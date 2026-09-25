@@ -6,8 +6,10 @@ import {
   ArrowUp,
   Boxes,
   ChevronDown,
+  Coins,
   Copy,
   Cpu,
+  CreditCard,
   EllipsisVertical,
   FolderOpen,
   Funnel,
@@ -116,7 +118,14 @@ import { type MovePlan, moveTargets, planMove } from '@/lib/move-chats'
 import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
 import { useTooltipConfig } from '@/lib/tooltip-config'
-import { bindingWeeklyPct, usageCheckedAgo, usageReasonMessageKey } from '@/lib/usage'
+import {
+  bindingWeeklyPct,
+  flaggedCodeCredit,
+  formatMoney,
+  shortDate,
+  usageCheckedAgo,
+  usageReasonMessageKey,
+} from '@/lib/usage'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
 import {
   msUntilReset,
@@ -163,16 +172,58 @@ const {
 const usageKeyFor = (inst: CMInstance) => `desktop:${inst.dir}`
 const usageFor = (inst: CMInstance) => snapshotFor(usageKeyFor(inst))
 
+// --- what only the running Claude app serves (server/src/claude-app-usage.ts) --------------------
+// Each is read from the app and kept, dated, while it is closed; the row carries an icon only for
+// what is worth a glance (a banked reset, credit money, billing past the plan limits) and the usage
+// chip's popover carries the rest.
+function appCheckedAgo(inst: CMInstance): string {
+  const at = usageFor(inst)?.claudeApp?.checkedAt
+  return at ? usageCheckedAgo(at) : '—'
+}
+
 function resetBankedHint(inst: CMInstance): string {
-  const snap = usageFor(inst)
-  const expires = snap?.resetCreditsExpiresAt
-    ? new Date(snap.resetCreditsExpiresAt).toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
+  const expires = shortDate(usageFor(inst)?.resetCreditsExpiresAt)
+  return t('instances.resetBankedHint', { expires, checked: appCheckedAgo(inst) })
+}
+
+const codeCreditFor = (inst: CMInstance) => flaggedCodeCredit(usageFor(inst))
+
+function codeCreditLabel(inst: CMInstance): string {
+  const credit = codeCreditFor(inst)
+  if (credit?.state === 'unclaimed') return t('instances.codeCreditUnclaimed')
+  if (credit?.state === 'locked') return t('instances.codeCreditLocked')
+  return t('instances.codeCredit', {
+    remaining: formatMoney(credit?.remainingUsd ?? 0),
+    limit: formatMoney(credit?.limitUsd ?? 0),
+  })
+}
+
+function codeCreditHint(inst: CMInstance): string {
+  const credit = codeCreditFor(inst)
+  const at = { expires: shortDate(credit?.expiresAt), checked: appCheckedAgo(inst) }
+  if (credit?.state === 'unclaimed') return t('instances.codeCreditUnclaimedHint', at)
+  if (credit?.state === 'locked')
+    return t('instances.codeCreditLockedHint', { ...at, reason: credit.lockedReason ?? '—' })
+  return t('instances.codeCreditHint', at)
+}
+
+/** Usage credits worth an icon: only when ON, because then the account bills past its limits. */
+const usageCreditsOnFor = (inst: CMInstance) => {
+  const credits = usageFor(inst)?.claudeApp?.usageCredits
+  return credits?.enabled ? credits : null
+}
+
+function usageCreditsHint(inst: CMInstance): string {
+  const credits = usageCreditsOnFor(inst)
+  const used = formatMoney(credits?.used ?? 0, credits?.currency ?? null)
+  const checked = appCheckedAgo(inst)
+  return credits?.limit == null
+    ? t('instances.usageCreditsOnHintUncapped', { used, checked })
+    : t('instances.usageCreditsOnHint', {
+        used,
+        limit: formatMoney(credits.limit, credits.currency),
+        checked,
       })
-    : '—'
-  const checked = snap?.resetCreditsCheckedAt ? usageCheckedAgo(snap.resetCreditsCheckedAt) : '—'
-  return t('instances.resetBankedHint', { expires, checked })
 }
 
 // --- usage mode ---------------------------------------------------------------------------------
@@ -1399,6 +1450,33 @@ onUnmounted(() => {
                     "
                   >
                     <RotateCcw class="size-3.5 text-success" />
+                  </span>
+                </IconTooltip>
+                <!-- claude.ai's one-time Claude Code & Cowork credit: money left to spend, or one
+                     never claimed / held back, which the account is not getting. -->
+                <IconTooltip
+                  v-if="codeCreditFor(inst)"
+                  :label="codeCreditLabel(inst)"
+                  :description="codeCreditHint(inst)"
+                >
+                  <span class="inline-flex items-center" :aria-label="codeCreditLabel(inst)">
+                    <Coins
+                      class="size-3.5"
+                      :class="
+                        codeCreditFor(inst)?.state === 'active' ? 'text-success' : 'text-warning'
+                      "
+                    />
+                  </span>
+                </IconTooltip>
+                <!-- Usage credits ON: this account bills usage past its plan limits. Off is the
+                     quiet default and gets no icon (the usage chip's popover says it either way). -->
+                <IconTooltip
+                  v-if="usageCreditsOnFor(inst)"
+                  :label="$t('instances.usageCreditsOn')"
+                  :description="usageCreditsHint(inst)"
+                >
+                  <span class="inline-flex items-center" :aria-label="$t('instances.usageCreditsOn')">
+                    <CreditCard class="size-3.5 text-warning" />
                   </span>
                 </IconTooltip>
                 <!-- A linked CLI login used to be visible NOWHERE on the row — its only trace was

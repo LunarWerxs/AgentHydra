@@ -102,6 +102,16 @@ export function resetTimeIso(
   return parseResetTime(limit.resets ?? '', now)
 }
 
+/** A banked reset turns "wait for the weekly reset" into "the windows can be cleared now". */
+function bankedResetNote(snap: UsageSnapshot): string {
+  const n = snap.resetCredits ?? 0
+  if (n <= 0) return ''
+  const until = snap.resetCreditsExpiresAt
+    ? ` until ${snap.resetCreditsExpiresAt.slice(0, 10)}`
+    : ''
+  return ` This account holds ${n} banked usage reset${n === 1 ? '' : 's'}${until}; spending one clears the 5-hour and weekly windows at once (Claude Desktop: the app's Settings > Usage > Resets; Codex: redeem_codex_reset_credit).`
+}
+
 /**
  * Turn a snapshot into an actionable verdict for an AI agent that is about to do expensive work.
  *
@@ -131,13 +141,15 @@ export function usageAdvice(snap: UsageSnapshot): UsageAdvice {
   const severity =
     snap.weekAll?.severity ?? (pct >= 95 ? 'critical' : pct >= 80 ? 'warning' : 'normal')
   const resets = snap.weekAll?.resets ? ` Weekly resets ${snap.weekAll.resets}.` : ''
+  // Only near the wall is a banked reset worth an agent's attention.
+  const nearWall = resets + bankedResetNote(snap)
   if (severity === 'critical') {
     return {
       severity,
       bindingPct: pct,
       shouldOffload: true,
       safeToFanOut: false,
-      advice: `CRITICAL: weekly (all models) is ${pct}% used. You may be cut off mid-task. OFFLOAD NOW: write your working context, findings, and next steps to a file before doing anything else. Do not fan out.${resets}`,
+      advice: `CRITICAL: weekly (all models) is ${pct}% used. You may be cut off mid-task. OFFLOAD NOW: write your working context, findings, and next steps to a file before doing anything else. Do not fan out.${nearWall}`,
     }
   }
   if (severity === 'warning') {
@@ -146,7 +158,7 @@ export function usageAdvice(snap: UsageSnapshot): UsageAdvice {
       bindingPct: pct,
       shouldOffload: false,
       safeToFanOut: false,
-      advice: `WARNING: weekly (all models) is ${pct}% used. Wind down: finish the current task, keep a written checkpoint, and shrink or postpone any fan-out.${resets}`,
+      advice: `WARNING: weekly (all models) is ${pct}% used. Wind down: finish the current task, keep a written checkpoint, and shrink or postpone any fan-out.${nearWall}`,
     }
   }
   return {

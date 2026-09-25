@@ -19,7 +19,7 @@
 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { readDesktopResetGrants } from './claude-reset-grants'
+import { readClaudeAppUsage } from './claude-app-usage'
 import {
   type InstanceGrantToken,
   resolveAccount,
@@ -201,23 +201,24 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   const label = account?.label ?? account?.email ?? null
 
   const finish = async (read: UsageSnapshot): Promise<UsageCheckResult> => {
-    // Banked resets live only behind the claude.ai session, so the running app is asked; a closed
-    // app keeps the last reading it gave (with its date) instead of dropping to "unknown".
-    const grants = await readDesktopResetGrants(dir)
+    // Banked resets, the Code credit and usage credits live only behind the claude.ai session, so
+    // the running app is asked; a closed app keeps the last reading it gave (with its date)
+    // instead of dropping to "unknown".
+    const fresh = await readClaudeAppUsage(dir)
     const previous = getCachedUsage(key)
-    const snapshot: UsageSnapshot = grants
+    const snapshot: UsageSnapshot = fresh
       ? {
           ...read,
-          resetCredits: grants.resetsLeft,
-          resetCreditsExpiresAt: grants.expiresAt,
-          resetCreditsCheckedAt: new Date().toISOString(),
+          resetCredits: fresh.resets?.resetsLeft ?? null,
+          resetCreditsExpiresAt: fresh.resets?.expiresAt ?? null,
+          claudeApp: fresh.app,
         }
-      : previous?.resetCreditsCheckedAt
+      : previous?.claudeApp
         ? {
             ...read,
             resetCredits: previous.resetCredits,
             resetCreditsExpiresAt: previous.resetCreditsExpiresAt,
-            resetCreditsCheckedAt: previous.resetCreditsCheckedAt,
+            claudeApp: previous.claudeApp,
           }
         : read
     setCachedUsage(key, snapshot)

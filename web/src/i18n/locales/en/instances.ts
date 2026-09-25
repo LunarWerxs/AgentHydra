@@ -81,6 +81,22 @@ export default {
   resetBanked: 'Banked usage resets: {count}',
   resetBankedHint:
     'Unused until {expires}. Spend it from Claude: Settings → Usage → Resets. Checked {checked}.',
+  // claude.ai's one-time "Claude Code and Cowork credit" (read from the running app).
+  codeCredit: 'Claude Code & Cowork credit: {remaining} of {limit} left',
+  codeCreditHint:
+    'A one-time credit from claude.ai, spent before the plan limits. Its claim is named a cloud credit, and desktop sessions have not been seen drawing from it. Expires {expires}. Checked {checked}.',
+  codeCreditUnclaimed: 'Claude Code & Cowork credit not claimed',
+  codeCreditUnclaimedHint:
+    'claude.ai offers this account a one-time credit it has not claimed, and it cannot be spent until it is. Claim it in Claude. Expires {expires}. Checked {checked}.',
+  codeCreditLocked: 'Claude Code & Cowork credit held back',
+  codeCreditLockedHint:
+    'Claimed, but claude.ai is holding it back ({reason}). Expires {expires}. Checked {checked}.',
+  // claude.ai "usage credits": usage past the plan limits is billed to the account.
+  usageCreditsOn: 'Usage credits on: usage past the plan limits is billed',
+  usageCreditsOnHint:
+    '{used} spent of a {limit} monthly cap. Turn it off in Claude: Settings → Usage. Checked {checked}.',
+  usageCreditsOnHintUncapped:
+    '{used} spent, with no monthly cap. Turn it off in Claude: Settings → Usage. Checked {checked}.',
   useAccountName: 'Name it after the account',
   toastUsingAccountName: 'Cleared the typed name. This instance is called “{name}” again.',
   copyAccountEmailAria: 'Copy the account address {email}',
@@ -213,6 +229,19 @@ export default {
   usageSessionResetsIn: 'Session resets in',
   usageWeekResetsIn: 'Week resets in',
   usageCheckedAgo: 'Checked {when}',
+  // The popover's section of facts only the running Claude app serves (claude-app-usage.ts).
+  usageAppResets: 'Banked resets',
+  usageAppResetsValue: '{count} · until {expires}',
+  usageAppCodeCredit: 'Code & Cowork credit',
+  usageAppCodeCreditValue: '{remaining} of {limit} · until {expires}',
+  usageAppCodeCreditUnclaimed: 'Not claimed',
+  usageAppCodeCreditLocked: 'Held back',
+  usageAppUsageCredits: 'Usage credits',
+  usageAppUsageCreditsOn: 'On · {used} of {limit}',
+  usageAppUsageCreditsOnUncapped: 'On · {used}, no cap',
+  usageAppUsageCreditsOff: 'Off',
+  usageAppWeeklySplit: 'This week',
+  usageAppCheckedAgo: 'From the Claude app, {when}',
   usageChecking: 'Checking…',
   usageCheckNow: 'Check now',
   toastUsageCheckFailed: 'Failed to check usage.',

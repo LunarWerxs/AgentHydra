@@ -2,7 +2,7 @@
 // format.ts's StatusMeta / Badge-variant pattern. See server/src/usage.ts for how a
 // snapshot is parsed from `claude -p "/usage"` output, and server/src/usage-service.ts /
 // server/src/index.ts for the cache keys (`acct:<id>`, `cli:<id>`) each check lands under.
-import type { UsageSnapshot } from './api'
+import type { ClaudeCodeCredit, UsageSnapshot } from './api'
 import { formatAgo } from './relativeTime'
 import { isWindowSuperseded } from './usage-reset'
 
@@ -93,6 +93,33 @@ export function usageCheckedAgo(capturedAt: string): string {
   const ms = Date.parse(capturedAt)
   if (!Number.isFinite(ms)) return '—'
   return formatAgo(Date.now(), ms)
+}
+
+/** "$250" once cents stop mattering, "$3.89" while they still do. */
+export function formatMoney(amount: number, currency: string | null = 'USD'): string {
+  const digits = Math.abs(amount) >= 100 ? 0 : 2
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: currency ?? 'USD',
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(amount)
+}
+
+/** "Nov 5": the day a credit or banked reset ends. */
+export function shortDate(iso: string | null | undefined): string {
+  const ms = iso ? Date.parse(iso) : Number.NaN
+  return Number.isNaN(ms)
+    ? '—'
+    : new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/** The Code credit worth a row icon: spendable money left, or one held back or never claimed
+ *  (both are money the account is not getting). A spent-out credit is not news. */
+export function flaggedCodeCredit(snap: UsageSnapshot | null | undefined): ClaudeCodeCredit | null {
+  const credit = snap?.claudeApp?.codeCredit
+  if (!credit) return null
+  return credit.state !== 'active' || (credit.remainingUsd ?? 0) >= 1 ? credit : null
 }
 
 /** A snapshot older than this is flagged as stale in the UI (a subtle affordance, not

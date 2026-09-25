@@ -12,8 +12,10 @@ import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { UsageSnapshot } from '@/lib/api'
 import {
+  formatMoney,
   isNoDataSnap,
   isStaleSnap,
+  shortDate,
   type UsageScope,
   usageBadgeVariant,
   usageCellLabel,
@@ -73,6 +75,48 @@ const reasonMessage = computed(() => {
 
 const sessionResets = computed(() => resetLabel(props.snapshot?.session, now.value))
 const weekAllResets = computed(() => resetLabel(props.snapshot?.weekAll, now.value))
+
+// Facts only the running Claude app serves (server/src/claude-app-usage.ts): banked resets, the
+// Code & Cowork credit, usage credits and the weekly split. Claude Desktop rows only.
+const app = computed(() => props.snapshot?.claudeApp ?? null)
+const appResets = computed(() => {
+  const count = props.snapshot?.resetCredits
+  if (!app.value || count == null) return null
+  if (count === 0) return '0'
+  const expires = shortDate(props.snapshot?.resetCreditsExpiresAt)
+  return t('instances.usageAppResetsValue', { count, expires })
+})
+const appCodeCredit = computed(() => {
+  const credit = app.value?.codeCredit
+  if (!credit) return null
+  if (credit.state === 'unclaimed') return t('instances.usageAppCodeCreditUnclaimed')
+  if (credit.state === 'locked') return t('instances.usageAppCodeCreditLocked')
+  return t('instances.usageAppCodeCreditValue', {
+    remaining: formatMoney(credit.remainingUsd ?? 0),
+    limit: formatMoney(credit.limitUsd ?? 0),
+    expires: shortDate(credit.expiresAt),
+  })
+})
+const appUsageCredits = computed(() => {
+  const credits = app.value?.usageCredits
+  if (!credits) return null
+  if (!credits.enabled) return t('instances.usageAppUsageCreditsOff')
+  const used = formatMoney(credits.used ?? 0, credits.currency)
+  return credits.limit == null
+    ? t('instances.usageAppUsageCreditsOnUncapped', { used })
+    : t('instances.usageAppUsageCreditsOn', {
+        used,
+        limit: formatMoney(credits.limit, credits.currency),
+      })
+})
+const appSplit = computed(
+  () =>
+    app.value?.weeklySplit
+      ?.filter((row) => row.pct > 0)
+      .map((row) => `${row.label} ${row.pct}%`)
+      .join(' · ') || null,
+)
+const appCheckedAgo = computed(() => (app.value ? usageCheckedAgo(app.value.checkedAt) : ''))
 
 // --- open on HOVER as well as on click ----------------------------------------------------------
 // The breakdown (both reset times, the per-model sub-limit, how stale the reading is) is the whole
@@ -196,6 +240,28 @@ function onRootOpenChange(v: boolean): void {
         <div v-if="weekAllResets" class="flex items-center justify-between gap-2">
           <span class="text-muted-foreground">{{ $t('instances.usageWeekResetsIn') }}</span>
           <span class="font-medium">{{ weekAllResets }}</span>
+        </div>
+        <!-- A closed app keeps its last reading, so this section carries its own date. -->
+        <div v-if="app" class="space-y-1.5 border-t border-border/60 pt-1.5">
+          <div v-if="appResets" class="flex items-center justify-between gap-2">
+            <span class="text-muted-foreground">{{ $t('instances.usageAppResets') }}</span>
+            <span class="font-medium">{{ appResets }}</span>
+          </div>
+          <div v-if="appCodeCredit" class="flex items-center justify-between gap-2">
+            <span class="text-muted-foreground">{{ $t('instances.usageAppCodeCredit') }}</span>
+            <span class="text-end font-medium">{{ appCodeCredit }}</span>
+          </div>
+          <div v-if="appUsageCredits" class="flex items-center justify-between gap-2">
+            <span class="text-muted-foreground">{{ $t('instances.usageAppUsageCredits') }}</span>
+            <span class="font-medium">{{ appUsageCredits }}</span>
+          </div>
+          <div v-if="appSplit" class="flex items-center justify-between gap-2">
+            <span class="text-muted-foreground">{{ $t('instances.usageAppWeeklySplit') }}</span>
+            <span class="text-end font-medium">{{ appSplit }}</span>
+          </div>
+          <p class="text-muted-foreground">
+            {{ $t('instances.usageAppCheckedAgo', { when: appCheckedAgo }) }}
+          </p>
         </div>
         <p class="text-muted-foreground">
           {{ $t('instances.usageCheckedAgo', { when: checkedAgo }) }}

@@ -871,13 +871,50 @@ export interface UsageSnapshot {
   source?: UsageSource
   /** Banked usage-limit resets still unused. Codex: `rate_limit_reset_credits.available_count` on
    *  the usage payload. Claude Desktop: the claude.ai reset grants, read from the running app (see
-   *  claude-reset-grants.ts) and carried over from the last reading while the app is closed.
-   *  Undefined when never read; null when the provider answered but reported none. */
+   *  claude-app-usage.ts) and carried over from the last reading while the app is closed; its date
+   *  is `claudeApp.checkedAt`. Undefined when never read; null when the provider answered but
+   *  reported none. */
   resetCredits?: number | null
   /** Claude Desktop: when the soonest-ending grant holding a reset expires (ISO). */
   resetCreditsExpiresAt?: string | null
-  /** Claude Desktop: when `resetCredits` was last read from the app itself (ISO). */
-  resetCreditsCheckedAt?: string | null
+  /** Claude Desktop: what only the signed-in claude.ai session serves. Undefined until the running
+   *  app has been read once; a closed app keeps its last reading. */
+  claudeApp?: ClaudeAppUsage
+}
+
+/** Claude Desktop facts read from the running app's own claude.ai session (claude-app-usage.ts). */
+export interface ClaudeAppUsage {
+  /** When the app was read (ISO). Everything here, and `resetCredits`, is as of this moment. */
+  checkedAt: string
+  /** The one-time Claude Code and Cowork credit; null when the account has none. */
+  codeCredit: ClaudeCodeCredit | null
+  /** Usage credits: whether usage past the plan limits is billed. Null when not reported. */
+  usageCredits: ClaudeUsageCredits | null
+  /** This week's usage split by product, in claude.ai's order; null before it has one. */
+  weeklySplit: { key: string; label: string; pct: number }[] | null
+}
+
+/** claude.ai's one-time "Claude Code and Cowork credit" (`iguana_necktie`). */
+export interface ClaudeCodeCredit {
+  /** 'unclaimed' is offered but never claimed: it cannot be spent until a person claims it.
+   *  'locked' is claimed but held back by Anthropic (`lockedReason` says why). */
+  state: 'active' | 'unclaimed' | 'locked'
+  limitUsd: number | null
+  remainingUsd: number | null
+  expiresAt: string | null
+  lockedReason: string | null
+}
+
+/** claude.ai "usage credits" (`spend`): usage past the plan limits, billed to the account. */
+export interface ClaudeUsageCredits {
+  enabled: boolean
+  /** Anthropic's reason code when off (e.g. `org_level_disabled_until`); null when none given. */
+  disabledReason: string | null
+  /** Spent this billing period, in `currency` units. */
+  used: number | null
+  /** The monthly cap, in `currency` units; null when uncapped or never set. */
+  limit: number | null
+  currency: string | null
 }
 
 /**
