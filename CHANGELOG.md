@@ -7,6 +7,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Behavioural eval for the MCP server** (`scripts/mcp-eval/`, `bun run eval:mcp`). Checks that an
+  agent can still reach a known answer through the tools, which a lint of the tool definitions
+  cannot see. Read-only questions ("which instance has the most weekly quota left?") are answered
+  over the real stdio server against a frozen fixture fleet. The report gives accuracy, tool calls,
+  tools used and time per question. A scripted reference agent runs in the test suite. `--serve`
+  and `--score` let an agent in a visible chat take the same eval, with its feedback on each tool.
+  Idea from the mcp-builder evaluation harness in anthropics/skills (Apache-2.0).
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,

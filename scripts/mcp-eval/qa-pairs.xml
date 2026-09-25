@@ -1,0 +1,32 @@
+<!--
+  Behavioural eval questions for the AgentHydra MCP server, answered against the frozen fleet in
+  fixture.ts. Same shape as the mcp-builder evaluation format: every pair is read-only, independent,
+  stable (the fixture never moves) and has exactly one verifiable answer. `id` ties a pair to its
+  reference solution in harness.ts; the harness refuses a pair without one.
+-->
+<evaluation>
+  <qa_pair id="most-weekly-headroom">
+    <question>Which instance has the most weekly (all-models) quota left? Answer with its instance number only.</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair id="closest-to-weekly-cap">
+    <question>Which instance is closest to hitting its weekly cap? Answer with its instance number only.</question>
+    <answer>1</answer>
+  </qa_pair>
+  <qa_pair id="instance-4-email">
+    <question>Which account email is signed in on instance 4?</question>
+    <answer>batch@example.com</answer>
+  </qa_pair>
+  <qa_pair id="codex-instance-number">
+    <question>What is the instance number of the Codex instance? Answer with the number only.</question>
+    <answer>5</answer>
+  </qa_pair>
+  <qa_pair id="open-incident-count">
+    <question>How many failure incidents are open right now? Answer with a number.</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair id="worst-open-incident">
+    <question>Which project's open incident has repeated the most times? Answer with the project key.</question>
+    <answer>billing-api</answer>
+  </qa_pair>
+</evaluation>
