@@ -43,6 +43,20 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(got["state"], "plan_only")
         self.assertEqual(got["nextAction"], "read gatelib._finished_evidence")
 
+    def test_a_next_steps_block_alone_is_plan_only(self):
+        # Regression: a colon-ended "Next steps:" before a newline never matched PLANNING.
+        got = livenesslib.classify("Findings above.\n\nNext steps:\n- run X", tool_calls=0)
+        self.assertEqual(got["state"], "plan_only")
+        self.assertEqual(got["nextAction"], "run X")
+
+    def test_prose_starting_next_steps_is_not_a_next_action_header(self):
+        self.assertIsNone(livenesslib.next_action("Next steps are unclear until the soak ends."))
+
+    def test_a_done_recap_that_needs_access_control_is_completed_not_blocked(self):
+        text = "Shipped the export.\nWe need access control on the admin route later.\n"
+        got = livenesslib.classify(text, tool_calls=3, done_claim="yes")
+        self.assertEqual(got["state"], "completed")
+
     def test_the_same_words_after_real_tool_calls_are_progress_not_a_plan(self):
         self.assertEqual(livenesslib.classify(PLAN_REPLY, tool_calls=3)["state"], "advanced")
 

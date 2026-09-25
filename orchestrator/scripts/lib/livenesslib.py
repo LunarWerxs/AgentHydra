@@ -60,18 +60,23 @@ APPROVAL = re.compile(
 
 # PLANNING-ONLY phrasing: the reply says what it WILL do. Only ever decisive together with zero
 # tool calls in the turn - a working chat says "I'll now run the tests" all day long.
+# The word boundary sits only on the alternatives that end in a word: the colon-ended ones
+# ("Plan:", "Next steps:") are usually followed by a space or a newline, where no \b exists.
 PLANNING = re.compile(
-    r"(?:^|\n)\s*(?:[-*]\s*)?(?:i'?ll|i will|i'm going to|i am going to|let me(?! know)"
-    r"|first,? i'?ll|my plan|here'?s (?:my|the) plan|plan:|next steps?:|#+ *next steps?"
+    r"(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*)?(?:(?:i'?ll|i will|i'm going to|i am going to|let me(?! know)"
+    r"|first,? i'?ll|my plan|here'?s (?:my|the) plan|#+ *next steps?"
     r"|the approach|i'?d start by"
-    r"|i (?:plan|intend) to)\b",
+    r"|i (?:plan|intend) to)\b"
+    r"|plan:|next steps?:)",
     re.IGNORECASE,
 )
 
-# "Next step: X", "**Next action** - X", "## Next steps" followed by a bullet.
+# "Next step: X", "**Next action** - X", "## Next steps" followed by a bullet. A plain line
+# needs its colon or dash (or a heading/bold marker): "Next steps are unclear" is prose.
 _NEXT_HEADER = re.compile(
-    r"^[ \t]*(?:#+[ \t]*)?(?:\*\*)?next (?:steps?|actions?)(?:\*\*)?[ \t]*"
-    r"(?:[:\-][ \t]*(?:\*\*)?)?[ \t]*(.*)$",
+    r"^[ \t]*(?:#+[ \t]*(?:\*\*)?next (?:steps?|actions?)(?:\*\*)?[ \t]*(?:[:\-][ \t]*(?:\*\*)?)?"
+    r"|\*\*next (?:steps?|actions?)[ \t]*:?\*\*[ \t]*(?:[:\-][ \t]*)?"
+    r"|next (?:steps?|actions?)[ \t]*[:\-][ \t]*(?:\*\*)?)[ \t]*(.*)$",
     re.IGNORECASE | re.MULTILINE,
 )
 # "Let me know if..." is a sign-off, not a plan, so it is excluded here and in PLANNING.
@@ -121,7 +126,11 @@ def classify(text: str, *, tool_calls: int, done_claim: str = "unknown",
     (gatelib.recap_view) so a quoted or fenced "I'm blocked" from another chat cannot count."""
     recs = open_recommendations or []
     nxt = next_action(text, recs)
-    m = BLOCKER.search(text)
+    # A recap that claims done with nothing left open is not waiting on anyone: "we need access
+    # control on X" in its summary is a design note, not a wait on a person.
+    settled = (done_claim == "yes" and not recs and not offers_to_continue
+               and not ends_with_question)
+    m = None if settled else BLOCKER.search(text)
     if m:
         return {"state": "blocked",
                 "why": f"it says it is blocked ('{m.group(0)}') - a person has to unblock it",
@@ -134,7 +143,7 @@ def classify(text: str, *, tool_calls: int, done_claim: str = "unknown",
         return {"state": "plan_only",
                 "why": "it replied with a plan and called no tool this turn - nothing was done yet",
                 "nextAction": nxt}
-    if done_claim == "yes" and not recs and not offers_to_continue and not ends_with_question:
+    if settled:
         return {"state": "completed", "why": "its recap claims done and nothing is left open",
                 "nextAction": None}
     if tool_calls > 0:
