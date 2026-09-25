@@ -30,6 +30,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Recorded agent CLI sessions replay over a real process boundary** (new
+  `server/tests/mocks/mock-agent.mjs`, `server/tests/mocks/bin/`, `server/tests/mocks/recordings/`,
+  `server/tests/mock-agent-replay.test.ts`, `server/src/config.ts`). A stand-in `claude` / `codex`
+  prints a recorded session in the CLI's own wire format (`-p` text, stream-json, `codex exec
+  --json`, `codex app-server` JSON-RPC), picked by name, by prompt sha256 or by default, so the
+  usage probe, the stream-json parser and the Codex RPC client are tested end to end with no quota
+  spent. New `AGENTHYDRA_CLAUDE_PATH` names the Claude CLI outright, because the npm-global install
+  otherwise wins over any PATH overlay. Idea from nexu-io/open-design (Apache-2.0); no code copied.
+  See docs/REFERENCE.md, "Replaying agent CLIs offline".
 - **A chat that left background work hanging is asked whether it is stuck** (new lane
   `orchestrator/scripts/stall_watch.py`, `lib/stalllib.py`, scheduled as `stall-watch` every 5
   minutes, policy group `stallwatch`). A chat's turn can end while a sub-agent, workflow or

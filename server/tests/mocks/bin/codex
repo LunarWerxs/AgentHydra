@@ -1,0 +1,4 @@
+#!/bin/sh
+# Replays a recorded codex session instead of running the real CLI (see ../mock-agent.mjs).
+# Put this folder first on PATH, or point AGENTHYDRA_CODEX_PATH at this file.
+exec bun "$(dirname "$0")/../mock-agent.mjs" --as codex "$@"

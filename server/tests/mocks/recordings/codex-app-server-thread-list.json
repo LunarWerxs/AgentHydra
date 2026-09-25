@@ -1,0 +1,48 @@
+{
+  "agent": "codex",
+  "mode": "app-server",
+  "default": true,
+  "delayMs": 10,
+  "responses": {
+    "initialize": [{ "result": { "userAgent": "codex_cli_rs/0.0.0-mock" } }],
+    "thread/list": [
+      {
+        "result": {
+          "data": [
+            {
+              "id": "thr_mock_1",
+              "name": "Fix the parser",
+              "preview": "Fix the parser",
+              "cwd": "/work/demo",
+              "updatedAt": 1790000000
+            }
+          ],
+          "nextCursor": "page-2"
+        }
+      },
+      {
+        "result": {
+          "data": [
+            {
+              "id": "thr_mock_2",
+              "name": "",
+              "preview": "Write the changelog",
+              "cwd": "/work/demo",
+              "updatedAt": 1789990000
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    ],
+    "thread/archive": [{ "error": { "code": -32000, "message": "thread is running" } }]
+  },
+  "afterInitialized": [
+    { "method": "account/rateLimits/updated", "params": {} },
+    {
+      "id": 900,
+      "method": "item/commandExecution/requestApproval",
+      "params": { "threadId": "thr_mock_1", "command": "rm -rf build" }
+    }
+  ]
+}

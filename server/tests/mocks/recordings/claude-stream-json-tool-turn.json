@@ -1,0 +1,81 @@
+{
+  "agent": "claude",
+  "mode": "stream-json",
+  "default": true,
+  "delayMs": 25,
+  "stdout": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "model": "claude-sonnet-4-5",
+      "cwd": "/work/demo",
+      "tools": ["Read"],
+      "mcp_servers": []
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_mock_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [
+          { "type": "text", "text": "Reading the README first." },
+          {
+            "type": "tool_use",
+            "id": "toolu_mock_1",
+            "name": "Read",
+            "input": { "file_path": "/work/demo/README.md" }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "usage": { "input_tokens": 12, "output_tokens": 20 }
+      },
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_mock_1",
+            "content": "# Demo\nA tiny project."
+          }
+        ]
+      },
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_mock_2",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{ "type": "text", "text": "The project is a tiny demo." }],
+        "stop_reason": "end_turn",
+        "usage": { "input_tokens": 40, "output_tokens": 9 }
+      },
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": { "status": "allowed", "rateLimitType": "five_hour", "resetsAt": 1790000000 },
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 1234,
+      "num_turns": 2,
+      "result": "The project is a tiny demo.",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "total_cost_usd": 0.0012
+    }
+  ],
+  "exitCode": 0
+}
