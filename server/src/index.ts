@@ -741,6 +741,7 @@ await import('./routes/monitor-fleet')
 await import('./routes/desktop-sessions')
 await import('./routes/session-message')
 await import('./routes/versions')
+await import('./routes/prefix-tax')
 
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------
 app.post('/api/portable-window', async (c) => {

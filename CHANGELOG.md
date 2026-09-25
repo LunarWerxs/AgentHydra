@@ -9,6 +9,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Prefix tax per spawn** (`server/src/prefix-tax.ts`, `server/src/routes/prefix-tax.ts`,
+  `web/src/components/PrefixTaxSection.vue`, `agenthydra --prefix-tax`). Measures what each Claude
+  CLI and Codex home re-ships on every spawn: tool count, MCP tool count, schema kB and the
+  heaviest MCP servers, so a bloated MCP loadout is visible before a fan-out multiplies it. The
+  harness is started once against a loopback sink that speaks anthropic-messages and
+  openai-responses and answers "DONE", so no model runs and no quota is spent; Claude runs with
+  `--no-session-persistence` and Codex in a throwaway `CODEX_HOME`, so no chat is saved. Runs only
+  on a click or the CLI flag, never on a timer. Idea from JuliusBrussee/caveman's subagent-tax.
+
 - **The orchestrator says WHICH kind of not-done a stopped chat is** (`orchestrator/scripts/lib/livenesslib.py`,
   `orchestrator/scripts/lib/gatelib.py`, `orchestrator/scripts/dashboard.py`,
   `orchestrator/scripts/fan_out.py`, `orchestrator/orch.py`). A finished or idle chat's last

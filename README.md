@@ -138,6 +138,15 @@ The same view manages Codex Desktop and CLI together. Each Codex instance gets i
 and desktop profile, so work and personal OpenAI logins can run in separate Codex windows. Open,
 focus and quit the desktop from its row; CLI Launch and Log in actions use that same isolated login.
 
+**Prefix tax per spawn:** every Claude or Codex worker re-sends its home's system prompt and every
+tool schema, MCP servers included, on its first request. The **Prefix tax per spawn** section at the
+bottom of the view measures that for each Claude CLI and Codex home: tools, MCP tools, schema kB and
+the heaviest MCP servers. **Measure** starts the harness once against a local sink that answers
+"DONE", so no model runs, no quota is spent and no chat is saved, but that home's MCP servers do
+start. It only runs when you click. `AgentHydra.exe --prefix-tax [--json] [--ref=cli:<id>]` prints
+the same readings for a script. Claude.ai connectors are not loaded without a real login, so a
+home that uses them reads low.
+
 ### Quick instance mode
 
 When you only need to pick an instance and start it, instance mode skips the session scanner,

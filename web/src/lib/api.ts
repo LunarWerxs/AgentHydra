@@ -944,3 +944,40 @@ export const deleteDshInstance = (
     method: 'DELETE',
     body: JSON.stringify(opts),
   })
+
+// --- prefix tax (what each home re-ships per spawn; see server/src/prefix-tax.ts) -------------
+// Mirrors the server's PrefixTax/PrefixTaxRow. Measuring boots the home's MCP roster through a
+// loopback sink (no model, no quota), so it only ever runs on a click.
+export interface PrefixTax {
+  protocol: 'anthropic-messages' | 'openai-responses'
+  systemBytes: number
+  messageBytes: number
+  tools: number
+  toolBytes: number
+  mcpTools: number
+  mcpToolBytes: number
+  totalBytes: number
+  approxTokens: number
+  byServer: { server: string; tools: number; bytes: number }[]
+  heaviest: { name: string; bytes: number; mcpServer: string | null }[]
+}
+export interface PrefixTaxReading {
+  ref: string
+  tax: PrefixTax | null
+  error: string | null
+  measuredAt: string
+}
+export interface PrefixTaxHome {
+  ref: string
+  kind: 'claude' | 'codex'
+  name: string
+  home: string
+  reading: PrefixTaxReading | null
+}
+export const getPrefixTax = () =>
+  j<{ running: string | null; rows: PrefixTaxHome[] }>('/api/prefix-tax')
+export const measurePrefixTax = (ref?: string) =>
+  j<{ rows: PrefixTaxReading[] }>('/api/prefix-tax/measure', {
+    method: 'POST',
+    body: JSON.stringify(ref ? { ref } : {}),
+  })
