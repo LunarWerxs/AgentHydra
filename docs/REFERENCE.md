@@ -356,6 +356,7 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_RUN_LOG_DIR` | `~/.agenthydra/data/run-logs` | detached-run log and sidecar directory |
 | `AGENTHYDRA_CODEX_HOME` | `~/.codex` | default Codex rollout store to scan |
 | `AGENTHYDRA_MCP_MAX_RESULT_BYTES` | `80000` | per-answer byte cap for MCP tool results (floor 4096); over it an answer is cut with notes, see [Asking for less](#asking-for-less-jmespath-and-the-size-cap) |
+| `AGENTHYDRA_CLAUDE_PATH` | npm-global install / `claude` | Claude CLI executable for every spawn (usage probe, keepalive, launches); point it at `server/tests/mocks/bin/claude(.cmd)` to replay a recording |
 | `AGENTHYDRA_CODEX_PATH` | auto-detected / `codex` | Codex executable used by managed Codex instances |
 | `AGENTHYDRA_CODEX_DESKTOP_PATH` | auto-detected | Codex Desktop GUI executable; useful for nonstandard installs |
 | `AGENTHYDRA_HOOKS_CONFIG` | `$CLAUDE_CONFIG_DIR/settings.json` or `~/.claude/settings.json` | Claude Code settings file the opt-in agent-status hooks are written to (`status_hooks`) |
@@ -655,6 +656,25 @@ checkout. External contributors should not run it; nothing in CI depends on it.
 
 CI runs these across `[ubuntu-latest, windows-latest]`, so a green local run on one OS clears one
 leg of two.
+
+### Replaying agent CLIs offline
+
+The daemon spawns real CLIs and parses what they print: `claude -p /usage`, `claude -p
+--output-format stream-json` and `codex app-server`. `server/tests/mocks/mock-agent.mjs` stands in
+for them: spawned the same way, it prints a recorded session in that CLI's own wire format, so a
+parser change can be run against the same bytes every time, with no quota spent and no network.
+
+- Tests spawn it directly: `[process.execPath, 'server/tests/mocks/mock-agent.mjs', '--as', 'claude', ...args]`
+  (see `server/tests/mock-agent-replay.test.ts`).
+- A whole daemon can run against it: set `AGENTHYDRA_CLAUDE_PATH` / `AGENTHYDRA_CODEX_PATH` to
+  `server/tests/mocks/bin/claude` / `codex` (`.cmd` on Windows), or put that folder first on `PATH`
+  on a machine with no npm-global Claude install.
+- Which recording plays: `AGENTHYDRA_MOCK_RECORDING` (a name under `server/tests/mocks/recordings/`
+  or a `.json` path), else the one whose `promptSha256` matches the prompt, else the agent and mode's
+  `"default": true` recording. `AGENTHYDRA_MOCK_RECORDINGS_DIR` swaps the folder;
+  `AGENTHYDRA_MOCK_NO_DELAY=1` skips the recorded pacing.
+- A recording is plain JSON (the shape is documented at the top of `mock-agent.mjs`). Capture one
+  from a real run, strip anything personal, and keep only what the parser under test needs.
 
 ### A flake that only exists inside a full-suite run
 

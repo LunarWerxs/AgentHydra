@@ -1,0 +1,44 @@
+{
+  "agent": "claude",
+  "mode": "stream-json",
+  "promptSha256": "b30148acc691a81694799f775c501199912075f5c14fb8bfeacfc10f4e943e9a",
+  "delayMs": 25,
+  "stdout": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "session_id": "00000000-0000-4000-8000-000000000002",
+      "model": "claude-sonnet-4-5",
+      "cwd": "/work/demo",
+      "tools": [],
+      "mcp_servers": []
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": { "status": "rejected", "rateLimitType": "seven_day", "resetsAt": 1790000000 },
+      "session_id": "00000000-0000-4000-8000-000000000002"
+    },
+    {
+      "type": "assistant",
+      "isApiErrorMessage": true,
+      "message": {
+        "id": "msg_mock_3",
+        "type": "message",
+        "role": "assistant",
+        "model": "<synthetic>",
+        "content": [{ "type": "text", "text": "Claude AI usage limit reached|1790000000" }]
+      },
+      "session_id": "00000000-0000-4000-8000-000000000002"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": true,
+      "duration_ms": 310,
+      "num_turns": 1,
+      "result": "Claude AI usage limit reached|1790000000",
+      "session_id": "00000000-0000-4000-8000-000000000002"
+    }
+  ],
+  "exitCode": 1
+}

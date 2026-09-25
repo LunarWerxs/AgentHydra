@@ -385,8 +385,16 @@ export const INSTANCE_MODE_WINDOW_SIZE = { width: 700, height: 760 }
 /**
  * Resolve the `claude` executable, mirroring the Python `claude_command()`:
  * prefer the npm-global install, else fall back to PATH resolution ("claude").
+ *
+ * `AGENTHYDRA_CLAUDE_PATH` wins over both, as `AGENTHYDRA_CODEX_PATH` does for Codex. WHY: the
+ * npm-global install is checked before PATH, so a PATH overlay alone can never swap the CLI on a
+ * machine that has one - and swapping it is how server/tests/mocks/bin replays a recorded session
+ * through the real spawn-and-parse path without spending quota.
  */
 export function resolveClaudeExe(): string {
+  const configured = appEnv('CLAUDE_PATH')?.trim()
+  if (configured) return configured
+
   const candidates = [
     join(APPDATA, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
     join(APPDATA, 'npm', 'claude.cmd'),

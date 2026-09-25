@@ -1,0 +1,17 @@
+{
+  "agent": "claude",
+  "mode": "text",
+  "default": true,
+  "delayMs": 25,
+  "stderr": ["Warning: no stdin data received in 3s, proceeding without it."],
+  "stdout": [
+    "You are currently using your subscription to power your Claude Code usage",
+    "",
+    "Current session: 12% used · resets Jul 13, 11:49pm (America/Chicago)",
+    "Current week (all models): 64% used · resets Jul 14, 2:59am (America/Chicago)",
+    "Current week (Fable): 41% used · resets Jul 14, 3am (America/Chicago)",
+    "",
+    "Last 24h · 1204 requests · 9 sessions"
+  ],
+  "exitCode": 0
+}

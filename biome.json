@@ -30,6 +30,7 @@
       "!**/lib/content-inset.ts",
       "!**/lib/grip-drag.ts",
       "!**/tests/server-lib",
+      "!**/tests/mocks",
       "!orchestrator/state",
       "!server/mcp-api-levels"
     ]
