@@ -3,6 +3,7 @@ import { safeTranscriptFilename } from '@agenthydra/server/filenames'
 import {
   AlignJustify,
   Archive,
+  ArrowDown,
   ArrowLeft,
   ArrowRightLeft,
   BookOpen,
@@ -158,7 +159,14 @@ const {
   runningRunId,
   isExpanded,
   toggleExpand,
+  loadOlder,
+  anchorNextOpen,
+  canLoadOlder,
+  olderLoading,
+  scroller,
 } = useOpenSession({ sessions, queue, showTools, showThinking, humanOnly })
+// Top-level refs so the template unwraps them (a ref inside a returned object would not be).
+const { pending: scrollPending, atBottom: chatAtBottom, unseen: unseenTurns } = scroller
 
 const { loadUsage, usageSummary, usageDetail } = useSessionUsage({
   selectedId,
@@ -407,6 +415,7 @@ const {
   selected,
   select,
   loadTail,
+  anchorNextOpen,
 })
 
 // --- jump to ONE session, asked from a dialog here or from another view ---------------------------
@@ -1656,9 +1665,16 @@ function onComposerSent(mode: 'now' | 'queued') {
           </Button>
         </div>
 
-        <!-- transcript, styled as a chat: user right / assistant left, tool events as log lines -->
+        <!-- transcript, styled as a chat: user right / assistant left, tool events as log lines.
+             role=log + aria-relevant=additions: a screen reader hears turns as they arrive, not
+             the whole pane again. data-pending-scroll holds until the opening position is set. -->
         <div
           ref="chatEl"
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions"
+          :aria-busy="tailLoading || olderLoading"
+          :data-pending-scroll="scrollPending || undefined"
           class="scroll-slim min-h-0 flex-1 overflow-y-auto"
           :class="compactTranscript && 'transcript-compact'"
         >
@@ -1678,9 +1694,18 @@ function onComposerSent(mode: 'now' | 'queued') {
             </p>
 
             <template v-else>
+              <!-- history paging: the window grows a page upward and the reader's turn stays put
+                   (useChatScroller.prepend), up to the daemon's own cap -->
+              <div v-if="canLoadOlder" class="flex justify-center">
+                <Button variant="ghost" size="sm" :disabled="olderLoading" @click="loadOlder">
+                  <ChevronUp />
+                  {{ olderLoading ? $t('sessions.loadingOlder') : $t('sessions.loadOlder') }}
+                </Button>
+              </div>
               <div
                 v-for="(ev, i) in events"
                 :key="i"
+                :data-turn="i"
                 class="group flex items-end gap-1.5"
                 :class="[
                   i > 0 && events[i - 1].role === ev.role ? 'mt-1.5' : 'mt-4',
@@ -1782,6 +1807,21 @@ function onComposerSent(mode: 'now' | 'queued') {
                 </Button>
               </div>
             </template>
+          </div>
+          <!-- jump to latest: only while scrolled up. A zero-height sticky rail, so showing it never
+               changes the content height the follow check measures. -->
+          <div v-if="!chatAtBottom && !tailLoading" class="sticky bottom-0 h-0">
+            <div class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+              <Button
+                variant="secondary"
+                size="sm"
+                class="pointer-events-auto shadow-md"
+                @click="scroller.scrollToLatest()"
+              >
+                <ArrowDown />
+                {{ unseenTurns ? $t('sessions.newTurns') : $t('sessions.jumpToLatest') }}
+              </Button>
+            </div>
           </div>
         </div>
       </template>

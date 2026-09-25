@@ -1676,14 +1676,19 @@ export function tailKeeper(opts: TailOptions): (e: TailEvent) => boolean {
 
 /** Parse a raw transcript tail newest-line-first into up to `limit` filtered event groups, plus
  *  whatever cwd the scanned lines revealed. Pulled out of tailTranscript's default (non-foreign,
- *  non-opencode) path so the byte-tail parsing loop isn't nested inside the source-branch chain. */
-function collectTailEventsFromRaw(
+ *  non-opencode) path so the byte-tail parsing loop isn't nested inside the source-branch chain.
+ *
+ *  `more` says whether an older kept turn exists above the window. It is found by reading ONE group
+ *  past the limit and dropping it, not by asking "were there lines left": a session_meta header or
+ *  a filtered-out tool turn is a line, and a "Load older turns" button that loads nothing is a lie.
+ *  Exported for server/tests/tail-filter.test.ts. */
+export function collectTailEventsFromRaw(
   raw: string,
   source: SessionSource,
   filter: TailFilter,
   keep: (e: TailEvent) => boolean,
   limit: number,
-): { events: TailEvent[]; cwd: string } {
+): { events: TailEvent[]; cwd: string; more: boolean } {
   const lines = raw.split('\n')
   const collected: TailEvent[][] = []
   let cwd = ''
@@ -1701,9 +1706,19 @@ function collectTailEventsFromRaw(
     const tes = eventToTailEventsForSource(source, ev, filter).filter(keep)
     if (tes.length === 0) continue
     collected.push(tes)
-    if (collected.length >= limit) break
+    if (collected.length > limit) break
   }
-  return { events: collected.reverse().flat(), cwd }
+  const more = collected.length > limit
+  if (more) collected.pop()
+  return { events: collected.reverse().flat(), cwd, more }
+}
+
+/** The last `limit` kept turns of a store read whole, and whether anything older was cut off. */
+export function lastTurns(
+  events: TailEvent[],
+  limit: number,
+): { events: TailEvent[]; more: boolean } {
+  return { events: events.slice(-limit), more: events.length > limit }
 }
 
 /**
@@ -1720,6 +1735,7 @@ function tailResult(
   opts: TailOptions,
   events: TailEvent[],
   error?: string,
+  more = false,
 ): TailResult {
   return {
     session_id: sessionId,
@@ -1727,8 +1743,21 @@ function tailResult(
     title: opts.title ?? tf.title ?? sessionId,
     cwd: opts.cwd ?? tf.cwd ?? '',
     events,
+    has_more: more,
     ...(error ? { error } : {}),
   }
+}
+
+/** tailResult for a store read whole: windows it and reports what the window cut off. */
+function windowedResult(
+  sessionId: string,
+  tf: TranscriptFile,
+  opts: TailOptions,
+  all: TailEvent[],
+  limit: number,
+): TailResult {
+  const { events, more } = lastTurns(all, limit)
+  return tailResult(sessionId, tf, opts, events, undefined, more)
 }
 
 /** Foreign adapters return the WHOLE conversation; these stores are small enough that a windowed
@@ -1740,10 +1769,13 @@ function tailForeignStore(
   keep: (e: TailEvent) => boolean,
   limit: number,
 ): TailResult {
-  const events = readForeignSession(tf.tool ?? '', tf.path)
-    .filter(keep)
-    .slice(-limit)
-  return tailResult(sessionId, tf, opts, events)
+  return windowedResult(
+    sessionId,
+    tf,
+    opts,
+    readForeignSession(tf.tool ?? '', tf.path).filter(keep),
+    limit,
+  )
 }
 
 /** Hermes: `tf.path` is passed through because a Hermes profile is a SEPARATE database from the
@@ -1758,7 +1790,7 @@ function tailHermesStore(
 ): TailResult {
   const content = readHermesSession(sessionId, tf.path)
   if (!content) return tailResult(sessionId, tf, opts, [], 'transcript not found')
-  return tailResult(sessionId, tf, opts, content.events.filter(keep).slice(-limit))
+  return windowedResult(sessionId, tf, opts, content.events.filter(keep), limit)
 }
 
 /** OpenCode: `tf.path` is THE store (audit AH-34). Kilo, MiMo Code and IcodeMate are
@@ -1774,7 +1806,7 @@ function tailOpenCodeStore(
 ): TailResult {
   const content = readOpenCodeSession(sessionId, tf.path)
   if (!content) return tailResult(sessionId, tf, opts, [], 'transcript not found')
-  return tailResult(sessionId, tf, opts, content.events.filter(keep).slice(-limit))
+  return windowedResult(sessionId, tf, opts, content.events.filter(keep), limit)
 }
 
 /** DeepSeek Harness: one file per session, so `tf.path` IS the log — but it is zstd, so it cannot
@@ -1791,7 +1823,7 @@ function tailDshLog(
 ): TailResult {
   const content = readDshSession(tf.path)
   if (!content) return tailResult(sessionId, tf, opts, [], 'transcript not found')
-  return tailResult(sessionId, tf, opts, content.events.filter(keep).slice(-limit))
+  return windowedResult(sessionId, tf, opts, content.events.filter(keep), limit)
 }
 
 function tailZswarmJob(
@@ -1803,7 +1835,7 @@ function tailZswarmJob(
 ): TailResult {
   const content = readZswarmSession(tf.path)
   if (!content) return tailResult(sessionId, tf, opts, [], 'transcript not found')
-  return tailResult(sessionId, tf, opts, content.events.filter(keep).slice(-limit))
+  return windowedResult(sessionId, tf, opts, content.events.filter(keep), limit)
 }
 
 /** Read the last `limit` real turns of a session's transcript, thinking filtered out.
@@ -1845,7 +1877,11 @@ export async function tailTranscript(
 
   // Claude and Codex: a real .jsonl on disk, read from the END rather than parsed whole.
   const raw = await readTailBytes(tf.path, 6 * 1024 * 1024)
-  const { events, cwd: rawCwd } = collectTailEventsFromRaw(raw, tf.source, filter, keep, limit)
+  const {
+    events,
+    cwd: rawCwd,
+    more,
+  } = collectTailEventsFromRaw(raw, tf.source, filter, keep, limit)
   const title = opts.title || sessionId
   const cwd = opts.cwd || rawCwd
   return {
@@ -1854,5 +1890,6 @@ export async function tailTranscript(
     title,
     cwd: cwd || decodeProjectKey(tf.project),
     events,
+    has_more: more,
   }
 }

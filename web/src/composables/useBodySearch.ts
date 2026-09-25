@@ -26,6 +26,7 @@ export function useBodySearch(deps: {
   selected: Ref<SessionSummary | null>
   select: (s: SessionSummary) => void
   loadTail: (opts?: { silent?: boolean }) => Promise<void>
+  anchorNextOpen?: (text: string | null) => void
 }) {
   const { t } = useI18n()
 
@@ -101,6 +102,9 @@ export function useBodySearch(deps: {
 
   /** Jump from a body-search hit to the full transcript, same as clicking it in the plain list. */
   async function selectFromBodyResult(r: SessionSearchResult) {
+    // Open AT the hit rather than at the end. A regex has no literal text to find again, so it
+    // keeps landing at the end as before.
+    deps.anchorNextOpen?.(advancedRegex.value ? null : bodySearchQueryUsed.value)
     const s = deps.sessions.value.find(
       (x) => x.session_id === r.session_id && x.source === r.source,
     )

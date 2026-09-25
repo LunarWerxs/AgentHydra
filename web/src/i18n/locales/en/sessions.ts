@@ -206,6 +206,10 @@ export default {
   showMore: 'Show more',
   showLess: 'Show less',
   noDisplayableTurns: 'No displayable turns.',
+  loadOlder: 'Load older turns',
+  loadingOlder: 'Loading older turns...',
+  jumpToLatest: 'Jump to latest',
+  newTurns: 'New turns below',
   // --- advanced (body) search ---
   advancedSearch: 'Advanced search',
   advancedSearchHint: 'Search the full session content on the server, not just titles',

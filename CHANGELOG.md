@@ -7,6 +7,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **The open transcript keeps its place: older turns page in, new ones wait below**
+  (`web/src/composables/useChatScroller.ts`, `web/src/composables/useOpenSession.ts`,
+  `server/src/transcript.ts`). One headless scroller now owns where the transcript sits, instead
+  of a hand-rolled "within 120px, then jump" check in the tail loader:
+  - **Load older turns** at the top pages 40 more turns in, up to the daemon's 200-turn cap, and
+    the turn you were reading stays where it was. `/api/sessions/:id/tail` answers `has_more`, so
+    the button shows only when an older kept turn really exists.
+  - A live poll follows the reply only while you are at the bottom. Scrolled up, you stay put
+    and a **Jump to latest** button appears (**New turns below** once something arrived).
+  - Opening a body-search hit lands on the newest loaded turn that holds the searched text,
+    not at the end.
+  - The pane is `role="log"` with `aria-relevant="additions"`, and carries `data-pending-scroll`
+    until its opening position is applied.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,
