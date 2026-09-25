@@ -23,6 +23,13 @@ from lib import hydralib  # noqa: E402
 
 SID = "abcd1111-2222-3333-4444-555566667777"
 WAITING = "I finished part one.\n## Am I 100% done?\n- No, part two is open.\nShall I continue?"
+ASK_CARD = ("```ask_user\n"
+            + json.dumps({"questions": [{
+                "id": "db", "question": "Which store should part two use?",
+                "options": [{"label": "SQLite", "description": "already a dependency"},
+                            {"label": "JSON file"}],
+                "allow_other": False}]})
+            + "\n```")
 
 
 from util import run_cli  # noqa: E402
@@ -161,6 +168,48 @@ class InterviewTest(unittest.TestCase):
         p.write_text("{ not json", encoding="utf-8")
         code, _, err = run_cli(interview.main, ["--apply", str(p)])
         self.assertEqual(code, 3)
+
+    def _raise_card(self):
+        """Rewrite the chat's last words so they end on an ask_user card."""
+        tp = Path(self.stub.routes["/api/sessions"][0]["transcript_path"])
+        tp.write_text(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": WAITING + "\n" + ASK_CARD}]}}) + "\n", encoding="utf-8")
+        old = time.time() - 600
+        os.utime(tp, (old, old))
+
+    def test_ask_user_card_surfaces_and_is_answered_exactly_once(self):
+        # ASK_USER (harvest, 2026-09-25): a chat that ends on a typed card gets it handed out
+        # parsed, and an 'answer' by option number stages the composed reply ONCE - the second
+        # answer to the same card is refused, so two answerers cannot send two replies.
+        self._raise_card()
+        q = interview.build_questions(cap=10)
+        card = q["questions"][0]["ask"]
+        self.assertEqual(card["questions"][0]["id"], "db")
+        first = interview.apply_answers({"answers": [
+            {"sessionId": SID, "decision": "answer", "askKey": card["key"], "choices": {"db": 2}}]})
+        self.assertTrue(first[0]["ok"], first[0]["outcome"])
+        pend = deliverylib.pending()
+        self.assertEqual(len(pend), 1)
+        self.assertIn("JSON file", pend[0]["text"])
+        self.assertIn("```ask_user_answer", pend[0]["text"])
+        again = interview.apply_answers({"answers": [
+            {"sessionId": SID, "decision": "answer", "choices": {"db": "SQLite"}}]})
+        self.assertFalse(again[0]["ok"])
+        self.assertIn("already answered", again[0]["outcome"])
+        self.assertEqual(len(deliverylib.pending()), 1)
+
+    def test_answer_refuses_a_stale_key_an_unknown_option_and_a_chat_with_no_card(self):
+        none = interview.apply_answers({"answers": [
+            {"sessionId": SID, "decision": "answer", "choices": {"db": 1}}]})
+        self.assertFalse(none[0]["ok"])
+        self._raise_card()
+        stale = interview.apply_answers({"answers": [
+            {"sessionId": SID, "decision": "answer", "askKey": "0000", "choices": {"db": 1}}]})
+        self.assertIn("stale", stale[0]["outcome"])
+        bad = interview.apply_answers({"answers": [
+            {"sessionId": SID, "decision": "answer", "choices": {"db": "Postgres"}}]})
+        self.assertFalse(bad[0]["ok"])
+        self.assertEqual(deliverylib.pending(), [])
 
 
 class ApprovalEscalationApplyTest(unittest.TestCase):

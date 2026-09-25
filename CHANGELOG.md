@@ -7,6 +7,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Ask_user cards in the judgment queue** (`orchestrator/scripts/lib/asklib.py`,
+  `orchestrator/scripts/interview.py`). A supervised chat can end its turn on a fenced
+  `ask_user` JSON block (1-3 questions, 2-3 labelled options each, optional free text) instead
+  of asking in prose. `interview.py --ask` shows it as numbered options, and the new `answer`
+  decision picks an option per question, stages the composed reply (readable lines plus an
+  `ask_user_answer` JSON block) for the courier, and marks the card answered once: a second or
+  stale answer is refused. Idea from Open WebUI's ask_user tool; nothing copied.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,
