@@ -40,7 +40,7 @@ import {
 } from '../orchestrator'
 import { jsonBody } from '../route-helpers'
 import { dropCachedUsage } from '../usage'
-import { desktopKey } from '../usage-service'
+import { desktopKey, readAppAfterOpen } from '../usage-service'
 
 /** Multi-instance (isolated Claude Desktop instances), instance-number lookups, and the
  *  orchestrator control routes. See index.ts for the app-wide middleware these routes run
@@ -93,7 +93,13 @@ app.get('/api/instances/:dir/account', async (c) => {
 })
 app.post('/api/instances/:dir/open', async (c) => {
   const dir = decodeURIComponent(c.req.param('dir'))
-  return c.json(await openInstance(dir))
+  const result = await openInstance(dir)
+  // A banked reset or credit shows on the row now instead of at the next usage sweep.
+  if (result.ok)
+    void readAppAfterOpen(dir).catch((err) =>
+      console.error('[instances] app reading after open failed:', err),
+    )
+  return c.json(result)
 })
 app.post('/api/instances/:dir/quit', async (c) => {
   const dir = decodeURIComponent(c.req.param('dir'))

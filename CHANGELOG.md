@@ -7,6 +7,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **A just-opened Claude Desktop app shows its banked reset and credit within seconds**
+  (`server/src/usage-service.ts`, `server/src/routes/instances.ts`). Those facts are read only
+  from a running app, and only the usage sweep read them, at most every 30 minutes: an app
+  opened between two sweeps showed no reset icon until the next one, or never if it closed
+  first (instance #15, 2026-09-25). An Open now asks the app itself a few seconds later. It
+  makes no quota request, so an Open never adds an unattended quota check, and the reading is
+  kept only while the cached one is still this profile's account.
+
 ## [1.3.1] - 2026-09-25
 
 ### Fixed
