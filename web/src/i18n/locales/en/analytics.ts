@@ -149,4 +149,24 @@ export default {
   recentEdits: 'Recently edited files',
   editsNote: 'Paths only, grouped by project. Newest first.',
   editsNone: 'No file changes recorded in this window.',
+  // --- recurring mistakes (fail-then-fix command pairs) ---
+  mistakes: 'Recurring mistakes',
+  mistakesNote:
+    'Shell commands that failed with a recognisable error and were fixed a few commands later, grouped by kind and command. Read from the newest transcripts when you ask; nothing is stored.',
+  mistakesScan: 'Scan',
+  mistakesRescan: 'Scan again',
+  mistakesCopy: 'Copy as rules',
+  mistakesCopied:
+    'Rules copied. Paste them into a rules file such as .claude/rules/cli-corrections.md.',
+  mistakesCopyFailed: "Couldn't copy to the clipboard.",
+  mistakesFailed: "Couldn't read the transcripts.",
+  mistakesCoverage: 'Read the newest {n} of {total} sessions.',
+  mistakesCoveragePartial: 'Read {n} of {total} sessions, then stopped on time.',
+  mistakesNone: 'No fail-then-fix pairs found in these sessions.',
+  mistakesCount: '{n}× in {sessions} session(s)',
+  mistakeUnknownFlag: 'unknown flag',
+  mistakeMissingArg: 'missing argument',
+  mistakeWrongPath: 'wrong path',
+  mistakeNotFound: 'command not found',
+  mistakePermission: 'permission denied',
 }

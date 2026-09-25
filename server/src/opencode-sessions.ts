@@ -340,6 +340,34 @@ export function readOpenCodeSession(
   }
 }
 
+/**
+ * One session's tool parts, parsed, in the order they ran. The command-corrections miner reads its
+ * shell calls and their outcome from these; the display reader above flattens away the status and
+ * exit code it needs, so it gets the raw part instead. Filtered in SQLite so a long session's text
+ * parts are never parsed.
+ */
+export function readOpenCodeToolParts(
+  sessionId: string,
+  path = OPENCODE_DB_PATH,
+): Array<Record<string, any>> {
+  const db = openDb(path)
+  if (!db) return []
+  try {
+    return db
+      .query<{ data: string }, [string]>(
+        `select data from part where session_id = ? and data like '%"type":"tool"%' ` +
+          'order by time_created, id',
+      )
+      .all(sessionId)
+      .map((row) => parseJson(row.data))
+      .filter((p): p is Record<string, any> => !!p && typeof p === 'object' && p.type === 'tool')
+  } catch {
+    return []
+  } finally {
+    db.close()
+  }
+}
+
 export interface OpenCodeSearchEvent {
   session_id: string
   cwd: string

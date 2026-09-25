@@ -546,6 +546,49 @@ export interface EditEntry {
   ts: number | null
 }
 
+/**
+ * Recurring command mistakes, mined from fail-then-fix pairs in the transcripts
+ * (server/src/command-corrections.ts). A pair is a shell command that failed with a recognisable
+ * error followed, a few commands later, by a similar command with the same base that succeeded.
+ */
+export type CommandErrorKind =
+  | 'unknown-flag'
+  | 'missing-arg'
+  | 'wrong-path'
+  | 'command-not-found'
+  | 'permission-denied'
+
+export interface CorrectionExample {
+  wrong: string
+  right: string
+  /** The error line that classified the failure, secret-redacted and truncated. */
+  error: string
+  count: number
+  sessions: number
+  lastTs: number | null
+}
+
+export interface CorrectionGroup {
+  kind: CommandErrorKind
+  /** The command the mistake was made with: the program, plus its subcommand for git/npm/cargo-style tools. */
+  base: string
+  count: number
+  sessions: number
+  lastTs: number | null
+  /** The most frequent distinct wrong -> right pairs, most frequent first. */
+  examples: CorrectionExample[]
+}
+
+export interface CorrectionReport {
+  groups: CorrectionGroup[]
+  /** The groups as a rules file (e.g. .claude/rules/cli-corrections.md), ready to copy. */
+  markdown: string
+  /** Transcripts read in this pass, and how many the store holds. */
+  scanned: number
+  total: number
+  budgetExhausted: boolean
+}
+
 /** What one queued run cost, computed from the turns inside its own window. Never stored. */
 export interface RunCost {
   id: string

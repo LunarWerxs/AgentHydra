@@ -1269,6 +1269,21 @@ export const TOOLS: McpEngineTool[] = [
     run: (a) => api(`/api/analytics/edits${qs({ limit: a.limit })}`),
   },
   {
+    name: 'get_command_corrections',
+    description:
+      'Recurring command mistakes: shell commands that failed with a recognisable error (unknown ' +
+      'flag, missing argument, wrong path, command not found, permission denied) and were fixed a ' +
+      'few commands later, grouped by error kind and base command with occurrence counts, mined ' +
+      'from the newest Claude, Codex and OpenCode sessions. `markdown` is the same list as a rules ' +
+      'file (e.g. .claude/rules/cli-corrections.md) to propose, not to write unasked. Read-only; ' +
+      'reads transcripts, so it is bounded by limit and budgetMs.',
+    inputSchema: S({
+      limit: { type: 'number', description: 'Newest sessions to read (default 200).' },
+      budgetMs: { type: 'number', description: 'Wall-clock budget in ms (default 15000).' },
+    }),
+    run: (a) => api(`/api/analytics/corrections${qs({ limit: a.limit, budgetMs: a.budgetMs })}`),
+  },
+  {
     name: 'get_run_cost',
     description:
       'What ONE queued run cost, computed from the transcript turns inside that run’s own start ' +

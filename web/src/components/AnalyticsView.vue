@@ -27,6 +27,7 @@ import {
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import CommandCorrections from '@/components/CommandCorrections.vue'
 import AreaLine from '@/components/charts/AreaLine.vue'
 import BarRows from '@/components/charts/BarRows.vue'
 import CalendarGrid from '@/components/charts/CalendarGrid.vue'
@@ -880,6 +881,8 @@ const survivalAverage = computed(() => {
             </ul>
           </section>
         </div>
+
+        <CommandCorrections />
 
         <section class="rounded-lg border border-border p-3">
           <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">

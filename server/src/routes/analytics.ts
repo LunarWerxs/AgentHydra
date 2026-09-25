@@ -10,6 +10,7 @@ import {
   spendReport,
   warmAnalyticsInBackground,
 } from '../analytics'
+import { mineCommandCorrections } from '../command-corrections'
 import { app } from '../http-app'
 import { boundedQueryInt } from '../route-helpers'
 import { listTranscriptFiles } from '../transcript'
@@ -60,6 +61,16 @@ app.get('/api/analytics/edits', (c) =>
   c.json({ edits: recentEdits(boundedQueryInt(c.req.query('limit'), 200, 1000)) }),
 )
 app.get('/api/analytics', (c) => c.json(analyticsCoverage()))
+// Recurring command mistakes (server/src/command-corrections.ts). Read on demand, never stored, and
+// bounded like the refresh below: it opens transcripts, which the totals above never do.
+app.get('/api/analytics/corrections', async (c) =>
+  c.json(
+    await mineCommandCorrections({
+      limit: boundedQueryInt(c.req.query('limit'), 200, 2000),
+      budgetMs: boundedQueryInt(c.req.query('budgetMs'), 15_000, 120_000),
+    }),
+  ),
+)
 /**
  * Which coding agents are installed on this machine (server/src/agent-catalog.ts).
  *
