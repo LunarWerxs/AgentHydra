@@ -250,6 +250,8 @@ describe('runOrchestrator - argv in, verdict out', () => {
     expect(routeLockKey('fan_out', ['--spec', 'x.json', '--json'])).toBe('fan_out')
     expect(routeLockKey('fan_out', ['send', 'g1', '--text', 'x'])).toBe('fan_out')
     expect(routeLockKey('fan_out', ['delete', 'g1'])).toBe('fan_out')
+    // a member's report_progress lands while later members are still spawning
+    expect(routeLockKey('fan_out', ['beacon', 'g1', '--beacon', '{}'])).toBeNull()
     expect(routeLockKey('migrate_batch', ['status'])).toBe('migrate_batch')
   })
 

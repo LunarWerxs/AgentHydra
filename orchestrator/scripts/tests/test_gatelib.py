@@ -534,6 +534,14 @@ class TaskDedupTest(unittest.TestCase):
         self.assertTrue(gatelib.same_task(MANAGER_TYPED, MANAGER_TYPED))
         self.assertFalse(gatelib.same_task(MANAGER_TYPED, "/orchestrate"))
 
+    def test_same_task_ignores_a_fan_out_members_beacon_footer(self):
+        # fan_out.py appends a footer naming a fresh group id to every member's first prompt;
+        # re-fanning the same task must still read as a duplicate of the chat already on it.
+        task = "Lint every file under the billing plane and fix what the linter reports."
+        spawned = (task + "\n\n" + gatelib.BEACON_MARK + " You are member 0 of fan-out group "
+                   "fo-abc. Report progress with the AgentHydra MCP tool report_progress ...")
+        self.assertTrue(gatelib.same_task(spawned, task))
+
     def test_normalize_task_collapses_whitespace_and_case(self):
         self.assertEqual(gatelib.normalize_task("  Review   THIS\nrepo  "), "review this repo")
 

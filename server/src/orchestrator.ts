@@ -120,6 +120,10 @@ function liveRun(script: string): InFlightRun | null {
 /** fan_out.py's own read-only subcommands (its docstring: `status` and `list` never spawn, send
  *  or delete anything) - the ONLY fan_out invocations this route must never queue behind a write. */
 const FAN_OUT_READ_SUBCOMMANDS = new Set(['status', 'list'])
+/** `beacon` writes, but only its own file under its own ledger lock (fan_out.py's
+ *  record_beacon), so it takes no route lock either: a member reports progress WHILE later
+ *  members of its group are still spawning, and must never be refused busy by that spawn. */
+const FAN_OUT_UNLOCKED_SUBCOMMANDS = new Set([...FAN_OUT_READ_SUBCOMMANDS, 'beacon'])
 
 /**
  * The in-flight/route-lock KEY for one invocation - `script` for every script, UNLESS it is one
@@ -137,7 +141,7 @@ const FAN_OUT_READ_SUBCOMMANDS = new Set(['status', 'list'])
  * a delete - still cannot overlap.
  */
 export function routeLockKey(script: string, args: string[]): string | null {
-  if (script === 'fan_out' && FAN_OUT_READ_SUBCOMMANDS.has(args[0] ?? '')) return null
+  if (script === 'fan_out' && FAN_OUT_UNLOCKED_SUBCOMMANDS.has(args[0] ?? '')) return null
   return script
 }
 

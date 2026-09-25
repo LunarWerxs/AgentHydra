@@ -32,6 +32,9 @@ WHAT IT DOES, and every rail it keeps:
     (working / idle / stalled / finished / crashed) with its last words, and `send` delivers one
     follow-up into all of them through the daemon's message route (native peer channel for a
     live chat, the composer for a dormant one), holds respected.
+  - TELLS each member its group id and index (a footer on its first prompt) so it can report a
+    typed progress BEACON (`beacon`, MCP report_progress): phase, cumulative summary, next
+    step, blocked-on-user. `status` carries each member's latest beacon, blocked ones first.
   - A duplicate of a chat that ALREADY EXISTS in the fleet is refused per task (the same
     double-check spawn_chat runs); two tasks in the SAME spec may share a prompt on purpose
     (seven planes, one instruction), so that check runs HERE, once per task, against the fleet
@@ -70,6 +73,7 @@ Usage: python fan_out.py --spec <file.json | '{"tasks":[...]}'> [--per-account N
        python fan_out.py send <group> --text "..." [--only <sessionId>]... [--force] [--json]
        python fan_out.py recover <group> [--force] [--json] # each failed member's recipe, once
        python fan_out.py delete <group> [--force] [--json]  # every member chat, everywhere
+       python fan_out.py beacon <group> --beacon '{"member": N, "mode": "...", ...}' [--json]
 Spec:  {"tasks": [{"title": "...", "folder": "<dir>", "prompt": "...", "artifact": "..."}, ...],
         "group": "<name>"}
        (a bare list of tasks is accepted too; `title` and `artifact` are optional)
@@ -105,6 +109,7 @@ from lib import (clilib, enginelib, gatelib, holdlib, hydralib, ledgerlib, recei
                  recoverylib)
 
 STATE_FILE = "fanouts.json"
+BEACON_FILE = "fanout-beacons.json"
 # How long to wait for a closed instance we were told to open to report running, and how long
 # between looks.
 OPEN_WAIT_SECS = 90
@@ -135,12 +140,15 @@ def _load() -> list[dict]:
         return []
 
 
-def _save(rows: list[dict]) -> None:
-    path = _path()
+def _write_atomic(path: Path, data: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _save(rows: list[dict]) -> None:
+    _write_atomic(_path(), rows)
 
 
 def _upsert(group: dict) -> None:
@@ -177,6 +185,110 @@ def _now_iso() -> str:
 
 def _new_group_id() -> str:
     return f"fo-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+
+
+# --- progress beacons ------------------------------------------------------------------------
+# WHY: `status` could only INFER a member's state after the fact from its transcript (working /
+# idle / finished) and could not tell "waiting on a person" from "done". A member now reports a
+# typed beacon itself (MCP report_progress -> `beacon`): its phase, a cumulative summary, the
+# NEXT step, and an explicit blocked-on-user flag, so the manager can steer or pick up a blocked
+# member without reading its transcript. Beacons live in their OWN file: spawn_group rewrites
+# the whole group record after every spawn from its in-memory copy, so a beacon written into
+# fanouts.json while later members were still spawning would be overwritten and lost.
+
+BEACON_MODES = ("planning", "execution", "verification")
+BEACON_TEXT_CAPS = {"taskName": 120, "summary": 1200, "nextStep": 400, "confidenceWhy": 400}
+BEACON_MAX_PATHS = 10
+
+
+def _beacon_path() -> Path:
+    return ledgerlib._state_dir() / BEACON_FILE
+
+
+def _load_beacons() -> dict:
+    try:
+        data = json.loads(_beacon_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def beacon_footer(group_id: str, index: int) -> str:
+    """The lines appended to a member's first prompt: who it is in the group and how to report.
+    Starts with gatelib.BEACON_MARK so the fleet duplicate check can cut it off again."""
+    return (f"\n\n{gatelib.BEACON_MARK} You are member {index} of fan-out group {group_id}. "
+            f"Report progress with the AgentHydra MCP tool report_progress "
+            f'{{group: "{group_id}", member: {index}, task_name, mode: planning | execution | '
+            f"verification, summary (cumulative), next_step}} when you start and each time your "
+            f"phase changes. When you finish or need a person, call it once more with "
+            f"paths_to_review, confidence (0-1) and confidence_why, and blocked_on_user: true if "
+            f"you cannot go on without a person.")
+
+
+def parse_beacon(raw: str) -> dict:
+    """Validate one beacon (JSON text). Raises ValueError with the exact complaint."""
+    try:
+        data = json.loads(raw)
+    except ValueError as err:
+        raise ValueError(f"beacon is not JSON: {err}") from err
+    if not isinstance(data, dict):
+        raise ValueError("beacon must be a JSON object")
+    try:
+        member = int(data.get("member"))
+    except (TypeError, ValueError):
+        raise ValueError("beacon needs member (the member index from the prompt)") from None
+    mode = str(data.get("mode") or "").strip().lower()
+    if mode not in BEACON_MODES:
+        raise ValueError(f"mode must be one of {', '.join(BEACON_MODES)}")
+    out: dict = {"member": member, "mode": mode}
+    for key, cap in BEACON_TEXT_CAPS.items():
+        text = str(data.get(key) or "").strip()
+        if text:
+            out[key] = text[:cap]
+    if not out.get("taskName"):
+        raise ValueError("beacon needs taskName")
+    paths = data.get("pathsToReview") or []
+    if not isinstance(paths, list):
+        raise ValueError("pathsToReview must be a list of paths")
+    paths = [str(p).strip() for p in paths if str(p).strip()][:BEACON_MAX_PATHS]
+    if paths:
+        out["pathsToReview"] = paths
+    if data.get("confidence") is not None:
+        try:
+            conf = float(data["confidence"])
+        except (TypeError, ValueError):
+            raise ValueError("confidence must be a number from 0 to 1") from None
+        if not 0 <= conf <= 1:
+            raise ValueError("confidence must be a number from 0 to 1")
+        if not out.get("confidenceWhy"):
+            raise ValueError("confidence needs confidenceWhy (the justification)")
+        out["confidence"] = conf
+    out["blockedOnUser"] = data.get("blockedOnUser") is True
+    return out
+
+
+def record_beacon(group: dict, beacon: dict) -> dict:
+    """Store `beacon` as the member's LATEST (one per member, replaced each call). Serialized
+    across processes; beacons of groups no longer on record are dropped on the way."""
+    index = beacon["member"]
+    member = next((m for m in group.get("members", []) if m.get("index") == index), None)
+    if member is None:
+        raise ValueError(f"group {group['id']} has no member {index}")
+    stamped = {**beacon, "at": _now_iso()}
+    if member.get("sessionId"):
+        stamped["sessionId"] = member["sessionId"]
+    with ledgerlib.locked("fanout-beacons"):
+        known = {g.get("id") for g in _load()}
+        data = {gid: rows for gid, rows in _load_beacons().items() if gid in known}
+        data.setdefault(group["id"], {})[str(index)] = stamped
+        _write_atomic(_beacon_path(), data)
+    return stamped
+
+
+def beacons_for(group_id: str) -> dict:
+    """{member index as text: latest beacon} for one group."""
+    rows = _load_beacons().get(group_id)
+    return rows if isinstance(rows, dict) else {}
 
 
 # --- the spec --------------------------------------------------------------------------------
@@ -677,10 +789,13 @@ def _spawn_member(group: dict, m: dict, target: dict, spawned_ids: set,
     if receipts:
         m["receipt"] = receiptlib.make(f"{group['id']}#{m['index']}", m["folder"], artifact)
         prompt = receiptlib.stamp(prompt, m["receipt"])
+    # The chat gets the task plus its beacon footer; m["prompt"] stays the bare task, which
+    # the first turn still OPENS with, so first_turn_owner keeps recognising the chat.
+    typed = prompt + beacon_footer(group["id"], m["index"])
     # force=True here lifts ONLY spawn_chat's own duplicate check, which this function has
     # already run with the group's members excluded; every other rail in spawn() stays.
     try:
-        res = spawn_chat.spawn(m["folder"], prompt, str(target["num"]), force=True)
+        res = spawn_chat.spawn(m["folder"], typed, str(target["num"]), force=True)
     except hydralib.DaemonError as err:
         res = {"ok": False, "why": f"daemon failure during spawn: {err.detail or err}"}
     m["state"], m["why"] = _spawn_state(res)
@@ -916,10 +1031,21 @@ def status(group: dict) -> dict:
         if kind:
             m["recovery"] = {**recoverylib.recipe_for(kind),
                              "attemptsUsed": recoverylib.attempts_used(kind, _subject(group, rec))}
+    # Each member's latest self-reported beacon rides along, and a member that says it is
+    # blocked on a person is listed FIRST (stable otherwise) - that is the one to act on.
+    beacons = beacons_for(group["id"])
+    for m in members:
+        b = beacons.get(str(m.get("index")))
+        if b:
+            m["beacon"] = b
+    members.sort(key=lambda m: not (m.get("beacon") or {}).get("blockedOnUser"))
+    blocked = [m.get("index") for m in members if (m.get("beacon") or {}).get("blockedOnUser")]
     out = {"id": group["id"], "name": group.get("name"), "createdAt": group.get("createdAt"),
            "dryRun": group.get("dryRun", False), "counts": counts, "members": members,
            "sends": group.get("sends", []),
            "recoveries": recoverylib.ledger(_subject_prefix(group))}
+    if blocked:
+        out["blockedOnUser"] = blocked
     for key in ("phase", "error", "envelope"):
         if group.get(key):
             out[key] = group[key]
@@ -1283,7 +1409,7 @@ def _positional(argv: list[str]) -> list[str]:
     """Words that are neither flags nor a flag's value."""
     valued = {"--spec", "--per-account", "--exclude", "--only", "--text", "--group-id",
               "--parent", "--caller-session", "--max-nodes", "--max-depth", "--ceiling-pct",
-              "--receipt-secs"}
+              "--receipt-secs", "--beacon"}
     out = []
     i = 0
     while i < len(argv):
@@ -1339,6 +1465,11 @@ def _print_status(s: dict) -> None:
         if m.get("receipt"):
             line += f"  receipt {m['receipt'].get('state')}"
         print(line)
+        b = m.get("beacon")
+        if b:
+            print(f"      {'BLOCKED ON USER - ' if b.get('blockedOnUser') else ''}"
+                  f"{b.get('mode', '').upper()} {b.get('taskName', '')[:60]}"
+                  f"{' - next: ' + b['nextStep'][:80] if b.get('nextStep') else ''}  ({b.get('at')})")
         if m.get("lastText"):
             tail = m["lastText"].strip().splitlines()
             print("      " + (tail[-1][:140] if tail else ""))
@@ -1429,6 +1560,29 @@ def _cmd_recover(words: list[str], as_json: bool, force: bool) -> int:
                   + (f" (incident {r['incident']})" if r.get("incident") else "")
                   + f"  {str(r.get('detail') or '')[:120]}")
     return recover_exit_code(record)
+
+
+def _cmd_beacon(argv: list[str], words: list[str], as_json: bool) -> int:
+    """Records one member's progress beacon (MCP report_progress) and echoes it back."""
+    raw = _take_value(argv, "--beacon")
+    if len(words) < 2 or not raw:
+        print(__doc__.strip(), file=sys.stderr)
+        return 3
+    group = find_group(words[1])
+    if not group:
+        print("REFUSED: no such fan-out group (fan_out list shows them)", file=sys.stderr)
+        return 3
+    try:
+        stamped = record_beacon(group, parse_beacon(raw))
+    except ValueError as err:
+        print(f"REFUSED: {err}", file=sys.stderr)
+        return 3
+    if as_json:
+        print(json.dumps({"ok": True, "recorded": True, "id": group["id"], "beacon": stamped},
+                         indent=2))
+    else:
+        print(f"beacon recorded for member {stamped['member']} of {group['id']}")
+    return 0
 
 
 def _cmd_delete(words: list[str], as_json: bool, force: bool) -> int:
@@ -1535,7 +1689,8 @@ def main(argv: list[str]) -> int:
     as_json = "--json" in argv
     force = "--force" in argv
     words = _positional(argv)
-    cmd = (words[0] if words and words[0] in ("list", "status", "send", "recover", "delete")
+    cmd = (words[0] if words and words[0] in ("list", "status", "send", "recover", "delete",
+                                             "beacon")
            else None)
 
     try:
@@ -1549,6 +1704,8 @@ def main(argv: list[str]) -> int:
             return _cmd_recover(words, as_json, force)
         if cmd == "delete":
             return _cmd_delete(words, as_json, force)
+        if cmd == "beacon":
+            return _cmd_beacon(argv, words, as_json)
         return _cmd_spawn(argv, force, as_json)
     except hydralib.DaemonError as err:
         print(f"fan_out FAILED: {err}", file=sys.stderr)
