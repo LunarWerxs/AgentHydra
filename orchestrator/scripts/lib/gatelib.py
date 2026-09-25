@@ -212,6 +212,10 @@ def ending_event_text(ev: dict) -> str:
     return ""
 
 
+# Claude Code's synthetic answer to a resume boot's meta prompt - see _idle_verdict.
+NO_RESPONSE_REQUESTED = "No response requested."
+
+
 def is_api_error_event(ev: dict) -> bool:
     """Ported from rate-limit-signal.ts."""
     if ev.get("isApiErrorMessage") is True:
@@ -340,6 +344,9 @@ def parse_tail_records(text: str, whole_file: bool) -> list[dict]:
                 # message, a session-start hook. Kept verbatim so a caller can see past such a
                 # record without having to recognise its text - see _judgeable_tail.
                 "meta": ev.get("isMeta") is True,
+                # The prompt this record belongs to. A prompt, its tool results and anything the
+                # app files under it share one id - see _answered_late.
+                "prompt_id": ev.get("promptId") if isinstance(ev.get("promptId"), str) else None,
             }
         )
     return strip_local_tail(out)
@@ -365,9 +372,33 @@ def _judgeable_tail(records: list[dict]) -> list[dict]:
     blast radius has to be earned separately.
     """
     end = len(records)
-    while end > 0 and records[end - 1]["type"] == "user" and records[end - 1].get("meta"):
+    while end > 0 and records[end - 1]["type"] == "user" and (
+            records[end - 1].get("meta") or _answered_late(records, end - 1)):
         end -= 1
     return records[:end]
+
+
+def _answered_late(records: list[dict], i: int) -> bool:
+    """Is records[i] a user record the app filed under a prompt that had ALREADY been answered?
+
+    ⛔ TWELVE IDLE MINUTES, 2026-09-25 (#14 -> #15). The move booted the landed engine, the boot
+    wrote its meta "Continue from where you left off." and the reply "No response requested.",
+    and six seconds later the app filed the previous engine's stopped-shell task-notification
+    under that SAME prompt id, after the reply. Nothing answers such a record and nothing is in
+    flight, but as the newest record it read as a turn in progress: the resume was refused as
+    mid-turn and the chat sat idle until a person typed into it. A tool result carries its
+    prompt's id too and never counts here: the assistant still owes a reply to one."""
+    rec = records[i]
+    pid = rec.get("prompt_id")
+    if rec["type"] != "user" or rec["has_tool_result"] or not pid:
+        return False
+    asked = False
+    for prev in records[:i]:
+        if prev["type"] == "user" and prev.get("prompt_id") == pid:
+            asked = True
+        elif asked and prev["type"] == "assistant":
+            return True
+    return False
 
 
 def first_user_prompt(path: str, max_bytes: int = 256 * 1024) -> str:
@@ -763,7 +794,13 @@ def _idle_verdict(
         last and not completed and not orphaned and not walled
         and _predates(last, engine_started)
     )
-    if not (completed or orphaned or walled or resumed_silent):
+    # A RESUME BOOT'S OWN NO-OP IS A TURN THAT ENDED (2026-09-25, #14 -> #15). The landed engine
+    # is booted with the meta "Continue from where you left off." and answers it with a SYNTHETIC
+    # "No response requested.", which reads as an api_error and so fails every test above: the
+    # moved chat sat idle for twelve minutes as "a turn in flight" until a person typed into it.
+    no_op = bool(last and last["type"] == "assistant"
+                 and last["text"].strip() == NO_RESPONSE_REQUESTED)
+    if not (completed or orphaned or walled or resumed_silent or no_op):
         return None
     fe = _finished_evidence(records)
     return {"quiet_secs": quiet, "orphaned_tool_call": orphaned, "usage_wall": walled,

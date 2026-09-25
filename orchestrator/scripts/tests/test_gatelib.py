@@ -227,6 +227,20 @@ class GateTest(TranscriptCase):
         v = gatelib.gate("s", p, {"pid": 123, "name": "x"})
         self.assertIsNotNone(v["idle"])
 
+    def test_a_notification_filed_under_an_answered_prompt_does_not_make_a_landed_chat_mid_turn(self):
+        """TWELVE IDLE MINUTES, 2026-09-25. The landed engine answered its boot prompt with the
+        synthetic "No response requested.", then the app filed the old engine's stopped-task
+        notification under the same prompt id, after the reply. Both read as a turn in flight
+        and the resume was never typed."""
+        boot = {**user("Continue from where you left off."), "isMeta": True, "promptId": "p1"}
+        no_op = assistant("No response requested.")
+        no_op["message"]["model"] = "<synthetic>"
+        note = {**user("<task-notification><status>stopped</status></task-notification>"),
+                "promptId": "p1", "origin": {"kind": "task-notification"}}
+        p = self.transcript([boot, no_op, note], age_secs=600)
+        v = gatelib.gate("s", p, {"pid": 123, "name": "x"})
+        self.assertIsNotNone(v["idle"], "the answered prompt is what ended this transcript")
+
     def test_a_REAL_user_prompt_at_the_tail_is_still_a_turn_in_flight(self):
         """The rail: only records the APP marked isMeta are seen past. A person's prompt (or any
         ordinary user record) still ends the transcript mid-turn, whatever it says."""

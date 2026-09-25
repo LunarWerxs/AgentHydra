@@ -273,6 +273,17 @@ export function pickInstance(
   const byEmail = all.filter((r) => r.email?.toLowerCase() === needle)
   if (byEmail.length === 1) return byEmail[0]!
 
+  // A desktop profile's FOLDER label ('temp2') and the leading words of an account name ('Artem'
+  // for 'Artem Volkov'), same one-row rule. list_chats already answered to the label while
+  // move_chats refused it, and neither took the first name a person says (2026-09-25: two
+  // refused calls before a move whose chat was waiting at a usage wall).
+  const folder = (r: ResolvedInstance) =>
+    r.kind === 'desktop' ? (r.handle.split(/[\\/]/).filter(Boolean).pop() ?? '').toLowerCase() : ''
+  const byFolder = all.filter((r) => folder(r) === needle)
+  if (byFolder.length === 1) return byFolder[0]!
+  const byLeading = all.filter((r) => r.name.toLowerCase().startsWith(`${needle} `))
+  if (byLeading.length === 1) return byLeading[0]!
+
   return null
 }
 

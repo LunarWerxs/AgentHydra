@@ -281,6 +281,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   first (instance #15, 2026-09-25). An Open now asks the app itself a few seconds later. It
   makes no quota request, so an Open never adds an unattended quota check, and the reading is
   kept only while the cached one is still this profile's account.
+- **A chat moved off a usage wall gets its resume typed instead of sitting idle**
+  (`orchestrator/scripts/lib/gatelib.py`). The landed engine answers its boot prompt with a
+  synthetic "No response requested.", and the app can then file the old engine's stopped-task
+  notification under that same prompt. The gate read either one as a turn in flight, so the
+  courier never typed the resume and the peer channel does not wake an idle desktop chat: a
+  chat moved #14 -> #15 on 2026-09-25 sat idle 12 minutes until a person typed into it. Both
+  now read as a finished turn; a tool result still reads as in flight.
+- **`move_chat`, `move_chats` and `list_chats` take a profile's folder label or a first name**
+  (`server/src/core/instance-ref.ts`). The tools promise "number, name, label or email", but a
+  name had to be the full account name and only `list_chats` took the label, so `temp2` and
+  `Artem` were refused. Both resolve now, under the same exactly-one-row rule as a name.
 
 ## [1.3.1] - 2026-09-25
 

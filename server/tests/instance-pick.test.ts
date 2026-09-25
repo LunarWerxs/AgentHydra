@@ -80,6 +80,12 @@ test('an ambiguous name or email resolves to NOTHING rather than to whichever ro
   expect(pickInstance(FLEET, 'grace@example.com')).toBe(null)
 })
 
+test('a profile folder label and a first name resolve when they name exactly one row', () => {
+  expect(pickInstance(FLEET, 'i13')?.num).toBe(13)
+  expect(pickInstance(FLEET, 'ada')?.num).toBe(3)
+  expect(pickInstance([...FLEET, row({ num: 20, name: 'Ada King' })], 'Ada')).toBe(null)
+})
+
 test('a name beats an email, and both lose to a number', () => {
   // One row's NAME is another row's email address: contrived, but the order has to be decided
   // somewhere, and "the more specific spelling wins" is the only defensible one.
