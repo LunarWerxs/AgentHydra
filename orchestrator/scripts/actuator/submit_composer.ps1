@@ -26,10 +26,20 @@
 #       enabled Send button - 6 the required permission mode could not be set (nothing sent)
 #       - 1 error, INCLUDING -Instance blank or matching zero/more-than-one running instance
 #       (2026-09-06: -Instance is now required and matched by EXACT leaf-name equality).
+#
+# THE WAITED SEND AND THE CLEARED REFUSAL (2026-09-24, chat ffb5fe39: two fan_outs to one idle
+# account ended "found our text in a composer but no ENABLED send button beside it", and the
+# prompt stayed typed in that composer, where a later Enter would start a chat no group tracks).
+# Send is now waited for, up to ~10 s, re-finding OUR composer each look (the toolbar can still be
+# loading its model and permission pickers when the text lands). A refusal prints every Send-named
+# button it saw and its enabled state, so the next one says why. -ClearOnRefuse (the caller's LAST
+# attempt only) empties the composer on exit 4, but only when its text STARTS with our prompt -
+# words a person typed ahead of it are never ours to erase - and says CLEARED or NOT CLEARED.
 param(
   [Parameter(Mandatory = $true)][string]$Contains,
   [Parameter(Mandatory = $true)][string]$Instance,
-  [string]$RequireMode = ''
+  [string]$RequireMode = '',
+  [switch]$ClearOnRefuse
 )
 # The picker's possible names - the app's own labels for its modes (English; the sibling
 # actuators carry localized lists for Send/Stop, extend here the same way if a German app shows up).
@@ -75,52 +85,61 @@ if ($mains.Count -ne 1) {
 $needle = $Contains.Trim()
 if ($needle.Length -gt 60) { $needle = $needle.Substring(0, 60) }
 
+# find the COMPOSER holding OUR text - structurally, the way the courier's actuator finds
+# it (review 2026-09-01: this walked EVERY Edit in the window). A composer is a WRITABLE box
+# (ValuePattern, not read-only); a read-only box that merely renders our prompt back can
+# never be the target. ⛔ NO pane-position rule here, unlike the sibling actuators: a
+# brand-new chat's composer sits CENTRED in the window, left of the 38% line, and a
+# same-day attempt at that rule made this exit 3 on every spawn (measured 2026-09-01).
+$editCond = New-Object System.Windows.Automation.PropertyCondition(
+  [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [System.Windows.Automation.ControlType]::Edit)
+$btnCond = New-Object System.Windows.Automation.PropertyCondition(
+  [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [System.Windows.Automation.ControlType]::Button)
+$walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+function Find-OurComposer($inEl) {
+  foreach ($e in $inEl.FindAll($TREE, $editCond)) {
+    try {
+      if ($e.Current.IsOffscreen) { continue }
+      $vp = TryPattern $e ([System.Windows.Automation.ValuePattern]::Pattern)
+      if (-not $vp -or $vp.Current.IsReadOnly) { continue }
+      $val = $vp.Current.Value
+      if ($val -and $val.Contains($needle)) { return $e }
+    } catch { continue }
+  }
+  return $null
+}
+# ⛔ SCOPED TO THE COMPOSER'S OWN CONTAINER, never the whole window: a window can show two
+# panes, each with its own composer and Send, so a window-wide search could press the OTHER
+# conversation's button and fire someone's half-written message. Walk up a few ancestors
+# from the matched composer and search only there.
+function Get-ComposerScope($t) {
+  $sc = $t
+  for ($up = 0; $up -lt 4; $up++) {
+    $parent = $walker.GetParent($sc)
+    if (-not $parent) { break }
+    $sc = $parent
+  }
+  return $sc
+}
+
 $foundTextNoButton = $false
 foreach ($m in $mains) {
   $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$m.ProcId)
   $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
   if (-not $win) { continue }
 
-  # find the COMPOSER holding OUR text - structurally, the way the courier's actuator finds
-  # it (review 2026-09-01: this walked EVERY Edit in the window). A composer is a WRITABLE box
-  # (ValuePattern, not read-only); a read-only box that merely renders our prompt back can
-  # never be the target. ⛔ NO pane-position rule here, unlike the sibling actuators: a
-  # brand-new chat's composer sits CENTRED in the window, left of the 38% line, and a
-  # same-day attempt at that rule made this exit 3 on every spawn (measured 2026-09-01).
-  $editCond = New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-    [System.Windows.Automation.ControlType]::Edit)
-  $target = $null
-  foreach ($e in $win.FindAll($TREE, $editCond)) {
-    try {
-      if ($e.Current.IsOffscreen) { continue }
-      $vp = TryPattern $e ([System.Windows.Automation.ValuePattern]::Pattern)
-      if (-not $vp -or $vp.Current.IsReadOnly) { continue }
-      $val = $vp.Current.Value
-      if ($val -and $val.Contains($needle)) { $target = $e; break }
-    } catch { continue }
-  }
+  $target = Find-OurComposer $win
   if (-not $target) { continue }
 
-  # ...and the Send button that is ENABLED (the app enables it only once it has the text).
-  # ⛔ SCOPED TO THE COMPOSER'S OWN CONTAINER, never the whole window: a window can show two
-  # panes, each with its own composer and Send, so a window-wide search could press the OTHER
-  # conversation's button and fire someone's half-written message. Walk up a few ancestors
-  # from the matched composer and search only there.
-  $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
-  $scope = $target
-  for ($up = 0; $up -lt 4; $up++) {
-    $parent = $walker.GetParent($scope)
-    if (-not $parent) { break }
-    $scope = $parent
-  }
+  # ...and the Send button that is ENABLED (the app enables it only once it has the text),
+  # searched in the composer's own scope only (Get-ComposerScope).
+  $scope = Get-ComposerScope $target
 
   # THE PERMISSION MODE, BEFORE THE SEND (see the header). The picker sits in the composer's
   # own toolbar, i.e. inside the same scope as the Send button.
   if ($RequireMode) {
-    $btnCond = New-Object System.Windows.Automation.PropertyCondition(
-      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-      [System.Windows.Automation.ControlType]::Button)
     # 2026-09-06: used to return the FIRST mode-named button in tree order - on a window
     # showing two panes (or a stray second picker) that can be the OTHER conversation's
     # button. Identify by POSITION instead: among every MODE_NAMES match in scope, pick the
@@ -281,44 +300,65 @@ foreach ($m in $mains) {
         Write-Output "permission mode set: '$before' -> '$RequireMode'"
       }
       # the tree re-rendered under the menu: re-find the composer scope for the Send search
-      $target = $null
-      foreach ($e in $fresh.FindAll($TREE, $editCond)) {
-        try {
-          if ($e.Current.IsOffscreen) { continue }
-          $vp2 = TryPattern $e ([System.Windows.Automation.ValuePattern]::Pattern)
-          if (-not $vp2 -or $vp2.Current.IsReadOnly) { continue }
-          $val2 = $vp2.Current.Value
-          if ($val2 -and $val2.Contains($needle)) { $target = $e; break }
-        } catch { continue }
-      }
+      $target = Find-OurComposer $fresh
       if (-not $target) { Write-Output "REFUSED: the composer lost our text while the mode was being set - not sending"; exit 4 }
-      $scope = $target
-      for ($up = 0; $up -lt 4; $up++) {
-        $parent = $walker.GetParent($scope)
-        if (-not $parent) { break }
-        $scope = $parent
-      }
+      $scope = Get-ComposerScope $target
     } elseif ($modeBtn) {
       Write-Output "permission mode already '$RequireMode'"
     }
   }
-  foreach ($b in $scope.FindAll($TREE, (New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-        [System.Windows.Automation.ControlType]::Button)))) {
-    try {
-      $bn = $b.Current.Name
-      if (-not $bn -or ($SEND_NAMES -notcontains $bn)) { continue }
-      if (-not $b.Current.IsEnabled) { continue }
-      $inv = TryPattern $b ([System.Windows.Automation.InvokePattern]::Pattern)
-      if (-not $inv) { continue }
-      $inv.Invoke()
-      Write-Output "SENT the pre-filled composer in $($m.Dir) (button '$bn')"
-      exit 0
-    } catch { continue }
+  # THE WAITED SEND (see the header): up to 10 looks a second apart, OUR composer re-found each
+  # time, because the toolbar may still be loading when the text lands.
+  $sendSeen = @()
+  $lostText = $false
+  for ($look = 0; $look -lt 10; $look++) {
+    if ($look -gt 0) {
+      Start-Sleep -Milliseconds 1000
+      $freshWin = [System.Windows.Automation.AutomationElement]::FromHandle($win.Current.NativeWindowHandle)
+      $again = Find-OurComposer $freshWin
+      if (-not $again) { $lostText = $true; break }
+      $target = $again
+      $scope = Get-ComposerScope $target
+    }
+    $sendSeen = @()
+    foreach ($b in $scope.FindAll($TREE, $btnCond)) {
+      try {
+        $bn = $b.Current.Name
+        if (-not $bn -or ($SEND_NAMES -notcontains $bn)) { continue }
+        $en = $b.Current.IsEnabled
+        $sendSeen += "'$bn' enabled=$en"
+        if (-not $en) { continue }
+        $inv = TryPattern $b ([System.Windows.Automation.InvokePattern]::Pattern)
+        if (-not $inv) { $sendSeen[-1] += ' (no Invoke)'; continue }
+        $inv.Invoke()
+        Write-Output "SENT the pre-filled composer in $($m.Dir) (button '$bn')"
+        exit 0
+      } catch { continue }
+    }
   }
-  # Found the text here but no enabled Send yet - another $mains entry (bare-name substring
-  # can match several instances) may still hold the real, sendable target, so keep looking
-  # instead of exiting on the first non-sendable hit.
+  if ($lostText) {
+    Write-Output "REFUSED: our text left the composer while Send was being waited for - nothing pressed"
+    exit 4
+  }
+  $seen = if ($sendSeen.Count) { 'Send buttons seen: ' + ($sendSeen -join ', ') } else { "no Send-named button in the composer's scope" }
+  Write-Output "note: waited ~10 s for an enabled Send - $seen"
+  if ($ClearOnRefuse) {
+    try {
+      $vpc = TryPattern $target ([System.Windows.Automation.ValuePattern]::Pattern)
+      $cur = if ($vpc) { [string]$vpc.Current.Value } else { '' }
+      if (-not $vpc) {
+        Write-Output "NOT CLEARED: the composer offers no ValuePattern - our prompt is still typed there"
+      } elseif (-not $cur.Trim().StartsWith($needle)) {
+        Write-Output "NOT CLEARED: the composer holds words ahead of our prompt - left for a person"
+      } else {
+        $vpc.SetValue('')
+        Start-Sleep -Milliseconds 400
+        $after = [string]$vpc.Current.Value
+        if ($after.Contains($needle)) { Write-Output "NOT CLEARED: SetValue did not take - our prompt is still typed there" }
+        else { Write-Output "CLEARED our unsent prompt from the composer" }
+      }
+    } catch { Write-Output "NOT CLEARED: $($_.Exception.Message)" }
+  }
   $foundTextNoButton = $true
 }
 if ($foundTextNoButton) {

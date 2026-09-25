@@ -251,6 +251,22 @@ class SpawnChatTest(unittest.TestCase):
         self.assertEqual(len(posts), 1)
         self.assertTrue(res["started"].startswith("running"), res["started"])
 
+    def test_a_send_refused_to_the_end_takes_its_typed_prompt_back_out(self):
+        # 2026-09-24, chat ffb5fe39: exit 4 on every attempt left the prompt in the composer,
+        # where a later Enter starts a chat no group tracks. Only the LAST attempt clears.
+        refused = mock.Mock(returncode=4, stderr="", stdout=(
+            "note: waited ~10 s for an enabled Send - Send buttons seen: 'Send' enabled=False\n"
+            "CLEARED our unsent prompt from the composer\n"
+            "REFUSED: found our text in a composer but no ENABLED send button beside it"))
+        with mock.patch.object(spawn_chat, "SUBMIT_ACTUATOR", Path(__file__)), \
+             mock.patch.object(spawn_chat.time, "sleep"), \
+             mock.patch.object(spawn_chat.clilib, "run_text", return_value=refused) as run:
+            submitted, note = spawn_chat._submit_composer({"dir": "C:/x/inst26"}, "do the thing")
+        clears = ["-ClearOnRefuse" in c.args[0] for c in run.call_args_list]
+        self.assertEqual(clears, [False] * (len(clears) - 1) + [True])
+        self.assertEqual(submitted, "exit 4")
+        self.assertIs(spawn_chat.composer_cleared(submitted, note), True)
+
     def test_a_new_chat_that_opens_with_somebody_elses_words_is_never_bound_or_typed_into(self):
         # 2026-09-23: a person started a chat on the same account inside the spawn's wait; the
         # spawner took it as its member and typed the fan-out prompt into it.

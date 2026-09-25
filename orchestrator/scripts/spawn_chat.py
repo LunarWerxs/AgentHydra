@@ -209,17 +209,21 @@ def _submit_composer(inst: dict, prompt: str) -> tuple[str, str]:
     time.sleep(6)  # let the deeplink paint the composer
     submitted = "not-attempted"
     submit_note = ""
-    for _ in range(6):
+    attempts = 4  # the actuator itself now waits ~10 s for an enabled Send on each attempt
+    for attempt in range(attempts):
         # BORN IN BYPASS (2026-09-01): a deeplink chat starts in the app's default mode and no
         # disk stamp sticks while it lives, so it stalled on its first shell call. The actuator
         # sets the app's own permission picker to bypass BEFORE pressing Send, and refuses
         # (exit 6) rather than start a chat that will only stall - a refused spawn is a report;
         # a stuck chat is a mess.
+        # THE LAST ATTEMPT CLEARS WHAT WE TYPED (2026-09-24, chat ffb5fe39): a refused send used
+        # to leave the prompt in the composer, where a later Enter starts a chat no group tracks.
+        clear = ["-ClearOnRefuse"] if attempt == attempts - 1 else []
         r = clilib.run_text(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", str(SUBMIT_ACTUATOR), "-Contains", prompt[:60],
              "-Instance", str(inst.get("dir") or ""),
-             "-RequireMode", REQUIRED_MODE],
+             "-RequireMode", REQUIRED_MODE, *clear],
             timeout=180,
         )
         # The actuator's own last lines ride along in the report: "permission mode set:
@@ -235,8 +239,21 @@ def _submit_composer(inst: dict, prompt: str) -> tuple[str, str]:
             tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
             submitted = f"exit 6 - {tail[-1][:160] if tail else 'permission mode not set'}"
             return submitted, submit_note
-        time.sleep(5)
+        if attempt < attempts - 1:
+            time.sleep(5)
     return submitted, submit_note
+
+
+def composer_cleared(submitted: str, submit_note: str) -> bool | None:
+    """Whether a refused send's typed prompt was taken back out of the composer: True/False when
+    the actuator's last attempt said CLEARED / NOT CLEARED, None when it never had to."""
+    if submitted == "sent":
+        return None
+    if "NOT CLEARED" in (submit_note or ""):
+        return False
+    if "CLEARED" in (submit_note or ""):
+        return True
+    return None
 
 
 def _drive_spawn_window(inst: dict, folder: str, prompt: str, binary: str) -> dict:
@@ -456,6 +473,7 @@ def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -
             "sessionId": session_id, "unboundSessionId": unbound,
             "skippedForeign": foreign,
             "submitted": submitted, "submitNote": submit_note,
+            "composerCleared": composer_cleared(submitted, submit_note),
             "started": started, "modeSet": mode_set,
             "window": window_note,
             "url": url[:120]}

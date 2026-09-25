@@ -389,8 +389,12 @@ def _spawn_state(res: dict) -> tuple[str, str | None]:
             # a new chat appeared but never opened with this prompt: not claimed as a member
             return "unbound", (f"new chat {res['unboundSessionId']} was not bound - "
                                f"{res.get('started')}")
+        left = {True: "; the typed prompt was cleared from the composer",
+                False: "; ⚠ the typed prompt is STILL in that composer - an Enter there starts "
+                       "an untracked chat"}.get(res.get("composerCleared"), "")
         return "not-registered", (f"the app never registered a new session (submitted: "
-                                  f"{res.get('submitted')}; {res.get('submitNote') or ''})".strip())
+                                  f"{res.get('submitted')}; {res.get('submitNote') or ''})"
+                                  f"{left}".strip())
     started = str(res.get("started") or "")
     if started.startswith("running"):
         return "spawned", None
@@ -458,7 +462,8 @@ def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
             res = {"ok": False, "why": f"daemon failure during spawn: {err.detail or err}"}
         m["state"], m["why"] = _spawn_state(res)
         m["sessionId"] = res.get("sessionId")
-        m["spawn"] = {k: res.get(k) for k in ("started", "submitted", "submitNote", "landedIn",
+        m["spawn"] = {k: res.get(k) for k in ("started", "submitted", "submitNote",
+                                              "composerCleared", "landedIn",
                                               "modeSet", "trustDialog", "window",
                                               "unboundSessionId", "skippedForeign")
                       if k in res}

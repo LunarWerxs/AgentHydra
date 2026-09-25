@@ -7,6 +7,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **A fan_out that cannot press Send no longer leaves its prompt typed in the composer**
+  (`orchestrator/scripts/actuator/submit_composer.ps1`, `spawn_chat.py`, `fan_out.py`). The
+  actuator waits up to ~10 s for an enabled Send, re-finding its own composer each look, and a
+  refusal names every Send button it saw with its enabled state. The last attempt passes
+  `-ClearOnRefuse`, which empties the composer only when its text starts with our prompt; the
+  member's `spawn.composerCleared` and its `not-registered` reason say whether the text is gone.
+
 ## [1.3.0] - 2026-09-25
 
 ### Added
