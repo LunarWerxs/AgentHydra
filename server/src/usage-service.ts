@@ -19,7 +19,7 @@
 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { readClaudeAppUsage } from './claude-app-usage'
+import { type ClaudeAppReading, readClaudeAppUsage } from './claude-app-usage'
 import {
   type InstanceGrantToken,
   resolveAccount,
@@ -206,6 +206,42 @@ function carriedAppReading(
   }
 }
 
+/** A quota reading plus what the running app just said. */
+const withAppReading = (read: UsageSnapshot, fresh: ClaudeAppReading): UsageSnapshot => ({
+  ...read,
+  resetCredits: fresh.resets?.resetsLeft ?? null,
+  resetCreditsExpiresAt: fresh.resets?.expiresAt ?? null,
+  claudeApp: fresh.app,
+})
+
+/** When to ask a just-opened app: its claude.ai page loads and signs in a few seconds after the
+ *  window appears, later on a loaded PC. */
+const APP_READ_AFTER_OPEN_MS = [3_000, 7_000, 15_000, 30_000]
+
+/**
+ * Read what only the running app serves (banked resets, the Code credit) right after it is opened.
+ * The sweep is the only other reader, and it runs at most every 30 minutes: an app opened between
+ * two sweeps showed nothing for up to half an hour, or never when it was closed again first
+ * (instance #15, 2026-09-25). Only the app is asked, never the quota endpoint, so an Open does not
+ * buy an unattended quota check (usage-refresh.ts). The reading lands on the cached snapshot only
+ * while that snapshot is still this profile's account, the same rule a carried reading follows.
+ */
+export async function readAppAfterOpen(dir: string): Promise<boolean> {
+  const key = desktopKey(dir)
+  for (const wait of APP_READ_AFTER_OPEN_MS) {
+    await new Promise((r) => setTimeout(r, wait))
+    const fresh = await readClaudeAppUsage(dir)
+    if (!fresh) continue
+    const account = await resolveAccount(dir, { noNetwork: true })
+    const label = account?.label ?? account?.email ?? null
+    const cached = getCachedUsage(key)
+    if (!cached || cached.account == null || cached.account !== label) return false
+    setCachedUsage(key, withAppReading(cached, fresh))
+    return true
+  }
+  return false
+}
+
 /**
  * Check a DESKTOP instance's usage, trying every credential that could speak for this account:
  *
@@ -228,12 +264,7 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
     // instead of dropping to "unknown".
     const fresh = await readClaudeAppUsage(dir)
     const snapshot: UsageSnapshot = fresh
-      ? {
-          ...read,
-          resetCredits: fresh.resets?.resetsLeft ?? null,
-          resetCreditsExpiresAt: fresh.resets?.expiresAt ?? null,
-          claudeApp: fresh.app,
-        }
+      ? withAppReading(read, fresh)
       : { ...read, ...carriedAppReading(getCachedUsage(key), read) }
     setCachedUsage(key, snapshot)
     // Every real reading feeds the time series. This is what lets a later call differentiate the
