@@ -79,3 +79,61 @@ SOFTWARE.
 The agent catalog (`server/src/agent-catalog.ts`) re-expresses the on-disk paths from the agent
 registry in <https://github.com/kenn-io/agentsview> (MIT, Kenn Software LLC), as its header
 states. Facts, not code, were taken; no source was copied.
+
+## junegunn/fzf and microsoft/terminal
+
+`web/src/lib/fuzzy.ts`, the session search box's scorer, is a TypeScript port of fzf's
+`FuzzyMatchV2` (<https://github.com/junegunn/fzf>, `src/algo/algo.go`, MIT), written with
+microsoft/terminal's C++ port of the same algorithm (<https://github.com/microsoft/terminal>,
+`src/cascadia/fzf/fzf.cpp`, MIT) as the second reference for the highlight runs. The scoring
+constants, character classes, bonus rules and the dynamic-programming table with its backtrace
+follow fzf closely enough that both notices travel with it. The multi-field row matching, the
+ranking tiebreak and the Vue wiring are ours.
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2013-2024 Junegunn Choi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+```
+MIT License
+
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE
+```
