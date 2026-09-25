@@ -481,10 +481,25 @@ def is_boilerplate_task(text: str) -> bool:
             or "the standing sweep opened this session" in n[:300])
 
 
+# fan_out.py appends this line (and everything after it) to each member's first prompt so the
+# member knows its group and index for report_progress. WHY it is cut here: the footer names a
+# fresh group id every time, so without the cut the same task re-fanned would never read as a
+# duplicate of the chat already running it.
+BEACON_MARK = "[fan-out beacon]"
+
+
+def strip_beacon(text: str) -> str:
+    """The prompt without fan_out.py's progress-beacon footer (see BEACON_MARK)."""
+    head, _mark, _rest = str(text or "").partition(BEACON_MARK)
+    return head.rstrip()
+
+
 def same_task(a: str, b: str) -> bool:
     """Two first prompts are the same task when they are equal, or when one is the other with
     a prefix prepended (a launcher that writes the folder before the prompt). Boilerplate the
-    toolbox sends to many chats never counts, and neither does a one-liner."""
+    toolbox sends to many chats never counts, and neither does a one-liner. A fan-out member's
+    beacon footer is not part of its task (strip_beacon)."""
+    a, b = strip_beacon(a), strip_beacon(b)
     if is_boilerplate_task(a) or is_boilerplate_task(b):
         return False
     na, nb = normalize_task(unwrap_command(a)), normalize_task(unwrap_command(b))

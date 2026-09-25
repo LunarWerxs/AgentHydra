@@ -610,6 +610,39 @@ function specArg(spec: string): string {
   return path
 }
 
+/** Build report_progress's beacon JSON for `fan_out beacon --beacon`. The same caps fan_out.py's
+ *  parse_beacon keeps, then trimmed to fit ONE orchestrator arg (4000 characters): review paths
+ *  go first, then the summary is shortened - a beacon is a pointer, the transcript has the rest. */
+function beaconArg(a: Record<string, unknown>): string {
+  const text = (v: unknown, cap: number) => str(v).trim().slice(0, cap)
+  const paths = (Array.isArray(a.paths_to_review) ? a.paths_to_review : [])
+    .map((p) => text(p, 260))
+    .filter(Boolean)
+    .slice(0, 10)
+  const beacon: Record<string, unknown> = {
+    member: Number(a.member),
+    mode: str(a.mode).trim().toLowerCase(),
+    taskName: text(a.task_name, 120),
+    summary: text(a.summary, 1200),
+    nextStep: text(a.next_step, 400),
+    pathsToReview: paths,
+    blockedOnUser: a.blocked_on_user === true,
+  }
+  if (a.confidence != null) beacon.confidence = Number(a.confidence)
+  if (a.confidence_why != null) beacon.confidenceWhy = text(a.confidence_why, 400)
+  let json = JSON.stringify(beacon)
+  while (json.length > SPEC_INLINE_MAX && paths.length > 0) {
+    paths.pop()
+    json = JSON.stringify(beacon)
+  }
+  if (json.length > SPEC_INLINE_MAX) {
+    const summary = str(beacon.summary)
+    beacon.summary = summary.slice(0, Math.max(0, summary.length - (json.length - SPEC_INLINE_MAX)))
+    json = JSON.stringify(beacon)
+  }
+  return json
+}
+
 /** What fan_out.py's own exit codes mean (its docstring is the source) - the FALLBACK verdict used
  *  only when the payload carries no members/results to count for itself (no JSON on stdout, or an
  *  empty group). Whenever there IS a per-member or per-result list, fanOutVerdict below reads it
@@ -683,8 +716,18 @@ function fanOutVerdict(
   const members = payload && Array.isArray(payload.members) ? payload.members : null
   if (members && members.length > 0) {
     const rows = members as Record<string, unknown>[]
-    const bad = rows.some((m) => FAN_OUT_BAD_MEMBER_STATES.has(str(m.state)))
-    return { verdict: `${bad ? 'partial' : 'ok'}: ${stateCounts(rows, (m) => str(m.state))}`, bad }
+    // A member whose own beacon (report_progress) says it is blocked on a person is not done,
+    // whatever its transcript state reads - "finished" is exactly what a chat waiting on a
+    // question looks like from outside.
+    const blocked = rows.filter(
+      (m) => ((m.beacon ?? null) as Record<string, unknown> | null)?.blockedOnUser === true,
+    ).length
+    const bad = blocked > 0 || rows.some((m) => FAN_OUT_BAD_MEMBER_STATES.has(str(m.state)))
+    const tail = blocked > 0 ? `; blocked on user ${blocked} (listed first)` : ''
+    return {
+      verdict: `${bad ? 'partial' : 'ok'}: ${stateCounts(rows, (m) => str(m.state))}${tail}`,
+      bad,
+    }
   }
   const results = payload && Array.isArray(payload.results) ? payload.results : null
   if (results && results.length > 0) {
@@ -2330,7 +2373,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'fan_out',
     description:
-      "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). ⛔ SPAWNING RUNS IN THE DAEMON, NOT ON THIS CONNECTION: a real fan-out (~30-90s per chat, sequential) is always DETACHED automatically past 120s declared - you get the group id and an operationId AT ONCE, and the daemon keeps spawning every chat regardless of whether this call's own connection is abandoned (a lost client can no longer cancel work mid-spawn). Poll fan_out_status { group } for each member's progress; pass `background: false` only for a one-or-two-chat call you know your transport can hold open. Then fan_out_status reads them and fan_out_send steers them. `dry_run: true` returns the plan and spawns nothing, and always blocks (it only ranks and plans). This is a person's act and does not need the tray icon. WRONG TOOL when every Claude account is at/above 90% weekly (check list_usage first): mechanical, checkable batch work belongs on the DeepSeek zswarm instead (zswarm_run) rather than queued behind N account resets; fan_out remains right for work that needs a real Claude Desktop chat. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
+      "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). ⛔ SPAWNING RUNS IN THE DAEMON, NOT ON THIS CONNECTION: a real fan-out (~30-90s per chat, sequential) is always DETACHED automatically past 120s declared - you get the group id and an operationId AT ONCE, and the daemon keeps spawning every chat regardless of whether this call's own connection is abandoned (a lost client can no longer cancel work mid-spawn). Poll fan_out_status { group } for each member's progress; pass `background: false` only for a one-or-two-chat call you know your transport can hold open. Then fan_out_status reads them and fan_out_send steers them. Each member's first prompt ends with a [fan-out beacon] line naming its group and index and asking it to call report_progress, so fan_out_status also shows each member's own phase, next step and blocked-on-user flag. `dry_run: true` returns the plan and spawns nothing, and always blocks (it only ranks and plans). This is a person's act and does not need the tray icon. WRONG TOOL when every Claude account is at/above 90% weekly (check list_usage first): mechanical, checkable batch work belongs on the DeepSeek zswarm instead (zswarm_run) rather than queued behind N account resets; fan_out remains right for work that needs a real Claude Desktop chat. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
     inputSchema: S(
       {
         tasks: {
@@ -2537,7 +2580,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'fan_out_status',
     description:
-      "READ-ONLY: where every chat of a fan_out group stands — per member: instance, sessionId, the gate's verdict as one word (working / idle / stalled / finished / crashed, or the spawn state for a member that never got a session), how long it has been quiet, its cause, and its LAST WORDS (the last assistant text, capped) so a manager chat can read seven results without seven tail_session calls. `group` is the id or name from fan_out (a unique id prefix works); omitted = the most recent group. Also lists the follow-ups already sent to the group.",
+      "READ-ONLY: where every chat of a fan_out group stands — per member: instance, sessionId, the gate's verdict as one word (working / idle / stalled / finished / crashed, or the spawn state for a member that never got a session), how long it has been quiet, its cause, and its LAST WORDS (the last assistant text, capped) so a manager chat can read seven results without seven tail_session calls. Each member also carries its latest self-reported `beacon` (report_progress: mode, task, cumulative summary, next step, review paths, confidence, blocked-on-user); members blocked on a person are listed FIRST, named in `blockedOnUser`, and make the verdict partial. `group` is the id or name from fan_out (a unique id prefix works); omitted = the most recent group. Also lists the follow-ups already sent to the group.",
     inputSchema: S({
       group: {
         type: 'string',
@@ -2573,6 +2616,62 @@ export const TOOLS: McpEngineTool[] = [
             ? `Group ${group} has no record yet: its fan_out (operation ${str(op.id)}) is still starting. Poll again shortly.`
             : `Group ${group} was never recorded: its fan_out (operation ${str(op.id)}) ended ${str(op.status)}${result && str(result.error) ? ` - ${str(result.error)}` : ''}${result && str(result.stderr).trim() ? ` - ${str(result.stderr).trim().slice(-400)}` : ''}.`,
       }
+    },
+  },
+  // A typed progress beacon, reported BY a fan_out member about itself. fan_out_status used to
+  // infer every member's state after the fact from its transcript, and could not tell a chat
+  // waiting on a person from a finished one; each member's first prompt now names its group and
+  // index and asks it to call this, so the manager sees phase, next step and blocked-on-user.
+  {
+    name: 'report_progress',
+    description:
+      'MUTATES: writes a progress record only. A fan_out MEMBER reports where it stands, for the chat that fanned it out to read in fan_out_status. Your first prompt names your `group` and `member` index (the "[fan-out beacon]" line); call this when you start, each time your phase changes, and once more when you finish or need a person. `task_name` is what you are doing, `mode` is planning / execution / verification, `summary` is CUMULATIVE (everything done so far, not just the last step), `next_step` is what you will do NEXT. On the final call add `paths_to_review` (files the manager should read), `confidence` 0-1 with `confidence_why`, and `blocked_on_user: true` when you cannot go on without a person - fan_out_status lists blocked members first. Each call replaces your previous beacon. It records only: nothing is sent to any chat, and it never waits behind a running spawn.',
+    inputSchema: S(
+      {
+        group: { type: 'string', description: 'The fan-out group id from your first prompt.' },
+        member: { type: 'number', description: 'Your member index from your first prompt.' },
+        task_name: { type: 'string', description: 'What you are working on, in a few words.' },
+        mode: {
+          type: 'string',
+          enum: ['planning', 'execution', 'verification'],
+          description: 'The phase you are in now.',
+        },
+        summary: {
+          type: 'string',
+          description: 'Cumulative: everything done so far (capped at 1200 characters).',
+        },
+        next_step: { type: 'string', description: 'What you will do next.' },
+        paths_to_review: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Files the manager should review (final report; at most 10).',
+        },
+        confidence: {
+          type: 'number',
+          minimum: 0,
+          maximum: 1,
+          description: 'How sure you are the work is right, 0-1 (needs confidence_why).',
+        },
+        confidence_why: { type: 'string', description: 'The justification for `confidence`.' },
+        blocked_on_user: {
+          type: 'boolean',
+          description: 'true = you cannot go on without a person (a question, an approval).',
+        },
+      },
+      ['group', 'member', 'task_name', 'mode'],
+    ),
+    run: async (a) => {
+      const group = str(a.group).trim()
+      if (!group) throw new Error('group is required: the fan-out group id from your first prompt')
+      if (!Number.isInteger(Number(a.member)) || str(a.member).trim() === '')
+        throw new Error('member is required: your member index from your first prompt')
+      if (!str(a.task_name).trim()) throw new Error('task_name is required')
+      const r = await runFanOut(['beacon', group, '--beacon', beaconArg(a), '--json'], 60_000)
+      // A beacon report has no members to count, so runFanOut's exit-code fallback verdict
+      // ("every member spawned...") would describe the wrong act; say what happened instead.
+      return r.recorded === true
+        ? { ...r, verdict: 'recorded' }
+        : { ...r, verdict: `not recorded: ${str(r.stderr).trim() || str(r.verdict)}` }
     },
   },
   {

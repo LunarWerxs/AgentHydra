@@ -7,6 +7,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Fan-out members report a typed progress beacon** (new MCP tool `report_progress`,
+  `orchestrator/scripts/fan_out.py` `beacon`, `server/src/mcp.ts`, `server/src/orchestrator.ts`,
+  `orchestrator/scripts/lib/gatelib.py`). `fan_out_status` could only infer a member's state from
+  its transcript, and a chat waiting on a person's answer read as `finished`. Each member's first
+  prompt now ends with a `[fan-out beacon]` line naming its group and index, and the member calls
+  `report_progress` with its mode (planning / execution / verification), a cumulative summary, its
+  next step, and on hand-back the paths to review, a confidence with its reason, and
+  `blocked_on_user`. `fan_out_status` carries each member's latest beacon, lists blocked members
+  first, and never calls a group with a blocked member ok. Beacons keep their own file
+  (`state/fanout-beacons.json`) and take no route lock, so a member can report while later members
+  are still spawning; the fleet duplicate check ignores the footer.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,

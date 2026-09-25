@@ -339,6 +339,69 @@ describe('what fan_out sends to the daemon', () => {
     expect(String(res.verdict)).toMatch(/^ok/)
     expect(res.ok).toBe(true)
   })
+
+  test('a member whose beacon says blocked on user is never "ok", even when its transcript reads finished', async () => {
+    // A chat waiting on a person's answer ends its turn, so the gate reads it "finished"; only
+    // the member's own report_progress beacon says it cannot go on.
+    reportRun({
+      id: 'fo-13',
+      members: [
+        { index: 1, state: 'finished', beacon: { mode: 'execution', blockedOnUser: true } },
+        { index: 0, state: 'finished', beacon: { mode: 'verification', blockedOnUser: false } },
+      ],
+    })
+    const res = (await tool('fan_out_status').run({ group: 'fo-13' })) as Record<string, unknown>
+    expect(String(res.verdict)).toMatch(/^partial/)
+    expect(String(res.verdict)).toContain('blocked on user 1')
+    expect(res.ok).toBe(false)
+  })
+})
+
+describe('report_progress (a member reports its own typed beacon)', () => {
+  test('sends one lock-free `fan_out beacon` run with the beacon as camelCase JSON', async () => {
+    reportRun({ ok: true, recorded: true, id: 'fo-20', beacon: { member: 2 } })
+    const res = (await tool('report_progress').run({
+      group: 'fo-20',
+      member: 2,
+      task_name: 'Lint plane B',
+      mode: 'VERIFICATION',
+      summary: 'Linted, 3 fixed',
+      next_step: 'Hand back',
+      paths_to_review: ['src/b.ts'],
+      confidence: 0.8,
+      confidence_why: 'tests pass',
+      blocked_on_user: true,
+    })) as Record<string, unknown>
+    const body = runBody()
+    expect(body.script).toBe('fan_out')
+    expect(body.args.slice(0, 3)).toEqual(['beacon', 'fo-20', '--beacon'])
+    expect(body.args[body.args.length - 1]).toBe('--json')
+    expect(JSON.parse(body.args[3] ?? '')).toEqual({
+      member: 2,
+      mode: 'verification',
+      taskName: 'Lint plane B',
+      summary: 'Linted, 3 fixed',
+      nextStep: 'Hand back',
+      pathsToReview: ['src/b.ts'],
+      blockedOnUser: true,
+      confidence: 0.8,
+      confidenceWhy: 'tests pass',
+    })
+    expect(res.verdict).toBe('recorded')
+  })
+
+  test('an oversized beacon is trimmed to fit one orchestrator arg instead of being refused', async () => {
+    reportRun({ ok: true, recorded: true })
+    await tool('report_progress').run({
+      group: 'fo-21',
+      member: 0,
+      task_name: 't',
+      mode: 'execution',
+      summary: '"'.repeat(1200),
+      paths_to_review: Array.from({ length: 10 }, () => 'C:\\x\\'.repeat(60)),
+    })
+    expect((runBody().args[3] ?? '').length).toBeLessThanOrEqual(3800)
+  })
 })
 
 describe('fan_out auto-detaches so a client timeout can no longer cancel a spawn mid-flight (defect 2, 2026-09-15)', () => {

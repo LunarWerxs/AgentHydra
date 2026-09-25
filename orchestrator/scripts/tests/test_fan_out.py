@@ -401,6 +401,44 @@ class StatusAndSendTest(FanOutBase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["members"][0]["state"], "refused")
 
+    def test_each_member_is_told_its_group_and_index_for_report_progress(self):
+        group = self._spawn_two()
+        for i, s in enumerate(self.spawned):
+            self.assertTrue(s["prompt"].startswith("lint this plane"))
+            self.assertIn(f"member {i} of fan-out group {group['id']}", s["prompt"])
+            self.assertIn("report_progress", s["prompt"])
+        # the record keeps the bare task: first_turn_owner matches the chat by its head
+        self.assertEqual(group["members"][0]["prompt"], "lint this plane")
+
+    def test_status_carries_each_members_latest_beacon_blocked_first(self):
+        group = self._spawn_two()
+        for beacon in ({"member": 0, "mode": "planning", "taskName": "Lint A"},
+                       {"member": 0, "mode": "execution", "taskName": "Lint A",
+                        "nextStep": "fix plane a"},
+                       {"member": 1, "mode": "verification", "taskName": "Lint B",
+                        "blockedOnUser": True, "pathsToReview": ["b.py"],
+                        "confidence": 0.4, "confidenceWhy": "one test flaky"}):
+            code, out, err = run_cli(fan_out.main, ["beacon", "g1", "--beacon",
+                                                    json.dumps(beacon), "--json"])
+            self.assertEqual(code, 0, err or out)
+        self.stub.routes["/api/chats/dossier"] = (500, {"error": "boom"})
+        code, out, _ = run_cli(fan_out.main, ["status", group["id"], "--json"])
+        self.assertEqual(code, 0, out)
+        got = json.loads(out)
+        self.assertEqual([m["index"] for m in got["members"]], [1, 0])  # blocked first
+        self.assertEqual(got["blockedOnUser"], [1])
+        self.assertEqual(got["members"][1]["beacon"]["mode"], "execution")  # latest replaces
+        self.assertEqual(got["members"][1]["beacon"]["nextStep"], "fix plane a")
+        self.assertEqual(got["members"][0]["beacon"]["pathsToReview"], ["b.py"])
+
+    def test_a_beacon_is_refused_for_a_member_or_mode_the_group_does_not_have(self):
+        self._spawn_two()
+        for bad in ({"member": 7, "mode": "planning", "taskName": "x"},
+                    {"member": 0, "mode": "napping", "taskName": "x"},
+                    {"member": 0, "mode": "planning", "taskName": "x", "confidence": 0.9}):
+            code, _, err = run_cli(fan_out.main, ["beacon", "g1", "--beacon", json.dumps(bad)])
+            self.assertEqual(code, 3, err)
+
     def test_send_posts_one_message_per_member_and_respects_holds(self):
         self._spawn_two()
         self.stub.routes["/api/sessions/sid-1/message"] = {"ok": True, "delivered": True,
