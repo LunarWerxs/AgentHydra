@@ -121,6 +121,7 @@ import { jsonBody } from './route-helpers'
 import { warmSessionScanCache } from './sessions'
 import { sideRunHeader, sideRunHealthFields } from './side-run'
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
+import { syncStatusHooks } from './status-hooks'
 import { startTitleSweep } from './title-sweep'
 import { resolveEditor } from './transcript-open'
 import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
@@ -735,6 +736,7 @@ await import('./routes/sessions')
 await import('./routes/analytics')
 await import('./routes/queue')
 await import('./routes/incidents')
+await import('./routes/agent-status')
 await import('./routes/instances')
 await import('./routes/usage')
 await import('./routes/monitor-fleet')
@@ -1000,6 +1002,9 @@ setOrchestratorDaemonUrl(daemonSelfUrl)
 // resolved would write a URL nothing is listening on. Runs on every boot so a hop cannot leave a
 // stale one behind, writes only when the entry actually differs, and never throws.
 mcpReasserter.run()
+// Installed status hooks (status-hooks.ts) carry the same URL, so a port hop re-points them too.
+// Hooks nobody installed are never added. Synchronous, never throws.
+syncStatusHooks(daemonSelfUrl)
 // AH-11: now that boundPort (and the runtime pointer) are known, resolve the exact-origin
 // allowlist the cors() and loopbackGuard() callbacks above read on every request. This runs well
 // before Bun.serve() starts accepting connections, so no request can observe the empty initial []

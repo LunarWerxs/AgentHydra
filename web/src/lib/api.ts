@@ -2,6 +2,7 @@ import type {
   Account,
   ActivityReport,
   AgentPresence,
+  AgentStatus,
   AnalyticsCoverage,
   ArchivedScope,
   AuthType,
@@ -65,6 +66,7 @@ export type {
   Account,
   ActivityReport,
   AgentPresence,
+  AgentStatus,
   AnalyticsCoverage,
   ArchivedScope,
   AuthType,
@@ -435,6 +437,10 @@ export const ackIncident = (id: string) =>
   j<{ ok: boolean; incident: Incident }>(`/api/incidents/${id}/ack`, { method: 'POST' })
 export const resolveIncident = (id: string) =>
   j<{ ok: boolean; incident: Incident }>(`/api/incidents/${id}/resolve`, { method: 'POST' })
+
+// --- live agent status (server/src/agent-status.ts) --------------------------
+// Working / waiting on you / done per session, as Claude Code's hooks reported it. Read as written.
+export const getAgentStatuses = () => j<AgentStatus[]>('/api/agent-status')
 
 // --- scheduler --------------------------------------------------------------
 export const getScheduler = () => j<SchedulerState>('/api/scheduler')

@@ -105,7 +105,7 @@ export interface McpRegisterStatus {
 
 /** Parse the config, distinguishing "no file yet" (fine, we create it) from "unreadable" (never
  *  written to). A file that is not a JSON OBJECT counts as unreadable for the same reason. */
-function readConfig(path: string): {
+export function readConfig(path: string): {
   config: Record<string, unknown> | null
   error: string | null
 } {
@@ -152,7 +152,7 @@ function resolveTarget(path: string): string {
  * OAuth material, and a fresh file created at the process umask would silently widen it - a
  * convenience feature must not loosen the permissions of a credential store on its way past.
  */
-function writeConfigAtomic(path: string, config: Record<string, unknown>): void {
+export function writeConfigAtomic(path: string, config: Record<string, unknown>): void {
   const target = resolveTarget(path)
   const tmp = `${target}.agenthydra-${process.pid}.tmp`
   try {

@@ -21,6 +21,7 @@
 // switch + optional per-account opt-out; at most N resumes per session (resume_attempts cap) then
 // "needs human"; idempotent (never double-queues a resume for a session that already has one).
 
+import { recordAgentStatus } from './agent-status'
 import { isDispatchReady } from './boot-state'
 import { coerceQueueItem, db, getSetting, setSetting } from './db'
 // No dispatchItem import any more, and that absence is load-bearing: since the no-headless law
@@ -792,6 +793,24 @@ async function processRateLimited(deps: MonitorDeps): Promise<void> {
   // Discovery already refuses archived sessions; a stop WE dispatched needs the same guard, or
   // archiving a session would silently fail to stop the resume it was queued for.
   const meta = sessionMetaMap()
+
+  // A discovered stop is a session sitting at a usage wall right now (nothing followed the notice),
+  // so the live status store hears it as waiting; the store decides whether a newer hook fact
+  // outranks it. Its failure must not stop the resume pipeline below.
+  try {
+    for (const item of found) {
+      if (!item.finished_at) continue
+      recordAgentStatus({
+        sessionId: item.session_id,
+        source: 'rate-limit',
+        event: 'rate-limit',
+        at: item.finished_at,
+        cwd: item.cwd,
+      })
+    }
+  } catch (err) {
+    console.error('[agenthydra] agent status write failed:', err)
+  }
 
   for (const item of [...dispatched, ...found]) {
     await processOneRateLimitedStop(item, meta, now, settings, deps)
