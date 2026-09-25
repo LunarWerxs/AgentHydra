@@ -25,7 +25,8 @@ move_chat { chat: "...", to: 36, dry_run: true }                    # plan only,
 - `chat` is a title fragment, matched **fuzzily** (case, punctuation, a misspelling: `arkitecht
   cleanup` finds `Arkitekt cleanup`), or a session id. Two different chats that both fit are a
   refusal that names both - never a coin flip.
-- `from` is the account it lives on - instance number, name, label or email. It scopes the search
+- `from` is the account it lives on - instance number, name, label or email; a first name
+  (`Artem`) or a profile folder label (`temp2`) works when it names exactly one account. It scopes the search
   (a title two accounts share is not ambiguous) and a typo can never select a chat on an account
   you did not name. If only an archived twin is on that account, the tool says where the live copy
   is instead of moving it.
@@ -128,6 +129,14 @@ tray icon and the fair share first), then reading two working chats' pids out of
     ends a transcript mid-turn. Separately, the courier now consults the daemon's own
     `limit_stop.pending`: a chat parked at a usage wall cannot be writing, so it is never treated
     as mid-turn - which is exactly the population a drain moves.
+  - ⛔ **THE BOOT'S OWN ANSWER LOOKED LIKE A TURN TOO** (2026-09-25). The landed engine answers
+    the boot's meta "Continue from where you left off." with a SYNTHETIC "No response requested.",
+    which the gate filed as an api error, and the app can then file the old engine's
+    stopped-task notification under that same prompt. Either one as the tail read as a turn in
+    flight, the peer channel does not wake an idle desktop chat, and the composer was forbidden:
+    a chat moved #14 -> #15 sat idle 12 minutes until a person typed into it. The gate now reads
+    both as a finished turn; a tool result still reads as in flight. If a landed chat's
+    `resume.delivered` is false and its engine shows no CPU, `gate_chat <session id>` says why.
   - Re-firing a batch whose resumes are still staged **re-uses those rows** rather than staging a
     second copy of the same words (2026-09-14: a cancelled batch left two rows each for two
     chats). A staged reply with DIFFERENT text - a person's - is never folded into the resume.
