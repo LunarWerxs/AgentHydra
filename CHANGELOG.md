@@ -9,6 +9,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **`history_search` / `history_read`: search what compaction dropped from your own session**
+  (`server/src/compaction-history.ts`, `server/src/mcp.ts`). The calling Claude Code session's
+  transcript is resolved from the caller's process chain and the live registry, and the text
+  before its last compaction (user/assistant text, tool calls, tool results) is searched
+  lexically: up to 8 excerpts of 600 characters with stable source ids, read back exactly in
+  4,000-character pages, marked as historical data. Idea from bytedance/deer-flow (MIT).
+
 - **Revive a chat Claude Code deleted** (`orchestrator/scripts/migrate_chat.py --revive`, new
   `orchestrator/scripts/lib/revivelib.py`, `docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md`). Claude Code
   deletes transcripts past `cleanupPeriodDays`, after which `--resume` fails. `--revive <id>`

@@ -26,7 +26,15 @@ describe('toolsForCaller', () => {
   test('only the identity tools are rebound - every other tool is the SAME object', () => {
     const bound = toolsForCaller(async () => CALLER_PID)
     const rebound = bound.filter((t, i) => t !== TOOLS[i]).map((t) => t.name)
-    expect(rebound.sort()).toEqual(['check_my_usage', 'move_chat', 'move_chats', 'whoami'])
+    // history_search / history_read resolve the CALLER's own transcript, so they are bound too.
+    expect(rebound.sort()).toEqual([
+      'check_my_usage',
+      'history_read',
+      'history_search',
+      'move_chat',
+      'move_chats',
+      'whoami',
+    ])
   })
 
   test('the binding is a function, which is what makes it unforgeable', async () => {
