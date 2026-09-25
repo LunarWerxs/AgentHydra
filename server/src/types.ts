@@ -639,6 +639,9 @@ export interface TailResult {
   title: string
   cwd: string
   events: TailEvent[]
+  /** True when older kept turns exist above this window, so the viewer can offer to page them in.
+   *  Absent from a "not found" answer; a raised `limit` is how a caller asks for them. */
+  has_more?: boolean
   error?: string
 }
 

@@ -9,7 +9,12 @@
 // cannot drift; these tests pin the rules it encodes.
 
 import { describe, expect, test } from 'bun:test'
-import { eventToTailEvents, tailKeeper } from '../src/transcript'
+import {
+  collectTailEventsFromRaw,
+  eventToTailEvents,
+  lastTurns,
+  tailKeeper,
+} from '../src/transcript'
 import type { TailEvent } from '../src/types'
 
 const assistant = (...content: unknown[]) => ({
@@ -107,5 +112,44 @@ describe('the other block types are unaffected by the new flag', () => {
     expect(events).toEqual([
       { role: 'user', kind: 'text', text: 'do the thing', tool_name: null, timestamp: null },
     ])
+  })
+})
+
+// has_more drives the viewer's "Load older turns" button, so it must mean "an older KEPT turn
+// exists", not "there were lines left": a header or a filtered-out tool line above the window is a
+// line, and a button that pages in nothing is a broken promise.
+describe('whether older turns exist above the window', () => {
+  const line = (text: string) => JSON.stringify(assistant({ type: 'text', text }))
+  const header = JSON.stringify({ type: 'summary', summary: 'a title line' })
+  const tool = JSON.stringify(assistant({ type: 'tool_use', name: 'Read', input: {} }))
+  const collect = (lines: string[], limit: number, opts = {}) =>
+    collectTailEventsFromRaw(
+      lines.join('\n'),
+      'claude',
+      { thinking: false },
+      tailKeeper(opts),
+      limit,
+    )
+
+  test('a turn left above the window is reported, and the window is still the newest ones', () => {
+    const r = collect([line('one'), line('two'), line('three')], 2)
+    expect(r.more).toBe(true)
+    expect(r.events.map((e) => e.text)).toEqual(['two', 'three'])
+  })
+
+  test('a window that holds the whole transcript has nothing above it', () => {
+    expect(collect([line('one'), line('two')], 2).more).toBe(false)
+  })
+
+  test('a header line or a filtered-out turn above the window is not an older turn', () => {
+    expect(collect([header, tool, line('one'), line('two')], 2, { textOnly: true }).more).toBe(
+      false,
+    )
+  })
+
+  test('stores read whole report the same thing', () => {
+    const evs = eventToTailEvents(assistant({ type: 'text', text: 'a' }))
+    expect(lastTurns([...evs, ...evs, ...evs], 2).more).toBe(true)
+    expect(lastTurns([...evs, ...evs], 2)).toEqual({ events: [...evs, ...evs], more: false })
   })
 })
