@@ -906,6 +906,11 @@ export function setOrchestratorDaemonUrl(url: string): void {
   daemonUrl = url
 }
 
+/** The same URL for other readers (the status-hook installer), so install and boot sync agree. */
+export function getOrchestratorDaemonUrl(): string | null {
+  return daemonUrl
+}
+
 /**
  * The environment a toolbox child runs with.
  *

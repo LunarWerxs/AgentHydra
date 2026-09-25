@@ -183,6 +183,25 @@ create table if not exists incidents (
 create index if not exists idx_incidents_scope_key on incidents(scope, key);
 create index if not exists idx_incidents_state on incidents(state);
 
+-- Live agent status (server/src/agent-status.ts): ONE row per session, written by every producer
+-- (Claude Code hooks, the rate-limit scan) through one function that settles precedence at write
+-- time. state is the folded answer readers show; main_state/subagents are kept beside it so a
+-- finished lead with a running sub-agent is visibly that. restored_unconfirmed = 1 marks a row read
+-- back after a daemon restart that nothing has confirmed since: history, never live.
+create table if not exists agent_status (
+  session_id          text primary key,
+  state               text not null,       -- working | blocked | done (folded)
+  main_state          text not null,       -- working | done (the lead agent alone)
+  subagents           integer not null default 0,
+  waiting             text,                -- why it is blocked (notification type, 'rate-limit'), else null
+  source              text not null,       -- provenance: claude-hook | rate-limit
+  event               text not null,       -- the hook event (or 'rate-limit') that wrote the row
+  cwd                 text,
+  at                  text not null,       -- ISO time of the fact the row reflects
+  restored_unconfirmed integer not null default 0
+);
+create index if not exists idx_agent_status_at on agent_status(at);
+
 `)
 
 // A short-lived pre-0.11 hardening change stored manually added account credentials as DPAPI

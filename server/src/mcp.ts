@@ -1419,6 +1419,36 @@ export const TOOLS: McpEngineTool[] = [
     run: (a) => api(`/api/incidents/${encodeURIComponent(str(a.id))}/resolve`, { method: 'POST' }),
   },
 
+  // --- live agent status (server/src/agent-status.ts) ----------------------------
+  // Working / waiting on you / done per session, fed by Claude Code's own hooks and the rate-limit
+  // scan. Precedence is settled when a row is written, so the answer is read, never re-derived.
+  {
+    name: 'agent_status',
+    description:
+      "WHICH SESSIONS ARE WORKING, WAITING ON A PERSON, OR DONE RIGHT NOW, as Claude Code's own hooks reported it (plus sessions the rate-limit scan found sitting at a usage wall). Omit `session` for every recorded session, newest first; pass a session id for one (404 when nothing was ever recorded for it). Read `state` as written: 'blocked' means waiting on you (`waiting` says why: a permission prompt, a question, 'rate-limit'); `mainState` is the lead agent alone, so mainState 'done' with state 'working' is a lead whose sub-agent is still running. ⛔ `restoredUnconfirmed: true` IS NOT LIVE: the row was read back after a daemon restart and nothing has confirmed it since. `source`/`event`/`at` say who wrote it and when. Nothing is recorded until the hooks are installed: see status_hooks.",
+    inputSchema: S({ session: { type: 'string', description: 'A session id; omit for all.' } }),
+    run: (a) =>
+      a.session
+        ? api(`/api/agent-status/${encodeURIComponent(str(a.session))}`)
+        : api('/api/agent-status'),
+  },
+  {
+    name: 'status_hooks',
+    description:
+      "Are the Claude Code hooks that feed agent_status installed, and where do they post? With `install: true` (MUTATES) writes them into Claude Code's user settings.json for this daemon's URL; `install: false` (MUTATES) removes only them. Every other hook in that file is left alone, an unreadable file is reported and never rewritten, and a running session picks up the change on its next start.",
+    inputSchema: S({
+      install: { type: 'boolean', description: 'true installs, false removes; omit to read.' },
+    }),
+    run: (a) =>
+      typeof a.install === 'boolean'
+        ? api('/api/agent-status/hooks', {
+            method: 'POST',
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ install: a.install }),
+          })
+        : api('/api/agent-status/hooks'),
+  },
+
   // --- accounts -----------------------------------------------------------------
   // NO list_accounts TOOL, deliberately (owner ask 2026-09-04: keep one of each duplicated pair).
   // It listed the old pasted-credentials table, and its own description ended "This is NOT the

@@ -9,6 +9,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Working, waiting on you, or done: a live status per Claude Code session** (new
+  `server/src/agent-status.ts`, `server/src/status-hooks.ts`, `server/src/routes/agent-status.ts`,
+  MCP tools `agent_status` and `status_hooks`, a badge in the session list). The session list could
+  say a chat was recently active or cut off by a usage wall, never that Claude is working right now
+  or sitting on a permission prompt. Claude Code's own hooks say exactly that; `status_hooks
+  { install: true }` writes them (opt-in, touching only its own hook groups) and they post to the
+  daemon. The rate-limit scan writes into the same store, and releases a row once its stop is no
+  longer found, so a resumed session never stays "waiting on you". One row per session, precedence decided
+  once at write time with its provenance on the row; a row read back after a daemon restart is
+  `restoredUnconfirmed` and never shows as live; and the lead's own state is kept beside the folded
+  one, so a finished lead with a running sub-agent reads working. Design follows stablyai/orca's
+  agent status store (MIT), written fresh. See docs/REFERENCE.md "Working, waiting on you, or done".
+
 - **Box select, Ctrl+A and Escape in the session list** (`web/src/composables/useMultiSelect.ts`,
   `web/src/lib/session-multiselect.ts`). Choosing bulk-reply or bulk-move targets no longer means
   ticking rows one by one: drag a band over the rows in select mode (Ctrl/Cmd/Shift-drag adds to the

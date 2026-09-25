@@ -879,6 +879,37 @@ export interface Incident {
   output_file: string | null
 }
 
+// --- live agent status (server/src/agent-status.ts) --------------------------------------------
+// Bun-free for the same reason as Incident above: the web session list reads it.
+
+/** What a person needs to know about a session right now: it is working, it is waiting on you (a
+ *  permission prompt, a question, a usage wall), or its turn is done. */
+export type AgentStatusState = 'working' | 'blocked' | 'done'
+/** Who wrote a status row. Kept on the row so a reader can say where a verdict came from. */
+export type AgentStatusSource = 'claude-hook' | 'rate-limit'
+
+export interface AgentStatus {
+  sessionId: string
+  /** The folded state, decided once when the row was written. Show it; never re-derive it. */
+  state: AgentStatusState
+  /** The lead agent's own state, kept beside the fold: mainState 'done' with state 'working' is a
+   *  lead that finished while a sub-agent it started is still running. */
+  mainState: 'working' | 'done'
+  /** Sub-agents the lead started that have not reported stopping. */
+  subagents: number
+  /** Why a blocked row is blocked (the hook's notification type, or 'rate-limit'); else null. */
+  waiting: string | null
+  source: AgentStatusSource
+  /** The hook event (or 'rate-limit') that last changed the row. */
+  event: string
+  cwd: string | null
+  /** When the fact the row reflects happened (ISO). */
+  at: string
+  /** Read back from disk after a daemon restart and not confirmed by any event since. It is history,
+   *  never live: the daemon cannot know what the session did while it was down. */
+  restoredUnconfirmed: boolean
+}
+
 export interface SchedulerState {
   enabled: boolean
   running_count: number

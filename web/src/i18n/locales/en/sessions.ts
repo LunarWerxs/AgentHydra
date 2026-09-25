@@ -135,6 +135,12 @@ export default {
   rateLimitedNote:
     'Claude sessions only, and only when the CLI itself reported the wall — a chat that merely talked about rate limits is not counted.',
   rateLimitedBadgePending: 'Still at the limit',
+  // --- live agent status (server/src/agent-status.ts), from Claude Code's hooks ---
+  agentStatusWorking: 'Working',
+  agentStatusBlocked: 'Waiting on you',
+  agentStatusDone: 'Done',
+  agentStatusTooltip:
+    'Last hook event: {event}. Waiting on: {waiting}. Sub-agents still running: {subagents}.',
   rateLimitedHint: 'This session stopped here: {notice}',
   // --- where a row's title came from ---
   titleFrom: 'Title from',

@@ -117,6 +117,7 @@ const {
   sessionsStatus,
   refreshSessions,
   queue,
+  agentStatuses,
   sessionInstanceFilter,
   sessionArchivedScope,
   sessionPeriod,
@@ -288,6 +289,26 @@ const {
   ACTIVITY_CLASS,
   ACTIVITY_LABEL,
 } = useSessionRowDisplay()
+
+// --- live agent status (server/src/agent-status.ts) -------------------------------------------
+// Shown exactly as the daemon wrote it; nothing here re-decides it. A row read back after a daemon
+// restart is not live, so it gets no badge rather than a confident one that may be hours stale.
+const liveStatusBySession = computed(() => {
+  const m = new Map<string, api.AgentStatus>()
+  for (const st of agentStatuses.value) if (!st.restoredUnconfirmed) m.set(st.sessionId, st)
+  return m
+})
+const AGENT_STATUS_CLASS: Record<api.AgentStatus['state'], string> = {
+  working: 'border-primary/50 bg-primary/10 text-primary',
+  blocked: 'border-warning/50 bg-warning/10 text-warning',
+  done: 'border-success/50 bg-success/10 text-success',
+}
+const AGENT_STATUS_LABEL: Record<api.AgentStatus['state'], string> = {
+  working: 'sessions.agentStatusWorking',
+  blocked: 'sessions.agentStatusBlocked',
+  done: 'sessions.agentStatusDone',
+}
+const agentStatusOf = (s: api.SessionSummary) => liveStatusBySession.value.get(s.session_id) ?? null
 
 const { doneCount, toggleDone, clearDoneMarks } = useDoneMarks({ sessions })
 const { openFile, copyingFile, copyFile, copyFileLocation } = useSessionFileActions({
@@ -1008,6 +1029,21 @@ function onComposerSent(mode: 'now' | 'queued') {
                       class="shrink-0 border-warning/50 bg-warning/10 text-[10px] text-warning"
                     >
                       {{ $t('sessions.rateLimitedBadgePending') }}
+                    </Badge>
+                    <!-- live status as the daemon wrote it (agent-status.ts): working, waiting on
+                         you, or done. The tooltip carries the provenance, so a badge can be traced
+                         to the hook event that set it. -->
+                    <Badge
+                      v-if="agentStatusOf(s)"
+                      variant="outline"
+                      :title="$t('sessions.agentStatusTooltip', {
+                        event: agentStatusOf(s)?.event,
+                        waiting: agentStatusOf(s)?.waiting ?? '-',
+                        subagents: agentStatusOf(s)?.subagents,
+                      })"
+                      :class="['shrink-0 text-[10px]', AGENT_STATUS_CLASS[agentStatusOf(s)?.state ?? 'done']]"
+                    >
+                      {{ $t(AGENT_STATUS_LABEL[agentStatusOf(s)?.state ?? 'done']) }}
                     </Badge>
                     <StatusBadge v-if="s.queue_status" :status="s.queue_status" />
                     <Badge

@@ -145,6 +145,39 @@ but not in a form worth trusting, and a false claim here would be worse than a m
 lives in one place (`createLimitStopTracker` in `server/src/rate-limit-signal.ts`) and is shared with
 the auto-resume monitor, so the badge and the resume queue cannot disagree.
 
+### Working, waiting on you, or done
+
+`agent_status { session? }` (and `GET /api/agent-status[/:sessionId]`) answers what a Claude Code
+session is doing right now: `working`, `blocked` (waiting on you: a permission prompt, a question,
+or `rate-limit`) or `done`. The session list shows the same answer as a badge. It is fed by Claude
+Code's own hooks, which are opt-in: `status_hooks { install: true }` (or
+`POST /api/agent-status/hooks {"install":true}`) writes one `curl` hook per event
+(UserPromptSubmit, PreToolUse, PostToolUse, Notification, Stop, SubagentStop, SessionEnd) into
+Claude Code's user `settings.json`, posting to `POST /api/agent-status/hook`; `install: false`
+removes only those. Every other hook in the file is left alone, an unreadable file is never
+rewritten, a boot re-points installed hooks at the port the daemon bound, and a session picks the
+hooks up on its next start. `CLAUDE_CONFIG_DIR` is honoured; `AGENTHYDRA_HOOKS_CONFIG` names the
+file outright. The rate-limit scan writes into the same store when it finds a session still at a
+usage wall, and drops that row once it no longer finds the stop (the session was resumed), so a
+setup without the hooks never keeps a stale "waiting on you". A side-run daemon (relocated store)
+never re-points the installed hooks at itself.
+
+Known limit: Claude Code fires no `Stop` when you interrupt a turn (Esc), so an interrupted turn
+reads `working` until the session's next hook event.
+
+Three rules keep the answer honest (`server/src/agent-status.ts`; the design follows stablyai/orca's
+agent status store, MIT):
+
+- **Precedence is decided once, when a row is written**, and the row carries its provenance
+  (`source`, `event`, `at`). Readers show `state` as written and never re-derive it.
+- **A row read back after a daemon restart is `restoredUnconfirmed`** and never reads as live
+  (the web badge hides it): hooks kept firing while the daemon was down and nobody heard them.
+- **The lead's own state is kept beside the folded one** (`mainState`, `subagents`), so a lead
+  that finished while a sub-agent it started is still running reads `working`, not `done`.
+
+Only the hook's routing fields are kept (session id, event, tool name, notification type, cwd);
+prompts, tool inputs and notification text never reach the store.
+
 ### Why a thread is called what it is called
 
 Every session row carries `title_source`: `custom` (a saved title the writing app displays), `ai`
@@ -323,6 +356,7 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_MCP_MAX_RESULT_BYTES` | `80000` | per-answer byte cap for MCP tool results (floor 4096); over it an answer is cut with notes, see [Asking for less](#asking-for-less-jmespath-and-the-size-cap) |
 | `AGENTHYDRA_CODEX_PATH` | auto-detected / `codex` | Codex executable used by managed Codex instances |
 | `AGENTHYDRA_CODEX_DESKTOP_PATH` | auto-detected | Codex Desktop GUI executable; useful for nonstandard installs |
+| `AGENTHYDRA_HOOKS_CONFIG` | `$CLAUDE_CONFIG_DIR/settings.json` or `~/.claude/settings.json` | Claude Code settings file the opt-in agent-status hooks are written to (`status_hooks`) |
 | `AGENTHYDRA_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode CLI/Desktop SQLite session store |
 | `AGENTHYDRA_BOOT_DEADLINE_MS` | `120000` (full daemon) / `30000` (`--instances`) | startup-liveness watchdog deadline; if boot hasn't reached a bound port by then, the process logs its last-known phase and exits `87` for the supervisor to restart it (see `server/src/boot-watchdog.ts`) |
 

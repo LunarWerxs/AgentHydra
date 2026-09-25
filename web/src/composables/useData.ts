@@ -2,6 +2,7 @@ import { useStorage } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import type {
   Account,
+  AgentStatus,
   ArchivedScope,
   DispatchedScope,
   Incident,
@@ -19,6 +20,9 @@ import { registerSharedPref } from './useSharedPrefs'
 const sessions = ref<SessionSummary[]>([])
 const queue = ref<QueueItem[]>([])
 const incidents = ref<Incident[]>([])
+// Live working / waiting / done per session (server/src/agent-status.ts). One cheap indexed read,
+// so it rides the fast timer: a status that lags by twelve seconds is not live.
+const agentStatuses = ref<AgentStatus[]>([])
 const accounts = ref<Account[]>([])
 const scheduler = ref<SchedulerState | null>(null)
 const sessionsLoading = ref(false)
@@ -110,6 +114,7 @@ const queueStatus = resourceStatus()
 const schedulerStatus = resourceStatus()
 const incidentsStatus = resourceStatus()
 const accountsStatus = resourceStatus()
+const agentStatusStatus = resourceStatus()
 
 /** Runs `p`, recording success/failure onto `status` and never throwing — but unlike the old
  *  shared `guard()`, only ever touches the ONE status object it was handed. */
@@ -203,6 +208,10 @@ async function refreshIncidents() {
   const r = await guard(api.getIncidents(), incidentsStatus)
   if (r) incidents.value = r
 }
+async function refreshAgentStatuses() {
+  const r = await guard(api.getAgentStatuses(), agentStatusStatus)
+  if (r) agentStatuses.value = r
+}
 async function refreshAccounts() {
   const r = await guard(api.getAccounts(), accountsStatus)
   if (r) accounts.value = r
@@ -227,10 +236,12 @@ function startPolling() {
   refreshIncidents()
   refreshAccounts()
   refreshScheduler()
+  refreshAgentStatuses()
   // queue + scheduler are cheap and change often while runs are active
   fastTimer = window.setInterval(() => {
     refreshQueue()
     refreshScheduler()
+    refreshAgentStatuses()
   }, 2000)
   // sessions require disk scans - refresh more lazily. Incidents change only on a new failure or an
   // ack/resolve click (both already re-fetch on their own), so the slow cadence is plenty.
@@ -252,6 +263,7 @@ export function useData() {
     sessions,
     queue,
     incidents,
+    agentStatuses,
     accounts,
     scheduler,
     sessionsLoading,
@@ -271,6 +283,7 @@ export function useData() {
     refreshSessions,
     refreshQueue,
     refreshIncidents,
+    refreshAgentStatuses,
     refreshAccounts,
     refreshScheduler,
     startPolling,
