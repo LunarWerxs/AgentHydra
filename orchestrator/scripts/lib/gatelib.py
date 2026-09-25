@@ -34,6 +34,7 @@ from pathlib import Path
 
 from lib import configlib
 from lib import joblocklib
+from lib import stalllib
 
 # How long a live chat must be quiet AFTER a completed turn before it counts as idle rather
 # than thinking. Three minutes: long enough that a model pausing between tool calls is never
@@ -739,11 +740,16 @@ def _idle_verdict(
                 "last_assistant_text")}}
 
 
-def _running_cause(pid, quiet: int, stalled: dict | None, idle: dict | None) -> str:
+def _running_cause(pid, quiet: int, stalled: dict | None, idle: dict | None,
+                   waiting_on: list[dict] | None = None) -> str:
     """The human-readable explanation for a 'running' verdict. Linear ifs rather than the
     nested ternary gate() used to build this inline - same four strings, easier to scan."""
     if stalled:
         return f"process {pid} is alive but looks STUCK: {stalled['why']}"
+    if waiting_on:
+        labels = ", ".join(str(a.get("label")) for a in waiting_on[:4])
+        return (f"process {pid} is alive and WORKING through its own workflow: "
+                f"{len(waiting_on)} agent(s) still running ({labels}) - not idle")
     if not idle:
         return f"process {pid} is alive (quiet {quiet}s - a long quiet can be background work, not a stall)"
     if idle.get("orphaned_tool_call"):
@@ -764,6 +770,7 @@ def _running_cause(pid, quiet: int, stalled: dict | None, idle: dict | None) -> 
 def _gate_running(
     base: dict, live: dict, transcript_path: str, quiet: int,
     idle_after_secs: int, stall_after_secs: int | None,
+    open_agents: list[dict] | None = None, now_s: float | None = None,
 ) -> dict:
     """The 'running' verdict: a live pid, possibly stalled or idle. Extracted from gate()
     so the top-level function reads as dispatch rather than one long body."""
@@ -795,14 +802,25 @@ def _gate_running(
             engine_started = None
     stall_after = STALL_QUIET_SECS if stall_after_secs is None else stall_after_secs
     stalled = _stall_verdict(transcript_path, quiet, stall_after, engine_started)
+    # An open agent last written before THIS engine started belongs to a previous process (a
+    # resume or a move) and died with it - the same rule as the orphaned tool call above.
+    now = now_s if now_s is not None else time.time()
+    waiting_on = [a for a in open_agents or []
+                  if engine_started is None or a.get("silentSecs") is None
+                  or now - a["silentSecs"] >= engine_started]
     idle = None if stalled else _idle_verdict(transcript_path, quiet, idle_after_secs, engine_started)
+    # A usage wall still wins: the agents bill the same account, so none of them can write
+    # either, and a walled chat is the one most worth moving.
+    if idle and waiting_on and not idle.get("usage_wall"):
+        idle = None
     return {
         **base,
         "state": "running",
-        "cause": _running_cause(pid, quiet, stalled, idle),
+        "cause": _running_cause(pid, quiet, stalled, idle, waiting_on),
         "live": {"pid": pid, "name": live.get("name")},
         "stalled": stalled,
         "idle": idle,
+        "workflow_open": waiting_on,
     }
 
 
@@ -976,6 +994,18 @@ def gate(
     # considers live-but-unpopulated, truthiness would route it to the no-writer branch and an
     # archive-candidate verdict could come back for a chat that still has a writer (rule 2).
     if live is not None:
-        return _gate_running(base, live, transcript_path, quiet, idle_after_secs, stall_after_secs)
+        # A CHAT WAITING ON ITS OWN WORKFLOW IS NOT IDLE (2026-09-24). Its turn ends with "I'll
+        # pick up when the agents finish", so the main transcript goes quiet while the agents
+        # keep editing files under <sid>/subagents/. Read from the main transcript alone, one
+        # such chat was "idle, quiet 949s" with five workflow agents mid-edit, and a move would
+        # have stopped the engine and every agent with it. The engine is writing wherever its
+        # agents write.
+        now = now_s if now_s is not None else time.time()
+        sub = stalllib.subagent_activity(transcript_path, now,
+                                         configlib.get("stallwatch.silent_secs"))
+        if sub["quietSecs"] is not None and sub["quietSecs"] < quiet:
+            quiet = base["quiet_secs"] = sub["quietSecs"]
+        return _gate_running(base, live, transcript_path, quiet, idle_after_secs, stall_after_secs,
+                             open_agents=sub["openAgents"], now_s=now)
 
     return _gate_ended(base, read_records(transcript_path))

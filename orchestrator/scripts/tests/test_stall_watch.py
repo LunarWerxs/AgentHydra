@@ -205,6 +205,12 @@ class ActivityTest(unittest.TestCase):
             {"type": "started", "agentId": "x1", "label": "map:fast"},
             {"type": "started", "agentId": "x2", "label": "map:hung"},
             {"type": "result", "agentId": "x1", "result": {}},
+            # `failed` settles a key, and a retry reuses the key under a new agentId
+            {"type": "started", "key": "k3", "agentId": "x3", "label": "map:failed"},
+            {"type": "failed", "key": "k3", "agentId": "x3"},
+            {"type": "started", "key": "k4", "agentId": "x4a", "label": "map:retried"},
+            {"type": "started", "key": "k4", "agentId": "x4b", "label": "map:retried"},
+            {"type": "result", "key": "k4", "agentId": "x4b", "result": {}},
         ]) + "\n", encoding="utf-8")
         os.utime(wdir / "journal.jsonl", (self.now - 1800, self.now - 1800))
         self._touch(wdir / "agent-x1.jsonl", 1800)

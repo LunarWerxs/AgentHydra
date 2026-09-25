@@ -170,6 +170,26 @@ class GateTest(TranscriptCase):
         self.assertIsNotNone(v["idle"])
         self.assertEqual(v["idle"]["done_claim"], "yes")
 
+    def test_a_chat_waiting_on_its_own_workflow_is_not_idle(self):
+        """2026-09-24: a chat ended its turn with "I'll pick up when the agents finish" and read
+        "idle, quiet 949s" while five workflow agents were still editing files under its
+        subagents folder, so a move would have stopped the engine and every agent with it."""
+        p = self.transcript([assistant(DONE_RECAP)], age_secs=900)
+        wdir = Path(p[:-len(".jsonl")]) / "subagents" / "workflows" / "wf_1"
+        wdir.mkdir(parents=True)
+        (wdir / "journal.jsonl").write_text("\n".join(json.dumps(r) for r in [
+            {"type": "started", "key": "k1", "agentId": "a1", "label": "thread:done"},
+            {"type": "result", "key": "k1", "agentId": "a1"},
+            {"type": "started", "key": "k2", "agentId": "a2", "label": "thread:busy"},
+        ]) + "\n", encoding="utf-8")
+        (wdir / "agent-a2.jsonl").write_text("{}\n", encoding="utf-8")
+        live = {"pid": 123, "name": "x", "startedAt": (time.time() - 3600) * 1000}
+        v = gatelib.gate("s", p, live)
+        self.assertEqual(v["state"], "running")
+        self.assertIsNone(v["idle"])
+        self.assertEqual([a["label"] for a in v["workflow_open"]], ["thread:busy"])
+        self.assertLess(v["quiet_secs"], 60)
+
     def test_a_boot_hook_written_after_the_turn_does_not_make_a_finished_chat_mid_turn(self):
         """FOUR UNDELIVERED RESUMES, 2026-09-14. Landing a chat boots its engine through
         claude://resume, and that boot appends a user-role record the app marks `isMeta`. Judged

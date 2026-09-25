@@ -221,9 +221,15 @@ def session_dir(transcript_path: str | os.PathLike) -> Path:
 
 
 def _workflow_pending(tdir: Path, now: float) -> list[dict]:
-    """Agents a workflow's journal says STARTED and never returned a RESULT, with how long each
-    has been silent. One of these holds a barrier forever when it hangs."""
-    started, done = {}, set()
+    """Agents a workflow's journal says STARTED and never settled, with how long each has been
+    silent. One of these holds a barrier forever when it hangs.
+
+    Read in order and by the journal's `key` (one agent() call), not by agentId: a retry starts
+    the SAME key under a NEW agentId, and `failed` settles a key as surely as `result` does.
+    Matching by agentId on `result` alone (the rule until 2026-09-24) left every failed or
+    retried attempt open forever - 4,531 `failed` rows and 1,469 retried keys across the 1,995
+    journals on this PC - so a finished workflow still read as running."""
+    open_: dict[str, tuple[str, str]] = {}  # key -> (agentId of its latest attempt, label)
     try:
         lines = (tdir / "journal.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -233,18 +239,42 @@ def _workflow_pending(tdir: Path, now: float) -> list[dict]:
             j = json.loads(line)
         except ValueError:
             continue
-        if j.get("type") == "started" and j.get("agentId"):
-            started[j["agentId"]] = j.get("label") or j["agentId"]
-        elif j.get("type") == "result" and j.get("agentId"):
-            done.add(j["agentId"])
-    out = []
-    for aid, label in started.items():
-        if aid in done:
+        key = j.get("key") or j.get("agentId")
+        if not key or not j.get("agentId"):
             continue
+        if j.get("type") == "started":
+            open_[key] = (j["agentId"], j.get("label") or j["agentId"])
+        elif j.get("type") in ("result", "failed"):
+            open_.pop(key, None)
+    out = []
+    for aid, label in open_.values():
         m = _mtime(tdir / f"agent-{aid}.jsonl")
         out.append({"agentId": aid, "label": label,
                     "silentSecs": max(0, int(now - m)) if m else None})
     return out
+
+
+def subagent_activity(transcript_path: str | os.PathLike, now: float, recent_secs: int) -> dict:
+    """What a chat's OWN sub-agents and workflows are doing, for the gate: {quietSecs, openAgents}.
+
+    `quietSecs` is how long nothing under `<sid>/subagents/` has been written (None: nothing
+    there). `openAgents` are the agents a workflow's journal says started and never settled, in
+    a workflow whose folder was written within `recent_secs`; an older one is hung, which is
+    stall_watch's question, not a reason to call the chat busy forever."""
+    sdir = session_dir(transcript_path) / "subagents"
+    newest, open_agents = None, []
+    if not sdir.is_dir():
+        return {"quietSecs": None, "openAgents": []}
+    for root, _dirs, files in os.walk(sdir):
+        stamps = [m for m in (_mtime(os.path.join(root, f)) for f in files) if m]
+        if not stamps:
+            continue
+        folder_last = max(stamps)
+        newest = folder_last if newest is None else max(newest, folder_last)
+        if "journal.jsonl" in files and now - folder_last < recent_secs:
+            open_agents += _workflow_pending(Path(root), now)
+    return {"quietSecs": max(0, int(now - newest)) if newest else None,
+            "openAgents": open_agents}
 
 
 def activity(task: dict, transcript_path: str | os.PathLike, now: float) -> dict:
