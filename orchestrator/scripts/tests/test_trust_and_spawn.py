@@ -267,6 +267,24 @@ class SpawnChatTest(unittest.TestCase):
         self.assertEqual(submitted, "exit 4")
         self.assertIs(spawn_chat.composer_cleared(submitted, note), True)
 
+    def test_a_deeplink_that_landed_without_its_prompt_is_sent_once_more(self):
+        # 2026-09-25 (#3 07:46 UTC, #25 10:51 UTC): the app opened a chat with neither our folder
+        # nor our prompt, so the actuator found no composer holding the text (exit 3) and nothing
+        # was bound. The spawn sends the deeplink one more time, never a third.
+        missing = mock.Mock(returncode=3, stderr="",
+                            stdout="no composer holds that text - nothing to submit")
+        with mock.patch.object(spawn_chat, "_binary", return_value="claude.exe"), \
+             mock.patch.object(spawn_chat.subprocess, "Popen") as popen, \
+             mock.patch.object(spawn_chat, "TRUST_ACTUATOR", Path("nope-not-here")), \
+             mock.patch.object(spawn_chat, "SUBMIT_ACTUATOR", Path(__file__)), \
+             mock.patch.object(spawn_chat.time, "sleep"), \
+             mock.patch("trust_workspace.apply_trust", return_value={"trusted": []}), \
+             mock.patch.object(spawn_chat.clilib, "run_text", return_value=missing):
+            res = spawn_chat.spawn(str(self.folder), "do the thing", "open1")
+        self.assertEqual(popen.call_count, 2)
+        self.assertEqual(res["retried"]["submitted"], "exit 3")
+        self.assertIsNone(res["sessionId"])
+
     def test_a_new_chat_that_opens_with_somebody_elses_words_is_never_bound_or_typed_into(self):
         # 2026-09-23: a person started a chat on the same account inside the spawn's wait; the
         # spawner took it as its member and typed the fan-out prompt into it.

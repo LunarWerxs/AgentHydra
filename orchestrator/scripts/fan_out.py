@@ -465,7 +465,8 @@ def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
         m["spawn"] = {k: res.get(k) for k in ("started", "submitted", "submitNote",
                                               "composerCleared", "landedIn",
                                               "modeSet", "trustDialog", "window",
-                                              "unboundSessionId", "skippedForeign")
+                                              "unboundSessionId", "skippedForeign",
+                                              "retried")
                       if k in res}
         m["spawnedAt"] = _now_iso()
         if m["sessionId"]:

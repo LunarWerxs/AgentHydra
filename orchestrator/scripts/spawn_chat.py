@@ -441,16 +441,58 @@ def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -
 
     trust = trust_workspace.apply_trust([folder], act=True)
 
+    run = _spawn_once(inst, folder, prompt, binary)
+    if not run["ok"]:
+        return run
+    retried = None
+    if deeplink_dropped(run):
+        # THE DEEPLINK LANDED EMPTY (2026-09-25: #3 at 07:46 UTC, #25 at 10:51 UTC, four members
+        # 02:00-02:33 UTC): the app opened a chat, but in its own scratch workspace and with no
+        # prompt typed, so the actuator found no composer holding our text (exit 3) and the
+        # fallback starter had no desktop chat to deliver into. Why the app drops the folder and
+        # prompt is not visible from outside it (the #25 sighting was an app launched seconds
+        # before; most deeplinks into the same apps carry both). Nothing of ours reached that
+        # chat, so sending the deeplink ONCE more cannot start the task twice. The first try
+        # rides along in `retried`, so a member that fails twice shows both answers.
+        retried = {k: run.get(k) for k in ("landedIn", "unboundSessionId", "submitted",
+                                           "submitNote", "started")}
+        again = _spawn_once(inst, folder, prompt, binary)
+        if again["ok"]:
+            run = again
+        else:
+            retried["retryRefused"] = again.get("why")
+
+    return {"ok": True, "instance": inst.get("name"), "folder": folder,
+            "landedIn": run["landedIn"],
+            "trusted": trust["trusted"], "trustDialog": run["dialog"],
+            "sessionId": run["sessionId"], "unboundSessionId": run["unboundSessionId"],
+            "skippedForeign": run["skippedForeign"],
+            "submitted": run["submitted"], "submitNote": run["submitNote"],
+            "composerCleared": composer_cleared(run["submitted"], run["submitNote"]),
+            "started": run["started"], "modeSet": run["modeSet"],
+            "window": run["window"], "retried": retried,
+            "url": run["url"][:120]}
+
+
+def deeplink_dropped(run: dict) -> bool:
+    """True when one spawn attempt proves the app took the deeplink without its prompt: the
+    actuator found no composer holding our text (exit 3), and no chat was bound. A chat the
+    fallback starter may have typed into (`typed-not-confirmed`) could still start our task, so
+    that case is never retried."""
+    return (not run.get("sessionId")
+            and str(run.get("submitted") or "") == "exit 3"
+            and "typed-not-confirmed" not in str(run.get("started") or ""))
+
+
+def _spawn_once(inst: dict, folder: str, prompt: str, binary: str) -> dict:
+    """One deeplink into the instance, then wait for, and bind, the chat it opens. Returns
+    {'ok': False, 'why'} when the window was busy, else the attempt's facts."""
     before_ids = _live_session_ids()
 
     drive = _drive_spawn_window(inst, folder, prompt, binary)
     if not drive["ok"]:
         return drive
-    url = drive["url"]
-    dialog = drive["dialog"]
     submitted = drive["submitted"]
-    submit_note = drive["submit_note"]
-    window_note = drive["window_note"]
 
     session_id, landed_in, owner, foreign = _await_new_session(folder, before_ids, inst, prompt)
     started = "not-confirmed"
@@ -467,16 +509,11 @@ def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -
         if not bound:
             unbound, session_id = session_id, None
 
-    return {"ok": True, "instance": inst.get("name"), "folder": folder,
-            "landedIn": landed_in,
-            "trusted": trust["trusted"], "trustDialog": dialog,
+    return {"ok": True, "url": drive["url"], "dialog": drive["dialog"],
+            "submitted": submitted, "submitNote": drive["submit_note"],
+            "window": drive["window_note"], "landedIn": landed_in,
             "sessionId": session_id, "unboundSessionId": unbound,
-            "skippedForeign": foreign,
-            "submitted": submitted, "submitNote": submit_note,
-            "composerCleared": composer_cleared(submitted, submit_note),
-            "started": started, "modeSet": mode_set,
-            "window": window_note,
-            "url": url[:120]}
+            "skippedForeign": foreign, "started": started, "modeSet": mode_set}
 
 
 def main(argv: list[str]) -> int:
