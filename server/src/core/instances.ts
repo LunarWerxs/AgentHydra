@@ -66,6 +66,10 @@ const QUIT_POLL_MS = 100
 /** After the main process has exited, how long its helper processes get to exit on their own
  *  before the survivors are forced. */
 const QUIT_CHILD_SETTLE_MS = 1_500
+/** Chromium helper processes that persist profile state (cookies, local storage) and so keep the
+ *  full graceful window after the main process exits. */
+const PROFILE_WRITER_HELPER =
+  /--utility-sub-type=(?:network\.mojom\.NetworkService|storage\.mojom\.StorageService)\b/
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
@@ -790,8 +794,11 @@ export async function confirmLaunchSurvives(
     }
     if (alive(pid)) return pid
     // The pid we watched is gone. Before calling the launch failed, look once more: the profile's
-    // main process may be running under another pid.
-    const after = await mainProc()
+    // main process may be running under another pid. A `fresh` scan can still JOIN one already in
+    // flight (scan-cache.ts single-flight) that began before the death and lists the dead pid, so
+    // a listing of that same pid is re-asked once; the second scan starts after the first ended.
+    let after = await mainProc()
+    if (after.proc?.pid === pid) after = await mainProc()
     if (after.failed)
       throw Error(`started (pid ${pid}), but could not confirm it stayed up: ${after.failed}`)
     if (after.proc === null)
@@ -951,12 +958,20 @@ export async function quitInstance(
       // close, and it is the one that runs Claude's quit cleanup (median ~1s across 41 logged
       // quits in this PC's profiles). The loop used to wait for EVERY pid, so one lingering
       // renderer or crashpad helper held the close to the full 5s. Now: the main process gets the
-      // whole grace; once it is gone the helpers get QUIT_CHILD_SETTLE_MS to exit on their own
-      // (the network service may still be flushing cookies), then whatever is left is forced.
+      // whole grace; once it is gone the helpers get QUIT_CHILD_SETTLE_MS to exit on their own,
+      // then whatever is left is forced - except the helpers that write the profile to disk (the
+      // network service owns the cookie store, i.e. the claude.ai login; the storage service the
+      // local storage), which keep the rest of the grace exactly as before.
       const deadline = Date.now() + gracefulTimeoutMs
       while (Date.now() < deadline && isPidAlive(main.pid)) await sleep(QUIT_POLL_MS)
       const settleBy = Math.min(deadline, Date.now() + QUIT_CHILD_SETTLE_MS)
-      while (Date.now() < settleBy && anyAlive(pids)) await sleep(QUIT_POLL_MS)
+      const writers = matched.filter((p) => PROFILE_WRITER_HELPER.test(p.cmdline)).map((p) => p.pid)
+      while (
+        (Date.now() < settleBy && anyAlive(pids)) ||
+        (Date.now() < deadline && anyAlive(writers))
+      ) {
+        await sleep(QUIT_POLL_MS)
+      }
     }
   }
 

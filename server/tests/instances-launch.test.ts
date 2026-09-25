@@ -144,3 +144,18 @@ test('an early exit is reported mid-window, and a main process under a new pid s
   )
   await expect(confirmLaunchSurvives(dir, crashed.deps)).rejects.toThrow('pid 70')
 })
+
+test('a rescan that still lists the dead pid is asked again before the launch is believed', async () => {
+  // Found in review 2026-09-25: a fresh scan can join one already in flight that began before the
+  // watched pid died, so its listing of that pid is stale.
+  const dir = 'c:/i/luis'
+  const main = {
+    pid: 7,
+    dir,
+    isMain: true,
+    startTime: new Date(100_000).toISOString(),
+  } as CMProcessInfo
+  const crash = survivalDeps([[main], [main], []], (_pid, clock) => clock < 101_000)
+  await expect(confirmLaunchSurvives(dir, crash.deps)).rejects.toThrow('exited within')
+  expect(crash.t.scans).toBe(3)
+})

@@ -81,8 +81,10 @@ test('an isolated instance dir is NOT refused by the external guard', async () =
 
 // 2026-09-25 (owner: "why is Agent Hydra so friggin slow at closing instances"): the grace period
 // is for the MAIN process. The wait used to hold for every pid, so one lingering helper kept the
-// close waiting the full 5s. The "main" here is pid 6: not a multiple of 4, so Windows can never
-// assign it, and the graceful signal reaches nothing real. The lingering helper is our own sleeper.
+// close waiting the full 5s. The "main" here is pid 6: Windows only assigns multiples of 4 and
+// rounds a pid down when opening it, so 6 lands on System (pid 4), which no user process may signal
+// or kill - it reads as gone and the graceful taskkill reaches nothing real. The lingering helper
+// is our own sleeper.
 test('a helper that outlives the main process is forced after a short settle, not the full grace', async () => {
   const dir = path.join(os.tmpdir(), 'ah-quit-settle')
   const helper = Bun.spawn([process.execPath, '-e', 'setTimeout(() => {}, 60000)'], {
@@ -114,3 +116,36 @@ test('a helper that outlives the main process is forced after a short settle, no
     helper.kill()
   }
 }, 90_000)
+
+test('the network service (it owns the login cookies) keeps the whole grace after the main exits', async () => {
+  const dir = path.join(os.tmpdir(), 'ah-quit-writer')
+  const helper = Bun.spawn([process.execPath, '-e', 'setTimeout(() => {}, 60000)'], {
+    stdout: 'ignore',
+    stderr: 'ignore',
+  })
+  try {
+    const started = performance.now()
+    const result = await quitInstance(dir, {
+      gracefulTimeoutMs: 3_000,
+      listProcesses: async () => [
+        { pid: 6, cmdline: 'fixture', dir, isMain: true },
+        {
+          pid: helper.pid,
+          cmdline: 'Claude.exe --type=utility --utility-sub-type=network.mojom.NetworkService',
+          dir,
+          isMain: false,
+        },
+      ],
+    })
+    // Waited out the grace for it (a plain helper is forced after 1.5s), and still stopped it.
+    expect(performance.now() - started).toBeGreaterThanOrEqual(2_900)
+    expect(result.data?.killedCount).toBe(2)
+    const exited = await Promise.race([
+      helper.exited.then(() => true),
+      Bun.sleep(5_000).then(() => false),
+    ])
+    expect(exited).toBe(true)
+  } finally {
+    helper.kill()
+  }
+}, 60_000)
