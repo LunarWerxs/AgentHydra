@@ -162,6 +162,10 @@ $ALLOW_ALWAYS_NAMES = @('Always allow', 'Immer erlauben', 'Permitir siempre', 'T
 $ALLOW_ONCE_NAMES = @('Allow once', 'Einmal erlauben', 'Permitir una vez', 'Autoriser une fois')
 $TREE = [System.Windows.Automation.TreeScope]::Descendants
 function TryPattern($e, $pat) { try { return $e.GetCurrentPattern($pat) } catch { return $null } }
+# Expand-SidebarGroups / Restore-SidebarGroups - the collapsed-group opener the delivery script has
+# used since 2026-09-01, shared since 2026-09-24 (to-do 5f8bde91: a chat in a collapsed group was
+# unreachable here, so its stuck permission prompt never cleared).
+. (Join-Path $PSScriptRoot 'sidebar_groups.ps1')
 
 $procs = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
   Where-Object { $_.CommandLine -and $_.CommandLine -notmatch '--type=' } |
@@ -270,8 +274,9 @@ function Restore-Foreground {
     $script:PriorFg = [IntPtr]::Zero
   }
 }
-# Covers every `exit N` path below without wrapping the whole script in a try/finally.
-[void](Register-EngineEvent PowerShell.Exiting -Action { Restore-Foreground })
+# Covers every `exit N` path below without wrapping the whole script in a try/finally. It also
+# folds back every sidebar group this run opened (owner ruling: leave the sidebar as it was found).
+[void](Register-EngineEvent PowerShell.Exiting -Action { Restore-SidebarGroups; Restore-Foreground })
 function Grab-Window {
   if ($script:PriorFg -eq [IntPtr]::Zero) {
     $fg = [Approve.Inv]::GetForegroundWindow()
@@ -585,6 +590,22 @@ if (-not (OpenChatIs $el $Title)) {
     Start-Sleep -Milliseconds 400
     $pick = Find-Rows $el
   }
+  # A COLLAPSED GROUP IS A CLOSED DRAWER, NOT A REACH LIMIT (to-do 5f8bde91, board ruling
+  # 2026-09-24). Still absent after the poll: open the collapsed project groups the way the
+  # delivery script does and look ONCE more. Every group opened here is folded back on exit. A
+  # row that is still not rendered after this is virtualized out of reach - the exit-4 dump below
+  # and the incident filed after 3 failed presses are the backstop; no scroll driver is attempted.
+  $groupsExpanded = -1
+  if (-not $pick.Row -and $pick.Why -eq 'no-row') {
+    $groupsExpanded = Expand-SidebarGroups $el
+    if ($groupsExpanded -gt 0) {
+      Start-Sleep -Milliseconds 900
+      $el = Wake $hwnd 0
+      $pick = Find-Rows $el
+    }
+  }
+  $expandNote = if ($groupsExpanded -gt 0) { "expanded $groupsExpanded group(s); row still not rendered (virtualized out of reach) - " }
+                elseif ($groupsExpanded -eq 0) { "expanded 0 group(s), none was collapsed - " } else { "" }
   if (-not $pick.Row) {
     # ⛔ SAY WHICH FAILURE THIS IS. One message used to blame the 6s poll for all of them,
     # which is how a pure MATCHING break (the Spanish app, 2026-09-09) read as a rendering
@@ -617,7 +638,7 @@ if (-not (OpenChatIs $el $Title)) {
       $leftNow = @($allNow | Where-Object { $_.Left -lt $mxNow })
       $expNow = @($leftNow | Where-Object { $_.HasExpand })
       $sample = (@($leftNow | Select-Object -First 6 | ForEach-Object { "'" + $_.Name + "'" }) -join ', ')
-      Write-Output ("REFUSED: the sidebar in $($proc.Dir) rendered NO chat rows at all in 6s, so " +
+      Write-Output ("REFUSED: $($expandNote)the sidebar in $($proc.Dir) rendered NO chat rows at all in 6s, so " +
         "'$Title' could not be looked for. " + (Window-Report $proc.ProcId ([int]$hwnd)) +
         ". The scan saw $($allNow.Count) button(s) in that window, $($leftNow.Count) left of the " +
         "sidebar boundary (x<$([int]$mxNow)), $($expNow.Count) of them row-shaped" +
@@ -625,7 +646,7 @@ if (-not (OpenChatIs $el $Title)) {
         ". $lens")
       exit 4
     }
-    Write-Output ("REFUSED: no sidebar row is named '$Title' in $($proc.Dir) - a MATCH failure, not a timing one: $($rendered.Count) rows are rendered right now $lens. Rows: " +
+    Write-Output ("REFUSED: $($expandNote)no sidebar row is named '$Title' in $($proc.Dir) - a MATCH failure, not a timing one: $($rendered.Count) rows are rendered right now $lens. Rows: " +
       ((@($rendered | Select-Object -First 12) | ForEach-Object { "'" + $_ + "'" }) -join ' | '))
     exit 4
   }

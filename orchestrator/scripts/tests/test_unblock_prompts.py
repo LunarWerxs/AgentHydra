@@ -428,6 +428,33 @@ class UnreachablePaneTest(unittest.TestCase):
         self.assertEqual(landed["failedStreak"], 0)
         self.assertEqual(ledgerlib.check("approval", "esc-13")["attempts"], 0)
 
+    # 2026-09-24 (to-do 5f8bde91, board ruling): -Select now opens the collapsed sidebar groups the
+    # way the delivery script does and looks once more. A row still absent after that is
+    # virtualized out of reach, and the refusal LEADS with it - press() keeps only the first 180
+    # characters of the last line, and the row dump after it can run far past that.
+    VIRTUALIZED = ("REFUSED: expanded 2 group(s); row still not rendered (virtualized out of reach) - "
+                   "no sidebar row is named 'chat one' in C:/x/inst1 - a MATCH failure, not a timing "
+                   "one: 40 rows are rendered right now (rows read by the kebab phrase 'More options "
+                   "for', measured off this window). Rows: "
+                   + " | ".join(f"'chat {i}'" for i in range(12)))
+
+    def test_a_row_still_missing_after_expanding_groups_names_the_expansion(self):
+        row = self._row("esc-15")
+        with mock.patch.object(unblock_prompts.windowlib, "instance_lock", _no_placement_lock),              mock.patch.object(unblock_prompts.clilib, "run_text",
+                               return_value=self._result(returncode=4, stdout=self.VIRTUALIZED)):
+            got = unblock_prompts.press(row, always_select=True)
+        self.assertFalse(got["ok"])
+        self.assertIn("expanded 2 group(s); row still not rendered (virtualized out of reach)",
+                      got["outcome"])
+
+    def test_the_actuator_expands_groups_and_leads_both_row_refusals_with_it(self):
+        src = unblock_prompts.ACTUATOR.read_text(encoding="utf-8")
+        self.assertIn("sidebar_groups.ps1", src)
+        self.assertIn("Expand-SidebarGroups $el", src)
+        self.assertIn("Restore-SidebarGroups; Restore-Foreground", src)  # every exit folds them back
+        self.assertIn("row still not rendered (virtualized out of reach)", src)
+        self.assertEqual(src.count('Write-Output ("REFUSED: $($expandNote)'), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

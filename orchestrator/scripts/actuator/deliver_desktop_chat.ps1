@@ -141,16 +141,10 @@ if ($mains.Count -ne 1) {
 
 # LEAVE THE SIDEBAR AS IT WAS FOUND (owner, 2026-09-04: "something keeps clicking interface
 # buttons on my Claude desktop, like the repo names or whatever"). The expansion below opens the
-# collapsed project groups to reach a row, and nothing ever folded them back - so every delivery
-# left his sidebar rearranged. Every group THIS run opens is remembered and collapsed again on
-# the way out, whatever the outcome (`exit` runs the finally).
-$script:OpenedGroups = @()
-function RestoreGroups {
-  $n = 0
-  foreach ($ecp in $script:OpenedGroups) { try { $ecp.Collapse(); $n++ } catch { } }
-  $script:OpenedGroups = @()
-  if ($n -gt 0) { Write-Output "collapsed $n sidebar group(s) back the way they were" }
-}
+# collapsed project groups to reach a row, and every group THIS run opens is collapsed again on the
+# way out, whatever the outcome (`exit` runs the finally). The expand/restore pair lives in
+# sidebar_groups.ps1 since 2026-09-24, shared with approve_prompt.ps1 - behaviour unchanged.
+. (Join-Path $PSScriptRoot 'sidebar_groups.ps1')
 try {
 # ONE WINDOW, PROVEN ABOVE (2026-09-06). The -Instance filter refuses anything but exactly one
 # running window before this point, so this loop runs at most once. The old shape ITERATED
@@ -165,60 +159,16 @@ foreach ($m in $mains) {
   [AxD]::Wake($hwnd); Start-Sleep -Milliseconds 1000
   $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
 
-  # EXPAND EVERY COLLAPSED SIDEBAR GROUP FIRST (2026-09-01). "Not rendered in any searched
-  # running instance (collapsed group or virtualized out)" was the single commonest delivery
-  # refusal on a real fleet - and for a COLLAPSED group it is not a reach limit at all, it is
-  # a closed drawer. The app exposes ExpandCollapse on those group headers, so open them and
-  # the rows underneath become ordinary rendered rows. Read-only in effect (expanding a list
-  # changes no chat), bounded, and it makes every later rail - the row match, the content
-  # verify, the composer - work on the chats that were merely out of sight.
-  # ⛔⛔ IDENTIFY A GROUP POSITIVELY - A BLACKLIST IS NOT GOOD ENOUGH (owner, 2026-09-01: "it's
-  # still clicking random shit... I think it's the script trying to select the model"). The
-  # first cut expanded EVERY ExpandCollapse element in the window and skipped only the kebabs
-  # by name. The MODEL PICKER is an ExpandCollapse control too, and so is every other dropdown
-  # in the app - so this opened the model menu, on a real account, repeatedly. Expanding a
-  # sidebar group is harmless; opening the model picker is one stray click away from changing
-  # a chat's model, which is a standing owner rule never to touch.
-  #
-  # So: a candidate must be a GROUP-SHAPED control (never a ComboBox/Button/MenuItem), and it
-  # must physically live in the SIDEBAR - the left column - which no model picker does.
-  try {
-    $expanded = 0
-    # THE ALLOW-LIST IS BUILT FROM THE APP ITSELF. Every project group in the sidebar has a
-    # companion button named "New session in <that group>" - measured across five live
-    # instances 2026-09-01 (connections, NormWind, odin, PublicProjects, RoloDexter). Nothing
-    # else in the window has one. So the set of names worth expanding is derived, not guessed,
-    # and it cannot include 'More models', 'Effort: Max', 'Bypass permissions', the account
-    # menu, 'Filter', 'Remote Control' or a 'Ran 6 commands' disclosure - every one of which
-    # the old blacklist happily opened.
-    $groupNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    foreach ($b in $el.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-                               [System.Windows.Automation.Condition]::TrueCondition)) {
-      try {
-        $n = $b.Current.Name
-        if ($n -and $n.Length -gt 15 -and $n.StartsWith('New session in ')) {
-          [void]$groupNames.Add($n.Substring(15).Trim())
-        }
-      } catch { continue }
-    }
-    foreach ($g in $el.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-                               [System.Windows.Automation.Condition]::TrueCondition)) {
-      try {
-        $n = $g.Current.Name
-        if (-not $n -or -not $groupNames.Contains($n.Trim())) { continue }
-        $ecp = TryPattern $g ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-        if (-not $ecp) { continue }
-        if ($ecp.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Collapsed) { continue }
-        $ecp.Expand(); $script:OpenedGroups += $ecp; $expanded++
-        if ($expanded -ge 40) { break }
-      } catch { continue }
-    }
-    if ($expanded -gt 0) {
-      Write-Output "expanded $expanded collapsed sidebar group(s) so their chats are reachable"
-      Start-Sleep -Milliseconds 900
-      $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
-    }
-  } catch { }
+  # EXPAND EVERY COLLAPSED SIDEBAR GROUP FIRST (2026-09-01): a row in a collapsed group is a
+  # closed drawer, not a reach limit. Expand-SidebarGroups (sidebar_groups.ps1) opens only groups
+  # it can identify POSITIVELY - never the model picker or any other dropdown - and remembers each
+  # one so Restore-SidebarGroups folds it back.
+  $expanded = Expand-SidebarGroups $el
+  if ($expanded -gt 0) {
+    Write-Output "expanded $expanded collapsed sidebar group(s) so their chats are reachable"
+    Start-Sleep -Milliseconds 900
+    $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+  }
 
   # RAIL 2: get the target chat ON SCREEN. It may ALREADY be the open conversation - an open
   # chat renders no selectable sidebar row (measured), so requiring a row would refuse the
@@ -592,6 +542,6 @@ foreach ($m in $mains) {
   Write-Output "DELIVERED to '$Title' in $($m.Dir) (focus-free; row-verified before typing)"
   exit 0
 }
-} finally { RestoreGroups }
+} finally { Restore-SidebarGroups }
 Write-Output "FAIL: '$Title' is not rendered in any searched running instance (collapsed group or virtualized out)"
 exit 3

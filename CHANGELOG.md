@@ -20,6 +20,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the courier steps the sidebar's own scroll container (left column only) and looks again, and puts
   the scroll back if the row never appears; `fan_out_send` to a virtualized-out foreman chat used to
   fail "not rendered in any searched running instance".
+- **A stuck permission prompt in a chat inside a collapsed sidebar group is reached**
+  (`orchestrator/scripts/actuator/approve_prompt.ps1`, `sidebar_groups.ps1`). `-Select` opens the
+  collapsed project groups the way the delivery courier does and looks once more; every group it
+  opens is folded back on exit. A row still missing after that is reported as virtualized out of
+  reach at the front of the refusal. The expand/restore pair is now one shared file.
 
 ### Changed
 
