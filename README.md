@@ -261,7 +261,7 @@ under [`orchestrator/`](orchestrator/README.md) and is driven through the same M
 (`orchestrator_menu`, `orchestrator_run`, `orchestrator_loop`, `orchestrator_switch`), so an agent
 never has to be told there is a second program. Nothing there acts unless the tray icon is up.
 
-How it behaves is yours to set: `orch.py policy` is one file of 86 switches - the gate's timings and
+How it behaves is yours to set: `orch.py policy` is one file of 106 switches - the gate's timings and
 its four archive signals, what each sweep lane does, the caps, the wake prompt, every scheduled lane
 - and every default is exactly what was hardcoded before it existed, so installing it changes
 nothing. `orch.py policy --wizard` walks through them; `orch.py dryrun` runs the read-only loop N

@@ -210,7 +210,7 @@ touches nothing, so you can see exactly what a real pass would do before arming 
 - there is no third behaviour hiding in the driver.
 
 THREE WAYS IT RUNS: (1) BY ITSELF - Windows scheduled tasks every few minutes (dashboard,
-reconcile, chat-journal, todo-sweep, saturate, unblock, stall-watch, twins, chips,
+reconcile, chat-journal, todo-sweep, saturate, unblock, stall-watch, goal-watch, twins, chips,
 groundskeeper, overlord, doctrine; `python scripts/schedule_jobs.py --status` is the live list);
 (2) A PERSON - `orch.py` above, or the dashboard
 at http://127.0.0.1:7799; (3) AN AI - the `/orchestrate` command (canonical copy in this repo's

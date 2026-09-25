@@ -9,6 +9,29 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **A chat's standing goal is continued, and audited while it moves** (new lane
+  `orchestrator/scripts/goal_watch.py`, `lib/goallib.py`, scheduled as `goal-watch` every 5
+  minutes, policy group `goalwatch`). The /goal command keeps a goal in `tmp/handoff/GOAL.md`
+  (STATUS: IN PROGRESS, a NEXT checklist), but nothing outside the chat read it back: a chat that
+  stopped at a milestone sat idle with its goal open. The lane finds each live chat's goal file
+  from its working folder (up to the repo root), continues only a chat whose transcript has named
+  that file, and only once its turn has been over 15 minutes. The continuation asks for a
+  one-line audit of the last turn (PROGRESS, VERIFIED WAIT on a named live handle, or NO
+  PROGRESS: a status restatement is no progress, a repeated blocker is one blocker, a timeout is
+  not an ending) and a per-requirement completion audit before DONE, never shrinking the goal to
+  what passes. From outside, a continuation that leaves the file byte-identical counts as no
+  progress and the next one says so; after 3 in a row the goal is filed as an incident and the
+  chat is left alone until the file changes. When the chat's account reaches 80% of its usage
+  window it gets a wrap-up instead (no new work, leave the file resumable, keep IN PROGRESS),
+  once per climb over the line, which sits below the courier's 85% delivery gate so it can still
+  arrive. A chat waiting on its person (its turn ended on a question, or the goal holds an open
+  `NEED:` item) is never nudged, and when a swap leaves two live owners of one goal only the one
+  that spoke last gets a continuation or a wrap-up. A continuation the courier would refuse
+  (account over its soft target) is skipped, not failed. Plan-only unless the tray icon is up,
+  skips held chats, `goalwatch.enabled` off in the
+  observe-only preset. Idea from OpenAI Codex's goal continuation prompts (Apache-2.0), wording
+  written fresh. Tests: `tests/test_goal_watch.py`.
+
 - **Frozen MCP API levels** (`server/src/mcp-api-levels.ts`, `server/mcp-api-levels/1.2.0.json`,
   `server/mcp-api-levels/1.3.1.json`, `scripts/mcp-api-level.ts`, `server/tests/mcp-api-levels.test.ts`). Each release commits its MCP
   tool surface (names, `since`, input schemas without prose), generated from `TOOLS`, and `bun test`
