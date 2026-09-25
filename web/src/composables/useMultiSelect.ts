@@ -1,4 +1,4 @@
-// useMultiSelect — pick several sessions, message them all at once - or move them. Ways in: the
+// useMultiSelect: pick several sessions, message them all at once - or move them. Ways in: the
 // Select switch in the toolbar, a Ctrl/Cmd-click or Shift-click straight on a row, Ctrl/Cmd+A with
 // the list focused, or a box dragged over the rows; each flips select mode on by itself so the
 // gesture means what it means everywhere else. Every gesture ends as a SelectionRequest applied
@@ -21,6 +21,8 @@ import {
 const BOX_THRESHOLD_PX = 6
 /** Within this distance of the list's top or bottom edge a box drag scrolls the list. */
 const BOX_EDGE_PX = 24
+/** How far the list scrolls per animation frame while a box drag sits in that edge zone. */
+const BOX_SCROLL_STEP_PX = 10
 
 export function useMultiSelect(deps: {
   filtered: ComputedRef<SessionSummary[]>
@@ -87,8 +89,19 @@ export function useMultiSelect(deps: {
 
   // Ctrl/Cmd+A while focus is in the list (a row button is focused after any click on it) selects
   // every visible Claude row. Bound on the list, not globally, so Ctrl+A in the filter box still
-  // selects its text.
+  // selects its text. Escape there clears the selection first and stops, so the window-level
+  // Escape shortcut does not also close the open session. Scoping it to the list is also what
+  // keeps an Escape that dismisses a context menu or dialog (focus is in that layer, not the list)
+  // from wiping the selection the user built.
   function listKeydown(ev: KeyboardEvent) {
+    const plain = !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && !ev.altKey
+    if (ev.key === 'Escape' && plain) {
+      if (!selectMode.value || checkedIds.value.size === 0) return
+      ev.preventDefault()
+      ev.stopPropagation()
+      clearChecked()
+      return
+    }
     if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey || ev.key.toLowerCase() !== 'a')
       return
     ev.preventDefault()
@@ -115,6 +128,7 @@ export function useMultiSelect(deps: {
     base: Set<string>
   } | null = null
   let suppressClick = false
+  let edgeFrame = 0
 
   const contentY = (el: HTMLElement, clientY: number) =>
     clientY - el.getBoundingClientRect().top + el.scrollTop
@@ -134,6 +148,22 @@ export function useMultiSelect(deps: {
     request(band ? [{ type: 'setRange', ...band, selected: true }] : [], drag.base)
     if (band) rangeAnchor = y >= drag.startY ? band.last : band.first
   }
+  // Edge auto-scroll runs per frame, not per pointermove, so a pointer held still in the edge zone
+  // keeps the list scrolling; each scroll event re-runs updateBox, which extends the band.
+  function edgeScroll() {
+    edgeFrame = 0
+    if (!drag?.active) return
+    const r = drag.el.getBoundingClientRect()
+    const dy =
+      drag.clientY < r.top + BOX_EDGE_PX
+        ? -BOX_SCROLL_STEP_PX
+        : drag.clientY > r.bottom - BOX_EDGE_PX
+          ? BOX_SCROLL_STEP_PX
+          : 0
+    if (!dy) return
+    drag.el.scrollBy(0, dy)
+    edgeFrame = window.requestAnimationFrame(edgeScroll)
+  }
   function onBoxMove(ev: PointerEvent) {
     if (!drag) return
     drag.clientY = ev.clientY
@@ -145,9 +175,7 @@ export function useMultiSelect(deps: {
       drag.base = drag.additive ? new Set(checkedIds.value) : new Set()
       window.getSelection()?.removeAllRanges()
     }
-    const r = drag.el.getBoundingClientRect()
-    if (ev.clientY < r.top + BOX_EDGE_PX) drag.el.scrollBy(0, -BOX_EDGE_PX)
-    else if (ev.clientY > r.bottom - BOX_EDGE_PX) drag.el.scrollBy(0, BOX_EDGE_PX)
+    if (!edgeFrame) edgeScroll()
     updateBox()
   }
   function endBox() {
@@ -161,6 +189,8 @@ export function useMultiSelect(deps: {
         suppressClick = false
       }, 0)
     }
+    if (edgeFrame) window.cancelAnimationFrame(edgeFrame)
+    edgeFrame = 0
     drag.el.removeEventListener('scroll', updateBox)
     window.removeEventListener('pointermove', onBoxMove)
     window.removeEventListener('pointerup', endBox)

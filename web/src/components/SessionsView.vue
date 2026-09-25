@@ -234,8 +234,6 @@ useShortcuts([
     groupKey: 'sessions.shortcutGroup',
     run: () => {
       if (findOpen.value) closeFind()
-      // a selection is cleared before the open session closes, as in any multi-select list
-      else if (selectMode.value && checkedIds.value.size > 0) clearChecked()
       else if (selectedId.value) selectedId.value = null
     },
   },
@@ -826,10 +824,12 @@ function onComposerSent(mode: 'now' | 'queued') {
           </button>
         </div>
 
-        <!-- relative + the pointer/keydown handlers: box select and Ctrl+A over the rows below
-             (composables/useMultiSelect.ts); the band is drawn in the list's content coordinates -->
+        <!-- relative + the pointer/keydown handlers: box select, Ctrl+A and Escape over the rows
+             below (composables/useMultiSelect.ts); the band is drawn in the list's content
+             coordinates, and select-none keeps a drag from the padding off the page text -->
         <div
           class="scroll-slim relative min-h-0 flex-1 overflow-y-auto p-2"
+          :class="{ 'select-none': box }"
           @pointerdown="boxPointerDown"
           @click.capture="boxClickGuard"
           @keydown="listKeydown"
