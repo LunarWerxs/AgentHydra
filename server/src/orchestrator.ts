@@ -1138,6 +1138,33 @@ async function resolveLiveRunConflict(
   }
 }
 
+/**
+ * Would this invocation be refused `busy` if it started now? Synchronous, and it decides nothing:
+ * runOrchestrator still makes (and records) the refusal itself, resume staging included.
+ *
+ * ⛔ A DETACHED CALL LEARNED IT WAS REFUSED ONLY BY POLLING (found live 2026-09-24, chat
+ * ffb5fe39). `async: true` answered 202 with an operation id the moment the operation was
+ * created, and the busy refusal happened a tick later inside it - so a `fan_out` fired while
+ * another spawn held the route got a group id and "started", and `fan_out_status` on that id
+ * answered `no such fan-out group`, because fan_out.py never ran. The route asks this first and
+ * answers a refusal it can already see as the 409 a blocking call gets.
+ */
+export function wouldRefuseBusy(input: {
+  script?: unknown
+  args?: unknown
+  timeoutMs?: unknown
+}): boolean {
+  const check = validateInvocation(input)
+  if (!check.ok) return false
+  const { script, args } = check.invocation
+  const lockKey = routeLockKey(script, args)
+  if (lockKey === null || !liveRun(lockKey)) return false
+  const holder = [...operations.values()].find(
+    (e) => e.op.status === 'running' && e.op.script === lockKey,
+  )
+  return !(holder && mayPreempt(args, holder.op.args))
+}
+
 /** Run one script by its menu name. The driver's cwd is the toolbox root, exactly as a person
  *  typing `python orch.py <script>` there, so state/, the tray heartbeat and the ledgers resolve
  *  to the same files a hand-run would use. */

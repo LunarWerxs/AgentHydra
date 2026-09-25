@@ -36,6 +36,7 @@ import {
   orchestratorStatus,
   runOriginAllowed,
   startOrchestratorOperation,
+  wouldRefuseBusy,
 } from '../orchestrator'
 import { jsonBody } from '../route-helpers'
 import { dropCachedUsage } from '../usage'
@@ -161,11 +162,12 @@ app.post('/api/orchestrator/run', async (c) => {
     (typeof headerKey === 'string' && headerKey.trim()) ||
     (typeof body.idempotencyKey === 'string' && body.idempotencyKey.trim()) ||
     null
-  const started = startOrchestratorOperation(
-    { script: body.script, args: body.args, timeoutMs: body.timeoutMs },
-    { idempotencyKey },
-  )
-  if (body.async === true)
+  const invocation = { script: body.script, args: body.args, timeoutMs: body.timeoutMs }
+  // A detached call that would be refused busy is answered like a blocking one (409 now), never
+  // 202-then-refused-inside-the-operation - see wouldRefuseBusy.
+  const refusedNow = body.async === true && wouldRefuseBusy(invocation)
+  const started = startOrchestratorOperation(invocation, { idempotencyKey })
+  if (body.async === true && !refusedNow)
     return c.json(
       { ok: true, operationId: started.op.id, status: started.op.status, reused: started.reused },
       202,

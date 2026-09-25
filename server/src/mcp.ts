@@ -675,6 +675,11 @@ function fanOutVerdict(
   payload: Record<string, unknown> | null,
 ): { verdict: string; bad: boolean } {
   const fallback = code == null ? 'no exit code' : (FAN_OUT_VERDICTS[code] ?? `exit ${code}`)
+  // A group recorded before ranking (fan_out.py's placeholder) has no members yet: it either
+  // failed there or is still planning, and neither is "ok".
+  if (payload && str(payload.error)) return { verdict: `failed: ${str(payload.error)}`, bad: true }
+  if (payload && payload.phase === 'planning')
+    return { verdict: 'not yet: still ranking accounts, no member planned', bad: true }
   const members = payload && Array.isArray(payload.members) ? payload.members : null
   if (members && members.length > 0) {
     const rows = members as Record<string, unknown>[]
@@ -2483,6 +2488,20 @@ export const TOOLS: McpEngineTool[] = [
                 : `Detached automatically: this spawn's own declared length (${Math.round(timeoutMs / 1000)}s, ${tasks.length} chat(s) at ~30-90s each) is longer than an MCP client will hold a connection open, and a call the client abandons loses the report for work that keeps running anyway. Group ${groupId} is spawning in the daemon regardless of this call's connection; poll fan_out_status { group: "${groupId}" } for per-member progress, or pass background:false if you really do want to block (only worth it for one or two chats).`,
           }
         return { ...run, groupId, selfNote }
+      } catch (e) {
+        // ⛔ BUSY IS AN ANSWER, NOT A THROW (found live 2026-09-24, chat ffb5fe39): a second
+        // fan_out while a spawn held the route read, from the caller's side, as a silent drop.
+        // Say so with the holder's operation id, and say plainly that no group exists.
+        const refusal = busyRefusal(e)
+        if (!refusal) throw e
+        return {
+          ...refusal,
+          ok: false,
+          busy: true,
+          groupId: null,
+          selfNote,
+          note: `REFUSED busy: another fan_out (or send/delete) holds the route, so nothing was spawned and no group ${groupId} exists. Wait for operation ${str(refusal.operationId) || '(unknown)'} to finish (orchestrator_operation), then fire this call again.`,
+        }
       } finally {
         // arkitect-allow: no-bandaids permanent finally-block cleanup, not scheduled for removal —
         // a spec that travelled as a temp file is ours to remove once the script has read it
@@ -2530,7 +2549,30 @@ export const TOOLS: McpEngineTool[] = [
       const group = str(a.group).trim()
       if (group) args.push(group)
       args.push('--json')
-      return runFanOut(args, 180_000)
+      const r = await runFanOut(args, 180_000)
+      if (!group || r.exitCode !== 3) return r
+      // ⛔ "NO SUCH GROUP" FOR AN ID fan_out HANDED OUT MUST SAY WHY (found live 2026-09-24):
+      // the id is minted before fan_out.py runs, so a run that was refused, or died before it
+      // wrote its first record, left a caller holding an id that status called nonexistent.
+      // The operation that carried `--group-id <id>` knows what happened to it.
+      const ops = (await api('/api/orchestrator/operations')) as {
+        operations?: Array<Record<string, unknown>>
+      }
+      const op = (ops.operations ?? []).find((o) => {
+        const argv = Array.isArray(o.args) ? o.args.map(str) : []
+        const i = argv.indexOf('--group-id')
+        return o.script === 'fan_out' && i >= 0 && argv[i + 1] === group
+      })
+      if (!op) return r
+      const result = (op.result ?? null) as Record<string, unknown> | null
+      return {
+        ...r,
+        operation: { id: op.id, status: op.status, startedAt: op.startedAt, result },
+        note:
+          op.status === 'running'
+            ? `Group ${group} has no record yet: its fan_out (operation ${str(op.id)}) is still starting. Poll again shortly.`
+            : `Group ${group} was never recorded: its fan_out (operation ${str(op.id)}) ended ${str(op.status)}${result && str(result.error) ? ` - ${str(result.error)}` : ''}${result && str(result.stderr).trim() ? ` - ${str(result.stderr).trim().slice(-400)}` : ''}.`,
+      }
     },
   },
   {

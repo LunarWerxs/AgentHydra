@@ -264,6 +264,20 @@ class SpawnTest(FanOutBase):
             code, _, _ = run_cli(fan_out.main, ["--spec", self.spec(2), "--json"])
         self.assertEqual(code, 2)
 
+    def test_a_daemon_that_is_not_ready_leaves_a_group_record_that_says_so(self):
+        # 2026-09-24: the MCP hands out the group id first; a ranking that died on an unready
+        # daemon wrote nothing, and status on that id answered "no such fan-out group".
+        err = hydralib.DaemonError("/api/fleet", None, "timed out")
+        with mock.patch.object(fan_out, "rank_targets", side_effect=err):
+            code, _, _ = run_cli(fan_out.main, ["--spec", self.spec(2), "--group-id", "fo-t1",
+                                                "--json"])
+        self.assertEqual(code, 1)
+        code, out, _ = run_cli(fan_out.main, ["status", "fo-t1", "--json"])
+        self.assertEqual(code, 0)
+        s = json.loads(out)
+        self.assertEqual(s["phase"], "failed")
+        self.assertIn("daemon not ready", s["error"])
+
     def test_a_task_already_running_in_the_fleet_is_refused_unless_forced(self):
         existing = [{"session_id": "old-1", "title": "Old lint", "instance": "bob", "live": True}]
         with mock.patch.object(fan_out.hydralib, "same_task_chats", return_value=existing):

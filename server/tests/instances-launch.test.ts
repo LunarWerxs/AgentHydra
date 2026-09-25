@@ -9,7 +9,8 @@
 // "simplification" back to a plain `Bun.spawn([binary, ...args])` fails CI instead of silently
 // reintroducing the regression.
 import { expect, test } from 'bun:test'
-import { buildInstanceLaunch } from '../src/core/instances'
+import { buildInstanceLaunch, confirmLaunchSurvives } from '../src/core/instances'
+import type { CMProcessInfo } from '../src/core/process'
 
 const WIN_BIN = 'C:\\Users\\me\\AppData\\Local\\AnthropicClaude\\app-1.0.0\\Claude.exe'
 const WIN_ARGS = ['--user-data-dir', 'C:\\path with space\\profile']
@@ -56,4 +57,21 @@ test('linux: direct spawn but detached:true (setsid), a genuine POSIX detach', (
   ])
   expect(argv).toEqual(['/usr/bin/claude', '--user-data-dir', '/home/me/p'])
   expect(detached).toBe(true)
+})
+
+test('an app that exits within seconds of starting is a failed launch, not "launched" (2026-09-24)', async () => {
+  // launch_instance answered `launched` (pid 42632) for #26, and seconds later list_instances
+  // showed it not running; fan_out then waited out its own 90s timer on an app that was gone.
+  const dir = 'c:/i/luis'
+  const main = { pid: 42632, dir, isMain: true } as CMProcessInfo
+  const scans = [[main], []]
+  let clock = 0
+  const deps = {
+    scan: async () => ({ ok: true as const, processes: scans.shift() ?? [] }),
+    sleep: async (ms: number) => {
+      clock += ms
+    },
+    now: () => clock,
+  }
+  await expect(confirmLaunchSurvives(dir, deps)).rejects.toThrow('exited within')
 })

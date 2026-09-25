@@ -397,6 +397,12 @@ def _spawn_state(res: dict) -> tuple[str, str | None]:
     return "spawned-unconfirmed", f"registered, but the first turn is not confirmed: {started}"
 
 
+def _placeholder(group_id: str, spec: dict) -> dict:
+    """The record written before ranking: no members yet, `phase` says how far it got."""
+    return {"id": group_id, "name": spec.get("group"), "createdAt": _now_iso(), "dryRun": False,
+            "phase": "planning", "members": [], "sends": []}
+
+
 def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
                 dry_run: bool = False, group_id: str | None = None) -> dict:
     """Spawn every assigned task, one at a time, recording the group after each so a crash
@@ -408,7 +414,8 @@ def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
     (30-90s per chat) has finished. Defaults to a fresh one, exactly as before."""
     group = {
         "id": group_id or _new_group_id(), "name": spec.get("group"), "createdAt": _now_iso(),
-        "dryRun": bool(dry_run), "members": [_member(a) for a in assignments], "sends": [],
+        "dryRun": bool(dry_run), "phase": "spawning",
+        "members": [_member(a) for a in assignments], "sends": [],
     }
     if dry_run:
         return group
@@ -459,6 +466,8 @@ def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
         if m["sessionId"]:
             spawned_ids.add(m["sessionId"])
         _upsert(group)
+    group["phase"] = "done"
+    _upsert(group)
     return group
 
 
@@ -558,9 +567,13 @@ def status(group: dict) -> dict:
     counts: dict[str, int] = {}
     for m in members:
         counts[m.get("state") or "?"] = counts.get(m.get("state") or "?", 0) + 1
-    return {"id": group["id"], "name": group.get("name"), "createdAt": group.get("createdAt"),
-            "dryRun": group.get("dryRun", False), "counts": counts, "members": members,
-            "sends": group.get("sends", [])}
+    out = {"id": group["id"], "name": group.get("name"), "createdAt": group.get("createdAt"),
+           "dryRun": group.get("dryRun", False), "counts": counts, "members": members,
+           "sends": group.get("sends", [])}
+    for key in ("phase", "error"):
+        if group.get(key):
+            out[key] = group[key]
+    return out
 
 
 # --- send ------------------------------------------------------------------------------------
@@ -808,7 +821,10 @@ def _print_plan(group: dict, ranking: dict) -> None:
 
 def _print_status(s: dict) -> None:
     print(f"fan-out {s['id']}{' (' + s['name'] + ')' if s.get('name') else ''} "
-          f"created {s.get('createdAt')}: " + ", ".join(f"{k} {v}" for k, v in s["counts"].items()))
+          f"created {s.get('createdAt')}: " + ", ".join(f"{k} {v}" for k, v in s["counts"].items())
+          + (f" [{s['phase']}]" if s.get("phase") else ""))
+    if s.get("error"):
+        print(f"  FAILED before any member was spawned: {s['error']}")
     for m in s["members"]:
         line = f"  [{m['index']}] {m['title'][:40]:<40} {m.get('instance') or '-':<22} {m.get('state')}"
         if m.get("quietSecs") is not None:
@@ -906,16 +922,29 @@ def _cmd_spawn(argv: list[str], force: bool, as_json: bool) -> int:
     try:
         spec = parse_spec(spec_raw)
         per_account = int(_take_value(argv, "--per-account") or 1)
-        ranking = rank_targets(exclude=_take_values(argv, "--exclude"),
-                               only=_take_values(argv, "--only"),
-                               open_closed="--open-closed" in argv)
     except ValueError as err:
         print(f"REFUSED: {err}", file=sys.stderr)
         return 3
+    dry_run = "--dry-run" in argv
+    group_id = _take_value(argv, "--group-id") or _new_group_id()
+    if not dry_run:
+        # THE RECORD EXISTS BEFORE ANYTHING CAN FAIL (found live 2026-09-24, chat ffb5fe39): the
+        # MCP hands the caller this id at once, and a ranking that died on an unready daemon left
+        # no record, so status answered "no such fan-out group" - a silent drop.
+        _upsert(_placeholder(group_id, spec))
+    try:
+        ranking = rank_targets(exclude=_take_values(argv, "--exclude"),
+                               only=_take_values(argv, "--only"),
+                               open_closed="--open-closed" in argv)
+    except (ValueError, hydralib.DaemonError) as err:
+        daemon = isinstance(err, hydralib.DaemonError)
+        why = f"daemon not ready: {err}" if daemon else str(err)
+        if not dry_run:
+            _upsert({**_placeholder(group_id, spec), "phase": "failed", "error": why})
+        print(f"{'fan_out FAILED' if daemon else 'REFUSED'}: {why}", file=sys.stderr)
+        return 1 if daemon else 3
     assignments = plan(spec["tasks"], ranking["targets"], per_account)
-    group_id = _take_value(argv, "--group-id")
-    group = spawn_group(spec, assignments, force=force, dry_run="--dry-run" in argv,
-                        group_id=group_id)
+    group = spawn_group(spec, assignments, force=force, dry_run=dry_run, group_id=group_id)
     if as_json:
         print(json.dumps({**group, "targets": ranking["targets"],
                           "skippedTargets": ranking["skipped"],

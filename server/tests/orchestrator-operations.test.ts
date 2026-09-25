@@ -18,6 +18,7 @@ import {
   resetOrchestratorOperationsForTests,
   runOrchestrator,
   startOrchestratorOperation,
+  wouldRefuseBusy,
 } from '../src/orchestrator'
 
 afterEach(() => resetOrchestratorOperationsForTests())
@@ -276,3 +277,18 @@ test.skipIf(!hasPython)(
   },
   60_000,
 )
+
+test('a detached call the route would refuse busy is known BEFORE its 202 (fan_out, 2026-09-24)', async () => {
+  // A second fan_out fired while a spawn held the route got a group id and "started"; the
+  // refusal happened inside the operation, and fan_out_status called the id nonexistent. The
+  // route now asks wouldRefuseBusy first and answers 409 at once.
+  const dir = fakeToolbox()
+  void runOrchestrator(
+    { script: 'fan_out', args: ['--spec', '{}'], timeoutMs: 600_000 },
+    { dir, spawn: () => new Promise<never>(() => {}) },
+  )
+  await Bun.sleep(10)
+  expect(wouldRefuseBusy({ script: 'fan_out', args: ['--spec', '{}'] })).toBe(true)
+  // fan_out's read-only subcommands take no lock, so they are never refused
+  expect(wouldRefuseBusy({ script: 'fan_out', args: ['status', 'fo-x'] })).toBe(false)
+})

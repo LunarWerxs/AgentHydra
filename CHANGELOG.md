@@ -7,6 +7,25 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,
+  `server/src/routes/instances.ts`, `server/src/mcp.ts`, `orchestrator/scripts/fan_out.py`,
+  `server/src/core/process.ts`, `server/src/core/instances.ts`). Reported 2026-09-24 (chat
+  ffb5fe39), six fan_out calls right after a PC restart:
+  - A detached run the route would refuse `busy` now gets the 409 at once (`wouldRefuseBusy`),
+    not a 202 and an operation that refuses a tick later. `fan_out` returns that refusal as data,
+    with the holder's operation id, and says no group exists.
+  - fan_out.py writes the group record (`phase: planning`) before ranking accounts, so a ranking
+    that dies on an unready daemon leaves `phase: failed` and `error: daemon not ready: ...`.
+    `fan_out_status` on an id with no record reads the operation that carried `--group-id` and
+    says what happened to it. A placeholder or failed group is never verdict "ok".
+  - A process scan that fails (the 10s CIM query on a pinned box) no longer reads as "nothing is
+    running" in `list_instances` and `/api/fleet`: the listing falls back to the last scan that
+    answered (at most 5 minutes old). Destructive guards still refuse on a failed scan.
+  - `launch_instance` answers "launched" only once the app's main process has been seen and is
+    still there 5 seconds later; an app that exits within seconds is a failed launch.
+
 ## [1.2.0] - 2026-09-24
 
 ### Added

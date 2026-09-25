@@ -48,6 +48,7 @@ import {
   type CMProcessInfo,
   invalidateClaudeProcessCache,
   type ListClaudeProcessesOptions,
+  lastGoodClaudeProcessScan,
   listClaudeProcesses,
   scanClaudeProcesses,
 } from './process'
@@ -58,6 +59,9 @@ import type { CMActionResult, CMInstance } from './shared'
  *  returned in ten seconds is wedged, and the caller's next step (a forced kill, a re-scan) is
  *  strictly better than waiting on it forever. */
 const TASKKILL_TIMEOUT_MS = 10_000
+
+/** How old a successful process scan may be and still stand in for a failed one in a LISTING. */
+const LAST_GOOD_SCAN_MAX_AGE_MS = 5 * 60_000
 
 /** A window-focus poke is instant or the desktop is not answering. */
 const FOCUS_TIMEOUT_MS = 15_000
@@ -154,17 +158,15 @@ export async function listInstances(options: ListInstancesOptions = {}): Promise
   const known = new Map<string, DiscoveredMeta>()
   for (const meta of listInstanceRootDirs()) known.set(meta.dir, meta)
 
-  let procs: CMProcessInfo[] = []
-  try {
-    // includeChildren: one scan yields both the main process per dir (for pid/startTime/running)
-    // AND every `--type=` child, so per-instance memory is the summed working set of the whole
-    // Electron tree — not just the (small) main process. Same single CIM/ps call as before.
-    procs = await listClaudeProcesses({ includeChildren: true })
-  } catch {
-    // Process enumeration failed entirely (e.g. wmic/ps unavailable); fall back to
-    // "nothing is running", still surface the known instance dirs.
-    procs = []
-  }
+  // includeChildren: one scan yields both the main process per dir (for pid/startTime/running)
+  // AND every `--type=` child, so per-instance memory is the summed working set of the whole
+  // Electron tree — not just the (small) main process. Same single CIM/ps call as before.
+  // A FAILED scan is not "nothing is running": it falls back to the last scan that answered (see
+  // lastGoodClaudeProcessScan), and only with none of those to "nothing", as before.
+  const scan = await scanClaudeProcesses({ includeChildren: true })
+  const procs: CMProcessInfo[] = scan.ok
+    ? scan.processes
+    : (lastGoodClaudeProcessScan(LAST_GOOD_SCAN_MAX_AGE_MS)?.processes ?? [])
 
   const runningByDir = new Map<string, CMProcessInfo>()
   const memoryByDir = new Map<string, number>()
@@ -675,15 +677,76 @@ async function spawnAndAwaitReady(
   recordInstanceLaunches([{ dir: normDir, at: Date.now() }])
   invalidateClaudeProcessCache()
   if (attempt.nativeData) attempt.nativeData.handoffPid = proc.pid
-  if (!plan.nativeDebugger) return proc.pid
-  const ready = await waitForNativeLaunchReady({
-    profileDir: normDir,
-    binary: plan.binary,
-    port: plan.nativeDebugger.port,
-    startupLogCursor,
-  })
-  if (attempt.nativeData) attempt.nativeData.pid = ready.pid
-  return ready.pid
+  if (plan.nativeDebugger) {
+    const ready = await waitForNativeLaunchReady({
+      profileDir: normDir,
+      binary: plan.binary,
+      port: plan.nativeDebugger.port,
+      startupLogCursor,
+    })
+    if (attempt.nativeData) attempt.nativeData.pid = ready.pid
+  }
+  return confirmLaunchSurvives(normDir)
+}
+
+/** How long a launched app must stay up before the launch is answered "launched", and how long it
+ *  may take to show up in the process list at all. */
+const LAUNCH_SURVIVAL_MS = 5_000
+const LAUNCH_APPEAR_MS = 30_000
+const LAUNCH_POLL_MS = 1_000
+
+export interface LaunchSurvivalDeps {
+  scan?: () => Promise<{ ok: true; processes: CMProcessInfo[] } | { ok: false; reason: string }>
+  sleep?: (ms: number) => Promise<void>
+  now?: () => number
+}
+
+/**
+ * The pid of this profile's main process once it has been seen AND is still there
+ * LAUNCH_SURVIVAL_MS later; throws otherwise.
+ *
+ * ⛔ "launched" USED TO MEAN "a process was handed the argv" (found live 2026-09-24, chat
+ * ffb5fe39): `launch_instance {instance: 26}` answered `launched` with pid 42632 - the transient
+ * `cmd /c start` hand-off on a stock launch - and seconds later `list_instances` showed it not
+ * running. An app that exits within seconds of starting did not launch, and fan_out, which opens
+ * closed accounts through this, must hear that as a failure rather than wait out its own timer.
+ */
+export async function confirmLaunchSurvives(
+  normDir: string,
+  deps: LaunchSurvivalDeps = {},
+): Promise<number> {
+  const scan = deps.scan ?? (() => scanClaudeProcesses({ fresh: true }))
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const now = deps.now ?? Date.now
+  const want = normalizePath(normDir)
+  const mainPid = async (): Promise<{ pid: number | null; failed?: string }> => {
+    const s = await scan()
+    if (!s.ok) return { pid: null, failed: s.reason }
+    const hit = s.processes.find((p) => p.isMain && p.dir && normalizePath(p.dir) === want)
+    return { pid: hit ? hit.pid : null }
+  }
+  const deadline = now() + LAUNCH_APPEAR_MS
+  let seen: number | null = null
+  let lastFailure: string | undefined
+  while (seen === null) {
+    const r = await mainPid()
+    seen = r.pid
+    lastFailure = r.failed ?? lastFailure
+    if (seen !== null) break
+    if (now() >= deadline)
+      throw Error(
+        `the app never appeared in the process list within ${LAUNCH_APPEAR_MS / 1000}s` +
+          (lastFailure ? ` (process scan failed: ${lastFailure})` : ''),
+      )
+    await sleep(LAUNCH_POLL_MS)
+  }
+  await sleep(LAUNCH_SURVIVAL_MS)
+  const after = await mainPid()
+  if (after.failed)
+    throw Error(`started (pid ${seen}), but could not confirm it stayed up: ${after.failed}`)
+  if (after.pid === null)
+    throw Error(`started (pid ${seen}) and exited within ${LAUNCH_SURVIVAL_MS / 1000}s`)
+  return after.pid
 }
 
 // ----------------------------------------------------------------------------

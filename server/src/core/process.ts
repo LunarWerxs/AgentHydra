@@ -763,6 +763,7 @@ const claudeProcessCache = createScanCache<ClaudeProcessScan>(
     try {
       const processes =
         process.platform === 'win32' ? await listWindowsProcesses() : await listUnixProcesses()
+      if (processes !== null) lastGoodScan = { processes, at: Date.now() }
       if (processes === null) {
         return {
           ok: false,
@@ -783,6 +784,25 @@ const claudeProcessCache = createScanCache<ClaudeProcessScan>(
   // deserves a real answer rather than a snapshot from whenever it last had focus.
   { freshMs: 3_000, staleMs: 30_000 },
 )
+
+/** The last scan that answered, whatever came after it. */
+let lastGoodScan: { processes: CMProcessInfo[]; at: number } | null = null
+
+/**
+ * The last SUCCESSFUL scan (full set, main + children) if it is at most `maxAgeMs` old, else null.
+ *
+ * ⛔ FOR A LISTING ONLY, NEVER A DESTRUCTIVE GUARD (those use scanClaudeProcesses and refuse on a
+ * failure). It exists because a failed scan used to read as "nothing is running": on a pinned box
+ * (2026-09-24) the 10s CIM query timed out, `/api/fleet` reported a running instance as closed,
+ * and fan_out refused it "not open" while `list_instances`, a moment later, showed its pid. A
+ * snapshot a few minutes old is a better answer to "is it running?" than an empty one.
+ */
+export function lastGoodClaudeProcessScan(
+  maxAgeMs: number,
+): { processes: CMProcessInfo[]; at: number } | null {
+  if (!lastGoodScan || Date.now() - lastGoodScan.at > maxAgeMs) return null
+  return lastGoodScan
+}
 
 /**
  * Forget the cached process snapshot so the next listing scans for real.
