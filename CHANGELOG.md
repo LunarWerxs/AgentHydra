@@ -7,6 +7,25 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **`fan_out` spreads load before an account saturates, and a spawn tree can only narrow**
+  (`orchestrator/scripts/fan_out.py`, `server/src/mcp.ts`, `docs/REFERENCE.md`).
+  - Load bias: every chat the fan-out ledger spawned into an account in the last two hours lowers
+    that account's place in the ranking by 15 points. Usage readings lag the work, so back-to-back
+    fan-outs used to both drain the roomiest account first. The bias moves the order only: an
+    account's reported room and whether it may take a chat at all are still the reading's own, and
+    with nothing in flight the order is exactly the room order.
+  - Narrow-only envelope: a member that fans out again names its parent (`--parent`, MCP `parent`:
+    its group id or its own sessionId). Its envelope comes from the parent's by narrowing only
+    (depth + 1 toward a cap of 2, accounts intersected, exclusions united, chats per account, node
+    cap and quota ceiling the smaller, closed apps opened only if both allow it), so a delegated
+    chat can never reach more accounts or budget than the group it belongs to.
+  - Tree ledger: the whole spawn tree holds at most 12 chats (`--max-nodes`, MCP `max_nodes`, can
+    only lower it); a group's planned members are counted and recorded under the ledger lock before
+    anything spawns, and members past the cap are reported unassigned with the reason.
+    `--ceiling-pct` (MCP `ceiling_pct`) keeps accounts at or over that peak usage out of the tree.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,

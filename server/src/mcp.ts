@@ -2383,6 +2383,21 @@ export const TOOLS: McpEngineTool[] = [
           description:
             "A person's word: start a task even though an identical chat already exists.",
         },
+        parent: {
+          type: 'string',
+          description:
+            "Set this when YOU are a fan_out member fanning out again: your group id, or your own sessionId. The new group's envelope is then derived from the parent's by narrowing only - never more accounts, chats per account, quota or depth than the parent had - and the whole spawn tree holds at most max_nodes chats.",
+        },
+        max_nodes: {
+          type: 'number',
+          description:
+            'Cap on chats across the whole spawn tree (default 12; a child can only lower it).',
+        },
+        ceiling_pct: {
+          type: 'number',
+          description:
+            "Only accounts whose peak usage is below this % may take a member (a child can only lower it). Default: each plan's own fill ceiling.",
+        },
         dry_run: { type: 'boolean', description: 'Plan only: rank, assign, spawn nothing.' },
         background: {
           type: 'boolean',
@@ -2459,6 +2474,15 @@ export const TOOLS: McpEngineTool[] = [
       }
       for (const n of new Set(excludes)) args.push('--exclude', n)
       if (a.open_closed === true) args.push('--open-closed')
+      // the spawn tree's narrow-only envelope (fan_out.py narrow_envelope owns the rules)
+      const parent = str(a.parent).trim()
+      if (parent) args.push('--parent', parent)
+      const maxNodes = Number(a.max_nodes)
+      if (Number.isFinite(maxNodes) && maxNodes >= 1)
+        args.push('--max-nodes', String(Math.floor(maxNodes)))
+      const ceilingPct = Number(a.ceiling_pct)
+      if (a.ceiling_pct != null && Number.isFinite(ceilingPct))
+        args.push('--ceiling-pct', String(ceilingPct))
       if (a.force === true) args.push('--force')
       if (a.dry_run === true) args.push('--dry-run')
       // one spawn can take ~4 minutes worst case (trust modal, six submit attempts); a dry run

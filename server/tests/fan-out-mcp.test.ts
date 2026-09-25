@@ -168,6 +168,31 @@ describe('what fan_out sends to the daemon', () => {
     expect(b.timeoutMs).toBe(90_000 + 2 * 240_000)
   })
 
+  test('parent, max_nodes and ceiling_pct reach the script as the spawn-tree envelope flags', async () => {
+    // A member fanning out again is only bounded if the tool hands its parent and limits to
+    // fan_out.py, which derives the narrow-only envelope from them.
+    reportRun({ id: 'fo-4', dryRun: true, members: [] })
+    await tool('fan_out').run({
+      tasks: twoTasks,
+      parent: 'fo-parent-1',
+      max_nodes: 4,
+      ceiling_pct: 60,
+      dry_run: true,
+      exclude_self: false,
+    })
+    const { rest } = stripGroupId(runBody().args)
+    expect(rest.slice(2)).toEqual([
+      '--json',
+      '--parent',
+      'fo-parent-1',
+      '--max-nodes',
+      '4',
+      '--ceiling-pct',
+      '60',
+      '--dry-run',
+    ])
+  })
+
   test('only/exclude refs are resolved to instance NUMBERS through the daemon before posting', async () => {
     answer = (url) => {
       if (url.includes('/api/instance-numbers/resolve')) {

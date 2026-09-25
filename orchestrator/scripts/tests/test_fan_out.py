@@ -258,6 +258,82 @@ class SpawnTest(FanOutBase):
         self.assertEqual(states, [("spawned", "sid-1"), ("refused", None), ("spawned", "sid-2")])
         self.assertIn("window is busy", json.loads(out)["members"][1]["why"])
 
+    def _ledger_member(self, num, sid, hours_ago=0.1, deleted=False):
+        at = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {"index": 0, "instanceNum": num, "sessionId": sid, "state": "spawned",
+                "spawnedAt": at, "deleted": deleted}
+
+    def test_chats_in_flight_lower_an_accounts_order_but_never_its_room(self):
+        # Room readings lag the work: back-to-back fan-outs both read charlie as the roomiest and
+        # both drained it. One recent chat there drops it below alice (10 points of room apart),
+        # not below bob (20 apart); its reported room is the reading's own. Old or deleted
+        # members carry no load.
+        before = {t["name"]: t["roomPct"] for t in fan_out.rank_targets()["targets"]}
+        fan_out._upsert({"id": "fo-earlier", "createdAt": "x", "members": [
+            self._ledger_member(3, "sid-a"),
+            self._ledger_member(2, "sid-old", hours_ago=3),
+            self._ledger_member(2, "sid-gone", deleted=True)]})
+        r = fan_out.rank_targets()
+        self.assertEqual([t["name"] for t in r["targets"]], ["alice", "charlie", "bob"])
+        self.assertEqual({t["name"]: t["roomPct"] for t in r["targets"]}, before)
+        self.assertEqual({t["name"]: t["inFlight"] for t in r["targets"]},
+                         {"alice": 0, "charlie": 1, "bob": 0})
+
+    def test_a_member_fanning_out_again_can_only_narrow_its_parents_envelope(self):
+        code, out, _ = run_cli(fan_out.main, ["--spec", self.spec(1), "--only", "charlie",
+                                              "--only", "alice", "--exclude", "bob", "--json"])
+        self.assertEqual(code, 0, out)
+        parent = json.loads(out)
+        self.assertEqual(parent["envelope"]["only"], [1, 3])
+        # Named by its own sessionId, the child asks for bob, erin (closed) and more per account.
+        code, out, _ = run_cli(fan_out.main, [
+            "--spec", self.spec(3, prompt="child task"), "--parent", "sid-1", "--only", "bob",
+            "--only", "alice", "--open-closed", "--per-account", "3", "--json"])
+        child = json.loads(out)
+        env = child["envelope"]
+        self.assertEqual((env["root"], env["parent"], env["depth"]),
+                         (parent["id"], parent["id"], 1))
+        self.assertEqual(env["only"], [1])          # bob was never the parent's to give
+        self.assertEqual(env["perAccount"], 1)      # 3 asked, the parent's 1 binds
+        self.assertFalse(env["openClosed"])         # the parent could not open erin
+        self.assertEqual([t["name"] for t in child["targets"]], ["alice"])
+        self.assertEqual([m["instance"] for m in child["members"]], ["#1 alice", None, None])
+        self.assertEqual(code, 4)
+
+    def test_the_tree_node_cap_admits_no_more_chats_than_it_allows(self):
+        code, out, _ = run_cli(fan_out.main, ["--spec", self.spec(3), "--max-nodes", "2",
+                                              "--json"])
+        self.assertEqual(code, 4)
+        root = json.loads(out)
+        self.assertEqual([m["state"] for m in root["members"]],
+                         ["spawned", "spawned", "unassigned"])
+        self.assertIn("node cap", root["members"][2]["why"])
+        # The child asks for a bigger tree; the root's cap binds and it is already full.
+        code, out, _ = run_cli(fan_out.main, ["--spec", self.spec(1, prompt="child"),
+                                              "--parent", root["id"], "--max-nodes", "50",
+                                              "--json"])
+        self.assertEqual(code, 2)
+        child = json.loads(out)
+        self.assertEqual(child["envelope"]["maxNodes"], 2)
+        self.assertIn("node cap", child["members"][0]["why"])
+        self.assertEqual(len(self.spawned), 2)
+
+    def test_the_tree_stops_at_its_depth_cap_and_an_unknown_parent_refuses(self):
+        code, out, _ = run_cli(fan_out.main, ["--spec", self.spec(1), "--max-depth", "1",
+                                              "--json"])
+        root = json.loads(out)["id"]
+        code, out, _ = run_cli(fan_out.main, ["--spec", self.spec(1, prompt="kid"),
+                                              "--parent", root, "--json"])
+        self.assertEqual(json.loads(out)["envelope"]["depth"], 1)
+        kid = json.loads(out)["id"]
+        code, _, err = run_cli(fan_out.main, ["--spec", self.spec(1, prompt="grandkid"),
+                                              "--parent", kid, "--json"])
+        self.assertEqual(code, 3)
+        self.assertIn("depth cap", err)
+        code, _, err = run_cli(fan_out.main, ["--spec", self.spec(1), "--parent", "fo-nobody"])
+        self.assertEqual(code, 3)
+        self.assertIn("names no fan-out group", err)
+
     def test_nothing_spawned_is_exit_2(self):
         with mock.patch.object(fan_out.spawn_chat, "spawn",
                                return_value={"ok": False, "why": "no"}):
