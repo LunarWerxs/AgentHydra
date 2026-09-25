@@ -7,6 +7,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Token sinks: why sessions were expensive** (`server/src/analytics.ts`,
+  `server/src/routes/analytics.ts`, `server/src/mcp.ts`, `web/src/components/AnalyticsView.vue`).
+  A "Where the tokens went" panel on the Analytics tab, `GET /api/analytics/sinks` and the
+  `get_token_sinks` MCP tool rank five sinks against one weighted total, each tagged structural or
+  behavioral, measured or estimated, with a one-line fix:
+  - skills and MCP servers loaded into every prompt but never used, ranked by the prefix tokens
+    they carried (the injected text's length at four characters a token, re-read on every call);
+  - calls whose prompt was past 150k tokens of context;
+  - subagent spend, and cache rewrites, plus the share of prompt served from cache per account.
+  The scan keeps skill and MCP server names with counts, never text; a skill listing is stored
+  once per distinct listing. `ANALYTICS_VERSION` is now 8, so the background warm rescans every
+  transcript once. Idea from the learn report in JuliusBrussee/caveman; no code copied.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,

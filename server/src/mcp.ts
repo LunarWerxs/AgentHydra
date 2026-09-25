@@ -1242,6 +1242,20 @@ export const TOOLS: McpEngineTool[] = [
     run: (a) => api(`/api/analytics/activity${qs({ period: a.period })}`),
   },
   {
+    name: 'get_token_sinks',
+    description:
+      'WHY sessions were expensive, ranked: skills and MCP servers loaded into every prompt but ' +
+      'never used (dead load, an estimate from the injected text length), calls whose prompt was ' +
+      'past the deep-context threshold, subagent spend, cache-write premium, and the cache-read ' +
+      'ratio per account. Each sink carries kind (structural = configuration, behavioral = how ' +
+      'sessions run), basis (measured or estimated), its share of the weighted total and a ' +
+      'one-line fix. Sinks overlap, so shares do not sum to 1.',
+    inputSchema: S({
+      period: { type: 'string', enum: ['24h', '7d', '30d', 'all'], description: 'Default 30d.' },
+    }),
+    run: (a) => api(`/api/analytics/sinks${qs({ period: a.period })}`),
+  },
+  {
     name: 'get_recent_edits',
     description:
       'Files changed across recent sessions, newest first, each with the session and the turn that ' +

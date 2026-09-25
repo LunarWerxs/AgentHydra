@@ -102,6 +102,9 @@ hidden; the screenshot below is historical.
 Cost by day, by model, by project, and by the account that ran it. When in the week you actually
 work. How many sessions were going at once. Which tools get used, which files changed recently, and
 which sessions are worth a second look because a tool kept failing or the context was compacted.
+And why it cost that much: the skills and MCP servers loaded into every prompt that nothing ever
+used, the calls made with a context past 150k tokens, what subagents spent, and how much of each
+account's prompt came from cache, ranked with a one-line fix for each.
 
 All of it comes from totals worked out while the session list is being built, so it costs about half
 a megabyte for a store of 1,400 sessions and no message text is kept. Costs are published list

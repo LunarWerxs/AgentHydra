@@ -6,6 +6,7 @@ import {
   dropAnalytics,
   recentEdits,
   refreshAnalytics,
+  sinkReport,
   spendReport,
 } from '../analytics'
 import { app } from '../http-app'
@@ -36,6 +37,9 @@ function cachedAgentTools(): AgentPresence[] {
 
 app.get('/api/analytics/spend', (c) => c.json(spendReport({ sinceMs: analyticsPeriod(c) })))
 app.get('/api/analytics/activity', (c) => c.json(activityReport({ sinceMs: analyticsPeriod(c) })))
+// WHY a session was expensive: dead skill/MCP load, deep-context calls, subagent and cache-write
+// spend, ranked against one total (analytics.ts sinkReport).
+app.get('/api/analytics/sinks', (c) => c.json(sinkReport({ sinceMs: analyticsPeriod(c) })))
 app.get('/api/analytics/concurrency', (c) =>
   c.json({
     buckets: concurrencyReport({

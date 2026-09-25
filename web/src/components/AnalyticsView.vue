@@ -17,6 +17,7 @@ import {
   DollarSign,
   FileEdit,
   FolderGit2,
+  Gauge,
   Hash,
   Hourglass,
   Layers,
@@ -51,6 +52,8 @@ import type {
   EditEntry,
   SessionPeriod,
   SpendReport,
+  TokenSink,
+  TokenSinkReport,
 } from '@/lib/api'
 import * as api from '@/lib/api'
 import { modelVendor, shortUsd, vendorLabel } from '@/lib/chart'
@@ -68,6 +71,8 @@ const spend = ref<SpendReport | null>(null)
 const activity = ref<ActivityReport | null>(null)
 const concurrency = ref<ConcurrencyPoint[]>([])
 const edits = ref<EditEntry[]>([])
+/** Where the tokens went and why (server/src/analytics.ts sinkReport). */
+const sinks = ref<TokenSinkReport | null>(null)
 /** Tools found on this machine, readable or not. Independent of the period filter: an install is
  *  not something that happened in the last 30 days. */
 const agentTools = ref<AgentPresence[]>([])
@@ -90,12 +95,14 @@ async function load() {
     // In parallel: independent reads of the same warmed table, so serialising them would just add
     // round trips to a page that is otherwise instant. The tool scan is the one that touches disk;
     // it is capped and cached server-side, and its failure must not take the charts with it.
-    const [s, a, c, e, tools] = await Promise.all([
+    const [s, a, c, e, tools, k] = await Promise.all([
       api.getSpend(period),
       api.getActivity(period),
       api.getConcurrency(period, period === '24h' ? 60 : 180),
       api.getRecentEdits(120),
       api.getAgentTools().catch(() => ({ tools: [] })),
+      // An addition to the page: a daemon without the route must not blank every chart.
+      api.getSinks(period).catch(() => null),
     ])
     if (analyticsPeriod.value !== period) return // the window moved on while we were fetching
     spend.value = s
@@ -103,6 +110,7 @@ async function load() {
     concurrency.value = c.buckets
     edits.value = e.edits
     agentTools.value = tools.tools
+    sinks.value = k
   } catch {
     spend.value = null
     activity.value = null
@@ -285,6 +293,55 @@ const accountRows = computed(() =>
     label: b.key,
     value: metricOf(b),
     detail: t('analytics.accountDetail', { sessions: b.sessions }),
+  })),
+)
+
+/** A sink's name and fix. A switch over literal keys, like toolNoteLabel, so the i18n checker can
+ *  see every string in use. The server sends an English `fix` too; that one is for API and MCP
+ *  readers, this one is translated. */
+function sinkLabel(id: TokenSink['id']): string {
+  if (id === 'dead-skills') return t('analytics.sinkDeadSkills')
+  if (id === 'dead-mcp') return t('analytics.sinkDeadMcp')
+  if (id === 'deep-context')
+    return t('analytics.sinkDeepContext', {
+      threshold: formatCompact(sinks.value?.deepContext.threshold ?? 0),
+    })
+  if (id === 'subagents') return t('analytics.sinkSubagents')
+  return t('analytics.sinkCacheWrites')
+}
+function sinkFix(id: TokenSink['id']): string {
+  if (id === 'dead-skills') return t('analytics.fixDeadSkills')
+  if (id === 'dead-mcp') return t('analytics.fixDeadMcp')
+  if (id === 'deep-context') return t('analytics.fixDeepContext')
+  if (id === 'subagents') return t('analytics.fixSubagents')
+  return t('analytics.fixCacheWrites')
+}
+const percent = (n: number) => `${Math.round(n * 100)}%`
+
+/** Loaded-but-unused rows, biggest dead prefix first. Rows something used everywhere are left
+ *  out: they are not a sink, and the list is for deciding what to uninstall. */
+function deadRows(rows: TokenSinkReport['skills']) {
+  return rows
+    .filter((r) => r.deadTokens > 0)
+    .map((r) => ({
+      key: r.key,
+      label: r.key,
+      value: r.deadTokens,
+      detail: t('analytics.deadDetail', {
+        tokens: formatCompact(r.loadTokens),
+        loaded: r.sessionsLoaded,
+        used: r.sessionsUsed,
+      }),
+    }))
+}
+const deadSkillRows = computed(() => deadRows(sinks.value?.skills ?? []))
+const deadMcpRows = computed(() => deadRows(sinks.value?.mcpServers ?? []))
+const cacheRows = computed(() =>
+  (sinks.value?.cacheByAccount ?? []).map((c) => ({
+    key: c.key ?? '',
+    label: c.key ?? t('analytics.sinkUnlinked'),
+    value: c.ratio,
+    detail: t('analytics.accountDetail', { sessions: c.sessions }),
   })),
 )
 
@@ -635,6 +692,81 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
             class="py-6 text-center text-[11px] text-muted-foreground"
           >{{ $t('analytics.noTokenData') }}</p>
           <BarRows v-else :rows="accountRows" :format="metricFormat" mono />
+        </section>
+
+        <!-- Token sinks: WHY the spend above happened. Structural sinks are configuration (a skill
+             or MCP server loaded into every prompt and never used), behavioral ones are how the
+             sessions ran. Badges name the kind and an estimate, never colour alone. -->
+        <section v-if="sinks && sinks.sessions" class="rounded-lg border border-border p-3">
+          <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
+            <Gauge class="size-3.5" />{{ $t('analytics.sinks') }}
+          </h3>
+          <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.sinksNote') }}</p>
+          <ul class="mb-3 space-y-1.5">
+            <li v-for="s in sinks.sinks" :key="s.id" class="text-[11px]">
+              <div class="flex items-center gap-2">
+                <span class="min-w-0 flex-1 truncate font-medium">{{ sinkLabel(s.id) }}</span>
+                <Badge variant="outline" class="shrink-0 text-[10px] font-normal">
+                  {{ s.kind === 'structural' ? $t('analytics.sinkStructural') : $t('analytics.sinkBehavioral') }}
+                </Badge>
+                <Badge
+                  v-if="s.basis === 'estimated'"
+                  variant="secondary"
+                  class="shrink-0 text-[10px] font-normal"
+                >{{ $t('analytics.sinkEstimated') }}</Badge>
+                <span class="shrink-0 tabular-nums">{{ formatCompact(s.weighted) }}</span>
+                <span class="w-10 shrink-0 text-end tabular-nums text-muted-foreground">
+                  {{ percent(s.share) }}
+                </span>
+              </div>
+              <p class="text-muted-foreground">{{ sinkFix(s.id) }}</p>
+            </li>
+          </ul>
+          <div class="grid gap-3 lg:grid-cols-2">
+            <div>
+              <h4 class="mb-1 text-[11px] font-medium">{{ $t('analytics.deadSkills') }}</h4>
+              <p
+                v-if="!deadSkillRows.length"
+                class="text-[11px] text-muted-foreground"
+              >{{ $t('analytics.deadNone') }}</p>
+              <BarRows
+                v-else
+                :rows="deadSkillRows.slice(0, 10)"
+                :more="deadSkillRows.slice(10)"
+                :more-label="$t('analytics.showMore', { n: deadSkillRows.slice(10).length })"
+                :format="formatCompact"
+                mono
+              />
+            </div>
+            <div>
+              <h4 class="mb-1 text-[11px] font-medium">{{ $t('analytics.deadMcp') }}</h4>
+              <p
+                v-if="!deadMcpRows.length"
+                class="text-[11px] text-muted-foreground"
+              >{{ $t('analytics.deadNone') }}</p>
+              <BarRows
+                v-else
+                :rows="deadMcpRows.slice(0, 10)"
+                :more="deadMcpRows.slice(10)"
+                :more-label="$t('analytics.showMore', { n: deadMcpRows.slice(10).length })"
+                :format="formatCompact"
+                mono
+              />
+            </div>
+          </div>
+          <p class="mt-3 text-[11px] text-muted-foreground">
+            {{
+              $t('analytics.sinkCounts', {
+                deep: formatCompact(sinks.deepContext.calls),
+                calls: formatCompact(sinks.calls),
+                spawns: formatCompact(sinks.subagents.spawns),
+              })
+            }}
+          </p>
+          <div v-if="cacheRows.length" class="mt-3">
+            <h4 class="mb-1 text-[11px] font-medium">{{ $t('analytics.cacheByAccount') }}</h4>
+            <BarRows :rows="cacheRows" :format="percent" mono />
+          </div>
         </section>
 
         <!-- Two grains, because "when does the work happen" is two questions. The CALENDAR is the

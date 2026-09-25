@@ -287,6 +287,9 @@ create index if not exists idx_incidents_state on incidents(state);
   add('active_ms', 'integer')
   add('first_ts', 'integer')
   add('last_ts', 'integer')
+  // Token-sink evidence (analytics.ts SinkScan): skill-listing fingerprints, skill and MCP server
+  // names with counts, and a handful of numbers. Names only, like tools_json.
+  add('sinks_json', 'text')
   // The list scanner's own verdict on whether this conversation stopped at a usage wall, folded
   // into the parse it already runs (server/src/sessions.ts). Cached rather than recomputed because
   // the alternative is re-reading up to 12 MB per session per list.
@@ -380,6 +383,17 @@ create table if not exists session_edits (
 );
 create index if not exists idx_session_edits_key on session_edits(cache_key);
 create index if not exists idx_session_edits_ts on session_edits(ts desc);
+`)
+
+// The skill listings Claude Code injected into sessions, stored ONCE per distinct listing. A
+// listing is ~140 skill names; storing it per session would multiply the analytics tier's size
+// several times over, while a machine sees only a handful of distinct listings. Sessions keep the
+// fingerprint (session_scan_cache.sinks_json). Entries are skill name -> estimated tokens.
+db.exec(`
+create table if not exists skill_listings (
+  hash         text primary key,
+  entries_json text not null
+);
 `)
 
 {

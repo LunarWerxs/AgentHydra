@@ -32,6 +32,7 @@
 // days those 24 hours touch. No arrangement of this data can do better; the old rule was not more
 // precise, only differently wrong.
 
+import { createHash } from 'node:crypto'
 import { db } from './db'
 import { readDshUsage } from './dsh-sessions'
 import { readHermesUsage } from './hermes-sessions'
@@ -50,9 +51,11 @@ import type {
   SpendBucket,
   SpendReport,
   TokenBreakdown,
+  TokenSink,
+  TokenSinkReport,
 } from './types'
 import { addTurn, type CodexTurn, CodexUsageReader, openCodeSpend } from './usage-foreign'
-import { accumulateUsageLine, emptySpend, newUsageSeen } from './usage-tokens'
+import { accumulateUsageLine, emptySpend, modelMultiplier, newUsageSeen } from './usage-tokens'
 
 /**
  * Bumped when the extracted shape changes, which forces every row to be recomputed.
@@ -81,8 +84,201 @@ import { accumulateUsageLine, emptySpend, newUsageSeen } from './usage-tokens'
  *    16,552 files holding 89.8B tokens were invisible against the top level's 64.5B. The freshness
  *    check is (mtime, size) and neither moves when a session merely GAINS sibling files, so only a
  *    version bump forces the recount.
+ * 8: Token-sink evidence (sinks_json): the skill listings and MCP servers a session loaded, what
+ *    it invoked, calls past DEEP_CONTEXT_TOKENS, and subagent spend. A row scanned before this has
+ *    none of it, and nothing about the file changes to say so.
  */
-export const ANALYTICS_VERSION = 7
+export const ANALYTICS_VERSION = 8
+
+/**
+ * A prompt past this many tokens is a "deep context" call.
+ *
+ * WHY THIS NUMBER: every call re-reads the whole history, so a call at 150k tokens pays for 150k
+ * of prompt however small its reply, and long contexts are where answers get worse. It sits below
+ * the point Claude Code auto-compacts a 200k window, so it flags sessions drifting toward that
+ * rather than only the ones that hit it.
+ */
+export const DEEP_CONTEXT_TOKENS = 150_000
+
+/**
+ * What a session loaded into its prompt prefix, what it actually used, and where its tokens went
+ * beyond that. Names and numbers only, never text: a skill's description is measured (its length
+ * becomes a token estimate) and then dropped.
+ */
+export interface SinkScan {
+  /** Skill listings seen, by fingerprint -> skill name -> estimated tokens. */
+  listings: Map<string, Record<string, number>>
+  /** Skill name -> invocations (Skill tool calls and /slash commands). */
+  skillUses: Record<string, number>
+  /** MCP server -> its instructions block (estimated tokens) and its deferred tool names. */
+  mcp: Map<string, { instr: number; tools: Map<string, number> }>
+  deepCalls: number
+  deepWeighted: number
+  /** Weighted tokens spent in subagent transcripts (the session's sibling files). */
+  subWeighted: number
+}
+
+/** The stored shape of SinkScan: listings by fingerprint only (skill_listings holds the rest). */
+interface StoredSinks {
+  listings: string[]
+  skillUses: Record<string, number>
+  /** MCP server -> estimated prefix tokens (instructions plus deferred tool names). */
+  mcpLoad: Record<string, number>
+  deepCalls: number
+  deepWeighted: number
+  subWeighted: number
+}
+
+function emptySinks(): SinkScan {
+  return {
+    listings: new Map(),
+    skillUses: {},
+    mcp: new Map(),
+    deepCalls: 0,
+    deepWeighted: 0,
+    subWeighted: 0,
+  }
+}
+
+/** Tokens a piece of injected text costs, estimated at four characters a token. An estimate, and
+ *  labelled one wherever it is reported: no tokenizer ships with this daemon. */
+const estTokens = (chars: number): number => Math.ceil(chars / 4)
+
+/** An MCP server's name as Claude Code prefixes its tools (`mcp__<server>__<tool>`), so the
+ *  server named in an instructions block and the one in a tool name land on the same key. */
+function mcpServerKey(name: string): string {
+  return name.replace(/[^A-Za-z0-9_-]/g, '_')
+}
+
+/** The server part of `mcp__<server>__<tool>`, or null for a tool that is not an MCP tool. */
+export function mcpServerOfTool(tool: string): string | null {
+  if (!tool.startsWith('mcp__')) return null
+  const end = tool.indexOf('__', 5)
+  return end > 5 ? tool.slice(5, end) : null
+}
+
+type SinkAttachment = {
+  type?: string
+  names?: unknown
+  content?: unknown
+  addedNames?: unknown
+  addedBlocks?: unknown
+  addedLines?: unknown
+}
+
+const strings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+
+/** A skill listing's names with a token estimate each, from its own `- name: description` lines. */
+function readSkillListing(a: SinkAttachment, sinks: SinkScan): void {
+  const entries: Record<string, number> = {}
+  const content = typeof a.content === 'string' ? a.content : ''
+  for (const line of content.split('\n')) {
+    if (!line.startsWith('- ')) continue
+    const colon = line.indexOf(':')
+    const name = (colon > 2 ? line.slice(2, colon) : line.slice(2)).trim()
+    if (name) entries[name] = estTokens(line.length + 1)
+  }
+  // A listing that names a skill without a line for it still carries its name.
+  for (const name of strings(a.names)) entries[name] ??= estTokens(name.length + 4)
+  const keys = Object.keys(entries).sort()
+  if (keys.length === 0) return
+  const sorted: Record<string, number> = {}
+  for (const k of keys) sorted[k] = entries[k] as number
+  const hash = createHash('sha1').update(JSON.stringify(sorted)).digest('hex').slice(0, 16)
+  sinks.listings.set(hash, sorted)
+}
+
+function mcpEntry(sinks: SinkScan, server: string) {
+  const e = sinks.mcp.get(server) ?? { instr: 0, tools: new Map<string, number>() }
+  sinks.mcp.set(server, e)
+  return e
+}
+
+/** Fold one of the three attachments that say what a session's prefix carries. */
+function foldSinkAttachment(a: SinkAttachment | undefined, sinks: SinkScan): void {
+  if (!a || typeof a !== 'object') return
+  if (a.type === 'skill_listing') {
+    readSkillListing(a, sinks)
+  } else if (a.type === 'mcp_instructions_delta') {
+    const names = Array.isArray(a.addedNames) ? a.addedNames : []
+    const blocks = Array.isArray(a.addedBlocks) ? a.addedBlocks : []
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i]
+      const block = blocks[i]
+      if (typeof name !== 'string') continue
+      const e = mcpEntry(sinks, mcpServerKey(name))
+      // Largest seen, not summed: a subagent or a reconnect re-announces the same block.
+      e.instr = Math.max(e.instr, estTokens(typeof block === 'string' ? block.length : 0))
+    }
+  } else if (a.type === 'deferred_tools_delta') {
+    const names = Array.isArray(a.addedNames) ? a.addedNames : []
+    const lines = Array.isArray(a.addedLines) ? a.addedLines : []
+    for (let i = 0; i < names.length; i++) {
+      const tool = names[i]
+      const server = typeof tool === 'string' ? mcpServerOfTool(tool) : null
+      if (!server) continue
+      const line = lines[i]
+      mcpEntry(sinks, server).tools.set(
+        tool,
+        estTokens(typeof line === 'string' ? line.length : tool.length),
+      )
+    }
+  }
+}
+
+/** `<command-name>/name</command-name>`, which is how a typed slash command lands in a transcript. */
+const COMMAND_NAME = /<command-name>\/?([\w:.-]+)<\/command-name>/g
+
+/**
+ * Fold a line that carries sink evidence rather than a tool call. Returns true when the line was an
+ * attachment (nothing else in the scan wants it), false when the caller should keep looking at it.
+ */
+function foldSinkLine(line: string, sinks: SinkScan): boolean {
+  if (
+    line.includes('"attachment"') &&
+    (line.includes('"skill_listing"') ||
+      line.includes('"mcp_instructions_delta"') ||
+      line.includes('"deferred_tools_delta"'))
+  ) {
+    try {
+      foldSinkAttachment((JSON.parse(line) as { attachment?: SinkAttachment }).attachment, sinks)
+    } catch {
+      // a partial trailing write
+    }
+    return true
+  }
+  // A typed /skill is a use too. Only on a person's own turn: the same markup quoted inside a tool
+  // result (a transcript being grepped) is not an invocation.
+  if (
+    line.includes('<command-name>') &&
+    line.includes('"type":"user"') &&
+    !line.includes('"tool_result"')
+  ) {
+    for (const m of line.matchAll(COMMAND_NAME)) {
+      const name = m[1]
+      if (name) sinks.skillUses[name] = (sinks.skillUses[name] ?? 0) + 1
+    }
+  }
+  return false
+}
+
+function storedSinks(s: SinkScan): StoredSinks {
+  const mcpLoad: Record<string, number> = {}
+  for (const [server, e] of s.mcp) {
+    let tools = 0
+    for (const n of e.tools.values()) tools += n
+    mcpLoad[server] = e.instr + tools
+  }
+  return {
+    listings: [...s.listings.keys()],
+    skillUses: s.skillUses,
+    mcpLoad,
+    deepCalls: s.deepCalls,
+    deepWeighted: s.deepWeighted,
+    subWeighted: s.subWeighted,
+  }
+}
 
 /**
  * Gaps longer than this are not work, they are a lunch break with the window left open.
@@ -141,6 +337,8 @@ export interface SessionAnalytics {
   lastTs: number | null
   /** A cost the PROVIDER computed itself (OpenCode does). Null when nobody but us can price it. */
   providerCostUsd: number | null
+  /** Token-sink evidence. Filled from Claude Code transcripts; empty for every other store. */
+  sinks: SinkScan
 }
 
 function emptyAnalytics(): SessionAnalytics {
@@ -161,6 +359,7 @@ function emptyAnalytics(): SessionAnalytics {
     firstTs: null,
     lastTs: null,
     providerCostUsd: null,
+    sinks: emptySinks(),
   }
 }
 
@@ -358,6 +557,11 @@ function foldContentBlock(
   if (b.type === 'tool_use') {
     const name = typeof b.name === 'string' && b.name ? b.name : 'tool'
     out.tools[name] = (out.tools[name] ?? 0) + 1
+    if (name === 'Skill' && b.input && typeof b.input === 'object') {
+      const skill = (b.input as { skill?: unknown }).skill
+      if (typeof skill === 'string' && skill)
+        out.sinks.skillUses[skill] = (out.sinks.skillUses[skill] ?? 0) + 1
+    }
     if (EDIT_TOOLS.has(name)) {
       const p = firstPath(b.input)
       if (p) {
@@ -455,20 +659,31 @@ export async function scanSessionAnalytics(
   let prevTs: number | null = null
   let turn = -1
   let streak = 0
+  // Weighted spend when the session's OWN transcript ended; the rest is its subagents'.
+  let ownWeighted = 0
 
   // The session's own transcript FIRST, then every subagent it spawned. A Task subagent makes its
   // own API calls into its own file, and those files hold 89.8B tokens against the top level's
   // 64.5B on this machine — leaving them out reported 42% of real Claude spend as the total.
   // Summing is safe here in a way it is not for Codex: every record carries its own request id and
   // `seen` is shared across the files, so nothing can be charged twice.
-  for await (const raw of streamSessionLines(path, siblingPaths)) {
+  for await (const { line: raw, sub } of streamSessionLines(path, siblingPaths)) {
     const line = raw.trim()
     if (!line) continue
 
     // The usage pass first, and on the RAW line: it has its own cheap pre-filter and its own
     // JSON.parse, and letting it skip the ~90% of lines with no `"usage"` in them is most of why
     // this is fast enough to run over a whole store.
+    const promptBefore = spend.input + spend.cacheRead + spend.cacheCreation
+    const weightedBefore = spend.weighted
     const ts = accumulateUsageLine(spend, line, 0, seen)
+    // A new request's whole prompt lands in one step, so the step IS the call's context size. A
+    // streaming record's final form adds output only, and a prompt of 0 never reads as deep.
+    if (spend.input + spend.cacheRead + spend.cacheCreation - promptBefore >= DEEP_CONTEXT_TOKENS) {
+      out.sinks.deepCalls++
+      out.sinks.deepWeighted += spend.weighted - weightedBefore
+    }
+    if (!sub) ownWeighted = spend.weighted
     if (ts !== null) {
       const weighted = spend.weighted - lastWeighted
       lastWeighted = spend.weighted
@@ -481,6 +696,8 @@ export async function scanSessionAnalytics(
       if (prevTs !== null && ts > prevTs) out.activeMs += Math.min(ts - prevTs, ACTIVE_GAP_CAP_MS)
       prevTs = ts
     }
+
+    if (foldSinkLine(line, out.sinks)) continue
 
     // Everything below needs the parsed event. Skip lines that cannot carry one rather than
     // parsing every line twice. A subagent's tool use IS the parent's work and counts; its edits
@@ -505,21 +722,26 @@ export async function scanSessionAnalytics(
   }
 
   out.tokens = spend.byModel
+  out.sinks.subWeighted = spend.weighted - ownWeighted
   return out
 }
 
 /**
- * Every line of a session: its own transcript, then each of the extra files it owns.
+ * Every line of a session: its own transcript, then each of the extra files it owns, with `sub`
+ * set on the extra files' lines so the subagent share of the spend can be told apart.
  *
  * One generator rather than a loop per file so the scan body stays a single pass over "lines of
  * this session". A file that vanished (Claude Code prunes old subagent transcripts) is skipped;
  * losing the whole session over one missing child would be a far larger error than the child.
  */
-async function* streamSessionLines(path: string, siblingPaths: string[]): AsyncGenerator<string> {
-  for await (const line of streamLines(path)) yield line
+async function* streamSessionLines(
+  path: string,
+  siblingPaths: string[],
+): AsyncGenerator<{ line: string; sub: boolean }> {
+  for await (const line of streamLines(path)) yield { line, sub: false }
   for (const extra of siblingPaths) {
     try {
-      for await (const line of streamLines(extra)) yield line
+      for await (const line of streamLines(extra)) yield { line, sub: true }
     } catch {
       // gone between the index build and now
     }
@@ -756,12 +978,13 @@ interface AnalyticsRow {
   first_ts: number | null
   last_ts: number | null
   provider_cost_usd: number | null
+  sinks_json: string | null
 }
 
 const selectRows = db.query<AnalyticsRow, []>(
   'select cache_key, session_id, source, project, cwd, analytics_at, analytics_version, ' +
     'tokens_json, days_json, hours_json, tools_json, tool_errors, tool_error_streak, ' +
-    'edit_count, compactions, active_ms, first_ts, last_ts, provider_cost_usd ' +
+    'edit_count, compactions, active_ms, first_ts, last_ts, provider_cost_usd, sinks_json ' +
     'from session_scan_cache ' +
     'where analytics_at is not null',
 )
@@ -829,7 +1052,13 @@ const upsertAnalytics = db.query(
     'analytics_mtime_ms = ?, analytics_size_bytes = ?, provider_cost_usd = ?, session_id = ?, ' +
     'source = ?, project = ?, tokens_json = ?, days_json = ?, hours_json = ?, tools_json = ?, ' +
     'tool_errors = ?, tool_error_streak = ?, edit_count = ?, compactions = ?, active_ms = ?, ' +
-    'first_ts = ?, last_ts = ? where cache_key = ?',
+    'first_ts = ?, last_ts = ?, sinks_json = ? where cache_key = ?',
+)
+
+/** A listing is keyed by a hash of its own content, so the first writer wins and every later one
+ *  is the same bytes. */
+const insertListing = db.query(
+  'insert into skill_listings (hash, entries_json) values (?, ?) on conflict(hash) do nothing',
 )
 
 /**
@@ -911,8 +1140,10 @@ function persist(tf: TranscriptFile, a: SessionAnalytics): void {
       a.activeMs,
       a.firstTs,
       a.lastTs,
+      JSON.stringify(storedSinks(a.sinks)),
       key,
     )
+    for (const [hash, entries] of a.sinks.listings) insertListing.run(hash, JSON.stringify(entries))
     deleteEdits.run(key)
     for (const e of a.edits)
       insertEdit.run(
@@ -1552,6 +1783,7 @@ export function spendReport(opts: { sinceMs?: number | null } = {}): SpendReport
         first_ts: g.first_ts,
         last_ts: g.last_ts,
         provider_cost_usd: null,
+        sinks_json: null,
       },
       since,
       sinceDay,
@@ -1639,6 +1871,219 @@ export function activityReport(opts: { sinceMs?: number | null } = {}): Activity
   }
 }
 
+// --- token sinks -------------------------------------------------------------------------------
+// WHY: the spend report says how much and where; this says WHY a session was expensive. Five
+// lenses on the same weighted total, each tagged structural (configuration) or behavioral (how the
+// sessions were run), with the evidence basis and a one-line fix.
+// The idea (dead-skill load, deep-context turns, subagent pressure, cache efficiency) comes from
+// the learn report in JuliusBrussee/caveman; no code was copied, this is written fresh against
+// AgentHydra's own stored per-session totals.
+
+const SINK_FIXES: Record<TokenSink['id'], string> = {
+  'dead-skills':
+    'Uninstall the skills these sessions never invoke, or scope them to the projects that do: each one is re-read on every call.',
+  'dead-mcp':
+    'Disable MCP servers these sessions never call, or scope them per project: their instructions and tool names ride along on every call.',
+  'deep-context': `Compact or start a fresh session before the prompt passes ${DEEP_CONTEXT_TOKENS / 1000}k tokens: every call past it re-reads the whole history.`,
+  subagents:
+    'Spawn subagents for wide, parallel searches only: each one pays for its own prefix and history.',
+  'cache-writes':
+    'Keep gaps between turns inside the cache window and avoid editing instructions mid-session: every rewrite of the prefix is billed at a premium.',
+}
+
+const selectListing = db.query<{ entries_json: string }, [string]>(
+  'select entries_json from skill_listings where hash = ?',
+)
+
+interface LoadAcc {
+  loadTokens: number
+  sessionsLoaded: number
+  sessionsUsed: number
+  uses: number
+  deadTokens: number
+}
+
+function foldLoad(
+  into: Map<string, LoadAcc>,
+  key: string,
+  loadTokens: number,
+  uses: number,
+  calls: number,
+): void {
+  const r = into.get(key) ?? {
+    loadTokens: 0,
+    sessionsLoaded: 0,
+    sessionsUsed: 0,
+    uses: 0,
+    deadTokens: 0,
+  }
+  r.loadTokens = Math.max(r.loadTokens, loadTokens)
+  r.sessionsLoaded++
+  r.uses += uses
+  if (uses > 0) r.sessionsUsed++
+  else r.deadTokens += loadTokens * calls
+  into.set(key, r)
+}
+
+const rankLoad = (m: Map<string, LoadAcc>) =>
+  [...m.entries()]
+    .map(([key, r]) => ({ key, ...r, deadTokens: Math.round(r.deadTokens) }))
+    .sort((a, b) => b.deadTokens - a.deadTokens || b.loadTokens - a.loadTokens)
+    .slice(0, 30)
+
+/**
+ * Where the window's tokens went, ranked.
+ *
+ * Windowed the same way spendReport is (windowShare scales each session's own totals), so the
+ * total here and the spend panel's agree. Dead load is an ESTIMATE: the injected text's length at
+ * four characters a token, re-read on every call at the cache-read rate of the model that made the
+ * call. The rest is measured off recorded usage.
+ */
+export function sinkReport(opts: { sinceMs?: number | null } = {}): TokenSinkReport {
+  const since = opts.sinceMs ?? null
+  const sinceDay = since === null ? null : dayKey(since)
+  const listings = new Map<string, Record<string, number>>()
+  const listing = (hash: string): Record<string, number> => {
+    let entries = listings.get(hash)
+    if (!entries) {
+      entries = parseJson<Record<string, number>>(selectListing.get(hash)?.entries_json ?? null, {})
+      listings.set(hash, entries)
+    }
+    return entries
+  }
+  const accounts = accountBySession()
+  let instances = new Map<string, string>()
+  try {
+    instances = instanceSessionMap()
+  } catch {
+    // No desktop instances to attribute to: every session falls in the unlinked bucket.
+  }
+
+  const skills = new Map<string, LoadAcc>()
+  const servers = new Map<string, LoadAcc>()
+  const cache = new Map<string | null, { sessions: number; cacheRead: number; prompt: number }>()
+  let sessions = 0
+  let calls = 0
+  let totalWeighted = 0
+  let deadSkills = 0
+  let deadMcp = 0
+  let cacheWrites = 0
+  let deepCalls = 0
+  let deepWeighted = 0
+  let subWeighted = 0
+  let spawns = 0
+
+  for (const row of selectRows.all()) {
+    if (row.analytics_version !== ANALYTICS_VERSION || !row.sinks_json) continue
+    const share = windowShare(parseJson<Record<string, number>>(row.days_json, {}), sinceDay)
+    if (share === null) {
+      if (since !== null && (row.last_ts ?? 0) < since) continue
+    } else if (share <= 0) continue
+    const scale = share ?? 1
+    const tokens = scaleModelSpend(
+      withoutNonModels(parseJson<Record<string, ModelSpend>>(row.tokens_json, {})),
+      scale,
+    )
+    if (Object.keys(tokens).length === 0) continue
+    const s = parseJson<Partial<StoredSinks>>(row.sinks_json, {})
+    sessions++
+
+    // Per model, because a prefix token re-read by Opus costs five times one re-read by Sonnet.
+    let sessionCalls = 0
+    let prefixRate = 0 // weighted cost of carrying ONE prefix token through this session
+    const t = emptyTokens()
+    for (const [model, m] of Object.entries(tokens)) {
+      const mult = modelMultiplier(model)
+      sessionCalls += m.turns
+      prefixRate += m.turns * 0.1 * mult
+      cacheWrites += (m.cacheCreation5m + m.cacheCreation1h) * 1.25 * mult
+      totalWeighted += m.weighted
+      addTokens(t, m)
+    }
+    calls += sessionCalls
+
+    const loaded = new Map<string, number>()
+    for (const hash of s.listings ?? [])
+      for (const [name, n] of Object.entries(listing(hash)))
+        loaded.set(name, Math.max(loaded.get(name) ?? 0, n))
+    for (const [name, n] of loaded) {
+      const uses = s.skillUses?.[name] ?? 0
+      foldLoad(skills, name, n, uses, sessionCalls)
+      if (uses === 0) deadSkills += n * prefixRate
+    }
+
+    const tools = parseJson<Record<string, number>>(row.tools_json, {})
+    const serverCalls = new Map<string, number>()
+    for (const [tool, n] of Object.entries(tools)) {
+      const server = mcpServerOfTool(tool)
+      if (server) serverCalls.set(server, (serverCalls.get(server) ?? 0) + n)
+    }
+    for (const [server, n] of Object.entries(s.mcpLoad ?? {})) {
+      const uses = serverCalls.get(server) ?? 0
+      foldLoad(servers, server, n, uses, sessionCalls)
+      if (uses === 0) deadMcp += n * prefixRate
+    }
+
+    deepCalls += (s.deepCalls ?? 0) * scale
+    deepWeighted += (s.deepWeighted ?? 0) * scale
+    subWeighted += (s.subWeighted ?? 0) * scale
+    // Task is the older name of the Agent tool; both spawn a subagent.
+    spawns += ((tools.Task ?? 0) + (tools.Agent ?? 0)) * scale
+
+    const account = accounts.get(row.session_id) ?? instances.get(row.session_id) ?? null
+    const c = cache.get(account) ?? { sessions: 0, cacheRead: 0, prompt: 0 }
+    c.sessions++
+    c.cacheRead += t.cacheRead
+    c.prompt += t.input + t.cacheRead + t.cacheWrite
+    cache.set(account, c)
+  }
+
+  const sink = (
+    id: TokenSink['id'],
+    kind: TokenSink['kind'],
+    basis: TokenSink['basis'],
+    weighted: number,
+  ): TokenSink => ({
+    id,
+    kind,
+    basis,
+    weighted: Math.round(weighted),
+    share: totalWeighted > 0 ? weighted / totalWeighted : 0,
+    fix: SINK_FIXES[id],
+  })
+
+  return {
+    sessions,
+    calls: Math.round(calls),
+    totalWeighted: Math.round(totalWeighted),
+    sinks: [
+      sink('dead-skills', 'structural', 'estimated', deadSkills),
+      sink('dead-mcp', 'structural', 'estimated', deadMcp),
+      sink('deep-context', 'behavioral', 'measured', deepWeighted),
+      sink('subagents', 'behavioral', 'measured', subWeighted),
+      sink('cache-writes', 'behavioral', 'measured', cacheWrites),
+    ].sort((a, b) => b.weighted - a.weighted),
+    skills: rankLoad(skills),
+    mcpServers: rankLoad(servers),
+    deepContext: {
+      threshold: DEEP_CONTEXT_TOKENS,
+      calls: Math.round(deepCalls),
+      weighted: Math.round(deepWeighted),
+    },
+    subagents: { weighted: Math.round(subWeighted), spawns: Math.round(spawns) },
+    cacheByAccount: [...cache.entries()]
+      .map(([key, c]) => ({
+        key,
+        sessions: c.sessions,
+        cacheRead: Math.round(c.cacheRead),
+        prompt: Math.round(c.prompt),
+        ratio: c.prompt > 0 ? c.cacheRead / c.prompt : 0,
+      }))
+      .sort((a, b) => b.prompt - a.prompt),
+    coverage: analyticsCoverage(),
+  }
+}
+
 /**
  * How many sessions were alive at the same time, bucketed.
  *
@@ -1717,9 +2162,10 @@ export function dropAnalytics(): boolean {
         'tool_errors = null, tool_error_streak = null, edit_count = null, compactions = null, ' +
         'active_ms = null, first_ts = null, last_ts = null, provider_cost_usd = null, ' +
         'analytics_mtime_ms = null, ' +
-        'analytics_size_bytes = null',
+        'analytics_size_bytes = null, sinks_json = null',
     )
     db.run('delete from session_edits')
+    db.run('delete from skill_listings')
     return true
   } catch {
     return false
