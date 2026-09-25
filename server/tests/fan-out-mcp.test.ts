@@ -599,6 +599,13 @@ describe('fan_out_recover - one automatic attempt per recipe, then the escalatio
     expect(res.ok).toBe(false)
   })
 
+  test('nothing to recover (exit 2, no rows) is an answer, not a failure', async () => {
+    reportRun({ id: 'fo-22', results: [] }, 2)
+    const res = (await tool('fan_out_recover').run({ group: 'fo-22' })) as Record<string, unknown>
+    expect(res.ok).toBe(true)
+    expect(String(res.verdict)).toMatch(/^nothing to recover/)
+  })
+
   test('refuses a missing group before any request', async () => {
     await expect(tool('fan_out_recover').run({ group: ' ' })).rejects.toThrow(/group/)
     expect(calls).toHaveLength(0)

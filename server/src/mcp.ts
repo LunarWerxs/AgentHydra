@@ -692,7 +692,7 @@ function fanOutVerdict(
   if (results && results.length > 0) {
     const rows = results as Record<string, unknown>[]
     const bad = rows.some(
-      (r) => !['delivered', 'deleted', 'recovered'].includes(fanOutResultState(r)),
+      (r) => !['delivered', 'deleted', 'recovered', 'asked'].includes(fanOutResultState(r)),
     )
     return {
       verdict: `${bad ? 'partial' : 'ok'}: ${stateCounts(rows, fanOutResultState)}`,
@@ -2615,7 +2615,7 @@ export const TOOLS: McpEngineTool[] = [
     // again. This meets each one with a fixed recipe and ONE automatic attempt, then escalates.
     name: 'fan_out_recover',
     description:
-      "MUTATES: meet every FAILED member of a fan_out group with its recovery recipe - one automatic attempt, then the recipe's escalation, each written to the group's recovery ledger (fan_out_status shows it). The closed table: delivery-failed -> re-send the same text once, only when the message route REFUSED it (4xx: nothing was typed; an unconfirmed send is never repeated blind), then alert-human (an incident in list_incidents); chat-stalled -> ask the chat once through its composer whether it is stuck, then alert-human; account-at-cap (an unassigned task) -> re-rank the accounts once inside the group's own fence (its --exclude, so never the calling chat's account) and spawn it where there is room now, then log-and-continue. A member whose attempt is already spent escalates without trying again; a success clears it. Members with nothing owed are left alone. Holds are respected unless `force` (a PERSON's word). Returns one row per member met: kind, outcome (recovered / escalated), escalation, incident, detail.",
+      "MUTATES: meet every FAILED member of a fan_out group with its recovery recipe - one automatic attempt, then the recipe's escalation, each written to the group's recovery ledger (fan_out_status shows it). The closed table: delivery-failed -> re-send the same text once, only when the message route REFUSED it before typing (400/404/409; a 422 or an unconfirmed send may already be on screen and is never repeated blind), then alert-human (an incident in list_incidents); chat-stalled -> ask the chat once through its composer whether it is stuck (outcome asked; the attempt stays spent until the member stops being stalled), then alert-human; account-at-cap (an unassigned task) -> re-rank the accounts once inside the group's own fence (its --exclude, so never the calling chat's account) and spawn it where there is room now, then log-and-continue. A member whose attempt is already spent escalates without trying again; a success clears it. Members with nothing owed are left alone. Holds are respected unless `force` (a PERSON's word). Returns one row per member met: kind, outcome (recovered / asked / escalated); nothing to recover is ok, not a failure, escalation, incident, detail.",
     inputSchema: S(
       {
         group: { type: 'string', description: 'Group id, name, or unique id prefix.' },
@@ -2630,7 +2630,15 @@ export const TOOLS: McpEngineTool[] = [
       const args = ['recover', group]
       if (a.force === true) args.push('--force')
       args.push('--json')
-      return runFanOut(args, 20 * 60_000)
+      const res = await runFanOut(args, 20 * 60_000)
+      // exit 2 with no rows is "no member is in a known failure": an answer, not a failure
+      if (res.exitCode === 2 && Array.isArray(res.results) && res.results.length === 0)
+        return {
+          ...res,
+          ok: true,
+          verdict: 'nothing to recover: no member is in a failure the recipe table knows',
+        }
+      return res
     },
   },
   {

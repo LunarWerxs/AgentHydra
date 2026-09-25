@@ -25,7 +25,7 @@ from stubdaemon import StubDaemon  # noqa: E402
 from util import run_cli  # noqa: E402
 
 import fan_out  # noqa: E402
-from lib import holdlib, hydralib  # noqa: E402
+from lib import holdlib, hydralib, recoverylib  # noqa: E402
 
 
 def _iso(hours_ago=0.2):
@@ -630,6 +630,51 @@ class RecoverTest(FanOutBase):
 
     def _message_posts(self, sid="sid-2"):
         return [b for p, b in self.stub.posts if p == f"/api/sessions/{sid}/message"]
+
+    def test_a_422_is_never_resent_because_it_may_already_be_typed(self):
+        # the route's own word: a peer pipe that did not confirm must not be sent again
+        self._spawn_two()
+        self.stub.routes["/api/sessions/sid-2/message"] = (
+            422, {"ok": False, "route": "peer", "delivered": False,
+                  "detail": "peer channel did not confirm (timeout)"})
+        run_cli(fan_out.main, ["send", "g1", "--text", "x" * 20, "--only", "sid-2", "--json"])
+        self.stub.routes["/api/sessions/sid-2/message"] = {"ok": True, "delivered": True}
+        self.stub.posts.clear()
+        code, out, _ = run_cli(fan_out.main, ["recover", "g1", "--json"])
+        self.assertEqual(code, 4)
+        (row,) = json.loads(out)["results"]
+        self.assertEqual((row["kind"], row["outcome"]), ("delivery-failed", "escalated"))
+        self.assertIn("never re-sent blind", row["detail"])
+        self.assertEqual(self._message_posts(), [])
+
+    def test_a_stalled_chat_is_asked_once_and_not_again_while_it_stays_stalled(self):
+        self._spawn_two()
+        self.stub.routes["/api/sessions/sid-2/message"] = {"ok": True, "delivered": True}
+        real = fan_out._member_status
+
+        def stalled(m):
+            out = real(m)
+            if m.get("sessionId") == "sid-2":
+                out["state"] = "stalled"
+            return out
+
+        self.stub.posts.clear()
+        with mock.patch.object(fan_out, "_member_status", stalled):
+            code, out, _ = run_cli(fan_out.main, ["recover", "g1", "--json"])
+            self.assertEqual(code, 0)
+            (row,) = json.loads(out)["results"]
+            self.assertEqual((row["kind"], row["outcome"]), ("chat-stalled", "asked"))
+            self.assertEqual([b["text"] for b in self._message_posts()], [fan_out.STALL_QUESTION])
+            self.stub.posts.clear()
+            code, out, _ = run_cli(fan_out.main, ["recover", "g1", "--json"])
+            self.assertEqual(code, 4)
+            self.assertEqual(self._message_posts(), [])  # still stalled: the one ask is spent
+        # no longer stalled: the spent ask is freed for a later stall
+        group = fan_out.find_group("g1")
+        subject = fan_out._subject(group, group["members"][1])
+        self.assertEqual(recoverylib.attempts_used("chat-stalled", subject), 1)
+        run_cli(fan_out.main, ["recover", "g1", "--json"])
+        self.assertEqual(recoverylib.attempts_used("chat-stalled", subject), 0)
 
     def test_a_refused_send_is_resent_once_with_its_whole_text(self):
         self._spawn_two()

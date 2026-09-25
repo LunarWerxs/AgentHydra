@@ -50,13 +50,27 @@ class RecoveryLibTest(unittest.TestCase):
 
     def test_a_success_clears_the_attempt(self):
         ok = Step(True, "delivered")
-        row = recoverylib.attempt_recovery("chat-stalled", "s", ok)
+        row = recoverylib.attempt_recovery("delivery-failed", "s", ok)
         self.assertEqual(row["outcome"], "recovered")
         self.assertNotIn("escalation", row)
-        self.assertEqual(recoverylib.attempts_used("chat-stalled", "s"), 0)
+        self.assertEqual(recoverylib.attempts_used("delivery-failed", "s"), 0)
         again = Step(False)
-        recoverylib.attempt_recovery("chat-stalled", "s", again)
+        recoverylib.attempt_recovery("delivery-failed", "s", again)
         self.assertEqual(again.calls, 1)
+
+    def test_a_delivered_stall_question_stays_spent_until_cleared(self):
+        # asking is not recovering: without this, every recover asks a still-stalled chat again
+        ok = Step(True, "asked")
+        row = recoverylib.attempt_recovery("chat-stalled", "s", ok)
+        self.assertEqual(row["outcome"], "asked")
+        self.assertNotIn("escalation", row)
+        again = recoverylib.attempt_recovery("chat-stalled", "s", ok)
+        self.assertEqual(ok.calls, 1)
+        self.assertEqual(again["outcome"], "escalated")
+        self.assertIsNotNone(recoverylib.clear("chat-stalled", "s", "working again"))
+        recoverylib.attempt_recovery("chat-stalled", "s", ok)
+        self.assertEqual(ok.calls, 2)
+        self.assertIsNone(recoverylib.clear("chat-stalled", "never-tried"))
 
     def test_alert_human_files_an_incident_and_log_and_continue_does_not(self):
         row = recoverylib.attempt_recovery("chat-stalled", "fanout:g:2", Step(False, "not asked"))

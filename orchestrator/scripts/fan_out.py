@@ -463,7 +463,7 @@ def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
     otherwise the id exists only inside this process and cannot be known until the whole spawn
     (30-90s per chat) has finished. Defaults to a fresh one, exactly as before.
 
-    `targeting` ({exclude, only}) is kept on the record so `recover` re-ranks inside the same
+    `targeting` ({exclude, only, openClosed}) is kept on the record so `recover` re-ranks inside the same
     fence the group was spawned in - never onto the calling chat's own account."""
     group = {
         "id": group_id or _new_group_id(), "name": spec.get("group"), "createdAt": _now_iso(),
@@ -737,10 +737,17 @@ def send(group: dict, text: str, only: list[str] | None = None, force: bool = Fa
     return record
 
 
+# WHY: not every 4xx means "nothing was typed". The message route answers 400 (no text), 404 (no
+# chat or instance) and 409 (not running, peer-only, row unreachable, live writer) BEFORE it
+# types; its 422 is a peer pipe that did not confirm or a composer that may already have typed,
+# and a re-send there can land a duplicate in a live chat.
+_REFUSED_BEFORE_TYPING = frozenset({400, 404, 409})
+
+
 def _refused_before_typing(result: dict) -> bool:
-    """A send the message route REFUSED with a 4xx: it answered, and it typed nothing."""
+    """A send the message route REFUSED before typing (400/404/409): it typed nothing."""
     return (not result.get("delivered") and not result.get("skipped")
-            and 400 <= int(result.get("httpStatus") or 0) < 500)
+            and int(result.get("httpStatus") or 0) in _REFUSED_BEFORE_TYPING)
 
 
 def send_exit_code(record: dict) -> int:
@@ -828,7 +835,8 @@ def _replace_step(group: dict, m: dict, force: bool):
             return False, "this group's account fence was not recorded - not re-ranked"
         taken = [str(x["instanceNum"]) for x in group.get("members", []) if x.get("instanceNum")]
         ranking = rank_targets(exclude=list(targeting.get("exclude") or []) + taken,
-                               only=targeting.get("only") or None)
+                               only=targeting.get("only") or None,
+                               open_closed=bool(targeting.get("openClosed")))
         if not ranking["targets"]:
             return False, "re-ranked: still no account with room"
         target = ranking["targets"][0]
@@ -851,6 +859,11 @@ def recover(group: dict, force: bool = False) -> dict:
     for m in group.get("members", []):
         state = _member_status(m).get("state")
         kind = failure_kind(group, m, state)
+        if kind != "chat-stalled":
+            # A delivered stall question is only "asked", which keeps the attempt spent; the
+            # member leaving the stalled state is what frees it for a later stall.
+            recoverylib.clear("chat-stalled", _subject(group, m),
+                              f"member [{m.get('index')}] is {state or 'gone'}, no longer stalled")
         if not kind:
             continue
         row = recoverylib.attempt_recovery(
@@ -865,7 +878,7 @@ def recover(group: dict, force: bool = False) -> dict:
 def recover_exit_code(record: dict) -> int:
     if not record["results"]:
         return 2
-    return 0 if all(r.get("outcome") == "recovered" for r in record["results"]) else 4
+    return 0 if all(r.get("outcome") in ("recovered", "asked") for r in record["results"]) else 4
 
 
 # --- delete ----------------------------------------------------------------------------------
@@ -1129,7 +1142,8 @@ def _cmd_spawn(argv: list[str], force: bool, as_json: bool) -> int:
     assignments = plan(spec["tasks"], ranking["targets"], per_account)
     group = spawn_group(spec, assignments, force=force, dry_run=dry_run, group_id=group_id,
                         targeting={"exclude": _take_values(argv, "--exclude"),
-                                   "only": _take_values(argv, "--only")})
+                                   "only": _take_values(argv, "--only"),
+                                   "openClosed": "--open-closed" in argv})
     if as_json:
         print(json.dumps({**group, "targets": ranking["targets"],
                           "skippedTargets": ranking["skipped"],

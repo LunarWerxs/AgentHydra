@@ -206,7 +206,9 @@ def run(argv: list[str]) -> tuple[dict, int]:
             act = False
             # The recipe table's tray-not-armed row: no automatic step (arming is a person's
             # act), escalation abort - recorded, so the ledger says why this lane did nothing.
-            recoverylib.attempt_recovery("tray-not-armed", "stall_watch", context=refusal)
+            # Only a real DISARMED refusal: an unreadable policy file is not a tray state.
+            if refusal.startswith("DISARMED"):
+                recoverylib.attempt_recovery("tray-not-armed", "stall_watch", context=refusal)
     cap = MAX_PER_RUN
     if _values(argv, "--max"):
         try:

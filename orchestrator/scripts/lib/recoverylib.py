@@ -14,7 +14,9 @@ here for the orchestrator's own failure kinds; no code was copied.
 The laws, in the same spirit as ledgerlib's breaker:
   - The table is CLOSED. An unknown kind is a programming error and raises, so a caller cannot
     invent a recipe on the fly and slip past the cap.
-  - ONE automatic attempt per (kind, subject) until a success clears it. The step runs outside
+  - ONE automatic attempt per (kind, subject) until a success clears it. A recipe whose
+    success is only a step taken (chat-stalled: "asked") keeps it spent until the caller
+    `clear`s it, once the failure is really gone. The step runs outside
     the ledger lock (a composer send takes minutes), and its outcome is recorded after.
   - A failed attempt escalates AT ONCE, by the recipe's policy: alert-human files an incident
     (list_incidents shows it), abort tells the caller to stop this act, log-and-continue only
@@ -56,6 +58,9 @@ RECIPES: dict[str, dict] = {
         "step": "ask the chat once, through its composer, whether it is stuck",
         "maxAttempts": 1,
         "escalation": ALERT_HUMAN,
+        # A delivered question is not a recovered chat: the attempt stays spent until the
+        # member leaves the stalled state (the caller's `clear`), or every recover asks again.
+        "onSuccess": "asked",
     },
     "tray-not-armed": {
         "step": None,  # arming is a person's act: nothing here ever puts the icon up
@@ -97,12 +102,12 @@ def _save(rows: list[dict]) -> None:
 
 
 def attempts_used(kind: str, subject: str, _rows: list[dict] | None = None) -> int:
-    """Automatic attempts spent on (kind, subject) since its last recovery."""
+    """Automatic attempts spent on (kind, subject) since its last recovery or clear."""
     used = 0
     for r in (_rows if _rows is not None else _load()):
         if r.get("kind") != kind or r.get("subject") != subject:
             continue
-        if r.get("outcome") == "recovered":
+        if r.get("outcome") in ("recovered", "cleared"):
             used = 0
         elif r.get("attempted"):
             used += 1
@@ -139,7 +144,7 @@ def attempt_recovery(kind: str, subject: str, step: Callable[[], tuple[bool, str
                      *, context: str = "") -> dict:
     """Meet one failure with its recipe. `step` performs the recipe's automatic attempt and
     returns (ok, detail); it runs only while the attempt is unspent. Returns the ledger row:
-    outcome recovered | escalated, the escalation applied, and why."""
+    outcome recovered | asked | escalated, the escalation applied, and why."""
     recipe = recipe_for(kind)
     used = attempts_used(kind, subject)
     row = {"at": int(time.time() * 1000), "kind": kind, "subject": str(subject),
@@ -158,9 +163,22 @@ def attempt_recovery(kind: str, subject: str, step: Callable[[], tuple[bool, str
     row["attempted"] = True
     row["detail"] = detail
     if ok:
-        row["outcome"] = "recovered"
+        row["outcome"] = recipe.get("onSuccess", "recovered")
     else:
         row.update(_escalate(recipe, subject, detail))
+    _append(row)
+    return row
+
+
+def clear(kind: str, subject: str, detail: str = "") -> dict | None:
+    """The failure is gone on its own (a stalled chat is working again): free the spent attempt
+    so a LATER failure of the same kind gets its one try. A no-op, and None, when none is spent."""
+    recipe_for(kind)
+    if not attempts_used(kind, subject):
+        return None
+    row = {"at": int(time.time() * 1000), "kind": kind, "subject": str(subject),
+           "context": "", "step": None, "attempted": False, "outcome": "cleared",
+           "detail": detail}
     _append(row)
     return row
 

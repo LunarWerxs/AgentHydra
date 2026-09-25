@@ -17,7 +17,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   abort, log-and-continue). The new `fan_out recover` / MCP `fan_out_recover` meets each failed
   member of a group with its recipe; `fan_out_status` shows each member's recipe and the group's
   recovery ledger, and `attempts.py --recoveries` prints the whole table and ledger. A failed send
-  is re-sent only when the message route refused it with a 4xx, never after an unconfirmed one.
+  is re-sent only when the message route refused it before typing (400/404/409), never after a
+  422 or an unconfirmed one; a stalled chat is asked once and not again until it has stopped
+  being stalled.
   Idea from ultraworkers/claw-code's recovery recipes (MIT), written fresh.
 
 ### Fixed
