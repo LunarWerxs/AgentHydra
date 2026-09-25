@@ -286,6 +286,28 @@ SPEC: list[dict] = [
        "Most chats one pass may ask (each ask wakes a chat, which spends its account).",
        min=1, max=50),
 
+    # ---- STANDING GOALS --------------------------------------------------------------
+    # goal_watch.py: continue a chat whose tmp/handoff/GOAL.md is still IN PROGRESS, audit that
+    # it moves, and wrap it up before its account's limit cuts it off. New lane, first values.
+    _k("goalwatch.enabled", True, "bool", "goalwatch",
+       "Re-prompt a chat whose turn has ended while its standing goal file still reads STATUS: "
+       "IN PROGRESS, with the progress and completion audit rules."),
+    _k("goalwatch.quiet_secs", 900, "secs", "goalwatch",
+       "How long a chat's turn must have been over before its goal is continued, so a person "
+       "reading or replying is not talked over.", min=120, max=86400),
+    _k("goalwatch.renudge_secs", 1800, "secs", "goalwatch",
+       "Minimum gap between two continuations of the same chat's goal.", min=300, max=86400),
+    _k("goalwatch.max_unchanged", 3, "int", "goalwatch",
+       "Continuations in a row that may leave the goal file byte-identical before the goal is "
+       "filed as an incident for you and the chat is left alone.", min=1, max=20),
+    _k("goalwatch.wrapup_pct", 80, "pct", "goalwatch",
+       "Account usage at which a chat with an open goal is told to wrap up and leave the file "
+       "resumable instead of being continued. Keep it below bands.soft_target_pct: past that "
+       "the courier delivers nothing, so the wrap-up could never arrive.", min=10, max=100),
+    _k("goalwatch.max_per_run", 3, "int", "goalwatch",
+       "Most chats one pass may prompt (each prompt wakes a chat, which spends its account).",
+       min=1, max=50),
+
     # ---- DELIVERING REPLIES ----------------------------------------------------------
     _k("courier.max_deliveries", 5, "int", "courier",
        "Most staged replies one pass may deliver.", min=1, max=50),
@@ -350,6 +372,8 @@ JOB_LANES: list[tuple[str, int, bool, str]] = [
                           "never have seen"),
     ("stall_watch", 5, False, "ask chats about background work they left hanging - the busy "
                               "dot that never clears"),
+    ("goal_watch", 5, False, "continue chats whose standing goal is still IN PROGRESS, and tell "
+                             "them to wrap up as their account nears its limit"),
     ("twins", 5, False, "find and settle duplicate chat records before one becomes unmanageable"),
     ("chips", 5, False, "start the desktop's Suggested-task chips locally through the app menu"),
     ("groundskeeper", 5, False, "the five duties: evacuate, archive, name the stuck, rebalance, "
@@ -384,6 +408,7 @@ GROUPS: list[tuple[str, str]] = [
     ("saturate", "WAKING - keeping the machine full"),
     ("unblock", "PERMISSION PROMPTS - answering the ones nobody is there to click"),
     ("stallwatch", "STALLED BACKGROUND WORK - asking a chat whether what it left running is stuck"),
+    ("goalwatch", "STANDING GOALS - continuing a chat's GOAL.md, and auditing that it moves"),
     ("courier", "DELIVERY - sending staged replies"),
     ("interview", "THE JUDGMENT QUEUE - the part an AI answers"),
     ("overlord", "THE STANDING MANAGER - the watchdog that keeps the orchestrator alive"),
@@ -425,7 +450,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "groundskeeper.duty_evacuate": False, "groundskeeper.duty_archive": False,
         "groundskeeper.duty_rebalance": False, "groundskeeper.duty_reap": False,
         "saturate.enabled": False, "unblock.enabled": False, "stallwatch.enabled": False,
-        "doctrine.ensure_allow_all": False,
+        "goalwatch.enabled": False, "doctrine.ensure_allow_all": False,
     },
     "conservative": {
         # Acts, but slowly, and never files a chat it is not sure about.

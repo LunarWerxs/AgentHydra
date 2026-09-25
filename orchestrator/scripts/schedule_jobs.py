@@ -242,6 +242,15 @@ JOBS: dict[str, dict] = {
         "needs_daemon": True,
         "lock": True,
     },
+    "goal-watch": {
+        "what": "KEEP A STANDING GOAL MOVING: a chat whose turn ended while its tmp/handoff/GOAL.md "
+                "still reads IN PROGRESS is continued with the progress and completion audit "
+                "rules, and told to wrap up as its account nears its limit",
+        "schedule": EVERY_5_MIN,
+        "lines": [r'"{python}" "{scripts}\goal_watch.py" --yes'],
+        "needs_daemon": True,
+        "lock": True,
+    },
     "twins": {
         "what": "IS ANY CHAT VISIBLE TWICE? A re-import can leave a second record for the same "
                 "conversation, and a twin makes that chat unmanageable (the sidebar actuator "

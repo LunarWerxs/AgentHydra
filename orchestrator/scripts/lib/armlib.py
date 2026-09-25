@@ -54,7 +54,7 @@ STALE_SECS = 60
 # it by hand instead of trusting the set.
 GATED_SCRIPTS = frozenset({
     "audit_twins", "automation_chat", "chips", "cli_saturate", "courier",
-    "groundskeeper", "harvest_todos", "overlord", "reconcile", "saturate",
+    "goal_watch", "groundskeeper", "harvest_todos", "overlord", "reconcile", "saturate",
     "stall_watch", "sweep", "unblock_prompts",
 })
 

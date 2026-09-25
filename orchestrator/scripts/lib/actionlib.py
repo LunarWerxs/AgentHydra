@@ -581,6 +581,15 @@ CATALOG: dict[str, dict] = {
         "availability": "available",
         "summary": "ACT: ask a chat whether background work it left running is stuck.",
     },
+    "goal_watch": {
+        "kind": "mutate",
+        "invocation": "both",
+        "platforms": "windows-only",
+        "guards": ("hold", "armed-window", "force"),
+        "result": "0 nothing to do, or every prompt landed - 2 a prompt did not land (each named) - 3 bad usage (an unknown flag, refused before anything is read) - 1 daemon failure",
+        "availability": "available",
+        "summary": "ACT: continue a chat whose standing GOAL.md is still IN PROGRESS, with audits.",
+    },
     "trust_workspace": {
         "kind": "mutate",
         "invocation": "direct",
