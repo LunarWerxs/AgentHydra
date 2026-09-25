@@ -7,6 +7,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **`history_search` / `history_read`: search what compaction dropped from your own session**
+  (`server/src/compaction-history.ts`, `server/src/mcp.ts`). The calling Claude Code session's
+  transcript is resolved from the caller's process chain and the live registry, and the text
+  before its last compaction (user/assistant text, tool calls, tool results) is searched
+  lexically: up to 8 excerpts of 600 characters with stable source ids, read back exactly in
+  4,000-character pages, marked as historical data. Idea from bytedance/deer-flow (MIT).
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,

@@ -125,6 +125,27 @@ tool description says the default out loud so it knows to:
   per-provider breakdown. Read from the transcript index, never a transcript, so it is cheap. This
   is the index of the index: start here to find out what "all" contains, then scope a real query.
 
+### What compaction dropped from your own session
+
+A long Claude Code session loses exact details at every compaction (a path, an error line, the
+person's own wording), yet its full transcript is still on disk. `history_search { query }` searches
+the CALLING session's own transcript for text from before its last compaction: user and assistant
+text, tool calls and tool results (reasoning blocks and the compaction summary are left out). A
+source matches when it holds every term (`"quote a phrase"` to keep it whole); up to 8 excerpts of
+up to 600 characters come back, most matches first, each with a stable `sourceId`
+(`<line uuid>#<block index>`) and the `offset` the excerpt starts at. `history_read { source_id,
+offset? }` then returns that source exactly, 4,000 characters a page, with `nextOffset` until the
+end. `all: true` on both widens the scope to the whole transcript.
+
+- The session is found the way `whoami` finds the caller: the calling engine's pid (or, over
+  stdio, this server's parent chain) is matched against the CLI's own live registry,
+  `~/.claude/sessions/<pid>.json`. `how` says which match won; `session_id` names a session outright
+  when detection cannot.
+- Everything returned is marked as historical data (`notice`), never instructions, and secrets in
+  recognisable formats are redacted the same way as `export_session`.
+- Read-only, lexical, nothing stored: the transcript is parsed on demand and the last one parsed is
+  kept until the file changes.
+
 ### Chats a usage limit cut off
 
 `list_rate_limited_sessions { pendingOnly?, period?, project?, limit? }` lists the conversations a
