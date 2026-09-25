@@ -6,6 +6,7 @@ import {
   dropAnalytics,
   recentEdits,
   refreshAnalytics,
+  sinkReport,
   spendReport,
   warmAnalyticsInBackground,
 } from '../analytics'
@@ -44,6 +45,9 @@ app.get('/api/analytics/activity', (c) => {
   if (report.editSurvival.overdue > 0) warmAnalyticsInBackground()
   return c.json(report)
 })
+// WHY a session was expensive: dead skill/MCP load, deep-context calls, subagent and cache-write
+// spend, ranked against one total (analytics.ts sinkReport).
+app.get('/api/analytics/sinks', (c) => c.json(sinkReport({ sinceMs: analyticsPeriod(c) })))
 app.get('/api/analytics/concurrency', (c) =>
   c.json({
     buckets: concurrencyReport({

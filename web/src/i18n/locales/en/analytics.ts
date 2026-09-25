@@ -105,6 +105,37 @@ export default {
   concurrency: 'Sessions running at once',
   concurrencyNote: 'How many sessions were alive in each window.',
   toolMix: 'Tool mix',
+  // Token sinks: WHY the spend happened, not only how much. Weighted tokens, the same unit as the
+  // headline, so the sinks rank against each other.
+  sinks: 'Where the tokens went',
+  sinksNote:
+    'Ranked in weighted tokens. Structural sinks are configuration, behavioral ones are how sessions ran. They overlap, so the shares do not add up to 100%.',
+  sinkDeadSkills: 'Skills loaded but never used',
+  sinkDeadMcp: 'MCP servers loaded but never called',
+  sinkDeepContext: 'Calls past {threshold} tokens of context',
+  sinkSubagents: 'Subagent spend',
+  sinkCacheWrites: 'Cache writes',
+  sinkStructural: 'Structural',
+  sinkBehavioral: 'Behavioral',
+  sinkEstimated: 'Estimate',
+  fixDeadSkills:
+    'Uninstall the skills these sessions never invoke, or scope them to the projects that do: each one is re-read on every call.',
+  fixDeadMcp:
+    'Disable MCP servers these sessions never call, or scope them per project: their instructions ride along on every call.',
+  fixDeepContext:
+    'Compact or start a fresh session before the context gets this deep: every call re-reads the whole history.',
+  fixSubagents:
+    'Spawn subagents for wide, parallel searches only: each one pays for its own prefix and history.',
+  fixCacheWrites:
+    'Keep gaps between turns inside the cache window and avoid editing instructions mid-session.',
+  deadSkills: 'Dead skill load',
+  deadMcp: 'Dead MCP load',
+  deadNone: 'Everything loaded here was used.',
+  deadDetail: '~{tokens} tokens each call, loaded in {loaded} session(s), used in {used}',
+  sinkCounts:
+    '{deep} of {calls} calls ran past the deep-context threshold. {spawns} subagents spawned.',
+  cacheByAccount: 'Prompt served from cache, per account',
+  sinkUnlinked: 'Not linked to an account',
   health: 'Worth a look',
   healthNote:
     'Sessions with a run of failing tools, heavy edit churn, a context compaction, or code that mostly did not survive. A signal to go and read one, not a verdict.',

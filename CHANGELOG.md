@@ -9,6 +9,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Token sinks: why sessions were expensive** (`server/src/analytics.ts`,
+  `server/src/routes/analytics.ts`, `server/src/mcp.ts`, `web/src/components/AnalyticsView.vue`).
+  A "Where the tokens went" panel on the Analytics tab, `GET /api/analytics/sinks` and the
+  `get_token_sinks` MCP tool rank five sinks against one weighted total, each tagged structural or
+  behavioral, measured or estimated, with a one-line fix:
+  - skills and MCP servers loaded into every prompt but never used, ranked by the prefix tokens
+    they carried (the injected text's length at four characters a token, re-read on every call);
+  - calls whose prompt was past 150k tokens of context;
+  - subagent spend, and cache writes (each session's first, unavoidable write included), plus
+    the share of prompt served from cache per account.
+  The scan keeps skill and MCP server names with counts, never text; a skill listing is stored
+  once per distinct listing. `ANALYTICS_VERSION` is now 8, so the background warm rescans every
+  transcript once. Idea from the learn report in JuliusBrussee/caveman; no code copied.
+
 - **Quota windows calibrated into dollars** (`server/src/quota-calibration.ts`,
   `server/src/usage-budget.ts`, `server/src/mcp.ts`). `usage_budget` now returns
   `budget.dollars`: what 100% of the weekly and the 5-hour window is worth in list-price dollars

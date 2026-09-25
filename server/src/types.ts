@@ -466,6 +466,72 @@ export interface ActivityReport {
   coverage: AnalyticsCoverage
 }
 
+/**
+ * One skill or MCP server that sat in a session's prompt prefix, and whether anything used it.
+ *
+ * WHY: a skill listing or an MCP server's instructions are re-sent on every API call of every
+ * session they load into, used or not. This row is the evidence for "which of them are pure
+ * prefix tax": loaded in N sessions, used in M.
+ */
+export interface DeadLoadRow {
+  /** Skill name, or MCP server name as its tools are prefixed (`mcp__<server>__...`). */
+  key: string
+  /** Estimated tokens it adds to the prefix (characters / 4 of the text Claude Code injected). */
+  loadTokens: number
+  sessionsLoaded: number
+  sessionsUsed: number
+  /** Invocations across the window: Skill tool calls and /slash commands, or MCP tool calls. */
+  uses: number
+  /** Prefix tokens it carried through sessions that never used it: loadTokens x API calls. */
+  deadTokens: number
+}
+
+/**
+ * One place tokens went, ranked against the others.
+ *
+ * `structural` sinks are configuration (fixed by uninstalling or scoping something); `behavioral`
+ * ones are how sessions are run (fixed by working differently). The sinks overlap - a deep-context
+ * call can also carry dead skills - so their shares are lenses on one total, not slices of it.
+ */
+export interface TokenSink {
+  id: 'dead-skills' | 'dead-mcp' | 'deep-context' | 'subagents' | 'cache-writes'
+  kind: 'structural' | 'behavioral'
+  /** `measured` = summed off recorded usage; `estimated` = derived from injected text length. */
+  basis: 'measured' | 'estimated'
+  /** Weighted tokens, the same unit as TokenSinkReport.totalWeighted, so sinks rank fairly. */
+  weighted: number
+  /** weighted / totalWeighted. */
+  share: number
+  /** One line on what reduces it. */
+  fix: string
+}
+
+export interface TokenSinkReport {
+  /** Sessions in the window whose scan recorded sink evidence. */
+  sessions: number
+  /** API calls across those sessions. */
+  calls: number
+  totalWeighted: number
+  sinks: TokenSink[]
+  /** Skills ranked by dead prefix tokens (Claude Code transcripts only). */
+  skills: DeadLoadRow[]
+  /** MCP servers ranked the same way. */
+  mcpServers: DeadLoadRow[]
+  /** Calls whose prompt was past `threshold` tokens, and the weighted tokens they spent. */
+  deepContext: { threshold: number; calls: number; weighted: number }
+  /** Weighted tokens spent inside subagent transcripts, and how many were spawned. */
+  subagents: { weighted: number; spawns: number }
+  /** Cache reads over all prompt tokens, per account. `key` null = not linked to an account. */
+  cacheByAccount: Array<{
+    key: string | null
+    sessions: number
+    cacheRead: number
+    prompt: number
+    ratio: number
+  }>
+  coverage: AnalyticsCoverage
+}
+
 export interface ConcurrencyPoint {
   at: number
   sessions: number

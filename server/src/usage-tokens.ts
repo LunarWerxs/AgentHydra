@@ -74,7 +74,7 @@ const W_OUTPUT = 5 // output is the expensive part
 
 /** Price of a model relative to Sonnet (Opus ~5x, Haiku ~0.27x). Quota is shared across models, so a
  *  turn's weight must account for WHICH model spent it, or an Opus-heavy hour reads as cheap. */
-function modelMultiplier(model: string): number {
+export function modelMultiplier(model: string): number {
   const m = model.toLowerCase()
   if (m.includes('opus') || m.includes('fable')) return 5
   if (m.includes('haiku')) return 0.27

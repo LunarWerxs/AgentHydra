@@ -53,6 +53,7 @@ import type {
   SpendReport,
   SyncStatus,
   TailResult,
+  TokenSinkReport,
   TranscriptSettings,
   UpdateApplyResult,
   UpdateStatus,
@@ -131,6 +132,8 @@ export type {
   TailResult,
   TitleSource,
   TokenBreakdown,
+  TokenSink,
+  TokenSinkReport,
   TranscriptSettings,
   UpdateApplyResult,
   UpdateStatus,
@@ -183,6 +186,9 @@ export const getSpend = (period: SessionPeriod = '30d') =>
   j<SpendReport>(`/api/analytics/spend?period=${period}`)
 export const getActivity = (period: SessionPeriod = '30d') =>
   j<ActivityReport>(`/api/analytics/activity?period=${period}`)
+/** Where the tokens went and why: dead skill/MCP load, deep context, subagents, cache writes. */
+export const getSinks = (period: SessionPeriod = '30d') =>
+  j<TokenSinkReport>(`/api/analytics/sinks?period=${period}`)
 export const getConcurrency = (period: SessionPeriod = '30d', bucketMinutes = 180) =>
   j<{ buckets: ConcurrencyPoint[] }>(
     `/api/analytics/concurrency?period=${period}&bucketMinutes=${bucketMinutes}`,
