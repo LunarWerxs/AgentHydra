@@ -264,6 +264,14 @@ current reading, without walking transcripts. Before a fan-out, compare
 `weekly.dollarsLeft` with what the batch is expected to cost. Every figure is
 null until a clean window exists; null means "not measured", never "$0 left".
 
+Only the account's own transcripts are priced: a CLI instance's config dir, or
+the `configDir` you pass. A desktop instance or dispatch account with no
+`configDir`, and every Codex instance, stays uncalibrated with a caveat saying
+why, because the default login's turns fitted against another account's quota
+would overstate what is left. Expect nothing at first: the 5-hour windows only
+count readings recorded from this release on, and `check_my_usage` shows null
+until `usage_budget` has run for that account.
+
 ## The `advice` verdict: when `shouldOffload` is true, save your work NOW
 
 This is the single most important behavior in this document.

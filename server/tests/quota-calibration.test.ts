@@ -164,4 +164,35 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
       rmSync(home, { recursive: true, force: true })
     }
   })
+
+  // Contract: only an account's own config dirs are priced, and never for Codex. Regression: the
+  // budget used to fall back to ~/.claude (another login) and to price Claude turns against a
+  // Codex window, persisting an inflated dollarsLeft that check_my_usage replayed.
+  test('refuses to calibrate a Codex account or an account with no config dir of its own', () => {
+    const samples: UsageSample[] = [
+      {
+        at: '2026-01-01T00:00:00.000Z',
+        sessionPct: null,
+        weekAllPct: 10,
+        weekResetsAt: '2026-01-08T00:00:00.000Z',
+      },
+      {
+        at: '2026-01-01T01:00:00.000Z',
+        sessionPct: null,
+        weekAllPct: 20,
+        weekResetsAt: '2026-01-08T00:00:00.000Z',
+      },
+    ]
+    for (const [key, dirs] of [
+      ['codex:x', ['unused-dir']],
+      ['desktop:x', undefined],
+      ['desktop:y', []],
+    ] as const) {
+      const d = calibrateQuotaDollars(key, snap(40), samples, dirs ? [...dirs] : undefined)
+      expect(d.calibratedAt).toBeNull()
+      expect(d.weekly.dollarsLeft).toBeNull()
+      expect(d.caveat).toStartWith('Not calibrated:')
+      expect(storedQuotaDollars(key, snap(40)).weekly.usdPerPct).toBeNull()
+    }
+  })
 })

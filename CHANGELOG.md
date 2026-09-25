@@ -17,7 +17,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   dollars spent) pair and a Theil-Sen median turns them into dollars per percent. Windows that
   hit a cap, were cut short by the weekly cap, fell back, rose with no recorded turn, held an
   unpriced model or moved under 3 points are left out and counted. `check_my_usage` carries the
-  last calibration re-priced to the current reading as `dollars`. Idea from lobehub/lobehub's
+  last calibration re-priced to the current reading as `dollars`. Only the account's own config
+  dirs are priced (a CLI instance's, or a passed `configDir`); Codex accounts and the `~/.claude`
+  fallback stay uncalibrated with a caveat, since another login's turns would overstate what is
+  left. The store is written by rename after a fresh re-read, and a first walk reaches back at
+  most a week. Figures are null until `usage_budget` has seen a clean window. Idea from lobehub/lobehub's
   quota calibration, written fresh.
 
 ### Fixed

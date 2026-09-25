@@ -19,7 +19,7 @@
 import { calibrateQuotaDollars, dollarsSummary } from './quota-calibration'
 import type { BudgetConfidence, UsageBudget, UsageSnapshot } from './types'
 import { burnRateBounds, forecastUsage, usageSamples } from './usage-history'
-import { defaultConfigDir, tokensPerPercent, tokensSince } from './usage-tokens'
+import { tokensPerPercent, tokensSince } from './usage-tokens'
 
 /** Match the burn-rate lookback, so tokens/hour and percent/hour describe the SAME window. Comparing
  *  a 6-hour token rate against a 1-hour burn rate would silently skew tokensPerPercent. */
@@ -112,14 +112,10 @@ export function buildUsageBudget(
     weightedPerTurn,
     confidence,
     caveat,
-    // The same transcripts, priced, against whole quota windows: the percentage in dollars.
-    dollars: calibrateQuotaDollars(
-      key,
-      snap,
-      samples,
-      opts.configDirs ?? [defaultConfigDir()],
-      now,
-    ),
+    // The same transcripts, priced, against whole quota windows: the percentage in dollars. Only the
+    // caller's own dirs, never the ~/.claude fallback: another login's turns would inflate the
+    // figure, and calibrateQuotaDollars refuses (with a caveat) when none are given or for Codex.
+    dollars: calibrateQuotaDollars(key, snap, samples, opts.configDirs, now),
   }
 }
 

@@ -25,7 +25,7 @@
 // turns since the last reading it folded, and a window keeps its early readings even after
 // usage-history.ts has trimmed them.
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
 import { priceTokens } from './pricing'
@@ -37,7 +37,7 @@ import type {
   UsageSample,
   UsageSnapshot,
 } from './types'
-import { defaultConfigDir, forEachTurnSince } from './usage-tokens'
+import { forEachTurnSince } from './usage-tokens'
 
 const STORE_PATH = join(DATA_DIR, 'quota-calibration.json')
 
@@ -250,7 +250,19 @@ export function withCurrentPct(cap: QuotaCapacity, currentPct: number | null): Q
 
 const CAVEAT =
   'Measured, not published: dollars are Claude Code turns in the counted transcripts priced at list API rates, fitted against how far each quota window moved (Theil-Sen median over clean windows). Windows that hit a cap, were cut short by the weekly cap, fell back, moved with no recorded turn, held an unpriced model, or moved under ' +
-  `${MIN_DELTA_PCT} points are left out. Usage from the desktop app, the web or another machine that slips past those rules makes the figure too LOW (more percent per dollar), so dollarsLeft errs conservative; spend from another account in the same transcripts makes it too HIGH.`
+  `${MIN_DELTA_PCT} points are left out. Only the account's own config dirs are ever priced. Usage from the desktop app, the web or another machine that slips past those rules makes the figure too LOW (more percent per dollar), which errs conservative; turns from another login that share those dirs make it too HIGH, and then dollarsLeft is an OPTIMISTIC upper bound.`
+
+/** Why a Codex account never gets a dollar figure. */
+export const CODEX_NOT_CALIBRATED =
+  'Not calibrated: this is a Codex account. Its quota is spent by Codex, not by the Claude Code transcripts this prices, so any figure would describe a different product.'
+
+/** Why an account with no known config dir of its own never gets a dollar figure. */
+export const FOREIGN_DIRS_NOT_CALIBRATED =
+  "Not calibrated: no Claude config dir is known to be this account's own. Pricing the default login's transcripts against this quota would measure a different login and overstate what is left. Pass configDir (the account's own dir) to usage_budget to calibrate."
+
+/** A transcript walk never reaches further back than this: one weekly window, the longest there is.
+ *  The walk is synchronous inside the live daemon, so an unbounded first call could stall it. */
+const MAX_SCAN_MS = 7 * 24 * 3600_000
 
 // --- storage ------------------------------------------------------------------
 
@@ -271,10 +283,20 @@ function readStore(): Store {
   }
 }
 
-function writeStore(s: Store): void {
+/**
+ * Save one account's entry. The store is shared by every account and by several MCP processes, so
+ * it is re-read right before writing (a sibling's windows written during our transcript walk are
+ * kept) and replaced by rename, never half-written: those folds are the only copy of readings
+ * older than the usage-history trim.
+ */
+function writeEntry(key: string, entry: AccountEntry): void {
   try {
     mkdirSync(DATA_DIR, { recursive: true })
-    writeFileSync(STORE_PATH, JSON.stringify(s))
+    const store = readStore()
+    store[key] = entry
+    const tmp = `${STORE_PATH}.${process.pid}.tmp`
+    writeFileSync(tmp, JSON.stringify(store))
+    renameSync(tmp, STORE_PATH)
   } catch {
     // best-effort: losing the calibration costs a dollar figure, never a usage reading
   }
@@ -315,32 +337,43 @@ function intervalCostFrom(sinceMs: number, configDirs: string[]): IntervalCost {
 /**
  * Calibrate one account's quota windows into dollars and persist the result.
  *
- * `key` is the usage-history key (desktop:/cli:/...) the samples were recorded under. Never
- * throws: a failure reads as "not calibrated", with every figure null.
+ * `key` is the usage-history key (desktop:/cli:/...) the samples were recorded under, and
+ * `configDirs` the Claude config dirs that are that account's OWN. With none known (the caller
+ * would fall back to the default login) or for a Codex account, nothing is priced: another login's
+ * turns fitted against this quota would overstate what is left. Never throws: a failure reads as
+ * "not calibrated", with every figure null.
  */
 export function calibrateQuotaDollars(
   key: string,
   snap: UsageSnapshot,
   samples: UsageSample[],
-  configDirs: string[] = [defaultConfigDir()],
+  configDirs: string[] | undefined,
   now: Date = new Date(),
 ): QuotaDollars {
+  if (key.startsWith('codex:')) return uncalibratedDollars(CODEX_NOT_CALIBRATED)
+  if (!configDirs?.length) return uncalibratedDollars(FOREIGN_DIRS_NOT_CALIBRATED)
   try {
-    const store = readStore()
-    const entry: AccountEntry = store[key] ?? { windows: {}, dollars: null }
+    const entry: AccountEntry = readStore()[key] ?? { windows: {}, dollars: null }
     const grouped = new Map<string, QuotaReading[]>()
     for (const kind of ['weekly', 'session'] as const) {
       for (const [wk, list] of groupWindows(readingsFor(samples, kind)))
         grouped.set(`${kind}:${wk}`, list)
     }
 
-    // One transcript walk covers every window that has an unpriced reading left.
+    // One transcript walk covers every window that has an unpriced reading left. A window that
+    // would need turns from before the scan floor (a week before the newest reading) is left out
+    // rather than priced short.
+    let newest = Number.NEGATIVE_INFINITY
+    for (const list of grouped.values()) newest = Math.max(newest, list[list.length - 1]!.at)
+    const floor = newest - MAX_SCAN_MS
     let scanFrom = Number.POSITIVE_INFINITY
     for (const [id, list] of grouped) {
       const prior = entry.windows[id]
       const last = list[list.length - 1]!
       const start = prior ? prior.throughAt : list[0]!.at
-      if (last.at > start) scanFrom = Math.min(scanFrom, start)
+      if (last.at <= start) continue
+      if (start < floor) grouped.delete(id)
+      else scanFrom = Math.min(scanFrom, start)
     }
     const cost: IntervalCost = Number.isFinite(scanFrom)
       ? intervalCostFrom(scanFrom, configDirs)
@@ -364,20 +397,20 @@ export function calibrateQuotaDollars(
       calibratedAt: now.toISOString(),
       caveat: CAVEAT,
     }
-    store[key] = { windows, dollars }
-    writeStore(store)
+    writeEntry(key, { windows, dollars })
     return dollars
   } catch {
     return uncalibratedDollars()
   }
 }
 
-export function uncalibratedDollars(): QuotaDollars {
+/** Every figure null. `reason` says why; by default, that nothing has been calibrated yet. */
+export function uncalibratedDollars(reason?: string): QuotaDollars {
   return {
     weekly: emptyCapacity(),
     session: emptyCapacity(),
     calibratedAt: null,
-    caveat: `Not calibrated yet: run usage_budget once the account has quota windows that moved at least ${MIN_DELTA_PCT} points. ${CAVEAT}`,
+    caveat: `${reason ?? `Not calibrated yet: run usage_budget once the account has quota windows that moved at least ${MIN_DELTA_PCT} points.`} ${CAVEAT}`,
   }
 }
 
@@ -386,6 +419,7 @@ export function uncalibratedDollars(): QuotaDollars {
  * quick self-check can carry a dollar figure. Every figure is null until usage_budget has run.
  */
 export function storedQuotaDollars(key: string, snap: UsageSnapshot | null): QuotaDollars {
+  if (key.startsWith('codex:')) return uncalibratedDollars(CODEX_NOT_CALIBRATED)
   const stored = readStore()[key]?.dollars
   if (!stored) return uncalibratedDollars()
   return {
