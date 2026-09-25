@@ -124,7 +124,9 @@ def decide(verdict: dict | None, breaker: dict | None, app_running: bool, why_un
         # not claim done (yes)" (2026-09-17).
         dissent = gatelib.archive_dissent(fin)
         reason = (
-            "it OFFERS TO CARRY ON and is waiting to be told to"
+            "it ends on an ask_user card"
+            if "ask_card" in dissent
+            else "it OFFERS TO CARRY ON and is waiting to be told to"
             if "offer" in dissent
             else "it ends on a question"
             if "question" in dissent

@@ -209,8 +209,12 @@ def _apply_answer(sid: str, a: dict) -> dict:
         raise ValueError("this chat's last words carry no ask_user card - use 'reply'")
     if not card.get("key"):
         raise ValueError(f"this chat's ask_user card is malformed: {card.get('error')}")
+    # askKey is REQUIRED: without it the stale-answer guard has nothing to compare, and an
+    # answer written for an older card would silently answer the newer one.
     want = str(a.get("askKey") or "").strip()
-    if want and want != card["key"]:
+    if not want:
+        raise ValueError(f"an answer decision needs askKey (the card's key, now {card['key']})")
+    if want != card["key"]:
         raise ValueError(f"stale answer: the chat's current card is {card['key']}, not {want}")
     text = asklib.compose_reply(card, a.get("choices"))
     staged = asklib.resolve(sid, card["key"], lambda: _stage(sid, text))

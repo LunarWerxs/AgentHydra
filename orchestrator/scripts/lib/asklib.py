@@ -35,7 +35,9 @@ of its canonical JSON, and asks_answered.json (under the orchestrator's state di
 atomic-write and lock discipline as every other ledger here) records which (chat, key) pairs
 were answered and by which staged delivery. A second answer to the same ask is refused as
 already answered - the orchestrator's equivalent of a 409 - so two people (or a person and
-the AI) answering one card cannot put two contradicting replies into the chat.
+the AI) answering one card cannot put two contradicting replies into the chat. An answer
+stands only while its delivery is staged or delivered: one that expired, failed or was
+cancelled never reached the chat, so the card is pending again.
 """
 
 from __future__ import annotations
@@ -47,7 +49,7 @@ import re
 import time
 from pathlib import Path
 
-from lib import ledgerlib
+from lib import deliverylib, ledgerlib
 
 MAX_QUESTIONS = 3
 MIN_OPTIONS = 2
@@ -131,6 +133,23 @@ def find(text: str) -> dict | None:
     return {"key": hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16], "questions": questions}
 
 
+def ends_on_card(text: str) -> bool:
+    """Whether a chat's last words END on an ask_user block, valid or not.
+
+    WHY: the archive gate read "ends on '?'" as its question signal, and a card always ends
+    on a closing fence, so asking through the card took away the '?' that used to keep a
+    waiting chat out of the archive lane. A malformed card still counts: the chat is waiting
+    on a person either way."""
+    t = (text or "").rstrip()
+    if not t.endswith("```"):
+        return False
+    start = t.rfind("```ask_user")
+    if start < 0:
+        return False
+    # The closing fence must be the one that closes THIS block, not a later block's.
+    return "```" not in t[start + len("```ask_user"):-3]
+
+
 def _pick(q: dict, choice) -> dict:
     """Resolve one answer against its question: an option label, a 1-based option number, or
     {"other": "..."} when the question allows free text."""
@@ -201,19 +220,37 @@ def _row_key(session_id: str, key: str) -> str:
     return f"{session_id}:{key}"
 
 
+def _still_answers(prior: dict) -> bool:
+    """Whether an earlier answer still stands: its delivery is staged (and inside its shelf
+    life) or delivered. WHY: an answer whose delivery expired, failed or was cancelled never
+    reached the chat, so the card is still pending and a fresh answer must be accepted. A row
+    the delivery ledger has pruned is kept as answered - a second send is the worse mistake."""
+    did = prior.get("deliveryId")
+    row = deliverylib.get(did) if did else None
+    if row is None:
+        return True
+    state = row.get("state")
+    if state == "staged":
+        floor = int(time.time() * 1000) - deliverylib.STAGED_TTL_SECS * 1000
+        return int(row.get("stagedAt") or 0) >= floor
+    return state == "delivered"
+
+
 def answered(session_id: str, key: str) -> dict | None:
     """The record of an earlier answer to this chat's ask, or None while it is pending."""
-    return _load().get(_row_key(session_id, key))
+    prior = _load().get(_row_key(session_id, key))
+    return prior if prior and _still_answers(prior) else None
 
 
 def resolve(session_id: str, key: str, stage) -> dict:
     """Mark one ask answered, running `stage()` (which stages the reply and returns its row)
     under the same lock as the check, so two answerers racing on one card get exactly one
-    staged reply. Raises AskError when the ask was already answered."""
+    staged reply. Raises AskError when the ask was already answered and that answer's
+    delivery still stands; an answer that never got through is replaced."""
     with ledgerlib.locked("asks"):
         rows = _load()
         prior = rows.get(_row_key(session_id, key))
-        if prior:
+        if prior and _still_answers(prior):
             raise AskError(f"already answered (delivery {prior.get('deliveryId') or '?'}) - "
                            "an ask is answered once")
         staged = stage()

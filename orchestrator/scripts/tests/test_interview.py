@@ -193,22 +193,43 @@ class InterviewTest(unittest.TestCase):
         self.assertIn("JSON file", pend[0]["text"])
         self.assertIn("```ask_user_answer", pend[0]["text"])
         again = interview.apply_answers({"answers": [
-            {"sessionId": SID, "decision": "answer", "choices": {"db": "SQLite"}}]})
+            {"sessionId": SID, "decision": "answer", "askKey": card["key"],
+             "choices": {"db": "SQLite"}}]})
         self.assertFalse(again[0]["ok"])
         self.assertIn("already answered", again[0]["outcome"])
         self.assertEqual(len(deliverylib.pending()), 1)
 
+    def test_an_answer_whose_delivery_expired_leaves_the_card_open(self):
+        # Review finding, 2026-09-25: an answer that never reached the chat (its delivery
+        # expired) must not keep the card ANSWERED forever and refuse the re-answer.
+        self._raise_card()
+        key = interview.build_questions(cap=10)["questions"][0]["ask"]["key"]
+        first = interview.apply_answers({"answers": [
+            {"sessionId": SID, "decision": "answer", "askKey": key, "choices": {"db": 1}}]})
+        self.assertTrue(first[0]["ok"], first[0]["outcome"])
+        deliverylib.expire(deliverylib.pending()[0]["id"], "never sent")
+        self.assertNotIn("answered", interview.build_questions(cap=10)["questions"][0]["ask"])
+        again = interview.apply_answers({"answers": [
+            {"sessionId": SID, "decision": "answer", "askKey": key, "choices": {"db": 2}}]})
+        self.assertTrue(again[0]["ok"], again[0]["outcome"])
+        self.assertIn("JSON file", deliverylib.pending()[0]["text"])
+
     def test_answer_refuses_a_stale_key_an_unknown_option_and_a_chat_with_no_card(self):
         none = interview.apply_answers({"answers": [
-            {"sessionId": SID, "decision": "answer", "choices": {"db": 1}}]})
+            {"sessionId": SID, "decision": "answer", "askKey": "0000", "choices": {"db": 1}}]})
         self.assertFalse(none[0]["ok"])
         self._raise_card()
+        key = interview.build_questions(cap=10)["questions"][0]["ask"]["key"]
         stale = interview.apply_answers({"answers": [
             {"sessionId": SID, "decision": "answer", "askKey": "0000", "choices": {"db": 1}}]})
         self.assertIn("stale", stale[0]["outcome"])
+        keyless = interview.apply_answers({"answers": [
+            {"sessionId": SID, "decision": "answer", "choices": {"db": 1}}]})
+        self.assertIn("needs askKey", keyless[0]["outcome"])
         bad = interview.apply_answers({"answers": [
-            {"sessionId": SID, "decision": "answer", "choices": {"db": "Postgres"}}]})
+            {"sessionId": SID, "decision": "answer", "askKey": key, "choices": {"db": "Postgres"}}]})
         self.assertFalse(bad[0]["ok"])
+        self.assertIn("no option labelled", bad[0]["outcome"])
         self.assertEqual(deliverylib.pending(), [])
 
 

@@ -589,13 +589,19 @@ text (at most 300 characters), 2 to 3 `options` (`label` at most 80 characters, 
 
 `interview.py --ask` hands the card out parsed (`ask` on the question, printed as numbered
 options) and the answer is `{"sessionId": ..., "decision": "answer", "askKey": "<ask.key>",
-"choices": {"db": 1}}`: an option number, an option label, or `{"other": "text"}`. The card is
+"choices": {"db": 1}}`: an option number, an option label, or `{"other": "text"}`. `askKey`
+is required. The card is
 re-read from the chat at apply time (an answer for an older card is refused as stale), the
 reply is composed as one readable line per question plus an `ask_user_answer` JSON block the
 chat can read without parsing prose, and it is staged for the courier like any reply. A card
 is answered ONCE: `state/asks_answered.json` records it, and a second answer is refused as
-already answered. A card that breaks the limits is shown as MALFORMED with the reason, never
-trimmed to fit (`scripts/lib/asklib.py`).
+already answered - but only while that answer's delivery is staged or delivered; one that
+expired, failed or was cancelled leaves the card open. The key is a hash of the questions, so
+a chat that asks the very same card again after it was answered must change its wording to be
+asked anew. A card that breaks the limits is shown as MALFORMED with the reason, never
+trimmed to fit (`scripts/lib/asklib.py`). The archive gate treats a turn that ends on a card
+as a question (the `ask_card` signal, which has no policy switch), so a chat waiting on its
+card is never swept into the archive lane.
 
 ### Touching the app: the route hierarchy (owner rule: no clicking around the screen)
 

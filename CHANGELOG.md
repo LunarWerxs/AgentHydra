@@ -15,7 +15,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   of asking in prose. `interview.py --ask` shows it as numbered options, and the new `answer`
   decision picks an option per question, stages the composed reply (readable lines plus an
   `ask_user_answer` JSON block) for the courier, and marks the card answered once: a second or
-  stale answer is refused. Idea from Open WebUI's ask_user tool; nothing copied.
+  stale answer is refused (`askKey` is required), and an answer whose delivery expired, failed
+  or was cancelled leaves the card open again. The archive gate counts a turn that ends on a
+  card as a question, through an `ask_card` signal no policy switch can turn off, so a waiting
+  card is never archived. Idea from Open WebUI's ask_user tool; nothing copied.
 
 ### Fixed
 

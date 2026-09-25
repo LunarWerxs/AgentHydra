@@ -32,6 +32,7 @@ import re
 import time
 from pathlib import Path
 
+from lib import asklib
 from lib import configlib
 from lib import joblocklib
 from lib import stalllib
@@ -556,10 +557,14 @@ def quiet_secs_of(path: str, now_s: float | None = None) -> int:
 def _finished_evidence(records: list[dict]) -> dict:
     evidence = last_assistant_text(records)
     view = recap_view(evidence)
+    # A turn that ends on an ask_user card IS a question: the card ends on a closing fence,
+    # not a '?', and recap_view strips it, so neither check below would see it otherwise.
+    asks_user = asklib.ends_on_card(evidence)
     return {
         "recap_present": bool(RECAP_HEADER.search(view)),
         "done_claim": parse_done_claim(view),
-        "ends_with_question": bool(re.search(r"\?\s*$", evidence.strip())),
+        "ends_with_question": asks_user or bool(re.search(r"\?\s*$", evidence.strip())),
+        "asks_user": asks_user,
         # Read from the recap view, so an offer merely quoted from another chat cannot fake one.
         "offers_to_continue": offers_to_continue(view),
         "open_recommendations": open_recommendations(view),
@@ -829,7 +834,10 @@ def _gate_running(
 # the owner asked for on 2026-09-01 - this changes nothing until someone deliberately turns
 # one off, and turning one off can only make archiving MORE eager, never less. The policy
 # menu says that in those words rather than leaving it to be discovered.
+# The fifth, ask_card, has no switch (key None): a chat that ended on an ask_user card is
+# waiting on a person by construction, and no policy may archive a question nobody answered.
 ARCHIVE_SIGNALS = (
+    ("ask_card", None, lambda fe: bool(fe.get("asks_user"))),
     ("done_claim", "gate.signal_done_claim", lambda fe: fe.get("done_claim") != "yes"),
     ("question", "gate.signal_no_question", lambda fe: bool(fe.get("ends_with_question"))),
     ("offer", "gate.signal_no_offer_to_continue", lambda fe: bool(fe.get("offers_to_continue"))),
@@ -847,7 +855,7 @@ def archive_dissent(fe: dict, include_disabled: bool = False) -> list[str]:
     plan records that, so dryrun.py can predict which chats a switched-off signal must
     release and fail a knob that releases none of them."""
     return [name for name, key, dissents in ARCHIVE_SIGNALS
-            if (include_disabled or configlib.get(key)) and dissents(fe)]
+            if (include_disabled or key is None or configlib.get(key)) and dissents(fe)]
 
 
 def _finished_turn_lane(fe: dict) -> str:
@@ -860,12 +868,14 @@ def _finished_turn_cause(lane: str, fe: dict) -> str:
     """The human-readable explanation for a completed-turn verdict. Linear ifs rather than
     the nested ternary gate() used to build this inline - same strings, easier to scan."""
     if lane == "archive-candidate":
-        off = [name for name, key, _ in ARCHIVE_SIGNALS if not configlib.get(key)]
+        off = [name for name, key, _ in ARCHIVE_SIGNALS if key and not configlib.get(key)]
         return ("completed turn, recap says done, nothing asked, nothing recommended"
                 + (f" (signal(s) {', '.join(off)} are switched OFF in your policy, so they "
                    "were not checked)" if off else ""))
     dissent = archive_dissent(fe)
-    if "done_claim" in dissent:
+    if "ask_card" in dissent:
+        detail = "it ends on an ask_user card - answer it (interview.py), do not archive it"
+    elif "done_claim" in dissent:
         detail = f"the recap does not claim done ({fe['done_claim']})"
     elif "offer" in dissent:
         detail = "it OFFERS TO CARRY ON and is waiting to be told to - answer it, do not archive it"
