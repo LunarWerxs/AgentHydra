@@ -9,6 +9,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **The orchestrator says WHICH kind of not-done a stopped chat is** (`orchestrator/scripts/lib/livenesslib.py`,
+  `orchestrator/scripts/lib/gatelib.py`, `orchestrator/scripts/dashboard.py`,
+  `orchestrator/scripts/fan_out.py`, `orchestrator/orch.py`). A finished or idle chat's last
+  assistant turn is classified as `completed`, `advanced` (tool calls, no claim of done),
+  `plan_only` (a plan and no tool call: "I'll inspect...", "Next steps:"), `blocked` (waiting on
+  a key, login or access only a person can give), `needs_approval` or `needs_followup`, with the
+  run's stated next action. The `wait-on-person` decision names it, `orch.py loop` counts it
+  under the gate stage, and `fan_out status` reports `liveness` and `nextAction` per member, so
+  a fanned-out chat that came back with a plan is no longer read as a result. Informational:
+  no lane or archive signal changes. Idea after paperclip's run-liveness classifier (MIT).
+
 - **A chat's standing goal is continued, and audited while it moves** (new lane
   `orchestrator/scripts/goal_watch.py`, `lib/goallib.py`, scheduled as `goal-watch` every 5
   minutes, policy group `goalwatch`). The /goal command keeps a goal in `tmp/handoff/GOAL.md`

@@ -43,6 +43,11 @@ def render(v: dict) -> str:
             f"lane     {f['lane']}  (done={f['done_claim']} question={f['ends_with_question']} "
             f"offers_to_continue={f['offers_to_continue']} interrupted={f['interrupted']})"
         )
+    live = (f or v.get("idle") or {}).get("liveness")
+    if live:
+        L.append(f"liveness {live['state']} - {live['why']}"
+                 + (f" (next: {live['nextAction']})" if live.get("nextAction") else ""))
+    if f:
         tail = f["last_assistant_text"].strip()
         if tail:
             L.append("last assistant text (evidence):")

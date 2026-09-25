@@ -33,6 +33,15 @@ from lib import ledgerlib
 DEFAULT_PORT = 7799
 HTML_PATH = Path(__file__).resolve().parent / "dashboard.html"
 
+# A waiting chat's action, by what its last turn amounts to (lib/livenesslib). A plan with no
+# work behind it wants one bounded nudge; a blocker or a sign-off request wants a person.
+# Anything else keeps the generic wording.
+_LIVENESS_ACTION = {
+    "plan_only": "nudge it once - stalled on a plan, nothing done yet",
+    "blocked": "unblock it - waiting on something only a person can give",
+    "needs_approval": "approve or refuse - it asked for sign-off",
+}
+
 
 def decide(verdict: dict | None, breaker: dict | None, app_running: bool, why_ungated: str = "",
            hold_why: str | None = None, manager: bool = False) -> dict:
@@ -79,14 +88,18 @@ def decide(verdict: dict | None, breaker: dict | None, app_running: bool, why_un
             }
         if verdict.get("idle"):
             mins = verdict["idle"]["quiet_secs"] // 60
+            live = verdict["idle"].get("liveness") or {}
             return {
                 "action": f"needs a decision - IDLE {mins}min with a live writer",
                 "kind": "judgment",
                 "detail": (
                     "It finished its turn and is waiting for its next instruction: answer it, "
                     "nudge it onward, or hand it off. Never archive - it still has a writer."
+                    + (f" Liveness: {live['state']} - {live['why']}." if live else "")
                 ),
                 "command": f"python scripts/gate_chat.py {sid}",
+                "liveness": live.get("state"),
+                "nextAction": live.get("nextAction"),
             }
         return {
             "action": "leave alone - working",
@@ -132,11 +145,15 @@ def decide(verdict: dict | None, breaker: dict | None, app_running: bool, why_un
             if "recommendations" in dissent and "done_claim" not in dissent
             else f"the recap does not claim done ({fin.get('done_claim')})"
         )
+        live = fin.get("liveness") or {}
         return {
-            "action": "answer it - waiting on a person",
+            "action": _LIVENESS_ACTION.get(live.get("state"), "answer it - waiting on a person"),
             "kind": "wait-on-person",
-            "detail": f"{reason}. Never archive a chat that is waiting for a word.",
+            "detail": (f"{reason}. Never archive a chat that is waiting for a word."
+                       + (f" Liveness: {live['state']} - {live['why']}." if live else "")),
             "command": f"python scripts/gate_chat.py {sid}",
+            "liveness": live.get("state"),
+            "nextAction": live.get("nextAction"),
         }
     # archive-candidate
     if breaker and breaker.get("suppressed"):
