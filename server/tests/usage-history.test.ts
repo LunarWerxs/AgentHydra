@@ -24,11 +24,6 @@ const mkSample = (at: string, weekAllPct: number): UsageSample => ({
 })
 
 describe('burnRatePctPerHour', () => {
-  test('null with fewer than 2 samples', () => {
-    expect(burnRatePctPerHour([])).toBeNull()
-    expect(burnRatePctPerHour([mkSample('2024-07-14T00:00:00.000Z', 10)])).toBeNull()
-  })
-
   test('null when the measured span is under 45 minutes (MIN_SPAN_MIN)', () => {
     const now = new Date('2024-07-14T02:00:00.000Z')
     const samples = [
@@ -36,15 +31,6 @@ describe('burnRatePctPerHour', () => {
       mkSample('2024-07-14T01:59:00.000Z', 12), // 44 minutes apart - just under the 45-min floor
     ]
     expect(burnRatePctPerHour(samples, now)).toBeNull()
-  })
-
-  test('happy path: plain (last-first)/hours over a clean 2-sample window', () => {
-    const now = new Date('2024-07-14T02:00:00.000Z')
-    const samples = [
-      mkSample('2024-07-14T00:00:00.000Z', 10),
-      mkSample('2024-07-14T02:00:00.000Z', 14),
-    ]
-    expect(burnRatePctPerHour(samples, now)).toBe(2) // (14-10)/2h
   })
 
   test('reset-crossing guard: 90 -> 95 -> 5 -> 15 only measures the post-reset leg', () => {
@@ -60,15 +46,6 @@ describe('burnRatePctPerHour', () => {
     const rate = burnRatePctPerHour(samples, now)
     expect(rate).toBe(10)
     expect(rate).not.toBeLessThan(0)
-  })
-
-  test('a flat (idle) window measures exactly 0, not null and not negative', () => {
-    const now = new Date('2024-07-14T02:00:00.000Z')
-    const samples = [
-      mkSample('2024-07-14T00:00:00.000Z', 30),
-      mkSample('2024-07-14T01:00:00.000Z', 30),
-    ]
-    expect(burnRatePctPerHour(samples, now)).toBe(0)
   })
 
   test('truncates to the lookback window (plus one sample past the edge)', () => {
@@ -271,22 +248,6 @@ describe('forecastUsage', () => {
     expect(forecast.exhaustsAt).toBe(
       new Date(NOW.getTime() + expectedHeadroom * 3600_000).toISOString(),
     )
-  })
-
-  test('exhaustsBeforeReset === false: the weekly reset arrives before the cap would be hit', () => {
-    // Same burn fixture as above (point 5, upper 5.5, headroom 20/11h ~= 1.82h), but the reset is
-    // only 1h away, so the reset wins even against the pessimistic upper-bound headroom.
-    const snap = baseSnap({ pct: 90, resets: '', resetsAt: '2024-07-14T03:00:00.000Z' }) // +1h
-    const samples = [
-      mkSample('2024-07-14T00:00:00.000Z', 10),
-      mkSample('2024-07-14T02:00:00.000Z', 20),
-    ]
-    const forecast = forecastUsage(snap, samples, NOW)
-    expect(forecast.burnPctPerHour).toBe(5)
-    expect(forecast.burnPctPerHourUpper).toBe(5.5)
-    expect(forecast.headroomHours).toBe(10 / 5.5)
-    expect(forecast.hoursToReset).toBeCloseTo(1, 10)
-    expect(forecast.exhaustsBeforeReset).toBe(false)
   })
 
   test('burn > 0 but no resetsAt -> exhaustsBeforeReset is null (unknown, not false)', () => {

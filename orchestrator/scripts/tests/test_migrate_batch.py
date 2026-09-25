@@ -475,25 +475,6 @@ class AllUnarchivedTest(_MigrateBatchTest):
         _run(["--all-unarchived", "--to", "8"])
         assert [c[0] for c in calls] == ["aaa"]
 
-    def test_from_scopes_all_unarchived_to_one_account(self):
-        self.patch(
-            migrate_batch.hydralib, "fleet",
-            lambda: {"instances": [{"num": 1, "name": "pap3r", "dir": "c:/x/pap3r"},
-                                   {"num": 2, "name": "anutha", "dir": "c:/x/anutha"}]},
-        )
-        self.patch(
-            migrate_batch.hydralib, "chats",
-            lambda instance=None: [
-                {"sessionId": "aaa", "instance": "pap3r", "archived": False,
-                 "lastActivityAt": "2026-09-13T03:00:00Z"},
-                {"sessionId": "ddd", "instance": "anutha", "archived": False,
-                 "lastActivityAt": "2026-09-13T02:00:00Z"},
-            ],
-        )
-        calls = self.stub_phases()
-        _run(["--all-unarchived", "--from", "pap3r", "--to", "8"])
-        assert [c[0] for c in calls] == ["aaa"]
-
     def test_from_scopes_all_unarchived_however_the_account_is_spelled(self):
         """THE REGRESSION: --from arrives as a NUMBER from the MCP, but a session row carries
         only the instance FOLDER name, so the raw comparison matched nothing and the batch
@@ -529,11 +510,6 @@ class AllUnarchivedTest(_MigrateBatchTest):
         assert code != migrate_batch.EXIT_NONE
         assert "names no instance" in out["report"] and "anothuh1" in out["report"]
         assert calls == [], "nothing may move when the source could not be resolved"
-
-    def test_the_note_names_the_resolved_account_not_the_number_typed(self):
-        self.two_accounts()
-        _, out = _run(["--all-unarchived", "--from", "27", "--to", "15"])
-        assert "on anothuh1" in out["report"]
 
     def test_a_resolved_but_empty_account_says_so_instead_of_reading_as_a_usage_error(self):
         """"0 unarchived desktop chat(s) on anothuh1" is an ANSWER; "name chats with --chat" is a

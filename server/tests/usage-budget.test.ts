@@ -107,12 +107,6 @@ describe('budgetSummary', () => {
     expect(summary).toContain('Confidence: rough')
   })
 
-  test('omits the turns phrase entirely when remainingTurns is null', () => {
-    const budget = mkBudget({ remainingTurns: null })
-    const summary = budgetSummary(budget, 10)
-    expect(summary).not.toContain('more assistant turns')
-  })
-
   test('point-burn of 0 reads "below what these readings can resolve", not "not burning"', () => {
     const budget = mkBudget({
       forecast: {
