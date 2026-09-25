@@ -9,6 +9,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Box select, Ctrl+A and Escape in the session list** (`web/src/composables/useMultiSelect.ts`,
+  `web/src/lib/session-multiselect.ts`). Choosing bulk-reply or bulk-move targets no longer means
+  ticking rows one by one: drag a band over the rows in select mode (Ctrl/Cmd/Shift-drag adds to the
+  selection and also works outside select mode; holding it at the list's edge keeps scrolling), press Ctrl/Cmd+A with the list focused to select
+  every visible Claude row, and Escape with the list focused clears the selection before it closes
+  the open session (an Escape that dismisses a menu or dialog leaves the selection alone).
+  Shift-click, Ctrl+A and the box all end as one of two requests (set all, set a range) applied to
+  the checked set, an idea taken from Dear ImGui's multi-select API.
+
 - **Recurring mistakes: fail-then-fix command pairs mined from transcripts**
   (`server/src/command-corrections.ts`, `server/src/routes/analytics.ts`, `server/src/mcp.ts`,
   `server/src/opencode-sessions.ts`, `web/src/components/CommandCorrections.vue`). The same agent

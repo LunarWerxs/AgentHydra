@@ -63,7 +63,7 @@ edit the dossier, not this block. Everything ABOVE the marker is yours.
 **Shipped**
 
 - **Foreign-tool session reading (Cursor, Windsurf, Zed, Copilot CLI)** - A shared adapter reads and lists session history from other AI coding tools alongside Claude/Codex/OpenCode, read-only. - `server/src/foreign-sessions.ts`
-- **Reply into live Claude sessions, single or bulk** - Type a message straight into a running Claude session from the browser without finding its terminal, or select several sessions and broadcast the same message to all of them. - `server/src/dispatch.ts`
+- **Reply into live Claude sessions, single or bulk** - Type a message straight into a running Claude session from the browser without finding its terminal, or select several sessions (Shift-click a range, Ctrl+A, or drag a box over the list) and broadcast the same message to all of them. - `server/src/dispatch.ts`
 - **ChatGPT handoff (context pack)** - Turns a task and working directory into a bounded, secret-scrubbed Markdown attachment, downloads it, copies a matching prompt and opens ChatGPT for the user to attach and submit themselves. - `server/src/context-pack.ts`
 - **Run queue with scheduler** - Queue claude CLI runs, each with its own prompt, cwd, model, effort, permission mode and account; run on demand or let the scheduler drain the queue with spacing, and give any run a start time instead of maintaining a cron job. - `server/src/dispatch.ts`, `server/src/scheduler.ts`
 - **Runs reattach after restart** - Quitting the app or letting it auto-update does not kill in-flight runs; the daemon picks them back up. - `server/src/dispatch.ts`

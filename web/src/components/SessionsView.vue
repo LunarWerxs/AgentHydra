@@ -363,7 +363,12 @@ const {
   isChecked,
   toggleSelectMode,
   checkAllFiltered,
+  clearChecked,
   rowClick,
+  listKeydown,
+  box,
+  boxPointerDown,
+  boxClickGuard,
   checkedSessions,
   bulkCount,
   copyCheckedIds,
@@ -792,7 +797,7 @@ function onComposerSent(mode: 'now' | 'queued') {
             variant="ghost"
             size="xs"
             :disabled="checkedIds.size === 0"
-            @click="checkedIds = new Set()"
+            @click="clearChecked"
           >
             {{ $t('sessions.clearSelection') }}
           </Button>
@@ -828,7 +833,22 @@ function onComposerSent(mode: 'now' | 'queued') {
           </button>
         </div>
 
-        <div class="scroll-slim min-h-0 flex-1 overflow-y-auto p-2">
+        <!-- relative + the pointer/keydown handlers: box select, Ctrl+A and Escape over the rows
+             below (composables/useMultiSelect.ts); the band is drawn in the list's content
+             coordinates, and select-none keeps a drag from the padding off the page text -->
+        <div
+          class="scroll-slim relative min-h-0 flex-1 overflow-y-auto p-2"
+          :class="{ 'select-none': box }"
+          @pointerdown="boxPointerDown"
+          @click.capture="boxClickGuard"
+          @keydown="listKeydown"
+        >
+          <div
+            v-if="box"
+            class="pointer-events-none absolute inset-x-1 z-10 rounded-md border border-primary/60 bg-primary/10"
+            :style="{ top: `${box.top}px`, height: `${box.height}px` }"
+            aria-hidden="true"
+          />
           <!-- first-load skeletons so the list never looks blank -->
           <template v-if="sessionsLoading && sessions.length === 0 && !bodySearchActive">
             <div v-for="i in 6" :key="i" class="mb-1.5 px-3 py-2.5">
@@ -928,6 +948,7 @@ function onComposerSent(mode: 'now' | 'queued') {
             <ContextMenu v-for="s in filtered" :key="`${s.source}:${s.session_id}`">
               <ContextMenuTrigger as-child>
                 <button
+                  :data-select-key="s.source === 'claude' ? sessionKey(s) : undefined"
                   class="mb-1.5 w-full rounded-lg border px-3 py-2.5 text-start transition-colors"
                   :class="[
                     // Selected is a RAISED GREY, not an accent tint. bg-primary/10 composited to a
