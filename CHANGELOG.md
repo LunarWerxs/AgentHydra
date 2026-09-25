@@ -7,6 +7,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Revive a chat Claude Code deleted** (`orchestrator/scripts/migrate_chat.py --revive`, new
+  `orchestrator/scripts/lib/revivelib.py`, `docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md`). Claude Code
+  deletes transcripts past `cleanupPeriodDays`, after which `--resume` fails. `--revive <id>`
+  rewrites a surviving copy (`--source`, another account's projects folder, or delete_chat's undo
+  copy) under the same session id, keeping only what a replayed request accepts: thinking blocks
+  dropped (their signatures cannot be rebuilt), every `tool_use` paired with a later
+  `tool_result` or dropped, orphan results dropped, and only the active branch since the last
+  compaction, relinked into one chain. An existing transcript is rewritten only with `--force`
+  (original kept as `.pre-revive-<time>`) and never one written in the last 300s. Rules adapted
+  from LobeHub's Claude Code transcript rebuild (ideas only). Tests: `tests/test_revivelib.py`.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,
