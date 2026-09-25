@@ -276,13 +276,54 @@ foreach ($m in $mains) {
     # name ALSO ends with the chat title, both survive, and the ambiguity guard below then refuses
     # the delivery outright. The sibling script settled this months ago: the kebab exposes
     # ExpandCollapse, the row itself exposes Invoke. The pattern identifies it, in every language.
-    $rowMatches = @()
-    foreach ($b in Buttons $el) {
-      $n = $b.Current.Name
-      if (-not $n -or -not $n.EndsWith($Title)) { continue }
-      if (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)) { continue }
-      if (-not (TryPattern $b ([System.Windows.Automation.InvokePattern]::Pattern))) { continue }
-      $rowMatches += $b
+    function Find-TitleRows($scope) {
+      $found = @()
+      foreach ($b in Buttons $scope) {
+        $n = $b.Current.Name
+        if (-not $n -or -not $n.EndsWith($Title)) { continue }
+        if (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)) { continue }
+        if (-not (TryPattern $b ([System.Windows.Automation.InvokePattern]::Pattern))) { continue }
+        $found += $b
+      }
+      return ,$found
+    }
+    $rowMatches = @(Find-TitleRows $el)
+    # A VIRTUALIZED ROW IS SCROLLED TO, NOT REFUSED (2026-09-24, Connections chat ffb5fe39: fan_out_send to
+    # an idle foreman chat failed "not rendered in any searched running instance (collapsed group or
+    # virtualized out)" with its group already expanded). A long sidebar renders only the rows near its
+    # viewport, so a chat far down the list has no element to find. Scroll the SIDEBAR's own scroll
+    # container (a vertically scrollable element in the left column, never the conversation pane) a
+    # step at a time and look again; put the scroll back if the row never appears. Scrolling a list
+    # changes no chat.
+    if ($rowMatches.Count -eq 0) {
+      try {
+        $winRect = $el.Current.BoundingRectangle
+        $sidebarEdge = $winRect.Left + ($winRect.Width * 0.38)
+        $scrollers = @()
+        foreach ($s in $el.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+          try {
+            $sp = TryPattern $s ([System.Windows.Automation.ScrollPattern]::Pattern)
+            if (-not $sp -or -not $sp.Current.VerticallyScrollable) { continue }
+            $r = $s.Current.BoundingRectangle
+            if (($r.Left + $r.Width / 2) -ge $sidebarEdge) { continue }
+            $scrollers += $sp
+          } catch { continue }
+        }
+        foreach ($sp in $scrollers) {
+          $startPct = $sp.Current.VerticalScrollPercent
+          for ($pct = 0; $pct -le 100 -and $rowMatches.Count -eq 0; $pct += 10) {
+            $sp.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll, $pct)
+            Start-Sleep -Milliseconds 350
+            $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+            $rowMatches = @(Find-TitleRows $el)
+          }
+          if ($rowMatches.Count -gt 0) {
+            Write-Output "scrolled the sidebar to '$Title' (it was virtualized out of view)"
+            break
+          }
+          try { $sp.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll, $startPct) } catch { }
+        }
+      } catch { }
     }
     $ambiguous = @()
     if ($rowMatches.Count -gt 1) {

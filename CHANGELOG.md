@@ -15,6 +15,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   refusal names every Send button it saw with its enabled state. The last attempt passes
   `-ClearOnRefuse`, which empties the composer only when its text starts with our prompt; the
   member's `spawn.composerCleared` and its `not-registered` reason say whether the text is gone.
+- **A chat far down a long sidebar is scrolled to, not refused**
+  (`orchestrator/scripts/actuator/deliver_desktop_chat.ps1`). When no rendered row carries the title,
+  the courier steps the sidebar's own scroll container (left column only) and looks again, and puts
+  the scroll back if the row never appears; `fan_out_send` to a virtualized-out foreman chat used to
+  fail "not rendered in any searched running instance".
 
 ## [1.3.0] - 2026-09-25
 
