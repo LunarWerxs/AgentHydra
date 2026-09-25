@@ -9,6 +9,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Pi sessions are readable** (`server/src/foreign-sessions.ts`, `server/src/agent-catalog.ts`).
+  Pi was detected but unread. Its sessions (`~/.pi/agent/sessions`, or
+  `PI_CODING_AGENT_SESSION_DIR`) now list, search, tail and export beside the other foreign
+  tools. A Pi file is a tree whose branches share one file, so the reader follows the last
+  entry's parent chain rather than the file order, and every branch left behind with /tree lists
+  as a fork of the session. The catalog row now names the variable Pi actually reads; the old
+  `PI_DIR` was not one. Pi's recorded usage is not priced yet.
+
 - **Working, waiting on you, or done: a live status per Claude Code session** (new
   `server/src/agent-status.ts`, `server/src/status-hooks.ts`, `server/src/routes/agent-status.ts`,
   MCP tools `agent_status` and `status_hooks`, a badge in the session list). The session list could

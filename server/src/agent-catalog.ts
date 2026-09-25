@@ -618,9 +618,14 @@ export const AGENT_TOOLS: AgentTool[] = [
     id: 'pi',
     name: 'Pi',
     vendor: 'Pi',
-    envVar: 'PI_DIR',
+    // Checked against Pi's own config.ts (2026-09-25), not the agentsview registry: sessions live in
+    // `<agentDir>/sessions`, agentDir defaults to `~/.pi/agent`, and PI_CODING_AGENT_SESSION_DIR
+    // relocates the sessions directory itself (the old PI_DIR row value is not a variable Pi reads).
+    // Readable since then: a tree-shaped JSONL per session, see the Pi adapter in foreign-sessions.ts.
+    envVar: 'PI_CODING_AGENT_SESSION_DIR',
     dirs: ['.pi/agent/sessions'],
-    format: null,
+    verified: 'earendil-works/pi packages/coding-agent/src/config.ts (2026-09-25)',
+    format: 'foreign',
   },
   {
     id: 'prime-agent',

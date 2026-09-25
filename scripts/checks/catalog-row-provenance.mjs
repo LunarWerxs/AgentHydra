@@ -51,7 +51,7 @@ const REL = 'server/src/agent-catalog.ts'
  * RAISE THIS when you verify a row; never lower it. It is the ratchet's whole mechanism: a floor
  * that only moves up is a promise that verification is not silently undone by a later refactor.
  */
-const VERIFIED_FLOOR = 3
+const VERIFIED_FLOOR = 5
 
 /**
  * Parse the catalog's row literals without importing it (this file must run under plain node).
