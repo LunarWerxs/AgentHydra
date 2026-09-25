@@ -7,8 +7,33 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-25
+
+### Added
+
+- **What only claude.ai knows about each Claude Desktop account** (`server/src/claude-app-usage.ts`,
+  `server/src/usage-service.ts`, `web/src/components/InstancesView.vue`,
+  `web/src/components/UsageBadge.vue`). The usage check asks each RUNNING app, through its native
+  inspector, for the facts the OAuth usage endpoint never serves; a closed app keeps its last
+  reading, dated, minus anything that has ended since or belonged to another account.
+  - Banked usage-limit resets (Settings > Usage > Resets): a reset icon beside the account name.
+  - The one-time Claude Code & Cowork credit ($250 on Max, until 2026-11-05): a coin icon while
+    money is left, amber when it was never claimed or is held back. It counts as money only when
+    claude.ai confirms the claim, the same rule as claude.ai's own Usage page.
+  - Usage credits (billing past the plan limits): a card icon only while they are on.
+  - This week's usage split by product (Claude Code / Chats / Cowork).
+  - The usage chip's popover lists all of it with the time it was read.
+- **Usage advice names a banked reset near the wall** (`server/src/usage.ts`): `check_my_usage`,
+  `check_usage` and `list_usage` tell an agent at warning/critical (or with a full 5-hour window)
+  that the account holds a reset, and when it can be spent (Claude: a person, in the app; Codex:
+  `redeem_codex_reset_credit` at 100%).
+
 ### Fixed
 
+- **The instance tables no longer re-sort on every usage reading** (`web/src/composables/useSortable.ts`).
+  A refresh lands readings one by one and each arrival moved rows; rows now move only after the
+  sort inputs have been quiet for 1.5s. A header click still re-sorts at once, and added or
+  removed rows are placed immediately.
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,
   `server/src/routes/instances.ts`, `server/src/mcp.ts`, `orchestrator/scripts/fan_out.py`,
   `server/src/core/process.ts`, `server/src/core/instances.ts`). Reported 2026-09-24 (chat
