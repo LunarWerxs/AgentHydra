@@ -9,6 +9,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **MCP answers can be projected and are held to a byte cap** (`server/src/mcp-output.ts`,
+  `server/src/jmespath.ts`, `server/src/mcp.ts`, `server/src/index.ts`). Every read tool takes an
+  optional `jmespath` argument applied server-side, so an agent takes one field instead of a whole
+  session list; a bad expression refuses before the tool runs, and a miss or type error answers
+  with the payload's top-level keys. Every answer is then measured in UTF-8 bytes and, over
+  `AGENTHYDRA_MCP_MAX_RESULT_BYTES` (default 80000), cut in five named phases with the tool's own
+  narrowing arguments, keeping a write's `ok` / `verdict` / `operationId` and per-item outcomes so
+  an oversized write answer never reads as a failure. Before this a big transcript or list either
+  flooded the agent's context or was cut silently by the client.
+
 - **The open transcript keeps its place: older turns page in, new ones wait below**
   (`web/src/composables/useChatScroller.ts`, `web/src/composables/useOpenSession.ts`,
   `server/src/transcript.ts`). One headless scroller now owns where the transcript sits, instead

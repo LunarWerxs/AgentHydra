@@ -190,6 +190,27 @@ true, gate a fan-out on current + projected cost, never quote an unattributed pe
 human typing any of it. The handshake block is length-capped by a test, because it sits in context
 for the whole session.
 
+### Asking for less: `jmespath` and the size cap
+
+Every read tool (any tool whose description does not say `MUTATES:`) takes an optional `jmespath`
+argument, applied server-side to the tool's answer, so an agent that wants one field of each
+session row gets that field and not the rows: `list_sessions {jmespath: "sessions[].{id:id,title:title}"}`.
+It is parsed before the tool runs, so a malformed expression refuses the call with nothing done and
+the grammar in the error. Once the tool has run, a projection that fails on the answer's types or
+matches nothing answers as data (`result: null`, `projectionError`, and the answer's top-level keys
+with their types), never as a failed call, so the retry can be written right without fetching the
+shape first. The evaluator is `server/src/jmespath.ts`, written for this with no dependency.
+
+Every answer, projected or not, is then measured in exact UTF-8 bytes of the text sent and held to
+`AGENTHYDRA_MCP_MAX_RESULT_BYTES` (default 80000, floor 4096). At 80% of the cap an object answer
+gains a `_responseSize` note; over it, the answer is cut in five progressively harsher phases (long
+strings, then list lengths, then nesting, then a top-level skeleton) until it fits, and leads with
+`_truncated`: the original size, the phase, what was cut, and the tool's own arguments for asking
+for less. A write's confirmation survives every phase: the answer's top-level scalars (`ok`,
+`verdict`, `operationId`, ...) and the per-item outcome lists named in `COMMITTED_FIELDS`
+(`server/src/mcp-output.ts`), reduced to their scalar fields, so an oversized `move_chats` answer
+still reads as the success it was. Both apply on stdio and on `/api/mcp` alike.
+
 ### Self-identification
 
 `whoami {}` answers "which instance am I?" and shows its working: the permanent number, account
@@ -299,6 +320,7 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_DB` | `~/.agenthydra/data/agenthydra.db` | sqlite path |
 | `AGENTHYDRA_RUN_LOG_DIR` | `~/.agenthydra/data/run-logs` | detached-run log and sidecar directory |
 | `AGENTHYDRA_CODEX_HOME` | `~/.codex` | default Codex rollout store to scan |
+| `AGENTHYDRA_MCP_MAX_RESULT_BYTES` | `80000` | per-answer byte cap for MCP tool results (floor 4096); over it an answer is cut with notes, see [Asking for less](#asking-for-less-jmespath-and-the-size-cap) |
 | `AGENTHYDRA_CODEX_PATH` | auto-detected / `codex` | Codex executable used by managed Codex instances |
 | `AGENTHYDRA_CODEX_DESKTOP_PATH` | auto-detected | Codex Desktop GUI executable; useful for nonstandard installs |
 | `AGENTHYDRA_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode CLI/Desktop SQLite session store |
