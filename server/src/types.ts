@@ -448,6 +448,9 @@ export interface SessionHealthRow {
   toolErrorStreak: number
   edits: number
   compactions: number
+  /** Share (0..1) of what the session wrote still in its files hours later; null = not measured.
+   *  See server/src/edit-survival.ts. */
+  editSurvival: number | null
 }
 
 export interface ActivityReport {
@@ -457,6 +460,9 @@ export interface ActivityReport {
   /** Engaged time, not wall clock: inter-turn gaps with each one capped. */
   agentMinutes: number
   health: SessionHealthRow[]
+  /** Edit survival across the period: how many sessions have a score, their mean, and how many are
+   *  old enough to measure but not yet rescanned. */
+  editSurvival: { sessions: number; average: number | null; overdue: number }
   coverage: AnalyticsCoverage
 }
 

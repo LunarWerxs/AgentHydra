@@ -287,6 +287,11 @@ create index if not exists idx_incidents_state on incidents(state);
   add('active_ms', 'integer')
   add('first_ts', 'integer')
   add('last_ts', 'integer')
+  // Edit survival (server/src/edit-survival.ts): the share of what a session wrote still in its
+  // files, how many writes that was scored over, and when a not-yet-measured session comes due.
+  add('edit_survival', 'real')
+  add('edit_survival_n', 'integer')
+  add('edit_survival_due_at', 'integer')
   // The list scanner's own verdict on whether this conversation stopped at a usage wall, folded
   // into the parse it already runs (server/src/sessions.ts). Cached rather than recomputed because
   // the alternative is re-reading up to 12 MB per session per list.

@@ -388,6 +388,11 @@ const clockLabel = (ms: number) =>
     minute: '2-digit',
   })
 const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0) / 60))
+// Edit survival across the period, as a whole percentage; null until any session has a score.
+const survivalAverage = computed(() => {
+  const s = activity.value?.editSurvival
+  return s && s.average !== null ? { pct: Math.round(s.average * 100), n: s.sessions } : null
+})
 </script>
 
 <template>
@@ -705,6 +710,10 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
           <section class="rounded-lg border border-border p-3">
             <h3 class="mb-1 text-xs font-medium">{{ $t('analytics.health') }}</h3>
             <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.healthNote') }}</p>
+            <!-- edit survival: the share of written code still on disk hours later (server/src/edit-survival.ts) -->
+            <p v-if="survivalAverage" class="mb-2 text-[11px] text-muted-foreground">
+              {{ $t('analytics.survivalAverage', survivalAverage) }}
+            </p>
             <p
               v-if="!activity?.health.length"
               class="text-[11px] text-muted-foreground"
@@ -727,6 +736,13 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
                 </Badge>
                 <Badge v-if="h.edits >= 40" variant="outline" class="shrink-0 text-[10px]">
                   {{ $t('analytics.churn', { n: h.edits }) }}
+                </Badge>
+                <Badge
+                  v-if="h.editSurvival != null && h.editSurvival < 0.5"
+                  variant="outline"
+                  class="shrink-0 text-[10px]"
+                >
+                  {{ $t('analytics.survived', { pct: Math.round(h.editSurvival * 100) }) }}
                 </Badge>
               </li>
             </ul>

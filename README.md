@@ -101,7 +101,9 @@ hidden; the screenshot below is historical.
 
 Cost by day, by model, by project, and by the account that ran it. When in the week you actually
 work. How many sessions were going at once. Which tools get used, which files changed recently, and
-which sessions are worth a second look because a tool kept failing or the context was compacted.
+which sessions are worth a second look because a tool kept failing, the context was compacted, or
+most of the code the agent wrote was gone from its files a couple of hours later (edit survival,
+scored by 4-gram overlap against the file on disk, with no model judging anything).
 
 All of it comes from totals worked out while the session list is being built, so it costs about half
 a megabyte for a store of 1,400 sessions and no message text is kept. Costs are published list

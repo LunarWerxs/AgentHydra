@@ -7,6 +7,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Edit survival: did the code a session wrote stay written?** (`server/src/edit-survival.ts`,
+  `server/src/analytics.ts`, `server/src/routes/analytics.ts`, `web/src/components/AnalyticsView.vue`).
+  Two hours or more after a Claude session's last Edit/Write (and a Codex session's structured edit
+  tools), the analytics scan re-reads the files it edited and scores the share of the text it wrote
+  still present, by 4-gram overlap. The session's own later rewrites do not count as losses; deleted
+  files and relative paths are skipped; sessions first seen more than 14 days after their last edit
+  are left unscored. "Worth a look" flags a session that kept under half its code, and shows the
+  period's average. Only the number is stored. Opening the analytics tab rescans sessions whose
+  measurement has come due. Idea after VS Code's Copilot edit-survival tracker (MIT); written fresh.
+  `ANALYTICS_VERSION` is now 8, so the store is rescanned once in the background.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,
