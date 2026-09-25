@@ -112,7 +112,9 @@ const typesOf = (s: Schema): string[] | null =>
 const num = (v: unknown): number | null => (typeof v === 'number' ? v : null)
 
 /** Push every way `cur` accepts less than `old` did. Loosening (a new optional field, a dropped
- *  requirement, a wider type) is never a break. */
+ *  requirement, a wider type) is never a break. Not compared: `const`, `anyOf`/`oneOf`/`allOf`
+ *  and `pattern`, so a tightening made through any of them goes unflagged (no tool uses them
+ *  today); extend this before a schema starts to. */
 function schemaBreaks(old: unknown, cur: unknown, path: string, out: Array<[string, string]>) {
   if (!isObject(old) || !isObject(cur)) return
   const oldTypes = typesOf(old)
