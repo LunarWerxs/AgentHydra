@@ -236,6 +236,34 @@ from the Claude Desktop app, the web UI, or another machine, that usage burns th
 same quota but is invisible here, and the estimate comes out **optimistically
 high**. `confidence` and `caveat` say so. Believe the caveat.
 
+### `budget.dollars`: what 100% is worth
+
+`usage_budget` also calibrates each quota window into list-price dollars of
+Claude Code work:
+
+```
+dollars: {
+  weekly:  { usdPerPct, capacityUsd, dollarsLeft, windows, censored, confidence },
+  session: { ...the same, for the 5-hour window },
+  calibratedAt: string | null,
+  caveat: string,
+}
+```
+
+Readings are grouped into windows keyed by the reset time the endpoint reports,
+rounded to the minute so seconds of jitter do not split one window into several.
+Each window gives one pair (percent moved, dollars spent between its first and
+last reading, priced from the transcripts), and the dollars per percent is the
+Theil-Sen median of the slopes between those pairs. A window is left out
+(`censored`) when it hit 100%, the weekly cap cut a 5-hour window short, the
+percentage fell back, it rose with no recorded turn behind it, a turn in it has
+no published price, or it moved fewer than 3 points.
+
+`check_my_usage` carries the last calibration as `dollars`, re-priced to the
+current reading, without walking transcripts. Before a fan-out, compare
+`weekly.dollarsLeft` with what the batch is expected to cost. Every figure is
+null until a clean window exists; null means "not measured", never "$0 left".
+
 ## The `advice` verdict: when `shouldOffload` is true, save your work NOW
 
 This is the single most important behavior in this document.

@@ -16,9 +16,10 @@
 // agent that trusts an inflated budget overruns its quota mid-task, which is exactly the failure this
 // whole subsystem exists to prevent. So the caveat travels with the number, always.
 
+import { calibrateQuotaDollars, dollarsSummary } from './quota-calibration'
 import type { BudgetConfidence, UsageBudget, UsageSnapshot } from './types'
 import { burnRateBounds, forecastUsage, usageSamples } from './usage-history'
-import { tokensPerPercent, tokensSince } from './usage-tokens'
+import { defaultConfigDir, tokensPerPercent, tokensSince } from './usage-tokens'
 
 /** Match the burn-rate lookback, so tokens/hour and percent/hour describe the SAME window. Comparing
  *  a 6-hour token rate against a 1-hour burn rate would silently skew tokensPerPercent. */
@@ -111,6 +112,14 @@ export function buildUsageBudget(
     weightedPerTurn,
     confidence,
     caveat,
+    // The same transcripts, priced, against whole quota windows: the percentage in dollars.
+    dollars: calibrateQuotaDollars(
+      key,
+      snap,
+      samples,
+      opts.configDirs ?? [defaultConfigDir()],
+      now,
+    ),
   }
 }
 
@@ -149,5 +158,7 @@ export function budgetSummary(budget: UsageBudget, pct: number | null): string {
         ` Confidence: ${budget.confidence}; this is an UPPER bound (see caveat).`,
     )
   }
+  const dollars = dollarsSummary(budget.dollars)
+  if (dollars) parts.push(dollars)
   return parts.join(' ')
 }

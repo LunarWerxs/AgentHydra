@@ -75,6 +75,8 @@ export function recordUsageSample(key: string, snap: UsageSnapshot): void {
     sessionPct: snap.session?.pct ?? null,
     weekAllPct: snap.weekAll.pct,
     weekResetsAt: snap.weekAll.resetsAt ?? null,
+    // Keys the 5-hour windows for the dollar calibration (quota-calibration.ts).
+    sessionResetsAt: snap.session?.resetsAt ?? null,
   }
   // Don't store a duplicate reading (the cache can replay the same snapshot).
   const last = list[list.length - 1]

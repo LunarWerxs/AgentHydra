@@ -7,6 +7,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Quota windows calibrated into dollars** (`server/src/quota-calibration.ts`,
+  `server/src/usage-budget.ts`, `server/src/mcp.ts`). `usage_budget` now returns
+  `budget.dollars`: what 100% of the weekly and the 5-hour window is worth in list-price dollars
+  of Claude Code work, and about how many dollars are left. Readings are grouped into windows
+  keyed by their reset time rounded to the minute; each clean window gives one (percent moved,
+  dollars spent) pair and a Theil-Sen median turns them into dollars per percent. Windows that
+  hit a cap, were cut short by the weekly cap, fell back, rose with no recorded turn, held an
+  unpriced model or moved under 3 points are left out and counted. `check_my_usage` carries the
+  last calibration re-priced to the current reading as `dollars`. Idea from lobehub/lobehub's
+  quota calibration, written fresh.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,
