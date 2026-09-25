@@ -11,6 +11,7 @@
 //   (none)                        → the daemon (./index.ts — serves the UI + API)
 //   --version | -v                → print the app version and exit (add --json for build metadata)
 //   --spend [--json] [--period=]   → token/dollar totals from the stored analytics (./analytics.ts)
+//   --prefix-tax [--json] [--ref=] → each managed home's per-spawn prompt prefix (./prefix-tax.ts)
 //   --instances | --instance-mode → the lightweight instance launcher (./instance-mode.ts)
 //   --mcp                         → the MCP stdio server (./mcp.ts)
 //
@@ -58,6 +59,37 @@ if (mode === '--version' || mode === '-v') {
     for (const b of report.byModel) console.log(`  ${usd(b.costUsd)}  ${b.key}`)
     console.log(`  coverage ${report.coverage.sessions}/${report.coverage.total} sessions scanned`)
   }
+  process.exit(0)
+} else if (mode === '--prefix-tax') {
+  // What each managed Claude/Codex home re-ships on every spawn: tools, MCP tools, schema kB.
+  // Measured through a loopback sink, so no model runs and no quota is spent (./prefix-tax.ts).
+  // One home at a time, because every probe boots that home's whole MCP roster.
+  const { measurePrefixTax, prefixTaxTargets } = await import('./prefix-tax')
+  const only = rest.find((a) => a.startsWith('--ref='))?.slice('--ref='.length)
+  const targets = prefixTaxTargets().filter((t) => !only || t.ref === only)
+  if (only && targets.length === 0) {
+    console.error(`no managed Claude/Codex home has ref ${only}`)
+    process.exit(1)
+  }
+  const rows = []
+  for (const target of targets) {
+    const row = await measurePrefixTax(target)
+    rows.push(row)
+    if (rest.includes('--json')) continue
+    const kb = (n: number) => `${(n / 1024).toFixed(1)} kB`
+    if (!row.tax) {
+      console.log(`${row.ref}  ${row.name}: not measured - ${row.error}`)
+      continue
+    }
+    const t = row.tax
+    console.log(
+      `${row.ref}  ${row.name}: ${t.tools} tools (${t.mcpTools} MCP), schemas ${kb(t.toolBytes)} ` +
+        `(MCP ${kb(t.mcpToolBytes)}), system ${kb(t.systemBytes)}, prefix ~${t.approxTokens} tokens`,
+    )
+    for (const s of t.byServer)
+      console.log(`    ${kb(s.bytes).padStart(9)}  ${s.server} (${s.tools})`)
+  }
+  if (rest.includes('--json')) console.log(JSON.stringify({ rows }))
   process.exit(0)
 } else if (mode === '--instances' || mode === '--instance-mode') {
   // Armed BEFORE the import: a hang inside instance-mode.ts's own module graph (import-time code,

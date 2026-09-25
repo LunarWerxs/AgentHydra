@@ -44,6 +44,7 @@ import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceSectionsMenu from '@/components/InstanceSectionsMenu.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
+import PrefixTaxSection from '@/components/PrefixTaxSection.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
@@ -1762,6 +1763,8 @@ onUnmounted(() => {
            section lists what is on the machine and shows an empty state when the harness is not
            installed, so there is nothing for a switch to protect against. -->
       <DshInstancesSection />
+      <!-- Last on purpose: it reads the homes the tables above list, and measuring is a click. -->
+      <PrefixTaxSection />
     </div>
 
     <!-- "Chats": this one account's chats, read-only. No action on the account itself, so it
