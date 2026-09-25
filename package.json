@@ -20,6 +20,7 @@
     "start": "bun run --cwd server start",
     "instances": "bun server/src/main.ts --instances",
     "mcp": "bun server/src/mcp.ts",
+    "mcp:api-level": "bun scripts/mcp-api-level.ts",
     "screenshots": "bun scripts/screenshots/capture.mjs",
     "check": "biome check . && bun run --cwd web check:i18n && bun run check:kit",
     "check:kit": "node ../../lunarwerx-ui/sync.mjs --check --app agenthydra && node ../../lunarwerx-ui/sync.mjs --check --app orchestrator",

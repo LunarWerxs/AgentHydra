@@ -212,6 +212,30 @@ near 100, and switching the flagship model doesn't dodge the shared weekly bucke
 check its own quota before a heavy multi-agent fan-out and pace accordingly, routing heavy work to
 whichever account has the lowest weekly %.
 
+### Frozen API levels
+
+Agents call these tools from prompts, skills and scripts that outlive a release, and nothing checks
+their arguments client-side, so a tool that disappears or an optional argument that becomes
+required breaks them silently. Each release therefore freezes its tool surface as
+`server/mcp-api-levels/<version>.json`: every tool's name, `since` (the earliest level holding it;
+1.2.0 is the baseline, so it means "at or before 1.2.0") and its input schema with the description
+prose stripped. Nobody lists tools by hand; the level is generated from `TOOLS`.
+
+`server/tests/mcp-api-levels.test.ts` replays every committed level against the live tools and
+fails on a removed tool or argument, an optional argument made required, a new required argument,
+a dropped enum value, a narrowed type or a tightened bound, at any depth. Adding tools, optional
+arguments or enum values and rewording descriptions never fails it. It also fails when the
+`package.json` version has no level, so a release cannot ship an unfrozen surface.
+
+| Command | What it does |
+| --- | --- |
+| `bun run mcp:api-level` | lists every break against every level and says whether this version is frozen; exits 1 on either |
+| `bun run mcp:api-level --write` | freezes the live surface for this version (a release step, [RELEASING.md](RELEASING.md)); refuses to overwrite a level that differs unless `--force` |
+
+A deliberate break goes in `ACCEPTED_BREAKS` (`server/src/mcp-api-levels.ts`), keyed
+`<level>:<tool>.<argument>`, with the reason and where callers were told. Frozen levels are never
+edited and are outside biome's formatter for that reason.
+
 ## Claude Desktop session mapping
 
 > **Moving a chat to another account?** Read

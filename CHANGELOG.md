@@ -7,6 +7,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Frozen MCP API levels** (`server/src/mcp-api-levels.ts`, `server/mcp-api-levels/1.2.0.json`,
+  `scripts/mcp-api-level.ts`, `server/tests/mcp-api-levels.test.ts`). Each release commits its MCP
+  tool surface (names, `since`, input schemas without prose), generated from `TOOLS`, and `bun test`
+  replays every level against the live tools: a removed tool or argument, an optional argument made
+  required, a dropped enum value or a narrowed type now fails the suite instead of silently breaking
+  an agent's saved prompt. A version bump with no frozen level fails too; `bun run mcp:api-level
+  --write` freezes it (docs/RELEASING.md). Idea from Neovim's API levels.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,

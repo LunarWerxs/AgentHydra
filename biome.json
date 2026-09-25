@@ -30,7 +30,8 @@
       "!**/lib/content-inset.ts",
       "!**/lib/grip-drag.ts",
       "!**/tests/server-lib",
-      "!orchestrator/state"
+      "!orchestrator/state",
+      "!server/mcp-api-levels"
     ]
   },
   "css": { "formatter": { "enabled": false }, "linter": { "enabled": false } },
