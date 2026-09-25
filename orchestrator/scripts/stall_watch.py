@@ -48,6 +48,7 @@ from lib import holdlib
 from lib import hydralib
 from lib import incidentlib
 from lib import ledgerlib
+from lib import recoverylib
 from lib import stalllib
 
 SILENT_SECS = configlib.get("stallwatch.silent_secs")
@@ -203,6 +204,11 @@ def run(argv: list[str]) -> tuple[dict, int]:
         if refusal:
             notes.append(refusal)
             act = False
+            # The recipe table's tray-not-armed row: no automatic step (arming is a person's
+            # act), escalation abort - recorded, so the ledger says why this lane did nothing.
+            # Only a real DISARMED refusal: an unreadable policy file is not a tray state.
+            if refusal.startswith("DISARMED"):
+                recoverylib.attempt_recovery("tray-not-armed", "stall_watch", context=refusal)
     cap = MAX_PER_RUN
     if _values(argv, "--max"):
         try:

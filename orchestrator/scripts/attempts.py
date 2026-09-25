@@ -7,6 +7,7 @@ false quiet this repo treats as its worst failure mode.
 
 Usage: python attempts.py [--all] [--json]
        python attempts.py --clear <kind> <session-or-chat-id>   (a person's word: forget the history)
+       python attempts.py --recoveries [--json]   (the recovery recipes and their ledger)
 Exit:  0 ok - 3 bad usage.
 """
 
@@ -15,7 +16,28 @@ from __future__ import annotations
 import json
 import sys
 
-from lib import clilib, ledgerlib
+from lib import clilib, ledgerlib, recoverylib
+
+
+def _show_recoveries(as_json: bool) -> int:
+    """The recipe table and the recovery ledger (lib/recoverylib): which failures get one
+    automatic attempt, what escalates after it, and every attempt and escalation so far."""
+    recipes = [recoverylib.recipe_for(k) for k in sorted(recoverylib.RECIPES)]
+    rows = recoverylib.ledger()
+    if as_json:
+        print(json.dumps({"recipes": recipes, "recoveries": rows}, indent=2))
+        return 0
+    print("recovery recipes (one automatic attempt, then the escalation):")
+    for r in recipes:
+        print(f"  {r['kind']:<16} {r['maxAttempts']}x {r['step'] or 'no automatic step'}"
+              f"  -> {r['escalation']}")
+    print(f"\n{len(rows)} row(s) on the recovery ledger:")
+    for r in rows:
+        print(f"  {r.get('kind'):<16} {r.get('subject')}  {r.get('outcome')}"
+              + (f" -> {r['escalation']}" if r.get("escalation") else "")
+              + (f" x{r['count']}" if r.get("count") else "")
+              + f"  {str(r.get('detail') or '')[:120]}")
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -24,6 +46,8 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip())
         return 0
     as_json = "--json" in argv
+    if "--recoveries" in argv:
+        return _show_recoveries(as_json)
     if "--clear" in argv:
         rest = [a for a in argv if not a.startswith("--")]
         if len(rest) != 2:

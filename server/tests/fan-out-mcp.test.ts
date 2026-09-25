@@ -566,3 +566,48 @@ describe('fan_out_delete - the cleanup a probe fan-out owes', () => {
     expect(SERVER_INSTRUCTIONS).toContain('fan_out_delete {group}')
   })
 })
+
+describe('fan_out_recover - one automatic attempt per recipe, then the escalation', () => {
+  test('is registered, MUTATES, and maps group and force onto the recover subcommand', async () => {
+    expect(tool('fan_out_recover').description).toMatch(/^MUTATES:/)
+    reportRun({
+      id: 'fo-20',
+      results: [{ index: 1, kind: 'delivery-failed', outcome: 'recovered' }],
+    })
+    const res = (await tool('fan_out_recover').run({ group: 'g1', force: true })) as Record<
+      string,
+      unknown
+    >
+    expect(runBody().args).toEqual(['recover', 'g1', '--force', '--json'])
+    expect(res.ok).toBe(true)
+    expect(String(res.verdict)).toBe('ok: recovered 1')
+  })
+
+  test('an escalated member is never read as ok', async () => {
+    reportRun(
+      {
+        id: 'fo-21',
+        results: [
+          { index: 0, kind: 'account-at-cap', outcome: 'recovered' },
+          { index: 1, kind: 'chat-stalled', outcome: 'escalated', escalation: 'alert-human' },
+        ],
+      },
+      4,
+    )
+    const res = (await tool('fan_out_recover').run({ group: 'fo-21' })) as Record<string, unknown>
+    expect(String(res.verdict)).toBe('partial: recovered 1, escalated 1')
+    expect(res.ok).toBe(false)
+  })
+
+  test('nothing to recover (exit 2, no rows) is an answer, not a failure', async () => {
+    reportRun({ id: 'fo-22', results: [] }, 2)
+    const res = (await tool('fan_out_recover').run({ group: 'fo-22' })) as Record<string, unknown>
+    expect(res.ok).toBe(true)
+    expect(String(res.verdict)).toMatch(/^nothing to recover/)
+  })
+
+  test('refuses a missing group before any request', async () => {
+    await expect(tool('fan_out_recover').run({ group: ' ' })).rejects.toThrow(/group/)
+    expect(calls).toHaveLength(0)
+  })
+})

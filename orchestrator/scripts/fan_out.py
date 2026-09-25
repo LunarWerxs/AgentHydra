@@ -56,15 +56,16 @@ Usage: python fan_out.py --spec <file.json | '{"tasks":[...]}'> [--per-account N
        python fan_out.py list [--json]
        python fan_out.py status [<group>] [--json]          # the latest group when omitted
        python fan_out.py send <group> --text "..." [--only <sessionId>]... [--force] [--json]
+       python fan_out.py recover <group> [--force] [--json] # each failed member's recipe, once
        python fan_out.py delete <group> [--force] [--json]  # every member chat, everywhere
 Spec:  {"tasks": [{"title": "...", "folder": "<dir>", "prompt": "..."}, ...], "group": "<name>"}
        (a bare list of tasks is accepted too; `title` is optional)
 Exit:  0 every task spawned and its first turn confirmed / status read / every send delivered /
-         every member deleted and verified
+         every member deleted and verified / every failed member recovered
        4 partial: some members not confirmed, refused or unassigned; some sends not delivered;
-         some members not deleted
+         some members not deleted; some recoveries escalated
        2 nothing spawned at all (no account with room, or every spawn refused) / nothing to
-         send to or delete
+         send to, delete or recover
        3 bad usage, bad spec, or unknown group - 1 daemon failure.
 """
 
@@ -82,7 +83,7 @@ from pathlib import Path
 import balance
 import delete_chat
 import spawn_chat
-from lib import clilib, enginelib, gatelib, holdlib, hydralib, ledgerlib
+from lib import clilib, enginelib, gatelib, holdlib, hydralib, ledgerlib, recoverylib
 
 STATE_FILE = "fanouts.json"
 # How long to wait for a closed instance we were told to open to report running, and how long
@@ -407,71 +408,83 @@ def _placeholder(group_id: str, spec: dict) -> dict:
             "phase": "planning", "members": [], "sends": []}
 
 
+def _spawn_member(group: dict, m: dict, target: dict, spawned_ids: set,
+                  force: bool = False) -> None:
+    """One member into one target with every rail of the group spawn, recorded as it goes.
+    Shared by spawn_group and `recover` (an unassigned member re-placed), so the second path
+    can never skip a rail the first one keeps."""
+    if not force:
+        # THE FLEET DOUBLE-CHECK, minus this group's own members (a shared prompt across
+        # the group's tasks is the point of a fan-out, not a duplicate).
+        try:
+            dups = hydralib.same_task_chats(m["prompt"], exclude=spawned_ids)
+        except hydralib.DaemonError as err:
+            dups = []
+            m["note"] = f"duplicate check failed ({err.detail or err}); spawned anyway"
+        if dups:
+            d = dups[0]
+            m["state"] = "refused-duplicate"
+            m["why"] = (f"a chat for this exact task already exists: '{d.get('title')}' in "
+                        f"{d.get('instance')} ({'running' if d.get('live') else 'dormant'})"
+                        " - --force is a person's word to insist")
+            m["duplicateOf"] = dups
+            _upsert(group)
+            return
+    if target.get("mustOpen") or not target.get("isRunning"):
+        why = _open_and_wait(target)
+        if why:
+            m["state"] = "open-failed"
+            m["why"] = why
+            _upsert(group)
+            return
+        m["opened"] = True
+    # force=True here lifts ONLY spawn_chat's own duplicate check, which this function has
+    # already run with the group's members excluded; every other rail in spawn() stays.
+    try:
+        res = spawn_chat.spawn(m["folder"], m["prompt"], str(target["num"]), force=True)
+    except hydralib.DaemonError as err:
+        res = {"ok": False, "why": f"daemon failure during spawn: {err.detail or err}"}
+    m["state"], m["why"] = _spawn_state(res)
+    m["sessionId"] = res.get("sessionId")
+    m["spawn"] = {k: res.get(k) for k in ("started", "submitted", "submitNote",
+                                          "composerCleared", "landedIn",
+                                          "modeSet", "trustDialog", "window",
+                                          "unboundSessionId", "skippedForeign",
+                                          "retried")
+                  if k in res}
+    m["spawnedAt"] = _now_iso()
+    if m["sessionId"]:
+        spawned_ids.add(m["sessionId"])
+    _upsert(group)
+
+
 def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
-                dry_run: bool = False, group_id: str | None = None) -> dict:
+                dry_run: bool = False, group_id: str | None = None,
+                targeting: dict | None = None) -> dict:
     """Spawn every assigned task, one at a time, recording the group after each so a crash
     half-way still leaves a readable record. Dry run: the plan only, nothing written.
 
     `group_id` lets a caller (the MCP `fan_out` tool) mint the id itself and hand it in, so it
     can return that SAME id to its own caller before this function has spawned anything -
     otherwise the id exists only inside this process and cannot be known until the whole spawn
-    (30-90s per chat) has finished. Defaults to a fresh one, exactly as before."""
+    (30-90s per chat) has finished. Defaults to a fresh one, exactly as before.
+
+    `targeting` ({exclude, only, openClosed}) is kept on the record so `recover` re-ranks inside the same
+    fence the group was spawned in - never onto the calling chat's own account."""
     group = {
         "id": group_id or _new_group_id(), "name": spec.get("group"), "createdAt": _now_iso(),
         "dryRun": bool(dry_run), "phase": "spawning",
         "members": [_member(a) for a in assignments], "sends": [],
     }
+    if targeting is not None:
+        group["targeting"] = targeting
     if dry_run:
         return group
     _upsert(group)
     spawned_ids: set = set()
     for a, m in zip(assignments, group["members"]):
-        target = a["target"]
-        if not target:
-            continue
-        if not force:
-            # THE FLEET DOUBLE-CHECK, minus this group's own members (a shared prompt across
-            # the group's tasks is the point of a fan-out, not a duplicate).
-            try:
-                dups = hydralib.same_task_chats(m["prompt"], exclude=spawned_ids)
-            except hydralib.DaemonError as err:
-                dups = []
-                m["note"] = f"duplicate check failed ({err.detail or err}); spawned anyway"
-            if dups:
-                d = dups[0]
-                m["state"] = "refused-duplicate"
-                m["why"] = (f"a chat for this exact task already exists: '{d.get('title')}' in "
-                            f"{d.get('instance')} ({'running' if d.get('live') else 'dormant'})"
-                            " - --force is a person's word to insist")
-                m["duplicateOf"] = dups
-                _upsert(group)
-                continue
-        if target.get("mustOpen") or not target.get("isRunning"):
-            why = _open_and_wait(target)
-            if why:
-                m["state"] = "open-failed"
-                m["why"] = why
-                _upsert(group)
-                continue
-            m["opened"] = True
-        # force=True here lifts ONLY spawn_chat's own duplicate check, which this loop has
-        # already run with the group's members excluded; every other rail in spawn() stays.
-        try:
-            res = spawn_chat.spawn(m["folder"], m["prompt"], str(target["num"]), force=True)
-        except hydralib.DaemonError as err:
-            res = {"ok": False, "why": f"daemon failure during spawn: {err.detail or err}"}
-        m["state"], m["why"] = _spawn_state(res)
-        m["sessionId"] = res.get("sessionId")
-        m["spawn"] = {k: res.get(k) for k in ("started", "submitted", "submitNote",
-                                              "composerCleared", "landedIn",
-                                              "modeSet", "trustDialog", "window",
-                                              "unboundSessionId", "skippedForeign",
-                                              "retried")
-                      if k in res}
-        m["spawnedAt"] = _now_iso()
-        if m["sessionId"]:
-            spawned_ids.add(m["sessionId"])
-        _upsert(group)
+        if a["target"]:
+            _spawn_member(group, m, a["target"], spawned_ids, force)
     group["phase"] = "done"
     _upsert(group)
     return group
@@ -571,11 +584,18 @@ def _member_status(m: dict) -> dict:
 def status(group: dict) -> dict:
     members = [_member_status(m) for m in group.get("members", [])]
     counts: dict[str, int] = {}
-    for m in members:
+    for rec, m in zip(group.get("members", []), members):
         counts[m.get("state") or "?"] = counts.get(m.get("state") or "?", 0) + 1
+        # Which recipe `recover` would meet this member with, and whether its one automatic
+        # attempt is still unspent - so "why did it escalate" is answered before anyone asks.
+        kind = failure_kind(group, rec, m.get("state"))
+        if kind:
+            m["recovery"] = {**recoverylib.recipe_for(kind),
+                             "attemptsUsed": recoverylib.attempts_used(kind, _subject(group, rec))}
     out = {"id": group["id"], "name": group.get("name"), "createdAt": group.get("createdAt"),
            "dryRun": group.get("dryRun", False), "counts": counts, "members": members,
-           "sends": group.get("sends", [])}
+           "sends": group.get("sends", []),
+           "recoveries": recoverylib.ledger(_subject_prefix(group))}
     for key in ("phase", "error"):
         if group.get(key):
             out[key] = group[key]
@@ -699,6 +719,10 @@ def send(group: dict, text: str, only: list[str] | None = None, force: bool = Fa
             detail = f"{err.detail or err}"
             entry = {"index": m.get("index"), "title": m.get("title"), "sessionId": sid,
                      "delivered": False, "error": detail, "engine": eng}
+            # The HTTP status is what tells a refusal (4xx: nothing was typed) from an unknown
+            # (a timeout or a lost connection: it may be on screen) - `recover` reads it.
+            if getattr(err, "status", None):
+                entry["httpStatus"] = err.status
             if "no desktop chat holds" in detail:
                 # Measured 2026-09-04: a spawned chat answered, its app logged the session
                 # mapping, and wrote no local_*.json for minutes - the row exists only in the
@@ -711,9 +735,25 @@ def send(group: dict, text: str, only: list[str] | None = None, force: bool = Fa
                                  "actuator never overwrites one - clear it in the app, then retry")
             results.append(entry)
     record = {"at": _now_iso(), "text": text[:200], "results": results}
+    if any(_refused_before_typing(r) for r in results):
+        # the whole text, kept only when `recover` may owe it one re-send
+        record["retryText"] = text
     group.setdefault("sends", []).append(record)
     _upsert(group)
     return record
+
+
+# WHY: not every 4xx means "nothing was typed". The message route answers 400 (no text), 404 (no
+# chat or instance) and 409 (not running, peer-only, row unreachable, live writer) BEFORE it
+# types; its 422 is a peer pipe that did not confirm or a composer that may already have typed,
+# and a re-send there can land a duplicate in a live chat.
+_REFUSED_BEFORE_TYPING = frozenset({400, 404, 409})
+
+
+def _refused_before_typing(result: dict) -> bool:
+    """A send the message route REFUSED before typing (400/404/409): it typed nothing."""
+    return (not result.get("delivered") and not result.get("skipped")
+            and int(result.get("httpStatus") or 0) in _REFUSED_BEFORE_TYPING)
 
 
 def send_exit_code(record: dict) -> int:
@@ -721,6 +761,130 @@ def send_exit_code(record: dict) -> int:
     if not attempted:
         return 2
     return 0 if all(r.get("delivered") for r in attempted) else 4
+
+
+# --- recover ---------------------------------------------------------------------------------
+# WHY: a failed member used to get whatever the manager chat thought of next - usually the same
+# send again, and again. `recover` meets each failed member with its recipe from lib/recoverylib
+# (one automatic attempt, then the recipe's escalation), and every attempt lands on the recovery
+# ledger that `status` shows.
+
+STALL_QUESTION = ("You have been quiet on this task for a while. Are you stuck? Reply with where "
+                  "you are and what is blocking you, or say that you are done.")
+
+
+def _subject_prefix(group: dict) -> str:
+    return f"fanout:{group['id']}:"
+
+
+def _subject(group: dict, m: dict) -> str:
+    return f"{_subject_prefix(group)}{m.get('index')}"
+
+
+def _last_send_result(group: dict, sid: str) -> tuple[dict | None, dict | None]:
+    """The newest send record that reached this member, and this member's result in it."""
+    for rec in reversed(group.get("sends", [])):
+        for r in rec.get("results", []):
+            if r.get("sessionId") == sid:
+                return rec, r
+    return None, None
+
+
+def failure_kind(group: dict, m: dict, state: str | None) -> str | None:
+    """The recipe kind a member's failure maps to, or None when nothing is owed. Only failures
+    the table knows: a refused or crashed spawn is a person's call, not a recipe."""
+    if state == "unassigned":
+        return "account-at-cap"
+    sid = m.get("sessionId")
+    if not sid or m.get("deleted"):
+        return None
+    if state == "stalled":
+        return "chat-stalled"
+    _, last = _last_send_result(group, sid)
+    if last and not last.get("delivered") and not last.get("skipped"):
+        return "delivery-failed"
+    return None
+
+
+def _resend_step(group: dict, m: dict, force: bool):
+    rec, last = _last_send_result(group, m["sessionId"])
+
+    def step() -> tuple[bool, str]:
+        if not _refused_before_typing(last or {}):
+            return False, ("the message route did not refuse the send outright, so the text may "
+                           "already be on screen - never re-sent blind")
+        text = (rec or {}).get("retryText")
+        if not text:
+            return False, "the failed send's full text was not kept, so it cannot be re-sent"
+        got = send(group, text, only=[m["sessionId"]], force=force)
+        r = next(iter(got["results"]), {})
+        return bool(r.get("delivered")), str(r.get("skipped") or r.get("error") or r.get("detail")
+                                             or ("delivered" if r.get("delivered") else "not delivered"))
+    return step
+
+
+def _ask_stalled_step(group: dict, m: dict, force: bool):
+    def step() -> tuple[bool, str]:
+        got = send(group, STALL_QUESTION, only=[m["sessionId"]], force=force)
+        r = next(iter(got["results"]), {})
+        return bool(r.get("delivered")), str(r.get("skipped") or r.get("error") or r.get("detail")
+                                             or ("asked" if r.get("delivered") else "not asked"))
+    return step
+
+
+def _replace_step(group: dict, m: dict, force: bool):
+    def step() -> tuple[bool, str]:
+        targeting = group.get("targeting")
+        if targeting is None:
+            # a group from before targeting was recorded: its --exclude (the calling chat's own
+            # account, from the MCP) is unknown, and guessing could land work on that account
+            return False, "this group's account fence was not recorded - not re-ranked"
+        taken = [str(x["instanceNum"]) for x in group.get("members", []) if x.get("instanceNum")]
+        ranking = rank_targets(exclude=list(targeting.get("exclude") or []) + taken,
+                               only=targeting.get("only") or None,
+                               open_closed=bool(targeting.get("openClosed")))
+        if not ranking["targets"]:
+            return False, "re-ranked: still no account with room"
+        target = ranking["targets"][0]
+        m["instance"], m["instanceNum"] = f"#{target['num']} {target['name']}", target["num"]
+        ids = {x["sessionId"] for x in group.get("members", []) if x.get("sessionId")}
+        _spawn_member(group, m, target, ids, force)
+        return m.get("state") == "spawned", f"{m['state']} into {m['instance']}" + (
+            f": {m['why']}" if m.get("why") else "")
+    return step
+
+
+_STEPS = {"delivery-failed": _resend_step, "chat-stalled": _ask_stalled_step,
+          "account-at-cap": _replace_step}
+
+
+def recover(group: dict, force: bool = False) -> dict:
+    """Meet every failed member with its recipe: one automatic attempt, then the recipe's
+    escalation, each written to the recovery ledger. Members with nothing owed are left alone."""
+    results = []
+    for m in group.get("members", []):
+        state = _member_status(m).get("state")
+        kind = failure_kind(group, m, state)
+        if kind != "chat-stalled":
+            # A delivered stall question is only "asked", which keeps the attempt spent; the
+            # member leaving the stalled state is what frees it for a later stall.
+            recoverylib.clear("chat-stalled", _subject(group, m),
+                              f"member [{m.get('index')}] is {state or 'gone'}, no longer stalled")
+        if not kind:
+            continue
+        row = recoverylib.attempt_recovery(
+            kind, _subject(group, m), _STEPS[kind](group, m, force),
+            context=f"member [{m.get('index')}] {str(m.get('title'))[:60]} was {state or kind}")
+        results.append({"index": m.get("index"), "title": m.get("title"),
+                        "sessionId": m.get("sessionId"), **row})
+    _upsert(group)
+    return {"id": group["id"], "name": group.get("name"), "results": results}
+
+
+def recover_exit_code(record: dict) -> int:
+    if not record["results"]:
+        return 2
+    return 0 if all(r.get("outcome") in ("recovered", "asked") for r in record["results"]) else 4
 
 
 # --- delete ----------------------------------------------------------------------------------
@@ -843,6 +1007,14 @@ def _print_status(s: dict) -> None:
             print("      " + (tail[-1][:140] if tail else ""))
         elif m.get("why"):
             print(f"      {m['why'][:140]}")
+        rec = m.get("recovery")
+        if rec:
+            print(f"      recipe {rec['kind']}: {rec['step'] or 'no automatic step'} "
+                  f"({rec['attemptsUsed']}/{rec['maxAttempts']} used, then {rec['escalation']})")
+    for r in s.get("recoveries") or []:
+        print(f"  ledger {r.get('subject', '').rsplit(':', 1)[-1]:>3} {r.get('kind')}: "
+              f"{r.get('outcome')}" + (f" -> {r['escalation']}" if r.get("escalation") else "")
+              + f"  {str(r.get('detail') or '')[:120]}")
 
 
 def _cmd_list(as_json: bool) -> int:
@@ -898,6 +1070,30 @@ def _cmd_send(argv: list[str], words: list[str], as_json: bool, force: bool) -> 
     return send_exit_code(record)
 
 
+def _cmd_recover(words: list[str], as_json: bool, force: bool) -> int:
+    """Looks up the named group and meets each failed member with its recovery recipe."""
+    if len(words) < 2:
+        print(__doc__.strip(), file=sys.stderr)
+        return 3
+    group = find_group(words[1])
+    if not group:
+        print("REFUSED: no such fan-out group (fan_out list shows them)", file=sys.stderr)
+        return 3
+    record = recover(group, force=force)
+    if as_json:
+        print(json.dumps(record, indent=2))
+    elif not record["results"]:
+        print("nothing to recover - no member is in a failure the recipe table knows")
+    else:
+        for r in record["results"]:
+            print(f"  [{r.get('index')}] {str(r.get('title'))[:40]:<40} {r['kind']}: "
+                  f"{r['outcome'].upper()}"
+                  + (f" -> {r['escalation']}" if r.get("escalation") else "")
+                  + (f" (incident {r['incident']})" if r.get("incident") else "")
+                  + f"  {str(r.get('detail') or '')[:120]}")
+    return recover_exit_code(record)
+
+
 def _cmd_delete(words: list[str], as_json: bool, force: bool) -> int:
     """Looks up the named group and deletes its spawned members, reporting the outcome."""
     if len(words) < 2:
@@ -950,7 +1146,10 @@ def _cmd_spawn(argv: list[str], force: bool, as_json: bool) -> int:
         print(f"{'fan_out FAILED' if daemon else 'REFUSED'}: {why}", file=sys.stderr)
         return 1 if daemon else 3
     assignments = plan(spec["tasks"], ranking["targets"], per_account)
-    group = spawn_group(spec, assignments, force=force, dry_run=dry_run, group_id=group_id)
+    group = spawn_group(spec, assignments, force=force, dry_run=dry_run, group_id=group_id,
+                        targeting={"exclude": _take_values(argv, "--exclude"),
+                                   "only": _take_values(argv, "--only"),
+                                   "openClosed": "--open-closed" in argv})
     if as_json:
         print(json.dumps({**group, "targets": ranking["targets"],
                           "skippedTargets": ranking["skipped"],
@@ -970,7 +1169,8 @@ def main(argv: list[str]) -> int:
     as_json = "--json" in argv
     force = "--force" in argv
     words = _positional(argv)
-    cmd = words[0] if words and words[0] in ("list", "status", "send", "delete") else None
+    cmd = (words[0] if words and words[0] in ("list", "status", "send", "recover", "delete")
+           else None)
 
     try:
         if cmd == "list":
@@ -979,6 +1179,8 @@ def main(argv: list[str]) -> int:
             return _cmd_status(words, as_json)
         if cmd == "send":
             return _cmd_send(argv, words, as_json, force)
+        if cmd == "recover":
+            return _cmd_recover(words, as_json, force)
         if cmd == "delete":
             return _cmd_delete(words, as_json, force)
         return _cmd_spawn(argv, force, as_json)

@@ -9,6 +9,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Recovery recipes with a ledger** (`orchestrator/scripts/lib/recoverylib.py`,
+  `orchestrator/scripts/fan_out.py`, `orchestrator/scripts/stall_watch.py`,
+  `orchestrator/scripts/attempts.py`, `server/src/mcp.ts`). A closed table of known failures
+  (delivery-failed, account-at-cap, chat-stalled, tray-not-armed), each with one fixed automatic
+  step, at most one automatic attempt, and an escalation policy (alert-human files an incident,
+  abort, log-and-continue). The new `fan_out recover` / MCP `fan_out_recover` meets each failed
+  member of a group with its recipe; `fan_out_status` shows each member's recipe and the group's
+  recovery ledger, and `attempts.py --recoveries` prints the whole table and ledger. A failed send
+  is re-sent only when the message route refused it before typing (400/404/409), never after a
+  422 or an unconfirmed one; a stalled chat is asked once and not again until it has stopped
+  being stalled.
+  Idea from ultraworkers/claw-code's recovery recipes (MIT), written fresh.
+
 - **Token sinks: why sessions were expensive** (`server/src/analytics.ts`,
   `server/src/routes/analytics.ts`, `server/src/mcp.ts`, `web/src/components/AnalyticsView.vue`).
   A "Where the tokens went" panel on the Analytics tab, `GET /api/analytics/sinks` and the
