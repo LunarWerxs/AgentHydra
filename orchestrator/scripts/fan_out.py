@@ -14,6 +14,14 @@ WHAT IT DOES, and every rail it keeps:
   - RANKS accounts by real room the way balance.py does (fill ceiling minus the account's peak
     across 5-hour / weekly / binding; an unknown or stale reading is never room), OPEN
     instances first, ONE task per account by default. SPREAD, NEVER DUMP (owner, 2026-08-31).
+    Chats this ledger spawned into an account in the last LOAD_WINDOW_SECS lower its place in
+    that order (a LOAD BIAS the lagging usage reading has not caught up with yet), never its room.
+  - A MEMBER THAT FANS OUT AGAIN gets a NARROW-ONLY envelope from its parent group: it can never
+    reach more accounts, more chats per account, a busier account or a closed app than its
+    parent could, the tree stops at TREE_MAX_DEPTH, and the whole tree holds at most
+    TREE_MAX_NODES chats (--max-nodes / --max-depth / --ceiling-pct only lower them). The parent
+    is --parent when named, else found from --caller-session (the MCP passes the calling chat's
+    own session ids), so a member that names nothing is still bound by its group.
   - SPAWNS each chat through spawn_chat.py - the app's own claude://code/new deeplink into a
     RUNNING desktop app, trust pre-written, composer submitted, bypass set at birth - so every
     chat is VISIBLE in a sidebar the owner reads. Nothing headless, ever.
@@ -52,7 +60,10 @@ first - so a probe fan-out leaves nothing in any account.
 
 Usage: python fan_out.py --spec <file.json | '{"tasks":[...]}'> [--per-account N]
                          [--exclude <inst>]... [--only <inst>]... [--open-closed]
-                         [--group-id <id>] [--dry-run] [--force] [--json]
+                         [--group-id <id>] [--parent <group | member sessionId>]
+                         [--caller-session <sessionId>]...
+                         [--max-nodes N] [--max-depth N] [--ceiling-pct P]
+                         [--dry-run] [--force] [--json]
        python fan_out.py list [--json]
        python fan_out.py status [<group>] [--json]          # the latest group when omitted
        python fan_out.py send <group> --text "..." [--only <sessionId>]... [--force] [--json]
@@ -260,16 +271,77 @@ def _resolve_nums(fleet_data: dict, refs: list[str]) -> set:
     return out
 
 
+# LOAD BIAS STEERS THE ORDER, NEVER THE ROOM (adapted from the MoE gate idea in DeepSeek-V3's
+# inference/model.py, MIT: a per-expert bias picks the top-k, the unbiased score still weighs
+# them). Room comes from a usage reading that lags the work it measures by minutes, so two
+# fan-outs a minute apart both read the same account as the roomiest and both drain it first.
+# Every chat this ledger spawned into an account inside LOAD_WINDOW_SECS lowers that account's
+# ORDER by LOAD_BIAS_PCT points; its reported roomPct, and whether it is eligible at all, stay
+# the reading's own. With no recent spawns the order is exactly the room order, so the
+# preferred account stays first until it is actually carrying work. The window is only about
+# as long as the reading's lag: past it the reading already carries that chat's spend, and
+# biasing on top would subtract the same load twice.
+LOAD_BIAS_PCT = 15
+LOAD_WINDOW_SECS = 20 * 60
+
+
+def _iso_secs(stamp: str | None) -> float | None:
+    try:
+        return datetime.strptime(str(stamp), "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def recent_spawns_by_instance(rows: list[dict] | None = None, now: float | None = None) -> dict:
+    """{instance num: chats this ledger spawned there within LOAD_WINDOW_SECS and has not
+    deleted}. A member with no session never reached the account, so it carries no load."""
+    now = time.time() if now is None else now
+    out: dict = {}
+    for g in (_load() if rows is None else rows):
+        for m in g.get("members", []):
+            num, at = m.get("instanceNum"), _iso_secs(m.get("spawnedAt"))
+            if num is None or not m.get("sessionId") or m.get("deleted") or at is None:
+                continue
+            if now - at <= LOAD_WINDOW_SECS:
+                out[num] = out.get(num, 0) + 1
+    return out
+
+
+def load_biased(targets: list[dict], recent: dict) -> list[dict]:
+    """The targets re-ordered by room minus the load bias, open ones still before closed ones.
+    The sort is stable, so equal scores keep balance.rank_next's own plan-weight tie-break."""
+    for t in targets:
+        n = int(recent.get(t["num"], 0))
+        t["recentSpawns"] = n
+        t["loadBias"] = -LOAD_BIAS_PCT * n
+        t["score"] = (t.get("roomPct") or 0) + t["loadBias"]
+    return sorted(targets, key=lambda t: (bool(t.get("mustOpen")), -t["score"]))
+
+
 def rank_targets(exclude: list[str] | None = None, only: list[str] | None = None,
-                 open_closed: bool = False) -> dict:
+                 open_closed: bool = False, envelope: dict | None = None) -> dict:
     """The accounts that may take a chat, best room first: OPEN instances first (in room
-    order), then - only with open_closed - the closed ones. Returns {"targets": [...],
-    "source": survey|cache-fallback|unavailable, "skipped": [why each other account was
-    left out]} so a short list is explainable."""
+    order, less the load bias), then - only with open_closed - the closed ones. `envelope`
+    (a spawn tree's, see narrow_envelope) binds on top of this call's own filters and can
+    only narrow them. Returns {"targets": [...], "source": survey|cache-fallback|unavailable,
+    "skipped": [why each other account was left out], "only"/"exclude": the instance numbers
+    that bound} so a short list is explainable."""
     survey, source = balance.usage_rows_with_fallback()
     fleet_data = hydralib.fleet()
-    only_nums = _resolve_nums(fleet_data, only or [])
+    # `named` is THIS call's own --only: the person's word that reaches a hands-on app. An
+    # instance set inherited from a spawn tree narrows the list but is nobody's word here.
+    named = _resolve_nums(fleet_data, only or [])
+    only_nums = set(named) if only else None
     excl_nums = _resolve_nums(fleet_data, exclude or [])
+    ceiling = None
+    if envelope:
+        if envelope.get("only") is not None:
+            allowed = set(envelope["only"])
+            only_nums = allowed if only_nums is None else only_nums & allowed
+        excl_nums |= set(envelope.get("exclude") or [])
+        open_closed = open_closed and bool(envelope.get("openClosed"))
+        ceiling = envelope.get("ceilingPct")
     ranked = balance.rank_next(balance.accounts_overview(survey, fleet_data))
     targets: list[dict] = []
     skipped: list[dict] = []
@@ -283,17 +355,22 @@ def rank_targets(exclude: list[str] | None = None, only: list[str] | None = None
         num = inst.get("num")
         seen_nums.add(num)
         label = f"#{num} {inst.get('name')}"
-        if only_nums and num not in only_nums:
-            skipped.append({"instance": label, "why": "not in --only"})
+        if only_nums is not None and num not in only_nums:
+            skipped.append({"instance": label, "why": "not in --only (or the spawn tree's)"})
             continue
         if num in excl_nums:
-            skipped.append({"instance": label, "why": "--exclude"})
+            skipped.append({"instance": label, "why": "--exclude (or the spawn tree's)"})
             continue
         if acct.get("mustOpen") and not open_closed:
             skipped.append({"instance": label, "why": "closed (pass --open-closed to use it)"})
             continue
+        if ceiling is not None and (acct.get("peakPct") or 0) >= ceiling:
+            skipped.append({"instance": label, "why": (
+                f"peak {acct.get('peakPct')}% is at or over the spawn tree's quota ceiling "
+                f"({ceiling}%)")})
+            continue
         hands_on = hands_on_secs_ago(inst.get("dir"))
-        if hands_on is not None and num not in only_nums:
+        if hands_on is not None and num not in named:
             skipped.append({"instance": label, "why": (
                 f"a person is working in it: its app logged a message sent or a chat opened "
                 f"{int(hands_on // 60)} min ago (name it with --only to use it anyway)")})
@@ -311,7 +388,9 @@ def rank_targets(exclude: list[str] | None = None, only: list[str] | None = None
             continue
         skipped.append({"instance": f"#{inst.get('num')} {inst.get('name')}",
                         "why": "no room, or no fresh successful usage reading"})
-    return {"targets": targets, "source": source, "skipped": skipped}
+    return {"targets": load_biased(targets, recent_spawns_by_instance()), "source": source,
+            "skipped": skipped, "only": sorted(only_nums) if only_nums is not None else None,
+            "exclude": sorted(excl_nums)}
 
 
 def plan(tasks: list[dict], targets: list[dict], per_account: int = 1) -> list[dict]:
@@ -334,6 +413,144 @@ def plan(tasks: list[dict], targets: list[dict], per_account: int = 1) -> list[d
                 break
         out.append({"index": i, "task": task, "target": chosen})
     return out
+
+
+# --- the spawn tree --------------------------------------------------------------------------
+
+# A MEMBER THAT FANS OUT AGAIN MAY ONLY NARROW (idea from AutoGPT's copilot spawn tree; ideas
+# only, nothing copied). One fan_out was capped, but a member chat can call fan_out itself, and
+# nothing stopped it asking for more than the group it belongs to: more accounts, more chats
+# per account, a closed app opened, a busier account used. A child names its parent
+# (`--parent <group or member sessionId>`), and its envelope is derived from the parent's ONLY
+# by narrowing: depth + 1 toward the cap, instance sets intersected (exclusions united),
+# per-account cap, node cap and quota ceiling the smaller, open-closed only if both allow it.
+# The tree ledger is fanouts.json itself: a member is admitted only while the tree holds fewer
+# than maxNodes chats, counted and recorded under the ledger's own lock, so two fan-outs in one
+# tree cannot both read the same headroom. A member need not name its parent: the MCP server
+# sees the calling chat's own session ids (CLAUDE_CODE_SESSION_ID / CLAUDE_CODE_HOST_SESSION_ID,
+# see server/src/core/self-identity.ts) and passes them as --caller-session, and a caller that is
+# a ledger member is narrowed by its group. Only a caller that is no member starts a new tree.
+TREE_MAX_DEPTH = 2
+TREE_MAX_NODES = 12
+# A member in one of these states never got (or never will get) a chat, so it is not a node.
+NOT_A_NODE = ("unassigned", "refused", "refused-duplicate", "open-failed", "not-registered")
+
+
+def _min_set(a, b):
+    """The smaller of two optional limits: None means "no limit of its own"."""
+    vals = [v for v in (a, b) if v is not None]
+    return min(vals) if vals else None
+
+
+def root_envelope(group_id: str, *, per_account: int = 1, open_closed: bool = False,
+                  max_nodes: int | None = None, max_depth: int | None = None,
+                  ceiling_pct: float | None = None) -> dict:
+    """The envelope of a fan-out that names no parent: the root of its own tree."""
+    return {"root": group_id, "parent": None, "depth": 0,
+            "maxDepth": _min_set(max_depth, TREE_MAX_DEPTH),
+            "maxNodes": _min_set(max_nodes, TREE_MAX_NODES),
+            "perAccount": max(1, int(per_account or 1)), "only": None, "exclude": [],
+            "openClosed": bool(open_closed), "ceilingPct": ceiling_pct}
+
+
+def envelope_of(group: dict) -> dict:
+    """A group's own envelope; one recorded before envelopes existed reads as a narrow root
+    (one chat per account, closed apps not opened), never as an unlimited one."""
+    env = group.get("envelope")
+    return env if isinstance(env, dict) else root_envelope(str(group.get("id")))
+
+
+def narrow_envelope(parent: dict, *, parent_id: str, per_account: int = 1,
+                    open_closed: bool = False, max_nodes: int | None = None,
+                    max_depth: int | None = None, ceiling_pct: float | None = None) -> dict:
+    """The child's envelope, from the parent's by narrowing operations only. Raises ValueError
+    when the parent is already at the tree's depth cap."""
+    max_d = _min_set(max_depth, parent.get("maxDepth"))
+    depth = int(parent.get("depth") or 0) + 1
+    if max_d is not None and depth > max_d:
+        raise ValueError(f"the spawn tree is at its depth cap ({max_d}): a member of "
+                         f"{parent_id} may not fan out again")
+    return {"root": parent.get("root") or parent_id, "parent": parent_id, "depth": depth,
+            "maxDepth": max_d, "maxNodes": _min_set(max_nodes, parent.get("maxNodes")),
+            "perAccount": min(max(1, int(per_account or 1)),
+                              int(parent.get("perAccount") or 1)),
+            "only": parent.get("only"), "exclude": list(parent.get("exclude") or []),
+            "openClosed": bool(open_closed) and bool(parent.get("openClosed")),
+            "ceilingPct": _min_set(ceiling_pct, parent.get("ceilingPct"))}
+
+
+def find_parent(ref: str) -> dict | None:
+    """The group `ref` names: a group id or name, or the sessionId of one of its members."""
+    ref = (ref or "").strip()
+    if not ref:
+        return None
+    hit = find_group(ref)
+    if hit:
+        return hit
+    for g in reversed(groups()):
+        if any(m.get("sessionId") == ref for m in g.get("members", [])):
+            return g
+    return None
+
+
+def caller_parent(session_ids: list[str]) -> dict | None:
+    """The group whose MEMBER is the calling chat, from its own session ids (the host id's
+    'local_' file prefix stripped), or None when the caller is no member: then it is a root.
+    Matches member sessionIds only, never a group id or name, so an unrelated caller can not
+    be bound to a group by a coincidence of names."""
+    wanted = set()
+    for sid in session_ids:
+        sid = (sid or "").strip()
+        if sid:
+            wanted |= {sid, sid.removeprefix("local_")}
+    if not wanted:
+        return None
+    for g in reversed(groups()):
+        if any(m.get("sessionId") in wanted for m in g.get("members", [])):
+            return g
+    return None
+
+
+def tree_nodes(root: str, rows: list[dict], skip_id: str | None = None) -> int:
+    """How many chats the tree rooted at `root` holds or is about to hold."""
+    n = 0
+    for g in rows:
+        if g.get("id") == skip_id or envelope_of(g).get("root") != root:
+            continue
+        n += sum(1 for m in g.get("members", [])
+                 if m.get("instanceNum") is not None and m.get("state") not in NOT_A_NODE)
+    return n
+
+
+def admit(assignments: list[dict], envelope: dict, group_id: str, name: str | None,
+          record: bool = True) -> list[dict]:
+    """Cap the assignments at the tree's node headroom (the ones past it become UNASSIGNED
+    with the reason) and, unless `record` is False (a dry run), write the group's planned
+    members in the same locked step, so the next fan-out in this tree counts them."""
+    def cap(rows: list[dict]) -> list[dict]:
+        room = int(envelope.get("maxNodes") or 0) - tree_nodes(envelope["root"], rows, group_id)
+        out = []
+        for a in assignments:
+            if a["target"] and room <= 0:
+                a = {**a, "target": None, "why": (
+                    f"the spawn tree {envelope['root']} is at its node cap "
+                    f"({envelope.get('maxNodes')} chats)")}
+            elif a["target"]:
+                room -= 1
+            out.append(a)
+        return out
+
+    if not record:
+        return cap(_load())
+    with ledgerlib.locked("fanouts"):
+        rows = _load()
+        admitted = cap(rows)
+        rows = [r for r in rows if r.get("id") != group_id]
+        rows.append({"id": group_id, "name": name, "createdAt": _now_iso(), "dryRun": False,
+                     "phase": "admitted", "envelope": envelope,
+                     "members": [_member(a) for a in admitted], "sends": []})
+        _save(rows)
+    return admitted
 
 
 # --- spawning --------------------------------------------------------------------------------
@@ -378,7 +595,8 @@ def _member(assignment: dict) -> dict:
         "instanceNum": target["num"] if target else None,
         "sessionId": None,
         "state": "planned" if target else "unassigned",
-        "why": None if target else "no account with room left for this task",
+        "why": None if target else (assignment.get("why")
+                                    or "no account with room left for this task"),
     }
 
 
@@ -460,7 +678,7 @@ def _spawn_member(group: dict, m: dict, target: dict, spawned_ids: set,
 
 def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
                 dry_run: bool = False, group_id: str | None = None,
-                targeting: dict | None = None) -> dict:
+                targeting: dict | None = None, envelope: dict | None = None) -> dict:
     """Spawn every assigned task, one at a time, recording the group after each so a crash
     half-way still leaves a readable record. Dry run: the plan only, nothing written.
 
@@ -478,6 +696,8 @@ def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
     }
     if targeting is not None:
         group["targeting"] = targeting
+    if envelope:
+        group["envelope"] = envelope
     if dry_run:
         return group
     _upsert(group)
@@ -602,7 +822,7 @@ def status(group: dict) -> dict:
            "dryRun": group.get("dryRun", False), "counts": counts, "members": members,
            "sends": group.get("sends", []),
            "recoveries": recoverylib.ledger(_subject_prefix(group))}
-    for key in ("phase", "error"):
+    for key in ("phase", "error", "envelope"):
         if group.get(key):
             out[key] = group[key]
     return out
@@ -848,7 +1068,8 @@ def _replace_step(group: dict, m: dict, force: bool):
         taken = [str(x["instanceNum"]) for x in group.get("members", []) if x.get("instanceNum")]
         ranking = rank_targets(exclude=list(targeting.get("exclude") or []) + taken,
                                only=targeting.get("only") or None,
-                               open_closed=bool(targeting.get("openClosed")))
+                               open_closed=bool(targeting.get("openClosed")),
+                               envelope=group.get("envelope"))
         if not ranking["targets"]:
             return False, "re-ranked: still no account with room"
         target = ranking["targets"][0]
@@ -962,7 +1183,8 @@ def _take_value(argv: list[str], flag: str) -> str | None:
 
 def _positional(argv: list[str]) -> list[str]:
     """Words that are neither flags nor a flag's value."""
-    valued = {"--spec", "--per-account", "--exclude", "--only", "--text", "--group-id"}
+    valued = {"--spec", "--per-account", "--exclude", "--only", "--text", "--group-id",
+              "--parent", "--caller-session", "--max-nodes", "--max-depth", "--ceiling-pct"}
     out = []
     i = 0
     while i < len(argv):
@@ -983,8 +1205,14 @@ def _print_plan(group: dict, ranking: dict) -> None:
           f"{' - DRY RUN, nothing spawned' if group.get('dryRun') else ''}")
     print(f"  targets from the {ranking.get('source')} usage survey: "
           + ", ".join(f"#{t['num']} {t['name']} (room {t['roomPct']}%"
+                      f"{', ' + str(t['recentSpawns']) + ' spawned recently' if t.get('recentSpawns') else ''}"
                       f"{', closed' if t.get('mustOpen') else ''})" for t in ranking["targets"])
           if ranking["targets"] else "  targets: NONE - no account has room")
+    env = group.get("envelope") or {}
+    if env:
+        print(f"  spawn tree {env.get('root')}: depth {env.get('depth')}/{env.get('maxDepth')}, "
+              f"at most {env.get('maxNodes')} chats, {env.get('perAccount')} per account"
+              + (f", ceiling {env['ceilingPct']}%" if env.get("ceilingPct") is not None else ""))
     for m in group["members"]:
         line = f"  [{m['index']}] {m['title'][:50]:<50} -> {m.get('instance') or 'UNASSIGNED'}"
         line += f"  {m['state']}"
@@ -1130,10 +1358,17 @@ def _cmd_spawn(argv: list[str], force: bool, as_json: bool) -> int:
     try:
         spec = parse_spec(spec_raw)
         per_account = int(_take_value(argv, "--per-account") or 1)
+        limits = {"max_nodes": _take_value(argv, "--max-nodes"),
+                  "max_depth": _take_value(argv, "--max-depth")}
+        limits = {k: int(v) for k, v in limits.items() if v is not None}
+        ceiling = _take_value(argv, "--ceiling-pct")
+        if ceiling is not None:
+            limits["ceiling_pct"] = float(ceiling)
     except ValueError as err:
         print(f"REFUSED: {err}", file=sys.stderr)
         return 3
     dry_run = "--dry-run" in argv
+    open_closed = "--open-closed" in argv
     group_id = _take_value(argv, "--group-id") or _new_group_id()
     if not dry_run:
         # THE RECORD EXISTS BEFORE ANYTHING CAN FAIL (found live 2026-09-24, chat ffb5fe39): the
@@ -1141,9 +1376,27 @@ def _cmd_spawn(argv: list[str], force: bool, as_json: bool) -> int:
         # no record, so status answered "no such fan-out group" - a silent drop.
         _upsert(_placeholder(group_id, spec))
     try:
+        parent_ref = _take_value(argv, "--parent")
+        if parent_ref is not None:
+            parent = find_parent(parent_ref)
+            if not parent:
+                raise ValueError(f"--parent {parent_ref!r} names no fan-out group or member "
+                                 f"(fan_out list shows them)")
+        else:
+            # A member that names no parent is still found by its own session ids; an unknown
+            # caller is simply a root, never a refusal (it did not claim a parent).
+            parent = caller_parent(_take_values(argv, "--caller-session"))
+        if parent:
+            envelope = narrow_envelope(envelope_of(parent), parent_id=parent["id"],
+                                       per_account=per_account, open_closed=open_closed,
+                                       **limits)
+        else:
+            envelope = root_envelope(group_id, per_account=per_account,
+                                     open_closed=open_closed, **limits)
         ranking = rank_targets(exclude=_take_values(argv, "--exclude"),
                                only=_take_values(argv, "--only"),
-                               open_closed="--open-closed" in argv)
+                               open_closed=open_closed, envelope=envelope)
+        envelope["only"], envelope["exclude"] = ranking["only"], ranking["exclude"]
     except (ValueError, hydralib.DaemonError) as err:
         daemon = isinstance(err, hydralib.DaemonError)
         why = f"daemon not ready: {err}" if daemon else str(err)
@@ -1151,11 +1404,13 @@ def _cmd_spawn(argv: list[str], force: bool, as_json: bool) -> int:
             _upsert({**_placeholder(group_id, spec), "phase": "failed", "error": why})
         print(f"{'fan_out FAILED' if daemon else 'REFUSED'}: {why}", file=sys.stderr)
         return 1 if daemon else 3
-    assignments = plan(spec["tasks"], ranking["targets"], per_account)
+    assignments = admit(plan(spec["tasks"], ranking["targets"], envelope["perAccount"]),
+                        envelope, group_id, spec.get("group"), record=not dry_run)
     group = spawn_group(spec, assignments, force=force, dry_run=dry_run, group_id=group_id,
                         targeting={"exclude": _take_values(argv, "--exclude"),
                                    "only": _take_values(argv, "--only"),
-                                   "openClosed": "--open-closed" in argv})
+                                   "openClosed": "--open-closed" in argv},
+                        envelope=envelope)
     if as_json:
         print(json.dumps({**group, "targets": ranking["targets"],
                           "skippedTargets": ranking["skipped"],

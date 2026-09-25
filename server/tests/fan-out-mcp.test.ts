@@ -43,9 +43,18 @@ function stripGroupId(args: string[]): { rest: string[]; groupId: string | null 
   return { rest: [...args.slice(0, i), ...args.slice(i + 2)], groupId: args[i + 1] ?? null }
 }
 
+// fan_out passes the calling chat's own session ids (below); a suite run from inside a chat
+// carries real ones, so every test starts without them and the argv pins stay exact.
+const CALLER_ENV = ['CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_HOST_SESSION_ID'] as const
+const savedCallerEnv: Record<string, string | undefined> = {}
+
 beforeEach(() => {
   calls = []
   answer = () => ({ ok: true })
+  for (const k of CALLER_ENV) {
+    savedCallerEnv[k] = process.env[k]
+    delete process.env[k]
+  }
   // @ts-expect-error test stub, narrower than the real fetch signature
   globalThis.fetch = async (url: string, init?: RequestInit) => {
     calls.push({
@@ -61,6 +70,11 @@ beforeEach(() => {
 })
 afterEach(() => {
   globalThis.fetch = originalFetch
+  for (const k of CALLER_ENV) {
+    const v = savedCallerEnv[k]
+    if (v === undefined) delete process.env[k]
+    else process.env[k] = v
+  }
 })
 
 const twoTasks = [
@@ -166,6 +180,58 @@ describe('what fan_out sends to the daemon', () => {
     const b = runBody()
     expect(b.args).not.toContain('--per-account')
     expect(b.timeoutMs).toBe(90_000 + 2 * 240_000)
+  })
+
+  test('parent, max_nodes and ceiling_pct reach the script as the spawn-tree envelope flags', async () => {
+    // A member fanning out again is only bounded if the tool hands its parent and limits to
+    // fan_out.py, which derives the narrow-only envelope from them.
+    reportRun({ id: 'fo-4', dryRun: true, members: [] })
+    await tool('fan_out').run({
+      tasks: twoTasks,
+      parent: 'fo-parent-1',
+      max_nodes: 4,
+      ceiling_pct: 60,
+      dry_run: true,
+      exclude_self: false,
+    })
+    const { rest } = stripGroupId(runBody().args)
+    expect(rest.slice(2)).toEqual([
+      '--json',
+      '--parent',
+      'fo-parent-1',
+      '--max-nodes',
+      '4',
+      '--ceiling-pct',
+      '60',
+      '--dry-run',
+    ])
+  })
+
+  test('with no parent, the calling chat own session ids reach the script so a member stays narrowed', async () => {
+    // Without them a member fanning out again becomes a fresh root with the full envelope:
+    // exactly the widening the spawn tree exists to stop. A named parent wins over them.
+    process.env.CLAUDE_CODE_SESSION_ID = 'sid-member'
+    process.env.CLAUDE_CODE_HOST_SESSION_ID = 'local_host-member'
+    reportRun({ id: 'fo-5', dryRun: true, members: [] })
+    await tool('fan_out').run({ tasks: twoTasks, max_depth: 1, dry_run: true, exclude_self: false })
+    expect(stripGroupId(runBody().args).rest.slice(2)).toEqual([
+      '--json',
+      '--caller-session',
+      'sid-member',
+      '--caller-session',
+      'local_host-member',
+      '--max-depth',
+      '1',
+      '--dry-run',
+    ])
+    calls = []
+    await tool('fan_out').run({
+      tasks: twoTasks,
+      parent: 'fo-p',
+      dry_run: true,
+      exclude_self: false,
+    })
+    expect(runBody().args).not.toContain('--caller-session')
   })
 
   test('only/exclude refs are resolved to instance NUMBERS through the daemon before posting', async () => {
