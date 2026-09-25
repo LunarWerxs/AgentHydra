@@ -14,12 +14,14 @@ WHAT IT DOES, and every rail it keeps:
   - RANKS accounts by real room the way balance.py does (fill ceiling minus the account's peak
     across 5-hour / weekly / binding; an unknown or stale reading is never room), OPEN
     instances first, ONE task per account by default. SPREAD, NEVER DUMP (owner, 2026-08-31).
-    Chats this ledger spawned into an account in the last two hours lower its place in that
-    order (a LOAD BIAS the lagging usage reading has not caught up with yet), never its room.
-  - A MEMBER THAT FANS OUT AGAIN names its parent (--parent) and gets a NARROW-ONLY envelope:
-    it can never reach more accounts, more chats per account, a busier account or a closed app
-    than its parent could, the tree stops at TREE_MAX_DEPTH, and the whole tree holds at most
-    TREE_MAX_NODES chats (--max-nodes / --max-depth / --ceiling-pct only lower them).
+    Chats this ledger spawned into an account in the last LOAD_WINDOW_SECS lower its place in
+    that order (a LOAD BIAS the lagging usage reading has not caught up with yet), never its room.
+  - A MEMBER THAT FANS OUT AGAIN gets a NARROW-ONLY envelope from its parent group: it can never
+    reach more accounts, more chats per account, a busier account or a closed app than its
+    parent could, the tree stops at TREE_MAX_DEPTH, and the whole tree holds at most
+    TREE_MAX_NODES chats (--max-nodes / --max-depth / --ceiling-pct only lower them). The parent
+    is --parent when named, else found from --caller-session (the MCP passes the calling chat's
+    own session ids), so a member that names nothing is still bound by its group.
   - SPAWNS each chat through spawn_chat.py - the app's own claude://code/new deeplink into a
     RUNNING desktop app, trust pre-written, composer submitted, bypass set at birth - so every
     chat is VISIBLE in a sidebar the owner reads. Nothing headless, ever.
@@ -59,6 +61,7 @@ first - so a probe fan-out leaves nothing in any account.
 Usage: python fan_out.py --spec <file.json | '{"tasks":[...]}'> [--per-account N]
                          [--exclude <inst>]... [--only <inst>]... [--open-closed]
                          [--group-id <id>] [--parent <group | member sessionId>]
+                         [--caller-session <sessionId>]...
                          [--max-nodes N] [--max-depth N] [--ceiling-pct P]
                          [--dry-run] [--force] [--json]
        python fan_out.py list [--json]
@@ -273,10 +276,12 @@ def _resolve_nums(fleet_data: dict, refs: list[str]) -> set:
 # fan-outs a minute apart both read the same account as the roomiest and both drain it first.
 # Every chat this ledger spawned into an account inside LOAD_WINDOW_SECS lowers that account's
 # ORDER by LOAD_BIAS_PCT points; its reported roomPct, and whether it is eligible at all, stay
-# the reading's own. With nothing in flight the order is exactly the room order, so the
-# preferred account stays first until it is actually carrying work.
+# the reading's own. With no recent spawns the order is exactly the room order, so the
+# preferred account stays first until it is actually carrying work. The window is only about
+# as long as the reading's lag: past it the reading already carries that chat's spend, and
+# biasing on top would subtract the same load twice.
 LOAD_BIAS_PCT = 15
-LOAD_WINDOW_SECS = 2 * 60 * 60
+LOAD_WINDOW_SECS = 20 * 60
 
 
 def _iso_secs(stamp: str | None) -> float | None:
@@ -287,7 +292,7 @@ def _iso_secs(stamp: str | None) -> float | None:
         return None
 
 
-def in_flight_by_instance(rows: list[dict] | None = None, now: float | None = None) -> dict:
+def recent_spawns_by_instance(rows: list[dict] | None = None, now: float | None = None) -> dict:
     """{instance num: chats this ledger spawned there within LOAD_WINDOW_SECS and has not
     deleted}. A member with no session never reached the account, so it carries no load."""
     now = time.time() if now is None else now
@@ -302,12 +307,12 @@ def in_flight_by_instance(rows: list[dict] | None = None, now: float | None = No
     return out
 
 
-def load_biased(targets: list[dict], in_flight: dict) -> list[dict]:
+def load_biased(targets: list[dict], recent: dict) -> list[dict]:
     """The targets re-ordered by room minus the load bias, open ones still before closed ones.
     The sort is stable, so equal scores keep balance.rank_next's own plan-weight tie-break."""
     for t in targets:
-        n = int(in_flight.get(t["num"], 0))
-        t["inFlight"] = n
+        n = int(recent.get(t["num"], 0))
+        t["recentSpawns"] = n
         t["loadBias"] = -LOAD_BIAS_PCT * n
         t["score"] = (t.get("roomPct") or 0) + t["loadBias"]
     return sorted(targets, key=lambda t: (bool(t.get("mustOpen")), -t["score"]))
@@ -382,7 +387,7 @@ def rank_targets(exclude: list[str] | None = None, only: list[str] | None = None
             continue
         skipped.append({"instance": f"#{inst.get('num')} {inst.get('name')}",
                         "why": "no room, or no fresh successful usage reading"})
-    return {"targets": load_biased(targets, in_flight_by_instance()), "source": source,
+    return {"targets": load_biased(targets, recent_spawns_by_instance()), "source": source,
             "skipped": skipped, "only": sorted(only_nums) if only_nums is not None else None,
             "exclude": sorted(excl_nums)}
 
@@ -420,8 +425,10 @@ def plan(tasks: list[dict], targets: list[dict], per_account: int = 1) -> list[d
 # per-account cap, node cap and quota ceiling the smaller, open-closed only if both allow it.
 # The tree ledger is fanouts.json itself: a member is admitted only while the tree holds fewer
 # than maxNodes chats, counted and recorded under the ledger's own lock, so two fan-outs in one
-# tree cannot both read the same headroom. A member that does not name its parent starts a new
-# tree; the daemon cannot tell which chat is calling, so naming it is the caller's job.
+# tree cannot both read the same headroom. A member need not name its parent: the MCP server
+# sees the calling chat's own session ids (CLAUDE_CODE_SESSION_ID / CLAUDE_CODE_HOST_SESSION_ID,
+# see server/src/core/self-identity.ts) and passes them as --caller-session, and a caller that is
+# a ledger member is narrowed by its group. Only a caller that is no member starts a new tree.
 TREE_MAX_DEPTH = 2
 TREE_MAX_NODES = 12
 # A member in one of these states never got (or never will get) a chat, so it is not a node.
@@ -481,6 +488,24 @@ def find_parent(ref: str) -> dict | None:
         return hit
     for g in reversed(groups()):
         if any(m.get("sessionId") == ref for m in g.get("members", [])):
+            return g
+    return None
+
+
+def caller_parent(session_ids: list[str]) -> dict | None:
+    """The group whose MEMBER is the calling chat, from its own session ids (the host id's
+    'local_' file prefix stripped), or None when the caller is no member: then it is a root.
+    Matches member sessionIds only, never a group id or name, so an unrelated caller can not
+    be bound to a group by a coincidence of names."""
+    wanted = set()
+    for sid in session_ids:
+        sid = (sid or "").strip()
+        if sid:
+            wanted |= {sid, sid.removeprefix("local_")}
+    if not wanted:
+        return None
+    for g in reversed(groups()):
+        if any(m.get("sessionId") in wanted for m in g.get("members", [])):
             return g
     return None
 
@@ -983,7 +1008,7 @@ def _take_value(argv: list[str], flag: str) -> str | None:
 def _positional(argv: list[str]) -> list[str]:
     """Words that are neither flags nor a flag's value."""
     valued = {"--spec", "--per-account", "--exclude", "--only", "--text", "--group-id",
-              "--parent", "--max-nodes", "--max-depth", "--ceiling-pct"}
+              "--parent", "--caller-session", "--max-nodes", "--max-depth", "--ceiling-pct"}
     out = []
     i = 0
     while i < len(argv):
@@ -1004,7 +1029,7 @@ def _print_plan(group: dict, ranking: dict) -> None:
           f"{' - DRY RUN, nothing spawned' if group.get('dryRun') else ''}")
     print(f"  targets from the {ranking.get('source')} usage survey: "
           + ", ".join(f"#{t['num']} {t['name']} (room {t['roomPct']}%"
-                      f"{', ' + str(t['inFlight']) + ' in flight' if t.get('inFlight') else ''}"
+                      f"{', ' + str(t['recentSpawns']) + ' spawned recently' if t.get('recentSpawns') else ''}"
                       f"{', closed' if t.get('mustOpen') else ''})" for t in ranking["targets"])
           if ranking["targets"] else "  targets: NONE - no account has room")
     env = group.get("envelope") or {}
@@ -1149,6 +1174,11 @@ def _cmd_spawn(argv: list[str], force: bool, as_json: bool) -> int:
             if not parent:
                 raise ValueError(f"--parent {parent_ref!r} names no fan-out group or member "
                                  f"(fan_out list shows them)")
+        else:
+            # A member that names no parent is still found by its own session ids; an unknown
+            # caller is simply a root, never a refusal (it did not claim a parent).
+            parent = caller_parent(_take_values(argv, "--caller-session"))
+        if parent:
             envelope = narrow_envelope(envelope_of(parent), parent_id=parent["id"],
                                        per_account=per_account, open_closed=open_closed,
                                        **limits)

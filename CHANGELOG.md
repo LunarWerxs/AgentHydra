@@ -11,18 +11,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **`fan_out` spreads load before an account saturates, and a spawn tree can only narrow**
   (`orchestrator/scripts/fan_out.py`, `server/src/mcp.ts`, `docs/REFERENCE.md`).
-  - Load bias: every chat the fan-out ledger spawned into an account in the last two hours lowers
-    that account's place in the ranking by 15 points. Usage readings lag the work, so back-to-back
-    fan-outs used to both drain the roomiest account first. The bias moves the order only: an
-    account's reported room and whether it may take a chat at all are still the reading's own, and
-    with nothing in flight the order is exactly the room order.
-  - Narrow-only envelope: a member that fans out again names its parent (`--parent`, MCP `parent`:
-    its group id or its own sessionId). Its envelope comes from the parent's by narrowing only
+  - Load bias: every chat the fan-out ledger spawned into an account in the last 20 minutes (about
+    the usage reading's lag) lowers that account's place in the ranking by 15 points. Usage readings
+    lag the work, so back-to-back fan-outs used to both drain the roomiest account first. The bias
+    moves the order only: an account's reported room and whether it may take a chat at all are
+    still the reading's own, and with no recent spawns the order is exactly the room order.
+  - Narrow-only envelope: a member that fans out again is bound by its group. It may name its
+    parent (`--parent`, MCP `parent`: a group id or a member sessionId); when it does not, the MCP
+    passes the calling chat's own session ids (`--caller-session`) and a caller that is a ledger
+    member is narrowed by its group, while any other caller starts a new tree. Its envelope comes from the parent's by narrowing only
     (depth + 1 toward a cap of 2, accounts intersected, exclusions united, chats per account, node
     cap and quota ceiling the smaller, closed apps opened only if both allow it), so a delegated
     chat can never reach more accounts or budget than the group it belongs to.
-  - Tree ledger: the whole spawn tree holds at most 12 chats (`--max-nodes`, MCP `max_nodes`, can
-    only lower it); a group's planned members are counted and recorded under the ledger lock before
+  - Tree ledger: the whole spawn tree holds at most 12 chats, a brand-new root included, so a large
+    `per_account` fan-out leaves tasks past 12 unassigned (`--max-nodes`, MCP `max_nodes`, can only
+    lower it; `--max-depth`, MCP `max_depth`, likewise for the depth cap); a group's planned members are counted and recorded under the ledger lock before
     anything spawns, and members past the cap are reported unassigned with the reason.
     `--ceiling-pct` (MCP `ceiling_pct`) keeps accounts at or over that peak usage out of the tree.
 

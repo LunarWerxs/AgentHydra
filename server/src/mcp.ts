@@ -2330,7 +2330,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'fan_out',
     description:
-      "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). ⛔ SPAWNING RUNS IN THE DAEMON, NOT ON THIS CONNECTION: a real fan-out (~30-90s per chat, sequential) is always DETACHED automatically past 120s declared - you get the group id and an operationId AT ONCE, and the daemon keeps spawning every chat regardless of whether this call's own connection is abandoned (a lost client can no longer cancel work mid-spawn). Poll fan_out_status { group } for each member's progress; pass `background: false` only for a one-or-two-chat call you know your transport can hold open. Then fan_out_status reads them and fan_out_send steers them. `dry_run: true` returns the plan and spawns nothing, and always blocks (it only ranks and plans). This is a person's act and does not need the tray icon. WRONG TOOL when every Claude account is at/above 90% weekly (check list_usage first): mechanical, checkable batch work belongs on the DeepSeek zswarm instead (zswarm_run) rather than queued behind N account resets; fan_out remains right for work that needs a real Claude Desktop chat. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
+      "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. SPAWN TREE CAP: every fan-out, a brand-new one included, belongs to a tree of at most 12 chats by default (`max_nodes`), so tasks past that come back UNASSIGNED even with room left; a member fanning out again is found by its own session and can only narrow its group's envelope (accounts, per_account, closed apps, quota ceiling, depth). Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). ⛔ SPAWNING RUNS IN THE DAEMON, NOT ON THIS CONNECTION: a real fan-out (~30-90s per chat, sequential) is always DETACHED automatically past 120s declared - you get the group id and an operationId AT ONCE, and the daemon keeps spawning every chat regardless of whether this call's own connection is abandoned (a lost client can no longer cancel work mid-spawn). Poll fan_out_status { group } for each member's progress; pass `background: false` only for a one-or-two-chat call you know your transport can hold open. Then fan_out_status reads them and fan_out_send steers them. `dry_run: true` returns the plan and spawns nothing, and always blocks (it only ranks and plans). This is a person's act and does not need the tray icon. WRONG TOOL when every Claude account is at/above 90% weekly (check list_usage first): mechanical, checkable batch work belongs on the DeepSeek zswarm instead (zswarm_run) rather than queued behind N account resets; fan_out remains right for work that needs a real Claude Desktop chat. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
     inputSchema: S(
       {
         tasks: {
@@ -2386,12 +2386,17 @@ export const TOOLS: McpEngineTool[] = [
         parent: {
           type: 'string',
           description:
-            "Set this when YOU are a fan_out member fanning out again: your group id, or your own sessionId. The new group's envelope is then derived from the parent's by narrowing only - never more accounts, chats per account, quota or depth than the parent had - and the whole spawn tree holds at most max_nodes chats.",
+            "The parent group id, or a member's sessionId. Omit it and the calling chat's own session is used: a fan_out member fanning out again is found by it automatically, and a caller that is no member starts a new tree. The new group's envelope is derived from the parent's by narrowing only - never more accounts, chats per account, quota or depth than the parent had - and the whole spawn tree holds at most max_nodes chats.",
         },
         max_nodes: {
           type: 'number',
           description:
-            'Cap on chats across the whole spawn tree (default 12; a child can only lower it).',
+            'Cap on chats across the whole spawn tree, this call included (default 12, also for a brand-new root: tasks past it come back UNASSIGNED; a child can only lower it).',
+        },
+        max_depth: {
+          type: 'number',
+          description:
+            'How many levels of members fanning out again the tree allows (default 2; a child can only lower it).',
         },
         ceiling_pct: {
           type: 'number',
@@ -2477,9 +2482,24 @@ export const TOOLS: McpEngineTool[] = [
       // the spawn tree's narrow-only envelope (fan_out.py narrow_envelope owns the rules)
       const parent = str(a.parent).trim()
       if (parent) args.push('--parent', parent)
+      else {
+        // A member that names no parent must still be bound by its group, or fanning out again
+        // silently widens to a fresh root. This process sees the calling chat's own session ids
+        // (core/self-identity.ts); fan_out.py narrows when one is a ledger member and starts a
+        // root when none is. A frozen id from an older chat can only narrow, never widen.
+        const callerIds = [
+          process.env.CLAUDE_CODE_SESSION_ID,
+          process.env.CLAUDE_CODE_HOST_SESSION_ID,
+        ]
+        for (const id of new Set(callerIds.map((v) => str(v).trim()).filter(Boolean)))
+          args.push('--caller-session', id)
+      }
       const maxNodes = Number(a.max_nodes)
       if (Number.isFinite(maxNodes) && maxNodes >= 1)
         args.push('--max-nodes', String(Math.floor(maxNodes)))
+      const maxDepth = Number(a.max_depth)
+      if (Number.isFinite(maxDepth) && maxDepth >= 0)
+        args.push('--max-depth', String(Math.floor(maxDepth)))
       const ceilingPct = Number(a.ceiling_pct)
       if (a.ceiling_pct != null && Number.isFinite(ceilingPct))
         args.push('--ceiling-pct', String(ceilingPct))
