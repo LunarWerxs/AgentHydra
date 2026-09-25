@@ -8,7 +8,7 @@
 // reconnect. These tests pin the file round-trip, the core-fields-win merge rule, the update /
 // clear semantics, and that a missing/dead pointer reads as "nothing running".
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInstancePointer } from "../../src/instance-pointer.mjs";
@@ -125,8 +125,6 @@ test("readInstanceInfo returns null for a missing or corrupt pointer", () => {
 
   writeFileSync(join(configDir, "runtime.json"), "{ not valid json");
   expect(ptr.readInstanceInfo()).toBeNull(); // corrupt
-  // sanity: we really did write the garbage we're claiming is unparseable
-  expect(readFileSync(join(configDir, "runtime.json"), "utf8")).toContain("not valid json");
 });
 
 test("findLiveInstance resolves null when no pointer is recorded (no network probe)", async () => {

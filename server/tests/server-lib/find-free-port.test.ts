@@ -64,6 +64,13 @@ test("honours an explicit loopback host when probing", async () => {
   expect(found).toBeGreaterThan(busy);
 });
 
-test("rejects with a RangeError once the search walks past port 65535", async () => {
-  await expect(findFreePort(65536)).rejects.toBeInstanceOf(RangeError);
+test("rejects with its own RangeError when the start port is past 65535", async () => {
+  // The message is what proves the guard: listen(65536) throws a RangeError of its own, so the
+  // type alone still passes with the guard removed.
+  const err = await findFreePort(65536).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(err).toBeInstanceOf(RangeError);
+  expect((err as Error).message).toBe("findFreePort: no free port between 65536 and 65535");
 });

@@ -109,14 +109,4 @@ mod tests {
         let prefix = hex(br"d:\publicprojects\redesign")[..16].to_uppercase();
         assert_eq!(prefix, "D5628C8F540E1934");
     }
-
-    #[test]
-    fn produces_the_same_16_char_prefix_powershell_does() {
-        // PowerShell: [BitConverter]::ToString(sha.ComputeHash(UTF8(path))).Replace('-','')
-        //             .Substring(0,16)  -- i.e. the first 8 bytes, uppercase hex.
-        // The host uppercases our lowercase hex to match; assert the prefix rule itself here.
-        let full = hex(b"d:\\publicprojects\\redesign");
-        assert_eq!(full.len(), 64);
-        assert_eq!(&full[..16].to_uppercase().len(), &16);
-    }
 }
