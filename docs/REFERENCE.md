@@ -105,7 +105,9 @@ reads as `working`; see [Clearing a stuck prompt](UNBLOCKING-STUCK-PROMPTS.md)).
 Mutating tools say `MUTATES:` in their description; there is deliberately no shutdown tool.
 
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
-`opencode` or `foreign` (the shared reader for Cursor, Windsurf, Zed, Copilot CLI and the rest);
+`opencode` or `foreign` (the shared reader for Cursor, Windsurf, Zed, Copilot CLI, Pi and the
+rest; a Pi session shows its active branch, and each branch left behind with /tree lists as a
+fork of it);
 every returned session is source-tagged. Session viewing/search is unified, but queue dispatch,
 composing replies, and rate-limit auto-resume remain Claude-only.
 

@@ -1,6 +1,6 @@
 // server/tests/foreign-sessions.test.ts — the fourth reader (server/src/foreign-sessions.ts).
 //
-// Five stores, one adapter each, built against real files on a real machine. What is worth pinning
+// Six stores, one adapter each, built against real files on a real machine. What is worth pinning
 // is not the happy path but the two promises the module makes: a store whose layout has moved on
 // contributes NOTHING rather than throwing, and no adapter ever invents a token count, because none
 // of these tools records one.
@@ -299,9 +299,98 @@ describe('Copilot CLI', () => {
   })
 })
 
+describe('Pi', () => {
+  // WHY: a Pi file is a tree, and /tree branching appends the new branch to the SAME file. Reading
+  // it in file order would splice the abandoned branch into the conversation; the active branch is
+  // the last entry's parent chain, and the abandoned tip is listed as a fork of its own.
+  const store = join(root, 'pi')
+  const file = join(store, '--D--Projects-Thing--', '2026-09-20T10-00-00-000Z_5f1c.jsonl')
+  const at = (s: number) => `2026-09-20T10:00:${String(s).padStart(2, '0')}.000Z`
+  const msg = (id: string, parentId: string | null, s: number, message: object) =>
+    JSON.stringify({ type: 'message', id, parentId, timestamp: at(s), message })
+  write(
+    file,
+    [
+      JSON.stringify({
+        type: 'session',
+        version: 3,
+        id: '5f1c',
+        timestamp: at(0),
+        cwd: 'D:\\Thing',
+      }),
+      msg('s0', null, 1, { role: 'system', content: 'You are pi. (a long system prompt)' }),
+      msg('u1', 's0', 2, { role: 'user', content: 'fix the parser' }),
+      msg('a1', 'u1', 3, {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'look first' },
+          { type: 'toolCall', id: 'c1', name: 'read', arguments: { path: 'parser.ts' } },
+        ],
+      }),
+      msg('r1', 'a1', 4, {
+        role: 'toolResult',
+        toolName: 'read',
+        content: [{ type: 'text', text: 'export function parse() {}' }],
+      }),
+      msg('u2', 'r1', 5, { role: 'user', content: 'try approach A' }),
+      msg('a2', 'u2', 6, { role: 'assistant', content: [{ type: 'text', text: 'A is done.' }] }),
+      JSON.stringify({
+        type: 'branch_summary',
+        id: 'b1',
+        parentId: 'r1',
+        timestamp: at(7),
+        fromId: 'a2',
+        summary: 'Approach A was tried.',
+      }),
+      msg('u3', 'b1', 8, { role: 'user', content: [{ type: 'text', text: 'try approach B' }] }),
+      msg('a3', 'u3', 9, { role: 'assistant', content: [{ type: 'text', text: 'B is done.' }] }),
+      JSON.stringify({
+        type: 'session_info',
+        id: 'n1',
+        parentId: 'a3',
+        timestamp: at(10),
+        name: 'Parser rewrite',
+      }),
+    ].join('\n'),
+  )
+
+  test('the active branch is the last entry and its parents, not the file in order', () => {
+    const texts = readForeignSession('pi', file)
+      .filter((e) => e.kind === 'text')
+      .map((e) => e.text)
+    expect(texts).toEqual([
+      'fix the parser',
+      'Branch summary: Approach A was tried.',
+      'try approach B',
+      'B is done.',
+    ])
+  })
+
+  test('tool calls, results and thinking keep their kinds; the system prompt is left out', () => {
+    const events = readForeignSession('pi', file)
+    expect(events.find((e) => e.kind === 'tool_use')?.tool_name).toBe('read')
+    expect(events.find((e) => e.kind === 'tool_result')?.text).toBe('export function parse() {}')
+    expect(events.find((e) => e.kind === 'thinking')?.text).toBe('look first')
+    expect(events.some((e) => e.text.includes('You are pi'))).toBe(false)
+  })
+
+  test('the session is named by /name, and the abandoned branch is listed as a fork', () => {
+    const sessions = listForeignSessions('pi', store)
+    expect(sessions.map((s) => s.session_id)).toEqual(['5f1c', '5f1c-fork-a2'])
+    expect(sessions[0]?.title).toBe('Parser rewrite')
+    expect(sessions[0]?.cwd).toBe('D:\\Thing')
+    expect(sessions[0]?.last_activity_at).toBe(Date.parse(at(10)))
+    expect(sessions[1]?.title).toBe('Parser rewrite (fork: try approach A)')
+    const fork = readForeignSession('pi', sessions[1]?.path ?? '')
+      .filter((e) => e.kind === 'text')
+      .map((e) => e.text)
+    expect(fork).toEqual(['fix the parser', 'try approach A', 'A is done.'])
+  })
+})
+
 describe('every adapter fails closed', () => {
   test('a root that does not exist yields no sessions and does not throw', () => {
-    for (const tool of ['grok', 'kimi', 'vscode-copilot', 'copilot', 'zed'])
+    for (const tool of ['grok', 'kimi', 'vscode-copilot', 'copilot', 'zed', 'pi'])
       expect(listForeignSessions(tool, join(root, 'nope'))).toEqual([])
   })
 

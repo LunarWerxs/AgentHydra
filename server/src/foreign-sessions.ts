@@ -15,7 +15,8 @@
 // Copilot and the IDE integrations bill credits and never write a token count at all; Grok, Kimi
 // and Zed simply do not persist one. So these sessions appear in the list, are readable and
 // searchable, and contribute NOTHING to the spend charts. A zero there would be a claim they were
-// free; an absence is the truth.
+// free; an absence is the truth. Pi is the one exception - its assistant messages carry `usage` and
+// `cost` - but pricing it would be a spend reader of its own, so for now it is read like the rest.
 
 import { Database } from 'bun:sqlite'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -621,6 +622,334 @@ function zedRead(virtualPath: string): TailEvent[] {
   }
 }
 
+// --- Pi -------------------------------------------------------------------------------------------
+// `<root>/--<encoded cwd>--/<timestamp>_<uuid>.jsonl`, or the same files flat in the root when
+// PI_CODING_AGENT_SESSION_DIR points at one directory. Written from the format documented in
+// earendil-works/pi packages/coding-agent/docs/session-format.md (MIT); no code taken from it.
+//
+// A Pi file is a TREE, not a transcript. After a `session` header line (id, cwd, timestamp) every
+// entry links to its parent by `id`/`parentId`, and branching (/tree) appends a new child to an
+// earlier entry in the SAME file. Reading the lines in file order would therefore splice every
+// abandoned branch into the conversation. Pi resumes a file at its LAST entry, so that entry's
+// parent chain back to a root is the session; every other childless entry is the tip of a branch
+// the user left, listed as a fork of it through a `<file>#<tipId>` virtual path, as Zed's are.
+
+interface PiEntry {
+  type?: string
+  id?: string
+  parentId?: string | null
+  timestamp?: string
+  /** `session` header only. */
+  cwd?: string
+  /** `session_info`: the name set with /name. */
+  name?: string
+  /** `compaction` and `branch_summary`. */
+  summary?: string
+  /** `custom_message`. */
+  content?: unknown
+  display?: boolean
+  message?: {
+    role?: string
+    content?: unknown
+    toolName?: string
+    command?: string
+    output?: string
+    summary?: string
+    display?: boolean
+  }
+}
+
+interface PiTree {
+  header: PiEntry | null
+  /** Insertion order is file order, which is what "last entry is the leaf" is measured against. */
+  entries: Map<string, PiEntry>
+  leaf: string | null
+}
+
+function parsePiTree(path: string): PiTree | null {
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch {
+    return null
+  }
+  const tree: PiTree = { header: null, entries: new Map(), leaf: null }
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    let rec: PiEntry
+    try {
+      rec = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (!rec || typeof rec !== 'object') continue
+    if (rec.type === 'session') {
+      tree.header ??= rec
+      continue
+    }
+    if (typeof rec.id !== 'string') continue
+    tree.entries.set(rec.id, rec)
+    tree.leaf = rec.id
+  }
+  return tree.header ? tree : null
+}
+
+/** Root-first chain of entries ending at `tip`. The seen-set bounds a parentId cycle in a bad
+ *  file. */
+function piBranch(tree: PiTree, tip: string): PiEntry[] {
+  const out: PiEntry[] = []
+  const seen = new Set<string>()
+  let at: string | null | undefined = tip
+  while (at && !seen.has(at)) {
+    seen.add(at)
+    const entry = tree.entries.get(at)
+    if (!entry) break
+    out.push(entry)
+    at = entry.parentId
+  }
+  return out.reverse()
+}
+
+/** The readable text of a Pi content field: a plain string, or blocks whose `text` ones count. */
+function piText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((c) =>
+      c && typeof c === 'object' && (c as { type?: string }).type === 'text'
+        ? ((c as { text?: string }).text ?? '')
+        : '',
+    )
+    .join('\n')
+}
+
+function piFirstUserText(entries: PiEntry[]): string {
+  for (const e of entries)
+    if (e.type === 'message' && e.message?.role === 'user') {
+      const t = compact(piText(e.message.content))
+      if (t) return t
+    }
+  return ''
+}
+
+const piTime = (entry: PiEntry | undefined, fallback: number): number => {
+  const t = entry?.timestamp ? Date.parse(entry.timestamp) : Number.NaN
+  return Number.isFinite(t) ? t : fallback
+}
+
+/** One file's sessions: the active branch first, then one row per abandoned branch that holds
+ *  conversation of its own. */
+function piSessionsOf(path: string, dirName: string, size: number): ForeignSession[] {
+  const tree = parsePiTree(path)
+  if (!tree?.leaf) return []
+  const header = tree.header as PiEntry
+  const mtime = mtimeOf(path)
+  const fileName = (path.split(/[\\/]/).pop() ?? '').replace(/\.jsonl$/, '')
+  const id = header.id || fileName.replace(/^.*?_/, '')
+  const cwd = typeof header.cwd === 'string' ? header.cwd : ''
+  const project = cwd || (dirName ? dirName.replace(/^--|--$/g, '') : 'pi')
+  const created = piTime(header, Number.NaN)
+  const active = piBranch(tree, tree.leaf)
+  // /name writes a session_info entry; the latest one anywhere in the file is the current name.
+  let named = ''
+  for (const e of tree.entries.values())
+    if (e.type === 'session_info' && typeof e.name === 'string') named = e.name.trim()
+  const title = named || titleFromText(piFirstUserText(active), 'Pi session')
+  const base = {
+    cwd,
+    project,
+    created_at: Number.isFinite(created) ? created : null,
+    size_bytes: size,
+    archived: false,
+  }
+  const out: ForeignSession[] = [
+    {
+      ...base,
+      session_id: id,
+      path,
+      title,
+      last_activity_at: piTime(tree.entries.get(tree.leaf), mtime),
+    },
+  ]
+  const parents = new Set<string>()
+  for (const e of tree.entries.values()) if (e.parentId) parents.add(e.parentId)
+  const onActive = new Set(active.map((e) => e.id))
+  for (const [tip, entry] of tree.entries) {
+    if (tip === tree.leaf || parents.has(tip)) continue
+    // Only the part past the fork point is the branch's own; a tip that is just a label or a
+    // model switch hanging off the main line is not a conversation anyone could want to open.
+    const own = piBranch(tree, tip).filter((e) => !onActive.has(e.id))
+    const said = own.some(
+      (e) =>
+        e.type === 'message' && (e.message?.role === 'user' || e.message?.role === 'assistant'),
+    )
+    if (!said) continue
+    const asked = piFirstUserText(own)
+    out.push({
+      ...base,
+      session_id: `${id}-fork-${tip}`,
+      path: `${path}#${tip}`,
+      title: `${title} (fork${asked ? `: ${truncate(asked, 60)}` : ''})`,
+      last_activity_at: piTime(entry, mtime),
+    })
+  }
+  return out
+}
+
+/** Every `.jsonl` a Pi root can hold: one level of per-cwd directories, or flat in the root. */
+function piFiles(root: string): Array<{ path: string; dirName: string }> {
+  const out: Array<{ path: string; dirName: string }> = []
+  const collect = (dir: string, dirName: string) => {
+    try {
+      for (const n of readdirSync(dir))
+        if (n.endsWith('.jsonl')) out.push({ path: join(dir, n), dirName })
+    } catch {
+      // An unreadable directory holds no sessions we can show.
+    }
+  }
+  collect(root, '')
+  for (const d of dirs(root)) collect(join(root, d), d)
+  return out
+}
+
+/**
+ * Listed files, keyed by path, valid only while the file is byte-for-byte the one that was parsed.
+ * Listing a Pi store means parsing every whole file (the title and the forks live in the tree, not
+ * in an index), so the same mtime+size stamp the VS Code cache uses keeps an idle sweep to a stat.
+ */
+const piCache = new Map<string, { stamp: string; sessions: ForeignSession[] }>()
+
+function* piSessions(root: string): Generator<ForeignSession[]> {
+  const seen = new Set<string>()
+  try {
+    for (const { path, dirName } of piFiles(root)) {
+      seen.add(path)
+      let stamp: string
+      let size: number
+      try {
+        const st = statSync(path)
+        size = st.size
+        stamp = `${st.mtimeMs}:${st.size}`
+      } catch {
+        yield []
+        continue
+      }
+      const hit = piCache.get(path)
+      if (hit?.stamp === stamp) {
+        yield hit.sessions
+        continue
+      }
+      const sessions = piSessionsOf(path, dirName, size)
+      // Pi appends while a session runs, so an empty parse may be a file caught mid-write: only a
+      // parse that found something is remembered.
+      if (sessions.length) piCache.set(path, { stamp, sessions })
+      yield sessions
+    }
+  } finally {
+    for (const path of piCache.keys())
+      if (path.startsWith(root) && !seen.has(path)) piCache.delete(path)
+  }
+}
+
+/** One Pi entry as the events a reader shows. System prompts, usage, labels and extension state are
+ *  machinery, not conversation, and are left out. */
+function piEvents(e: PiEntry, at: string): TailEvent[] {
+  const ev = (
+    role: TailEvent['role'],
+    kind: TailEvent['kind'],
+    text: string,
+    tool: string | null,
+  ): TailEvent => ({ role, kind, text: truncate(text), tool_name: tool, timestamp: at })
+  if (e.type === 'compaction' || e.type === 'branch_summary') {
+    const t = compact(e.summary ?? '')
+    const label = e.type === 'compaction' ? 'Compacted' : 'Branch summary'
+    return t ? [ev('assistant', 'text', `${label}: ${t}`, null)] : []
+  }
+  if (e.type === 'custom_message') {
+    const t = compact(piText(e.content))
+    return e.display !== false && t ? [ev('user', 'text', t, null)] : []
+  }
+  if (e.type !== 'message' || !e.message) return []
+  const m = e.message
+  const out: TailEvent[] = []
+  switch (m.role) {
+    case 'user': {
+      const t = compact(piText(m.content))
+      if (t) out.push(ev('user', 'text', t, null))
+      break
+    }
+    case 'assistant':
+      for (const c of Array.isArray(m.content) ? m.content : []) {
+        if (!c || typeof c !== 'object') continue
+        const block = c as {
+          type?: string
+          text?: string
+          thinking?: string
+          name?: string
+          arguments?: unknown
+        }
+        if (block.type === 'text') {
+          const t = compact(block.text ?? '')
+          if (t) out.push(ev('assistant', 'text', t, null))
+        } else if (block.type === 'thinking') {
+          const t = compact(block.thinking ?? '')
+          if (t) out.push(ev('assistant', 'thinking', t, null))
+        } else if (block.type === 'toolCall') {
+          const args = block.arguments ? compact(JSON.stringify(block.arguments)) : ''
+          out.push(ev('assistant', 'tool_use', truncate(args, 500), block.name ?? 'tool'))
+        }
+      }
+      break
+    case 'toolResult': {
+      const t = compact(piText(m.content))
+      if (t) out.push(ev('user', 'tool_result', t, m.toolName ?? 'tool'))
+      break
+    }
+    case 'bashExecution':
+      // A command the user ran with `!`, not one the model asked for; shown as the tool it is.
+      if (m.command) out.push(ev('user', 'tool_use', m.command, 'bash'))
+      if (m.output?.trim()) out.push(ev('user', 'tool_result', m.output.trim(), 'bash'))
+      break
+    case 'custom': {
+      const t = compact(piText(m.content))
+      if (m.display !== false && t) out.push(ev('user', 'text', t, null))
+      break
+    }
+    case 'branchSummary':
+    case 'compactionSummary': {
+      const t = compact(m.summary ?? '')
+      if (t) out.push(ev('assistant', 'text', t, null))
+      break
+    }
+  }
+  return out
+}
+
+const pi: Adapter = {
+  list: (root) => [...piSessions(root)].flat(),
+  async listAsync(root) {
+    const out: ForeignSession[] = []
+    let examined = 0
+    for (const sessions of piSessions(root)) {
+      out.push(...sessions)
+      if (++examined % 16 === 0) await new Promise((r) => setTimeout(r, 0))
+    }
+    return out
+  },
+  read(virtualPath) {
+    // `#<tipId>` opens a fork; a bare path opens the active branch. Only a suffix after `.jsonl`
+    // counts, so a `#` that is part of a real directory name is left alone.
+    const hash = virtualPath.lastIndexOf('#')
+    const forked = hash > 0 && virtualPath.slice(0, hash).endsWith('.jsonl')
+    const path = forked ? virtualPath.slice(0, hash) : virtualPath
+    const tree = parsePiTree(path)
+    const tip = forked ? virtualPath.slice(hash + 1) : tree?.leaf
+    if (!tree || !tip || !tree.entries.has(tip)) return []
+    const fallback = mtimeOf(path)
+    return piBranch(tree, tip).flatMap((e) => piEvents(e, iso(piTime(e, fallback))))
+  },
+}
+
 /** Adapter per catalog tool id. A tool with `format: 'foreign'` and no entry here reads as empty,
  *  which is the same bounded failure as a path that does not exist. */
 const ADAPTERS: Record<string, Adapter> = {
@@ -629,6 +958,7 @@ const ADAPTERS: Record<string, Adapter> = {
   'vscode-copilot': vscodeCopilot,
   copilot: copilotCli,
   zed,
+  pi,
 }
 
 export function foreignAdapter(toolId: string): Adapter | undefined {

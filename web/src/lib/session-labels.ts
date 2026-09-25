@@ -77,6 +77,7 @@ export const TOOL_NAME: Record<string, string> = {
   grok: 'Grok',
   kimi: 'Kimi',
   zed: 'Zed',
+  pi: 'Pi',
   copilot: 'Copilot CLI',
   'vscode-copilot': 'VS Code Copilot',
 }
