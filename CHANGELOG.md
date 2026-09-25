@@ -9,6 +9,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Behavioural eval for the MCP server** (`scripts/mcp-eval/`, `bun run eval:mcp`). Checks that an
+  agent can still reach a known answer through the tools, which a lint of the tool definitions
+  cannot see. Read-only questions ("which instance has the most weekly quota left?") are answered
+  over the real stdio server against a frozen fixture fleet. The report gives accuracy, tool calls,
+  tools used and time per question. A scripted reference agent runs in the test suite. `--serve`
+  and `--score` let an agent in a visible chat take the same eval, with its feedback on each tool.
+  Idea from the mcp-builder evaluation harness in anthropics/skills (Apache-2.0).
+
 - **Edit survival: did the code a session wrote stay written?** (`server/src/edit-survival.ts`,
   `server/src/analytics.ts`, `server/src/routes/analytics.ts`, `web/src/components/AnalyticsView.vue`).
   Two hours or more after a Claude session's last Edit/Write (and a Codex session's structured edit

@@ -212,6 +212,29 @@ near 100, and switching the flagship model doesn't dodge the shared weekly bucke
 check its own quota before a heavy multi-agent fan-out and pace accordingly, routing heavy work to
 whichever account has the lowest weekly %.
 
+### Behavioural eval: can an agent reach the answer?
+
+`bun run eval:mcp` (`scripts/mcp-eval/`) checks the tools by USE, not by lint. It starts a frozen,
+fictional fleet on a loopback port (`fixture.ts`), spawns the stdio server against it exactly as an
+MCP client would, and asks the questions in `qa-pairs.xml` ("which instance has the most weekly
+quota left?"). Each pair is read-only, independent, stable and has one verifiable answer. The report
+gives accuracy plus, per question, the tool calls, which tools, and the time taken.
+
+- **Default**: a scripted reference agent answers each question by the path a competent agent would
+  take, and the command exits 1 on any miss. The test suite runs this
+  (`server/tests/mcp-eval.test.ts`), so a renamed tool, a changed argument or a reshaped result on a
+  question's path fails CI.
+- **`--serve`**: starts the fixture and prints the server config for a chat you can see. The agent
+  answers using only that server and writes `[{"id","answer","feedback","toolCalls"}]`, where
+  `feedback` is its view of the tools. **`--score <file>`** scores that file. Nothing here launches a
+  model on its own.
+
+Every non-GET the fixture receives is refused with 405, and the harness's own client will not call
+a `MUTATES:` tool. Both are listed under "refused mutations". A route the fixture does not serve
+answers 404, so the server reports an error. It never falls back to reading this machine's real
+accounts. To add a question, add a `<qa_pair id=...>` and its reference solution in `harness.ts`.
+A pair without a solution is refused, never skipped.
+
 ## Claude Desktop session mapping
 
 > **Moving a chat to another account?** Read
