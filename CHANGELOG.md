@@ -9,6 +9,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Frozen MCP API levels** (`server/src/mcp-api-levels.ts`, `server/mcp-api-levels/1.2.0.json`,
+  `server/mcp-api-levels/1.3.1.json`, `scripts/mcp-api-level.ts`, `server/tests/mcp-api-levels.test.ts`). Each release commits its MCP
+  tool surface (names, `since`, input schemas without prose), generated from `TOOLS`, and `bun test`
+  replays every level against the live tools: a removed tool or argument, an optional argument made
+  required, a dropped enum value or a narrowed type now fails the suite instead of silently breaking
+  an agent's saved prompt. A version bump with no frozen level fails too; `bun run mcp:api-level
+  --write` freezes it (docs/RELEASING.md). Idea from Neovim's API levels.
+
 - **Recovery recipes with a ledger** (`orchestrator/scripts/lib/recoverylib.py`,
   `orchestrator/scripts/fan_out.py`, `orchestrator/scripts/stall_watch.py`,
   `orchestrator/scripts/attempts.py`, `server/src/mcp.ts`). A closed table of known failures

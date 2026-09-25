@@ -31,6 +31,10 @@ from the dirty tree. Both hooks have suites under `.githooks/tests/`.
 2. **Update the changelog.** Move the relevant `[Unreleased]` entries in `CHANGELOG.md` into a new
    `## [X.Y.Z] - YYYY-MM-DD` heading, following the existing Keep a Changelog format already used
    in that file.
+   **Then freeze the MCP API level:** `bun run mcp:api-level --write` commits the live tool surface
+   as `server/mcp-api-levels/<version>.json`. `bun test` refuses a version with no level, and
+   replays every level against the live tools, so a later release that drops a tool or makes an
+   optional argument required fails there (see [REFERENCE.md](REFERENCE.md#frozen-api-levels)).
 3. **Run local CI before pushing.** `.github/workflows/ci.yml` is the authoritative list; the
    commands below are a convenience copy and the workflow wins if the two ever disagree. Check
    the workflow rather than trusting this line when a step has been added recently.

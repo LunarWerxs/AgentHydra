@@ -1,0 +1,1633 @@
+{
+  "version": "1.2.0",
+  "tools": [
+    {
+      "name": "ack_incident",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "add_queue_item",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "effort": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "type": "string"
+          },
+          "fork": {
+            "type": "boolean"
+          },
+          "instance_ref": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "new_chat": {
+            "type": "boolean"
+          },
+          "permission_mode": {
+            "enum": [
+              "default",
+              "acceptEdits",
+              "bypassPermissions",
+              "plan"
+            ],
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "prompt",
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "archive_desktop_chat",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "cancel_queue_item",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "chat_dossier",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "chat_rename",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "current_title": {
+            "type": "string"
+          },
+          "new_title": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_title",
+          "session_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "check_my_usage",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "check_update",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "check_usage",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "configDir": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "check_versions",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "cli_instance_login_helper",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "codex_instance_login_helper",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "create_cli_instance",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "create_codex_instance",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "export_session",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "enum": [
+              "markdown",
+              "html"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "claude",
+              "codex",
+              "opencode",
+              "hermes",
+              "dsh",
+              "zswarm",
+              "foreign"
+            ],
+            "type": "string"
+          },
+          "thinking": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "fan_out",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "background": {
+            "type": "boolean"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "exclude": {
+            "items": {
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "type": "array"
+          },
+          "exclude_self": {
+            "type": "boolean"
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "group": {
+            "type": "string"
+          },
+          "only": {
+            "items": {
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "type": "array"
+          },
+          "open_closed": {
+            "type": "boolean"
+          },
+          "per_account": {
+            "type": "number"
+          },
+          "tasks": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "cwd": {
+                  "type": "string"
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "cwd",
+                "prompt"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "tasks"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "fan_out_delete",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "force": {
+            "type": "boolean"
+          },
+          "group": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "group"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "fan_out_send",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "force": {
+            "type": "boolean"
+          },
+          "group": {
+            "type": "string"
+          },
+          "only": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "text"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "fan_out_status",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "group": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "focus_codex_desktop_instance",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_activity",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "period": {
+            "enum": [
+              "24h",
+              "7d",
+              "30d",
+              "all"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_monitor",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_recent_edits",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "number"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_run_cost",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_run_events",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_scheduler",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_session",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "claude",
+              "codex",
+              "opencode",
+              "hermes",
+              "dsh",
+              "zswarm",
+              "foreign"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_spend",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "period": {
+            "enum": [
+              "24h",
+              "7d",
+              "30d",
+              "all"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "import_session_to_desktop",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm_title": {
+            "type": "string"
+          },
+          "instance_ref": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "launch_cli_instance",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "effort": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "model": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "launch_codex_instance",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "launch_instance",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "launch_terminal_session",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "effort": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "type": "string"
+          },
+          "instance_ref": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "resume_session_id": {
+            "type": "string"
+          },
+          "visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cwd",
+          "prompt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "link_cli_instance_to_desktop",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "desktop": {
+            "type": [
+              "string",
+              "number",
+              "null"
+            ]
+          },
+          "desktopDir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_chats",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "enum": [
+              "hide",
+              "include",
+              "only"
+            ],
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "limit": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          },
+          "q": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_cli_instances",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_codex_instances",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_incidents",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "enum": [
+              "open",
+              "acked",
+              "resolved"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_instance_numbers",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_instances",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_projects",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_queue",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_rate_limited_sessions",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "number"
+          },
+          "pendingOnly": {
+            "type": "boolean"
+          },
+          "period": {
+            "enum": [
+              "24h",
+              "7d",
+              "30d",
+              "all"
+            ],
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_sessions",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "enum": [
+              "hide",
+              "include",
+              "only"
+            ],
+            "type": "string"
+          },
+          "dispatched": {
+            "enum": [
+              "all",
+              "queued",
+              "manual"
+            ],
+            "type": "string"
+          },
+          "fields": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          },
+          "period": {
+            "enum": [
+              "24h",
+              "7d",
+              "30d",
+              "all"
+            ],
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "rateLimited": {
+            "enum": [
+              "all",
+              "only",
+              "pending"
+            ],
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "claude",
+              "codex",
+              "opencode",
+              "hermes",
+              "dsh",
+              "zswarm",
+              "foreign"
+            ],
+            "type": "string"
+          },
+          "until": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_usage",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "move_chat",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "chat": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "from": {
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "to": {
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "wait_secs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "chat"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "move_chats",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "all_unarchived": {
+            "type": "boolean"
+          },
+          "archived_count": {
+            "type": "number"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "chats": {
+            "items": {
+              "properties": {
+                "chat": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "chat"
+              ],
+              "type": [
+                "string",
+                "object"
+              ]
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "from": {
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "limit": {
+            "type": "number"
+          },
+          "resume": {
+            "type": "string"
+          },
+          "terminate_live": {
+            "type": "boolean"
+          },
+          "to": {
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "wait_secs": {
+            "type": "number"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "open_codex_desktop_instance",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "orchestrator_cancel",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "orchestrator_loop",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "json": {
+            "type": "boolean"
+          },
+          "live": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "orchestrator_menu",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "orchestrator_operation",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "orchestrator_run",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "script": {
+            "type": "string"
+          },
+          "timeout_secs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "script"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "orchestrator_switch",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "armed",
+              "arm",
+              "arm_now",
+              "resume",
+              "pause",
+              "disarm"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "quit_codex_desktop_instance",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "quit_instance",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "redeem_codex_reset_credit",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "force": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "resolve_incident",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "resolve_instance",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [
+          "instance"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "run_queue_item",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "scan_session_secrets",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "claude",
+              "codex",
+              "opencode",
+              "hermes",
+              "dsh",
+              "zswarm",
+              "foreign"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "search_sessions",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "caseSensitive": {
+            "type": "boolean"
+          },
+          "everything": {
+            "type": "boolean"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "query": {
+            "type": "string"
+          },
+          "regex": {
+            "type": "boolean"
+          },
+          "source": {
+            "enum": [
+              "claude",
+              "codex",
+              "opencode",
+              "hermes",
+              "dsh",
+              "zswarm",
+              "foreign"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "set_monitor",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "maxAttempts": {
+            "type": "number"
+          },
+          "resumeBufferMin": {
+            "type": "number"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "set_scheduler",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "max_concurrent": {
+            "type": "number"
+          },
+          "poll_seconds": {
+            "type": "number"
+          },
+          "spacing_seconds": {
+            "type": "number"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "sync_versions",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "tail_session",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "humanOnly": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "source": {
+            "enum": [
+              "claude",
+              "codex",
+              "opencode",
+              "hermes",
+              "dsh",
+              "zswarm",
+              "foreign"
+            ],
+            "type": "string"
+          },
+          "textOnly": {
+            "type": "boolean"
+          },
+          "thinking": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "unblock_prompts",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "max": {
+            "type": "number"
+          },
+          "min_wait_secs": {
+            "type": "number"
+          },
+          "session": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "string",
+              "array"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "update_queue_item",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "patch": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "patch"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "usage_budget",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "configDir": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "whoami",
+      "since": "1.2.0",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fresh": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    }
+  ]
+}
