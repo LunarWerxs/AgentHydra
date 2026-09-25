@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-25
+
 ### Fixed
 
 - **Opening and closing a Claude Desktop instance no longer waits on AgentHydra's own checks**
@@ -46,6 +48,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   collapsed project groups the way the delivery courier does and looks once more; every group it
   opens is folded back on exit. A row still missing after that is reported as virtualized out of
   reach at the front of the refusal. The expand/restore pair is now one shared file.
+- **A spawn whose deeplink landed empty is sent once more** (`orchestrator/scripts/spawn_chat.py`,
+  `fan_out.py`). Some opens of `claude://code/new` gave a chat in the instance's scratch workspace
+  with no prompt typed, so the actuator found no composer holding the text (exit 3) and the member
+  ended `unbound` or `not-registered`. The spawn now sends the deeplink one more time in exactly that
+  case, never when a prompt may have been typed, and the member's `spawn.retried` keeps the first
+  try's answer.
 
 ### Changed
 
