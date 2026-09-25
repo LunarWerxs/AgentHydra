@@ -9,6 +9,7 @@ import {
 } from '../agent-status'
 import { app } from '../http-app'
 import { DEFAULT_URL, readInstanceInfo } from '../instance'
+import { getOrchestratorDaemonUrl } from '../orchestrator'
 import { setStatusHooks, statusHooksState } from '../status-hooks'
 
 // The hook receiver. Always 204 with no body, whatever arrives: a hook that failed or printed
@@ -29,7 +30,8 @@ app.get('/api/agent-status/hooks', (c) => c.json(statusHooksState()))
 app.post('/api/agent-status/hooks', async (c) => {
   const body = (await c.req.json().catch(() => null)) as { install?: unknown } | null
   if (typeof body?.install !== 'boolean') return c.json({ error: 'install must be a boolean' }, 400)
-  const url = readInstanceInfo()?.url ?? DEFAULT_URL
+  // The URL boot sync (index.ts) re-points hooks at, so an install and the next boot never disagree.
+  const url = getOrchestratorDaemonUrl() ?? readInstanceInfo()?.url ?? DEFAULT_URL
   const result = setStatusHooks(body.install ? url : null)
   return c.json(result, result.error ? 500 : 200)
 })

@@ -73,6 +73,7 @@ import {
   clearInstanceInfo,
   findLiveInstance,
   findLiveOnDefaultPort,
+  IS_PRIMARY_INSTALL,
   instanceFilePath,
   POINTER_DIR,
   readInstanceInfo,
@@ -1003,8 +1004,9 @@ setOrchestratorDaemonUrl(daemonSelfUrl)
 // stale one behind, writes only when the entry actually differs, and never throws.
 mcpReasserter.run()
 // Installed status hooks (status-hooks.ts) carry the same URL, so a port hop re-points them too.
-// Hooks nobody installed are never added. Synchronous, never throws.
-syncStatusHooks(daemonSelfUrl)
+// Hooks nobody installed are never added. A side-run (relocated store) leaves them alone: they
+// belong to the primary daemon, and a scratch daemon must not take them. Synchronous, never throws.
+if (IS_PRIMARY_INSTALL) syncStatusHooks(daemonSelfUrl)
 // AH-11: now that boundPort (and the runtime pointer) are known, resolve the exact-origin
 // allowlist the cors() and loopbackGuard() callbacks above read on every request. This runs well
 // before Bun.serve() starts accepting connections, so no request can observe the empty initial []

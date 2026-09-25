@@ -158,7 +158,12 @@ removes only those. Every other hook in the file is left alone, an unreadable fi
 rewritten, a boot re-points installed hooks at the port the daemon bound, and a session picks the
 hooks up on its next start. `CLAUDE_CONFIG_DIR` is honoured; `AGENTHYDRA_HOOKS_CONFIG` names the
 file outright. The rate-limit scan writes into the same store when it finds a session still at a
-usage wall.
+usage wall, and drops that row once it no longer finds the stop (the session was resumed), so a
+setup without the hooks never keeps a stale "waiting on you". A side-run daemon (relocated store)
+never re-points the installed hooks at itself.
+
+Known limit: Claude Code fires no `Stop` when you interrupt a turn (Esc), so an interrupted turn
+reads `working` until the session's next hook event.
 
 Three rules keep the answer honest (`server/src/agent-status.ts`; the design follows stablyai/orca's
 agent status store, MIT):

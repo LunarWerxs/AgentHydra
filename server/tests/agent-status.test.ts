@@ -11,8 +11,13 @@ const scratch = `${process.env.TEMP ?? '/tmp'}/agenthydra-agent-status-test-${cr
 process.env.AGENTHYDRA_HOME = scratch
 
 const { db } = await import('../src/db')
-const { getAgentStatus, hookEventFromPayload, hydrateAgentStatus, recordAgentStatus } =
-  await import('../src/agent-status')
+const {
+  getAgentStatus,
+  hookEventFromPayload,
+  hydrateAgentStatus,
+  recordAgentStatus,
+  releaseRateLimitStatus,
+} = await import('../src/agent-status')
 const { HOOK_PATH, STATUS_HOOK_EVENTS, installedHookUrl, setStatusHooks, withStatusHooks } =
   await import('../src/status-hooks')
 
@@ -102,6 +107,29 @@ describe('precedence at write', () => {
     expect(after.status?.state).toBe('blocked')
     expect(after.status?.waiting).toBe('rate-limit')
     expect(after.status?.source).toBe('rate-limit')
+  })
+})
+
+// Contract: a rate-limit row lives only while the scan still finds its stop. Regression: without the
+// hooks nothing else writes for that session, so a resumed session read "waiting on you" until the
+// next restart. Seam: the scan's release call (monitor.ts) into the store.
+describe('rate-limit release', () => {
+  const limit = (sessionId: string) =>
+    recordAgentStatus({ sessionId, source: 'rate-limit', event: 'rate-limit', at: tick() })
+
+  test('a stop the scan no longer finds is dropped; one it still finds stays blocked', () => {
+    limit(SID)
+    limit('sess-2')
+    expect(releaseRateLimitStatus(['sess-2'])).toBe(1)
+    expect(getAgentStatus(SID)).toBeNull()
+    expect(getAgentStatus('sess-2')?.state).toBe('blocked')
+  })
+
+  test('a row a hook wrote since is not the scan to drop', () => {
+    limit(SID)
+    hook('UserPromptSubmit')
+    expect(releaseRateLimitStatus([])).toBe(0)
+    expect(getAgentStatus(SID)?.state).toBe('working')
   })
 })
 

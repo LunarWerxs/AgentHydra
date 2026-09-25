@@ -189,6 +189,26 @@ export function recordAgentStatus(e: AgentStatusEvent): {
   return { outcome: 'applied', status: toStatus(next) }
 }
 
+/**
+ * The rate-limit scan's clearing half. A rate-limit row is the scan's claim that a session sits at a
+ * usage wall, and without the (opt-in) hooks nothing else ever writes a newer fact for it: once the
+ * scan stops finding that stop (the session was resumed or moved on), the claim is withdrawn, or the
+ * row would read "waiting on you" until the next restart. Rows another producer has written since
+ * are not the scan's to drop. Answers how many rows went.
+ */
+export function releaseRateLimitStatus(stillAtWall: Iterable<string>): number {
+  const keep = new Set(stillAtWall)
+  const stale = db
+    .query<{ session_id: string }, []>(
+      "select session_id from agent_status where source = 'rate-limit'",
+    )
+    .all()
+    .filter((r) => !keep.has(r.session_id))
+  const drop = db.query("delete from agent_status where session_id = ? and source = 'rate-limit'")
+  for (const r of stale) drop.run(r.session_id)
+  return stale.length
+}
+
 export function getAgentStatus(sessionId: string): AgentStatus | null {
   const r = getRow(sessionId)
   return r ? toStatus(r) : null
