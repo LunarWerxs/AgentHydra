@@ -116,9 +116,12 @@ function summarizeResets(raw: unknown, now: number): ClaudeResetGrants | null {
 }
 
 /**
- * The credit's state comes from two places: the meter (`iguana_necktie`: amounts, expiry, lock) and
- * the claim (`/v1/code/promo/cloud_credit`). An offered credit nobody claimed is worth nothing until
- * a person claims it, so it must never read as money left. An expired one is gone.
+ * The credit's state comes from two places: the claim (`/v1/code/promo/cloud_credit`) decides
+ * whether there is a credit at all, and the meter (`iguana_necktie`) says how much of a claimed one
+ * is left, when it ends and whether it is held back. That is claude.ai's own rule: its Usage page
+ * shows the balance only for a claim that says `claimed: true`, and an offer only for
+ * `claimed: false, eligible: true`. So an unanswered claim shows no credit, an unclaimed offer never
+ * reads as money left, and an expired credit is gone.
  */
 function summarizeCredit(
   meterRaw: unknown,
@@ -127,23 +130,27 @@ function summarizeCredit(
 ): ClaudeCodeCredit | null {
   const meter = obj(meterRaw)
   const promo = obj(promoRaw)
-  const expires = instant(meter?.resets_at ?? promo?.expires_at)
+  if (promo?.claimed !== true && !(promo?.claimed === false && promo.eligible === true)) return null
+  const expires =
+    [meter?.resets_at, promo.expires_at].map(instant).find((at) => !Number.isNaN(at)) ?? Number.NaN
   if (expires <= now) return null
   const expiresAt = iso(expires)
   const limitUsd = num(meter?.limit_dollars)
   const remainingUsd = num(meter?.remaining_dollars)
-  if (promo?.claimed === false && promo.eligible === true) {
+  if (promo.claimed === false) {
     return { state: 'unclaimed', limitUsd, remainingUsd, expiresAt, lockedReason: null }
   }
+  // Observed only as null; a real reason is a non-blank string, or some other non-empty value.
+  const lock = meter?.locked_reason
+  const lockedReason =
+    typeof lock === 'string'
+      ? lock.trim() || null
+      : lock && (typeof lock !== 'object' || Object.keys(lock).length)
+        ? JSON.stringify(lock)
+        : null
+  if (lockedReason) return { state: 'locked', limitUsd, remainingUsd, expiresAt, lockedReason }
   if (limitUsd === null || limitUsd <= 0) return null
-  const lockedReason = text(meter?.locked_reason)
-  return {
-    state: lockedReason ? 'locked' : 'active',
-    limitUsd,
-    remainingUsd,
-    expiresAt,
-    lockedReason,
-  }
+  return { state: 'active', limitUsd, remainingUsd, expiresAt, lockedReason: null }
 }
 
 /** claude.ai sends money as `{ amount_minor, currency, exponent }`. */

@@ -92,8 +92,8 @@ const appCodeCredit = computed(() => {
   if (credit.state === 'unclaimed') return t('instances.usageAppCodeCreditUnclaimed')
   if (credit.state === 'locked') return t('instances.usageAppCodeCreditLocked')
   return t('instances.usageAppCodeCreditValue', {
-    remaining: formatMoney(credit.remainingUsd ?? 0),
-    limit: formatMoney(credit.limitUsd ?? 0),
+    remaining: formatMoney(credit.remainingUsd),
+    limit: formatMoney(credit.limitUsd),
     expires: shortDate(credit.expiresAt),
   })
 })
@@ -101,7 +101,7 @@ const appUsageCredits = computed(() => {
   const credits = app.value?.usageCredits
   if (!credits) return null
   if (!credits.enabled) return t('instances.usageAppUsageCreditsOff')
-  const used = formatMoney(credits.used ?? 0, credits.currency)
+  const used = formatMoney(credits.used, credits.currency)
   return credits.limit == null
     ? t('instances.usageAppUsageCreditsOnUncapped', { used })
     : t('instances.usageAppUsageCreditsOn', {
@@ -113,7 +113,7 @@ const appSplit = computed(
   () =>
     app.value?.weeklySplit
       ?.filter((row) => row.pct > 0)
-      .map((row) => `${row.label} ${row.pct}%`)
+      .map((row) => `${row.label} ${Math.round(row.pct)}%`)
       .join(' · ') || null,
 )
 const appCheckedAgo = computed(() => (app.value ? usageCheckedAgo(app.value.checkedAt) : ''))

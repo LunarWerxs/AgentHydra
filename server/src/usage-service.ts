@@ -185,6 +185,28 @@ export async function checkUsageForCodex(
 }
 
 /**
+ * What a closed app's last reading still says: nothing when it belonged to another account (the
+ * profile was signed into a different one since), and nothing that has provably ended. When the
+ * soonest reset grant ends while the app is closed, whether a later one still holds a reset is
+ * unknown until the app is read again, so the count goes back to unknown rather than a guess.
+ */
+function carriedAppReading(
+  previous: UsageSnapshot | null,
+  read: UsageSnapshot,
+  now = Date.now(),
+): Partial<UsageSnapshot> {
+  const app = previous?.claudeApp
+  if (!app || previous.account == null || previous.account !== read.account) return {}
+  const ended = (at: string | null | undefined) => at != null && Date.parse(at) <= now
+  const resetsEnded = ended(previous.resetCreditsExpiresAt)
+  return {
+    resetCredits: resetsEnded ? undefined : previous.resetCredits,
+    resetCreditsExpiresAt: resetsEnded ? undefined : previous.resetCreditsExpiresAt,
+    claudeApp: ended(app.codeCredit?.expiresAt) ? { ...app, codeCredit: null } : app,
+  }
+}
+
+/**
  * Check a DESKTOP instance's usage, trying every credential that could speak for this account:
  *
  *   1. the instance's OWN safeStorage token          (the common case — no extra setup at all)
@@ -205,7 +227,6 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
     // the running app is asked; a closed app keeps the last reading it gave (with its date)
     // instead of dropping to "unknown".
     const fresh = await readClaudeAppUsage(dir)
-    const previous = getCachedUsage(key)
     const snapshot: UsageSnapshot = fresh
       ? {
           ...read,
@@ -213,14 +234,7 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
           resetCreditsExpiresAt: fresh.resets?.expiresAt ?? null,
           claudeApp: fresh.app,
         }
-      : previous?.claudeApp
-        ? {
-            ...read,
-            resetCredits: previous.resetCredits,
-            resetCreditsExpiresAt: previous.resetCreditsExpiresAt,
-            claudeApp: previous.claudeApp,
-          }
-        : read
+      : { ...read, ...carriedAppReading(getCachedUsage(key), read) }
     setCachedUsage(key, snapshot)
     // Every real reading feeds the time series. This is what lets a later call differentiate the
     // percentage into a burn rate (see usage-history.ts) — without it, "98%" stays uninterpretable.

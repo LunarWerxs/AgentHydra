@@ -95,15 +95,22 @@ export function usageCheckedAgo(capturedAt: string): string {
   return formatAgo(Date.now(), ms)
 }
 
-/** "$250" once cents stop mattering, "$3.89" while they still do. */
-export function formatMoney(amount: number, currency: string | null = 'USD'): string {
-  const digits = Math.abs(amount) >= 100 ? 0 : 2
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: currency ?? 'USD',
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  }).format(amount)
+/** "$246.11"; "—" for an amount claude.ai did not report (never "$0.00", which is a claim). The
+ *  currency code comes from claude.ai, and Intl throws on one it does not know; a table row must
+ *  never die of that. */
+export function formatMoney(
+  amount: number | null | undefined,
+  currency: string | null = 'USD',
+): string {
+  if (amount == null) return '—'
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: currency ?? 'USD',
+    }).format(amount)
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`
+  }
 }
 
 /** "Nov 5": the day a credit or banked reset ends. */

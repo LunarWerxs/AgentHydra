@@ -58,19 +58,27 @@ describe('summarizeClaudeAppUsage', () => {
     ])
   })
 
-  test('a credit that was offered but never claimed is never read as money left', () => {
-    const reading = summarizeClaudeAppUsage(
+  test('only a claim claude.ai confirms reads as money left', () => {
+    const offered = summarizeClaudeAppUsage(
       { credit: credit(), promo: { claimed: false, eligible: true, expires_at: null } },
       now,
     )
-    expect(reading?.app.codeCredit?.state).toBe('unclaimed')
+    expect(offered?.app.codeCredit?.state).toBe('unclaimed')
+    // The claim request failed: claude.ai's own page shows no balance then, and neither does this.
+    expect(
+      summarizeClaudeAppUsage({ credit: credit(), promo: null }, now)?.app.codeCredit,
+    ).toBeNull()
   })
 
   test('a credit held back reads as held back, and an expired one is gone', () => {
-    const held = summarizeClaudeAppUsage({ credit: credit({ locked_reason: 'review' }) }, now)
+    const promo = { claimed: true, eligible: false, expires_at: '2026-11-05T07:59:00Z' }
+    const held = summarizeClaudeAppUsage(
+      { credit: credit({ locked_reason: 'review' }), promo },
+      now,
+    )
     expect(held?.app.codeCredit).toMatchObject({ state: 'locked', lockedReason: 'review' })
     const expired = summarizeClaudeAppUsage(
-      { credit: credit({ resets_at: '2026-09-01T00:00:00+00:00' }) },
+      { credit: credit({ resets_at: '2026-09-01T00:00:00+00:00' }), promo },
       now,
     )
     expect(expired?.app.codeCredit).toBeNull()

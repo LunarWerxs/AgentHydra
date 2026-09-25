@@ -193,8 +193,8 @@ function codeCreditLabel(inst: CMInstance): string {
   if (credit?.state === 'unclaimed') return t('instances.codeCreditUnclaimed')
   if (credit?.state === 'locked') return t('instances.codeCreditLocked')
   return t('instances.codeCredit', {
-    remaining: formatMoney(credit?.remainingUsd ?? 0),
-    limit: formatMoney(credit?.limitUsd ?? 0),
+    remaining: formatMoney(credit?.remainingUsd),
+    limit: formatMoney(credit?.limitUsd),
   })
 }
 
@@ -215,7 +215,7 @@ const usageCreditsOnFor = (inst: CMInstance) => {
 
 function usageCreditsHint(inst: CMInstance): string {
   const credits = usageCreditsOnFor(inst)
-  const used = formatMoney(credits?.used ?? 0, credits?.currency ?? null)
+  const used = formatMoney(credits?.used, credits?.currency ?? null)
   const checked = appCheckedAgo(inst)
   return credits?.limit == null
     ? t('instances.usageCreditsOnHintUncapped', { used, checked })

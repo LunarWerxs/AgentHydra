@@ -102,14 +102,24 @@ export function resetTimeIso(
   return parseResetTime(limit.resets ?? '', now)
 }
 
-/** A banked reset turns "wait for the weekly reset" into "the windows can be cleared now". */
+/**
+ * A banked reset turns "wait for the weekly reset" into "the windows can be cleared at the wall".
+ * Spending one early wastes what the windows had left, so the note says WHEN, per provider: a
+ * Claude count is read from the app (and carried while it is closed), so it says when it was read;
+ * only Claude snapshots carry `claudeApp`, so a count without one is Codex's.
+ */
 function bankedResetNote(snap: UsageSnapshot): string {
   const n = snap.resetCredits ?? 0
   if (n <= 0) return ''
-  const until = snap.resetCreditsExpiresAt
-    ? ` until ${snap.resetCreditsExpiresAt.slice(0, 10)}`
-    : ''
-  return ` This account holds ${n} banked usage reset${n === 1 ? '' : 's'}${until}; spending one clears the 5-hour and weekly windows at once (Claude Desktop: the app's Settings > Usage > Resets; Codex: redeem_codex_reset_credit).`
+  const resets = `${n} banked usage reset${n === 1 ? '' : 's'}`
+  if (snap.claudeApp) {
+    const until = snap.resetCreditsExpiresAt
+      ? ` until ${snap.resetCreditsExpiresAt.slice(0, 10)}`
+      : ''
+    const read = snap.claudeApp.checkedAt.slice(0, 16).replace('T', ' ')
+    return ` The Claude app (read ${read} UTC) showed ${resets}${until}: once this account hits its limit, a person can spend one in the app (Settings > Usage > Resets) to clear the 5-hour and weekly windows instead of waiting.`
+  }
+  return ` This account holds ${resets}: once a window is at 100%, redeem_codex_reset_credit restores the full 5-hour and weekly windows (before that it refuses unless forced, since redeeming early wastes most of one).`
 }
 
 /**
@@ -141,8 +151,10 @@ export function usageAdvice(snap: UsageSnapshot): UsageAdvice {
   const severity =
     snap.weekAll?.severity ?? (pct >= 95 ? 'critical' : pct >= 80 ? 'warning' : 'normal')
   const resets = snap.weekAll?.resets ? ` Weekly resets ${snap.weekAll.resets}.` : ''
-  // Only near the wall is a banked reset worth an agent's attention.
+  // Only near a wall is a banked reset worth an agent's attention: the weekly one (warning and
+  // critical), or a 5-hour window that is already full while the week still has room.
   const nearWall = resets + bankedResetNote(snap)
+  const sessionFull = (snap.session?.pct ?? 0) >= 100
   if (severity === 'critical') {
     return {
       severity,
@@ -166,7 +178,7 @@ export function usageAdvice(snap: UsageSnapshot): UsageAdvice {
     bindingPct: pct,
     shouldOffload: false,
     safeToFanOut: true,
-    advice: `OK: weekly (all models) is ${pct}% used. Normal operation; a fan-out is safe.${resets}`,
+    advice: `OK: weekly (all models) is ${pct}% used. Normal operation; a fan-out is safe.${sessionFull ? nearWall : resets}`,
   }
 }
 
