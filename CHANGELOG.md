@@ -7,6 +7,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Recovery recipes with a ledger** (`orchestrator/scripts/lib/recoverylib.py`,
+  `orchestrator/scripts/fan_out.py`, `orchestrator/scripts/stall_watch.py`,
+  `orchestrator/scripts/attempts.py`, `server/src/mcp.ts`). A closed table of known failures
+  (delivery-failed, account-at-cap, chat-stalled, tray-not-armed), each with one fixed automatic
+  step, at most one automatic attempt, and an escalation policy (alert-human files an incident,
+  abort, log-and-continue). The new `fan_out recover` / MCP `fan_out_recover` meets each failed
+  member of a group with its recipe; `fan_out_status` shows each member's recipe and the group's
+  recovery ledger, and `attempts.py --recoveries` prints the whole table and ledger. A failed send
+  is re-sent only when the message route refused it with a 4xx, never after an unconfirmed one.
+  Idea from ultraworkers/claw-code's recovery recipes (MIT), written fresh.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,

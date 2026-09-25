@@ -662,6 +662,8 @@ function stateCounts<T>(items: readonly T[], key: (item: T) => string): string {
  *  `skipped` reason instead. */
 function fanOutResultState(r: Record<string, unknown>): string {
   if (r.skipped) return 'skipped'
+  // a `recover` row: recovered, or escalated by its recipe
+  if ('outcome' in r) return str(r.outcome)
   if ('delivered' in r) return r.delivered ? 'delivered' : 'not-delivered'
   if ('deleted' in r) return r.deleted ? 'deleted' : 'not-deleted'
   return '?'
@@ -689,7 +691,9 @@ function fanOutVerdict(
   const results = payload && Array.isArray(payload.results) ? payload.results : null
   if (results && results.length > 0) {
     const rows = results as Record<string, unknown>[]
-    const bad = rows.some((r) => !['delivered', 'deleted'].includes(fanOutResultState(r)))
+    const bad = rows.some(
+      (r) => !['delivered', 'deleted', 'recovered'].includes(fanOutResultState(r)),
+    )
     return {
       verdict: `${bad ? 'partial' : 'ok'}: ${stateCounts(rows, fanOutResultState)}`,
       bad,
@@ -2537,7 +2541,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'fan_out_status',
     description:
-      "READ-ONLY: where every chat of a fan_out group stands — per member: instance, sessionId, the gate's verdict as one word (working / idle / stalled / finished / crashed, or the spawn state for a member that never got a session), how long it has been quiet, its cause, and its LAST WORDS (the last assistant text, capped) so a manager chat can read seven results without seven tail_session calls. `group` is the id or name from fan_out (a unique id prefix works); omitted = the most recent group. Also lists the follow-ups already sent to the group.",
+      "READ-ONLY: where every chat of a fan_out group stands — per member: instance, sessionId, the gate's verdict as one word (working / idle / stalled / finished / crashed, or the spawn state for a member that never got a session), how long it has been quiet, its cause, and its LAST WORDS (the last assistant text, capped) so a manager chat can read seven results without seven tail_session calls. `group` is the id or name from fan_out (a unique id prefix works); omitted = the most recent group. Also lists the follow-ups already sent to the group. A member in a failure the recovery table knows (delivery-failed, account-at-cap, chat-stalled) carries `recovery`: the recipe's one automatic step, attempts used of its max, and the escalation that follows; `recoveries` is the group's recovery ledger - every attempt and escalation fan_out_recover made, with why.",
     inputSchema: S({
       group: {
         type: 'string',
@@ -2601,6 +2605,29 @@ export const TOOLS: McpEngineTool[] = [
       const args = ['send', group, '--text', text]
       const only = Array.isArray(a.only) ? a.only.map(str).filter((s) => s.trim()) : []
       for (const sid of only) args.push('--only', sid.trim())
+      if (a.force === true) args.push('--force')
+      args.push('--json')
+      return runFanOut(args, 20 * 60_000)
+    },
+  },
+  {
+    // WHY: a failed member used to get whatever the caller tried next, usually the same send
+    // again. This meets each one with a fixed recipe and ONE automatic attempt, then escalates.
+    name: 'fan_out_recover',
+    description:
+      "MUTATES: meet every FAILED member of a fan_out group with its recovery recipe - one automatic attempt, then the recipe's escalation, each written to the group's recovery ledger (fan_out_status shows it). The closed table: delivery-failed -> re-send the same text once, only when the message route REFUSED it (4xx: nothing was typed; an unconfirmed send is never repeated blind), then alert-human (an incident in list_incidents); chat-stalled -> ask the chat once through its composer whether it is stuck, then alert-human; account-at-cap (an unassigned task) -> re-rank the accounts once inside the group's own fence (its --exclude, so never the calling chat's account) and spawn it where there is room now, then log-and-continue. A member whose attempt is already spent escalates without trying again; a success clears it. Members with nothing owed are left alone. Holds are respected unless `force` (a PERSON's word). Returns one row per member met: kind, outcome (recovered / escalated), escalation, incident, detail.",
+    inputSchema: S(
+      {
+        group: { type: 'string', description: 'Group id, name, or unique id prefix.' },
+        force: { type: 'boolean', description: "A person's word: act past a hold." },
+      },
+      ['group'],
+    ),
+    run: async (a) => {
+      const group = str(a.group).trim()
+      if (!group)
+        throw new Error('group is required (fan_out_status with no group shows the latest)')
+      const args = ['recover', group]
       if (a.force === true) args.push('--force')
       args.push('--json')
       return runFanOut(args, 20 * 60_000)
@@ -3008,7 +3035,8 @@ THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); noth
 unless the tray icon is up: orchestrator_switch {action:"armed"} first. No icon needed for
 move_chat {chat, from, to}, or fan_out {tasks:[{cwd, prompt}]}, which spreads a task list over
 OTHER accounts as VISIBLE desktop chats (never one a person is working in); fan_out_status {}
-then reads every member's verdict and fan_out_send {group, text} steers them all.
+then reads every member's verdict and fan_out_send {group, text} steers them all; a failed
+member gets fan_out_recover {group} (one automatic attempt per recipe, then it escalates).
 add_queue_item and launch_terminal_session are REFUSED (no chat nobody can see).
 ANY PROBE CHAT YOU CREATE (a ping, a drill) MUST BE DELETED AFTERWARDS, never left in the
 account: fan_out_delete {group}, or orchestrator_run delete_chat <chat>.`
