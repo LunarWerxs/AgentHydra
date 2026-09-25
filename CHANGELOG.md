@@ -9,6 +9,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **`fan_out` proves each prompt landed and started (task receipt)** (`orchestrator/scripts/lib/receiptlib.py`,
+  `orchestrator/scripts/fan_out.py`, `orchestrator/scripts/lib/gatelib.py`, `server/src/mcp.ts`).
+  A spawned chat could hold its prompt as an unanswered turn and still read `spawned`. Every
+  fan-out prompt now ends with a short receipt (token, repo, task id, expected artifact) that the
+  chat is asked to echo first. `fan_out_status` classifies each member from its transcript:
+  delivered, no-echo, wrong-task, never-started, wrong-chat or pending. After the last spawn,
+  `fan_out` waits `receipt_secs` (default 180) for every echo and nudges a never-started chat
+  once through the composer. It never types into a wrong-chat member, and a misdelivered
+  member makes the fan-out partial. `receipt: false` (CLI `--no-receipt`) sends the bare
+  prompt. The fleet duplicate check ignores the receipt. Idea adapted from
+  ultraworkers/claw-code's prompt-misdelivery check (MIT).
+
 - **`history_search` / `history_read`: search what compaction dropped from your own session**
   (`server/src/compaction-history.ts`, `server/src/mcp.ts`). The calling Claude Code session's
   transcript is resolved from the caller's process chain and the live registry, and the text

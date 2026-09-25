@@ -139,7 +139,8 @@ describe('what fan_out sends to the daemon', () => {
       ],
     })
     const { rest, groupId } = stripGroupId(b.args)
-    expect(rest.slice(2)).toEqual(['--json'])
+    // the task receipt is checked by default: wait for every echo, re-deliver once
+    expect(rest.slice(2)).toEqual(['--json', '--receipt-secs', '180'])
     expect(groupId).toMatch(/^fo-/)
     expect(b.async).toBe(false)
     expect(res.ok).toBe(true)
@@ -179,7 +180,22 @@ describe('what fan_out sends to the daemon', () => {
     await tool('fan_out').run({ tasks: twoTasks, per_account: 1, exclude_self: false })
     const b = runBody()
     expect(b.args).not.toContain('--per-account')
-    expect(b.timeoutMs).toBe(90_000 + 2 * 240_000)
+    // plus the default receipt check: two 180s waits and one nudge per chat
+    expect(b.timeoutMs).toBe(90_000 + 2 * 240_000 + 2 * 180_000 + 2 * 270_000)
+  })
+
+  test('the receipt check maps onto --receipt-secs / --no-receipt and a dry run carries neither', async () => {
+    reportRun({ id: 'fo-r', members: [] })
+    await tool('fan_out').run({ tasks: twoTasks, receipt_secs: 60, exclude_self: false })
+    expect(stripGroupId(runBody().args).rest.slice(2)).toEqual(['--json', '--receipt-secs', '60'])
+    calls = [] // runBody reads the first run call
+    await tool('fan_out').run({ tasks: twoTasks, receipt: false, exclude_self: false })
+    const off = runBody()
+    expect(stripGroupId(off.args).rest.slice(2)).toEqual(['--json', '--no-receipt'])
+    expect(off.timeoutMs).toBe(90_000 + 2 * 240_000)
+    calls = []
+    await tool('fan_out').run({ tasks: twoTasks, dry_run: true, exclude_self: false })
+    expect(runBody().args).not.toContain('--receipt-secs')
   })
 
   test('parent, max_nodes and ceiling_pct reach the script as the spawn-tree envelope flags', async () => {
@@ -252,7 +268,17 @@ describe('what fan_out sends to the daemon', () => {
     })
     const b = runBody()
     const { rest } = stripGroupId(b.args)
-    expect(rest.slice(2)).toEqual(['--json', '--only', '8', '--only', '36', '--exclude', '8'])
+    expect(rest.slice(2)).toEqual([
+      '--json',
+      '--only',
+      '8',
+      '--only',
+      '36',
+      '--exclude',
+      '8',
+      '--receipt-secs',
+      '180',
+    ])
   })
 
   test('a spec too long for one argv entry travels as a temp file the script can read, removed after the run', async () => {
