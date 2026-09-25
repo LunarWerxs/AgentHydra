@@ -34,6 +34,7 @@ from pathlib import Path
 
 from lib import configlib
 from lib import joblocklib
+from lib import livenesslib
 from lib import stalllib
 
 # How long a live chat must be quiet AFTER a completed turn before it counts as idle rather
@@ -556,7 +557,7 @@ def quiet_secs_of(path: str, now_s: float | None = None) -> int:
 def _finished_evidence(records: list[dict]) -> dict:
     evidence = last_assistant_text(records)
     view = recap_view(evidence)
-    return {
+    fe = {
         "recap_present": bool(RECAP_HEADER.search(view)),
         "done_claim": parse_done_claim(view),
         "ends_with_question": bool(re.search(r"\?\s*$", evidence.strip())),
@@ -565,6 +566,14 @@ def _finished_evidence(records: list[dict]) -> dict:
         "open_recommendations": open_recommendations(view),
         "last_assistant_text": evidence,
     }
+    # WHICH KIND OF NOT-DONE (2026-09-25): stalled on a plan, blocked on a person, or asking for
+    # sign-off each want a different next move, and the four signals above cannot tell them
+    # apart. Informational: no lane or archive signal reads it (see livenesslib).
+    fe["liveness"] = livenesslib.classify(
+        view, tool_calls=livenesslib.turn_tool_calls(records), done_claim=fe["done_claim"],
+        open_recommendations=fe["open_recommendations"],
+        offers_to_continue=fe["offers_to_continue"], ends_with_question=fe["ends_with_question"])
+    return fe
 
 
 def transcript_for_match(match: dict, session_row_lookup) -> str:
@@ -737,7 +746,7 @@ def _idle_verdict(
             "resumed_silent": resumed_silent,
             **{k: fe[k] for k in (
                 "done_claim", "ends_with_question", "recap_present",
-                "last_assistant_text")}}
+                "last_assistant_text", "liveness")}}
 
 
 def _running_cause(pid, quiet: int, stalled: dict | None, idle: dict | None,

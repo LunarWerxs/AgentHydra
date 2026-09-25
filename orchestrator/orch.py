@@ -178,10 +178,17 @@ def _loop_stage_census(hydralib) -> tuple[dict, list[dict]]:
 def _loop_stage_gate(plan: dict) -> dict:
     """Stage 2: every chat, gated, decided."""
     counts: dict[str, int] = {}
+    # What each waiting chat's last turn amounts to (lib/livenesslib): stalled on a plan and
+    # blocked on a person want different moves, so the loop counts them apart.
+    liveness: dict[str, int] = {}
     for ch in plan["chats"]:
         k = ch["decision"]["kind"]
         counts[k] = counts.get(k, 0) + 1
-    return {"scanned": plan["scanned"], "complete": plan["complete"], "byDecision": counts}
+        live = ch["decision"].get("liveness")
+        if live:
+            liveness[live] = liveness.get(live, 0) + 1
+    return {"scanned": plan["scanned"], "complete": plan["complete"], "byDecision": counts,
+            "byLiveness": liveness}
 
 
 def _loop_stage_accounts(bal: dict) -> dict:
@@ -346,6 +353,10 @@ def _render_gate(s: dict, L: list[str]) -> None:
              + ("" if g["complete"] else "  ⚠ INCOMPLETE - a read failed, counts are lower bounds"))
     for k, v in sorted(g["byDecision"].items(), key=lambda kv: -kv[1]):
         L.append(f"                 {v:>3}  {k}")
+    if g.get("byLiveness"):
+        L.append("                 of those waiting, the last turn was: "
+                 + ", ".join(f"{v} {k}" for k, v in sorted(g["byLiveness"].items(),
+                                                           key=lambda kv: -kv[1])))
 
 
 def _render_accounts(s: dict, L: list[str]) -> None:

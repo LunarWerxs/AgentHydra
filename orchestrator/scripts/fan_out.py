@@ -530,6 +530,12 @@ def _finalize_gated_status(out: dict, tp: str, verdict: dict) -> dict:
     if fin:
         out["doneClaim"] = fin.get("done_claim")
         out["endsWithQuestion"] = fin.get("ends_with_question")
+    # A MEMBER THAT CAME BACK WITH A PLAN IS NOT A RESULT (2026-09-25): liveness says whether
+    # it did the work, stalled on a plan, or is blocked on a person (lib/livenesslib).
+    live = (fin or verdict.get("idle") or {}).get("liveness")
+    if live:
+        out["liveness"] = live.get("state")
+        out["nextAction"] = live.get("nextAction")
     try:
         text = gatelib.last_assistant_text(gatelib.read_records(tp))
     except OSError:
