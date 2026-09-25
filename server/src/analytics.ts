@@ -175,8 +175,10 @@ function readSkillListing(a: SinkAttachment, sinks: SinkScan): void {
   const content = typeof a.content === 'string' ? a.content : ''
   for (const line of content.split('\n')) {
     if (!line.startsWith('- ')) continue
-    const colon = line.indexOf(':')
-    const name = (colon > 2 ? line.slice(2, colon) : line.slice(2)).trim()
+    // Split at the first ': ', not the first ':' - a plugin skill is named `plugin:skill`, and
+    // splitting inside its name would fold every skill of that plugin into one fake entry.
+    const sep = line.indexOf(': ')
+    const name = (sep > 2 ? line.slice(2, sep) : line.slice(2).replace(/:$/, '')).trim()
     if (name) entries[name] = estTokens(line.length + 1)
   }
   // A listing that names a skill without a line for it still carries its name.
@@ -1887,8 +1889,10 @@ const SINK_FIXES: Record<TokenSink['id'], string> = {
   'deep-context': `Compact or start a fresh session before the prompt passes ${DEEP_CONTEXT_TOKENS / 1000}k tokens: every call past it re-reads the whole history.`,
   subagents:
     'Spawn subagents for wide, parallel searches only: each one pays for its own prefix and history.',
+  // Every cache write, each session's first unavoidable one included, so this is an upper bound on
+  // what the fix can save, not the avoidable part alone.
   'cache-writes':
-    'Keep gaps between turns inside the cache window and avoid editing instructions mid-session: every rewrite of the prefix is billed at a premium.',
+    'Keep gaps between turns inside the cache window and avoid editing instructions mid-session: each session pays one cache write it cannot avoid, and every rewrite after it is billed at a premium.',
 }
 
 const selectListing = db.query<{ entries_json: string }, [string]>(

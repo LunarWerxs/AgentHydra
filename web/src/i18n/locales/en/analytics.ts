@@ -114,7 +114,7 @@ export default {
   sinkDeadMcp: 'MCP servers loaded but never called',
   sinkDeepContext: 'Calls past {threshold} tokens of context',
   sinkSubagents: 'Subagent spend',
-  sinkCacheWrites: 'Cache rewrites',
+  sinkCacheWrites: 'Cache writes',
   sinkStructural: 'Structural',
   sinkBehavioral: 'Behavioral',
   sinkEstimated: 'Estimate',

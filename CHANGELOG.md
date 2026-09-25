@@ -17,7 +17,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   - skills and MCP servers loaded into every prompt but never used, ranked by the prefix tokens
     they carried (the injected text's length at four characters a token, re-read on every call);
   - calls whose prompt was past 150k tokens of context;
-  - subagent spend, and cache rewrites, plus the share of prompt served from cache per account.
+  - subagent spend, and cache writes (each session's first, unavoidable write included), plus
+    the share of prompt served from cache per account.
   The scan keeps skill and MCP server names with counts, never text; a skill listing is stored
   once per distinct listing. `ANALYTICS_VERSION` is now 8, so the background warm rescans every
   transcript once. Idea from the learn report in JuliusBrussee/caveman; no code copied.

@@ -61,7 +61,7 @@ describe('what a session loaded and what it used', () => {
   test('a skill used through the Skill tool OR a typed /command counts as used', async () => {
     const a = await scanSessionAnalytics(
       transcript([
-        listing(['by-tool', 'by-command', 'never']),
+        listing(['by-tool', 'by-command', 'never', 'plugin:skill', 'plugin:other']),
         toolUse('2024-08-10T10:00:00.000Z', 'Skill', { skill: 'by-tool' }),
         slash('2024-08-10T10:01:00.000Z', 'by-command'),
         assistant('2024-08-10T10:02:00.000Z'),
@@ -69,9 +69,19 @@ describe('what a session loaded and what it used', () => {
       'claude',
     )
     const [entries] = [...a.sinks.listings.values()]
-    expect(Object.keys(entries ?? {}).sort()).toEqual(['by-command', 'by-tool', 'never'])
+    // A plugin skill keeps its whole `plugin:skill` name: splitting at its first colon would fold
+    // both into one fake `plugin` skill that no call ever names.
+    expect(Object.keys(entries ?? {}).sort()).toEqual([
+      'by-command',
+      'by-tool',
+      'never',
+      'plugin:other',
+      'plugin:skill',
+    ])
     // An estimate off the injected line, never zero for a listed skill.
     expect(entries?.never).toBeGreaterThan(0)
+    // Estimated off its own description line, not off the bare name.
+    expect(entries?.['plugin:skill']).toBeGreaterThan(10)
     expect(a.sinks.skillUses).toEqual({ 'by-tool': 1, 'by-command': 1 })
   })
 
