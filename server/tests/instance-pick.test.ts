@@ -83,6 +83,7 @@ test('an ambiguous name or email resolves to NOTHING rather than to whichever ro
 test('a profile folder label and a first name resolve when they name exactly one row', () => {
   expect(pickInstance(FLEET, 'i13')?.num).toBe(13)
   expect(pickInstance(FLEET, 'ada')?.num).toBe(3)
+  expect(pickInstance([row({ num: 21, name: 'Artem Volkov' })], 'artem')?.num).toBe(21)
   expect(pickInstance([...FLEET, row({ num: 20, name: 'Ada King' })], 'Ada')).toBe(null)
 })
 

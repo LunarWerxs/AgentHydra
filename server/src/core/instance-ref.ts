@@ -281,7 +281,12 @@ export function pickInstance(
     r.kind === 'desktop' ? (r.handle.split(/[\\/]/).filter(Boolean).pop() ?? '').toLowerCase() : ''
   const byFolder = all.filter((r) => folder(r) === needle)
   if (byFolder.length === 1) return byFolder[0]!
-  const byLeading = all.filter((r) => r.name.toLowerCase().startsWith(`${needle} `))
+  // Word by word, so any whitespace between them counts (a no-break space, a double space).
+  const typed = needle.split(/\s+/)
+  const byLeading = all.filter((r) => {
+    const words = r.name.toLowerCase().trim().split(/\s+/)
+    return words.length > typed.length && typed.every((w, i) => words[i] === w)
+  })
   if (byLeading.length === 1) return byLeading[0]!
 
   return null
