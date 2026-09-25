@@ -20,6 +20,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Square,
   Terminal,
   Timer,
@@ -115,7 +116,7 @@ import { type MovePlan, moveTargets, planMove } from '@/lib/move-chats'
 import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
 import { useTooltipConfig } from '@/lib/tooltip-config'
-import { bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
+import { bindingWeeklyPct, usageCheckedAgo, usageReasonMessageKey } from '@/lib/usage'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
 import {
   msUntilReset,
@@ -161,6 +162,18 @@ const {
 
 const usageKeyFor = (inst: CMInstance) => `desktop:${inst.dir}`
 const usageFor = (inst: CMInstance) => snapshotFor(usageKeyFor(inst))
+
+function resetBankedHint(inst: CMInstance): string {
+  const snap = usageFor(inst)
+  const expires = snap?.resetCreditsExpiresAt
+    ? new Date(snap.resetCreditsExpiresAt).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+      })
+    : '—'
+  const checked = snap?.resetCreditsCheckedAt ? usageCheckedAgo(snap.resetCreditsCheckedAt) : '—'
+  return t('instances.resetBankedHint', { expires, checked })
+}
 
 // --- usage mode ---------------------------------------------------------------------------------
 // One toolbar toggle swaps the PROCESS columns (PID / uptime / memory — "is it healthy?") for the
@@ -232,6 +245,7 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
     },
   ],
   { key: desktopSortKey, direction: desktopSortDirection },
+  { rowKey: (i: CMInstance) => i.dir },
 )
 
 /** "3h ago" for the last launch on this PC. Reads the shared clock so the cell ticks with the tab. */
@@ -1367,6 +1381,24 @@ onUnmounted(() => {
                     :aria-label="$t('instances.labelStale')"
                   >
                     <TriangleAlert class="size-3.5 text-warning" />
+                  </span>
+                </IconTooltip>
+                <!-- A banked usage-limit reset (claude.ai Settings -> Usage -> Resets) this account
+                     has not spent. Read from the running app; a closed app shows its last reading. -->
+                <IconTooltip
+                  v-if="(usageFor(inst)?.resetCredits ?? 0) > 0"
+                  :label="
+                    $t('instances.resetBanked', { count: usageFor(inst)?.resetCredits ?? 0 })
+                  "
+                  :description="resetBankedHint(inst)"
+                >
+                  <span
+                    class="inline-flex items-center"
+                    :aria-label="
+                      $t('instances.resetBanked', { count: usageFor(inst)?.resetCredits ?? 0 })
+                    "
+                  >
+                    <RotateCcw class="size-3.5 text-success" />
                   </span>
                 </IconTooltip>
                 <!-- A linked CLI login used to be visible NOWHERE on the row — its only trace was

@@ -262,6 +262,8 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
       accessor: (instance: CodexInstance) => usageFor(instance)?.session?.pct ?? undefined,
     },
   ],
+  undefined,
+  { rowKey: (instance: CodexInstance) => instance.id },
 )
 
 // --- filter -------------------------------------------------------------------------------------

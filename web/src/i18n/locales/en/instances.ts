@@ -77,6 +77,10 @@ export default {
   labelStale: 'This name does not match the account',
   labelStaleHint:
     'You named this instance “{label}”, but it is signed into {account}. Names you type are kept until you change them, so this one stayed behind when the account did. Use “Name it after the account” in the ⋯ menu to drop it.',
+  // A banked Claude usage-limit reset (claude.ai Settings -> Usage -> Resets) not yet spent.
+  resetBanked: 'Banked usage resets: {count}',
+  resetBankedHint:
+    'Unused until {expires}. Spend it from Claude: Settings → Usage → Resets. Checked {checked}.',
   useAccountName: 'Name it after the account',
   toastUsingAccountName: 'Cleared the typed name. This instance is called “{name}” again.',
   copyAccountEmailAria: 'Copy the account address {email}',

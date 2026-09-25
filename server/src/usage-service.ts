@@ -19,6 +19,7 @@
 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { readDesktopResetGrants } from './claude-reset-grants'
 import {
   type InstanceGrantToken,
   resolveAccount,
@@ -199,7 +200,26 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   const account = await resolveAccount(dir, { noNetwork: true })
   const label = account?.label ?? account?.email ?? null
 
-  const finish = (snapshot: UsageSnapshot): UsageCheckResult => {
+  const finish = async (read: UsageSnapshot): Promise<UsageCheckResult> => {
+    // Banked resets live only behind the claude.ai session, so the running app is asked; a closed
+    // app keeps the last reading it gave (with its date) instead of dropping to "unknown".
+    const grants = await readDesktopResetGrants(dir)
+    const previous = getCachedUsage(key)
+    const snapshot: UsageSnapshot = grants
+      ? {
+          ...read,
+          resetCredits: grants.resetsLeft,
+          resetCreditsExpiresAt: grants.expiresAt,
+          resetCreditsCheckedAt: new Date().toISOString(),
+        }
+      : previous?.resetCreditsCheckedAt
+        ? {
+            ...read,
+            resetCredits: previous.resetCredits,
+            resetCreditsExpiresAt: previous.resetCreditsExpiresAt,
+            resetCreditsCheckedAt: previous.resetCreditsCheckedAt,
+          }
+        : read
     setCachedUsage(key, snapshot)
     // Every real reading feeds the time series. This is what lets a later call differentiate the
     // percentage into a burn rate (see usage-history.ts) — without it, "98%" stays uninterpretable.

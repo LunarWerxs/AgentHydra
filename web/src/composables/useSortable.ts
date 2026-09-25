@@ -2,7 +2,7 @@
 // Generic over the row type; each column declares its own accessor so callers don't need
 // to pre-shape their data. Kept tiny and dependency-free so it's easy to reuse on other
 // tables (Sessions/Queue) later, per PLAN.md §4.
-import { computed, type Ref, ref, type WritableComputedRef } from 'vue'
+import { computed, onScopeDispose, type Ref, ref, type WritableComputedRef, watch } from 'vue'
 
 export type SortDirection = 'asc' | 'desc' | null
 
@@ -23,6 +23,14 @@ export interface PersistedSort {
   direction: Ref<string>
 }
 
+/** Hold row positions still while the sort's inputs are still arriving (see the SETTLED ORDER note). */
+export interface SortSettleOptions<Row> {
+  /** Identifies a row across data refreshes. */
+  rowKey: (row: Row) => string
+  /** How long the sort's inputs must stay quiet before rows move. Default 1500ms. */
+  settleMs?: number
+}
+
 /**
  * Click-to-sort state machine for a table. Cycles a column through
  * asc -> desc -> none (back to the original/unsorted `rows` order) on repeated clicks.
@@ -35,6 +43,7 @@ export function useSortable<Row>(
   rows: () => readonly Row[],
   columns: SortableColumn<Row>[],
   persisted?: PersistedSort,
+  settle?: SortSettleOptions<Row>,
 ) {
   const columnsByKey = new Map(columns.map((c) => [c.key, c]))
 
@@ -89,7 +98,7 @@ export function useSortable<Row>(
     return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
   }
 
-  const sortedRows = computed<readonly Row[]>(() => {
+  const liveSortedRows = computed<readonly Row[]>(() => {
     const source = rows()
     const key = sortKey.value
     const dir = sortDirection.value
@@ -108,6 +117,50 @@ export function useSortable<Row>(
       return dir === 'asc' ? cmp : -cmp
     })
     return copy
+  })
+
+  // SETTLED ORDER. A table whose sort column is fed by readings that arrive one at a time (a page
+  // refresh hydrates the usage cache, then each live check lands separately) re-sorted on every
+  // arrival, so rows machine-gunned up and down the page (owner, 2026-09-25). With `settle`, the
+  // cells still update live but ROW POSITIONS only move once the order has been quiet for
+  // settleMs; the user's own sort change applies at once. New rows appear in their live position,
+  // gone rows leave at once.
+  if (!settle)
+    return { sortKey, sortDirection, sortedRows: liveSortedRows, toggleSort, indicatorFor }
+  const { rowKey, settleMs = 1500 } = settle
+  const committed = ref<string[] | null>(null)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const commit = () => {
+    clearTimeout(timer)
+    timer = undefined
+    committed.value = liveSortedRows.value.map(rowKey)
+  }
+  watch([sortKey, sortDirection], commit)
+  watch(
+    () => liveSortedRows.value.map(rowKey).join('\n'),
+    () => {
+      // A row added or removed is a change of WHAT is listed: place it now. Only a reshuffle of
+      // the same rows waits for the data to settle.
+      const live = liveSortedRows.value.map(rowKey)
+      const known = committed.value
+      if (!known || known.length !== live.length || !live.every((key) => known.includes(key)))
+        return commit()
+      clearTimeout(timer)
+      timer = setTimeout(commit, settleMs)
+    },
+    { immediate: true },
+  )
+  onScopeDispose(() => clearTimeout(timer))
+
+  const sortedRows = computed<readonly Row[]>(() => {
+    const live = liveSortedRows.value
+    const rank = new Map((committed.value ?? []).map((key, index) => [key, index]))
+    // The watch above commits before render whenever the row set changes, so every live row is
+    // ranked; the live index only breaks a tie that cannot happen.
+    return live
+      .map((row, liveIndex) => ({ row, liveIndex, at: rank.get(rowKey(row)) ?? liveIndex }))
+      .sort((a, b) => a.at - b.at || a.liveIndex - b.liveIndex)
+      .map((r) => r.row)
   })
 
   return { sortKey, sortDirection, sortedRows, toggleSort, indicatorFor }

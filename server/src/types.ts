@@ -869,10 +869,15 @@ export interface UsageSnapshot {
    // arkitect-allow: no-bandaids (reason in the comment above)
    *  Optional for back-compat with snapshots cached before the API path existed. */
   source?: UsageSource
-  /** Codex-only: banked `/usage reset` credits available to redeem (`rate_limit_reset_credits.
-   *  available_count` on the usage payload). Undefined for snapshots that predate this field or
-   *  for providers with no such concept; null when the provider answered but reported none. */
+  /** Banked usage-limit resets still unused. Codex: `rate_limit_reset_credits.available_count` on
+   *  the usage payload. Claude Desktop: the claude.ai reset grants, read from the running app (see
+   *  claude-reset-grants.ts) and carried over from the last reading while the app is closed.
+   *  Undefined when never read; null when the provider answered but reported none. */
   resetCredits?: number | null
+  /** Claude Desktop: when the soonest-ending grant holding a reset expires (ISO). */
+  resetCreditsExpiresAt?: string | null
+  /** Claude Desktop: when `resetCredits` was last read from the app itself (ISO). */
+  resetCreditsCheckedAt?: string | null
 }
 
 /**

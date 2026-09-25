@@ -170,6 +170,8 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
     },
     { key: 'usageSession', accessor: (i: CliInstance) => usageFor(i)?.session?.pct ?? undefined },
   ],
+  undefined,
+  { rowKey: (i: CliInstance) => i.id },
 )
 
 // The filter is tab-wide too (composables/useInstanceFilter.ts): "show me the rows I'm after" is
