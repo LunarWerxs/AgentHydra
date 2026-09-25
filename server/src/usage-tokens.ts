@@ -381,6 +381,36 @@ export function tokensSince(since: Date, configDirs: string[] = [defaultConfigDi
 }
 
 /**
+ * Visit every dated assistant turn spent since `since`, one turn at a time, with its own per-model
+ * counts. The quota calibration (quota-calibration.ts) needs spend BETWEEN two usage readings, which
+ * one lump sum from {@link tokensSince} cannot give; this walks the same files through the same
+ * per-turn parser and the same request de-duplication, so a turn is never priced differently here.
+ */
+export function forEachTurnSince(
+  since: Date,
+  configDirs: string[],
+  visit: (ts: number, byModel: TokenSpend['byModel']) => void,
+): void {
+  const sinceMs = since.getTime()
+  const seen = newUsageSeen()
+  for (const dir of configDirs) {
+    for (const file of recentTranscripts(projectsDir(dir), sinceMs)) {
+      let text: string
+      try {
+        text = readFileSync(file, 'utf8')
+      } catch {
+        continue // unreadable/locked file: skip rather than fail the whole walk
+      }
+      for (const line of text.split('\n')) {
+        const turn = emptySpend()
+        const ts = accumulateUsageLine(turn, line, sinceMs, seen)
+        if (ts !== null) visit(ts, turn.byModel)
+      }
+    }
+  }
+}
+
+/**
  * The empirically-measured size of one percent of the weekly quota, in tokens.
  *
  * `tokensPerHour / burnPctPerHour`. Returns null when either input is missing or the burn is zero

@@ -976,6 +976,12 @@ export interface UsageSample {
   sessionPct: number | null
   weekAllPct: number
   weekResetsAt: string | null
+  /** arkitect-allow: no-bandaids permanent - usage-history.json persists across upgrades, and a
+   *  sample written before this field existed must still deserialize.
+   // arkitect-allow: no-bandaids (reason in the comment above)
+   *  The 5-hour window's reset instant: what keys a session window for the dollar calibration
+   *  (quota-calibration.ts). Absent on older samples, which then feed only the weekly one. */
+  sessionResetsAt?: string | null
 }
 
 /** The percentage, differentiated. See server/src/usage-history.ts. */
@@ -1102,6 +1108,42 @@ export interface UsageBudget {
   weightedPerTurn: number | null
   confidence: BudgetConfidence
   /** Why the confidence is what it is, and what would make it wrong. Always populated. */
+  caveat: string
+  /** The quota windows calibrated into dollars. See server/src/quota-calibration.ts. */
+  dollars: QuotaDollars
+}
+
+/** Why one quota window was left out of the dollar calibration. Each names a way the window's
+ *  (percent moved, dollars spent) pair stops describing the account's real capacity. */
+export type QuotaWindowCensor =
+  | 'capped' // the window hit 100%: spend past the cap never shows in the percentage
+  | 'higher_tier_capped' // the weekly cap cut a 5-hour window short
+  | 'went_backwards' // the percentage fell inside one window key: a reset we did not record
+  | 'unrecorded_usage' // the percentage rose while no priced turn was recorded here
+  | 'unpriced' // a turn in the window has no published price, so its dollars are a lower bound
+  | 'too_small' // moved too few points for an integer percentage to resolve
+
+/** What one quota window (weekly or 5-hour) is worth in dollars, measured, not published. */
+export interface QuotaCapacity {
+  /** List-price dollars one percent of this window buys. Null until a clean window exists. */
+  usdPerPct: number | null
+  /** usdPerPct x 100: what a whole window is worth. */
+  capacityUsd: number | null
+  /** usdPerPct x the percent still unused at the current reading. */
+  dollarsLeft: number | null
+  /** Clean windows the slope was fitted to. */
+  windows: number
+  /** Windows set aside, by reason. */
+  censored: Partial<Record<QuotaWindowCensor, number>>
+  confidence: BudgetConfidence
+}
+
+/** Both quota windows in dollars, plus what the figures assume. */
+export interface QuotaDollars {
+  weekly: QuotaCapacity
+  session: QuotaCapacity
+  /** When the slope was last fitted (ISO), or null when it never has been. */
+  calibratedAt: string | null
   caveat: string
 }
 

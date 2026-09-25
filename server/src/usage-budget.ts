@@ -16,6 +16,7 @@
 // agent that trusts an inflated budget overruns its quota mid-task, which is exactly the failure this
 // whole subsystem exists to prevent. So the caveat travels with the number, always.
 
+import { calibrateQuotaDollars, dollarsSummary } from './quota-calibration'
 import type { BudgetConfidence, UsageBudget, UsageSnapshot } from './types'
 import { burnRateBounds, forecastUsage, usageSamples } from './usage-history'
 import { tokensPerPercent, tokensSince } from './usage-tokens'
@@ -111,6 +112,10 @@ export function buildUsageBudget(
     weightedPerTurn,
     confidence,
     caveat,
+    // The same transcripts, priced, against whole quota windows: the percentage in dollars. Only the
+    // caller's own dirs, never the ~/.claude fallback: another login's turns would inflate the
+    // figure, and calibrateQuotaDollars refuses (with a caveat) when none are given or for Codex.
+    dollars: calibrateQuotaDollars(key, snap, samples, opts.configDirs, now),
   }
 }
 
@@ -149,5 +154,7 @@ export function budgetSummary(budget: UsageBudget, pct: number | null): string {
         ` Confidence: ${budget.confidence}; this is an UPPER bound (see caveat).`,
     )
   }
+  const dollars = dollarsSummary(budget.dollars)
+  if (dollars) parts.push(dollars)
   return parts.join(' ')
 }

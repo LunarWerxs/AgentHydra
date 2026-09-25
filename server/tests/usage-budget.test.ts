@@ -9,6 +9,7 @@
 // "definitely safe".
 
 import { describe, expect, test } from 'bun:test'
+import { uncalibratedDollars } from '../src/quota-calibration'
 import type { TokenSpend, UsageBudget, UsageForecast } from '../src/types'
 import { budgetSummary } from '../src/usage-budget'
 
@@ -45,6 +46,7 @@ const mkBudget = (overrides: Partial<UsageBudget> = {}): UsageBudget => ({
   weightedPerTurn: null,
   confidence: 'none',
   caveat: 'test caveat',
+  dollars: uncalibratedDollars(),
   ...overrides,
 })
 
