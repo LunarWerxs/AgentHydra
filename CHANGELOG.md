@@ -26,6 +26,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   - `launch_instance` answers "launched" only once the app's main process has been seen and is
     still there 5 seconds later; an app that exits within seconds is a failed launch.
 
+### Changed
+
+- **Console chats start at `--effort high`, not `max`** (`orchestrator/scripts/lib/configlib.py`,
+  `orchestrator/scripts/cli_spawn.py`). `doctrine.console_effort` now ships as `high`. Every console
+  chat is one the fleet started or woke, so it runs at the efficient effort, and the owner's own
+  chats keep theirs (owner, 2026-09-24: "I run chats on ultra, you run them on whatever you know is
+  efficient"; the ruling came the same day from the panel he delegated to). The measured reason:
+  high matched xhigh on 10 of 10 real fixes at 2.3x fewer output tokens. An install that wants the
+  old launch sets `doctrine.console_effort` to `max` in its policy file.
+  `--dangerously-skip-permissions` is unchanged.
+
 ## [1.2.0] - 2026-09-24
 
 ### Added

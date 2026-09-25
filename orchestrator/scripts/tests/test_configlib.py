@@ -65,11 +65,12 @@ class SpecTest(_ConfigCase):
 
     def test_the_automation_profile_ships_as_todays_doctrine(self):
         # Owner, 2026-09-24: chats AgentHydra launches may run at a cheaper effort than the
-        # owner's own - but the repo is shared, so the SHIPPED profile is exactly the old
-        # behaviour (ultracode + xhigh on desktop, --effort max in the console).
+        # owner's own - but the repo is shared, so the SHIPPED desktop profile is exactly the old
+        # behaviour (ultracode + xhigh). The console ships at --effort high (ruling 2026-09-24, the
+        # panel Jacob delegated to, decide-43): every console chat is one the fleet started or woke.
         dflt = configlib.defaults()
         self.assertEqual((dflt["doctrine.automation_ultracode"], dflt["doctrine.automation_effort"],
-                          dflt["doctrine.console_effort"]), (True, "xhigh", "max"))
+                          dflt["doctrine.console_effort"]), (True, "xhigh", "high"))
         self.write({"doctrine.automation_ultracode": False, "doctrine.automation_effort": "high",
                     "doctrine.console_effort": "high"})
         self.assertEqual(configlib.problems(), [])
