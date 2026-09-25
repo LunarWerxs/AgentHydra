@@ -165,9 +165,10 @@ SPEC: list[dict] = [
        "Reasoning effort stamped on chats the toolbox launches itself. Ultracode needs xhigh, so "
        "anything lower only means something with automation ultracode OFF.",
        choices=["low", "medium", "high", "xhigh", "max"]),
-    _k("doctrine.console_effort", "max", "enum", "doctrine",
+    _k("doctrine.console_effort", "high", "enum", "doctrine",
        "The --effort flag every console chat the console fleet starts or wakes is launched with "
-       "(it is set at launch and cannot drift).",
+       "(it is set at launch and cannot drift). Ships at high (ruling 2026-09-24): every console "
+       "chat is one the fleet started or woke, so it runs at the efficient effort, not the owner's.",
        choices=["low", "medium", "high", "xhigh", "max"]),
     _k("doctrine.stamp_held_chats", True, "bool", "doctrine",
        "Stamp chats you have put on HOLD too. ON is today's behaviour (the stamp is config, "

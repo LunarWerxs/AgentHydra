@@ -11,9 +11,9 @@ THE DOCTRINE IS A LAUNCH FLAG HERE, AND THAT IS THE POINT (owner, 2026-09-01: "I
 sick of having to change things from manual edits to bypass permissions"). On the desktop side
 the permission mode is a record on disk that a running app can re-save over, which is why it
 needed a stamp at landing, a stamp before every wake, and a five-minute sweep. In the console
-it is `--dangerously-skip-permissions` and `--effort max` on the command line: set when the
-process starts, impossible to drift, and no prompt is ever shown. The model is passed only
-when the caller names one - a chat keeps whatever it was assigned, same standing rule.
+it is `--dangerously-skip-permissions` and `--effort <doctrine.console_effort>` on the command
+line: set when the process starts, impossible to drift, and no prompt is ever shown. The model is
+passed only when the caller names one - a chat keeps whatever it was assigned, same standing rule.
 
 Usage: python cli_spawn.py --folder <path> [--prompt "..."] [--account <name>]
                            [--model <id>] [--resume <sessionId>] [--force] [--json]
@@ -44,9 +44,10 @@ from lib import clilib, configlib, peerlib
 
 def doctrine_args() -> list[str]:
     """The doctrine, as arguments. Nothing else can set these once the process is up, and nothing
-    else needs to. The effort is doctrine.console_effort (shipped: max, the old literal) - every
-    console chat is one the fleet started or woke, so it runs at the automation effort (owner,
-    2026-09-24: "I run chats on ultra, you run them on whatever you know is efficient")."""
+    else needs to. The effort is doctrine.console_effort (shipped: high since 2026-09-24, max
+    before) - every console chat is one the fleet started or woke, so it runs at the automation
+    effort (owner, 2026-09-24: "I run chats on ultra, you run them on whatever you know is
+    efficient")."""
     return ["--dangerously-skip-permissions", "--effort", configlib.get("doctrine.console_effort")]
 
 # How long to wait for a started chat to publish its session record.

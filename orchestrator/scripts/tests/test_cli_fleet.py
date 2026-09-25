@@ -171,17 +171,17 @@ class SpawnTest(unittest.TestCase):
         self.assertIn("--effort", line)
         self.assertEqual(env["CLAUDE_CONFIG_DIR"], "C:/cfg")
 
-    def test_the_console_effort_ships_as_max_and_follows_the_policy(self):
+    def test_the_console_effort_ships_as_high_and_follows_the_policy(self):
         # Owner, 2026-09-24: "I run chats on ultra, you run them on whatever you know is
-        # efficient." The console fleet is chats nobody typed into, so its effort is a knob;
-        # the shipped default is the old literal, so an install that never set it is unchanged.
+        # efficient." The console fleet is chats nobody typed into, so its effort is a knob, and
+        # it ships at high (ruling 2026-09-24, the panel he delegated to); max stays one setting away.
         self.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
         configlib._CACHE = configlib.defaults()
         self.assertEqual(cli_spawn.doctrine_args(),
-                         ["--dangerously-skip-permissions", "--effort", "max"])
-        configlib._CACHE = {**configlib.defaults(), "doctrine.console_effort": "high"}
-        self.assertEqual(cli_spawn.doctrine_args(),
                          ["--dangerously-skip-permissions", "--effort", "high"])
+        configlib._CACHE = {**configlib.defaults(), "doctrine.console_effort": "max"}
+        self.assertEqual(cli_spawn.doctrine_args(),
+                         ["--dangerously-skip-permissions", "--effort", "max"])
 
     @unittest.skipIf(cli_spawn.claude_exe() == "claude",
                      "Claude Code is not installed here, so claude_exe() has nothing absolute to "
