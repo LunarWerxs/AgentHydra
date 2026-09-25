@@ -148,7 +148,7 @@ export default {
   shortcutGroup: 'Sessions',
   shortcutFind: 'Find in the open session',
   shortcutFilter: 'Filter the session list',
-  shortcutEscape: 'Close the find bar, then the session',
+  shortcutEscape: 'Close the find bar, then clear the selection, then close the session',
   // --- reopen in a terminal ---
   resumeTerminal: 'Reopen in a terminal',
   resumeOpened: 'Opened a terminal for this session.',

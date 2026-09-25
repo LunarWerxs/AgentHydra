@@ -7,6 +7,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Box select, Ctrl+A and Escape in the session list** (`web/src/composables/useMultiSelect.ts`,
+  `web/src/lib/session-multiselect.ts`). Choosing bulk-reply or bulk-move targets no longer means
+  ticking rows one by one: drag a band over the rows in select mode (Ctrl/Cmd/Shift-drag adds to the
+  selection and also works outside select mode), press Ctrl/Cmd+A with the list focused to select
+  every visible Claude row, and Escape clears the selection before it closes the open session.
+  Shift-click, Ctrl+A and the box all end as one of two requests (set all, set a range) applied to
+  the checked set, an idea taken from Dear ImGui's multi-select API.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,
