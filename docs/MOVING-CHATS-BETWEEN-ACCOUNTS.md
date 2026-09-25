@@ -229,6 +229,30 @@ paginated ordinals and `item-completed` events across untouched. Downgrading `hi
 be simpler and is wrong: Codex silently drops the displayed items while the model messages sit
 intact on disk, so the moved chat opens LOOKING empty and reads as a failed move.
 
+## Reviving a chat Claude Code deleted (`migrate_chat.py --revive`)
+
+Claude Code deletes a transcript once it is older than `cleanupPeriodDays` (30 days by default),
+and `claude --resume <id>` then fails. If any copy survives (delete_chat's undo copy, the old
+account's projects folder of a moved chat, a file you saved), write it back under the same id:
+
+```sh
+python orchestrator/scripts/migrate_chat.py --revive <session id> --dry-run   # the plan
+python orchestrator/scripts/migrate_chat.py --revive <session id> [--source FILE.jsonl]
+```
+
+It does not copy the file verbatim, because a verbatim copy is what fails on the next turn:
+
+- thinking blocks are dropped: they are signed, a replayed signature that no longer verifies is
+  rejected, and nothing can re-sign one;
+- every `tool_use` must have its `tool_result` later in the chain, or it is dropped (an unanswered
+  call is a 400 on the next request), and a result whose call was dropped goes with it;
+- only the active branch since the last compaction is kept, relinked into one chain, and only user
+  and assistant turns (summaries, snapshots and progress records are the CLI's own bookkeeping).
+
+An existing transcript is rewritten only with `--force`, which keeps the original beside it as
+`.pre-revive-<time>`, and never while it was written in the last 300 seconds. The revive makes no
+daemon call and touches no app; land the revived chat in a desktop account with the usual move.
+
 ---
 
 Everything below was learned the hard way on 2026-08-28, moving 13 chats off an account
