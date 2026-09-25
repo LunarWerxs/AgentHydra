@@ -90,6 +90,7 @@ import {
   withDaemonWarning as mcpWithDaemonWarning,
 } from './mcp'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
+import { withOutputShaping as mcpWithOutputShaping } from './mcp-output'
 import {
   createMcpReasserter,
   mcpRegisterEnabled,
@@ -350,9 +351,13 @@ app.post('/api/mcp', async (c) => {
   // check_my_usage ever pay for the lookup, and cached per port so a keep-alive client pays once.
   // Wrapped here, not inside toolsForCaller: that function's contract is "identity tools rebound,
   // everything else the same object", and the side-run warning (side-run.ts) is a transport concern.
+  // The jmespath projection and the byte cap (mcp-output.ts) sit beneath both warnings, exactly as
+  // on stdio, so the two transports shape a result the same way.
   const ctx = {
     serverInfo: MCP_SERVER_INFO,
-    tools: withRestartWarning(mcpWithDaemonWarning(mcpToolsForCaller(() => callerPidOf(c)))),
+    tools: withRestartWarning(
+      mcpWithDaemonWarning(mcpWithOutputShaping(mcpToolsForCaller(() => callerPidOf(c)))),
+    ),
     instructions: MCP_INSTRUCTIONS,
   }
   const { status, json } = await handleMcpHttp(body, ctx, handleMcpRpc)

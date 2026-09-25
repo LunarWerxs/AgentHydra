@@ -31,6 +31,7 @@ import { join } from 'node:path'
 import { appEnv, IS_COMPILED, PORT, SERVICE_NAME, VERSION } from './config'
 import type { SelfIdentityDetection } from './core/self-identity'
 import { instanceFilePath, readInstanceInfo } from './instance'
+import { withOutputShaping } from './mcp-output'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 import { runMcpStdio } from './mcp-stdio.mjs'
 import type { UsageAdvice, UsageSnapshot } from './types'
@@ -3017,7 +3018,9 @@ account: fan_out_delete {group}, or orchestrator_run delete_chat <chat>.`
 export function runMcp(): Promise<void> {
   return runMcpStdio({
     serverInfo: SERVER_INFO,
-    tools: withDaemonWarning(TOOLS),
+    // Projection + size guard beneath the side-run warning, so the warning rides on the shaped
+    // answer instead of being projected away (mcp-output.ts).
+    tools: withDaemonWarning(withOutputShaping(TOOLS)),
     instructions: SERVER_INSTRUCTIONS,
   })
 }
