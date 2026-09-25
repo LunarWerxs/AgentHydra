@@ -206,13 +206,35 @@ function stopPolling() {
   pollTimer = null
 }
 
+/** Show an open or quit the server has just CONFIRMED on its row at once. The re-list that follows
+ *  is fired, not awaited (2026-09-25, owner: "why is Agent Hydra so friggin slow at closing
+ *  instances and opening instances"): it pays a fresh process scan of 1.0-1.5s, and the server
+ *  answered ok only after it saw the app up (open) or its processes gone (quit), so the row was
+ *  already known. The re-list still replaces the row with the server's own reading. */
+function showConfirmed(dir: string, running: boolean, pid: number | null) {
+  instances.value = instances.value.map((i) =>
+    i.dir === dir
+      ? {
+          ...i,
+          isRunning: running,
+          pid: running ? (pid ?? i.pid) : null,
+          ...(running ? {} : { memoryBytes: null }),
+        }
+      : i,
+  )
+  void refreshInstances({ silent: true })
+}
+
 /** Launch (open) an instance. Returns the action result (or undefined on hard failure) so
  *  the caller can surface the server's failure message (e.g. the MSIX-only explanation). */
 async function open(dir: string): Promise<api.CMActionResult | undefined> {
   setBusy(dir, true)
   try {
     const result = await guard(api.openInstance(dir))
-    if (result?.ok) await refreshInstances()
+    if (result?.ok) {
+      const pid = typeof result.data?.pid === 'number' ? result.data.pid : null
+      showConfirmed(dir, true, pid)
+    }
     return result
   } finally {
     setBusy(dir, false)
@@ -226,7 +248,7 @@ async function quit(dir: string, opts: { confirmExternal?: boolean } = {}): Prom
   setBusy(dir, true)
   try {
     const result = await guard(api.quitInstance(dir, opts))
-    if (result?.ok) await refreshInstances()
+    if (result?.ok) showConfirmed(dir, false, null)
     return result?.ok ?? false
   } finally {
     setBusy(dir, false)

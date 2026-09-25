@@ -805,6 +805,23 @@ export function lastGoodClaudeProcessScan(
 }
 
 /**
+ * Whether `pid` is still running AS A PROCESS WE CAN SIGNAL, without a scan: signal 0 probes and
+ * signals nothing. A few ms against the 1.0-1.5s of one full scan (measured 2026-09-25, 112
+ * claude.exe running), so a caller that already knows WHICH Claude pid it is waiting on watches it
+ * with this and scans only once it is gone. EPERM counts as GONE: a Claude this app started runs as
+ * this user, so a pid we may not signal has been handed to someone else's process - one a quit
+ * must neither wait on nor force-kill.
+ */
+export function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Forget the cached process snapshot so the next listing scans for real.
  *
  * Call this after anything that CHANGES what a scan would return — launching, quitting, creating

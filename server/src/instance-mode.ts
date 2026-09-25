@@ -309,7 +309,10 @@ const boundPort = await findFreePort(INSTANCE_MODE_PORT, 50, HOST)
 // Fill the allowlist the cors() and guard callbacks above read on every request. This runs
 // before Bun.serve accepts a single connection, so no request can observe the empty initial [].
 allowedApiOrigins = apiOriginAllowlist(`http://${HOST}:${boundPort}`)
-Bun.serve({ hostname: HOST, port: boundPort, fetch: app.fetch })
+// idleTimeout as the full daemon's (index.ts): Bun's default is 10s, and an Open that verifies a
+// managed launch can run longer than that on a loaded PC - the quick window then lost the answer to
+// a dropped connection while the launch carried on (found 2026-09-25 tracing slow opens).
+Bun.serve({ hostname: HOST, port: boundPort, fetch: app.fetch, idleTimeout: 255 })
 disarmBootWatchdog()
 writeInstanceModeInfo(boundPort, { mode: 'instances' })
 startupLock.release()

@@ -72,6 +72,75 @@ test('an app that exits within seconds of starting is a failed launch, not "laun
       clock += ms
     },
     now: () => clock,
+    alive: () => false,
   }
   await expect(confirmLaunchSurvives(dir, deps)).rejects.toThrow('exited within')
+})
+
+// 2026-09-25 (owner: "why is Agent Hydra so friggin slow at opening instances"): the 5s window
+// used to start when a ~1s scan happened to notice the app and end in another full scan, so every
+// open paid ~8s on top of Claude's own startup. It now starts at the process's own CreationDate.
+function survivalDeps(scans: CMProcessInfo[][], alive: (pid: number, clock: number) => boolean) {
+  const t = { clock: 100_000, scans: 0 }
+  return {
+    t,
+    deps: {
+      scan: async () => {
+        t.scans += 1
+        return { ok: true as const, processes: scans.shift() ?? [] }
+      },
+      sleep: async (ms: number) => {
+        t.clock += ms
+      },
+      now: () => t.clock,
+      alive: (pid: number) => alive(pid, t.clock),
+    },
+  }
+}
+
+test('the survival window counts from the process start time, with one scan and no re-scan', async () => {
+  const dir = 'c:/i/luis'
+  const startedAgo = (ms: number) => new Date(100_000 - ms).toISOString()
+  // Up 4s already when first seen: only the last second is waited for.
+  const young = survivalDeps(
+    [[{ pid: 7, dir, isMain: true, startTime: startedAgo(4_000) } as CMProcessInfo]],
+    () => true,
+  )
+  await expect(confirmLaunchSurvives(dir, young.deps)).resolves.toBe(7)
+  expect(young.t.clock - 100_000).toBe(1_000)
+  expect(young.t.scans).toBe(1)
+  // A managed launch that already waited out its inspector: nothing left to wait for.
+  const old = survivalDeps(
+    [[{ pid: 8, dir, isMain: true, startTime: startedAgo(9_000) } as CMProcessInfo]],
+    () => true,
+  )
+  await expect(confirmLaunchSurvives(dir, old.deps)).resolves.toBe(8)
+  expect(old.t.clock).toBe(100_000)
+  // No readable start time: the full window from the sighting, as before.
+  const blind = survivalDeps([[{ pid: 9, dir, isMain: true } as CMProcessInfo]], () => true)
+  await expect(confirmLaunchSurvives(dir, blind.deps)).resolves.toBe(9)
+  expect(blind.t.clock - 100_000).toBe(5_000)
+})
+
+test('an early exit is reported mid-window, and a main process under a new pid still counts', async () => {
+  const dir = 'c:/i/luis'
+  const main = {
+    pid: 7,
+    dir,
+    isMain: true,
+    startTime: new Date(100_000).toISOString(),
+  } as CMProcessInfo
+  const died = survivalDeps([[main], []], (_pid, clock) => clock < 101_000)
+  await expect(confirmLaunchSurvives(dir, died.deps)).rejects.toThrow('exited within')
+  expect(died.t.clock - 100_000).toBeLessThan(1_500)
+  // A hand-off: the stub exits and the real app runs on - and must survive its own window.
+  const successor = { pid: 70, dir, isMain: true } as CMProcessInfo
+  const moved = survivalDeps([[main], [successor]], (pid) => pid !== 7)
+  await expect(confirmLaunchSurvives(dir, moved.deps)).resolves.toBe(70)
+  expect(moved.t.clock - 100_000).toBeGreaterThanOrEqual(5_000)
+  const crashed = survivalDeps(
+    [[main], [successor], []],
+    (pid, clock) => pid === 70 && clock < 102_000,
+  )
+  await expect(confirmLaunchSurvives(dir, crashed.deps)).rejects.toThrow('pid 70')
 })

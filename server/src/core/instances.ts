@@ -47,6 +47,7 @@ import {
 import {
   type CMProcessInfo,
   invalidateClaudeProcessCache,
+  isPidAlive,
   type ListClaudeProcessesOptions,
   lastGoodClaudeProcessScan,
   listClaudeProcesses,
@@ -59,6 +60,14 @@ import type { CMActionResult, CMInstance } from './shared'
  *  returned in ten seconds is wedged, and the caller's next step (a forced kill, a re-scan) is
  *  strictly better than waiting on it forever. */
 const TASKKILL_TIMEOUT_MS = 10_000
+
+/** How often a quit re-checks the pids it is waiting on (signal 0, no scan). */
+const QUIT_POLL_MS = 100
+/** After the main process has exited, how long its helper processes get to exit on their own
+ *  before the survivors are forced. */
+const QUIT_CHILD_SETTLE_MS = 1_500
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 /** How old a successful process scan may be and still stand in for a failed one in a LISTING. */
 const LAST_GOOD_SCAN_MAX_AGE_MS = 5 * 60_000
@@ -677,6 +686,7 @@ async function spawnAndAwaitReady(
   recordInstanceLaunches([{ dir: normDir, at: Date.now() }])
   invalidateClaudeProcessCache()
   if (attempt.nativeData) attempt.nativeData.handoffPid = proc.pid
+  let known: CMProcessInfo | null = null
   if (plan.nativeDebugger) {
     const ready = await waitForNativeLaunchReady({
       profileDir: normDir,
@@ -685,52 +695,76 @@ async function spawnAndAwaitReady(
       startupLogCursor,
     })
     if (attempt.nativeData) attempt.nativeData.pid = ready.pid
+    known = ready.owner
   }
-  return confirmLaunchSurvives(normDir)
+  return confirmLaunchSurvives(normDir, {}, known)
 }
 
 /** How long a launched app must stay up before the launch is answered "launched", and how long it
  *  may take to show up in the process list at all. */
 const LAUNCH_SURVIVAL_MS = 5_000
 const LAUNCH_APPEAR_MS = 30_000
-const LAUNCH_POLL_MS = 1_000
+/** The gap between process scans while waiting for the app to appear. Each scan is itself a
+ *  powershell + CIM round trip (1.0-1.5s measured 2026-09-25 with 112 claude.exe running), so a
+ *  full second on top of that only delayed noticing an app that was already there. */
+const LAUNCH_POLL_MS = 300
+/** How often the survival window re-checks the one pid it is watching (signal 0, no scan). */
+const LAUNCH_LIVENESS_POLL_MS = 250
+/** How many times the watched main process may hand over to a new pid before the scan's answer is
+ *  taken as it stands. */
+const LAUNCH_MAX_HANDOFFS = 2
 
 export interface LaunchSurvivalDeps {
   scan?: () => Promise<{ ok: true; processes: CMProcessInfo[] } | { ok: false; reason: string }>
   sleep?: (ms: number) => Promise<void>
   now?: () => number
+  /** Whether `pid` is still running. Defaults to isPidAlive (signal 0); injected by tests. */
+  alive?: (pid: number) => boolean
 }
 
 /**
- * The pid of this profile's main process once it has been seen AND is still there
- * LAUNCH_SURVIVAL_MS later; throws otherwise.
+ * The pid of this profile's main process once it has been seen AND has been up for
+ * LAUNCH_SURVIVAL_MS; throws otherwise.
  *
  * ⛔ "launched" USED TO MEAN "a process was handed the argv" (found live 2026-09-24, chat
  * ffb5fe39): `launch_instance {instance: 26}` answered `launched` with pid 42632 - the transient
  * `cmd /c start` hand-off on a stock launch - and seconds later `list_instances` showed it not
  * running. An app that exits within seconds of starting did not launch, and fan_out, which opens
  * closed accounts through this, must hear that as a failure rather than wait out its own timer.
+ *
+ * THE WINDOW COUNTS FROM THE PROCESS'S OWN START TIME, NOT FROM WHEN A SCAN NOTICED IT (2026-09-25,
+ * owner: "why is Agent Hydra so friggin slow at opening instances"). The first cut slept the full
+ * 5s after the scan that found the app and then ran one more full scan, so every open paid scan +
+ * 5s + scan (~8s) on top of Claude's own startup, and a managed launch that had already waited
+ * several seconds for its inspector paid all of it again. Now the scan's CreationDate starts the
+ * clock, the watched pid is re-checked with signal 0 while the window runs (an early exit is
+ * reported as soon as it happens), and a full scan is paid again only when that pid has died, to
+ * see whether the profile's main process lives on under another pid. `known` is the row a managed
+ * launch's readiness wait already found (it scanned for it): no scan is needed to find it again.
  */
 export async function confirmLaunchSurvives(
   normDir: string,
   deps: LaunchSurvivalDeps = {},
+  known: CMProcessInfo | null = null,
 ): Promise<number> {
   const scan = deps.scan ?? (() => scanClaudeProcesses({ fresh: true }))
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const now = deps.now ?? Date.now
+  const alive = deps.alive ?? isPidAlive
   const want = normalizePath(normDir)
-  const mainPid = async (): Promise<{ pid: number | null; failed?: string }> => {
+  const mainProc = async (): Promise<{ proc: CMProcessInfo | null; failed?: string }> => {
     const s = await scan()
-    if (!s.ok) return { pid: null, failed: s.reason }
+    if (!s.ok) return { proc: null, failed: s.reason }
     const hit = s.processes.find((p) => p.isMain && p.dir && normalizePath(p.dir) === want)
-    return { pid: hit ? hit.pid : null }
+    return { proc: hit ?? null }
   }
   const deadline = now() + LAUNCH_APPEAR_MS
-  let seen: number | null = null
+  let seen: CMProcessInfo | null =
+    known?.isMain && known.dir && normalizePath(known.dir) === want ? known : null
   let lastFailure: string | undefined
   while (seen === null) {
-    const r = await mainPid()
-    seen = r.pid
+    const r = await mainProc()
+    seen = r.proc
     lastFailure = r.failed ?? lastFailure
     if (seen !== null) break
     if (now() >= deadline)
@@ -740,13 +774,33 @@ export async function confirmLaunchSurvives(
       )
     await sleep(LAUNCH_POLL_MS)
   }
-  await sleep(LAUNCH_SURVIVAL_MS)
-  const after = await mainPid()
-  if (after.failed)
-    throw Error(`started (pid ${seen}), but could not confirm it stayed up: ${after.failed}`)
-  if (after.pid === null)
-    throw Error(`started (pid ${seen}) and exited within ${LAUNCH_SURVIVAL_MS / 1000}s`)
-  return after.pid
+  // A hand-off (a stub that starts the real app and exits) shows up as a main process that dies
+  // while a new one takes over; the successor must survive its own window too. Bounded, so a
+  // profile whose main process keeps changing cannot hold the launch forever.
+  let watched = seen
+  for (let handoffs = 0; ; handoffs++) {
+    const pid = watched.pid
+    // A start time in the future (clock skew, a bad parse) must not stretch the window, and one we
+    // cannot read falls back to the moment we saw the process, which is the old, longer wait.
+    const started = watched.startTime ? Date.parse(watched.startTime) : Number.NaN
+    const upSince = Number.isFinite(started) ? Math.min(started, now()) : now()
+    const survivedAt = upSince + LAUNCH_SURVIVAL_MS
+    while (alive(pid) && now() < survivedAt) {
+      await sleep(Math.min(LAUNCH_LIVENESS_POLL_MS, survivedAt - now()))
+    }
+    if (alive(pid)) return pid
+    // The pid we watched is gone. Before calling the launch failed, look once more: the profile's
+    // main process may be running under another pid.
+    const after = await mainProc()
+    if (after.failed)
+      throw Error(`started (pid ${pid}), but could not confirm it stayed up: ${after.failed}`)
+    if (after.proc === null)
+      throw Error(`started (pid ${pid}) and exited within ${LAUNCH_SURVIVAL_MS / 1000}s`)
+    // The scan still lists the pid signal 0 called gone, or the main process keeps changing: the
+    // scan is the authority, as the full rescan after the window always was.
+    if (after.proc.pid === pid || handoffs >= LAUNCH_MAX_HANDOFFS) return after.proc.pid
+    watched = after.proc
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -775,18 +829,9 @@ export interface QuitInstanceOptions {
   listProcesses?: (options: ListClaudeProcessesOptions) => Promise<CMProcessInfo[]>
 }
 
-/** True once none of `pids` are alive anymore (best-effort liveness probe). */
+/** True while any of `pids` is still alive (signal-0 probe, see isPidAlive). */
 function anyAlive(pids: number[]): boolean {
-  for (const pid of pids) {
-    try {
-      // signal 0 = liveness probe only, doesn't actually kill (Node/Bun convention on all OSes).
-      process.kill(pid, 0)
-      return true
-    } catch {
-      // ESRCH (no such process) => this one's dead; keep checking the rest.
-    }
-  }
-  return false
+  return pids.some(isPidAlive)
 }
 
 async function forceKillPid(pid: number): Promise<void> {
@@ -901,21 +946,21 @@ export async function quitInstance(
     const main = matched.find((p) => p.isMain) ?? matched[0]
     if (main) {
       await gracefulKillPid(main.pid)
+      // THE GRACE IS FOR THE MAIN PROCESS; THE HELPERS GET A SHORT SETTLE (2026-09-25, owner: "why
+      // is Agent Hydra so friggin slow at closing instances"). Only the main process was asked to
+      // close, and it is the one that runs Claude's quit cleanup (median ~1s across 41 logged
+      // quits in this PC's profiles). The loop used to wait for EVERY pid, so one lingering
+      // renderer or crashpad helper held the close to the full 5s. Now: the main process gets the
+      // whole grace; once it is gone the helpers get QUIT_CHILD_SETTLE_MS to exit on their own
+      // (the network service may still be flushing cookies), then whatever is left is forced.
       const deadline = Date.now() + gracefulTimeoutMs
-      while (Date.now() < deadline && anyAlive(pids)) {
-        await new Promise((resolve) => setTimeout(resolve, 200))
-      }
+      while (Date.now() < deadline && isPidAlive(main.pid)) await sleep(QUIT_POLL_MS)
+      const settleBy = Math.min(deadline, Date.now() + QUIT_CHILD_SETTLE_MS)
+      while (Date.now() < settleBy && anyAlive(pids)) await sleep(QUIT_POLL_MS)
     }
   }
 
-  const stillAlive = pids.filter((pid) => {
-    try {
-      process.kill(pid, 0)
-      return true
-    } catch {
-      return false
-    }
-  })
+  const stillAlive = pids.filter(isPidAlive)
 
   let forceKilled = 0
   if (stillAlive.length > 0) {

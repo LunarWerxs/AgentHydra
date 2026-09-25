@@ -62,6 +62,8 @@ function fixture() {
   let clock = 0
   let calls = 0
   let closes = 0
+  let scans = 0
+  const live = { owner: true }
   const states = [
     { ready: false, pid: 15, executable: binary, profile },
     { ready: true, pid: 15, executable: binary, profile },
@@ -71,10 +73,14 @@ function fixture() {
     sleep: async (ms: number) => {
       clock += ms
     },
-    scan: async () => ({
-      ok: true as const,
-      processes: [{ pid: 15, cmdline: 'fixture', dir: profile, isMain: true }],
-    }),
+    alive: () => live.owner,
+    scan: async () => {
+      scans++
+      return {
+        ok: true as const,
+        processes: [{ pid: 15, cmdline: 'fixture', dir: profile, isMain: true }],
+      }
+    },
     connect: async () =>
       ({
         identity: { pid: 15, profile, argv: [], electron: '44.2.0', version: '2.2553.1' },
@@ -84,16 +90,33 @@ function fixture() {
         },
       }) as ClaudeInspectorClient,
   }
-  return { deps, states, getCalls: () => calls, getCloses: () => closes }
+  return {
+    deps,
+    states,
+    live,
+    getCalls: () => calls,
+    getCloses: () => closes,
+    getScans: () => scans,
+  }
 }
 
 test('waits for the correct app window to finish loading and closes every inspector connection', async () => {
   const f = fixture()
   expect(
     await waitForNativeLaunchReady({ profileDir: profile, binary, port: 19315 }, f.deps),
-  ).toMatchObject({ pid: 15, ready: true })
+  ).toMatchObject({ pid: 15, ready: true, owner: { pid: 15 } })
   expect(f.getCalls()).toBe(2)
   expect(f.getCloses()).toBe(2)
+  // 2026-09-25: one scan finds the owner; a live owner is re-probed, not re-scanned (each scan is
+  // a 1.0-1.5s powershell + CIM round trip that competes with the startup being waited on).
+  expect(f.getScans()).toBe(1)
+})
+
+test('an owner that dies mid-wait is looked for again with a fresh scan', async () => {
+  const f = fixture()
+  f.live.owner = false
+  await waitForNativeLaunchReady({ profileDir: profile, binary, port: 19315 }, f.deps)
+  expect(f.getScans()).toBe(2)
 })
 
 test.each(['profile', 'executable'] as const)(

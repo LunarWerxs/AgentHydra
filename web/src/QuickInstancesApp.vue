@@ -298,10 +298,14 @@ async function refresh(silent = false): Promise<void> {
   }
 }
 
+/** `confirmed` paints a Claude open/stop the server has just confirmed onto its row at once, and the
+ *  re-list (a fresh 1.0-1.5s process scan) then runs without holding the row busy (2026-09-25,
+ *  owner: "why is Agent Hydra so friggin slow at closing instances and opening instances"). */
 async function act(
   key: string,
   label: string,
   action: () => Promise<CMActionResult>,
+  confirmed?: (result: CMActionResult) => void,
 ): Promise<void> {
   setBusy(key, true)
   notice.value = null
@@ -309,7 +313,12 @@ async function act(
     const result = await action()
     if (!result.ok) throw new Error(result.message ?? `${label} failed.`)
     notice.value = result.message || `${label} completed.`
-    await refresh(true)
+    if (confirmed) {
+      confirmed(result)
+      void refresh(true)
+    } else {
+      await refresh(true)
+    }
   } catch (cause) {
     error.value = message(cause)
   } finally {
@@ -333,10 +342,32 @@ function copyEmail(dir: string, email: string): void {
   }, 1200)
 }
 
+/** The row of a Claude open/stop the server just confirmed, shown before the re-list lands. */
+function showClaudeRunning(dir: string, running: boolean, result: CMActionResult): void {
+  const pid = typeof result.data?.pid === 'number' ? result.data.pid : null
+  claude.value = claude.value.map((row) =>
+    row.dir === dir
+      ? {
+          ...row,
+          isRunning: running,
+          pid: running ? (pid ?? row.pid) : null,
+          ...(running ? {} : { memoryBytes: null }),
+        }
+      : row,
+  )
+}
+
 function openClaude(instance: CMInstance): void {
   const key = `claude:${instance.dir}`
-  void act(key, instance.isRunning ? 'Focus' : 'Start', () =>
-    instance.isRunning ? focusInstance(instance.dir) : openInstance(instance.dir),
+  if (instance.isRunning) {
+    void act(key, 'Focus', () => focusInstance(instance.dir))
+    return
+  }
+  void act(
+    key,
+    'Start',
+    () => openInstance(instance.dir),
+    (result) => showClaudeRunning(instance.dir, true, result),
   )
 }
 
@@ -347,7 +378,12 @@ function stopClaude(instance: CMInstance): void {
   )
     return
   const key = `claude:${instance.dir}`
-  void act(key, 'Stop', () => quitInstance(instance.dir, { confirmExternal: instance.isExternal }))
+  void act(
+    key,
+    'Stop',
+    () => quitInstance(instance.dir, { confirmExternal: instance.isExternal }),
+    (result) => showClaudeRunning(instance.dir, false, result),
+  )
 }
 
 function launchClaudeCli(instance: CliInstance): void {

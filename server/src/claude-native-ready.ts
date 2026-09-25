@@ -4,7 +4,7 @@ import {
   type ClaudeInspectorIdentity,
   connectClaudeInspector,
 } from './core/claude-native/inspector-client'
-import { scanClaudeProcesses } from './core/process'
+import { type CMProcessInfo, isPidAlive, scanClaudeProcesses } from './core/process'
 
 export interface NativeLaunchReadyOptions {
   profileDir: string
@@ -68,6 +68,8 @@ interface ReadyDeps {
   connect?: typeof connectClaudeInspector
   sleep?: (milliseconds: number) => Promise<void>
   now?: () => number
+  /** Whether a pid is still running (signal 0 by default); injected by tests. */
+  alive?: (pid: number) => boolean
 }
 
 /** Only a changed identity or a failed host setup is worth abandoning the whole wait for. */
@@ -176,20 +178,37 @@ function nativeLaunchWait(options: NativeLaunchReadyOptions, deps: ReadyDeps): L
 export async function waitForNativeLaunchReady(
   options: NativeLaunchReadyOptions,
   deps: ReadyDeps = {},
-): Promise<{ pid: number; identity: ClaudeInspectorIdentity; ready: boolean }> {
+): Promise<{
+  pid: number
+  identity: ClaudeInspectorIdentity
+  ready: boolean
+  /** The process row the ready pid came from (carries its start time). */
+  owner: CMProcessInfo
+}> {
   const profile = normalizeClaudeNativeProfile(options.profileDir)
   const binary = normalizeClaudeNativeProfile(options.binary)
   const { now, sleep, deadline } = nativeLaunchWait(options, deps)
+  const alive = deps.alive ?? isPidAlive
   let last = 'the launched profile has not appeared'
+  // ONE SCAN FINDS THE OWNER; ITS PID IS THEN WATCHED DIRECTLY (2026-09-25, owner: "why is Agent
+  // Hydra so friggin slow at opening instances"). Every lap used to run a fresh full scan - a
+  // powershell + CIM round trip of 1.0-1.5s on this box - so readiness was noticed up to ~1.5s
+  // late, and the scans competed for CPU with the very Claude startup being waited on. The probe
+  // below re-proves pid, executable and profile through the inspector on every lap, so a pid that
+  // is still alive needs no rescan; a new scan runs only until the owner appears or once it dies.
+  let owner: CMProcessInfo | undefined
   while (now() < deadline) {
-    const scan = await (deps.scan ?? scanClaudeProcesses)({ fresh: true })
-    if (!scan.ok) throw Error(`Native launch process discovery failed: ${scan.reason}`)
-    if (now() >= deadline) break
-    const owners = scan.processes.filter(
-      (row) => row.isMain && row.dir && normalizeClaudeNativeProfile(row.dir) === profile,
-    )
-    if (owners.length > 1) throw Error('Native launch has multiple processes for the exact profile')
-    const owner = owners[0]
+    if (!owner || !alive(owner.pid)) {
+      const scan = await (deps.scan ?? scanClaudeProcesses)({ fresh: true })
+      if (!scan.ok) throw Error(`Native launch process discovery failed: ${scan.reason}`)
+      if (now() >= deadline) break
+      const owners = scan.processes.filter(
+        (row) => row.isMain && row.dir && normalizeClaudeNativeProfile(row.dir) === profile,
+      )
+      if (owners.length > 1)
+        throw Error('Native launch has multiple processes for the exact profile')
+      owner = owners[0]
+    }
     if (owner) {
       const probe = await probeNativeLaunchOwner(
         owner,
@@ -202,7 +221,7 @@ export async function waitForNativeLaunchReady(
       )
       if (probe.kind === 'fatal') throw probe.error
       if (probe.kind === 'ready') {
-        return { pid: probe.pid, identity: probe.identity, ready: true }
+        return { pid: probe.pid, identity: probe.identity, ready: true, owner }
       }
       last = probe.reason
     }

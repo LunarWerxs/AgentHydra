@@ -78,3 +78,39 @@ test('an isolated instance dir is NOT refused by the external guard', async () =
     rmSync(tempDir, { recursive: true, force: true })
   }
 })
+
+// 2026-09-25 (owner: "why is Agent Hydra so friggin slow at closing instances"): the grace period
+// is for the MAIN process. The wait used to hold for every pid, so one lingering helper kept the
+// close waiting the full 5s. The "main" here is pid 6: not a multiple of 4, so Windows can never
+// assign it, and the graceful signal reaches nothing real. The lingering helper is our own sleeper.
+test('a helper that outlives the main process is forced after a short settle, not the full grace', async () => {
+  const dir = path.join(os.tmpdir(), 'ah-quit-settle')
+  const helper = Bun.spawn([process.execPath, '-e', 'setTimeout(() => {}, 60000)'], {
+    stdout: 'ignore',
+    stderr: 'ignore',
+  })
+  try {
+    const started = performance.now()
+    // A grace far longer than any honest run: the old wait-for-every-pid loop sat out all of it
+    // for the lingering helper, the new one forces the helper about 1.5s after the main is gone.
+    // Asserting against half the grace keeps this true on a loaded PC, where spawns are slow.
+    const result = await quitInstance(dir, {
+      gracefulTimeoutMs: 60_000,
+      listProcesses: async () => [
+        { pid: 6, cmdline: 'fixture', dir, isMain: true },
+        { pid: helper.pid, cmdline: 'fixture --type=renderer', dir, isMain: false },
+      ],
+    })
+    const elapsed = performance.now() - started
+    expect(result.ok).toBe(true)
+    expect(result.data?.killedCount).toBe(2)
+    expect(elapsed).toBeLessThan(30_000)
+    const exited = await Promise.race([
+      helper.exited.then(() => true),
+      Bun.sleep(5_000).then(() => false),
+    ])
+    expect(exited).toBe(true)
+  } finally {
+    helper.kill()
+  }
+}, 90_000)

@@ -9,6 +9,27 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Opening and closing a Claude Desktop instance no longer waits on AgentHydra's own checks**
+  (`server/src/core/instances.ts`, `server/src/claude-native-ready.ts`,
+  `server/src/claude-native-launch.ts`, `server/src/core/process.ts`,
+  `web/src/composables/useInstances.ts`, `web/src/QuickInstancesApp.vue`). Claude's own logs on the
+  owner's PC put its startup at a median 2 s (101 starts) and its quit cleanup at about 1 s (41
+  quits); an Open took 10-15 s and a Close up to 7.5 s because of what AgentHydra did around them.
+  Each check stays; the waiting goes:
+  - The 5 s "did it stay up" window counts from the process's own start time, re-checks the pid
+    with signal 0 instead of a closing full process scan, and reuses the process a managed launch's
+    readiness wait already found. A managed launch that took 5 s to become ready answers at once.
+  - The readiness wait scans once to find Claude's main process and then watches that pid; it used
+    to run a 1.0-1.5 s PowerShell/CIM scan on every 300 ms lap, competing with Claude's startup.
+  - The managed copy is still fully re-hashed on every Open, 8 files at a time in 1 MiB reads:
+    1.5-2.2 s where the old one-file-at-a-time loop took 5.5-8.8 s on the same loaded PC.
+  - Close gives the graceful grace to the main process only, then 1.5 s for its helper processes
+    before forcing them; one lingering helper used to hold every close to the full 5 s.
+  - The Instances tab and the quick window show a confirmed open or close on the row at once and
+    re-list in the background instead of holding the row busy through one more full scan.
+  - The quick window's server keeps a connection open as long as the full daemon's does (255 s,
+    `server/src/instance-mode.ts`); Bun's 10 s default could drop a slow Open's answer while the
+    launch carried on.
 - **A fan_out that cannot press Send no longer leaves its prompt typed in the composer**
   (`orchestrator/scripts/actuator/submit_composer.ps1`, `spawn_chat.py`, `fan_out.py`). The
   actuator waits up to ~10 s for an enabled Send, re-finding its own composer each look, and a

@@ -84,12 +84,43 @@ async function regularDirectory(path: string): Promise<void> {
   }
 }
 
+/** Read size per chunk while hashing. The stream default (64 KiB) spent more time on chunk
+ *  round trips than on SHA-256: 1 MiB chunks, several files at once (see HASH_CONCURRENCY),
+ *  verified the 3,749-file / 614 MB managed copy in 1.5-2.2s where the old loop took 5.5-8.8s on
+ *  the same loaded box (measured 2026-09-25, identical hashes). */
+const HASH_CHUNK_BYTES = 1 << 20
+/** How many files one verification hashes at the same time. */
+const HASH_CONCURRENCY = 8
+
+/** Runs `fn` over every item, at most `limit` at once; the first failure stops new work starting
+ *  and is what rejects. Every item is still checked unless an earlier one already failed. */
+async function forEachLimited<T>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0
+  let failed = false
+  const worker = async () => {
+    while (!failed && next < items.length) {
+      const item = items[next++]
+      try {
+        await fn(item)
+      } catch (error) {
+        failed = true
+        throw error
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+}
+
 async function digest(path: string): Promise<{ size: number; sha256: string }> {
   const info = await lstat(path)
   if (!info.isFile() || info.isSymbolicLink()) throw Error(`Not a regular Claude file: ${path}`)
   const hash = createHash('sha256')
   let size = 0
-  for await (const chunk of createReadStream(path)) {
+  for await (const chunk of createReadStream(path, { highWaterMark: HASH_CHUNK_BYTES })) {
     hash.update(chunk)
     size += chunk.length
   }
@@ -318,12 +349,14 @@ async function verifyCopy(
   if (JSON.stringify(files) !== JSON.stringify(manifest.files.map((entry) => entry.path))) {
     throw Error('Managed Claude copy file inventory changed')
   }
-  for (const expected of manifest.files) {
+  // Every file is still hashed and compared on every launch (the guard the runbook says never to
+  // weaken); only the reading is batched, because this runs before Claude is even started.
+  await forEachLimited(manifest.files, HASH_CONCURRENCY, async (expected) => {
     const actual = await digest(childPath(target, expected.path))
     if (actual.sha256 !== expected.sha256 || actual.size !== expected.size) {
       throw Error(`Managed Claude copy changed: ${expected.path}`)
     }
-  }
+  })
   const exe = manifest.files.find((entry) => entry.path.toLowerCase() === 'claude.exe')
   if (exe?.sha256 !== build.managedSha256) throw Error('Managed Claude executable hash mismatch')
   if (!manifest.files.some((entry) => entry.path === 'resources/app.asar')) {
