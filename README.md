@@ -108,6 +108,14 @@ a megabyte for a store of 1,400 sessions and no message text is kept. Costs are 
 prices: a subscription plan is not billed per token, so read them as what the same work would cost
 on the API. `AgentHydra.exe --spend --json` prints the same numbers for a script.
 
+**Recurring mistakes** reads the newest Claude, Codex and OpenCode sessions on demand and pairs each
+shell command that failed with the similar command that fixed it a few steps later: an unknown flag,
+a missing argument, a wrong path, a command that was not found, a permission error. The pairs are
+grouped by error kind and command with how often each happened, and **Copy as rules** puts them on
+the clipboard as a rules file (for example `.claude/rules/cli-corrections.md`), so a mistake agents
+keep making becomes a rule backed by evidence. Nothing is stored or written; agents get the same list
+from the MCP `get_command_corrections` tool.
+
 ## Manage isolated instances
 
 ![The instances view: four isolated Claude Desktop instances, each with its account, plan, remaining weekly quota, live memory and uptime](.github/screenshots/instances.png)

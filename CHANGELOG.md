@@ -7,6 +7,23 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Recurring mistakes: fail-then-fix command pairs mined from transcripts**
+  (`server/src/command-corrections.ts`, `server/src/routes/analytics.ts`, `server/src/mcp.ts`,
+  `server/src/opencode-sessions.ts`, `web/src/components/CommandCorrections.vue`). The same agent
+  mistakes kept coming back, and each time the fix sat two commands later in the transcript where
+  nobody would look. The Analytics tab's new **Recurring mistakes** panel reads the newest Claude,
+  Codex and OpenCode sessions on demand, pairs each shell command that failed with a recognisable
+  error (unknown flag, missing argument, wrong path, command not found, permission denied) with the
+  similar command that then succeeded, and groups the pairs by error kind and base command with
+  occurrence and session counts. **Copy as rules** puts them on the clipboard as a rules file such
+  as `.claude/rules/cli-corrections.md`. A failing test run followed by a passing one, or an
+  identical retry, is not counted. Read-only, bounded by a session limit and a time budget, nothing
+  stored; commands are secret-redacted. Also `GET /api/analytics/corrections` and the MCP
+  `get_command_corrections` tool. Idea from rtk's `rtk learn` (rtk-ai/rtk, Apache-2.0), written
+  fresh.
+
 ### Fixed
 
 - **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,

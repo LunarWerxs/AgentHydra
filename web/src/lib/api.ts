@@ -19,6 +19,7 @@ import type {
   CodexMoveResult,
   CodexResetRedeemResult,
   ConcurrencyPoint,
+  CorrectionReport,
   DispatchedScope,
   EditEntry,
   EffortLevel,
@@ -83,7 +84,11 @@ export type {
   CodexInstance,
   CodexResetRedeemResult,
   CodexResetRedeemStatus,
+  CommandErrorKind,
   ConcurrencyPoint,
+  CorrectionExample,
+  CorrectionGroup,
+  CorrectionReport,
   DispatchedScope,
   EditEntry,
   EffortLevel,
@@ -186,6 +191,9 @@ export const getConcurrency = (period: SessionPeriod = '30d', bucketMinutes = 18
   )
 export const getRecentEdits = (limit = 200) =>
   j<{ edits: EditEntry[] }>(`/api/analytics/edits?limit=${limit}`)
+/** Recurring command mistakes, mined from transcripts on demand. Slower than the totals above
+ *  (it opens transcripts), so the view asks for it on a click rather than on every visit. */
+export const getCommandCorrections = () => j<CorrectionReport>('/api/analytics/corrections')
 export const getAnalyticsStatus = () => j<AnalyticsCoverage>('/api/analytics')
 /** Which coding agents are installed here — including ones whose conversations we cannot read yet.
  *  Listing those is the point: silence would read as "AgentHydra looked and found nothing". */
