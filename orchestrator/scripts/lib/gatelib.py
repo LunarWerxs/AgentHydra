@@ -34,6 +34,7 @@ from pathlib import Path
 
 from lib import configlib
 from lib import joblocklib
+from lib import receiptlib
 from lib import stalllib
 
 # How long a live chat must be quiet AFTER a completed turn before it counts as idle rather
@@ -485,6 +486,9 @@ def same_task(a: str, b: str) -> bool:
     """Two first prompts are the same task when they are equal, or when one is the other with
     a prefix prepended (a launcher that writes the folder before the prompt). Boilerplate the
     toolbox sends to many chats never counts, and neither does a one-liner."""
+    # A fan-out prompt carries a task receipt with a fresh token (receiptlib); the task is the
+    # words above it, so the receipt never makes one task look like two.
+    a, b = receiptlib.strip(a), receiptlib.strip(b)
     if is_boilerplate_task(a) or is_boilerplate_task(b):
         return False
     na, nb = normalize_task(unwrap_command(a)), normalize_task(unwrap_command(b))

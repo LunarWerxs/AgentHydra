@@ -53,12 +53,19 @@ first - so a probe fan-out leaves nothing in any account.
 Usage: python fan_out.py --spec <file.json | '{"tasks":[...]}'> [--per-account N]
                          [--exclude <inst>]... [--only <inst>]... [--open-closed]
                          [--group-id <id>] [--dry-run] [--force] [--json]
+                         [--no-receipt] [--receipt-secs N]
        python fan_out.py list [--json]
        python fan_out.py status [<group>] [--json]          # the latest group when omitted
        python fan_out.py send <group> --text "..." [--only <sessionId>]... [--force] [--json]
        python fan_out.py delete <group> [--force] [--json]  # every member chat, everywhere
-Spec:  {"tasks": [{"title": "...", "folder": "<dir>", "prompt": "..."}, ...], "group": "<name>"}
-       (a bare list of tasks is accepted too; `title` is optional)
+Spec:  {"tasks": [{"title": "...", "folder": "<dir>", "prompt": "...", "artifact": "..."}, ...],
+        "group": "<name>"}
+       (a bare list of tasks is accepted too; `title` and `artifact` are optional)
+Receipt: every prompt carries a task receipt (token, repo, task id, expected artifact) the chat
+       is asked to echo first (lib/receiptlib.py); `status` classifies each member delivered /
+       no-echo / wrong-task / never-started / wrong-chat / pending. --receipt-secs N waits up to N
+       seconds after the last spawn for every echo and re-delivers ONCE to a chat that never
+       started; a member left misdelivered makes the exit 4. --no-receipt sends the bare prompt.
 Exit:  0 every task spawned and its first turn confirmed / status read / every send delivered /
          every member deleted and verified
        4 partial: some members not confirmed, refused or unassigned; some sends not delivered;
@@ -82,7 +89,7 @@ from pathlib import Path
 import balance
 import delete_chat
 import spawn_chat
-from lib import clilib, enginelib, gatelib, holdlib, hydralib, ledgerlib
+from lib import clilib, enginelib, gatelib, holdlib, hydralib, ledgerlib, receiptlib
 
 STATE_FILE = "fanouts.json"
 # How long to wait for a closed instance we were told to open to report running, and how long
@@ -97,6 +104,8 @@ SEND_CONFIRM_SECS = 120
 # Why send/delete leave a member alone whose chat opens with somebody else's words.
 NOT_OUR_CHAT = ("not this group's chat: its first turn is not the member's prompt, so it is "
                 "somebody else's - never sent to or deleted")
+# How often the receipt check re-reads the members' transcripts while it waits for their echo.
+RECEIPT_POLL_SECS = 10
 
 
 # --- the group ledger ------------------------------------------------------------------------
@@ -193,7 +202,12 @@ def parse_spec(raw: str) -> dict:
         if not prompt:
             raise ValueError(f"task {i} has no prompt")
         title = str(t.get("title") or "").strip() or prompt.splitlines()[0][:60]
-        tasks.append({"title": title, "folder": str(Path(folder).resolve()), "prompt": prompt})
+        task = {"title": title, "folder": str(Path(folder).resolve()), "prompt": prompt}
+        # the task receipt's "expected artifact" (receiptlib); optional
+        artifact = str(t.get("artifact") or "").strip()
+        if artifact:
+            task["artifact"] = artifact
+        tasks.append(task)
     name = str(data.get("group") or "").strip() or None
     return {"group": name, "tasks": tasks}
 
@@ -404,14 +418,20 @@ def _placeholder(group_id: str, spec: dict) -> dict:
 
 
 def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
-                dry_run: bool = False, group_id: str | None = None) -> dict:
+                dry_run: bool = False, group_id: str | None = None,
+                receipts: bool = True, receipt_secs: int = 0) -> dict:
     """Spawn every assigned task, one at a time, recording the group after each so a crash
     half-way still leaves a readable record. Dry run: the plan only, nothing written.
 
     `group_id` lets a caller (the MCP `fan_out` tool) mint the id itself and hand it in, so it
     can return that SAME id to its own caller before this function has spawned anything -
     otherwise the id exists only inside this process and cannot be known until the whole spawn
-    (30-90s per chat) has finished. Defaults to a fresh one, exactly as before."""
+    (30-90s per chat) has finished. Defaults to a fresh one, exactly as before.
+
+    `receipts` (default on) appends a task receipt to every prompt (receiptlib); `status` then
+    says whether each chat echoed it. `receipt_secs` > 0 also waits that long, after the last
+    spawn, for every echo and re-delivers ONCE to a chat that never started (verify_receipts).
+    The member's `prompt` stays the bare task, so every first-turn check keeps matching it."""
     group = {
         "id": group_id or _new_group_id(), "name": spec.get("group"), "createdAt": _now_iso(),
         "dryRun": bool(dry_run), "phase": "spawning",
@@ -450,10 +470,15 @@ def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
                 _upsert(group)
                 continue
             m["opened"] = True
+        prompt = m["prompt"]
+        if receipts:
+            m["receipt"] = receiptlib.make(f"{group['id']}#{m['index']}", m["folder"],
+                                           a["task"].get("artifact"))
+            prompt = receiptlib.stamp(prompt, m["receipt"])
         # force=True here lifts ONLY spawn_chat's own duplicate check, which this loop has
         # already run with the group's members excluded; every other rail in spawn() stays.
         try:
-            res = spawn_chat.spawn(m["folder"], m["prompt"], str(target["num"]), force=True)
+            res = spawn_chat.spawn(m["folder"], prompt, str(target["num"]), force=True)
         except hydralib.DaemonError as err:
             res = {"ok": False, "why": f"daemon failure during spawn: {err.detail or err}"}
         m["state"], m["why"] = _spawn_state(res)
@@ -466,14 +491,78 @@ def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
         if m["sessionId"]:
             spawned_ids.add(m["sessionId"])
         _upsert(group)
+    if receipts and receipt_secs > 0:
+        group["phase"] = "verifying"
+        _upsert(group)
+        verify_receipts(group, receipt_secs)
     group["phase"] = "done"
     _upsert(group)
     return group
 
 
+# --- the task receipt ------------------------------------------------------------------------
+
+def _transcript_of(sid: str) -> str | None:
+    try:
+        row = hydralib.session_row(sid)
+    except hydralib.DaemonError:
+        row = None
+    return (row or {}).get("transcript_path") or gatelib.find_transcript_on_disk(sid) or None
+
+
+def _check_receipt(m: dict) -> dict:
+    """Classify one member's receipt from its transcript and record the verdict on it."""
+    verdict = receiptlib.classify(_transcript_of(m["sessionId"]), m["receipt"])
+    m["receipt"].update(state=verdict["state"], why=verdict["why"], checkedAt=_now_iso())
+    return verdict
+
+
+def _await_receipts(members: list[dict], wait_secs: int, clock, sleep) -> None:
+    """Re-read every member until none is still pending or never-started, or the wait is up.
+    Look first, sleep after, and look once more at the deadline (as _open_and_wait does)."""
+    deadline = clock() + wait_secs
+    while True:
+        open_ = [m for m in members
+                 if _check_receipt(m)["state"] in ("pending", "never-started")]
+        left = deadline - clock()
+        if not open_ or left <= 0:
+            return
+        members = open_
+        sleep(min(RECEIPT_POLL_SECS, left))
+
+
+def verify_receipts(group: dict, wait_secs: int, *, clock=time.monotonic,
+                    sleep=time.sleep) -> dict:
+    """PROVE EVERY PROMPT LANDED AND STARTED, re-delivering once (receiptlib).
+
+    Waits up to `wait_secs` for each member's echo. A member still `never-started` then (our
+    prompt is its turn and nothing answered) gets ONE nudge through `send` - the same composer
+    route, engine and hold rails as any steer - and is watched for another `wait_secs`. A
+    `wrong-chat` member is recorded and never typed into. Returns {state: count}."""
+    members = [m for m in group.get("members", [])
+               if m.get("sessionId") and m.get("receipt") and not m.get("deleted")]
+    _await_receipts(members, wait_secs, clock, sleep)
+    replay = [m for m in members
+              if m["receipt"].get("state") == "never-started" and not m["receipt"].get("redelivered")]
+    for m in replay:
+        m["receipt"]["redelivered"] = _now_iso()
+        send(group, receiptlib.nudge(m["receipt"]), only=[m["sessionId"]])
+    if replay:
+        _await_receipts(replay, wait_secs, clock, sleep)
+    _upsert(group)
+    counts: dict[str, int] = {}
+    for m in members:
+        st = m["receipt"].get("state") or "?"
+        counts[st] = counts.get(st, 0) + 1
+    return counts
+
+
 def spawn_exit_code(group: dict) -> int:
     members = group.get("members", [])
-    spawned = [m for m in members if m.get("state") == "spawned"]
+    # a checked receipt that proves misdelivery makes the member unconfirmed, whatever the
+    # spawn itself said
+    spawned = [m for m in members if m.get("state") == "spawned"
+               and (m.get("receipt") or {}).get("state") not in receiptlib.FAILED]
     with_session = [m for m in members if m.get("sessionId")]
     if not with_session:
         return 2
@@ -552,6 +641,11 @@ def _member_status(m: dict) -> dict:
     row, live = _load_row_and_live(out, sid)
     tp = (row or {}).get("transcript_path") or gatelib.find_transcript_on_disk(sid)
     out["chatTitle"] = (row or {}).get("title")
+    if m.get("receipt"):
+        # read-only here: the verdict as the transcript stands now, plus whether the one
+        # re-delivery was already spent (verify_receipts records that)
+        out["receipt"] = {**receiptlib.classify(tp, m["receipt"]), "token": m["receipt"].get("token"),
+                          "redelivered": m["receipt"].get("redelivered")}
     if not out["liveKnown"]:
         return _unknown_liveness_status(out, tp)
     verdict = gatelib.gate(sid, tp, live) if tp else None
@@ -786,7 +880,8 @@ def _take_value(argv: list[str], flag: str) -> str | None:
 
 def _positional(argv: list[str]) -> list[str]:
     """Words that are neither flags nor a flag's value."""
-    valued = {"--spec", "--per-account", "--exclude", "--only", "--text", "--group-id"}
+    valued = {"--spec", "--per-account", "--exclude", "--only", "--text", "--group-id",
+              "--receipt-secs"}
     out = []
     i = 0
     while i < len(argv):
@@ -814,6 +909,8 @@ def _print_plan(group: dict, ranking: dict) -> None:
         line += f"  {m['state']}"
         if m.get("sessionId"):
             line += f"  {m['sessionId']}"
+        if (m.get("receipt") or {}).get("state"):
+            line += f"  receipt {m['receipt']['state']}"
         if m.get("why"):
             line += f"  ({m['why'][:120]})"
         print(line)
@@ -831,6 +928,8 @@ def _print_status(s: dict) -> None:
             line += f"  quiet {m['quietSecs']}s"
         if m.get("cause"):
             line += f"  - {m['cause'][:80]}"
+        if m.get("receipt"):
+            line += f"  receipt {m['receipt'].get('state')}"
         print(line)
         if m.get("lastText"):
             tail = m["lastText"].strip().splitlines()
@@ -922,6 +1021,7 @@ def _cmd_spawn(argv: list[str], force: bool, as_json: bool) -> int:
     try:
         spec = parse_spec(spec_raw)
         per_account = int(_take_value(argv, "--per-account") or 1)
+        receipt_secs = max(0, int(_take_value(argv, "--receipt-secs") or 0))
     except ValueError as err:
         print(f"REFUSED: {err}", file=sys.stderr)
         return 3
@@ -944,7 +1044,8 @@ def _cmd_spawn(argv: list[str], force: bool, as_json: bool) -> int:
         print(f"{'fan_out FAILED' if daemon else 'REFUSED'}: {why}", file=sys.stderr)
         return 1 if daemon else 3
     assignments = plan(spec["tasks"], ranking["targets"], per_account)
-    group = spawn_group(spec, assignments, force=force, dry_run=dry_run, group_id=group_id)
+    group = spawn_group(spec, assignments, force=force, dry_run=dry_run, group_id=group_id,
+                        receipts="--no-receipt" not in argv, receipt_secs=receipt_secs)
     if as_json:
         print(json.dumps({**group, "targets": ranking["targets"],
                           "skippedTargets": ranking["skipped"],

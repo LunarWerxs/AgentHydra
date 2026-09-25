@@ -618,5 +618,73 @@ class OpenAndWaitTest(FanOutBase):
         self.assertEqual(sleeps, [])
 
 
+class ReceiptTest(FanOutBase):
+    """The task receipt (lib/receiptlib.py): a chat that holds our prompt but never ran it read
+    as `spawned` forever. Pins: every spawned prompt carries a receipt while the member keeps the
+    bare task; a never-started chat gets exactly ONE nudge and is then proven by its echo; a
+    chat whose first turn lacks our token is never typed into and makes the fan-out partial."""
+
+    def _spawn_one(self):
+        code, out, err = run_cli(fan_out.main, ["--spec", self.spec(1, group="r1"), "--json"])
+        self.assertEqual(code, 0, err or out)
+        return fan_out.find_group("r1")
+
+    def _write(self, turns):
+        p = self.root / "sid-1.jsonl"
+        p.write_text("\n".join(json.dumps(
+            {"type": role, "message": {"role": role, "content": [{"type": "text", "text": text}]}})
+            for role, text in turns) + "\n", encoding="utf-8")
+        self.stub.routes["/api/sessions/sid-1"] = {"session_id": "sid-1", "transcript_path": str(p)}
+        return p
+
+    def _clock(self):
+        now = [0.0]
+
+        def sleep(secs):
+            now[0] += secs
+        return (lambda: now[0]), sleep
+
+    def test_the_spawned_prompt_carries_the_receipt_and_the_member_keeps_the_bare_task(self):
+        group = self._spawn_one()
+        rec = group["members"][0]["receipt"]
+        self.assertEqual(group["members"][0]["prompt"], "lint this plane")
+        self.assertTrue(self.spawned[0]["prompt"].startswith("lint this plane"))
+        self.assertIn(rec["token"], self.spawned[0]["prompt"])
+        self.assertEqual(rec["repo"], "plane-a")
+        self.assertEqual(rec["task"], f"{group['id']}#0")
+
+    def test_a_never_started_chat_is_nudged_exactly_once_and_then_proven_delivered(self):
+        group = self._spawn_one()
+        rec = group["members"][0]["receipt"]
+        path = self._write([("user", self.spawned[0]["prompt"])])
+        sends = []
+
+        def fake_send(g, text, only=None, force=False):
+            sends.append((text, only))
+            self._write([("user", self.spawned[0]["prompt"]), ("user", text),
+                         ("assistant", fan_out.receiptlib.line(rec))])
+            return {"results": []}
+
+        clock, sleep = self._clock()
+        with mock.patch.object(fan_out, "send", side_effect=fake_send):
+            counts = fan_out.verify_receipts(group, 30, clock=clock, sleep=sleep)
+        self.assertEqual(len(sends), 1)
+        self.assertEqual(sends[0][1], ["sid-1"])
+        self.assertIn(rec["token"], sends[0][0])
+        self.assertEqual(counts, {"delivered": 1})
+        self.assertTrue(group["members"][0]["receipt"]["redelivered"])
+        self.assertTrue(path.exists())
+
+    def test_a_wrong_chat_is_never_typed_into_and_leaves_the_fan_out_partial(self):
+        group = self._spawn_one()
+        self._write([("user", "somebody else's task"), ("assistant", "working on it")])
+        clock, sleep = self._clock()
+        with mock.patch.object(fan_out, "send") as send:
+            counts = fan_out.verify_receipts(group, 30, clock=clock, sleep=sleep)
+        send.assert_not_called()
+        self.assertEqual(counts, {"wrong-chat": 1})
+        self.assertEqual(fan_out.spawn_exit_code(group), 4)
+
+
 if __name__ == "__main__":
     unittest.main()
