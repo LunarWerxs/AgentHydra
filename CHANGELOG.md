@@ -9,6 +9,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Fuzzy, ranked session search** (`web/src/lib/fuzzy.ts`, `web/src/components/SessionsView.vue`,
+  `web/src/components/SessionPicker.vue`). The sessions sidebar search and the session picker
+  used a plain substring test, so `cdxsess` found nothing and hits came back in list order. They
+  now use a port of fzf's v2 scorer: the query only has to be a subsequence of the title, working
+  directory (or a substring of the id), matches at word starts, camelCase humps and in runs score
+  higher, space-separated terms must all match, and the best match sorts first (ties keep recency
+  order). The matched title characters are bolded in the sidebar. Ported from junegunn/fzf and
+  microsoft/terminal (both MIT; notices in `THIRD-PARTY-NOTICES.md`).
+
 - **Ask_user cards in the judgment queue** (`orchestrator/scripts/lib/asklib.py`,
   `orchestrator/scripts/interview.py`). A supervised chat can end its turn on a fenced
   `ask_user` JSON block (1-3 questions, 2-3 labelled options each, optional free text) instead

@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SessionSummary } from '@/lib/api'
 import { baseName, shortId, timeAgo } from '@/lib/format'
+import { rankByQuery, sessionSearchFields } from '@/lib/fuzzy'
 
 const props = withDefaults(defineProps<{ multiple?: boolean; sessions?: SessionSummary[] }>(), {
   multiple: false,
@@ -30,17 +31,13 @@ const search = ref('')
 const copiedId = ref<string | null>(null)
 let copiedTimer: number | undefined
 
-// Same match rule as the sessions sidebar search (title / cwd / id). The list arrives
-// pre-sorted (server: most-recently-active first), so no client re-sort.
+// Same fuzzy match as the sessions sidebar search (lib/fuzzy.ts: title / cwd / id). With no query
+// the list keeps its server order (most-recently-active first); with one, the best match sorts
+// first and equal scores keep that order.
 const filtered = computed(() => {
-  const q = search.value.trim().toLowerCase()
+  const q = search.value.trim()
   if (!q) return props.sessions
-  return props.sessions.filter(
-    (s) =>
-      s.title.toLowerCase().includes(q) ||
-      s.cwd.toLowerCase().includes(q) ||
-      s.session_id.includes(q),
-  )
+  return rankByQuery(props.sessions, q, sessionSearchFields).map((r) => r.row)
 })
 
 const byId = computed(() => new Map(props.sessions.map((s) => [s.session_id, s])))

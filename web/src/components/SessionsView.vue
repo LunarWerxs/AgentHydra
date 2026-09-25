@@ -106,6 +106,7 @@ import { useTranscriptDisplay } from '@/composables/useTranscriptDisplay'
 import { clampWidth, SIDEBAR_DEFAULT, useUiPrefs } from '@/composables/useUiPrefs'
 import * as api from '@/lib/api'
 import { baseName, shortId, timeAgo } from '@/lib/format'
+import { highlightRuns, rankByQuery, sessionSearchFields, type TextRun } from '@/lib/fuzzy'
 import { groupByProject } from '@/lib/session-groups'
 import { sessionShape } from '@/lib/session-shape'
 import { cn } from '@/lib/utils'
@@ -320,22 +321,30 @@ const { resuming, resumeInTerminal } = useResumeInTerminal()
 
 const search = ref('')
 
-const filtered = computed(() => {
-  const q = search.value.trim().toLowerCase()
+// The search box is an fzf-style fuzzy filter (lib/fuzzy.ts): 'cdxsess' finds 'Codex session', and
+// the best match sorts first instead of wherever recency put it. Matched title characters are kept
+// per row so the list can bold them.
+const searchRanked = computed(() => {
+  const q = search.value.trim()
   const shape = sessionShapeScope.value
   let rows = sessions.value
   // Applied in the browser, unlike the scopes the daemon owns, so it narrows the window that was
   // fetched rather than reaching further back. Said plainly in the menu, because "no marathons in
   // the last 24 hours" and "no marathons" are different answers.
   if (shape !== 'all') rows = rows.filter((s) => sessionShape(s) === shape)
-  if (!q) return rows
-  return rows.filter(
-    (s) =>
-      s.title.toLowerCase().includes(q) ||
-      s.cwd.toLowerCase().includes(q) ||
-      s.session_id.includes(q),
-  )
+  if (!q) return { rows, hits: new Map<api.SessionSummary, number[]>() }
+  const ranked = rankByQuery(rows, q, sessionSearchFields)
+  return {
+    rows: ranked.map((r) => r.row),
+    hits: new Map<api.SessionSummary, number[]>(ranked.map((r) => [r.row, r.match.positions])),
+  }
 })
+const filtered = computed(() => searchRanked.value.rows)
+
+/** The title split into plain and matched runs for the current search; one plain run without one. */
+function titleRunsOf(s: api.SessionSummary): TextRun[] {
+  return highlightRuns(s.title, searchRanked.value.hits.get(s) ?? [])
+}
 
 /** An empty list under a bounded window is ambiguous: "nothing here" or "nothing here LATELY"?
  *  Say which, so a quiet day doesn't read as a broken list. */
@@ -1007,7 +1016,11 @@ function onComposerSent(mode: 'now' | 'queued') {
                       class="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-snug"
                       :class="s.done ? 'line-through decoration-muted-foreground/40' : ''"
                       :title="titleOriginOf(s)"
-                    >{{ s.title }}<!--
+                    ><!-- the search's matched characters, bolded; one plain run when not searching
+                      --><template v-for="(run, ri) in titleRunsOf(s)" :key="ri"><span
+                        v-if="run.hit"
+                        class="font-semibold text-primary"
+                      >{{ run.text }}</span><template v-else>{{ run.text }}</template></template><!--
                       A title nobody chose gets a mark, and only that case: the string came out of a
                       wrapper around the first message, so it may match nothing the user has named.
                       --><span
