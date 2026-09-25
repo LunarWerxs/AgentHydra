@@ -82,7 +82,7 @@ export function withStatusHooks(
     if (kept.length) hooks[event] = kept
     else delete hooks[event]
   }
-  const next = { ...settings, hooks }
+  const next: Record<string, unknown> = { ...settings, hooks }
   if (Object.keys(hooks).length === 0) delete next.hooks
   return next
 }

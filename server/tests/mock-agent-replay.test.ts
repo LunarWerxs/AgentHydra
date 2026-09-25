@@ -96,7 +96,10 @@ test(
 // recorded stdin warning goes to stderr and must not matter) and parses the /usage screen. Gap:
 // usage.test.ts pins the parser on a string; nothing ran the spawn, the bounded capture and the
 // parse together.
-test(
+// Skipped on Windows: the probe passes `--mcp-config '{"mcpServers":{}}'`, and Bun refuses to hand
+// an argument holding cmd.exe special characters to a .cmd file (ERR_INVALID_ARG_VALUE), so the
+// wrapper can never launch there. The real CLI is an .exe and is not affected; ubuntu CI runs this.
+test.skipIf(process.platform === 'win32')(
   'the /usage probe reads a replayed screen through the real spawn',
   async () => {
     const wrapper = join(MOCKS, 'bin', process.platform === 'win32' ? 'claude.cmd' : 'claude')

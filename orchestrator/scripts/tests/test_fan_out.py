@@ -821,7 +821,8 @@ class RecoverTest(FanOutBase):
         self.assertEqual(code, 0, err or out)
         (row,) = json.loads(out)["results"]
         self.assertEqual((row["kind"], row["outcome"]), ("delivery-failed", "recovered"))
-        self.assertEqual([b["text"] for b in self._message_posts()], [self.LONG])
+        # the whole text the refused send carried (`send` strips it once, before the first try)
+        self.assertEqual([b["text"] for b in self._message_posts()], [self.LONG.strip()])
 
     def test_a_refusal_that_persists_escalates_to_an_incident_and_is_never_tried_twice(self):
         self._spawn_two()
@@ -869,6 +870,9 @@ class RecoverTest(FanOutBase):
         # dave's window resets; alice (more room than dave) is still behind the group's fence
         self.stub.routes["/api/usage/survey"]["rows"][3] = survey_row(4, "dave", "dave@x.com",
                                                                       five=5, week=40)
+        # the survey is shared across processes for minutes (hydralib.usage_survey); drop the
+        # copy the spawn left, as a later tick would, so the re-rank reads dave's new window
+        hydralib._survey_cache_path().unlink(missing_ok=True)
         code, out, err = run_cli(fan_out.main, ["recover", "g3", "--json"])
         self.assertEqual(code, 0, err or out)
         (row,) = json.loads(out)["results"]

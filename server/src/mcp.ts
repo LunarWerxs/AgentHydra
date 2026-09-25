@@ -3398,8 +3398,7 @@ THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); noth
 unless the tray icon is up: orchestrator_switch {action:"armed"} first. No icon needed for
 move_chat {chat, from, to}, or fan_out {tasks:[{cwd, prompt}]}, which spreads a task list over
 OTHER accounts as VISIBLE desktop chats (never one a person is working in); fan_out_status {}
-then reads every member's verdict and fan_out_send {group, text} steers them all; a failed
-member gets fan_out_recover {group} (one automatic attempt per recipe, then it escalates).
+then reads every member's verdict and fan_out_send {group, text} steers them all.
 add_queue_item and launch_terminal_session are REFUSED (no chat nobody can see).
 ANY PROBE CHAT YOU CREATE (a ping, a drill) MUST BE DELETED AFTERWARDS, never left in the
 account: fan_out_delete {group}, or orchestrator_run delete_chat <chat>.`

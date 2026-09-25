@@ -24,7 +24,7 @@ const tool = (name: string, inputSchema: unknown): McpEngineTool => ({
   run: () => null,
 })
 
-const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
+const obj = (properties: Record<string, unknown> = {}, required: string[] = []) => ({
   type: 'object',
   properties,
   required,

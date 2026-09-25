@@ -151,7 +151,7 @@ export function fuzzyMatch(text: string, pattern: string): FuzzyMatch | null {
     inGap = false
     for (let j = F[i] as number; j <= lastIdx; j++) {
       const left = j > (F[i] as number) ? (H[row + j - 1] as number) : 0
-      const s2 = left + (inGap ? SCORE_GAP_EXTENSION : SCORE_GAP_START)
+      const s2: number = left + (inGap ? SCORE_GAP_EXTENSION : SCORE_GAP_START)
       let s1 = 0
       let consecutive = 0
       if (T[j] === pch) {
