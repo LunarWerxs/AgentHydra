@@ -71,6 +71,14 @@ class ArchiveSignalTest(_PolicyCase):
         self.assertIn("switched OFF", cause)
         self.assertIn("offer", cause)
 
+    def test_an_ask_user_card_protects_with_every_switchable_signal_off(self):
+        # ASK_USER (review finding, 2026-09-25): the card signal has no switch - a policy that
+        # turns the other four off must still not archive a chat waiting on its card.
+        self.policy(**{key: False for _, key, _ in gatelib.ARCHIVE_SIGNALS if key})
+        fe = dict(_finished(done="no", question=True), asks_user=True)
+        self.assertEqual(gatelib._finished_turn_lane(fe), "needs-input-review")
+        self.assertEqual(gatelib.archive_dissent(fe), ["ask_card"])
+
     def test_the_other_three_still_protect_when_one_is_off(self):
         self.policy(**{"gate.signal_done_claim": False})
         self.assertEqual(gatelib._finished_turn_lane(_finished(done="no", offer=True)),

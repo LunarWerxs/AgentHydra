@@ -573,6 +573,37 @@ run with the person-level word the gate wanted. The AI never starts bespoke-codi
 functionality that exists, never gets a don't-list, and never needs more context than the
 question itself.
 
+**Ask_user cards: a chat asks the human a typed question instead of prose.** A supervised
+chat that needs a person decides something can END its turn with one fenced block whose info
+string is `ask_user` and whose body is JSON: 1 to 3 questions, each with an `id`, `question`
+text (at most 300 characters), 2 to 3 `options` (`label` at most 80 characters, optional
+`description` at most 240) and `allow_other` (free text allowed; default false):
+
+````
+```ask_user
+{"questions": [{"id": "db", "question": "Which store should the cache use?",
+  "options": [{"label": "SQLite", "description": "one file, already a dependency"},
+              {"label": "JSON file", "description": "simplest, no locking"}],
+  "allow_other": true}]}
+```
+````
+
+`interview.py --ask` hands the card out parsed (`ask` on the question, printed as numbered
+options) and the answer is `{"sessionId": ..., "decision": "answer", "askKey": "<ask.key>",
+"choices": {"db": 1}}`: an option number, an option label, or `{"other": "text"}`. `askKey`
+is required. The card is
+re-read from the chat at apply time (an answer for an older card is refused as stale), the
+reply is composed as one readable line per question plus an `ask_user_answer` JSON block the
+chat can read without parsing prose, and it is staged for the courier like any reply. A card
+is answered ONCE: `state/asks_answered.json` records it, and a second answer is refused as
+already answered - but only while that answer's delivery is staged or delivered; one that
+expired, failed or was cancelled leaves the card open. The key is a hash of the questions, so
+a chat that asks the very same card again after it was answered must change its wording to be
+asked anew. A card that breaks the limits is shown as MALFORMED with the reason, never
+trimmed to fit (`scripts/lib/asklib.py`). The archive gate treats a turn that ends on a card
+as a question (the `ask_card` signal, which has no policy switch), so a chat waiting on its
+card is never swept into the archive lane.
+
 ### Touching the app: the route hierarchy (owner rule: no clicking around the screen)
 
 1. **⛔ There is NO native delivery route** (corrected 2026-09-01, the hard way): the

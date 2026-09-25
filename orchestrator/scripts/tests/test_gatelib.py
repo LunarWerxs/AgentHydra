@@ -137,6 +137,20 @@ class GateTest(TranscriptCase):
         v = gatelib.gate("s", p, None)
         self.assertEqual(v["finished"]["lane"], "needs-input-review")
 
+    def test_a_turn_ending_on_an_ask_user_card_is_never_archive(self):
+        # ASK_USER (review finding, 2026-09-25): a card ends on a closing fence, not a '?', and
+        # recap_view strips it, so a done-yes recap plus a card read as finished-and-done and
+        # the unanswered question was swept into the archive lane.
+        card = ("```ask_user\n" + json.dumps({"questions": [{
+            "id": "db", "question": "Which store should the cache use?",
+            "options": [{"label": "SQLite"}, {"label": "JSON file"}]}]}) + "\n```")
+        p = self.transcript([user("go"), assistant(DONE_RECAP + "\n\n" + card)])
+        v = gatelib.gate("s", p, None)
+        self.assertEqual(v["finished"]["lane"], "needs-input-review")
+        self.assertTrue(v["finished"]["asks_user"])
+        self.assertTrue(v["finished"]["ends_with_question"])
+        self.assertIn("ask_user card", v["cause"])
+
     def test_no_done_claim_is_needs_input(self):
         p = self.transcript([assistant("I fixed some of it.")])
         self.assertEqual(gatelib.gate("s", p, None)["finished"]["lane"], "needs-input-review")

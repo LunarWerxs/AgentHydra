@@ -19,6 +19,9 @@ THE LOOP
   2. (the AI reads each block and writes answers.json - decisions, nothing else)
   3. `python interview.py --apply answers.json`   each decision executes through the rails:
        reply   -> staged via the delivery ledger; the next courier/sweep run sends it
+       answer  -> ASK_USER CARDS ONLY: picks an option per question of the card the chat
+                  raised (lib/asklib.py); the answer is composed, staged like a reply, and
+                  the card is marked answered - a second answer to it is refused
        hold    -> holdlib, reason required (the chat leaves automation's reach)
        archive -> archive_chat --force (the answer IS the person-level word the gate wanted)
        skip    -> recorded with its reason; the chat (or escalation) stays in the queue
@@ -30,6 +33,8 @@ THE LOOP
 ANSWER FORMAT (what --ask also prints, so the AI never has to guess):
   {"answers": [
     {"sessionId": "<id>", "decision": "reply",   "text": "the message to send"},
+    {"sessionId": "<id>", "decision": "answer",  "askKey": "<card key>",
+     "choices": {"<question id>": "<option label>" | <option number> | {"other": "text"}}},
     {"sessionId": "<id>", "decision": "hold",    "reason": "why hands-off"},
     {"sessionId": "<id>", "decision": "archive"},
     {"sessionId": "<id>", "decision": "skip",    "reason": "why not now"},
@@ -50,6 +55,7 @@ import sys
 from pathlib import Path
 
 from lib import approvallib
+from lib import asklib
 from lib import configlib
 from lib import clilib
 from lib import deliverylib
@@ -68,6 +74,7 @@ def build_questions(cap: int) -> dict:
     batch = sweep.build_batch(allow_pending=False, max_per_lane=sweep.DEFAULT_MAX_PER_LANE)
     questions = []
     for j in batch["judgmentQueue"][:cap]:
+        card = _ask_card(j["sessionId"], j.get("evidence") or "")
         questions.append({
             "sessionId": j["sessionId"],
             "title": j["title"],
@@ -85,7 +92,12 @@ def build_questions(cap: int) -> dict:
                          "public exposure, another person's lane). A recap whose 'recommend' "
                          "section lists sensible items gets 'Proceed with your "
                          "recommendations' - the owner calls acting on those his most "
-                         "productive channel."),
+                         "productive channel."
+                         + (" THIS CHAT RAISED AN ASK_USER CARD (see `ask`): prefer decision "
+                            "'answer' with one choice per question id; 'reply' still works "
+                            "for anything the options do not cover." if card and card.get("key")
+                            else "")),
+            **({"ask": card} if card else {}),
         })
     # THE APPROVAL ESCALATION QUEUE (unblock_prompts.py's tri-state gate, lib/approvallib.py):
     # a stuck permission prompt whose pending command matched neither the DENY nor the
@@ -122,19 +134,46 @@ def build_questions(cap: int) -> dict:
         "answerFormat": {"answers": [
             {"sessionId": "<id>", "decision": "reply|hold|archive|skip",
              "text": "(reply only)", "reason": "(hold/skip only)"},
+            {"sessionId": "<id>", "decision": "answer (questions carrying an `ask` card only)",
+             "askKey": "<ask.key>",
+             "choices": {"<question id>": "<option label> | <option number> | {\"other\": \"text\"}"}},
             {"sessionId": "<id>", "decision": "approve|deny (approvalQuestions only)",
              "reason": "(deny only, or why it's safe to approve)"},
         ]},
     }
 
 
+def _ask_card(sid: str, tail: str) -> dict | None:
+    """The ask_user card a judgment chat ended its turn on, marked if already answered.
+
+    The judgment row carries only the last few hundred characters, too few for a whole card,
+    so the chat's full last words are read - but only when that tail holds a fence, which is
+    how every card ends (the convention says the block closes the turn)."""
+    if "```" not in tail:
+        return None
+    import stage_reply
+
+    card = asklib.find(stage_reply.last_rendered_text(sid) or tail)
+    if card and card.get("key"):
+        prior = asklib.answered(sid, card["key"])
+        if prior:
+            card["answered"] = prior
+    return card
+
+
 def _apply_reply(sid: str, a: dict) -> dict:
     """Stage a reply decision, falling back to the last rendered text when the gate has no evidence."""
-    from lib import gatelib
-
     text = str(a.get("text") or "").strip()
     if not text:
         raise ValueError("a reply decision needs text")
+    staged = _stage(sid, text)
+    return {"ok": True, "outcome": f"staged {staged['id']} - the next courier/sweep run delivers it"}
+
+
+def _stage(sid: str, text: str) -> dict:
+    """Stage one reply for a chat, with its own last words as the courier's verify evidence."""
+    from lib import gatelib
+
     match = hydralib.resolve_one(sid)
     verdict = gatelib.gate_match(match, hydralib.session_row)
     src = (verdict or {}).get("finished") or (verdict or {}).get("idle") or {}
@@ -153,7 +192,34 @@ def _apply_reply(sid: str, a: dict) -> dict:
         instance=match.get("instance") or "",
         evidence=evidence, by="interview",
     )
-    return {"ok": True, "outcome": f"staged {staged['id']} - the next courier/sweep run delivers it"}
+    return staged
+
+
+def _apply_answer(sid: str, a: dict) -> dict:
+    """Answer the ask_user card a chat raised: check the choices against the card the chat
+    shows NOW, stage the composed answer, and mark the card answered - once.
+
+    The card is re-read at apply time, not trusted from --ask: a chat that has since asked
+    something newer shows its newer card, and an answer written for the old one (askKey no
+    longer matching) is refused as stale instead of answering a question nobody is asking."""
+    import stage_reply
+
+    card = asklib.find(stage_reply.last_rendered_text(sid))
+    if card is None:
+        raise ValueError("this chat's last words carry no ask_user card - use 'reply'")
+    if not card.get("key"):
+        raise ValueError(f"this chat's ask_user card is malformed: {card.get('error')}")
+    # askKey is REQUIRED: without it the stale-answer guard has nothing to compare, and an
+    # answer written for an older card would silently answer the newer one.
+    want = str(a.get("askKey") or "").strip()
+    if not want:
+        raise ValueError(f"an answer decision needs askKey (the card's key, now {card['key']})")
+    if want != card["key"]:
+        raise ValueError(f"stale answer: the chat's current card is {card['key']}, not {want}")
+    text = asklib.compose_reply(card, a.get("choices"))
+    staged = asklib.resolve(sid, card["key"], lambda: _stage(sid, text))
+    return {"ok": True, "outcome": (f"answered card {card['key']}: staged {staged['id']} - "
+                                    "the next courier/sweep run delivers it")}
 
 
 def _apply_hold(sid: str, a: dict) -> dict:
@@ -241,6 +307,8 @@ def apply_answers(payload: dict) -> list[dict]:
         try:
             if decision == "reply":
                 entry.update(_apply_reply(sid, a))
+            elif decision == "answer":
+                entry.update(_apply_answer(sid, a))
             elif decision == "hold":
                 entry.update(_apply_hold(sid, a))
             elif decision == "archive":
@@ -278,6 +346,7 @@ def _print_ask_output(q: dict, as_json: bool) -> None:
             print(f"    its last words:")
             for line in (x["lastWords"] or "(nothing readable)").splitlines()[-8:]:
                 print(f"      | {line}")
+            _print_card(x.get("ask"))
             print(f"    -> {x['question']}\n")
     if q["approvalQuestions"]:
         print(f"{len(q['approvalQuestions'])} approval escalation(s)"
@@ -293,6 +362,24 @@ def _print_ask_output(q: dict, as_json: bool) -> None:
                 print(f"      | {line}")
             print(f"    -> {x['question']}\n")
     print(json.dumps(q["answerFormat"], indent=2))
+
+
+def _print_card(card: dict | None) -> None:
+    """Render a chat's ask_user card as numbered options, so a person can answer by number."""
+    if not card:
+        return
+    if not card.get("key"):
+        print(f"    ask_user card MALFORMED: {card.get('error')} - reply asking the chat to fix it")
+        return
+    state = (f"ANSWERED (delivery {card['answered'].get('deliveryId')})"
+             if card.get("answered") else "pending")
+    print(f"    ask_user card {card['key']} ({state}):")
+    for qq in card["questions"]:
+        print(f"      [{qq['id']}] {qq['question']}")
+        for n, o in enumerate(qq["options"], 1):
+            print(f"        {n}. {o['label']}" + (f" - {o['description']}" if o["description"] else ""))
+        if qq["allow_other"]:
+            print('        or {"other": "your own answer"}')
 
 
 def _print_apply_results(results: list[dict], as_json: bool) -> None:

@@ -9,6 +9,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Ask_user cards in the judgment queue** (`orchestrator/scripts/lib/asklib.py`,
+  `orchestrator/scripts/interview.py`). A supervised chat can end its turn on a fenced
+  `ask_user` JSON block (1-3 questions, 2-3 labelled options each, optional free text) instead
+  of asking in prose. `interview.py --ask` shows it as numbered options, and the new `answer`
+  decision picks an option per question, stages the composed reply (readable lines plus an
+  `ask_user_answer` JSON block) for the courier, and marks the card answered once: a second or
+  stale answer is refused (`askKey` is required), and an answer whose delivery expired, failed
+  or was cancelled leaves the card open again. The archive gate counts a turn that ends on a
+  card as a question, through an `ask_card` signal no policy switch can turn off, so a waiting
+  card is never archived. Idea from Open WebUI's ask_user tool; nothing copied.
+
 - **Fan-out members report a typed progress beacon** (new MCP tool `report_progress`,
   `orchestrator/scripts/fan_out.py` `beacon`, `server/src/mcp.ts`, `server/src/orchestrator.ts`,
   `orchestrator/scripts/lib/gatelib.py`). `fan_out_status` could only infer a member's state from
