@@ -7,6 +7,7 @@ import {
   recentEdits,
   refreshAnalytics,
   spendReport,
+  warmAnalyticsInBackground,
 } from '../analytics'
 import { app } from '../http-app'
 import { boundedQueryInt } from '../route-helpers'
@@ -35,7 +36,14 @@ function cachedAgentTools(): AgentPresence[] {
 }
 
 app.get('/api/analytics/spend', (c) => c.json(spendReport({ sinceMs: analyticsPeriod(c) })))
-app.get('/api/analytics/activity', (c) => c.json(activityReport({ sinceMs: analyticsPeriod(c) })))
+app.get('/api/analytics/activity', (c) => {
+  const report = activityReport({ sinceMs: analyticsPeriod(c) })
+  // Edit survival comes due hours after a session stops, and the boot warm has long finished by
+  // then. Opening the tab is what measures the sessions that are now old enough; the warm skips
+  // every row that is already current, so this costs a directory listing when nothing is due.
+  if (report.editSurvival.overdue > 0) warmAnalyticsInBackground()
+  return c.json(report)
+})
 app.get('/api/analytics/concurrency', (c) =>
   c.json({
     buckets: concurrencyReport({

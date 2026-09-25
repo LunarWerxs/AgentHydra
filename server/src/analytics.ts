@@ -34,6 +34,12 @@
 
 import { db } from './db'
 import { readDshUsage } from './dsh-sessions'
+import {
+  type AgentWrite,
+  captureWrite,
+  type EditSurvival,
+  measureEditSurvival,
+} from './edit-survival'
 import { readHermesUsage } from './hermes-sessions'
 import { instanceSessionMap } from './instance-sessions'
 import { readOpenCodeUsage } from './opencode-sessions'
@@ -81,8 +87,11 @@ import { accumulateUsageLine, emptySpend, newUsageSeen } from './usage-tokens'
  *    16,552 files holding 89.8B tokens were invisible against the top level's 64.5B. The freshness
  *    check is (mtime, size) and neither moves when a session merely GAINS sibling files, so only a
  *    version bump forces the recount.
+ * 8: Edit survival (server/src/edit-survival.ts). Every row written before it has no survival
+ *    column, and a NULL there reads as "not measured yet" rather than as a missing field only if the
+ *    row was written by a scanner that knew about it.
  */
-export const ANALYTICS_VERSION = 7
+export const ANALYTICS_VERSION = 8
 
 /**
  * Gaps longer than this are not work, they are a lunch break with the window left open.
@@ -141,6 +150,11 @@ export interface SessionAnalytics {
   lastTs: number | null
   /** A cost the PROVIDER computed itself (OpenCode does). Null when nobody but us can price it. */
   providerCostUsd: number | null
+  /** The text the edit tools wrote, held ONLY until the scan scores it and then emptied: this is the
+   *  one field that carries message text, and it never reaches the database. */
+  writes: AgentWrite[]
+  /** Share of the session's written code still in its files some hours later. See edit-survival.ts. */
+  editSurvival: EditSurvival
 }
 
 function emptyAnalytics(): SessionAnalytics {
@@ -161,6 +175,8 @@ function emptyAnalytics(): SessionAnalytics {
     firstTs: null,
     lastTs: null,
     providerCostUsd: null,
+    writes: [],
+    editSurvival: { score: null, measured: 0, dueAt: null },
   }
 }
 
@@ -364,6 +380,7 @@ function foldContentBlock(
         out.editCount++
         out.filesTouched.add(p)
         countEditLines(b.input, out)
+        captureWrite(out.writes, p, b.input, atMs)
         if (out.edits.length < MAX_EDITS_PER_SESSION)
           out.edits.push({ path: p, turn: nextTurn, ts: atMs })
       }
@@ -445,7 +462,7 @@ export async function scanSessionAnalytics(
   // token count, and Grok, Kimi and Zed simply do not persist one. So a foreign session is listed
   // and readable and contributes nothing to the spend charts. A zero would claim it was free.
   if (source === 'foreign') return out
-  if (source === 'codex') return scanCodexAnalytics([path, ...siblingPaths], out)
+  if (source === 'codex') return scoreWrites(await scanCodexAnalytics([path, ...siblingPaths], out))
 
   const spend = emptySpend()
   // One API response is one charge, however many transcript records Claude Code split it across.
@@ -505,6 +522,16 @@ export async function scanSessionAnalytics(
   }
 
   out.tokens = spend.byModel
+  return scoreWrites(out)
+}
+
+/**
+ * Score the session's writes against the files on disk, then drop the text. The scan is the only
+ * moment the written text is in hand, so the measurement happens here and only its number is kept.
+ */
+async function scoreWrites(out: SessionAnalytics): Promise<SessionAnalytics> {
+  out.editSurvival = await measureEditSurvival(out.writes)
+  out.writes = []
   return out
 }
 
@@ -648,6 +675,7 @@ function recordCodexToolCall(
     out.editCount++
     out.filesTouched.add(p)
     countEditLines(input, out)
+    captureWrite(out.writes, p, input, lastTs)
     if (out.edits.length < MAX_EDITS_PER_SESSION) out.edits.push({ path: p, turn, ts: lastTs })
   }
 }
@@ -756,12 +784,16 @@ interface AnalyticsRow {
   first_ts: number | null
   last_ts: number | null
   provider_cost_usd: number | null
+  edit_survival: number | null
+  edit_survival_n: number | null
+  edit_survival_due_at: number | null
 }
 
 const selectRows = db.query<AnalyticsRow, []>(
   'select cache_key, session_id, source, project, cwd, analytics_at, analytics_version, ' +
     'tokens_json, days_json, hours_json, tools_json, tool_errors, tool_error_streak, ' +
-    'edit_count, compactions, active_ms, first_ts, last_ts, provider_cost_usd ' +
+    'edit_count, compactions, active_ms, first_ts, last_ts, provider_cost_usd, ' +
+    'edit_survival, edit_survival_n, edit_survival_due_at ' +
     'from session_scan_cache ' +
     'where analytics_at is not null',
 )
@@ -829,7 +861,8 @@ const upsertAnalytics = db.query(
     'analytics_mtime_ms = ?, analytics_size_bytes = ?, provider_cost_usd = ?, session_id = ?, ' +
     'source = ?, project = ?, tokens_json = ?, days_json = ?, hours_json = ?, tools_json = ?, ' +
     'tool_errors = ?, tool_error_streak = ?, edit_count = ?, compactions = ?, active_ms = ?, ' +
-    'first_ts = ?, last_ts = ? where cache_key = ?',
+    'first_ts = ?, last_ts = ?, edit_survival = ?, edit_survival_n = ?, ' +
+    'edit_survival_due_at = ? where cache_key = ?',
 )
 
 /**
@@ -867,19 +900,25 @@ const selectRevision = db.query<
     analytics_size_bytes: number | null
     analytics_at: number | null
     analytics_version: number | null
+    edit_survival_due_at: number | null
   },
   [string]
 >(
-  'select analytics_mtime_ms, analytics_size_bytes, analytics_at, analytics_version ' +
-    'from session_scan_cache where cache_key = ?',
+  'select analytics_mtime_ms, analytics_size_bytes, analytics_at, analytics_version, ' +
+    'edit_survival_due_at from session_scan_cache where cache_key = ?',
 )
 
 /** Compared against the ANALYTICS stamp, never the list scanner's: the two are written by different
- *  passes, and reading the other one's stamp would make each rescan whenever the other ran. */
-function needsScan(tf: TranscriptFile): boolean {
+ *  passes, and reading the other one's stamp would make each rescan whenever the other ran.
+ *
+ *  The one exception to "an unchanged file needs no rescan": edit survival is measured some hours
+ *  AFTER a session stops, which is exactly when its transcript stops changing. A row whose
+ *  measurement has come due is rescanned once for it, then carries a null due date again. */
+function needsScan(tf: TranscriptFile, now = Date.now()): boolean {
   const row = selectRevision.get(analyticsCacheKey(tf))
   if (!row) return true
   if (row.analytics_at === null || row.analytics_version !== ANALYTICS_VERSION) return true
+  if (row.edit_survival_due_at !== null && row.edit_survival_due_at <= now) return true
   return row.analytics_mtime_ms !== tf.mtime_ms || row.analytics_size_bytes !== tf.size_bytes
 }
 
@@ -911,6 +950,9 @@ function persist(tf: TranscriptFile, a: SessionAnalytics): void {
       a.activeMs,
       a.firstTs,
       a.lastTs,
+      a.editSurvival.score,
+      a.editSurvival.measured,
+      a.editSurvival.dueAt,
       key,
     )
     deleteEdits.run(key)
@@ -1552,6 +1594,9 @@ export function spendReport(opts: { sinceMs?: number | null } = {}): SpendReport
         first_ts: g.first_ts,
         last_ts: g.last_ts,
         provider_cost_usd: null,
+        edit_survival: null,
+        edit_survival_n: null,
+        edit_survival_due_at: null,
       },
       since,
       sinceDay,
@@ -1585,6 +1630,11 @@ export function spendReport(opts: { sinceMs?: number | null } = {}): SpendReport
   }
 }
 
+/** Below this share kept, a session is worth a second look: most of what it wrote is gone. */
+const LOW_SURVIVAL = 0.5
+/** ...but only over at least this many scored writes, so one discarded scratch edit is not a flag. */
+const MIN_SURVIVAL_N = 2
+
 export function activityReport(opts: { sinceMs?: number | null } = {}): ActivityReport {
   const since = opts.sinceMs ?? null
   const rows = selectRows.all()
@@ -1592,6 +1642,10 @@ export function activityReport(opts: { sinceMs?: number | null } = {}): Activity
   const tools = new Map<string, number>()
   let agentMs = 0
   const health: ActivityReport['health'] = []
+  const now = Date.now()
+  let survivalSum = 0
+  let survivalSessions = 0
+  let survivalOverdue = 0
 
   for (const row of rows) {
     if (row.analytics_version !== ANALYTICS_VERSION) continue
@@ -1606,9 +1660,17 @@ export function activityReport(opts: { sinceMs?: number | null } = {}): Activity
     const toolErrors = row.tool_errors ?? 0
     const streak = row.tool_error_streak ?? 0
     const compactions = row.compactions ?? 0
+    const survival = row.edit_survival
+    if (survival !== null) {
+      survivalSum += survival
+      survivalSessions++
+    }
+    if (row.edit_survival_due_at !== null && row.edit_survival_due_at <= now) survivalOverdue++
+    const lowSurvival =
+      survival !== null && survival < LOW_SURVIVAL && (row.edit_survival_n ?? 0) >= MIN_SURVIVAL_N
     // Only sessions with something to say. A list of every session with zero problems is not a
     // health signal, it is the session list again.
-    if (streak >= 3 || toolErrors >= 10 || compactions >= 1)
+    if (streak >= 3 || toolErrors >= 10 || compactions >= 1 || lowSurvival)
       health.push({
         session_id: row.session_id,
         source: (row.source as SessionSource) ?? 'claude',
@@ -1617,6 +1679,7 @@ export function activityReport(opts: { sinceMs?: number | null } = {}): Activity
         toolErrorStreak: streak,
         edits: row.edit_count ?? 0,
         compactions,
+        editSurvival: survival,
       })
   }
 
@@ -1624,7 +1687,8 @@ export function activityReport(opts: { sinceMs?: number | null } = {}): Activity
     (a, b) =>
       b.toolErrorStreak - a.toolErrorStreak ||
       b.compactions - a.compactions ||
-      b.toolErrors - a.toolErrors,
+      b.toolErrors - a.toolErrors ||
+      (a.editSurvival ?? 1) - (b.editSurvival ?? 1),
   )
 
   return {
@@ -1635,6 +1699,11 @@ export function activityReport(opts: { sinceMs?: number | null } = {}): Activity
       .slice(0, 20),
     agentMinutes: Math.round(agentMs / 60_000),
     health: health.slice(0, 50),
+    editSurvival: {
+      sessions: survivalSessions,
+      average: survivalSessions > 0 ? survivalSum / survivalSessions : null,
+      overdue: survivalOverdue,
+    },
     coverage: analyticsCoverage(),
   }
 }
@@ -1716,6 +1785,7 @@ export function dropAnalytics(): boolean {
         'tokens_json = null, days_json = null, hours_json = null, tools_json = null, ' +
         'tool_errors = null, tool_error_streak = null, edit_count = null, compactions = null, ' +
         'active_ms = null, first_ts = null, last_ts = null, provider_cost_usd = null, ' +
+        'edit_survival = null, edit_survival_n = null, edit_survival_due_at = null, ' +
         'analytics_mtime_ms = null, ' +
         'analytics_size_bytes = null',
     )

@@ -107,11 +107,14 @@ export default {
   toolMix: 'Tool mix',
   health: 'Worth a look',
   healthNote:
-    'Sessions with a run of failing tools, heavy edit churn, or a context compaction. A signal to go and read one, not a verdict.',
+    'Sessions with a run of failing tools, heavy edit churn, a context compaction, or code that mostly did not survive. A signal to go and read one, not a verdict.',
   healthNone: 'Nothing stood out in this window.',
   streak: '{n} failures in a row',
   compactions: '{n} compaction(s)',
   churn: '{n} edits',
+  survived: '{pct}% kept',
+  survivalAverage:
+    'Code kept: {pct}% of what agents wrote was still in the file two hours or more later, averaged over {n} session(s).',
   recentEdits: 'Recently edited files',
   editsNote: 'Paths only, grouped by project. Newest first.',
   editsNone: 'No file changes recorded in this window.',
