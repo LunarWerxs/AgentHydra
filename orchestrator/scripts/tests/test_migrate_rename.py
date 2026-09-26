@@ -155,7 +155,9 @@ class MigrateTest(ActTestBase):
 
         self.dossier_static(instance="2claude")
         self.assertEqual(migrate_chat.main([SID, "--to", "2claude"]), 0)
-        self.assertEqual(self.stub.posts, [])
+        # Nothing is imported, archived or renamed. The one call tells the daemon the chat is kept
+        # where it is, so a retire an earlier move queued there cannot hide it (review, 2026-09-26).
+        self.assertEqual([p for p, _ in self.stub.posts], [f"/api/sessions/{SID}/keep-here"])
 
     def test_console_only_session_resolves_via_sessions_table_and_lands(self):
         # The dossier only knows desktop records; a console stray MUST still be migratable

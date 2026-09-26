@@ -471,9 +471,14 @@ FIRST (a flag written first would confirm the click by itself). A click that doe
 writes NO flag under the running app, because that flag is the reported bug. It hides nothing,
 and the next move from that account finds nothing. The old copy is queued in
 `move-retire-on-close.ts` and flagged once that app is closed, provided another account still
-shows the chat. A record filed under a previous login of a running profile is not on screen, so
-it gets the flag directly. A move back onto an account drops whatever is queued for that chat
-there and cancels any archive watcher still running on it. An account at its usage wall (98% of either bucket on a fresh cached
+shows the chat. "Closed" means a fresh process scan that answered: a failed scan waits, since
+listInstances' fallback would read it as nothing running. The queue is also run for a profile
+right before AgentHydra opens it. A record filed under a previous login of a running profile is
+not on screen, so it gets the flag directly. Everything that puts the chat on an account calls
+`keepChatOn` there: `/migrate`, `/import-desktop` (the MCP movers), an unarchive through
+`/desktop-archive`, and `POST /api/sessions/:id/keep-here`, which `migrate_chat` posts when it
+finds the chat already living on the target. `keepChatOn` drops the queued flag and cancels any
+archive watcher still running on that account. An account at its usage wall (98% of either bucket on a fresh cached
 reading) is archived over other chats' preview servers, each named in `stoppedBystanders`, the
 same standing order the MCP mover applies. Read `sourceStillShown` (the profiles still listing
 the chat) and `sourceSettle` (each profile's route and `reason`) on the answer; `ok` means

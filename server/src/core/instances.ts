@@ -493,12 +493,21 @@ async function noLaunchBinaryResult(normDir: string): Promise<CMActionResult> {
   }
 }
 
+/** Work that must land in a profile's store before its app starts and reads it (the daemon sets
+ *  it: move-retire-on-close.ts retireBeforeLaunch). Never allowed to fail a launch. */
+let beforeLaunchHook: ((normDir: string) => Promise<void>) | null = null
+
+export function setBeforeLaunchHook(hook: ((normDir: string) => Promise<void>) | null): void {
+  beforeLaunchHook = hook
+}
+
 async function openConfiguredInstance(
   normDir: string,
   nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
 ): Promise<CMActionResult> {
   const running = await probeRunningInstance(normDir, nativeConfig)
   if (running) return running
+  await beforeLaunchHook?.(normDir).catch(() => {})
 
   const binary = await resolveLaunchBinaryOrNull()
   if (!binary) return await noLaunchBinaryResult(normDir)

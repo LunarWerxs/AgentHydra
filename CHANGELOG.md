@@ -301,9 +301,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   both accounts where a later move can still find it. Nothing writes the flag under a running app
   any more. On an account without native control whose own Archive click did not take, the old
   copy is queued instead and archived as soon as that app is closed
-  (`server/src/move-retire-on-close.ts`). A chat moving back to an account it left cancels
-  anything still queued for it there, and an account at its usage limit that stopped another
-  chat's preview server says so in the move's warning.
+  (`server/src/move-retire-on-close.ts`), judged by a fresh process scan (a failed scan waits)
+  and also checked right before AgentHydra opens that account. A chat moved back to an account
+  it left, unarchived there, or found already living there by the MCP movers cancels anything
+  still queued for it there. An account at its usage limit that stopped another chat's preview
+  server says so in the move's warning.
 - **The "Chats" dialog on an account that has never held a chat says so** instead of "Couldn't
   read the chats" (`GET /api/chats` no longer 404s an instance the registry resolves).
 - **A just-opened Claude Desktop app shows its banked reset and credit within seconds**

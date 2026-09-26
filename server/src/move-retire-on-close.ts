@@ -14,21 +14,33 @@
 //
 // The queue is a small JSON file in the daemon's data dir, so a daemon restart keeps it. An entry
 // is dropped without being acted on when:
-//   · the chat lands on that account again (the owner moved it back; /migrate drops it),
-//   · the record there is already archived, or gone (the owner archived it in the app),
-//   · no OTHER account shows the chat unarchived (it is the only visible copy left), or
+//   · the chat lands on that account again, or is unarchived there, or a move finds it already
+//     living there (keepChatOn: /migrate, /import-desktop, /desktop-archive, /keep-here),
+//   · the record there is already archived (the owner archived it in the app),
+//   · every other account was read and none shows the chat unarchived (it is the only visible
+//     copy left), or
 //   · it is older than RETIRE_MAX_AGE_MS.
+// Anything it cannot read is not an answer: the entry waits for the next pass.
+//
+// ⛔ "CLOSED" IS A FRESH PROCESS SCAN THAT ANSWERED (review, 2026-09-26). listInstances falls back
+// to an old snapshot, then to "nothing running", when a scan fails (core/process.ts says that
+// fallback is for a listing, never a destructive guard). Read that way, a failed scan on a pinned
+// box would flag the chat under the running app - the very write this file exists to avoid. So a
+// failed scan skips the pass. The sweep also runs for a profile right before AgentHydra opens it,
+// so a close and reopen inside one 60s tick is not missed.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DATA_DIR } from './config'
-import { listInstances } from './core/instances'
+import { setBeforeLaunchHook } from './core/instances'
+import { scanClaudeProcesses } from './core/process'
 import { pathKey, samePathKey } from './path-key'
 import {
   archiveDesktopChat,
+  cancelChatArchiveReassert,
   desktopProfileRoots,
   findChatMetaPath,
-  renderedInStore,
+  findVisibleChatMetaPath,
 } from './session-launch'
 
 export const RETIRE_SWEEP_MS = 60_000
@@ -99,13 +111,43 @@ export function dropRetireOnClose(profile: string, sessionId: string): boolean {
   return true
 }
 
+/**
+ * The chat belongs on `profile` now: it is landing there, being unarchived there, or a move found
+ * it already there. Everything an earlier move armed to retire it there is called off - the queued
+ * flag and any archive watcher still running - or it would hide the copy the owner just chose.
+ */
+export function keepChatOn(profile: string, sessionId: string): void {
+  try {
+    dropRetireOnClose(profile, sessionId)
+  } catch {
+    // an unwritable queue file must not fail the landing; the sweep re-checks before any write
+  }
+  cancelChatArchiveReassert(profile, sessionId)
+}
+
+/**
+ * The profile dirs whose desktop app is running, from a FRESH process scan. Throws when the scan
+ * fails: a destructive caller must not read "could not tell" as "closed".
+ */
+export async function runningProfileDirs(): Promise<string[]> {
+  const scan = await scanClaudeProcesses({ fresh: true })
+  if (!scan.ok) throw new Error(`could not read the Claude processes: ${scan.reason}`)
+  return scan.processes.filter((p) => p.isMain && p.dir).map((p) => p.dir as string)
+}
+
+/** One record's flag, read strictly: a bad read throws, which leaves the entry for next pass. */
+function readArchivedStrict(path: string): boolean {
+  return (JSON.parse(readFileSync(path, 'utf8')) as { isArchived?: unknown }).isArchived === true
+}
+
 export interface RetireDeps {
   store: RetireStore
   /** Profile dirs whose desktop app is running right now. */
   listRunningDirs: () => Promise<string[]>
-  /** The record's flag in that profile's store; null when there is no record. */
+  /** The record's flag in that profile's store; null when no record was found. Throws on a bad
+   *  read, which leaves the entry for the next pass. */
   archivedIn: (profile: string, sessionId: string) => boolean | null
-  /** Some OTHER profile shows this chat unarchived. */
+  /** Some OTHER profile shows this chat unarchived. Throws when one cannot be read. */
   liveElsewhere: (profile: string, sessionId: string) => boolean
   /** Write the archive flag in that one profile; true when it changed the record. */
   flag: (sessionId: string, profile: string) => Promise<boolean>
@@ -115,16 +157,17 @@ export interface RetireDeps {
 
 const defaultDeps = (): RetireDeps => ({
   store,
-  listRunningDirs: async () => (await listInstances()).filter((i) => i.isRunning).map((i) => i.dir),
+  listRunningDirs: runningProfileDirs,
   archivedIn: (profile, id) => {
     const path = findChatMetaPath(profile, id)
-    if (!path) return null
-    return (JSON.parse(readFileSync(path, 'utf8')) as { isArchived?: unknown }).isArchived === true
+    return path ? readArchivedStrict(path) : null
   },
   liveElsewhere: (profile, id) =>
-    desktopProfileRoots().some(
-      (dir) => !samePathKey(dir, profile) && renderedInStore(dir, id)?.archived === false,
-    ),
+    desktopProfileRoots().some((dir) => {
+      if (samePathKey(dir, profile)) return false
+      const path = findVisibleChatMetaPath(dir, id)
+      return path ? !readArchivedStrict(path) : false
+    }),
   flag: async (id, profile) =>
     (await archiveDesktopChat(id, true, [profile])).hits.some((h) => h.changed),
   now: Date.now,
@@ -132,11 +175,16 @@ const defaultDeps = (): RetireDeps => ({
 })
 
 /**
- * One pass over the queue. Per-entry failures are contained and retried next tick. Returns how
- * many old copies it archived.
+ * One pass over the queue, or over one profile's entries. Per-entry failures are contained and
+ * retried next tick. Returns how many old copies it archived.
  */
-export async function runRetireOnCloseOnce(deps: RetireDeps = defaultDeps()): Promise<number> {
-  const entries = deps.store.load()
+export async function runRetireOnCloseOnce(
+  deps: RetireDeps = defaultDeps(),
+  opts: { profile?: string } = {},
+): Promise<number> {
+  const entries = deps.store
+    .load()
+    .filter((e) => opts.profile === undefined || samePathKey(e.profile, opts.profile))
   if (entries.length === 0) return 0
   let running: string[]
   try {
@@ -156,7 +204,11 @@ export async function runRetireOnCloseOnce(deps: RetireDeps = defaultDeps()): Pr
         continue
       }
       if (running.some((dir) => samePathKey(dir, e.profile))) continue
-      if (deps.archivedIn(e.profile, e.sessionId) !== false) {
+      const archived = deps.archivedIn(e.profile, e.sessionId)
+      // No record found is not proof it is gone (a walk can come up empty on a contended store);
+      // it waits, and the age cap ends it if it never comes back.
+      if (archived === null) continue
+      if (archived) {
         settle(e)
         continue
       }
@@ -187,10 +239,30 @@ export async function runRetireOnCloseOnce(deps: RetireDeps = defaultDeps()): Pr
   return retired
 }
 
+/** Longest a launch waits on the pass below; the sweep's next tick finishes anything it cut off. */
+const BEFORE_LAUNCH_BUDGET_MS = 5_000
+
+/**
+ * The pass for one profile, run right before AgentHydra opens it: the app reads its store at
+ * startup, so this is the last moment the flag can land before it is read, and a close and
+ * reopen inside one tick would otherwise miss it. Bounded, and never throws into the launch.
+ */
+export async function retireBeforeLaunch(profile: string): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([
+    runRetireOnCloseOnce(defaultDeps(), { profile }).catch(() => 0),
+    new Promise<void>((r) => {
+      timeout = setTimeout(r, BEFORE_LAUNCH_BUDGET_MS)
+    }),
+  ])
+  clearTimeout(timeout)
+}
+
 let timer: ReturnType<typeof setInterval> | null = null
 
 export function startRetireOnCloseSweep(): void {
   if (timer) return
+  setBeforeLaunchHook(retireBeforeLaunch)
   // Same shape as automation-stamp-sweep.ts's timer: this process exits on an unhandled
   // rejection, so a repeating timer must not be able to let one escape.
   timer = setInterval(() => {

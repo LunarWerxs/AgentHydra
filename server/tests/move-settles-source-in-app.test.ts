@@ -193,6 +193,17 @@ test('a record under a PREVIOUS login of a running profile gets the flag: the ap
   expect(calls.order).toEqual(['flag'])
 })
 
+test('a liveness read that FAILS is "running": no flag is written on a guess', async () => {
+  const { deps, calls } = harness({ native: refused })
+  deps.isRunning = async () => {
+    throw new Error('could not read the Claude processes')
+  }
+  const [row] = await settleMovedSource(SID, [SOURCE], [], deps)
+  expect(calls.flag).toEqual([])
+  expect(calls.native.map((c) => c.profile)).toEqual([SOURCE])
+  expect(row?.stillShown).toBe(true)
+})
+
 test('closedOnly (a batch first pass) settles the closed account now and leaves the running one', async () => {
   const running = 'C:\\instances\\running'
   const { deps, calls } = harness({ runningOf: { [SOURCE]: false, [running]: true } })

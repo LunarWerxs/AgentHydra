@@ -149,7 +149,9 @@ async function settleOne(
   closedOnly: boolean,
 ): Promise<SourceSettle | null> {
   const alreadyArchived = deps.diskArchived(profile, sessionId) === true
-  const running = await deps.isRunning(profile).catch(() => false)
+  // A liveness read that failed is "running": the flag below is only safe for a closed app, and
+  // the running path writes nothing under an app it cannot reach (review, 2026-09-26).
+  const running = await deps.isRunning(profile).catch(() => true)
   // Under a previous login the running app never loaded the record: a flag is safe there, and it
   // is the only route that can reach it. It is not on screen either way, so never "still shown".
   const hidden = running && deps.shown?.(profile, sessionId) === false

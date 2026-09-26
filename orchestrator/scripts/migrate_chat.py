@@ -782,11 +782,28 @@ def _resolve_target_or_raise(fleet: dict, to: str, match: dict, session_id: str,
     # a chat is RE-HOMED instead - the import sets the stale record aside and lands the chat in the
     # signed-in account's folder (session-launch.ts setAsideStaleLoginRecords).
     if _same_instance(match, target) and match.get("staleLogin") is not True:
+        _keep_here(session_id, target)
         raise _MigrateRefusal(
             {"landed": False, "report": f"nothing to do: '{chat_title}' already lives in {target.get('name')}"},
             0,
         )
     return target
+
+
+def _keep_here(session_id: str, target: dict) -> None:
+    """A move to where the chat already lives says the owner wants it THERE: call off whatever an
+    earlier move queued to retire that copy once its app closes (the daemon's
+    move-retire-on-close.ts), or that app's next close would hide the chat they just chose
+    (review, 2026-09-26). Best effort: an older daemon without the route changes nothing."""
+    directory = target.get("dir")
+    if not directory:
+        return
+    try:
+        hydralib.api_post(
+            f"/api/sessions/{session_id}/keep-here", {"instance_ref": f"desktop:{directory}"}
+        )
+    except Exception:  # noqa: BLE001 - never turn a no-op move into a failure
+        pass
 
 
 def _same_instance(m: dict, target: dict) -> bool:

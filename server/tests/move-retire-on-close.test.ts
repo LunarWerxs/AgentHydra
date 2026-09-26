@@ -78,13 +78,44 @@ test('once the app is CLOSED, the old copy is flagged and the entry is done', as
   expect(store.entries).toEqual([])
 })
 
-test('a record already archived (or gone) is dropped without a write', async () => {
-  for (const archived of [true, null]) {
-    const { deps, store, flagged } = harness({ archived })
-    await runRetireOnCloseOnce(deps)
-    expect(flagged).toEqual([])
-    expect(store.entries).toEqual([])
+test('a record already archived is dropped without a write', async () => {
+  const { deps, store, flagged } = harness({ archived: true })
+  await runRetireOnCloseOnce(deps)
+  expect(flagged).toEqual([])
+  expect(store.entries).toEqual([])
+})
+
+test('a record not found, or unreadable, is not an answer: the entry waits', async () => {
+  const missing = harness({ archived: null })
+  await runRetireOnCloseOnce(missing.deps)
+  expect(missing.flagged).toEqual([])
+  expect(missing.store.entries).toHaveLength(1)
+  const unreadable = harness({})
+  unreadable.deps.liveElsewhere = () => {
+    throw new Error('half-written record')
   }
+  await runRetireOnCloseOnce(unreadable.deps)
+  expect(unreadable.flagged).toEqual([])
+  expect(unreadable.store.entries).toHaveLength(1)
+})
+
+test('a FAILED process scan is not "closed": the pass writes nothing and keeps every entry', async () => {
+  // listInstances would have answered "nothing running" here (review, 2026-09-26).
+  const { deps, store, flagged } = harness({})
+  deps.listRunningDirs = async () => {
+    throw new Error('could not read the Claude processes: CIM timed out')
+  }
+  expect(await runRetireOnCloseOnce(deps)).toBe(0)
+  expect(flagged).toEqual([])
+  expect(store.entries).toHaveLength(1)
+})
+
+test('a pass for one profile (before AgentHydra opens it) leaves the others alone', async () => {
+  const other = entry({ profile: 'C:\\instances\\b' })
+  const { deps, store, flagged } = harness({ entries: [entry(), other] })
+  expect(await runRetireOnCloseOnce(deps, { profile: 'c:/instances/a' })).toBe(1)
+  expect(flagged).toEqual([`${A}:${SID}`])
+  expect(store.entries).toEqual([other])
 })
 
 test('never the only visible copy: no other account shows it unarchived -> dropped, not flagged', async () => {

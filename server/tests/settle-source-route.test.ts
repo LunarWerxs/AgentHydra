@@ -46,6 +46,15 @@ afterAll(() => {
   mock.module('../src/claude-native-archive', () => realNative)
 })
 
+const retire = await import('../src/move-retire-on-close')
+let queued: Array<{ profile: string; sessionId: string; queuedAt: string }> = []
+retire.setRetireStoreForTests({
+  load: () => [...queued],
+  save: (next) => {
+    queued = next
+  },
+})
+
 const { app } = await import('../src/http-app')
 await import('../src/routes/desktop-sessions')
 const http = new Hono().route('/', app)
@@ -96,4 +105,18 @@ test('instance_ref is required', async () => {
   const r = await settle({})
   expect(r.status).toBe(400)
   expect(calls).toEqual([])
+})
+
+test('keep-here calls off a retire an earlier move queued for that account', async () => {
+  // migrate_chat's "nothing to do: already lives here" posts this: the owner wants the chat on
+  // TARGET, so a flag queued there for when its app closes would hide the copy they just chose.
+  retire.queueRetireOnClose(TARGET, SID)
+  retire.queueRetireOnClose(SOURCE, SID)
+  const r = await http.request(`/api/sessions/${SID}/keep-here`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_ref: `desktop:${TARGET.replace(/\\/g, '/')}` }),
+  })
+  expect(r.status).toBe(200)
+  expect(queued.map((e) => e.profile)).toEqual([SOURCE])
 })
