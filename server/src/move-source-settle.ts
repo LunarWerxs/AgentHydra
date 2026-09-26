@@ -22,10 +22,16 @@
 //                     archiving the leftover in that app is durable, and a later move from that
 //                     account still finds the chat instead of answering "No chats to move".
 //   · native UNAVAILABLE (not configured, or prefer-native with no debugger) -> the guarded
-//                     legacy path /desktop-archive uses: flag, reassert watcher, the app's own
-//                     Archive control, read back.
+//                     legacy path: the app's own Archive control first, read back; only if that
+//                     does not settle it, the flag and the reassert watcher, reported as still
+//                     shown (a flag under a running app is not an archive on screen).
+//
+// A source account AT ITS USAGE WALL is archived over other chats' preview servers, each one
+// named (owner's standing order, 2026-09-26; migrate_chat's usage_full applies it for the MCP
+// mover). usageAtWall below is that test for the web's moves.
 
 import type { NativeArchiveOutcome } from './claude-native-archive'
+import type { UsageSnapshot } from './types'
 import type { UiArchiveOutcome } from './ui-archive'
 
 /** One profile's leftover, and what became of it. */
@@ -39,6 +45,10 @@ export interface SourceSettle {
   stillShown: boolean
   /** The record already said archived before this move touched it (an older move's leftover). */
   alreadyArchived?: boolean
+  /** The account was at its usage wall, so the archive went ahead over other chats' servers. */
+  atLimit?: boolean
+  /** What that at-limit archive stopped which another chat owned (native-program). */
+  stoppedBystanders?: unknown[]
   reason?: string
 }
 
@@ -51,8 +61,10 @@ export interface SettleDeps {
   native: (
     profile: string,
     sessionId: string,
-    opts: { leavingCliSessionIds: string[] },
+    opts: { leavingCliSessionIds: string[]; sourceAtLimit?: boolean },
   ) => Promise<NativeArchiveOutcome>
+  /** The account is at its usage wall right now (usageAtWall over its cached reading). */
+  atLimit?: (profile: string) => boolean
   /** archiveDesktopChat(sessionId, true, [profile]). */
   flag: (
     sessionId: string,
@@ -132,13 +144,19 @@ async function settleOne(
     }
   }
 
-  const native = await deps.native(profile, sessionId, { leavingCliSessionIds: leaving })
+  const atLimit = deps.atLimit?.(profile) === true
+  const native = await deps.native(profile, sessionId, {
+    leavingCliSessionIds: leaving,
+    ...(atLimit ? { sourceAtLimit: true } : {}),
+  })
   if (native.kind === 'result') {
     const done = native.ok && native.verified
     return {
       profile,
       via: 'native',
       changed: done && native.changed,
+      ...(atLimit ? { atLimit } : {}),
+      ...(native.stoppedBystanders?.length ? { stoppedBystanders: native.stoppedBystanders } : {}),
       // A record the store already called archived is an older move's leftover. An unconfirmed
       // native answer about it says nothing about THIS move, and calling it "still shown" would
       // flag every chat that ever lived on a now-unreachable account.
@@ -148,16 +166,54 @@ async function settleOne(
     }
   }
 
-  // Native is unavailable for this profile: the same guarded legacy path /desktop-archive takes.
+  // Native is unavailable for this profile: the app's own Archive control FIRST, the flag only if
+  // that does not settle it. The order is the point (review, 2026-09-26): uiArchiveChat confirms a
+  // click by reading the record's flag, so a flag written beforehand confirmed ITSELF - a row the
+  // sidebar never rendered, or a click that did not take, read as settled while the chat sat in
+  // the old sidebar. migrate_chat's settle clicks first for the same reason.
+  const ui = await deps.ui(profile, sessionId)
+  if (ui.verified)
+    return {
+      profile,
+      via: 'ui',
+      changed: ui.clicked,
+      stillShown: false,
+      ...(alreadyArchived ? { alreadyArchived } : {}),
+    }
   const hit = (await deps.flag(sessionId, profile).catch(() => null))?.hits?.[0]
   if (hit?.changed) deps.watch(profile, sessionId)
-  const ui = await deps.ui(profile, sessionId)
   return {
     profile,
-    via: ui.verified ? 'ui' : 'flag',
-    changed: ui.clicked || hit?.changed === true,
-    stillShown: !ui.verified && !alreadyArchived,
+    via: 'flag',
+    changed: hit?.changed === true,
+    // The flag is on disk and the watcher defends it, but the running app still lists the chat
+    // until it restarts, so this is not an archive on screen.
+    stillShown: !alreadyArchived,
     ...(alreadyArchived ? { alreadyArchived } : {}),
-    ...(ui.verified ? {} : { reason: ui.reason ?? native.reason }),
+    reason: ui.reason ?? native.reason,
   }
+}
+
+/** How full is too full: the owner's order names 98% of either bucket. */
+const WALL_PCT = 98
+/** A reading older than this says nothing about now: the orchestrator reads a two-minute-old
+ *  survey; the web's cache is refreshed by the usage sweep, so this allows one missed sweep. */
+const WALL_MAX_AGE_MS = 15 * 60_000
+
+/**
+ * Is this account at its usage wall right now? Either the 5-hour or the weekly all-models bucket
+ * at WALL_PCT or more, on a reading captured in the last WALL_MAX_AGE_MS, in a window that has not
+ * reset since. Anything missing, old, reset or unparseable answers false: an unverified reading is
+ * never grounds to archive over another chat's server (migrate_chat.usage_full, same rule).
+ */
+export function usageAtWall(snap: UsageSnapshot | null | undefined, now = Date.now()): boolean {
+  if (!snap) return false
+  const captured = Date.parse(snap.capturedAt)
+  if (!Number.isFinite(captured) || now - captured > WALL_MAX_AGE_MS || captured > now + 60_000)
+    return false
+  return [snap.session, snap.weekAll].some((limit) => {
+    if (!limit || typeof limit.pct !== 'number' || limit.pct < WALL_PCT) return false
+    const resets = limit.resetsAt ? Date.parse(limit.resetsAt) : Number.NaN
+    return !(Number.isFinite(resets) && resets <= now)
+  })
 }

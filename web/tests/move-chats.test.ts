@@ -3,7 +3,7 @@
 // store rows the move takes.
 import { expect, test } from 'bun:test'
 import type { ChatListRow } from '../src/lib/api'
-import { moveTargets, planMove } from '../src/lib/move-chats'
+import { moveTargets, planMove, profileLabel, stillShownLine } from '../src/lib/move-chats'
 
 const inst = (dir: string, isRunning: boolean, label = dir) => ({ dir, isRunning, label })
 const label = (i: { label: string }) => i.label
@@ -68,4 +68,34 @@ test('a live chat is still in the plan: the route stops it, that is what a perso
 test('an archived row is neither moved nor counted as skipped - it was never in scope', () => {
   const plan = planMove([row({ isArchived: true, archived: true })])
   expect(plan).toEqual({ chats: [], skippedDone: 0, skippedNoSession: 0 })
+})
+
+// --- naming the account a moved chat is still listed on (review, 2026-09-26) ------------------
+
+test('a server profile path is named after the instance row, whatever its case and slashes', () => {
+  const fleet = [
+    inst('c:\\users\\me\\.claude-instances\\thomas', true, 'angel'),
+    inst('c:\\users\\me\\.claude-instances\\anh', false, 'Anh'),
+  ]
+  expect(profileLabel('C:\\Users\\me\\.claude-instances\\thomas', fleet, label)).toBe('angel')
+  expect(profileLabel('C:/Users/me/.claude-instances/anh/', fleet, label)).toBe('Anh')
+  // Not in the list: the folder's own name, never the whole path.
+  expect(profileLabel('C:\\Users\\me\\.claude-instances\\gone', fleet, label)).toBe('gone')
+})
+
+test('the still-shown line names the account it is on, which need not be where the move began', () => {
+  const nameOf = (p: string) => (p.endsWith('a') ? 'Account A' : 'Account B')
+  expect(
+    stillShownLine(
+      [
+        { profile: 'c:/i/b', via: 'native', changed: true, stillShown: false },
+        { profile: 'c:/i/a', via: 'native', changed: false, stillShown: true, reason: 'busy' },
+      ],
+      nameOf,
+    ),
+  ).toBe('Account A: busy')
+  expect(
+    stillShownLine([{ profile: 'c:/i/b', via: 'flag', changed: true, stillShown: false }], nameOf),
+  ).toBeNull()
+  expect(stillShownLine(undefined, nameOf)).toBeNull()
 })

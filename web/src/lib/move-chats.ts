@@ -11,7 +11,7 @@
 // having existed (2026-09-08). The store is what the app itself reads, so the plan, the "Chats"
 // dialog and the sidebar all agree on what is there.
 
-import type { ChatListRow } from '@/lib/api'
+import type { ChatListRow, MigrateSourceSettle } from '@/lib/api'
 
 /**
  * Destinations for a move FROM `from`: every other instance, running first, then by name.
@@ -65,4 +65,40 @@ export function planMove(rows: readonly ChatListRow[]): MovePlan {
     chats.push({ ...row, sessionId: row.sessionId })
   }
   return { chats, skippedDone, skippedNoSession }
+}
+
+/**
+ * Which account a server-side profile path is, in the name a person knows it by: the instance
+ * whose dir it is, else the folder's own name. The server spells profile paths its own way (case,
+ * slashes) and the instance list its own, so both are folded before comparing, as the server's
+ * samePathKey does on Windows.
+ */
+export function profileLabel<T extends { dir: string }>(
+  profile: string,
+  instances: readonly T[],
+  label: (i: T) => string,
+): string {
+  const key = (p: string) =>
+    p
+      .replace(/[\\/]+/g, '/')
+      .replace(/\/+$/, '')
+      .toLowerCase()
+  const hit = instances.find((i) => key(i.dir) === key(profile))
+  return hit ? label(hit) : (profile.split(/[\\/]/).filter(Boolean).pop() ?? profile)
+}
+
+/**
+ * The first old account that still lists a moved chat, and why, as one line; null when every old
+ * copy was retired. The account is NAMED because it need not be the one the move started from: a
+ * chat that stayed on an earlier account is settled by every later move of it, and a warning that
+ * blamed the account the person just moved from sent them looking in the wrong app (review,
+ * 2026-09-26).
+ */
+export function stillShownLine(
+  settle: readonly MigrateSourceSettle[] | undefined,
+  nameOf: (profile: string) => string,
+): string | null {
+  const first = settle?.find((s) => s.stillShown)
+  if (!first) return null
+  return first.reason ? `${nameOf(first.profile)}: ${first.reason}` : nameOf(first.profile)
 }

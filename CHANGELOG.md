@@ -9,6 +9,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **The number of active chats beside "Chats" in each Instances row menu** (right-click or ⋮).
+  It counts the chats on that account that are not archived, so 0 means nothing is active there,
+  and it is the same number the "Chats" dialog lists (`GET /api/chats/counts`, one store scan
+  keyed by instance folder, read when a menu opens).
+
 - **A machine's own brain for the judgment queue** (`orchestrator/scripts/lib/configlib.py`
   `interview.brain`, `interview.py`, `.claude/commands/orchestrate.md`). The chat running a pass
   answered every waiting chat on the generic doctrine. A new policy knob names a command that
@@ -285,6 +290,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **"Move chats to account" takes the chats off the old account's screen, not just its disk**
+  (`server/src/move-source-settle.ts`, `server/src/routes/desktop-sessions.ts`). The Instances
+  menu and the Sessions migrate settled the old copy with a disk flag alone, which a running app
+  ignores and saves over: every moved chat stayed in the old sidebar, and because the store then
+  said "archived", moving it again from there answered "No chats to move" for a chat on screen.
+  The old copy is now archived by its own app (native control), the way the MCP mover and the
+  Archive action already did; a closed app still gets the flag, which it reads when it starts. A
+  chat the old app would not archive is named in a warning with the reason, and stays listed on
+  both accounts where a later move can still find it.
+- **The "Chats" dialog on an account that has never held a chat says so** instead of "Couldn't
+  read the chats" (`GET /api/chats` no longer 404s an instance the registry resolves).
 - **A just-opened Claude Desktop app shows its banked reset and credit within seconds**
   (`server/src/usage-service.ts`, `server/src/routes/instances.ts`). Those facts are read only
   from a running app, and only the usage sweep read them, at most every 30 minutes: an app

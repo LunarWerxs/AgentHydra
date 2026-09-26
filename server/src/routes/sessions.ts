@@ -296,6 +296,10 @@ app.get('/api/chats', async (c) => {
   let instances: string[] | undefined
   // The registry knows this instance, so it EXISTS, whatever its store holds.
   let known = false
+  // ...and its store is read where it actually is. The default roots matched by leaf name miss an
+  // external profile (a running app outside ~/.claude-instances), which the count beside "Chats"
+  // reads by its real dir, so the badge and this list disagreed there (review, 2026-09-26).
+  let roots: Array<{ dir: string; label: string }> | undefined
   if (raw) {
     // Any spelling move_chat accepts — number, email, account name, ref, or the directory label
     // itself. A label that the registry does not know is passed through rather than rejected:
@@ -311,17 +315,21 @@ app.get('/api/chats', async (c) => {
       )
     instances = [hit ? chatStoreLabel(hit.handle) : raw]
     known = !!hit
+    if (hit) roots = [{ dir: hit.handle, label: instances[0] as string }]
   }
   const archived = c.req.query('archived')
-  const got = listChats({
-    instances,
-    // Same defensive read as /api/sessions: an unrecognized scope shows the live list rather
-    // than silently burying it under the archived majority.
-    archived: archived === 'include' || archived === 'only' ? archived : 'hide',
-    q: c.req.query('q') || undefined,
-    limit: boundedQueryInt(c.req.query('limit'), 200, 1000),
-    offset: boundedQueryInt(c.req.query('offset'), 0, 100_000, 0),
-  })
+  const got = listChats(
+    {
+      instances,
+      // Same defensive read as /api/sessions: an unrecognized scope shows the live list rather
+      // than silently burying it under the archived majority.
+      archived: archived === 'include' || archived === 'only' ? archived : 'hide',
+      q: c.req.query('q') || undefined,
+      limit: boundedQueryInt(c.req.query('limit'), 200, 1000),
+      offset: boundedQueryInt(c.req.query('offset'), 0, 100_000, 0),
+    },
+    roots ? { roots } : {},
+  )
   // ⛔ AN INSTANCE THAT DOES NOT EXIST MUST NOT LOOK LIKE AN INSTANCE WITH NO CHATS. Both are
   // `{rows: [], counts: {all: 0}}`, and the second is a real and reassuring answer, so a typo or
   // an ambiguous email would read as "that account is empty" - the exact class of silently-wrong

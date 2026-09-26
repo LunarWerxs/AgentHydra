@@ -906,8 +906,9 @@ export interface MigrateSourceSettle {
 
 /** Move a chat to another account: stops its live process if any, lands it in the target
  *  instance's app under its real title, verifies the landing, then archives the old account's
- *  copy through that app (so an open app drops the row now). `leaving` names the other chats the
- *  same move is taking, so a sibling's server in a shared folder does not block the archive. */
+ *  copy through that app (so an open app drops the row now). A BATCH passes `deferSettle` and
+ *  retires the old copies afterwards with settleMovedChat, naming only the chats that landed:
+ *  the archive of one chat must know which siblings' servers belong to chats that really left. */
 export const migrateSession = (
   sessionId: string,
   instanceRef: string,
@@ -917,7 +918,7 @@ export const migrateSession = (
   // itself a real name. This client sent neither for a month, so every migrate from the UI -
   // single or bulk - was refused with 400 before it did anything (owner's console, 2026-09-03:
   // sixteen 400s for sixteen chats). Callers pass the row's own title as the confirmation.
-  opts: { title?: string; confirmTitle?: string; leaving?: string[] } = {},
+  opts: { title?: string; confirmTitle?: string; deferSettle?: boolean } = {},
 ) =>
   j<{
     ok: boolean
@@ -927,14 +928,29 @@ export const migrateSession = (
     /** Old accounts that still list the chat; each one's reason is in `sourceSettle`. */
     sourceStillShown?: string[]
     sourceSettle?: MigrateSourceSettle[]
+    /** The old copies were left for settleMovedChat (the call passed `deferSettle`). */
+    settleDeferred?: boolean
   }>(`/api/sessions/${encodeURIComponent(sessionId)}/migrate`, {
     method: 'POST',
     body: JSON.stringify({
       instance_ref: instanceRef,
       ...(opts.title ? { title: opts.title } : {}),
       ...(opts.confirmTitle ? { confirm_title: opts.confirmTitle } : {}),
-      ...(opts.leaving?.length ? { leaving: opts.leaving } : {}),
+      ...(opts.deferSettle ? { defer_settle: true } : {}),
     }),
+  })
+
+/** A batch's second pass: retire the old copies of a chat that has already landed on
+ *  `instanceRef`. `leaving` is every chat of the batch that landed, and nothing else. */
+export const settleMovedChat = (sessionId: string, instanceRef: string, leaving: string[]) =>
+  j<{
+    ok: boolean
+    error?: string
+    sourceStillShown?: string[]
+    sourceSettle?: MigrateSourceSettle[]
+  }>(`/api/sessions/${encodeURIComponent(sessionId)}/settle-source`, {
+    method: 'POST',
+    body: JSON.stringify({ instance_ref: instanceRef, leaving }),
   })
 
 /** Active (not archived) and archived chat counts per desktop instance dir: the number beside

@@ -343,10 +343,12 @@ export default {
   moveChatsProgress: 'Moving chat {done} of {n}…',
   moveChatsDone: 'Moved {ok} of {n} chats to {to}.',
   moveChatsSomeFailed: '{failed} could not be moved; details are in the browser console.',
-  // Moved and verified on the new account, but the old account's app still lists them: its own
-  // archive refused, or it has no native control. The server's reason, which says what to do,
-  // follows the colon.
-  moveChatsStillShown: '{n} still show on {from}:',
+  // Pass two of a move: the moved chats' old copies, archived through the old account's own app.
+  moveChatsSettling: 'Archiving the old copies, {done} of {n}…',
+  // Moved and verified on the new account, but an old account's app still lists them: its own
+  // archive refused, or it has no native control. The first chat follows, with the account it is
+  // still on and the server's reason, which says what to do.
+  moveChatsStillShown: '{n} still listed on an old account:',
   // The chat list inside the move dialog: grouped by project, each row opens that chat in Sessions.
   moveChatsGroupCount: '{n} chat(s)',
   moveChatsRowHint: 'Grouped by project. Click a chat to open it in Sessions.',

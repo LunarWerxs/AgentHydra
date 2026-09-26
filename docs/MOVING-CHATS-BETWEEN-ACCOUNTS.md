@@ -298,8 +298,12 @@ again and must be re-filed. Resolve the target's uuids from
 
 ## migrate archives the source pointer, it does not remove it
 
-After a migrate the chat has a metadata file in **both** profiles: archived in the source, fresh in
-the target. That is deliberate - nothing is destroyed - but it has a consequence nobody expects.
+After a migrate the chat has a metadata file in **both** profiles: fresh in the target, and in the
+source archived (by its own app when it runs, by the flag when it is closed). The one exception is
+a running source whose native archive refused or could not confirm: that record is deliberately
+left unarchived, so the store agrees with the screen, and the profile is named in
+`sourceStillShown` (see "The web UI's move settles its source the same way" below). Keeping both
+records is deliberate - nothing is destroyed - but it has a consequence nobody expects.
 
 AgentHydra's session -> instance map is keyed by transcript id and keeps **one** entry per
 transcript, so with copies in two profiles it reports whichever it read last. In practice that was
@@ -453,6 +457,29 @@ source copy. The archive and migration scripts use the same native adapter throu
   do not assume a disk flag changed the running app or request a restart to make it appear so.
 - Native archive rejects live/pending work, unsafe cascades and affected preview servers;
   `force` does not bypass these native guards.
+
+### The web UI's move settles its source the same way (2026-09-26)
+
+The Instances row menu's **Move chats to account** and the Sessions tab's migrate both call
+`POST /api/sessions/:id/migrate`, and until 2026-09-26 that route settled the old copy with the
+disk flag alone: every chat moved off an open account stayed in its sidebar, and the store's
+"archived" then made a second move from that account answer "No chats to move". The route now
+settles each old copy through `settleMovedSource` (`server/src/move-source-settle.ts`): a closed
+app gets the flag; a running app is archived natively; a native refusal is final and reported;
+only an unavailable native connection takes the legacy path, and there the in-app click runs
+FIRST and the flag and watcher only if it does not settle (a flag written first would confirm
+the click by itself). An account at its usage wall (98% of either bucket on a fresh cached
+reading) is archived over other chats' preview servers, each named in `stoppedBystanders`, the
+same standing order the MCP mover applies. Read `sourceStillShown` (the profiles still listing
+the chat) and `sourceSettle` (each profile's route and `reason`) on the answer; `ok` means
+landed and verified, as before.
+
+A BATCH runs in two passes, as `migrate_batch` does: every chat is landed with
+`defer_settle: true`, then `POST /api/sessions/:id/settle-source {instance_ref, leaving}` retires
+each one's old copies with `leaving` naming exactly the chats that landed. The native archive of
+one chat stops a sibling's preview server only when that sibling is named as leaving, so naming
+chats that had not landed (or never would) could stop a server that belonged to a chat that
+stayed. `/settle-source` refuses unless the target's store holds the chat unarchived.
 
 ## Checklist for a move
 

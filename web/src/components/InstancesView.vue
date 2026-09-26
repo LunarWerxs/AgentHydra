@@ -101,6 +101,7 @@ import {
   getInstanceChats,
   getSession,
   migrateSession,
+  settleMovedChat,
 } from '@/lib/api'
 import { formatBytes, formatUptime, timeAgo } from '@/lib/format'
 import {
@@ -116,7 +117,13 @@ import {
   shortDisplayName,
 } from '@/lib/instance-appearance'
 import type { InstanceFacts } from '@/lib/instance-filter'
-import { type MovePlan, moveTargets, planMove } from '@/lib/move-chats'
+import {
+  type MovePlan,
+  moveTargets,
+  planMove,
+  profileLabel,
+  stillShownLine,
+} from '@/lib/move-chats'
 import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
 import { useTooltipConfig } from '@/lib/tooltip-config'
@@ -890,6 +897,8 @@ const moveShowClosed = ref(false)
 // The same name the table shows: label, else the account's name, else the folder. `label ?? name`
 // skipped the middle step and offered "5claude" for the row everyone knows as apebrain.
 const instLabel = (i: CMInstance) => displayName(i)
+/** A server profile path, named the way the table names its row. */
+const profileName = (profile: string) => profileLabel(profile, instances.value, instLabel)
 const moveTargetsFor = (from: CMInstance) =>
   moveTargets(instances.value, from, moveShowClosed.value, instLabel)
 // A closed destination is NOT started: the server lands each chat straight in that instance's
@@ -931,18 +940,14 @@ async function runMoveAll() {
   const id = `move-all-${job.from.dir}`
   const ref = `desktop:${job.to.dir}`
   const chats = job.plan.chats
-  // Every chat this batch takes off the account. The server's archive of each old row refuses
-  // when a chat that STAYS has a server running in the same folder, and without this list every
-  // sibling in the batch looked like one that stays - a batch of chats in one repo, the usual
-  // shape, left every row on the old account.
-  const leaving = chats.map((c) => c.sessionId)
-  let ok = 0
+  const landed: Array<{ sessionId: string; name: string }> = []
   const failed: string[] = []
-  // Moved, but the old account's app still lists it (the server says which and why).
+  // Moved, but an old account's app still lists it (the server says which account and why).
   const stillShown: string[] = []
   try {
-    // Serial on purpose: each migrate may stop a live run and wait for it, and the desktop app
-    // takes imports one at a time anyway.
+    // PASS ONE, every landing. Serial on purpose: each migrate may stop a live run and wait for it,
+    // and the desktop app takes imports one at a time anyway. The old copies are left in place
+    // (deferSettle) until every landing is known, for the reason pass two gives.
     for (const [i, row] of chats.entries()) {
       toast.loading(t('instances.moveChatsProgress', { done: i + 1, n: chats.length }), { id })
       const name = row.title || t('instances.chatsNoTitle')
@@ -952,18 +957,27 @@ async function runMoveAll() {
         // confirmed by the session list's title for it - the route's other current name -
         // fetched only for that row. A chat neither store can name is refused by the route.
         const confirmTitle = row.title?.trim() || (await getSession(row.sessionId, 'claude')).title
-        const r = await migrateSession(row.sessionId, ref, { confirmTitle, leaving })
-        if (!r.ok) {
-          failed.push(`${name}: ${r.error ?? 'failed'}`)
-          continue
-        }
-        ok++
-        if (r.sourceStillShown?.length) {
-          const why = r.sourceSettle?.find((s) => s.stillShown)?.reason
-          stillShown.push(why ? `${name}: ${why}` : name)
-        }
+        const r = await migrateSession(row.sessionId, ref, { confirmTitle, deferSettle: true })
+        if (r.ok) landed.push({ sessionId: row.sessionId, name })
+        else failed.push(`${name}: ${r.error ?? 'failed'}`)
       } catch (e) {
         failed.push(`${name}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+    // PASS TWO, the old copies, archived through the old account's own app. `leaving` is exactly
+    // the chats that landed: the app's archive of one chat stops a sibling's preview server only
+    // when that sibling is named as leaving too, and naming the whole plan let it stop the server
+    // of a chat whose own move then failed and stayed (review, 2026-09-26). Without the list at
+    // all, a batch of chats in one repo, the usual shape, left every old row on screen.
+    const leaving = landed.map((c) => c.sessionId)
+    for (const [i, c] of landed.entries()) {
+      toast.loading(t('instances.moveChatsSettling', { done: i + 1, n: landed.length }), { id })
+      try {
+        const r = await settleMovedChat(c.sessionId, ref, leaving)
+        const line = r.ok ? stillShownLine(r.sourceSettle, profileName) : (r.error ?? 'failed')
+        if (line) stillShown.push(`${c.name} (${line})`)
+      } catch (e) {
+        stillShown.push(`${c.name} (${e instanceof Error ? e.message : String(e)})`)
       }
     }
   } finally {
@@ -974,18 +988,19 @@ async function runMoveAll() {
   if (failed.length) console.warn('[agenthydra] move all chats: some could not be moved', failed)
   if (stillShown.length)
     console.warn(
-      '[agenthydra] move all chats: moved, but still listed on the old account',
+      '[agenthydra] move all chats: moved, but still listed on an old account',
       stillShown,
     )
+  const ok = landed.length
   const summary = t('instances.moveChatsDone', {
     ok,
     n: chats.length,
     to: instLabel(job.to),
   })
-  // A chat that moved but still sits in the old sidebar is the exact complaint this batch used
-  // to produce silently (owner, 2026-09-26). Say so, with the first reason, rather than a tick.
+  // A chat that moved but still sits in an old sidebar is the exact complaint this batch used to
+  // produce silently (owner, 2026-09-26). Say so, naming the account and the first reason.
   const shownNote = stillShown.length
-    ? ` ${t('instances.moveChatsStillShown', { n: stillShown.length, from: instLabel(job.from) })} ${stillShown[0] ?? ''}`
+    ? ` ${t('instances.moveChatsStillShown', { n: stillShown.length })} ${stillShown[0] ?? ''}`
     : ''
   // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
   // warning when nothing moved at all (sixteen 400s once read as a warning with a zero in it).

@@ -18,6 +18,7 @@ import { toast } from 'vue-sonner'
 import type { SessionSummary } from '@/lib/api'
 import * as api from '@/lib/api'
 import { displayName } from '@/lib/instance-appearance'
+import { profileLabel, stillShownLine } from '@/lib/move-chats'
 
 export interface MigrateTarget {
   ref: string
@@ -37,6 +38,9 @@ export function useSessionMigration(deps: {
   const runningTargets = computed(() => migrateTargets.value.filter((x) => x.isRunning))
   const closedTargets = computed(() => migrateTargets.value.filter((x) => !x.isRunning))
   const migrating = ref(false)
+  /** A server profile path, named the way the migrate menu names its target. */
+  const profileName = (profile: string) =>
+    profileLabel(profile, migrateTargets.value, (x) => x.name)
 
   /** `s` is the session the menu is FOR, so its own instance can be marked; null for a bulk menu,
    *  where the checked sessions may span several instances and none is "current". */
@@ -76,10 +80,10 @@ export function useSessionMigration(deps: {
       const r = await api.migrateSession(s.session_id, target.ref, { confirmTitle: s.title })
       if (!r.ok) toast.error(r.error ?? t('sessions.migrateFailed'))
       else if (r.sourceStillShown?.length)
-        // Landed, but the old account's app still lists it: say so with the server's reason
-        // rather than a success that leaves the chat visibly on two accounts.
+        // Landed, but an old account's app still lists it: say which and why, rather than a
+        // success that leaves the chat visibly on two accounts.
         toast.warning(
-          `${t('sessions.migrateStarted', { name: target.name })} ${t('sessions.migrateStillShown')} ${r.sourceSettle?.find((x) => x.stillShown)?.reason ?? ''}`,
+          `${t('sessions.migrateStarted', { name: target.name })} ${t('sessions.migrateStillShown')} ${stillShownLine(r.sourceSettle, profileName) ?? ''}`,
         )
       else toast.success(t('sessions.migrateStarted', { name: target.name }))
     } catch {
@@ -104,16 +108,14 @@ export function useSessionMigration(deps: {
     bulkConfirm.value = null
     migrating.value = true
     const id = `bulk-migrate-${job.target.ref}`
-    // The whole batch, so the archive of each old row does not refuse over a SIBLING in the same
-    // folder that is leaving too (server/src/move-source-settle.ts).
-    const leaving = job.sessions.map((s) => s.session_id)
-    let ok = 0
+    const landed: Array<{ sessionId: string; title: string }> = []
     const failed: string[] = []
-    // Moved, but an old account's app still lists it (the server says why).
+    // Moved, but an old account's app still lists it (the server says which account and why).
     const stillShown: string[] = []
     try {
-      // One at a time on purpose: each migrate may stop a live process and wait for it, and the
-      // desktop app takes imports serially anyway. Parallel calls would only race its import lock.
+      // PASS ONE, every landing, one at a time on purpose: each migrate may stop a live process and
+      // wait for it, and the desktop app takes imports serially anyway. Parallel calls would only
+      // race its import lock. The old copies wait for pass two (deferSettle).
       for (const [i, s] of job.sessions.entries()) {
         toast.loading(t('sessions.migrateBulkProgress', { done: i + 1, n: job.sessions.length }), {
           id,
@@ -121,17 +123,26 @@ export function useSessionMigration(deps: {
         try {
           const r = await api.migrateSession(s.session_id, job.target.ref, {
             confirmTitle: s.title,
-            leaving,
+            deferSettle: true,
           })
-          if (r.ok) {
-            ok++
-            if (r.sourceStillShown?.length) {
-              const why = r.sourceSettle?.find((x) => x.stillShown)?.reason
-              stillShown.push(why ? `${s.title}: ${why}` : s.title)
-            }
-          } else failed.push(`${s.title}: ${r.error ?? 'failed'}`)
+          if (r.ok) landed.push({ sessionId: s.session_id, title: s.title })
+          else failed.push(`${s.title}: ${r.error ?? 'failed'}`)
         } catch (e) {
           failed.push(`${s.title}: ${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
+      // PASS TWO, the old copies, with `leaving` naming exactly the chats that landed, so the
+      // archive of one never stops a preview server that belongs to a chat that stayed
+      // (server/src/move-source-settle.ts; the Instances batch runs the same two passes).
+      const leaving = landed.map((c) => c.sessionId)
+      for (const [i, c] of landed.entries()) {
+        toast.loading(t('sessions.migrateBulkSettling', { done: i + 1, n: landed.length }), { id })
+        try {
+          const r = await api.settleMovedChat(c.sessionId, job.target.ref, leaving)
+          const line = r.ok ? stillShownLine(r.sourceSettle, profileName) : (r.error ?? 'failed')
+          if (line) stillShown.push(`${c.title} (${line})`)
+        } catch (e) {
+          stillShown.push(`${c.title} (${e instanceof Error ? e.message : String(e)})`)
         }
       }
     } finally {
@@ -139,6 +150,7 @@ export function useSessionMigration(deps: {
     }
     if (failed.length)
       console.warn('[agenthydra] bulk migrate: some chats could not be moved', failed)
+    const ok = landed.length
     const summary = t('sessions.migrateBulkDone', {
       ok,
       n: job.sessions.length,

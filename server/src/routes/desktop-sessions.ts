@@ -17,7 +17,7 @@ import {
   instanceRefForSession,
   invalidateSessionMetaCache,
 } from '../instance-sessions'
-import { settleMovedSource } from '../move-source-settle'
+import { type SettleDeps, settleMovedSource, usageAtWall } from '../move-source-settle'
 import { newChatUltracodeEnabled, withUltracode } from '../new-chat-defaults'
 import { samePathKey } from '../path-key'
 import { invalidEnum, jsonBody, VALID_EFFORTS, VALID_PERMISSION_MODES } from '../route-helpers'
@@ -38,10 +38,12 @@ import {
   liveSessionEntry,
   reassertChatArchive,
   reassertChatTitle,
+  renderedInStore,
   unarchiveChatRecord,
 } from '../session-launch'
 import { getSession } from '../sessions'
 import { type UiArchiveOutcome, uiArchiveChat } from '../ui-archive'
+import { allCachedUsage } from '../usage-cache'
 
 /** Screenshot capture, launching a visible terminal session, and the desktop-chat lifecycle
  *  operations (import, automation stamp, archive, migrate). See index.ts for the app-wide
@@ -768,29 +770,22 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   // move" because the store said archived. settleMovedSource asks the running app first, the way
   // /desktop-archive and the orchestrator's mover already did (its header has the whole order).
   // The watcher still starts, from inside it, on the legacy path where only the flag landed.
-  const leaving = Array.isArray(body.leaving)
-    ? body.leaving.filter((id: unknown): id is string => typeof id === 'string')
-    : []
-  const settled = await settleMovedSource(sessionId, archiveRootsForMove(targetDir), leaving, {
-    carriers: desktopChatCarriers,
-    diskArchived: (profile, id) => {
-      try {
-        const path = findChatMetaPath(profile, id)
-        return path ? JSON.parse(readFileSync(path, 'utf8')).isArchived === true : null
-      } catch {
-        return null
-      }
-    },
-    isRunning: async (profile) =>
-      (await listInstances()).some((i) => i.isRunning && samePathKey(i.dir, profile)),
-    native: (profile, id, opts) => tryNativeArchiveChat(profile, id, opts),
-    flag: (id, profile) => archiveDesktopChat(id, true, [profile]),
-    // Started only here, after the landing is verified: a watcher started before a failed landing
-    // would re-hide the chat the failure had left in place. Its caps bound it; it never delays
-    // this response.
-    watch: (profile, id) => void reassertChatArchive(profile, id).catch(() => {}),
-    ui: uiArchiveWithinBudget,
-  })
+  //
+  // `defer_settle` leaves the old copies for a second pass (POST /settle-source), which is how a
+  // BATCH has to run: the native archive of one chat asks which of its siblings' preview servers
+  // belong to chats that are leaving too, and until every landing is done the only honest answer
+  // is "the ones that already landed" (review, 2026-09-26: naming the whole plan let a sibling's
+  // archive stop the server of a chat whose own move then failed and stayed). The orchestrator's
+  // batch settles after every landing for the same reason (migrate_batch.py _settle_all).
+  const deferred = body.defer_settle === true
+  const settled = deferred
+    ? []
+    : await settleMovedSource(
+        sessionId,
+        archiveRootsForMove(targetDir),
+        leavingOf(body),
+        routeSettleDeps(),
+      )
   // The move rewrote metadata in TWO stores (created in the target, archived in the source), and
   // the scan behind every session listing caches for 15s. Without this the very next read serves
   // the pre-migrate rows: the caller sees the chat still on the old account, and setPreferred
@@ -812,6 +807,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     // itself is done (landed and verified); ok stays true, as in the orchestrator's mover.
     sourceSettle: settled,
     sourceStillShown,
+    ...(deferred ? { settleDeferred: true } : {}),
     carried: Object.keys(carried),
     stoppedLive: !!live,
     ranHeadless: false,
@@ -824,5 +820,80 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     // nothing here can reach into the desktop composer.
     prompt: newChatUltracodeEnabled() ? withUltracode(prompt) : prompt,
     promptDelivery: 'deliver-natively-via-the-app-message-channel (boots the chat; no click)',
+  })
+})
+
+/** CLI ids a move declares as leaving their profile alongside this chat (move-source-settle.ts). */
+function leavingOf(body: Record<string, unknown>): string[] {
+  return Array.isArray(body.leaving)
+    ? body.leaving.filter((id: unknown): id is string => typeof id === 'string')
+    : []
+}
+
+/** settleMovedSource's routes, wired to the real archive paths. One definition for /migrate and
+ *  /settle-source, so a chat's old copy is retired the same way whichever pass does it. */
+function routeSettleDeps(): SettleDeps {
+  return {
+    carriers: desktopChatCarriers,
+    diskArchived: (profile, id) => {
+      try {
+        const path = findChatMetaPath(profile, id)
+        return path ? JSON.parse(readFileSync(path, 'utf8')).isArchived === true : null
+      } catch {
+        return null
+      }
+    },
+    isRunning: async (profile) =>
+      (await listInstances()).some((i) => i.isRunning && samePathKey(i.dir, profile)),
+    native: (profile, id, opts) => tryNativeArchiveChat(profile, id, opts),
+    // The account's cached usage reading, found by its dir however the cache spelled the key.
+    atLimit: (profile) =>
+      usageAtWall(
+        Object.entries(allCachedUsage()).find(
+          ([key]) =>
+            key.startsWith('desktop:') && samePathKey(key.slice('desktop:'.length), profile),
+        )?.[1],
+      ),
+    flag: (id, profile) => archiveDesktopChat(id, true, [profile]),
+    // Only ever reached after a verified landing: a watcher started before a failed landing would
+    // re-hide the chat the failure had left in place. Its caps bound it; it never delays an answer.
+    watch: (profile, id) => void reassertChatArchive(profile, id).catch(() => {}),
+    ui: uiArchiveWithinBudget,
+  }
+}
+
+// The second pass of a batch move (see `defer_settle` on /migrate): retire the old copies of a chat
+// that has ALREADY landed on `instance_ref`, with `leaving` naming every chat of the batch that
+// landed. Refuses unless the target's own store holds the chat unarchived, so it can never put
+// away the only visible copy - the same proof /migrate requires before it settles.
+app.post('/api/sessions/:id/settle-source', async (c) => {
+  const sessionId = c.req.param('id')
+  const body = await jsonBody(c)
+  const ref = typeof body.instance_ref === 'string' ? body.instance_ref.trim() : ''
+  if (!ref.startsWith('desktop:'))
+    return c.json({ ok: false, error: "instance_ref ('desktop:<dir>') is required" }, 400)
+  const targetDir = ref.slice('desktop:'.length)
+  const landed = renderedInStore(targetDir, sessionId)
+  if (!landed || landed.archived)
+    return c.json(
+      {
+        ok: false,
+        error:
+          'not-landed: the target store does not hold this chat unarchived, so its old copies are left as they are',
+      },
+      409,
+    )
+  const settled = await settleMovedSource(
+    sessionId,
+    archiveRootsForMove(targetDir),
+    leavingOf(body),
+    routeSettleDeps(),
+  )
+  invalidateSessionMetaCache()
+  return c.json({
+    ok: true,
+    sourceArchived: settled.filter((s) => s.changed).map((s) => s.profile),
+    sourceSettle: settled,
+    sourceStillShown: settled.filter((s) => s.stillShown).map((s) => s.profile),
   })
 })

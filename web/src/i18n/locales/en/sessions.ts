@@ -165,8 +165,9 @@ export default {
   migrateNoTargets: 'No other instances',
   migrateStarted: 'Migrated to {name} — the chat is in that desktop app now, ready to carry on.',
   migrateFailed: "Couldn't migrate this chat.",
-  // Landed and verified, but the old account's app still lists it; the server's reason follows.
-  migrateStillShown: 'Its old account still lists it:',
+  // Landed and verified, but an old account's app still lists it; that account and the server's
+  // reason follow.
+  migrateStillShown: 'An old account still lists it:',
   // --- readable export ---
   exportMarkdown: 'Save as Markdown',
   exportHtml: 'Save as a web page',
@@ -258,7 +259,8 @@ export default {
   migrateBulkProgress: 'Moving chat {done} of {n}…',
   migrateBulkDone: 'Moved {ok} of {n} chats to {name}.',
   migrateBulkSomeFailed: '{failed} could not be moved; details are in the browser console.',
-  migrateBulkStillShown: '{n} still show on their old account:',
+  migrateBulkSettling: 'Archiving the old copies, {done} of {n}…',
+  migrateBulkStillShown: '{n} still listed on an old account:',
   // The chat list inside the bulk-move dialog: grouped by project, each row opens that chat.
   groupCount: '{n} chat(s)',
   dialogRowHint: 'Grouped by project. Click a chat to open it.',
