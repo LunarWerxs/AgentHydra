@@ -35,8 +35,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
+    timeout-minutes: 60
     name: compile (${{ matrix.target }})
     strategy:
       fail-fast: false
@@ -164,6 +169,7 @@ jobs:
   # is the ONE target that stays build-only-verified: GitHub retired its Intel macOS runners, so
   # there is no honest way to boot it in CI — a documented, deliberate gap, not a silent one.
   smoke:
+    timeout-minutes: 60
     name: smoke (${{ matrix.target }})
     needs: build
     strategy:
@@ -299,6 +305,7 @@ jobs:
             arm64v8/debian:stable-slim ./agenthydra --version
 
   release:
+    timeout-minutes: 60
     name: publish the GitHub release
     if: github.ref_type == 'tag'
     needs: [build, smoke]
