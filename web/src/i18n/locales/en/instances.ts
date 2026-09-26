@@ -343,6 +343,10 @@ export default {
   moveChatsProgress: 'Moving chat {done} of {n}…',
   moveChatsDone: 'Moved {ok} of {n} chats to {to}.',
   moveChatsSomeFailed: '{failed} could not be moved; details are in the browser console.',
+  // Moved and verified on the new account, but the old account's app still lists them: its own
+  // archive refused, or it has no native control. The server's reason, which says what to do,
+  // follows the colon.
+  moveChatsStillShown: '{n} still show on {from}:',
   // The chat list inside the move dialog: grouped by project, each row opens that chat in Sessions.
   moveChatsGroupCount: '{n} chat(s)',
   moveChatsRowHint: 'Grouped by project. Click a chat to open it in Sessions.',
@@ -352,6 +356,8 @@ export default {
   // one has which chats"). It reads the account's own chat store, not the session list, so a chat
   // with no recent transcript activity is still here, see getInstanceChats in web/src/lib/api.ts.
   chats: 'Chats',
+  // The number beside "Chats" in the row menu: the dialog's default list, counted.
+  chatsActiveCount: '{n} active (not archived) chats',
   chatsTitle: 'Chats on {name}',
   chatsLoading: 'Reading this account’s chats…',
   // The counts describe the WHOLE account, deliberately not narrowed by the archived toggle: "3

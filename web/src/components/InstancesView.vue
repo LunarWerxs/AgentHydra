@@ -96,6 +96,7 @@ import type { ChatListRow, CliInstance, CMDesktopInstall, CMInstance } from '@/l
 import {
   CLASSIC_DESKTOP_INSTALLER_URL,
   DESKTOP_DOWNLOAD_PAGE_URL,
+  getChatCounts,
   getDesktopInstall,
   getInstanceChats,
   getSession,
@@ -827,6 +828,38 @@ function openChats(inst: CMInstance) {
   chatsTarget.value = inst
   chatsOpen.value = true
 }
+
+// The number beside "Chats": how many chats on that account are ACTIVE, meaning not archived
+// (owner, 2026-09-26: "a little number that says like zero, so you know there's no chats that
+// are active"). It is the dialog's own default list counted, so the badge and the list it opens
+// agree. Read when a row's menu opens rather than on the table's poll: it is one store scan for
+// the whole fleet (~0.25s on 739 records), and a count nobody is looking at is not worth that
+// every few seconds. A reading younger than CHAT_COUNTS_FRESH_MS is reused, so opening menus
+// row after row costs one scan. Until the first answer the badge is simply absent, never a 0.
+const CHAT_COUNTS_FRESH_MS = 5_000
+const chatCounts = ref<Record<string, { active: number; archived: number }>>({})
+let chatCountsAt = 0
+let chatCountsInFlight: Promise<void> | null = null
+function refreshChatCounts(force = false): Promise<void> {
+  if (chatCountsInFlight) return chatCountsInFlight
+  if (!force && Date.now() - chatCountsAt < CHAT_COUNTS_FRESH_MS) return Promise.resolve()
+  chatCountsInFlight = getChatCounts()
+    .then((got) => {
+      chatCounts.value = got.counts
+      chatCountsAt = Date.now()
+    })
+    .catch(() => {
+      // Unreadable: keep the last reading rather than blanking every badge.
+    })
+    .finally(() => {
+      chatCountsInFlight = null
+    })
+  return chatCountsInFlight
+}
+watch(rowMenuOpen, (dir) => {
+  if (dir) void refreshChatCounts()
+})
+const activeChatsOf = (inst: CMInstance): number | undefined => chatCounts.value[inst.dir]?.active
 /** A chat clicked inside the panel: land on it in Sessions (the tab switch happens in App.vue). */
 function onChatsOpenRow(row: ChatListRow) {
   if (!row.sessionId) return
@@ -898,8 +931,15 @@ async function runMoveAll() {
   const id = `move-all-${job.from.dir}`
   const ref = `desktop:${job.to.dir}`
   const chats = job.plan.chats
+  // Every chat this batch takes off the account. The server's archive of each old row refuses
+  // when a chat that STAYS has a server running in the same folder, and without this list every
+  // sibling in the batch looked like one that stays - a batch of chats in one repo, the usual
+  // shape, left every row on the old account.
+  const leaving = chats.map((c) => c.sessionId)
   let ok = 0
   const failed: string[] = []
+  // Moved, but the old account's app still lists it (the server says which and why).
+  const stillShown: string[] = []
   try {
     // Serial on purpose: each migrate may stop a live run and wait for it, and the desktop app
     // takes imports one at a time anyway.
@@ -912,31 +952,51 @@ async function runMoveAll() {
         // confirmed by the session list's title for it - the route's other current name -
         // fetched only for that row. A chat neither store can name is refused by the route.
         const confirmTitle = row.title?.trim() || (await getSession(row.sessionId, 'claude')).title
-        const r = await migrateSession(row.sessionId, ref, { confirmTitle })
-        if (r.ok) ok++
-        else failed.push(`${name}: ${r.error ?? 'failed'}`)
+        const r = await migrateSession(row.sessionId, ref, { confirmTitle, leaving })
+        if (!r.ok) {
+          failed.push(`${name}: ${r.error ?? 'failed'}`)
+          continue
+        }
+        ok++
+        if (r.sourceStillShown?.length) {
+          const why = r.sourceSettle?.find((s) => s.stillShown)?.reason
+          stillShown.push(why ? `${name}: ${why}` : name)
+        }
       } catch (e) {
         failed.push(`${name}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
   } finally {
     moveAllBusy.value = false
+    // The counts beside "Chats" changed on both accounts.
+    chatCountsAt = 0
   }
   if (failed.length) console.warn('[agenthydra] move all chats: some could not be moved', failed)
+  if (stillShown.length)
+    console.warn(
+      '[agenthydra] move all chats: moved, but still listed on the old account',
+      stillShown,
+    )
   const summary = t('instances.moveChatsDone', {
     ok,
     n: chats.length,
     to: instLabel(job.to),
   })
+  // A chat that moved but still sits in the old sidebar is the exact complaint this batch used
+  // to produce silently (owner, 2026-09-26). Say so, with the first reason, rather than a tick.
+  const shownNote = stillShown.length
+    ? ` ${t('instances.moveChatsStillShown', { n: stillShown.length, from: instLabel(job.from) })} ${stillShown[0] ?? ''}`
+    : ''
   // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
   // warning when nothing moved at all (sixteen 400s once read as a warning with a zero in it).
   if (failed.length)
     (ok === 0 ? toast.error : toast.warning)(
-      `${summary} ${t('instances.moveChatsSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}`,
+      `${summary} ${t('instances.moveChatsSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}${shownNote}`,
       {
         id,
       },
     )
+  else if (stillShown.length) toast.warning(`${summary}${shownNote}`, { id })
   else toast.success(summary, { id })
 }
 
@@ -1749,6 +1809,17 @@ onUnmounted(() => {
                          thought and the answer here decides whether the other is wanted. -->
                     <DropdownMenuItem @click="openChats(inst)">
                       <MessagesSquare /> {{ $t('instances.chats') }}
+                      <!-- Active (not archived) chats on this account; 0 means none. Absent
+                           until the first count arrives rather than a guessed 0. -->
+                      <span
+                        v-if="activeChatsOf(inst) !== undefined"
+                        class="ms-auto min-w-5 rounded-full px-1.5 text-center text-[0.6875rem] font-medium tabular-nums"
+                        :class="activeChatsOf(inst) ? 'bg-primary text-primary-foreground' : 'border border-muted-foreground/50 text-muted-foreground'"
+                        :title="$t('instances.chatsActiveCount', { n: activeChatsOf(inst) ?? 0 })"
+                        :aria-label="$t('instances.chatsActiveCount', { n: activeChatsOf(inst) ?? 0 })"
+                      >
+                        {{ activeChatsOf(inst) }}
+                      </span>
                     </DropdownMenuItem>
                     <!-- Every active chat on this account, moved to one other account. One line
                          per destination: a green dot marks a running app, the same mark the

@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import { chatDossier, listChats, liveLineage } from '../chat-dossier'
+import { chatDossier, countChatsByProfile, listChats, liveLineage } from '../chat-dossier'
 import { CLIPBOARD_DIR } from '../config'
 import { resolveInstance } from '../core/instance-ref'
+import { listInstances } from '../core/instances'
 import { defaultClaudeUserDataDir } from '../core/paths'
 import { awaitExitBounded } from '../core/process.ts'
 import { db, getSetting } from '../db'
@@ -278,12 +279,23 @@ export function chatStoreLabel(handle: string): string {
   return fold(trimmed) === fold(defaultClaudeUserDataDir()) ? 'default' : lastSegment(trimmed)
 }
 
+// How many chats each desktop account holds, active and archived, for the count beside "Chats"
+// in the Instances row menu. One scan of exactly the profiles the Instances table lists, keyed by
+// their dirs (countChatsByProfile). Registered before /api/chats only for reading order; the two
+// paths do not overlap.
+app.get('/api/chats/counts', async (c) => {
+  const dirs = (await listInstances()).map((i) => i.dir)
+  return c.json({ counts: countChatsByProfile(dirs) })
+})
+
 // One desktop instance's chats, compactly — the read that did not exist until 2026-09-06, when
 // answering "what does this account hold" cost five round trips and produced a wrong number.
 // See listChats in chat-dossier.ts for why it lives beside the dossier rather than in sessions.ts.
 app.get('/api/chats', async (c) => {
   const raw = (c.req.query('instance') ?? '').trim()
   let instances: string[] | undefined
+  // The registry knows this instance, so it EXISTS, whatever its store holds.
+  let known = false
   if (raw) {
     // Any spelling move_chat accepts — number, email, account name, ref, or the directory label
     // itself. A label that the registry does not know is passed through rather than rejected:
@@ -298,6 +310,7 @@ app.get('/api/chats', async (c) => {
         400,
       )
     instances = [hit ? chatStoreLabel(hit.handle) : raw]
+    known = !!hit
   }
   const archived = c.req.query('archived')
   const got = listChats({
@@ -314,7 +327,12 @@ app.get('/api/chats', async (c) => {
   // an ambiguous email would read as "that account is empty" - the exact class of silently-wrong
   // answer this whole endpoint exists to stop. Only fires when the scan saw NOTHING under the
   // label, so a real but genuinely empty account still answers 200.
-  if (instances && !got.instances.includes(instances[0] as string))
+  //
+  // ...and only for a name the registry could NOT resolve (2026-09-26). An account that has never
+  // held a chat has no store records, so the scan sees nothing under its label either, and the
+  // "Chats" dialog answered "Couldn't read the chats" for two real, empty accounts while the new
+  // count beside it said 0. A resolved instance is real; its empty list is the true answer.
+  if (instances && !known && !got.instances.includes(instances[0] as string))
     return c.json(
       {
         error: `no desktop instance matched "${raw}". Known chat-store labels: ${got.instances.join(', ')}`,

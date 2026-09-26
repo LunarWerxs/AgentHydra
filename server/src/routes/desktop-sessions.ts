@@ -17,6 +17,7 @@ import {
   instanceRefForSession,
   invalidateSessionMetaCache,
 } from '../instance-sessions'
+import { settleMovedSource } from '../move-source-settle'
 import { newChatUltracodeEnabled, withUltracode } from '../new-chat-defaults'
 import { samePathKey } from '../path-key'
 import { invalidEnum, jsonBody, VALID_EFFORTS, VALID_PERMISSION_MODES } from '../route-helpers'
@@ -753,34 +754,49 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   if (landing === 'hot')
     void reassertChatTitle(targetDir, sessionId, migrateTitle.title).catch(() => {})
 
-  // Old desktop entries: flagged archived NOW, after the landing is proven.
+  // Old desktop entries: retired NOW, after the landing is proven.
   //
   // EVERY OTHER PROFILE - NEVER THE TARGET'S OWN (bug, reproduced live 2026-09-04). This used to
   // call archiveDesktopChat with no roots, which walks the default profile plus every isolated
   // instance and flips the flag in each store that carries the chat, the TARGET included, and
   // nothing downstream put it back. Excluding the target fixes it upstream, where no write is
   // made at all, rather than by racing the running app with a corrective write it re-saves over.
-  const archived0 = await archiveDesktopChat(sessionId, true, archiveRootsForMove(targetDir)).catch(
-    () => null,
-  )
+  //
+  // THROUGH THE APP, NOT JUST THE FLAG (owner report, 2026-09-26). This used to be the flag plus a
+  // ten-minute reassert watcher, and a RUNNING source app ignores the flag: every chat moved off
+  // an open account stayed in its sidebar, and the next move from there answered "No chats to
+  // move" because the store said archived. settleMovedSource asks the running app first, the way
+  // /desktop-archive and the orchestrator's mover already did (its header has the whole order).
+  // The watcher still starts, from inside it, on the legacy path where only the flag landed.
+  const leaving = Array.isArray(body.leaving)
+    ? body.leaving.filter((id: unknown): id is string => typeof id === 'string')
+    : []
+  const settled = await settleMovedSource(sessionId, archiveRootsForMove(targetDir), leaving, {
+    carriers: desktopChatCarriers,
+    diskArchived: (profile, id) => {
+      try {
+        const path = findChatMetaPath(profile, id)
+        return path ? JSON.parse(readFileSync(path, 'utf8')).isArchived === true : null
+      } catch {
+        return null
+      }
+    },
+    isRunning: async (profile) =>
+      (await listInstances()).some((i) => i.isRunning && samePathKey(i.dir, profile)),
+    native: (profile, id, opts) => tryNativeArchiveChat(profile, id, opts),
+    flag: (id, profile) => archiveDesktopChat(id, true, [profile]),
+    // Started only here, after the landing is verified: a watcher started before a failed landing
+    // would re-hide the chat the failure had left in place. Its caps bound it; it never delays
+    // this response.
+    watch: (profile, id) => void reassertChatArchive(profile, id).catch(() => {}),
+    ui: uiArchiveWithinBudget,
+  })
   // The move rewrote metadata in TWO stores (created in the target, archived in the source), and
   // the scan behind every session listing caches for 15s. Without this the very next read serves
   // the pre-migrate rows: the caller sees the chat still on the old account, and setPreferred
   // never gets to pick the live copy over the source's fresh tombstone.
   invalidateSessionMetaCache()
-  // THE DURABLE FIX for the zombie twin (owner ask, 2026-09-01): a RUNNING source app
-  // re-saves isArchived=false within seconds and resurrects the stale row. For each source
-  // profile whose app was running, fire a bounded background watcher that keeps the flag true
-  // until the app's next boot makes it stick. Fire-and-forget: it must never delay the
-  // migrate's own response, and its own caps bound it. Started only here, after the landing is
-  // verified: a watcher started before a failed landing would re-hide the chat the failure had
-  // left in place. The TARGET dir is excluded so the fresh import is never touched — belt and
-  // braces now that the archive above cannot reach it either.
-  for (const hit of archived0?.hits ?? []) {
-    if (!hit.changed || !hit.wasRunning) continue
-    if (samePathKey(hit.profile, targetDir)) continue
-    void reassertChatArchive(hit.profile, sessionId).catch(() => {})
-  }
+  const sourceStillShown = settled.filter((s) => s.stillShown).map((s) => s.profile)
   return c.json({
     ok: true,
     surface: 'desktop',
@@ -790,7 +806,12 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     landedPath,
     targetUnarchived,
     ...(staleLoginSetAside.length ? { staleLoginSetAside } : {}),
-    sourceArchived: (archived0?.hits ?? []).filter((h) => h.changed).map((h) => h.profile),
+    sourceArchived: settled.filter((s) => s.changed).map((s) => s.profile),
+    // Per old account: how its row was retired, or why it was not. A profile in sourceStillShown
+    // still lists the chat, and its `reason` says what refused and what to do about it. The move
+    // itself is done (landed and verified); ok stays true, as in the orchestrator's mover.
+    sourceSettle: settled,
+    sourceStillShown,
     carried: Object.keys(carried),
     stoppedLive: !!live,
     ranHeadless: false,

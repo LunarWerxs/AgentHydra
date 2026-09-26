@@ -74,8 +74,14 @@ export function useSessionMigration(deps: {
     try {
       // The row's title IS the current title (same listing the server reads), restated as required.
       const r = await api.migrateSession(s.session_id, target.ref, { confirmTitle: s.title })
-      if (r.ok) toast.success(t('sessions.migrateStarted', { name: target.name }))
-      else toast.error(r.error ?? t('sessions.migrateFailed'))
+      if (!r.ok) toast.error(r.error ?? t('sessions.migrateFailed'))
+      else if (r.sourceStillShown?.length)
+        // Landed, but the old account's app still lists it: say so with the server's reason
+        // rather than a success that leaves the chat visibly on two accounts.
+        toast.warning(
+          `${t('sessions.migrateStarted', { name: target.name })} ${t('sessions.migrateStillShown')} ${r.sourceSettle?.find((x) => x.stillShown)?.reason ?? ''}`,
+        )
+      else toast.success(t('sessions.migrateStarted', { name: target.name }))
     } catch {
       toast.error(t('sessions.migrateFailed'))
     } finally {
@@ -98,8 +104,13 @@ export function useSessionMigration(deps: {
     bulkConfirm.value = null
     migrating.value = true
     const id = `bulk-migrate-${job.target.ref}`
+    // The whole batch, so the archive of each old row does not refuse over a SIBLING in the same
+    // folder that is leaving too (server/src/move-source-settle.ts).
+    const leaving = job.sessions.map((s) => s.session_id)
     let ok = 0
     const failed: string[] = []
+    // Moved, but an old account's app still lists it (the server says why).
+    const stillShown: string[] = []
     try {
       // One at a time on purpose: each migrate may stop a live process and wait for it, and the
       // desktop app takes imports serially anyway. Parallel calls would only race its import lock.
@@ -110,9 +121,15 @@ export function useSessionMigration(deps: {
         try {
           const r = await api.migrateSession(s.session_id, job.target.ref, {
             confirmTitle: s.title,
+            leaving,
           })
-          if (r.ok) ok++
-          else failed.push(`${s.title}: ${r.error ?? 'failed'}`)
+          if (r.ok) {
+            ok++
+            if (r.sourceStillShown?.length) {
+              const why = r.sourceSettle?.find((x) => x.stillShown)?.reason
+              stillShown.push(why ? `${s.title}: ${why}` : s.title)
+            }
+          } else failed.push(`${s.title}: ${r.error ?? 'failed'}`)
         } catch (e) {
           failed.push(`${s.title}: ${e instanceof Error ? e.message : String(e)}`)
         }
@@ -127,15 +144,25 @@ export function useSessionMigration(deps: {
       n: job.sessions.length,
       name: job.target.name,
     })
+    // Moved but still listed on an old account: a warning, never a plain tick.
+    if (stillShown.length)
+      console.warn(
+        '[agenthydra] bulk migrate: moved, but still listed on the old account',
+        stillShown,
+      )
+    const shownNote = stillShown.length
+      ? ` ${t('sessions.migrateBulkStillShown', { n: stillShown.length })} ${stillShown[0] ?? ''}`
+      : ''
     // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
     // warning when nothing moved at all (sixteen 400s once read as a warning with a zero in it).
     if (failed.length)
       (ok === 0 ? toast.error : toast.warning)(
-        `${summary} ${t('sessions.migrateBulkSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}`,
+        `${summary} ${t('sessions.migrateBulkSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}${shownNote}`,
         {
           id,
         },
       )
+    else if (stillShown.length) toast.warning(`${summary}${shownNote}`, { id })
     else toast.success(summary, { id })
     deps.clearChecked()
   }

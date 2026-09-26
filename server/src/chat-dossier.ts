@@ -290,3 +290,34 @@ export function listChats(
 
   return { rows, total: matched.length, counts, instances }
 }
+
+/** One desktop profile's chats, split the way the Instances row menu shows them. */
+export interface ProfileChatCount {
+  /** Not archived: the chats the "Chats" dialog lists by default. */
+  active: number
+  archived: number
+}
+
+/**
+ * Chat counts per desktop profile DIR, for the number beside "Chats" in the Instances row menu
+ * (owner, 2026-09-26: "a little number that says like zero, so you know there's no chats that
+ * are active", active meaning not archived). Keyed by the dir the Instances table already holds,
+ * so the web never has to rebuild the store-label rule, and every dir asked about answers, an
+ * empty store included: an account with no chats is a real 0, not a missing key. Same store read
+ * and the same `isArchived` test as listChats' counts, so the badge and the dialog it opens agree.
+ */
+export function countChatsByProfile(
+  dirs: string[],
+  collect: typeof collectChats = collectChats,
+): Record<string, ProfileChatCount> {
+  const out: Record<string, ProfileChatCount> = {}
+  for (const dir of dirs) out[dir] = { active: 0, archived: 0 }
+  // The dir doubles as the scan label, so each record comes back tagged with the key it counts under.
+  for (const c of collect(Object.keys(out).map((dir) => ({ dir, label: dir })))) {
+    const row = out[c.instance]
+    if (!row) continue
+    if (c.isArchived) row.archived++
+    else row.active++
+  }
+  return out
+}
