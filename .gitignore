@@ -58,3 +58,4 @@ docs/HANDOFF_MICHAEL.md
 # docs/HANDOFF_MICHAEL.md and /docs/todo/* above. Findings get upstreamed as a fix plus its
 # comment, not as a file of field notes about one machine's logs.
 /FINDINGS-*.md
+*.tsbuildinfo

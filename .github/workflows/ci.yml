@@ -21,6 +21,7 @@ permissions:
 
 jobs:
   ci:
+    timeout-minutes: 60
     name: lint · typecheck · build · test (${{ matrix.os }})
     strategy:
       fail-fast: false
