@@ -401,9 +401,18 @@ function nameCellText(inst: CMInstance): string {
 function nameTooltip(inst: CMInstance): { label: string; description?: string; detail?: string } {
   const full = displayName(inst)
   const focus = inst.isRunning ? t('instances.focusHint') : undefined
-  return nameCellText(inst) === full
+  return nameCellText(inst) === full && clippedName.value !== inst.dir
     ? { label: inst.dir, description: focus }
     : { label: full, description: inst.dir, detail: focus }
+}
+
+// The name column also gives way when the window is narrow, so the CSS can elide a name the
+// character cap left whole. Measured on hover, the one moment the tooltip is about to be read,
+// so a name cut either way leads its hover with the full text.
+const clippedName = ref<string | null>(null)
+function noteNameClip(e: PointerEvent, inst: CMInstance): void {
+  const el = e.currentTarget as HTMLElement
+  clippedName.value = el.scrollWidth > el.clientWidth ? inst.dir : null
 }
 
 // The account cell identifies the LOGIN, so it shows the email handle and nothing else — see
@@ -1265,7 +1274,9 @@ onUnmounted(() => {
            against, so the header would silently stop sticking. ExpandArea only clips WHILE the
            transition runs, which is the one moment nothing is being scrolled anyway. -->
       <ExpandArea :open="showDesktopInstances && desktopOpen">
-      <Table>
+      <!-- px-1.5 rather than the kit's px-2: ten columns in the 1000px frame, and the 36px this
+           gives back is what lets every capped name fit the Name column whole. -->
+      <Table class="[&_td]:px-1.5 [&_th]:px-1.5">
         <TableHeader class="sticky top-0 z-10 bg-card">
           <TableRow>
             <TableHead
@@ -1282,7 +1293,11 @@ onUnmounted(() => {
                  do these names even come from?" — one row's Name can be a label you typed, the
                  next row's the account it is signed into, the next its folder, and nothing said
                  which. The rule is now written down where the question gets asked. -->
-            <TableHead class="w-44 cursor-pointer select-none" @click="toggleSort('name')">
+            <!-- Name is the one column that gives way. Ten nowrap columns needed 1008px inside a
+                 988px frame, so the table scrolled sideways (owner, 2026-09-26); now this column
+                 takes whatever the others leave (w-full, and max-w-0 on its cells so their content
+                 cannot force the table wider), never below min-w-36, and the name elides. -->
+            <TableHead class="w-full min-w-36 cursor-pointer select-none" @click="toggleSort('name')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colName') }}
                 <InfoHint :text="$t('instances.colNameHint')" @click.stop />
@@ -1477,7 +1492,7 @@ onUnmounted(() => {
                 />
               </span>
             </TableCell>
-            <TableCell class="font-medium">
+            <TableCell class="max-w-0 font-medium">
               <!-- The folder used to sit under the name as a permanent mono sub-line, which made
                    every row two lines tall to show a path nobody reads at rest. It moved into the
                    tooltip, where it is one hover away and costs no height. The tooltip is on EVERY
@@ -1485,22 +1500,29 @@ onUnmounted(() => {
                    focus hint rides along as the description when clicking would actually focus.
                    A name too long for the column takes the first line instead, and pushes both of
                    those down one — see nameTooltip. -->
-              <div class="flex items-center gap-1.5">
+              <div class="flex min-w-0 items-center gap-1.5">
                 <!-- The permanent number sits BEFORE the name because the name is the untrustworthy
                      half: a profile signed into a different account than the folder it was named
                      after keeps showing the old name, and the number never drifts. -->
                 <InstanceNumber :num="inst.num" />
+                <!-- min-w-0 + truncate: when the column is squeezed, the name elides and the number
+                     and marker icons around it keep their size. -->
                 <IconTooltip v-bind="nameTooltip(inst)">
                   <button
                     v-if="inst.isRunning"
                     type="button"
-                    class="cursor-pointer text-start hover:underline"
+                    class="min-w-0 cursor-pointer truncate text-start hover:underline"
                     :disabled="isBusy(inst)"
+                    @pointerenter="noteNameClip($event, inst)"
                     @click="onFocus(inst)"
                   >
                     {{ nameCellText(inst) }}
                   </button>
-                  <span v-else class="cursor-default">{{ nameCellText(inst) }}</span>
+                  <span
+                    v-else
+                    class="min-w-0 cursor-default truncate"
+                    @pointerenter="noteNameClip($event, inst)"
+                  >{{ nameCellText(inst) }}</span>
                 </IconTooltip>
                 <Badge v-if="inst.isExternal" variant="outline">{{ $t('instances.external') }}</Badge>
                 <!-- The name you typed no longer matches the account this profile is signed into.

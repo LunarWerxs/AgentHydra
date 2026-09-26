@@ -21,21 +21,67 @@
 // Deliberately NOT pushed up into the kit: that would rewrite a shared component vendored into
 // five sibling apps for a problem only this app currently has. If a sibling grows a sticky header
 // inside a collapsible, that is the moment to promote this and delete it from here.
+//
+// THE TABLE'S OWN BOX BROKE STICKY TOO
+//
+// The kit's Table wraps every <table> in an `overflow-x: auto` div, and a horizontal scroller is a
+// scroll container in both axes, so the header stuck to THAT div (which never scrolls vertically)
+// and rode off the top with the rows (measured 2026-09-26: thead top 294 -> -6 after a 300px
+// scroll). So the box is left `overflow: visible` while its table fits, and becomes a scroller only
+// when the table is genuinely wider than the view: the header sticks in the normal case, and a
+// too-narrow window still scrolls the table sideways inside its own box, never the whole page.
+import { onBeforeUnmount, ref, watch } from 'vue'
+
 defineProps<{ open: boolean }>()
+
+const clip = ref<HTMLElement | null>(null)
+const fits = ref(true)
+let observer: ResizeObserver | null = null
+
+// The clip is observed as well as the tables: a window resize changes its width, and a table
+// that renders later changes its height, which is when it gets picked up here.
+function measure(): void {
+  const el = clip.value
+  if (!el || !observer) return
+  const tables = [...el.querySelectorAll<HTMLElement>('[data-slot="table"]')]
+  for (const t of tables) observer.observe(t)
+  fits.value = tables.every((t) => t.offsetWidth <= el.clientWidth)
+}
+
+watch(clip, (el) => {
+  observer?.disconnect()
+  observer = null
+  if (!el) return
+  observer = new ResizeObserver(measure)
+  observer.observe(el)
+})
+onBeforeUnmount(() => observer?.disconnect())
 </script>
 
 <template>
   <Transition name="expand-area">
     <div v-if="open" class="expand-area-grid">
-      <div class="expand-area-clip min-h-0"><slot /></div>
+      <div ref="clip" class="expand-area-clip min-h-0" :class="{ 'expand-area-fits': fits }">
+        <slot />
+      </div>
     </div>
   </Transition>
 </template>
 
 <style scoped>
+/* minmax(0, 1fr), not the implicit `auto` column: a grid item's minimum width defaults to its
+   content, so a table wider than the view stretched this wrapper past its parent and the WHOLE
+   page scrolled sideways, cutting off the icon column on the left (owner, 2026-09-26). Pinned to
+   the parent's width, anything too wide scrolls inside its own box instead. */
 .expand-area-grid {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 1fr;
+}
+
+/* See "THE TABLE'S OWN BOX BROKE STICKY TOO" above. */
+.expand-area-fits :deep([data-slot='table-container']) {
+  overflow-x: visible;
 }
 
 /* Only while the transition runs — see the header comment. */
