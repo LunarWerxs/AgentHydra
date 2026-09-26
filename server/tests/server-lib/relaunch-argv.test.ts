@@ -140,3 +140,19 @@ test("custom flag names are honoured", () => {
   });
   expect(out).toEqual([EXE, "--daemon-port", "4000", "--from-update"]);
 });
+
+test("safe mode: carried across an update, entered and left on request, never accumulated", () => {
+  // Without this the tray's "Restart Normally" could not leave safe mode through a relaunch, and
+  // an update relaunch would silently drop an operator out of it.
+  const opts = { execPath: BUN, isCompiled: false, boundPort: 7172, command: "start" };
+  const quiet = buildRelaunchArgv(sourceArgv("start"), { ...opts, safeMode: true });
+  expect(quiet.filter((a) => a === "--safe-mode")).toHaveLength(1);
+  expect(dispatch(quiet, false, { hasVerb: true })).toEqual({ verb: "start", port: 7172, relaunch: true });
+
+  const carried = buildRelaunchArgv(quiet, opts);
+  expect(carried).toEqual(quiet);
+
+  const normal = buildRelaunchArgv(quiet, { ...opts, safeMode: false });
+  expect(normal).not.toContain("--safe-mode");
+  expect(buildRelaunchArgv(sourceArgv("start"), opts)).not.toContain("--safe-mode");
+});

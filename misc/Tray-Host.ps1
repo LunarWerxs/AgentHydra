@@ -230,6 +230,18 @@ function Start-TrayHost($Config) {
   # Full-shutdown sentinel (web-UI "Shut Down" / `<app> stop`). $null ⇒ no sentinel.
   $script:shutdownRequestFile = $Config.SentinelFile
 
+  # Crash sentinel + safe mode (server-lib crash-sentinel.mjs). The daemon writes run_<launch> into
+  # CrashSentinelDir and deletes it on a graceful exit, so a leftover whose owner is dead means the
+  # last run ended uncleanly. After an unclean exit the tray offers "Restart in Safe Mode": the
+  # daemon is relaunched with $safeModeEnvVar=1 and skips its auto-start work, so a crash inside
+  # that work stops replaying on every revive. An env var, not a flag, because StartCommand is an
+  # opaque per-app string a flag cannot be spliced into safely. Setting CrashSentinelDir is the
+  # app's statement that its daemon honours $safeModeEnvVar: with no dir the tray never offers safe
+  # mode, since the item would change nothing and the crash would simply repeat.
+  $crashSentinelDir = Get-TrayConfigValue $Config 'CrashSentinelDir' $null
+  $safeModeEnvVar = 'LUNARWERX_SAFE_MODE'
+  $script:safeMode = $false
+
   # $startedByUs: did THIS tray launch the daemon? Only an owned daemon is force-stopped at Quit
   # and revived by the watchdog. For the force-kill apps that always own on the winner path, it's
   # implicitly true; the token/attach apps track it explicitly (an attached instance is left alone).
@@ -399,6 +411,35 @@ function Start-TrayHost($Config) {
         }
       }
     }
+    # Did an earlier run end uncleanly? True for any run file whose owner is gone, unreadable (the
+    # crash landed mid-write), or written before the last boot (a live owner pid is then recycled).
+    # Empty $dir: never.
+    function Test-UncleanRunLeft($dir) {
+      if (-not $dir) { return $false }
+      try {
+        foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter 'run_*' -File -ErrorAction Stop)) {
+          $run = $null
+          try { $run = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json } catch {}
+          $ownerPid = 0
+          try { $ownerPid = [int]$run.pid } catch {}
+          if ($ownerPid -le 0 -or -not (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue)) { return $true }
+          # Alive: only the rare path pays for the boot-time query. 5 min of slack, as in the .mjs.
+          if ($run.bootedAt) {
+            try {
+              $bootMs = ([DateTimeOffset](Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime).ToUnixTimeMilliseconds()
+              if ([math]::Abs([double]$run.bootedAt - $bootMs) -gt 300000) { return $true }
+            } catch {}
+          }
+        }
+      } catch {}
+      return $false
+    }
+    # Delete the daemon's run_* crash-sentinel files after WE stopped it on purpose, so the next
+    # launch does not report a deliberate force-kill as a crash. Empty $dir: nothing to do.
+    function Clear-RunSentinels($dir) {
+      if (-not $dir) { return }
+      try { Get-ChildItem -LiteralPath $dir -Filter 'run_*' -File -ErrorAction Stop | Remove-Item -Force -ErrorAction SilentlyContinue } catch {}
+    }
     # Launch the daemon via cmd.exe /c (so bun.cmd/bun.ps1's PATHEXT shim resolves and taskkill
     # /T can later reap the whole cmd->bun tree). $startCommand is the app's exact payload with
     # any {PORT} token already substituted. $portEnvVar (if non-empty) is set to the port;
@@ -443,6 +484,8 @@ function Start-TrayHost($Config) {
     }
   }
   . $ServerControl   # make the functions available on the UI thread
+  # Read BEFORE the cold start below: the daemon we are about to launch reports and deletes them.
+  $script:uncleanExitSeen = Test-UncleanRunLeft $crashSentinelDir
 
   # Effective start command / env with {PORT} and {TOKEN} tokens substituted, computed once and
   # reused by cold start, worker, and watchdog (so all launch paths are byte-identical).
@@ -459,10 +502,19 @@ function Start-TrayHost($Config) {
   # honours a shutdown POST bearing the matching token).
   if ($useToken) { $startEnv[$tokenEnvVar] = $script:shutdownToken }
 
+  # The env every launch path uses: StartEnv plus the safe-mode switch, pinned to '0' when off so
+  # a value inherited from the tray's own environment cannot keep the daemon quiet by accident.
+  function Get-LaunchEnv {
+    $launchEnv = @{}
+    foreach ($k in $startEnv.Keys) { $launchEnv[$k] = $startEnv[$k] }
+    $launchEnv[$safeModeEnvVar] = if ($script:safeMode) { '1' } else { '0' }
+    return $launchEnv
+  }
+
   # Small UI-thread wrappers that bind the app-specific parameters so the rest of the host reads
   # cleanly (the worker binds them itself from the passed-in config args).
   function Get-LiveUrl { return (Get-RunningUrl $infoFile $port $serviceName (Get-TrayConfigValue $Config 'UrlHost' '127.0.0.1')) }
-  function Start-DaemonHere($proc) { return (Start-Daemon $root $port $startCommand $portEnvVar $startEnv) }
+  function Start-DaemonHere($proc) { return (Start-Daemon $root $port $startCommand $portEnvVar (Get-LaunchEnv)) }
   function Stop-DaemonHere([bool]$forceKill, [bool]$skipGraceful = $false) { Stop-Daemon $infoFile $port $serviceName (Get-TrayConfigValue $Config 'UrlHost' '127.0.0.1') $script:shutdownToken $headerPrefix $forceKill $skipGraceful }
 
   # --- Portable-window open path (UI-thread only) --------------------------------------
@@ -748,7 +800,7 @@ function Start-TrayHost($Config) {
   # (order-dependent, must match the AddArgument sequence in Start-Job-Async exactly).
   # =====================================================================================
   $worker = {
-    param($appRoot, $appScriptDir, $infoFile, $appPort, $service, $urlHost, $startCommand, $portEnvVar, $extraEnvJson, $token, $headerPrefix, $doRebuild, $buildCommand, $rebuildLogName, $helpersText, $shared, $isDevTree, $restartRetries, $usePortFreeWait, $workerWaitSec)
+    param($appRoot, $appScriptDir, $infoFile, $appPort, $service, $urlHost, $startCommand, $portEnvVar, $extraEnvJson, $token, $headerPrefix, $doRebuild, $buildCommand, $rebuildLogName, $helpersText, $shared, $isDevTree, $restartRetries, $usePortFreeWait, $workerWaitSec, $crashSentinelDir)
     $ErrorActionPreference = 'SilentlyContinue'
     . ([scriptblock]::Create($helpersText))
     # Re-hydrate the extra-env hashtable from JSON (a Synchronized hashtable doesn't marshal
@@ -792,7 +844,11 @@ function Start-TrayHost($Config) {
     }
     if ($shared.cancel) { return $result }
 
+    # A daemon already dead with its run file left behind crashed on its own: keep that file so the
+    # next launch reports it. Only a stop THIS restart causes is cleared as deliberate.
+    $crashedBefore = Test-UncleanRunLeft $crashSentinelDir
     Stop-Daemon $infoFile $appPort $service $urlHost $token $headerPrefix $true
+    if (-not $crashedBefore) { Clear-RunSentinels $crashSentinelDir }
     if ($usePortFreeWait) { Wait-PortFree $appPort 6 | Out-Null }
     Start-Sleep -Milliseconds 300
     $sp = Start-Daemon $appRoot $appPort $startCommand $portEnvVar $extraEnv
@@ -806,8 +862,10 @@ function Start-TrayHost($Config) {
     $attempt = 0
     while (-not $result.Ready -and -not $shared.cancel -and $attempt -lt $restartRetries) {
       $attempt++
+      $crashedBefore = Test-UncleanRunLeft $crashSentinelDir
       if ($shared.serverPid -gt 0) { try { & taskkill /PID $shared.serverPid /T /F 2>$null | Out-Null } catch {} }
       Stop-Daemon $infoFile $appPort $service $urlHost $token $headerPrefix $true
+      if (-not $crashedBefore) { Clear-RunSentinels $crashSentinelDir }
       if ($usePortFreeWait) { Wait-PortFree $appPort 6 | Out-Null }
       Start-Sleep -Milliseconds 400
       $sp = Start-Daemon $appRoot $appPort $startCommand $portEnvVar $extraEnv
@@ -852,6 +910,10 @@ function Start-TrayHost($Config) {
   # '&' as a mnemonic-underline escape, so '&&' renders one visible '&'. Only shown in a dev tree.
   $rebuildItem = New-Object System.Windows.Forms.ToolStripMenuItem("Rebuild && Restart")
   $restartItem = New-Object System.Windows.Forms.ToolStripMenuItem("Restart")
+  # Offered only after an unclean exit (see CrashSentinelDir above); while in safe mode, Restart
+  # reads "Restart Normally" and is the way back out.
+  $safeModeItem = New-Object System.Windows.Forms.ToolStripMenuItem("Restart in Safe Mode")
+  $safeModeItem.Available = $script:uncleanExitSeen
   # Optional app action (see ActionPath above). Created only when configured, so the object can't
   # be referenced by a handler that shouldn't exist.
   $actionItem = if ($actionPath) { New-Object System.Windows.Forms.ToolStripMenuItem($actionLabel) } else { $null }
@@ -886,6 +948,7 @@ function Start-TrayHost($Config) {
     }
     $rebuildItem.Enabled = $true
     $restartItem.Enabled = $true
+    $safeModeItem.Enabled = $true
     $script:busy = $false
   })
 
@@ -903,12 +966,13 @@ function Start-TrayHost($Config) {
     $script:restartTimes.Clear()
     $rebuildItem.Enabled = $false
     $restartItem.Enabled = $false
+    $safeModeItem.Enabled = $false
 
     try {
       $script:shared = [hashtable]::Synchronized(@{ buildPid = 0; serverPid = 0; cancel = $false })
       $buildCommand = if ($doRebuild) { Resolve-RebuildCommand } else { $null }
       $urlHost = Get-TrayConfigValue $Config 'UrlHost' '127.0.0.1'
-      $extraEnvJson = $startEnv | ConvertTo-Json -Compress
+      $extraEnvJson = (Get-LaunchEnv) | ConvertTo-Json -Compress
       $script:ps = [System.Management.Automation.PowerShell]::Create()
       [void]$script:ps.AddScript($worker.ToString())
       [void]$script:ps.AddArgument($root)              # 1  appRoot
@@ -931,6 +995,7 @@ function Start-TrayHost($Config) {
       [void]$script:ps.AddArgument($restartRetries)    # 18 restartRetries
       [void]$script:ps.AddArgument($usePortFreeWait)   # 19 usePortFreeWait
       [void]$script:ps.AddArgument($workerWaitSec)     # 20 workerWaitSec
+      [void]$script:ps.AddArgument($crashSentinelDir)  # 21 crashSentinelDir
       $script:psAsync = $script:ps.BeginInvoke()
       $pollTimer.Start()
     } catch {
@@ -939,6 +1004,7 @@ function Start-TrayHost($Config) {
       $script:ps = $null; $script:psAsync = $null
       $rebuildItem.Enabled = $true
       $restartItem.Enabled = $true
+      $safeModeItem.Enabled = $true
       $script:busy = $false
       $tray.ShowBalloonTip(3500, $displayName, "Couldn't start the background worker. Try again.", [System.Windows.Forms.ToolTipIcon]::Error)
     }
@@ -1052,8 +1118,10 @@ function Start-TrayHost($Config) {
     # Quit into a ~30s hang, the exact case the fast fallback exists for).
     if (-not $useToken) {
       Stop-DaemonHere $true
+      Clear-RunSentinels $crashSentinelDir
     } elseif ($script:startedByUs) {
       Stop-DaemonHere $true $true
+      Clear-RunSentinels $crashSentinelDir
     }
     $tray.Visible = $false
     $tray.Dispose()
@@ -1063,7 +1131,32 @@ function Start-TrayHost($Config) {
 
   $openItem.Add_Click({ Open-AppUi $script:url })
   $rebuildItem.Add_Click({ Start-Job-Async $true })
-  $restartItem.Add_Click({ Start-Job-Async $false })
+  # Flip the mode, then restart through the normal worker (which launches with Get-LaunchEnv).
+  # The mode only changes when a restart will actually run, so a busy click cannot desync it.
+  function Set-SafeMode([bool]$on) {
+    $script:safeMode = $on
+    $restartItem.Text = if ($on) { 'Restart Normally' } else { 'Restart' }
+    $safeModeItem.Available = (-not $on) -and $script:uncleanExitSeen
+    try { $tray.Text = if ($on) { "$displayName (Safe Mode)" } else { $displayName } } catch {}
+  }
+  function Restart-InMode([bool]$safe) {
+    if ($script:busy) { return }
+    if ($script:safeMode -ne $safe) {
+      Set-SafeMode $safe
+      $modeNote = if ($safe) { 'restarting in SAFE MODE (auto-start work skipped)' } else { 'leaving safe mode - restarting normally' }
+      Write-TrayLog 'INFO' $modeNote
+    }
+    Start-Job-Async $false
+  }
+  # An unclean exit the tray did not cause: from here on, offer the quiet way back in. Only for an
+  # app that names CrashSentinelDir (see above): anything else would get an item that does nothing.
+  function Show-SafeModeOffer {
+    if (-not $crashSentinelDir) { return }
+    $script:uncleanExitSeen = $true
+    if (-not $script:safeMode) { $safeModeItem.Available = $true }
+  }
+  $restartItem.Add_Click({ Restart-InMode $false })
+  $safeModeItem.Add_Click({ Restart-InMode $true })
   if ($actionItem) { $actionItem.Add_Click({ Invoke-AppAction }) }
   $quitItem.Add_Click({ Invoke-QuitApp })
 
@@ -1072,6 +1165,7 @@ function Start-TrayHost($Config) {
   # disabled one). Gated here at menu-ADD time; re-checked in Start-Job-Async and the worker.
   if ($isDevTree -and $rebuildSpec) { $menu.Items.Add($rebuildItem) | Out-Null }
   $menu.Items.Add($restartItem) | Out-Null
+  $menu.Items.Add($safeModeItem) | Out-Null
   # App action sits in its own group between the daemon-lifecycle items and Quit: it acts on what
   # the daemon is RUNNING, not on the daemon, and next to Restart/Quit without a divider it reads
   # as another way to stop the app itself.
@@ -1133,6 +1227,7 @@ function Start-TrayHost($Config) {
     # double-spawned, and honour a crash-loop pause.
     if ((Get-Date) -lt $script:reviveGraceUntil) { return }
     if ($script:autoRestartPaused) { return }
+    Show-SafeModeOffer
 
     # Crash-loop guard: prune attempts outside the window, then bail if we've hit the cap.
     $cutoff = (Get-Date).AddSeconds(-$CrashLoopWindowSec)
@@ -1142,7 +1237,8 @@ function Start-TrayHost($Config) {
     if ($script:restartTimes.Count -ge $CrashLoopMax) {
       $script:autoRestartPaused = $true
       Write-TrayLog 'ERROR' "auto-restart PAUSED - $($script:restartTimes.Count) restarts within ${CrashLoopWindowSec}s (crash-loop guard)"
-      $tray.ShowBalloonTip(6000, $displayName, "$displayName keeps crashing - auto-restart paused. See $logPath, then use Restart to try again.", [System.Windows.Forms.ToolTipIcon]::Error)
+      $retryHint = if ($crashSentinelDir) { 'Restart or Restart in Safe Mode' } else { 'Restart to try again' }
+      $tray.ShowBalloonTip(6000, $displayName, "$displayName keeps crashing - auto-restart paused. See $logPath, then use $retryHint.", [System.Windows.Forms.ToolTipIcon]::Error)
       return
     }
 
@@ -1189,7 +1285,12 @@ function Start-TrayHost($Config) {
   $healthTimer.Start()
 
   # --- Startup banner + open the UI ----------------------------------------------------
-  $tray.ShowBalloonTip(2500, $displayName, "Running in the tray - right-click for options.", [System.Windows.Forms.ToolTipIcon]::Info)
+  if ($script:uncleanExitSeen) {
+    Write-TrayLog 'WARN' 'previous run did not shut down cleanly - Restart in Safe Mode offered'
+    $tray.ShowBalloonTip(5000, $displayName, "$displayName did not shut down cleanly last time. If it misbehaves, right-click > Restart in Safe Mode.", [System.Windows.Forms.ToolTipIcon]::Warning)
+  } else {
+    $tray.ShowBalloonTip(2500, $displayName, "Running in the tray - right-click for options.", [System.Windows.Forms.ToolTipIcon]::Info)
+  }
   # Wait for a freshly-spawned daemon to bind before opening the browser, so the first paint isn't
   # ERR_CONNECTION_REFUSED (Bun takes ~1s to boot), resolving $script:url to wherever it ACTUALLY
   # bound (it may have hopped past the preferred port). Only meaningful on the cold-start path;

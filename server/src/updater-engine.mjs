@@ -10,6 +10,7 @@
  *   updateRepoEnvVar  env var that overrides the update remote (e.g. REPOYETI_UPDATE_REPO)
  *   installCmd        install step, e.g. ["bun", "install"]
  *   buildCmd          build step, e.g. ["bun", "run", "--cwd", "web", "build"]
+ *   cooldownDays      optional; when > 0, only commits at least this many days old are adopted
  *
  * runtime-agnostic (Bun + Node): node:child_process spawn runs in both. Part of the
  * shared kit, keep it app-agnostic.
@@ -22,7 +23,13 @@ const CHECK_TIMEOUT_MS = 30_000;
 const APPLY_TIMEOUT_MS = 120_000;
 const BUILD_TIMEOUT_MS = 240_000;
 
-export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar, installCmd, buildCmd }) {
+const DAY_SECONDS = 86_400;
+
+export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar, installCmd, buildCmd, cooldownDays = 0 }) {
+  // Normalized once so a string or negative option is never echoed back in status or reasons.
+  const cooldownDaysN = Math.max(0, Number(cooldownDays) || 0);
+  const cooldownSeconds = cooldownDaysN * DAY_SECONDS;
+
   function packageVersion() {
     try {
       const pkg = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8"));
@@ -177,17 +184,49 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
   // cycle. So the fast-forward is proven before it is advertised: fetch just that branch into
   // FETCH_HEAD (no local branch and no working file moves) and ask git the ancestry question.
   // A failed fetch is reported as its own reason rather than guessed either way.
-  async function evaluateFastForward(remoteCommit, currentCommit, remoteBranch, remoteArg) {
+  //
+  // `alreadyFetched` is set by the cooldown path, which has fetched the branch and picked an older
+  // commit than the tip: the fast-forward question is then asked of that commit, not FETCH_HEAD.
+  async function evaluateFastForward(remoteCommit, currentCommit, remoteBranch, remoteArg, alreadyFetched = false) {
     if (!remoteCommit || remoteCommit === currentCommit) return { remoteIsAncestor: false, fastForward: "n/a" };
     const remoteIsAncestor = (await git(["merge-base", "--is-ancestor", remoteCommit, "HEAD"])).ok;
     if (remoteIsAncestor || !remoteBranch) return { remoteIsAncestor, fastForward: "n/a" };
-    const fetched = await git(["fetch", "--quiet", "--no-tags", remoteArg, remoteBranch], APPLY_TIMEOUT_MS);
-    if (!fetched.ok) return { remoteIsAncestor, fastForward: "unknown" };
-    const fastForward = (await git(["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"])).ok ? "yes" : "no";
+    if (!alreadyFetched) {
+      const fetched = await git(["fetch", "--quiet", "--no-tags", remoteArg, remoteBranch], APPLY_TIMEOUT_MS);
+      if (!fetched.ok) return { remoteIsAncestor, fastForward: "unknown" };
+    }
+    const target = alreadyFetched ? remoteCommit : "FETCH_HEAD";
+    const fastForward = (await git(["merge-base", "--is-ancestor", "HEAD", target])).ok ? "yes" : "no";
     return { remoteIsAncestor, fastForward };
   }
 
-  function reasonForStatus({ newer, dirty, fastForward, remoteBranch, remoteCommit, remoteIsAncestor }) {
+  // Update cooldown (idea from ohmyzsh's tools/upgrade.sh, MIT): with cooldownDays set, an update
+  // targets the newest FIRST-PARENT commit on the remote branch that is at least that old, never
+  // the tip, so a bad push has N days to be caught and reverted before any install adopts it.
+  // Limitation: the age is the committer date (%ct), which the pusher sets and can backdate, so this
+  // does not stop a compromised push; that would need a first-seen time recorded locally. Returns the commit to update to and a state: "off" (no cooldown, or nothing new to
+  // hold back), "clear" (the tip itself is old enough), "held" (younger commits are held back; the
+  // commit is the newest aged one, or null when none is aged yet), "unknown" (history unreadable).
+  async function applyCooldown(remoteCommit, currentCommit, remoteBranch, remoteArg) {
+    if (!cooldownSeconds || !remoteCommit || remoteCommit === currentCommit || !remoteBranch) {
+      return { commit: remoteCommit, cooldown: "off" };
+    }
+    // Local is already at or past the tip: there is nothing to hold back.
+    if ((await git(["merge-base", "--is-ancestor", remoteCommit, "HEAD"])).ok) return { commit: remoteCommit, cooldown: "off" };
+    const fetched = await git(["fetch", "--quiet", "--no-tags", remoteArg, remoteBranch], APPLY_TIMEOUT_MS);
+    // --until with -1 asks git for just the newest aged first-parent commit, so the output stays
+    // one line however long the history is.
+    const cutoff = Math.floor(Date.now() / 1000) - cooldownSeconds;
+    const log = fetched.ok
+      ? await git(["log", "--first-parent", `--until=@${cutoff}`, "-1", "--format=%H", "FETCH_HEAD"])
+      : fetched;
+    if (!log.ok) return { commit: null, cooldown: "unknown" };
+    const sha = log.stdout.trim();
+    if (sha) return { commit: sha, cooldown: sha === remoteCommit ? "clear" : "held" };
+    return { commit: null, cooldown: "held" };
+  }
+
+  function reasonForStatus({ newer, dirty, fastForward, remoteBranch, remoteCommit, remoteIsAncestor, cooldown }) {
     if (newer) {
       if (dirty) return "local changes must be committed or stashed before updating";
       if (fastForward === "no")
@@ -196,6 +235,8 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
       if (!remoteBranch) return "could not determine the remote branch to pull";
       return null;
     }
+    if (cooldown === "unknown") return "could not fetch the update remote to apply the update cooldown";
+    if (cooldown === "held") return `newer commits on the update remote are inside the ${cooldownDaysN}-day update cooldown`;
     if (remoteCommit) return remoteIsAncestor ? "local checkout is ahead of the update remote" : "up to date";
     return "could not read remote commit";
   }
@@ -225,17 +266,30 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
 
     const compareBranch = upstream.remoteBranch || status.branch;
     const resolved = await resolveRemoteCommit(remote.remoteArg, compareBranch, status.branch);
-    status.branch = resolved.branch;
-    status.remoteCommit = resolved.remoteCommit;
-    status.remoteBranch = resolved.remoteBranch;
-
-    const { remoteIsAncestor, fastForward } = await evaluateFastForward(
+    // With a cooldown, `remoteCommit` is the aged commit an apply would move to; the tip it was
+    // chosen from is reported beside it so a host can show what is being held back.
+    const { commit: target, cooldown } = await applyCooldown(
       resolved.remoteCommit,
       status.currentCommit,
       resolved.remoteBranch,
       remote.remoteArg,
     );
-    const newer = !!(resolved.remoteCommit && resolved.remoteCommit !== status.currentCommit && !remoteIsAncestor);
+    status.branch = resolved.branch;
+    status.remoteCommit = target;
+    status.remoteBranch = resolved.remoteBranch;
+    if (cooldown !== "off") {
+      status.latestRemoteCommit = resolved.remoteCommit;
+      status.cooldownDays = cooldownDaysN;
+    }
+
+    const { remoteIsAncestor, fastForward } = await evaluateFastForward(
+      target,
+      status.currentCommit,
+      resolved.remoteBranch,
+      remote.remoteArg,
+      cooldown !== "off",
+    );
+    const newer = !!(target && target !== status.currentCommit && !remoteIsAncestor);
     status.updateAvailable = newer;
     status.diverged = newer && fastForward === "no";
     status.canApply = newer && fastForward === "yes" && !status.dirty && !!resolved.remoteBranch;
@@ -244,8 +298,9 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
       dirty: status.dirty,
       fastForward,
       remoteBranch: resolved.remoteBranch,
-      remoteCommit: resolved.remoteCommit,
+      remoteCommit: target,
       remoteIsAncestor,
+      cooldown,
     });
     return status;
   }
@@ -407,7 +462,12 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
     const branch = before.remoteBranch || upstream.remoteBranch || before.branch;
     if (!remote.remoteArg || !branch) throw new Error("No update remote/branch is configured.");
 
-    await runStep(["git", "pull", "--ff-only", remote.remoteArg, branch], APPLY_TIMEOUT_MS, output);
+    // Under a cooldown the target is an aged commit, not the tip a pull would take; the check just
+    // fetched it, so fast-forward to exactly that commit instead.
+    const advance = before.latestRemoteCommit
+      ? ["git", "merge", "--ff-only", before.remoteCommit]
+      : ["git", "pull", "--ff-only", remote.remoteArg, branch];
+    await runStep(advance, APPLY_TIMEOUT_MS, output);
     try {
       await runStep(installCmd, BUILD_TIMEOUT_MS, output);
       await runStep(buildCmd, BUILD_TIMEOUT_MS, output);

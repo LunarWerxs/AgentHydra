@@ -37,6 +37,8 @@ const ID_RESTART: usize = 3;
 const ID_QUIT: usize = 4;
 /// Optional per-app extra item (see Config::action_path).
 const ID_ACTION: usize = 5;
+/// Offered only after an unclean exit (see Config::crash_sentinel_dir).
+const ID_SAFE_MODE: usize = 6;
 
 // --- timers -----------------------------------------------------------------------------------
 const TIMER_HEALTH: usize = 1;
@@ -83,6 +85,10 @@ struct App {
     server_pid: AtomicU32,
     /// True when the last worker was a rebuild (so a successful finish re-opens the UI).
     was_rebuild: AtomicBool,
+    /// An unclean exit was seen (a leftover run file at cold start, or a death the watchdog
+    /// caught), so the menu offers "Restart in Safe Mode" from now on. Never set unless the app
+    /// configures crash_sentinel_dir (its statement that it honours safe mode).
+    unclean_exit_seen: AtomicBool,
 }
 
 static APP: OnceLock<App> = OnceLock::new();
@@ -188,8 +194,14 @@ unsafe fn show_menu(hwnd: HWND) {
         let rebuild = wide("Rebuild && Restart");
         AppendMenuW(menu, MF_STRING | grey, ID_REBUILD, rebuild.as_ptr());
     }
-    let restart = wide("Restart");
+    // In safe mode, Restart is the way back out, and says so.
+    let safe = daemon::SAFE_MODE.load(Ordering::Relaxed);
+    let restart = wide(if safe { "Restart Normally" } else { "Restart" });
     AppendMenuW(menu, MF_STRING | grey, ID_RESTART, restart.as_ptr());
+    if !safe && a.unclean_exit_seen.load(Ordering::Relaxed) {
+        let safe_item = wide("Restart in Safe Mode");
+        AppendMenuW(menu, MF_STRING | grey, ID_SAFE_MODE, safe_item.as_ptr());
+    }
     // The app-action item, for apps that supervise WORK the daemon owns rather than just the
     // daemon itself: Restart and Quit act on the daemon, this acts on what the daemon is running.
     if a.cfg.action_path.is_some() {
@@ -243,6 +255,29 @@ fn start_worker(hwnd: HWND, rebuild: bool) {
             PostMessageW(hwnd_val as HWND, WM_APP_WORKER_DONE, outcome, 0);
         }
     });
+}
+
+/// Restart in the requested mode: the daemon comes back with its auto-start work skipped (safe) or
+/// as normal. The mode only flips when a restart will actually run, so a click while busy cannot
+/// leave the flag saying one thing and the daemon doing another.
+fn restart_in_mode(hwnd: HWND, safe: bool) {
+    let a = app();
+    if a.busy.load(Ordering::SeqCst) {
+        return;
+    }
+    daemon::SAFE_MODE.store(safe, Ordering::Relaxed);
+    let name = &a.cfg.display_name;
+    let tip = if safe { format!("{name} (Safe Mode)") } else { name.clone() };
+    UI.with(|ui| {
+        let mut slot = ui.borrow_mut();
+        let Some(ui) = slot.as_mut() else { return };
+        fill(&mut ui.nid.szTip, &tip);
+        if ICON_SHOWN.load(Ordering::Relaxed) {
+            ui.nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+            unsafe { Shell_NotifyIconW(NIM_MODIFY, &mut ui.nid) };
+        }
+    });
+    start_worker(hwnd, false);
 }
 
 /// Fire the app-action POST on a background thread.
@@ -351,7 +386,13 @@ fn run_worker(rebuild: bool) -> usize {
 fn restart_once(budget: Duration) -> bool {
     let a = app();
     let cfg = &a.cfg;
+    // A daemon already dead with its run file left behind crashed on its own: keep that file so the
+    // next launch reports it. Only a stop THIS restart causes is cleared as deliberate.
+    let crashed_before = daemon::unclean_run_left(cfg);
     daemon::stop(cfg, &a.token, true, false);
+    if !crashed_before {
+        daemon::clear_run_sentinels(cfg);
+    }
     if cfg.use_port_free_wait {
         daemon::wait_port_free(cfg.port, 6);
     }
@@ -411,6 +452,13 @@ fn health_tick() {
     if a.auto_restart_paused.load(Ordering::Relaxed) {
         return;
     }
+    // A death this tray did not cause: from here on, offer the quiet way back in. Only when the app
+    // names its crash-sentinel directory, which is its statement that it honours safe mode; an app
+    // that ignores LUNARWERX_SAFE_MODE would get a menu item that changes nothing.
+    let offers_safe_mode = a.cfg.crash_sentinel_dir.is_some();
+    if offers_safe_mode {
+        a.unclean_exit_seen.store(true, Ordering::Relaxed);
+    }
 
     // Crash-loop guard: prune the window, then refuse to keep resurrecting something that will not
     // stay up. Only a manual Restart/Rebuild clears the pause.
@@ -421,11 +469,9 @@ fn health_tick() {
         if times.len() >= CRASH_LOOP_MAX {
             a.auto_restart_paused.store(true, Ordering::Relaxed);
             drop(times);
+            let hint = if offers_safe_mode { "Restart or Restart in Safe Mode" } else { "Restart to try again" };
             balloon(
-                &format!(
-                    "{} keeps crashing - auto-restart paused. Use Restart to try again.",
-                    a.cfg.display_name
-                ),
+                &format!("{} keeps crashing - auto-restart paused. Use {hint}.", a.cfg.display_name),
                 NIIF_ERROR,
             );
             return;
@@ -516,8 +562,10 @@ fn quit_app(hwnd: HWND) {
     // poll is exactly how Quit used to turn into a ~30 s hang.
     if !use_token {
         daemon::stop(&a.cfg, &a.token, true, false);
+        daemon::clear_run_sentinels(&a.cfg);
     } else if owned {
         daemon::stop(&a.cfg, &a.token, true, true);
+        daemon::clear_run_sentinels(&a.cfg);
     }
 
     UI.with(|ui| {
@@ -552,7 +600,8 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             match w & 0xFFFF {
                 ID_OPEN => open_current_ui(),
                 ID_REBUILD => start_worker(h, true),
-                ID_RESTART => start_worker(h, false),
+                ID_RESTART => restart_in_mode(h, false),
+                ID_SAFE_MODE => restart_in_mode(h, true),
                 ID_ACTION => start_action(h),
                 ID_QUIT => quit_app(h),
                 _ => {}
@@ -795,7 +844,16 @@ unsafe fn create_tray_window(display_name: &str, icon_file: &Path, mutex: HANDLE
         SetTimer(hwnd, TIMER_SENTINEL, SENTINEL_INTERVAL_MS, null_mut());
     }
 
-    balloon("Running in the tray - right-click for options.", NIIF_INFO);
+    if app().unclean_exit_seen.load(Ordering::Relaxed) {
+        balloon(
+            &format!(
+                "{display_name} did not shut down cleanly last time. If it misbehaves, right-click > Restart in Safe Mode."
+            ),
+            NIIF_WARNING,
+        );
+    } else {
+        balloon("Running in the tray - right-click for options.", NIIF_INFO);
+    }
     hwnd
 }
 
@@ -855,6 +913,8 @@ fn main() {
     }
 
     let started_by_us = existing.is_none();
+    // Before the spawn below: the daemon we are about to start reports and deletes these.
+    let unclean_exit_seen = daemon::unclean_run_left(&cfg);
     let mut server_pid = 0;
     if started_by_us {
         match bootstrap_and_spawn_daemon(&cfg, &token) {
@@ -882,6 +942,7 @@ fn main() {
         build_pid: AtomicU32::new(0),
         server_pid: AtomicU32::new(server_pid),
         was_rebuild: AtomicBool::new(false),
+        unclean_exit_seen: AtomicBool::new(unclean_exit_seen),
     })
     .ok();
 

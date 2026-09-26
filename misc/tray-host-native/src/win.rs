@@ -128,6 +128,34 @@ extern "system" {
     pub fn GetModuleHandleW(name: *const u16) -> HINSTANCE;
     pub fn CloseHandle(h: HANDLE) -> i32;
     pub fn GetLocalTime(t: *mut SYSTEMTIME);
+    pub fn OpenProcess(access: u32, inherit: i32, pid: u32) -> HANDLE;
+    pub fn GetExitCodeProcess(h: HANDLE, code: *mut u32) -> i32;
+    pub fn GetTickCount64() -> u64;
+}
+
+/// When this machine booted, in epoch ms: the same moment crash-sentinel.mjs records as a run
+/// file's `bootedAt`, so a live pid on a file from an earlier boot is known to be recycled.
+pub fn boot_time_ms() -> Option<f64> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(now.as_millis() as f64 - unsafe { GetTickCount64() } as f64)
+}
+
+/// Is `pid` a running process? Used to tell a crashed daemon's leftover run file from a live one.
+/// A process we cannot open at all is treated as gone: every daemon this host starts runs as the
+/// same user, so "cannot open" means "not ours to worry about".
+pub fn pid_alive(pid: u32) -> bool {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code) != 0;
+        CloseHandle(h);
+        ok && code == STILL_ACTIVE
+    }
 }
 
 /// Local wall-clock stamp, `YYYY-MM-DD HH:MM:SS`, for log lines a human reads beside Windows'

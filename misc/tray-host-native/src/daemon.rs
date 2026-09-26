@@ -11,10 +11,62 @@ use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Safe mode for every spawn from now on (server-lib crash-sentinel.mjs): set by "Restart in Safe
+/// Mode", cleared by "Restart Normally". A process-wide flag rather than a spawn() parameter so the
+/// cold start, the worker and the watchdog, which all call spawn(), cannot disagree about it. The
+/// daemon reads it as an env var because the start command is an opaque per-app string a flag
+/// cannot be spliced into safely; it is pinned to "0" when off so an inherited value cannot keep
+/// the daemon quiet by accident.
+pub static SAFE_MODE: AtomicBool = AtomicBool::new(false);
+const SAFE_MODE_ENV: &str = "LUNARWERX_SAFE_MODE";
+const RUN_PREFIX: &str = "run_";
+/// Slack for comparing boot times, as in crash-sentinel.mjs: clock corrections shift them a little.
+const BOOT_TOLERANCE_MS: f64 = 5.0 * 60.0 * 1000.0;
+
+/// The daemon's run_* crash-sentinel files, or nothing when the app configures no directory.
+fn run_sentinels(cfg: &Config) -> Vec<PathBuf> {
+    let Some(dir) = cfg.crash_sentinel_dir.as_ref() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(RUN_PREFIX))
+        .map(|e| e.path())
+        .collect()
+}
+
+/// Did an earlier run end uncleanly? True for any run file whose owner is gone, unreadable (the
+/// crash landed mid-write), or written before the last boot (its pid, if alive, is recycled). Read
+/// BEFORE the cold start, because the daemon reports and deletes them.
+pub fn unclean_run_left(cfg: &Config) -> bool {
+    let booted = crate::win::boot_time_ms();
+    run_sentinels(cfg).iter().any(|path| {
+        let run = std::fs::read_to_string(path).ok().and_then(|s| crate::json::parse(&s));
+        let pid = run.as_ref().and_then(|v| v.num_at("pid")).map(|n| n as u32).unwrap_or(0);
+        let earlier_boot = match (run.as_ref().and_then(|v| v.num_at("bootedAt")), booted) {
+            (Some(then), Some(now)) => (then - now).abs() > BOOT_TOLERANCE_MS,
+            _ => false,
+        };
+        pid == 0 || earlier_boot || !crate::win::pid_alive(pid)
+    })
+}
+
+/// Delete the run files after the tray stopped the daemon ON PURPOSE, so the next launch does not
+/// report a deliberate force-kill as a crash.
+pub fn clear_run_sentinels(cfg: &Config) {
+    for path in run_sentinels(cfg) {
+        let _ = std::fs::remove_file(path);
+    }
+}
 
 /// Pre-spawn "is one already running?" probe. A live daemon on loopback answers in ~2 ms; this
 /// budget is only ever reached by a port that is silently dropping, and every millisecond of it
@@ -138,16 +190,19 @@ pub fn spawn(cfg: &Config, token: &str) -> Option<u32> {
     for (k, v) in cfg.resolved_start_env(token) {
         cmd.env(k, v);
     }
+    let safe = SAFE_MODE.load(Ordering::Relaxed);
+    cmd.env(SAFE_MODE_ENV, if safe { "1" } else { "0" });
     match cmd.spawn() {
         Ok(child) => {
             let pid = child.id();
+            let mode = if safe { " in safe mode" } else { "" };
             // Say which death this birth answers, BEFORE watching for the next one - otherwise the
             // only record of a restart is a pid that silently changed, which is exactly the
             // evidence that was missing on 2026-09-14/15.
             let log = log_path(cfg);
             match take_last_death() {
-                Some(prev) => log_line(&log, &format!("respawn pid {pid} - answering {prev}")),
-                None => log_line(&log, &format!("spawn pid {pid}")),
+                Some(prev) => log_line(&log, &format!("respawn pid {pid}{mode} - answering {prev}")),
+                None => log_line(&log, &format!("spawn pid {pid}{mode}")),
             }
             watch_child(child, log);
             Some(pid)

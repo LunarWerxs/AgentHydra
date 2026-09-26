@@ -17,6 +17,14 @@ export interface RelaunchArgvOptions {
   portFlag?: string;
   /** Defaults to "--relaunch". */
   relaunchFlag?: string;
+  /**
+   * true: relaunch in safe mode; false: relaunch normally; omitted: keep the current mode. This
+   * governs the argv only: a LUNARWERX_SAFE_MODE=1 the tray set is inherited through the
+   * environment, so with `false` the caller must also spawn with that variable pinned to "0".
+   */
+  safeMode?: boolean;
+  /** Defaults to "--safe-mode" (crash-sentinel.mjs's SAFE_MODE_FLAG). */
+  safeModeFlag?: string;
   /** Flags whose NEXT token is a value (e.g. "--root"), so a value is never re-read as a flag. */
   valueFlags?: readonly string[];
 }

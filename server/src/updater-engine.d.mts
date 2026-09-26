@@ -19,6 +19,12 @@ export interface UpdateStatus {
    *  cannot apply it (local commits the remote lacks). `canApply` is false and `reason` says so.
    *  OPTIONAL: set by the git-checkout engine only. */
   diverged?: boolean;
+  /** Set only while an update cooldown is in play: the remote branch tip, whereas `remoteCommit` is
+   *  the newest first-parent commit old enough to adopt (null when none is yet). OPTIONAL: set by
+   *  the git-checkout engine only. */
+  latestRemoteCommit?: string | null;
+  /** The cooldown in days that chose `remoteCommit`; present alongside `latestRemoteCommit`. */
+  cooldownDays?: number;
   /** Installed version of each release-owned component, or null where an install predates version
    *  stamping. OPTIONAL because only an app whose release ships sidecar components beside the
    *  executable can populate it: the git-checkout engine has no such components, and a fabricated
@@ -53,6 +59,11 @@ export interface UpdaterOptions {
   installCmd: string[];
   /** Build step, e.g. ["bun", "run", "--cwd", "web", "build"]. */
   buildCmd: string[];
+  /** Adopt only commits at least this many days old (committer date, first-parent history of the
+   *  remote branch), so a bad push can be caught before installs run it. Default 0: off, the tip is
+   *  adopted as soon as it is seen. Not a defence against a compromised push: the committer date is
+   *  set by whoever pushes and can be backdated past the cooldown. */
+  cooldownDays?: number;
 }
 
 export interface Updater {

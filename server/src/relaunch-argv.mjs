@@ -36,22 +36,28 @@
  * Windows command lines are capped. Any inherited port flag and relaunch flag are stripped before
  * the current ones are appended.
  *
+ * SAFE MODE rides the same fixed point: an inherited safe-mode flag is stripped and re-appended at
+ * most once. `safeMode: true` relaunches quiet (crash-sentinel.mjs), `false` is "Restart
+ * normally", and leaving it unset carries the current mode across an update relaunch.
+ *
  * Runtime-agnostic (Bun + Node) and pure. Synced from the shared kit, do not edit in an app.
  */
 
 /**
- * Keep every user token, dropping the relaunch flag and the stale port pair so the caller can
- * re-append both from the port actually being served. A value flag's next token is copied
- * verbatim and never re-read as a flag.
+ * Keep every user token, dropping the relaunch flag, the safe-mode flag and the stale port pair so
+ * the caller can re-append them from the port actually being served and the mode it wants. A value
+ * flag's next token is copied verbatim and never re-read as a flag.
  * @param {readonly string[]} rest
  * @param {object} flags
  * @param {string} flags.portFlag
  * @param {string} flags.relaunchFlag
+ * @param {string} flags.safeModeFlag
  * @param {readonly string[]} flags.valueFlags
- * @returns {string[]}
+ * @returns {{ kept: string[], safeMode: boolean }} `safeMode`: the flag was inherited.
  */
-function filterRelaunchArgs(rest, { portFlag, relaunchFlag, valueFlags }) {
+function filterRelaunchArgs(rest, { portFlag, relaunchFlag, safeModeFlag, valueFlags }) {
   const kept = [];
+  let safeMode = false;
   for (let i = 0; i < rest.length; i++) {
     const token = rest[i];
     if (valueFlags.includes(token) && rest[i + 1] !== undefined) {
@@ -63,9 +69,13 @@ function filterRelaunchArgs(rest, { portFlag, relaunchFlag, valueFlags }) {
       continue;
     }
     if (token === relaunchFlag) continue; // re-appended below, never accumulated
+    if (token === safeModeFlag) {
+      safeMode = true; // re-appended below when the mode carries over
+      continue;
+    }
     kept.push(token);
   }
-  return kept;
+  return { kept, safeMode };
 }
 
 /**
@@ -78,6 +88,11 @@ function filterRelaunchArgs(rest, { portFlag, relaunchFlag, valueFlags }) {
  *                                    an entry that takes no verb.
  * @param {string} [options.portFlag="--port"]
  * @param {string} [options.relaunchFlag="--relaunch"]
+ * @param {boolean} [options.safeMode]  true: relaunch in safe mode; false: relaunch normally;
+ *                                      omitted: keep whatever mode the current argv carries.
+ *   The argv only: with `false`, also spawn with LUNARWERX_SAFE_MODE pinned to "0", or a value
+ *   the tray set is inherited through the environment and the child is still in safe mode.
+ * @param {string} [options.safeModeFlag="--safe-mode"]
  * @param {readonly string[]} [options.valueFlags=[]]  Flags whose NEXT token is a value (e.g.
  *   "--root"). Listed so a value is never re-read as a flag: a root path is allowed to be the
  *   literal string "--port", and mirroring the app's own parse loop is the only way to be sure.
@@ -91,6 +106,8 @@ export function buildRelaunchArgv(argv, options) {
     command,
     portFlag = "--port",
     relaunchFlag = "--relaunch",
+    safeMode,
+    safeModeFlag = "--safe-mode",
     valueFlags = [],
   } = options;
 
@@ -100,9 +117,16 @@ export function buildRelaunchArgv(argv, options) {
   const rest = hasVerb ? cli.slice(1) : cli;
   const verb = command === undefined ? null : hasVerb ? cli[0] : command;
 
-  const kept = filterRelaunchArgs(rest, { portFlag, relaunchFlag, valueFlags });
+  const filtered = filterRelaunchArgs(rest, { portFlag, relaunchFlag, safeModeFlag, valueFlags });
+  const safe = safeMode ?? filtered.safeMode;
 
-  const tail = [...kept, portFlag, String(boundPort), relaunchFlag];
+  const tail = [
+    ...filtered.kept,
+    portFlag,
+    String(boundPort),
+    ...(safe ? [safeModeFlag] : []),
+    relaunchFlag,
+  ];
   const cliOut = verb === null ? tail : [verb, ...tail];
   // Source mode: argv[1] is the real script path and must be passed to the runtime. Compiled:
   // argv[0..1] are placeholders and execPath alone is the whole command.

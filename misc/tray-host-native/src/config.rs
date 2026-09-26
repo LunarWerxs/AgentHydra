@@ -61,6 +61,12 @@ pub struct Config {
     /// Dropped by the daemon when the user picks "Shut down" in the web UI: the tray must then tear
     /// the WHOLE app down rather than reviving it.
     pub sentinel_file: Option<PathBuf>,
+    /// Where the daemon's crash sentinel (server-lib crash-sentinel.mjs) writes its run_* files.
+    /// Setting it is the app's statement that its daemon honours LUNARWERX_SAFE_MODE: without it the
+    /// tray never offers "Restart in Safe Mode". Read at cold start to offer it after an unclean
+    /// exit, and cleared after the tray itself force-stops the daemon so that stop is not reported
+    /// as a crash.
+    pub crash_sentinel_dir: Option<PathBuf>,
 
     pub on_stray_daemon: StrayPolicy,
     /// When false the watchdog revives even a daemon this tray did not start. AgentHydra sets this
@@ -315,6 +321,8 @@ impl Config {
             shutdown_token_env_var: opt_string(v.str_at("shutdownTokenEnvVar")),
             shutdown_header_prefix: v.str_at("shutdownHeaderPrefix").unwrap_or("x-app").to_string(),
             sentinel_file: opt_string(v.str_at("sentinelFile")).map(|s| PathBuf::from(expand(&s))),
+            crash_sentinel_dir: opt_string(v.str_at("crashSentinelDir"))
+                .map(|s| PathBuf::from(expand(&s))),
             on_stray_daemon: match v.str_at("onStrayDaemon") {
                 Some("warn") => StrayPolicy::Warn,
                 _ => StrayPolicy::Attach,
