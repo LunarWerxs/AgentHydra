@@ -454,12 +454,17 @@ export async function uiArchiveChat(
   // it might hit "the wrong one" - when both were already archived and either click was right.
   // So the question is not how many chats carry this title, it is whether any of them is still
   // live. If one is, clicking by title could retire it and the refusal stands.
-  const live = readLiveTitleCount(profileDir, title)
+  // The chat being archived is not one of those: a caller that clicks BEFORE writing any flag (a
+  // move settling its source, move-source-settle.ts) arrives with it still unarchived, and counting
+  // it refused every click beside an archived namesake (review, 2026-09-26). An unreadable flag
+  // leaves it counted.
+  const selfLive = readArchived(profileDir, sessionId) === false ? 1 : 0
+  const live = Math.max(0, readLiveTitleCount(profileDir, title) - selfLive)
   if (holders > 1 && live > 0)
     return {
       clicked: false,
       verified: false,
-      reason: `${holders} chats in this profile's store carry the title '${title}' and ${live} of them ${live === 1 ? 'is' : 'are'} not archived - clicking by title could archive the wrong one`,
+      reason: `${holders} chats in this profile's store carry the title '${title}' and ${live} other ${live === 1 ? 'is' : 'are'} not archived - clicking by title could archive the wrong one`,
     }
   const { code, out } = await invoke(profileDir, title)
   // Exit 0 = row left the sidebar; exit 2 = Archive was INVOKED but the row still rendered at

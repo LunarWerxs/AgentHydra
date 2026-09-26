@@ -123,6 +123,8 @@ import {
   planMove,
   profileLabel,
   stillShownLine,
+  stoppedServers,
+  warnOnUnloadWhile,
 } from '@/lib/move-chats'
 import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
@@ -891,6 +893,7 @@ function onChatsOpenRow(row: ChatListRow) {
 // this used to contradict outright.
 const moveAll = ref<{ from: CMInstance; to: CMInstance; plan: MovePlan } | null>(null)
 const moveAllBusy = ref(false)
+warnOnUnloadWhile(moveAllBusy)
 // Closed destinations are hidden from the submenu until asked for, and asked for afresh on every
 // page load (owner, 2026-09-08: off by default). One switch shared by every row's submenu.
 const moveShowClosed = ref(false)
@@ -944,6 +947,9 @@ async function runMoveAll() {
   const failed: string[] = []
   // Moved, but an old account's app still lists it (the server says which account and why).
   const stillShown: string[] = []
+  // Other chats' preview servers an at-limit old account's archive stopped, and where first.
+  let stopped = 0
+  let stoppedOn = ''
   try {
     // PASS ONE, every landing. Serial on purpose: each migrate may stop a live run and wait for it,
     // and the desktop app takes imports one at a time anyway. The old copies are left in place
@@ -976,6 +982,11 @@ async function runMoveAll() {
         const r = await settleMovedChat(c.sessionId, ref, leaving)
         const line = r.ok ? stillShownLine(r.sourceSettle, profileName) : (r.error ?? 'failed')
         if (line) stillShown.push(`${c.name} (${line})`)
+        const halted = r.ok ? stoppedServers(r.sourceSettle) : null
+        if (halted) {
+          stopped += halted.n
+          stoppedOn ||= profileName(halted.profile)
+        }
       } catch (e) {
         stillShown.push(`${c.name} (${e instanceof Error ? e.message : String(e)})`)
       }
@@ -1002,16 +1013,20 @@ async function runMoveAll() {
   const shownNote = stillShown.length
     ? ` ${t('instances.moveChatsStillShown', { n: stillShown.length })} ${stillShown[0] ?? ''}`
     : ''
+  const stoppedNote = stopped
+    ? ` ${t('instances.moveChatsStoppedServers', { account: stoppedOn, n: stopped })}`
+    : ''
   // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
   // warning when nothing moved at all (sixteen 400s once read as a warning with a zero in it).
   if (failed.length)
     (ok === 0 ? toast.error : toast.warning)(
-      `${summary} ${t('instances.moveChatsSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}${shownNote}`,
+      `${summary} ${t('instances.moveChatsSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}${shownNote}${stoppedNote}`,
       {
         id,
       },
     )
-  else if (stillShown.length) toast.warning(`${summary}${shownNote}`, { id })
+  else if (stillShown.length || stopped)
+    toast.warning(`${summary}${shownNote}${stoppedNote}`, { id })
   else toast.success(summary, { id })
 }
 

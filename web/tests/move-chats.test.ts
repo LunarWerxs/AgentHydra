@@ -3,7 +3,13 @@
 // store rows the move takes.
 import { expect, test } from 'bun:test'
 import type { ChatListRow } from '../src/lib/api'
-import { moveTargets, planMove, profileLabel, stillShownLine } from '../src/lib/move-chats'
+import {
+  moveTargets,
+  planMove,
+  profileLabel,
+  stillShownLine,
+  stoppedServers,
+} from '../src/lib/move-chats'
 
 const inst = (dir: string, isRunning: boolean, label = dir) => ({ dir, isRunning, label })
 const label = (i: { label: string }) => i.label
@@ -98,4 +104,32 @@ test('the still-shown line names the account it is on, which need not be where t
     stillShownLine([{ profile: 'c:/i/b', via: 'flag', changed: true, stillShown: false }], nameOf),
   ).toBeNull()
   expect(stillShownLine(undefined, nameOf)).toBeNull()
+})
+
+test('stoppedServers totals the other chats servers an at-limit archive stopped, naming the first account', () => {
+  const server = { kind: 'server', id: 'srv', sessionId: 'other' }
+  expect(
+    stoppedServers([
+      { profile: 'c:/i/a', via: 'native', changed: true, stillShown: false },
+      {
+        profile: 'c:/i/b',
+        via: 'native',
+        changed: true,
+        stillShown: false,
+        atLimit: true,
+        stoppedBystanders: [server, server],
+      },
+      {
+        profile: 'c:/i/c',
+        via: 'native',
+        changed: true,
+        stillShown: false,
+        stoppedBystanders: [server],
+      },
+    ]),
+  ).toEqual({ profile: 'c:/i/b', n: 3 })
+  expect(
+    stoppedServers([{ profile: 'c:/i/a', via: 'native', changed: true, stillShown: false }]),
+  ).toBeNull()
+  expect(stoppedServers(undefined)).toBeNull()
 })

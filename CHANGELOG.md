@@ -296,9 +296,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   ignores and saves over: every moved chat stayed in the old sidebar, and because the store then
   said "archived", moving it again from there answered "No chats to move" for a chat on screen.
   The old copy is now archived by its own app (native control), the way the MCP mover and the
-  Archive action already did; a closed app still gets the flag, which it reads when it starts. A
-  chat the old app would not archive is named in a warning with the reason, and stays listed on
-  both accounts where a later move can still find it.
+  Archive action already did; a closed app still gets the flag, which it reads when it starts.
+  A chat the old app would not archive is named in a warning with the reason, and stays listed on
+  both accounts where a later move can still find it. Nothing writes the flag under a running app
+  any more. On an account without native control whose own Archive click did not take, the old
+  copy is queued instead and archived as soon as that app is closed
+  (`server/src/move-retire-on-close.ts`). A chat moving back to an account it left cancels
+  anything still queued for it there, and an account at its usage limit that stopped another
+  chat's preview server says so in the move's warning.
 - **The "Chats" dialog on an account that has never held a chat says so** instead of "Couldn't
   read the chats" (`GET /api/chats` no longer 404s an instance the registry resolves).
 - **A just-opened Claude Desktop app shows its banked reset and credit within seconds**

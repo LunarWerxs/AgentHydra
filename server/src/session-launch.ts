@@ -59,7 +59,7 @@ import { readLoginUuid } from './core/login-state'
 import { resolveLaunchBinary, staleLoginBackupDir } from './core/paths'
 import { allMigratedSettings, db, pruneMigratedSettings } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
-import { isInsideDir, samePathKey } from './path-key'
+import { isInsideDir, pathKey, samePathKey } from './path-key'
 
 /**
  * One lineage, one continuation. A done-marked session (session_marks.done = 1) was handed off,
@@ -1361,9 +1361,11 @@ export async function reassertChatAutomation(
  */
 const archiveReassertWatchers = new Map<string, { cancelled: boolean }>()
 
-/** The one spelling of the registry key, so a cancel cannot miss a watcher over path case. */
+/** The one spelling of the registry key, so a cancel cannot miss a watcher over path case or
+ *  separators: a move names the profile as its instance_ref spells it, the settle as the carrier
+ *  walk found it, and `C:/x` and `C:\x\` are one watcher (review, 2026-09-26). */
 function archiveReassertKey(instanceDir: string, sessionId: string): string {
-  return `${instanceDir.toLowerCase()}::${sessionId}`
+  return `${pathKey(instanceDir, true)}::${sessionId}`
 }
 
 /**

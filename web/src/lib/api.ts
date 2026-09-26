@@ -901,6 +901,12 @@ export interface MigrateSourceSettle {
   changed: boolean
   stillShown: boolean
   alreadyArchived?: boolean
+  /** The account was at its usage limit, so its archive went ahead over other chats' servers. */
+  atLimit?: boolean
+  /** The preview servers that at-limit archive stopped, each owned by another chat. */
+  stoppedBystanders?: Array<{ kind?: string; id?: string; sessionId?: string | null }>
+  /** Its app could not archive it now; AgentHydra archives it once that app is closed. */
+  retiresOnClose?: boolean
   reason?: string
 }
 

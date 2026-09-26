@@ -467,8 +467,13 @@ disk flag alone: every chat moved off an open account stayed in its sidebar, and
 settles each old copy through `settleMovedSource` (`server/src/move-source-settle.ts`): a closed
 app gets the flag; a running app is archived natively; a native refusal is final and reported;
 only an unavailable native connection takes the legacy path, and there the in-app click runs
-FIRST and the flag and watcher only if it does not settle (a flag written first would confirm
-the click by itself). An account at its usage wall (98% of either bucket on a fresh cached
+FIRST (a flag written first would confirm the click by itself). A click that does not settle
+writes NO flag under the running app, because that flag is the reported bug. It hides nothing,
+and the next move from that account finds nothing. The old copy is queued in
+`move-retire-on-close.ts` and flagged once that app is closed, provided another account still
+shows the chat. A record filed under a previous login of a running profile is not on screen, so
+it gets the flag directly. A move back onto an account drops whatever is queued for that chat
+there and cancels any archive watcher still running on it. An account at its usage wall (98% of either bucket on a fresh cached
 reading) is archived over other chats' preview servers, each named in `stoppedBystanders`, the
 same standing order the MCP mover applies. Read `sourceStillShown` (the profiles still listing
 the chat) and `sourceSettle` (each profile's route and `reason`) on the answer; `ok` means

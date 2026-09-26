@@ -101,6 +101,7 @@ import {
 } from './mcp-register'
 import { handleRpc as handleMcpRpc, type McpEngineTool } from './mcp-stdio.mjs'
 import { startMonitor } from './monitor'
+import { startRetireOnCloseSweep } from './move-retire-on-close'
 import { sendOsNotification } from './notify-os'
 import {
   getNotificationSettings,
@@ -1290,6 +1291,9 @@ startMonitor()
 // re-saves, so the app's next boot makes it permanent - the durable half of the migrate fix.
 // See automation-stamp-sweep.ts for why the per-import watcher alone could not do this.
 startAutomationStampSweep()
+// A moved chat's old copy that its running app would not archive, archived once that app is
+// closed: a flag under a running app hides nothing and makes the next move find nothing.
+startRetireOnCloseSweep()
 // The same thing for the chat's NAME. A moved chat's title is one disk write into a store the
 // running target app then re-saves from memory, blanking it, and a blank renders as the app's own
 // "General coding session". reassertChatTitle covers the ten minutes after the move; this is the

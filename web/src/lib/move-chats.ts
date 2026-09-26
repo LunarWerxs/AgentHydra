@@ -11,6 +11,7 @@
 // having existed (2026-09-08). The store is what the app itself reads, so the plan, the "Chats"
 // dialog and the sidebar all agree on what is there.
 
+import { onScopeDispose, type Ref, watch } from 'vue'
 import type { ChatListRow, MigrateSourceSettle } from '@/lib/api'
 
 /**
@@ -101,4 +102,36 @@ export function stillShownLine(
   const first = settle?.find((s) => s.stillShown)
   if (!first) return null
   return first.reason ? `${nameOf(first.profile)}: ${first.reason}` : nameOf(first.profile)
+}
+
+/**
+ * The preview servers a move stopped that belonged to OTHER chats, and the first account it
+ * happened on. An old account at its usage limit is archived over them on purpose (owner's
+ * order, 2026-09-26), and the server names each one; a person moving chats from here was never
+ * told (review, 2026-09-26). Null when nothing was stopped.
+ */
+export function stoppedServers(
+  settle: readonly MigrateSourceSettle[] | undefined,
+): { profile: string; n: number } | null {
+  const rows = settle?.filter((s) => s.stoppedBystanders?.length) ?? []
+  const first = rows[0]
+  if (!first) return null
+  return {
+    profile: first.profile,
+    n: rows.reduce((sum, s) => sum + (s.stoppedBystanders?.length ?? 0), 0),
+  }
+}
+
+/**
+ * Ask before the page closes while `busy`: a batch retires the old copies in a second pass run
+ * from this page, and closing it between the passes leaves them on their running accounts.
+ */
+export function warnOnUnloadWhile(busy: Ref<boolean>): void {
+  const warn = (e: BeforeUnloadEvent) => {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+  const off = () => window.removeEventListener('beforeunload', warn)
+  watch(busy, (on) => (on ? window.addEventListener('beforeunload', warn) : off()))
+  onScopeDispose(off)
 }

@@ -261,6 +261,8 @@ export default {
   migrateBulkSomeFailed: '{failed} could not be moved; details are in the browser console.',
   migrateBulkSettling: 'Archiving the old copies, {done} of {n}…',
   migrateBulkStillShown: '{n} still listed on an old account:',
+  migrateStoppedServers:
+    '{account} was at its usage limit, so archiving there stopped {n} preview server(s) other chats were using.',
   // The chat list inside the bulk-move dialog: grouped by project, each row opens that chat.
   groupCount: '{n} chat(s)',
   dialogRowHint: 'Grouped by project. Click a chat to open it.',

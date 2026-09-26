@@ -18,7 +18,7 @@ import { toast } from 'vue-sonner'
 import type { SessionSummary } from '@/lib/api'
 import * as api from '@/lib/api'
 import { displayName } from '@/lib/instance-appearance'
-import { profileLabel, stillShownLine } from '@/lib/move-chats'
+import { profileLabel, stillShownLine, stoppedServers, warnOnUnloadWhile } from '@/lib/move-chats'
 
 export interface MigrateTarget {
   ref: string
@@ -38,6 +38,7 @@ export function useSessionMigration(deps: {
   const runningTargets = computed(() => migrateTargets.value.filter((x) => x.isRunning))
   const closedTargets = computed(() => migrateTargets.value.filter((x) => !x.isRunning))
   const migrating = ref(false)
+  warnOnUnloadWhile(migrating)
   /** A server profile path, named the way the migrate menu names its target. */
   const profileName = (profile: string) =>
     profileLabel(profile, migrateTargets.value, (x) => x.name)
@@ -78,13 +79,19 @@ export function useSessionMigration(deps: {
     try {
       // The row's title IS the current title (same listing the server reads), restated as required.
       const r = await api.migrateSession(s.session_id, target.ref, { confirmTitle: s.title })
+      const halted = r.ok ? stoppedServers(r.sourceSettle) : null
+      const stoppedNote = halted
+        ? ` ${t('sessions.migrateStoppedServers', { account: profileName(halted.profile), n: halted.n })}`
+        : ''
       if (!r.ok) toast.error(r.error ?? t('sessions.migrateFailed'))
       else if (r.sourceStillShown?.length)
         // Landed, but an old account's app still lists it: say which and why, rather than a
         // success that leaves the chat visibly on two accounts.
         toast.warning(
-          `${t('sessions.migrateStarted', { name: target.name })} ${t('sessions.migrateStillShown')} ${stillShownLine(r.sourceSettle, profileName) ?? ''}`,
+          `${t('sessions.migrateStarted', { name: target.name })} ${t('sessions.migrateStillShown')} ${stillShownLine(r.sourceSettle, profileName) ?? ''}${stoppedNote}`,
         )
+      else if (halted)
+        toast.warning(`${t('sessions.migrateStarted', { name: target.name })}${stoppedNote}`)
       else toast.success(t('sessions.migrateStarted', { name: target.name }))
     } catch {
       toast.error(t('sessions.migrateFailed'))
@@ -112,6 +119,9 @@ export function useSessionMigration(deps: {
     const failed: string[] = []
     // Moved, but an old account's app still lists it (the server says which account and why).
     const stillShown: string[] = []
+    // Other chats' preview servers an at-limit old account's archive stopped, and where first.
+    let stopped = 0
+    let stoppedOn = ''
     try {
       // PASS ONE, every landing, one at a time on purpose: each migrate may stop a live process and
       // wait for it, and the desktop app takes imports serially anyway. Parallel calls would only
@@ -141,6 +151,11 @@ export function useSessionMigration(deps: {
           const r = await api.settleMovedChat(c.sessionId, job.target.ref, leaving)
           const line = r.ok ? stillShownLine(r.sourceSettle, profileName) : (r.error ?? 'failed')
           if (line) stillShown.push(`${c.title} (${line})`)
+          const halted = r.ok ? stoppedServers(r.sourceSettle) : null
+          if (halted) {
+            stopped += halted.n
+            stoppedOn ||= profileName(halted.profile)
+          }
         } catch (e) {
           stillShown.push(`${c.title} (${e instanceof Error ? e.message : String(e)})`)
         }
@@ -165,16 +180,20 @@ export function useSessionMigration(deps: {
     const shownNote = stillShown.length
       ? ` ${t('sessions.migrateBulkStillShown', { n: stillShown.length })} ${stillShown[0] ?? ''}`
       : ''
+    const stoppedNote = stopped
+      ? ` ${t('sessions.migrateStoppedServers', { account: stoppedOn, n: stopped })}`
+      : ''
     // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
     // warning when nothing moved at all (sixteen 400s once read as a warning with a zero in it).
     if (failed.length)
       (ok === 0 ? toast.error : toast.warning)(
-        `${summary} ${t('sessions.migrateBulkSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}${shownNote}`,
+        `${summary} ${t('sessions.migrateBulkSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}${shownNote}${stoppedNote}`,
         {
           id,
         },
       )
-    else if (stillShown.length) toast.warning(`${summary}${shownNote}`, { id })
+    else if (stillShown.length || stopped)
+      toast.warning(`${summary}${shownNote}${stoppedNote}`, { id })
     else toast.success(summary, { id })
     deps.clearChecked()
   }

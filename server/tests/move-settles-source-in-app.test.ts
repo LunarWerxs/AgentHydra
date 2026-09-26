@@ -57,11 +57,15 @@ function harness(opts: {
   diskArchived?: boolean | null
   carriers?: string[]
   atLimit?: boolean
+  /** Per profile: is the app running (overrides `running`). */
+  runningOf?: Record<string, boolean>
+  /** The record sits under the signed-in account's folder (default true). */
+  shown?: boolean
 }) {
   const calls = {
     native: [] as Array<{ profile: string; leaving: string[]; sourceAtLimit?: boolean }>,
     flag: [] as string[],
-    watch: [] as string[],
+    retire: [] as string[],
     ui: [] as string[],
     /** Every route in the order it ran. */
     order: [] as string[],
@@ -69,7 +73,8 @@ function harness(opts: {
   const deps: SettleDeps = {
     carriers: (_id, roots) => opts.carriers ?? roots,
     diskArchived: () => opts.diskArchived ?? false,
-    isRunning: async () => opts.running ?? false,
+    isRunning: async (profile) => opts.runningOf?.[profile] ?? opts.running ?? false,
+    shown: () => opts.shown ?? true,
     native: async (profile, _id, o) => {
       calls.order.push('native')
       calls.native.push({
@@ -85,9 +90,9 @@ function harness(opts: {
       calls.flag.push(profile)
       return { hits: [{ profile, changed: opts.diskArchived !== true }] }
     },
-    watch: (profile) => {
-      calls.order.push('watch')
-      calls.watch.push(profile)
+    retireOnClose: (profile) => {
+      calls.order.push('retire')
+      calls.retire.push(profile)
     },
     ui: async (profile) => {
       calls.order.push('ui')
@@ -104,7 +109,7 @@ test('a CLOSED old account gets the flag alone: its app reads the store when it 
   expect(row).toEqual({ profile: SOURCE, via: 'flag', changed: true, stillShown: false })
   expect(calls.native).toEqual([])
   expect(calls.ui).toEqual([])
-  expect(calls.watch).toEqual([])
+  expect(calls.retire).toEqual([])
 })
 
 test('a RUNNING old account is archived by its own app, and no flag is written under it', async () => {
@@ -132,7 +137,7 @@ test('a native REFUSAL is final: no flag, no click, and the account is reported 
   // from that account find the chat instead of answering "No chats to move".
   expect(calls.flag).toEqual([])
   expect(calls.ui).toEqual([])
-  expect(calls.watch).toEqual([])
+  expect(calls.retire).toEqual([])
 })
 
 test('native UNAVAILABLE clicks the Archive control of the app itself; a settled click writes no flag', async () => {
@@ -143,24 +148,59 @@ test('native UNAVAILABLE clicks the Archive control of the app itself; a settled
   expect(calls.flag).toEqual([])
 })
 
-test('the click comes BEFORE any flag, so its read-back can only be a write the app made', async () => {
-  // uiArchiveChat confirms a click by reading the record's flag. Written first, the flag confirmed
-  // itself and a click that never took read as settled (review, 2026-09-26).
+test('a click that does not settle writes NO flag under the running app; it is queued for close', async () => {
+  // A flag under a running app hides nothing, and the store then says "archived" while the sidebar
+  // shows the chat, so the next move from that account answered "No chats to move" - the owner's
+  // report, recreated on the legacy path (review, 2026-09-26). The record stays as the screen
+  // shows it, and move-retire-on-close.ts flags it once that app is closed.
   const { deps, calls } = harness({
     running: true,
     native: unavailable,
     ui: { clicked: false, verified: false, reason: 'the row is not rendered' },
   })
   const [row] = await settleMovedSource(SID, [SOURCE], [], deps)
-  expect(calls.order).toEqual(['native', 'ui', 'flag', 'watch'])
-  // The flag is the fallback, and under a running app it is not an archive on screen.
-  expect(row).toEqual({
+  expect(calls.order).toEqual(['native', 'ui', 'retire'])
+  expect(calls.flag).toEqual([])
+  expect(row).toMatchObject({
     profile: SOURCE,
-    via: 'flag',
-    changed: true,
+    via: 'ui',
+    changed: false,
     stillShown: true,
-    reason: 'the row is not rendered',
+    retiresOnClose: true,
   })
+  expect(row?.reason).toStartWith('the row is not rendered. AgentHydra archives it there once')
+})
+
+test('an unsettled click on a record already archived on disk queues nothing', async () => {
+  const { deps, calls } = harness({
+    running: true,
+    native: unavailable,
+    diskArchived: true,
+    ui: { clicked: false, verified: false, reason: 'the row is not rendered' },
+  })
+  const [row] = await settleMovedSource(SID, [SOURCE], [], deps)
+  expect(calls.retire).toEqual([])
+  expect(calls.flag).toEqual([])
+  expect(row).toMatchObject({ via: 'ui', stillShown: false, alreadyArchived: true })
+})
+
+test('a record under a PREVIOUS login of a running profile gets the flag: the app never loaded it', async () => {
+  // It is not on screen, so no click or native archive can find it, and calling it "still shown"
+  // was a false warning (review, 2026-09-26).
+  const { deps, calls } = harness({ running: true, shown: false, native: refused })
+  const [row] = await settleMovedSource(SID, [SOURCE], [], deps)
+  expect(row).toEqual({ profile: SOURCE, via: 'flag', changed: true, stillShown: false })
+  expect(calls.order).toEqual(['flag'])
+})
+
+test('closedOnly (a batch first pass) settles the closed account now and leaves the running one', async () => {
+  const running = 'C:\\instances\\running'
+  const { deps, calls } = harness({ runningOf: { [SOURCE]: false, [running]: true } })
+  const rows = await settleMovedSource(SID, [SOURCE, running], [], deps, { closedOnly: true })
+  expect(rows).toEqual([{ profile: SOURCE, via: 'flag', changed: true, stillShown: false }])
+  expect(calls.native).toEqual([])
+  expect(calls.ui).toEqual([])
+  expect(calls.flag).toEqual([SOURCE])
 })
 
 test('an account AT ITS USAGE WALL is archived over servers other chats own, naming what it stopped', async () => {

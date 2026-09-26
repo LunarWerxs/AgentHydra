@@ -17,6 +17,7 @@ import {
   instanceRefForSession,
   invalidateSessionMetaCache,
 } from '../instance-sessions'
+import { dropRetireOnClose, queueRetireOnClose } from '../move-retire-on-close'
 import { type SettleDeps, settleMovedSource, usageAtWall } from '../move-source-settle'
 import { newChatUltracodeEnabled, withUltracode } from '../new-chat-defaults'
 import { samePathKey } from '../path-key'
@@ -32,6 +33,7 @@ import {
   desktopChatCarriers,
   desktopHomeFor,
   findChatMetaPath,
+  findVisibleChatMetaPath,
   importSessionToDesktop,
   isSessionSuperseded,
   launchTerminalSession,
@@ -687,6 +689,11 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   //     to fight. This used to be refused outright ("importing would boot that instance"); the
   //     refusal still holds for the app import, and this is the path that does not need one.
   const targetDir = ref.slice('desktop:'.length)
+  // The chat is coming back to an account it left: whatever an earlier move of it queued there
+  // (a flag for when that app closes, or a watcher still re-asserting the flag) was the intent to
+  // retire THIS record, and it would archive the landing within seconds (review, 2026-09-26).
+  dropRetireOnClose(targetDir, sessionId)
+  cancelChatArchiveReassert(targetDir, sessionId)
   const targetRunning = (await listInstances()).some(
     (i) => i.isRunning && samePathKey(i.dir, targetDir),
   )
@@ -769,23 +776,25 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   // an open account stayed in its sidebar, and the next move from there answered "No chats to
   // move" because the store said archived. settleMovedSource asks the running app first, the way
   // /desktop-archive and the orchestrator's mover already did (its header has the whole order).
-  // The watcher still starts, from inside it, on the legacy path where only the flag landed.
+  // Where the running app cannot archive it, nothing is flagged under it: the old copy is queued
+  // to be flagged once that app is closed (move-retire-on-close.ts).
   //
   // `defer_settle` leaves the old copies for a second pass (POST /settle-source), which is how a
   // BATCH has to run: the native archive of one chat asks which of its siblings' preview servers
   // belong to chats that are leaving too, and until every landing is done the only honest answer
   // is "the ones that already landed" (review, 2026-09-26: naming the whole plan let a sibling's
   // archive stop the server of a chat whose own move then failed and stayed). The orchestrator's
-  // batch settles after every landing for the same reason (migrate_batch.py _settle_all).
+  // batch settles after every landing for the same reason (migrate_batch.py _settle_all). What
+  // needs no running app (a closed old account) is settled now even then, so a batch the browser
+  // never finishes leaves no old copy flagged-but-shown or waiting on it.
   const deferred = body.defer_settle === true
-  const settled = deferred
-    ? []
-    : await settleMovedSource(
-        sessionId,
-        archiveRootsForMove(targetDir),
-        leavingOf(body),
-        routeSettleDeps(),
-      )
+  const settled = await settleMovedSource(
+    sessionId,
+    archiveRootsForMove(targetDir),
+    leavingOf(body),
+    routeSettleDeps(),
+    { closedOnly: deferred },
+  )
   // The move rewrote metadata in TWO stores (created in the target, archived in the source), and
   // the scan behind every session listing caches for 15s. Without this the very next read serves
   // the pre-migrate rows: the caller sees the chat still on the old account, and setPreferred
@@ -855,9 +864,10 @@ function routeSettleDeps(): SettleDeps {
         )?.[1],
       ),
     flag: (id, profile) => archiveDesktopChat(id, true, [profile]),
-    // Only ever reached after a verified landing: a watcher started before a failed landing would
-    // re-hide the chat the failure had left in place. Its caps bound it; it never delays an answer.
-    watch: (profile, id) => void reassertChatArchive(profile, id).catch(() => {}),
+    shown: (profile, id) => findVisibleChatMetaPath(profile, id) !== null,
+    // Only ever reached after a verified landing, so it can never queue away the only copy; the
+    // sweep re-checks that another account shows the chat before it writes anything.
+    retireOnClose: (profile, id) => queueRetireOnClose(profile, id),
     ui: uiArchiveWithinBudget,
   }
 }

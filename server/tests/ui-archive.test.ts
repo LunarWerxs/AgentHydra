@@ -263,6 +263,32 @@ test('two chats sharing the title, ALL already archived -> click, because none c
   expect(calls).toContain('invoke:Real Chat Name')
 })
 
+// A move settles its old copy by clicking FIRST (move-source-settle.ts), so the chat arrives here
+// still unarchived. It is the one being archived, not a namesake the click could lose: beside an
+// archived twin of its title it must click, where counting itself refused (review, 2026-09-26).
+test('click-first: the chat itself still LIVE beside an archived namesake -> click', async () => {
+  const { d, calls } = deps({ titleCount: 2, liveTitleCount: 1 })
+  let clicked = false
+  d.invoke = async (_dir, title) => {
+    clicked = true
+    calls.push(`invoke:${title}`)
+    return { code: 0, out: 'x' }
+  }
+  d.readArchived = () => clicked
+  const r = await uiArchiveChat('C:/i1', 'sid', d)
+  expect(r).toEqual({ clicked: true, verified: true })
+  expect(calls).toEqual(['invoke:Real Chat Name'])
+})
+
+test('click-first: the chat itself AND another live namesake -> still refused', async () => {
+  const { d, calls } = deps({ titleCount: 2, liveTitleCount: 2 })
+  d.readArchived = () => false
+  const r = await uiArchiveChat('C:/i1', 'sid', d)
+  expect(r.clicked).toBe(false)
+  expect(r.reason).toContain('1 other is not archived')
+  expect(calls).toEqual([])
+})
+
 // --- discovering the rendered name itself (chat_rename, 2026-09-15) ------------------------
 // ⛔ THE BUG: a fresh import's disk title can survive just long enough for a caller to read it,
 // then a RUNNING app re-saves its own in-memory record and erases it - so by the time a rename

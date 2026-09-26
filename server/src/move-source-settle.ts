@@ -22,9 +22,14 @@
 //                     archiving the leftover in that app is durable, and a later move from that
 //                     account still finds the chat instead of answering "No chats to move".
 //   · native UNAVAILABLE (not configured, or prefer-native with no debugger) -> the guarded
-//                     legacy path: the app's own Archive control first, read back; only if that
-//                     does not settle it, the flag and the reassert watcher, reported as still
-//                     shown (a flag under a running app is not an archive on screen).
+//                     legacy path: the app's own Archive control, read back. If that does not
+//                     settle it, NO flag under the running app: that flag is the reported bug
+//                     itself (hides nothing, and the next move finds nothing). The record stays as
+//                     the screen shows it, reported as still shown, and is queued to be flagged
+//                     once that app is closed (move-retire-on-close.ts).
+//   · a record filed under a PREVIOUS login of a running profile -> the flag. The app renders only
+//                     the signed-in account's folder, so it never loaded that record and cannot
+//                     save over the flag, and no click or native archive can find it on screen.
 //
 // A source account AT ITS USAGE WALL is archived over other chats' preview servers, each one
 // named (owner's standing order, 2026-09-26; migrate_chat's usage_full applies it for the MCP
@@ -49,6 +54,8 @@ export interface SourceSettle {
   atLimit?: boolean
   /** What that at-limit archive stopped which another chat owned (native-program). */
   stoppedBystanders?: unknown[]
+  /** Queued to be archived once that app is closed (move-retire-on-close.ts). */
+  retiresOnClose?: boolean
   reason?: string
 }
 
@@ -70,8 +77,11 @@ export interface SettleDeps {
     sessionId: string,
     profile: string,
   ) => Promise<{ hits: Array<{ profile: string; changed: boolean }> } | null>
-  /** Fire-and-forget reassertChatArchive for a running app. */
-  watch: (profile: string, sessionId: string) => void
+  /** The record sits in the folder of the account the profile is signed into now, so the app
+   *  renders it (session-launch findVisibleChatMetaPath). Absent: every record counts as shown. */
+  shown?: (profile: string, sessionId: string) => boolean
+  /** Queue the old copy to be flagged once its app is closed (move-retire-on-close.ts). */
+  retireOnClose: (profile: string, sessionId: string) => void
   /** The app's own Archive control, bounded (desktop-sessions uiArchiveWithinBudget). */
   ui: (profile: string, sessionId: string) => Promise<UiArchiveOutcome>
 }
@@ -83,19 +93,26 @@ export interface SettleDeps {
  * chat whose working directory has a SIBLING's preview server running, and a batch of chats in
  * one repo (the usual shape of an account move) left every source row on screen (2026-09-26).
  *
- * Never throws; every profile gets a row.
+ * `closedOnly` settles only what needs no running app (a closed profile, or a record under a
+ * previous login) and skips the rest: a batch's first pass, whose running sources wait for the
+ * second pass to know every chat that landed. Nothing there depends on `leaving`, and settling it
+ * at once means an interrupted batch leaves nothing flagged-but-shown behind.
+ *
+ * Never throws; every profile it visits gets a row.
  */
 export async function settleMovedSource(
   sessionId: string,
   roots: string[],
   leaving: string[],
   deps: SettleDeps,
+  opts: { closedOnly?: boolean } = {},
 ): Promise<SourceSettle[]> {
   const out: SourceSettle[] = []
   const others = leaving.filter((id) => id !== sessionId)
   for (const profile of deps.carriers(sessionId, roots)) {
     try {
-      out.push(await settleOne(sessionId, profile, others, deps))
+      const row = await settleOne(sessionId, profile, others, deps, opts.closedOnly === true)
+      if (row) out.push(row)
     } catch (e) {
       out.push({
         profile,
@@ -129,20 +146,26 @@ async function settleOne(
   profile: string,
   leaving: string[],
   deps: SettleDeps,
-): Promise<SourceSettle> {
+  closedOnly: boolean,
+): Promise<SourceSettle | null> {
   const alreadyArchived = deps.diskArchived(profile, sessionId) === true
   const running = await deps.isRunning(profile).catch(() => false)
-  if (!running) {
+  // Under a previous login the running app never loaded the record: a flag is safe there, and it
+  // is the only route that can reach it. It is not on screen either way, so never "still shown".
+  const hidden = running && deps.shown?.(profile, sessionId) === false
+  if (!running || hidden) {
     const hit = (await deps.flag(sessionId, profile).catch(() => null))?.hits?.[0]
+    const failed = !hit && !alreadyArchived
     return {
       profile,
       via: 'flag',
       changed: hit?.changed === true,
-      stillShown: !hit && !alreadyArchived,
+      stillShown: failed && !hidden,
       ...(alreadyArchived ? { alreadyArchived } : {}),
-      ...(!hit && !alreadyArchived ? { reason: 'the archive flag could not be written' } : {}),
+      ...(failed ? { reason: 'the archive flag could not be written' } : {}),
     }
   }
+  if (closedOnly) return null
 
   const atLimit = deps.atLimit?.(profile) === true
   const native = await deps.native(profile, sessionId, {
@@ -180,17 +203,21 @@ async function settleOne(
       stillShown: false,
       ...(alreadyArchived ? { alreadyArchived } : {}),
     }
-  const hit = (await deps.flag(sessionId, profile).catch(() => null))?.hits?.[0]
-  if (hit?.changed) deps.watch(profile, sessionId)
+  const why = ui.reason ?? native.reason ?? 'the app did not archive it'
+  // An older leftover the store already calls archived needs nothing queued.
+  if (alreadyArchived)
+    return { profile, via: 'ui', changed: false, stillShown: false, alreadyArchived, reason: why }
+  // ⛔ NO FLAG UNDER THE RUNNING APP (review, 2026-09-26). It hid nothing on screen and made the
+  // next move from this account answer "No chats to move" - the owner's report, recreated. The
+  // record stays as the screen shows it, and is flagged once the app is closed.
+  deps.retireOnClose(profile, sessionId)
   return {
     profile,
-    via: 'flag',
-    changed: hit?.changed === true,
-    // The flag is on disk and the watcher defends it, but the running app still lists the chat
-    // until it restarts, so this is not an archive on screen.
-    stillShown: !alreadyArchived,
-    ...(alreadyArchived ? { alreadyArchived } : {}),
-    reason: ui.reason ?? native.reason,
+    via: 'ui',
+    changed: false,
+    stillShown: true,
+    retiresOnClose: true,
+    reason: `${why}. AgentHydra archives it there once that app is closed; until then it stays listed there and can still be moved.`,
   }
 }
 

@@ -349,6 +349,8 @@ export default {
   // archive refused, or it has no native control. The first chat follows, with the account it is
   // still on and the server's reason, which says what to do.
   moveChatsStillShown: '{n} still listed on an old account:',
+  moveChatsStoppedServers:
+    '{account} was at its usage limit, so archiving there stopped {n} preview server(s) other chats were using.',
   // The chat list inside the move dialog: grouped by project, each row opens that chat in Sessions.
   moveChatsGroupCount: '{n} chat(s)',
   moveChatsRowHint: 'Grouped by project. Click a chat to open it in Sessions.',
