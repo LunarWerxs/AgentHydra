@@ -22,10 +22,13 @@ export interface NativeUltracodeOutcome {
   after?: { effort: string | null; ultracode: boolean | null }
 }
 
+/** Land `effort` and `ultracode` on one chat in its running app. Ultracode defaults to on; a move
+ *  passes the source's own pair so the chat keeps the level it had (owner, 2026-09-26). */
 export async function tryNativeUltracode(
   profileDir: string,
   sessionId: string,
-  effort: 'xhigh' | 'max' = 'xhigh',
+  effort = 'xhigh',
+  ultracode = true,
 ): Promise<NativeUltracodeOutcome> {
   if (!/^local_[A-Za-z0-9_-]{1,160}$/.test(sessionId)) {
     return { ok: false, reason: 'expected the exact native chat id (local_...)' }
@@ -56,6 +59,7 @@ export async function tryNativeUltracode(
         profileDir: profile,
         sessionId,
         effort,
+        ultracode,
       }),
     )
     if (result?.ok === true && result.verified === true) {

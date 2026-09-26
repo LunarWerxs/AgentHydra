@@ -549,7 +549,9 @@ def _terminate_for(query: str) -> dict:
 # 100% usage... always kill. That should be a standing order. Honestly, if it's 98% or above,
 # always kill." A chat left running on a walled account burns the last of its quota and then
 # dies at the wall anyway, so the owner's word is already given for these - no flag needed.
-FULL_SOURCE_PCT = 98
+# One owner of the number and the survey read: migrate_chat, whose settle phase uses the same
+# wall to always archive the source row.
+FULL_SOURCE_PCT = migrate_chat.FULL_SOURCE_PCT
 
 
 def _full_source(query: str, survey: dict | None = None) -> dict | None:
@@ -562,28 +564,7 @@ def _full_source(query: str, survey: dict | None = None) -> dict | None:
             survey = hydralib.usage_survey()
     except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError):
         return None
-    inst = str(match.get("instance") or "").strip().lower()
-    if not inst:
-        return None
-    for row in survey.get("rows", []):
-        if row.get("kind") != "desktop":
-            continue
-        names = {str(row.get("label") or "").strip().lower(),
-                 str(row.get("id") or "").replace("/", "\\").rstrip("\\").split("\\")[-1].strip().lower()}
-        if inst not in names:
-            continue
-        result = row.get("result") or {}
-        if result.get("reason") not in (None, "ok"):
-            return None
-        snap = result.get("snapshot") or {}
-        sess = (snap.get("session") or {}).get("pct")
-        week = (snap.get("weekAll") or {}).get("pct")
-        pcts = [p for p in (sess, week) if isinstance(p, (int, float))]
-        if pcts and max(pcts) >= FULL_SOURCE_PCT:
-            return {"instance": match.get("instance"), "num": row.get("num"),
-                    "sessionPct": sess, "weekPct": week}
-        return None
-    return None
+    return migrate_chat.usage_full(str(match.get("instance") or ""), survey)
 
 
 def _attach_terminated(item: _Item) -> None:

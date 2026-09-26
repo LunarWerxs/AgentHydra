@@ -16,11 +16,18 @@ export const NATIVE_PROGRAM_PIN = Object.freeze({
 
 export interface NativeProgramRequest {
   action: 'inspect' | 'archive' | 'ultracode'
-  /** ultracode only: the effort ultracode runs at (the app clears ultracode off any other). */
+  /** ultracode only: the effort to land (low..max; ultracode on needs xhigh or max). */
   effort?: string
+  /** ultracode only: the ultracode flag to land. Default true; false lands a source that ran
+   *  without it, so a moved chat keeps the level it had (owner, 2026-09-26). */
+  ultracode?: boolean
   /** archive only: CLI ids of chats leaving this profile in the same move; their servers are
    *  not bystanders of this archive. */
   leavingCliSessionIds?: string[]
+  /** archive only: the source account is at its usage limit, so a move off it ALWAYS archives
+   *  the source row (owner, 2026-09-26). Servers and HTML previews another chat owns under the
+   *  cwd are stopped by that archive, and the result names each one (`stoppedBystanders`). */
+  sourceAtLimit?: boolean
   pid: number
   profileDir: string
   accountId?: string
@@ -32,6 +39,15 @@ export interface NativeProgramRequest {
   expectedTitle?: string
 }
 export type NativeRequest = NativeProgramRequest
+
+/** The effort levels the app's picker offers; the ultracode action accepts exactly these. */
+export const NATIVE_EFFORTS: readonly string[] = Object.freeze([
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+])
 
 /**
  * The runtime is deliberately self-contained: its source is evaluated in the inspected process.
@@ -347,22 +363,34 @@ function nativeCheckSiblingSessions(
   }
 }
 
-function nativeCheckPreviewPrefixes(previewManager: any, effectiveCwd: string): void {
-  for (const preview of previewManager.htmlPreviews.values()) {
+function nativeCheckPreviewPrefixes(
+  previewManager: any,
+  effectiveCwd: string,
+  sourceAtLimit = false,
+): any[] {
+  const stopping: any[] = []
+  for (const [previewId, preview] of previewManager.htmlPreviews.entries()) {
     if (typeof preview?.cwd !== 'string') {
       nativeRefuse('shared working directory preview state is invalid')
     }
     // Pinned stopServersForWorktree uses this raw prefix, even without a path separator.
     if (preview.cwd.startsWith(effectiveCwd)) {
-      nativeRefuse('shared working directory has HTML previews that archive would stop')
+      if (!sourceAtLimit) {
+        nativeRefuse('shared working directory has HTML previews that archive would stop')
+      }
+      stopping.push({ kind: 'html-preview', id: String(previewId), cwd: preview.cwd })
     }
   }
+  return stopping
 }
 
 /**
  * A prefix-matched HTML preview can belong to a different directory, even when no other session
  * shares this exact cwd. No archive may stop a resource another chat owns: HTML previews under
- * the prefix always refuse, and registry servers refuse unless the archived chat owns them all.
+ * the prefix refuse, and registry servers refuse unless the archived chat owns them all.
+ * The one exception is a source at its usage limit (`sourceAtLimit`): the owner's order is that
+ * a move off a walled account always archives the source row, so what the archive will stop is
+ * returned for the result instead of refused.
  */
 function nativeCheckSharedPreviewSafety(
   env: any,
@@ -371,7 +399,8 @@ function nativeCheckSharedPreviewSafety(
   session: any,
   effectiveCwd: string,
   leavingCliSessionIds: string[] = [],
-): void {
+  sourceAtLimit = false,
+): any[] {
   nativeCheckMainIdentity(env, preview)
   nativeCheckSiblingSessions(env, manager, session, effectiveCwd)
   const previewManager = preview.value
@@ -395,10 +424,18 @@ function nativeCheckSharedPreviewSafety(
     if (!owner) return true
     return owner.isArchived !== true && !leavingCliSessionIds.includes(owner.cliSessionId)
   }
-  if (servers.some(bystander)) {
+  const bystanders = servers.filter(bystander)
+  if (bystanders.length && !sourceAtLimit) {
     nativeRefuse('shared working directory has servers that archive would stop')
   }
-  nativeCheckPreviewPrefixes(previewManager, effectiveCwd)
+  return [
+    ...bystanders.map((server: any) => ({
+      kind: 'server',
+      id: String(server?.serverId ?? ''),
+      sessionId: server?.sessionId ?? null,
+    })),
+    ...nativeCheckPreviewPrefixes(previewManager, effectiveCwd, sourceAtLimit),
+  ]
 }
 
 function nativeMainInfo(env: any, preview: any): any {
@@ -601,13 +638,14 @@ async function nativeArchive(
   nativeCheckIdentity(env, found, request, settled)
   if (nativeSelect(manager, request) !== session)
     nativeRefuse('session object changed before archive')
-  nativeCheckSharedPreviewSafety(
+  const stoppedBystanders = nativeCheckSharedPreviewSafety(
     env,
     preview,
     manager,
     session,
     effectiveCwd,
     Array.isArray(request.leavingCliSessionIds) ? request.leavingCliSessionIds : [],
+    request.sourceAtLimit === true,
   )
   // No await between the final guards and this native call. cleanupWorktree:false preserves
   // checkout files. The native method emits the same archived event used by the stock UI.
@@ -618,14 +656,16 @@ async function nativeArchive(
   if (nativeSelect(manager, request) !== session)
     nativeRefuse('session object changed during archive')
   const after = nativeSnapshot(manager, session)
-  return nativeArchiveResult(env, found, session, before, after, flags, mainInfo, state)
+  const result = nativeArchiveResult(env, found, session, before, after, flags, mainInfo, state)
+  return stoppedBystanders.length ? { ...result, stoppedBystanders } : result
 }
 
 /**
- * Ultracode ON for one chat, through the app's own manager.applyFlagSettings - the call its
- * effort picker makes, so memory, the saved record and a running engine all get it. A disk
- * stamp alone cannot do this while the app runs: the app holds the chat in memory and writes
- * its own copy back (2026-09-26: four moved chats booted with ultracode off).
+ * One chat's effort and ultracode flag, through the app's own manager.applyFlagSettings - the
+ * call its effort picker makes, so memory, the saved record and a running engine all get it. A
+ * disk stamp alone cannot do this while the app runs: the app holds the chat in memory and
+ * writes its own copy back (2026-09-26: four moved chats booted with ultracode off). The flag
+ * defaults to on; a move passes the source's own flag and effort so the chat keeps its level.
  */
 async function nativeUltracode(env: any, found: any, request: any, settled: any, state: any) {
   const manager = found.manager
@@ -634,15 +674,17 @@ async function nativeUltracode(env: any, found: any, request: any, settled: any,
   }
   const session = nativeSelect(manager, request)
   const before = nativeSnapshot(manager, session)
+  const wantUltracode = request.ultracode !== false
   state.dispatch = 'sent'
   await manager.applyFlagSettings(session.sessionId, {
-    ultracode: true,
+    ultracode: wantUltracode,
     effortLevel: request.effort,
   })
   nativeCheckIdentity(env, found, request, settled)
   const after = nativeSnapshot(manager, nativeSelect(manager, request))
   const pick = (s: any) => ({ effort: s.effort, ultracode: s.sessionSettings?.ultracode ?? null })
-  const verified = after.sessionSettings?.ultracode === true && after.effort === request.effort
+  const verified =
+    (after.sessionSettings?.ultracode === true) === wantUltracode && after.effort === request.effort
   return {
     ok: verified,
     verified,
@@ -754,11 +796,16 @@ export function nativeProgram(request: NativeProgramRequest): string {
   ) {
     throw Error('Archive requires accountId, orgId, sessionId and cliSessionId')
   }
-  if (
-    request.action === 'ultracode' &&
-    (!request.sessionId || !['xhigh', 'max'].includes(String(request.effort)))
-  ) {
-    throw Error('Ultracode requires sessionId and an effort of xhigh or max')
+  if (request.action === 'ultracode') {
+    if (!request.sessionId || !NATIVE_EFFORTS.includes(String(request.effort)))
+      throw Error(`Ultracode requires sessionId and an effort of ${NATIVE_EFFORTS.join('/')}`)
+    if (request.ultracode !== undefined && typeof request.ultracode !== 'boolean')
+      throw Error('ultracode must be a boolean')
+    if (request.ultracode !== false && !['xhigh', 'max'].includes(String(request.effort)))
+      throw Error('Ultracode on requires an effort of xhigh or max')
+  }
+  if (request.sourceAtLimit !== undefined && typeof request.sourceAtLimit !== 'boolean') {
+    throw Error('sourceAtLimit must be a boolean')
   }
   if (
     request.leavingCliSessionIds !== undefined &&

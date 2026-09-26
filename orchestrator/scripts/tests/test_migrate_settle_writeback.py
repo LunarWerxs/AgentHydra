@@ -75,6 +75,8 @@ class _Landing:
         self.settle_note = ""
         self.source_row = None
         self.source_app_running = None
+        self.source_effort = None
+        self.stopped_bystanders = None
         self.doctrine = {"verdict": "bypassPermissions"}
         self.sw = _Stopwatch()
 
@@ -96,6 +98,8 @@ class PhaseSettleProvisionalTest(unittest.TestCase):
         self._patch(migrate_chat, "_settle_source_row",
                     lambda *a, **k: (" Source row settled.", "settled"))
         self._patch(mutationlib, "advance_phase", lambda mid, phase: self.phases.append(phase))
+        # No usage survey from a test: the source is not at its limit.
+        self._patch(migrate_chat, "source_at_limit", lambda land: None)
         self.phases = []
 
     def _patch(self, obj, name, value):

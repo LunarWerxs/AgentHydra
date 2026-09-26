@@ -8,6 +8,7 @@ import {
   setClaudeNativeProfileConfig,
 } from '../claude-native-settings'
 import { tryNativeUltracode } from '../claude-native-ultracode'
+import { NATIVE_EFFORTS } from '../core/claude-native/native-program'
 import { listInstances } from '../core/instances'
 import { rememberMigratedSettings } from '../db'
 import { app } from '../http-app'
@@ -252,14 +253,20 @@ async function uiArchiveWithinBudget(
   }
 }
 
-// Ultracode ON for one chat inside its RUNNING app (claude-native-ultracode.ts): the only
-// route that reaches the app's memory and a live engine, where a disk stamp does not.
+// Effort + ultracode for one chat inside its RUNNING app (claude-native-ultracode.ts): the only
+// route that reaches the app's memory and a live engine, where a disk stamp does not. `effort`
+// is any picker level (default xhigh); `ultracode` defaults on, and false lands a chat without it.
 app.post('/api/claude-native/ultracode', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.profileDir !== 'string' || typeof body.sessionId !== 'string')
     return c.json({ ok: false, reason: 'profileDir and sessionId are required' }, 400)
-  const effort = body.effort === 'max' ? 'max' : 'xhigh'
-  const out = await tryNativeUltracode(body.profileDir, body.sessionId, effort)
+  const effort = body.effort === undefined ? 'xhigh' : String(body.effort)
+  const ultracode = body.ultracode !== false
+  if (!NATIVE_EFFORTS.includes(effort))
+    return c.json({ ok: false, reason: `effort must be one of ${NATIVE_EFFORTS.join('/')}` }, 400)
+  if (ultracode && effort !== 'xhigh' && effort !== 'max')
+    return c.json({ ok: false, reason: 'ultracode on requires an effort of xhigh or max' }, 400)
+  const out = await tryNativeUltracode(body.profileDir, body.sessionId, effort, ultracode)
   return c.json(out, out.ok ? 200 : 409)
 })
 
@@ -305,8 +312,11 @@ app.post('/api/sessions/:id/native-archive', async (c) => {
   const leaving = Array.isArray(body.leaving)
     ? body.leaving.filter((id: unknown): id is string => typeof id === 'string')
     : []
+  // `sourceAtLimit`: the move is draining an account at its usage limit, so the archive goes
+  // ahead even over another chat's servers and names each one it stopped (owner, 2026-09-26).
   const result = await tryNativeArchiveChat(profile, c.req.param('id'), {
     leavingCliSessionIds: leaving,
+    sourceAtLimit: body.sourceAtLimit === true,
   })
   if (result.kind === 'unavailable')
     return c.json({ ...result, available: false, ok: false, verified: false })

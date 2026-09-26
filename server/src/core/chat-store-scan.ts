@@ -38,6 +38,12 @@ export interface DossierChat {
    *  the answer is also the name in the file, so a hand-check cannot silently invert. */
   isArchived: boolean
   permissionMode: string | null
+  /** The effort the app runs this chat at (`effort` in the record: low..max), null when unset. */
+  effort: string | null
+  /** `sessionSettings.ultracode` - true on, false off, null when the record never set it. A move
+   *  carries this and `effort` from the source, so both are shown on every row (owner,
+   *  2026-09-26: a moved chat must keep the effort level it had). */
+  ultracode: boolean | null
   /** The `<accountUuid>` folder this record is filed under (the first path segment below
    *  `claude-code-sessions`). */
   accountUuid: string | null
@@ -85,6 +91,12 @@ function textList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((x: unknown) => typeof x === 'string') : []
 }
 
+/** `sessionSettings.ultracode` as a boolean, or null when the record never set it. */
+function ultracodeOf(meta: unknown): boolean | null {
+  const flag = metaField(metaField(meta, 'sessionSettings'), 'ultracode')
+  return typeof flag === 'boolean' ? flag : null
+}
+
 /** The file's mtime as ISO, or null when stat cannot read it (deleted mid-scan, permissions). */
 function metaMtimeIso(path: string): string | null {
   try {
@@ -121,6 +133,8 @@ function chatRecordFromFile(
     archived: !!metaField(meta, 'isArchived'),
     isArchived: !!metaField(meta, 'isArchived'),
     permissionMode: anyText(metaField(meta, 'permissionMode')),
+    effort: nonEmptyText(metaField(meta, 'effort')),
+    ultracode: ultracodeOf(meta),
     accountUuid,
     loginUuid,
     staleLogin:

@@ -38,6 +38,8 @@ const row = (over: Partial<ChatListRow>): ChatListRow => ({
   isArchived: false,
   lastActivityAt: null,
   cwd: null,
+  effort: null,
+  ultracode: null,
   live: false,
   livePid: null,
   done: false,

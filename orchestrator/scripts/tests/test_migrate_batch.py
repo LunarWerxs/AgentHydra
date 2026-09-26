@@ -697,6 +697,10 @@ class DoctrineRestampTest(_MigrateBatchTest):
         self.patch(migrate_chat, "watch_bypass", lambda *a, **k: watched)
         self.patch(migrate_chat.hydralib, "api_post", lambda *a, **k: {"ok": True})
         self.patch(migrate_chat, "_adjudicate_bypass", lambda *a, **k: verdict)
+        # The landed record as the doctrine stamp leaves it, and a running app that takes it.
+        self.patch(migrate_chat.stamplib, "read_meta",
+                   lambda _p: {"effort": "xhigh", "sessionSettings": {"ultracode": True}})
+        self.patch(migrate_chat, "effort_in_app", lambda *a, **k: True)
 
     def test_the_restamp_stops_as_soon_as_both_halves_take(self):
         """The win: stop burning the ceiling when the app settled in a few hundred
@@ -731,6 +735,33 @@ class DoctrineRestampTest(_MigrateBatchTest):
         got = _run_stamp()
         assert got["ultracode"] is False
         assert clock.total >= migrate_chat.DOCTRINE_RESTAMP_SECS, "the 4s ceiling must still be paid"
+
+    def test_a_running_target_gets_the_sources_own_effort_not_the_doctrine(self):
+        """A moved chat keeps the level it had (owner, 2026-09-26). The doctrine stamp writes
+        xhigh + ultracode; a source that ran at high without ultracode must land at high, pushed
+        into the running app, and the record must say so too."""
+        self.stamp_deps(_FakeClock(),
+                        watched={"mode": "bypassPermissions", "flips": 0, "stable": True},
+                        verdict=("app-confirmed", "picker agreed", ""))
+        record = {"effort": "xhigh", "sessionSettings": {"ultracode": True}}
+        self.patch(migrate_chat.stamplib, "stamp_doctrine",
+                   lambda _p: {"bypass": True, "ultracode": True, "error": ""})
+        self.patch(migrate_chat.stamplib, "read_meta", lambda _p: dict(record))
+
+        def mutate(_path, apply):
+            apply(record)
+            return {"error": None, "changed": True, "meta": record}
+        self.patch(migrate_chat.stamplib, "mutate_meta", mutate)
+        pushed = []
+        self.patch(migrate_chat, "effort_in_app",
+                   lambda target, path, want: pushed.append(dict(want)) or True)
+        carry = {"effort": "high", "ultracode": False}
+        got = migrate_chat._stamp_automation_doctrine(
+            "sid", {"name": "t", "isRunning": True},
+            [{"cliSessionId": "sid", "instance": "t", "metaPath": "m"}], {}, carry=carry)
+        assert pushed == [carry], "the running app must get the source's pair"
+        assert record["effort"] == "high" and record["sessionSettings"]["ultracode"] is False
+        assert got["effort"] == {"from": carry, "to": carry, "verified": True, "via": "app"}
 
 
 class ArchiveGateTest(unittest.TestCase):

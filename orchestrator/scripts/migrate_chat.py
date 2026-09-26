@@ -1235,6 +1235,52 @@ def clear_resurrected_source_record(session_id: str, src_instance: str, target: 
     return _tombstone_source_session_file(session_id, src_instance, target, fleet_data)
 
 
+# The owner's usage wall (Michael, 2026-09-20: "if it's 98% or above, always kill"; 2026-09-26:
+# a move off such an account always archives the source row). migrate_batch re-exports it.
+FULL_SOURCE_PCT = 98
+
+
+def usage_full(instance: str, survey: dict) -> dict | None:
+    """The desktop account `instance` (its label or dir leaf) when EITHER bucket - the 5-hour
+    session or the weekly all-models - is at FULL_SOURCE_PCT or above, else None. An unreadable
+    row answers None: an unverified reading is never grounds to override a rail."""
+    inst = str(instance or "").strip().lower()
+    if not inst:
+        return None
+    for row in (survey or {}).get("rows", []):
+        if row.get("kind") != "desktop":
+            continue
+        names = {str(row.get("label") or "").strip().lower(),
+                 str(row.get("id") or "").replace("/", "\\").rstrip("\\").split("\\")[-1].strip().lower()}
+        if inst not in names:
+            continue
+        result = row.get("result") or {}
+        if result.get("reason") not in (None, "ok"):
+            return None
+        snap = result.get("snapshot") or {}
+        sess = (snap.get("session") or {}).get("pct")
+        week = (snap.get("weekAll") or {}).get("pct")
+        pcts = [p for p in (sess, week) if isinstance(p, (int, float))]
+        if pcts and max(pcts) >= FULL_SOURCE_PCT:
+            return {"instance": instance, "num": row.get("num"),
+                    "sessionPct": sess, "weekPct": week}
+        return None
+    return None
+
+
+def source_at_limit(land) -> dict | None:
+    """usage_full for this landing's SOURCE account, off the daemon's cached usage survey (one
+    read serves a whole batch). None when the survey cannot be read."""
+    src_name = str(land.src_instance or "")
+    if not src_name or src_name.lower() == str(land.target.get("name", "")).lower():
+        return None
+    try:
+        survey = hydralib.usage_survey(max_age_secs=120)
+    except hydralib.DaemonError:
+        return None
+    return usage_full(src_name, survey)
+
+
 def source_app_running(match: dict, target: dict, fleet: dict) -> bool:
     """Was the SOURCE account's app running when we settled it?
 
@@ -1561,25 +1607,48 @@ def _adjudicate_bypass(session_id: str, chat_title, target: dict, meta_path: str
     return "disk-only", f"the app's picker did not confirm ({said})", remedy
 
 
-def _disk_wants_ultracode(meta_path: str) -> bool:
-    """Did the doctrine stamp put ultracode ON in this record? (Off for an automation chat, or
-    when the owner's doctrine turns it off - then nothing is pushed into the app either.)"""
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def _effort_pair(meta: dict) -> dict | None:
+    """{effort, ultracode} as one record holds them, or None when it names no known effort.
+    Ultracode only runs at xhigh or max (the app clears it off any other level), so a flag
+    beside a lower effort is read as off rather than carried into a refusal."""
+    effort = meta.get("effort")
+    if effort not in EFFORTS:
+        return None
+    ultra = (meta.get("sessionSettings") or {}).get("ultracode") is True
+    return {"effort": effort, "ultracode": ultra and effort in ("xhigh", "max")}
+
+
+def source_effort(match: dict) -> dict | None:
+    """The SOURCE chat's own effort and ultracode flag, read off its record before the move.
+
+    ⛔ A MOVED CHAT KEEPS THE LEVEL IT HAD (owner, 2026-09-26: "they should always be set to the
+    level that they were previously set to of effort"). Three chats moved off a walled account
+    that day, all xhigh + ultracode; two landed in a running app with neither, because the disk
+    carry never reaches a running app's memory. None when the record cannot be read or names no
+    effort - the doctrine stamp then decides alone."""
+    path = match.get("metaPath")
+    if not path:
+        return None
     try:
-        return (stamplib.read_meta(meta_path).get("sessionSettings") or {}).get("ultracode") is True
+        return _effort_pair(stamplib.read_meta(path))
     except (OSError, ValueError):
-        return False
+        return None
 
 
-def ultracode_in_app(target: dict, meta_path: str) -> bool | str:
-    """Turn ultracode on INSIDE the target's running app for the chat whose record is
-    `meta_path`, via the daemon's native route. True when the app read it back on; otherwise
-    the reason, for the report. Module scope so a test can replace it; never raises."""
-    effort = stamplib.ULTRACODE_EFFORT if stamplib.ULTRACODE_EFFORT in ("xhigh", "max") else "xhigh"
+def effort_in_app(target: dict, meta_path: str, want: dict) -> bool | str:
+    """Land `want` ({effort, ultracode}) INSIDE the target's running app for the chat whose
+    record is `meta_path`, via the daemon's native route (the app's own applyFlagSettings).
+    True when the app read both back; otherwise the reason, for the report. Module scope so a
+    test can replace it; never raises."""
     try:
         got = hydralib.api_post_once("/api/claude-native/ultracode", {
             "profileDir": str(target.get("dir") or ""),
             "sessionId": _Path(meta_path).stem,
-            "effort": effort,
+            "effort": want["effort"],
+            "ultracode": bool(want["ultracode"]),
         })
     except hydralib.DaemonError as err:
         return f"app refused: {str(err)[:160]}"
@@ -1590,9 +1659,68 @@ def ultracode_in_app(target: dict, meta_path: str) -> bool | str:
     return str((got or {}).get("reason") if isinstance(got, dict) else got)[:160] or "no verdict"
 
 
+def _describe_effort(pair: dict | None) -> str:
+    if not pair:
+        return "no effort"
+    return f"{pair['effort']}{' + ultracode' if pair['ultracode'] else ''}"
+
+
+def _land_effort(target: dict, meta_path: str, carry: dict | None) -> dict:
+    """Put the landed chat at the effort the owner left it on: the source's own pair when its
+    record had one (`carry`), else whatever the doctrine stamp just wrote. Always onto the
+    record; and INTO the target app as well when it is running, because a running app holds the
+    chat in memory, writes its own copy back, and its engine takes effort from the app, never
+    from the file. Returns the report half (`effortCarried`); never raises."""
+    try:
+        disk = stamplib.read_meta(meta_path)
+    except (OSError, ValueError) as err:
+        return {"from": carry, "to": None, "verified": False, "via": None,
+                "why": f"landed record unreadable: {str(err)[:120]}"}
+    want = carry or _effort_pair(disk)
+    if want is None:
+        return {"from": None, "to": None, "verified": False, "via": None,
+                "why": "neither the source nor the doctrine stamp named an effort"}
+    if carry and _effort_pair(disk) != want:
+        def _apply(meta: dict) -> bool:
+            settings = dict(meta.get("sessionSettings") or {})
+            settings["ultracode"] = bool(want["ultracode"])
+            meta["sessionSettings"] = settings
+            meta["effort"] = want["effort"]
+            return True
+        wrote = stamplib.mutate_meta(meta_path, _apply)
+        if wrote["error"]:
+            return {"from": carry, "to": _effort_pair(disk), "verified": False, "via": "disk",
+                    "why": f"record write failed: {wrote['error']}"}
+    if target.get("isRunning"):
+        in_app = effort_in_app(target, meta_path, want)
+        if in_app is True:
+            return {"from": carry, "to": want, "verified": True, "via": "app"}
+        return {"from": carry, "to": want, "verified": False, "via": "app", "why": in_app}
+    try:
+        landed = _effort_pair(stamplib.read_meta(meta_path))
+    except (OSError, ValueError):
+        landed = None
+    # A closed app reads this record at its next start, so the record IS the landing.
+    return {"from": carry, "to": landed, "verified": landed == want, "via": "disk",
+            **({} if landed == want else {"why": "the record did not read back as written"})}
+
+
+def _effort_note(landed: dict) -> str:
+    """One report clause for `effortCarried`: what landed, where from, and who confirmed it."""
+    source = "carried from the source" if landed.get("from") else "from the doctrine stamp"
+    what = _describe_effort(landed.get("to") or landed.get("from"))
+    if landed.get("verified"):
+        who = ("the target app itself confirms it" if landed.get("via") == "app"
+               else "written to the record; the closed app adopts it at its next start")
+        return f"effort {what} {source} - {who}"
+    return (f"⚠ effort {what} NOT confirmed ({landed.get('why') or 'no verdict'}) - "
+            "the chat may run at another level until that app restarts")
+
+
 def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict],
                                fleet: dict, chat_title=None,
-                               watched: dict | None = None, sw=None) -> dict:
+                               watched: dict | None = None, sw=None,
+                               carry: dict | None = None) -> dict:
     """The automation doctrine (module docstring): stamp bypassPermissions on every verified
     landing, and ultracode, mechanically, into the landed chat's meta record (stamplib
     docstring), then ADJUDICATE what may actually be claimed about the mode
@@ -1657,19 +1785,14 @@ def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict],
         if watched["flips"]:
             uc_note += (f"; the app re-saved over a doctrine stamp {watched['flips']}x during "
                         f"the watch and was re-stamped each time")
-        if uc_ok and target.get("isRunning") and _disk_wants_ultracode(meta_path):
-            # A running app holds the record in memory and writes its OWN view back, and its
-            # engine takes effort from the app, never from the file - so a disk stamp alone
-            # left four chats moved on 2026-09-26 running with ultracode OFF under a record
-            # that said on. The app's own applyFlagSettings, through the native route, is the
-            # one write that reaches its memory and a live engine.
-            in_app = ultracode_in_app(target, meta_path)
-            if in_app is True:
-                uc_note += "; the target app itself confirms ultracode on"
-            else:
-                uc_ok = False
-                uc_note += (f"; ultracode is on disk but NOT in the running app ({in_app}) - "
-                            "the chat runs without it until that app restarts")
+        # The effort half lands LAST, over the doctrine stamp: the source's own level when it
+        # had one (_land_effort). A running app gets it through its own applyFlagSettings - a
+        # disk stamp alone left four chats moved on 2026-09-26 running with ultracode OFF
+        # under a record that said on. `ultracodeStamped` now means "the level landed": the
+        # source's own pair when there was one, else the doctrine stamp AND its in-app push.
+        effort_landed = _land_effort(target, meta_path, carry)
+        uc_ok = bool(effort_landed["verified"]) and (uc_ok or carry is not None)
+        uc_note += f"; {_effort_note(effort_landed)}"
         if sw is not None:
             sw.lap("stamp-doctrine")  # the daemon stamp + disk stamps + re-stamp poll
         verdict, evidence, remedy = _adjudicate_bypass(
@@ -1695,8 +1818,11 @@ def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict],
         verdict, evidence = "unknown", "the dossier gave no metaPath"
         remedy = _bypass_remedy_cmd(session_id, chat_title)
         uc_note = "not stamped - the dossier gave no metaPath; run automation_chat.py on it"
+        effort_landed = {"from": carry, "to": None, "verified": False, "via": None,
+                         "why": "the dossier gave no metaPath"}
     return {"stamped": stamped, "stampNote": stamp_note, "ultracode": uc_ok, "note": uc_note,
-            "mode": mode, "verdict": verdict, "evidence": evidence, "remedy": remedy}
+            "mode": mode, "verdict": verdict, "evidence": evidence, "remedy": remedy,
+            "effort": effort_landed}
 
 
 def out(payload: dict, as_json: bool, code: int) -> int:
@@ -1720,7 +1846,8 @@ class _Landing:
 
     __slots__ = ("parsed", "sw", "notes", "match", "fleet", "target", "session_id",
                  "chat_title", "src_instance", "result", "after", "settle_note",
-                 "source_row", "doctrine", "mutation_id", "source_app_running")
+                 "source_row", "doctrine", "mutation_id", "source_app_running",
+                 "source_effort", "stopped_bystanders")
 
     def __init__(self, **kw) -> None:
         for slot in _Landing.__slots__:
@@ -1770,6 +1897,8 @@ def move_only(argv: list[str]) -> _MoveOutcome:
         chat_title = match.get("title")
         door_title = _untruncated_title(session_id, chat_title)
         src_name = str(match.get("instance") or "")
+        # Read BEFORE anything touches the source: the level the chat lands at (_land_effort).
+        carry = source_effort(match)
         sw.lap("resolve")
         _check_archived_or_raise(match, parsed.archived)
 
@@ -1832,7 +1961,7 @@ def move_only(argv: list[str]) -> _MoveOutcome:
         landing=_Landing(parsed=parsed, sw=sw, notes=notes, match=match, fleet=fleet,
                          target=target, session_id=session_id, chat_title=chat_title,
                          src_instance=src_instance, result=result, after=after,
-                         mutation_id=mutation_id),
+                         mutation_id=mutation_id, source_effort=carry),
         as_json=parsed.as_json)
 
 
@@ -1853,8 +1982,25 @@ def phase_settle(land: _Landing) -> None:
     # Read BEFORE the settle: the actuator can close nothing, but a settle that takes several
     # seconds must not be judged against a fleet read taken after it.
     land.source_app_running = source_app_running(land.match, land.target, land.fleet)
-    land.settle_note, land.source_row = _settle_source_row(
-        land.match, land.target, land.fleet, land.session_id, land.chat_title, sw=land.sw)
+    # ⛔ A MOVE OFF A WALLED ACCOUNT ALWAYS ARCHIVES ITS SOURCE ROW (owner, 2026-09-26: "That
+    # should always be part of the migration, at the very least if the account was migrated due
+    # to a limit being reached"). At the limit the native archive goes ahead over another chat's
+    # servers and previews under the same folder, and the report names each one it stopped.
+    full = source_at_limit(land) if land.source_app_running else None
+    src_inst = resolve_instance(land.fleet, str(land.src_instance or "")) if full else None
+    nativearchivelib.set_at_limit([src_inst.get("dir")] if src_inst and src_inst.get("dir") else ())
+    try:
+        land.settle_note, land.source_row = _settle_source_row(
+            land.match, land.target, land.fleet, land.session_id, land.chat_title, sw=land.sw)
+    finally:
+        nativearchivelib.set_at_limit(())
+    land.stopped_bystanders = nativearchivelib.take_stopped(land.session_id)
+    if land.stopped_bystanders:
+        names = ", ".join(f"{s.get('kind')} {s.get('id')}" for s in land.stopped_bystanders)
+        land.settle_note += (
+            f" {land.src_instance} is at its usage limit ({full.get('sessionPct')}% 5-hour / "
+            f"{full.get('weekPct')}% weekly), so the archive went ahead and stopped what another "
+            f"chat ran under that folder: {names}.")
     if land.source_app_running and land.source_row in ("settled", "flagged"):
         land.settle_note += (
             f" ⚠ PROVISIONAL: {land.match.get('instance')}'s app was RUNNING, and a running app "
@@ -1883,7 +2029,7 @@ def phase_stamp(land: _Landing, watched: dict | None = None) -> None:
     land.sw.resume()
     land.doctrine = _stamp_automation_doctrine(
         land.session_id, land.target, land.after, land.fleet, land.chat_title, watched=watched,
-        sw=land.sw)
+        sw=land.sw, carry=land.source_effort)
     land.sw.lap("stamp")  # whatever is left after the two laps the doctrine records itself
     if land.mutation_id:
         # ⛔ NOT "stamped" WHILE THE SOURCE TWIN IS STILL VISIBLE (review finding, 2026-09-14). The
@@ -1960,6 +2106,13 @@ def landing_payload(land: _Landing) -> dict:
         "bypassRemedy": doctrine["remedy"],
         "permissionMode": mode,
         "ultracodeStamped": uc_ok,
+        # The level the chat runs at on landing: `from` the source's own pair (null = the
+        # source named none, so the doctrine decided), `to` what landed, `via` app|disk.
+        "effortCarried": doctrine.get("effort") or {
+            "from": land.source_effort, "to": None, "verified": False, "via": None,
+            "why": "the stamp phase did not run"},
+        # Servers and previews another chat owned that the at-limit source archive stopped.
+        **({"stoppedBystanders": land.stopped_bystanders} if land.stopped_bystanders else {}),
         # sourceRow is the machine half; sourceSettled stays for older readers.
         "sourceRow": source_row,
         "sourceSettled": source_row in ("settled", "flagged", "none"),

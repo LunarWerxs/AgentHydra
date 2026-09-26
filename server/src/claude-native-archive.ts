@@ -26,6 +26,8 @@ export type NativeArchiveOutcome =
       reason?: string
       identity?: Record<string, unknown>
       session?: Record<string, unknown>
+      /** What an at-limit archive stopped that another chat owned (native-program). */
+      stoppedBystanders?: unknown[]
       timingsMs: { total: number }
     }
 
@@ -42,6 +44,8 @@ interface NativeArchiveRun {
   mutationSent: boolean
   /** CLI ids of chats leaving this profile in the same move (native-program's archive guard). */
   leavingCliSessionIds: string[]
+  /** The move is draining this profile at its usage limit: archive over bystanders, name them. */
+  sourceAtLimit: boolean
   lockedProfile?: string
   client?: ClaudeInspectorClient
 }
@@ -260,6 +264,9 @@ function nativeArchiveFinal(
     dispatch,
     identity,
     session: archived.session,
+    ...(Array.isArray(archived.stoppedBystanders) && archived.stoppedBystanders.length
+      ? { stoppedBystanders: archived.stoppedBystanders }
+      : {}),
     timingsMs: { total: Math.round(performance.now() - run.started) },
   }
 }
@@ -319,6 +326,7 @@ async function nativeArchiveAttempt(
     sessionId: session.sessionId,
     cliSessionId: session.cliSessionId,
     ...(run.leavingCliSessionIds.length ? { leavingCliSessionIds: run.leavingCliSessionIds } : {}),
+    ...(run.sourceAtLimit ? { sourceAtLimit: true } : {}),
   })
   run.mutationSent = true
   const archived = await client.evaluate<unknown>(expression)
@@ -328,7 +336,7 @@ async function nativeArchiveAttempt(
 export async function tryNativeArchiveChat(
   profileDir: string,
   requestedSessionId: string,
-  options: { nativeOnly?: boolean; leavingCliSessionIds?: string[] } = {},
+  options: { nativeOnly?: boolean; leavingCliSessionIds?: string[]; sourceAtLimit?: boolean } = {},
   deps: NativeArchiveDeps = {},
 ): Promise<NativeArchiveOutcome> {
   const run: NativeArchiveRun = {
@@ -338,6 +346,7 @@ export async function tryNativeArchiveChat(
     leavingCliSessionIds: (options.leavingCliSessionIds ?? []).filter((id) =>
       /^[A-Za-z0-9-]{8,80}$/.test(id),
     ),
+    sourceAtLimit: options.sourceAtLimit === true,
   }
   try {
     return await nativeArchiveAttempt(run, profileDir, requestedSessionId, deps)

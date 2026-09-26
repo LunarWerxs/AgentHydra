@@ -387,6 +387,18 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
       ok: false,
       dispatch: 'not-sent',
     })
+    // A source at its usage limit is always archived (owner, 2026-09-26): the staying chat's
+    // server no longer refuses it, and the result names what the archive stopped.
+    const walled = sibling()
+    walled.previews.htmlPreviews.set('html-preview-other', { cwd: walled.target.cwd })
+    expect(await walled.run({ sourceAtLimit: true })).toMatchObject({
+      ok: true,
+      dispatch: 'sent',
+      stoppedBystanders: [
+        { kind: 'server', id: 'sibling-server', sessionId: 'local_other' },
+        { kind: 'html-preview', id: 'html-preview-other', cwd: walled.target.cwd },
+      ],
+    })
   })
   test("shared cwd refuses another chat's registry servers, whatever their state", async () => {
     const h = harness()

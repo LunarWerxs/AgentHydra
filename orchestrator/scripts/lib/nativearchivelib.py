@@ -29,6 +29,24 @@ def set_leaving(session_ids) -> None:
     _leaving = tuple(str(s) for s in (session_ids or ()) if s)
 
 
+# Source profile dirs (casefolded) the CURRENT move is draining at their usage limit. A move off
+# a walled account ALWAYS archives its source row (owner, 2026-09-26), so the archive goes ahead
+# over another chat's servers and names what it stopped; migrate_chat.phase_settle sets it.
+_at_limit: frozenset[str] = frozenset()
+# session id -> what an at-limit archive stopped, taken once by the caller that reports it.
+_stopped: dict[str, list] = {}
+
+
+def set_at_limit(profile_dirs) -> None:
+    global _at_limit
+    _at_limit = frozenset(str(p).casefold() for p in (profile_dirs or ()) if p)
+
+
+def take_stopped(session_id: str) -> list:
+    """What the at-limit archive of `session_id` stopped (servers, HTML previews); [] if none."""
+    return _stopped.pop(str(session_id), [])
+
+
 def _terminal(reason: str, *, dispatch: str = "not-sent") -> tuple[int, str]:
     return NATIVE_TERMINAL, json.dumps({
         "available": True, "ok": False, "verified": False,
@@ -71,6 +89,8 @@ def try_archive(session_id: str, instance: str) -> tuple[int, str] | None:
         leaving = [s for s in _leaving if s != session_id]
         if leaving:
             request["leaving"] = leaving
+        if profile.casefold() in _at_limit:
+            request["sourceAtLimit"] = True
         body = hydralib.api_post_once(path, request, timeout=HTTP_TIMEOUT_SECS)
     except hydralib.DaemonError as err:
         try:
@@ -91,6 +111,8 @@ def try_archive(session_id: str, instance: str) -> tuple[int, str] | None:
         return None
     if (body.get("available") is True and body.get("ok") is True
             and body.get("verified") is True and body.get("dispatch") in ("sent", "not-sent")):
+        if body.get("stoppedBystanders"):
+            _stopped[str(session_id)] = list(body["stoppedBystanders"])
         return NATIVE_VERIFIED, json.dumps(body)
     if body.get("available") is not True or body.get("dispatch") not in ("sent", "not-sent", "unknown"):
         return _terminal("native archive returned an inconsistent response", dispatch="unknown")
