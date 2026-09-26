@@ -21,6 +21,10 @@ export interface LiveSession {
   /** The Claude Code version the session's engine runs, as the engine wrote it on start. Absent on
    *  records too old to carry one. version-drift.ts reads it to find chats left on an old engine. */
   version?: string
+  /** The desktop chat id (`local_...`) whose app hosts this engine. A moved chat keeps its
+   *  sessionId on BOTH accounts, so the sessionId alone cannot say which account's copy is
+   *  running; this can. Absent on CLI engines and on records too old to carry one. */
+  hostSessionId?: string
 }
 
 function pidAlive(pid: number): boolean {
@@ -149,6 +153,9 @@ export function readLiveRegistry(claudeHome: string): LiveSession[] {
         startedAt: typeof reg.startedAt === 'number' ? reg.startedAt : 0,
         transcriptPath: transcriptPathFor(claudeHome, reg.cwd, reg.sessionId),
         ...(typeof reg.version === 'string' ? { version: reg.version } : {}),
+        ...(typeof reg.hostSessionId === 'string' && reg.hostSessionId !== ''
+          ? { hostSessionId: reg.hostSessionId }
+          : {}),
       })
     } catch {
       // One unreadable registry entry must not hide the others.

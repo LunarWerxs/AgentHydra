@@ -37,7 +37,19 @@ const iso = (ms: unknown): string | null =>
 export interface DossierDeps {
   roots?: Array<{ dir: string; label: string }>
   markFor?: (ids: string[]) => { done: boolean; updatedAt: string } | null
-  liveFor?: (ids: string[]) => DossierMatch['live']
+  liveFor?: (ids: string[], chatId?: string | null) => DossierMatch['live']
+}
+
+/** Does a live engine belong to THIS copy of the chat? A moved chat keeps its sessionId on the
+ *  source and the target alike, so a sessionId match alone lit the SOURCE row with the target's
+ *  engine (2026-09-26: a moved chat read `live` on its source while its only engine ran on the
+ *  target, so migrate_reconcile called it "source-writing" and --finish would never settle it). The
+ *  engine's hostSessionId names the desktop chat hosting it; when it is known it must match. */
+export function engineHostedBy(
+  host: string | undefined,
+  chatId: string | null | undefined,
+): boolean {
+  return host === undefined || chatId == null || host === chatId
 }
 
 function defaultMarkFor(ids: string[]): { done: boolean; updatedAt: string } | null {
@@ -53,10 +65,12 @@ function defaultMarkFor(ids: string[]): { done: boolean; updatedAt: string } | n
   return null
 }
 
-function defaultLiveFor(ids: string[]): DossierMatch['live'] {
+function defaultLiveFor(ids: string[], chatId?: string | null): DossierMatch['live'] {
   try {
     const live = readLiveRegistry(join(homedir(), '.claude'))
-    const hit = live.find((s) => ids.includes(s.sessionId))
+    const hit = live.find(
+      (s) => ids.includes(s.sessionId) && engineHostedBy(s.hostSessionId, chatId),
+    )
     if (!hit) return null
     return { pid: hit.pid, name: hit.name, startedAt: iso(hit.startedAt) ?? '', cwd: hit.cwd }
   } catch {
@@ -80,7 +94,7 @@ export function chatDossier(q: string, deps: DossierDeps = {}): { matches: Dossi
       ...c,
       lineageIds,
       doneMark: markFor(lineageIds),
-      live: liveFor(lineageIds),
+      live: liveFor(lineageIds, c.chatId),
     })
   }
   // Newest activity first — the chat being asked about is almost always the recent one.
@@ -188,22 +202,32 @@ export function liveLineage(
 
 /** Session ids with a live engine, read ONCE. The dossier's per-chat liveFor re-reads the
  *  registry for every chat it returns, which is right for one chat and quadratic for 206. */
-function liveIndex(): Map<string, number> {
-  const out = new Map<string, number>()
+function liveIndex(): { pids: Map<string, number>; hosts: Map<string, string> } {
+  const pids = new Map<string, number>()
+  const hosts = new Map<string, string>()
   try {
-    for (const s of readLiveRegistry(join(homedir(), '.claude'))) out.set(s.sessionId, s.pid)
+    for (const s of readLiveRegistry(join(homedir(), '.claude'))) {
+      pids.set(s.sessionId, s.pid)
+      if (s.hostSessionId) hosts.set(s.sessionId, s.hostSessionId)
+    }
   } catch {
     /* no registry: every chat reports live:false, which is what "unknown" already looked like */
   }
-  return out
+  return { pids, hosts }
 }
 
 export function listChats(
   opts: ListChatsOptions = {},
-  deps: DossierDeps & { liveIds?: Map<string, number> } = {},
+  deps: DossierDeps & { liveIds?: Map<string, number>; liveHosts?: Map<string, string> } = {},
 ): ChatListResult {
   const chats = collectChats(deps.roots)
-  const live = deps.liveIds ?? liveIndex()
+  const index = deps.liveIds ? null : liveIndex()
+  const live = deps.liveIds ?? index?.pids ?? new Map<string, number>()
+  const hosts = deps.liveHosts ?? index?.hosts ?? new Map<string, string>()
+  const livePidOf = (c: DossierChat): number | undefined =>
+    lineageIdsOf(c)
+      .map((id) => (engineHostedBy(hosts.get(id), c.chatId) ? live.get(id) : undefined))
+      .find((p) => p !== undefined)
   const markFor = deps.markFor ?? defaultMarkFor
   const scope = opts.archived ?? 'hide'
   const wanted = opts.instances?.length ? new Set(opts.instances) : null
@@ -218,7 +242,7 @@ export function listChats(
     all: scoped.length,
     unarchived: scoped.filter((c) => !c.isArchived).length,
     archived: scoped.filter((c) => c.isArchived).length,
-    live: scoped.filter((c) => lineageIdsOf(c).some((id) => live.has(id))).length,
+    live: scoped.filter((c) => livePidOf(c) !== undefined).length,
     staleLogin: scoped.filter((c) => !c.isArchived && c.staleLogin === true).length,
   }
 
@@ -242,7 +266,7 @@ export function listChats(
   const limit = Math.max(1, Math.min(opts.limit ?? 200, 1000))
   const rows = matched.slice(offset, offset + limit).map((c): ChatListRow => {
     const lineage = lineageIdsOf(c)
-    const pid = lineage.map((id) => live.get(id)).find((p) => p !== undefined)
+    const pid = livePidOf(c)
     return {
       instance: c.instance,
       chatId: c.chatId,

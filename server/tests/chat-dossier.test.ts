@@ -166,6 +166,32 @@ describe('listChats', () => {
     expect(got.counts.live).toBe(1)
   })
 
+  test("a moved chat's OTHER copy never reads live off the engine hosting this one", () => {
+    // 2026-09-26: after a move, source and target hold the same sessionId. The target's engine
+    // lit the source row too, so migrate_reconcile called it "source-writing" and never settled
+    // it. The engine's hostSessionId names the desktop chat hosting it, and only that copy is live.
+    const elsewhere = listChats(
+      { archived: 'include' },
+      {
+        ...opts,
+        liveIds: new Map([['prior-id-b', 4242]]),
+        liveHosts: new Map([['prior-id-b', 'local_the-copy-on-another-account']]),
+      },
+    )
+    expect(elsewhere.rows.find((r) => r.title === 'Rolling thread')?.live).toBe(false)
+    expect(elsewhere.counts.live).toBe(0)
+
+    const here = listChats(
+      { archived: 'include' },
+      {
+        ...opts,
+        liveIds: new Map([['prior-id-b', 4242]]),
+        liveHosts: new Map([['prior-id-b', 'local_chat-one']]),
+      },
+    )
+    expect(here.rows.find((r) => r.title === 'Rolling thread')?.livePid).toBe(4242)
+  })
+
   test('an unknown instance label returns nothing but names the labels that do exist', () => {
     const got = listChats({ instances: ['typo'], archived: 'include' }, opts)
     expect(got.rows).toEqual([])
