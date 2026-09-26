@@ -363,6 +363,31 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
     expect(await mixed.run()).toMatchObject({ ok: false, dispatch: 'not-sent' })
     expect(mixed.calls).toEqual([])
   })
+  test('a server whose owner is leaving in the same move, or already archived, is no bystander', async () => {
+    // 2026-09-26: a batch of chats sharing one cwd refused every source archive over its
+    // siblings' servers, leaving all the source rows visible.
+    const sibling = () => {
+      const h = harness()
+      h.other.cwd = h.target.cwd
+      h.previews.getServersForWorktree = () => [
+        { serverId: 'sibling-server', sessionId: h.other.sessionId, status: 'running' },
+      ]
+      return h
+    }
+    const leaving = sibling()
+    expect(await leaving.run({ leavingCliSessionIds: ['cli-other'] })).toMatchObject({
+      ok: true,
+      dispatch: 'sent',
+    })
+    const archived = sibling()
+    archived.other.isArchived = true
+    expect(await archived.run()).toMatchObject({ ok: true, dispatch: 'sent' })
+    const staying = sibling()
+    expect(await staying.run({ leavingCliSessionIds: ['cli-somebody'] })).toMatchObject({
+      ok: false,
+      dispatch: 'not-sent',
+    })
+  })
   test("shared cwd refuses another chat's registry servers, whatever their state", async () => {
     const h = harness()
     h.other.cwd = h.target.cwd

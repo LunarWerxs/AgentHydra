@@ -300,7 +300,14 @@ app.post('/api/sessions/:id/native-archive', async (c) => {
       },
       400,
     )
-  const result = await tryNativeArchiveChat(profile, c.req.param('id'))
+  // `leaving`: CLI ids of the other chats a move is taking off this same profile, so a batch
+  // sharing one cwd does not refuse each archive over its siblings' servers.
+  const leaving = Array.isArray(body.leaving)
+    ? body.leaving.filter((id: unknown): id is string => typeof id === 'string')
+    : []
+  const result = await tryNativeArchiveChat(profile, c.req.param('id'), {
+    leavingCliSessionIds: leaving,
+  })
   if (result.kind === 'unavailable')
     return c.json({ ...result, available: false, ok: false, verified: false })
   return c.json({ ...result, available: true }, result.ok ? 200 : 409)

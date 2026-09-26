@@ -40,6 +40,8 @@ interface NativeArchiveRun {
   started: number
   nativeOnly: boolean
   mutationSent: boolean
+  /** CLI ids of chats leaving this profile in the same move (native-program's archive guard). */
+  leavingCliSessionIds: string[]
   lockedProfile?: string
   client?: ClaudeInspectorClient
 }
@@ -316,6 +318,7 @@ async function nativeArchiveAttempt(
     orgId: identity.orgId as string,
     sessionId: session.sessionId,
     cliSessionId: session.cliSessionId,
+    ...(run.leavingCliSessionIds.length ? { leavingCliSessionIds: run.leavingCliSessionIds } : {}),
   })
   run.mutationSent = true
   const archived = await client.evaluate<unknown>(expression)
@@ -325,13 +328,16 @@ async function nativeArchiveAttempt(
 export async function tryNativeArchiveChat(
   profileDir: string,
   requestedSessionId: string,
-  options: { nativeOnly?: boolean } = {},
+  options: { nativeOnly?: boolean; leavingCliSessionIds?: string[] } = {},
   deps: NativeArchiveDeps = {},
 ): Promise<NativeArchiveOutcome> {
   const run: NativeArchiveRun = {
     started: performance.now(),
     nativeOnly: options.nativeOnly === true,
     mutationSent: false,
+    leavingCliSessionIds: (options.leavingCliSessionIds ?? []).filter((id) =>
+      /^[A-Za-z0-9-]{8,80}$/.test(id),
+    ),
   }
   try {
     return await nativeArchiveAttempt(run, profileDir, requestedSessionId, deps)

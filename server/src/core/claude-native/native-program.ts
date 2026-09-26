@@ -18,6 +18,9 @@ export interface NativeProgramRequest {
   action: 'inspect' | 'archive' | 'ultracode'
   /** ultracode only: the effort ultracode runs at (the app clears ultracode off any other). */
   effort?: string
+  /** archive only: CLI ids of chats leaving this profile in the same move; their servers are
+   *  not bystanders of this archive. */
+  leavingCliSessionIds?: string[]
   pid: number
   profileDir: string
   accountId?: string
@@ -367,6 +370,7 @@ function nativeCheckSharedPreviewSafety(
   manager: any,
   session: any,
   effectiveCwd: string,
+  leavingCliSessionIds: string[] = [],
 ): void {
   nativeCheckMainIdentity(env, preview)
   nativeCheckSiblingSessions(env, manager, session, effectiveCwd)
@@ -380,11 +384,18 @@ function nativeCheckSharedPreviewSafety(
   const servers = previewManager.getServersForWorktree(effectiveCwd)
   if (!Array.isArray(servers)) nativeRefuse('shared working directory server state is invalid')
   // A server the archived chat started itself is stopped by the app's own archive of that chat,
-  // the same as when a person archives it; only a server owned by ANOTHER chat (or by no
-  // readable chat) is a bystander. Refusing its own servers too left a moved chat's source row
-  // unarchivable for as long as its dev servers ran (2026-09-26: two vite servers only the
-  // source app's own preview tabs used).
-  if (servers.some((server: any) => server?.sessionId !== session.sessionId)) {
+  // the same as when a person archives it. So is one whose owner is already archived here, or
+  // is leaving this profile in the same move (the caller names those by CLI id): a batch of
+  // chats sharing one cwd otherwise refused each archive over its siblings' servers and left
+  // every source row visible. Only a server whose owner stays - or cannot be read - is a
+  // bystander (2026-09-26).
+  const bystander = (server: any) => {
+    if (server?.sessionId === session.sessionId) return false
+    const owner = manager.sessions.get(server?.sessionId)
+    if (!owner) return true
+    return owner.isArchived !== true && !leavingCliSessionIds.includes(owner.cliSessionId)
+  }
+  if (servers.some(bystander)) {
     nativeRefuse('shared working directory has servers that archive would stop')
   }
   nativeCheckPreviewPrefixes(previewManager, effectiveCwd)
@@ -590,7 +601,14 @@ async function nativeArchive(
   nativeCheckIdentity(env, found, request, settled)
   if (nativeSelect(manager, request) !== session)
     nativeRefuse('session object changed before archive')
-  nativeCheckSharedPreviewSafety(env, preview, manager, session, effectiveCwd)
+  nativeCheckSharedPreviewSafety(
+    env,
+    preview,
+    manager,
+    session,
+    effectiveCwd,
+    Array.isArray(request.leavingCliSessionIds) ? request.leavingCliSessionIds : [],
+  )
   // No await between the final guards and this native call. cleanupWorktree:false preserves
   // checkout files. The native method emits the same archived event used by the stock UI.
   state.dispatch = 'sent'
@@ -741,6 +759,15 @@ export function nativeProgram(request: NativeProgramRequest): string {
     (!request.sessionId || !['xhigh', 'max'].includes(String(request.effort)))
   ) {
     throw Error('Ultracode requires sessionId and an effort of xhigh or max')
+  }
+  if (
+    request.leavingCliSessionIds !== undefined &&
+    !(
+      Array.isArray(request.leavingCliSessionIds) &&
+      request.leavingCliSessionIds.every((id) => /^[A-Za-z0-9-]{8,80}$/.test(String(id)))
+    )
+  ) {
+    throw Error('leavingCliSessionIds must be a list of CLI session ids')
   }
   return nativeRuntimeExpression(request)
 }

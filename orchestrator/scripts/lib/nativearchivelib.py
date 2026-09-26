@@ -17,6 +17,17 @@ NATIVE_VERIFIED = 100
 NATIVE_TERMINAL = 101
 HTTP_TIMEOUT_SECS = 45
 
+# CLI ids of every chat the CURRENT move is taking off its source (migrate_batch fills it for
+# the settle phase). The app's archive stops every server registered under the chat's cwd, so a
+# batch sharing one cwd refused each archive over its siblings' servers and left every source
+# row visible (2026-09-26); a sibling that is leaving too is not a bystander.
+_leaving: tuple[str, ...] = ()
+
+
+def set_leaving(session_ids) -> None:
+    global _leaving
+    _leaving = tuple(str(s) for s in (session_ids or ()) if s)
+
 
 def _terminal(reason: str, *, dispatch: str = "not-sent") -> tuple[int, str]:
     return NATIVE_TERMINAL, json.dumps({
@@ -56,8 +67,11 @@ def try_archive(session_id: str, instance: str) -> tuple[int, str] | None:
         return _terminal(f"native archive source identity could not be resolved: {err}")
     path = f"/api/sessions/{quote(session_id, safe='')}/native-archive"
     try:
-        body = hydralib.api_post_once(path, {"instance_ref": f"desktop:{profile}"},
-                                     timeout=HTTP_TIMEOUT_SECS)
+        request = {"instance_ref": f"desktop:{profile}"}
+        leaving = [s for s in _leaving if s != session_id]
+        if leaving:
+            request["leaving"] = leaving
+        body = hydralib.api_post_once(path, request, timeout=HTTP_TIMEOUT_SECS)
     except hydralib.DaemonError as err:
         try:
             body = json.loads(err.detail)

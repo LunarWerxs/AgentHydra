@@ -122,7 +122,7 @@ import time
 import migrate_chat
 import stage_reply
 from lib import archivewatchlib
-from lib import clilib, deliverylib, enginelib, gatelib, hydralib, ledgerlib
+from lib import clilib, deliverylib, enginelib, gatelib, hydralib, ledgerlib, nativearchivelib
 
 
 #: Flags this driver consumes itself; everything else is forwarded to each chat's own move.
@@ -1058,6 +1058,16 @@ def _run_phases(items: list[_Item]) -> None:
         return
 
     def _settle_all() -> None:
+        # Every chat this batch landed is leaving its source, so none of them is a bystander of
+        # another's archive (nativearchivelib._leaving). Cleared after, so nothing leaks into a
+        # later lone move in the same process.
+        nativearchivelib.set_leaving(i.landing.session_id for i in live)
+        try:
+            _settle_each()
+        finally:
+            nativearchivelib.set_leaving(())
+
+    def _settle_each() -> None:
         for item in live:
             try:
                 migrate_chat.phase_settle(item.landing)
