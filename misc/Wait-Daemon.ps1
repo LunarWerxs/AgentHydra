@@ -151,7 +151,8 @@ if ($StabilitySeconds -gt 0) {
       Write-Host "    during the $StabilitySeconds-second stability hold. Something killed it AFTER it came up:" -ForegroundColor Red
       Write-Host "    the classic causes are a second supervisor (an old tray host's watchdog fighting the" -ForegroundColor Red
       Write-Host "    relaunch) or the console that launched it being closed. Check ~\.$name\logs\daemon.log," -ForegroundColor Red
-      Write-Host "    look for stray '*-Tray.ps1' powershell processes, then re-run misc\Restart-Daemon.ps1." -ForegroundColor Red
+      Write-Host "    look for a stray lunarwerx-tray.exe naming this app's *-Tray.json, or a powershell running" -ForegroundColor Red
+      Write-Host "    '*-Tray.ps1', then re-run misc\Restart-Daemon.ps1." -ForegroundColor Red
       exit 1
     }
     # Tolerate a transient flake (a busy box can miss one 2s probe); three consecutive misses

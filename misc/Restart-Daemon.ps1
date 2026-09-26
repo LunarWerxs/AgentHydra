@@ -42,6 +42,17 @@
 # its cmd->bun daemon in the same stroke; the identity sweep still catches adopted strays,
 # orphans, and headless daemons.
 #
+# WHY THE NATIVE HOST IS A KILL TARGET TOO (2026-09-26, AgentHydra down until fixed by hand):
+# Every app's shortcut now runs the NATIVE host, `misc\lunarwerx-tray.exe <App>-Tray.json`, not a
+# powershell. This script still looked only for powershell running "<App>-Tray.ps1", so it saw no
+# tray host, left the native one alive, and relaunched Tray-Launch.vbs. That PowerShell host lost
+# the app's tray mutex to the native one and quit, and the surviving native host never revived the
+# daemon we had killed: every AgentHydra MCP tool stayed down until someone replaced the native
+# host by hand. The native host is matched by the config filename on its command line. Every kit
+# app runs the SAME lunarwerx-tray.exe, so matching the binary name alone would kill a sibling
+# app's tray (tray-bootstrap.mjs hit exactly that on 2026-09-11). The relaunch starts the native
+# host whenever the app ships one, and falls back to Tray-Launch.vbs only when it does not.
+#
 # WHY THE RELAUNCH GOES THROUGH WMI:
 # Start-Process parents the new tray host under THIS console's process tree, so closing the
 # terminal (or the tool/job that ran the rebuild) can tear the whole app down minutes later
@@ -58,9 +69,9 @@
 # forever. Wait-Daemon.ps1 reads the same stamp to prove the daemon that ends up answering
 # is younger than the restart, i.e. that it really is a new process.
 #
-# App-agnostic on purpose: everything derives from package.json `name` and the sibling
-# "*-Tray.ps1" adapter, so the same file works in agenthydra / redesign / repoyeti /
-# devwebui. Keep the four copies identical.
+# App-agnostic on purpose: everything derives from package.json `name`, the sibling "*-Tray.ps1"
+# adapter and the sibling "*-Tray.json" native config, so the same file works in agenthydra /
+# redesign / repoyeti / devwebui. Keep the four copies identical.
 
 [CmdletBinding()]
 param(
@@ -85,7 +96,12 @@ param(
   # worse than a reopened window.
   [switch]$DaemonOnly,
   # How long to keep killing before admitting defeat.
-  [int]$KillTimeoutSeconds = 15
+  [int]$KillTimeoutSeconds = 15,
+  # -DaemonOnly with a live tray host: how long its watchdog gets to bring the new daemon up. Both
+  # hosts revive after three missed 5s probes plus a 20s grace after their own last revive, so a
+  # working one is back well inside this. A tray host that misses it has stopped supervising and is
+  # replaced (2026-09-26: a live native host sat on a dead AgentHydra daemon and never revived it).
+  [int]$ReviveTimeoutSeconds = 40
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -132,28 +148,93 @@ function Test-PredatesRestart {
 }
 
 # --- Tray hosts ------------------------------------------------------------------------------------
-# The daemon's supervisor: a hidden powershell running the sibling "<App>-Tray.ps1" adapter
-# (launched by Tray-Launch.vbs / the app shortcut). Its watchdog revives a killed daemon within
-# ~5 seconds, so a restart that leaves it alive restarts NOTHING durably -- see the zero-instance
-# incident in the header. The adapter filename is unique per app (RepoYeti-Tray.ps1,
-# DevWebUI-Tray.ps1, ...), so a command-line match on that name alone can only ever hit THIS
-# app's tray hosts -- including a mutex-loser zombie stuck on its "already starting" MessageBox.
-$trayAdapter = Get-ChildItem -LiteralPath (Join-Path $Root 'misc') -Filter '*-Tray.ps1' -ErrorAction SilentlyContinue |
+# The daemon's supervisor, in one of two forms:
+#   · NATIVE, what every app's shortcut runs: misc\lunarwerx-tray.exe <App>-Tray.json.
+#   · POWERSHELL, the -Legacy rollback: a hidden powershell running the sibling "<App>-Tray.ps1"
+#     adapter, launched by Tray-Launch.vbs.
+# Either one's watchdog revives a killed daemon within seconds, so a restart that leaves it alive
+# restarts NOTHING durably -- see the zero-instance incident in the header. Each is matched by a
+# name unique to THIS app: the adapter filename (RepoYeti-Tray.ps1, DevWebUI-Tray.ps1, ...) in a
+# powershell command line, and the config filename (RepoYeti-Tray.json, ...) in a
+# lunarwerx-tray.exe command line -- including a mutex-loser zombie stuck on its "already
+# starting" MessageBox.
+$miscDir = Join-Path $Root 'misc'
+$trayAdapter = Get-ChildItem -LiteralPath $miscDir -Filter '*-Tray.ps1' -ErrorAction SilentlyContinue |
   Select-Object -First 1
+
+$nativeExeName = 'lunarwerx-tray.exe'
+$nativeExe = Join-Path $miscDir $nativeExeName
+# The config the native host runs with: the adapter's twin (<App>-Tray.ps1 -> <App>-Tray.json)
+# when there is one, otherwise the only *-Tray.json in misc\. Two candidates and no twin means we
+# cannot say which one is ours, so no native host is matched or launched.
+$nativeConfig = $null
+if ($trayAdapter) {
+  $twin = Join-Path $miscDir ($trayAdapter.BaseName + '.json')
+  if (Test-Path -LiteralPath $twin) { $nativeConfig = Get-Item -LiteralPath $twin }
+}
+if (-not $nativeConfig) {
+  $configs = @(Get-ChildItem -LiteralPath $miscDir -Filter '*-Tray.json' -ErrorAction SilentlyContinue)
+  if ($configs.Count -eq 1) { $nativeConfig = $configs[0] }
+}
+# The config filename as a WHOLE argument, bare, quoted or at the end of a path. That also finds a
+# compiled build's host, which tray-bootstrap.mjs materializes under the app's state dir and starts
+# with the same bare filename. Every kit app runs the same binary, so this filename is the only
+# thing telling our host from a sibling's.
+$nativeNeedle = if ($nativeConfig) { '(^|[\s"\\/])' + [regex]::Escape($nativeConfig.Name) + '("|\s|$)' } else { $null }
+$canLaunchNative = $nativeConfig -and (Test-Path -LiteralPath $nativeExe)
+# The port the app is configured for, so the revive check below has somewhere to look even when
+# the runtime pointer is gone.
+$configPort = 0
+if ($nativeConfig) {
+  try { $configPort = [int](Get-Content -LiteralPath $nativeConfig.FullName -Raw | ConvertFrom-Json).port } catch { }
+}
 
 function Get-TrayHostPids {
   param([switch]$IncludeFresh)   # default: only hosts that predate this run (the kill targets)
-  if (-not $trayAdapter) { return @() }
+  $names = @()
+  if ($trayAdapter) { $names += "Name='powershell.exe'", "Name='pwsh.exe'" }
+  if ($nativeNeedle) { $names += "Name='$nativeExeName'" }
+  if ($names.Count -eq 0) { return @() }
   $found = @()
-  $procs = Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue
+  $procs = Get-CimInstance Win32_Process -Filter ($names -join ' OR ') -ErrorAction SilentlyContinue
   foreach ($p in $procs) {
     if ([int]$p.ProcessId -eq $PID) { continue }
     if (-not $p.CommandLine) { continue }
-    if ($p.CommandLine.IndexOf($trayAdapter.Name, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+    $ours = if ($p.Name -ieq $nativeExeName) {
+      $p.CommandLine -match $nativeNeedle
+    } else {
+      $p.CommandLine.IndexOf($trayAdapter.Name, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    }
+    if (-not $ours) { continue }
     if (-not $IncludeFresh -and -not (Test-PredatesRestart -ProcessId ([int]$p.ProcessId))) { continue }
     $found += [int]$p.ProcessId
   }
   return $found
+}
+
+# A daemon of ours that answers AND started after this run: the replacement, not a survivor. Looks
+# where a fresh daemon announces itself (the runtime pointer it rewrites at boot) plus the ports we
+# already know, rather than sweeping every listener once a second.
+function Get-FreshDaemonPid {
+  $ports = New-Object System.Collections.Generic.List[int]
+  if (Test-Path $runtimeFile) {
+    try {
+      $now = Get-Content $runtimeFile -Raw | ConvertFrom-Json
+      if ($now.port) { $ports.Add([int]$now.port) }
+    } catch { }
+  }
+  if ($pointerPort) { $ports.Add($pointerPort) }
+  if ($configPort) { $ports.Add($configPort) }
+  foreach ($port in ($ports | Sort-Object -Unique)) {
+    if ((Get-HealthService -Port $port) -ne $name) { continue }
+    $owners = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+      Select-Object -ExpandProperty OwningProcess -Unique
+    foreach ($procId in $owners) {
+      if (-not (Get-Process -Id $procId -ErrorAction SilentlyContinue)) { continue }
+      if (-not (Test-PredatesRestart -ProcessId $procId)) { return [int]$procId }
+    }
+  }
+  return $null
 }
 
 # Every process that identifies as this app AND predates this run. Recomputed each pass so the
@@ -218,7 +299,8 @@ $deadline = (Get-Date).AddSeconds($KillTimeoutSeconds)
 $survivors = @{}
 
 # -DaemonOnly keeps the APP off the screen either way; only the mechanism differs.
-#   · tray host alive -> kill just the daemon; its ~5s watchdog brings the new one up.
+#   · tray host alive -> kill just the daemon; its watchdog (native or PowerShell) brings the new
+#                        one up, and we wait to SEE it do so. One that does not is replaced.
 #   · no tray host    -> kill the daemon and start a BARE daemon ourselves (no Tray-Launch.vbs,
 #                        so no window). Deploying must never be a reason for the app to appear
 #                        (owner directive, 2026-08-29) - and a headless daemon is exactly what a
@@ -307,24 +389,47 @@ if (Test-Path $runtimeFile) {
 # --- Relaunch ------------------------------------------------------------------------------------
 if ($NoLaunch) { exit 0 }
 
-# -DaemonOnly never launches the app. With a tray host alive its watchdog already has the job;
-# without one we start the daemon BY ITSELF, detached the same way (WMI) so it outlives this
-# console. Either path leaves the screen exactly as it was.
+# -DaemonOnly never launches the app while the app can be kept running without it. With a tray
+# host alive its watchdog has the job, and we WAIT for it to prove it did it: a tray host that is
+# alive but not supervising (2026-09-26) is no better than none. One that misses the deadline is
+# killed and replaced through the full relaunch below. That opens the app window, which is still
+# better than a dead daemon. Without a tray host we start the daemon BY ITSELF, detached the same way
+# (WMI) so it outlives this console. Both paths leave the screen exactly as it was.
 if ($daemonOnlyMode) {
   if ($trayAlive) {
-    Write-Host "  Daemon stopped; the live tray host's watchdog will bring the new one up (no window touched)."
+    Write-Host "  Daemon stopped; waiting up to $ReviveTimeoutSeconds s for the live tray host's watchdog to start the new one..."
+    $until = (Get-Date).AddSeconds($ReviveTimeoutSeconds)
+    $revived = $null
+    while (-not $revived -and (Get-Date) -lt $until) {
+      $revived = Get-FreshDaemonPid
+      if (-not $revived) { Start-Sleep -Seconds 1 }
+    }
+    if ($revived) {
+      Write-Host "  The tray host's watchdog brought the new daemon up (pid $revived). No window touched."
+      exit 0
+    }
+    Write-Host "  ! The tray host is alive but did not revive the daemon within $ReviveTimeoutSeconds s - replacing it." -ForegroundColor Yellow
+    foreach ($trayPid in @(Get-TrayHostPids)) {
+      taskkill /PID $trayPid /T /F *> $null
+      Write-Host "  Killed pid $trayPid - tray host that stopped supervising its daemon."
+    }
+    # Let Windows reap them first: one still listed would pass for a fresh host below, and then
+    # nothing would be launched at all.
+    $reaped = (Get-Date).AddSeconds(5)
+    while (@(Get-TrayHostPids).Count -gt 0 -and (Get-Date) -lt $reaped) { Start-Sleep -Milliseconds 400 }
+    # Fall through to the full relaunch below.
+  } else {
+    $spawn = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+      CommandLine      = "cmd.exe /c bun run --cwd server start"
+      CurrentDirectory = $Root
+    } -ErrorAction SilentlyContinue
+    if ($spawn -and $spawn.ReturnValue -eq 0) {
+      Write-Host "  Started a bare daemon, detached (WMI). No tray host, no app window."
+    } else {
+      Write-Host "  ! Could not start the bare daemon - run 'bun run --cwd server start' yourself." -ForegroundColor Red
+    }
     exit 0
   }
-  $spawn = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-    CommandLine      = "cmd.exe /c bun run --cwd server start"
-    CurrentDirectory = $Root
-  } -ErrorAction SilentlyContinue
-  if ($spawn -and $spawn.ReturnValue -eq 0) {
-    Write-Host "  Started a bare daemon, detached (WMI). No tray host, no app window."
-  } else {
-    Write-Host "  ! Could not start the bare daemon - run 'bun run --cwd server start' yourself." -ForegroundColor Red
-  }
-  exit 0
 }
 
 # Anything still standing after the sweep is FRESH by construction (stale hosts were kill targets
@@ -339,8 +444,24 @@ if ($freshTray.Count -gt 0) {
 # Launch DETACHED via WMI: Win32_Process.Create parents the new tray host to WmiPrvSE, outside
 # this console's tree and job object, so closing the terminal (or the tool run that invoked this
 # script) can no longer tear the whole app down minutes later. See the header for the incident
-# this prevents. Tray-Launch.vbs is what the app shortcut points at anyway -- launching it
-# directly just removes the .lnk dependency.
+# this prevents.
+#
+# The NATIVE host first, exactly as the app shortcut starts it (the host resolves the bare config
+# name against its own directory). Tray-Launch.vbs starts the PowerShell host, which is the -Legacy
+# rollback, so it runs only when the app ships no native host or WMI could not start it.
+if ($canLaunchNative) {
+  $configArg = if ($nativeConfig.Name -match '\s') { "`"$($nativeConfig.Name)`"" } else { $nativeConfig.Name }
+  $spawn = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+    CommandLine      = "`"$nativeExe`" $configArg"
+    CurrentDirectory = $miscDir
+  } -ErrorAction SilentlyContinue
+  if ($spawn -and $spawn.ReturnValue -eq 0) {
+    Write-Host "  Relaunched the native tray host ($nativeExeName $($nativeConfig.Name)), detached (WMI), so it survives this console closing."
+    exit 0
+  }
+  Write-Host "  ! WMI could not start $nativeExeName - falling back to the PowerShell tray host." -ForegroundColor Yellow
+}
+
 $launcherVbs = if ($trayAdapter) { Join-Path $trayAdapter.DirectoryName 'Tray-Launch.vbs' } else { $null }
 if ($launcherVbs -and (Test-Path $launcherVbs)) {
   $spawn = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
