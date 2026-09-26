@@ -57,7 +57,7 @@ def _k(key: str, default: Any, kind: str, group: str, help: str, **extra) -> dic
 
 # ---------------------------------------------------------------------------------------
 # THE SPEC. One row per knob: key, default (== today's hardcoded value), kind, group, help.
-# `kind`: bool | int | secs | pct | str | enum | int_or_null.  `secs` is an int in seconds
+# `kind`: bool | int | secs | pct | str | enum | int_or_null | str_or_null (null = unset).  `secs` is an int in seconds
 # rendered as minutes in the menu.  Ranges are advisory guardrails, not opinions: they stop
 # a typo (a 5-second archive quiet window) from reaching the fleet, nothing more.
 # ---------------------------------------------------------------------------------------
@@ -324,6 +324,13 @@ SPEC: list[dict] = [
     _k("interview.max_questions", 20, "int", "interview",
        "Most questions one judgment pass puts to the AI. The rest are counted and reported.",
        min=1, max=200),
+    _k("interview.brain", None, "str_or_null", "interview",
+       "A command that answers the judgment queue in place of the chat running the pass: a "
+       "person's own trained brain, built from their own record. null (the default) keeps "
+       "today's behaviour - the chat answers on the doctrine. When set, `interview --ask` names "
+       "it on its first line and in its JSON, and the pass runs `<brain> ask` for the brief and "
+       "`<brain> apply <file>`, which applies through `interview --apply` itself, so every rail "
+       "still runs. A brain treats a pass as unattended unless `--by-hand` says its owner typed it."),
     _k("interview.evidence_chars", 900, "int", "interview",
        "Trailing characters of a chat's last words handed over with each question.",
        min=100, max=20000),
@@ -493,6 +500,10 @@ def _coerce(row: dict, value: Any) -> Any:
         if value in row["choices"]:
             return value
         raise ConfigError(f"{key}: expected one of {row['choices']}, got {value!r}")
+    if kind == "str_or_null":
+        if value is None or (isinstance(value, str) and value.strip().lower() in ("", "null", "none")):
+            return None
+        kind = "str"
     if kind == "str":
         if isinstance(value, str) and value.strip():
             return value

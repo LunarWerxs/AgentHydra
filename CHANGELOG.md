@@ -9,6 +9,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **A machine's own brain for the judgment queue** (`orchestrator/scripts/lib/configlib.py`
+  `interview.brain`, `interview.py`, `.claude/commands/orchestrate.md`). The chat running a pass
+  answered every waiting chat on the generic doctrine. A new policy knob names a command that
+  answers instead, such as a brain trained on the owner's own replies: `interview --ask` names it
+  on its first line and in its JSON, and `/orchestrate` step 3 runs `<brain> ask` and
+  `<brain> apply <file>` (which applies through `interview --apply`, so every rail still runs).
+  A brain treats every pass as unattended unless `--by-hand` says the owner typed it, so a
+  forgotten flag fails safe. Empty, the default, changes nothing. `policy` shows an unset text
+  knob as "unset" and takes `null` to clear it. `hold_chat.py <session id> --release` now lifts a
+  hold on a chat the fleet cannot resolve (a console chat a pass held by id), which had no way out.
+
 - **Fuzzy, ranked session search** (`web/src/lib/fuzzy.ts`, `web/src/components/SessionsView.vue`,
   `web/src/components/SessionPicker.vue`). The sessions sidebar search and the session picker
   used a plain substring test, so `cdxsess` found nothing and hits came back in list order. They

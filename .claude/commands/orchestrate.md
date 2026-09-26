@@ -86,6 +86,14 @@ THE PASS, in order:
    executes through the rails; replies are STAGED and the sweep/courier delivers them under the
    machine-wide 18-running cap (deferred wakes stay staged; the 5-minute cycle is the round
    robin).
+   **IF THIS MACHINE HAS ITS OWN BRAIN** (the `interview.brain` knob; `--ask` then says so on its
+   first line), answer THROUGH it instead of on the doctrine above: `<brain> ask` prints the
+   brief (whose words, whose rulings, what is reserved) with the same questions and names the
+   answers file to write; answer as the brief says (or hand the brief to one Opus agent), then
+   run `<brain> apply <file>`, which applies through `interview --apply` itself. A brain treats
+   every pass as unattended (only the kinds of reply its owner armed; the rest stay queued for
+   them) unless `--by-hand` says the owner typed this `/orchestrate` themselves. Never add it on
+   the standing manager's own loop or a cron-fired run.
 
 4. **Report what CHANGED**, one plain-English line per act, and name anything you left
    alone with its reason. A status recital is a failed run: if nothing changed, either the
@@ -165,8 +173,12 @@ orchestrators" he saw). First `orchestrator_run {script:"overlord", args:["--sta
 the overlord it names is not THIS chat, arm nothing here, say in one line that the standing
 manager is elsewhere, and stop - a spare that keeps a timer is a second orchestrator. If it is
 this chat: after a clean pass, `CronList`; if this session has no
-recurring `/orchestrate` job, `CronCreate { cron: "*/5 * * * *", prompt: "/orchestrate",
-recurring: true }` and tell the owner in ONE line. This in-chat timer is the FAST path;
+recurring orchestrate job (its prompt names `/orchestrate` or `orchestrate.md`), `CronCreate { cron: "*/5 * * * *",
+prompt: "Cron-fired orchestrate pass: follow ~/.claude/commands/orchestrate.md (Read it only if it is no longer in your context). Arm nothing; if the loop shows nothing waiting, report ONE line.",
+recurring: true }` and tell the owner in ONE line. The prompt POINTS at this file rather than
+being `/orchestrate`: a slash command re-sends all 14 KB of this text every five minutes into one
+long chat, about 43k tokens an hour (Opus 5.5 guide audit, 2026-09-24), while the chat already
+holds it from the first pass. This in-chat timer is the FAST path;
 the overlord watchdog (standing fact above) is the guarantee - if the timer dies or was
 never armed, the watchdog wakes you anyway (2026-09-01: a chat that armed nothing sat dead
 48 minutes before the watchdog existed). SKIP arming when this run is itself

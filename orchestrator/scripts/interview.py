@@ -122,6 +122,9 @@ def build_questions(cap: int) -> dict:
                          "says, only judge whether it is safe to run."),
         })
     return {
+        # THIS MACHINE'S OWN BRAIN, when it has one (interview.brain): the pass answers through it
+        # instead of on the doctrine in each question. None keeps the chat as the brain.
+        "brain": configlib.get("interview.brain") or None,
         "questions": questions,
         "overCap": max(0, len(batch["judgmentQueue"]) - cap),
         "approvalQuestions": approvals,
@@ -332,6 +335,11 @@ def _print_ask_output(q: dict, as_json: bool) -> None:
     if as_json:
         print(json.dumps(q, indent=2))
         return
+    if q.get("brain"):
+        print(f"THIS MACHINE ANSWERS THROUGH ITS OWN BRAIN: run `{q['brain']} ask` for the brief, "
+              f"answer as it says, then `{q['brain']} apply <file>` (it applies through "
+              "interview --apply; add --by-hand only when the owner typed this pass). "
+              "The questions below are what it will ask.\n")
     if not q["questions"] and not q["approvalQuestions"]:
         print("nothing to ask - the judgment queue and the approval queue are both empty.")
         return

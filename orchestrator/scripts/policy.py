@@ -72,14 +72,14 @@ def _fmt(row: dict, value=_UNSET) -> str:
     none - caught by the preset test, 2026-09-17."""
     v = row["value"] if value is _UNSET else value
     if v is None:
-        return "uncapped"
+        return "unset" if row["kind"] == "str_or_null" else "uncapped"
     if row["kind"] == "bool":
         return "ON" if v else "OFF"
     if row["kind"] == "secs":
         return f"{v}s ({v // 60}m)" if v >= 120 else f"{v}s"
     if row["kind"] == "pct":
         return f"{v}%"
-    if row["kind"] == "str":
+    if row["kind"] in ("str", "str_or_null"):
         return f'"{v}"' if len(str(v)) <= 60 else f'"{str(v)[:57]}..."'
     return str(v)
 
@@ -187,6 +187,8 @@ def _parse_value(row: dict, raw: str):
     about how a person spells a boolean (on/off/yes/no/true/false) - configlib validates."""
     if row["kind"] == "int_or_null" and raw.lower() in ("null", "none", "uncapped", ""):
         return None
+    if row["kind"] == "str_or_null" and raw.strip().lower() in ("null", "none", ""):
+        return None
     return raw
 
 
@@ -273,7 +275,8 @@ def build_questions(group: str | None) -> list[dict]:
                              " | ".join(row["choices"]) if row["kind"] == "enum" else
                              f"a whole number between {row.get('min')} and {row.get('max')}"
                              + (" , or null for uncapped" if row["kind"] == "int_or_null" else "")
-                             if row.get("min") is not None else "a string"),
+                             if row.get("min") is not None else
+                             "a string, or null for unset" if row["kind"] == "str_or_null" else "a string"),
         }
         out.append(q)
     return out
@@ -375,7 +378,10 @@ def _ask_one(row: dict):
         if not raw:
             return KEEP
         return None if raw.lower() in ("null", "none", "uncapped") else raw
-    raw = input(f"    {row['key']} is {label} (text) ").strip()
+    unset = row["kind"] == "str_or_null"
+    raw = input(f"    {row['key']} is {label} (text{', or null to unset' if unset else ''}) ").strip()
+    if unset and raw.lower() in ("null", "none"):
+        return None
     return raw or KEEP
 
 

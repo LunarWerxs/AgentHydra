@@ -83,6 +83,22 @@ class InterviewTest(unittest.TestCase):
         self.assertIn("reply", x["question"])
         self.assertIn("answers", q["answerFormat"])
 
+    def test_ask_names_this_machines_own_brain_only_when_one_is_set(self):
+        real_get = interview.configlib.get
+
+        def brain_is(value):  # the knob pinned both ways, so the machine's own config never leaks in
+            return mock.patch.object(interview.configlib, "get",
+                                     side_effect=lambda k, *a: value if k == "interview.brain"
+                                     else real_get(k, *a))
+        with brain_is(None):
+            self.assertIsNone(interview.build_questions(cap=10)["brain"])
+        with brain_is("node brain.mjs"):
+            q = interview.build_questions(cap=10)
+            code, out, _ = run_cli(interview.main, ["--ask"])
+        self.assertEqual(q["brain"], "node brain.mjs")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("THIS MACHINE ANSWERS THROUGH ITS OWN BRAIN: run `node brain.mjs ask`"))
+
     def test_ask_also_surfaces_a_queued_approval_escalation(self):
         # THE JUDGMENT QUEUE WIRING (item 1): unblock_prompts.py's tri-state gate queues an
         # ESCALATE row here instead of pressing it - --ask must hand it back out, command and

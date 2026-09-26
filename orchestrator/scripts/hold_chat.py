@@ -112,6 +112,12 @@ def main(argv: list[str]) -> int:
     try:
         match = hydralib.resolve_one(args[0])
     except (hydralib.ChatNotFound, hydralib.AmbiguousChat) as err:
+        # A hold is kept by session id, and `interview --apply` can place one on a chat with no
+        # desktop home (a console chat), which the dossier cannot resolve: its release must
+        # still reach it by that exact id, or the hold outlives every way to lift it.
+        entry = holdlib.check(args[0]) if do_release and isinstance(err, hydralib.ChatNotFound) else None
+        if entry is not None:
+            return _release_hold({"title": entry.get("title") or args[0]}, args[0], "", as_json)
         print(f"REFUSED (deterministic): {err}", file=sys.stderr)
         return 3
     except hydralib.DaemonError as err:

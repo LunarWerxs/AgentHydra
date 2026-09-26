@@ -166,6 +166,16 @@ class ValidationTest(_ConfigCase):
         for word, want in (("on", True), ("off", False), ("yes", True), ("false", False)):
             self.assertIs(configlib._coerce(row, word), want)
 
+    def test_str_or_null_is_unset_by_null_or_blank_and_keeps_text(self):
+        row = configlib.BY_KEY["interview.brain"]
+        for unset in (None, "", "  ", "null", "None"):
+            self.assertIsNone(configlib._coerce(row, unset))
+        self.assertEqual(configlib._coerce(row, "node brain.mjs"), "node brain.mjs")
+        self.assertIsNone(configlib.defaults()["interview.brain"])
+        # shown as text, never in int_or_null's "uncapped" wording
+        self.assertEqual(policy._fmt(row, None), "unset")
+        self.assertEqual(policy._fmt(row, "node brain.mjs"), '"node brain.mjs"')
+
     def test_int_or_null_accepts_null_for_uncapped(self):
         row = configlib.BY_KEY["groundskeeper.evacuate_per_run"]
         self.assertIsNone(configlib._coerce(row, "null"))

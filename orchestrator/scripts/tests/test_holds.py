@@ -181,6 +181,18 @@ class HoldRailTest(unittest.TestCase):
         code, out, _ = run_cli(hold_chat.main, ["--list"])
         self.assertIn("no chat is held", out)
 
+    def test_a_hold_on_a_chat_the_fleet_cannot_resolve_is_still_released_by_its_id(self):
+        # interview --apply holds by session id, so a console chat (no desktop home) can be held
+        import hold_chat
+
+        holdlib.hold("console-only-sid", "held by a pass")
+        code, out, _ = run_cli(hold_chat.main, ["console-only-sid", "--release"])
+        self.assertEqual(code, 0)
+        self.assertIn("released", out)
+        self.assertIsNone(holdlib.check("console-only-sid"))
+        code, _, err = run_cli(hold_chat.main, ["console-only-sid", "--release"])
+        self.assertEqual(code, 3, "an id that is neither a chat nor held is still refused")
+
 
 if __name__ == "__main__":
     unittest.main()
