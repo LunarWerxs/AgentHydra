@@ -59,6 +59,7 @@ function harness(opts: {
       flagged.push(`${profile}:${id}`)
       return opts.flag ? opts.flag() : true
     },
+    launchedSince: () => false,
     now: () => NOW,
   }
   return { deps, store, flagged }
@@ -151,6 +152,31 @@ test('a flag that throws keeps the entry for the next tick', async () => {
   })
   expect(await runRetireOnCloseOnce(deps)).toBe(0)
   expect(store.entries).toHaveLength(1)
+})
+
+test('no write on an old reading: a launch since the scan, or a passed deadline, stops the pass', async () => {
+  const launched = harness({})
+  launched.deps.launchedSince = () => true
+  expect(await runRetireOnCloseOnce(launched.deps)).toBe(0)
+  expect(launched.flagged).toEqual([])
+  expect(launched.store.entries).toHaveLength(1)
+
+  const late = harness({})
+  expect(await runRetireOnCloseOnce(late.deps, { deadline: NOW - 1 })).toBe(0)
+  expect(late.flagged).toEqual([])
+  expect(late.store.entries).toHaveLength(1)
+
+  // A pass whose scan has gone stale mid-way stops before the next write.
+  const slow = harness({ entries: [entry(), entry({ sessionId: 'bbbbbbbb-2' })] })
+  let t = NOW
+  slow.deps.now = () => t
+  slow.deps.flag = async (id, profile) => {
+    slow.flagged.push(`${profile}:${id}`)
+    t += 11_000
+    return true
+  }
+  expect(await runRetireOnCloseOnce(slow.deps)).toBe(1)
+  expect(slow.store.entries.map((e) => e.sessionId)).toEqual(['bbbbbbbb-2'])
 })
 
 // --- the queue file itself ------------------------------------------------------------------

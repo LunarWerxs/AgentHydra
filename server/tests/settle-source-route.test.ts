@@ -10,6 +10,7 @@ import { Hono } from 'hono'
 
 const realLaunch = { ...(await import('../src/session-launch')) }
 const realNative = { ...(await import('../src/claude-native-archive')) }
+const realProcess = { ...(await import('../src/core/process')) }
 const SID = '11111111-2222-4333-8444-555555555555'
 const TARGET = 'C:\\instances\\target'
 const SOURCE = 'C:\\instances\\source'
@@ -30,6 +31,11 @@ mock.module('../src/session-launch', () => ({
     }
   },
 }))
+// No real process scan: nothing here runs, and a slow scan on a busy box must not decide a test.
+mock.module('../src/core/process', () => ({
+  ...realProcess,
+  scanClaudeProcesses: async () => ({ ok: true, processes: [] }),
+}))
 mock.module('../src/claude-native-archive', () => ({
   ...realNative,
   tryNativeArchiveChat: async (
@@ -44,6 +50,7 @@ mock.module('../src/claude-native-archive', () => ({
 afterAll(() => {
   mock.module('../src/session-launch', () => realLaunch)
   mock.module('../src/claude-native-archive', () => realNative)
+  mock.module('../src/core/process', () => realProcess)
 })
 
 const retire = await import('../src/move-retire-on-close')
@@ -92,7 +99,7 @@ test('a landed chat settles its OLD copy only, never the target, reporting per p
   const r = await settle({ instance_ref: `desktop:${TARGET}`, leaving: [SID, 'bbbbbbbb-2222'] })
   expect(r.status).toBe(200)
   expect(r.body.ok).toBe(true)
-  // The source is closed here (isRunning reads the live fleet, which has no such dir), so the
+  // The source is closed here (the faked process scan lists nothing running), so the
   // flag alone settles it; the target is never among the profiles touched.
   expect(calls).toEqual([`flag:${SOURCE}`])
   expect(r.body.sourceStillShown).toEqual([])

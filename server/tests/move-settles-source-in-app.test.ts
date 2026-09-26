@@ -193,15 +193,26 @@ test('a record under a PREVIOUS login of a running profile gets the flag: the ap
   expect(calls.order).toEqual(['flag'])
 })
 
-test('a liveness read that FAILS is "running": no flag is written on a guess', async () => {
+test('a liveness read that FAILS guesses neither way: no flag, no native, the copy is queued', async () => {
+  // "Closed" would flag under an app that may be open; "running" sent a closed app down a native
+  // path that refuses and queues nothing, so its copy was never retired (review, 2026-09-26).
   const { deps, calls } = harness({ native: refused })
   deps.isRunning = async () => {
     throw new Error('could not read the Claude processes')
   }
   const [row] = await settleMovedSource(SID, [SOURCE], [], deps)
-  expect(calls.flag).toEqual([])
-  expect(calls.native.map((c) => c.profile)).toEqual([SOURCE])
-  expect(row?.stillShown).toBe(true)
+  expect(calls.order).toEqual(['retire'])
+  expect(row).toMatchObject({ stillShown: true, retiresOnClose: true })
+  expect(row?.reason).toStartWith('could not tell whether that app is open')
+})
+
+test('a failed liveness read on a batch first pass is left for the second pass', async () => {
+  const { deps, calls } = harness({})
+  deps.isRunning = async () => {
+    throw new Error('could not read the Claude processes')
+  }
+  expect(await settleMovedSource(SID, [SOURCE], [], deps, { closedOnly: true })).toEqual([])
+  expect(calls.order).toEqual([])
 })
 
 test('closedOnly (a batch first pass) settles the closed account now and leaves the running one', async () => {

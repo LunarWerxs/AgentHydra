@@ -149,13 +149,18 @@ async function settleOne(
   closedOnly: boolean,
 ): Promise<SourceSettle | null> {
   const alreadyArchived = deps.diskArchived(profile, sessionId) === true
-  // A liveness read that failed is "running": the flag below is only safe for a closed app, and
-  // the running path writes nothing under an app it cannot reach (review, 2026-09-26).
-  const running = await deps.isRunning(profile).catch(() => true)
-  // Under a previous login the running app never loaded the record: a flag is safe there, and it
-  // is the only route that can reach it. It is not on screen either way, so never "still shown".
-  const hidden = running && deps.shown?.(profile, sessionId) === false
-  if (!running || hidden) {
+  // null: the liveness read failed. Neither answer is safe to act on - "closed" would flag under
+  // an app that may be open, and "running" sends a closed app down a native path that refuses and
+  // queues nothing (review, 2026-09-26).
+  const running = await deps.isRunning(profile).then(
+    (r) => r,
+    () => null,
+  )
+  const shown = deps.shown?.(profile, sessionId) !== false
+  // Under a previous login the app never loaded the record: a flag is safe there whether or not
+  // the app runs, and it is the only route that can reach it. Never "still shown".
+  const hidden = !shown
+  if (running === false || hidden) {
     const hit = (await deps.flag(sessionId, profile).catch(() => null))?.hits?.[0]
     const failed = !hit && !alreadyArchived
     return {
@@ -168,6 +173,21 @@ async function settleOne(
     }
   }
   if (closedOnly) return null
+  if (running === null) {
+    if (alreadyArchived)
+      return { profile, via: 'flag', changed: false, stillShown: false, alreadyArchived }
+    // The retire queue writes the flag only once a scan that answered shows the app closed.
+    deps.retireOnClose(profile, sessionId)
+    return {
+      profile,
+      via: 'flag',
+      changed: false,
+      stillShown: true,
+      retiresOnClose: true,
+      reason:
+        'could not tell whether that app is open (the process scan failed). AgentHydra archives it there once it sees that app closed; until then it stays listed there and can still be moved.',
+    }
+  }
 
   const atLimit = deps.atLimit?.(profile) === true
   const native = await deps.native(profile, sessionId, {

@@ -747,7 +747,7 @@ def best_target(fleet: dict, exclude_name: str | None, survey: dict | None = Non
 
 
 def _resolve_target_or_raise(fleet: dict, to: str, match: dict, session_id: str, chat_title,
-                             choice_out: dict | None = None) -> dict:
+                             choice_out: dict | None = None, dry_run: bool = False) -> dict:
     """Resolve --to to a real instance, and short-circuit a no-op move. `--to best` asks
     best_target and records its shortlist into `choice_out` for the report."""
     if str(to).strip().lower() == "best":
@@ -782,7 +782,8 @@ def _resolve_target_or_raise(fleet: dict, to: str, match: dict, session_id: str,
     # a chat is RE-HOMED instead - the import sets the stale record aside and lands the chat in the
     # signed-in account's folder (session-launch.ts setAsideStaleLoginRecords).
     if _same_instance(match, target) and match.get("staleLogin") is not True:
-        _keep_here(session_id, target)
+        if not dry_run:  # a dry run plans and posts nothing
+            _keep_here(session_id, target)
         raise _MigrateRefusal(
             {"landed": False, "report": f"nothing to do: '{chat_title}' already lives in {target.get('name')}"},
             0,
@@ -1921,7 +1922,7 @@ def move_only(argv: list[str]) -> _MoveOutcome:
 
         choice: dict = {}
         target = _resolve_target_or_raise(fleet, parsed.to, match, session_id, chat_title,
-                                          choice_out=choice)
+                                          choice_out=choice, dry_run=parsed.dry_run)
         if choice:
             notes["targetChoice"] = choice
         if parsed.dry_run:

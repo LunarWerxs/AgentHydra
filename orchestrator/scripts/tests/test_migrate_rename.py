@@ -159,6 +159,13 @@ class MigrateTest(ActTestBase):
         # where it is, so a retire an earlier move queued there cannot hide it (review, 2026-09-26).
         self.assertEqual([p for p, _ in self.stub.posts], [f"/api/sessions/{SID}/keep-here"])
 
+    def test_already_there_dry_run_posts_nothing(self):
+        import migrate_chat
+
+        self.dossier_static(instance="2claude")
+        self.assertEqual(migrate_chat.main([SID, "--to", "2claude", "--dry-run"]), 0)
+        self.assertEqual(self.stub.posts, [])
+
     def test_console_only_session_resolves_via_sessions_table_and_lands(self):
         # The dossier only knows desktop records; a console stray MUST still be migratable
         # (the live fleet's whole land-console lane died on this before the fallback).

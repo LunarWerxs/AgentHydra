@@ -17,7 +17,7 @@ import {
   instanceRefForSession,
   invalidateSessionMetaCache,
 } from '../instance-sessions'
-import { keepChatOn, queueRetireOnClose, runningProfileDirs } from '../move-retire-on-close'
+import { isProfileRunning, keepChatOn, queueRetireOnClose } from '../move-retire-on-close'
 import { type SettleDeps, settleMovedSource, usageAtWall } from '../move-source-settle'
 import { newChatUltracodeEnabled, withUltracode } from '../new-chat-defaults'
 import { samePathKey } from '../path-key'
@@ -133,9 +133,6 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
       { ok: false, error: "instance_ref ('desktop:<dir>') is required — none could be inferred" },
       400,
     )
-  // The MCP movers land here (migrate_chat), so a move back onto an account the chat left must
-  // call off what an earlier move queued to retire it there, as /migrate does (review, 2026-09-26).
-  keepChatOn(ref.slice('desktop:'.length), sessionId)
   if (body.force !== true && isSessionSuperseded(sessionId))
     return c.json(
       {
@@ -180,6 +177,10 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
     recordTitle,
   })
   if (!titled.ok) return c.json({ ok: false, error: titled.error }, 400)
+  // The MCP movers land here (migrate_chat), so a move back onto an account the chat left must
+  // call off what an earlier move queued to retire it there, as /migrate does - once the request
+  // is past its refusals, so a refused one drops nothing (review, 2026-09-26).
+  keepChatOn(ref.slice('desktop:'.length), sessionId)
   const result = await importSessionToDesktop({
     sessionId,
     instanceDir: ref.slice('desktop:'.length),
@@ -846,7 +847,8 @@ function leavingOf(body: Record<string, unknown>): string[] {
 /** settleMovedSource's routes, wired to the real archive paths. One definition for /migrate and
  *  /settle-source, so a chat's old copy is retired the same way whichever pass does it. */
 function routeSettleDeps(): SettleDeps {
-  let running: Promise<string[]> | undefined
+  // One fresh scan per settle at most, shared by every profile it asks about.
+  const fresh: { scan?: Promise<string[]> } = {}
   return {
     carriers: desktopChatCarriers,
     diskArchived: (profile, id) => {
@@ -857,12 +859,9 @@ function routeSettleDeps(): SettleDeps {
         return null
       }
     },
-    // A FRESH scan, once per settle, and a failed one throws: settleOne then treats the app as
-    // running, so "could not tell" never becomes a flag under an open app (review, 2026-09-26).
-    isRunning: async (profile) => {
-      running ??= runningProfileDirs()
-      return (await running).some((dir) => samePathKey(dir, profile))
-    },
+    // "Closed" is confirmed by a fresh scan (bounded); "could not tell" throws, and settleOne
+    // queues the old copy rather than guessing either way (move-retire-on-close.ts).
+    isRunning: (profile) => isProfileRunning(profile, fresh),
     native: (profile, id, opts) => tryNativeArchiveChat(profile, id, opts),
     // The account's cached usage reading, found by its dir however the cache spelled the key.
     atLimit: (profile) =>

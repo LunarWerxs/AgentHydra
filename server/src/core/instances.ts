@@ -30,6 +30,7 @@ import {
   getClaudeNativeProfileConfig,
 } from '../claude-native-settings'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
+import { pathKey } from '../path-key'
 import { detectDesktopInstall } from './desktop-install'
 import { recordInstanceLaunches } from './instance-launches'
 import { readInstanceMetaMap } from './instance-meta'
@@ -501,6 +502,15 @@ export function setBeforeLaunchHook(hook: ((normDir: string) => Promise<void>) |
   beforeLaunchHook = hook
 }
 
+/** When AgentHydra last started launching each profile, keyed by pathKey. */
+const launchStarts = new Map<string, number>()
+
+/** Has AgentHydra started launching `dir` at or after `since`? A store write judged on a liveness
+ *  reading older than that launch could land while the app reads its store. */
+export function launchStartedSince(dir: string, since: number): boolean {
+  return (launchStarts.get(pathKey(dir, true)) ?? Number.NEGATIVE_INFINITY) >= since
+}
+
 async function openConfiguredInstance(
   normDir: string,
   nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
@@ -508,6 +518,7 @@ async function openConfiguredInstance(
   const running = await probeRunningInstance(normDir, nativeConfig)
   if (running) return running
   await beforeLaunchHook?.(normDir).catch(() => {})
+  launchStarts.set(pathKey(normDir, true), Date.now())
 
   const binary = await resolveLaunchBinaryOrNull()
   if (!binary) return await noLaunchBinaryResult(normDir)

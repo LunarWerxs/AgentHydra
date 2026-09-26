@@ -32,7 +32,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DATA_DIR } from './config'
-import { setBeforeLaunchHook } from './core/instances'
+import { launchStartedSince, setBeforeLaunchHook } from './core/instances'
 import { scanClaudeProcesses } from './core/process'
 import { pathKey, samePathKey } from './path-key'
 import {
@@ -125,14 +125,43 @@ export function keepChatOn(profile: string, sessionId: string): void {
   cancelChatArchiveReassert(profile, sessionId)
 }
 
+/** How long a move waits on a fresh scan before calling liveness unknown. The scan itself runs
+ *  on in the scan cache's in-flight slot, so the next request joins it rather than starting one. */
+const FRESH_SCAN_BUDGET_MS = 3_000
+
 /**
  * The profile dirs whose desktop app is running, from a FRESH process scan. Throws when the scan
- * fails: a destructive caller must not read "could not tell" as "closed".
+ * fails or overruns `timeoutMs`: a destructive caller must not read "could not tell" as "closed".
  */
-export async function runningProfileDirs(): Promise<string[]> {
-  const scan = await scanClaudeProcesses({ fresh: true })
+export async function runningProfileDirs(timeoutMs?: number): Promise<string[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const scan = await (timeoutMs === undefined
+    ? scanClaudeProcesses({ fresh: true })
+    : Promise.race([
+        scanClaudeProcesses({ fresh: true }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('the process scan timed out')), timeoutMs)
+        }),
+      ]).finally(() => clearTimeout(timer)))
   if (!scan.ok) throw new Error(`could not read the Claude processes: ${scan.reason}`)
   return scan.processes.filter((p) => p.isMain && p.dir).map((p) => p.dir as string)
+}
+
+/**
+ * Is `profile`'s app running? The cached scan (the UI's poll keeps it warm) answers "running" at
+ * no cost, and running only ever leads to the app's own archive. "Not running" leads to a flag,
+ * so it is confirmed by a fresh scan, shared through `fresh` by every profile one settle asks
+ * about. Throws when that cannot be confirmed.
+ */
+export async function isProfileRunning(
+  profile: string,
+  fresh: { scan?: Promise<string[]> },
+): Promise<boolean> {
+  const cached = await scanClaudeProcesses()
+  if (cached.ok && cached.processes.some((p) => p.isMain && samePathKey(p.dir, profile)))
+    return true
+  fresh.scan ??= runningProfileDirs(FRESH_SCAN_BUDGET_MS)
+  return (await fresh.scan).some((dir) => samePathKey(dir, profile))
 }
 
 /** One record's flag, read strictly: a bad read throws, which leaves the entry for next pass. */
@@ -151,6 +180,8 @@ export interface RetireDeps {
   liveElsewhere: (profile: string, sessionId: string) => boolean
   /** Write the archive flag in that one profile; true when it changed the record. */
   flag: (sessionId: string, profile: string) => Promise<boolean>
+  /** AgentHydra started launching this profile at or after `since` (core/instances). */
+  launchedSince: (profile: string, since: number) => boolean
   now: () => number
   log?: (msg: string) => void
 }
@@ -168,30 +199,47 @@ const defaultDeps = (): RetireDeps => ({
       const path = findVisibleChatMetaPath(dir, id)
       return path ? !readArchivedStrict(path) : false
     }),
+  // The pass has already judged the app closed; skipping archiveDesktopChat's own liveness read
+  // (it only reports) keeps each flag from paying another process scan.
   flag: async (id, profile) =>
-    (await archiveDesktopChat(id, true, [profile])).hits.some((h) => h.changed),
+    (await archiveDesktopChat(id, true, [profile], async () => false)).hits.some((h) => h.changed),
+  launchedSince: launchStartedSince,
   now: Date.now,
   log: (msg) => console.log(msg),
 })
 
+/** How long a liveness reading stays good enough to write a flag on. */
+const SNAPSHOT_MAX_AGE_MS = 10_000
+
 /**
  * One pass over the queue, or over one profile's entries. Per-entry failures are contained and
  * retried next tick. Returns how many old copies it archived.
+ *
+ * ⛔ NO WRITE ON AN OLD READING (review, 2026-09-26). The liveness read is taken once, at the start,
+ * so before every flag the pass stops if that reading is older than SNAPSHOT_MAX_AGE_MS, past
+ * `deadline`, or older than an AgentHydra launch of that profile: any of those, and the app may
+ * be starting and reading its store as the flag lands. What it did not reach, the next pass does.
  */
 export async function runRetireOnCloseOnce(
   deps: RetireDeps = defaultDeps(),
-  opts: { profile?: string } = {},
+  opts: { profile?: string; deadline?: number } = {},
 ): Promise<number> {
   const entries = deps.store
     .load()
     .filter((e) => opts.profile === undefined || samePathKey(e.profile, opts.profile))
   if (entries.length === 0) return 0
   let running: string[]
+  let readAt: number
   try {
     running = await deps.listRunningDirs()
+    readAt = deps.now()
   } catch {
     return 0
   }
+  const stale = (profile: string) =>
+    deps.now() - readAt > SNAPSHOT_MAX_AGE_MS ||
+    (opts.deadline !== undefined && deps.now() > opts.deadline) ||
+    deps.launchedSince(profile, readAt)
   // Settled entries by key AND stamp: an entry re-queued while this pass ran is a new intent.
   const settled = new Set<string>()
   const settle = (e: RetireEntry) => settled.add(`${keyOf(e.profile, e.sessionId)}@${e.queuedAt}`)
@@ -222,6 +270,7 @@ export async function runRetireOnCloseOnce(
       // A move back onto this account may have dropped the entry since this pass loaded it.
       const key = keyOf(e.profile, e.sessionId)
       if (!deps.store.load().some((x) => keyOf(x.profile, x.sessionId) === key)) continue
+      if (stale(e.profile)) break
       if (await deps.flag(e.sessionId, e.profile)) retired++
       settle(e)
     } catch {
@@ -239,23 +288,22 @@ export async function runRetireOnCloseOnce(
   return retired
 }
 
-/** Longest a launch waits on the pass below; the sweep's next tick finishes anything it cut off. */
-const BEFORE_LAUNCH_BUDGET_MS = 5_000
+/** The most a launch gives the pass below; what it does not reach waits for the next pass. */
+const BEFORE_LAUNCH_BUDGET_MS = 3_000
 
 /**
  * The pass for one profile, run right before AgentHydra opens it: the app reads its store at
  * startup, so this is the last moment the flag can land before it is read, and a close and
- * reopen inside one tick would otherwise miss it. Bounded, and never throws into the launch.
+ * reopen inside one tick would otherwise miss it. The launch's own probe has just shown the
+ * profile closed with a fresh scan, so no second scan is taken, and the pass stops writing at its
+ * deadline rather than racing the launch. Never throws into the launch.
  */
 export async function retireBeforeLaunch(profile: string): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  await Promise.race([
-    runRetireOnCloseOnce(defaultDeps(), { profile }).catch(() => 0),
-    new Promise<void>((r) => {
-      timeout = setTimeout(r, BEFORE_LAUNCH_BUDGET_MS)
-    }),
-  ])
-  clearTimeout(timeout)
+  const deps = { ...defaultDeps(), listRunningDirs: async () => [] }
+  await runRetireOnCloseOnce(deps, {
+    profile,
+    deadline: Date.now() + BEFORE_LAUNCH_BUDGET_MS,
+  }).catch(() => 0)
 }
 
 let timer: ReturnType<typeof setInterval> | null = null
