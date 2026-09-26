@@ -347,7 +347,23 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
     expect(h.calls).toEqual([{ id: 'local_target', options: { cleanupWorktree: false } }])
     expect(h.other.isArchived).toBe(false)
   })
-  test('shared cwd refuses registry servers regardless of state or owner', async () => {
+  test("the archived chat's OWN servers do not block its archive; another chat's still do", async () => {
+    const h = harness()
+    h.previews.getServersForWorktree = () => [
+      { serverId: 'own-server', sessionId: h.target.sessionId, status: 'running' },
+    ]
+    expect(await h.run()).toMatchObject({ ok: true, dispatch: 'sent' })
+    expect(h.calls).toEqual([{ id: 'local_target', options: { cleanupWorktree: false } }])
+
+    const mixed = harness()
+    mixed.previews.getServersForWorktree = () => [
+      { serverId: 'own-server', sessionId: mixed.target.sessionId, status: 'running' },
+      { serverId: 'bystander', sessionId: 'local_someone_else', status: 'running' },
+    ]
+    expect(await mixed.run()).toMatchObject({ ok: false, dispatch: 'not-sent' })
+    expect(mixed.calls).toEqual([])
+  })
+  test("shared cwd refuses another chat's registry servers, whatever their state", async () => {
     const h = harness()
     h.other.cwd = h.target.cwd
     h.previews.getServersForWorktree = (cwd: string) => {

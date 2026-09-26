@@ -1561,6 +1561,35 @@ def _adjudicate_bypass(session_id: str, chat_title, target: dict, meta_path: str
     return "disk-only", f"the app's picker did not confirm ({said})", remedy
 
 
+def _disk_wants_ultracode(meta_path: str) -> bool:
+    """Did the doctrine stamp put ultracode ON in this record? (Off for an automation chat, or
+    when the owner's doctrine turns it off - then nothing is pushed into the app either.)"""
+    try:
+        return (stamplib.read_meta(meta_path).get("sessionSettings") or {}).get("ultracode") is True
+    except (OSError, ValueError):
+        return False
+
+
+def ultracode_in_app(target: dict, meta_path: str) -> bool | str:
+    """Turn ultracode on INSIDE the target's running app for the chat whose record is
+    `meta_path`, via the daemon's native route. True when the app read it back on; otherwise
+    the reason, for the report. Module scope so a test can replace it; never raises."""
+    effort = stamplib.ULTRACODE_EFFORT if stamplib.ULTRACODE_EFFORT in ("xhigh", "max") else "xhigh"
+    try:
+        got = hydralib.api_post_once("/api/claude-native/ultracode", {
+            "profileDir": str(target.get("dir") or ""),
+            "sessionId": _Path(meta_path).stem,
+            "effort": effort,
+        })
+    except hydralib.DaemonError as err:
+        return f"app refused: {str(err)[:160]}"
+    except Exception as err:  # a transport failure is reported, never fatal to the move
+        return f"native route unavailable: {str(err)[:120]}"
+    if isinstance(got, dict) and got.get("ok") is True:
+        return True
+    return str((got or {}).get("reason") if isinstance(got, dict) else got)[:160] or "no verdict"
+
+
 def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict],
                                fleet: dict, chat_title=None,
                                watched: dict | None = None, sw=None) -> dict:
@@ -1628,13 +1657,19 @@ def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict],
         if watched["flips"]:
             uc_note += (f"; the app re-saved over a doctrine stamp {watched['flips']}x during "
                         f"the watch and was re-stamped each time")
-        if uc_ok and target.get("isRunning"):
-            # The same honesty the permission half already gets. A running app holds the
-            # record in memory and writes its OWN view of it on its own schedule - and its
-            # view has no ultracode field at all, so a later re-save simply drops ours. The
-            # watch defends the window it can see; it cannot defend the next hour.
-            uc_note += ("; ultracode is on disk but NOT durable while that app runs - its "
-                        "next re-save can drop it, and the doctrine sweep re-applies on a clock")
+        if uc_ok and target.get("isRunning") and _disk_wants_ultracode(meta_path):
+            # A running app holds the record in memory and writes its OWN view back, and its
+            # engine takes effort from the app, never from the file - so a disk stamp alone
+            # left four chats moved on 2026-09-26 running with ultracode OFF under a record
+            # that said on. The app's own applyFlagSettings, through the native route, is the
+            # one write that reaches its memory and a live engine.
+            in_app = ultracode_in_app(target, meta_path)
+            if in_app is True:
+                uc_note += "; the target app itself confirms ultracode on"
+            else:
+                uc_ok = False
+                uc_note += (f"; ultracode is on disk but NOT in the running app ({in_app}) - "
+                            "the chat runs without it until that app restarts")
         if sw is not None:
             sw.lap("stamp-doctrine")  # the daemon stamp + disk stamps + re-stamp poll
         verdict, evidence, remedy = _adjudicate_bypass(

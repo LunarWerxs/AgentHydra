@@ -15,7 +15,9 @@ export const NATIVE_PROGRAM_PIN = Object.freeze({
 })
 
 export interface NativeProgramRequest {
-  action: 'inspect' | 'archive'
+  action: 'inspect' | 'archive' | 'ultracode'
+  /** ultracode only: the effort ultracode runs at (the app clears ultracode off any other). */
+  effort?: string
   pid: number
   profileDir: string
   accountId?: string
@@ -356,7 +358,8 @@ function nativeCheckPreviewPrefixes(previewManager: any, effectiveCwd: string): 
 
 /**
  * A prefix-matched HTML preview can belong to a different directory, even when no other session
- * shares this exact cwd. This POC requires no affected resources for every archive.
+ * shares this exact cwd. No archive may stop a resource another chat owns: HTML previews under
+ * the prefix always refuse, and registry servers refuse unless the archived chat owns them all.
  */
 function nativeCheckSharedPreviewSafety(
   env: any,
@@ -376,7 +379,14 @@ function nativeCheckSharedPreviewSafety(
   }
   const servers = previewManager.getServersForWorktree(effectiveCwd)
   if (!Array.isArray(servers)) nativeRefuse('shared working directory server state is invalid')
-  if (servers.length) nativeRefuse('shared working directory has servers that archive would stop')
+  // A server the archived chat started itself is stopped by the app's own archive of that chat,
+  // the same as when a person archives it; only a server owned by ANOTHER chat (or by no
+  // readable chat) is a bystander. Refusing its own servers too left a moved chat's source row
+  // unarchivable for as long as its dev servers ran (2026-09-26: two vite servers only the
+  // source app's own preview tabs used).
+  if (servers.some((server: any) => server?.sessionId !== session.sessionId)) {
+    nativeRefuse('shared working directory has servers that archive would stop')
+  }
   nativeCheckPreviewPrefixes(previewManager, effectiveCwd)
 }
 
@@ -593,6 +603,40 @@ async function nativeArchive(
   return nativeArchiveResult(env, found, session, before, after, flags, mainInfo, state)
 }
 
+/**
+ * Ultracode ON for one chat, through the app's own manager.applyFlagSettings - the call its
+ * effort picker makes, so memory, the saved record and a running engine all get it. A disk
+ * stamp alone cannot do this while the app runs: the app holds the chat in memory and writes
+ * its own copy back (2026-09-26: four moved chats booted with ultracode off).
+ */
+async function nativeUltracode(env: any, found: any, request: any, settled: any, state: any) {
+  const manager = found.manager
+  if (typeof manager.applyFlagSettings !== 'function') {
+    nativeRefuse('native applyFlagSettings unavailable')
+  }
+  const session = nativeSelect(manager, request)
+  const before = nativeSnapshot(manager, session)
+  state.dispatch = 'sent'
+  await manager.applyFlagSettings(session.sessionId, {
+    ultracode: true,
+    effortLevel: request.effort,
+  })
+  nativeCheckIdentity(env, found, request, settled)
+  const after = nativeSnapshot(manager, nativeSelect(manager, request))
+  const pick = (s: any) => ({ effort: s.effort, ultracode: s.sessionSettings?.ultracode ?? null })
+  const verified = after.sessionSettings?.ultracode === true && after.effort === request.effort
+  return {
+    ok: verified,
+    verified,
+    dispatch: state.dispatch,
+    action: 'ultracode',
+    identity: nativeIdentity(env, found, null),
+    before: pick(before),
+    after: pick(after),
+    evidence: "native manager state read back after the app's own applyFlagSettings",
+  }
+}
+
 async function nativeRun(request: any, pin: any, state: any): Promise<any> {
   const env = nativeOpenEnv(request)
   const found = nativeFindManager(env, pin)
@@ -603,6 +647,8 @@ async function nativeRun(request: any, pin: any, state: any): Promise<any> {
     orgId: found.manager.currentOrgId,
   }
   const manager = found.manager
+  if (request.action === 'ultracode')
+    return await nativeUltracode(env, found, request, settled, state)
   // getSessionList is the app's list contract, but its folder checks await. Identity is checked
   // again and the selected object is read afresh after those awaits before any mutation.
   if (request.action === 'inspect') {
@@ -671,6 +717,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeArchiveResult,
     nativeInspectResult,
     nativeArchive,
+    nativeUltracode,
     nativeRun,
     nativeRuntime,
   ]
@@ -679,7 +726,8 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
 }
 
 export function nativeProgram(request: NativeProgramRequest): string {
-  if (!['inspect', 'archive'].includes(request.action)) throw Error('Unsupported native action')
+  if (!['inspect', 'archive', 'ultracode'].includes(request.action))
+    throw Error('Unsupported native action')
   if (!Number.isSafeInteger(request.pid) || request.pid <= 0) throw Error('Expected positive PID')
   if (!request.profileDir?.trim()) throw Error('Expected exact profile directory')
   if (
@@ -687,6 +735,12 @@ export function nativeProgram(request: NativeProgramRequest): string {
     (!request.accountId || !request.orgId || !request.sessionId || !request.cliSessionId)
   ) {
     throw Error('Archive requires accountId, orgId, sessionId and cliSessionId')
+  }
+  if (
+    request.action === 'ultracode' &&
+    (!request.sessionId || !['xhigh', 'max'].includes(String(request.effort)))
+  ) {
+    throw Error('Ultracode requires sessionId and an effort of xhigh or max')
   }
   return nativeRuntimeExpression(request)
 }

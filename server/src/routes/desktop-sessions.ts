@@ -7,6 +7,7 @@ import {
   parseClaudeNativeProfileConfig,
   setClaudeNativeProfileConfig,
 } from '../claude-native-settings'
+import { tryNativeUltracode } from '../claude-native-ultracode'
 import { listInstances } from '../core/instances'
 import { rememberMigratedSettings } from '../db'
 import { app } from '../http-app'
@@ -250,6 +251,17 @@ async function uiArchiveWithinBudget(
     if (timer) clearTimeout(timer)
   }
 }
+
+// Ultracode ON for one chat inside its RUNNING app (claude-native-ultracode.ts): the only
+// route that reaches the app's memory and a live engine, where a disk stamp does not.
+app.post('/api/claude-native/ultracode', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.profileDir !== 'string' || typeof body.sessionId !== 'string')
+    return c.json({ ok: false, reason: 'profileDir and sessionId are required' }, 400)
+  const effort = body.effort === 'max' ? 'max' : 'xhigh'
+  const out = await tryNativeUltracode(body.profileDir, body.sessionId, effort)
+  return c.json(out, out.ok ? 200 : 409)
+})
 
 // Connections are opt-in per profile. launchDebugger applies on the next ordinary Open;
 // saving configuration does not launch or restart a desktop instance.

@@ -267,10 +267,18 @@ class MigrateTest(ActTestBase):
             stub.routes["/api/chats/dossier"] = route
             stub.routes[f"/api/sessions/{SID}/import-desktop"] = {"ok": True}
             stub.routes[f"/api/sessions/{SID}/automation"] = {"ok": True}
+            # The target app is RUNNING, so the disk stamp alone does not reach it (2026-09-26:
+            # four moved chats ran with ultracode off under a record that said on). The move
+            # must also switch it on inside the app, for exactly the landed chat.
+            stub.routes["/api/claude-native/ultracode"] = {"ok": True}
             code, out, _ = run_cli(migrate_chat.main, [SID, "--to", "2", "--json"])
             self.assertEqual(code, 0)
             payload = json.loads(out)
             self.assertTrue(payload["ultracodeStamped"])
+            in_app = [b for p, b in stub.posts if p == "/api/claude-native/ultracode"]
+            self.assertEqual(len(in_app), 1)
+            self.assertEqual(in_app[0]["sessionId"], "local_y")
+            self.assertEqual(in_app[0]["profileDir"], "c:\\i\\2claude")
             written = json.loads(meta.read_text(encoding="utf-8"))
             self.assertIs(written["sessionSettings"]["ultracode"], True)
             self.assertEqual(written["effort"], "xhigh")
