@@ -75,14 +75,10 @@ struct App {
     intentional_stop: AtomicBool,
     busy: AtomicBool,
     quitting: AtomicBool,
-    auto_restart_paused: AtomicBool,
-    health_misses: AtomicU32,
-    revive_grace_until: Mutex<Option<Instant>>,
-    restart_times: Mutex<Vec<Instant>>,
+    watchdog: Mutex<Watchdog>,
     /// Set by Quit so an in-flight worker stops instead of resurrecting what we are closing.
     cancel: AtomicBool,
     build_pid: AtomicU32,
-    server_pid: AtomicU32,
     /// True when the last worker was a rebuild (so a successful finish re-opens the UI).
     was_rebuild: AtomicBool,
     /// An unclean exit was seen (a leftover run file at cold start, or a death the watchdog
@@ -242,8 +238,7 @@ fn start_worker(hwnd: HWND, rebuild: bool) {
         return; // one at a time
     }
     // A manual Restart is the operator saying "try again", so it clears the crash-loop pause.
-    a.auto_restart_paused.store(false, Ordering::Relaxed);
-    a.restart_times.lock().unwrap().clear();
+    a.watchdog.lock().unwrap().rearm();
     a.cancel.store(false, Ordering::Relaxed);
     a.was_rebuild.store(rebuild, Ordering::Relaxed);
 
@@ -369,7 +364,7 @@ fn run_worker(rebuild: bool) -> usize {
     let mut attempt = 0;
     while !ready && !a.cancel.load(Ordering::Relaxed) && attempt < cfg.restart_retries {
         attempt += 1;
-        let pid = a.server_pid.swap(0, Ordering::Relaxed);
+        let pid = daemon::CHILD_PID.swap(0, Ordering::SeqCst);
         if pid > 0 {
             daemon::taskkill(pid);
         }
@@ -397,8 +392,8 @@ fn restart_once(budget: Duration) -> bool {
         daemon::wait_port_free(cfg.port, 6);
     }
     std::thread::sleep(Duration::from_millis(300));
-    if let Some(pid) = daemon::spawn(cfg, &a.token) {
-        a.server_pid.store(pid, Ordering::Relaxed);
+    let why = if a.was_rebuild.load(Ordering::Relaxed) { "tray Rebuild & Restart" } else { "tray Restart" };
+    if daemon::spawn(cfg, &a.token, why).is_some() {
         a.started_by_us.store(true, Ordering::Relaxed);
     }
     match daemon::wait_for_url(cfg, budget) {
@@ -412,73 +407,234 @@ fn restart_once(budget: Duration) -> bool {
 
 // --- watchdog ----------------------------------------------------------------------------------
 
+/// Why a health tick that found the daemon dead did not revive it.
+///
+/// Each one is written to the tray log once per episode (see `Watchdog::report`). Before
+/// 2026-09-26 every guard returned without a word, and AgentHydra's watchdog stood down for ~31
+/// hours with nothing to show for it but a spawn line that never came.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum StandDown {
+    /// A Restart or Rebuild from the menu owns the daemon until its worker finishes.
+    Busy,
+    /// A token app leaves a daemon it did not start alone (Config::watchdog_requires_ownership).
+    NotOurs,
+    /// The last revive has not had its grace period to bind yet.
+    Grace,
+    /// The crash-loop guard paused auto-restart.
+    Paused,
+}
+
+impl StandDown {
+    fn reason(self) -> String {
+        match self {
+            StandDown::Busy => "a Restart or Rebuild from the tray menu is still running".into(),
+            StandDown::NotOurs => {
+                "this tray did not start it, and watchdogRequiresOwnership is on".into()
+            }
+            StandDown::Grace => format!(
+                "the last revive is still inside its {}s grace",
+                REVIVE_GRACE.as_secs()
+            ),
+            StandDown::Paused => format!("auto-restart is paused by the crash-loop guard {}", rearm_hint()),
+        }
+    }
+}
+
+fn rearm_hint() -> String {
+    format!(
+        "(it re-arms once the daemon answers for {}s, or on a tray Restart)",
+        CRASH_LOOP_WINDOW.as_secs()
+    )
+}
+
+/// What one health tick decided.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Verdict {
+    /// The daemon answered.
+    Alive,
+    /// The daemon answered, and has for long enough that a crash-loop pause is lifted.
+    Rearmed,
+    /// Silent, but not for long enough to count as dead: one slow tick is not a death.
+    Hiccup,
+    /// Dead, and a guard kept the watchdog from reviving it.
+    StandDown(StandDown),
+    /// Dead, and one revive too many inside the crash-loop window: auto-restart pauses.
+    CrashLoop,
+    /// Dead: reap and respawn it.
+    Revive,
+}
+
+/// The watchdog's memory between ticks, and its whole policy.
+///
+/// Kept apart from the probe, the clock and the spawn so the policy can be exercised without a
+/// daemon: `health_tick` feeds it the probe result and acts on the verdict.
+#[derive(Default)]
+struct Watchdog {
+    misses: u32,
+    grace_until: Option<Instant>,
+    paused: bool,
+    restart_times: Vec<Instant>,
+    /// Since when the daemon has answered. Only a death resets it, never a hiccup.
+    healthy_since: Option<Instant>,
+    /// The stand-down last written to the tray log, so a standing guard is reported once.
+    reported: Option<StandDown>,
+}
+
+impl Watchdog {
+    fn tick(&mut self, now: Instant, alive: bool, busy: bool, not_ours: bool) -> Verdict {
+        if alive {
+            self.misses = 0;
+            let since = *self.healthy_since.get_or_insert(now);
+            // The pause must not outlive the crash loop. A daemon that has answered for the whole
+            // window has, by the guard's own definition, stopped crash-looping, and a pause kept
+            // past that turns the NEXT unrelated death into one nothing revives: AgentHydra paused
+            // after four fast revives, the fifth daemon served for 15 hours, and when it was killed
+            // the watchdog stood down for good.
+            if self.paused && now.duration_since(since) >= CRASH_LOOP_WINDOW {
+                self.rearm();
+                return Verdict::Rearmed;
+            }
+            return Verdict::Alive;
+        }
+
+        self.misses += 1;
+        if self.misses < REVIVE_AFTER_MISSES {
+            return Verdict::Hiccup;
+        }
+        // Dead from here. Every guard below stands the revive down, and says which it was.
+        self.healthy_since = None;
+        if busy {
+            self.misses = 0;
+            return Verdict::StandDown(StandDown::Busy);
+        }
+        if not_ours {
+            self.misses = 0;
+            return Verdict::StandDown(StandDown::NotOurs);
+        }
+        if self.grace_until.is_some_and(|until| now < until) {
+            return Verdict::StandDown(StandDown::Grace);
+        }
+        if self.paused {
+            return Verdict::StandDown(StandDown::Paused);
+        }
+        // Crash-loop guard: prune the window, then refuse to keep resurrecting something that will
+        // not stay up.
+        self.restart_times.retain(|t| now.duration_since(*t) < CRASH_LOOP_WINDOW);
+        if self.restart_times.len() >= CRASH_LOOP_MAX {
+            self.paused = true;
+            return Verdict::CrashLoop;
+        }
+        self.restart_times.push(now);
+        self.grace_until = Some(now + REVIVE_GRACE);
+        self.misses = 0;
+        Verdict::Revive
+    }
+
+    /// Lift a crash-loop pause: a manual Restart, or a daemon that has stayed up.
+    fn rearm(&mut self) {
+        self.paused = false;
+        self.restart_times.clear();
+    }
+
+    /// The tray-log line this verdict earns, or None when it would only repeat the last one.
+    /// A revive needs none: its own spawn line is the record.
+    fn report(&mut self, verdict: Verdict) -> Option<String> {
+        const DEAD: &str = "watchdog: the daemon is not answering, and it is NOT being revived";
+        match verdict {
+            Verdict::Hiccup => None,
+            Verdict::Revive => {
+                self.reported = None;
+                None
+            }
+            Verdict::Alive => self
+                .reported
+                .take()
+                .map(|_| "watchdog: the daemon answers again".to_string()),
+            Verdict::Rearmed => {
+                self.reported = None;
+                Some(format!(
+                    "watchdog: re-armed - the daemon has answered for {}s since the crash-loop guard paused auto-restart",
+                    CRASH_LOOP_WINDOW.as_secs()
+                ))
+            }
+            Verdict::CrashLoop => {
+                self.reported = Some(StandDown::Paused);
+                Some(format!(
+                    "{DEAD}: {} revives inside {}s tripped the crash-loop guard, so auto-restart is paused {}",
+                    CRASH_LOOP_MAX,
+                    CRASH_LOOP_WINDOW.as_secs(),
+                    rearm_hint()
+                ))
+            }
+            Verdict::StandDown(why) if self.reported == Some(why) => None,
+            Verdict::StandDown(why) => {
+                self.reported = Some(why);
+                Some(format!("{DEAD}: {}", why.reason()))
+            }
+        }
+    }
+}
+
 fn health_tick() {
     let a = app();
     // The visibility sync runs FIRST and unconditionally, so "hide tray icon" keeps working even
     // when every other guard below stands the watchdog down.
     sync_icon_visibility();
 
-    if a.intentional_stop.load(Ordering::Relaxed) || a.busy.load(Ordering::Relaxed) {
-        a.health_misses.store(0, Ordering::Relaxed);
+    // Quit is tearing the app down and kills this timer next: there is nothing left to watch.
+    if a.intentional_stop.load(Ordering::Relaxed) {
         return;
     }
+    // Probe BEFORE any guard, so a guard that stands the watchdog down still knows the daemon is
+    // dead and can say so. The guards used to return ahead of the probe, silently.
+    let url = daemon::live_url(&a.cfg, daemon::PROBE_POLL);
+    let busy = a.busy.load(Ordering::Relaxed);
     // Ownership gate: for token apps, leave a daemon another session owns alone. An app can opt out
     // (watchdogRequiresOwnership = false) to revive whatever is there, which is what AgentHydra
     // does to keep parity with its pre-kit launcher.
-    let use_token = !a.token.is_empty();
-    if use_token
+    let not_ours = !a.token.is_empty()
         && !a.started_by_us.load(Ordering::Relaxed)
-        && a.cfg.watchdog_requires_ownership
-    {
-        a.health_misses.store(0, Ordering::Relaxed);
-        return;
+        && a.cfg.watchdog_requires_ownership;
+    let (verdict, line) = {
+        let mut watchdog = a.watchdog.lock().unwrap();
+        let verdict = watchdog.tick(Instant::now(), url.is_some(), busy, not_ours);
+        (verdict, watchdog.report(verdict))
+    };
+    if let Some(line) = line {
+        daemon::tray_log(&a.cfg, &line);
     }
 
-    if let Some(url) = daemon::live_url(&a.cfg, daemon::PROBE_POLL) {
-        set_url(Some(url));
-        a.health_misses.store(0, Ordering::Relaxed);
-        return;
-    }
-
-    let misses = a.health_misses.fetch_add(1, Ordering::Relaxed) + 1;
-    if misses < REVIVE_AFTER_MISSES {
-        return;
-    }
-    if let Some(until) = *a.revive_grace_until.lock().unwrap() {
-        if Instant::now() < until {
-            return;
+    match verdict {
+        Verdict::Alive | Verdict::Rearmed => {
+            set_url(url);
+            // A death followed by a live daemon has been answered already: a self-update relaunch
+            // hands over to a daemon that is not our child. A later revive must not claim it.
+            daemon::forget_last_death();
+        }
+        Verdict::Hiccup | Verdict::StandDown(_) => {}
+        Verdict::CrashLoop | Verdict::Revive => {
+            // A death this tray did not cause: from here on, offer the quiet way back in. Only when
+            // the app names its crash-sentinel directory, which is its statement that it honours
+            // safe mode; an app that ignores LUNARWERX_SAFE_MODE would get a menu item that changes
+            // nothing.
+            let offers_safe_mode = a.cfg.crash_sentinel_dir.is_some();
+            if offers_safe_mode {
+                a.unclean_exit_seen.store(true, Ordering::Relaxed);
+            }
+            if verdict == Verdict::CrashLoop {
+                let hint = if offers_safe_mode { "Restart or Restart in Safe Mode" } else { "Restart to try again" };
+                balloon(
+                    &format!("{} keeps crashing - auto-restart paused. Use {hint}.", a.cfg.display_name),
+                    NIIF_ERROR,
+                );
+            } else {
+                revive(a);
+            }
         }
     }
-    if a.auto_restart_paused.load(Ordering::Relaxed) {
-        return;
-    }
-    // A death this tray did not cause: from here on, offer the quiet way back in. Only when the app
-    // names its crash-sentinel directory, which is its statement that it honours safe mode; an app
-    // that ignores LUNARWERX_SAFE_MODE would get a menu item that changes nothing.
-    let offers_safe_mode = a.cfg.crash_sentinel_dir.is_some();
-    if offers_safe_mode {
-        a.unclean_exit_seen.store(true, Ordering::Relaxed);
-    }
+}
 
-    // Crash-loop guard: prune the window, then refuse to keep resurrecting something that will not
-    // stay up. Only a manual Restart/Rebuild clears the pause.
-    {
-        let mut times = a.restart_times.lock().unwrap();
-        let now = Instant::now();
-        times.retain(|t| now.duration_since(*t) < CRASH_LOOP_WINDOW);
-        if times.len() >= CRASH_LOOP_MAX {
-            a.auto_restart_paused.store(true, Ordering::Relaxed);
-            drop(times);
-            let hint = if offers_safe_mode { "Restart or Restart in Safe Mode" } else { "Restart to try again" };
-            balloon(
-                &format!("{} keeps crashing - auto-restart paused. Use {hint}.", a.cfg.display_name),
-                NIIF_ERROR,
-            );
-            return;
-        }
-        times.push(now);
-    }
-    *a.revive_grace_until.lock().unwrap() = Some(Instant::now() + REVIVE_GRACE);
+fn revive(a: &App) {
     a.started_by_us.store(true, Ordering::Relaxed);
 
     // REAP THE PREDECESSOR FIRST. A daemon that missed three consecutive probes is not always
@@ -488,18 +644,16 @@ fn health_tick() {
     // the orphan still holding its handles. Repeat that a few times and the pile is the problem.
     //
     // This is a deliberate improvement on the PowerShell host, which also re-spawned without
-    // reaping. Safe here because the grace period above means we only reach this after ~15s of
-    // silence: a daemon that has not bound by then is not about to, and taskkill /T takes the
-    // cmd.exe wrapper's whole tree with it.
-    let previous = a.server_pid.swap(0, Ordering::Relaxed);
+    // reaping. Safe here because the grace period means we only reach this after ~15s of silence:
+    // a daemon that has not bound by then is not about to, and taskkill /T takes the cmd.exe
+    // wrapper's whole tree with it. CHILD_PID is 0 once that wrapper has exited, so this never
+    // kills a recycled pid.
+    let previous = daemon::CHILD_PID.swap(0, Ordering::SeqCst);
     if previous > 0 {
         daemon::taskkill(previous);
     }
 
-    if let Some(pid) = daemon::spawn(&a.cfg, &a.token) {
-        a.server_pid.store(pid, Ordering::Relaxed);
-    }
-    a.health_misses.store(0, Ordering::Relaxed);
+    daemon::spawn(&a.cfg, &a.token, "watchdog revive");
     balloon(
         &format!("{} stopped unexpectedly - restarting.", a.cfg.display_name),
         NIIF_WARNING,
@@ -552,7 +706,7 @@ fn quit_app(hwnd: HWND) {
     // Reap anything a worker spawned before killing the daemon itself.
     for pid in [
         a.build_pid.swap(0, Ordering::Relaxed),
-        a.server_pid.swap(0, Ordering::Relaxed),
+        daemon::CHILD_PID.swap(0, Ordering::SeqCst),
     ] {
         if pid > 0 {
             daemon::taskkill(pid);
@@ -713,9 +867,8 @@ fn config_path() -> PathBuf {
 /// First-run bootstrap (blocking, once) before the daemon can possibly work, then spawn it.
 /// Split out of `main` along with `report_not_serving_and_teardown` below so `main` reads as the
 /// startup sequence and each non-trivial step's own branching lives in its own named function.
-/// Returns the daemon's pid, or None having already reported the failure — the caller must then
-/// return immediately.
-fn bootstrap_and_spawn_daemon(cfg: &Config, token: &str) -> Option<u32> {
+/// Returns false having already reported the failure — the caller must then return immediately.
+fn bootstrap_and_spawn_daemon(cfg: &Config, token: &str) -> bool {
     for step in &cfg.first_run {
         if cfg.app_root.join(&step.missing).exists() {
             continue;
@@ -735,17 +888,15 @@ fn bootstrap_and_spawn_daemon(cfg: &Config, token: &str) -> Option<u32> {
     }
     // SPAWNED BEFORE ANY UI IS BUILT. This is the whole point: the daemon's ~120 ms boot runs
     // concurrently with our window, icon and menu setup rather than after it.
-    match daemon::spawn(cfg, token) {
-        Some(pid) => Some(pid),
-        None => {
-            win::message_box(
-                &cfg.display_name,
-                &format!("{} could not start its background process.", cfg.display_name),
-                MB_ICONERROR,
-            );
-            None
-        }
+    if daemon::spawn(cfg, token, "tray start").is_some() {
+        return true;
     }
+    win::message_box(
+        &cfg.display_name,
+        &format!("{} could not start its background process.", cfg.display_name),
+        MB_ICONERROR,
+    );
+    false
 }
 
 /// "Started but not serving" guidance, torn down and reported. One app's overwhelmingly likely
@@ -758,7 +909,7 @@ unsafe fn report_not_serving_and_teardown(a: &App) -> bool {
         return false;
     };
     daemon::stop(&a.cfg, &a.token, true, false);
-    let pid = a.server_pid.swap(0, Ordering::Relaxed);
+    let pid = daemon::CHILD_PID.swap(0, Ordering::SeqCst);
     if pid > 0 {
         daemon::taskkill(pid);
     }
@@ -915,12 +1066,8 @@ fn main() {
     let started_by_us = existing.is_none();
     // Before the spawn below: the daemon we are about to start reports and deletes these.
     let unclean_exit_seen = daemon::unclean_run_left(&cfg);
-    let mut server_pid = 0;
-    if started_by_us {
-        match bootstrap_and_spawn_daemon(&cfg, &token) {
-            Some(pid) => server_pid = pid,
-            None => return,
-        }
+    if started_by_us && !bootstrap_and_spawn_daemon(&cfg, &token) {
+        return;
     }
 
     let display_name = cfg.display_name.clone();
@@ -934,13 +1081,9 @@ fn main() {
         intentional_stop: AtomicBool::new(false),
         busy: AtomicBool::new(false),
         quitting: AtomicBool::new(false),
-        auto_restart_paused: AtomicBool::new(false),
-        health_misses: AtomicU32::new(0),
-        revive_grace_until: Mutex::new(None),
-        restart_times: Mutex::new(Vec::new()),
+        watchdog: Mutex::new(Watchdog::default()),
         cancel: AtomicBool::new(false),
         build_pid: AtomicU32::new(0),
-        server_pid: AtomicU32::new(server_pid),
         was_rebuild: AtomicBool::new(false),
         unclean_exit_seen: AtomicBool::new(unclean_exit_seen),
     })
@@ -988,5 +1131,53 @@ fn main() {
             }
         });
         DestroyWindow(hwnd);
+    }
+}
+
+#[cfg(test)]
+mod watchdog_tests {
+    use super::*;
+
+    const TICK: Duration = Duration::from_millis(HEALTH_INTERVAL_MS as u64);
+
+    /// Silent ticks until the watchdog does something other than wait (a hiccup or a revive's
+    /// grace), which is what one daemon death looks like from here.
+    fn die(w: &mut Watchdog, now: &mut Instant) -> Verdict {
+        loop {
+            *now += TICK;
+            let v = w.tick(*now, false, false, false);
+            if v != Verdict::Hiccup && v != Verdict::StandDown(StandDown::Grace) {
+                return v;
+            }
+        }
+    }
+
+    #[test]
+    fn a_crash_loop_pause_is_reported_once_and_lifts_once_the_daemon_stays_up() {
+        let mut w = Watchdog::default();
+        let mut now = Instant::now();
+        // AgentHydra, 2026-09-25: daemons that never answered, revived back to back until the guard
+        // paused auto-restart.
+        for _ in 0..CRASH_LOOP_MAX {
+            assert_eq!(die(&mut w, &mut now), Verdict::Revive);
+        }
+        assert_eq!(die(&mut w, &mut now), Verdict::CrashLoop);
+        assert!(w.report(Verdict::CrashLoop).is_some());
+        // Paused and dead: the tray log hears it once, not every 5 s.
+        for _ in 0..10 {
+            now += TICK;
+            let v = w.tick(now, false, false, false);
+            assert_eq!(v, Verdict::StandDown(StandDown::Paused));
+            assert_eq!(w.report(v), None);
+        }
+        // The next daemon comes up and stays up for the whole window (that one served 15 hours).
+        let mut lifted = false;
+        for _ in 0..=CRASH_LOOP_WINDOW.as_secs() / TICK.as_secs() {
+            now += TICK;
+            lifted |= w.tick(now, true, false, false) == Verdict::Rearmed;
+        }
+        assert!(lifted, "a daemon healthy for the whole crash-loop window must lift the pause");
+        // Then it is killed, and that death is a new one: it gets revived.
+        assert_eq!(die(&mut w, &mut now), Verdict::Revive);
     }
 }

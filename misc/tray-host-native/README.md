@@ -70,6 +70,26 @@ one-engine-plus-thin-per-app-adapter shape survives the port:
 }
 ```
 
+## What the watchdog writes to `misc/Tray.log`
+
+Every 5 s the health tick probes `/api/health`. Three silent probes in a row count as a death, and
+then it either revives the daemon or stands down. Both leave a line (local time), so "why did
+nothing restart it" is answered by the log, not by reading code:
+
+- `spawn pid N (tray start | tray Restart | watchdog revive)`, or `respawn pid N (...) - answering
+  death of pid M (exit code C, up 12.3s)` when the tray saw the previous wrapper die.
+- `death of pid N (exit code C, up 12.3s)`, written by the thread holding that child.
+- `watchdog: the daemon is not answering, and it is NOT being revived: <guard>`, once per guard,
+  not every tick. The guards are a Restart/Rebuild still running, a daemon another session owns
+  (`watchdogRequiresOwnership`), the 20 s grace after a revive, and the crash-loop pause.
+- `watchdog: the daemon answers again` when a stand-down ends, and `watchdog: re-armed` when the
+  crash-loop pause lifts.
+
+**The crash-loop pause lifts itself.** Four revives inside 120 s pause auto-restart, and a manual
+Restart clears the pause, as before. So does a daemon that then answers for a full 120 s: it has
+stopped crash-looping by the guard's own definition. A pause that outlived that once left
+AgentHydra's watchdog standing down for 31 hours, until a killed daemon stayed dead.
+
 ## Three Win32 traps this hit, all of them silent
 
 Worth keeping in the file, because each one presented as "it started fine and then nothing

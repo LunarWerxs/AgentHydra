@@ -11,7 +11,7 @@ use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -178,7 +178,10 @@ pub fn live_url(cfg: &Config, timeout: Duration) -> Option<String> {
 ///   terminal's pipes; nothing drains them, the buffer fills, and the daemon blocks on a console
 ///   write BEFORE it binds its port. Observed: a live process with no listening socket and no
 ///   runtime pointer. The daemon tees its own output to logs/daemon.log, so nothing is lost.
-pub fn spawn(cfg: &Config, token: &str) -> Option<u32> {
+///
+/// `why` names the caller in the tray log (tray start, tray Restart, watchdog revive), so a spawn
+/// line says who asked for it.
+pub fn spawn(cfg: &Config, token: &str, why: &str) -> Option<u32> {
     let command = cfg.resolved_start_command(token);
     let mut cmd = Command::new("cmd.exe");
     cmd.raw_arg(format!("/c \"{command}\""))
@@ -201,9 +204,13 @@ pub fn spawn(cfg: &Config, token: &str) -> Option<u32> {
             // evidence that was missing on 2026-09-14/15.
             let log = log_path(cfg);
             match take_last_death() {
-                Some(prev) => log_line(&log, &format!("respawn pid {pid}{mode} - answering {prev}")),
-                None => log_line(&log, &format!("spawn pid {pid}{mode}")),
+                Some(prev) => {
+                    log_line(&log, &format!("respawn pid {pid}{mode} ({why}) - answering {prev}"))
+                }
+                None => log_line(&log, &format!("spawn pid {pid}{mode} ({why})")),
             }
+            // Before the watcher starts, so even an instant exit clears it again.
+            CHILD_PID.store(pid, Ordering::SeqCst);
             watch_child(child, log);
             Some(pid)
         }
@@ -218,6 +225,23 @@ static LAST_DEATH: Mutex<Option<String>> = Mutex::new(None);
 
 fn take_last_death() -> Option<String> {
     LAST_DEATH.lock().ok()?.take()
+}
+
+/// Drop the recorded death once a live daemon has been seen after it: a self-update relaunch
+/// answers its own wrapper's death, and a revive hours later must not claim that one.
+pub fn forget_last_death() {
+    let _ = take_last_death();
+}
+
+/// The pid of the daemon wrapper this process spawned, for as long as that wrapper runs; 0 once it
+/// has exited. It lives here because only the thread watching the child knows when the pid stops
+/// being ours, and every reader hands it to `taskkill /T /F`: a pid kept past its process's exit
+/// can be reused by any process on the machine, and its whole tree would go with it.
+pub static CHILD_PID: AtomicU32 = AtomicU32::new(0);
+
+/// One line in the tray log, for the watchdog's own record.
+pub fn tray_log(cfg: &Config, text: &str) {
+    log_line(&log_path(cfg), text);
 }
 
 fn set_last_death(text: String) {
@@ -264,6 +288,10 @@ fn watch_child(mut child: std::process::Child, log: PathBuf) {
     let pid = child.id();
     std::thread::spawn(move || {
         let status = child.wait();
+        // While `child` is alive its handle pins the pid, so clearing it here, before the handle
+        // drops, closes the reuse window. Only this child's own pid is cleared: a newer spawn owns
+        // the slot by now if it already holds a different one.
+        let _ = CHILD_PID.compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst);
         let up = started.elapsed();
         let how = match status {
             Ok(s) => match s.code() {
@@ -273,8 +301,9 @@ fn watch_child(mut child: std::process::Child, log: PathBuf) {
             Err(e) => format!("could not be waited on: {e}"),
         };
         let text = format!("death of pid {pid} ({how}, up {:.1}s)", up.as_secs_f64());
+        // Slot first, line second: whoever sees the line can rely on the slot already holding it.
+        set_last_death(text.clone());
         log_line(&log, &text);
-        set_last_death(text);
     });
 }
 
@@ -489,6 +518,11 @@ fn kill_port_owners(cfg: &Config, url: &str) {
 mod death_record_tests {
     use super::*;
 
+    /// Every watched death writes the one process-wide LAST_DEATH slot, and the test runner runs
+    /// tests on parallel threads, so a test that reads the slot must not share it with another
+    /// test's child dying at the same moment.
+    static SLOT: Mutex<()> = Mutex::new(());
+
     /// A real short-lived process, so the exit code under test is Windows' own and not a fake.
     fn exiting_with(code: i32) -> std::process::Child {
         Command::new("cmd.exe")
@@ -524,6 +558,7 @@ mod death_record_tests {
 
     #[test]
     fn a_dead_child_is_recorded_with_its_pid_exit_code_and_uptime() {
+        let _slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());
         let log = temp_log("death");
         let child = exiting_with(3);
         let pid = child.id();
@@ -541,6 +576,7 @@ mod death_record_tests {
 
     #[test]
     fn the_next_spawn_names_the_death_it_answers() {
+        let _slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());
         let log = temp_log("answers");
         let child = exiting_with(1);
         let pid = child.id();
