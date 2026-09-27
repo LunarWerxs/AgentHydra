@@ -14,6 +14,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { callerPidFromArgs, TOOLS, toolsForCaller } from '../src/mcp'
+import { selfIdentity } from '../src/mcp-self'
 
 const CALLER_PID = 66800
 
@@ -50,14 +51,14 @@ describe('callerPidFromArgs', () => {
   test('a client-supplied callerPid in the JSON arguments is ignored', async () => {
     // JSON cannot carry a function, so anything a client sends under this name is data - and data
     // is never an identity here. Otherwise "which account am I" would be answerable by asking.
-    expect(await callerPidFromArgs({ callerPid: 1234 })).toBeNull()
-    expect(await callerPidFromArgs({ callerPid: '1234' })).toBeNull()
-    expect(await callerPidFromArgs({ callerPid: { pid: 1234 } })).toBeNull()
+    expect(await callerPidFromArgs({ callerPid: 1234 })).toBeUndefined()
+    expect(await callerPidFromArgs({ callerPid: '1234' })).toBeUndefined()
+    expect(await callerPidFromArgs({ callerPid: { pid: 1234 } })).toBeUndefined()
   })
 
-  test('no binding at all (the stdio transport) is a null, not an error', async () => {
-    expect(await callerPidFromArgs({})).toBeNull()
-    expect(await callerPidFromArgs({ fresh: true })).toBeNull()
+  test('no binding at all (the stdio transport) is undefined, not an error', async () => {
+    expect(await callerPidFromArgs({})).toBeUndefined()
+    expect(await callerPidFromArgs({ fresh: true })).toBeUndefined()
   })
 
   test('a lookup that throws degrades to "could not tell"', async () => {
@@ -71,4 +72,15 @@ describe('callerPidFromArgs', () => {
     expect(await callerPidFromArgs({ callerPid: async () => CALLER_PID })).toBe(CALLER_PID)
     expect(await callerPidFromArgs({ callerPid: async () => null })).toBeNull()
   })
+})
+
+// ⛔ 2026-09-27: the first move_chats after a watchdog respawn could not trace its socket, fell
+// back to identifying the DAEMON (whose parent is the tray) and told an agent whoami had named
+// #72 "exact" minutes earlier that it was "not running under Claude Code at all".
+test('an HTTP caller that cannot be traced is reported as untraced, never as the daemon', async () => {
+  const self = await selfIdentity(false, null)
+  expect(self.confidence).toBe('none')
+  expect(self.configDir).toBeNull()
+  expect(self.warning).toContain('could not be traced')
+  expect(self.warning).not.toContain('not look like it is running under Claude Code')
 })

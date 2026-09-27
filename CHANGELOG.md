@@ -306,6 +306,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   while the server is stuck, naming the requests it was serving, and a line when it recovers;
   a server kept busy by many short stalls gets a `saturated` line naming what the time went to.
 
+- **"Which account am I" no longer tells a Claude Code agent it is not running under Claude
+  Code** (`server/src/mcp-self.ts`). When AgentHydra could not tell which process had called it
+  (seen on the first call after a restart), it described its own process instead, found no
+  Claude Code above it, and said so, which refused `move_chats` with `to: "here"` for a
+  reason that was false. It now says the caller could not be traced and suggests calling again
+  or naming the instance number.
+
 - **"Move chats to account" takes the chats off the old account's screen, not just its disk**
   (`server/src/move-source-settle.ts`, `server/src/routes/desktop-sessions.ts`). The Instances
   menu and the Sessions migrate settled the old copy with a disk flag alone, which a running app

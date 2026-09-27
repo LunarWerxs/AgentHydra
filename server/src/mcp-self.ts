@@ -61,10 +61,30 @@ async function detectForCaller(callerPid: number, fresh: boolean): Promise<SelfI
   }
 }
 
+/** An HTTP caller whose socket the OS table could not tie to one process (see callerPidFromArgs).
+ *  ⛔ NOT this daemon's own identity: that fallback walked the daemon's parents (the tray) and told
+ *  an agent on #72 it was "not running under Claude Code at all" minutes after `whoami` had named
+ *  it exactly (2026-09-27, the first call after a watchdog respawn). The honest answer is that the
+ *  caller could not be traced, which says nothing about what the caller is. */
+const UNTRACED_CALLER: SelfIdentityDetection = {
+  configDir: null,
+  kind: 'unknown',
+  method: null,
+  confidence: 'none',
+  clues: [],
+  ruledOut: [
+    "the call arrived over HTTP and the connection table named no single process owning its socket, so the CALLER could not be traced; this daemon's own process is not the caller and was not examined",
+  ],
+  conflict: false,
+}
+
+/** `callerPid` undefined: no HTTP caller (stdio), so this process IS the caller. null: an HTTP
+ *  caller that could not be traced. A number: that caller. */
 async function detectSelf(
   fresh = false,
   callerPid?: number | null,
 ): Promise<SelfIdentityDetection> {
+  if (callerPid === null) return UNTRACED_CALLER
   if (callerPid) return detectForCaller(callerPid, fresh)
   if (fresh || !selfDetectionCache) {
     selfDetectionCache = (async () => {
@@ -96,9 +116,14 @@ export const CALLER_AWARE_TOOLS = new Set([
   'history_read',
 ])
 
-export async function callerPidFromArgs(a: Record<string, unknown>): Promise<number | null> {
+/** The HTTP caller's pid; null when the route bound a caller but the lookup named nobody (or
+ *  threw); undefined when nothing was bound - the stdio transport, where this process is the
+ *  caller. Anything a client put under this name is data, never a binding, so it reads as unbound. */
+export async function callerPidFromArgs(
+  a: Record<string, unknown>,
+): Promise<number | null | undefined> {
   const source = a[CALLER_PID_ARG]
-  if (typeof source !== 'function') return null
+  if (typeof source !== 'function') return undefined
   try {
     return await (source as CallerPidSource)()
   } catch {
@@ -114,7 +139,7 @@ export async function ownTranscript(a: Record<string, unknown>) {
   const callerPid = await callerPidFromArgs(a)
   return resolveOwnTranscript({
     sessionId: typeof a.session_id === 'string' ? a.session_id : undefined,
-    callerPid,
+    callerPid: callerPid ?? null,
     extraHomes: async () => {
       const dir = (await detectSelf(false, callerPid)).configDir
       return dir ? [dir] : []
@@ -190,7 +215,11 @@ export async function selfIdentity(
       'ASSUMED, not proven: no instance signal matched, so this fell back to the default ~/.claude login by elimination. If a human told you an instance number, THEIRS IS THE AUTHORITATIVE ANSWER — believe it over this.',
     )
   }
-  if (detection.confidence === 'none') {
+  if (detection === UNTRACED_CALLER) {
+    warnings.push(
+      'UNIDENTIFIED CALLER: this call came over the shared HTTP server and its socket could not be traced to a process, so which account is asking is unknown - it says nothing about whether you run under Claude Code. Call again, or name the instance number instead of "here".',
+    )
+  } else if (detection.confidence === 'none') {
     warnings.push(
       'UNIDENTIFIED: this process does not look like it is running under Claude Code at all. Treat any quota reading as unattributed.',
     )
