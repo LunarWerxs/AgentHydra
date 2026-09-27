@@ -331,6 +331,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
     and refresh in the background. The live-chat and chat-list reads check the records without
     holding up anything else.
   - The code-survival score now pauses between chunks instead of scoring a whole file in one go.
+  - The health check itself read git's files to tell whether the code on disk had changed, and
+    during a commit that took 0.8 s. It now answers from memory and re-reads in the background.
   Measured on a test copy of AgentHydra with the same load that froze the real one: missed health
   checks went from 38 of 121 (up to 8 in a row) to none of 121, and the slowest health answer
   took 69 ms.
