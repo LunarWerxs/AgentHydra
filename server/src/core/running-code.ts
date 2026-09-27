@@ -9,51 +9,61 @@
 // and the app's header.
 //
 // Git's own files are read directly (HEAD, the ref it names, packed-refs), so a check costs a few
-// small reads and never a process; the answer is cached briefly because /api/health is polled.
-// A compiled build has no checkout and is never "stale" here: it updates by replacing itself.
+// small reads and never a process. A compiled build has no checkout and is never "stale" here: it
+// updates by replacing itself.
+//
+// ⛔ ASYNC, AND NEVER ON THE HEALTH PATH (2026-09-27). /api/health reports this, and the tray
+// watchdog kills a daemon whose /api/health misses three probes. The reads are small, but they are
+// reads of the files git itself is rewriting: during a commit or push the synchronous version took
+// 805 ms (profiled), inside the health handler. status() now answers from what it has and re-reads
+// in the background.
 
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 const SHA = /^[0-9a-f]{40}$/
 
+/** A file's text, or null when it is not there. */
+async function readText(file: string): Promise<string | null> {
+  try {
+    return await readFile(file, 'utf8')
+  } catch {
+    return null
+  }
+}
+
 /** The .git directory for `root`: a real directory, or the `gitdir:` a worktree's .git file names. */
-function gitDirOf(root: string): { gitDir: string; commonDir: string } | null {
+async function gitDirOf(root: string): Promise<{ gitDir: string; commonDir: string } | null> {
   const dotGit = path.join(root, '.git')
-  if (!existsSync(dotGit)) return null
+  const st = await stat(dotGit).catch(() => null)
+  if (!st) return null
   let gitDir = dotGit
-  if (statSync(dotGit).isFile()) {
-    const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, 'utf8'))?.[1]?.trim()
+  if (st.isFile()) {
+    const pointer = /^gitdir:\s*(.+)$/m.exec((await readText(dotGit)) ?? '')?.[1]?.trim()
     if (!pointer) return null
     gitDir = path.resolve(root, pointer)
   }
   // A linked worktree keeps its own HEAD but shares refs with the main repository.
-  const commonFile = path.join(gitDir, 'commondir')
-  const commonDir = existsSync(commonFile)
-    ? path.resolve(gitDir, readFileSync(commonFile, 'utf8').trim())
-    : gitDir
+  const common = await readText(path.join(gitDir, 'commondir'))
+  const commonDir = common === null ? gitDir : path.resolve(gitDir, common.trim())
   return { gitDir, commonDir }
 }
 
-/** The commit the checkout at `root` names right now, or null when it cannot be read. Never throws. */
-export function readCheckoutCommit(root: string): string | null {
+/** The commit the checkout at `root` names right now, or null when it cannot be read. Never rejects. */
+export async function readCheckoutCommit(root: string): Promise<string | null> {
   try {
-    const dirs = gitDirOf(root)
+    const dirs = await gitDirOf(root)
     if (!dirs) return null
-    const head = readFileSync(path.join(dirs.gitDir, 'HEAD'), 'utf8').trim()
+    const head = (await readText(path.join(dirs.gitDir, 'HEAD')))?.trim() ?? ''
     if (SHA.test(head)) return head // detached
     const ref = /^ref:\s*(.+)$/.exec(head)?.[1]?.trim()
     if (!ref) return null
     for (const base of [dirs.gitDir, dirs.commonDir]) {
-      const loose = path.join(base, ...ref.split('/'))
-      if (existsSync(loose)) {
-        const value = readFileSync(loose, 'utf8').trim()
-        if (SHA.test(value)) return value
-      }
+      const value = (await readText(path.join(base, ...ref.split('/'))))?.trim()
+      if (value && SHA.test(value)) return value
     }
-    const packed = path.join(dirs.commonDir, 'packed-refs')
-    if (!existsSync(packed)) return null
-    for (const line of readFileSync(packed, 'utf8').split(/\r?\n/)) {
+    const packed = await readText(path.join(dirs.commonDir, 'packed-refs'))
+    for (const line of packed?.split(/\r?\n/) ?? []) {
       const [sha, name] = line.split(' ')
       if (name === ref && SHA.test(sha ?? '')) return sha ?? null
     }
@@ -75,31 +85,51 @@ export interface RunningCodeStatus {
 /**
  * Record the commit at boot and answer "has the checkout moved since?" on demand. Call it once,
  * at startup. `readCommit` and `now` are injectable for tests.
+ *
+ * status() never reads the disk itself: it returns the last answer and, once that is `ttlMs` old,
+ * starts a re-read whose result the next call sees. Until the boot read lands the daemon reports
+ * itself current, which a daemon that has just started is.
  */
 export function createRunningCodeProbe(opts: {
   root: string
   compiled: boolean
   ttlMs?: number
-  readCommit?: (root: string) => string | null
+  readCommit?: (root: string) => Promise<string | null>
   now?: () => number
 }): { status: () => RunningCodeStatus } {
   const read = opts.readCommit ?? readCheckoutCommit
   const now = opts.now ?? Date.now
   const ttl = opts.ttlMs ?? 10_000
-  const bootCommit = opts.compiled ? null : read(opts.root)
-  let cached: { at: number; value: RunningCodeStatus } | null = null
+  let bootCommit: string | null = null
+  let value: RunningCodeStatus = { bootCommit: null, diskCommit: null, restartNeeded: false }
+  let checkedAt = now()
+  let reading: Promise<void> | null = null
+  const reread = (apply: (commit: string | null) => void): void => {
+    checkedAt = now()
+    reading = read(opts.root)
+      .then(apply, () => {})
+      .finally(() => {
+        reading = null
+      })
+  }
+  if (!opts.compiled)
+    reread((commit) => {
+      bootCommit = commit
+      if (commit) value = { bootCommit: commit, diskCommit: commit, restartNeeded: false }
+    })
   return {
     status() {
-      if (!bootCommit) return { bootCommit: null, diskCommit: null, restartNeeded: false }
-      const at = now()
-      if (cached && at - cached.at < ttl) return cached.value
-      const diskCommit = read(opts.root)
-      const value = {
-        bootCommit,
-        diskCommit,
-        restartNeeded: diskCommit !== null && diskCommit !== bootCommit,
-      }
-      cached = { at, value }
+      const boot = bootCommit
+      // Compiled, unreadable at boot, or not read yet: never reported stale.
+      if (!boot) return value
+      if (!reading && now() - checkedAt >= ttl)
+        reread((diskCommit) => {
+          value = {
+            bootCommit: boot,
+            diskCommit,
+            restartNeeded: diskCommit !== null && diskCommit !== boot,
+          }
+        })
       return value
     },
   }

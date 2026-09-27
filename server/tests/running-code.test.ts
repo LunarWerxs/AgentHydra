@@ -7,7 +7,8 @@
 //    HEAD and a linked worktree, and an unreadable checkout answers null rather than throwing;
 //  * restartNeeded is true only when BOTH commits are known and differ, never on a guess;
 //  * a compiled build is never "stale" (it updates by replacing itself);
-//  * the answer is cached for the TTL, because /api/health is polled;
+//  * the answer is re-read at most once per TTL, and never inside the call: /api/health reports it,
+//    and a read of git's files during a commit held that handler for 805 ms (2026-09-27);
 //  * the message names both commits so a person and an agent read the same thing.
 
 import { afterAll, expect, test } from 'bun:test'
@@ -38,24 +39,24 @@ function checkout(files: Record<string, string>): string {
   return root
 }
 
-test('a branch head is read from its loose ref', () => {
+test('a branch head is read from its loose ref', async () => {
   const root = checkout({ '.git/HEAD': 'ref: refs/heads/main\n', '.git/refs/heads/main': `${A}\n` })
-  expect(readCheckoutCommit(root)).toBe(A)
+  expect(await readCheckoutCommit(root)).toBe(A)
 })
 
-test('a branch that only exists in packed-refs is read from there', () => {
+test('a branch that only exists in packed-refs is read from there', async () => {
   const root = checkout({
     '.git/HEAD': 'ref: refs/heads/main\n',
     '.git/packed-refs': `# pack-refs with: peeled fully-peeled sorted\n${B} refs/heads/main\n${C} refs/tags/v1\n`,
   })
-  expect(readCheckoutCommit(root)).toBe(B)
+  expect(await readCheckoutCommit(root)).toBe(B)
 })
 
-test('a detached HEAD is its own commit', () => {
-  expect(readCheckoutCommit(checkout({ '.git/HEAD': `${C}\n` }))).toBe(C)
+test('a detached HEAD is its own commit', async () => {
+  expect(await readCheckoutCommit(checkout({ '.git/HEAD': `${C}\n` }))).toBe(C)
 })
 
-test('a linked worktree reads its own HEAD and the shared refs', () => {
+test('a linked worktree reads its own HEAD and the shared refs', async () => {
   const main = checkout({
     '.git/refs/heads/feature': `${B}\n`,
     '.git/HEAD': 'ref: refs/heads/main\n',
@@ -65,45 +66,64 @@ test('a linked worktree reads its own HEAD and the shared refs', () => {
   writeFileSync(join(wtGit, 'HEAD'), 'ref: refs/heads/feature\n')
   writeFileSync(join(wtGit, 'commondir'), '../..\n')
   const worktree = checkout({ '.git': `gitdir: ${wtGit}\n` })
-  expect(readCheckoutCommit(worktree)).toBe(B)
+  expect(await readCheckoutCommit(worktree)).toBe(B)
 })
 
-test('no checkout, or a malformed one, reads as null and never throws', () => {
-  expect(readCheckoutCommit(checkout({ 'README.md': 'no git here' }))).toBeNull()
-  expect(readCheckoutCommit(checkout({ '.git/HEAD': 'ref: refs/heads/gone\n' }))).toBeNull()
-  expect(readCheckoutCommit(checkout({ '.git/HEAD': 'garbage' }))).toBeNull()
-  expect(readCheckoutCommit(checkout({ '.git': 'not a gitdir pointer' }))).toBeNull()
+test('no checkout, or a malformed one, reads as null and never throws', async () => {
+  expect(await readCheckoutCommit(checkout({ 'README.md': 'no git here' }))).toBeNull()
+  expect(await readCheckoutCommit(checkout({ '.git/HEAD': 'ref: refs/heads/gone\n' }))).toBeNull()
+  expect(await readCheckoutCommit(checkout({ '.git/HEAD': 'garbage' }))).toBeNull()
+  expect(await readCheckoutCommit(checkout({ '.git': 'not a gitdir pointer' }))).toBeNull()
 })
 
-test('restart is needed only when the checkout moved after boot', () => {
+/** Let a probe's background re-read land. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+test('restart is needed only when the checkout moved after boot', async () => {
   let disk: string | null = A
   let clock = 0
   const probe = createRunningCodeProbe({
     root: 'unused',
     compiled: false,
     ttlMs: 10_000,
-    readCommit: () => disk,
+    readCommit: async () => disk,
     now: () => clock,
   })
+  await settle()
   expect(probe.status()).toEqual({ bootCommit: A, diskCommit: A, restartNeeded: false })
 
   disk = B
-  clock = 5_000 // inside the TTL: still the cached answer
+  clock = 5_000 // inside the TTL: the answer it has, and no re-read
+  expect(probe.status().restartNeeded).toBe(false)
+  await settle()
   expect(probe.status().restartNeeded).toBe(false)
   clock = 10_000
+  // Past the TTL the call still answers at once, from what it has, and re-reads behind it.
+  expect(probe.status().restartNeeded).toBe(false)
+  await settle()
   expect(probe.status()).toEqual({ bootCommit: A, diskCommit: B, restartNeeded: true })
 
   disk = null // an unreadable checkout later is not evidence either way
   clock = 20_000
+  probe.status()
+  await settle()
   expect(probe.status()).toEqual({ bootCommit: A, diskCommit: null, restartNeeded: false })
 })
 
-test('a compiled build, or a checkout unreadable at boot, is never reported stale', () => {
-  const compiled = createRunningCodeProbe({ root: 'x', compiled: true, readCommit: () => B })
+test('a compiled build, or a checkout unreadable at boot, is never reported stale', async () => {
+  const compiled = createRunningCodeProbe({ root: 'x', compiled: true, readCommit: async () => B })
+  await settle()
   expect(compiled.status()).toEqual({ bootCommit: null, diskCommit: null, restartNeeded: false })
   let disk: string | null = null
-  const unreadable = createRunningCodeProbe({ root: 'x', compiled: false, readCommit: () => disk })
+  const unreadable = createRunningCodeProbe({
+    root: 'x',
+    compiled: false,
+    readCommit: async () => disk,
+  })
+  await settle()
   disk = B
+  unreadable.status()
+  await settle()
   expect(unreadable.status().restartNeeded).toBe(false)
 })
 
@@ -115,7 +135,7 @@ test('the message names both commits, and there is none when nothing is stale', 
   expect(restartNeededMessage({ bootCommit: A, diskCommit: A, restartNeeded: false })).toBeNull()
 })
 
-test('the real checkout this suite runs in reads as a commit', () => {
+test('the real checkout this suite runs in reads as a commit', async () => {
   // This repository is itself a git checkout, so the reader must find a 40-hex commit here.
-  expect(readCheckoutCommit(join(import.meta.dir, '..', '..'))).toMatch(/^[0-9a-f]{40}$/)
+  expect(await readCheckoutCommit(join(import.meta.dir, '..', '..'))).toMatch(/^[0-9a-f]{40}$/)
 })
