@@ -194,6 +194,24 @@ html.theme-transitioning *::after {
 @keyframes collapsible-down { from { height: 0; } to { height: var(--reka-collapsible-content-height); } }
 @keyframes collapsible-up { from { height: var(--reka-collapsible-content-height); } to { height: 0; } }
 
+/* --- Button variant="gemini": the Gemini-style animated rainbow of an AI action ---
+   Lifted from RepoYeti's scoped .gemini-auto (RepoCardCommit.vue), which restyled the kit Button.
+   The five-stop gradient cannot be spelled with bg-linear/from/via/to, and an arbitrary
+   bg-[linear-gradient(...)] would put raw literals past no-arbitrary-values, so both halves live
+   here as named utilities. Reduced motion is baked into the animation utility, so no caller can
+   forget it; every button sharing it pans in sync because they all start on first paint. */
+@utility bg-gemini {
+  background-image: linear-gradient(110deg, #4285f4 0%, #9b72cb 28%, #d96570 50%, #9b72cb 72%, #4285f4 100%);
+  background-size: 200% 100%;
+}
+@utility animate-gemini-pan {
+  animation: gemini-pan 6s linear infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+@keyframes gemini-pan { to { background-position: -200% 0; } }
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
