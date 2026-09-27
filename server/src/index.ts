@@ -113,6 +113,7 @@ import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { buildRelaunchArgv } from './relaunch-argv.mjs'
+import { relaunchWithHandoff, writeRelaunchAck } from './relaunch-handoff'
 import {
   acknowledgeResetEvents,
   listResetEvents,
@@ -448,7 +449,7 @@ app.post('/api/update/apply', async (c) => {
   // by polling /api/health (composables/useUpdates.ts) — belt and braces, because this end of it
   // can only ever be a race that is made unlikely, never one that is closed.
   if (IS_COMPILED && result.ok && result.restartRequired) {
-    setTimeout(() => relaunchDaemon(), 3000)
+    setTimeout(() => void relaunchDaemon(), 3000)
   }
   return c.json(result)
 })
@@ -464,7 +465,8 @@ app.post('/api/update/apply', async (c) => {
 //   · This route is the daemon relaunching ITSELF, the same relaunchDaemon() every auto-update
 //     already exercises: the successor is spawned first, waits for the port, and takes over the
 //     SAME port; the tray is untouched. Nothing is killed - the predecessor exits on its own once
-//     a replacement exists, so there is never a window with no daemon.
+//     the replacement has REPORTED IN (relaunch-handoff.ts), so there is never a window with no
+//     daemon, and a successor that never starts leaves this one serving.
 // The gap it closes: relaunchDaemon() was reachable only through /api/update/apply, gated on
 // IS_COMPILED, so a SOURCE build (what this fleet runs) had no graceful path at all - a change in
 // server/src/ sat inert until someone remembered the .ps1. Restarting and updating are different
@@ -485,13 +487,15 @@ app.post('/api/daemon/restart', async (c) => {
       },
       409,
     )
-  const ok = relaunchDaemon()
+  // Awaited: the answer is only true once the successor has reported in, which on a healthy box
+  // takes about a second and on a failed spawn takes the handoff's whole deadline.
+  const ok = await relaunchDaemon()
   return c.json({
     ok,
     activeRuns: active,
     detail: ok
-      ? 'successor spawned; this daemon frees the port in ~800ms - poll /api/health until it answers'
-      : 'the successor could not be spawned, so this daemon is STAYING UP (nothing was restarted)',
+      ? 'successor reported in; this daemon frees the port in ~800ms - poll /api/health until it answers'
+      : 'no successor reported in, so this daemon is STAYING UP (nothing was restarted; see daemon.log)',
   })
 })
 
@@ -958,7 +962,16 @@ if (!skipSingleInstanceGuard()) {
 // A daemon relaunched by the auto-updater (AGENTHYDRA_RELAUNCH=1) waits for its predecessor to
 // free the preferred port BEFORE probing/binding, so it rebinds the SAME port (an open browser
 // tab's SSE then reconnects seamlessly instead of the daemon hopping to a port the tab can't reach).
-if (isRelaunchSuccessor()) await waitForPortFree(PORT, 8000)
+// Report in FIRST: the predecessor keeps the port until this ack exists and stays up for good if it
+// never does (relaunch-handoff.ts). Written here, after every import has loaded and the state is
+// open, so an ack means this build can actually boot.
+if (isRelaunchSuccessor()) {
+  writeRelaunchAck(POINTER_DIR)
+  console.log(
+    `[agenthydra] relaunch successor pid ${process.pid} reported in; waiting for port ${PORT}`,
+  )
+  await waitForPortFree(PORT, 8000)
+}
 // Probe the SAME interface the server binds (HOST); the wildcard probe misses a
 // squatter that holds only 127.0.0.1 (e.g. wrangler dev's workerd on 8787).
 // A tray "Restart"/"Rebuild & Restart" spawns the successor while the predecessor is still
@@ -1148,65 +1161,86 @@ if (DATA_DIR_NOTICE) console.warn(`[agenthydra] WARNING: ${DATA_DIR_NOTICE}`)
 // Load the persisted session/sync state into memory before the server starts accepting requests.
 initConnections()
 
-// Restart the daemon so a freshly-applied update takes over. The tray is a bare supervisor that
-// never relaunches us, so the daemon must relaunch ITSELF: spawn a DETACHED copy of this exact
+// Restart the daemon so a freshly-applied update takes over. The tray's watchdog only revives a
+// daemon that has died, so the daemon must relaunch ITSELF: spawn a DETACHED copy of this exact
 // launch command (AGENTHYDRA_RELAUNCH=1 so the successor waits for our port), then gracefully
 // shut THIS daemon down to free the port. Shared by the auto-update loop AND the manual
 // /api/update/apply route (a compiled apply swapped the binary on disk — process.execPath now
-// points at the NEW exe, so respawning it boots the updated build). Returns false (no shutdown)
-// if the successor couldn't be spawned, so we never exit without one.
-function relaunchDaemon(): boolean {
-  try {
-    // In a compiled binary process.argv is ['bun', '<virtual embedded path>', ...realArgs] — a
-    // placeholder pair, NOT respawnable. The shared kit builder handles that, pins the port we are
-    // actually SERVING on (never the preferred one), and keeps the argv a fixed point so it cannot
-    // grow by two tokens on every update. No `command` here: main.ts's daemon mode takes no verb.
-    const relaunchArgv = buildRelaunchArgv(process.argv, {
-      execPath: process.execPath,
-      isCompiled: IS_COMPILED,
-      boundPort,
-      relaunchFlag: RELAUNCH_FLAG,
-    })
-    // Through buildDetachedSpawn, not a plain spawn. `detached: true` is NOT a process-tree escape
-    // on Windows — the shared primitive's own header says so, and that is the reason it exists.
-    // Left as a plain spawn the successor stays inside THIS process's tree for the whole ~800ms
-    // handoff, so a tray Quit (`taskkill /T /F`) landing in that window kills the outgoing daemon
-    // AND its replacement, leaving the user with none. That hand-off is also why the relaunch
-    // signal and the port ride as FLAGS above: WMI does not carry our environment block.
-    // hideWindow: the successor is a CONSOLE program (bun), and WMI's default STARTUPINFO gives
-    // it a VISIBLE console on the owner's desktop at every auto-update - the recurring mystery
-    // "command prompt that says starting" (found live 2026-08-30). Same ShowWindow=0 mechanism
-    // the dispatch runner's WMI launch verified on 2026-07-15; closing such a stray console
-    // would also CTRL_CLOSE_EVENT-kill the daemon living in it.
-    const plan = buildDetachedSpawn(process.platform, relaunchArgv, { hideWindow: true })
-    const child = spawn(plan.argv[0] as string, plan.argv.slice(1), {
-      cwd: process.cwd(),
-      detached: plan.detached,
-      stdio: 'ignore',
-      windowsHide: true,
-      // boundPort, NOT PORT. PORT is the port this daemon PREFERRED (config/env); boundPort is the
-      // one it is actually serving on, and they diverge for every daemon that has ever hopped. The
-      // successor uses this value for BOTH of its jobs, so handing it the preferred port breaks both:
-      // waitForPortFree() waits out its full 8s on a port the predecessor never held (nothing is
-      // going to release it), and findFreePort() then binds that port instead of the one the user's
-      // open tab is on — so a healthy daemon moves out from under the tab and its SSE stream dies.
-      // Passing boundPort makes the wait apply to the socket actually being released and keeps the
-      // daemon on ONE port across updates, which is the whole point of the handoff.
-      env: { ...process.env, AGENTHYDRA_RELAUNCH: '1', PORT: String(boundPort) },
-    })
-    child.unref()
-  } catch (e) {
-    console.error('[agenthydra] relaunch failed to spawn; staying on the running version.', e)
-    return false
-  }
-  console.log('[agenthydra] update applied, relaunching the daemon…')
-  setTimeout(async () => {
-    await flushConnectionsBeforeExit()
-    clearInstanceInfo()
-    stopAutoUpdate()
-    process.exit(0)
-  }, 800) // let the successor start, then free the port
-  return true
+// points at the NEW exe, so respawning it boots the updated build). Resolves false (no shutdown)
+// when no successor reported in, so we never exit without one.
+//
+// ⛔ "spawn() did not throw" is NOT "a successor exists" (2026-09-25: the daemon exited 0.8s after
+// a spawn whose successor never started, and nothing listened on the port for 90 minutes). The
+// handoff (relaunch-handoff.ts) keeps THIS daemon serving until the successor writes its ack, and
+// keeps it up for good when none arrives. One relaunch at a time: a second caller while a handoff
+// is waiting gets the same answer rather than spawning a second successor.
+let relaunchInFlight: Promise<boolean> | null = null
+function relaunchDaemon(): Promise<boolean> {
+  relaunchInFlight ??= relaunchWithHandoff({
+    spawnSuccessor: spawnRelaunchSuccessor,
+    ackDir: POINTER_DIR,
+    selfPid: process.pid,
+    shutdown: () => {
+      // The successor is up and waiting for our port. The short delay only lets a
+      // /api/daemon/restart response flush before the socket carrying it closes.
+      setTimeout(async () => {
+        await flushConnectionsBeforeExit()
+        clearInstanceInfo()
+        stopAutoUpdate()
+        process.exit(0)
+      }, 800)
+    },
+  }).then((handedOver) => {
+    if (!handedOver) relaunchInFlight = null
+    return handedOver
+  })
+  return relaunchInFlight
+}
+
+function spawnRelaunchSuccessor(): void {
+  // In a compiled binary process.argv is ['bun', '<virtual embedded path>', ...realArgs] — a
+  // placeholder pair, NOT respawnable. The shared kit builder handles that, pins the port we are
+  // actually SERVING on (never the preferred one), and keeps the argv a fixed point so it cannot
+  // grow by two tokens on every update. No `command` here: main.ts's daemon mode takes no verb.
+  const relaunchArgv = buildRelaunchArgv(process.argv, {
+    execPath: process.execPath,
+    isCompiled: IS_COMPILED,
+    boundPort,
+    relaunchFlag: RELAUNCH_FLAG,
+  })
+  // Through buildDetachedSpawn, not a plain spawn. `detached: true` is NOT a process-tree escape
+  // on Windows — the shared primitive's own header says so, and that is the reason it exists.
+  // Left as a plain spawn the successor stays inside THIS process's tree for the whole
+  // handoff, so a tray Quit (`taskkill /T /F`) landing in that window kills the outgoing daemon
+  // AND its replacement, leaving the user with none. That hand-off is also why the relaunch
+  // signal and the port ride as FLAGS above: WMI does not carry our environment block.
+  // hideWindow: the successor is a CONSOLE program (bun), and WMI's default STARTUPINFO gives
+  // it a VISIBLE console on the owner's desktop at every auto-update - the recurring mystery
+  // "command prompt that says starting" (found live 2026-08-30). Same ShowWindow=0 mechanism
+  // the dispatch runner's WMI launch verified on 2026-07-15; closing such a stray console
+  // would also CTRL_CLOSE_EVENT-kill the daemon living in it.
+  const plan = buildDetachedSpawn(process.platform, relaunchArgv, { hideWindow: true })
+  const child = spawn(plan.argv[0] as string, plan.argv.slice(1), {
+    cwd: process.cwd(),
+    detached: plan.detached,
+    stdio: 'ignore',
+    windowsHide: true,
+    // boundPort, NOT PORT. PORT is the port this daemon PREFERRED (config/env); boundPort is the
+    // one it is actually serving on, and they diverge for every daemon that has ever hopped. The
+    // successor uses this value for BOTH of its jobs, so handing it the preferred port breaks both:
+    // waitForPortFree() waits out its full 8s on a port the predecessor never held (nothing is
+    // going to release it), and findFreePort() then binds that port instead of the one the user's
+    // open tab is on — so a healthy daemon moves out from under the tab and its SSE stream dies.
+    // Passing boundPort makes the wait apply to the socket actually being released and keeps the
+    // daemon on ONE port across updates, which is the whole point of the handoff.
+    env: { ...process.env, AGENTHYDRA_RELAUNCH: '1', PORT: String(boundPort) },
+  })
+  // A launcher that cannot start at all arrives as an 'error' EVENT, not a throw, and an unheard
+  // one would take this daemon down with it. Logged here; the handoff sees no ack and stays up.
+  child.once('error', (e) =>
+    console.error('[agenthydra] relaunch: the successor launcher failed to start', e),
+  )
+  child.unref()
 }
 
 // --- auto-update loop (opt-in; see server/src/auto-update.ts) ---------------
@@ -1216,7 +1250,7 @@ loadAutoUpdateSettings()
 setAutoUpdateHooks({
   // Don't auto-update (which relaunches the daemon) while dispatch runs are in flight.
   hasActiveRuns: () => activeCount() > 0,
-  relaunch: relaunchDaemon,
+  relaunch: () => void relaunchDaemon(),
 })
 
 // A compiled build's self-updater renames the old exe + web/dist aside during a swap; sweep any

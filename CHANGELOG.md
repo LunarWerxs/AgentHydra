@@ -290,6 +290,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **An update can no longer leave you with no AgentHydra running** (`server/src/relaunch-handoff.ts`).
+  After applying an update, AgentHydra started its replacement and quit 0.8 seconds later
+  without checking that the replacement had actually started. On 2026-09-25 it had not, and
+  nothing answered for 90 minutes. The running copy now keeps serving until the new one reports
+  in, and if none does within a minute it stays up on the current version and says so in the log.
+  The in-app Restart answers only once the new copy has reported in.
+
 - **Moving chats no longer kills AgentHydra** (`server/src/core/chat-store-scan.ts`). Every
   read of the desktop chat stores (the live-chat index, the per-account chat list, the chat
   dossier) re-read and re-parsed every chat record on the machine, 3,395 files and 1.3 seconds
