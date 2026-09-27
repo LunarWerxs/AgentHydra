@@ -9,8 +9,11 @@
 //
 // The scan is a FRESH read of every store on purpose — no 15-second cache. A dossier is a
 // diagnostic: the caller is usually asking because the world just changed, and a cached
-// archive flag is exactly the lie they came here to catch. ~1300 small files, well under a
-// second; this endpoint is called by a human-paced investigation, not a hot path.
+// archive flag is exactly the lie they came here to catch. Fresh means every record file is
+// stat'ed on every call and re-read whenever it changed; only a byte-identical file skips the
+// parse (core/chat-store-scan.ts, recordCache). That skip is not optional: at 3,395 records the
+// full re-parse blocked the daemon's thread for 1.3 s a call, and this read is a hot path after
+// all - the orchestrator's liveness index and every per-chat resolve in a migrate_batch run it.
 
 import { homedir } from 'node:os'
 import { join } from 'node:path'

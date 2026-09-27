@@ -9,7 +9,7 @@
 // stay import-time side-effect-free (see that module's header). chat-dossier.ts re-exports
 // everything here unchanged, so its own callers and tests are untouched by the split.
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, type Stats, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { readLoginUuid } from './login-state'
 import { defaultClaudeUserDataDir, instancesRoot } from './paths'
@@ -97,33 +97,18 @@ function ultracodeOf(meta: unknown): boolean | null {
   return typeof flag === 'boolean' ? flag : null
 }
 
-/** The file's mtime as ISO, or null when stat cannot read it (deleted mid-scan, permissions). */
-function metaMtimeIso(path: string): string | null {
-  try {
-    return new Date(statSync(path).mtimeMs).toISOString()
-  } catch {
-    return null
-  }
-}
+/** Everything a row takes from its own FILE. The rest (the scan's label, the profile's current
+ *  login) belongs to the scan, so a re-login is seen without the record file changing. */
+type RecordFields = Omit<DossierChat, 'instance' | 'loginUuid' | 'staleLogin'>
 
-/** One store record -> one DossierChat row. Throws on an unreadable/half-written file, exactly as
- *  the inlined reader did, so the caller's per-record skip still covers it. */
-function chatRecordFromFile(
-  dir: string,
-  rel: string,
-  label: string,
-  loginUuid: string | null,
-): DossierChat {
-  const path = join(dir, rel)
-  // Bun's glob yields native separators on Windows, so split on both.
-  const accountUuid = rel.split(/[\\/]/)[0] || null
+/** One store record's fields, parsed. Throws on an unreadable/half-written file, exactly as the
+ *  inlined reader did, so the caller's per-record skip still covers it (and caches nothing). */
+function recordFields(path: string, rel: string, mtimeMs: number): RecordFields {
   const meta = JSON.parse(readFileSync(path, 'utf8'))
-  const chatId = rel.slice(rel.lastIndexOf('local_'), -'.json'.length) || null
   return {
-    instance: label,
     metaPath: path,
-    metaMtime: metaMtimeIso(path),
-    chatId,
+    metaMtime: new Date(mtimeMs).toISOString(),
+    chatId: rel.slice(rel.lastIndexOf('local_'), -'.json'.length) || null,
     cliSessionId: nonEmptyText(metaField(meta, 'cliSessionId')),
     priorCliSessionIds: textList(metaField(meta, 'priorCliSessionIds')),
     title: trimmedText(metaField(meta, 'title')),
@@ -135,12 +120,61 @@ function chatRecordFromFile(
     permissionMode: anyText(metaField(meta, 'permissionMode')),
     effort: nonEmptyText(metaField(meta, 'effort')),
     ultracode: ultracodeOf(meta),
-    accountUuid,
-    loginUuid,
-    staleLogin:
-      loginUuid && accountUuid ? accountUuid.toLowerCase() !== loginUuid.toLowerCase() : null,
+    // Bun's glob yields native separators on Windows, so split on both.
+    accountUuid: rel.split(/[\\/]/)[0] || null,
   }
 }
+
+/** A parsed record and the stat that proves the file has not changed since it was read. */
+interface CachedRecord {
+  mtimeMs: number
+  ctimeMs: number
+  size: number
+  /** When the file was read. See RACY_MS. */
+  readAt: number
+  fields: RecordFields
+}
+
+/**
+ * A record changed less than this long before it was read is re-read on the next scan anyway -
+ * git's "racily clean" rule. A file's timestamps only advance with the clock tick, so a second
+ * same-size write inside the tick of the first leaves mtime, ctime and size ALL identical
+ * (measured 2026-09-27, Bun on NTFS: two back-to-back writes, byte-identical stat in 2 runs of 3),
+ * and a read that fell between the two would be served forever. Once a read is RACY_MS past the
+ * file's last change, any later write carries a later timestamp and the stat catches it.
+ */
+const RACY_MS = 1_000
+
+function reusable(rec: CachedRecord | undefined, st: Stats): rec is CachedRecord {
+  return (
+    !!rec &&
+    rec.mtimeMs === st.mtimeMs &&
+    rec.ctimeMs === st.ctimeMs &&
+    rec.size === st.size &&
+    Math.max(rec.mtimeMs, rec.ctimeMs) < rec.readAt - RACY_MS
+  )
+}
+
+/**
+ * ⛔ WHY THE SCAN KEEPS WHAT IT PARSED (2026-09-27). This read ran 3,395 readFileSync + JSON.parse
+ * calls on the daemon's ONE thread for every caller - 1.2-1.4 s measured, blocking - and it is
+ * on the hot path: `/api/sessions/live?lineage=1` (the orchestrator's liveness index), `/api/chats`
+ * (every per-chat resolve) and the dossier, which a migrate_batch polls in a loop. Health probes
+ * went unanswered while it ran, and the tray watchdog tree-kills a daemon that misses three of
+ * them 5 s apart: move_chats killed the daemon, and its own migrate_batch child with it, eight
+ * times in nine minutes on 2026-09-27.
+ *
+ * It is NOT a time-based cache. Every record is still stat'ed on every scan and re-read the moment
+ * its mtime, ctime or size moves, so an archive flag flipped a millisecond ago is read as flipped
+ * (the dossier's whole reason to exist, chat-dossier.ts). ctime is in the key because nothing can
+ * set it: a writer that restores a file's mtime still moves its ctime. Only a record whose stat is
+ * unchanged, and whose file was already a second old when it was read (RACY_MS), skips the read
+ * and the parse, which were ~85% of the scan's cost.
+ *
+ * Keyed by store dir, then by record path; each scan of a store replaces that store's map with the
+ * records it found, so a deleted chat leaves the cache with its file.
+ */
+const recordCache = new Map<string, Map<string, CachedRecord>>()
 
 function scanStoreFull(userDataDir: string, label: string, out: DossierChat[]): void {
   const dir = join(userDataDir, 'claude-code-sessions')
@@ -149,13 +183,36 @@ function scanStoreFull(userDataDir: string, label: string, out: DossierChat[]): 
   // Read once per profile, not per record: one config.json per store, and every record in the
   // store is judged against the same answer.
   const loginUuid = readLoginUuid(userDataDir)
+  const previous = recordCache.get(dir)
+  const current = new Map<string, CachedRecord>()
   for (const rel of glob.scanSync({ cwd: dir, onlyFiles: true })) {
     try {
-      out.push(chatRecordFromFile(dir, rel, label, loginUuid))
+      const path = join(dir, rel)
+      const st = statSync(path)
+      let rec = previous?.get(rel)
+      if (!reusable(rec, st))
+        rec = {
+          mtimeMs: st.mtimeMs,
+          ctimeMs: st.ctimeMs,
+          size: st.size,
+          readAt: Date.now(),
+          fields: recordFields(path, rel, st.mtimeMs),
+        }
+      current.set(rel, rec)
+      const accountUuid = rec.fields.accountUuid
+      out.push({
+        instance: label,
+        ...rec.fields,
+        priorCliSessionIds: [...rec.fields.priorCliSessionIds],
+        loginUuid,
+        staleLogin:
+          loginUuid && accountUuid ? accountUuid.toLowerCase() !== loginUuid.toLowerCase() : null,
+      })
     } catch {
-      /* unreadable metadata file: skip it */
+      /* unreadable metadata file (deleted mid-scan, half-written): skip it, cache nothing */
     }
   }
+  recordCache.set(dir, current)
 }
 
 /** Every desktop chat on the machine, fresh from disk. Injectable roots for tests. */

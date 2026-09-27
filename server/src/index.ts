@@ -82,7 +82,7 @@ import {
   updateInstanceInfo,
   writeInstanceInfo,
 } from './instance'
-import { initFileLogging } from './log-file.mjs'
+import { initFileLogging, logFilePath } from './log-file.mjs'
 import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
 import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
@@ -124,6 +124,7 @@ import { jsonBody } from './route-helpers'
 import { warmSessionScanCache } from './sessions'
 import { sideRunHeader, sideRunHealthFields } from './side-run'
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
+import { startStallSentinel } from './stall-sentinel'
 import { syncStatusHooks } from './status-hooks'
 import { startTitleSweep } from './title-sweep'
 import { resolveEditor } from './transcript-open'
@@ -191,6 +192,12 @@ for (const sig of ['SIGBREAK', 'SIGHUP'] as const)
 process.on('exit', (code) => {
   console.error(exitRecordLine(code))
 })
+
+// ...and the death neither of those can see: the tray watchdog's `taskkill /T /F` of a daemon
+// whose thread stopped answering /api/health (2026-09-27, move_chats). The sentinel writes the
+// stall, and what was in flight, to daemon.log BEFORE that kill. First middleware on purpose, so
+// every request is on its in-flight list. See stall-sentinel.ts.
+app.use('*', startStallSentinel(logFilePath()))
 
 // --- portable mode (server/src/db.ts settings table; see server/src/portable-window.mjs) ---
 function portableModeEnabled(): boolean {

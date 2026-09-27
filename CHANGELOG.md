@@ -290,6 +290,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Moving chats no longer kills AgentHydra** (`server/src/core/chat-store-scan.ts`). Every
+  read of the desktop chat stores (the live-chat index, the per-account chat list, the chat
+  dossier) re-read and re-parsed every chat record on the machine, 3,395 files and 1.3 seconds
+  in which the server answered nothing. A `move_chats` batch asks for those in a loop, so the
+  tray's watchdog saw three unanswered health checks in a row and restarted AgentHydra, taking
+  the batch with it: eight restarts in nine minutes while moving three chats off a full account.
+  A record is now read again only when its file changed, so a repeat read takes about a sixth of
+  the time and a moved or archived chat still shows its new state at once. Measured under the
+  same load, health checks went from about one miss in two to about one in twelve.
+
+- **AgentHydra's log now says why it was restarted** (`server/src/stall-sentinel.ts`). When the
+  tray restarts an unresponsive AgentHydra it force-kills it, and nothing was written: the log
+  showed only the next start. A background watcher now writes `STALL` lines to `daemon.log`
+  while the server is stuck, naming the requests it was serving, and a line when it recovers;
+  a server kept busy by many short stalls gets a `saturated` line naming what the time went to.
+
 - **"Move chats to account" takes the chats off the old account's screen, not just its disk**
   (`server/src/move-source-settle.ts`, `server/src/routes/desktop-sessions.ts`). The Instances
   menu and the Sessions migrate settled the old copy with a disk flag alone, which a running app
