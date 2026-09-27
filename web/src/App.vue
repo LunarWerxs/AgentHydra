@@ -45,8 +45,12 @@ import { pendingSessionJump } from '@/lib/session-jump'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
 import { applyWindowSizeHint } from '@/lib/window-size-hint'
+import DiscordMark from '@/shell/DiscordMark.vue'
 import Sidebar from '@/shell/Sidebar.vue'
 import { usePushPanel } from '@/shell/usePushPanel'
+
+// The studio's one invite link, never expiring (the same one every product carries).
+const DISCORD_URL = 'https://discord.gg/PsWpeNUzhk'
 
 // A portable (--app) window forwarded into an already-running Chromium instance ignores
 // --window-size and the saved placement; the daemon/tray tag its URL with the size it should
@@ -361,6 +365,14 @@ onUnmounted(stopAvailabilityPolling)
              whole failure: the only code that ever checked was the Settings screen's own onMounted,
              so a user who never opened Settings was never told. A dot on the door to the thing is
              the smallest signal that still reaches someone who isn't already there. -->
+        <!-- The studio's Discord, as a plain icon: this is the page people keep open and come
+             back to, so it carries the invite quietly rather than the landing pages' floating
+             badge (owner, 2026-09-27). -->
+        <Button variant="ghost" size="icon-sm" as-child>
+          <a :href="DISCORD_URL" target="_blank" rel="noopener noreferrer" :title="$t('app.discord')" :aria-label="$t('app.discord')">
+            <DiscordMark />
+          </a>
+        </Button>
         <Button
           variant="ghost"
           size="icon-sm"

@@ -107,6 +107,9 @@ import { useShortcuts } from '@/composables/useShortcuts'
 import { useTranscriptDisplay } from '@/composables/useTranscriptDisplay'
 import { clampWidth, SIDEBAR_DEFAULT, useUiPrefs } from '@/composables/useUiPrefs'
 import type * as api from '@/lib/api'
+// Values, not types: the export menu builds its links with these at runtime. Importing the
+// module as `import type` (2026-09-26 cleanup) left the template calling an undefined `api`.
+import { sessionExportUrl, sessionFileUrl } from '@/lib/api'
 import { baseName, shortId, timeAgo } from '@/lib/format'
 import { highlightRuns, rankByQuery, sessionSearchFields, type TextRun } from '@/lib/fuzzy'
 import { groupByProject } from '@/lib/session-groups'
@@ -1554,7 +1557,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                             <DropdownMenuItem as-child>
                               <a
                                 :href="
-                                  api.sessionExportUrl(
+                                  sessionExportUrl(
                                     selected.session_id,
                                     selected.source,
                                     'markdown',
@@ -1570,7 +1573,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                             <DropdownMenuItem as-child>
                               <a
                                 :href="
-                                  api.sessionExportUrl(
+                                  sessionExportUrl(
                                     selected.session_id,
                                     selected.source,
                                     'html',
@@ -1586,7 +1589,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                             <DropdownMenuSeparator />
                             <DropdownMenuItem as-child>
                               <a
-                                :href="api.sessionFileUrl(selected.session_id, selected.source)"
+                                :href="sessionFileUrl(selected.session_id, selected.source)"
                                 :download="safeTranscriptFilename(selected.title, selected.session_id)"
                               >
                                 <FileSymlink />{{ $t('sessions.exportRaw') }}

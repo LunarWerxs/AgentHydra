@@ -4,16 +4,25 @@
  * app. The wording is intentionally literal English (not i18n) so one component
  * serves apps with and without vue-i18n; it lives in src/shell, which every
  * app's i18n prose check exempts. Width tracks the shared `--container-max`.
+ *
+ * It also carries the studio's Discord invite. An app is the page a person
+ * bookmarks and comes back to, so it gets the invite as a quiet link here
+ * rather than the floating badge the landing pages carry (owner, 2026-09-27:
+ * "any web-accessible version of our software ... they might literally just
+ * bookmark that page").
  */
-withDefaults(defineProps<{ name?: string; url?: string }>(), {
+import DiscordMark from "./DiscordMark.vue";
+
+withDefaults(defineProps<{ name?: string; url?: string; discord?: string }>(), {
   name: "LunarWerx Studios",
   url: "https://lunarwerx.com/",
+  discord: "https://discord.gg/PsWpeNUzhk",
 });
 </script>
 
 <template>
   <footer
-    class="mx-auto w-full max-w-(--container-max) px-4 pb-6 pt-4 text-center text-xs text-muted-foreground/60 sm:px-6"
+    class="mx-auto flex w-full max-w-(--container-max) flex-wrap items-center justify-center gap-x-3 gap-y-1 px-4 pb-6 pt-4 text-center text-xs text-muted-foreground/60 sm:px-6"
   >
     <span>
       Created by
@@ -25,5 +34,16 @@ withDefaults(defineProps<{ name?: string; url?: string }>(), {
         >{{ name }}</a
       >
     </span>
+    <span aria-hidden="true">·</span>
+    <a
+      :href="discord"
+      target="_blank"
+      rel="noopener noreferrer"
+      title="Join the LunarWerx Discord"
+      class="inline-flex items-center gap-1 font-medium text-foreground/70 underline-offset-4 transition-colors hover:text-foreground hover:underline"
+    >
+      <DiscordMark class="size-3.5" />
+      Discord
+    </a>
   </footer>
 </template>

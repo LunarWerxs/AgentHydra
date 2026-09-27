@@ -5,6 +5,7 @@ export default {
   queue: 'Queue',
   settings: 'Settings',
   settingsUpdateAvailable: 'Settings: an update is available',
+  discord: 'Join the LunarWerx Discord',
   restartNeeded: 'Restart to load new code',
   restarting: 'Restarting…',
   restartNeededHint:
