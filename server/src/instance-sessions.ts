@@ -313,6 +313,12 @@ function originRows(): OriginRow[] {
   return scanAll().origins
 }
 
+/** Every instance resolveInstanceByOrigin can name: it only ever returns an origin row's instance,
+ *  so a scope outside this set can never be reached through the origin join. */
+export function originInstances(): Set<string> {
+  return new Set(originRows().map((row) => row.instance))
+}
+
 /** Drop the 15s scan cache. Tests that WRITE a metadata fixture and then ask about it need this:
  *  a cached answer from before the write is stale by construction, and the surface-purity guard
  *  (dispatch.ts) consults this map on a hot path, so the TTL is not something to shorten. A

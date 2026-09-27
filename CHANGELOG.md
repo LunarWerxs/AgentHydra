@@ -290,6 +290,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Listing one Codex account's sessions takes a fraction of a second, not a minute**
+  (`server/src/sessions.ts`). `list_sessions` scoped to an account the Desktop origin join cannot
+  name, a Codex account above all, still kept every Claude chat Desktop had no record for and read
+  each one before throwing it away: 68 seconds to return nothing over 2,511 transcripts. Those
+  chats are now kept only for a scope the join can actually place them in. The same call takes
+  182 ms.
+
 - **An update can no longer leave you with no AgentHydra running** (`server/src/relaunch-handoff.ts`).
   After applying an update, AgentHydra started its replacement and quit 0.8 seconds later
   without checking that the replacement had actually started. On 2026-09-25 it had not, and

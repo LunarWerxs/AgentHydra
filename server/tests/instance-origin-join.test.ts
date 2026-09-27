@@ -198,3 +198,46 @@ test(
   },
   SPAWNS_A_CHILD_BUN,
 )
+
+test(
+  'an instance-scoped list keeps the transcript Desktop forgot, once its origin places it there',
+  () => {
+    // listSessions narrows the scope BEFORE parsing, and a transcript with no Desktop id is exactly
+    // the row that narrowing can wrongly drop: only the parse supplies the cwd and start time the
+    // join needs. A Codex-scoped list must not parse these at all (68 s for 0 rows on a real
+    // store), and a scope the join CAN name must still get them.
+    const projects = join(home, '.claude', 'projects', 'D--PublicProjects')
+    mkdirSync(projects, { recursive: true })
+    const at = new Date(CREATED).toISOString()
+    const line = (role: 'user' | 'assistant', text: string) =>
+      JSON.stringify({
+        type: role,
+        uuid: crypto.randomUUID(),
+        message: { role, content: text },
+        cwd: 'D:\\PublicProjects',
+        timestamp: at,
+      })
+    writeFileSync(
+      join(projects, 'placed-by-origin.jsonl'),
+      `${line('user', 'which account ran me')}\n${line('assistant', 'work')}\n`,
+    )
+    const SESSIONS = JSON.stringify(join(import.meta.dir, '..', 'src', 'sessions.ts'))
+    const proc = Bun.spawnSync(
+      [
+        process.execPath,
+        '-e',
+        `const { listSessions } = await import(${SESSIONS});
+         const rows = await listSessions({ instance: 'work', archived: 'include' });
+         console.log(JSON.stringify(rows.map((r) => [r.session_id, r.instance])));`,
+      ],
+      { env, stdout: 'pipe', stderr: 'pipe' },
+    )
+    const out = proc.stdout.toString().trim()
+    if (!proc.success || !out) throw new Error(`child failed: ${proc.stderr.toString() || out}`)
+    expect(JSON.parse(out.slice(out.lastIndexOf('\n') + 1))).toContainEqual([
+      'placed-by-origin',
+      'work',
+    ])
+  },
+  SPAWNS_A_CHILD_BUN,
+)

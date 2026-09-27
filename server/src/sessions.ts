@@ -5,6 +5,7 @@ import { readDshSession } from './dsh-sessions'
 import { readForeignSession } from './foreign-sessions'
 import { readHermesSession } from './hermes-sessions'
 import {
+  originInstances,
   resolveInstanceByOrigin,
   retiredSessionIds,
   type SessionMeta,
@@ -848,6 +849,7 @@ function transcriptMatchesInstance(
   instance: string,
   idsOf: (f: TranscriptFile) => string[],
   mmap: Map<string, SessionMeta>,
+  byOrigin: Set<string>,
 ): boolean {
   // A store that splits per ACCOUNT says so on the row itself, so no parse and no Desktop
   // lookup is involved: Codex rows are settled here and never fall through to the Claude
@@ -857,7 +859,10 @@ function transcriptMatchesInstance(
   const known = idsOf(f)
     .map((id) => mmap.get(id))
     .find(Boolean)
-  if (!known) return true
+  // Unknown to Desktop: only the origin join can still place it, and only into an instance that
+  // join can name. Scoped to anything else (a Codex account above all), keeping it would parse the
+  // whole Claude store to return nothing — measured 68 s for 0 rows over 2,511 transcripts.
+  if (!known) return instance === 'other' || byOrigin.has(instance)
   return instance === 'other' ? false : known.instance === instance
 }
 
@@ -1031,7 +1036,10 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   // and toSummary settles them exactly, the same shape the usage-wall scope uses below and for
   // the same reason — a scope that runs before the cap cannot see anything only a parse knows,
   // and being conservative here costs a few parses where guessing would cost correctness.
-  if (instance) files = files.filter((f) => transcriptMatchesInstance(f, instance, idsOf, mmap))
+  if (instance) {
+    const byOrigin = originInstances()
+    files = files.filter((f) => transcriptMatchesInstance(f, instance, idsOf, mmap, byOrigin))
+  }
   if (archived !== 'include') {
     const want = archived === 'only'
     files = files.filter((f) => transcriptArchivedFlag(f, idsOf, mmap) === want)
