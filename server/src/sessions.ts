@@ -1,4 +1,5 @@
 import { markSessionGone } from './analytics'
+import { mapPool } from './core/map-pool'
 import { db } from './db'
 import { readDshSession } from './dsh-sessions'
 import { readForeignSession } from './foreign-sessions'
@@ -255,7 +256,7 @@ const inFlight = new Map<string, Promise<ScannedMeta | null>>()
  *  than treat it as an empty session, and the type is what forces them to.
  *
  *  Exported only so the regression test can point it at a path that no longer exists and prove the
- *  miss is survivable, the same reason mapPooled above is exported. Nothing else imports it. */
+ *  miss is survivable. Nothing else imports it. */
 export function scanMeta(tf: TranscriptFile): Promise<ScannedMeta | null> {
   const key = cacheKey(tf)
   const cached = metaCache.get(key)
@@ -578,26 +579,6 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta |
  * just stops the list from being a memory bomb.
  */
 export const SCAN_CONCURRENCY = 12
-
-/** Promise.all with a ceiling on how many run at once. Results stay in input order.
- *  Exported only so the regression test can prove the ceiling is real — nothing else imports it. */
-export async function mapPooled<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const out = new Array<R>(items.length)
-  let next = 0
-  const worker = async () => {
-    for (;;) {
-      const i = next++
-      if (i >= items.length) return
-      out[i] = await fn(items[i])
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
-  return out
-}
 
 /** Map of session_id -> most-relevant queue status (running/queued win over terminal). */
 function queueStatusMap(): Map<string, QueueStatus> {
@@ -1115,7 +1096,7 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   for (let cursor = 0; cursor < files.length && out.length < wanted; ) {
     const batch = files.slice(cursor, cursor + (wanted - out.length))
     cursor += batch.length
-    const scanned = await mapPooled(batch, SCAN_CONCURRENCY, toSummary)
+    const scanned = await mapPool(batch, SCAN_CONCURRENCY, toSummary)
     for (const s of scanned) if (s) out.push(s)
   }
   out.sort((a, b) => b.last_activity_at - a.last_activity_at)
@@ -1377,7 +1358,7 @@ export async function warmSessionScanCache(newest = 400): Promise<void> {
   // Half the request-path width: this is speculative work, and a request that arrives mid-warm-up
   // should be able to overtake it. It never duplicates that request's work — scanMeta's in-flight
   // map means the two share whichever file they both want.
-  await mapPooled(batch, Math.max(1, Math.floor(SCAN_CONCURRENCY / 2)), async (tf) => {
+  await mapPool(batch, Math.max(1, Math.floor(SCAN_CONCURRENCY / 2)), async (tf) => {
     try {
       await scanMeta(tf)
     } catch {

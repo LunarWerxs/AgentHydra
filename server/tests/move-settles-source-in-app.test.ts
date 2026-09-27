@@ -15,7 +15,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { countChatsByProfile } from '../src/chat-dossier'
 import type { NativeArchiveOutcome } from '../src/claude-native-archive'
-import { collectChats } from '../src/core/chat-store-scan'
 import { type SettleDeps, settleMovedSource, usageAtWall } from '../src/move-source-settle'
 import type { UsageSnapshot } from '../src/types'
 import type { UiArchiveOutcome } from '../src/ui-archive'
@@ -333,7 +332,7 @@ test('countChatsByProfile counts active and archived per dir, and an empty accou
   const empty = join(ROOT, 'never-used')
   mkdirSync(empty, { recursive: true })
 
-  const counts = countChatsByProfile([busy, quiet, empty], collectChats)
+  const counts = countChatsByProfile([busy, quiet, empty])
   expect(counts[busy]).toEqual({ active: 2, archived: 1 })
   // Everything archived: the badge reads 0, which is the whole point of it.
   expect(counts[quiet]).toEqual({ active: 0, archived: 1 })

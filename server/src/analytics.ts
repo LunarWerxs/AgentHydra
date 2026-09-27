@@ -33,6 +33,7 @@
 // precise, only differently wrong.
 
 import { createHash } from 'node:crypto'
+import { timeSlice } from './core/loop-yield'
 import { db } from './db'
 import { readDshUsage } from './dsh-sessions'
 import {
@@ -42,7 +43,7 @@ import {
   measureEditSurvival,
 } from './edit-survival'
 import { readHermesUsage } from './hermes-sessions'
-import { instanceSessionMap } from './instance-sessions'
+import { findDesktopChat, instanceSessionMap } from './instance-sessions'
 import { readOpenCodeUsage } from './opencode-sessions'
 import { priceSource, pricesAsOf, priceTokens } from './pricing'
 import { streamLines } from './session-search'
@@ -441,14 +442,14 @@ function firstPath(input: unknown): string | null {
  * a log, so there is nothing to stream. See openCodeSpend for why `reasoning` is kept out of
  * `output` rather than added to it.
  */
-function scanOpenCodeAnalytics(
+async function scanOpenCodeAnalytics(
   sessionId: string | undefined,
   /** The store's database - the row's own, not the default OpenCode one: Kilo, MiMo Code and
    *  IcodeMate are separate OpenCode-format databases (audit AH-34). */
   path: string,
   out: SessionAnalytics,
-): SessionAnalytics {
-  const row = sessionId ? readOpenCodeUsage(sessionId, path) : null
+): Promise<SessionAnalytics> {
+  const row = sessionId ? await readOpenCodeUsage(sessionId, path) : null
   if (row) {
     const spend = openCodeSpend(row)
     out.tokens = spend.byModel
@@ -681,7 +682,12 @@ export async function scanSessionAnalytics(
   // 64.5B on this machine — leaving them out reported 42% of real Claude spend as the total.
   // Summing is safe here in a way it is not for Codex: every record carries its own request id and
   // `seen` is shared across the files, so nothing can be charged twice.
+  //
+  // Sliced by the clock (core/loop-yield.ts): a buffered stream chunk resumes this loop without
+  // ever reaching the event loop, so one large transcript otherwise parses as a single block.
+  const slice = timeSlice()
   for await (const { line: raw, sub } of streamSessionLines(path, siblingPaths)) {
+    if (slice.due()) await slice.pause()
     const line = raw.trim()
     if (!line) continue
     foldClaudeUsageLine(line, sub, st, out)
@@ -976,10 +982,12 @@ async function scanOneCodexRollout(path: string, out: SessionAnalytics): Promise
     unattributed = []
   }
 
+  const slice = timeSlice()
   for (const path of paths) {
     const reader = new CodexUsageReader()
     let prevTs: number | null = null
     for await (const raw of streamLines(path)) {
+      if (slice.due()) await slice.pause()
       const line = raw.trim()
       if (!line) continue
       let ev: {
@@ -1287,7 +1295,7 @@ function recordPermanentStats(tf: TranscriptFile, a: SessionAnalytics): void {
     tf.title ?? null,
     // Which desktop instance (and therefore which ACCOUNT) ran it. The single most perishable fact
     // here: once the transcript is gone nothing else on this machine remembers who paid for it.
-    instanceSessionMap().get(tf.session_id) ?? null,
+    findDesktopChat(tf.session_id)?.instance ?? null,
     a.firstTs,
     a.lastTs,
     turns,

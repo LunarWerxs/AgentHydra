@@ -75,14 +75,14 @@ describe('the 4-gram score', () => {
 })
 
 describe('the session rewriting its own code is not a loss', () => {
-  test('an edit a later edit consumed, or a later whole-file write replaced, is not scored', () => {
+  test('an edit a later edit consumed, or a later whole-file write replaced, is not scored', async () => {
     const p = 'D:/x/a.ts'
     const first = write(p, GONE)
     const rewrite = write(p, KEPT, { replaced: GONE })
     const other = write('D:/x/b.ts', GONE)
-    expect(liveWrites([first, rewrite, other])).toEqual([rewrite, other])
+    expect(await liveWrites([first, rewrite, other])).toEqual([rewrite, other])
     const whole = write(p, KEPT, { whole: true })
-    expect(liveWrites([first, whole])).toEqual([whole])
+    expect(await liveWrites([first, whole])).toEqual([whole])
   })
 })
 

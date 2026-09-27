@@ -342,7 +342,7 @@ test('the watcher is bounded: a restore cap against a hostile flipper, a miss ca
   expect(missTicks).toBe(5)
 })
 
-test('reassertAutomationStamps restamps clobbered imports only, never app-created chats', () => {
+test('reassertAutomationStamps restamps clobbered imports only, never app-created chats', async () => {
   // The durable half: run in the archive-visibility restart's quit→reopen window, the one
   // moment a daemon write provably enters the app's memory (same window 4499079 proved for
   // archive flags). Import shape = file named after the CLI id; an app-created chat is filed
@@ -368,15 +368,15 @@ test('reassertAutomationStamps restamps clobbered imports only, never app-create
   )
   // A corrupt file must not stop the sweep.
   writeFileSync(join(store, 'local_broken.json'), '{not json')
-  expect(reassertAutomationStamps(profile)).toBe(1)
+  expect(await reassertAutomationStamps(profile)).toBe(1)
   expect(read('local_imp-clobbered.json').permissionMode).toBe('bypassPermissions')
   expect(read('local_imp-clobbered.json').title).toBe('T')
   expect(read('local_imp-fine.json').permissionMode).toBe('bypassPermissions')
   expect(read('local_app-own-id.json').permissionMode).toBe('acceptEdits')
   // Second pass: everything already converged, nothing rewritten.
-  expect(reassertAutomationStamps(profile)).toBe(0)
+  expect(await reassertAutomationStamps(profile)).toBe(0)
   // A profile with no store is a no-op, not a throw.
-  expect(reassertAutomationStamps(join(profile, 'no-such-dir'))).toBe(0)
+  expect(await reassertAutomationStamps(join(profile, 'no-such-dir'))).toBe(0)
 })
 
 test('stampImportedChat gives up at its deadline instead of blocking forever', async () => {

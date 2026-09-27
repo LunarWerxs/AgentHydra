@@ -9,10 +9,13 @@
 // stay import-time side-effect-free (see that module's header). chat-dossier.ts re-exports
 // everything here unchanged, so its own callers and tests are untouched by the split.
 
-import { existsSync, readdirSync, readFileSync, type Stats, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readLoginUuid } from './login-state'
+import { mapPool } from './map-pool'
 import { defaultClaudeUserDataDir, instancesRoot } from './paths'
+import { type StatStamp, stampOf, unchangedSince } from './stat-stamp'
 
 /** One chat's full metadata row, read straight off disk (superset of SessionMeta: the cached
  *  scan drops lineage and timestamps, and lineage ids are the whole point here). */
@@ -101,10 +104,10 @@ function ultracodeOf(meta: unknown): boolean | null {
  *  login) belongs to the scan, so a re-login is seen without the record file changing. */
 type RecordFields = Omit<DossierChat, 'instance' | 'loginUuid' | 'staleLogin'>
 
-/** One store record's fields, parsed. Throws on an unreadable/half-written file, exactly as the
- *  inlined reader did, so the caller's per-record skip still covers it (and caches nothing). */
-function recordFields(path: string, rel: string, mtimeMs: number): RecordFields {
-  const meta = JSON.parse(readFileSync(path, 'utf8'))
+/** One store record's fields, parsed from its text. Throws on a half-written file, so the
+ *  caller's per-record skip still covers it (and caches nothing). */
+function recordFields(path: string, rel: string, text: string, mtimeMs: number): RecordFields {
+  const meta = JSON.parse(text)
   return {
     metaPath: path,
     metaMtime: new Date(mtimeMs).toISOString(),
@@ -125,34 +128,11 @@ function recordFields(path: string, rel: string, mtimeMs: number): RecordFields 
   }
 }
 
-/** A parsed record and the stat that proves the file has not changed since it was read. */
+/** A parsed record and the stat that proves the file has not changed since it was read
+ *  (core/stat-stamp.ts, which also holds the racily-clean rule). */
 interface CachedRecord {
-  mtimeMs: number
-  ctimeMs: number
-  size: number
-  /** When the file was read. See RACY_MS. */
-  readAt: number
+  stamp: StatStamp
   fields: RecordFields
-}
-
-/**
- * A record changed less than this long before it was read is re-read on the next scan anyway -
- * git's "racily clean" rule. A file's timestamps only advance with the clock tick, so a second
- * same-size write inside the tick of the first leaves mtime, ctime and size ALL identical
- * (measured 2026-09-27, Bun on NTFS: two back-to-back writes, byte-identical stat in 2 runs of 3),
- * and a read that fell between the two would be served forever. Once a read is RACY_MS past the
- * file's last change, any later write carries a later timestamp and the stat catches it.
- */
-const RACY_MS = 1_000
-
-function reusable(rec: CachedRecord | undefined, st: Stats): rec is CachedRecord {
-  return (
-    !!rec &&
-    rec.mtimeMs === st.mtimeMs &&
-    rec.ctimeMs === st.ctimeMs &&
-    rec.size === st.size &&
-    Math.max(rec.mtimeMs, rec.ctimeMs) < rec.readAt - RACY_MS
-  )
 }
 
 /**
@@ -166,48 +146,52 @@ function reusable(rec: CachedRecord | undefined, st: Stats): rec is CachedRecord
  *
  * It is NOT a time-based cache. Every record is still stat'ed on every scan and re-read the moment
  * its mtime, ctime or size moves, so an archive flag flipped a millisecond ago is read as flipped
- * (the dossier's whole reason to exist, chat-dossier.ts). ctime is in the key because nothing can
- * set it: a writer that restores a file's mtime still moves its ctime. Only a record whose stat is
- * unchanged, and whose file was already a second old when it was read (RACY_MS), skips the read
- * and the parse, which were ~85% of the scan's cost.
+ * (the dossier's whole reason to exist, chat-dossier.ts). Only a record whose stat is unchanged,
+ * and whose file was already a second old when it was read, skips the read and the parse, which
+ * were ~85% of the scan's cost.
  *
  * Keyed by store dir, then by record path; each scan of a store replaces that store's map with the
  * records it found, so a deleted chat leaves the cache with its file.
  */
 const recordCache = new Map<string, Map<string, CachedRecord>>()
 
+const RECORD_GLOB = '*/*/local_*.json'
+
+/** One record as a row: its file's fields, plus what the scan knows (label, current login). */
+function chatRow(label: string, fields: RecordFields, loginUuid: string | null): DossierChat {
+  const accountUuid = fields.accountUuid
+  return {
+    instance: label,
+    ...fields,
+    priorCliSessionIds: [...fields.priorCliSessionIds],
+    loginUuid,
+    staleLogin:
+      loginUuid && accountUuid ? accountUuid.toLowerCase() !== loginUuid.toLowerCase() : null,
+  }
+}
+
 function scanStoreFull(userDataDir: string, label: string, out: DossierChat[]): void {
   const dir = join(userDataDir, 'claude-code-sessions')
   if (!existsSync(dir)) return
-  const glob = new Bun.Glob('*/*/local_*.json')
   // Read once per profile, not per record: one config.json per store, and every record in the
   // store is judged against the same answer.
   const loginUuid = readLoginUuid(userDataDir)
   const previous = recordCache.get(dir)
   const current = new Map<string, CachedRecord>()
-  for (const rel of glob.scanSync({ cwd: dir, onlyFiles: true })) {
+  for (const rel of new Bun.Glob(RECORD_GLOB).scanSync({ cwd: dir, onlyFiles: true })) {
     try {
       const path = join(dir, rel)
       const st = statSync(path)
       let rec = previous?.get(rel)
-      if (!reusable(rec, st))
+      if (!rec || !unchangedSince(rec.stamp, st)) {
+        const readAt = Date.now()
         rec = {
-          mtimeMs: st.mtimeMs,
-          ctimeMs: st.ctimeMs,
-          size: st.size,
-          readAt: Date.now(),
-          fields: recordFields(path, rel, st.mtimeMs),
+          stamp: stampOf(st, readAt),
+          fields: recordFields(path, rel, readFileSync(path, 'utf8'), st.mtimeMs),
         }
+      }
       current.set(rel, rec)
-      const accountUuid = rec.fields.accountUuid
-      out.push({
-        instance: label,
-        ...rec.fields,
-        priorCliSessionIds: [...rec.fields.priorCliSessionIds],
-        loginUuid,
-        staleLogin:
-          loginUuid && accountUuid ? accountUuid.toLowerCase() !== loginUuid.toLowerCase() : null,
-      })
+      out.push(chatRow(label, rec.fields, loginUuid))
     } catch {
       /* unreadable metadata file (deleted mid-scan, half-written): skip it, cache nothing */
     }
@@ -215,25 +199,89 @@ function scanStoreFull(userDataDir: string, label: string, out: DossierChat[]): 
   recordCache.set(dir, current)
 }
 
-/** Every desktop chat on the machine, fresh from disk. Injectable roots for tests. */
-export function collectChats(roots?: Array<{ dir: string; label: string }>): DossierChat[] {
+/** How many record stats are in flight at once in the async scan. */
+const STAT_WIDTH = 16
+
+/**
+ * scanStoreFull without holding the event loop: the same records, rows and cache.
+ *
+ * ⛔ WHY (2026-09-27). Even fully cached, the sync scan is a stat per record - 3,397 of them, 351 ms
+ * measured - and `/api/sessions/live?lineage=1` and `/api/chats` ran it on the daemon's only
+ * thread for every call. Two callers polling together (the orchestrator's liveness pass and a
+ * migrate_batch) left /api/health waiting behind back-to-back scans, and the tray watchdog kills a
+ * daemon that misses three probes. Here the stats run on the thread pool, 16 at a time: 89 ms for
+ * the same store, and the loop never waits more than a few ms.
+ */
+async function scanStoreFullAsync(
+  userDataDir: string,
+  label: string,
+  out: DossierChat[],
+): Promise<void> {
+  const dir = join(userDataDir, 'claude-code-sessions')
+  if (!existsSync(dir)) return
+  const loginUuid = readLoginUuid(userDataDir)
+  const previous = recordCache.get(dir)
+  const rels: string[] = []
+  try {
+    for await (const rel of new Bun.Glob(RECORD_GLOB).scan({ cwd: dir, onlyFiles: true }))
+      rels.push(rel)
+  } catch {
+    return
+  }
+  const recs = await mapPool(rels, STAT_WIDTH, async (rel): Promise<CachedRecord | null> => {
+    try {
+      const path = join(dir, rel)
+      const st = await stat(path)
+      const rec = previous?.get(rel)
+      if (rec && unchangedSince(rec.stamp, st)) return rec
+      const readAt = Date.now()
+      return {
+        stamp: stampOf(st, readAt),
+        fields: recordFields(path, rel, await readFile(path, 'utf8'), st.mtimeMs),
+      }
+    } catch {
+      return null // same skip as the sync scan: deleted mid-scan or half-written
+    }
+  })
+  const current = new Map<string, CachedRecord>()
+  rels.forEach((rel, i) => {
+    const rec = recs[i]
+    if (!rec) return
+    current.set(rel, rec)
+    out.push(chatRow(label, rec.fields, loginUuid))
+  })
+  recordCache.set(dir, current)
+}
+
+type StoreRoot = { dir: string; label: string }
+
+/** The default profile and every isolated instance profile, unless a caller names its own. */
+function storeRoots(roots?: StoreRoot[]): StoreRoot[] {
+  if (roots) return roots
+  const out: StoreRoot[] = [{ dir: defaultClaudeUserDataDir(), label: 'default' }]
+  const root = instancesRoot()
+  try {
+    if (existsSync(root))
+      for (const e of readdirSync(root, { withFileTypes: true }))
+        if (e.isDirectory()) out.push({ dir: join(root, e.name), label: e.name })
+  } catch {
+    /* an unreadable instances root lists the default profile alone */
+  }
+  return out
+}
+
+/** Every desktop chat on the machine, fresh from disk. Injectable roots for tests.
+ *  Blocks for a stat per record; a caller that can await should use collectChatsAsync. */
+export function collectChats(roots?: StoreRoot[]): DossierChat[] {
   const out: DossierChat[] = []
-  const targets =
-    roots ??
-    [{ dir: defaultClaudeUserDataDir(), label: 'default' }].concat(
-      ((): Array<{ dir: string; label: string }> => {
-        const root = instancesRoot()
-        try {
-          if (!existsSync(root)) return []
-          return readdirSync(root, { withFileTypes: true })
-            .filter((e) => e.isDirectory())
-            .map((e) => ({ dir: join(root, e.name), label: e.name }))
-        } catch {
-          return []
-        }
-      })(),
-    )
-  for (const t of targets) scanStoreFull(t.dir, t.label, out)
+  for (const t of storeRoots(roots)) scanStoreFull(t.dir, t.label, out)
+  return out
+}
+
+/** collectChats, answered without holding the event loop. Same rows, same freshness. */
+export async function collectChatsAsync(roots?: StoreRoot[]): Promise<DossierChat[]> {
+  const out: DossierChat[] = []
+  for (const t of storeRoots(roots)) await scanStoreFullAsync(t.dir, t.label, out)
   return out
 }
 

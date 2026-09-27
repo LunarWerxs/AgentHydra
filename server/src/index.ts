@@ -82,6 +82,7 @@ import {
   updateInstanceInfo,
   writeInstanceInfo,
 } from './instance'
+import { warmSessionMetaIndex } from './instance-sessions'
 import { initFileLogging, logFilePath } from './log-file.mjs'
 import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
 import {
@@ -1434,7 +1435,14 @@ startPriceCatalog()
 // renew is a documented no-op, kept so 'session-scan' still shows up as a named boot phase rather
 // than silently missing one, and so it stays correct if warming is ever moved ahead of serve().
 renewBootWatchdog('session-scan')
-warmSessionScanCache()
+// The desktop chat index FIRST, built without blocking: with nothing cached, its first lookup is a
+// 1.7 s synchronous scan of every chat record, and both warms below look chats up (the analytics
+// warm once per session it stores). See warmSessionMetaIndex.
+warmSessionMetaIndex()
+  .catch(() => {
+    // the first lookup will build it synchronously instead
+  })
+  .then(() => warmSessionScanCache())
   .catch((error) => {
     console.error('[agenthydra] session-scan warm failed; the list will build on demand:', error)
   })

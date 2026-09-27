@@ -10,7 +10,7 @@ import { afterAll, expect, spyOn, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { collectChats } from '../src/core/chat-store-scan'
+import { collectChats, collectChatsAsync } from '../src/core/chat-store-scan'
 
 const ROOT = mkdtempSync(join(tmpdir(), 'chat-store-rereads-'))
 const MARK = 'rereads-fixture-'
@@ -38,7 +38,7 @@ test('a rescan re-parses only the records that changed, and still reads those', 
   record('a', 'alpha')
   const beta = record('b', 'beta')
   record('c', 'gamma')
-  // Past the racily-clean window (chat-store-scan.ts RACY_MS), so an unchanged file may be reused.
+  // Past the racily-clean window (core/stat-stamp.ts RACY_MS), so an unchanged file may be reused.
   await Bun.sleep(1_100)
   const roots = [{ dir: join(ROOT, 'profile'), label: 'p' }]
 
@@ -61,5 +61,18 @@ test('a rescan re-parses only the records that changed, and still reads those', 
   utimesSync(beta, before.atime, before.mtime)
   parse.mockClear()
   expect(collectChats(roots).find((c) => c.cliSessionId === `${MARK}b`)?.title).toBe('BETA')
+  expect(parsesOfFixture()).toBe(1)
+
+  // The async scan the routes answer from (so /api/health is never queued behind a stat per
+  // record) is the same scan: the same rows from the same cache, and a changed record re-read.
+  await Bun.sleep(1_100)
+  collectChats(roots) // b was read inside its racy window above, so this scan reads it once more
+  parse.mockClear()
+  expect(await collectChatsAsync(roots)).toEqual(collectChats(roots))
+  expect(parsesOfFixture()).toBe(0)
+  record('c', 'GAMMA, rewritten')
+  expect((await collectChatsAsync(roots)).find((c) => c.cliSessionId === `${MARK}c`)?.title).toBe(
+    'GAMMA, rewritten',
+  )
   expect(parsesOfFixture()).toBe(1)
 })

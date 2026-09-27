@@ -38,6 +38,7 @@ const env = {
 }
 const SESSIONS = JSON.stringify(join(import.meta.dir, '..', 'src', 'sessions.ts'))
 const DB = JSON.stringify(join(import.meta.dir, '..', 'src', 'db.ts'))
+const POOL = JSON.stringify(join(import.meta.dir, '..', 'src', 'core', 'map-pool.ts'))
 
 // 30s, on EVERY test here, because every one of them spawns at least one child Bun that imports
 // sessions.ts (or db.ts) from source and opens a fresh SQLite file. That is real work, and its cost
@@ -151,10 +152,11 @@ test(
   'the scan pool never runs more than its ceiling at once, and keeps input order',
   () => {
     const result = child<{ ceiling: number; peak: number; ordered: boolean }>(
-      `const { mapPooled, SCAN_CONCURRENCY } = await import(${SESSIONS});
+      `const { SCAN_CONCURRENCY } = await import(${SESSIONS});
+     const { mapPool } = await import(${POOL});
      let live = 0, peak = 0;
      const items = Array.from({ length: 200 }, (_, i) => i);
-     const out = await mapPooled(items, 4, async (i) => {
+     const out = await mapPool(items, 4, async (i) => {
        live++; peak = Math.max(peak, live);
        await Bun.sleep(1);
        live--; return i * 2;

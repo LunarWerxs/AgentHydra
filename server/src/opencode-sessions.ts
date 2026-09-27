@@ -1,6 +1,7 @@
 import { Database } from 'bun:sqlite'
 import { existsSync, statSync } from 'node:fs'
 import { OPENCODE_DB_PATH } from './config'
+import { queryInWorker } from './core/sqlite-worker'
 import type { TailEvent } from './types'
 import type { OpenCodeUsageRow } from './usage-foreign'
 
@@ -253,13 +254,18 @@ export function listOpenCodeSessions(path = OPENCODE_DB_PATH): OpenCodeSessionRe
   if (!db) return []
   try {
     const parentId = hasColumn(db, 'session', 'parent_id') ? 's.parent_id' : 'null as parent_id'
+    // octet_length, NOT length. length() of a TEXT value counts characters, so SQLite loads every
+    // byte of every row to count them: 2.5 s for an 8 GB store (2026-09-27), synchronous on the
+    // daemon's only thread, at every boot - long enough for the tray watchdog to kill it.
+    // octet_length() reads the size from the record header without touching the content (111 ms
+    // for the same store), and a byte count is what `size_bytes` claims to be anyway.
     const rows = db
       .query<SessionRow, []>(
         `select
            s.id, s.project_id, s.directory, s.title, s.time_created, s.time_updated,
            s.time_archived, ${parentId},
-           coalesce((select sum(length(m.data)) from message m where m.session_id = s.id), 0) +
-           coalesce((select sum(length(p.data)) from part p where p.session_id = s.id), 0)
+           coalesce((select sum(octet_length(m.data)) from message m where m.session_id = s.id), 0) +
+           coalesce((select sum(octet_length(p.data)) from part p where p.session_id = s.id), 0)
              as size_bytes
          from session s`,
       )
@@ -426,38 +432,42 @@ export function listOpenCodeSearchEvents(path = OPENCODE_DB_PATH): OpenCodeSearc
  * the three providers. Returns null when the row or the database is missing; a session that simply
  * has no usage yet comes back with zeros, which is a different and true answer.
  */
-export function readOpenCodeUsage(
+export async function readOpenCodeUsage(
   sessionId: string,
   path = OPENCODE_DB_PATH,
-): OpenCodeUsageRow | null {
+): Promise<OpenCodeUsageRow | null> {
   const db = openDb(path)
   if (!db) return null
+  let row: Omit<OpenCodeUsageRow, 'turns'> | null
   try {
-    const row = db
-      .query<OpenCodeUsageRow, [string]>(
+    row = db
+      .query<Omit<OpenCodeUsageRow, 'turns'>, [string]>(
         'select model, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, ' +
           'tokens_cache_write, cost, time_updated from session where id = ?',
       )
       .get(sessionId)
-    if (!row) return null
-    // Assistant replies, so the model breakdown can say "N replies" for OpenCode as it does for the
-    // others. OpenCode keeps the role inside each message's JSON blob rather than in a column, so
-    // this matches on the blob: one indexed scan of this session's rows, not a parse of every body.
-    let turns = 0
-    try {
-      turns =
-        db
-          .query<{ n: number }, [string]>(
-            'select count(*) as n from message where session_id = ? ' +
-              `and data like '%"role":"assistant"%'`,
-          )
-          .get(sessionId)?.n ?? 0
-    } catch {
-      // A schema this query does not fit: the totals still stand, the reply count is simply 0.
-    }
-    return { ...row, turns }
   } catch {
     // An older OpenCode without these columns: no usage rather than a broken list.
     return null
+  } finally {
+    db.close()
   }
+  if (!row) return null
+  // Assistant replies, so the model breakdown can say "N replies" for OpenCode as it does for the
+  // others. OpenCode keeps the role inside each message's JSON blob rather than in a column, so
+  // this matches on the blob - and SQLite loads a whole value to match it, so a session whose user
+  // messages carry 160 MB of diffs costs 0.4-2.6 s however the pattern is written (measured
+  // 2026-09-27). On a worker thread (core/sqlite-worker.ts), never on the daemon's.
+  let turns = 0
+  try {
+    const [counted] = await queryInWorker<{ n: number }>(
+      path,
+      `select count(*) as n from message where session_id = ? and data like '%"role":"assistant"%'`,
+      [sessionId],
+    )
+    turns = counted?.n ?? 0
+  } catch {
+    // A schema this query does not fit: the totals still stand, the reply count is simply 0.
+  }
+  return { ...row, turns }
 }

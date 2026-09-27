@@ -39,6 +39,9 @@ const iso = (ms: unknown): string | null =>
 
 export interface DossierDeps {
   roots?: Array<{ dir: string; label: string }>
+  /** The records, already read. A route passes collectChatsAsync's answer here so the scan never
+   *  holds the daemon's thread; omitted, the scan runs synchronously on `roots`. */
+  chats?: DossierChat[]
   markFor?: (ids: string[]) => { done: boolean; updatedAt: string } | null
   liveFor?: (ids: string[], chatId?: string | null) => DossierMatch['live']
 }
@@ -86,7 +89,7 @@ function defaultLiveFor(ids: string[], chatId?: string | null): DossierMatch['li
  * its archive flag as it sits ON DISK RIGHT NOW, its done-mark, and its live process if any.
  */
 export function chatDossier(q: string, deps: DossierDeps = {}): { matches: DossierMatch[] } {
-  const chats = collectChats(deps.roots)
+  const chats = deps.chats ?? collectChats(deps.roots)
   const markFor = deps.markFor ?? defaultMarkFor
   const liveFor = deps.liveFor ?? defaultLiveFor
   const matches: DossierMatch[] = []
@@ -226,7 +229,7 @@ export function listChats(
   opts: ListChatsOptions = {},
   deps: DossierDeps & { liveIds?: Map<string, number>; liveHosts?: Map<string, string> } = {},
 ): ChatListResult {
-  const chats = collectChats(deps.roots)
+  const chats = deps.chats ?? collectChats(deps.roots)
   const index = deps.liveIds ? null : liveIndex()
   const live = deps.liveIds ?? index?.pids ?? new Map<string, number>()
   const hosts = deps.liveHosts ?? index?.hosts ?? new Map<string, string>()
@@ -301,6 +304,12 @@ export interface ProfileChatCount {
   archived: number
 }
 
+/** The scan roots countChatsByProfile counts: each profile dir once, labelled by itself, so every
+ *  record comes back tagged with the key it counts under. */
+export function profileRoots(dirs: string[]): Array<{ dir: string; label: string }> {
+  return [...new Set(dirs)].map((dir) => ({ dir, label: dir }))
+}
+
 /**
  * Chat counts per desktop profile DIR, for the number beside "Chats" in the Instances row menu
  * (owner, 2026-09-26: "a little number that says like zero, so you know there's no chats that
@@ -311,12 +320,11 @@ export interface ProfileChatCount {
  */
 export function countChatsByProfile(
   dirs: string[],
-  collect: typeof collectChats = collectChats,
+  chats: DossierChat[] = collectChats(profileRoots(dirs)),
 ): Record<string, ProfileChatCount> {
   const out: Record<string, ProfileChatCount> = {}
   for (const dir of dirs) out[dir] = { active: 0, archived: 0 }
-  // The dir doubles as the scan label, so each record comes back tagged with the key it counts under.
-  for (const c of collect(Object.keys(out).map((dir) => ({ dir, label: dir })))) {
+  for (const c of chats) {
     const row = out[c.instance]
     if (!row) continue
     if (c.isArchived) row.archived++

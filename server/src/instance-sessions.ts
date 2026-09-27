@@ -17,8 +17,9 @@
 // default (non-isolated) install labels as "default", and anything unmapped is a
 // plain CLI / unknown session. The same files also carry `isArchived`, Claude
 // Desktop's own archive flag, so one scan gives both the label and that.
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { collectChats, collectChatsAsync, type DossierChat } from './core/chat-store-scan'
 import { defaultClaudeUserDataDir, instancesRoot } from './core/paths'
 import { AMBIENT_RUN_AS } from './types'
 
@@ -67,12 +68,14 @@ interface RetiredClaim {
 }
 
 const TTL_MS = 15_000
-let cache: {
+
+interface ScanIndex {
   at: number
   map: Map<string, SessionMeta>
   origins: OriginRow[]
   retired: Map<string, RetiredClaim>
-} | null = null
+}
+let cache: ScanIndex | null = null
 
 /**
  * One metadata file reduced to WHERE and WHEN its conversation started.
@@ -131,43 +134,28 @@ function setPreferred(map: Map<string, SessionMeta>, key: string, entry: Session
   if (a > b || (a === b && entry.path.localeCompare(existing.path) < 0)) map.set(key, entry)
 }
 
-/** One metadata file reduced to its SessionMeta entry plus the two facts scanStore needs to file
- *  it under (the cliSessionId, when it has one, and the retired-id claims it makes). Pure parsing;
- *  scanStore still owns where these land in the shared map/origins/retired accumulators. */
-function parseSessionMetaFile(
-  path: string,
-  rel: string,
-  label: string,
-): { id: string | null; entry: SessionMeta; prior: string[]; origin: OriginRow | null } {
-  const meta = JSON.parse(readFileSync(path, 'utf8'))
-  const id = meta?.cliSessionId
-  const archived = !!meta.isArchived
-  const permissionMode = typeof meta.permissionMode === 'string' ? meta.permissionMode : null
-  const title = typeof meta?.title === 'string' && meta.title.trim() ? meta.title.trim() : null
-  // The filename IS the app's chat id. It was already being computed below purely as a
-  // second lookup key and then discarded; keeping it is what lets a caller address this
-  // chat at all.
-  const chatId = rel.slice(rel.lastIndexOf('local_'), -'.json'.length) || null
-  const prior = Array.isArray(meta?.priorCliSessionIds)
-    ? (meta.priorCliSessionIds as unknown[]).filter(
-        (p): p is string => typeof p === 'string' && !!p && p !== id,
-      )
-    : []
+/** One chat-store record as this index keeps it, plus its (cwd, createdAt) origin when it has one.
+ *  The record is read by core/chat-store-scan.ts, the one reader of these files. */
+function metaOf(c: DossierChat): { entry: SessionMeta; origin: OriginRow | null } {
+  const id = c.cliSessionId
   const entry: SessionMeta = {
-    instance: label,
-    archived,
-    permissionMode,
-    path,
-    title,
-    chatId,
-    cliSessionId: typeof id === 'string' && id ? id : null,
-    priorCliSessionIds: prior,
+    instance: c.instance,
+    archived: c.archived,
+    permissionMode: c.permissionMode,
+    path: c.metaPath,
+    title: c.title,
+    // The filename IS the app's chat id, which is what lets a caller address this chat at all.
+    chatId: c.chatId,
+    cliSessionId: id,
+    priorCliSessionIds: c.priorCliSessionIds.filter((p) => !!p && p !== id),
   }
+  // Back to the record's own epoch ms: chat-store-scan carries it as ISO, which is exact to the ms.
+  const createdAt = c.createdAt ? Date.parse(c.createdAt) : Number.NaN
   const origin =
-    typeof meta?.cwd === 'string' && meta.cwd && typeof meta?.createdAt === 'number'
-      ? { instance: label, archived, cwd: meta.cwd, createdAt: meta.createdAt }
+    c.cwd && Number.isFinite(createdAt)
+      ? { instance: c.instance, archived: c.archived, cwd: c.cwd, createdAt }
       : null
-  return { id: typeof id === 'string' && id ? id : null, entry, prior, origin }
+  return { entry, origin }
 }
 
 /** Record every retired-id claim this file makes. A live row's claim beats an archived row's
@@ -191,14 +179,9 @@ function recordRetiredClaims(
  *  filed under the app's own id and names the session only INSIDE, as cliSessionId. Indexing both
  *  means every lookup resolves from cache whichever shape it meets - and a chat that has rolled
  *  onto a new cliSessionId is still findable by the original id its filename kept. */
-function indexSessionEntry(
-  map: Map<string, SessionMeta>,
-  rel: string,
-  id: string | null,
-  entry: SessionMeta,
-): void {
-  if (id) setPreferred(map, id, entry)
-  const fileId = rel.slice(rel.lastIndexOf('local_') + 'local_'.length, -'.json'.length)
+function indexSessionEntry(map: Map<string, SessionMeta>, entry: SessionMeta): void {
+  if (entry.cliSessionId) setPreferred(map, entry.cliSessionId, entry)
+  const fileId = entry.chatId?.slice('local_'.length)
   // The FILENAME key deliberately keeps its original first-wins rule rather than adopting
   // setPreferred. It exists so a chat that has rolled onto a new cliSessionId is still
   // reachable by the id its filename kept, which means it can legitimately point at a
@@ -208,27 +191,19 @@ function indexSessionEntry(
   if (fileId && !map.has(fileId)) map.set(fileId, entry)
 }
 
-function scanStore(
-  userDataDir: string,
-  label: string,
-  map: Map<string, SessionMeta>,
-  origins: OriginRow[],
-  retired: Map<string, RetiredClaim>,
-): void {
-  const dir = join(userDataDir, 'claude-code-sessions')
-  if (!existsSync(dir)) return
-  const glob = new Bun.Glob('*/*/local_*.json')
-  for (const rel of glob.scanSync({ cwd: dir, onlyFiles: true })) {
-    try {
-      const path = join(dir, rel)
-      const { id, entry, prior, origin } = parseSessionMetaFile(path, rel, label)
-      if (id) recordRetiredClaims(retired, id, prior, entry.archived)
-      indexSessionEntry(map, rel, id, entry)
-      if (origin) origins.push(origin)
-    } catch {
-      /* unreadable metadata file: skip it */
-    }
+/** The index over every chat-store record: lookups by id, origins, and retired-id claims. */
+function indexOf(chats: DossierChat[], at: number): ScanIndex {
+  const map = new Map<string, SessionMeta>()
+  const origins: OriginRow[] = []
+  const retired = new Map<string, RetiredClaim>()
+  for (const c of chats) {
+    const { entry, origin } = metaOf(c)
+    if (entry.cliSessionId)
+      recordRetiredClaims(retired, entry.cliSessionId, entry.priorCliSessionIds, entry.archived)
+    indexSessionEntry(map, entry)
+    if (origin) origins.push(origin)
   }
+  return { at, map, origins, retired }
 }
 
 /**
@@ -340,9 +315,11 @@ function originRows(): OriginRow[] {
 
 /** Drop the 15s scan cache. Tests that WRITE a metadata fixture and then ask about it need this:
  *  a cached answer from before the write is stale by construction, and the surface-purity guard
- *  (dispatch.ts) consults this map on a hot path, so the TTL is not something to shorten. */
+ *  (dispatch.ts) consults this map on a hot path, so the TTL is not something to shorten. A
+ *  background refresh already under way is disowned too: it began before the write. */
 export function invalidateSessionMetaCache(): void {
   cache = null
+  generation++
 }
 
 /**
@@ -357,31 +334,57 @@ export function findDesktopChat(sessionId: string): SessionMeta | null {
   return sessionMetaMap().get(sessionId) ?? null
 }
 
-function scanAll(): {
-  map: Map<string, SessionMeta>
-  origins: OriginRow[]
-  retired: Map<string, RetiredClaim>
-} {
+/**
+ * The index, stale-while-revalidate.
+ *
+ * ⛔ WHY NOT A BLOCKING RESCAN AT EXPIRY (2026-09-27). This index used to read and parse every
+ * metadata file itself, 3,397 of them, 1.2 s on the daemon's only thread, every 15 s that anything
+ * asked - and the analytics warm asks once per session it stores, so under load it ran on the
+ * clock. It now derives from the chat-store scan (core/chat-store-scan.ts), which re-reads only a
+ * changed record; and past the TTL a caller gets the index it already had while an async scan
+ * (pooled stats, never holding the loop) replaces it. Only the very first call, or the first after
+ * invalidateSessionMetaCache, scans synchronously: it has nothing to answer from.
+ */
+function scanAll(): ScanIndex {
   const now = performance.now()
   if (cache && now - cache.at < TTL_MS) return cache
-
-  const map = new Map<string, SessionMeta>()
-  const origins: OriginRow[] = []
-  const retired = new Map<string, RetiredClaim>()
-  scanStore(defaultClaudeUserDataDir(), 'default', map, origins, retired)
-  const root = instancesRoot()
-  try {
-    if (existsSync(root)) {
-      for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (entry.isDirectory())
-          scanStore(join(root, entry.name), entry.name, map, origins, retired)
-      }
-    }
-  } catch {
-    /* best-effort: an unreadable instances root just means no labels */
+  if (cache) {
+    void refreshInBackground()
+    return cache
   }
-  cache = { at: now, map, origins, retired }
+  cache = indexOf(collectChats(), now)
   return cache
+}
+
+let refreshing: Promise<void> | null = null
+/** Bumped by invalidateSessionMetaCache, so a refresh that began before it never lands after it. */
+let generation = 0
+
+/**
+ * Build the index without blocking, for boot (index.ts). With nothing cached, the first lookup
+ * scans synchronously - 3,397 records read and parsed cold, 1.7 s on the daemon's only thread -
+ * and at boot the first asker was the analytics warm, one lookup per session it stores.
+ */
+export function warmSessionMetaIndex(): Promise<void> {
+  return cache ? Promise.resolve() : refreshInBackground()
+}
+
+function refreshInBackground(): Promise<void> {
+  if (refreshing) return refreshing
+  const gen = generation
+  const started = performance.now()
+  refreshing = collectChatsAsync()
+    .then((chats) => {
+      // A sync scan that ran meanwhile is newer than this one; keep it.
+      if (gen === generation && (!cache || cache.at < started)) cache = indexOf(chats, started)
+    })
+    .catch(() => {
+      /* keep the index we have; the next expiry tries again */
+    })
+    .finally(() => {
+      refreshing = null
+    })
+  return refreshing
 }
 
 /** Map of CLI transcript session id -> instance label ("default" | instance dir name). */

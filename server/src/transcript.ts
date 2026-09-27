@@ -5,6 +5,7 @@ import { extraRootsWithFormat } from './agent-catalog'
 import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH, ZSWARM_HOME } from './config'
 import { codexInstanceStores } from './core/codex-instances'
 import { dshInstanceStores } from './core/dsh-instances'
+import { mapPool } from './core/map-pool'
 import { listDshSessions, readDshSession } from './dsh-sessions'
 import {
   type ForeignSession,
@@ -28,7 +29,12 @@ import {
 } from './session-continuations'
 import { dedupeKey, makeLocator, matchesLocator, parseLocator } from './session-locator'
 import type { SessionSource, TailEvent, TailResult } from './types'
-import { listZswarmSessions, readZswarmSession } from './zswarm-sessions'
+import {
+  listZswarmSessions,
+  listZswarmSessionsAsync,
+  readZswarmSession,
+  type ZswarmSessionRecord,
+} from './zswarm-sessions'
 
 // --- cwd folder-name encoding (forward only; reverse is lossy) --------------
 
@@ -351,17 +357,6 @@ async function readCodexRolloutIdentityAsync(
   const identity = codexRolloutIdentity(event, fallbackId)
   if (event) codexIdentityCache.set(path, identity)
   return identity
-}
-
-/** Bounded-concurrency map, local so this module stays free of a cycle back through sessions.ts. */
-async function mapPool<T, R>(items: T[], width: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out = new Array<R>(items.length)
-  let next = 0
-  const workers = Array.from({ length: Math.min(width, items.length) }, async () => {
-    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]!)
-  })
-  await Promise.all(workers)
-  return out
 }
 
 /**
@@ -850,8 +845,8 @@ function dshRecords(root: string, tool = 'deepseek-harness'): TranscriptFile[] {
  *  account, so ZSWARM_HOME is read directly here the same way OPENCODE_DB_PATH is, rather than through
  *  an instance-store list. `path` is the job's own job.json, so - same as DSH - every row already
  *  names the exact bytes to read. */
-function zswarmRecords(root: string = ZSWARM_HOME, tool = 'zswarm'): TranscriptFile[] {
-  return listZswarmSessions(root).map((session) => ({
+function zswarmRow(session: ZswarmSessionRecord): TranscriptFile {
+  return {
     session_id: session.session_id,
     source: 'zswarm' as const,
     path: session.path,
@@ -862,8 +857,17 @@ function zswarmRecords(root: string = ZSWARM_HOME, tool = 'zswarm'): TranscriptF
     title: session.title,
     cwd: session.cwd,
     created_at: session.created_at,
-    tool,
-  }))
+    tool: 'zswarm',
+  }
+}
+
+function zswarmRecords(root: string = ZSWARM_HOME): TranscriptFile[] {
+  return listZswarmSessions(root).map(zswarmRow)
+}
+
+/** zswarmRecords for the async sweep; see listZswarmSessionsAsync. */
+async function zswarmRecordsAsync(root: string = ZSWARM_HOME): Promise<TranscriptFile[]> {
+  return (await listZswarmSessionsAsync(root)).map(zswarmRow)
 }
 
 /**
@@ -1233,9 +1237,10 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   files.push(...extra.openCodeFiles)
   files.push(...extra.hermesFiles)
   files.push(...extra.dshFiles)
-  files.push(...zswarmRecords())
-  // The async listing, which yields while it parses. Everything above this line already yields;
-  // this was the last synchronous block in the sweep, and the largest.
+  // Async, like the foreign listing below: the zswarm's job.json files are hundreds of MB of JSON,
+  // and reading the changed ones inline held the thread for 1.2 s (see listZswarmSessionsAsync).
+  files.push(...(await zswarmRecordsAsync()))
+  // The async listing, which yields while it parses.
   files.push(...(await foreignRecordsAsync()))
   const built = finishIndex(files, claudeChildren)
   // The head cache tracks the store, not everything ever seen: a deleted transcript should not keep

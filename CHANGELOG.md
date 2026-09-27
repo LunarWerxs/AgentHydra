@@ -307,6 +307,27 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the time and a moved or archived chat still shows its new state at once. Measured under the
   same load, health checks went from about one miss in two to about one in twelve.
 
+- **AgentHydra no longer freezes at startup or under a busy session list** (`server/src/core/`,
+  `opencode-sessions.ts`, `zswarm-sessions.ts`, `instance-sessions.ts`, `edit-survival.ts`). The
+  new stall log caught two freezes on the first day: 3.7 seconds at startup and 4.7 seconds while
+  the chat list was being polled, each long enough for the tray to count missed health checks.
+  Profiling named every cause, and each one now either runs without blocking or stops repeating:
+  - Startup added up the size of every OpenCode chat by reading all 8 GB of its database; it now
+    reads the stored sizes (2.5 s down to 0.1 s). OpenCode sizes are now bytes rather than
+    characters, so those chats are re-counted once in the background after updating.
+  - Counting an OpenCode chat's replies read every message in full (up to 160 MB each); that
+    count now runs on a separate thread.
+  - Every refresh of the session list re-read all 625 zswarm job files (279 MB); now only the jobs
+    that changed are read.
+  - Each account's chat lookup re-read all 3,397 desktop chat records every 15 seconds, and the
+    once-a-minute permission check read them all again; both now reuse the records already read
+    and refresh in the background. The live-chat and chat-list reads check the records without
+    holding up anything else.
+  - The code-survival score now pauses between chunks instead of scoring a whole file in one go.
+  Measured on a test copy of AgentHydra with the same load that froze the real one: missed health
+  checks went from 38 of 121 (up to 8 in a row) to none of 121, and the slowest health answer
+  took 69 ms.
+
 - **AgentHydra's log now says why it was restarted** (`server/src/stall-sentinel.ts`). When the
   tray restarts an unresponsive AgentHydra it force-kills it, and nothing was written: the log
   showed only the next start. A background watcher now writes `STALL` lines to `daemon.log`

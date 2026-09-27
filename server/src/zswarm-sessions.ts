@@ -18,13 +18,24 @@
 // READONLY, ALWAYS. The zswarm owns these files; this reader opens them for reading and never writes,
 // moves or repairs one - same contract as every other store AgentHydra reads.
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, type Stats, statSync } from 'node:fs'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { timeSlice } from './core/loop-yield'
+import { type StatStamp, stampOf, unchangedSince } from './core/stat-stamp'
 import type { TailEvent } from './types'
 
 function readJson<T>(path: string): T | null {
   try {
     return JSON.parse(readFileSync(path, 'utf8')) as T
+  } catch {
+    return null
+  }
+}
+
+function parseJson<T>(text: string): T | null {
+  try {
+    return JSON.parse(text) as T
   } catch {
     return null
   }
@@ -94,21 +105,13 @@ export interface ZswarmSessionRecord {
   path: string
 }
 
-/** One job dir's session record, or `null` when its job.json is missing or unreadable - a job
- *  directory can exist a moment before job.json is written, and that job simply does not list yet. */
-function buildZswarmSessionRecord(root: string, jobId: string): ZswarmSessionRecord | null {
-  const path = join(root, 'jobs', jobId, 'job.json')
-  let size = 0
-  let mtime = 0
-  try {
-    const st = statSync(path)
-    size = st.size
-    mtime = st.mtimeMs
-  } catch {
-    return null
-  }
-  const job = readJson<ZswarmJobFile>(path)
-  if (!job) return null
+/** One job's session record, from its parsed job.json and the stat it was read at. */
+function zswarmSessionRecord(
+  path: string,
+  jobId: string,
+  job: ZswarmJobFile,
+  st: Stats,
+): ZswarmSessionRecord {
   const summary = job.summary ?? {}
   const firstCwd = job.tasks?.find((t) => typeof t.cwd === 'string' && t.cwd)?.cwd ?? ''
   const created = epochMs(summary.created)
@@ -123,35 +126,100 @@ function buildZswarmSessionRecord(root: string, jobId: string): ZswarmSessionRec
     created_at: created,
     // The file's own mtime is kept as a floor: a job still running has no `finished` yet, and the
     // file on disk is still the freshest honest signal, same rule dsh-sessions.ts's mtime floor uses.
-    last_activity_at: Math.max(mtime, finished ?? 0),
+    last_activity_at: Math.max(st.mtimeMs, finished ?? 0),
     archived: false, // the zswarm has no archive concept; every job stays where it finished
-    size_bytes: size,
+    size_bytes: st.size,
     path,
   }
 }
 
-/** Every job under one zswarm home.
+/**
+ * Each home's job records as last read, re-validated by stat on every listing.
  *
- * The job DIRECTORY is the source of truth for what exists, not job.json's own `state` field: a job
- * mid-run already has a directory and a partial job.json, and the walk finds it exactly like a
- * finished one - see listDshSessions for the same directory-first rule. */
+ * ⛔ WHY (2026-09-27). The whole-store sweep re-read and re-parsed EVERY job.json on every pass:
+ * 625 jobs, 279 MB of JSON, 1.2 s on the daemon's one thread, several times a minute while anything
+ * polled the session list, and at boot on top of the OpenCode listing. A finished job never changes,
+ * so after the first pass a sweep is one stat per job. Each listing replaces its home's map, so a
+ * deleted job leaves the cache with its directory.
+ */
+const jobCache = new Map<string, Map<string, { stamp: StatStamp; record: ZswarmSessionRecord }>>()
+
+/** The job ids under a home, directory-first: a job mid-run already has a directory and a partial
+ *  job.json, and is found exactly like a finished one - see listDshSessions for the same rule. */
+function jobIds(entries: Array<{ name: string; isDirectory(): boolean }>): string[] {
+  return entries.filter((e) => e.isDirectory()).map((e) => e.name)
+}
+
+/** Every job under one zswarm home. A job whose job.json is missing or unreadable does not list
+ *  yet: its directory can exist a moment before the file is written. */
 export function listZswarmSessions(root: string): ZswarmSessionRecord[] {
   const jobsRoot = join(root, 'jobs')
   if (!existsSync(jobsRoot)) return []
   let ids: string[]
   try {
-    ids = readdirSync(jobsRoot, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
+    ids = jobIds(readdirSync(jobsRoot, { withFileTypes: true }))
   } catch {
     return []
   }
-  const out: ZswarmSessionRecord[] = []
+  const previous = jobCache.get(root)
+  const current = new Map<string, { stamp: StatStamp; record: ZswarmSessionRecord }>()
   for (const id of ids) {
-    const record = buildZswarmSessionRecord(root, id)
-    if (record) out.push(record)
+    const path = join(jobsRoot, id, 'job.json')
+    try {
+      const st = statSync(path)
+      let hit = previous?.get(id)
+      if (!unchangedSince(hit?.stamp, st)) {
+        const readAt = Date.now()
+        const job = readJson<ZswarmJobFile>(path)
+        hit = job
+          ? { stamp: stampOf(st, readAt), record: zswarmSessionRecord(path, id, job, st) }
+          : undefined
+      }
+      if (hit) current.set(id, hit)
+    } catch {
+      /* gone between the listing and the stat */
+    }
   }
-  return out
+  jobCache.set(root, current)
+  return [...current.values()].map((h) => h.record)
+}
+
+/**
+ * The same listing without holding the event loop, for the whole-store sweep (transcript.ts
+ * buildTranscriptIndexAsync). Shares the cache above; only a changed job is read, and the parse
+ * of each one is the longest the thread is held.
+ */
+export async function listZswarmSessionsAsync(root: string): Promise<ZswarmSessionRecord[]> {
+  const jobsRoot = join(root, 'jobs')
+  let ids: string[]
+  try {
+    ids = jobIds(await readdir(jobsRoot, { withFileTypes: true }))
+  } catch {
+    return []
+  }
+  const slice = timeSlice()
+  const previous = jobCache.get(root)
+  const current = new Map<string, { stamp: StatStamp; record: ZswarmSessionRecord }>()
+  for (const id of ids) {
+    const path = join(jobsRoot, id, 'job.json')
+    try {
+      const st = await stat(path)
+      let hit = previous?.get(id)
+      if (!unchangedSince(hit?.stamp, st)) {
+        const readAt = Date.now()
+        const job = parseJson<ZswarmJobFile>(await readFile(path, 'utf8'))
+        hit = job
+          ? { stamp: stampOf(st, readAt), record: zswarmSessionRecord(path, id, job, st) }
+          : undefined
+      }
+      if (hit) current.set(id, hit)
+    } catch {
+      /* gone between the listing and the stat */
+    }
+    if (slice.due()) await slice.pause()
+  }
+  jobCache.set(root, current)
+  return [...current.values()].map((h) => h.record)
 }
 
 // --- transcript ----------------------------------------------------------------------------------

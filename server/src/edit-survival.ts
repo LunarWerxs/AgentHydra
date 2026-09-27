@@ -19,6 +19,7 @@
 
 import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
+import { type TimeSlice, timeSlice } from './core/loop-yield'
 import { pathKey } from './path-key'
 
 /** One piece of text an edit tool wrote, held only for the length of one scan. */
@@ -75,15 +76,52 @@ function normalize(text: string): string {
   return text.replace(/\r\n?/g, '\n')
 }
 
-/** The multiset of `text`'s 4-grams. */
-export function fourGrams(text: string): Map<string, number> {
-  const t = normalize(text)
-  const grams = new Map<string, number>()
-  for (let i = 0; i + N <= t.length; i++) {
+/** Count `t`'s 4-grams that start in [from, to) into `grams`. */
+function addGrams(t: string, from: number, to: number, grams: Map<string, number>): void {
+  const end = Math.min(to, t.length - N + 1)
+  for (let i = from; i < end; i++) {
     const g = t.slice(i, i + N)
     grams.set(g, (grams.get(g) ?? 0) + 1)
   }
+}
+
+/** The multiset of `text`'s 4-grams. */
+export function fourGrams(text: string): Map<string, number> {
+  const grams = new Map<string, number>()
+  addGrams(normalize(text), 0, Number.POSITIVE_INFINITY, grams)
   return grams
+}
+
+/** Characters counted between two looks at the slice clock: a few milliseconds of work. */
+const GRAM_CHUNK = 32_768
+
+/**
+ * `fourGrams` for a whole file, handing the thread back between chunks. A 4 MB file is four million
+ * map updates, which ran as one 300-550 ms block on the daemon's only thread (profiled 2026-09-27,
+ * see core/loop-yield.ts for what a block that long costs).
+ */
+async function fourGramsSliced(text: string, slice: TimeSlice): Promise<Map<string, number>> {
+  const t = normalize(text)
+  const grams = new Map<string, number>()
+  for (let from = 0; from < t.length; from += GRAM_CHUNK) {
+    addGrams(t, from, from + GRAM_CHUNK, grams)
+    if (slice.due()) await slice.pause()
+  }
+  return grams
+}
+
+/** Of `written`'s 4-gram multiset, how many are still in `now`, and how many there were. */
+function overlapOf(
+  written: Map<string, number>,
+  now: Map<string, number>,
+): { kept: number; total: number } {
+  let kept = 0
+  let total = 0
+  for (const [g, count] of written) {
+    total += count
+    kept += Math.min(count, now.get(g) ?? 0)
+  }
+  return { kept, total }
 }
 
 /**
@@ -94,19 +132,27 @@ export function fourGramOverlap(
   written: string,
   now: Map<string, number>,
 ): { kept: number; total: number } {
-  let kept = 0
-  let total = 0
-  for (const [g, count] of fourGrams(written)) {
-    total += count
-    kept += Math.min(count, now.get(g) ?? 0)
-  }
-  return { kept, total }
+  return overlapOf(fourGrams(written), now)
 }
 
 /** `fourGramOverlap` as a share, 1 for an empty text (nothing was lost). */
 export function fourGramContainment(written: string, now: Map<string, number>): number {
   const { kept, total } = fourGramOverlap(written, now)
   return total === 0 ? 1 : kept / total
+}
+
+/** `fourGrams`, computed once per text for the length of one measurement. liveWrites compares
+ *  every write with every later one to the same file, and recomputing both sides for each pair is
+ *  what made that comparison one of the longest blocks in the analytics warm. */
+function gramMemo(): (text: string) => Map<string, number> {
+  const memo = new Map<string, Map<string, number>>()
+  return (text) => {
+    const hit = memo.get(text)
+    if (hit) return hit
+    const grams = fourGrams(text)
+    memo.set(text, grams)
+    return grams
+  }
 }
 
 /**
@@ -116,8 +162,15 @@ export function fourGramContainment(written: string, now: Map<string, number>): 
  * scoring that first version against the file would call the session's own iteration a failure.
  * So a write is dropped when a later write to the same path replaced the whole file, or when a
  * later edit's `old_string` is mostly made of it.
+ *
+ * Async because the comparison is pairwise over up to MAX_WRITES writes: it hands the thread back
+ * between writes rather than running as one block.
  */
-export function liveWrites(writes: AgentWrite[]): AgentWrite[] {
+export async function liveWrites(
+  writes: AgentWrite[],
+  slice: TimeSlice = timeSlice(),
+  gramsOf: (text: string) => Map<string, number> = gramMemo(),
+): Promise<AgentWrite[]> {
   const live: AgentWrite[] = []
   for (let i = 0; i < writes.length; i++) {
     const w = writes[i]
@@ -128,10 +181,13 @@ export function liveWrites(writes: AgentWrite[]): AgentWrite[] {
       const later = writes[j]
       if (!later || pathKey(later.path) !== key) continue
       if (later.whole) superseded = true
-      else if (later.replaced)
-        superseded = fourGramContainment(w.text, fourGrams(later.replaced)) >= CONSUMED_SHARE
+      else if (later.replaced) {
+        const { kept, total } = overlapOf(gramsOf(w.text), gramsOf(later.replaced))
+        superseded = (total === 0 ? 1 : kept / total) >= CONSUMED_SHARE
+      }
     }
     if (!superseded) live.push(w)
+    if (slice.due()) await slice.pause()
   }
   return live
 }
@@ -167,11 +223,11 @@ export function captureWrite(
   })
 }
 
-async function readGrams(path: string): Promise<Map<string, number> | null> {
+async function readGrams(path: string, slice: TimeSlice): Promise<Map<string, number> | null> {
   try {
     const s = await stat(path)
     if (!s.isFile() || s.size > MAX_FILE_BYTES) return null
-    return fourGrams(await readFile(path, 'utf8'))
+    return await fourGramsSliced(await readFile(path, 'utf8'), slice)
   } catch {
     return null
   }
@@ -195,17 +251,19 @@ export async function measureEditSurvival(
   if (last !== null && now - last > SURVIVAL_MAX_AGE_MS)
     return { score: null, measured: 0, dueAt: null }
 
+  const slice = timeSlice()
+  const gramsOf = gramMemo()
   const files = new Map<string, Map<string, number> | null>()
   let kept = 0
   let total = 0
   let measured = 0
-  for (const w of liveWrites(writes)) {
+  for (const w of await liveWrites(writes, slice, gramsOf)) {
     if (!isAbsolute(w.path)) continue
     const key = pathKey(w.path)
-    if (!files.has(key)) files.set(key, await readGrams(w.path))
+    if (!files.has(key)) files.set(key, await readGrams(w.path, slice))
     const grams = files.get(key)
     if (!grams) continue
-    const o = fourGramOverlap(w.text, grams)
+    const o = overlapOf(gramsOf(w.text), grams)
     if (o.total === 0) continue
     kept += o.kept
     total += o.total

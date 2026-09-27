@@ -33,7 +33,7 @@ export interface StampSweepDeps {
   /** Profile dirs whose desktop app is running right now. A closed app cannot re-save anything,
    *  so its store cannot drift; sweeping it would be a walk for nothing. */
   listRunningDirs: () => Promise<string[]>
-  reassert: (profileDir: string) => number
+  reassert: (profileDir: string) => number | Promise<number>
   log?: (msg: string) => void
 }
 
@@ -58,7 +58,7 @@ export async function runAutomationStampSweepOnce(
   }
   for (const dir of dirs) {
     try {
-      total += deps.reassert(dir)
+      total += await deps.reassert(dir)
     } catch {
       // this profile's store was contended or half-written; the next tick reads it again
     }

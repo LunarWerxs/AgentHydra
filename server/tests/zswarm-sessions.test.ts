@@ -4,11 +4,15 @@
 // `Lunarwerx/zswarm`'s `zswarm/jobstore.py` writes (job.summary/tasks/results). Nothing is mocked -
 // every bug this reader can have is a bug about the shape of job.json on disk.
 
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, spyOn, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { listZswarmSessions, readZswarmSession } from '../src/zswarm-sessions'
+import {
+  listZswarmSessions,
+  listZswarmSessionsAsync,
+  readZswarmSession,
+} from '../src/zswarm-sessions'
 
 const homes: string[] = []
 afterAll(() => {
@@ -80,6 +84,45 @@ describe('listZswarmSessions', () => {
 
   test('a zswarm home that does not exist lists as empty, not an error', () => {
     expect(listZswarmSessions(join(tmpdir(), 'no-such-zswarm-home-at-all'))).toEqual([])
+  })
+
+  // Regression (2026-09-27): every whole-store sweep re-read and re-parsed every job.json - 625 jobs,
+  // 279 MB, 1.2 s on the daemon's one thread, several times a minute - and a daemon that blocks
+  // that long misses the tray watchdog's health probes. Parses of this fixture are counted off the
+  // global JSON.parse by a marker only its jobs carry.
+  test('a relisting parses only the jobs that changed, and still reads those', async () => {
+    const home = newHome()
+    const MARK = 'zswarm-reread-'
+    const job = (id: string, label: string) =>
+      writeJob(home, id, { summary: { job_id: `${MARK}${id}`, label }, tasks: [], results: {} })
+    job('a', 'alpha')
+    job('b', 'beta')
+    // Past the racily-clean window (core/stat-stamp.ts), so an unchanged job may be reused.
+    await Bun.sleep(1_100)
+    const parse = spyOn(JSON, 'parse')
+    const parses = () =>
+      parse.mock.calls.filter(([text]) => typeof text === 'string' && text.includes(MARK)).length
+    try {
+      expect(
+        listZswarmSessions(home)
+          .map((r) => r.title)
+          .sort(),
+      ).toEqual(['alpha', 'beta'])
+      expect(parses()).toBe(2)
+
+      parse.mockClear()
+      expect(listZswarmSessions(home)).toHaveLength(2)
+      expect(parses()).toBe(0)
+
+      // The async listing the sweep uses shares the cache, and re-reads the job that changed.
+      job('b', 'beta, still running')
+      parse.mockClear()
+      const rows = await listZswarmSessionsAsync(home)
+      expect(rows.find((r) => r.session_id === `${MARK}b`)?.title).toBe('beta, still running')
+      expect(parses()).toBe(1)
+    } finally {
+      parse.mockRestore()
+    }
   })
 
   test('falls back to the job id when the job carries no label', () => {

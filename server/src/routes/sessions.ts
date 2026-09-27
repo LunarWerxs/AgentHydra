@@ -1,8 +1,15 @@
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import { chatDossier, countChatsByProfile, listChats, liveLineage } from '../chat-dossier'
+import {
+  chatDossier,
+  countChatsByProfile,
+  listChats,
+  liveLineage,
+  profileRoots,
+} from '../chat-dossier'
 import { CLIPBOARD_DIR } from '../config'
+import { collectChatsAsync } from '../core/chat-store-scan'
 import { resolveInstance } from '../core/instance-ref'
 import { listInstances } from '../core/instances'
 import { defaultClaudeUserDataDir } from '../core/paths'
@@ -247,11 +254,13 @@ app.post('/api/chats/:id/rename', async (c) => {
   )
 })
 
-app.get('/api/chats/dossier', (c) => {
+// Every chat-store read below goes through collectChatsAsync: the sync scan is a stat per record
+// (3,397 here) on the daemon's only thread, and these are the reads callers poll.
+app.get('/api/chats/dossier', async (c) => {
   const q = c.req.query('q') ?? ''
   if (!q.trim())
     return c.json({ error: 'q required: a title fragment or any session/chat id' }, 400)
-  return c.json(chatDossier(q.trim()))
+  return c.json(chatDossier(q.trim(), { chats: await collectChatsAsync() }))
 })
 /**
  * The chat-store LABEL an instance's user-data dir is filed under, matching collectChats exactly.
@@ -285,7 +294,9 @@ export function chatStoreLabel(handle: string): string {
 // paths do not overlap.
 app.get('/api/chats/counts', async (c) => {
   const dirs = (await listInstances()).map((i) => i.dir)
-  return c.json({ counts: countChatsByProfile(dirs) })
+  return c.json({
+    counts: countChatsByProfile(dirs, await collectChatsAsync(profileRoots(dirs))),
+  })
 })
 
 // One desktop instance's chats, compactly — the read that did not exist until 2026-09-06, when
@@ -328,7 +339,7 @@ app.get('/api/chats', async (c) => {
       limit: boundedQueryInt(c.req.query('limit'), 200, 1000),
       offset: boundedQueryInt(c.req.query('offset'), 0, 100_000, 0),
     },
-    roots ? { roots } : {},
+    { chats: await collectChatsAsync(roots) },
   )
   // ⛔ AN INSTANCE THAT DOES NOT EXIST MUST NOT LOOK LIKE AN INSTANCE WITH NO CHATS. Both are
   // `{rows: [], counts: {all: 0}}`, and the second is a real and reassuring answer, so a typo or
@@ -359,7 +370,7 @@ app.get('/api/chats', async (c) => {
 // ever answered to - and `lineage: true` at the top, so a caller can tell this answer from an
 // older daemon that ignored the parameter. Opt-in because it scans the chat store, and the
 // running-count callers ask this endpoint far more often than the orchestrator's plan does.
-app.get('/api/sessions/live', (c) => {
+app.get('/api/sessions/live', async (c) => {
   const sessions = readLiveRegistry(join(homedir(), '.claude'))
   const seen = new Set<string>()
   const rows = sessions.filter((s) => {
@@ -368,7 +379,10 @@ app.get('/api/sessions/live', (c) => {
     return true
   })
   if (c.req.query('lineage') !== '1') return c.json({ count: rows.length, sessions: rows })
-  const lineage = liveLineage(rows.map((s) => s.sessionId))
+  const lineage = liveLineage(
+    rows.map((s) => s.sessionId),
+    await collectChatsAsync(),
+  )
   return c.json({
     count: rows.length,
     lineage: true,

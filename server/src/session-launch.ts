@@ -54,6 +54,7 @@ import {
 } from './chat-settings-carry'
 import { GENERIC_CHAT_TITLE, isGenericChatTitle, PLUMBING_CHAT_TITLE } from './chat-title'
 import { resolveInstanceToken } from './core/accounts'
+import { collectChats, collectChatsAsync } from './core/chat-store-scan'
 import { getCliInstance } from './core/cli-instances'
 import { readLoginUuid } from './core/login-state'
 import { resolveLaunchBinary, staleLoginBackupDir } from './core/paths'
@@ -1630,33 +1631,20 @@ function stampImportShapeFile(dir: string, f: string): boolean {
   }
 }
 
-/** How many chats this pass stamped in ONE org/user leaf directory, split out of
- *  {@link reassertAutomationStamps}'s walk in the same shape as {@link findChatMetaPathInDir}, so
- *  that function's complexity reflects only the walk. An unreadable directory throws to the
- *  caller's guard exactly as the inline `readdirSync` did, and cannot lose a count: nothing has
- *  been counted yet at that point. Behaviour is unchanged. */
-function stampDirBypassPermissions(dir: string): number {
+/**
+ * Candidates come from the chat-store scan (core/chat-store-scan.ts), which re-reads a record only
+ * when its file changed; only a record that scan says is import-shape and unstamped is opened
+ * here, and stampImportShapeFile re-checks it from the file before writing. The sweep runs every
+ * minute over every running profile, and parsing every record itself held the daemon's only
+ * thread for ~380 ms a pass (profiled 2026-09-27).
+ */
+export async function reassertAutomationStamps(profileDir: string): Promise<number> {
+  if (!existsSync(join(profileDir, 'claude-code-sessions'))) return 0 // no store in this profile
   let stamped = 0
-  for (const f of readdirSync(dir)) {
-    if (!f.startsWith('local_') || !f.endsWith('.json')) continue
-    if (stampImportShapeFile(dir, f)) stamped++
-  }
-  return stamped
-}
-
-export function reassertAutomationStamps(profileDir: string): number {
-  const store = join(profileDir, 'claude-code-sessions')
-  let stamped = 0
-  try {
-    for (const org of readdirSync(store, { withFileTypes: true })) {
-      if (!org.isDirectory()) continue
-      for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
-        if (!user.isDirectory()) continue
-        stamped += stampDirBypassPermissions(join(store, org.name, user.name))
-      }
-    }
-  } catch {
-    return stamped // no store in this profile
+  for (const c of await collectChatsAsync([{ dir: profileDir, label: profileDir }])) {
+    if (!c.cliSessionId || c.chatId !== `local_${c.cliSessionId}`) continue // app-created shape
+    if (c.permissionMode === 'bypassPermissions') continue
+    if (stampImportShapeFile(dirname(c.metaPath), basename(c.metaPath))) stamped++
   }
   stamped += restoreMigratedSettings(profileDir)
   if (stamped > 0) invalidateSessionMetaCache()
@@ -1737,20 +1725,12 @@ export function findChatMetaPath(instanceDir: string, sessionId: string): string
   // account could answer with the other account's file, and the caller archives it.
   const hit = findDesktopChat(sessionId)
   if (hit?.path && isInsideDir(hit.path, instanceDir)) return hit.path
-  const store = join(instanceDir, 'claude-code-sessions')
-  try {
-    for (const org of readdirSync(store, { withFileTypes: true })) {
-      if (!org.isDirectory()) continue
-      for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
-        if (!user.isDirectory()) continue
-        const found = findChatMetaPathInDir(join(store, org.name, user.name), sessionId)
-        if (found) return found
-      }
-    }
-  } catch {
-    return null
-  }
-  return null
+  // The index can lag a chat written in the last few seconds; this profile's own scan cannot (it
+  // stats every record), and it re-reads only the records that changed rather than every one.
+  const chat = collectChats([{ dir: instanceDir, label: instanceDir }]).find(
+    (c) => c.chatId === `local_${sessionId}` || c.cliSessionId === sessionId,
+  )
+  return chat?.metaPath ?? null
 }
 
 /**
