@@ -298,58 +298,81 @@ def parse_tail_records(text: str, whole_file: bool) -> list[dict]:
         lines = lines[1:]
     out: list[dict] = []
     for line in lines:
-        t = line.strip()
-        if not t:
-            continue
-        try:
-            ev = json.loads(t)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(ev, dict) or ev.get("type") not in ("user", "assistant", "result"):
-            continue
-        # Sidechain records (compaction side-branches) are not the conversation's own tail.
-        if ev.get("isSidechain") is True:
-            continue
-        txt = ending_event_text(ev)
-        msg = ev.get("message") if isinstance(ev.get("message"), dict) else None
-        content = msg.get("content") if msg else None
-        blocks = content if isinstance(content, list) else []
-        tool_uses = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
-        out.append(
-            {
-                "type": ev["type"],
-                "ts": ev.get("timestamp"),  # when the record was written (ISO), if stamped
-                "interrupted": ev["type"] == "user" and bool(INTERRUPTED.match(txt.strip())),
-                "api_error": is_api_error_event(ev)
-                or (ev["type"] == "result" and ev.get("is_error") is True),
-                "text": txt,
-                "has_text": bool(txt.strip()),
-                # A record ENDING the transcript while carrying a tool_use means the result
-                # never landed - a mid-turn death even with prefacing text.
-                "has_tool_use": bool(tool_uses),
-                "tool_names": [str(b.get("name", "")) for b in tool_uses if b.get("name")],
-                # The tool_use blocks' own name+input, kept verbatim (never summarised) so a
-                # caller can classify what a pending call would actually DO - approvallib's
-                # tri-state gate is the reason this exists (2026-09-04): a bare tool NAME
-                # ("Bash") says nothing about whether the command behind it is destructive.
-                "tool_inputs": [{"name": str(b.get("name", "")),
-                                "input": b.get("input") if isinstance(b.get("input"), dict) else {}}
-                               for b in tool_uses],
-                "has_tool_result": any(
-                    isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks
-                ),
-                "local_command": local_kind(ev, txt),
-                # The APP's own marker for a user-role record that is NOT a prompt anyone is
-                # expected to answer: the local-command caveat, an injected cross-session
-                # message, a session-start hook. Kept verbatim so a caller can see past such a
-                # record without having to recognise its text - see _judgeable_tail.
-                "meta": ev.get("isMeta") is True,
-                # The prompt this record belongs to. A prompt, its tool results and anything the
-                # app files under it share one id - see _answered_late.
-                "prompt_id": ev.get("promptId") if isinstance(ev.get("promptId"), str) else None,
-            }
-        )
+        ev = _tail_event(line)
+        if ev is not None:
+            out.append(_tail_record(ev))
     return strip_local_tail(out)
+
+
+def _tail_event(line: str) -> dict | None:
+    """One JSONL line -> the event it holds, or None when it cannot carry a verdict (blank,
+    torn, not a user/assistant/result record, or a sidechain record)."""
+    t = line.strip()
+    if not t:
+        return None
+    try:
+        ev = json.loads(t)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(ev, dict) or ev.get("type") not in ("user", "assistant", "result"):
+        return None
+    # Sidechain records (compaction side-branches) are not the conversation's own tail.
+    if ev.get("isSidechain") is True:
+        return None
+    return ev
+
+
+def _content_blocks(ev: dict) -> list:
+    """The event's message content blocks; [] when the content is a plain string or absent."""
+    msg = ev.get("message") if isinstance(ev.get("message"), dict) else None
+    content = msg.get("content") if msg else None
+    return content if isinstance(content, list) else []
+
+
+def _tool_use_fields(blocks: list) -> dict:
+    """has_tool_use / tool_names / tool_inputs for one record's content blocks."""
+    tool_uses = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
+    return {
+        # A record ENDING the transcript while carrying a tool_use means the result
+        # never landed - a mid-turn death even with prefacing text.
+        "has_tool_use": bool(tool_uses),
+        "tool_names": [str(b.get("name", "")) for b in tool_uses if b.get("name")],
+        # The tool_use blocks' own name+input, kept verbatim (never summarised) so a
+        # caller can classify what a pending call would actually DO - approvallib's
+        # tri-state gate is the reason this exists (2026-09-04): a bare tool NAME
+        # ("Bash") says nothing about whether the command behind it is destructive.
+        "tool_inputs": [{"name": str(b.get("name", "")),
+                        "input": b.get("input") if isinstance(b.get("input"), dict) else {}}
+                       for b in tool_uses],
+    }
+
+
+def _tail_record(ev: dict) -> dict:
+    """The verdict-bearing record parse_tail_records keeps for one accepted event."""
+    txt = ending_event_text(ev)
+    blocks = _content_blocks(ev)
+    return {
+        "type": ev["type"],
+        "ts": ev.get("timestamp"),  # when the record was written (ISO), if stamped
+        "interrupted": ev["type"] == "user" and bool(INTERRUPTED.match(txt.strip())),
+        "api_error": is_api_error_event(ev)
+        or (ev["type"] == "result" and ev.get("is_error") is True),
+        "text": txt,
+        "has_text": bool(txt.strip()),
+        **_tool_use_fields(blocks),
+        "has_tool_result": any(
+            isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks
+        ),
+        "local_command": local_kind(ev, txt),
+        # The APP's own marker for a user-role record that is NOT a prompt anyone is
+        # expected to answer: the local-command caveat, an injected cross-session
+        # message, a session-start hook. Kept verbatim so a caller can see past such a
+        # record without having to recognise its text - see _judgeable_tail.
+        "meta": ev.get("isMeta") is True,
+        # The prompt this record belongs to. A prompt, its tool results and anything the
+        # app files under it share one id - see _answered_late.
+        "prompt_id": ev.get("promptId") if isinstance(ev.get("promptId"), str) else None,
+    }
 
 
 def _judgeable_tail(records: list[dict]) -> list[dict]:

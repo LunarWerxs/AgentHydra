@@ -53,9 +53,9 @@ function usage(u: string): string {
           </TableHeader>
           <TableBody>
             <TableRow v-for="s in g.rows" :key="s.name">
-              <TableCell class="whitespace-normal font-mono font-semibold">{{ s.name }}</TableCell>
-              <TableCell class="whitespace-normal text-xs">{{ s.summary }}</TableCell>
-              <TableCell class="whitespace-normal text-xs">
+              <TableCell class="whitespace-normal"><div class="font-mono font-semibold">{{ s.name }}</div></TableCell>
+              <TableCell class="whitespace-normal">{{ s.summary }}</TableCell>
+              <TableCell class="whitespace-normal">
                 <div v-if="s.detail" class="whitespace-pre-wrap">{{ s.detail }}</div>
                 <div v-if="s.usage" class="mt-1"><span class="cmd">{{ usage(s.usage) }}</span></div>
                 <div v-if="s.exits" class="mt-1 text-muted-foreground">{{ s.exits }}</div>

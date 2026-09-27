@@ -31,13 +31,13 @@ import IconTooltip from '@/shell/IconTooltip.vue'
             <Layers />
           </button>
         </PopoverTrigger>
-        <PopoverContent align="end" class="w-80 p-0">
+        <PopoverContent align="end" flush class="w-80">
           <p
-            class="px-3.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
+            class="px-3.5 pb-1 pt-3 text-2xs font-semibold uppercase tracking-wider text-muted-foreground"
           >
             {{ $t('instances.sectionsTitle') }}
           </p>
-          <div class="divide-y divide-border/60">
+          <div class="mt-4 divide-y divide-border/60">
             <ProviderRows :show-handoff="false" />
           </div>
         </PopoverContent>

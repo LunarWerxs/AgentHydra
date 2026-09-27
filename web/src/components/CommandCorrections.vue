@@ -61,41 +61,39 @@ async function copyRules() {
           v-if="report?.groups.length"
           size="sm"
           variant="outline"
-          class="h-6 px-2 text-[11px]"
           @click="copyRules"
         >
-          <ClipboardCopy class="size-3" />{{ $t('analytics.mistakesCopy') }}
+          <ClipboardCopy class="size-3" /><span class="text-2xs">{{ $t('analytics.mistakesCopy') }}</span>
         </Button>
         <Button
           size="sm"
           variant="outline"
-          class="h-6 px-2 text-[11px]"
           :disabled="loading"
           @click="scan"
         >
           <RefreshCw class="size-3" :class="{ 'animate-spin': loading }" />
-          {{ report ? $t('analytics.mistakesRescan') : $t('analytics.mistakesScan') }}
+          <span class="text-2xs">{{ report ? $t('analytics.mistakesRescan') : $t('analytics.mistakesScan') }}</span>
         </Button>
       </span>
     </h3>
-    <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.mistakesNote') }}</p>
+    <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.mistakesNote') }}</p>
     <template v-if="report">
-      <p class="mb-2 text-[11px] text-muted-foreground">
+      <p class="mb-2 text-2xs text-muted-foreground">
         {{
           report.budgetExhausted
             ? $t('analytics.mistakesCoveragePartial', { n: report.scanned, total: report.total })
             : $t('analytics.mistakesCoverage', { n: report.scanned, total: report.total })
         }}
       </p>
-      <p v-if="!report.groups.length" class="text-[11px] text-muted-foreground">
+      <p v-if="!report.groups.length" class="text-2xs text-muted-foreground">
         {{ $t('analytics.mistakesNone') }}
       </p>
       <ul v-else class="scroll-slim max-h-96 space-y-2 overflow-y-auto">
-        <li v-for="g in report.groups" :key="`${g.kind}:${g.base}`" class="text-[11px]">
+        <li v-for="g in report.groups" :key="`${g.kind}:${g.base}`" class="text-2xs">
           <p class="flex items-center gap-2">
             <code class="font-mono font-medium">{{ g.base }}</code>
-            <Badge variant="outline" class="shrink-0 text-[10px] font-normal">
-              {{ $t(KIND_KEYS[g.kind]) }}
+            <Badge variant="outline" class="shrink-0">
+              <span class="font-normal">{{ $t(KIND_KEYS[g.kind]) }}</span>
             </Badge>
             <span class="ms-auto shrink-0 tabular-nums text-muted-foreground">
               {{ $t('analytics.mistakesCount', { n: g.count, sessions: g.sessions }) }}
@@ -105,7 +103,7 @@ async function copyRules() {
             <li
               v-for="ex in g.examples"
               :key="`${ex.wrong} -> ${ex.right}`"
-              class="min-w-0 font-mono text-[10px]"
+              class="min-w-0 font-mono text-3xs"
               :title="ex.error"
             >
               <span class="block truncate text-destructive">{{ ex.wrong }}</span>

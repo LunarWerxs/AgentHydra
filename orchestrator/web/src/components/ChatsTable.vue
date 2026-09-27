@@ -35,12 +35,12 @@ defineProps<{ data: ChatsData }>()
         </TableHeader>
         <TableBody>
           <TableRow v-for="ch in data.chats" :key="ch.sessionId">
-            <TableCell class="whitespace-normal font-semibold">{{ ch.title ?? '(untitled)' }}</TableCell>
+            <TableCell class="whitespace-normal"><div class="font-semibold">{{ ch.title ?? '(untitled)' }}</div></TableCell>
             <TableCell class="whitespace-normal"><OriginCell :chat="ch" /></TableCell>
             <TableCell class="whitespace-normal"><AccountCell :account="ch.account" :instance="ch.instance" /></TableCell>
             <TableCell>{{ ch.archived ? '🗄 yes' : '👁 visible' }}</TableCell>
-            <TableCell class="text-xs">{{ rel(ch.lastActivityAt) }}</TableCell>
-            <TableCell class="whitespace-normal text-xs text-muted-foreground">{{ ch.preview }}</TableCell>
+            <TableCell><div class="text-xs">{{ rel(ch.lastActivityAt) }}</div></TableCell>
+            <TableCell class="whitespace-normal"><div class="text-xs text-muted-foreground">{{ ch.preview }}</div></TableCell>
           </TableRow>
         </TableBody>
       </Table>

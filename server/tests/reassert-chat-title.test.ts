@@ -13,11 +13,19 @@
 // The asymmetry with its two siblings is the whole design and is tested below: they drive one
 // correct value home unconditionally, this one MUST NOT, because a title has a second legitimate
 // author - the owner renaming the chat in the app while the watcher is still running.
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { reassertChatTitle } from '../src/session-launch'
+
+// Every profile seed() mints lands here so afterAll can reap it no matter how
+// the run ends - a test that dies mid-write must not leak its tmp tree.
+const scratch: string[] = []
+
+afterAll(() => {
+  for (const profile of scratch) rmSync(profile, { recursive: true, force: true })
+})
 
 function seed(
   prefix: string,
@@ -25,6 +33,7 @@ function seed(
   record: Record<string, unknown>,
 ): { profile: string; metaPath: string } {
   const profile = mkdtempSync(join(tmpdir(), prefix))
+  scratch.push(profile)
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
   const metaPath = join(store, `local_${sessionId}.json`)

@@ -19,7 +19,9 @@ import {
   setRetireStoreForTests,
 } from '../src/move-retire-on-close'
 
-const NOW = Date.parse('2026-09-26T12:00:00Z')
+// The pass reads its clock through deps.now, so a fixed far-past instant keeps every age below
+// exactly as written, whenever the suite runs.
+const NOW = Date.parse('2020-01-01T12:00:00Z')
 const A = 'C:\\instances\\a'
 const SID = 'aaaaaaaa-1111-2222-3333-444444444444'
 

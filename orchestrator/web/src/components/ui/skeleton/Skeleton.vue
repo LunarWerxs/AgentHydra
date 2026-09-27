@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils"
 
 interface SkeletonProps {
   class?: HTMLAttributes["class"]
+  shape?: "default" | "bubble"
 }
 
 const props = defineProps<SkeletonProps>()
@@ -12,6 +13,7 @@ const props = defineProps<SkeletonProps>()
 <template>
   <div
     data-slot="skeleton"
-    :class="cn('bg-muted rounded-md animate-pulse', props.class)"
+    :data-shape="shape"
+    :class="cn('bg-muted rounded-md animate-pulse', shape === 'bubble' && 'rounded-2xl', props.class)"
   />
 </template>

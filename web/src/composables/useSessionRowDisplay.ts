@@ -12,7 +12,6 @@ import {
   ACTIVITY_LABEL,
   ENDING_LABEL,
   SHAPE_LABEL,
-  SOURCE_BADGE_CLASS,
   SOURCE_FILE_IS_TEXT,
   SOURCE_HAS_FILE,
   SOURCE_LABEL,
@@ -36,7 +35,6 @@ export function useSessionRowDisplay() {
 
   const rowSourceLabel = (s: { source: SessionSource; tool?: string }) =>
     (s.tool && TOOL_NAME[s.tool]) || sourceLabel(s.source)
-  const sourceBadgeClass = (source: SessionSource) => SOURCE_BADGE_CLASS[source]
   /** Re-exported through this composable because the template is where it is asked, and the view
    *  should not import a second labels module for one lookup. */
   const sourceHasFile = SOURCE_HAS_FILE
@@ -76,7 +74,6 @@ export function useSessionRowDisplay() {
     limitTooltipOf,
     sourceLabel,
     rowSourceLabel,
-    sourceBadgeClass,
     sourceHasFile,
     sourceFileIsText,
     shapeLabel,

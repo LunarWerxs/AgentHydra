@@ -22,7 +22,8 @@ const { HOOK_PATH, STATUS_HOOK_EVENTS, installedHookUrl, setStatusHooks, withSta
   await import('../src/status-hooks')
 
 const SID = 'sess-1'
-let clock = Date.parse('2026-09-25T10:00:00.000Z')
+// A fixed far-past start: the store only compares events with each other, never with the wall clock.
+let clock = Date.parse('2001-01-01T10:00:00.000Z')
 /** Each call is one second after the last, so "newer" is never ambiguous. */
 const tick = () => {
   clock += 1000

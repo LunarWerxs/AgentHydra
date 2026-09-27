@@ -1,5 +1,6 @@
 import { computed, getCurrentInstance, onBeforeUnmount, watch } from "vue";
 import { useStorage, usePreferredDark } from "@vueuse/core";
+import { prefersReducedMotion } from "./utils";
 
 /**
  * Shared theme composable for every LunarWerx app (RepoYeti · DevWebUI · Reimagine).
@@ -66,8 +67,7 @@ function withCrossfade(fn: () => void) {
   const vt = (
     document as Document & { startViewTransition?: (cb: () => void) => unknown }
   ).startViewTransition;
-  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
-  if (typeof vt === "function" && !reducedMotion) {
+  if (typeof vt === "function" && !prefersReducedMotion()) {
     vt.call(document, fn);
     return;
   }

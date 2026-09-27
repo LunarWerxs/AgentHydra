@@ -30,14 +30,14 @@ defineProps<{ data: InstancesData }>()
       </TableHeader>
       <TableBody>
         <TableRow v-for="i in data.instances" :key="`${i.num ?? '?'}-${i.name}`">
-          <TableCell class="font-mono">{{ i.num ?? '?' }}</TableCell>
+          <TableCell><div class="font-mono">{{ i.num ?? '?' }}</div></TableCell>
           <TableCell class="whitespace-normal">
             <div class="font-semibold">{{ i.name || '(unnamed)' }}</div>
-            <div class="text-[11px] text-muted-foreground">{{ i.dir ?? '' }}</div>
+            <div class="text-2xs text-muted-foreground">{{ i.dir ?? '' }}</div>
           </TableCell>
           <TableCell>{{ i.isRunning ? '🟢 open' : '◦ closed' }}</TableCell>
-          <TableCell class="text-xs">{{ i.email ?? '?' }}</TableCell>
-          <TableCell class="text-xs">{{ i.plan ?? '?' }}</TableCell>
+          <TableCell><div class="text-xs">{{ i.email ?? '?' }}</div></TableCell>
+          <TableCell><div class="text-xs">{{ i.plan ?? '?' }}</div></TableCell>
           <TableCell class="text-end">{{ i.weeklyPct ?? '—' }}</TableCell>
           <TableCell class="text-end">{{ i.visibleChats }}</TableCell>
           <TableCell>{{ i.signedIn ? 'yes' : '⚠ SIGNED OUT' }}</TableCell>

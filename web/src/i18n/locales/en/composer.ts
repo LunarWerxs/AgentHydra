@@ -5,7 +5,7 @@ export default {
   sendingToN: 'Sending to {n} sessions',
   send: 'Send',
   sendHint:
-    'Deliver this into the chat now. Enter sends, Shift+Enter adds a line. A busy chat refuses honestly instead of queuing behind it — headless runs are off.',
+    'Deliver this into the chat now. Enter sends, Shift+Enter adds a line. A busy chat refuses honestly instead of queuing behind it. Headless runs are off.',
   toastSent: 'Sent to {n} session(s)',
   toastFailed: 'Failed for {n} session(s)',
   chatGptHandoff: 'ChatGPT',

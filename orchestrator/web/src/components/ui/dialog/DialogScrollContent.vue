@@ -17,10 +17,10 @@ defineOptions({
   inheritAttrs: false,
 })
 
-const props = defineProps<DialogContentProps & { class?: HTMLAttributes["class"] }>()
+const props = defineProps<DialogContentProps & { class?: HTMLAttributes["class"], flush?: boolean }>()
 const emits = defineEmits<DialogContentEmits>()
 
-const delegatedProps = reactiveOmit(props, "class")
+const delegatedProps = reactiveOmit(props, "class", "flush")
 
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
 </script>
@@ -28,15 +28,17 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
 <template>
   <DialogPortal>
     <DialogOverlay
-      class="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/50 pe-[var(--content-inset-right,0px)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+      class="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/50 pe-(--content-inset-right,0px) data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
     >
       <DialogContent
         :class="
           cn(
             'relative z-50 grid w-full max-w-lg my-8 gap-4 border border-border bg-background p-6 shadow-lg duration-200 sm:rounded-lg md:w-full',
+            flush && 'gap-0 p-0',
             props.class,
           )
         "
+        :data-flush="flush ? '' : undefined"
         v-bind="{ ...$attrs, ...forwarded }"
         @pointer-down-outside="(event) => {
           const originalEvent = event.detail.originalEvent;
@@ -51,7 +53,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
         <DialogClose
           class="absolute top-4 right-4 p-0.5 transition-colors rounded-md hover:bg-secondary"
         >
-          <XIcon class="w-4 h-4" />
+          <XIcon class="size-4" />
           <span class="sr-only">Close</span>
         </DialogClose>
       </DialogContent>

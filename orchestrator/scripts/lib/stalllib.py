@@ -103,39 +103,72 @@ def _launch_from(result_block: dict, rec: dict, use: dict) -> dict | None:
     if result_block.get("is_error"):
         return None
     tur = rec.get("toolUseResult") if isinstance(rec.get("toolUseResult"), dict) else {}
-    # ⛔ THE TEXT FALLBACK ONLY READS A RESULT THAT *IS* A LAUNCH MESSAGE (found on its first live
-    # run, 2026-09-24): a foreground command that PRINTED a transcript sample carried
-    # "running in background with ID: ..." in its output and was read as a launch. The structured
-    # `toolUseResult` is the source of truth; the text is consulted only when the harness wrote
-    # none, and only when the result BEGINS with the harness's own launch sentence.
-    text = _text_of(result_block.get("content")).lstrip()
-    if tur:
-        text = ""
-    elif not text.startswith(("Command running in background", "Workflow launched in background",
-                              "Async agent launched")):
-        text = ""
+    text = _launch_text(result_block, tur)
     name = use.get("name")
     label = str((use.get("input") or {}).get("description") or "")[:120]
-    if tur.get("taskType") == "local_workflow" or (name == "Workflow" and _WF_TASK_RE.search(text)):
-        tid = tur.get("taskId") or (_WF_TASK_RE.search(text) or [None, None])[1]
-        run = tur.get("runId") or (_WF_RUN_RE.search(text) or [None, None])[1]
-        tdir = tur.get("transcriptDir") or ((_WF_DIR_RE.search(text) or [None, None])[1] or "").strip()
-        if not tid:
-            return None
-        return {"id": tid, "kind": "workflow", "label": tur.get("workflowName") or label or tid,
-                "runId": run, "transcriptDir": tdir or None}
+    if _is_workflow_launch(tur, name, text):
+        return _workflow_launch(tur, text, label)
     if tur.get("backgroundTaskId") or _BG_ID_RE.search(text):
-        tid = tur.get("backgroundTaskId") or _BG_ID_RE.search(text).group(1)
-        out = _OUTPUT_RE.search(text)
-        cmd = str((use.get("input") or {}).get("command") or "")
-        return {"id": tid, "kind": "shell", "label": label or cmd[:80] or tid,
-                "outputFile": out.group(1) if out else None}
-    if (tur.get("isAsync") and tur.get("agentId")) or (name in ("Agent", "Task") and _AGENT_ID_RE.search(text)
-                                                         and "async" in text.lower()):
-        aid = tur.get("agentId") or _AGENT_ID_RE.search(text).group(1)
-        return {"id": aid, "kind": "agent", "label": tur.get("description") or label or aid,
-                "agentId": aid}
+        return _shell_launch(tur, text, label, use)
+    if _is_agent_launch(tur, name, text):
+        return _agent_launch(tur, text, label)
     return None
+
+
+def _launch_text(result_block: dict, tur: dict) -> str:
+    """The result text _launch_from may read as a launch message, or "" when it may read none.
+
+    ⛔ THE TEXT FALLBACK ONLY READS A RESULT THAT *IS* A LAUNCH MESSAGE (found on its first live
+    run, 2026-09-24): a foreground command that PRINTED a transcript sample carried
+    "running in background with ID: ..." in its output and was read as a launch. The structured
+    `toolUseResult` is the source of truth; the text is consulted only when the harness wrote
+    none, and only when the result BEGINS with the harness's own launch sentence."""
+    text = _text_of(result_block.get("content")).lstrip()
+    if tur:
+        return ""
+    if not text.startswith(("Command running in background", "Workflow launched in background",
+                            "Async agent launched")):
+        return ""
+    return text
+
+
+def _match_group(regex: re.Pattern, text: str) -> str | None:
+    m = regex.search(text)
+    return m[1] if m else None
+
+
+def _is_workflow_launch(tur: dict, name, text: str) -> bool:
+    return tur.get("taskType") == "local_workflow" or (name == "Workflow" and bool(_WF_TASK_RE.search(text)))
+
+
+def _workflow_launch(tur: dict, text: str, label: str) -> dict | None:
+    tid = tur.get("taskId") or _match_group(_WF_TASK_RE, text)
+    run = tur.get("runId") or _match_group(_WF_RUN_RE, text)
+    tdir = tur.get("transcriptDir") or (_match_group(_WF_DIR_RE, text) or "").strip()
+    if not tid:
+        return None
+    return {"id": tid, "kind": "workflow", "label": tur.get("workflowName") or label or tid,
+            "runId": run, "transcriptDir": tdir or None}
+
+
+def _shell_launch(tur: dict, text: str, label: str, use: dict) -> dict:
+    tid = tur.get("backgroundTaskId") or _BG_ID_RE.search(text).group(1)
+    out = _OUTPUT_RE.search(text)
+    cmd = str((use.get("input") or {}).get("command") or "")
+    return {"id": tid, "kind": "shell", "label": label or cmd[:80] or tid,
+            "outputFile": out.group(1) if out else None}
+
+
+def _is_agent_launch(tur: dict, name, text: str) -> bool:
+    if tur.get("isAsync") and tur.get("agentId"):
+        return True
+    return name in ("Agent", "Task") and bool(_AGENT_ID_RE.search(text)) and "async" in text.lower()
+
+
+def _agent_launch(tur: dict, text: str, label: str) -> dict:
+    aid = tur.get("agentId") or _AGENT_ID_RE.search(text).group(1)
+    return {"id": aid, "kind": "agent", "label": tur.get("description") or label or aid,
+            "agentId": aid}
 
 
 def scan(transcript_path: str | os.PathLike, cache: dict | None = None) -> tuple[list[dict], dict]:

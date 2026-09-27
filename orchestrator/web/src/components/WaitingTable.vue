@@ -45,15 +45,15 @@ function tail(evidence: string): string {
         <TableRow v-for="ch in rows" :key="ch.sessionId">
           <TableCell class="whitespace-normal">
             <div class="font-semibold">{{ ch.title ?? '(untitled)' }}</div>
-            <div class="text-[11px] text-muted-foreground">{{ rel(ch.lastActivityAt) }}</div>
+            <div class="text-2xs text-muted-foreground">{{ rel(ch.lastActivityAt) }}</div>
           </TableCell>
           <TableCell class="whitespace-normal"><AccountCell :account="ch.account" :instance="ch.instance" /></TableCell>
           <TableCell class="whitespace-normal">
             <KindBadge :kind="ch.decision.kind" />
             <div class="mt-1 text-xs">{{ ch.decision.action }}</div>
           </TableCell>
-          <TableCell class="whitespace-normal text-xs">
-            <pre class="whitespace-pre-wrap font-mono text-[12px] leading-relaxed">{{ tail(ch.evidence) }}</pre>
+          <TableCell class="whitespace-normal">
+            <pre class="whitespace-pre-wrap font-mono text-xs leading-relaxed">{{ tail(ch.evidence) }}</pre>
           </TableCell>
         </TableRow>
       </TableBody>

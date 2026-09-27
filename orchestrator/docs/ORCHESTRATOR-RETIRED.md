@@ -71,7 +71,7 @@ reads or writes them anymore, and fresh installs do not create them. Chats seede
 carry `[orchestrator]`-prefixed fabricated first messages; the title scanner still recognises
 that prefix as replaceable plumbing.
 
-Four of the five `~/.claude/commands` files (`/orcstart`, `/orcstop`, `/orc-dryrun`, `/orc-move`)
+Four of the five [`~/.claude/commands`](../../docs/CLAUDE-CONFIG-LAYOUT.md) files (`/orcstart`, `/orcstop`, `/orc-dryrun`, `/orc-move`)
 are retired with the server surface they called.
 
 ## Where the orchestrator lives now

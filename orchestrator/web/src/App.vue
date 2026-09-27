@@ -186,12 +186,12 @@ watch(
 
     <SignIn v-else-if="gateway.needsSignIn.value" :auth="gateway.auth.value!" />
 
-    <div v-else class="mx-auto w-full max-w-[1280px] px-4 pb-10 pt-4 sm:px-6">
+    <div v-else class="mx-auto w-full max-w-7xl px-4 pb-10 pt-4 sm:px-6">
       <header class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
         <div class="flex items-center gap-2">
           <img src="/favicon.svg" alt="" class="size-7" />
           <h1 class="text-lg font-semibold tracking-tight">Orchestrator</h1>
-          <span class="rounded-full border border-border bg-input/20 px-2 py-0.5 text-[11px] text-muted-foreground">read-only · acts stay in the terminal</span>
+          <span class="rounded-full border border-border bg-input/20 px-2 py-0.5 text-2xs text-muted-foreground">read-only · acts stay in the terminal</span>
         </div>
         <div class="ms-auto flex items-center gap-2">
           <ArmSwitch />
@@ -204,9 +204,11 @@ watch(
           </Button>
           <DropdownMenu v-if="gateway.auth.value?.remote">
             <DropdownMenuTrigger as-child>
-              <Button variant="ghost" size="sm" class="gap-2">
-                <img v-if="gateway.auth.value?.ownerPicture" :src="gateway.auth.value.ownerPicture" alt="" class="size-5 rounded-full" />
-                <span class="max-w-[10rem] truncate">{{ gateway.auth.value?.owner || 'owner' }}</span>
+              <Button variant="ghost" size="sm">
+                <span class="flex items-center gap-2">
+                  <img v-if="gateway.auth.value?.ownerPicture" :src="gateway.auth.value.ownerPicture" alt="" class="size-5 rounded-full" />
+                  <span class="max-w-40 truncate">{{ gateway.auth.value?.owner || 'owner' }}</span>
+                </span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -220,7 +222,7 @@ watch(
 
       <StatusPills :status="gateway.status.value" :error="gateway.statusError.value" />
 
-      <p class="mb-4 mt-2 text-[13px] text-muted-foreground">
+      <p class="mb-4 mt-2 text-ui text-muted-foreground">
         Every verdict below is computed by the Python toolbox from real transcript tails and the daemon's dossier.
         This page shows what it <em>would</em> do and why; the switch is the only thing here that changes anything.
       </p>

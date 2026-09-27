@@ -17,7 +17,7 @@
 
 export class JmesPathError extends Error {}
 
-/** One parsed node. Kept as a tagged union so the evaluator is a single switch. */
+/** One parsed node. Kept as a tagged union so the evaluator is one exhaustive table. */
 export type JmesNode =
   | { type: 'identity' }
   | { type: 'field'; name: string }
@@ -94,103 +94,139 @@ const SIMPLE: Record<string, string> = {
   '@': 'current',
 }
 
+// Operators that are one token alone and another when a given second character follows:
+// [second character, token with it, token without it].
+const PAIRS: Record<string, [string, string, string]> = {
+  '|': ['|', 'or', 'pipe'],
+  '&': ['&', 'and', 'expref'],
+  '!': ['=', 'ne', 'not'],
+  '<': ['=', 'lte', 'lt'],
+  '>': ['=', 'gte', 'gt'],
+}
+
+/** Reads the one token that starts at `i` into `tokens` and answers where the next one starts. */
+type Scanner = (expr: string, i: number, tokens: Token[]) => number
+
+const SCANNERS: Record<string, Scanner> = {
+  '[': scanBracket,
+  '"': scanQuoted,
+  "'": scanRawString,
+  '`': scanLiteral,
+  '=': scanEquals,
+}
+
+function lexFail(msg: string, pos: number): never {
+  throw new JmesPathError(`${msg} at position ${pos}`)
+}
+
 function tokenize(expr: string): Token[] {
   const tokens: Token[] = []
   let i = 0
-  const fail = (msg: string): never => {
-    throw new JmesPathError(`${msg} at position ${i}`)
-  }
-  while (i < expr.length) {
-    const ch = expr[i] as string
-    const pos = i
-    if (/\s/.test(ch)) {
-      i++
-    } else if (/[A-Za-z_]/.test(ch)) {
-      let j = i + 1
-      while (j < expr.length && /[A-Za-z0-9_]/.test(expr[j] as string)) j++
-      tokens.push({ type: 'unquoted', value: expr.slice(i, j), pos })
-      i = j
-    } else if (SIMPLE[ch]) {
-      tokens.push({ type: SIMPLE[ch] as string, pos })
-      i++
-    } else if (ch === '[') {
-      const next = expr[i + 1]
-      if (next === ']') {
-        tokens.push({ type: 'flatten', pos })
-        i += 2
-      } else if (next === '?') {
-        tokens.push({ type: 'filter', pos })
-        i += 2
-      } else {
-        tokens.push({ type: 'lbracket', pos })
-        i++
-      }
-    } else if (/[0-9-]/.test(ch)) {
-      let j = i + 1
-      while (j < expr.length && /[0-9]/.test(expr[j] as string)) j++
-      const text = expr.slice(i, j)
-      if (text === '-') fail('a "-" must start a number')
-      tokens.push({ type: 'number', value: Number(text), pos })
-      i = j
-    } else if (ch === '"') {
-      let j = i + 1
-      while (j < expr.length && expr[j] !== '"') j += expr[j] === '\\' ? 2 : 1
-      if (j >= expr.length) fail('unterminated quoted identifier')
-      try {
-        tokens.push({ type: 'quoted', value: JSON.parse(expr.slice(i, j + 1)), pos })
-      } catch {
-        fail('bad quoted identifier')
-      }
-      i = j + 1
-    } else if (ch === "'") {
-      let j = i + 1
-      let raw = ''
-      while (j < expr.length && expr[j] !== "'") {
-        if (expr[j] === '\\' && (expr[j + 1] === "'" || expr[j + 1] === '\\')) {
-          raw += expr[j + 1]
-          j += 2
-        } else {
-          raw += expr[j]
-          j++
-        }
-      }
-      if (j >= expr.length) fail('unterminated raw string')
-      tokens.push({ type: 'literal', value: raw, pos })
-      i = j + 1
-    } else if (ch === '`') {
-      let j = i + 1
-      while (j < expr.length && expr[j] !== '`') j += expr[j] === '\\' ? 2 : 1
-      if (j >= expr.length) fail('unterminated literal')
-      const body = expr.slice(i + 1, j).replace(/\\`/g, '`')
-      try {
-        tokens.push({ type: 'literal', value: JSON.parse(body), pos })
-      } catch {
-        fail('a `literal` must be JSON')
-      }
-      i = j + 1
-    } else if (ch === '|') {
-      tokens.push(expr[i + 1] === '|' ? { type: 'or', pos } : { type: 'pipe', pos })
-      i += expr[i + 1] === '|' ? 2 : 1
-    } else if (ch === '&') {
-      tokens.push(expr[i + 1] === '&' ? { type: 'and', pos } : { type: 'expref', pos })
-      i += expr[i + 1] === '&' ? 2 : 1
-    } else if (ch === '!') {
-      tokens.push(expr[i + 1] === '=' ? { type: 'ne', pos } : { type: 'not', pos })
-      i += expr[i + 1] === '=' ? 2 : 1
-    } else if (ch === '=') {
-      if (expr[i + 1] !== '=') fail('"=" is not an operator (use "==")')
-      tokens.push({ type: 'eq', pos })
-      i += 2
-    } else if (ch === '<' || ch === '>') {
-      const orEqual = expr[i + 1] === '='
-      tokens.push({ type: `${ch === '<' ? 'lt' : 'gt'}${orEqual ? 'e' : ''}`, pos })
-      i += orEqual ? 2 : 1
-    } else {
-      fail(`unexpected character ${JSON.stringify(ch)}`)
-    }
-  }
+  while (i < expr.length) i = scanToken(expr, i, tokens)
   tokens.push({ type: 'eof', pos: expr.length })
   return tokens
+}
+
+function scanToken(expr: string, i: number, tokens: Token[]): number {
+  const ch = expr[i] as string
+  if (/\s/.test(ch)) return i + 1
+  if (/[A-Za-z_]/.test(ch)) return scanUnquoted(expr, i, tokens)
+  const simple = SIMPLE[ch]
+  if (simple) {
+    tokens.push({ type: simple, pos: i })
+    return i + 1
+  }
+  const pair = PAIRS[ch]
+  if (pair) return scanPair(expr, i, tokens, pair)
+  const scan = SCANNERS[ch] ?? (/[0-9-]/.test(ch) ? scanNumber : undefined)
+  if (!scan) return lexFail(`unexpected character ${JSON.stringify(ch)}`, i)
+  return scan(expr, i, tokens)
+}
+
+function scanUnquoted(expr: string, i: number, tokens: Token[]): number {
+  let j = i + 1
+  while (j < expr.length && /[A-Za-z0-9_]/.test(expr[j] as string)) j++
+  tokens.push({ type: 'unquoted', value: expr.slice(i, j), pos: i })
+  return j
+}
+
+function scanPair(
+  expr: string,
+  i: number,
+  tokens: Token[],
+  [second, paired, single]: [string, string, string],
+): number {
+  const isPaired = expr[i + 1] === second
+  tokens.push({ type: isPaired ? paired : single, pos: i })
+  return i + (isPaired ? 2 : 1)
+}
+
+function scanBracket(expr: string, i: number, tokens: Token[]): number {
+  const next = expr[i + 1]
+  const type = next === ']' ? 'flatten' : next === '?' ? 'filter' : 'lbracket'
+  tokens.push({ type, pos: i })
+  return type === 'lbracket' ? i + 1 : i + 2
+}
+
+function scanNumber(expr: string, i: number, tokens: Token[]): number {
+  let j = i + 1
+  while (j < expr.length && /[0-9]/.test(expr[j] as string)) j++
+  const text = expr.slice(i, j)
+  if (text === '-') lexFail('a "-" must start a number', i)
+  tokens.push({ type: 'number', value: Number(text), pos: i })
+  return j
+}
+
+/** Index of the `quote` closing a token whose body starts at `from`, skipping backslash escapes;
+ *  `expr.length` when there is none. */
+function closingQuote(expr: string, from: number, quote: string): number {
+  let j = from
+  while (j < expr.length && expr[j] !== quote) j += expr[j] === '\\' ? 2 : 1
+  return j
+}
+
+function parseJsonToken(text: string, msg: string, pos: number): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return lexFail(msg, pos)
+  }
+}
+
+function scanQuoted(expr: string, i: number, tokens: Token[]): number {
+  const j = closingQuote(expr, i + 1, '"')
+  if (j >= expr.length) lexFail('unterminated quoted identifier', i)
+  const value = parseJsonToken(expr.slice(i, j + 1), 'bad quoted identifier', i)
+  tokens.push({ type: 'quoted', value, pos: i })
+  return j + 1
+}
+
+function scanRawString(expr: string, i: number, tokens: Token[]): number {
+  let j = i + 1
+  let raw = ''
+  while (j < expr.length && expr[j] !== "'") {
+    const escaped = expr[j] === '\\' && (expr[j + 1] === "'" || expr[j + 1] === '\\')
+    raw += escaped ? expr[j + 1] : expr[j]
+    j += escaped ? 2 : 1
+  }
+  if (j >= expr.length) lexFail('unterminated raw string', i)
+  tokens.push({ type: 'literal', value: raw, pos: i })
+  return j + 1
+}
+
+function scanLiteral(expr: string, i: number, tokens: Token[]): number {
+  const j = closingQuote(expr, i + 1, '`')
+  if (j >= expr.length) lexFail('unterminated literal', i)
+  const body = expr.slice(i + 1, j).replace(/\\`/g, '`')
+  const value = parseJsonToken(body, 'a `literal` must be JSON', i)
+  tokens.push({ type: 'literal', value, pos: i })
+  return j + 1
+}
+
+function scanEquals(expr: string, i: number, tokens: Token[]): number {
+  if (expr[i + 1] !== '=') lexFail('"=" is not an operator (use "==")', i)
+  tokens.push({ type: 'eq', pos: i })
+  return i + 2
 }
 
 const IDENTITY: JmesNode = { type: 'identity' }
@@ -530,7 +566,7 @@ const FUNCTIONS: Record<string, Fn> = {
   keys: ([v]) => Object.keys(need<object>('keys', v, 'object')),
   values: ([v]) => Object.values(need<object>('values', v, 'object')),
   type: ([v]) => typeOf(v),
-  not_null: (args) => args.find((v) => v !== null && v !== undefined) ?? null,
+  not_null: (args) => args.find((v) => v != null) ?? null,
   contains: ([hay, needle]) => {
     need('contains', hay, 'string', 'array')
     if (typeof hay === 'string') return typeof needle === 'string' && hay.includes(needle)
@@ -601,88 +637,117 @@ function project(list: unknown[], right: JmesNode): unknown[] {
   const out: unknown[] = []
   for (const item of list) {
     const v = evaluate(right, item)
-    if (v !== null && v !== undefined) out.push(v)
+    if (v != null) out.push(v)
   }
   return out
 }
 
+type NodeOf<K extends JmesNode['type']> = Extract<JmesNode, { type: K }>
+type Evaluator<K extends JmesNode['type']> = (node: NodeOf<K>, value: unknown) => unknown
+
+function evalChain(node: NodeOf<'subexpr' | 'indexExpr' | 'pipe'>, value: unknown): unknown {
+  return evaluate(node.right, evaluate(node.left, value))
+}
+
+function evalIndex(node: NodeOf<'index'>, value: unknown): unknown {
+  if (!Array.isArray(value)) return null
+  const i = node.index < 0 ? value.length + node.index : node.index
+  return value[i] ?? null
+}
+
+function evalProjection(node: NodeOf<'projection'>, value: unknown): unknown {
+  const base = evaluate(node.left, value)
+  return Array.isArray(base) ? project(base, node.right) : null
+}
+
+function evalValueProjection(node: NodeOf<'valueProjection'>, value: unknown): unknown {
+  const base = evaluate(node.left, value)
+  return isObject(base) ? project(Object.values(base), node.right) : null
+}
+
+function evalFilterProjection(node: NodeOf<'filterProjection'>, value: unknown): unknown {
+  const base = evaluate(node.left, value)
+  if (!Array.isArray(base)) return null
+  return project(
+    base.filter((item) => truthy(evaluate(node.condition, item))),
+    node.right,
+  )
+}
+
+function evalFlatten(node: NodeOf<'flatten'>, value: unknown): unknown {
+  const base = evaluate(node.child, value)
+  if (!Array.isArray(base)) return null
+  return base.flatMap((x) => (Array.isArray(x) ? x : [x]))
+}
+
+function evalComparator(node: NodeOf<'comparator'>, value: unknown): unknown {
+  const l = evaluate(node.left, value)
+  const r = evaluate(node.right, value)
+  if (node.op === 'eq') return deepEqual(l, r)
+  if (node.op === 'ne') return !deepEqual(l, r)
+  if (typeof l !== 'number' || typeof r !== 'number') return null
+  if (node.op === 'lt') return l < r
+  if (node.op === 'lte') return l <= r
+  if (node.op === 'gt') return l > r
+  return l >= r
+}
+
+function evalOr(node: NodeOf<'or'>, value: unknown): unknown {
+  const l = evaluate(node.left, value)
+  return truthy(l) ? l : evaluate(node.right, value)
+}
+
+function evalAnd(node: NodeOf<'and'>, value: unknown): unknown {
+  const l = evaluate(node.left, value)
+  return truthy(l) ? evaluate(node.right, value) : l
+}
+
+function evalMultiList(node: NodeOf<'multiList'>, value: unknown): unknown {
+  return value == null ? null : node.children.map((c) => evaluate(c, value))
+}
+
+function evalMultiHash(node: NodeOf<'multiHash'>, value: unknown): unknown {
+  return value == null
+    ? null
+    : Object.fromEntries(node.pairs.map((p) => [p.key, evaluate(p.value, value)]))
+}
+
+function evalFunction(node: NodeOf<'function'>, value: unknown): unknown {
+  const fn = FUNCTIONS[node.name]
+  if (!fn) throw new JmesPathError(`unknown function ${node.name}()`)
+  const exprefs = node.args.map((a) => (a.type === 'expref' ? a.child : null))
+  const args = node.args.map((a) => (a.type === 'expref' ? a : evaluate(a, value)))
+  return fn(args, exprefs)
+}
+
+// One evaluator per node type. The mapped type makes the table exhaustive: a node type added to
+// JmesNode without an entry here is a compile error.
+const EVALUATORS: { [K in JmesNode['type']]: Evaluator<K> } = {
+  identity: (_node, value) => value ?? null,
+  field: (node, value) => (isObject(value) ? (value[node.name] ?? null) : null),
+  literal: (node) => node.value,
+  subexpr: evalChain,
+  indexExpr: evalChain,
+  pipe: evalChain,
+  index: evalIndex,
+  slice: (node, value) =>
+    Array.isArray(value) ? sliceOf(value, node.start, node.stop, node.step) : null,
+  projection: evalProjection,
+  valueProjection: evalValueProjection,
+  filterProjection: evalFilterProjection,
+  flatten: evalFlatten,
+  comparator: evalComparator,
+  or: evalOr,
+  and: evalAnd,
+  not: (node, value) => !truthy(evaluate(node.child, value)),
+  multiList: evalMultiList,
+  multiHash: evalMultiHash,
+  expref: (node) => node,
+  function: evalFunction,
+}
+
 function evaluate(node: JmesNode, value: unknown): unknown {
-  switch (node.type) {
-    case 'identity':
-      return value ?? null
-    case 'field':
-      return isObject(value) ? (value[node.name] ?? null) : null
-    case 'literal':
-      return node.value
-    case 'subexpr':
-    case 'indexExpr':
-    case 'pipe':
-      return evaluate(node.right, evaluate(node.left, value))
-    case 'index': {
-      if (!Array.isArray(value)) return null
-      const i = node.index < 0 ? value.length + node.index : node.index
-      return value[i] ?? null
-    }
-    case 'slice':
-      return Array.isArray(value) ? sliceOf(value, node.start, node.stop, node.step) : null
-    case 'projection': {
-      const base = evaluate(node.left, value)
-      return Array.isArray(base) ? project(base, node.right) : null
-    }
-    case 'valueProjection': {
-      const base = evaluate(node.left, value)
-      return isObject(base) ? project(Object.values(base), node.right) : null
-    }
-    case 'filterProjection': {
-      const base = evaluate(node.left, value)
-      if (!Array.isArray(base)) return null
-      return project(
-        base.filter((item) => truthy(evaluate(node.condition, item))),
-        node.right,
-      )
-    }
-    case 'flatten': {
-      const base = evaluate(node.child, value)
-      if (!Array.isArray(base)) return null
-      return base.flatMap((x) => (Array.isArray(x) ? x : [x]))
-    }
-    case 'comparator': {
-      const l = evaluate(node.left, value)
-      const r = evaluate(node.right, value)
-      if (node.op === 'eq') return deepEqual(l, r)
-      if (node.op === 'ne') return !deepEqual(l, r)
-      if (typeof l !== 'number' || typeof r !== 'number') return null
-      if (node.op === 'lt') return l < r
-      if (node.op === 'lte') return l <= r
-      if (node.op === 'gt') return l > r
-      return l >= r
-    }
-    case 'or': {
-      const l = evaluate(node.left, value)
-      return truthy(l) ? l : evaluate(node.right, value)
-    }
-    case 'and': {
-      const l = evaluate(node.left, value)
-      return truthy(l) ? evaluate(node.right, value) : l
-    }
-    case 'not':
-      return !truthy(evaluate(node.child, value))
-    case 'multiList':
-      return value == null ? null : node.children.map((c) => evaluate(c, value))
-    case 'multiHash':
-      return value == null
-        ? null
-        : Object.fromEntries(node.pairs.map((p) => [p.key, evaluate(p.value, value)]))
-    case 'expref':
-      return node
-    case 'function': {
-      const fn = FUNCTIONS[node.name]
-      if (!fn) throw new JmesPathError(`unknown function ${node.name}()`)
-      const exprefs = node.args.map((a) => (a.type === 'expref' ? a.child : null))
-      const args = node.args.map((a) => (a.type === 'expref' ? a : evaluate(a, value)))
-      return fn(args, exprefs)
-    }
-  }
+  return (EVALUATORS[node.type] as Evaluator<JmesNode['type']>)(node, value)
 }
 
 /** Evaluate a compiled expression against a JSON value. Missing fields answer null, as the spec

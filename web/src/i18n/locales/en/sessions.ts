@@ -15,7 +15,7 @@ export default {
   selectSessionsHint: 'Tap sessions in the list to pick message targets',
   copySessionId: 'Copy session id',
   copySessionIdHint:
-    'Copies the full id as text — what you paste into claude --resume or a bug report',
+    'Copies the full id as text: what you paste into claude --resume or a bug report',
   id: 'ID',
   // --- the ⋯ menu on an open transcript ---
   // Items in here carry no explanatory second line. The labels are full sentences already, and a
@@ -33,7 +33,7 @@ export default {
   // regular install is not running so it has no row) — or it is right there and has no resolved
   // identity yet. Telling you the first when it is the second sends you hunting for nothing.
   accountUnresolved: 'This account is not in the instance list right now',
-  accountAddressUnknown: 'No address resolved for this account yet — it may be signed out',
+  accountAddressUnknown: 'No address resolved for this account yet. It may be signed out',
   openAccountInstance: 'Open this account',
   focusAccountInstance: 'Bring this account to the front',
   copyAccountEmail: 'Copy the account address',
@@ -76,9 +76,9 @@ export default {
   endedError: 'it hit an error',
   endedComplete: 'picked up again later',
   copyWhy:
-    'Part {i} of {n}. This part ended because {why}, and the conversation carried on in a new transcript — that is why it is here more than once. Every part is listed, because each one holds turns the others do not, often the last thing you said before it stopped.',
+    'Part {i} of {n}. This part ended because {why}, and the conversation carried on in a new transcript. That is why it is here more than once. Every part is listed, because each one holds turns the others do not, often the last thing you said before it stopped.',
   copyLatest:
-    'Part {i} of {n}, the most recent. The earlier parts are listed too, because each one holds turns this one does not — the conversation moved to a new transcript each time it was stopped or cut off.',
+    'Part {i} of {n}, the most recent. The earlier parts are listed too, because each one holds turns this one does not. The conversation moved to a new transcript each time it was stopped or cut off.',
   instanceUnknown: 'Unknown account',
   instanceUnknownHint:
     'Claude Desktop kept no record of which account ran this session, so AgentHydra cannot say. It is not hiding one.',
@@ -133,7 +133,7 @@ export default {
   rateLimitedOnly: 'Only ones a usage limit stopped',
   rateLimitedPending: 'Only ones still stopped right now',
   rateLimitedNote:
-    'Claude sessions only, and only when the CLI itself reported the wall — a chat that merely talked about rate limits is not counted.',
+    'Claude sessions only, and only when the CLI itself reported the wall. A chat that merely talked about rate limits is not counted.',
   rateLimitedBadgePending: 'Still at the limit',
   // --- live agent status (server/src/agent-status.ts), from Claude Code's hooks ---
   agentStatusWorking: 'Working',
@@ -144,7 +144,7 @@ export default {
   rateLimitedHint: 'This session stopped here: {notice}',
   // --- where a row's title came from ---
   titleFrom: 'Title from',
-  titleFromCustom: 'a saved title on the session — a rename, or the app naming it',
+  titleFromCustom: 'a saved title on the session: a rename, or the app naming it',
   titleFromAi: 'the assistant summarising the conversation',
   titleFromStore: 'the app that wrote this session',
   titleFromEnvelope: 'a <{tag} name="…"> wrapper around the first message, not from you',
@@ -163,7 +163,7 @@ export default {
   resumeFailed: "Couldn't reopen this session.",
   migrateAccount: 'Migrate to another account',
   migrateNoTargets: 'No other instances',
-  migrateStarted: 'Migrated to {name} — the chat is in that desktop app now, ready to carry on.',
+  migrateStarted: 'Migrated to {name}. The chat is in that desktop app now, ready to carry on.',
   migrateFailed: "Couldn't migrate this chat.",
   // Landed and verified, but an old account's app still lists it; that account and the server's
   // reason follow.
@@ -190,9 +190,9 @@ export default {
   shapeAutomation: 'Automation',
   shapeNote: 'Narrows the sessions already loaded, not the window they came from.',
   shapeHint: 'how big the session was, from its message count and how long it ran. Not a name.',
-  activityWorking: 'Working — a turn landed in the last couple of minutes',
-  activityIdle: 'Idle — active within the hour',
-  activityStale: 'Stale — nothing for over an hour',
+  activityWorking: 'Working: a turn landed in the last couple of minutes',
+  activityIdle: 'Idle: active within the hour',
+  activityStale: 'Stale: nothing for over an hour',
   // --- what the transcript shows ---
   // A section heading inside the ⋯ menu now, not a button — the four toggles under it are their own
   // explanation, so it needs no hint. displayControlsActive is what the collapsed trigger says.
@@ -269,5 +269,5 @@ export default {
   // AH-20: the first fetch failing is not the same fact as a genuinely empty list.
   unavailable: 'Could not load sessions: {reason}.',
   retry: 'Retry',
-  staleHint: 'Showing the last known list — updates unavailable: {reason}.',
+  staleHint: 'Showing the last known list, updates unavailable: {reason}.',
 }

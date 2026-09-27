@@ -31,8 +31,8 @@ const emit = defineEmits<{
   <Dialog v-model:open="open">
     <DialogContent>
       <DialogHeader>
-        <DialogTitle class="flex items-center gap-2">
-          <TriangleAlert class="size-4 text-warning" />
+        <DialogTitle class="flex items-center">
+          <TriangleAlert class="me-2 size-4 text-warning" />
           {{ $t('instances.quitExternalDialogTitle') }}
         </DialogTitle>
         <DialogDescription>

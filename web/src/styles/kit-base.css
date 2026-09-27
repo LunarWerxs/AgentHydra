@@ -66,6 +66,10 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* Resting value for the collapsible keyframes below. reka-ui's CollapsibleContent sets the
+     measured height as an inline style on its own element at runtime, which overrides this. */
+  --reka-collapsible-content-height: auto;
 }
 
 .dark {
@@ -110,6 +114,8 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* box-shadow is deliberately NOT crossfaded: Tailwind draws the keyboard focus ring as a box-shadow,
+   and a ring must be fully there on its first frame, even mid theme swap (focus-ring-first-frame). */
 /* Smooth crossfade when toggling light/dark. The theme composable adds
    `html.theme-transitioning` around the class swap, then removes it. */
 html.theme-transitioning,
@@ -117,7 +123,7 @@ html.theme-transitioning *,
 html.theme-transitioning *::before,
 html.theme-transitioning *::after {
   transition-duration: 280ms !important;
-  transition-property: background-color, border-color, color, fill, stroke, box-shadow, opacity !important;
+  transition-property: background-color, border-color, color, fill, stroke, opacity !important;
   transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1) !important;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -131,6 +137,14 @@ html.theme-transitioning *::after {
   --font-sans: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-heading: var(--font-sans);
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* The type scale below text-sm (added 2026-09-26, fleet gate burn-down). The apps hard-coded
+     these sizes as text-[11px], text-[12.5px] and friends; declared here once, they are steps on
+     the scale @shadcn/lint's no-arbitrary-values reads. No --line-height sub-keys on purpose: an
+     arbitrary text-[11px] set only the font size, so these must too (leading stays inherited). */
+  --text-3xs: 0.625rem;
+  --text-2xs: 0.6875rem;
+  --text-ui: 0.8125rem;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -177,8 +191,8 @@ html.theme-transitioning *::after {
   --animate-collapsible-up: collapsible-up 0.2s ease-out;
 }
 
-@keyframes collapsible-down { from { height: 0; } to { height: var(--reka-collapsible-content-height, auto); } }
-@keyframes collapsible-up { from { height: var(--reka-collapsible-content-height, auto); } to { height: 0; } }
+@keyframes collapsible-down { from { height: 0; } to { height: var(--reka-collapsible-content-height); } }
+@keyframes collapsible-up { from { height: var(--reka-collapsible-content-height); } to { height: 0; } }
 
 @layer base {
   * {
@@ -213,3 +227,27 @@ html.theme-transitioning *::after {
 .scroll-slim { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 .scroll-slim::-webkit-scrollbar { width: 8px; height: 8px; }
 .scroll-slim::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+
+/* --- shell/ExpandTransition.vue: grid-rows 0fr<->1fr expand/collapse (Transition name="kit-expand") --- */
+.kit-expand-grid {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+.kit-expand-enter-active,
+.kit-expand-leave-active {
+  transition: grid-template-rows 0.2s ease;
+}
+.kit-expand-enter-from,
+.kit-expand-leave-to {
+  grid-template-rows: 0fr;
+}
+
+/* --- shell/SettingsTabs.vue: the sliding active-tab indicator ---
+   It animates a layout property (width), so its transition lives here as a named class rather
+   than an arbitrary transition-[...] utility. measure() feeds the geometry in through the two
+   custom properties. */
+.kit-tab-indicator {
+  transform: translateX(var(--indicator-x));
+  width: var(--indicator-w);
+  transition: transform 200ms ease-out, width 200ms ease-out;
+}

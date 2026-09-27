@@ -2,7 +2,7 @@
 import { XIcon } from '@lucide/vue';
 
 import type { DialogContentEmits, DialogContentProps } from "reka-ui"
-import type { CSSProperties, HTMLAttributes } from "vue"
+import type { HTMLAttributes } from "vue"
 import { computed } from "vue"
 import { reactiveOmit } from "@vueuse/core"
 import {
@@ -42,10 +42,8 @@ const delegatedProps = reactiveOmit(props, "class", "side", "showCloseButton", "
 
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
 
-const contentStyle = computed<CSSProperties | undefined>(() => {
-  if (props.side !== "right" || props.rightOffsetPx <= 0) return undefined
-  return { right: `${props.rightOffsetPx}px` }
-})
+// Read only by the data-[side=right] class below, so the offset never touches another side.
+const rightOffset = computed(() => `${Math.max(props.rightOffsetPx, 0)}px`)
 </script>
 
 <template>
@@ -54,8 +52,8 @@ const contentStyle = computed<CSSProperties | undefined>(() => {
     <DialogContent
       data-slot="sheet-content"
       :data-side="side"
-      :class="cn('bg-popover text-popover-foreground fixed z-50 flex flex-col bg-clip-padding text-xs/relaxed shadow-lg transition duration-200 ease-in-out data-[side=bottom]:inset-x-0 data-[side=bottom]:bottom-0 data-[side=bottom]:h-auto data-[side=bottom]:border-t data-[side=left]:inset-y-0 data-[side=left]:left-0 data-[side=left]:h-full data-[side=left]:w-3/4 data-[side=left]:border-e data-[side=right]:inset-y-0 data-[side=right]:right-0 data-[side=right]:h-full data-[side=right]:w-3/4 data-[side=right]:border-s data-[side=top]:inset-x-0 data-[side=top]:top-0 data-[side=top]:h-auto data-[side=top]:border-b data-[side=left]:sm:max-w-sm data-[side=right]:sm:max-w-sm data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[side=bottom]:data-[state=open]:slide-in-from-bottom-10 data-[side=left]:data-[state=open]:slide-in-from-left-10 data-[side=right]:data-[state=open]:slide-in-from-right-10 data-[side=top]:data-[state=open]:slide-in-from-top-10 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[side=bottom]:data-[state=closed]:slide-out-to-bottom-10 data-[side=left]:data-[state=closed]:slide-out-to-left-10 data-[side=right]:data-[state=closed]:slide-out-to-right-10 data-[side=top]:data-[state=closed]:slide-out-to-top-10', props.class)"
-      :style="contentStyle"
+      :class="cn('bg-popover text-popover-foreground fixed z-50 flex flex-col bg-clip-padding text-xs/relaxed shadow-lg transition duration-200 ease-in-out data-[side=bottom]:inset-x-0 data-[side=bottom]:bottom-0 data-[side=bottom]:h-auto data-[side=bottom]:border-t data-[side=left]:inset-y-0 data-[side=left]:left-0 data-[side=left]:h-full data-[side=left]:w-3/4 data-[side=left]:border-e data-[side=right]:inset-y-0 data-[side=right]:right-(--sheet-right-offset)data-[side=right]:h-full data-[side=right]:w-3/4 data-[side=right]:border-s data-[side=top]:inset-x-0 data-[side=top]:top-0 data-[side=top]:h-auto data-[side=top]:border-b data-[side=left]:sm:max-w-sm data-[side=right]:sm:max-w-sm data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[side=bottom]:data-[state=open]:slide-in-from-bottom-10 data-[side=left]:data-[state=open]:slide-in-from-left-10 data-[side=right]:data-[state=open]:slide-in-from-right-10 data-[side=top]:data-[state=open]:slide-in-from-top-10 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[side=bottom]:data-[state=closed]:slide-out-to-bottom-10 data-[side=left]:data-[state=closed]:slide-out-to-left-10 data-[side=right]:data-[state=closed]:slide-out-to-right-10 data-[side=top]:data-[state=closed]:slide-out-to-top-10', props.class)"
+      :style="{ '--sheet-right-offset': rightOffset }"
       v-bind="{ ...$attrs, ...forwarded }"
     >
       <slot />

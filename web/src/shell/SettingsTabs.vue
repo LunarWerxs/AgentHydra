@@ -18,7 +18,7 @@ const model = defineModel<T>({ required: true });
 
 const tablistEl = ref<HTMLElement | null>(null);
 const buttonEls = ref<Record<string, HTMLElement | undefined>>({});
-const indicatorStyle = ref<{ transform: string; width: string }>({ transform: 'translateX(0px)', width: '0px' });
+const indicator = ref<{ left: number; width: number }>({ left: 0, width: 0 });
 const indicatorReady = ref(false);
 
 function setButtonEl(id: T, el: Element | ComponentPublicInstance | null) {
@@ -37,7 +37,7 @@ function measure() {
   const listRect = tablistEl.value.getBoundingClientRect();
   const rect = active.getBoundingClientRect();
   const left = rect.left - listRect.left - tablistEl.value.clientLeft;
-  indicatorStyle.value = { transform: `translateX(${left}px)`, width: `${rect.width}px` };
+  indicator.value = { left, width: rect.width };
   indicatorReady.value = true;
 }
 
@@ -68,8 +68,8 @@ onBeforeUnmount(() => {
   >
     <div
       v-if="indicatorReady"
-      class="pointer-events-none absolute inset-y-1 left-0 rounded-md bg-background shadow-sm transition-[transform,width] duration-200 ease-out"
-      :style="indicatorStyle"
+      class="kit-tab-indicator pointer-events-none absolute inset-y-1 left-0 rounded-md bg-background shadow-sm"
+      :style="{ '--indicator-x': indicator.left + 'px', '--indicator-w': indicator.width + 'px' }"
       aria-hidden="true"
     />
     <button
@@ -79,7 +79,7 @@ onBeforeUnmount(() => {
       type="button"
       role="tab"
       :aria-selected="model === tb.id"
-      class="relative z-10 flex-1 rounded-md px-1 py-1.5 text-[12.5px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40"
+      class="relative z-10 flex-1 rounded-md px-1 py-1.5 text-ui font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40"
       :class="model === tb.id ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'"
       @click="model = tb.id"
     >

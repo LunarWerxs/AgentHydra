@@ -30,8 +30,8 @@ defineProps<{ data: SuppressedData }>()
           </TableHeader>
           <TableBody>
             <TableRow v-for="(h, i) in data.holds" :key="`${h.session}-${i}`">
-              <TableCell class="whitespace-normal font-mono">{{ h.session }}</TableCell>
-              <TableCell class="whitespace-normal text-xs">{{ h.why || h.reason }}</TableCell>
+              <TableCell class="whitespace-normal"><div class="font-mono">{{ h.session }}</div></TableCell>
+              <TableCell class="whitespace-normal"><div class="text-xs">{{ h.why || h.reason }}</div></TableCell>
             </TableRow>
           </TableBody>
         </Table>
@@ -61,9 +61,9 @@ defineProps<{ data: SuppressedData }>()
             <TableBody>
               <TableRow v-for="(s, i) in data.suppressed" :key="`${s.session}-${i}`">
                 <TableCell>{{ s.kind }}</TableCell>
-                <TableCell class="whitespace-normal font-mono">{{ s.session }}</TableCell>
+                <TableCell class="whitespace-normal"><div class="font-mono">{{ s.session }}</div></TableCell>
                 <TableCell class="text-end">{{ s.attempts ?? '?' }}</TableCell>
-                <TableCell class="whitespace-normal text-xs">{{ s.why }}</TableCell>
+                <TableCell class="whitespace-normal"><div class="text-xs">{{ s.why }}</div></TableCell>
               </TableRow>
             </TableBody>
           </Table>

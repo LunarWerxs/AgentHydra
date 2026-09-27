@@ -88,6 +88,7 @@ import { useCliInstances } from '@/composables/useCliInstances'
 import { useCodexInstances } from '@/composables/useCodexInstances'
 import { useInstanceFilter } from '@/composables/useInstanceFilter'
 import { useInstances } from '@/composables/useInstances'
+import { useMoveAllChats } from '@/composables/useMoveAllChats'
 import { useSortable } from '@/composables/useSortable'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
@@ -98,10 +99,6 @@ import {
   DESKTOP_DOWNLOAD_PAGE_URL,
   getChatCounts,
   getDesktopInstall,
-  getInstanceChats,
-  getSession,
-  migrateSession,
-  settleMovedChat,
 } from '@/lib/api'
 import { formatBytes, formatUptime, timeAgo } from '@/lib/format'
 import {
@@ -117,15 +114,6 @@ import {
   shortDisplayName,
 } from '@/lib/instance-appearance'
 import type { InstanceFacts } from '@/lib/instance-filter'
-import {
-  type MovePlan,
-  moveTargets,
-  planMove,
-  profileLabel,
-  stillShownLine,
-  stoppedServers,
-  warnOnUnloadWhile,
-} from '@/lib/move-chats'
 import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
 import { useTooltipConfig } from '@/lib/tooltip-config'
@@ -885,167 +873,25 @@ function onChatsOpenRow(row: ChatListRow) {
 }
 
 // --- move every active chat on one instance to another -----------------------------------------
-// The instance-level version of the session list's migrate: every chat on this account that is
-// not archived and not marked done, moved to one other account in one confirmed action. Done rows
-// are skipped because the server refuses them as superseded, so leaving them in would trade one
-// confirmation for a column of error toasts.
-//
-// ⛔ A LIVE CHAT IS NOT SKIPPED. It is stopped and then moved, which is what a person-driven move
-// means (web/tests/move-chats.test.ts pins it, and moveChatsConfirmBody now leads with it). The
-// submenu's "not running" switch is about DESTINATION ACCOUNTS and nothing else; the two got read
-// as one thing (owner, 2026-09-09: "does it only move chats that aren't actively running?").
-//
-// And a closed destination is NOT opened first. The line that used to sit here said it was, on the
-// grounds that "the import has to land in a running app" - true until the server grew its cold
-// landing (desktop-sessions.ts), which writes the chat straight into the closed account's store,
-// settings intact, for the app to find at its next start. See the note above prepareMoveAll, which
-// this used to contradict outright.
-const moveAll = ref<{ from: CMInstance; to: CMInstance; plan: MovePlan } | null>(null)
-const moveAllBusy = ref(false)
-warnOnUnloadWhile(moveAllBusy)
-// Closed destinations are hidden from the submenu until asked for, and asked for afresh on every
-// page load (owner, 2026-09-08: off by default). One switch shared by every row's submenu.
-const moveShowClosed = ref(false)
-// The same name the table shows: label, else the account's name, else the folder. `label ?? name`
-// skipped the middle step and offered "5claude" for the row everyone knows as apebrain.
-const instLabel = (i: CMInstance) => displayName(i)
-/** A server profile path, named the way the table names its row. */
-const profileName = (profile: string) => profileLabel(profile, instances.value, instLabel)
-const moveTargetsFor = (from: CMInstance) =>
-  moveTargets(instances.value, from, moveShowClosed.value, instLabel)
-// A closed destination is NOT started: the server lands each chat straight in that instance's
-// store, settings intact, and the app finds them there when it next starts. That is the whole
-// point of moving to a closed account, and it is the one landing that needs no restart afterwards.
-async function prepareMoveAll(from: CMInstance, to: CMInstance) {
-  // One count at a time. The submenu item is disabled while busy, but a second click can still
-  // arrive through a reopened menu, and two overlapping counts share one toast id - the first's
-  // dismiss then races the second's loading toast and one of them is left on screen (seen live).
-  if (moveAllBusy.value) return
-  rowMenuOpen.value = null
-  moveAllBusy.value = true
-  const id = `move-all-${from.dir}`
-  try {
-    toast.loading(t('instances.moveChatsCounting'), { id })
-    // The account's OWN chat store - the same read the "Chats" dialog makes - never the session
-    // list, which is scoped by a recorded instance name and by one preferred record per id and
-    // so came up short (planMove's header has the three ways). `desktop:<dir>` is the one
-    // spelling two similarly named accounts cannot share.
-    const got = await getInstanceChats(`desktop:${from.dir}`, 'hide', 1000)
-    const plan = planMove(got.rows)
-    toast.dismiss(id)
-    if (plan.chats.length === 0) {
-      toast.info(t('instances.moveChatsNone', { from: instLabel(from) }))
-      return
-    }
-    moveAll.value = { from, to, plan }
-  } catch {
-    toast.error(t('instances.moveChatsFailed', { from: instLabel(from) }), { id })
-  } finally {
-    moveAllBusy.value = false
-  }
-}
-async function runMoveAll() {
-  const job = moveAll.value
-  if (!job) return
-  moveAll.value = null
-  moveAllBusy.value = true
-  const id = `move-all-${job.from.dir}`
-  const ref = `desktop:${job.to.dir}`
-  const chats = job.plan.chats
-  const landed: Array<{ sessionId: string; name: string }> = []
-  const failed: string[] = []
-  // Moved, but an old account's app still lists it (the server says which account and why).
-  const stillShown: string[] = []
-  // Other chats' preview servers an at-limit old account's archive stopped, and where first.
-  let stopped = 0
-  let stoppedOn = ''
-  try {
-    // PASS ONE, every landing. Serial on purpose: each migrate may stop a live run and wait for it,
-    // and the desktop app takes imports one at a time anyway. The old copies are left in place
-    // (deferSettle) until every landing is known, for the reason pass two gives.
-    for (const [i, row] of chats.entries()) {
-      toast.loading(t('instances.moveChatsProgress', { done: i + 1, n: chats.length }), { id })
-      const name = row.title || t('instances.chatsNoTitle')
-      try {
-        // The record's own title is the name this list showed, and one of the two names the
-        // route accepts as the chat's current one. A record with no title of its own is
-        // confirmed by the session list's title for it - the route's other current name -
-        // fetched only for that row. A chat neither store can name is refused by the route.
-        const confirmTitle = row.title?.trim() || (await getSession(row.sessionId, 'claude')).title
-        const r = await migrateSession(row.sessionId, ref, { confirmTitle, deferSettle: true })
-        if (r.ok) landed.push({ sessionId: row.sessionId, name })
-        else failed.push(`${name}: ${r.error ?? 'failed'}`)
-      } catch (e) {
-        failed.push(`${name}: ${e instanceof Error ? e.message : String(e)}`)
-      }
-    }
-    // PASS TWO, the old copies, archived through the old account's own app. `leaving` is exactly
-    // the chats that landed: the app's archive of one chat stops a sibling's preview server only
-    // when that sibling is named as leaving too, and naming the whole plan let it stop the server
-    // of a chat whose own move then failed and stayed (review, 2026-09-26). Without the list at
-    // all, a batch of chats in one repo, the usual shape, left every old row on screen.
-    const leaving = landed.map((c) => c.sessionId)
-    for (const [i, c] of landed.entries()) {
-      toast.loading(t('instances.moveChatsSettling', { done: i + 1, n: landed.length }), { id })
-      try {
-        const r = await settleMovedChat(c.sessionId, ref, leaving)
-        const line = r.ok ? stillShownLine(r.sourceSettle, profileName) : (r.error ?? 'failed')
-        if (line) stillShown.push(`${c.name} (${line})`)
-        const halted = r.ok ? stoppedServers(r.sourceSettle) : null
-        if (halted) {
-          stopped += halted.n
-          stoppedOn ||= profileName(halted.profile)
-        }
-      } catch (e) {
-        stillShown.push(`${c.name} (${e instanceof Error ? e.message : String(e)})`)
-      }
-    }
-  } finally {
-    moveAllBusy.value = false
-    // The counts beside "Chats" changed on both accounts.
+// The whole flow (destinations, count, confirm, the two-pass move) lives in useMoveAllChats.
+const {
+  moveAll,
+  moveAllBusy,
+  moveShowClosed,
+  instLabel,
+  moveTargetsFor,
+  prepareMoveAll,
+  runMoveAll,
+  openChatFromMoveDialog,
+} = useMoveAllChats({
+  instances,
+  closeRowMenu: () => {
+    rowMenuOpen.value = null
+  },
+  onMoved: () => {
     chatCountsAt = 0
-  }
-  if (failed.length) console.warn('[agenthydra] move all chats: some could not be moved', failed)
-  if (stillShown.length)
-    console.warn(
-      '[agenthydra] move all chats: moved, but still listed on an old account',
-      stillShown,
-    )
-  const ok = landed.length
-  const summary = t('instances.moveChatsDone', {
-    ok,
-    n: chats.length,
-    to: instLabel(job.to),
-  })
-  // A chat that moved but still sits in an old sidebar is the exact complaint this batch used to
-  // produce silently (owner, 2026-09-26). Say so, naming the account and the first reason.
-  const shownNote = stillShown.length
-    ? ` ${t('instances.moveChatsStillShown', { n: stillShown.length })} ${stillShown[0] ?? ''}`
-    : ''
-  const stoppedNote = stopped
-    ? ` ${t('instances.moveChatsStoppedServers', { account: stoppedOn, n: stopped })}`
-    : ''
-  // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
-  // warning when nothing moved at all (sixteen 400s once read as a warning with a zero in it).
-  if (failed.length)
-    (ok === 0 ? toast.error : toast.warning)(
-      `${summary} ${t('instances.moveChatsSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}${shownNote}${stoppedNote}`,
-      {
-        id,
-      },
-    )
-  else if (stillShown.length || stopped)
-    toast.warning(`${summary}${shownNote}${stoppedNote}`, { id })
-  else toast.success(summary, { id })
-}
-
-/** A chat in the move list, clicked: close the dialog and land on that chat in Sessions, filtered
- *  to it and selected. The tab switch happens in App.vue; the select happens in SessionsView. */
-function openChatFromMoveDialog(row: ChatListRow) {
-  if (!row.sessionId) return
-  moveAll.value = null
-  requestSessionJump({ session_id: row.sessionId, source: 'claude' })
-}
+  },
+})
 
 function openDeleteDialog(inst: CMInstance) {
   deleteTarget.value = inst
@@ -1220,14 +1066,16 @@ onUnmounted(() => {
         <Button
           v-if="showDesktopInstances"
           size="sm"
-          class="group/create gap-0 overflow-hidden transition-all"
+          class="group/create overflow-hidden"
           :aria-label="$t('instances.createInstance')"
           @click="openCreateDialog"
         >
-          <Plus class="shrink-0" />
-          <span
-            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
-          >{{ $t('instances.createInstance') }}</span>
+          <span class="inline-flex items-center">
+            <Plus class="shrink-0" />
+            <span
+              class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-36 group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-36 group-focus-visible/create:opacity-100"
+            >{{ $t('instances.createInstance') }}</span>
+          </span>
         </Button>
       </div>
     </div>
@@ -1276,8 +1124,8 @@ onUnmounted(() => {
       <ExpandArea :open="showDesktopInstances && desktopOpen">
       <!-- px-1.5 rather than the kit's px-2: ten columns in the 1000px frame, and the 36px this
            gives back is what lets every capped name fit the Name column whole. -->
-      <Table class="[&_td]:px-1.5 [&_th]:px-1.5">
-        <TableHeader class="sticky top-0 z-10 bg-card">
+      <Table density="compact">
+        <TableHeader sticky>
           <TableRow>
             <TableHead
               class="w-10 cursor-pointer select-none"
@@ -1403,7 +1251,7 @@ onUnmounted(() => {
         <!-- visibleRows, not instances: with "hide" on, the filter can empty a table that still has
              instances in it. Keying the empty branch off the rows actually rendered is what stops
              that landing as a blank tbody with no explanation. -->
-        <TableBody v-if="visibleRows.length === 0" class="[&>tr]:transition-colors [&>tr]:duration-200">
+        <TableBody v-if="visibleRows.length === 0">
           <!-- Usage mode swaps three process columns for two quota ones and adds the 5-hour
                usage chip, which lands back on ten either way (Last launched shows in both). Kept as
                an expression rather than a literal so a future column change cannot silently desync
@@ -1429,9 +1277,9 @@ onUnmounted(() => {
           </TableEmpty>
           <!-- first-load skeleton rows so the table never looks blank -->
           <TableRow v-for="i in 4" v-else :key="i">
-            <TableCell><Skeleton class="size-2 rounded-full" /></TableCell>
+            <TableCell><Skeleton class="size-2" /></TableCell>
             <TableCell>
-              <Skeleton class="h-4" :style="{ width: `${9 - (i % 3) * 2}rem` }" />
+              <Skeleton class="h-4 w-(--skeleton-w)" :style="{ '--skeleton-w': `${9 - (i % 3) * 2}rem` }" />
               <Skeleton class="mt-1.5 h-3 w-44" />
             </TableCell>
             <TableCell><Skeleton class="h-5 w-24" /></TableCell>
@@ -1469,8 +1317,7 @@ onUnmounted(() => {
           <TableRow
             v-for="inst in visibleRows"
             :key="inst.dir"
-            class="transition-opacity"
-            :class="filterDimmed(filterFacts(inst)) ? 'opacity-25 hover:bg-transparent' : ''"
+            :variant="filterDimmed(filterFacts(inst)) ? 'faded' : 'default'"
             @contextmenu.prevent="rowMenuOpen = inst.dir"
           >
             <TableCell>
@@ -1482,8 +1329,8 @@ onUnmounted(() => {
               >
                 <component
                   :is="iconComponent(resolveIconKey(inst))"
-                  class="size-[18px]"
-                  :style="{ color: colorValue(resolveColorKey(inst)) }"
+                  class="size-4.5 text-(--icon-color)"
+                  :style="{ '--icon-color': colorValue(resolveColorKey(inst)) }"
                   :class="inst.isRunning ? '' : 'opacity-40'"
                 />
                 <span
@@ -1492,7 +1339,7 @@ onUnmounted(() => {
                 />
               </span>
             </TableCell>
-            <TableCell class="max-w-0 font-medium">
+            <TableCell class="max-w-0">
               <!-- The folder used to sit under the name as a permanent mono sub-line, which made
                    every row two lines tall to show a path nobody reads at rest. It moved into the
                    tooltip, where it is one hover away and costs no height. The tooltip is on EVERY
@@ -1500,7 +1347,7 @@ onUnmounted(() => {
                    focus hint rides along as the description when clicking would actually focus.
                    A name too long for the column takes the first line instead, and pushes both of
                    those down one — see nameTooltip. -->
-              <div class="flex min-w-0 items-center gap-1.5">
+              <div class="flex min-w-0 items-center gap-1.5 font-medium">
                 <!-- The permanent number sits BEFORE the name because the name is the untrustworthy
                      half: a profile signed into a different account than the folder it was named
                      after keeps showing the old name, and the number never drifts. -->
@@ -1649,13 +1496,8 @@ onUnmounted(() => {
                     ? $t('instances.copyAccountEmailAria', { email: accountEmail(inst.account) })
                     : undefined
                 "
-                :class="
-                  accountEmail(inst.account)
-                    ? 'cursor-pointer transition-colors hover:brightness-110'
-                    : accountTitle(inst)
-                      ? 'cursor-help'
-                      : undefined
-                "
+                :interactive="!!accountEmail(inst.account)"
+                :class="!accountEmail(inst.account) && accountTitle(inst) ? 'cursor-help' : undefined"
                 @click="copyAccountEmail(inst)"
               >
                 {{ accountCellName(inst) }}
@@ -1665,18 +1507,18 @@ onUnmounted(() => {
               </span>
             </TableCell>
             <template v-if="!usageMode">
-              <TableCell class="mono text-xs text-muted-foreground">{{ inst.pid ?? '—' }}</TableCell>
-              <TableCell class="text-xs text-muted-foreground">
-                {{ inst.isRunning ? formatUptime(inst.startTime) : '—' }}
+              <TableCell><span class="mono text-muted-foreground">{{ inst.pid ?? '—' }}</span></TableCell>
+              <TableCell>
+                <span class="text-muted-foreground">{{ inst.isRunning ? formatUptime(inst.startTime) : '—' }}</span>
               </TableCell>
-              <TableCell class="text-xs text-muted-foreground">{{ formatBytes(inst.memoryBytes) }}</TableCell>
+              <TableCell><span class="text-muted-foreground">{{ formatBytes(inst.memoryBytes) }}</span></TableCell>
             </template>
             <template v-else>
               <!-- A bar, not a bare number: the point of usage mode is scanning ten rows at once
                    for the ones up against a wall, and ten integers all look alike until you read
                    each one. The number stays inside the bar (91 vs 96 is the whole decision), and
                    the countdown under it says when the number stops mattering. -->
-              <TableCell class="text-xs">
+              <TableCell>
                 <UsageBar
                   v-if="sessionResetFor(inst)"
                   :fill-pct="sessionRemaining(inst)"
@@ -1686,7 +1528,7 @@ onUnmounted(() => {
                 />
                 <span v-else class="text-muted-foreground">—</span>
               </TableCell>
-              <TableCell class="text-xs">
+              <TableCell>
                 <CopyResetDate v-if="weeklyResetFor(inst)" :limit="usageFor(inst)?.weekAll">
                   <UsageBar
                     :fill-pct="weeklyRemaining(inst)"
@@ -1786,59 +1628,61 @@ onUnmounted(() => {
                          fourteen near-identically named rows, an open kebab menu is otherwise
                          detached from the row it came from — and "Delete" is the wrong item to be
                          unsure about. Copying it here is one click from every row's menu. -->
-                    <DropdownMenuLabel class="flex items-center justify-between gap-2 py-1">
-                      <span class="font-mono text-xs">{{
-                        $t('instances.numberMenuLabel', { num: inst.num })
-                      }}</span>
-                      <!-- Icon row, everything to the LEFT of copy (owner spec, 2026-09-07).
-                           Refresh is the former "Check usage" ITEM: re-checking one account is the
-                           thing you want twice in a row, and as a menu item every click closed the
-                           menu and made you reopen it. It and Copy keep the menu open; Edit and Log
-                           out each open a dialog, so they close it first rather than leaving a menu
-                           floating over their own dialog. -->
-                      <div class="flex items-center gap-0.5">
-                        <button
-                          type="button"
-                          class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                          :disabled="isChecking(usageKeyFor(inst))"
-                          :aria-label="$t('instances.checkUsage')"
-                          :title="$t('instances.checkUsage')"
-                          @click.stop="onCheckUsage(inst)"
-                        >
-                          <RefreshCw
-                            class="size-3.5"
-                            :class="isChecking(usageKeyFor(inst)) ? 'animate-spin' : ''"
-                          />
-                        </button>
-                        <button
-                          type="button"
-                          class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                          :disabled="isBusy(inst)"
-                          :aria-label="$t('instances.edit')"
-                          :title="$t('instances.edit')"
-                          @click.stop="rowMenuOpen = null; openEditDialog(inst)"
-                        >
-                          <Pencil class="size-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                          :disabled="inst.isRunning || isBusy(inst)"
-                          :aria-label="$t('instances.logout')"
-                          :title="$t('instances.logout')"
-                          @click.stop="rowMenuOpen = null; openLogoutDialog(inst)"
-                        >
-                          <LogOut class="size-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          :aria-label="$t('instances.copyNumber')"
-                          :title="$t('instances.copyNumber')"
-                          @click.stop="copyInstanceNumber(inst.num)"
-                        >
-                          <Copy class="size-3.5" />
-                        </button>
+                    <DropdownMenuLabel>
+                      <div class="-my-0.5 flex items-center justify-between gap-2">
+                        <span class="font-mono text-xs">{{
+                          $t('instances.numberMenuLabel', { num: inst.num })
+                        }}</span>
+                        <!-- Icon row, everything to the LEFT of copy (owner spec, 2026-09-07).
+                             Refresh is the former "Check usage" ITEM: re-checking one account is the
+                             thing you want twice in a row, and as a menu item every click closed the
+                             menu and made you reopen it. It and Copy keep the menu open; Edit and Log
+                             out each open a dialog, so they close it first rather than leaving a menu
+                             floating over their own dialog. -->
+                        <div class="flex items-center gap-0.5">
+                          <button
+                            type="button"
+                            class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                            :disabled="isChecking(usageKeyFor(inst))"
+                            :aria-label="$t('instances.checkUsage')"
+                            :title="$t('instances.checkUsage')"
+                            @click.stop="onCheckUsage(inst)"
+                          >
+                            <RefreshCw
+                              class="size-3.5"
+                              :class="isChecking(usageKeyFor(inst)) ? 'animate-spin' : ''"
+                            />
+                          </button>
+                          <button
+                            type="button"
+                            class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                            :disabled="isBusy(inst)"
+                            :aria-label="$t('instances.edit')"
+                            :title="$t('instances.edit')"
+                            @click.stop="rowMenuOpen = null; openEditDialog(inst)"
+                          >
+                            <Pencil class="size-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                            :disabled="inst.isRunning || isBusy(inst)"
+                            :aria-label="$t('instances.logout')"
+                            :title="$t('instances.logout')"
+                            @click.stop="rowMenuOpen = null; openLogoutDialog(inst)"
+                          >
+                            <LogOut class="size-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                            :aria-label="$t('instances.copyNumber')"
+                            :title="$t('instances.copyNumber')"
+                            @click.stop="copyInstanceNumber(inst.num)"
+                          >
+                            <Copy class="size-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </DropdownMenuLabel>
                     <DropdownMenuSeparator />
@@ -1865,7 +1709,7 @@ onUnmounted(() => {
                            until the first count arrives rather than a guessed 0. -->
                       <span
                         v-if="activeChatsOf(inst) !== undefined"
-                        class="ms-auto min-w-5 rounded-full px-1.5 text-center text-[0.6875rem] font-medium tabular-nums"
+                        class="ms-auto min-w-5 rounded-full px-1.5 text-center text-2xs font-medium tabular-nums"
                         :class="activeChatsOf(inst) ? 'bg-primary text-primary-foreground' : 'border border-muted-foreground/50 text-muted-foreground'"
                         :title="$t('instances.chatsActiveCount', { n: activeChatsOf(inst) ?? 0 })"
                         :aria-label="$t('instances.chatsActiveCount', { n: activeChatsOf(inst) ?? 0 })"
@@ -1892,7 +1736,7 @@ onUnmounted(() => {
                              It never was: the move takes every unarchived, not-done chat and
                              stops a live one first - see moveChatsConfirmBody, which now leads
                              with that. Naming the list is what disambiguates the switch. -->
-                        <DropdownMenuLabel class="text-xs text-muted-foreground">
+                        <DropdownMenuLabel>
                           {{ $t('instances.moveChatsTargetsLabel') }}
                         </DropdownMenuLabel>
                         <!-- @select.prevent keeps the submenu open across the flip; reka closes
@@ -2032,7 +1876,7 @@ onUnmounted(() => {
              click. Each row opens that chat in Sessions (filtered to it, selected). -->
         <ul class="scroll-slim max-h-56 space-y-2 overflow-y-auto text-xs">
           <li v-for="g in groupByProject(moveAll?.plan.chats ?? [])" :key="g.project">
-            <div class="mb-1 flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground">
+            <div class="mb-1 flex items-center justify-between gap-2 text-2xs font-medium text-muted-foreground">
               <span class="truncate">{{ g.project }}</span>
               <span class="shrink-0">{{ $t('instances.moveChatsGroupCount', { n: g.sessions.length }) }}</span>
             </div>
@@ -2101,25 +1945,3 @@ onUnmounted(() => {
     />
   </div>
 </template>
-
-<style scoped>
-.row-fade-enter-active,
-.row-fade-leave-active {
-  transition:
-    opacity 200ms ease,
-    transform 200ms ease;
-}
-.row-fade-enter-from {
-  opacity: 0;
-  transform: translateY(-4px);
-}
-.row-fade-leave-to {
-  opacity: 0;
-}
-.row-fade-leave-active {
-  position: relative;
-}
-.row-fade-move {
-  transition: transform 200ms ease;
-}
-</style>

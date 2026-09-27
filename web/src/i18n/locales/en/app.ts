@@ -4,7 +4,7 @@ export default {
   tabInstances: 'Instances',
   queue: 'Queue',
   settings: 'Settings',
-  settingsUpdateAvailable: 'Settings — an update is available',
+  settingsUpdateAvailable: 'Settings: an update is available',
   restartNeeded: 'Restart to load new code',
   restarting: 'Restarting…',
   restartNeededHint:

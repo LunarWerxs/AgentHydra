@@ -17,7 +17,7 @@ export default {
   // --- the unit switch ---
   // Money answers "what would this have cost on the API"; tokens answer "how much did I actually
   // use". Several panels could only ever say the first, which made the second unanswerable on a
-  // tab named Analytics. One switch, whole tab — see composables/useAnalyticsPrefs.ts.
+  // tab named Analytics. One switch, whole tab, see composables/useAnalyticsPrefs.ts.
   unitMoney: 'Money',
   unitTokens: 'Tokens',
   showTokens: 'Show tokens instead of money',
@@ -27,7 +27,7 @@ export default {
   // has to say so. Per-day/project/account token splits are newer than the rest of the tab, so a
   // daemon running older code serves buckets with a cost and no token figures at all.
   noTokenData:
-    'This build has no token figures for this chart yet — restart AgentHydra to pick them up, or switch back to money.',
+    'This build has no token figures for this chart yet. Restart AgentHydra to pick them up, or switch back to money.',
   // --- headline numbers ---
   totalCost: 'Cost',
   totalTokens: 'Tokens',
@@ -38,7 +38,7 @@ export default {
   sessions: 'Sessions',
   agentHours: 'Agent hours',
   tokens: 'Weighted tokens',
-  tokensNote: 'Cache reads ×0.1, output ×5 — a cost-shaped total, not a raw count.',
+  tokensNote: 'Cache reads ×0.1, output ×5: a cost-shaped total, not a raw count.',
   // --- token split ---
   tokenSplit: 'Where the tokens went',
   tokenSplitNote:
@@ -97,7 +97,7 @@ export default {
   whenYouWork: 'When the work happens',
   hourNote: 'Replies by hour of the week, darker where there were more.',
   // Two grains, two questions. The hour grid answers "what time of day do I work" and throws the
-  // calendar away to do it, so it could never answer "which weeks was I actually working" — which
+  // calendar away to do it, so it could never answer "which weeks was I actually working", which
   // over a window of months is the one people open this panel for.
   grainCalendar: 'Calendar',
   grainHour: 'Hour of week',

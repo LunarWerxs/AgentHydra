@@ -97,18 +97,7 @@ def rebuild_records(records: list[dict], session_id: str | None = None) -> tuple
     chain = active_chain(records)
     stats = {"chain": len(chain), "kept": 0, "thinking": 0, "unansweredToolUse": 0,
              "orphanToolResult": 0, "nonConversation": 0, "emptied": 0}
-
-    # Which tool_use ids are answered LATER in the chain. Built back to front so "later" is
-    # exact: a result that appears before its call does not count.
-    answered_after: list[set] = [set()] * len(chain)
-    seen_results: set = set()
-    for i in range(len(chain) - 1, -1, -1):
-        answered_after[i] = set(seen_results)
-        content = _blocks(chain[i])
-        if chain[i].get("type") == "user" and isinstance(content, list):
-            for b in content:
-                if isinstance(b, dict) and b.get("type") == "tool_result":
-                    seen_results.add(b.get("tool_use_id"))
+    answered_after = _answered_after(chain)
 
     kept: list[dict] = []
     issued: set = set()  # tool_use ids a kept assistant record already carries
@@ -117,40 +106,8 @@ def rebuild_records(records: list[dict], session_id: str | None = None) -> tuple
         if kind not in _CONVERSATION or rec.get("isSidechain"):
             stats["nonConversation"] += 1
             continue
-        content = _blocks(rec)
-        if isinstance(content, str):
-            if not content.strip():
-                stats["emptied"] += 1
-                continue
-            new_content: list | str = content
-        elif isinstance(content, list):
-            new_content = []
-            for b in content:
-                btype = b.get("type") if isinstance(b, dict) else None
-                if btype in ("thinking", "redacted_thinking"):
-                    stats["thinking"] += 1
-                    continue
-                if kind == "assistant":
-                    if btype not in _ASSISTANT_KEEP:
-                        continue
-                    if btype == "tool_use" and b.get("id") not in answered_after[i]:
-                        stats["unansweredToolUse"] += 1
-                        continue
-                    if btype == "text" and not str(b.get("text") or "").strip():
-                        continue
-                    if btype == "tool_use":
-                        issued.add(b.get("id"))
-                else:
-                    if btype not in _USER_KEEP:
-                        continue
-                    if btype == "tool_result" and b.get("tool_use_id") not in issued:
-                        stats["orphanToolResult"] += 1
-                        continue
-                new_content.append(b)
-            if not new_content:
-                stats["emptied"] += 1
-                continue
-        else:
+        new_content = _rebuilt_content(_blocks(rec), kind, answered_after[i], issued, stats)
+        if new_content is None:
             stats["emptied"] += 1
             continue
         out = dict(rec)
@@ -159,14 +116,85 @@ def rebuild_records(records: list[dict], session_id: str | None = None) -> tuple
             out["sessionId"] = session_id
         kept.append(out)
 
-    # One straight chain: each record's parent is the record kept before it.
+    _relink(kept)
+    stats["kept"] = len(kept)
+    return kept, stats
+
+
+def _answered_after(chain: list[dict]) -> list[set]:
+    """Which tool_use ids are answered LATER in the chain, per record. Built back to front so
+    "later" is exact: a result that appears before its call does not count."""
+    answered_after: list[set] = [set()] * len(chain)
+    seen_results: set = set()
+    for i in range(len(chain) - 1, -1, -1):
+        answered_after[i] = set(seen_results)
+        content = _blocks(chain[i])
+        if chain[i].get("type") == "user" and isinstance(content, list):
+            seen_results.update(_tool_result_ids(content))
+    return answered_after
+
+
+def _tool_result_ids(content: list) -> list:
+    """The tool_use_id of every tool_result block in one content list, in order."""
+    return [b.get("tool_use_id") for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_result"]
+
+
+def _rebuilt_content(content, kind: str, answered: set, issued: set,
+                     stats: dict) -> list | str | None:
+    """One record's replay-safe content, or None when nothing replayable is left (the caller
+    counts it as emptied). Drops and tool_use ids issued are recorded in `stats` / `issued`."""
+    if isinstance(content, str):
+        return content if content.strip() else None
+    if not isinstance(content, list):
+        return None
+    new_content = []
+    for b in content:
+        if _keep_block(b, kind, answered, issued, stats):
+            new_content.append(b)
+    return new_content or None
+
+
+def _keep_block(b, kind: str, answered: set, issued: set, stats: dict) -> bool:
+    """Whether one content block survives the replay-safe rules for a record of `kind`."""
+    btype = b.get("type") if isinstance(b, dict) else None
+    if btype in ("thinking", "redacted_thinking"):
+        stats["thinking"] += 1
+        return False
+    if kind == "assistant":
+        return _keep_assistant_block(b, btype, answered, issued, stats)
+    return _keep_user_block(b, btype, issued, stats)
+
+
+def _keep_assistant_block(b, btype: str | None, answered: set, issued: set, stats: dict) -> bool:
+    if btype not in _ASSISTANT_KEEP:
+        return False
+    if btype == "tool_use" and b.get("id") not in answered:
+        stats["unansweredToolUse"] += 1
+        return False
+    if btype == "text" and not str(b.get("text") or "").strip():
+        return False
+    if btype == "tool_use":
+        issued.add(b.get("id"))
+    return True
+
+
+def _keep_user_block(b, btype: str | None, issued: set, stats: dict) -> bool:
+    if btype not in _USER_KEEP:
+        return False
+    if btype == "tool_result" and b.get("tool_use_id") not in issued:
+        stats["orphanToolResult"] += 1
+        return False
+    return True
+
+
+def _relink(kept: list[dict]) -> None:
+    """One straight chain: each record's parent is the record kept before it."""
     parent = None
     for rec in kept:
         rec["parentUuid"] = parent
         rec.pop("logicalParentUuid", None)
         parent = rec.get("uuid")
-    stats["kept"] = len(kept)
-    return kept, stats
 
 
 def project_folder(cwd: str) -> str:

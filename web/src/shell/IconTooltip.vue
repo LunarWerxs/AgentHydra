@@ -22,10 +22,12 @@ defineProps<{ label: string; description?: string; detail?: string }>();
     <TooltipTrigger as-child>
       <slot />
     </TooltipTrigger>
-    <TooltipContent class="max-w-[220px] flex-col items-start gap-0.5 text-start">
-      <div class="font-medium">{{ label }}</div>
-      <div v-if="description" class="text-background/70">{{ description }}</div>
-      <div v-if="detail" class="text-background/70">{{ detail }}</div>
+    <TooltipContent class="max-w-55">
+      <div class="flex flex-col items-start gap-0.5 text-start">
+        <div class="font-medium">{{ label }}</div>
+        <div v-if="description" class="text-background/70">{{ description }}</div>
+        <div v-if="detail" class="text-background/70">{{ detail }}</div>
+      </div>
     </TooltipContent>
   </Tooltip>
 </template>

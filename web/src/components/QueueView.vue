@@ -113,10 +113,14 @@ async function cancel(item: QueueItem) {
   }
   await refreshQueue()
 }
+// Optimistic: the card leaves the list on the click, and comes back only if the daemon refuses.
 async function remove(item: QueueItem) {
+  const previous = queue.value
+  queue.value = previous.filter((q) => q.id !== item.id)
   try {
     await api.deleteQueueItem(item.id)
   } catch (e) {
+    queue.value = previous
     toast.error(actionErrorText(e, t('queue.toastDeleteFailed')))
   }
   await refreshQueue()
@@ -215,7 +219,7 @@ async function clearFinished() {
            whenever there is OLDER data still on screen but the latest poll failed. -->
       <p
         v-if="queueStatus.stale.value"
-        class="mb-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-[11px] text-warning"
+        class="mb-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-2xs text-warning"
       >
         {{ $t('queue.staleHint', { reason: queueStatus.error.value }) }}
       </p>
@@ -226,7 +230,7 @@ async function clearFinished() {
           <div class="flex items-start gap-3">
             <Skeleton class="mt-0.5 size-4" />
             <div class="min-w-0 flex-1">
-              <Skeleton class="h-4" :style="{ width: `${70 - (i % 3) * 15}%` }" />
+              <Skeleton class="h-4 w-(--skeleton-w)" :style="{ '--skeleton-w': `${70 - (i % 3) * 15}%` }" />
               <Skeleton class="mt-2 h-3 w-11/12" />
               <div class="mt-2.5 flex items-center gap-1.5">
                 <Skeleton class="h-5 w-20" />

@@ -175,7 +175,7 @@ function onRootOpenChange(v: boolean): void {
       <Badge
         :variant="variant"
         class="cursor-pointer"
-        :class="stale ? 'opacity-60' : ''"
+        :dimmed="stale"
         :title="noData ? reasonMessage : undefined"
         @mouseenter="onEnter"
         @mouseleave="onLeave"
@@ -190,7 +190,7 @@ function onRootOpenChange(v: boolean): void {
          reachable. -->
     <PopoverContent
       align="start"
-      class="w-64 text-xs"
+      class="w-64"
       :trap-focus="false"
       @open-auto-focus.prevent
       @mouseenter="onEnter"

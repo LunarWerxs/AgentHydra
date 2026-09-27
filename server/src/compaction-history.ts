@@ -65,6 +65,60 @@ function toolResultText(content: unknown): string {
     .join('\n')
 }
 
+/** One transcript line's event, or null for a blank, unparseable or non-object line. */
+function parseEventLine(raw: string | undefined): Record<string, unknown> | null {
+  const line = raw?.trim()
+  if (!line) return null
+  let ev: Record<string, unknown> | null
+  try {
+    ev = JSON.parse(line)
+  } catch {
+    return null // a half-written last line, or a corrupt one, must not hide the rest
+  }
+  if (!ev || typeof ev !== 'object') return null
+  return ev
+}
+
+/** A message's content as blocks: a bare string is one text block. */
+function contentBlocks(content: unknown): Block[] {
+  if (typeof content === 'string') return [{ type: 'text', text: content }]
+  return Array.isArray(content) ? (content as Block[]) : []
+}
+
+/** A block's kind and searchable text, or null for thinking, images and anything unknown. */
+function blockText(b: Block | undefined): { kind: HistorySource['kind']; text: string } | null {
+  if (b?.type === 'text' && typeof b.text === 'string') return { kind: 'text', text: b.text }
+  if (b?.type === 'tool_use')
+    return {
+      kind: 'tool_use',
+      text: `${String(b.name ?? 'tool')} ${JSON.stringify(b.input ?? {})}`,
+    }
+  if (b?.type === 'tool_result') return { kind: 'tool_result', text: toolResultText(b.content) }
+  return null
+}
+
+/** Append a user or assistant turn's searchable blocks; line `n` names a turn without a uuid. */
+function pushEventSources(ev: Record<string, unknown>, n: number, sources: HistorySource[]): void {
+  if (ev.type !== 'user' && ev.type !== 'assistant') return
+  if (ev.isMeta === true) return
+  const role: HistorySource['role'] = ev.type === 'user' ? 'user' : 'assistant'
+  const content = (ev.message as { content?: unknown } | undefined)?.content
+  const base = typeof ev.uuid === 'string' && ev.uuid ? ev.uuid : `line${n + 1}`
+  const timestamp = typeof ev.timestamp === 'string' ? ev.timestamp : null
+  const blocks = contentBlocks(content)
+  for (let i = 0; i < blocks.length; i++) {
+    const found = blockText(blocks[i])
+    if (!found?.text.trim()) continue
+    sources.push({
+      id: `${base}#${i}`,
+      role,
+      kind: found.kind,
+      timestamp,
+      text: redactSecrets(found.text).text,
+    })
+  }
+}
+
 /** Parse a Claude Code JSONL transcript into its sources and where the last compaction cut it. */
 export function parseHistory(raw: string): ParsedHistory {
   const sources: HistorySource[] = []
@@ -73,56 +127,17 @@ export function parseHistory(raw: string): ParsedHistory {
   let droppedCount = 0
   const lines = raw.split('\n')
   for (let n = 0; n < lines.length; n++) {
-    const line = lines[n]?.trim()
-    if (!line) continue
-    let ev: Record<string, unknown> | null
-    try {
-      ev = JSON.parse(line)
-    } catch {
-      continue // a half-written last line, or a corrupt one, must not hide the rest
-    }
-    if (!ev || typeof ev !== 'object') continue
+    const ev = parseEventLine(lines[n])
+    if (!ev) continue
     // The cut: the engine's own boundary marker, or (older transcripts) the summary turn it writes.
     if (ev.type === 'system' && ev.subtype === 'compact_boundary') {
       boundaries++
       droppedCount = sources.length
-      continue
-    }
-    if (ev.isCompactSummary === true) {
+    } else if (ev.isCompactSummary === true) {
       summaries++
       droppedCount = sources.length
-      continue
-    }
-    if (ev.type !== 'user' && ev.type !== 'assistant') continue
-    if (ev.isMeta === true) continue
-    const role: HistorySource['role'] = ev.type === 'user' ? 'user' : 'assistant'
-    const content = (ev.message as { content?: unknown } | undefined)?.content
-    const base = typeof ev.uuid === 'string' && ev.uuid ? ev.uuid : `line${n + 1}`
-    const timestamp = typeof ev.timestamp === 'string' ? ev.timestamp : null
-    const blocks: Block[] =
-      typeof content === 'string'
-        ? [{ type: 'text', text: content }]
-        : Array.isArray(content)
-          ? (content as Block[])
-          : []
-    for (let i = 0; i < blocks.length; i++) {
-      const b = blocks[i]
-      let kind: HistorySource['kind']
-      let text: string
-      if (b?.type === 'text' && typeof b.text === 'string') {
-        kind = 'text'
-        text = b.text
-      } else if (b?.type === 'tool_use') {
-        kind = 'tool_use'
-        text = `${String(b.name ?? 'tool')} ${JSON.stringify(b.input ?? {})}`
-      } else if (b?.type === 'tool_result') {
-        kind = 'tool_result'
-        text = toolResultText(b.content)
-      } else {
-        continue // thinking, images and anything unknown are not searchable text
-      }
-      if (!text.trim()) continue
-      sources.push({ id: `${base}#${i}`, role, kind, timestamp, text: redactSecrets(text).text })
+    } else {
+      pushEventSources(ev, n, sources)
     }
   }
   return { sources, compactions: boundaries || summaries, droppedCount }

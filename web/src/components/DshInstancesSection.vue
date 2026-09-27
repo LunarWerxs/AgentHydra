@@ -234,10 +234,10 @@ onUnmounted(() => window.clearInterval(timer))
         </TableBody>
         <TableBody v-else>
           <TableRow v-for="inst in instances" :key="inst.id">
-            <TableCell class="font-medium">
+            <TableCell>
               <!-- Same chip as every other instance table: the number comes from ONE sequence
                    spanning all four families, so it has to look identical everywhere. -->
-              <div class="flex items-center gap-1.5">
+              <div class="flex items-center gap-1.5 font-medium">
                 <InstanceNumber :num="inst.num" />
                 <span>{{ inst.name }}</span>
                 <Badge v-if="inst.isDefault" variant="outline" :title="$t('dshInstances.defaultHint')">
@@ -257,9 +257,9 @@ onUnmounted(() => window.clearInterval(timer))
                 </span>
               </span>
             </TableCell>
-            <TableCell class="text-xs text-muted-foreground">{{ inst.sessions }}</TableCell>
-            <TableCell class="mono max-w-[20rem] truncate text-[0.625rem] text-muted-foreground" :title="inst.home">
-              {{ inst.home }}
+            <TableCell><span class="text-xs text-muted-foreground">{{ inst.sessions }}</span></TableCell>
+            <TableCell :title="inst.home">
+              <span class="mono block max-w-[20rem] truncate text-3xs text-muted-foreground">{{ inst.home }}</span>
             </TableCell>
             <TableCell>
               <div class="flex items-center justify-end gap-1">

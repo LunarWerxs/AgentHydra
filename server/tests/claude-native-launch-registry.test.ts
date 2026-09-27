@@ -34,7 +34,13 @@ function snapshot() {
 function success(value: unknown): CapturedRun {
   return { code: 0, timedOut: false, stdout: JSON.stringify(value), stderr: '' }
 }
-function decodePayload(script: string): any {
+/** What the restore script carries: the arguments it was built from. */
+type RestorePayload = {
+  managedBinary: string
+  profile: string
+  snapshot: Parameters<typeof nativeRegistryRestoreScript>[2]
+}
+function decodePayload(script: string): unknown {
   const encoded = script.match(/FromBase64String\('([^']+)'\)/)![1]!
   return JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))
 }
@@ -70,9 +76,9 @@ describe('managed Claude launch registry guard', () => {
       browsers: CLAUDE_NATIVE_HOST_KEYS,
     })
     expect(await guard.restore()).toEqual(expected)
-    const payload = decodePayload(calls[1]!.at(-1)!)
+    const payload = decodePayload(calls[1]!.at(-1)!) as RestorePayload
     expect(payload).toEqual({ managedBinary: binary, profile, snapshot: baseline })
-    expect(payload.snapshot.protocol.keys[0].values[2].data).toBe('9223372036854775807')
+    expect(payload.snapshot.protocol.keys[0]!.values[2]!.data).toBe('9223372036854775807')
     expect(CLAUDE_NATIVE_HOST_KEYS[4]).toContain('ArcBrowser\\Arc')
     expect(CLAUDE_NATIVE_HOST_KEYS[6]).toContain('Opera Software\\Opera Stable')
   })

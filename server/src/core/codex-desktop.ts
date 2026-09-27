@@ -486,6 +486,47 @@ export interface OpenCodexDesktopOptions {
   platform?: NodeJS.Platform
 }
 
+/**
+ * Spawns the launch. A detached launch is released at once; a hand-off shell is waited for, and
+ * its failure message is returned (null when it succeeded).
+ */
+async function spawnCodexLaunch(
+  launch: CodexDesktopLaunch,
+  platform: NodeJS.Platform,
+  spawn: typeof Bun.spawn,
+): Promise<string | null> {
+  const child = spawn(launch.argv, {
+    env: { ...(process.env as Record<string, string>), ...launch.envOverrides },
+    stdin: 'ignore',
+    stdout: 'ignore',
+    stderr: launch.detached ? 'ignore' : 'pipe',
+    windowsHide: platform === 'win32',
+    ...(launch.detached ? { detached: true } : {}),
+  })
+  if (launch.detached) {
+    child.unref()
+    return null
+  }
+  // The hand-off is a short-lived shell whose exit code IS the launch verdict: ignoring it would
+  // report "Access is denied" from Start-Process as "Codex Desktop launched."
+  const [code, stderr] = await Promise.all([
+    awaitExitBounded(child, HANDOFF_TIMEOUT_MS),
+    child.stderr instanceof ReadableStream
+      ? new Response(child.stderr).text().catch(() => '')
+      : Promise.resolve(''),
+  ])
+  return handoffFailureMessage(code, stderr)
+}
+
+/** What a finished (or timed-out, `code` null) hand-off says went wrong, or null for a clean exit. */
+function handoffFailureMessage(code: number | null, stderr: string): string | null {
+  if (code === 0) return null
+  if (code === null)
+    return `Failed to launch Codex Desktop: the launcher did not finish within ${HANDOFF_TIMEOUT_MS / 1000}s.`
+  const reason = handoffError(stderr)
+  return `Failed to launch Codex Desktop${reason ? `: ${reason}` : ` (launcher exit ${code}).`}`
+}
+
 export async function openCodexDesktop(
   target: CodexDesktopTarget,
   options: OpenCodexDesktopOptions = {},
@@ -527,35 +568,8 @@ export async function openCodexDesktop(
     mkdirSync(desktopDir, { recursive: true })
     const platform = options.platform ?? process.platform
     const launch = buildCodexDesktopLaunch(platform, binary, target.codexHome, desktopDir)
-    const spawn = options.spawn ?? Bun.spawn
-    const child = spawn(launch.argv, {
-      env: { ...(process.env as Record<string, string>), ...launch.envOverrides },
-      stdin: 'ignore',
-      stdout: 'ignore',
-      stderr: launch.detached ? 'ignore' : 'pipe',
-      windowsHide: platform === 'win32',
-      ...(launch.detached ? { detached: true } : {}),
-    })
-    if (launch.detached) {
-      child.unref()
-    } else {
-      // The hand-off is a short-lived shell whose exit code IS the launch verdict. It used to be
-      // ignored, so "Access is denied" from Start-Process was reported as "Codex Desktop launched."
-      const [code, stderr] = await Promise.all([
-        awaitExitBounded(child, HANDOFF_TIMEOUT_MS),
-        child.stderr instanceof ReadableStream
-          ? new Response(child.stderr).text().catch(() => '')
-          : Promise.resolve(''),
-      ])
-      if (code !== 0) {
-        const reason = handoffError(stderr)
-        return failed(
-          code === null
-            ? `Failed to launch Codex Desktop: the launcher did not finish within ${HANDOFF_TIMEOUT_MS / 1000}s.`
-            : `Failed to launch Codex Desktop${reason ? `: ${reason}` : ` (launcher exit ${code}).`}`,
-        )
-      }
-    }
+    const handoffFailure = await spawnCodexLaunch(launch, platform, options.spawn ?? Bun.spawn)
+    if (handoffFailure !== null) return failed(handoffFailure)
     // The cached snapshot is now wrong by construction — drop it so the next poll shows the row
     // as running rather than waiting out the TTL.
     invalidateCodexProcessCache()

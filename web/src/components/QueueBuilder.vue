@@ -332,7 +332,7 @@ async function submit() {
 
 <template>
   <Dialog v-model:open="open">
-    <DialogContent class="max-w-[660px]">
+    <DialogContent class="max-w-165">
       <DialogHeader>
         <DialogTitle>{{ editing ? $t('builder.editDialogTitle') : $t('builder.dialogTitle') }}</DialogTitle>
       </DialogHeader>
@@ -380,7 +380,7 @@ async function submit() {
           </div>
           <div class="space-y-1.5">
             <label class="text-xs font-medium text-muted-foreground">{{ $t('builder.cwdLabel') }}</label>
-            <Input v-model="form.cwd" :placeholder="$t('builder.cwdPlaceholder')" class="font-mono text-xs" />
+            <Input v-model="form.cwd" :placeholder="$t('builder.cwdPlaceholder')" variant="mono" />
           </div>
         </div>
 
@@ -424,14 +424,14 @@ async function submit() {
           <div class="flex items-center gap-1.5">
             <Popover v-model:open="runAtOpen">
               <PopoverTrigger as-child>
-                <Button variant="outline" size="sm" class="flex-1 justify-start font-normal">
+                <Button variant="outline" size="sm" class="flex-1 justify-start">
                   <CalendarClock />
-                  <span :class="form.not_before_local ? '' : 'text-muted-foreground'">
+                  <span class="font-normal" :class="form.not_before_local ? '' : 'text-muted-foreground'">
                     {{ runAtLabel }}
                   </span>
                 </Button>
               </PopoverTrigger>
-              <PopoverContent align="start" class="w-64 p-3">
+              <PopoverContent align="start" class="w-64">
                 <SchedulePanel
                   :confirm-label="$t('scheduler.scheduleUseTime')"
                   @pick="setRunAt"
@@ -457,7 +457,7 @@ async function submit() {
         <button
           v-if="showCreateForm"
           type="button"
-          class="flex w-full items-center justify-between rounded-md px-1 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+          class="flex w-full items-center justify-between rounded-md p-1 text-xs font-medium text-muted-foreground hover:text-foreground"
           @click="advancedOpen = !advancedOpen"
         >
           {{ $t('builder.advancedOptions') }}
@@ -473,7 +473,7 @@ async function submit() {
               </div>
               <div class="space-y-1.5">
                 <label class="text-xs font-medium text-muted-foreground">{{ $t('builder.cwdOverrideLabel') }}</label>
-                <Input v-model="form.cwd" :placeholder="$t('builder.cwdOverridePlaceholder')" class="font-mono text-xs" />
+                <Input v-model="form.cwd" :placeholder="$t('builder.cwdOverridePlaceholder')" variant="mono" />
               </div>
             </div>
 

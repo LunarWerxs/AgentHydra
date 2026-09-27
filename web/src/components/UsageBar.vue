@@ -90,7 +90,7 @@ const TEXT = 'text-foreground'
 </script>
 
 <template>
-  <div class="min-w-[5rem] leading-tight">
+  <div class="min-w-20 leading-tight">
     <!-- role="meter": a bar with its value drawn inside is a meter, and a screen reader should be
          given the number rather than "graphic". aria-valuetext carries the label when the visible
          text is a duration rather than the meter's own percentage. -->
@@ -105,20 +105,20 @@ const TEXT = 'text-foreground'
       :aria-valuetext="ariaLabel ?? label"
     >
       <div
-        class="absolute inset-y-0 left-0 transition-[width] duration-500 ease-out"
+        class="absolute inset-y-0 left-0 w-(--bar-w) transition-width duration-500 ease-out"
         :class="FILL[props.variant]"
-        :style="{ width: `${width}%` }"
+        :style="{ '--bar-w': `${width}%` }"
       />
       <!-- One label, layered over the fill (see TEXT above for why it is neutral rather than the
            hue): no second copy, no "is it legible at 47%?", and no blend mode fighting the palette. -->
       <span
-        class="absolute inset-0 flex items-center justify-center whitespace-nowrap px-1.5 text-[0.625rem] font-medium"
+        class="absolute inset-0 flex items-center justify-center whitespace-nowrap px-1.5 text-3xs font-medium"
         :class="TEXT"
       >
         {{ label }}
       </span>
     </div>
-    <div v-if="caption" class="mt-0.5 text-[0.6875rem] text-muted-foreground">
+    <div v-if="caption" class="mt-0.5 text-2xs text-muted-foreground">
       {{ caption }}
     </div>
   </div>

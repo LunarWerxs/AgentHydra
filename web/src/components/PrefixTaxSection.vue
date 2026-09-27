@@ -103,8 +103,8 @@ onMounted(() => void refresh())
         </TableBody>
         <TableBody v-else>
           <TableRow v-for="row in rows" :key="row.ref">
-            <TableCell class="font-medium">
-              <div class="flex items-center gap-1.5" :title="row.home">
+            <TableCell>
+              <div class="flex items-center gap-1.5 font-medium" :title="row.home">
                 <span>{{ row.name }}</span>
                 <Badge variant="outline">
                   {{ row.kind === 'codex' ? $t('prefixTax.kindCodex') : $t('prefixTax.kindClaude') }}
@@ -112,29 +112,31 @@ onMounted(() => void refresh())
               </div>
             </TableCell>
             <template v-if="row.reading?.tax">
-              <TableCell class="text-xs">
+              <TableCell>
                 {{ $t('prefixTax.tools', { tools: row.reading.tax.tools, mcp: row.reading.tax.mcpTools }) }}
               </TableCell>
-              <TableCell class="text-xs" :title="$t('prefixTax.mcpShare', { kb: kb(row.reading.tax.mcpToolBytes) })">
+              <TableCell :title="$t('prefixTax.mcpShare', { kb: kb(row.reading.tax.mcpToolBytes) })">
                 {{ kb(row.reading.tax.toolBytes) }}
               </TableCell>
-              <TableCell class="text-xs" :title="$t('prefixTax.prefixHint')">
+              <TableCell :title="$t('prefixTax.prefixHint')">
                 {{ $t('prefixTax.tokens', { tokens: row.reading.tax.approxTokens.toLocaleString() }) }}
               </TableCell>
-              <TableCell class="text-xs text-muted-foreground">
-                <span v-if="row.reading.tax.byServer.length === 0">{{ $t('prefixTax.noMcp') }}</span>
-                <span
-                  v-for="s in row.reading.tax.byServer.slice(0, 3)"
-                  v-else
-                  :key="s.server"
-                  class="me-2 whitespace-nowrap"
-                >
-                  {{ $t('prefixTax.server', { server: s.server, kb: kb(s.bytes), tools: s.tools }) }}
+              <TableCell>
+                <span class="text-muted-foreground">
+                  <span v-if="row.reading.tax.byServer.length === 0">{{ $t('prefixTax.noMcp') }}</span>
+                  <span
+                    v-for="s in row.reading.tax.byServer.slice(0, 3)"
+                    v-else
+                    :key="s.server"
+                    class="me-2 whitespace-nowrap"
+                  >
+                    {{ $t('prefixTax.server', { server: s.server, kb: kb(s.bytes), tools: s.tools }) }}
+                  </span>
                 </span>
               </TableCell>
             </template>
-            <TableCell v-else colspan="4" class="text-xs text-muted-foreground">
-              {{ row.reading?.error ?? $t('prefixTax.notMeasured') }}
+            <TableCell v-else colspan="4">
+              <span class="text-muted-foreground">{{ row.reading?.error ?? $t('prefixTax.notMeasured') }}</span>
             </TableCell>
             <TableCell>
               <div class="flex justify-end">

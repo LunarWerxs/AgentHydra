@@ -13,7 +13,7 @@ defineProps<{ label?: string; description?: string }>();
 <template>
   <section>
     <div v-if="label || description || $slots.description" class="mb-2 flex items-center gap-1.5 px-1">
-      <p v-if="label" class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <p v-if="label" class="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
         {{ label }}
       </p>
       <slot name="info">

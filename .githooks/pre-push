@@ -5,15 +5,24 @@
 # 1. Refuse a push to a PUBLIC remote unless AGENTHYDRA_PUSH_PUBLIC=1 is set for this command.
 #    The heading is printed either way; the rule is announce-then-do.
 # 2. Refuse a release tag (v*.*.*) while docs/todo/TODO.md has an open section. No override.
+# 3. Run the host-only lanes GitHub structurally cannot: `check:local` (kit drift) on every push,
+#    or the whole `check:deep` lane when a release tag is in the push, since that is the lane's
+#    stated moment ("run before a release") and it already includes the kit check.
 #
-# Both rules and their history live in .githooks/check-public-push.mjs. Git hands this hook the
+# Rules 1 and 2 and their history live in .githooks/check-public-push.mjs. Git hands this hook the
 # remote's name and URL as arguments and the refs on stdin; both are passed straight through.
 #
 # FAIL CLOSED. The kit-sync and Biome pre-commit guards step aside when their runtime is missing,
 # because a commit is local and cheap to redo. A push is neither, so with no node and no bun on
 # PATH this refuses rather than guessing, and says how to proceed.
+#
+# Rule 3 needs the private lunarwerx-ui kit as a sibling checkout (the same path check:kit reads).
+# Without it, as on every contributor's machine and in CI, it says so and steps aside: those lanes
+# cannot run there at all. With it, a missing bun is refused, like rule 1's missing runtime.
 remote="$1"
 url="$2"
+# stdin can only be read once, and rule 3 needs the refs as well as the guard.
+refs=$(cat)
 
 if command -v node >/dev/null 2>&1; then
   runner=node
@@ -33,4 +42,23 @@ else
   exit 1
 fi
 
-"$runner" .githooks/check-public-push.mjs "$remote" "$url" || exit 1
+printf '%s\n' "$refs" | "$runner" .githooks/check-public-push.mjs "$remote" "$url" || exit 1
+
+kit=../../lunarwerx-ui/sync.mjs
+if [ ! -f "$kit" ]; then
+  echo "pre-push: no lunarwerx-ui kit checkout at $kit, so the host-only kit lanes cannot run here; skipped." >&2
+  exit 0
+fi
+if ! command -v bun >/dev/null 2>&1; then
+  echo "pre-push: the lunarwerx-ui kit is checked out but bun is not on PATH, so the kit lanes cannot run. Refused; install bun." >&2
+  exit 1
+fi
+
+# The same release-tag shape check-public-push.mjs gates on; a deleted tag (all-zero sha) is not a release.
+if printf '%s\n' "$refs" | awk '$2 !~ /^0+$/ && $3 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+/ { found = 1 } END { exit !found }'; then
+  echo "› check:deep (a release tag is in this push; 25+ minutes)…" >&2
+  bun run check:deep || exit 1
+else
+  echo "› check:local (kit drift)…" >&2
+  bun run check:local || exit 1
+fi

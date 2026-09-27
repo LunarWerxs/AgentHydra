@@ -87,7 +87,7 @@ const triggerLabel = computed(() => {
   return parts.length > 0 ? parts.join(' · ') : 'off'
 })
 
-const CAPTION = 'text-[11px] font-semibold uppercase tracking-wider text-primary'
+const CAPTION = 'text-2xs font-semibold uppercase tracking-wider text-primary'
 const CARD = 'rounded-md border border-border bg-background/60'
 const presetLabel = (pct: number) => `${pct}%`
 </script>
@@ -106,15 +106,15 @@ const presetLabel = (pct: number) => `${pct}%`
         <span v-if="enabled" class="tabular-nums">{{ triggerLabel }}</span>
       </button>
     </PopoverTrigger>
-    <PopoverContent align="end" class="w-80 p-0">
-      <div class="space-y-3 px-3 py-3">
+    <PopoverContent align="end" class="w-80">
+      <div class="space-y-3">
         <header class="space-y-1.5">
           <h2 class="text-sm font-semibold text-foreground">Filter</h2>
           <div class="flex items-center gap-3">
-            <span class="min-w-0 flex-1 text-[13px] text-foreground">Filter instances</span>
+            <span class="min-w-0 flex-1 text-ui text-foreground">Filter instances</span>
             <Switch v-model="enabled" />
           </div>
-          <p class="text-[11px] leading-snug text-muted-foreground">
+          <p class="text-2xs leading-snug text-muted-foreground">
             By whether the app is open, which plan it is on, and how much quota is left. A fact that
             is not known yet — an unresolved plan, a login with no window — never sets a row aside.
           </p>
@@ -163,7 +163,7 @@ const presetLabel = (pct: number) => `${pct}%`
                     {{ plan }}
                   </Button>
                 </div>
-                <p v-else class="text-[11px] leading-snug text-muted-foreground">
+                <p v-else class="text-2xs leading-snug text-muted-foreground">
                   No plans read yet. They appear here as accounts resolve.
                 </p>
               </div>
@@ -196,14 +196,14 @@ const presetLabel = (pct: number) => `${pct}%`
                    exactly what reads as a bug. -->
               <ExpandTransition :open="!quotaApplies">
                 <p
-                  class="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground"
+                  class="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-2xs leading-snug text-muted-foreground"
                 >
                   Quota filtering waits for the usage badges — turn them on with the stopwatch
                   button.
                 </p>
               </ExpandTransition>
               <ExpandTransition :open="quotaApplies && !weekEnabled && !sessionEnabled">
-                <p class="px-0.5 text-[11px] leading-snug text-muted-foreground">
+                <p class="px-0.5 text-2xs leading-snug text-muted-foreground">
                   Both quota windows are off, so quota is not part of the filter.
                 </p>
               </ExpandTransition>
@@ -213,7 +213,7 @@ const presetLabel = (pct: number) => `${pct}%`
                  so it has to say so — otherwise the only symptom is a list that never reacted. -->
             <ExpandTransition :open="noRule">
               <p
-                class="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground"
+                class="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-2xs leading-snug text-muted-foreground"
               >
                 The filter is on but nothing is selected. Pick a status, a plan, or a quota window.
               </p>
@@ -222,10 +222,10 @@ const presetLabel = (pct: number) => `${pct}%`
             <section class="space-y-1.5">
               <h3 :class="CAPTION">Display</h3>
               <div :class="cn(CARD, 'flex items-center gap-3 px-2.5 py-1.5')">
-                <span class="min-w-0 flex-1 text-[13px] text-foreground">Hide instead of dim</span>
+                <span class="min-w-0 flex-1 text-ui text-foreground">Hide instead of dim</span>
                 <Switch v-model="hideMatches" />
               </div>
-              <p v-if="hideMatches && props.hiddenCount" class="text-[11px] text-muted-foreground">
+              <p v-if="hideMatches && props.hiddenCount" class="text-2xs text-muted-foreground">
                 {{ props.hiddenCount }} hidden by this filter.
               </p>
             </section>

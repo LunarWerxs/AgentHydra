@@ -91,7 +91,7 @@ function onMove(e: MouseEvent) {
   <div ref="wrap" class="w-full">
     <svg
       :viewBox="`0 0 ${W} ${H}`"
-      class="h-[150px] w-full"
+      class="h-37.5 w-full"
       role="img"
       @mousemove="onMove"
       @mouseleave="hover = null"
@@ -112,14 +112,14 @@ function onMove(e: MouseEvent) {
         :x="PAD_L - 6"
         :y="plotH - (t / max) * plotH + 3"
         text-anchor="end"
-        class="fill-muted-foreground text-[9px] tabular-nums"
+        class="fill-muted-foreground text-3xs tabular-nums"
       >{{ format(t) }}</text>
 
-      <path :d="areaPath(xy, plotH)" :style="{ fill: 'var(--viz-seq)', opacity: 0.14 }" />
+      <path :d="areaPath(xy, plotH)" class="fill-(--viz-seq) opacity-14" />
       <path
         :d="linePath(xy)"
         fill="none"
-        :style="{ stroke: 'var(--viz-seq)' }"
+        class="stroke-(--viz-seq)"
         stroke-width="2"
         stroke-linejoin="round"
       />
@@ -139,8 +139,7 @@ function onMove(e: MouseEvent) {
           :cx="xy[hover]?.x"
           :cy="xy[hover]?.y"
           r="4"
-          :style="{ fill: 'var(--viz-seq)' }"
-          class="stroke-background"
+          class="fill-(--viz-seq) stroke-background"
           stroke-width="2"
         />
       </g>

@@ -1,4 +1,4 @@
-// SettingsView strings — scheduler controls and account credential management.
+// SettingsView strings: scheduler controls and account credential management.
 export default {
   // top-level tabs
   tabGeneral: 'General',
@@ -119,13 +119,13 @@ export default {
     'The 5-hour quota window only starts when an account is used, so an idle account makes you wait the full five hours from the moment you need it. This sends ONE throwaway prompt to any account whose window is not running, which costs a small amount of real quota each time. Off by default. It never touches an account whose window is already running.',
   keepaliveFloorLabel: 'Leave alone above (weekly %)',
   keepaliveFloorHint:
-    'Accounts at or above this share of their WEEKLY cap are skipped. The weekly window is the one that matters — a 5-hour window refills the same day — so spending the last of a weekly allowance to start one is a bad trade. Set 0 to stop the keepalive spending on anything.',
+    'Accounts at or above this share of their WEEKLY cap are skipped. The weekly window is the one that matters. A 5-hour window refills the same day, so spending the last of a weekly allowance to start one is a bad trade. Set 0 to stop the keepalive spending on anything.',
   chatGptHandoffLabel: 'ChatGPT handoff',
   chatGptHandoffHint:
     'Adds a composer action that downloads a bounded, secret-screened repository context file, copies the task prompt, and opens ChatGPT. You still review and submit everything manually.',
   providerToastFailed: 'Failed to save provider setting.',
 
-  // updates section — the version number itself is the status + control now (see the tips below),
+  // updates section: the version number itself is the status + control now (see the tips below),
   // so the old standalone "Check for updates" / "Update available" / "Update blocked" / "Up to
   // date" strings are gone.
   updates: 'Updates',
@@ -176,7 +176,7 @@ export default {
   schedulerHint:
     "When enabled, the scheduler automatically spawns real claude runs for queued items; this spends the selected account's quota and acts on real repositories. Leave it off to dispatch items manually with the Run button.",
   // AH-12: AgentHydra never runs a chat nobody can see (headless-policy.ts's headlessRunsAllowed()
-  // is hardcoded false) — the scheduler exists to spawn those runs automatically, so it can never
+  // is hardcoded false). It exists to spawn those runs automatically, so it can never
   // actually dispatch anything in this build. Read alongside web/src/lib/headless.ts's
   // HEADLESS_QUEUEING_ENABLED, which is what the panel below branches on to disable these controls
   // rather than leave them offering a toggle that would only fail moments after flipping.

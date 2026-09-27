@@ -130,8 +130,9 @@ async function saveTomorrowTime() {
       </Button>
       <!-- the tomorrow time is user-configurable; the tiny gear edits it in place, below -->
       <div class="relative">
-        <Button variant="outline" size="xs" class="w-full pe-5" @click="pickTomorrow()">
-          {{ $t('scheduler.presetTomorrow', { time: tomorrowTime }) }}
+        <Button variant="outline" size="xs" class="w-full" @click="pickTomorrow()">
+          <!-- the end margin keeps the label clear of the gear laid over the button's end -->
+          <span class="me-3">{{ $t('scheduler.presetTomorrow', { time: tomorrowTime }) }}</span>
         </Button>
         <button
           type="button"
@@ -150,11 +151,11 @@ async function saveTomorrowTime() {
     <!-- Disclosed by the gear above, hidden otherwise: one input, right under the button whose
          label it changes, instead of a trip to Settings. -->
     <div v-if="editingTomorrow" class="flex items-center gap-1.5">
-      <label class="text-[11px] text-muted-foreground">{{ $t('scheduler.editTomorrowTime') }}</label>
+      <label class="text-2xs text-muted-foreground">{{ $t('scheduler.editTomorrowTime') }}</label>
       <Input
         v-model="tomorrowDraft"
         type="time"
-        class="h-7 w-24 text-xs"
+        class="w-24"
         :disabled="savingTomorrow"
         @change="saveTomorrowTime()"
         @keyup.enter="saveTomorrowTime()"
@@ -217,8 +218,8 @@ async function saveTomorrowTime() {
       {{ delayLabel }}
     </Button>
 
-    <label class="block text-[11px] text-muted-foreground">{{ $t('scheduler.schedulePickLabel') }}</label>
-    <Input v-model="localValue" type="datetime-local" class="text-xs" />
+    <label class="block text-2xs text-muted-foreground">{{ $t('scheduler.schedulePickLabel') }}</label>
+    <Input v-model="localValue" type="datetime-local" />
     <Button
       :variant="localValue ? 'default' : 'secondary'"
       size="sm"

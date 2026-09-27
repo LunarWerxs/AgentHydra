@@ -29,6 +29,136 @@ export interface MigrateTarget {
   isRunning: boolean
 }
 
+type Translate = (key: string, named?: Record<string, unknown>) => string
+
+interface BulkJob {
+  target: MigrateTarget
+  sessions: SessionSummary[]
+}
+
+/** What a bulk move has done so far, filled by the two passes and read by the summary toast. */
+interface BulkTally {
+  landed: Array<{ sessionId: string; title: string }>
+  failed: string[]
+  // Moved, but an old account's app still lists it (the server says which account and why).
+  stillShown: string[]
+  // Other chats' preview servers an at-limit old account's archive stopped, and where first.
+  stopped: number
+  stoppedOn: string
+}
+
+function newBulkTally(): BulkTally {
+  return { landed: [], failed: [], stillShown: [], stopped: 0, stoppedOn: '' }
+}
+
+function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
+// PASS ONE, every landing, one at a time on purpose: each migrate may stop a live process and
+// wait for it, and the desktop app takes imports serially anyway. Parallel calls would only
+// race its import lock. The old copies wait for pass two (deferSettle).
+async function landBulkSessions(job: BulkJob, id: string, t: Translate, tally: BulkTally) {
+  for (const [i, s] of job.sessions.entries()) {
+    toast.loading(t('sessions.migrateBulkProgress', { done: i + 1, n: job.sessions.length }), {
+      id,
+    })
+    try {
+      const r = await api.migrateSession(s.session_id, job.target.ref, {
+        confirmTitle: s.title,
+        deferSettle: true,
+      })
+      if (r.ok) tally.landed.push({ sessionId: s.session_id, title: s.title })
+      else tally.failed.push(`${s.title}: ${r.error ?? 'failed'}`)
+    } catch (e) {
+      tally.failed.push(`${s.title}: ${errorText(e)}`)
+    }
+  }
+}
+
+async function settleOneLanding(
+  c: { sessionId: string; title: string },
+  targetRef: string,
+  leaving: string[],
+  profileName: (profile: string) => string,
+  tally: BulkTally,
+) {
+  const r = await api.settleMovedChat(c.sessionId, targetRef, leaving)
+  const line = r.ok ? stillShownLine(r.sourceSettle, profileName) : (r.error ?? 'failed')
+  if (line) tally.stillShown.push(`${c.title} (${line})`)
+  const halted = r.ok ? stoppedServers(r.sourceSettle) : null
+  if (halted) {
+    tally.stopped += halted.n
+    tally.stoppedOn ||= profileName(halted.profile)
+  }
+}
+
+// PASS TWO, the old copies, with `leaving` naming exactly the chats that landed, so the
+// archive of one never stops a preview server that belongs to a chat that stayed
+// (server/src/move-source-settle.ts; the Instances batch runs the same two passes).
+async function settleBulkLandings(
+  job: BulkJob,
+  id: string,
+  t: Translate,
+  profileName: (profile: string) => string,
+  tally: BulkTally,
+) {
+  const leaving = tally.landed.map((c) => c.sessionId)
+  for (const [i, c] of tally.landed.entries()) {
+    toast.loading(t('sessions.migrateBulkSettling', { done: i + 1, n: tally.landed.length }), {
+      id,
+    })
+    try {
+      await settleOneLanding(c, job.target.ref, leaving, profileName, tally)
+    } catch (e) {
+      tally.stillShown.push(`${c.title} (${errorText(e)})`)
+    }
+  }
+}
+
+/** The "still shown" and "stopped servers" tails the summary toast appends, each '' when empty. */
+function bulkNotes(t: Translate, tally: BulkTally) {
+  const { stillShown, stopped, stoppedOn } = tally
+  const shownNote = stillShown.length
+    ? ` ${t('sessions.migrateBulkStillShown', { n: stillShown.length })} ${stillShown[0] ?? ''}`
+    : ''
+  const stoppedNote = stopped
+    ? ` ${t('sessions.migrateStoppedServers', { account: stoppedOn, n: stopped })}`
+    : ''
+  return { shownNote, stoppedNote }
+}
+
+function reportBulkMigrate(job: BulkJob, id: string, t: Translate, tally: BulkTally) {
+  const { landed, failed, stillShown, stopped } = tally
+  if (failed.length)
+    console.warn('[agenthydra] bulk migrate: some chats could not be moved', failed)
+  const ok = landed.length
+  const summary = t('sessions.migrateBulkDone', {
+    ok,
+    n: job.sessions.length,
+    name: job.target.name,
+  })
+  // Moved but still listed on an old account: a warning, never a plain tick.
+  if (stillShown.length)
+    console.warn(
+      '[agenthydra] bulk migrate: moved, but still listed on the old account',
+      stillShown,
+    )
+  const { shownNote, stoppedNote } = bulkNotes(t, tally)
+  // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
+  // warning when nothing moved at all (sixteen 400s once read as a warning with a zero in it).
+  if (failed.length)
+    (ok === 0 ? toast.error : toast.warning)(
+      `${summary} ${t('sessions.migrateBulkSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}${shownNote}${stoppedNote}`,
+      {
+        id,
+      },
+    )
+  else if (stillShown.length || stopped)
+    toast.warning(`${summary}${shownNote}${stoppedNote}`, { id })
+  else toast.success(summary, { id })
+}
+
 export function useSessionMigration(deps: {
   checkedSessions: ComputedRef<SessionSummary[]>
   clearChecked: () => void
@@ -115,86 +245,14 @@ export function useSessionMigration(deps: {
     bulkConfirm.value = null
     migrating.value = true
     const id = `bulk-migrate-${job.target.ref}`
-    const landed: Array<{ sessionId: string; title: string }> = []
-    const failed: string[] = []
-    // Moved, but an old account's app still lists it (the server says which account and why).
-    const stillShown: string[] = []
-    // Other chats' preview servers an at-limit old account's archive stopped, and where first.
-    let stopped = 0
-    let stoppedOn = ''
+    const tally = newBulkTally()
     try {
-      // PASS ONE, every landing, one at a time on purpose: each migrate may stop a live process and
-      // wait for it, and the desktop app takes imports serially anyway. Parallel calls would only
-      // race its import lock. The old copies wait for pass two (deferSettle).
-      for (const [i, s] of job.sessions.entries()) {
-        toast.loading(t('sessions.migrateBulkProgress', { done: i + 1, n: job.sessions.length }), {
-          id,
-        })
-        try {
-          const r = await api.migrateSession(s.session_id, job.target.ref, {
-            confirmTitle: s.title,
-            deferSettle: true,
-          })
-          if (r.ok) landed.push({ sessionId: s.session_id, title: s.title })
-          else failed.push(`${s.title}: ${r.error ?? 'failed'}`)
-        } catch (e) {
-          failed.push(`${s.title}: ${e instanceof Error ? e.message : String(e)}`)
-        }
-      }
-      // PASS TWO, the old copies, with `leaving` naming exactly the chats that landed, so the
-      // archive of one never stops a preview server that belongs to a chat that stayed
-      // (server/src/move-source-settle.ts; the Instances batch runs the same two passes).
-      const leaving = landed.map((c) => c.sessionId)
-      for (const [i, c] of landed.entries()) {
-        toast.loading(t('sessions.migrateBulkSettling', { done: i + 1, n: landed.length }), { id })
-        try {
-          const r = await api.settleMovedChat(c.sessionId, job.target.ref, leaving)
-          const line = r.ok ? stillShownLine(r.sourceSettle, profileName) : (r.error ?? 'failed')
-          if (line) stillShown.push(`${c.title} (${line})`)
-          const halted = r.ok ? stoppedServers(r.sourceSettle) : null
-          if (halted) {
-            stopped += halted.n
-            stoppedOn ||= profileName(halted.profile)
-          }
-        } catch (e) {
-          stillShown.push(`${c.title} (${e instanceof Error ? e.message : String(e)})`)
-        }
-      }
+      await landBulkSessions(job, id, t, tally)
+      await settleBulkLandings(job, id, t, profileName, tally)
     } finally {
       migrating.value = false
     }
-    if (failed.length)
-      console.warn('[agenthydra] bulk migrate: some chats could not be moved', failed)
-    const ok = landed.length
-    const summary = t('sessions.migrateBulkDone', {
-      ok,
-      n: job.sessions.length,
-      name: job.target.name,
-    })
-    // Moved but still listed on an old account: a warning, never a plain tick.
-    if (stillShown.length)
-      console.warn(
-        '[agenthydra] bulk migrate: moved, but still listed on the old account',
-        stillShown,
-      )
-    const shownNote = stillShown.length
-      ? ` ${t('sessions.migrateBulkStillShown', { n: stillShown.length })} ${stillShown[0] ?? ''}`
-      : ''
-    const stoppedNote = stopped
-      ? ` ${t('sessions.migrateStoppedServers', { account: stoppedOn, n: stopped })}`
-      : ''
-    // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
-    // warning when nothing moved at all (sixteen 400s once read as a warning with a zero in it).
-    if (failed.length)
-      (ok === 0 ? toast.error : toast.warning)(
-        `${summary} ${t('sessions.migrateBulkSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}${shownNote}${stoppedNote}`,
-        {
-          id,
-        },
-      )
-    else if (stillShown.length || stopped)
-      toast.warning(`${summary}${shownNote}${stoppedNote}`, { id })
-    else toast.success(summary, { id })
+    reportBulkMigrate(job, id, t, tally)
     deps.clearChecked()
   }
 

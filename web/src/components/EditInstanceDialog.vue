@@ -129,7 +129,11 @@ onBeforeUnmount(() => clearTimeout(applyTimer))
               :aria-pressed="k === icon"
               @click="icon = k"
             >
-              <component :is="iconComponent(k)" class="size-4" :style="{ color: colorValue(color) }" />
+              <component
+                :is="iconComponent(k)"
+                class="size-4 text-(--instance-color)"
+                :style="{ '--instance-color': colorValue(color) }"
+              />
             </button>
           </div>
         </div>
@@ -141,9 +145,9 @@ onBeforeUnmount(() => clearTimeout(applyTimer))
               v-for="c in INSTANCE_COLOR_KEYS"
               :key="c"
               type="button"
-              class="size-6 rounded-full ring-offset-2 ring-offset-background transition-transform hover:scale-110"
+              class="size-6 rounded-full bg-(--instance-color) ring-offset-2 ring-offset-background transition-transform hover:scale-110"
               :class="c === color ? 'ring-2 ring-foreground' : ''"
-              :style="{ backgroundColor: colorValue(c) }"
+              :style="{ '--instance-color': colorValue(c) }"
               :aria-label="c"
               :aria-pressed="c === color"
               @click="color = c"

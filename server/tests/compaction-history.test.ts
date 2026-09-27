@@ -15,14 +15,14 @@ const jsonl = (lines: object[]) => lines.map((l) => JSON.stringify(l)).join('\n'
 const user = (uuid: string, content: unknown, extra: object = {}) => ({
   type: 'user',
   uuid,
-  timestamp: '2026-09-25T10:00:00Z',
+  timestamp: '2001-01-01T10:00:00Z',
   message: { role: 'user', content },
   ...extra,
 })
 const assistant = (uuid: string, content: unknown[]) => ({
   type: 'assistant',
   uuid,
-  timestamp: '2026-09-25T10:01:00Z',
+  timestamp: '2001-01-01T10:01:00Z',
   message: { role: 'assistant', content },
 })
 const boundary = { type: 'system', subtype: 'compact_boundary', content: 'Compacted' }

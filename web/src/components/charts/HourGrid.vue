@@ -101,48 +101,51 @@ const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21]
 <template>
   <!-- No overflow and no min-width: the cell size is DERIVED from the measured container, so the
        grid always fits and there is nothing to scroll or clip. -->
+  <!-- The measured sizes are set once here as custom properties; every row, label and cell below
+       reads them through classes. -->
   <div ref="wrap" class="w-full">
-    <div :style="{ width: `${LABEL_W + GAP + gridWidth}px` }">
+    <div
+      class="w-(--hg-total)"
+      :style="{
+        '--hg-total': `${LABEL_W + GAP + gridWidth}px`,
+        '--hg-label': `${LABEL_W}px`,
+        '--hg-gap': `${GAP}px`,
+        '--hg-cell': `${cell}px`,
+        '--hg-grid': `${gridWidth}px`,
+      }"
+    >
       <div
         v-for="(day, d) in DAYS"
         :key="day"
-        class="flex items-center"
-        :style="{ gap: `${GAP}px`, marginBottom: `${GAP}px` }"
+        class="mb-(--hg-gap) flex items-center gap-(--hg-gap)"
       >
-        <span
-          class="shrink-0 text-[10px] text-muted-foreground"
-          :style="{ width: `${LABEL_W}px` }"
-        >{{ day }}</span>
-        <div class="flex" :style="{ gap: `${GAP}px` }">
+        <span class="w-(--hg-label) shrink-0 text-3xs text-muted-foreground">{{ day }}</span>
+        <div class="flex gap-(--hg-gap)">
           <div
             v-for="h in 24"
             :key="h"
-            class="shrink-0 rounded-[2px] bg-muted"
+            class="size-(--hg-cell) shrink-0 rounded-xs bg-muted"
             :class="hover === d * 24 + (h - 1) ? 'ring-1 ring-foreground/40' : ''"
-            :style="{ width: `${cell}px`, height: `${cell}px` }"
             :aria-label="cellLabel(d * 24 + (h - 1))"
             @mouseenter="onEnter(d * 24 + (h - 1), $event)"
             @mousemove="tip = { x: $event.clientX, y: $event.clientY }"
             @mouseleave="hover = null"
           >
             <div
-              class="size-full rounded-[2px]"
-              :style="{
-                background: 'var(--viz-seq)',
-                opacity: intensity(hours[d * 24 + (h - 1)] ?? 0),
-              }"
+              class="size-full rounded-xs bg-(--viz-seq) opacity-(--hg-alpha)"
+              :style="{ '--hg-alpha': intensity(hours[d * 24 + (h - 1)] ?? 0) }"
             ></div>
           </div>
         </div>
       </div>
-      <div class="flex items-center" :style="{ gap: `${GAP}px` }">
-        <span class="shrink-0" :style="{ width: `${LABEL_W}px` }"></span>
-        <div class="relative h-3" :style="{ width: `${gridWidth}px` }">
+      <div class="flex items-center gap-(--hg-gap)">
+        <span class="w-(--hg-label) shrink-0"></span>
+        <div class="relative h-3 w-(--hg-grid)">
           <span
             v-for="h in HOUR_TICKS"
             :key="h"
-            class="absolute top-0 text-[10px] tabular-nums text-muted-foreground"
-            :style="{ left: `${h * (cell + GAP)}px` }"
+            class="absolute top-0 left-(--hg-tick-x) text-3xs tabular-nums text-muted-foreground"
+            :style="{ '--hg-tick-x': `${h * (cell + GAP)}px` }"
           >{{ String(h).padStart(2, '0') }}</span>
         </div>
       </div>

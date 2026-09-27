@@ -9,7 +9,7 @@ export default {
   sortByStatus: 'Sort by status',
   colName: 'Name',
   colNameHint:
-    'The label you gave this instance. If you never named it, this falls back to the account it is signed into, and then to its profile folder — so a row can be named after any of the three. Rename it from the ⋯ menu; that only changes the label, never the folder.',
+    'The label you gave this instance. If you never named it, this falls back to the account it is signed into, and then to its profile folder, so a row can be named after any of the three. Rename it from the ⋯ menu; that only changes the label, never the folder.',
   colAccount: 'Instance account',
   // NO literal "@" in this string. vue-i18n reads a bare @ as the start of a linked-message
   // reference, so "before the @." threw a tokenizer SyntaxError at render time — and because the
@@ -57,13 +57,13 @@ export default {
   // an old note that says "instance 7" still points at the same account.
   numberTooltipTitle: 'Instance #{num}',
   numberTooltipBody:
-    'Permanent number for this instance — unique across Claude Desktop, Claude CLI and Codex, and never reused. Say “instance {num}” to an AI, or pass instance: {num} to the MCP tools. Click to copy.',
+    'Permanent number for this instance: unique across Claude Desktop, Claude CLI and Codex, and never reused. Say “instance {num}” to an AI, or pass instance: {num} to the MCP tools. Click to copy.',
   numberCopyAria: 'Copy instance number {num}',
   // Owner spec (2026-09-07): drop the word "Instance" - the menu is already open on one row,
   // so the number alone is the identifier and the label stops competing with the icon row.
   numberMenuLabel: '#{num}',
   copyNumber: 'Copy instance number',
-  toastNumberCopied: 'Copied “{num}” — refer to this instance by that number.',
+  toastNumberCopied: 'Copied “{num}”. Refer to this instance by that number.',
   // Account-column hover. The handle is on the badge; this is where the full address and the
   // Anthropic profile display name live, so the column itself stays one comparable thing per row.
   accountTitleWithProfile: '{email}\nAnthropic profile name: {profile}',
@@ -100,7 +100,7 @@ export default {
   useAccountName: 'Name it after the account',
   toastUsingAccountName: 'Cleared the typed name. This instance is called “{name}” again.',
   copyAccountEmailAria: 'Copy the account address {email}',
-  toastEmailCopied: 'Copied {email} — the account this instance is signed into.',
+  toastEmailCopied: 'Copied {email}: the account this instance is signed into.',
   // Sign a profile out. Removes the stored login ONLY: history, settings and the folder stay.
   // Disabled while the instance runs, because the server refuses it then (Claude Desktop holds
   // config.json open and would undo or corrupt the write) and a dead click is worse than a
@@ -127,8 +127,8 @@ export default {
   // The row badge that makes a linked CLI login visible without opening the actions menu.
   linkedCliBadge: 'Has a linked CLI login',
   linkedCliTooltip: 'Claude CLI: {name}',
-  linkedCliSignedIn: 'Signed in — launch it from this row’s ⋯ menu.',
-  linkedCliSignedOut: 'Needs sign-in — open this row’s ⋯ menu to finish it.',
+  linkedCliSignedIn: 'Signed in. Launch it from this row’s ⋯ menu.',
+  linkedCliSignedOut: 'Needs sign-in. Open this row’s ⋯ menu to finish it.',
   toastCliLaunched: 'Opened a terminal for the linked CLI instance.',
   toastCliLaunchFailed: 'Failed to launch the linked CLI instance.',
   toastCliLoginOpened: 'Opened a terminal. Run /login there to sign this CLI instance in.',
@@ -148,7 +148,7 @@ export default {
   // The Filter flyout (toolbar) — three facets, OR-ed. See composables/useInstanceFilter.ts.
   filterTitle: 'Filter',
   filterHint:
-    'Narrow these tables to the accounts you are after — whether the app is open, which plan it is on, and how much quota is left.',
+    'Narrow these tables to the accounts you are after: whether the app is open, which plan it is on, and how much quota is left.',
   filterEnable: 'Filter instances',
   filterThreshold: 'Threshold',
   filterThresholdValue: '{pct}%',
@@ -167,24 +167,24 @@ export default {
   filterStatusOpen: 'Open',
   filterStatusClosed: 'Closed',
   filterStatusHint:
-    'Whether an instance is running right now. Rows that cannot be open or closed — an unlinked CLI login has no window of its own — are never set aside by this.',
+    'Whether an instance is running right now. Rows that cannot be open or closed, an unlinked CLI login has no window of its own, are never set aside by this.',
   // Plan facet: which account types to keep.
   filterPlanAll: 'Any plan',
   filterPlanHint:
-    'Keep only the accounts on the plans you pick; picking none means every plan. An account whose plan has not been read yet is never set aside — an unknown plan is not a different one.',
+    'Keep only the accounts on the plans you pick; picking none means every plan. An account whose plan has not been read yet is never set aside. An unknown plan is not a different one.',
   filterPlanEmpty: 'No plans read yet. They appear here as accounts resolve.',
   // One switch + one threshold per quota window; an instance is set aside when it crosses either.
   filterWeek: 'Weekly usage',
   filterWeekHint:
-    'The Usage column — the cap that decides whether an account is worth starting on at all. Instances at or above the threshold are set aside. Instances that have never been checked are never filtered: an unknown reading is not a full one.',
+    'The Usage column: the cap that decides whether an account is worth starting on at all. Instances at or above the threshold are set aside. Instances that have never been checked are never filtered: an unknown reading is not a full one.',
   filterWeekThresholdLabel: 'Weekly usage threshold, percent',
   filterSession: 'Also 5-hour usage',
   filterSessionHint:
-    'Also set an instance aside when its 5-hour session window is at or above its own threshold, even if there is weekly quota left — a spent session means you cannot use the account right now. Off by default: this window refills the same day, so instances leave the table and come back over an afternoon.',
+    'Also set an instance aside when its 5-hour session window is at or above its own threshold, even if there is weekly quota left: a spent session means you cannot use the account right now. Off by default: this window refills the same day, so instances leave the table and come back over an afternoon.',
   filterSessionThresholdLabel: '5-hour usage threshold, percent',
   filterNoWindows: 'Both quota windows are off, so quota is not part of the filter.',
   filterQuotaNeedsUsageMode:
-    'Quota filtering waits for the usage columns — turn them on with the stopwatch button, and these thresholds start applying again.',
+    'Quota filtering waits for the usage columns. Turn them on with the stopwatch button, and these thresholds start applying again.',
   // Compact form of the rule, on the toolbar button. A bare percentage is the weekly cap.
   filterChipWeek: '{pct}%',
   filterChipSession: '5h {pct}%',

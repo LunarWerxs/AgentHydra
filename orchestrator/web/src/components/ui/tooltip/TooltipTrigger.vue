@@ -134,11 +134,7 @@ const forwarded = reactiveOmit(props, "touch")
   <TooltipTrigger
     data-slot="tooltip-trigger"
     v-bind="forwarded"
-    :style="
-      suppressNativeHold
-        ? { userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }
-        : undefined
-    "
+    :class="{ 'select-none [-webkit-touch-callout:none]': suppressNativeHold }"
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
     @pointerup="onPointerUp"

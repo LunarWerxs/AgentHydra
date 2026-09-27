@@ -4,11 +4,24 @@
 import { describe, expect, test } from 'bun:test'
 import { summarizeClaudeAppUsage } from '../src/claude-app-usage'
 
-const now = Date.parse('2026-09-25T00:00:00Z')
+// Every instant is an offset from a fixed far-past `now`: the fold reads only the `now` it is
+// handed, so which side of it each date falls on can never drift with the wall clock.
+const HOUR = 60 * 60 * 1000
+const DAY = 24 * HOUR
+const now = Date.parse('2001-01-01T00:00:00Z')
+const CREDIT_ENDS = now + 41 * DAY + 7 * HOUR + 59 * 60 * 1000
+const GRANT_ENDS = now + 27 * DAY + 16 * HOUR
+const ENDED = now - 24 * DAY
+const LATER = now + 6 * DAY
+/** The normalised form the fold returns. */
+const iso = (at: number) => new Date(at).toISOString()
+/** The two wire forms claude.ai sends: an explicit offset, or a bare Z without milliseconds. */
+const wire = (at: number) => iso(at).replace('.000Z', '+00:00')
+const wireZ = (at: number) => iso(at).replace('.000Z', 'Z')
 const credit = (over: Record<string, unknown> = {}) => ({
   limit_dollars: 250,
   remaining_dollars: 246.108598,
-  resets_at: '2026-11-05T07:59:00+00:00',
+  resets_at: wire(CREDIT_ENDS),
   locked_reason: null,
   ...over,
 })
@@ -18,12 +31,12 @@ describe('summarizeClaudeAppUsage', () => {
     const reading = summarizeClaudeAppUsage(
       {
         grants: [
-          { resets_left: 1, ends_at: '2026-10-22T16:00:00+00:00' },
-          { resets_left: 2, ends_at: '2026-09-01T00:00:00+00:00' }, // ended: never counts
-          { resets_left: 0, ends_at: '2026-10-01T00:00:00+00:00' }, // spent
+          { resets_left: 1, ends_at: wire(GRANT_ENDS) },
+          { resets_left: 2, ends_at: wire(ENDED) }, // ended: never counts
+          { resets_left: 0, ends_at: wire(LATER) }, // spent
         ],
         credit: credit(),
-        promo: { claimed: true, eligible: false, expires_at: '2026-11-05T07:59:00Z' },
+        promo: { claimed: true, eligible: false, expires_at: wireZ(CREDIT_ENDS) },
         spend: {
           enabled: true,
           disabled_reason: null,
@@ -37,12 +50,12 @@ describe('summarizeClaudeAppUsage', () => {
       },
       now,
     )
-    expect(reading?.resets).toEqual({ resetsLeft: 1, expiresAt: '2026-10-22T16:00:00.000Z' })
+    expect(reading?.resets).toEqual({ resetsLeft: 1, expiresAt: iso(GRANT_ENDS) })
     expect(reading?.app.codeCredit).toEqual({
       state: 'active',
       limitUsd: 250,
       remainingUsd: 246.108598,
-      expiresAt: '2026-11-05T07:59:00.000Z',
+      expiresAt: iso(CREDIT_ENDS),
       lockedReason: null,
     })
     expect(reading?.app.usageCredits).toEqual({
@@ -71,14 +84,14 @@ describe('summarizeClaudeAppUsage', () => {
   })
 
   test('a credit held back reads as held back, and an expired one is gone', () => {
-    const promo = { claimed: true, eligible: false, expires_at: '2026-11-05T07:59:00Z' }
+    const promo = { claimed: true, eligible: false, expires_at: wireZ(CREDIT_ENDS) }
     const held = summarizeClaudeAppUsage(
       { credit: credit({ locked_reason: 'review' }), promo },
       now,
     )
     expect(held?.app.codeCredit).toMatchObject({ state: 'locked', lockedReason: 'review' })
     const expired = summarizeClaudeAppUsage(
-      { credit: credit({ resets_at: '2026-09-01T00:00:00+00:00' }), promo },
+      { credit: credit({ resets_at: wire(ENDED) }), promo },
       now,
     )
     expect(expired?.app.codeCredit).toBeNull()

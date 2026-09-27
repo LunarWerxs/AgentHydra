@@ -206,7 +206,7 @@ function openChatFromList(row: ChatListRow) {
               <ArrowRightLeft class="size-3.5" />
             </button>
           </div>
-          <div class="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+          <div class="mt-0.5 flex items-center gap-2 text-2xs text-muted-foreground">
             <span v-if="row.cwd" class="truncate" :title="row.cwd">{{ baseName(row.cwd) }}</span>
             <span class="ms-auto shrink-0">
               {{ row.lastActivityAt ? timeAgo(row.lastActivityAt) : $t('instances.chatsNeverActive') }}
@@ -214,7 +214,7 @@ function openChatFromList(row: ChatListRow) {
           </div>
         </li>
       </ul>
-      <p v-if="rows.length && total > rows.length" class="text-[11px] text-muted-foreground">
+      <p v-if="rows.length && total > rows.length" class="text-2xs text-muted-foreground">
         {{ $t('instances.chatsTruncated', { shown: rows.length, total: total }) }}
       </p>
 

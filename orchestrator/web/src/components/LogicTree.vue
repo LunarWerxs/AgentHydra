@@ -36,7 +36,7 @@
           <path class="edge" d="M360,230 H400" marker-end="url(#arr)"/>
   
           <!-- live? -->
-          <rect class="box accent-b" x="402" y="202" width="128" height="56" rx="8"/>
+          <rect class="box emphasized" x="402" y="202" width="128" height="56" rx="8"/>
           <text x="466" y="226" text-anchor="middle" class="h">Live writer</text>
           <text x="466" y="242" text-anchor="middle" class="h">attached?</text>
   

@@ -1,6 +1,18 @@
 # AgentHydra agent instructions
 
+Read and follow these instructions, including the Claude Desktop native-control
+instructions below, before operating or modifying desktop chat management.
+
 ## Claude Desktop chat operations
+
+For supported archive and migration-source cleanup, use AgentHydra's production
+programmatic path first. **Start debugger automatically** is saved per account in
+Settings and activates on the next **AgentHydra Open**; do not repeat developer
+menu clicks. Enabling `allowDevTools` alone does not start the debugger.
+
+See [the native-control runbook](docs/CLAUDE-DESKTOP-NATIVE-CONTROL.md) for exact
+APIs, configuration, verification and remaining migration limitations. Current
+settings are authoritative; old proof scripts and result logs are historical.
 
 Read [the native-control runbook](docs/CLAUDE-DESKTOP-NATIVE-CONTROL.md) before
 moving, migrating or archiving Claude Desktop Code chats. Prefer the production

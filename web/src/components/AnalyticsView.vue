@@ -514,7 +514,7 @@ const survivalAverage = computed(() => {
       </div>
 
       <!-- what the numbers are and are not, before any chart -->
-      <p v-if="coverage" class="text-[11px] leading-snug text-muted-foreground">
+      <p v-if="coverage" class="text-2xs leading-snug text-muted-foreground">
         {{ $t('analytics.listPrice') }}
         <span v-if="!complete">
           {{ $t('analytics.partial', { n: coverage.sessions, total: coverage.total }) }}
@@ -539,7 +539,7 @@ const survivalAverage = computed(() => {
              one number, and dressing it as a chart would add nothing to read. -->
         <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div class="rounded-lg border border-border p-3">
-            <p class="text-[11px] text-muted-foreground">
+            <p class="text-2xs text-muted-foreground">
               {{ tokenMode ? $t('analytics.totalTokens') : $t('analytics.totalCost') }}
             </p>
             <!-- In token mode this is the RAW total — every token sent and received. The weighted
@@ -558,7 +558,7 @@ const survivalAverage = computed(() => {
             <!-- Where the rates came from and how old they are. A dollar total with no price date
                  is a number nobody can audit, and "downloaded" versus "shipped with this build" is
                  the difference between last week's rate card and this release's. -->
-            <p class="mt-0.5 text-[10px] text-muted-foreground">
+            <p class="mt-0.5 text-3xs text-muted-foreground">
               {{
                 tokenMode
                   ? $t('analytics.totalTokensNote')
@@ -569,22 +569,22 @@ const survivalAverage = computed(() => {
             </p>
           </div>
           <div class="rounded-lg border border-border p-3">
-            <p class="text-[11px] text-muted-foreground">{{ $t('analytics.sessions') }}</p>
+            <p class="text-2xs text-muted-foreground">{{ $t('analytics.sessions') }}</p>
             <p class="text-xl font-semibold tabular-nums">{{ formatCompact(spend.sessions) }}</p>
           </div>
           <div class="rounded-lg border border-border p-3">
-            <p class="text-[11px] text-muted-foreground">{{ $t('analytics.agentHours') }}</p>
+            <p class="text-2xs text-muted-foreground">{{ $t('analytics.agentHours') }}</p>
             <p class="text-xl font-semibold tabular-nums">{{ formatCompact(agentHours) }}</p>
           </div>
           <div class="rounded-lg border border-border p-3">
             <!-- Says what "weighted" MEANS, in the tile rather than in a doc nobody opens. This
                  number sits beside a raw token total four times its size, and without the line
                  below the only honest reaction is to assume one of them is broken. -->
-            <p class="text-[11px] text-muted-foreground">{{ $t('analytics.tokens') }}</p>
+            <p class="text-2xs text-muted-foreground">{{ $t('analytics.tokens') }}</p>
             <p class="text-xl font-semibold tabular-nums">
               {{ formatCompact(spend.totalWeighted) }}
             </p>
-            <p class="mt-0.5 text-[10px] text-muted-foreground">{{ $t('analytics.tokensNote') }}</p>
+            <p class="mt-0.5 text-3xs text-muted-foreground">{{ $t('analytics.tokensNote') }}</p>
           </div>
         </div>
 
@@ -592,7 +592,7 @@ const survivalAverage = computed(() => {
           <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
             <Layers class="size-3.5" />{{ $t('analytics.tokenSplit') }}
           </h3>
-          <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.tokenSplitNote') }}</p>
+          <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.tokenSplitNote') }}</p>
           <TokenSplit v-if="spend" :tokens="spend.tokens" />
         </section>
 
@@ -618,7 +618,7 @@ const survivalAverage = computed(() => {
                 v-for="g in (['day', 'month'] as const)"
                 :key="g"
                 type="button"
-                class="rounded px-1.5 py-0.5 text-[10px] font-normal transition-colors"
+                class="rounded px-1.5 py-0.5 text-3xs font-normal transition-colors"
                 :class="
                   (g === 'month') === groupedByMonth
                     ? 'bg-muted text-foreground'
@@ -630,7 +630,7 @@ const survivalAverage = computed(() => {
           </h3>
           <p
             v-if="dayTokensMissing"
-            class="py-6 text-center text-[11px] text-muted-foreground"
+            class="py-6 text-center text-2xs text-muted-foreground"
           >{{ $t('analytics.noTokenData') }}</p>
           <TimeBars
             v-else
@@ -657,7 +657,7 @@ const survivalAverage = computed(() => {
             />
             <!-- Named, not drawn at zero: a model with no published price did not cost nothing. -->
             <div v-if="unpricedTokenRows.length" class="mt-3 border-t border-border pt-2">
-              <p class="mb-1.5 text-[11px] text-muted-foreground">
+              <p class="mb-1.5 text-2xs text-muted-foreground">
                 {{ $t('analytics.unpricedNote') }}
               </p>
               <BarRows
@@ -675,7 +675,7 @@ const survivalAverage = computed(() => {
             </h3>
             <p
               v-if="projectTokensMissing"
-              class="py-6 text-center text-[11px] text-muted-foreground"
+              class="py-6 text-center text-2xs text-muted-foreground"
             >{{ $t('analytics.noTokenData') }}</p>
             <BarRows
               v-else
@@ -692,10 +692,10 @@ const survivalAverage = computed(() => {
           <h3 class="mb-1 text-xs font-medium">
             {{ tokenMode ? $t('analytics.tokensByAccount') : $t('analytics.costByAccount') }}
           </h3>
-          <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.accountNote') }}</p>
+          <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.accountNote') }}</p>
           <p
             v-if="accountTokensMissing"
-            class="py-6 text-center text-[11px] text-muted-foreground"
+            class="py-6 text-center text-2xs text-muted-foreground"
           >{{ $t('analytics.noTokenData') }}</p>
           <BarRows v-else :rows="accountRows" :format="metricFormat" mono />
         </section>
@@ -707,19 +707,19 @@ const survivalAverage = computed(() => {
           <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
             <Gauge class="size-3.5" />{{ $t('analytics.sinks') }}
           </h3>
-          <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.sinksNote') }}</p>
+          <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.sinksNote') }}</p>
           <ul class="mb-3 space-y-1.5">
-            <li v-for="s in sinks.sinks" :key="s.id" class="text-[11px]">
+            <li v-for="s in sinks.sinks" :key="s.id" class="text-2xs">
               <div class="flex items-center gap-2">
                 <span class="min-w-0 flex-1 truncate font-medium">{{ sinkLabel(s.id) }}</span>
-                <Badge variant="outline" class="shrink-0 text-[10px] font-normal">
-                  {{ s.kind === 'structural' ? $t('analytics.sinkStructural') : $t('analytics.sinkBehavioral') }}
+                <Badge variant="outline" class="shrink-0">
+                  <span class="font-normal">{{ s.kind === 'structural' ? $t('analytics.sinkStructural') : $t('analytics.sinkBehavioral') }}</span>
                 </Badge>
                 <Badge
                   v-if="s.basis === 'estimated'"
                   variant="secondary"
-                  class="shrink-0 text-[10px] font-normal"
-                >{{ $t('analytics.sinkEstimated') }}</Badge>
+                  class="shrink-0"
+                ><span class="font-normal">{{ $t('analytics.sinkEstimated') }}</span></Badge>
                 <span class="shrink-0 tabular-nums">{{ formatCompact(s.weighted) }}</span>
                 <span class="w-10 shrink-0 text-end tabular-nums text-muted-foreground">
                   {{ percent(s.share) }}
@@ -730,10 +730,10 @@ const survivalAverage = computed(() => {
           </ul>
           <div class="grid gap-3 lg:grid-cols-2">
             <div>
-              <h4 class="mb-1 text-[11px] font-medium">{{ $t('analytics.deadSkills') }}</h4>
+              <h4 class="mb-1 text-2xs font-medium">{{ $t('analytics.deadSkills') }}</h4>
               <p
                 v-if="!deadSkillRows.length"
-                class="text-[11px] text-muted-foreground"
+                class="text-2xs text-muted-foreground"
               >{{ $t('analytics.deadNone') }}</p>
               <BarRows
                 v-else
@@ -745,10 +745,10 @@ const survivalAverage = computed(() => {
               />
             </div>
             <div>
-              <h4 class="mb-1 text-[11px] font-medium">{{ $t('analytics.deadMcp') }}</h4>
+              <h4 class="mb-1 text-2xs font-medium">{{ $t('analytics.deadMcp') }}</h4>
               <p
                 v-if="!deadMcpRows.length"
-                class="text-[11px] text-muted-foreground"
+                class="text-2xs text-muted-foreground"
               >{{ $t('analytics.deadNone') }}</p>
               <BarRows
                 v-else
@@ -760,7 +760,7 @@ const survivalAverage = computed(() => {
               />
             </div>
           </div>
-          <p class="mt-3 text-[11px] text-muted-foreground">
+          <p class="mt-3 text-2xs text-muted-foreground">
             {{
               $t('analytics.sinkCounts', {
                 deep: formatCompact(sinks.deepContext.calls),
@@ -770,7 +770,7 @@ const survivalAverage = computed(() => {
             }}
           </p>
           <div v-if="cacheRows.length" class="mt-3">
-            <h4 class="mb-1 text-[11px] font-medium">{{ $t('analytics.cacheByAccount') }}</h4>
+            <h4 class="mb-1 text-2xs font-medium">{{ $t('analytics.cacheByAccount') }}</h4>
             <BarRows :rows="cacheRows" :format="percent" mono />
           </div>
         </section>
@@ -787,7 +787,7 @@ const survivalAverage = computed(() => {
                 v-for="g in (['calendar', 'hour'] as const)"
                 :key="g"
                 type="button"
-                class="rounded px-1.5 py-0.5 text-[11px] transition-colors"
+                class="rounded px-1.5 py-0.5 text-2xs transition-colors"
                 :class="
                   whenGrain === g
                     ? 'bg-accent text-foreground'
@@ -797,12 +797,12 @@ const survivalAverage = computed(() => {
               >{{ g === 'calendar' ? $t('analytics.grainCalendar') : $t('analytics.grainHour') }}</button>
             </span>
           </h3>
-          <p class="mb-2 text-[11px] text-muted-foreground">
+          <p class="mb-2 text-2xs text-muted-foreground">
             {{ whenGrain === 'calendar' ? $t('analytics.calendarNote') : $t('analytics.hourNote') }}
           </p>
           <p
             v-if="whenGrain === 'calendar' && dayTokensMissing"
-            class="py-6 text-center text-[11px] text-muted-foreground"
+            class="py-6 text-center text-2xs text-muted-foreground"
           >{{ $t('analytics.noTokenData') }}</p>
           <CalendarGrid
             v-else-if="whenGrain === 'calendar'"
@@ -815,7 +815,7 @@ const survivalAverage = computed(() => {
 
         <section class="rounded-lg border border-border p-3">
           <h3 class="mb-1 text-xs font-medium">{{ $t('analytics.concurrency') }}</h3>
-          <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.concurrencyNote') }}</p>
+          <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.concurrencyNote') }}</p>
           <AreaLine
             :points="concurrencyPoints"
             :format="(n: number) => String(Math.round(n))"
@@ -842,38 +842,38 @@ const survivalAverage = computed(() => {
 
           <section class="rounded-lg border border-border p-3">
             <h3 class="mb-1 text-xs font-medium">{{ $t('analytics.health') }}</h3>
-            <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.healthNote') }}</p>
+            <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.healthNote') }}</p>
             <!-- edit survival: the share of written code still on disk hours later (server/src/edit-survival.ts) -->
-            <p v-if="survivalAverage" class="mb-2 text-[11px] text-muted-foreground">
+            <p v-if="survivalAverage" class="mb-2 text-2xs text-muted-foreground">
               {{ $t('analytics.survivalAverage', survivalAverage) }}
             </p>
             <p
               v-if="!activity?.health.length"
-              class="text-[11px] text-muted-foreground"
+              class="text-2xs text-muted-foreground"
             >{{ $t('analytics.healthNone') }}</p>
             <ul v-else class="scroll-slim max-h-56 space-y-1 overflow-y-auto">
               <li
                 v-for="h in activity?.health ?? []"
                 :key="h.session_id"
-                class="flex items-center gap-2 text-[11px]"
+                class="flex items-center gap-2 text-2xs"
               >
                 <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="h.project">
                   {{ baseName(h.project) || h.project }}
                 </span>
                 <!-- badges, not colour alone: each signal is named as well as counted -->
-                <Badge v-if="h.toolErrorStreak >= 3" variant="outline" class="shrink-0 text-[10px]">
+                <Badge v-if="h.toolErrorStreak >= 3" variant="outline" class="shrink-0">
                   {{ $t('analytics.streak', { n: h.toolErrorStreak }) }}
                 </Badge>
-                <Badge v-if="h.compactions" variant="outline" class="shrink-0 text-[10px]">
+                <Badge v-if="h.compactions" variant="outline" class="shrink-0">
                   {{ $t('analytics.compactions', { n: h.compactions }) }}
                 </Badge>
-                <Badge v-if="h.edits >= 40" variant="outline" class="shrink-0 text-[10px]">
+                <Badge v-if="h.edits >= 40" variant="outline" class="shrink-0">
                   {{ $t('analytics.churn', { n: h.edits }) }}
                 </Badge>
                 <Badge
                   v-if="h.editSurvival != null && h.editSurvival < 0.5"
                   variant="outline"
-                  class="shrink-0 text-[10px]"
+                  class="shrink-0"
                 >
                   {{ $t('analytics.survived', { pct: Math.round(h.editSurvival * 100) }) }}
                 </Badge>
@@ -888,16 +888,16 @@ const survivalAverage = computed(() => {
           <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
             <FileEdit class="size-3.5" />{{ $t('analytics.recentEdits') }}
           </h3>
-          <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.editsNote') }}</p>
+          <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.editsNote') }}</p>
           <p
             v-if="!editGroups.length"
-            class="text-[11px] text-muted-foreground"
+            class="text-2xs text-muted-foreground"
           >{{ $t('analytics.editsNone') }}</p>
           <div v-for="[project, list] in editGroups" :key="project" class="mb-3">
-            <p class="mb-0.5 flex items-baseline gap-2 text-[11px] font-medium">
+            <p class="mb-0.5 flex items-baseline gap-2 text-2xs font-medium">
               <FolderGit2 class="size-3 shrink-0 text-muted-foreground" />
               {{ baseName(project) || project }}
-              <span class="text-[10px] font-normal text-muted-foreground">{{ project }}</span>
+              <span class="text-3xs font-normal text-muted-foreground">{{ project }}</span>
             </p>
             <EditsFeed :project="project" :edits="list" />
           </div>
@@ -909,17 +909,17 @@ const survivalAverage = computed(() => {
           <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
             <Boxes class="size-3.5" />{{ $t('analytics.toolsFound') }}
           </h3>
-          <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.toolsFoundNote') }}</p>
+          <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.toolsFoundNote') }}</p>
           <ul class="grid gap-1 sm:grid-cols-2">
             <li
               v-for="tool in agentTools"
               :key="tool.id"
-              class="flex items-center gap-2 rounded px-1 py-0.5 text-[11px] hover:bg-muted/50"
+              class="flex items-center gap-2 rounded px-1 py-0.5 text-2xs hover:bg-muted/50"
               :title="tool.roots.join('\n')"
             >
               <span class="min-w-0 flex-1 truncate">
                 {{ tool.name }}
-                <span class="ms-1 text-[10px] text-muted-foreground">{{ tool.vendor }}</span>
+                <span class="ms-1 text-3xs text-muted-foreground">{{ tool.vendor }}</span>
               </span>
               <span class="shrink-0 tabular-nums text-muted-foreground">
                 {{ formatCompact(tool.files) }}<span v-if="tool.truncated">+</span>
@@ -929,12 +929,12 @@ const survivalAverage = computed(() => {
               <Badge
                 v-if="tool.format === null"
                 variant="outline"
-                class="shrink-0 text-[10px] font-normal"
+                class="shrink-0"
               >
-                {{ toolNoteLabel(tool.note) }}
+                <span class="font-normal">{{ toolNoteLabel(tool.note) }}</span>
               </Badge>
-              <Badge v-else variant="secondary" class="shrink-0 text-[10px] font-normal">
-                {{ $t('analytics.toolRead') }}
+              <Badge v-else variant="secondary" class="shrink-0">
+                <span class="font-normal">{{ $t('analytics.toolRead') }}</span>
               </Badge>
             </li>
           </ul>

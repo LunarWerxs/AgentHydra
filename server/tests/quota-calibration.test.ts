@@ -22,17 +22,21 @@ import {
 } from '../src/quota-calibration'
 import type { UsageSample, UsageSnapshot } from '../src/types'
 
-const T0 = Date.parse('2026-01-01T00:00:00.000Z')
+// Nothing here reads the real clock (the transcript is written now, long after every reading), so
+// every instant hangs off one fixed far-past origin and keeps its spacing whenever the suite runs.
+const T0 = Date.parse('2020-01-01T00:00:00.000Z')
 const HOUR = 3600_000
+const WEEK_END = T0 + 7 * 24 * HOUR
+const iso = (ms: number) => new Date(ms).toISOString()
 const reading = (h: number, pct: number, resetsAt: string, higherPct: number | null = null) =>
   ({ at: T0 + h * HOUR, pct, resetsAt, higherPct }) satisfies QuotaReading
 
 describe('window keys', () => {
   test('reset times that differ by seconds fall into one window', () => {
     const windows = groupWindows([
-      reading(0, 10, '2026-01-08T00:00:10.000Z'),
-      reading(1, 20, '2026-01-07T23:59:55.000Z'),
-      reading(2, 5, '2026-01-15T00:00:00.000Z'),
+      reading(0, 10, iso(WEEK_END + 10_000)),
+      reading(1, 20, iso(WEEK_END - 5_000)),
+      reading(2, 5, iso(WEEK_END + 7 * 24 * HOUR)),
     ])
     expect([...windows.values()].map((w) => w.length)).toEqual([2, 1])
   })
@@ -118,9 +122,9 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
   const snap = (weekPct: number): UsageSnapshot => ({
     account: null,
     session: null,
-    weekAll: { pct: weekPct, resets: '', resetsAt: '2026-01-08T00:00:00.000Z' },
+    weekAll: { pct: weekPct, resets: '', resetsAt: iso(WEEK_END) },
     weekModel: null,
-    capturedAt: '2026-01-01T01:00:00.000Z',
+    capturedAt: iso(T0 + HOUR),
   })
 
   test('prices the turns between the readings of a window into dollars per percent, then re-prices', () => {
@@ -131,23 +135,23 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
         join(home, 'projects', 'p', 's.jsonl'),
         [
           // $30 at $3 per million input tokens, inside the window.
-          turn('2026-01-01T00:30:00.000Z', 'r1', 10_000_000),
+          turn(iso(T0 + HOUR / 2), 'r1', 10_000_000),
           // After the window's last reading: must not count.
-          turn('2026-01-01T02:00:00.000Z', 'r2', 50_000_000),
+          turn(iso(T0 + 2 * HOUR), 'r2', 50_000_000),
         ].join('\n'),
       )
       const samples: UsageSample[] = [
         {
-          at: '2026-01-01T00:00:00.000Z',
+          at: iso(T0),
           sessionPct: null,
           weekAllPct: 10,
-          weekResetsAt: '2026-01-08T00:00:10.000Z',
+          weekResetsAt: iso(WEEK_END + 10_000),
         },
         {
-          at: '2026-01-01T01:00:00.000Z',
+          at: iso(T0 + HOUR),
           sessionPct: null,
           weekAllPct: 20,
-          weekResetsAt: '2026-01-07T23:59:55.000Z',
+          weekResetsAt: iso(WEEK_END - 5_000),
         },
       ]
       const key = 'test:quota-dollars'
@@ -171,16 +175,16 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
   test('refuses to calibrate a Codex account or an account with no config dir of its own', () => {
     const samples: UsageSample[] = [
       {
-        at: '2026-01-01T00:00:00.000Z',
+        at: iso(T0),
         sessionPct: null,
         weekAllPct: 10,
-        weekResetsAt: '2026-01-08T00:00:00.000Z',
+        weekResetsAt: iso(WEEK_END),
       },
       {
-        at: '2026-01-01T01:00:00.000Z',
+        at: iso(T0 + HOUR),
         sessionPct: null,
         weekAllPct: 20,
-        weekResetsAt: '2026-01-08T00:00:00.000Z',
+        weekResetsAt: iso(WEEK_END),
       },
     ]
     for (const [key, dirs] of [

@@ -22,15 +22,15 @@ const props = defineProps<{
 
 const ESTIMATED_W = 220
 const ESTIMATED_H = 96
-const style = computed(() => {
+const left = computed(() => {
   const vw = typeof window === 'undefined' ? 1280 : window.innerWidth
-  const vh = typeof window === 'undefined' ? 800 : window.innerHeight
   const flipX = props.x + ESTIMATED_W + 24 > vw
+  return `${flipX ? props.x - ESTIMATED_W - 12 : props.x + 12}px`
+})
+const top = computed(() => {
+  const vh = typeof window === 'undefined' ? 800 : window.innerHeight
   const flipY = props.y + ESTIMATED_H + 24 > vh
-  return {
-    left: `${flipX ? props.x - ESTIMATED_W - 12 : props.x + 12}px`,
-    top: `${flipY ? props.y - ESTIMATED_H - 12 : props.y + 12}px`,
-  }
+  return `${flipY ? props.y - ESTIMATED_H - 12 : props.y + 12}px`
 })
 </script>
 
@@ -38,18 +38,18 @@ const style = computed(() => {
   <!-- pointer-events-none so the card can never sit between the cursor and the cell it describes -->
   <Teleport to="body">
     <div
-      class="pointer-events-none fixed z-50 min-w-[10rem] max-w-[16rem] rounded-md border border-border bg-popover px-2.5 py-2 text-popover-foreground shadow-md"
-      :style="style"
+      class="pointer-events-none fixed top-(--tip-y) left-(--tip-x) z-50 min-w-40 max-w-[16rem] rounded-md border border-border bg-popover px-2.5 py-2 text-popover-foreground shadow-md"
+      :style="{ '--tip-x': left, '--tip-y': top }"
       role="tooltip"
     >
       <p class="text-xs font-medium">{{ title }}</p>
       <dl v-if="rows?.length" class="mt-1 space-y-0.5">
         <div v-for="r in rows" :key="r.label" class="flex items-baseline justify-between gap-3">
-          <dt class="text-[11px] text-muted-foreground">{{ r.label }}</dt>
-          <dd class="text-[11px] font-medium tabular-nums">{{ r.value }}</dd>
+          <dt class="text-2xs text-muted-foreground">{{ r.label }}</dt>
+          <dd class="text-2xs font-medium tabular-nums">{{ r.value }}</dd>
         </div>
       </dl>
-      <p v-if="note" class="mt-1 text-[10px] leading-snug text-muted-foreground">{{ note }}</p>
+      <p v-if="note" class="mt-1 text-3xs leading-snug text-muted-foreground">{{ note }}</p>
     </div>
   </Teleport>
 </template>

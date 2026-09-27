@@ -3,6 +3,18 @@ import { win32 as path } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { type NativeRequest, nativeProgram } from './native-program'
 
+// The shapes the generated program hands to, and reads from, Claude's managers.
+interface FixtureSession {
+  sessionId: string
+  cliSessionId: string
+}
+interface ArchiveOptions {
+  cleanupWorktree?: boolean
+}
+interface HtmlPreview {
+  cwd: string
+}
+
 // Tests the generated program's own guards in an inert runtime. Actual installed archive
 // behavior is separately tested by native-archive.poc.ts; this suite needs no installed app.
 function harness() {
@@ -59,10 +71,11 @@ function harness() {
     archiveCascadeClosureOf: () => [],
     losableWorkKind: () => undefined,
     hasPendingUserInput: () => false,
-    localLineageIds: (s: any) => [s.cliSessionId],
+    localLineageIds: (s: FixtureSession) => [s.cliSessionId],
     // Shaped like Claude's: archive forwards cleanupWorktree to teardown, which reads it.
-    teardownSession: async (_id: string, _reason: string, options: any) => options?.cleanupWorktree,
-    archiveSession: async (id: string, options: any) => {
+    teardownSession: async (_id: string, _reason: string, options?: ArchiveOptions) =>
+      options?.cleanupWorktree,
+    archiveSession: async (id: string, options?: ArchiveOptions) => {
       if (options?.cleanupWorktree !== false) throw Error('fixture expects cleanupWorktree: false')
       calls.push({ id, options })
       sessions.get(id)!.isArchived = true
@@ -75,7 +88,7 @@ function harness() {
     getServersForWorktree: () => [],
     // Claude's prefix match, which the preview guard models and the pre-dispatch check reads.
     stopServersForWorktree: (cwd: string) =>
-      [...previews.htmlPreviews.values()].filter((p: any) => p.cwd.startsWith(cwd)).length,
+      [...previews.htmlPreviews.values()].filter((p: HtmlPreview) => p.cwd.startsWith(cwd)).length,
     htmlPreviews: new Map(),
   }
   const cache: any = {
@@ -161,10 +174,10 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
       h.manager.sessions.set(h.target.sessionId, h.target)
     }
     const inspected = await h.run({ action: 'inspect', sessionId: undefined })
-    expect(
-      inspected.sessions.find((session: any) => session.sessionId === h.target.sessionId)
-        .isArchived,
-    ).toBe(true)
+    const inspectedTarget = inspected.sessions.find(
+      (session: FixtureSession) => session.sessionId === h.target.sessionId,
+    )
+    expect(inspectedTarget.isArchived).toBe(true)
     expect(await h.run()).toMatchObject({ ok: true, changed: false, dispatch: 'not-sent' })
     expect(h.calls).toEqual([])
     h.manager.ensureArchivedSessionsLoaded = async () => {
@@ -275,7 +288,7 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
       },
       // archive still forwards it, but teardown stopped reading it
       (h: ReturnType<typeof harness>) => {
-        h.manager.archiveSession = async (id: string, o: any) =>
+        h.manager.archiveSession = async (id: string, o?: ArchiveOptions) =>
           h.manager.teardownSession(id, 'archive', { cleanupWorktree: o?.cleanupWorktree })
         h.manager.teardownSession = async () => undefined
       },
@@ -497,7 +510,7 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
   })
   test('bystander archive and in-place settings changes produce failed postconditions', async () => {
     const h = harness()
-    h.manager.archiveSession = async (_id: string, { cleanupWorktree }: any) => {
+    h.manager.archiveSession = async (_id: string, { cleanupWorktree }: ArchiveOptions) => {
       expect(cleanupWorktree).toBe(false)
       h.target.isArchived = true
       h.other.isArchived = true
@@ -512,7 +525,7 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
   })
   test('errors after dispatch retain sent status rather than suggesting a safe retry', async () => {
     const h = harness()
-    h.manager.archiveSession = async (_id: string, { cleanupWorktree }: any) => {
+    h.manager.archiveSession = async (_id: string, { cleanupWorktree }: ArchiveOptions) => {
       expect(cleanupWorktree).toBe(false)
       h.target.isArchived = true
       throw Error('save response lost')

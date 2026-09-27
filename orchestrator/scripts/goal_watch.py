@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from dataclasses import dataclass
 
 from lib import armlib, bandlib, clilib, configlib
 from lib import deliverylib
@@ -223,8 +224,21 @@ def _decide(chat: dict, entry: dict, pct: int | None, snap: dict | None,
     return "continue", ""
 
 
-def run(argv: list[str]) -> tuple[dict, int]:
-    now = time.time()
+@dataclass
+class _Tick:
+    """What every chat's handling in one run shares: the clock, whether it acts, its cap, the
+    one usage survey, the newest owner of each goal file, and the goal history it updates."""
+    now: float
+    act: bool
+    cap: int
+    snap: dict | None
+    pcts: dict[str, int]
+    newest: dict[str, str]
+    history: dict
+
+
+def _acting(argv: list[str]) -> tuple[bool, list[str]]:
+    """(whether this run may type into chats, the notes that say why not)."""
     act = "--yes" in argv
     notes = []
     if act and not configlib.get("goalwatch.enabled"):
@@ -236,104 +250,171 @@ def run(argv: list[str]) -> tuple[dict, int]:
         if refusal:
             notes.append(refusal)
             act = False
-    cap = MAX_PER_RUN
-    if _values(argv, "--max"):
-        try:
-            cap = max(1, int(_values(argv, "--max")[0]))
-        except ValueError:
-            return {"error": "--max needs a whole number"}, 3
+    return act, notes
+
+
+def _parse_cap(argv: list[str]) -> int | None:
+    """This run's prompt cap (--max, else goalwatch.max_per_run); None when --max is not a number."""
+    if not _values(argv, "--max"):
+        return MAX_PER_RUN
+    try:
+        return max(1, int(_values(argv, "--max")[0]))
+    except ValueError:
+        return None
+
+
+def _usage(chats: list[dict]) -> tuple[dict | None, dict[str, int]]:
+    """One usage survey per run, shared by every chat's decision (bandlib's snapshot rule), and
+    none at all when no goal is open - the survey is the slow read."""
+    if not any(c["goal"]["inProgress"] for c in chats):
+        return None, {}
+    snap = bandlib.snapshot()
+    return snap, _usage_pct_by_instance(snap)
+
+
+def _newest_owners(chats: list[dict]) -> dict[str, str]:
+    """{goal path -> the session that spoke last}. Several live chats can own one goal file (a
+    swap leaves the old one idle): only the one that spoke last is prompted, so one goal never
+    gets two chats racing on it."""
+    newest: dict[str, str] = {}
+    for c in sorted(chats, key=_quiet_key, reverse=True):
+        newest[c["goalPath"]] = c["sessionId"]
+    return newest
+
+
+def _quiet_key(chat: dict) -> int:
+    return chat.get("quietSecs") or 0
+
+
+def _goal_row(chat: dict, pct: int | None) -> dict:
+    goal = chat["goal"]
+    return {"sessionId": chat["sessionId"], "title": chat["title"], "instance": chat["instance"],
+            "goalPath": chat["goalPath"], "status": goal["status"],
+            "inProgress": goal["inProgress"], "open": goal["open"],
+            "done": goal["done"], "usagePct": pct, "action": "none"}
+
+
+def _judge(chat: dict, entry: dict, pct: int | None, tick: _Tick) -> tuple[str, str, int]:
+    """(kind, why, unchanged streak): _decide's verdict, narrowed to the goal's newest owner and
+    audited against the goal file's last hash."""
+    kind, why = _decide(chat, entry, pct, tick.snap, tick.now)
+    # A wrap-up is also a "rewrite the goal file" order, so it goes to the newest owner only.
+    if kind in ("continue", "wrapup") and tick.newest.get(chat["goalPath"]) != chat["sessionId"]:
+        kind, why = "skip", "another live chat owns the same goal and spoke more recently"
+    # THE OUTSIDE AUDIT: the file byte-identical since the last continuation = no progress.
+    streak = 0
+    if kind == "continue" and entry.get("lastHash"):
+        streak = int(entry.get("unchanged", 0)) + 1 if entry["lastHash"] == chat["goal"]["hash"] else 0
+        if streak >= MAX_UNCHANGED:
+            kind = "escalate"
+    return kind, why, streak
+
+
+def _escalate(chat: dict, key: str, entry: dict, act: bool) -> str:
+    """File the goal as an incident (when acting) and return the row's action."""
+    goal = chat["goal"]
+    if act:
+        entry["incident"] = incidentlib.record(
+            "goal_watch", key,
+            f"{MAX_UNCHANGED} continuations and {chat['goalPath']} never changed "
+            f"({goal['open']} open item(s)) - the chat is spinning or stuck")
+        entry["lastHash"] = goal["hash"]
+    return (f"escalated to an incident: {MAX_UNCHANGED} continuation(s) left the "
+            "goal file unchanged")
+
+
+def _goal_text(goal: dict, kind: str, pct: int | None, streak: int) -> str:
+    rel = str(goallib.GOAL_REL).replace("\\", "/")
+    if kind == "wrapup":
+        return goallib.wrapup_text(goal, rel_path=rel, pct=pct or 0, wrapup_pct=WRAPUP_PCT)
+    return goallib.continuation_text(goal, rel_path=rel, unchanged_for=streak)
+
+
+def _deliver(chat: dict, row: dict, entry: dict, key: str, verdict: tuple[str, str, int],
+             tick: _Tick) -> str:
+    """Send (or, plan only, describe) the continuation or wrap-up; 'sent' | 'failed' | ''."""
+    kind, why, streak = verdict
+    goal = chat["goal"]
+    text = _goal_text(goal, kind, row["usagePct"], streak)
+    if not tick.act:
+        row["action"] = f"would {'send the wrap-up' if kind == 'wrapup' else 'continue'}" + (
+            f" ({why})" if why else "")
+        return ""
+    ok, detail = send(chat, text)
+    row["action"] = (("wrap-up sent" if kind == "wrapup" else "continued") if ok
+                     else "PROMPT FAILED") + f": {detail}"
+    if not ok:
+        return "failed"
+    if kind == "wrapup":
+        entry["wrapupSent"] = True
+    else:
+        entry.update({"lastAt": tick.now, "lastHash": goal["hash"], "unchanged": streak,
+                      "incident": None})
+    tick.history[key] = entry
+    return "sent"
+
+
+def _handle_goal(chat: dict, tick: _Tick, sent: int) -> tuple[dict, str]:
+    """(the chat's report row, 'sent' | 'failed' | '' for what this run did to it)."""
+    key = f"{chat['sessionId']}|{chat['goalPath']}"
+    entry = dict(tick.history.get(key) or {})
+    pct = tick.pcts.get(chat["instance"])
+    if pct is not None and pct < WRAPUP_PCT:
+        entry.pop("wrapupSent", None)
+    row = _goal_row(chat, pct)
+    verdict = _judge(chat, entry, pct, tick)
+    kind = verdict[0]
+    if kind == "skip":
+        row["action"] = verdict[1]
+    elif kind == "escalate":
+        row["action"] = _escalate(chat, key, entry, tick.act)
+    elif sent >= tick.cap:
+        row["action"] = f"over this run's cap of {tick.cap} - next tick"
+    else:
+        return row, _deliver(chat, row, entry, key, verdict, tick)
+    tick.history[key] = entry
+    return row, ""
+
+
+def _save_history(history: dict, chats: list[dict], now: float) -> None:
+    # Forget goals of chats that are gone, so the history cannot grow forever.
+    live = {c["sessionId"] for c in chats}
+    for key in list(history):
+        if key.split("|", 1)[0] not in live and now - float(history[key].get("lastAt") or 0) > 86400:
+            history.pop(key, None)
+    with ledgerlib.locked("goalwatch"):
+        merged = _load_state()
+        merged["goals"] = history
+        _save_state(merged)
+
+
+def run(argv: list[str]) -> tuple[dict, int]:
+    now = time.time()
+    act, notes = _acting(argv)
+    cap = _parse_cap(argv)
+    if cap is None:
+        return {"error": "--max needs a whole number"}, 3
     only = set(_values(argv, "--session")) or None
     try:
         p = plan(only)
     except hydralib.DaemonError as err:
         return {"error": f"daemon read failed: {err}"}, 1
 
-    # One usage survey per run, shared by every chat's decision (bandlib's snapshot rule), and
-    # none at all when no goal is open - the survey is the slow read.
-    snap, pcts = None, {}
-    if any(c["goal"]["inProgress"] for c in p["chats"]):
-        snap = bandlib.snapshot()
-        pcts = _usage_pct_by_instance(snap)
+    snap, pcts = _usage(p["chats"])
     state = _load_state()
     history = state.setdefault("goals", {})
-    # Several live chats can own one goal file (a swap leaves the old one idle): only the one
-    # that spoke last is prompted, so one goal never gets two chats racing on it.
-    newest: dict[str, str] = {}
-    for c in sorted(p["chats"], key=lambda c: c.get("quietSecs") or 0, reverse=True):
-        newest[c["goalPath"]] = c["sessionId"]
+    tick = _Tick(now=now, act=act, cap=cap, snap=snap, pcts=pcts,
+                 newest=_newest_owners(p["chats"]), history=history)
     rows, failed, sent = [], 0, 0
     for chat in p["chats"]:
-        key = f"{chat['sessionId']}|{chat['goalPath']}"
-        entry = dict(history.get(key) or {})
-        goal = chat["goal"]
-        pct = pcts.get(chat["instance"])
-        if pct is not None and pct < WRAPUP_PCT:
-            entry.pop("wrapupSent", None)
-        row = {"sessionId": chat["sessionId"], "title": chat["title"], "instance": chat["instance"],
-               "goalPath": chat["goalPath"], "status": goal["status"],
-               "inProgress": goal["inProgress"], "open": goal["open"],
-               "done": goal["done"], "usagePct": pct, "action": "none"}
+        row, outcome = _handle_goal(chat, tick, sent)
         rows.append(row)
-        kind, why = _decide(chat, entry, pct, snap, now)
-        # A wrap-up is also a "rewrite the goal file" order, so it goes to the newest owner only.
-        if kind in ("continue", "wrapup") and newest.get(chat["goalPath"]) != chat["sessionId"]:
-            kind, why = "skip", "another live chat owns the same goal and spoke more recently"
-        # THE OUTSIDE AUDIT: the file byte-identical since the last continuation = no progress.
-        streak = 0
-        if kind == "continue" and entry.get("lastHash"):
-            streak = int(entry.get("unchanged", 0)) + 1 if entry["lastHash"] == goal["hash"] else 0
-            if streak >= MAX_UNCHANGED:
-                kind = "escalate"
-        if kind == "skip":
-            row["action"] = why
-            history[key] = entry
-            continue
-        if kind == "escalate":
-            row["action"] = (f"escalated to an incident: {MAX_UNCHANGED} continuation(s) left the "
-                             "goal file unchanged")
-            if act:
-                entry["incident"] = incidentlib.record(
-                    "goal_watch", key,
-                    f"{MAX_UNCHANGED} continuations and {chat['goalPath']} never changed "
-                    f"({goal['open']} open item(s)) - the chat is spinning or stuck")
-                entry["lastHash"] = goal["hash"]
-            history[key] = entry
-            continue
-        if sent >= cap:
-            row["action"] = f"over this run's cap of {cap} - next tick"
-            history[key] = entry
-            continue
-        rel = str(goallib.GOAL_REL).replace("\\", "/")
-        text = (goallib.wrapup_text(goal, rel_path=rel, pct=pct or 0, wrapup_pct=WRAPUP_PCT)
-                if kind == "wrapup" else
-                goallib.continuation_text(goal, rel_path=rel, unchanged_for=streak))
-        if not act:
-            row["action"] = f"would {'send the wrap-up' if kind == 'wrapup' else 'continue'}" + (
-                f" ({why})" if why else "")
-            continue
-        ok, detail = send(chat, text)
-        row["action"] = (("wrap-up sent" if kind == "wrapup" else "continued") if ok
-                         else "PROMPT FAILED") + f": {detail}"
-        if not ok:
+        if outcome == "sent":
+            sent += 1
+        elif outcome == "failed":
             failed += 1
-            continue
-        sent += 1
-        if kind == "wrapup":
-            entry["wrapupSent"] = True
-        else:
-            entry.update({"lastAt": now, "lastHash": goal["hash"], "unchanged": streak,
-                          "incident": None})
-        history[key] = entry
     if act:
-        # Forget goals of chats that are gone, so the history cannot grow forever.
-        live = {c["sessionId"] for c in p["chats"]}
-        for key in list(history):
-            if key.split("|", 1)[0] not in live and now - float(history[key].get("lastAt") or 0) > 86400:
-                history.pop(key, None)
-        with ledgerlib.locked("goalwatch"):
-            merged = _load_state()
-            merged["goals"] = history
-            _save_state(merged)
+        _save_history(history, p["chats"], now)
     payload = {"scanned": p["scanned"], "withGoals": len(rows),
                "openGoals": sum(1 for r in rows if r["inProgress"]),
                "sent": sent, "failed": failed, "acting": act, "notes": notes, "chats": rows,

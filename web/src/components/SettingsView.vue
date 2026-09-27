@@ -676,23 +676,32 @@ watch(
   { immediate: true },
 )
 
+// Both writes apply locally first (the switch and the numbers reflect the change instantly), roll
+// back if the server refuses, and still reload afterwards so counts the server owns reconcile.
 async function toggleScheduler(enabled: boolean) {
+  const prev = scheduler.value
+  if (prev) scheduler.value = { ...prev, enabled }
   try {
     await api.updateScheduler({ enabled })
   } catch {
+    scheduler.value = prev
     toast.error(t('settings.toastSchedulerFailed'))
   }
   await refreshScheduler()
 }
 async function saveScheduler() {
+  const patch = {
+    spacing_seconds: Number(sched.spacing_seconds),
+    poll_seconds: Number(sched.poll_seconds),
+    max_concurrent: Number(sched.max_concurrent),
+    tomorrow_time: sched.tomorrow_time,
+  }
+  const prev = scheduler.value
+  if (prev) scheduler.value = { ...prev, ...patch }
   try {
-    await api.updateScheduler({
-      spacing_seconds: Number(sched.spacing_seconds),
-      poll_seconds: Number(sched.poll_seconds),
-      max_concurrent: Number(sched.max_concurrent),
-      tomorrow_time: sched.tomorrow_time,
-    })
+    await api.updateScheduler(patch)
   } catch {
+    scheduler.value = prev
     toast.error(t('settings.toastSchedulerFailed'))
   }
   await refreshScheduler()
@@ -898,11 +907,12 @@ defineExpose({ save })
                 v-model="transcriptEditor"
                 type="text"
                 :placeholder="$t('settings.transcriptEditorPlaceholder')"
-                class="w-full font-mono text-xs"
+                variant="mono"
+                class="w-full"
                 @change="saveTranscriptEditor"
               />
               <p
-                class="text-[11px]"
+                class="text-2xs"
                 :class="editorOverrideIgnored ? 'text-warning' : 'text-muted-foreground'"
               >
                 {{
@@ -955,13 +965,13 @@ defineExpose({ save })
                 :disabled="!copyPathIncludePrompt"
                 :placeholder="$t('settings.copyPathPromptPlaceholder')"
                 :aria-label="$t('settings.copyPathPromptLabel')"
-                class="w-full text-xs"
+                class="w-full"
               />
               <div>
-                <p class="mb-1 text-[11px] text-muted-foreground">
+                <p class="mb-1 text-2xs text-muted-foreground">
                   {{ $t('settings.copyPathPreviewLabel') }}
                 </p>
-                <pre class="overflow-x-auto rounded border border-border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">{{ copyPathPreview }}</pre>
+                <pre class="overflow-x-auto rounded border border-border bg-muted/40 p-2 font-mono text-2xs leading-relaxed text-muted-foreground">{{ copyPathPreview }}</pre>
               </div>
             </div>
           </ExpandTransition>
@@ -1032,7 +1042,7 @@ defineExpose({ save })
           <Switch :model-value="mcpRegister" @update:model-value="toggleMcpRegister" />
         </template>
       </SettingsRow>
-      <div class="space-y-0.5 px-3.5 py-2.5 text-[11px] text-muted-foreground">
+      <div class="space-y-0.5 px-3.5 py-2.5 text-2xs text-muted-foreground">
         <p v-if="mcpError" class="text-destructive">{{ mcpError }}</p>
         <p v-else-if="mcpRegistered">{{ $t('settings.mcpRegisteredYes', { url: mcpUrl }) }}</p>
         <p v-else>
@@ -1047,7 +1057,7 @@ defineExpose({ save })
            misc/ costs the tray icon, and claiming the first when it is the second would be a
            false alarm. A repair is the ordinary update path applied to the CURRENT version, so
            the button is the same apply the update row uses. -->
-      <div v-if="mcpMissingComponents.length" class="space-y-1.5 px-3.5 py-2.5 text-[11px]">
+      <div v-if="mcpMissingComponents.length" class="space-y-1.5 px-3.5 py-2.5 text-2xs">
         <p class="text-warning">
           {{
             mcpToolboxPresent
@@ -1399,7 +1409,7 @@ defineExpose({ save })
       <!-- not connected: sign-in CTA -->
       <div v-if="!syncStatus.connected" class="px-3.5 py-2.5">
         <Button variant="outline" class="w-full" @click="goSignIn">
-          <Cloud class="text-sky-500" />
+          <Cloud class="text-info" />
           {{ $t('settings.cloudSyncConnectButton') }}
           <ExternalLink class="opacity-70" />
         </Button>
@@ -1421,12 +1431,12 @@ defineExpose({ save })
               v-if="syncStatus.picture"
               :src="syncStatus.picture"
               alt=""
-              class="size-[18px] shrink-0 rounded-full object-cover"
+              class="size-4.5 shrink-0 rounded-full object-cover"
             />
-            <User v-else class="size-[18px] shrink-0 text-muted-foreground" />
+            <User v-else class="size-4.5 shrink-0 text-muted-foreground" />
           </template>
           <template #control>
-            <span class="text-[12px] text-muted-foreground">{{ syncedLabel }}</span>
+            <span class="text-xs text-muted-foreground">{{ syncedLabel }}</span>
             <Button variant="ghost" size="sm" :disabled="syncBusy" @click="onSyncNow">
               <RefreshCw :class="syncBusy ? 'animate-spin' : ''" />
               {{ syncBusy ? $t('settings.cloudSyncSyncing') : $t('settings.cloudSyncSyncNow') }}
@@ -1434,7 +1444,7 @@ defineExpose({ save })
           </template>
         </SettingsRow>
         <SettingsRow>
-          <template #icon><LogOut class="size-[18px] shrink-0 text-muted-foreground" /></template>
+          <template #icon><LogOut class="size-4.5 shrink-0 text-muted-foreground" /></template>
           <template #label>
             {{ confirmDisconnect ? $t('settings.cloudSyncConfirmDisconnect') : $t('settings.cloudSyncDisconnect') }}
           </template>
@@ -1476,7 +1486,7 @@ defineExpose({ save })
            this build. Say so up front and disable the controls below with that reason, rather than
            offer a toggle that would only fail moments after being flipped on. Mirrors QueueView /
            QueueBuilder's AH-12 fix, both reading the same HEADLESS_QUEUEING_ENABLED flag. -->
-      <div v-if="!HEADLESS_QUEUEING_ENABLED" class="px-3.5 py-2.5 text-[11px] text-warning">
+      <div v-if="!HEADLESS_QUEUEING_ENABLED" class="px-3.5 py-2.5 text-2xs text-warning">
         {{ $t('settings.schedulerUnavailableHint') }}
       </div>
       <SettingsRow :icon="Power" :label="$t('settings.schedulerEnabledLabel')">
@@ -1599,7 +1609,7 @@ defineExpose({ save })
                 {{ $t('settings.monitorDiscovered') }}
               </Badge>
               <span class="min-w-0 flex-1 truncate text-foreground">{{ row.title ?? row.sessionId }}</span>
-              <span v-if="row.message" class="max-w-[14rem] truncate text-muted-foreground">{{ row.message }}</span>
+              <span v-if="row.message" class="max-w-56 truncate text-muted-foreground">{{ row.message }}</span>
               <span class="shrink-0 text-muted-foreground">
                 {{ $t('settings.monitorAttempts', { n: row.resumeAttempts }) }}
               </span>
@@ -1607,7 +1617,7 @@ defineExpose({ save })
           </div>
 
           <template v-if="accounts.length > 0">
-            <p class="px-3.5 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <p class="px-3.5 pt-2 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
               {{ $t('settings.monitorAccountOverridesLabel') }}
             </p>
             <SettingsRow v-for="a in accounts" :key="a.id" :label="a.label">

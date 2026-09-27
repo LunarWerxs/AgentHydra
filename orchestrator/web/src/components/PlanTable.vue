@@ -38,7 +38,7 @@ function rows() {
     </p>
     <p v-if="filter" class="text-xs">
       Filtered to <b>{{ KINDS[filter]?.label ?? filter }}</b> —
-      <Button variant="link" size="xs" class="h-auto p-0 align-baseline" @click="emit('clearFilter')">show all {{ plan.chats.length }}</Button>
+      <Button variant="link" size="inline" @click="emit('clearFilter')"><span class="text-3xs">show all {{ plan.chats.length }}</span></Button>
     </p>
     <p class="text-xs text-muted-foreground">
       Residence rule: a chat with a desktop home stays in the desktop; console-only sessions may stay console, but
@@ -64,7 +64,7 @@ function rows() {
               <TableRow class="cursor-pointer" @click="toggle(ch.sessionId)">
                 <TableCell class="whitespace-normal">
                   <div class="font-semibold">{{ ch.title ?? '(untitled)' }}</div>
-                  <div class="text-[11px] text-muted-foreground">
+                  <div class="text-2xs text-muted-foreground">
                     {{ rel(ch.lastActivityAt) }}<span v-if="ch.evidence && ch.evidence.trim()"> · click for its last words</span>
                   </div>
                 </TableCell>
@@ -75,21 +75,21 @@ function rows() {
                   <KindBadge :kind="ch.decision.kind" />
                   <div class="mt-1 text-xs">{{ ch.decision.action }}</div>
                 </TableCell>
-                <TableCell class="whitespace-normal text-xs">{{ ch.decision.detail || ch.cause || '' }}</TableCell>
+                <TableCell class="whitespace-normal"><div class="text-xs">{{ ch.decision.detail || ch.cause || '' }}</div></TableCell>
                 <TableCell class="whitespace-normal">
                   <span v-if="ch.decision.command" class="cmd">{{ ch.decision.command }}</span>
                   <span v-else class="text-muted-foreground">—</span>
                 </TableCell>
               </TableRow>
-              <TableRow v-if="open.has(ch.sessionId)" class="bg-muted/40 hover:bg-muted/40">
+              <TableRow v-if="open.has(ch.sessionId)" variant="tinted">
                 <TableCell colspan="7" class="whitespace-normal">
-                  <pre class="whitespace-pre-wrap font-mono text-[12px] leading-relaxed text-muted-foreground">{{ ch.evidence || '' }}</pre>
+                  <pre class="whitespace-pre-wrap font-mono text-xs leading-relaxed text-muted-foreground">{{ ch.evidence || '' }}</pre>
                 </TableCell>
               </TableRow>
             </template>
           </template>
           <TableRow v-else>
-            <TableCell colspan="7" class="text-muted-foreground">nothing in this lane</TableCell>
+            <TableCell colspan="7"><div class="text-muted-foreground">nothing in this lane</div></TableCell>
           </TableRow>
         </TableBody>
       </Table>

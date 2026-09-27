@@ -38,8 +38,8 @@ const emit = defineEmits<{
   <Dialog v-model:open="open">
     <DialogContent>
       <DialogHeader>
-        <DialogTitle class="flex items-center gap-2">
-          <LogOut class="size-4" />
+        <DialogTitle class="flex items-center">
+          <LogOut class="me-2 size-4" />
           {{ $t('instances.logoutDialogTitle', { name: instanceName ?? '' }) }}
         </DialogTitle>
         <DialogDescription>

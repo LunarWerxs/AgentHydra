@@ -47,11 +47,11 @@ export default {
   login: 'Log in',
   redeemResetCredit: 'Redeem reset credit',
   /** Disabled-button tooltip: the cached usage already shows no banked credits. */
-  redeemNoCredits: 'No banked reset credits — nothing to redeem.',
+  redeemNoCredits: 'No banked reset credits. Nothing to redeem.',
   /** Disabled-button tooltip: a reset would be wasted while a window still has headroom. `pct` is
    *  the busiest window's used percent, matching the server guard's own wording. */
   redeemNotExhausted:
-    'Busiest window is only {pct}% used — redeeming now would waste most of the reset.',
+    'Busiest window is only {pct}% used. Redeeming now would waste most of the reset.',
   rename: 'Rename',
   delete: 'Delete',
   nameLabel: 'Instance name',

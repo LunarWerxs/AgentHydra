@@ -165,9 +165,9 @@ Each of these was tried during a real investigation and each produced a
 confident wrong answer. Do not identify yourself from any of them:
 
 1. **Your transcript's location.** A Desktop-instance session still writes to
-   the DEFAULT `~/.claude/projects/<cwd-key>/<sessionId>.jsonl`. That proves
+   the DEFAULT [`~/.claude/projects/<cwd-key>/<sessionId>.jsonl`](CLAUDE-CONFIG-LAYOUT.md). That proves
    where the session LOGS, not which account PAYS.
-2. **`~/.claude.json`'s `oauthAccount.emailAddress`.** That is the default login
+2. **[`~/.claude.json`](CLAUDE-CONFIG-LAYOUT.md)'s `oauthAccount.emailAddress`.** That is the default login
    sitting on the machine, not the credential the running session bills to.
 3. **Searching chat history for your own session id.** It resolves to the same
    default config dir as (1), for the same reason, and costs far more.

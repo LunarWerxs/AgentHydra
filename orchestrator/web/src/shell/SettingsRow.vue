@@ -18,7 +18,7 @@ withDefaults(
     class="flex items-center gap-3 px-3.5 py-2.5"
     :class="clickable ? 'cursor-pointer transition-colors hover:bg-accent/60' : ''"
   >
-    <component :is="icon" v-if="icon" class="size-[18px] shrink-0 text-muted-foreground" />
+    <component :is="icon" v-if="icon" class="size-4.5 shrink-0 text-muted-foreground" />
     <slot v-else name="icon" />
     <span class="min-w-0 flex-1">
       <span class="flex items-center gap-1.5 text-sm text-foreground">
@@ -27,12 +27,12 @@ withDefaults(
       </span>
       <span
         v-if="description || $slots.description"
-        class="mt-0.5 block text-[12px] leading-snug text-muted-foreground"
+        class="mt-0.5 block text-xs leading-snug text-muted-foreground"
       >
         <slot name="description">{{ description }}</slot>
       </span>
     </span>
-    <div class="flex shrink-0 items-center gap-2 text-[13px] text-muted-foreground">
+    <div class="flex shrink-0 items-center gap-2 text-ui text-muted-foreground">
       <slot name="control" />
     </div>
   </div>

@@ -23,6 +23,7 @@
 // onEnd runs exactly once per started drag, no matter which signal ends it.
 
 import { onBeforeUnmount, ref, type Ref } from "vue";
+import { prefersReducedMotion } from "./utils";
 
 export interface GripDragHandlers {
   /** Capture the drag's starting state. Return false to reject the drag (missing refs etc.);
@@ -163,7 +164,8 @@ export function useGripGlide(): GripGlide {
   function glideTo(from: number | null | undefined, to: number, release: () => void): void {
     cancel();
     release();
-    if (from == null || Math.abs(to - from) < GLIDE_MIN_DELTA_PX || reducedMotion()) return;
+    // Respect the OS setting — with motion reduced, a reset simply lands.
+    if (from == null || Math.abs(to - from) < GLIDE_MIN_DELTA_PX || prefersReducedMotion()) return;
     // The element is ALREADY rendered at `from`, so this single assignment is a complete
     // transition pair — no pin-then-retarget frame dance, nothing to wait a tick for.
     height.value = to;
@@ -174,11 +176,6 @@ export function useGripGlide(): GripGlide {
 
   onBeforeUnmount(cancel);
   return { height, glideTo, cancel };
-}
-
-/** Respect the OS setting — with motion reduced, a reset simply lands. */
-function reducedMotion(): boolean {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
 }
 
 /**

@@ -36,7 +36,7 @@
 .logic-tree svg .box { fill: var(--surface); stroke: var(--baseline); rx: 8; }
 .logic-tree svg .edge { stroke: var(--baseline); stroke-width: 1.5; fill: none; }
 .logic-tree svg .lbl { fill: var(--ink-muted); font-size: 11px; font-style: italic; }
-.logic-tree svg .accent-b { stroke: var(--accent); stroke-width: 2; }
+.logic-tree svg .emphasized { stroke: var(--accent); stroke-width: 2; }
 .logic-tree svg .good-b { stroke: var(--good); stroke-width: 2; }
 .logic-tree svg .warn-b { stroke: var(--warning); stroke-width: 2; }
 .logic-tree svg .serious-b { stroke: var(--serious); stroke-width: 2; }

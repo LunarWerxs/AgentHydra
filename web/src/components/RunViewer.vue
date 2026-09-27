@@ -73,7 +73,7 @@ onBeforeUnmount(disconnect)
         <Terminal class="size-3.5" /> {{ $t('run.liveOutput') }}
         <span
           v-if="connectionLost && !finished"
-          class="animate-pulse font-normal text-[11px] text-muted-foreground/70"
+          class="animate-pulse font-normal text-2xs text-muted-foreground/70"
         >
           {{ $t('run.reconnecting') }}
         </span>
@@ -83,7 +83,7 @@ onBeforeUnmount(disconnect)
           <StatusBadge :status="item.status" />
           <span
             v-if="item.exit_code !== null"
-            class="text-[11px] text-muted-foreground"
+            class="text-2xs text-muted-foreground"
             :title="item.exit_code === -1 ? $t('queue.exitLostHint') : undefined"
           >
             {{ item.exit_code === -1 ? $t('queue.exitLost') : $t('queue.exitCode', { code: item.exit_code }) }}
@@ -112,10 +112,10 @@ onBeforeUnmount(disconnect)
               : 'border-border bg-muted/40'
           "
         >
-          <div class="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div class="mb-0.5 text-3xs font-semibold uppercase tracking-wide text-muted-foreground">
             {{ ev.role }}
           </div>
-          <div class="whitespace-pre-wrap break-words">{{ ev.text }}</div>
+          <div class="whitespace-pre-wrap wrap-break-word">{{ ev.text }}</div>
         </div>
 
         <!-- meta -->
@@ -126,7 +126,7 @@ onBeforeUnmount(disconnect)
         <!-- tool activity (collapsed by default) -->
         <div
           v-else-if="showTools"
-          class="flex items-start gap-1.5 rounded-md border border-border/60 bg-background/40 px-2 py-1 font-mono text-[11px] text-muted-foreground"
+          class="flex items-start gap-1.5 rounded-md border border-border/60 bg-background/40 px-2 py-1 font-mono text-2xs text-muted-foreground"
         >
           <Wrench class="mt-0.5 size-3 shrink-0" />
           <span class="break-all">

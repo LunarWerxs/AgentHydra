@@ -149,19 +149,31 @@ function onEnter(key: string, e: MouseEvent) {
 
 <template>
   <div ref="wrap" class="w-full">
-    <div v-if="cells.length === 0" class="py-6 text-center text-[11px] text-muted-foreground">
+    <div v-if="cells.length === 0" class="py-6 text-center text-2xs text-muted-foreground">
       {{ $t('analytics.editsNone') }}
     </div>
-    <div v-else :style="{ width: `${LABEL_W + GAP + gridWidth}px` }">
+    <!-- The measured sizes are set once here as custom properties; every row, label and cell below
+         reads them through classes. -->
+    <div
+      v-else
+      class="w-(--cg-total)"
+      :style="{
+        '--cg-total': `${LABEL_W + GAP + gridWidth}px`,
+        '--cg-label': `${LABEL_W}px`,
+        '--cg-gap': `${GAP}px`,
+        '--cg-cell': `${cell}px`,
+        '--cg-grid': `${gridWidth}px`,
+      }"
+    >
       <!-- month axis -->
-      <div class="flex" :style="{ gap: `${GAP}px`, marginBottom: `${GAP}px` }">
-        <span class="shrink-0" :style="{ width: `${LABEL_W}px` }"></span>
-        <div class="relative h-3" :style="{ width: `${gridWidth}px` }">
+      <div class="mb-(--cg-gap) flex gap-(--cg-gap)">
+        <span class="w-(--cg-label) shrink-0"></span>
+        <div class="relative h-3 w-(--cg-grid)">
           <span
             v-for="m in monthTicks"
             :key="`${m.col}-${m.label}`"
-            class="absolute top-0 text-[10px] text-muted-foreground"
-            :style="{ left: `${m.col * (cell + GAP)}px` }"
+            class="absolute top-0 left-(--cg-tick-x) text-3xs text-muted-foreground"
+            :style="{ '--cg-tick-x': `${m.col * (cell + GAP)}px` }"
           >{{ m.label }}</span>
         </div>
       </div>
@@ -169,32 +181,24 @@ function onEnter(key: string, e: MouseEvent) {
       <div
         v-for="(label, row) in DAY_LABELS"
         :key="`row-${row}`"
-        class="flex items-center"
-        :style="{ gap: `${GAP}px`, marginBottom: `${GAP}px` }"
+        class="mb-(--cg-gap) flex items-center gap-(--cg-gap)"
       >
-        <span
-          class="shrink-0 text-[10px] text-muted-foreground"
-          :style="{ width: `${LABEL_W}px` }"
-        >{{ label }}</span>
-        <div class="relative" :style="{ width: `${gridWidth}px`, height: `${cell}px` }">
+        <span class="w-(--cg-label) shrink-0 text-3xs text-muted-foreground">{{ label }}</span>
+        <div class="relative h-(--cg-cell) w-(--cg-grid)">
           <div
             v-for="c in cells.filter((x) => x.row === row)"
             :key="c.key"
-            class="absolute top-0 rounded-[2px] bg-muted"
+            class="absolute top-0 left-(--cg-x) size-(--cg-cell) rounded-xs bg-muted"
             :class="hover === c.key ? 'ring-1 ring-foreground/40' : ''"
-            :style="{
-              left: `${c.col * (cell + GAP)}px`,
-              width: `${cell}px`,
-              height: `${cell}px`,
-            }"
+            :style="{ '--cg-x': `${c.col * (cell + GAP)}px` }"
             :aria-label="cellLabel(c)"
             @mouseenter="onEnter(c.key, $event)"
             @mousemove="tip = { x: $event.clientX, y: $event.clientY }"
             @mouseleave="hover = null"
           >
             <div
-              class="size-full rounded-[2px]"
-              :style="{ background: 'var(--viz-seq)', opacity: intensity(c.value) }"
+              class="size-full rounded-xs bg-(--viz-seq) opacity-(--cg-alpha)"
+              :style="{ '--cg-alpha': intensity(c.value) }"
             ></div>
           </div>
         </div>

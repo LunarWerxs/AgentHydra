@@ -22,7 +22,7 @@
 //                     archiving the leftover in that app is durable, and a later move from that
 //                     account still finds the chat instead of answering "No chats to move".
 //   · native UNAVAILABLE (not configured, or prefer-native with no debugger) -> the guarded
-//                     legacy path: the app's own Archive control, read back. If that does not
+//                     fallback path: the app's own Archive control, read back. If that does not
 //                     settle it, NO flag under the running app: that flag is the reported bug
 //                     itself (hides nothing, and the next move finds nothing). The record stays as
 //                     the screen shows it, reported as still shown, and is queued to be flagged

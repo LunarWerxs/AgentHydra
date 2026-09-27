@@ -36,7 +36,7 @@ const groups = computed(() => {
         {{ $t('app.shortcutsNone') }}
       </div>
       <div v-for="[groupKey, list] in groups" :key="groupKey" class="space-y-1">
-        <p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        <p class="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
           {{ $t(groupKey) }}
         </p>
         <div
@@ -46,7 +46,7 @@ const groups = computed(() => {
         >
           <span class="min-w-0 flex-1">{{ $t(s.labelKey) }}</span>
           <kbd
-            class="shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]"
+            class="shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-2xs"
           >{{ displayKeys(s.keys) }}</kbd>
         </div>
       </div>

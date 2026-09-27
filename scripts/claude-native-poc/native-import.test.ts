@@ -7,6 +7,16 @@ import {
   nativeImportProgram,
 } from './native-import'
 
+// The shapes the generated program hands to Claude's manager (see nativeImportProgram).
+interface FixtureSession {
+  cliSessionId: string
+}
+interface ImportOptions {
+  autoTrust: boolean
+  title: string
+  beforeWrite: () => Promise<void>
+}
+
 // Inert runtime tests the safety wrapper, not Claude's importer implementation or live UI.
 function fixture() {
   const request: NativeImportRequest = {
@@ -33,10 +43,10 @@ function fixture() {
     adoptingCliSessionIds: new Map(),
     waitForInitialization: async () => {},
     ensureArchivedSessionsLoaded: async () => {},
-    localLineageIds: (s: any) => [s.cliSessionId],
+    localLineageIds: (s: FixtureSession) => [s.cliSessionId],
     diskTranscript: { resolveProjectDirForSession: async () => 'D:\\transcripts' },
     getCliSessionDiscovery: async () => ({ liveOwnershipRefusal: async () => refusal }),
-    importCliSession: async (id: string, options: any) => {
+    importCliSession: async (id: string, options: ImportOptions) => {
       calls.push({ id, options })
       await options.beforeWrite()
       const sessionId = `local_${id}`
@@ -172,7 +182,7 @@ describe('disposable native import wrapper (no app/network connection)', () => {
   })
   test('beforeWrite refuses a writer that resumes during the native import preparation', async () => {
     const f = fixture()
-    f.manager.importCliSession = async (_id: string, options: any) => {
+    f.manager.importCliSession = async (_id: string, options: ImportOptions) => {
       f.refusal('running')
       await options.beforeWrite()
       throw Error('unreachable')

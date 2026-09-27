@@ -4,7 +4,7 @@ export default {
   // runs a chat nobody can see — so this now describes the queue as a history/editing view rather
   // than a thing that can still dispatch.
   whatIsQueue:
-    'Each item records a claude CLI run — its prompt, working directory, model, effort, ' +
+    'Each item records a claude CLI run, its prompt, working directory, model, effort, ' +
     'permission mode, and account. New runs and dispatch (Run, the scheduler) are disabled by ' +
     'policy: AgentHydra never runs a chat nobody can see. Existing items can still be edited or ' +
     'deleted; to get work done, reply in the session’s own desktop chat, use fan_out, or import ' +
@@ -61,5 +61,5 @@ export default {
   // AH-20: an outage must not read as an empty queue.
   unavailable: 'Could not load the queue: {reason}.',
   retry: 'Retry',
-  staleHint: 'Showing the last known queue — updates unavailable: {reason}.',
+  staleHint: 'Showing the last known queue, updates unavailable: {reason}.',
 }

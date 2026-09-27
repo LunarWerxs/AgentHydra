@@ -116,3 +116,7 @@ export function useTranscriptDisplay(deps: {
     copyMessage,
   }
 }
+
+/** One turn as the transcript renders it: escaped or markdown HTML, find-highlighted, with its
+ *  long-message flag. What components/SessionTranscriptTurns.vue draws. */
+export type TranscriptTurn = ReturnType<typeof useTranscriptDisplay>['events']['value'][number]

@@ -165,7 +165,7 @@ watch(settingsOpen, (open) => {
     </template>
   </SettingsRow>
   <div class="space-y-2 px-3.5 py-3 text-xs" aria-live="polite">
-    <p v-if="error" role="alert" class="break-words text-destructive">{{ error }}</p>
+    <p v-if="error" role="alert" class="wrap-break-word text-destructive">{{ error }}</p>
     <template v-if="loaded && selectedInstance">
       <p class="font-medium" :class="config?.launchDebugger ? 'text-success' : 'text-foreground'">
         {{ saving ? $t('settings.claudeNativeSaving') : status }}
@@ -179,7 +179,7 @@ watch(settingsOpen, (open) => {
         {{ $t('settings.claudeNativeReset') }}
       </Button>
     </template>
-    <p v-if="loaded" class="break-words text-muted-foreground">
+    <p v-if="loaded" class="wrap-break-word text-muted-foreground">
       {{ automaticProfiles.length
         ? $t('settings.claudeNativeEnabledAccounts', { accounts: automaticProfiles.join(', ') })
         : $t('settings.claudeNativeNoAutomaticAccounts') }}

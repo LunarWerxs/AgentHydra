@@ -28,9 +28,9 @@ defineProps<{ data: RulesData }>()
           </TableHeader>
           <TableBody>
             <TableRow v-for="(r, i) in s.rules" :key="i">
-              <TableCell class="whitespace-normal text-xs">{{ r.if }}</TableCell>
-              <TableCell class="whitespace-normal text-xs">{{ r.then }}</TableCell>
-              <TableCell class="whitespace-normal font-mono text-xs">{{ r.value }}</TableCell>
+              <TableCell class="whitespace-normal">{{ r.if }}</TableCell>
+              <TableCell class="whitespace-normal">{{ r.then }}</TableCell>
+              <TableCell class="whitespace-normal"><div class="font-mono">{{ r.value }}</div></TableCell>
             </TableRow>
           </TableBody>
         </Table>

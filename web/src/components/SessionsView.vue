@@ -47,8 +47,10 @@ import {
 import { useMediaQuery } from '@vueuse/core'
 import { type ComponentPublicInstance, computed, ref, watch } from 'vue'
 import SessionComposer, { type ComposerTarget } from '@/components/SessionComposer.vue'
+import SessionTranscriptTurns from '@/components/SessionTranscriptTurns.vue'
+import SourceBadge from '@/components/SourceBadge.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
-import { Badge } from '@/components/ui/badge'
+import { Badge, type BadgeVariants } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import {
   ContextMenu,
@@ -104,7 +106,7 @@ import { useSessionUsage } from '@/composables/useSessionUsage'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useTranscriptDisplay } from '@/composables/useTranscriptDisplay'
 import { clampWidth, SIDEBAR_DEFAULT, useUiPrefs } from '@/composables/useUiPrefs'
-import * as api from '@/lib/api'
+import type * as api from '@/lib/api'
 import { baseName, shortId, timeAgo } from '@/lib/format'
 import { highlightRuns, rankByQuery, sessionSearchFields, type TextRun } from '@/lib/fuzzy'
 import { groupByProject } from '@/lib/session-groups'
@@ -279,7 +281,6 @@ const {
   limitTooltipOf,
   sourceLabel,
   rowSourceLabel,
-  sourceBadgeClass,
   sourceHasFile: SOURCE_HAS_FILE,
   sourceFileIsText: SOURCE_FILE_IS_TEXT,
   shapeLabel,
@@ -299,10 +300,10 @@ const liveStatusBySession = computed(() => {
   for (const st of agentStatuses.value) if (!st.restoredUnconfirmed) m.set(st.sessionId, st)
   return m
 })
-const AGENT_STATUS_CLASS: Record<api.AgentStatus['state'], string> = {
-  working: 'border-primary/50 bg-primary/10 text-primary',
-  blocked: 'border-warning/50 bg-warning/10 text-warning',
-  done: 'border-success/50 bg-success/10 text-success',
+const AGENT_STATUS_VARIANT: Record<api.AgentStatus['state'], BadgeVariants['variant']> = {
+  working: 'primary',
+  blocked: 'warning',
+  done: 'success',
 }
 const AGENT_STATUS_LABEL: Record<api.AgentStatus['state'], string> = {
   working: 'sessions.agentStatusWorking',
@@ -353,8 +354,6 @@ const emptyBecauseOfPeriod = computed(
 )
 
 // --- sidebar: persisted drag-resize + animated collapse, auto-collapsing when narrow -------------
-const RAIL_WIDTH = 44
-
 const isWide = useMediaQuery('(min-width: 1024px)')
 const collapsed = ref(!isWide.value)
 watch(isWide, (wide) => {
@@ -378,12 +377,11 @@ function startResize(e: PointerEvent) {
   window.addEventListener('pointerup', onUp)
 }
 
-// Never wider than the viewport allows (a 340px sidebar on a 390px phone would
-// crush the transcript); the width transition animates the collapse toggle but is
-// suspended during a drag so resizing tracks the pointer 1:1.
-const asideStyle = computed(() => ({
-  width: collapsed.value ? `${RAIL_WIDTH}px` : `min(${sidebarWidth.value}px, calc(100vw - 56px))`,
-}))
+// The dragged width rides the aside as --sidebar-w (set in the template); `.sessions-sidebar-w`
+// (style.css) caps it at the viewport (a 340px sidebar on a 390px phone would crush the
+// transcript), and the collapsed rail is w-11 (44px). The width transition (`transition-width`,
+// style.css) animates the collapse toggle but is suspended during a drag so resizing tracks the
+// pointer 1:1.
 
 // --- multi-select: pick several sessions, message them all at once - or move them ---------------
 const {
@@ -508,8 +506,8 @@ function onComposerSent(mode: 'now' | 'queued') {
          separated only by the hairline border. -->
     <aside
       class="relative min-h-0 shrink-0 overflow-hidden border-e border-border bg-sidebar"
-      :class="resizing ? '' : 'transition-[width] duration-300 ease-in-out'"
-      :style="asideStyle"
+      :class="[collapsed ? 'w-11' : 'sessions-sidebar-w', resizing ? '' : 'transition-width duration-300 ease-in-out']"
+      :style="{ '--sidebar-w': `${sidebarWidth}px` }"
     >
       <IconTooltip :label="collapsed ? $t('sessions.expandSidebar') : $t('sessions.collapseSidebar')">
         <Button
@@ -525,9 +523,8 @@ function onComposerSent(mode: 'now' | 'queued') {
 
       <!-- expanded content keeps its full width while animating so it clips, not reflows -->
       <div
-        class="flex h-full min-h-0 flex-col transition-opacity duration-200"
+        class="sessions-sidebar-w flex h-full min-h-0 flex-col transition-opacity duration-200"
         :class="collapsed ? 'pointer-events-none opacity-0' : 'opacity-100'"
-        :style="{ width: `min(${sidebarWidth}px, calc(100vw - 56px))` }"
       >
         <div class="flex shrink-0 items-center gap-2 p-3 pe-11">
           <div class="relative flex-1">
@@ -536,7 +533,8 @@ function onComposerSent(mode: 'now' | 'queued') {
               ref="searchInput"
               v-model="search"
               :placeholder="$t('sessions.searchPlaceholder')"
-              class="ps-8 pe-8"
+              leading="icon"
+              trailing="icon"
             />
             <!-- Same popper-anchor rule as the instance filter below: the Popover root lives
                  INSIDE IconTooltip, so PopoverTrigger's PopperAnchor finds the popover's own
@@ -556,37 +554,39 @@ function onComposerSent(mode: 'now' | 'queued') {
                       <SlidersHorizontal class="size-4" />
                     </button>
                   </PopoverTrigger>
-                  <PopoverContent align="end" class="w-80 space-y-3 p-3">
-                    <p class="text-xs font-semibold">{{ $t('sessions.advancedSearchTitle') }}</p>
-                    <div class="space-y-1.5">
-                      <label class="text-xs font-medium text-muted-foreground">
-                        {{ $t('sessions.advancedSearchQueryLabel') }}
-                      </label>
-                      <Input
-                        v-model="advancedQuery"
-                        :placeholder="$t('sessions.advancedSearchQueryPlaceholder')"
-                        class="font-mono text-xs"
-                        @keydown.enter="runBodySearch"
-                      />
+                  <PopoverContent align="end" class="w-80">
+                    <div class="space-y-3">
+                      <p class="text-xs font-semibold">{{ $t('sessions.advancedSearchTitle') }}</p>
+                      <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-muted-foreground">
+                          {{ $t('sessions.advancedSearchQueryLabel') }}
+                        </label>
+                        <Input
+                          v-model="advancedQuery"
+                          :placeholder="$t('sessions.advancedSearchQueryPlaceholder')"
+                          variant="mono"
+                          @keydown.enter="runBodySearch"
+                        />
+                      </div>
+                      <div class="flex items-center justify-between">
+                        <IconTooltip :label="$t('sessions.regexMode')" :description="$t('sessions.regexModeHint')">
+                          <span class="text-xs" tabindex="0">{{ $t('sessions.regexMode') }}</span>
+                        </IconTooltip>
+                        <Switch v-model="advancedRegex" size="sm" />
+                      </div>
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs">{{ $t('sessions.caseSensitive') }}</span>
+                        <Switch v-model="advancedCaseSensitive" size="sm" />
+                      </div>
+                      <Button
+                        size="sm"
+                        class="w-full"
+                        :disabled="!advancedQuery.trim() || bodySearching"
+                        @click="runBodySearch"
+                      >
+                        {{ bodySearching ? $t('sessions.searching') : $t('sessions.searchButton') }}
+                      </Button>
                     </div>
-                    <div class="flex items-center justify-between">
-                      <IconTooltip :label="$t('sessions.regexMode')" :description="$t('sessions.regexModeHint')">
-                        <span class="text-xs" tabindex="0">{{ $t('sessions.regexMode') }}</span>
-                      </IconTooltip>
-                      <Switch v-model="advancedRegex" size="sm" />
-                    </div>
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs">{{ $t('sessions.caseSensitive') }}</span>
-                      <Switch v-model="advancedCaseSensitive" size="sm" />
-                    </div>
-                    <Button
-                      size="sm"
-                      class="w-full"
-                      :disabled="!advancedQuery.trim() || bodySearching"
-                      @click="runBodySearch"
-                    >
-                      {{ bodySearching ? $t('sessions.searching') : $t('sessions.searchButton') }}
-                    </Button>
                   </PopoverContent>
                 </Popover>
               </span>
@@ -643,7 +643,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <MessagesSquare />
                       {{ $t('sessions.filterSource') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
                         {{ sourceFilterLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -672,7 +672,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <Boxes />
                       {{ $t('sessions.filterInstance') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
                         {{ instanceFilterLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -699,7 +699,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <ListTodo />
                       {{ $t('sessions.dispatched') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
                         {{ dispatchedScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -719,7 +719,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <CircleAlert />
                       {{ $t('sessions.rateLimited') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
                         {{ rateLimitScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -729,7 +729,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                         <DropdownMenuRadioItem value="only">{{ $t('sessions.rateLimitedOnly') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="pending">{{ $t('sessions.rateLimitedPending') }}</DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
-                      <p class="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
+                      <p class="px-2 py-1.5 text-2xs leading-snug text-muted-foreground">
                         {{ $t('sessions.rateLimitedNote') }}
                       </p>
                     </DropdownMenuSubContent>
@@ -742,7 +742,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <Hourglass />
                       {{ $t('sessions.shape') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
                         {{ shapeScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -755,7 +755,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                         <DropdownMenuRadioItem value="marathon">{{ $t('sessions.shapeMarathon') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="automation">{{ $t('sessions.shapeAutomation') }}</DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
-                      <p class="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
+                      <p class="px-2 py-1.5 text-2xs leading-snug text-muted-foreground">
                         {{ $t('sessions.shapeNote') }}
                       </p>
                     </DropdownMenuSubContent>
@@ -767,7 +767,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <Archive />
                       {{ $t('sessions.archived') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
                         {{ archivedScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -787,7 +787,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <CalendarRange />
                       {{ $t('sessions.period') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
                         {{ periodLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -806,7 +806,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuItem @select="clearDoneMarks">
                       <CircleSlash />
                       {{ $t('sessions.clearDoneMarks') }}
-                      <span class="ms-auto ps-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto ps-2 text-2xs text-muted-foreground">
                         {{ $t('sessions.doneMarkCount', { n: doneCount }) }}
                       </span>
                     </DropdownMenuItem>
@@ -850,7 +850,7 @@ function onComposerSent(mode: 'now' | 'queued') {
              the search covered everything, gave up early, or only read the conversation -->
         <div
           v-if="bodySearchActive && bodySearchNotice"
-          class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-warning/10 px-3 py-1.5 text-[11px] text-muted-foreground"
+          class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-warning/10 px-3 py-1.5 text-2xs text-muted-foreground"
         >
           <span>{{ bodySearchNotice }}</span>
           <button
@@ -875,14 +875,14 @@ function onComposerSent(mode: 'now' | 'queued') {
         >
           <div
             v-if="box"
-            class="pointer-events-none absolute inset-x-1 z-10 rounded-md border border-primary/60 bg-primary/10"
-            :style="{ top: `${box.top}px`, height: `${box.height}px` }"
+            class="pointer-events-none absolute inset-x-1 top-(--box-top) z-10 h-(--box-h) rounded-md border border-primary/60 bg-primary/10"
+            :style="{ '--box-top': `${box.top}px`, '--box-h': `${box.height}px` }"
             aria-hidden="true"
           />
           <!-- first-load skeletons so the list never looks blank -->
           <template v-if="sessionsLoading && sessions.length === 0 && !bodySearchActive">
             <div v-for="i in 6" :key="i" class="mb-1.5 px-3 py-2.5">
-              <Skeleton class="h-4" :style="{ width: `${88 - (i % 3) * 16}%` }" />
+              <Skeleton class="h-4 w-(--skeleton-w)" :style="{ '--skeleton-w': `${88 - (i % 3) * 16}%` }" />
               <div class="mt-2.5 flex items-center gap-2">
                 <Skeleton class="h-3 w-16" />
                 <Skeleton class="h-3 w-10" />
@@ -906,13 +906,10 @@ function onComposerSent(mode: 'now' | 'queued') {
                 <span class="line-clamp-1 min-w-0 flex-1 font-mono text-xs text-muted-foreground">
                   {{ baseName(r.cwd) }} · {{ shortId(r.session_id) }}
                 </span>
-                <Badge
-                  variant="outline"
-                  :class="['shrink-0 text-[10px]', sourceBadgeClass(r.source)]"
-                >
+                <SourceBadge :source="r.source">
                   {{ rowSourceLabel(r) }}
-                </Badge>
-                <span class="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                </SourceBadge>
+                <span class="shrink-0 rounded bg-muted px-1.5 py-0.5 text-2xs font-medium text-muted-foreground">
                   {{ $t('sessions.matchCount', { n: r.match_count }) }}
                 </span>
               </div>
@@ -923,7 +920,7 @@ function onComposerSent(mode: 'now' | 'queued') {
               >
                 {{ snippet }}
               </p>
-              <p v-if="r.truncated" class="mt-1 text-[11px] text-muted-foreground/70">
+              <p v-if="r.truncated" class="mt-1 text-2xs text-muted-foreground/70">
                 {{ r.match_count - r.snippets.length }} {{ $t('sessions.truncatedMatches') }}
               </p>
             </button>
@@ -965,7 +962,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                it stays on screen, just labelled stale. Non-modal: a state of the list, not a toast. -->
           <p
             v-if="sessionsStatus.stale.value"
-            class="mb-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-[11px] text-warning"
+            class="mb-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-2xs text-warning"
           >
             {{ $t('sessions.staleHint', { reason: sessionsStatus.error.value }) }}
           </p>
@@ -1025,7 +1022,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                       wrapper around the first message, so it may match nothing the user has named.
                       --><span
                         v-if="titleIsUnattributed(s)"
-                        class="ms-1 align-middle text-[10px] font-normal text-muted-foreground/70"
+                        class="ms-1 align-middle text-3xs font-normal text-muted-foreground/70"
                       >&lt;{{ s.title_tag }}&gt;</span></span>
                     <!-- the wall this conversation died at. `pending` is the actionable half —
                          nothing followed the notice, so it is still sitting there — and it is the
@@ -1037,9 +1034,9 @@ function onComposerSent(mode: 'now' | 'queued') {
                          notice. Ever-hit is still reachable, as a filter. -->
                     <Badge
                       v-if="s.limit_stop?.pending"
-                      variant="outline"
+                      variant="warning"
                       :title="limitTooltipOf(s)"
-                      class="shrink-0 border-warning/50 bg-warning/10 text-[10px] text-warning"
+                      class="shrink-0"
                     >
                       {{ $t('sessions.rateLimitedBadgePending') }}
                     </Badge>
@@ -1048,25 +1045,22 @@ function onComposerSent(mode: 'now' | 'queued') {
                          to the hook event that set it. -->
                     <Badge
                       v-if="agentStatusOf(s)"
-                      variant="outline"
+                      :variant="AGENT_STATUS_VARIANT[agentStatusOf(s)?.state ?? 'done']"
+                      class="shrink-0"
                       :title="$t('sessions.agentStatusTooltip', {
                         event: agentStatusOf(s)?.event,
                         waiting: agentStatusOf(s)?.waiting ?? '-',
                         subagents: agentStatusOf(s)?.subagents,
                       })"
-                      :class="['shrink-0 text-[10px]', AGENT_STATUS_CLASS[agentStatusOf(s)?.state ?? 'done']]"
                     >
                       {{ $t(AGENT_STATUS_LABEL[agentStatusOf(s)?.state ?? 'done']) }}
                     </Badge>
                     <StatusBadge v-if="s.queue_status" :status="s.queue_status" />
-                    <Badge
-                      variant="outline"
-                      :class="['shrink-0 text-[10px]', sourceBadgeClass(s.source)]"
-                    >
+                    <SourceBadge :source="s.source">
                       {{ rowSourceLabel(s) }}
-                    </Badge>
+                    </SourceBadge>
                   </div>
-                  <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                  <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-muted-foreground">
                     <span class="inline-flex items-center gap-1"><FolderGit2 class="size-3" />{{ baseName(s.cwd) }}</span>
                     <span v-if="s.git_branch" class="inline-flex items-center gap-1"><GitBranch class="size-3" />{{ s.git_branch }}</span>
                     <span class="inline-flex items-center gap-1"><MessagesSquare class="size-3" />{{ s.message_count }}</span>
@@ -1144,7 +1138,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                 <!-- Bulk section: only when THIS row is one of several checked rows, so a
                      right-click on an unchecked row still acts on that row alone. -->
                 <template v-if="selectMode && bulkCount > 1 && isChecked(s)">
-                  <ContextMenuLabel class="text-xs text-muted-foreground">
+                  <ContextMenuLabel>
                     {{ $t('sessions.selectedCount', { n: bulkCount }) }}
                   </ContextMenuLabel>
                   <ContextMenuItem @select="copyCheckedIds">
@@ -1161,7 +1155,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                         {{ $t('sessions.migrateNoTargets') }}
                       </ContextMenuItem>
                       <template v-if="runningTargets.length">
-                        <ContextMenuLabel class="text-xs text-muted-foreground">
+                        <ContextMenuLabel>
                           {{ $t('sessions.migrateRunningGroup') }}
                         </ContextMenuLabel>
                         <ContextMenuItem
@@ -1181,7 +1175,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                       </template>
                       <template v-if="closedTargets.length">
                         <ContextMenuSeparator v-if="runningTargets.length" />
-                        <ContextMenuLabel class="text-xs text-muted-foreground">
+                        <ContextMenuLabel>
                           {{ $t('sessions.migrateClosedGroup') }}
                         </ContextMenuLabel>
                         <ContextMenuItem
@@ -1244,7 +1238,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                         {{ $t('sessions.migrateNoTargets') }}
                       </ContextMenuItem>
                       <template v-if="runningTargets.length">
-                        <ContextMenuLabel class="text-xs text-muted-foreground">
+                        <ContextMenuLabel>
                           {{ $t('sessions.migrateRunningGroup') }}
                         </ContextMenuLabel>
                         <ContextMenuItem
@@ -1264,7 +1258,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                       </template>
                       <template v-if="closedTargets.length">
                         <ContextMenuSeparator v-if="runningTargets.length" />
-                        <ContextMenuLabel class="text-xs text-muted-foreground">
+                        <ContextMenuLabel>
                           {{ $t('sessions.migrateClosedGroup') }}
                         </ContextMenuLabel>
                         <ContextMenuItem
@@ -1338,12 +1332,9 @@ function onComposerSent(mode: 'now' | 'queued') {
               <h2 class="truncate text-base font-semibold">{{ selected.title }}</h2>
               <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 <span class="font-mono">{{ shortId(selected.session_id) }}</span>
-                <Badge
-                  variant="outline"
-                  :class="['text-[10px]', sourceBadgeClass(selected.source)]"
-                >
+                <SourceBadge :source="selected.source">
                   {{ rowSourceLabel(selected) }}
-                </Badge>
+                </SourceBadge>
                 <!-- Which account is having this conversation. Read-only here on purpose: the
                      acts (open it, copy its address) live in the ⋯ menu, so a metadata line stays
                      a metadata line. The hover carries the full address, because the chip shows
@@ -1469,9 +1460,11 @@ function onComposerSent(mode: 'now' | 'queued') {
                            an open menu detached from the thing it acts on is a menu you hesitate
                            over. -->
                       <template v-if="sessionAccount">
-                        <DropdownMenuLabel class="flex items-center gap-2 py-1">
-                          <UserRound class="size-3.5 shrink-0" />
-                          <span class="truncate">{{ sessionAccount.name }}</span>
+                        <DropdownMenuLabel>
+                          <span class="flex items-center gap-2">
+                            <UserRound class="size-3.5 shrink-0" />
+                            <span class="truncate">{{ sessionAccount.name }}</span>
+                          </span>
                         </DropdownMenuLabel>
                         <!-- Unresolvable is a real state, not a blank: the instance folder may be
                              gone, or the regular non-isolated install may simply not be running (it
@@ -1501,8 +1494,10 @@ function onComposerSent(mode: 'now' | 'queued') {
                         </template>
                         <DropdownMenuSeparator />
                       </template>
-                      <DropdownMenuLabel class="flex items-center gap-2">
-                        <SlidersHorizontal class="size-3.5" />{{ $t('sessions.displayControls') }}
+                      <DropdownMenuLabel>
+                        <span class="flex items-center gap-2">
+                          <SlidersHorizontal class="size-3.5" />{{ $t('sessions.displayControls') }}
+                        </span>
                       </DropdownMenuLabel>
                       <DropdownMenuCheckboxItem
                         :model-value="humanOnly"
@@ -1537,8 +1532,10 @@ function onComposerSent(mode: 'now' | 'queued') {
 
                       <template v-if="SOURCE_HAS_FILE[selected.source]">
                         <DropdownMenuSeparator />
-                        <DropdownMenuLabel class="flex items-center gap-2">
-                          <FileSymlink class="size-3.5" />{{ $t('sessions.fileActions') }}
+                        <DropdownMenuLabel>
+                          <span class="flex items-center gap-2">
+                            <FileSymlink class="size-3.5" />{{ $t('sessions.fileActions') }}
+                          </span>
                         </DropdownMenuLabel>
                         <DropdownMenuItem
                           v-if="SOURCE_FILE_IS_TEXT[selected.source]"
@@ -1619,9 +1616,9 @@ function onComposerSent(mode: 'now' | 'queued') {
                                  one is started first (a deliberate click, so the "nothing opens an
                                  account on its own" rule holds), then the chat moves. -->
                             <template v-if="runningTargets.length">
-                              <DropdownMenuItem disabled class="text-xs text-muted-foreground">
+                              <DropdownMenuLabel>
                                 {{ $t('sessions.migrateRunningGroup') }}
-                              </DropdownMenuItem>
+                              </DropdownMenuLabel>
                               <DropdownMenuItem
                                 v-for="target in runningTargets"
                                 :key="target.ref"
@@ -1639,9 +1636,9 @@ function onComposerSent(mode: 'now' | 'queued') {
                             </template>
                             <template v-if="closedTargets.length">
                               <DropdownMenuSeparator v-if="runningTargets.length" />
-                              <DropdownMenuItem disabled class="text-xs text-muted-foreground">
+                              <DropdownMenuLabel>
                                 {{ $t('sessions.migrateClosedGroup') }}
-                              </DropdownMenuItem>
+                              </DropdownMenuLabel>
                               <DropdownMenuItem
                                 v-for="target in closedTargets"
                                 :key="target.ref"
@@ -1690,7 +1687,7 @@ function onComposerSent(mode: 'now' | 'queued') {
           <Input
             ref="findInput"
             v-model="findQuery"
-            class="h-7 max-w-xs text-xs"
+            class="max-w-xs"
             :placeholder="$t('sessions.findPlaceholder')"
             :aria-label="$t('sessions.findInSession')"
             @keydown.enter.exact.prevent="goToMatch(findIndex + 1)"
@@ -1748,13 +1745,13 @@ function onComposerSent(mode: 'now' | 'queued') {
           class="scroll-slim min-h-0 flex-1 overflow-y-auto"
           :class="compactTranscript && 'transcript-compact'"
         >
-          <div class="mx-auto w-full max-w-3xl px-4 py-4">
+          <div class="mx-auto w-full max-w-3xl p-4">
             <template v-if="tailLoading">
               <div class="space-y-4">
-                <div class="flex justify-end"><Skeleton class="h-9 w-2/5 rounded-2xl" /></div>
-                <div class="flex"><Skeleton class="h-20 w-4/5 rounded-2xl" /></div>
-                <div class="flex justify-end"><Skeleton class="h-9 w-1/3 rounded-2xl" /></div>
-                <div class="flex"><Skeleton class="h-14 w-3/5 rounded-2xl" /></div>
+                <div class="flex justify-end"><Skeleton shape="bubble" class="h-9 w-2/5" /></div>
+                <div class="flex"><Skeleton shape="bubble" class="h-20 w-4/5" /></div>
+                <div class="flex justify-end"><Skeleton shape="bubble" class="h-9 w-1/3" /></div>
+                <div class="flex"><Skeleton shape="bubble" class="h-14 w-3/5" /></div>
               </div>
             </template>
 
@@ -1772,125 +1769,30 @@ function onComposerSent(mode: 'now' | 'queued') {
                   {{ olderLoading ? $t('sessions.loadingOlder') : $t('sessions.loadOlder') }}
                 </Button>
               </div>
-              <div
-                v-for="(ev, i) in events"
-                :key="i"
-                :data-turn="i"
-                class="group flex items-end gap-1.5"
-                :class="[
-                  i > 0 && events[i - 1].role === ev.role ? 'mt-1.5' : 'mt-4',
-                  ev.kind === 'text' && ev.role === 'user' ? 'justify-end' : 'justify-start',
-                ]"
-              >
-                <!-- user bubbles get their copy button on the left, assistant on the right;
-                     hover-revealed, but always faintly visible on touch screens -->
-                <Button
-                  v-if="ev.kind === 'text' && ev.role === 'user'"
-                  variant="ghost"
-                  size="icon-sm"
-                  class="shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-60"
-                  :title="$t('sessions.copyMessage')"
-                  @click="copyMessage(i, ev.text)"
-                >
-                  <Check v-if="copiedIdx === i" class="text-success" />
-                  <Copy v-else />
-                </Button>
-
-                <!-- tool activity and reasoning: a compact log line, not a bubble -->
-                <div
-                  v-if="ev.kind !== 'text'"
-                  class="w-full min-w-0 rounded-md border-s-2 border-border bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground"
-                  :class="ev.kind === 'thinking' ? 'italic' : 'font-mono'"
-                >
-                  <div class="mb-0.5 flex items-center gap-1 font-semibold not-italic">
-                    <Brain v-if="ev.kind === 'thinking'" class="size-3" />
-                    <Wrench v-else class="size-3" />
-                    {{ ev.kind === 'thinking' ? $t('sessions.thinkingLabel') : ev.tool_name ?? ev.kind }}
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      class="ms-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-60"
-                      :title="$t('sessions.copyMessage')"
-                      @click="copyMessage(i, ev.text)"
-                    >
-                      <Check v-if="copiedIdx === i" class="text-success" />
-                      <Copy v-else />
-                    </Button>
-                  </div>
-                  <!-- the text is HTML-escaped before anything reads it (lib/markdown.ts), and
-                       lib/find.ts only ever adds <mark> around already-escaped slices, so no tag
-                       here came from the transcript -->
-                  <!-- eslint-disable-next-line vue/no-v-html -- see the note above -->
-                  <div
-                    class="break-words"
-                    :class="[
-                      ev.pre ? 'whitespace-pre-wrap' : 'md',
-                      ev.long && !isExpanded(i) ? 'max-h-48 overflow-hidden' : '',
-                    ]"
-                    v-html="ev.html"
-                  ></div>
-                  <button
-                    v-if="ev.long"
-                    class="mt-1 text-[11px] font-medium text-primary hover:underline"
-                    @click="toggleExpand(i)"
-                  >
-                    {{ isExpanded(i) ? $t('sessions.showLess') : $t('sessions.showMore') }}
-                  </button>
-                </div>
-
-                <!-- chat bubbles: user = raised grey, assistant = flatter muted. The user bubble was
-                     bg-primary/15, which composited to #352626 — a maroon block behind every message
-                     you sent, rather than a neutral raised surface. -->
-                <div
-                  v-else
-                  class="min-w-0 max-w-[85%] rounded-2xl px-3.5 py-2 text-sm"
-                  :class="ev.role === 'user' ? 'rounded-ee-md bg-accent' : 'rounded-es-md bg-muted/50'"
-                >
-                  <!-- eslint-disable-next-line vue/no-v-html -- see the note above -->
-                  <div
-                    class="break-words"
-                    :class="[
-                      ev.pre ? 'whitespace-pre-wrap' : 'md',
-                      ev.long && !isExpanded(i) ? 'max-h-56 overflow-hidden' : '',
-                    ]"
-                    v-html="ev.html"
-                  ></div>
-                  <button
-                    v-if="ev.long"
-                    class="mt-1 text-[11px] font-medium text-primary hover:underline"
-                    @click="toggleExpand(i)"
-                  >
-                    {{ isExpanded(i) ? $t('sessions.showLess') : $t('sessions.showMore') }}
-                  </button>
-                </div>
-
-                <Button
-                  v-if="ev.kind === 'text' && ev.role !== 'user'"
-                  variant="ghost"
-                  size="icon-sm"
-                  class="shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-60"
-                  :title="$t('sessions.copyMessage')"
-                  @click="copyMessage(i, ev.text)"
-                >
-                  <Check v-if="copiedIdx === i" class="text-success" />
-                  <Copy v-else />
-                </Button>
-              </div>
+              <SessionTranscriptTurns
+                :events="events"
+                :copied-idx="copiedIdx"
+                :is-expanded="isExpanded"
+                @copy="copyMessage"
+                @toggle-expand="toggleExpand"
+              />
             </template>
           </div>
           <!-- jump to latest: only while scrolled up. A zero-height sticky rail, so showing it never
                changes the content height the follow check measures. -->
           <div v-if="!chatAtBottom && !tailLoading" class="sticky bottom-0 h-0">
             <div class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
-              <Button
-                variant="secondary"
-                size="sm"
-                class="pointer-events-auto shadow-md"
-                @click="scroller.scrollToLatest()"
-              >
-                <ArrowDown />
-                {{ unseenTurns ? $t('sessions.newTurns') : $t('sessions.jumpToLatest') }}
-              </Button>
+              <!-- the lift lives on a wrapper: the Button owns its own surface -->
+              <span class="pointer-events-auto flex rounded-md shadow-md">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  @click="scroller.scrollToLatest()"
+                >
+                  <ArrowDown />
+                  {{ unseenTurns ? $t('sessions.newTurns') : $t('sessions.jumpToLatest') }}
+                </Button>
+              </span>
             </div>
           </div>
         </div>
@@ -1934,7 +1836,7 @@ function onComposerSent(mode: 'now' | 'queued') {
              click: three Connections chats and ten AgentHydra ones read differently from "13". -->
         <ul class="scroll-slim max-h-56 space-y-2 overflow-y-auto text-xs">
           <li v-for="g in groupByProject(bulkConfirm?.sessions ?? [])" :key="g.project">
-            <div class="mb-1 flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground">
+            <div class="mb-1 flex items-center justify-between gap-2 text-2xs font-medium text-muted-foreground">
               <span class="truncate">{{ g.project }}</span>
               <span class="shrink-0">{{ $t('sessions.groupCount', { n: g.sessions.length }) }}</span>
             </div>
@@ -1971,7 +1873,7 @@ function onComposerSent(mode: 'now' | 'queued') {
             :key="i"
             class="flex items-center gap-2 rounded border border-border px-2 py-1.5"
           >
-            <Badge variant="outline" class="shrink-0 text-[10px]">{{ f.kind }}</Badge>
+            <Badge variant="outline" class="shrink-0">{{ f.kind }}</Badge>
             <span class="min-w-0 flex-1 truncate font-mono">{{ f.redacted }}</span>
             <span class="shrink-0 text-muted-foreground">
               {{ $t('sessions.secretsTurn', { n: f.turn + 1 }) }}

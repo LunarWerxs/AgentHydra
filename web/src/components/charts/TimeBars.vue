@@ -91,7 +91,7 @@ function onEnter(i: number, e: MouseEvent) {
           :x="PAD_L - 6"
           :y="yOf(t) + 3"
           text-anchor="end"
-          class="fill-muted-foreground text-[9px] tabular-nums"
+          class="fill-muted-foreground text-3xs tabular-nums"
         >{{ fmtAxis(t) }}</text>
       </g>
 
@@ -116,7 +116,8 @@ function onEnter(i: number, e: MouseEvent) {
           :width="barW"
           :height="Math.max(0, plotH - yOf(p.value))"
           rx="2"
-          :style="{ fill: 'var(--viz-seq)', opacity: hover === null || hover === i ? 1 : 0.45 }"
+          class="fill-(--viz-seq)"
+          :class="hover === null || hover === i ? 'opacity-100' : 'opacity-45'"
         />
       </g>
 
@@ -126,14 +127,14 @@ function onEnter(i: number, e: MouseEvent) {
         v-if="points.length"
         :x="PAD_L"
         :y="H - 4"
-        class="fill-muted-foreground text-[9px]"
+        class="fill-muted-foreground text-3xs"
       >{{ points[0]?.label }}</text>
       <text
         v-if="points.length > 1"
         :x="W"
         :y="H - 4"
         text-anchor="end"
-        class="fill-muted-foreground text-[9px]"
+        class="fill-muted-foreground text-3xs"
       >{{ points[points.length - 1]?.label }}</text>
     </svg>
   </div>

@@ -57,7 +57,7 @@ const fill = computed(() => `${props.threshold}%`)
     :class="enabled ? 'border-border bg-background/60' : 'border-border/60 bg-transparent'"
   >
     <div class="flex items-center gap-3 px-2.5 py-1.5">
-      <span class="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-foreground">
+      <span class="flex min-w-0 flex-1 items-center gap-1.5 text-ui text-foreground">
         {{ label }}
         <InfoHint :text="hint" />
       </span>
@@ -67,14 +67,16 @@ const fill = computed(() => `${props.threshold}%`)
     <ExpandTransition :open="enabled">
       <div class="space-y-2 border-t border-border/60 px-2.5 py-2">
         <div class="flex items-center justify-between gap-3">
-          <span class="text-[12px] text-muted-foreground">{{ thresholdCaption }}</span>
+          <span class="text-xs text-muted-foreground">{{ thresholdCaption }}</span>
           <div class="flex items-baseline gap-1">
-            <!-- `md:text-[13px]` as well as the unprefixed size: the Input's own base class list
+            <!-- `md:text-ui` as well as the unprefixed size: the Input's own base class list
                  carries a `md:text-xs/relaxed`, and twMerge treats a responsive variant as its own
                  group — so the unprefixed size alone loses above the md breakpoint. Spinners off
                  because this reads as a value, and they cost a third of the box's width. -->
             <Input
-              class="h-6 w-11 rounded px-1.5 text-end text-[13px] font-medium tabular-nums md:text-[13px] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              variant="numeric"
+              text-size="ui"
+              class="h-6 w-11"
               type="number"
               min="0"
               max="100"
@@ -82,7 +84,7 @@ const fill = computed(() => `${props.threshold}%`)
               :model-value="threshold"
               @change="(e: Event) => emit('update:threshold', (e.target as HTMLInputElement).value)"
             />
-            <span class="text-[12px] text-muted-foreground">%</span>
+            <span class="text-xs text-muted-foreground">%</span>
           </div>
         </div>
 
@@ -114,74 +116,3 @@ const fill = computed(() => `${props.threshold}%`)
     </ExpandTransition>
   </section>
 </template>
-
-<style scoped>
-/* color tokens - lifted from raw literals by Odin's fix_color_tokens.py (2026-09-14); the Architect's
-   color-scheme-conformance check wants every color consumed through the token layer. */
-:root {
-  --color-rgb-0-0-0-a0_4: rgb(0 0 0 / 0.4);
-}
-
-
-/* A bare range input, styled here rather than vendored as a ui/ component: the kit owns
-   components/ui and shell/ (check:kit fails on a single byte of drift), and this is the only
-   slider in the app. Both vendor prefixes because the track/thumb pseudo-elements cannot be
-   combined into one rule — a selector list containing an unknown pseudo-element is dropped whole. */
-.usage-range {
-  width: 100%;
-  height: 0.75rem;
-  appearance: none;
-  -webkit-appearance: none;
-  background: transparent;
-  cursor: pointer;
-}
-.usage-range:focus-visible {
-  outline: none;
-}
-
-.usage-range::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 9999px;
-  background: linear-gradient(
-    to right,
-    var(--primary) var(--usage-fill),
-    var(--border) var(--usage-fill)
-  );
-}
-.usage-range::-moz-range-track {
-  height: 4px;
-  border-radius: 9999px;
-  background: linear-gradient(
-    to right,
-    var(--primary) var(--usage-fill),
-    var(--border) var(--usage-fill)
-  );
-}
-
-.usage-range::-webkit-slider-thumb {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
-  margin-top: -4px;
-  border-radius: 9999px;
-  background: var(--primary);
-  box-shadow: 0 1px 3px var(--color-rgb-0-0-0-a0_4);
-  transition: box-shadow 0.15s ease;
-}
-.usage-range::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
-  border: none;
-  border-radius: 9999px;
-  background: var(--primary);
-  box-shadow: 0 1px 3px var(--color-rgb-0-0-0-a0_4);
-}
-
-.usage-range:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 40%, transparent);
-}
-.usage-range:focus-visible::-moz-range-thumb {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 40%, transparent);
-}
-</style>

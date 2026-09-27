@@ -39,12 +39,12 @@ const share = (pct: number, value: number) =>
 
 <template>
   <div class="space-y-2">
-    <div class="flex h-3 w-full gap-[2px] overflow-hidden rounded-full bg-muted">
+    <div class="flex h-3 w-full gap-0.5 overflow-hidden rounded-full bg-muted">
       <div
         v-for="r in rows"
         :key="r.key"
-        class="h-full first:rounded-s-full last:rounded-e-full"
-        :style="{ width: `${Math.max(r.value > 0 ? 0.5 : 0, r.pct)}%`, background: r.color }"
+        class="h-full w-(--seg-w) bg-(--seg-color) first:rounded-s-full last:rounded-e-full"
+        :style="{ '--seg-w': `${Math.max(r.value > 0 ? 0.5 : 0, r.pct)}%`, '--seg-color': r.color }"
         :title="`${$t(r.labelKey)}: ${formatCompact(r.value)}`"
       ></div>
     </div>
@@ -52,13 +52,13 @@ const share = (pct: number, value: number) =>
          number too, so identity is never carried by colour alone. -->
     <dl class="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
       <div v-for="r in rows" :key="r.key" class="min-w-0">
-        <dt class="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <span class="size-2 shrink-0 rounded-[2px]" :style="{ background: r.color }"></span>
+        <dt class="flex items-center gap-1.5 text-2xs text-muted-foreground">
+          <span class="size-2 shrink-0 rounded-xs bg-(--seg-color)" :style="{ '--seg-color': r.color }"></span>
           <span class="truncate">{{ $t(r.labelKey) }}</span>
         </dt>
         <dd class="ps-3.5 text-sm font-medium tabular-nums">
           {{ formatCompact(r.value) }}
-          <span class="text-[11px] font-normal text-muted-foreground">
+          <span class="text-2xs font-normal text-muted-foreground">
             {{ share(r.pct, r.value) }}
           </span>
         </dd>

@@ -459,14 +459,16 @@ onUnmounted(stopPolling)
         <!-- Plus at rest, label on hover/focus — same expanding pill as Instances and New run. -->
         <Button
           size="sm"
-          class="group/create gap-0 overflow-hidden transition-all"
+          class="group/create overflow-hidden"
           :aria-label="$t('cliInstances.createInstance')"
           @click="openCreateDialog"
         >
-          <Plus class="shrink-0" />
-          <span
-            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
-          >{{ $t('cliInstances.createInstance') }}</span>
+          <span class="inline-flex items-center">
+            <Plus class="shrink-0" />
+            <span
+              class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-36 group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-36 group-focus-visible/create:opacity-100"
+            >{{ $t('cliInstances.createInstance') }}</span>
+          </span>
         </Button>
       </div>
     </div>
@@ -476,7 +478,7 @@ onUnmounted(stopPolling)
          header. ExpandArea only clips while the transition is actually running. -->
     <ExpandArea :open="cliOpen">
     <Table>
-        <TableHeader class="sticky top-0 z-10 bg-card">
+        <TableHeader sticky>
           <TableRow>
             <TableHead class="w-10 cursor-pointer select-none" @click="toggleSort('loggedIn')">
               <span class="inline-flex items-center gap-0.5">
@@ -575,7 +577,7 @@ onUnmounted(stopPolling)
             </div>
           </TableEmpty>
           <TableRow v-for="i in 2" v-else :key="i">
-            <TableCell><Skeleton class="size-2 rounded-full" /></TableCell>
+            <TableCell><Skeleton class="size-2" /></TableCell>
             <TableCell><Skeleton class="h-4 w-28" /></TableCell>
             <TableCell><Skeleton class="h-5 w-20" /></TableCell>
             <TableCell v-if="!usageMode"><Skeleton class="h-3 w-32" /></TableCell>
@@ -597,8 +599,7 @@ onUnmounted(stopPolling)
           <TableRow
             v-for="inst in visibleRows"
             :key="inst.id"
-            class="transition-opacity"
-            :class="filterDimmed(filterFacts(inst)) ? 'opacity-25 hover:bg-transparent' : ''"
+            :variant="filterDimmed(filterFacts(inst)) ? 'faded' : 'default'"
           >
             <TableCell>
               <span
@@ -607,11 +608,11 @@ onUnmounted(stopPolling)
                 :title="inst.loggedIn ? $t('cliInstances.loggedIn') : $t('cliInstances.loggedOut')"
               />
             </TableCell>
-            <TableCell class="font-medium">
+            <TableCell>
               <!-- Same chip as the desktop table on purpose: the number comes from ONE sequence
                    spanning all three instance families, so it must look identical everywhere or
                    that guarantee stops being obvious. -->
-              <div class="flex items-center gap-1.5">
+              <div class="flex items-center gap-1.5 font-medium">
                 <InstanceNumber :num="inst.num" />
                 <!-- Capped to the column like the desktop table's name, with the full name on
                      hover: these are names a person typed, so nothing stops one being a sentence,
@@ -627,14 +628,11 @@ onUnmounted(stopPolling)
               </Badge>
               <span v-else class="text-xs text-muted-foreground">{{ $t('cliInstances.noAccount') }}</span>
             </TableCell>
-            <TableCell
-              v-if="!usageMode"
-              class="mono max-w-[16rem] truncate text-[0.625rem] text-muted-foreground"
-            >
-              {{ inst.configDir }}
+            <TableCell v-if="!usageMode" class="max-w-[16rem]">
+              <span class="mono block truncate text-3xs text-muted-foreground">{{ inst.configDir }}</span>
             </TableCell>
             <template v-else>
-              <TableCell class="text-xs">
+              <TableCell>
                 <UsageBar
                   v-if="sessionResetFor(inst)"
                   :fill-pct="sessionRemaining(inst)"
@@ -644,7 +642,7 @@ onUnmounted(stopPolling)
                 />
                 <span v-else class="text-muted-foreground">—</span>
               </TableCell>
-              <TableCell class="text-xs">
+              <TableCell>
                 <CopyResetDate v-if="weeklyResetFor(inst)" :limit="usageFor(inst)?.weekAll">
                   <UsageBar
                     :fill-pct="weeklyRemaining(inst)"
@@ -691,18 +689,20 @@ onUnmounted(stopPolling)
                   <DropdownMenuContent align="end" class="max-w-56">
                     <!-- Which instance this menu belongs to, by number — see the desktop table's
                          menu for why an open kebab needs to say so. -->
-                    <DropdownMenuLabel class="flex items-center justify-between gap-2 py-1">
-                      <span class="font-mono text-xs">{{
-                        $t('instances.numberMenuLabel', { num: inst.num })
-                      }}</span>
-                      <button
-                        type="button"
-                        class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        :aria-label="$t('instances.copyNumber')"
-                        @click.stop="copyInstanceNumber(inst.num)"
-                      >
-                        <Copy class="size-3.5" />
-                      </button>
+                    <DropdownMenuLabel>
+                      <div class="-my-0.5 flex items-center justify-between gap-2">
+                        <span class="font-mono text-xs">{{
+                          $t('instances.numberMenuLabel', { num: inst.num })
+                        }}</span>
+                        <button
+                          type="button"
+                          class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          :aria-label="$t('instances.copyNumber')"
+                          @click.stop="copyInstanceNumber(inst.num)"
+                        >
+                          <Copy class="size-3.5" />
+                        </button>
+                      </div>
                     </DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem :disabled="isBusy(inst)" @click="onLogin(inst)">

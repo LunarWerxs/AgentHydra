@@ -76,7 +76,8 @@ function checkDeps(overrides: Partial<CheckDeps> = {}): CheckDeps {
         cmdline: `"C:\\Users\\x\\AppData\\Local\\AnthropicClaude\\app-2.2553.1\\claude.exe" --user-data-dir="${P.b}"`,
       },
     ],
-    now: () => new Date('2026-09-23T12:00:00Z'),
+    // A frozen clock far after every log line below, so it can never fall before them.
+    now: () => new Date('2099-01-01T12:00:00Z'),
     ...overrides,
   }
 }

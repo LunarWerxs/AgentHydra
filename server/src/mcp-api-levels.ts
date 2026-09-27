@@ -117,20 +117,40 @@ const num = (v: unknown): number | null => (typeof v === 'number' ? v : null)
  *  today); extend this before a schema starts to. */
 function schemaBreaks(old: unknown, cur: unknown, path: string, out: Array<[string, string]>) {
   if (!isObject(old) || !isObject(cur)) return
+  typeBreaks(old, cur, path, out)
+  enumBreaks(old, cur, path, out)
+  boundBreaks(old, cur, path, out)
+  if (old.additionalProperties !== false && cur.additionalProperties === false) {
+    out.push([path, 'no longer accepts extra properties'])
+  }
+  const oldProps: Schema = isObject(old.properties) ? old.properties : {}
+  propertyBreaks(oldProps, cur, path, out)
+  requiredBreaks(old, cur, oldProps, path, out)
+  if (old.items !== undefined) schemaBreaks(old.items, cur.items, `${path}[]`, out)
+}
+
+const childPath = (path: string, name: string): string => (path ? `${path}.${name}` : name)
+
+function typeBreaks(old: Schema, cur: Schema, path: string, out: Array<[string, string]>) {
   const oldTypes = typesOf(old)
   const curTypes = typesOf(cur)
-  if (curTypes) {
-    const lost = oldTypes ? oldTypes.filter((t) => !curTypes.includes(t)) : ['any']
-    if (lost.length) out.push([path, `type no longer accepts ${lost.join(', ')}`])
+  if (!curTypes) return
+  const lost = oldTypes ? oldTypes.filter((t) => !curTypes.includes(t)) : ['any']
+  if (lost.length) out.push([path, `type no longer accepts ${lost.join(', ')}`])
+}
+
+function enumBreaks(old: Schema, cur: Schema, path: string, out: Array<[string, string]>) {
+  if (!Array.isArray(cur.enum)) return
+  const curEnum = cur.enum as unknown[]
+  if (!Array.isArray(old.enum)) {
+    out.push([path, 'now restricted to an enum'])
+    return
   }
-  if (Array.isArray(cur.enum)) {
-    const curEnum = cur.enum as unknown[]
-    if (!Array.isArray(old.enum)) out.push([path, 'now restricted to an enum'])
-    else {
-      const lost = (old.enum as unknown[]).filter((v) => !curEnum.includes(v))
-      if (lost.length) out.push([path, `enum value(s) removed: ${lost.join(', ')}`])
-    }
-  }
+  const lost = (old.enum as unknown[]).filter((v) => !curEnum.includes(v))
+  if (lost.length) out.push([path, `enum value(s) removed: ${lost.join(', ')}`])
+}
+
+function boundBreaks(old: Schema, cur: Schema, path: string, out: Array<[string, string]>) {
   for (const key of ['minimum', 'minLength', 'minItems'] as const) {
     const was = num(old[key]) ?? Number.NEGATIVE_INFINITY
     const now = num(cur[key])
@@ -141,24 +161,33 @@ function schemaBreaks(old: unknown, cur: unknown, path: string, out: Array<[stri
     const now = num(cur[key])
     if (now !== null && now < was) out.push([path, `${key} lowered to ${now}`])
   }
-  if (old.additionalProperties !== false && cur.additionalProperties === false) {
-    out.push([path, 'no longer accepts extra properties'])
-  }
-  const oldProps = isObject(old.properties) ? old.properties : {}
+}
+
+function propertyBreaks(oldProps: Schema, cur: Schema, path: string, out: Array<[string, string]>) {
   const curProps = isObject(cur.properties) ? cur.properties : {}
   for (const name of Object.keys(oldProps)) {
-    const at = path ? `${path}.${name}` : name
+    const at = childPath(path, name)
     if (!(name in curProps)) out.push([at, 'argument removed'])
     else schemaBreaks(oldProps[name], curProps[name], at, out)
   }
+}
+
+function requiredBreaks(
+  old: Schema,
+  cur: Schema,
+  oldProps: Schema,
+  path: string,
+  out: Array<[string, string]>,
+) {
   const oldRequired = Array.isArray(old.required) ? (old.required as string[]) : []
   const curRequired = Array.isArray(cur.required) ? (cur.required as string[]) : []
   for (const name of curRequired) {
     if (oldRequired.includes(name)) continue
-    const at = path ? `${path}.${name}` : name
-    out.push([at, name in oldProps ? 'optional argument became required' : 'new required argument'])
+    out.push([
+      childPath(path, name),
+      name in oldProps ? 'optional argument became required' : 'new required argument',
+    ])
   }
-  if (old.items !== undefined) schemaBreaks(old.items, cur.items, `${path}[]`, out)
 }
 
 /** How `live` breaks a caller written against `frozen`, minus ACCEPTED_BREAKS. */

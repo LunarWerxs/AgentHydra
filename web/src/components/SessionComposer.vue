@@ -165,7 +165,8 @@ async function handoffToChatGpt() {
       <div class="rounded-xl border border-border bg-input focus-within:border-ring">
         <Textarea
           v-model="text"
-          class="max-h-48 min-h-12 border-0 bg-transparent px-3 pt-2.5 focus-visible:ring-0 dark:bg-transparent"
+          variant="embedded"
+          class="max-h-48 min-h-12"
           :placeholder="
             targets.length > 1
               ? $t('composer.placeholderMulti', { n: targets.length })

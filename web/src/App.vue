@@ -150,17 +150,13 @@ const { wide } = useShellWidth()
 // widthPx drives the content shift, the --content-inset-right var, and both panels'
 // rendered width below — one value so they can never disagree. shellMaxWidth makes the
 // shift the panel's actual overlap with the centered shell (0 on a wide monitor).
-const { side, containerStyle, widthPx } = usePushPanel(anyPanelOpen, {
+// shiftPx reaches the template as the --push-shift custom property on the shell: the main
+// column pads by exactly that, and the header by that plus its own 16px of breathing room
+// (--header-pe), or its buttons would sit flush against the panel edge.
+const { side, shiftPx, widthPx } = usePushPanel(anyPanelOpen, {
   widthPx: 480,
   shellMaxWidth: () => (wide.value ? SHELL_WIDE_MAX : SHELL_BASE_MAX),
 })
-// The header shares the panel shift but must keep its own 16px (px-4) of breathing room
-// on top of it; a bare containerStyle would put the buttons flush against the panel edge.
-const headerStyle = computed(() =>
-  containerStyle.value.paddingInlineEnd
-    ? { paddingInlineEnd: `calc(${containerStyle.value.paddingInlineEnd} + 1rem)` }
-    : {},
-)
 
 // Everything in Settings auto-saves; the footer button flushes the one buffered
 // form (scheduler numbers) and gives the reassuring "saved" moment people expect.
@@ -286,15 +282,18 @@ onUnmounted(stopAvailabilityPolling)
        room (an open transcript) request the wide cap via useShellWidth and the whole
        shell — header included — animates out to meet them. -->
   <div
-    class="mx-auto flex h-dvh w-full flex-col overflow-hidden border-x border-border transition-[max-width] duration-300 ease-in-out"
-    :style="{ maxWidth: `${wide ? SHELL_WIDE_MAX : SHELL_BASE_MAX}px` }"
+    class="mx-auto flex h-dvh w-full max-w-(--shell-max) flex-col overflow-hidden border-x border-border transition-max-width duration-300 ease-in-out"
+    :style="{
+      '--shell-max': `${wide ? SHELL_WIDE_MAX : SHELL_BASE_MAX}px`,
+      '--push-shift': `${shiftPx}px`,
+      '--header-pe': `calc(${shiftPx}px + 1rem)`,
+    }"
   >
     <!-- top bar (borderless: the content columns carry their own separators). Shares the
          push-panel padding shift with the main content, or an open drawer would cover the
          right-side buttons instead of nudging them over. -->
     <header
-      class="flex shrink-0 items-center gap-3 bg-sidebar px-4 py-2 transition-[padding] duration-300 ease-in-out"
-      :style="headerStyle"
+      class="flex shrink-0 items-center gap-3 bg-sidebar ps-4 pe-(--header-pe) py-2 transition-padding duration-300 ease-in-out"
     >
       <div class="flex items-center gap-2.5">
         <!-- the real brand mark (same asset as the favicon/tray icon), not a placeholder glyph -->
@@ -336,7 +335,7 @@ onUnmounted(stopAvailabilityPolling)
           <span class="hidden sm:inline">{{ $t('app.queue') }}</span>
           <span
             v-if="runningCount > 0"
-            class="ms-0.5 inline-flex size-4 items-center justify-center rounded-full text-[0.625rem] font-semibold"
+            class="ms-0.5 inline-flex size-4 items-center justify-center rounded-full text-3xs font-semibold"
             :class="queueOpen ? 'bg-info/15 text-info' : 'bg-primary-foreground/25 text-primary-foreground'"
           >
             {{ runningCount }}
@@ -380,7 +379,7 @@ onUnmounted(stopAvailabilityPolling)
     </header>
 
     <!-- main (pushes left when a right-docked panel overlaps the shell) -->
-    <div class="min-h-0 flex-1 transition-[padding] duration-300 ease-in-out" :style="containerStyle">
+    <div class="min-h-0 flex-1 pe-(--push-shift) transition-padding duration-300 ease-in-out">
       <main
         class="h-full min-h-0"
         :class="view === 'instances' ? 'overflow-y-auto scroll-slim' : ''"
@@ -433,10 +432,9 @@ onUnmounted(stopAvailabilityPolling)
           <!-- shut down: closes the whole app (window + daemon + tray). Two-step to prevent a
                mis-click; see onShutdown. -->
           <Button
-            variant="ghost"
+            :variant="confirmShutdown ? 'destructive' : 'ghost'"
             size="icon-sm"
             :title="confirmShutdown ? $t('settings.shutdownConfirmTooltip') : $t('settings.shutdownTooltip')"
-            :class="confirmShutdown ? 'text-destructive' : ''"
             @click="onShutdown"
             @blur="confirmShutdown = false"
           >
@@ -463,14 +461,3 @@ onUnmounted(stopAvailabilityPolling)
   </div>
   </TooltipProvider>
 </template>
-
-<style scoped>
-.view-fade-enter-active,
-.view-fade-leave-active {
-  transition: opacity 150ms ease;
-}
-.view-fade-enter-from,
-.view-fade-leave-to {
-  opacity: 0;
-}
-</style>

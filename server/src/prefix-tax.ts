@@ -98,40 +98,11 @@ function toolName(tool: unknown): string {
 export function analyzeCapture(protocol: PrefixProtocol, body: unknown): PrefixTax | null {
   if (!body || typeof body !== 'object') return null
   const b = body as Record<string, unknown>
-  let systemBytes = 0
-  let messageBytes = 0
-  if (protocol === 'anthropic-messages') {
-    if (!Array.isArray(b.messages)) return null
-    const sys = b.system
-    if (typeof sys === 'string') systemBytes = byteLen(sys)
-    else if (Array.isArray(sys))
-      for (const block of sys) systemBytes += byteLen((block as { text?: unknown })?.text ?? '')
-    messageBytes = byteLen(b.messages)
-  } else {
-    if (b.input === undefined && b.instructions === undefined) return null
-    systemBytes = byteLen(typeof b.instructions === 'string' ? b.instructions : '')
-    // Codex sends its developer/system context as input items; those are prefix too, so they are
-    // counted with the instructions rather than hidden among the messages.
-    for (const item of Array.isArray(b.input) ? b.input : []) {
-      const role = (item as { role?: unknown })?.role
-      if (role === 'system' || role === 'developer') systemBytes += byteLen(item)
-      else messageBytes += byteLen(item)
-    }
-    if (typeof b.input === 'string') messageBytes += byteLen(b.input)
-  }
+  const sizes = protocol === 'anthropic-messages' ? anthropicSizes(b) : responsesSizes(b)
+  if (!sizes) return null
+  const { systemBytes, messageBytes } = sizes
 
-  const weights: ToolWeight[] = (Array.isArray(b.tools) ? b.tools : []).map((tool) => {
-    const name = toolName(tool)
-    return { name, bytes: byteLen(tool), mcpServer: mcpServerOf(name) }
-  })
-  const servers = new Map<string, ServerWeight>()
-  for (const w of weights) {
-    if (!w.mcpServer) continue
-    const s = servers.get(w.mcpServer) ?? { server: w.mcpServer, tools: 0, bytes: 0 }
-    s.tools++
-    s.bytes += w.bytes
-    servers.set(w.mcpServer, s)
-  }
+  const weights: ToolWeight[] = (Array.isArray(b.tools) ? b.tools : []).map(toolWeight)
   const mcp = weights.filter((w) => w.mcpServer)
   const toolBytes = weights.reduce((n, w) => n + w.bytes, 0)
   const totalBytes = systemBytes + messageBytes + toolBytes
@@ -145,9 +116,60 @@ export function analyzeCapture(protocol: PrefixProtocol, body: unknown): PrefixT
     mcpToolBytes: mcp.reduce((n, w) => n + w.bytes, 0),
     totalBytes,
     approxTokens: Math.ceil(totalBytes / 4),
-    byServer: [...servers.values()].sort((a, c) => c.bytes - a.bytes),
+    byServer: serverWeights(weights).sort((a, c) => c.bytes - a.bytes),
     heaviest: [...weights].sort((a, c) => c.bytes - a.bytes).slice(0, HEAVIEST_KEPT),
   }
+}
+
+interface BodySizes {
+  systemBytes: number
+  messageBytes: number
+}
+
+/** An anthropic-messages body's system and message bytes; null when it carries no messages. */
+function anthropicSizes(b: Record<string, unknown>): BodySizes | null {
+  if (!Array.isArray(b.messages)) return null
+  let systemBytes = 0
+  const sys = b.system
+  if (typeof sys === 'string') systemBytes = byteLen(sys)
+  else if (Array.isArray(sys))
+    for (const block of sys) systemBytes += byteLen((block as { text?: unknown })?.text ?? '')
+  return { systemBytes, messageBytes: byteLen(b.messages) }
+}
+
+/** An openai-responses body's system and message bytes; null when it has neither input nor
+ *  instructions. */
+function responsesSizes(b: Record<string, unknown>): BodySizes | null {
+  if (b.input === undefined && b.instructions === undefined) return null
+  let systemBytes = byteLen(typeof b.instructions === 'string' ? b.instructions : '')
+  let messageBytes = 0
+  // Codex sends its developer/system context as input items; those are prefix too, so they are
+  // counted with the instructions rather than hidden among the messages.
+  for (const item of Array.isArray(b.input) ? b.input : []) {
+    const role = (item as { role?: unknown })?.role
+    if (role === 'system' || role === 'developer') systemBytes += byteLen(item)
+    else messageBytes += byteLen(item)
+  }
+  if (typeof b.input === 'string') messageBytes += byteLen(b.input)
+  return { systemBytes, messageBytes }
+}
+
+function toolWeight(tool: unknown): ToolWeight {
+  const name = toolName(tool)
+  return { name, bytes: byteLen(tool), mcpServer: mcpServerOf(name) }
+}
+
+/** Each MCP server's share of `weights`, in the order the servers first appear. */
+function serverWeights(weights: ToolWeight[]): ServerWeight[] {
+  const servers = new Map<string, ServerWeight>()
+  for (const w of weights) {
+    if (!w.mcpServer) continue
+    const s = servers.get(w.mcpServer) ?? { server: w.mcpServer, tools: 0, bytes: 0 }
+    s.tools++
+    s.bytes += w.bytes
+    servers.set(w.mcpServer, s)
+  }
+  return [...servers.values()]
 }
 
 /** The capture that IS the prefix: the one with the most tool schemas, the larger on a tie. */

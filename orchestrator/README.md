@@ -289,8 +289,8 @@ manual mode - no, I am quite certain you can figure it out"). The desktop launch
 chat's engine with an explicit `--permission-mode` from its in-memory record and
 `--setting-sources=user,project,local`, so the app's label decides the MODE but the user
 settings still decide the RULES: permission ALLOW rules pre-approve a tool before any prompt,
-in every mode. `stamplib.ensure_allow_all` keeps `~/.claude/settings.json` covering every
-built-in tool and every MCP server (the ones in `~/.claude.json` plus the desktop's own), and
+in every mode. `stamplib.ensure_allow_all` keeps [`~/.claude/settings.json`](../docs/CLAUDE-CONFIG-LAYOUT.md) covering every
+built-in tool and every MCP server (the ones in [`~/.claude.json`](../docs/CLAUDE-CONFIG-LAYOUT.md) plus the desktop's own), and
 the doctrine lane re-asserts it every two minutes as its ungated, invisible half. A chat the
 app still labels 'Accept edits' stops stalling on prompts; the label changes only through the
 icon-gated picker pass.

@@ -44,7 +44,7 @@ onUnmounted(() => window.clearTimeout(timer))
     <TooltipTrigger as-child>
       <button
         type="button"
-        class="inline-flex shrink-0 cursor-pointer items-center gap-0.5 rounded border border-border bg-muted/60 px-1 py-px font-mono text-[11px] leading-none text-muted-foreground tabular-nums transition-colors hover:border-foreground/30 hover:text-foreground"
+        class="inline-flex shrink-0 cursor-pointer items-center gap-0.5 rounded border border-border bg-muted/60 px-1 py-px font-mono text-2xs leading-none text-muted-foreground tabular-nums transition-colors hover:border-foreground/30 hover:text-foreground"
         :aria-label="t('instances.numberCopyAria', { num })"
         @click.stop="copy"
       >

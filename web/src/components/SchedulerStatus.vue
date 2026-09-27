@@ -161,14 +161,14 @@ const tone = computed(() => {
           <span class="hidden tabular-nums sm:inline">{{ label }}</span>
         </button>
         </PopoverTrigger>
-        <PopoverContent align="end" class="w-60 p-3">
-          <p v-if="state === 'unavailable'" class="mb-2 text-[11px] text-warning">
+        <PopoverContent align="end" class="w-60">
+          <p v-if="state === 'unavailable'" class="mb-2 text-2xs text-warning">
             {{ $t('scheduler.unavailableHint', { reason: schedulerStatus.error.value ?? '' }) }}
           </p>
           <div class="flex items-center justify-between gap-3">
             <div class="min-w-0">
               <p class="text-xs font-medium">{{ $t('scheduler.enabledLabel') }}</p>
-              <p class="text-[11px] text-muted-foreground">
+              <p class="text-2xs text-muted-foreground">
                 {{ $t('scheduler.countsLine', { running: runningCount, queued: queuedCount }) }}
               </p>
             </div>

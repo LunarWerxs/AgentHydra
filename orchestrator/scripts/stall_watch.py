@@ -191,8 +191,8 @@ def ask(chat: dict, items: list[tuple[dict, dict]]) -> tuple[bool, str]:
     return False, f"the ask did not land ({last[:160]})"
 
 
-def run(argv: list[str]) -> tuple[dict, int]:
-    now = time.time()
+def _acting(argv: list[str]) -> tuple[bool, list[str]]:
+    """(whether this run may type into chats, the notes that say why not)."""
     act = "--yes" in argv
     notes = []
     if act and not configlib.get("stallwatch.enabled"):
@@ -209,12 +209,120 @@ def run(argv: list[str]) -> tuple[dict, int]:
             # Only a real DISARMED refusal: an unreadable policy file is not a tray state.
             if refusal.startswith("DISARMED"):
                 recoverylib.attempt_recovery("tray-not-armed", "stall_watch", context=refusal)
-    cap = MAX_PER_RUN
-    if _values(argv, "--max"):
-        try:
-            cap = max(1, int(_values(argv, "--max")[0]))
-        except ValueError:
-            return {"error": "--max needs a whole number"}, 3
+    return act, notes
+
+
+def _parse_cap(argv: list[str]) -> int | None:
+    """This run's ask cap (--max, else stallwatch.max_per_run); None when --max is not a number."""
+    if not _values(argv, "--max"):
+        return MAX_PER_RUN
+    try:
+        return max(1, int(_values(argv, "--max")[0]))
+    except ValueError:
+        return None
+
+
+def _stalled(chat: dict) -> list[tuple[dict, dict]]:
+    return [(j["task"], j["activity"]) for j in chat["tasks"] if j["verdict"] == "stalled"]
+
+
+def _due_by_task(chat: dict, stalled: list, history: dict, now: float) -> dict[str, str]:
+    return {t["id"]: _due(history.get(f"{chat['sessionId']}:{t['id']}"), now) for t, _ in stalled}
+
+
+def _not_due_reason(due: dict[str, str]) -> str:
+    return ("incident already filed" if all(d == "done" for d in due.values())
+            else "already asked recently")
+
+
+def _chat_row(chat: dict) -> dict:
+    return {"sessionId": chat["sessionId"], "title": chat["title"], "instance": chat["instance"],
+            "idle": chat["idle"], "held": chat["held"],
+            "tasks": [{"id": j["task"]["id"], "kind": j["task"]["kind"], "verdict": j["verdict"],
+                       "line": stalllib.describe(j["task"], j["activity"])} for j in chat["tasks"]],
+            "action": "none"}
+
+
+def _escalate(chat: dict, stalled: list, due: dict, history: dict, act: bool, row: dict) -> None:
+    """File an incident for every stalled task that has been asked about max_nudges times."""
+    for t, a in stalled:
+        if due[t["id"]] != "escalate":
+            continue
+        key = f"{chat['sessionId']}:{t['id']}"
+        if act:
+            iid = incidentlib.record("stall_watch", key,
+                                     f"asked {MAX_NUDGES}x and still stalled: "
+                                     f"{stalllib.describe(t, a)}")
+            history[key]["incident"] = iid
+        row["action"] = "escalated to an incident"
+
+
+def _ask_blocked(chat: dict, act: bool, cap: int, asked: int) -> str | None:
+    """Why this chat is not asked this run, or None when it may be."""
+    if chat["held"]:
+        return f"held - not typed into ({chat['held']})"
+    if not chat["idle"]:
+        return (f"working (wrote {int((chat.get('quietSecs') or 0) // 60)} min ago) - "
+                "reported, not interrupted")
+    if asked >= cap:
+        return f"over this run's cap of {cap} - next tick"
+    if not act:
+        return "would ask"
+    return None
+
+
+def _record_asks(chat: dict, to_ask: list, history: dict, now: float) -> None:
+    for t, _ in to_ask:
+        key = f"{chat['sessionId']}:{t['id']}"
+        prev = history.get(key) or {}
+        history[key] = {"nudges": int(prev.get("nudges", 0)) + 1, "lastAt": now,
+                        "firstAt": prev.get("firstAt", now)}
+
+
+def _handle_chat(chat: dict, history: dict, now: float, act: bool, cap: int,
+                 asked: int) -> tuple[dict, str]:
+    """(the chat's report row, 'asked' | 'failed' | '' for what this run did to it)."""
+    stalled = _stalled(chat)
+    row = _chat_row(chat)
+    if not stalled:
+        return row, ""
+    due = _due_by_task(chat, stalled, history, now)
+    _escalate(chat, stalled, due, history, act, row)
+    to_ask = [(t, a) for t, a in stalled if due[t["id"]] == "ask"]
+    if not to_ask:
+        if row["action"] == "none":
+            row["action"] = _not_due_reason(due)
+        return row, ""
+    blocked = _ask_blocked(chat, act, cap, asked)
+    if blocked:
+        row["action"] = blocked
+        return row, ""
+    ok, why = ask(chat, to_ask)
+    row["action"] = ("asked" if ok else "ASK FAILED") + f": {why}"
+    if not ok:
+        return row, "failed"
+    _record_asks(chat, to_ask, history, now)
+    return row, "asked"
+
+
+def _save_history(history: dict, chats: list[dict], now: float) -> None:
+    # Forget tasks of chats that are gone, so the history cannot grow forever.
+    live = {c["sessionId"] for c in chats}
+    for key in list(history):
+        if key.split(":", 1)[0] not in live and now - float(history[key].get("lastAt", 0)) > 86400:
+            history.pop(key, None)
+    with ledgerlib.locked("stallwatch"):
+        merged = _load_state()
+        merged["tasks"] = history
+        _save_state(merged)
+
+
+def run(argv: list[str]) -> tuple[dict, int]:
+    now = time.time()
+    act, notes = _acting(argv)
+    cap = _parse_cap(argv)
+    if cap is None:
+        return {"error": "--max needs a whole number"}, 3
     only = set(_values(argv, "--session")) or None
     try:
         p = plan(now, only)
@@ -225,65 +333,14 @@ def run(argv: list[str]) -> tuple[dict, int]:
     history = state.setdefault("tasks", {})
     rows, failed, asked = [], 0, 0
     for chat in p["chats"]:
-        stalled = [(j["task"], j["activity"]) for j in chat["tasks"] if j["verdict"] == "stalled"]
-        row = {"sessionId": chat["sessionId"], "title": chat["title"], "instance": chat["instance"],
-               "idle": chat["idle"], "held": chat["held"],
-               "tasks": [{"id": j["task"]["id"], "kind": j["task"]["kind"], "verdict": j["verdict"],
-                          "line": stalllib.describe(j["task"], j["activity"])} for j in chat["tasks"]],
-               "action": "none"}
+        row, outcome = _handle_chat(chat, history, now, act, cap, asked)
         rows.append(row)
-        if not stalled:
-            continue
-        due = {t["id"]: _due(history.get(f"{chat['sessionId']}:{t['id']}"), now) for t, _ in stalled}
-        for t, a in stalled:
-            if due[t["id"]] == "escalate":
-                key = f"{chat['sessionId']}:{t['id']}"
-                if act:
-                    iid = incidentlib.record("stall_watch", key,
-                                             f"asked {MAX_NUDGES}x and still stalled: "
-                                             f"{stalllib.describe(t, a)}")
-                    history[key]["incident"] = iid
-                row["action"] = "escalated to an incident"
-        to_ask = [(t, a) for t, a in stalled if due[t["id"]] == "ask"]
-        if not to_ask:
-            if row["action"] == "none":
-                row["action"] = ("incident already filed" if all(d == "done" for d in due.values())
-                                 else "already asked recently")
-            continue
-        if chat["held"]:
-            row["action"] = f"held - not typed into ({chat['held']})"
-            continue
-        if not chat["idle"]:
-            row["action"] = (f"working (wrote {int((chat.get('quietSecs') or 0) // 60)} min ago) - "
-                             "reported, not interrupted")
-            continue
-        if asked >= cap:
-            row["action"] = f"over this run's cap of {cap} - next tick"
-            continue
-        if not act:
-            row["action"] = "would ask"
-            continue
-        ok, why = ask(chat, to_ask)
-        row["action"] = ("asked" if ok else "ASK FAILED") + f": {why}"
-        if ok:
+        if outcome == "asked":
             asked += 1
-            for t, _ in to_ask:
-                key = f"{chat['sessionId']}:{t['id']}"
-                prev = history.get(key) or {}
-                history[key] = {"nudges": int(prev.get("nudges", 0)) + 1, "lastAt": now,
-                                "firstAt": prev.get("firstAt", now)}
-        else:
+        elif outcome == "failed":
             failed += 1
     if act:
-        # Forget tasks of chats that are gone, so the history cannot grow forever.
-        live = {c["sessionId"] for c in p["chats"]}
-        for key in list(history):
-            if key.split(":", 1)[0] not in live and now - float(history[key].get("lastAt", 0)) > 86400:
-                history.pop(key, None)
-        with ledgerlib.locked("stallwatch"):
-            merged = _load_state()
-            merged["tasks"] = history
-            _save_state(merged)
+        _save_history(history, p["chats"], now)
     stalled_chats = [r for r in rows if any(t["verdict"] == "stalled" for t in r["tasks"])]
     payload = {"scanned": p["scanned"], "withBackgroundWork": len(rows),
                "stalledChats": len(stalled_chats), "asked": asked, "failed": failed,

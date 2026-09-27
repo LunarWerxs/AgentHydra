@@ -45,15 +45,15 @@ const colorFor = (key: string) =>
       <!-- 6px track, 4px rounded end anchored at the baseline: a thin mark, per the mark spec -->
       <div class="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
-          class="h-full rounded-full transition-[width] duration-300"
-          :style="{ width: `${Math.max(1.5, (row.value / max) * 100)}%`, background: colorFor(row.key) }"
+          class="h-full w-(--bar-w) rounded-full bg-(--bar-color) transition-width duration-300"
+          :style="{ '--bar-w': `${Math.max(1.5, (row.value / max) * 100)}%`, '--bar-color': colorFor(row.key) }"
         ></div>
       </div>
     </li>
     <li v-if="more?.length">
       <button
         type="button"
-        class="mt-0.5 text-[11px] font-medium text-primary hover:underline"
+        class="mt-0.5 text-2xs font-medium text-primary hover:underline"
         @click="expanded = !expanded"
       >
         {{ expanded ? $t('analytics.showLess') : moreLabel }}

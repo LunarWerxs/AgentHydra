@@ -14,7 +14,7 @@
 // restores it. CONFIG_DIR is already redirected to a temp dir by tests/setup.ts.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCliInstance, deleteCliInstance } from '../src/core/cli-instances'
@@ -48,6 +48,7 @@ afterEach(() => {
   else process.env.HOME = savedHome
   if (savedUserProfile === undefined) delete process.env.USERPROFILE
   else process.env.USERPROFILE = savedUserProfile
+  rmSync(scratchHome, { recursive: true, force: true })
 })
 
 /** Create an instance and return the path of the `.claude.json` it should have been seeded with. */

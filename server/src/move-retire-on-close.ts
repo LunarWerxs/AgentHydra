@@ -228,64 +228,82 @@ export async function runRetireOnCloseOnce(
     .load()
     .filter((e) => opts.profile === undefined || samePathKey(e.profile, opts.profile))
   if (entries.length === 0) return 0
-  let running: string[]
-  let readAt: number
+  let pass: RetirePass
   try {
-    running = await deps.listRunningDirs()
-    readAt = deps.now()
+    const running = await deps.listRunningDirs()
+    pass = { deps, running, readAt: deps.now(), deadline: opts.deadline }
   } catch {
     return 0
   }
-  const stale = (profile: string) =>
-    deps.now() - readAt > SNAPSHOT_MAX_AGE_MS ||
-    (opts.deadline !== undefined && deps.now() > opts.deadline) ||
-    deps.launchedSince(profile, readAt)
-  // Settled entries by key AND stamp: an entry re-queued while this pass ran is a new intent.
   const settled = new Set<string>()
-  const settle = (e: RetireEntry) => settled.add(`${keyOf(e.profile, e.sessionId)}@${e.queuedAt}`)
   let retired = 0
   for (const e of entries) {
-    try {
-      const queued = Date.parse(e.queuedAt)
-      if (!Number.isFinite(queued) || deps.now() - queued > RETIRE_MAX_AGE_MS) {
-        settle(e)
-        continue
-      }
-      if (running.some((dir) => samePathKey(dir, e.profile))) continue
-      const archived = deps.archivedIn(e.profile, e.sessionId)
-      // No record found is not proof it is gone (a walk can come up empty on a contended store);
-      // it waits, and the age cap ends it if it never comes back.
-      if (archived === null) continue
-      if (archived) {
-        settle(e)
-        continue
-      }
-      if (!deps.liveElsewhere(e.profile, e.sessionId)) {
-        deps.log?.(
-          `[agenthydra] kept ${e.sessionId} on ${e.profile}: no other account shows it, so it is not archived there`,
-        )
-        settle(e)
-        continue
-      }
-      // A move back onto this account may have dropped the entry since this pass loaded it.
-      const key = keyOf(e.profile, e.sessionId)
-      if (!deps.store.load().some((x) => keyOf(x.profile, x.sessionId) === key)) continue
-      if (stale(e.profile)) break
-      if (await deps.flag(e.sessionId, e.profile)) retired++
-      settle(e)
-    } catch {
-      // a contended store or a half-written record says nothing about the next tick
-    }
+    // A contended store or a half-written record says nothing about the next tick: it waits.
+    const outcome = await retireEntry(e, pass).catch((): EntryOutcome => 'wait')
+    if (outcome === 'stop') break
+    if (outcome === 'retired') retired++
+    if (outcome !== 'wait') settled.add(settledKey(e))
   }
-  if (settled.size)
-    deps.store.save(
-      deps.store
-        .load()
-        .filter((e) => !settled.has(`${keyOf(e.profile, e.sessionId)}@${e.queuedAt}`)),
-    )
+  if (settled.size) forgetSettled(deps.store, settled)
   if (retired > 0)
     deps.log?.(`[agenthydra] archived ${retired} moved chat(s) on accounts that have since closed`)
   return retired
+}
+
+/** The liveness reading one pass acts on, and when it was taken. */
+interface RetirePass {
+  deps: RetireDeps
+  running: string[]
+  readAt: number
+  deadline?: number
+}
+
+/** What one entry's turn in a pass came to: left for the next pass (`wait`), done with and
+ *  dropped from the queue (`settle`, or `retired` when its flag changed the record), or the end of
+ *  this pass because the liveness reading can no longer be trusted (`stop`). */
+type EntryOutcome = 'wait' | 'settle' | 'retired' | 'stop'
+
+/** Settled entries by key AND stamp: an entry re-queued while this pass ran is a new intent. */
+const settledKey = (e: RetireEntry) => `${keyOf(e.profile, e.sessionId)}@${e.queuedAt}`
+
+function forgetSettled(queue: RetireStore, settled: Set<string>): void {
+  queue.save(queue.load().filter((e) => !settled.has(settledKey(e))))
+}
+
+function isStale(pass: RetirePass, profile: string): boolean {
+  const { deps, readAt, deadline } = pass
+  return (
+    deps.now() - readAt > SNAPSHOT_MAX_AGE_MS ||
+    (deadline !== undefined && deps.now() > deadline) ||
+    deps.launchedSince(profile, readAt)
+  )
+}
+
+function isExpired(e: RetireEntry, now: number): boolean {
+  const queued = Date.parse(e.queuedAt)
+  return !Number.isFinite(queued) || now - queued > RETIRE_MAX_AGE_MS
+}
+
+async function retireEntry(e: RetireEntry, pass: RetirePass): Promise<EntryOutcome> {
+  const { deps } = pass
+  if (isExpired(e, deps.now())) return 'settle'
+  if (pass.running.some((dir) => samePathKey(dir, e.profile))) return 'wait'
+  const archived = deps.archivedIn(e.profile, e.sessionId)
+  // No record found is not proof it is gone (a walk can come up empty on a contended store);
+  // it waits, and the age cap ends it if it never comes back.
+  if (archived === null) return 'wait'
+  if (archived) return 'settle'
+  if (!deps.liveElsewhere(e.profile, e.sessionId)) {
+    deps.log?.(
+      `[agenthydra] kept ${e.sessionId} on ${e.profile}: no other account shows it, so it is not archived there`,
+    )
+    return 'settle'
+  }
+  // A move back onto this account may have dropped the entry since this pass loaded it.
+  const key = keyOf(e.profile, e.sessionId)
+  if (!deps.store.load().some((x) => keyOf(x.profile, x.sessionId) === key)) return 'wait'
+  if (isStale(pass, e.profile)) return 'stop'
+  return (await deps.flag(e.sessionId, e.profile)) ? 'retired' : 'settle'
 }
 
 /** The most a launch gives the pass below; what it does not reach waits for the next pass. */

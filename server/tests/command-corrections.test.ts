@@ -127,7 +127,7 @@ describe('store readers', () => {
     const call = (id: string, command: string) =>
       JSON.stringify({
         type: 'assistant',
-        timestamp: '2026-09-01T10:00:00.000Z',
+        timestamp: '2001-01-01T10:00:00.000Z',
         message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] },
       })
     const result = (id: string, text: string, isError: boolean) =>

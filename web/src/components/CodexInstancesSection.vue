@@ -543,14 +543,16 @@ onUnmounted(() => {
              width was set by a phrase you only read once. -->
         <Button
           size="sm"
-          class="group/create gap-0 overflow-hidden transition-all"
+          class="group/create overflow-hidden"
           :aria-label="$t('codexInstances.createInstance')"
           @click="createOpen = true"
         >
-          <Plus class="shrink-0" />
-          <span
-            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
-          >{{ $t('codexInstances.createInstance') }}</span>
+          <span class="inline-flex items-center">
+            <Plus class="shrink-0" />
+            <span
+              class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-36 group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-36 group-focus-visible/create:opacity-100"
+            >{{ $t('codexInstances.createInstance') }}</span>
+          </span>
         </Button>
       </div>
     </div>
@@ -559,7 +561,7 @@ onUnmounted(() => {
          table's `sticky top-0` header. See ExpandArea.vue. -->
     <ExpandArea :open="open">
     <Table>
-      <TableHeader class="sticky top-0 z-10 bg-card">
+      <TableHeader sticky>
         <TableRow>
           <!-- `w-10` dot, not a spelled-out status: the two Claude tables above put a single dot
                here, and this column's two-word labels ("Desktop stopped") were what shoved every
@@ -672,7 +674,7 @@ onUnmounted(() => {
           </div>
         </TableEmpty>
         <TableRow v-for="i in 2" v-else :key="i">
-          <TableCell><Skeleton class="size-2 rounded-full" /></TableCell>
+          <TableCell><Skeleton class="size-2" /></TableCell>
           <TableCell><Skeleton class="h-4 w-28" /></TableCell>
           <TableCell><Skeleton class="h-4 w-36" /></TableCell>
           <TableCell v-if="!usageMode"><Skeleton class="h-3 w-32" /></TableCell>
@@ -690,8 +692,7 @@ onUnmounted(() => {
         <TableRow
           v-for="instance in visibleRows"
           :key="instance.id"
-          class="transition-opacity"
-          :class="filterDimmed(filterFacts(instance)) ? 'opacity-25 hover:bg-transparent' : ''"
+          :variant="filterDimmed(filterFacts(instance)) ? 'faded' : 'default'"
         >
           <TableCell>
             <!-- One dot, same size and same colours as the CLI table's — see the header comment
@@ -702,10 +703,10 @@ onUnmounted(() => {
               :title="statusTitle(instance)"
             />
           </TableCell>
-          <TableCell class="font-medium">
+          <TableCell>
             <!-- Codex instances share ONE number sequence with the Claude Desktop and CLI tables,
                  so `#7` here can never be a different `#7` there. Same chip for the same reason. -->
-            <div class="flex items-center gap-1.5">
+            <div class="flex items-center gap-1.5 font-medium">
               <InstanceNumber :num="instance.num" />
               <!-- Same cap and same hover as the other two Name columns; see CliInstancesSection. -->
               <span :title="nameOverflowTitle(instance.name)">{{ shortDisplayName(instance.name) }}</span>
@@ -714,7 +715,7 @@ onUnmounted(() => {
           <!-- Which ChatGPT account this CODEX_HOME is signed into. The name/email come straight
                off the list payload (the server resolves them from auth.json), so this fills in on
                first paint with no per-row request. -->
-          <TableCell class="max-w-[16rem] text-xs">
+          <TableCell class="max-w-[16rem]">
             <template v-if="instance.account?.email || instance.account?.name">
               <!-- A button only when there IS an address to copy: with a name and no email the
                    cell is text, because a control that silently does nothing is worse than none. -->
@@ -741,7 +742,7 @@ onUnmounted(() => {
               </component>
               <div
                 v-if="instance.account.name && instance.account.email"
-                class="truncate text-[0.625rem] text-muted-foreground"
+                class="truncate text-3xs text-muted-foreground"
               >
                 {{ instance.account.email }}
               </div>
@@ -757,15 +758,11 @@ onUnmounted(() => {
           <!-- max-w-[16rem], not 28: the same cap the CLI table's config dir uses. At 28rem this one
                column was wide enough on its own to push the actions cell past the right edge, which
                is why the Open/Focus buttons were being clipped. -->
-          <TableCell
-            v-if="!usageMode"
-            class="mono max-w-[16rem] truncate text-[0.625rem] text-muted-foreground"
-            :title="instance.codexHome"
-          >
-            {{ instance.codexHome }}
+          <TableCell v-if="!usageMode" class="max-w-[16rem]" :title="instance.codexHome">
+            <span class="mono block truncate text-3xs text-muted-foreground">{{ instance.codexHome }}</span>
           </TableCell>
           <template v-else>
-            <TableCell class="text-xs">
+            <TableCell>
               <UsageBar
                 v-if="sessionResetFor(instance)"
                 :fill-pct="sessionRemaining(instance)"
@@ -775,7 +772,7 @@ onUnmounted(() => {
               />
               <span v-else class="text-muted-foreground" :title="usageFor(instance)?.sessionLimitUnavailable ? $t('codexInstances.noSessionLimit') : undefined">{{ usageFor(instance)?.sessionLimitUnavailable ? 'N/A' : '—' }}</span>
             </TableCell>
-            <TableCell class="text-xs">
+            <TableCell>
               <CopyResetDate v-if="weeklyResetFor(instance)" :limit="usageFor(instance)?.weekAll">
                 <UsageBar
                   :fill-pct="weeklyRemaining(instance)"
@@ -818,7 +815,7 @@ onUnmounted(() => {
                  found". It is listed to be READ — identity, plan, quota — and says so instead of
                  offering buttons that cannot work. -->
             <div v-if="instance.isExternal" class="flex items-center justify-end">
-              <span class="whitespace-nowrap text-[0.625rem] text-muted-foreground">
+              <span class="whitespace-nowrap text-3xs text-muted-foreground">
                 {{ $t('codexInstances.externalHint') }}
               </span>
             </div>
@@ -867,18 +864,20 @@ onUnmounted(() => {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" class="max-w-52">
                   <!-- Which instance this menu belongs to, by number — see InstancesView. -->
-                  <DropdownMenuLabel class="flex items-center justify-between gap-2 py-1">
-                    <span class="font-mono text-xs">{{
-                      $t('instances.numberMenuLabel', { num: instance.num })
-                    }}</span>
-                    <button
-                      type="button"
-                      class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      :aria-label="$t('instances.copyNumber')"
-                      @click.stop="copyInstanceNumber(instance.num)"
-                    >
-                      <Copy class="size-3.5" />
-                    </button>
+                  <DropdownMenuLabel>
+                    <div class="-my-0.5 flex items-center justify-between gap-2">
+                      <span class="font-mono text-xs">{{
+                        $t('instances.numberMenuLabel', { num: instance.num })
+                      }}</span>
+                      <button
+                        type="button"
+                        class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        :aria-label="$t('instances.copyNumber')"
+                        @click.stop="copyInstanceNumber(instance.num)"
+                      >
+                        <Copy class="size-3.5" />
+                      </button>
+                    </div>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuSub>

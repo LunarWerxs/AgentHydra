@@ -16,7 +16,7 @@
 // and Zed simply do not persist one. So these sessions appear in the list, are readable and
 // searchable, and contribute NOTHING to the spend charts. A zero there would be a claim they were
 // free; an absence is the truth. Pi is the one exception - its assistant messages carry `usage` and
-// `cost` - but pricing it would be a spend reader of its own, so for now it is read like the rest.
+// `cost` - but pricing it would be a spend reader of its own, so it is read like the rest.
 
 import { Database } from 'bun:sqlite'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -854,74 +854,95 @@ function* piSessions(root: string): Generator<ForeignSession[]> {
 /** One Pi entry as the events a reader shows. System prompts, usage, labels and extension state are
  *  machinery, not conversation, and are left out. */
 function piEvents(e: PiEntry, at: string): TailEvent[] {
-  const ev = (
-    role: TailEvent['role'],
-    kind: TailEvent['kind'],
-    text: string,
-    tool: string | null,
-  ): TailEvent => ({ role, kind, text: truncate(text), tool_name: tool, timestamp: at })
   if (e.type === 'compaction' || e.type === 'branch_summary') {
     const t = compact(e.summary ?? '')
     const label = e.type === 'compaction' ? 'Compacted' : 'Branch summary'
-    return t ? [ev('assistant', 'text', `${label}: ${t}`, null)] : []
+    return t ? [piEvent(at, 'assistant', 'text', `${label}: ${t}`, null)] : []
   }
   if (e.type === 'custom_message') {
     const t = compact(piText(e.content))
-    return e.display !== false && t ? [ev('user', 'text', t, null)] : []
+    return e.display !== false && t ? [piEvent(at, 'user', 'text', t, null)] : []
   }
   if (e.type !== 'message' || !e.message) return []
-  const m = e.message
-  const out: TailEvent[] = []
+  return piMessageEvents(e.message, at)
+}
+
+type PiMessage = NonNullable<PiEntry['message']>
+
+/** One block of an assistant message's `content` array. */
+interface PiContentBlock {
+  type?: string
+  text?: string
+  thinking?: string
+  name?: string
+  arguments?: unknown
+}
+
+function piEvent(
+  at: string,
+  role: TailEvent['role'],
+  kind: TailEvent['kind'],
+  text: string,
+  tool: string | null,
+): TailEvent {
+  return { role, kind, text: truncate(text), tool_name: tool, timestamp: at }
+}
+
+/** The one event `text` makes once compacted, or none when nothing is left of it. */
+function piTextEvents(
+  at: string,
+  role: TailEvent['role'],
+  kind: TailEvent['kind'],
+  text: string,
+  tool: string | null,
+): TailEvent[] {
+  const t = compact(text)
+  return t ? [piEvent(at, role, kind, t, tool)] : []
+}
+
+function piMessageEvents(m: PiMessage, at: string): TailEvent[] {
   switch (m.role) {
-    case 'user': {
-      const t = compact(piText(m.content))
-      if (t) out.push(ev('user', 'text', t, null))
-      break
-    }
+    case 'user':
+      return piTextEvents(at, 'user', 'text', piText(m.content), null)
     case 'assistant':
-      for (const c of Array.isArray(m.content) ? m.content : []) {
-        if (!c || typeof c !== 'object') continue
-        const block = c as {
-          type?: string
-          text?: string
-          thinking?: string
-          name?: string
-          arguments?: unknown
-        }
-        if (block.type === 'text') {
-          const t = compact(block.text ?? '')
-          if (t) out.push(ev('assistant', 'text', t, null))
-        } else if (block.type === 'thinking') {
-          const t = compact(block.thinking ?? '')
-          if (t) out.push(ev('assistant', 'thinking', t, null))
-        } else if (block.type === 'toolCall') {
-          const args = block.arguments ? compact(JSON.stringify(block.arguments)) : ''
-          out.push(ev('assistant', 'tool_use', truncate(args, 500), block.name ?? 'tool'))
-        }
-      }
-      break
-    case 'toolResult': {
-      const t = compact(piText(m.content))
-      if (t) out.push(ev('user', 'tool_result', t, m.toolName ?? 'tool'))
-      break
-    }
+      return piAssistantEvents(m.content, at)
+    case 'toolResult':
+      return piTextEvents(at, 'user', 'tool_result', piText(m.content), m.toolName ?? 'tool')
     case 'bashExecution':
-      // A command the user ran with `!`, not one the model asked for; shown as the tool it is.
-      if (m.command) out.push(ev('user', 'tool_use', m.command, 'bash'))
-      if (m.output?.trim()) out.push(ev('user', 'tool_result', m.output.trim(), 'bash'))
-      break
+      return piBashEvents(m, at)
     case 'custom': {
       const t = compact(piText(m.content))
-      if (m.display !== false && t) out.push(ev('user', 'text', t, null))
-      break
+      return m.display !== false && t ? [piEvent(at, 'user', 'text', t, null)] : []
     }
     case 'branchSummary':
-    case 'compactionSummary': {
-      const t = compact(m.summary ?? '')
-      if (t) out.push(ev('assistant', 'text', t, null))
-      break
-    }
+    case 'compactionSummary':
+      return piTextEvents(at, 'assistant', 'text', m.summary ?? '', null)
   }
+  return []
+}
+
+function piAssistantEvents(content: unknown, at: string): TailEvent[] {
+  const out: TailEvent[] = []
+  for (const c of Array.isArray(content) ? content : []) {
+    if (c && typeof c === 'object') out.push(...piBlockEvents(c as PiContentBlock, at))
+  }
+  return out
+}
+
+function piBlockEvents(block: PiContentBlock, at: string): TailEvent[] {
+  if (block.type === 'text') return piTextEvents(at, 'assistant', 'text', block.text ?? '', null)
+  if (block.type === 'thinking')
+    return piTextEvents(at, 'assistant', 'thinking', block.thinking ?? '', null)
+  if (block.type !== 'toolCall') return []
+  const args = block.arguments ? compact(JSON.stringify(block.arguments)) : ''
+  return [piEvent(at, 'assistant', 'tool_use', truncate(args, 500), block.name ?? 'tool')]
+}
+
+/** A command the user ran with `!`, not one the model asked for; shown as the tool it is. */
+function piBashEvents(m: PiMessage, at: string): TailEvent[] {
+  const out: TailEvent[] = []
+  if (m.command) out.push(piEvent(at, 'user', 'tool_use', m.command, 'bash'))
+  if (m.output?.trim()) out.push(piEvent(at, 'user', 'tool_result', m.output.trim(), 'bash'))
   return out
 }
 

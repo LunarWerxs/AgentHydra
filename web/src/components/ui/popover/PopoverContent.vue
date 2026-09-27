@@ -14,7 +14,7 @@ defineOptions({
 })
 
 const props = withDefaults(
-  defineProps<PopoverContentProps & { class?: HTMLAttributes["class"] }>(),
+  defineProps<PopoverContentProps & { class?: HTMLAttributes["class"], flush?: boolean }>(),
   {
     align: "center",
     sideOffset: 4,
@@ -22,7 +22,7 @@ const props = withDefaults(
 )
 const emits = defineEmits<PopoverContentEmits>()
 
-const delegatedProps = reactiveOmit(props, "class")
+const delegatedProps = reactiveOmit(props, "class", "flush")
 
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
 </script>
@@ -32,9 +32,11 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
     <PopoverContent
       data-slot="popover-content"
       v-bind="{ ...$attrs, ...forwarded }"
+      :data-flush="flush ? '' : undefined"
       :class="
         cn(
           'bg-popover text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 ring-foreground/10 flex flex-col gap-4 rounded-lg p-2.5 text-xs shadow-md ring-1 duration-100 z-50 w-72 origin-(--reka-popover-content-transform-origin) outline-hidden',
+          flush && 'gap-0 p-0',
           props.class,
         )
       "

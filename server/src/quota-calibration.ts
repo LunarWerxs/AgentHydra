@@ -354,46 +354,16 @@ export function calibrateQuotaDollars(
   if (!configDirs?.length) return uncalibratedDollars(FOREIGN_DIRS_NOT_CALIBRATED)
   try {
     const entry: AccountEntry = readStore()[key] ?? { windows: {}, dollars: null }
-    const grouped = new Map<string, QuotaReading[]>()
-    for (const kind of ['weekly', 'session'] as const) {
-      for (const [wk, list] of groupWindows(readingsFor(samples, kind)))
-        grouped.set(`${kind}:${wk}`, list)
-    }
-
-    // One transcript walk covers every window that has an unpriced reading left. A window that
-    // would need turns from before the scan floor (a week before the newest reading) is left out
-    // rather than priced short.
-    let newest = Number.NEGATIVE_INFINITY
-    for (const list of grouped.values()) newest = Math.max(newest, list[list.length - 1]!.at)
-    const floor = newest - MAX_SCAN_MS
-    let scanFrom = Number.POSITIVE_INFINITY
-    for (const [id, list] of grouped) {
-      const prior = entry.windows[id]
-      const last = list[list.length - 1]!
-      const start = prior ? prior.throughAt : list[0]!.at
-      if (last.at <= start) continue
-      if (start < floor) grouped.delete(id)
-      else scanFrom = Math.min(scanFrom, start)
-    }
+    const grouped = groupedReadings(samples)
+    const scanFrom = pruneToScanFloor(grouped, entry.windows)
     const cost: IntervalCost = Number.isFinite(scanFrom)
       ? intervalCostFrom(scanFrom, configDirs)
       : () => ({ usd: 0, unpriced: false })
-
-    // Windows no longer in the history are dropped: nothing can extend them, and the store stays
-    // bounded by the history's own cap.
-    const windows: Record<string, WindowFold> = {}
-    for (const [id, list] of grouped) {
-      const fold = foldWindow(list, cost, entry.windows[id] ?? null)
-      if (fold) windows[id] = fold
-    }
-    const folds = (kind: QuotaKind) =>
-      Object.entries(windows)
-        .filter(([id]) => id.startsWith(`${kind}:`))
-        .map(([, w]) => w)
+    const windows = foldWindows(grouped, cost, entry.windows)
 
     const dollars: QuotaDollars = {
-      weekly: capacityFrom(folds('weekly'), snap.weekAll?.pct ?? null),
-      session: capacityFrom(folds('session'), snap.session?.pct ?? null),
+      weekly: capacityFrom(foldsOf(windows, 'weekly'), snap.weekAll?.pct ?? null),
+      session: capacityFrom(foldsOf(windows, 'session'), snap.session?.pct ?? null),
       calibratedAt: now.toISOString(),
       caveat: CAVEAT,
     }
@@ -402,6 +372,65 @@ export function calibrateQuotaDollars(
   } catch {
     return uncalibratedDollars()
   }
+}
+
+/** Every weekly and session reading, grouped by `<kind>:<window key>`. */
+function groupedReadings(samples: UsageSample[]): Map<string, QuotaReading[]> {
+  const grouped = new Map<string, QuotaReading[]>()
+  for (const kind of ['weekly', 'session'] as const) {
+    for (const [wk, list] of groupWindows(readingsFor(samples, kind)))
+      grouped.set(`${kind}:${wk}`, list)
+  }
+  return grouped
+}
+
+/**
+ * One transcript walk covers every window that has an unpriced reading left. A window that would
+ * need turns from before the scan floor (a week before the newest reading) is removed from
+ * `grouped` rather than priced short. Returns where the walk starts: +Infinity when nothing is left
+ * to price.
+ */
+function pruneToScanFloor(
+  grouped: Map<string, QuotaReading[]>,
+  priorWindows: Record<string, WindowFold>,
+): number {
+  let newest = Number.NEGATIVE_INFINITY
+  for (const list of grouped.values()) newest = Math.max(newest, list[list.length - 1]!.at)
+  const floor = newest - MAX_SCAN_MS
+  let scanFrom = Number.POSITIVE_INFINITY
+  for (const [id, list] of grouped) {
+    const prior = priorWindows[id]
+    const last = list[list.length - 1]!
+    const start = prior ? prior.throughAt : list[0]!.at
+    if (last.at <= start) continue
+    if (start < floor) grouped.delete(id)
+    else scanFrom = Math.min(scanFrom, start)
+  }
+  return scanFrom
+}
+
+/**
+ * Each window's fold, extending its prior one. Windows no longer in the history are dropped:
+ * nothing can extend them, and the store stays bounded by the history's own cap.
+ */
+function foldWindows(
+  grouped: Map<string, QuotaReading[]>,
+  cost: IntervalCost,
+  priorWindows: Record<string, WindowFold>,
+): Record<string, WindowFold> {
+  const windows: Record<string, WindowFold> = {}
+  for (const [id, list] of grouped) {
+    const fold = foldWindow(list, cost, priorWindows[id] ?? null)
+    if (fold) windows[id] = fold
+  }
+  return windows
+}
+
+/** The folds of one quota kind. */
+function foldsOf(windows: Record<string, WindowFold>, kind: QuotaKind): WindowFold[] {
+  return Object.entries(windows)
+    .filter(([id]) => id.startsWith(`${kind}:`))
+    .map(([, w]) => w)
 }
 
 /** Every figure null. `reason` says why; by default, that nothing has been calibrated yet. */

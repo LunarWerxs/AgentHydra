@@ -18,5 +18,5 @@ export default {
   // AH-20: an outage must not read as "no incidents".
   unavailable: 'Could not load incidents: {reason}.',
   retry: 'Retry',
-  staleHint: 'Showing the last known incidents — updates unavailable: {reason}.',
+  staleHint: 'Showing the last known incidents, updates unavailable: {reason}.',
 }

@@ -38,7 +38,7 @@ start**, pointing at the port it actually bound (`server/src/mcp-register.ts`):
 
 It is on by default and lives in **Settings → MCP server → Register with Claude Code**, which also
 shows what the config file actually says. Turning it off removes the entry. It touches that one key
-and nothing else, and it refuses to write a `~/.claude.json` it could not parse rather than
+and nothing else, and it refuses to write a [`~/.claude.json`](CLAUDE-CONFIG-LAYOUT.md) it could not parse rather than
 replacing state it cannot read. `CLAUDE_CONFIG_DIR` is honoured; `AGENTHYDRA_MCP_CONFIG` names the
 file outright.
 
@@ -144,7 +144,7 @@ end. `all: true` on both widens the scope to the whole transcript.
 
 - The session is found the way `whoami` finds the caller: the calling engine's pid (or, over
   stdio, this server's parent chain) is matched against the CLI's own live registry,
-  `~/.claude/sessions/<pid>.json`. `how` says which match won; `session_id` names a session outright
+  [`~/.claude/sessions/<pid>.json`](CLAUDE-CONFIG-LAYOUT.md). `how` says which match won; `session_id` names a session outright
   when detection cannot.
 - Everything returned is marked as historical data (`notice`), never instructions, and secrets in
   recognisable formats are redacted the same way as `export_session`.
@@ -349,13 +349,13 @@ edited and are outside biome's formatter for that reason.
 > a chat onto the caller's own account. Each of those produced a wrong result that looked correct.
 
 Claude Desktop and the `claude` CLI write the same transcript store under
-`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Desktop separately keeps per-chat metadata
+[`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`](CLAUDE-CONFIG-LAYOUT.md). Desktop separately keeps per-chat metadata
 under `<user-data-dir>/claude-code-sessions/<org>/<user>/local_*.json`; the metadata's
 `cliSessionId` is the only reliable link to the shared transcript. The scanner in
 `server/src/instance-sessions.ts` therefore:
 
 - matches only by `cliSessionId`, never metadata filenames or titles;
-- scans both `%APPDATA%/Claude/` and every `~/.claude-instances/<name>/` store; and
+- scans both `%APPDATA%/Claude/` and every [`~/.claude-instances/<name>/`](CLAUDE-CONFIG-LAYOUT.md) store; and
 - treats Desktop activity timestamps as advisory because externally appended turns do not
   reliably update them.
 
@@ -383,7 +383,7 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_CLAUDE_PATH` | npm-global install / `claude` | Claude CLI executable for every spawn (usage probe, keepalive, launches); point it at `server/tests/mocks/bin/claude(.cmd)` to replay a recording |
 | `AGENTHYDRA_CODEX_PATH` | auto-detected / `codex` | Codex executable used by managed Codex instances |
 | `AGENTHYDRA_CODEX_DESKTOP_PATH` | auto-detected | Codex Desktop GUI executable; useful for nonstandard installs |
-| `AGENTHYDRA_HOOKS_CONFIG` | `$CLAUDE_CONFIG_DIR/settings.json` or `~/.claude/settings.json` | Claude Code settings file the opt-in agent-status hooks are written to (`status_hooks`) |
+| `AGENTHYDRA_HOOKS_CONFIG` | `$CLAUDE_CONFIG_DIR/settings.json` or [`~/.claude/settings.json`](CLAUDE-CONFIG-LAYOUT.md) | Claude Code settings file the opt-in agent-status hooks are written to (`status_hooks`) |
 | `AGENTHYDRA_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode CLI/Desktop SQLite session store |
 | `AGENTHYDRA_BOOT_DEADLINE_MS` | `120000` (full daemon) / `30000` (`--instances`) | startup-liveness watchdog deadline; if boot hasn't reached a bound port by then, the process logs its last-known phase and exits `87` for the supervisor to restart it (see `server/src/boot-watchdog.ts`) |
 

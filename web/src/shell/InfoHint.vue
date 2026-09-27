@@ -32,7 +32,7 @@ defineProps<{ text?: string }>();
           <InfoIcon class="size-3.5" />
         </button>
       </TooltipTrigger>
-      <TooltipContent class="max-w-xs text-[12px] leading-snug"><slot>{{ text }}</slot></TooltipContent>
+      <TooltipContent><span class="leading-snug"><slot>{{ text }}</slot></span></TooltipContent>
     </Tooltip>
   </TooltipProvider>
 </template>

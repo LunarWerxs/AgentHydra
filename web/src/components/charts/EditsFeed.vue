@@ -86,18 +86,18 @@ const rows = computed<Row[]>(() => {
       :title="r.key"
     >
       <span
-        class="w-9 shrink-0 truncate rounded-[3px] px-1 py-px text-center font-mono text-[9px] uppercase leading-4"
-        :style="{ background: `color-mix(in oklab, ${r.color} 22%, transparent)`, color: r.color }"
+        class="w-9 shrink-0 truncate rounded-xs bg-(--ext-color)/22 px-1 py-px text-center font-mono text-3xs uppercase leading-4 text-(--ext-color)"
+        :style="{ '--ext-color': r.color }"
       >{{ r.ext || '·' }}</span>
       <span class="min-w-0 flex-1 truncate">
         <span class="text-xs font-medium">{{ r.name }}</span>
-        <span v-if="r.where" class="ms-1.5 text-[11px] text-muted-foreground">{{ r.where }}</span>
+        <span v-if="r.where" class="ms-1.5 text-2xs text-muted-foreground">{{ r.where }}</span>
       </span>
       <span
         v-if="r.count > 1"
-        class="shrink-0 rounded-full bg-muted px-1.5 text-[10px] tabular-nums text-muted-foreground"
+        class="shrink-0 rounded-full bg-muted px-1.5 text-3xs tabular-nums text-muted-foreground"
       >&times;{{ r.count }}</span>
-      <span class="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+      <span class="shrink-0 text-3xs tabular-nums text-muted-foreground">
         {{ r.ts ? timeAgo(r.ts) : '' }}
       </span>
     </li>

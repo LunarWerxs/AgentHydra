@@ -342,6 +342,187 @@
   padding: 0.4rem 0.5rem;
 }
 
+/* --- width-animated bars (UsageBar, charts/BarRows) --------------------------------------------
+   Tailwind ships no named transition for width, and width is a layout property, so transition-all
+   would also animate everything else on the element. A real utility (not a plain class) so it sits
+   in the utilities layer and still reads the duration-* / ease-* set beside it, exactly as
+   Tailwind's own transition-* utilities do. */
+@utility transition-width {
+  transition-property: width;
+  transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+  transition-duration: var(--tw-duration, var(--default-transition-duration));
+}
+
+/* The same, for the app shell (App.vue): its max-width eases out when a view asks for the wide cap,
+   and the header and main column ease their padding when a push-in panel opens beside them. */
+@utility transition-max-width {
+  transition-property: max-width;
+  transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+  transition-duration: var(--tw-duration, var(--default-transition-duration));
+}
+@utility transition-padding {
+  transition-property: padding;
+  transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+  transition-duration: var(--tw-duration, var(--default-transition-duration));
+}
+
+/* --- view switch (App.vue's <Transition name="view-fade">) ------------------------------------- */
+.view-fade-enter-active,
+.view-fade-leave-active {
+  transition: opacity 150ms ease;
+}
+.view-fade-enter-from,
+.view-fade-leave-to {
+  opacity: 0;
+}
+
+/* --- ExpandArea (components/ExpandArea.vue) ----------------------------------------------------
+   Animated expand/collapse that keeps `position: sticky` working inside it; the header comment in
+   ExpandArea.vue explains why it exists beside the kit's ExpandTransition.
+
+   minmax(0, 1fr), not the implicit `auto` column: a grid item's minimum width defaults to its
+   content, so a table wider than the view stretched this wrapper past its parent and the WHOLE
+   page scrolled sideways, cutting off the icon column on the left (owner, 2026-09-26). Pinned to
+   the parent's width, anything too wide scrolls inside its own box instead. */
+.expand-area-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 1fr;
+}
+
+/* See "THE TABLE'S OWN BOX BROKE STICKY TOO" in ExpandArea.vue. */
+.expand-area-fits [data-slot='table-container'] {
+  overflow-x: visible;
+}
+
+/* Only while the transition runs — see ExpandArea.vue's header comment. */
+.expand-area-enter-active .expand-area-clip,
+.expand-area-leave-active .expand-area-clip {
+  overflow: hidden;
+}
+
+/* 0.22s ease-out matches the kit's --animate-collapsible-down, so a section that opens here and a
+   reka Collapsible elsewhere in the same view move at the same speed. The opacity ramp is shorter
+   than the height one and eased out, so the content has arrived before the box stops growing —
+   the difference between "it slid in" and "it stretched". */
+.expand-area-enter-active,
+.expand-area-leave-active {
+  transition:
+    grid-template-rows 0.22s ease-out,
+    opacity 0.16s ease-out;
+}
+
+.expand-area-enter-from,
+.expand-area-leave-to {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+/* The app already honours this for theme swaps (styles/kit-base.css); motion added here has to
+   honour it too. Not `none` — a 0.01ms transition still fires transitionend, so nothing that
+   waits on the animation completing can hang. */
+@media (prefers-reduced-motion: reduce) {
+  .expand-area-enter-active,
+  .expand-area-leave-active {
+    transition-duration: 0.01ms;
+  }
+}
+
+/* --- sessions sidebar width (SessionsView) ------------------------------------------------------
+   The dragged width arrives as --sidebar-w on the aside and is inherited by its content column, so
+   both read one number. Never wider than the viewport allows: a 340px sidebar on a 390px phone
+   would crush the transcript. */
+.sessions-sidebar-w {
+  width: min(var(--sidebar-w), calc(100vw - 56px));
+}
+
+/* --- instance rows arriving and leaving (InstancesView's <TransitionGroup name="row-fade">) ----- */
+.row-fade-enter-active,
+.row-fade-leave-active {
+  transition:
+    opacity 200ms ease,
+    transform 200ms ease;
+}
+.row-fade-enter-from {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+.row-fade-leave-to {
+  opacity: 0;
+}
+.row-fade-leave-active {
+  position: relative;
+}
+.row-fade-move {
+  transition: transform 200ms ease;
+}
+
+/* --- usage threshold slider (UsageFilterWindow.vue) --------------------------------------------
+   A bare range input, styled here rather than vendored as a ui/ component: the kit owns
+   components/ui and shell/ (check:kit fails on a single byte of drift), and this is the only
+   slider in the app. Both vendor prefixes because the track/thumb pseudo-elements cannot be
+   combined into one rule — a selector list containing an unknown pseudo-element is dropped whole.
+   The thumb has no transition: its focus ring is a box-shadow and must be there on the first frame. */
+:root {
+  --color-rgb-0-0-0-a0_4: rgb(0 0 0 / 0.4);
+}
+.usage-range {
+  width: 100%;
+  height: 0.75rem;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.usage-range:focus-visible {
+  outline: none;
+}
+
+.usage-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--primary) var(--usage-fill),
+    var(--border) var(--usage-fill)
+  );
+}
+.usage-range::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--primary) var(--usage-fill),
+    var(--border) var(--usage-fill)
+  );
+}
+
+.usage-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: 9999px;
+  background: var(--primary);
+  box-shadow: 0 1px 3px var(--color-rgb-0-0-0-a0_4);
+}
+.usage-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 9999px;
+  background: var(--primary);
+  box-shadow: 0 1px 3px var(--color-rgb-0-0-0-a0_4);
+}
+
+.usage-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 40%, transparent);
+}
+.usage-range:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 40%, transparent);
+}
+
 /* --- chart palette (used by the Analytics view) ------------------------------------------------
    NOT the kit's own --chart-1..5. That set fails a colourblind-safety check in light mode: its
    slots 4 and 5 (#ffb900 and #fe9a00) sit ΔE 7.4 apart for NORMAL vision and 5.6 under deuteranopia,

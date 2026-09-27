@@ -86,14 +86,14 @@ const triggerLabel = computed(() => {
   <div class="space-y-1.5">
     <Popover v-model:open="open">
       <PopoverTrigger as-child>
-        <Button variant="outline" class="w-full justify-between font-normal" role="combobox">
-          <span class="truncate" :class="selected.length ? '' : 'text-muted-foreground'">
+        <Button variant="outline" class="w-full justify-between" role="combobox">
+          <span class="truncate font-normal" :class="selected.length ? '' : 'text-muted-foreground'">
             {{ triggerLabel }}
           </span>
           <ChevronsUpDown class="size-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" class="w-[min(90vw,30rem)] p-0">
+      <PopoverContent align="start" flush class="w-[min(90vw,30rem)]">
         <div class="flex items-center gap-2 border-b border-border px-3 py-2">
           <Search class="size-3.5 shrink-0 text-muted-foreground" />
           <input
@@ -102,7 +102,7 @@ const triggerLabel = computed(() => {
             class="w-full bg-transparent text-xs outline-none placeholder:text-muted-foreground"
           />
         </div>
-        <div class="max-h-72 overflow-y-auto p-1">
+        <div class="mt-4 max-h-72 overflow-y-auto p-1">
           <p v-if="filtered.length === 0" class="px-3 py-6 text-center text-xs text-muted-foreground">
             {{ $t('builder.sessionPickerEmpty') }}
           </p>
@@ -122,7 +122,7 @@ const triggerLabel = computed(() => {
                 <span class="truncate text-xs font-medium">{{ s.title }}</span>
                 <StatusBadge v-if="s.queue_status" :status="s.queue_status" />
               </span>
-              <span class="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span class="mt-0.5 flex items-center gap-1.5 text-2xs text-muted-foreground">
                 <span class="truncate">{{ baseName(s.cwd) }}</span>
                 <span v-if="s.git_branch" class="shrink-0">· {{ s.git_branch }}</span>
                 <span class="shrink-0">· {{ timeAgo(s.last_activity_at) }}</span>
@@ -130,7 +130,7 @@ const triggerLabel = computed(() => {
             </span>
             <!-- the opaque id, on demand: hover shows it, click copies it -->
             <span
-              class="mt-0.5 flex shrink-0 items-center gap-1 rounded px-1 text-[10px] text-muted-foreground hover:bg-background hover:text-foreground"
+              class="mt-0.5 flex shrink-0 items-center gap-1 rounded px-1 text-3xs text-muted-foreground hover:bg-background hover:text-foreground"
               :title="s.session_id"
               @click="copyId(s.session_id, $event)"
             >
@@ -145,7 +145,7 @@ const triggerLabel = computed(() => {
 
     <!-- selected chips (multi): name + info tooltip carrying the id, and a remove X -->
     <div v-if="multiple && selectedSessions.length" class="flex flex-wrap gap-1.5">
-      <Badge v-for="s in selectedSessions" :key="s.session_id" variant="secondary" class="gap-1">
+      <Badge v-for="s in selectedSessions" :key="s.session_id" variant="secondary">
         {{ s.title }}
         <button
           type="button"

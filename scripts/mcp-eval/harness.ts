@@ -274,12 +274,15 @@ function summarize(
 export function startEvalEnvironment(): { fixture: FixtureDaemon; home: string; stop(): void } {
   const fixture = startFixtureDaemon()
   const home = mkdtempSync(join(tmpdir(), 'agenthydra-mcp-eval-'))
+  const clean = () => rmSync(home, { recursive: true, force: true })
+  process.on('exit', clean)
   return {
     fixture,
     home,
     stop: () => {
       fixture.stop()
-      rmSync(home, { recursive: true, force: true })
+      clean()
+      process.off('exit', clean)
     },
   }
 }

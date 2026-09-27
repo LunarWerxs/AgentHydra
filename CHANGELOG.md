@@ -263,7 +263,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   hit a cap, were cut short by the weekly cap, fell back, rose with no recorded turn, held an
   unpriced model or moved under 3 points are left out and counted. `check_my_usage` carries the
   last calibration re-priced to the current reading as `dollars`. Only the account's own config
-  dirs are priced (a CLI instance's, or a passed `configDir`); Codex accounts and the `~/.claude`
+  dirs are priced (a CLI instance's, or a passed `configDir`); Codex accounts and the [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md)
   fallback stay uncalibrated with a caveat, since another login's turns would overstate what is
   left. The store is written by rename after a fresh re-read, and a first walk reaches back at
   most a week. Figures are null until `usage_budget` has seen a clean window. Idea from lobehub/lobehub's
@@ -515,7 +515,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The Codex terminal launch runs the newest Codex CLI the desktop app installed**
   (`server/src/config.ts`). Its version folders are content hashes, and the pick was the
   alphabetically last one, so after an update it could launch the older binary left beside it.
-- **A new CLI instance's MCP seed reads the same `~/.claude.json` Claude Code does**
+- **A new CLI instance's MCP seed reads the same [`~/.claude.json`](docs/CLAUDE-CONFIG-LAYOUT.md) Claude Code does**
   (`server/src/core/cli-instances.ts`). It followed Bun's `os.homedir()`, which on Linux ignores a
   `HOME` set at runtime where Node's (Claude Code's) honours it; the ubuntu CI leg was red on it.
 - **A fan-out never adopts somebody else's chat** (`orchestrator/scripts/spawn_chat.py`,
@@ -637,7 +637,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   looked for it in the pane. The sidebar's edge is now measured off its own chat rows, which works
   in any language and layout; checked read-only against three open windows.
 - **Claude Code sessions lost AgentHydra's tools when another Claude app rewrote its config.**
-  AgentHydra registered itself in `~/.claude.json` once, at startup. Every running Claude client
+  AgentHydra registered itself in [`~/.claude.json`](docs/CLAUDE-CONFIG-LAYOUT.md) once, at startup. Every running Claude client
   rewrites that whole file from its own copy, so one that was already open reverted the entry,
   and a different session hours later found an MCP server with no tools and nothing saying why.
   The entry is now re-checked every minute while registration is on and restored if it drifted
@@ -2252,7 +2252,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   URL behind. **It writes that one key and nothing else**: every other server and every unrelated
   key is preserved, the write is a temp file and a rename that keeps the target's permission bits
   and follows a symlink to its target, and nothing is written when the entry is already correct.
-  A `~/.claude.json` that does not parse is REPORTED rather than replaced, because that file holds
+  A [`~/.claude.json`](docs/CLAUDE-CONFIG-LAYOUT.md) that does not parse is REPORTED rather than replaced, because that file holds
   the user's logins and project history and a naive read-default-write would destroy all of it to
   add a convenience. Claude Code writes the same file, so each write is bracketed by a size+mtime
   check and abandoned rather than allowed to clobber a concurrent one. Turning the switch off
@@ -3618,8 +3618,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
       any startup gate; a `fireAt` row is retried every 60s tick until it fires, and the app
       then logs "Auto-disabled one-time task after fire". The old fleet-wide probe tasks only
       ever fired because they were RECURRING crons.
-    - The prompt must sit at the app's **hardcoded** `~/.claude/scheduled-tasks/<taskId>/
-      SKILL.md`; the task row's own `filePath` is ignored (the app's main.log said so
+    - The prompt must sit at the app's **hardcoded**
+      [`~/.claude/scheduled-tasks/<taskId>/SKILL.md`](docs/CLAUDE-CONFIG-LAYOUT.md); the task
+      row's own `filePath` is ignored (the app's main.log said so
       outright: "Skipping ... task file not found at ...").
     - The feature is gated on `preferences.ccdScheduledTasksEnabled` in the instance's
       claude_desktop_config.json, which defaults false.
@@ -3658,7 +3659,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   refuted). Cleanup: 18 broken recurring courier-probe tasks the retired v1 probing had left
   registered across the whole fleet (all pointing at deleted SKILL files, firing-and-failing
   in any instance the owner opened) were removed, and the test suite no longer writes SKILL
-  dirs into the real ~/.claude (taskSkillPath honors the test-state override).
+  dirs into the real [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md) (taskSkillPath honors the test-state override).
 
 - **THE DELIVERY LEDGER** (`GET /api/deliveries` + server/src/deliveries.ts + the deliveries
   MCP tool): the deterministic half of the delivery story. Every prompt the act path stages
@@ -3766,7 +3767,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   was hand-swapped onto the fixed code (WMI-created, hidden, verified handle 0). The two
   other console-flashing culprits on the machine (two hourly scheduled tasks launching a
   .cmd/powershell directly) were rewrapped through a windowless wscript wrapper
-  (~/.claude/tools/run-hidden.vbs), live-verified result 0.
+  (run-hidden.vbs, from the claude-memory repo's home/tools/), live-verified result 0.
 
 - **desktopHomeFor leaked the instance LABEL instead of the DIR** for every index-resolved
   chat (the fallback filename walk returned a dir, the index hit returned 'pap3r'-style
@@ -4392,7 +4393,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ### Fixed
 
 - **A shipped command fix could never reach the reviewer that reads it.** The rubric the reviewer
-  runs is installed into `~/.claude/commands`, and the only automatic install ran on first enable
+  runs is installed into [`~/.claude/commands`](docs/CLAUDE-CONFIG-LAYOUT.md), and the only automatic install ran on first enable
   with force off, whose own comment reads "an existing copy is never touched here". Nothing ever
   ran after an update, so a release could change the rubric and the installed copy would sit at
   whatever version first landed. Measured 2026-08-27: the live copy predated the previous day's
@@ -4954,7 +4955,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   (`docs/orchestrate-command.md`), because peer messaging is only available to interactive
   sessions - measured, and written into the docs. The command file ships inside the daemon
   (bundled into compiled builds): enabling the orchestrator installs it to
-  `~/.claude/commands/` when absent, and `POST /api/orchestrator/install-command` (or the
+  [`~/.claude/commands/`](docs/CLAUDE-CONFIG-LAYOUT.md) when absent, and `POST /api/orchestrator/install-command` (or the
   `orchestrator_install_command` MCP tool) installs or force-refreshes it on any machine; an
   edited copy is never overwritten without force.
 
@@ -5429,7 +5430,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ### Fixed
 
 - **An agent can now tell which of your accounts it is spending.** `whoami` read one environment
-  variable, `CLAUDE_CONFIG_DIR`, and fell back to the default `~/.claude` login when it was unset.
+  variable, `CLAUDE_CONFIG_DIR`, and fell back to the default [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md) login when it was unset.
   That is right for a CLI instance and wrong for **every Claude Desktop session**, which sets no
   such variable at all: the account is chosen by the Electron host's `--user-data-dir`. So a Desktop
   agent reported `instance: null` and the default login while actually spending a different
@@ -5446,8 +5447,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
   **The obvious fixes are all wrong, and each was tried first.** Identifying by the session's own
   transcript fails because a Desktop-instance session still writes to the DEFAULT
-  `~/.claude/projects/…`: that proves where a session LOGS, not which account PAYS. Reading
-  `~/.claude.json`'s `oauthAccount.emailAddress` fails because it is the machine's default login,
+  [`~/.claude/projects/…`](docs/CLAUDE-CONFIG-LAYOUT.md): that proves where a session LOGS, not which account PAYS. Reading
+  [`~/.claude.json`](docs/CLAUDE-CONFIG-LAYOUT.md)'s `oauthAccount.emailAddress` fails because it is the machine's default login,
   not the running session's credential; it looks authoritative and is not. And reading
   `CLAUDE_CODE_EXECPATH` alone fails **only where it matters**: a stdio MCP server gets a reduced
   environment without it, so that detector passes every shell test and then does nothing in
@@ -5496,7 +5497,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   whether it can finish, had to already know its own instance number, and a Desktop session had no
   way to learn it. The response carries an `identity` block naming the account it measured.
 
-- **`/api/usage/budget?configDir=…`.** The plain `~/.claude` login belongs to no instance and no
+- **`/api/usage/budget?configDir=…`.** The plain [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md) login belongs to no instance and no
   dispatch account, so it could get a percentage from `/api/usage` but never a burn rate, which is
   the number that actually decides whether to keep working.
 
@@ -6185,7 +6186,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   - `usage_budget` gained the `instance` form, which incidentally **fixes a gap**: it previously
     only accepted a desktop dir or a dispatch account, so a CLI or Codex login could not get a
     budget at all. A CLI instance's token spend is now measured against its own config dir rather
-    than defaulting to the `~/.claude` login, which belongs to a different account.
+    than defaulting to the [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md) login, which belongs to a different account.
   - A queue item's `instance_ref` accepts a number too; it is expanded to a real ref before the item
     is stored, so a pinned run can never fail to resolve later, at dispatch time, with nobody
     watching.
@@ -7237,7 +7238,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   advice }` alongside the raw percentages, so a caller does not have to re-derive "is this bad" from
   thresholds itself. `shouldOffload: true` means the caller is close to being cut off mid-task.
 - **`check_my_usage` now works from a normal Claude Code session, not only a CLI instance.** It falls
-  back to the default `~/.claude` login when `CLAUDE_CODE_CONFIG_DIR` / `CLAUDE_CONFIG_DIR` is unset,
+  back to the default [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md) login when `CLAUDE_CODE_CONFIG_DIR` / `CLAUDE_CONFIG_DIR` is unset,
   which previously made the self-check error out for the everyday case of the session the user is
   actually talking to. New `list_usage` MCP tool surveys every managed instance (desktop and CLI) at
   once, each with its own `advice` verdict, for picking an account with headroom before routing heavy
@@ -7414,8 +7415,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the favicon), matching the sibling apps' icon-generator convention.
 - **Sessions across every Claude Desktop instance, with an instance filter.** Each desktop
   instance keeps per-session metadata whose `cliSessionId` names the CLI transcript in the
-  shared `~/.claude/projects` store; the daemon now scans those to label every session with
-  its instance (`instance`: an `~/.claude-instances` dir name, "default" for the main
+  shared [`~/.claude/projects`](docs/CLAUDE-CONFIG-LAYOUT.md) store; the daemon now scans those to label every session with
+  its instance (`instance`: an [`~/.claude-instances`](docs/CLAUDE-CONFIG-LAYOUT.md) dir name, "default" for the main
   install, or null for plain CLI). The sidebar shows the instance on each row and gained a
   filter dropdown (All / Default / each instance / CLI-other) that scopes the list
   SERVER-side, before the newest-200 cap, so a quiet instance's older sessions finally

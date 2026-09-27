@@ -771,63 +771,98 @@ export async function confirmLaunchSurvives(
   deps: LaunchSurvivalDeps = {},
   known: CMProcessInfo | null = null,
 ): Promise<number> {
-  const scan = deps.scan ?? (() => scanClaudeProcesses({ fresh: true }))
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
-  const now = deps.now ?? Date.now
-  const alive = deps.alive ?? isPidAlive
-  const want = normalizePath(normDir)
-  const mainProc = async (): Promise<{ proc: CMProcessInfo | null; failed?: string }> => {
-    const s = await scan()
-    if (!s.ok) return { proc: null, failed: s.reason }
-    const hit = s.processes.find((p) => p.isMain && p.dir && normalizePath(p.dir) === want)
-    return { proc: hit ?? null }
-  }
-  const deadline = now() + LAUNCH_APPEAR_MS
-  let seen: CMProcessInfo | null =
-    known?.isMain && known.dir && normalizePath(known.dir) === want ? known : null
-  let lastFailure: string | undefined
-  while (seen === null) {
-    const r = await mainProc()
-    seen = r.proc
-    lastFailure = r.failed ?? lastFailure
-    if (seen !== null) break
-    if (now() >= deadline)
-      throw Error(
-        `the app never appeared in the process list within ${LAUNCH_APPEAR_MS / 1000}s` +
-          (lastFailure ? ` (process scan failed: ${lastFailure})` : ''),
-      )
-    await sleep(LAUNCH_POLL_MS)
+  const ctx: LaunchSurvivalCtx = {
+    scan: deps.scan ?? (() => scanClaudeProcesses({ fresh: true })),
+    sleep: deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
+    now: deps.now ?? Date.now,
+    alive: deps.alive ?? isPidAlive,
+    want: normalizePath(normDir),
   }
   // A hand-off (a stub that starts the real app and exits) shows up as a main process that dies
   // while a new one takes over; the successor must survive its own window too. Bounded, so a
   // profile whose main process keeps changing cannot hold the launch forever.
-  let watched = seen
+  let watched = await awaitLaunchAppears(ctx, known)
   for (let handoffs = 0; ; handoffs++) {
     const pid = watched.pid
-    // A start time in the future (clock skew, a bad parse) must not stretch the window, and one we
-    // cannot read falls back to the moment we saw the process, which is the old, longer wait.
-    const started = watched.startTime ? Date.parse(watched.startTime) : Number.NaN
-    const upSince = Number.isFinite(started) ? Math.min(started, now()) : now()
-    const survivedAt = upSince + LAUNCH_SURVIVAL_MS
-    while (alive(pid) && now() < survivedAt) {
-      await sleep(Math.min(LAUNCH_LIVENESS_POLL_MS, survivedAt - now()))
-    }
-    if (alive(pid)) return pid
-    // The pid we watched is gone. Before calling the launch failed, look once more: the profile's
-    // main process may be running under another pid. A `fresh` scan can still JOIN one already in
-    // flight (scan-cache.ts single-flight) that began before the death and lists the dead pid, so
-    // a listing of that same pid is re-asked once; the second scan starts after the first ended.
-    let after = await mainProc()
-    if (after.proc?.pid === pid) after = await mainProc()
-    if (after.failed)
-      throw Error(`started (pid ${pid}), but could not confirm it stayed up: ${after.failed}`)
-    if (after.proc === null)
-      throw Error(`started (pid ${pid}) and exited within ${LAUNCH_SURVIVAL_MS / 1000}s`)
+    if (await survivesLaunchWindow(ctx, watched)) return pid
+    const next = await rescanAfterLaunchDeath(ctx, pid)
     // The scan still lists the pid signal 0 called gone, or the main process keeps changing: the
     // scan is the authority, as the full rescan after the window always was.
-    if (after.proc.pid === pid || handoffs >= LAUNCH_MAX_HANDOFFS) return after.proc.pid
-    watched = after.proc
+    if (next.pid === pid || handoffs >= LAUNCH_MAX_HANDOFFS) return next.pid
+    watched = next
   }
+}
+
+/** LaunchSurvivalDeps with every default filled in, and the normalized profile being watched. */
+type LaunchSurvivalCtx = Required<LaunchSurvivalDeps> & { want: string }
+
+/** One fresh scan's main process for the watched profile, or the reason the scan failed. */
+async function scanLaunchMain(
+  ctx: LaunchSurvivalCtx,
+): Promise<{ proc: CMProcessInfo | null; failed?: string }> {
+  const s = await ctx.scan()
+  if (!s.ok) return { proc: null, failed: s.reason }
+  const hit = s.processes.find((p) => p.isMain && p.dir && normalizePath(p.dir) === ctx.want)
+  return { proc: hit ?? null }
+}
+
+/** The profile's main process once a scan lists it (or `known`, when it is that); throws when it
+ *  has not appeared within LAUNCH_APPEAR_MS. */
+async function awaitLaunchAppears(
+  ctx: LaunchSurvivalCtx,
+  known: CMProcessInfo | null,
+): Promise<CMProcessInfo> {
+  const deadline = ctx.now() + LAUNCH_APPEAR_MS
+  let seen: CMProcessInfo | null =
+    known?.isMain && known.dir && normalizePath(known.dir) === ctx.want ? known : null
+  let lastFailure: string | undefined
+  while (seen === null) {
+    const r = await scanLaunchMain(ctx)
+    seen = r.proc
+    lastFailure = r.failed ?? lastFailure
+    if (seen !== null) break
+    if (ctx.now() >= deadline)
+      throw Error(
+        `the app never appeared in the process list within ${LAUNCH_APPEAR_MS / 1000}s` +
+          (lastFailure ? ` (process scan failed: ${lastFailure})` : ''),
+      )
+    await ctx.sleep(LAUNCH_POLL_MS)
+  }
+  return seen
+}
+
+/** Watch `watched`'s pid until its survival window closes; true when it is still alive then. */
+async function survivesLaunchWindow(
+  ctx: LaunchSurvivalCtx,
+  watched: CMProcessInfo,
+): Promise<boolean> {
+  const pid = watched.pid
+  // A start time in the future (clock skew, a bad parse) must not stretch the window, and one we
+  // cannot read falls back to the moment we saw the process, which is the old, longer wait.
+  const started = watched.startTime ? Date.parse(watched.startTime) : Number.NaN
+  const upSince = Number.isFinite(started) ? Math.min(started, ctx.now()) : ctx.now()
+  const survivedAt = upSince + LAUNCH_SURVIVAL_MS
+  while (ctx.alive(pid) && ctx.now() < survivedAt) {
+    await ctx.sleep(Math.min(LAUNCH_LIVENESS_POLL_MS, survivedAt - ctx.now()))
+  }
+  return ctx.alive(pid)
+}
+
+/**
+ * The pid we watched is gone. Before calling the launch failed, look once more: the profile's
+ * main process may be running under another pid. A `fresh` scan can still JOIN one already in
+ * flight (scan-cache.ts single-flight) that began before the death and lists the dead pid, so
+ * a listing of that same pid is re-asked once; the second scan starts after the first ended.
+ * Throws when the scan fails or lists no main process for the profile.
+ */
+async function rescanAfterLaunchDeath(ctx: LaunchSurvivalCtx, pid: number): Promise<CMProcessInfo> {
+  let after = await scanLaunchMain(ctx)
+  if (after.proc?.pid === pid) after = await scanLaunchMain(ctx)
+  if (after.failed)
+    throw Error(`started (pid ${pid}), but could not confirm it stayed up: ${after.failed}`)
+  if (after.proc === null)
+    throw Error(`started (pid ${pid}) and exited within ${LAUNCH_SURVIVAL_MS / 1000}s`)
+  return after.proc
 }
 
 // ----------------------------------------------------------------------------

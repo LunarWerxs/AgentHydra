@@ -529,10 +529,10 @@ onBeforeUnmount(() => {
             <AppWindow class="size-4 text-primary" />
             <h2 class="flex-1 text-sm font-medium">Claude Desktop</h2>
             <template v-if="usageMode">
-              <span class="w-16 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <span class="w-16 text-center text-3xs font-medium uppercase tracking-wide text-muted-foreground">
                 5h
               </span>
-              <span class="w-16 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <span class="w-16 text-center text-3xs font-medium uppercase tracking-wide text-muted-foreground">
                 Week
               </span>
             </template>
@@ -557,7 +557,7 @@ onBeforeUnmount(() => {
           >
             <span
               class="size-2.5 shrink-0 rounded-full"
-              :class="instance.isRunning ? 'bg-emerald-500' : 'bg-muted-foreground/35'"
+              :class="instance.isRunning ? 'bg-success' : 'bg-muted-foreground/35'"
             />
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
@@ -599,19 +599,23 @@ onBeforeUnmount(() => {
               </p>
             </div>
             <template v-if="usageMode">
-              <div class="flex w-16 shrink-0 justify-center">
+              <div
+                class="flex w-16 shrink-0 justify-center"
+                :class="isStaleSnap(usageForClaude(instance)) ? 'opacity-60' : ''"
+              >
                 <Badge
                   :variant="usageVariant(usageForClaude(instance), 'session')"
-                  :class="isStaleSnap(usageForClaude(instance)) ? 'opacity-60' : ''"
                   :title="usageTitle(usageForClaude(instance), 'session')"
                 >
                   {{ usageCellLabel(usageForClaude(instance), 'session') }}
                 </Badge>
               </div>
-              <div class="flex w-16 shrink-0 justify-center">
+              <div
+                class="flex w-16 shrink-0 justify-center"
+                :class="isStaleSnap(usageForClaude(instance)) ? 'opacity-60' : ''"
+              >
                 <Badge
                   :variant="usageVariant(usageForClaude(instance), 'week')"
-                  :class="isStaleSnap(usageForClaude(instance)) ? 'opacity-60' : ''"
                   :title="usageTitle(usageForClaude(instance), 'week')"
                 >
                   {{ usageCellLabel(usageForClaude(instance), 'week') }}
@@ -648,10 +652,10 @@ onBeforeUnmount(() => {
             <Terminal class="size-4 text-primary" />
             <h2 class="flex-1 text-sm font-medium">Claude CLI</h2>
             <template v-if="usageMode">
-              <span class="w-16 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <span class="w-16 text-center text-3xs font-medium uppercase tracking-wide text-muted-foreground">
                 5h
               </span>
-              <span class="w-16 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <span class="w-16 text-center text-3xs font-medium uppercase tracking-wide text-muted-foreground">
                 Week
               </span>
             </template>
@@ -675,7 +679,7 @@ onBeforeUnmount(() => {
           >
             <span
               class="size-2.5 shrink-0 rounded-full"
-              :class="instance.loggedIn ? 'bg-emerald-500' : 'bg-amber-500'"
+              :class="instance.loggedIn ? 'bg-success' : 'bg-warning'"
             />
             <div class="min-w-0 flex-1">
               <p class="truncate text-sm font-medium">{{ instance.name }}</p>
@@ -684,19 +688,23 @@ onBeforeUnmount(() => {
               </p>
             </div>
             <template v-if="usageMode">
-              <div class="flex w-16 shrink-0 justify-center">
+              <div
+                class="flex w-16 shrink-0 justify-center"
+                :class="isStaleSnap(usageForClaudeCli(instance)) ? 'opacity-60' : ''"
+              >
                 <Badge
                   :variant="usageVariant(usageForClaudeCli(instance), 'session')"
-                  :class="isStaleSnap(usageForClaudeCli(instance)) ? 'opacity-60' : ''"
                   :title="usageTitle(usageForClaudeCli(instance), 'session')"
                 >
                   {{ usageCellLabel(usageForClaudeCli(instance), 'session') }}
                 </Badge>
               </div>
-              <div class="flex w-16 shrink-0 justify-center">
+              <div
+                class="flex w-16 shrink-0 justify-center"
+                :class="isStaleSnap(usageForClaudeCli(instance)) ? 'opacity-60' : ''"
+              >
                 <Badge
                   :variant="usageVariant(usageForClaudeCli(instance), 'week')"
-                  :class="isStaleSnap(usageForClaudeCli(instance)) ? 'opacity-60' : ''"
                   :title="usageTitle(usageForClaudeCli(instance), 'week')"
                 >
                   {{ usageCellLabel(usageForClaudeCli(instance), 'week') }}
@@ -739,7 +747,7 @@ onBeforeUnmount(() => {
           >
             <span
               class="size-2.5 shrink-0 rounded-full"
-              :class="instance.isDesktopRunning ? 'bg-emerald-500' : 'bg-muted-foreground/35'"
+              :class="instance.isDesktopRunning ? 'bg-success' : 'bg-muted-foreground/35'"
             />
             <div class="min-w-0 flex-1">
               <p class="truncate text-sm font-medium">{{ instance.name }}</p>

@@ -10,7 +10,8 @@ part. Do not follow a single step below.** Every tool it names (`prestart`, `cha
 AgentHydra when orchestration was cut out of it on 2026-08-31. A session that follows this file
 will stop at step 1 on a tool that no longer exists.
 
-**The live command is `~/.claude/commands/orchestrate.md`**, and it drives the v3 Python
+**The live command is this repo's [`.claude/commands/orchestrate.md`](../../.claude/commands/orchestrate.md)**,
+installed as `/orchestrate` in the user's [commands dir](../../docs/CLAUDE-CONFIG-LAYOUT.md), and it drives the v3 Python
 toolbox in this repo: `python orch.py loop` (dry), `python scripts/sweep.py --all --yes`
 (acting), `python scripts/interview.py --ask` / `--apply` (the judgment queue). `README.md`
 here explains the rest. Nothing acts unless the tray icon is up (`python orch.py arm`).

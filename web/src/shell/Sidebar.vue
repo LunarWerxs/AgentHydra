@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { CSSProperties, HTMLAttributes } from "vue";
+import type { HTMLAttributes } from "vue";
 import { computed, watch } from "vue";
 import {
   DialogClose,
@@ -58,15 +58,6 @@ const isBottom = computed(() => props.side === "bottom");
 // Backdrop + focus-trap whenever we're not a desktop push panel.
 const overlayed = computed(() => isBottom.value || props.mode === "overlay");
 
-const contentStyle = computed<CSSProperties>(() => {
-  if (isBottom.value) return {};
-  return {
-    width: "100%",
-    maxWidth: `${props.widthPx}px`,
-    right: props.rightOffsetPx ? `${props.rightOffsetPx}px` : undefined,
-  };
-});
-
 // A push panel never dismisses on an outside click, only ✕ / Escape / the trigger
 // toggle. (This also swallows the opening click from an external trigger, so it can't
 // open-then-vanish.) Modal overlays, the mobile bottom sheet and wide overlay drawers, 
@@ -114,12 +105,12 @@ if (import.meta.env.DEV) {
       <DialogContent
         data-slot="sidebar"
         :data-side="side"
-        :style="contentStyle"
+        :style="{ '--sidebar-w': `${widthPx}px`, '--sidebar-right': `${rightOffsetPx}px` }"
         :class="cn(
           'bg-background text-foreground fixed z-50 flex flex-col shadow-xl outline-none ease-in-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-300 data-[state=closed]:duration-300',
           isBottom
             ? 'inset-x-0 bottom-0 max-h-[92vh] rounded-t-2xl border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom'
-            : 'inset-y-0 right-0 h-full border-s data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
+            : 'inset-y-0 right-(--sidebar-right) size-full max-w-(--sidebar-w) border-s data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
           props.class,
         )"
         @pointer-down-outside="guardOutside"

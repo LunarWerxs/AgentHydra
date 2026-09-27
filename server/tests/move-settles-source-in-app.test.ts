@@ -271,7 +271,9 @@ test('only carriers are visited, and a route that throws still yields a row inst
 
 // --- usageAtWall: the at-limit reading ------------------------------------------------------
 
-const NOW = Date.parse('2026-09-26T12:00:00Z')
+// usageAtWall takes its clock as an argument, so a fixed far-past instant keeps every age below
+// exactly as written, whenever the suite runs.
+const NOW = Date.parse('2020-01-01T12:00:00Z')
 const snap = (over: Partial<UsageSnapshot>): UsageSnapshot => ({
   account: 'someone',
   session: { pct: 10, resets: '' },

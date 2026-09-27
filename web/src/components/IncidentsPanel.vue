@@ -87,7 +87,7 @@ const STATE_VARIANT: Record<Incident['state'], 'warning' | 'secondary' | 'succes
          Mirrors QueueView's unavailable state: an icon, the server's own reason, and Retry. -->
     <div
       v-if="incidentsStatus.unavailable.value"
-      class="mb-1.5 flex flex-col items-center gap-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-2 text-center text-[11px] text-warning"
+      class="mb-1.5 flex flex-col items-center gap-1.5 rounded-md border border-warning/30 bg-warning/10 p-2 text-center text-2xs text-warning"
     >
       <CircleAlert class="size-4 opacity-70" />
       <p>{{ t('incidents.unavailable', { reason: incidentsStatus.error.value }) }}</p>
@@ -98,7 +98,7 @@ const STATE_VARIANT: Record<Incident['state'], 'warning' | 'secondary' | 'succes
          they may be stale, same as the queue's staleHint. -->
     <p
       v-else-if="incidentsStatus.stale.value"
-      class="mb-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-[11px] text-warning"
+      class="mb-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-2xs text-warning"
     >
       {{ t('incidents.staleHint', { reason: incidentsStatus.error.value }) }}
     </p>
@@ -121,7 +121,7 @@ const STATE_VARIANT: Record<Incident['state'], 'warning' | 'secondary' | 'succes
               <Badge variant="outline">{{ t('incidents.occurrences', { n: incident.count }) }}</Badge>
             </div>
             <p class="mt-1 truncate text-muted-foreground" :title="incident.error">{{ incident.error }}</p>
-            <p class="mt-0.5 text-[0.6875rem] text-muted-foreground/70">
+            <p class="mt-0.5 text-2xs text-muted-foreground/70">
               {{ t('incidents.lastSeen', { time: timeAgo(incident.last_seen_at) }) }}
             </p>
           </div>

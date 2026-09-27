@@ -113,7 +113,7 @@ const triggerLabel = computed(() => {
 })
 
 /** Section caption: uppercase, tracked, accent-coloured. Shared so they cannot drift. */
-const CAPTION = 'text-[11px] font-semibold uppercase tracking-wider text-primary'
+const CAPTION = 'text-2xs font-semibold uppercase tracking-wider text-primary'
 /** The frame every non-window card uses, so a switch row and a button row sit in the same box. */
 const CARD = 'rounded-md border border-border bg-background/60'
 
@@ -143,11 +143,11 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
         <!-- Wider than the default popover: two threshold cards, each with a four-up preset row,
              and the shared auto-refresh rows below them, whose label wraps under a narrow control
              column. 24rem is the width at which none of them has to fold. -->
-        <PopoverContent align="end" class="w-96 p-0">
+        <PopoverContent align="end" flush class="w-96">
           <!-- No max height and no scroller: the flyout GROWS as sections open. A scrollbar here
                was worse than the height it saved — expanding a window moved the controls under the
                cursor, and the section you had just opened could land below the fold. -->
-          <div class="space-y-3 px-3 py-3">
+          <div class="space-y-3 p-3">
             <header class="space-y-1.5">
               <h2 class="text-sm font-semibold text-foreground">
                 {{ $t('instances.filterTitle') }}
@@ -156,7 +156,7 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
                    the things it turns on, and nesting it among them would make it look like one more
                    of them. -->
               <div class="flex items-center gap-3">
-                <span class="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-foreground">
+                <span class="flex min-w-0 flex-1 items-center gap-1.5 text-ui text-foreground">
                   {{ $t('instances.filterEnable') }}
                   <InfoHint :text="$t('instances.filterHint')" />
                 </span>
@@ -175,7 +175,7 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
                 <section class="space-y-1.5">
                   <h3 :class="CAPTION">{{ $t('instances.filterStatusSection') }}</h3>
                   <div :class="cn(CARD, 'space-y-1.5 px-2.5 py-2')">
-                    <div class="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                    <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
                       {{ $t('instances.filterStatusHint') }}
                     </div>
                     <div class="grid grid-cols-3 gap-1">
@@ -199,7 +199,7 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
                 <section class="space-y-1.5">
                   <h3 :class="CAPTION">{{ $t('instances.filterPlanSection') }}</h3>
                   <div :class="cn(CARD, 'space-y-1.5 px-2.5 py-2')">
-                    <span class="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
+                    <span class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
                       {{ $t('instances.filterPlanHint') }}
                     </span>
                     <div v-if="options.length > 0" class="flex flex-wrap gap-1">
@@ -222,7 +222,7 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
                         {{ plan }}
                       </Button>
                     </div>
-                    <p v-else class="text-[11px] leading-snug text-muted-foreground">
+                    <p v-else class="text-2xs leading-snug text-muted-foreground">
                       {{ $t('instances.filterPlanEmpty') }}
                     </p>
                   </div>
@@ -258,13 +258,13 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
                        applying is exactly what reads as a bug. -->
                   <ExpandTransition :open="!quotaApplies">
                     <p
-                      class="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground"
+                      class="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-2xs leading-snug text-muted-foreground"
                     >
                       {{ $t('instances.filterQuotaNeedsUsageMode') }}
                     </p>
                   </ExpandTransition>
                   <ExpandTransition :open="quotaApplies && !weekEnabled && !sessionEnabled">
-                    <p class="px-0.5 text-[11px] leading-snug text-muted-foreground">
+                    <p class="px-0.5 text-2xs leading-snug text-muted-foreground">
                       {{ $t('instances.filterNoWindows') }}
                     </p>
                   </ExpandTransition>
@@ -275,7 +275,7 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
                      reacted. -->
                 <ExpandTransition :open="noRule">
                   <p
-                    class="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground"
+                    class="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-2xs leading-snug text-muted-foreground"
                   >
                     {{ $t('instances.filterNothingSelected') }}
                   </p>
@@ -284,7 +284,7 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
                 <section class="space-y-1.5">
                   <h3 :class="CAPTION">{{ $t('instances.filterDisplay') }}</h3>
                   <div :class="cn(CARD, 'flex items-center gap-3 px-2.5 py-1.5')">
-                    <span class="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-foreground">
+                    <span class="flex min-w-0 flex-1 items-center gap-1.5 text-ui text-foreground">
                       {{ $t('instances.filterHide') }}
                       <InfoHint :text="$t('instances.filterHideHint')" />
                     </span>
