@@ -97,7 +97,6 @@ import {
   mcpRegisterEnabled,
   mcpRegistrationStatus,
   setMcpRegisterEnabled,
-  syncMcpRegistration,
 } from './mcp-register'
 import { handleRpc as handleMcpRpc, type McpEngineTool } from './mcp-stdio.mjs'
 import { startMonitor } from './monitor'

@@ -132,21 +132,27 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
   const window: Late[] = []
   let lastBeat = Date.now()
   let lastSaturatedLog = 0
+  // A tick that throws is a tick skipped, never a dead daemon (scripts/checks/
+  // timer-callback-can-kill-the-daemon.mjs): the watcher of stalls must not become a crash.
   const timer = setInterval(() => {
-    const now = Date.now()
-    Atomics.store(beat, 0, BigInt(now))
-    const lateMs = now - lastBeat - BEAT_MS
-    lastBeat = now
-    const blame = begunSinceBeat
-    begunSinceBeat = []
-    if (lateMs >= LATE_FLOOR_MS) window.push({ at: now, lateMs, blame })
-    while (window.length && (window[0] as Late).at < now - WINDOW_MS) window.shift()
-    const blocked = window.reduce((sum, w) => sum + w.lateMs, 0)
-    if (blocked < SATURATED_MS || now - lastSaturatedLog < SATURATED_QUIET_MS) return
-    lastSaturatedLog = now
-    console.error(
-      `[agenthydra] STALL event loop saturated: blocked ${(blocked / 1000).toFixed(1)}s of the last ${WINDOW_MS / 1000}s pid=${process.pid}; the late time followed: ${blameText(window)} | ${WATCHDOG_NOTE}`,
-    )
+    try {
+      const now = Date.now()
+      Atomics.store(beat, 0, BigInt(now))
+      const lateMs = now - lastBeat - BEAT_MS
+      lastBeat = now
+      const blame = begunSinceBeat
+      begunSinceBeat = []
+      if (lateMs >= LATE_FLOOR_MS) window.push({ at: now, lateMs, blame })
+      while (window.length && (window[0] as Late).at < now - WINDOW_MS) window.shift()
+      const blocked = window.reduce((sum, w) => sum + w.lateMs, 0)
+      if (blocked < SATURATED_MS || now - lastSaturatedLog < SATURATED_QUIET_MS) return
+      lastSaturatedLog = now
+      console.error(
+        `[agenthydra] STALL event loop saturated: blocked ${(blocked / 1000).toFixed(1)}s of the last ${WINDOW_MS / 1000}s pid=${process.pid}; the late time followed: ${blameText(window)} | ${WATCHDOG_NOTE}`,
+      )
+    } catch {
+      // skipped: the next beat is BEAT_MS away
+    }
   }, BEAT_MS)
   timer.unref()
 
