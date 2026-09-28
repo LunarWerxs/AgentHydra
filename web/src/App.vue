@@ -50,7 +50,7 @@ import Sidebar from '@/shell/Sidebar.vue'
 import { usePushPanel } from '@/shell/usePushPanel'
 
 // The studio's one invite link, never expiring (the same one every product carries).
-const DISCORD_URL = 'https://discord.gg/A9A2FjzdSb'
+const DISCORD_URL = 'https://lunarwerx.com/discord/agenthydra'
 
 // A portable (--app) window forwarded into an already-running Chromium instance ignores
 // --window-size and the saved placement; the daemon/tray tag its URL with the size it should
