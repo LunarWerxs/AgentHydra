@@ -116,7 +116,9 @@ test('a FAILED process scan is not "closed": the pass writes nothing and keeps e
 test('a pass for one profile (before AgentHydra opens it) leaves the others alone', async () => {
   const other = entry({ profile: 'C:\\instances\\b' })
   const { deps, store, flagged } = harness({ entries: [entry(), other] })
-  expect(await runRetireOnCloseOnce(deps, { profile: 'c:/instances/a' })).toBe(1)
+  // Forward slashes match the queued backslashes on every platform; a different drive-letter case
+  // would only match on win32 (path-key.ts folds case there alone), so Linux CI read it as another profile.
+  expect(await runRetireOnCloseOnce(deps, { profile: 'C:/instances/a' })).toBe(1)
   expect(flagged).toEqual([`${A}:${SID}`])
   expect(store.entries).toEqual([other])
 })

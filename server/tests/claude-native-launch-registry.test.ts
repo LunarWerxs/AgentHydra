@@ -156,6 +156,9 @@ describe('managed Claude launch registry guard', () => {
 // These Windows checks execute only an inert branch harness or PowerShell's parser. They never
 // execute the real registry reader/writer. Other platforms retain all transport/payload tests.
 const windowsTest = process.platform === 'win32' ? test : test.skip
+// A cold `powershell` start on a GitHub Windows runner outlasts bun's 5 s default: the first two
+// tests in this file timed out at 5000 ms on CI while the warm ones after them passed.
+const SPAWN_TIMEOUT_MS = 30_000
 async function powershell(script: string): Promise<any> {
   const proc = Bun.spawn(['powershell', '-NoProfile', '-NonInteractive', '-Command', '-'], {
     stdin: 'pipe',
@@ -173,13 +176,15 @@ async function powershell(script: string): Promise<any> {
   return JSON.parse(stdout.trim())
 }
 
-windowsTest('both generated PowerShell scripts parse without invoking registry APIs', async () => {
-  const scripts = [
-    nativeRegistrySnapshotScript(),
-    nativeRegistryRestoreScript(binary, profile, snapshot()),
-  ]
-  const encoded = Buffer.from(JSON.stringify(scripts)).toString('base64')
-  const errors = await powershell(`
+windowsTest(
+  'both generated PowerShell scripts parse without invoking registry APIs',
+  async () => {
+    const scripts = [
+      nativeRegistrySnapshotScript(),
+      nativeRegistryRestoreScript(binary, profile, snapshot()),
+    ]
+    const encoded = Buffer.from(JSON.stringify(scripts)).toString('base64')
+    const errors = await powershell(`
     $scripts = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')) | ConvertFrom-Json
     $all = @()
     foreach ($script in $scripts) {
@@ -189,8 +194,10 @@ windowsTest('both generated PowerShell scripts parse without invoking registry A
     }
     ConvertTo-Json -InputObject @($all) -Compress
   `)
-  expect(errors).toEqual([])
-})
+    expect(errors).toEqual([])
+  },
+  SPAWN_TIMEOUT_MS,
+)
 
 async function branches(options: {
   command: string
@@ -238,6 +245,7 @@ windowsTest(
       errors: [],
     })
   },
+  SPAWN_TIMEOUT_MS,
 )
 
 windowsTest(
@@ -254,6 +262,7 @@ windowsTest(
       errors: [],
     })
   },
+  SPAWN_TIMEOUT_MS,
 )
 
 windowsTest(
@@ -271,4 +280,5 @@ windowsTest(
       `${CLAUDE_NATIVE_HOST_KEYS[0]}: registration disappeared; ownership is uncertain`,
     ])
   },
+  SPAWN_TIMEOUT_MS,
 )
