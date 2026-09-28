@@ -7,6 +7,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **A move clears the old copy of a chat left under an account's previous login**
+  (`orchestrator/scripts/migrate_chat.py`). An account's app shows only the chats of the login it
+  is signed into now, so its own archive control cannot reach a chat still filed under an earlier
+  login. Every such move landed the chat, then reported the old copy "NOT confirmed settled"
+  (found 0) and left it unarchived on disk, where AgentHydra kept counting it as an active chat.
+  The move now archives that copy by its flag on disk, as it already did for a closed app, and no
+  longer calls the result provisional, because the app never loads that copy and cannot bring it
+  back. `migrate_reconcile --finish` also stopped refusing such a copy as "source-writing" when the
+  only running engine was the new account's own: the two copies can share one chat id, so the
+  old copy borrowed the new one's `live`, and the move could never be finished.
+
 ## [1.4.0] - 2026-09-28
 
 ### Added

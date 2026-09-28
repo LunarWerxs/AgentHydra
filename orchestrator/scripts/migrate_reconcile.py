@@ -158,7 +158,13 @@ def _state_when_on_target(on_src: list[dict], src: str, tgt: str) -> dict:
         # exactly the quota the move existed to protect, and two engines appending to one
         # .jsonl can interleave writes. On that chat it was harmless only by luck - its context
         # was full, so any turn on either account was refused.
-        writing = [m for m in visible if (m.get("live") or {}).get("pid") or m.get("live") is True]
+        #
+        # A row filed under a PREVIOUS LOGIN of the source is never its writer: that app does not
+        # load the row (migrate_chat.source_app_running), so a `live` on it is another copy's
+        # engine lent by a shared chat id. Measured 2026-09-28: pid 37304 was the TARGET app's
+        # engine for the chat it had just landed, and --finish would never settle the source.
+        writing = [m for m in visible if m.get("staleLogin") is not True
+                   and ((m.get("live") or {}).get("pid") or m.get("live") is True)]
         if writing:
             where = ", ".join(str((m.get("live") or {}).get("pid") or "live") for m in writing)
             return {"state": "source-writing",

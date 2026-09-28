@@ -247,6 +247,13 @@ response permits their existing guarded fallback only when routing policy allows
 `native-only` returns a terminal result instead. A native refusal, malformed
 response, or lost mutation reply is terminal: no retry through disk or UI.
 
+A migration source row filed under a previous login of its profile (`staleLogin`)
+is outside native control's reach: the running app loads only its signed-in
+account's folder, so no inspection can match that row, and nothing in the app can
+write it back. Migration settles such a row the way it settles a closed profile's,
+by its disk flag with a read-back, before any native attempt. That is a routing
+decision made from the record itself, not a fallback after a native refusal.
+
 Connections are configured centrally through `GET` / `PUT
 /api/claude-native/settings`. A PUT body is:
 

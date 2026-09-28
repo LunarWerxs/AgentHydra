@@ -1300,7 +1300,7 @@ def source_at_limit(land) -> dict | None:
 
 
 def source_app_running(match: dict, target: dict, fleet: dict) -> bool:
-    """Was the SOURCE account's app running when we settled it?
+    """Was the SOURCE account's app running when we settled it, and holding THIS row?
 
     ⛔ A SETTLE AGAINST A RUNNING APP IS PROVISIONAL, AND ONE WAS REPORTED AS FINAL (2026-09-18).
     A two-chat `move_chats` off a running #15 landed both chats and settled both source rows;
@@ -1315,9 +1315,18 @@ def source_app_running(match: dict, target: dict, fleet: dict) -> bool:
     business. So the fact is recorded HERE, the journal stays owed (`phase_stamp`), and the
     report says the verdict is provisional - a disk read taken seconds after a settle cannot
     prove what a running app will write next.
+
+    ⛔ A ROW FILED UNDER A PREVIOUS LOGIN IS NOT THE RUNNING APP'S (2026-09-28). The app renders
+    only its signed-in account's folder of `claude-code-sessions`, so it never loads a
+    `staleLogin` row: its own archive control cannot find one (four chats moved off a running
+    profile each answered "Expected one exact native session match, found 0", and all four
+    source rows stayed unarchived) and it cannot write one back either. For that row the app
+    might as well be closed, so the answer is False and the disk flag settles it, durably.
     """
     src_name = str(match.get("instance") or "")
     if not src_name or src_name.lower() == str(target.get("name", "")).lower():
+        return False
+    if match.get("staleLogin") is True:
         return False
     src_inst = resolve_instance(fleet, src_name)
     return bool(src_inst and src_inst.get("isRunning"))
@@ -1340,12 +1349,14 @@ def _settle_source_row_core(match: dict, target: dict, fleet: dict, session_id: 
     # A CLOSED APP IS NOT AUTOMATICALLY SETTLED (found live 2026-09-04: two closed-instance
     # twins from older moves). The import is supposed to flag the source copy on disk; this
     # verifies that it did, which costs one store scan and is the difference between "a move
-    # is a move" and a claim.
-    if not (src_inst and src_inst.get("isRunning")):
+    # is a move" and a claim. A row filed under a PREVIOUS LOGIN of a running app is settled the
+    # same way, because that app never loads it (source_app_running says why).
+    if not source_app_running(match, target, fleet):
         if not _source_still_visible(session_id, src_name, fleet):
             return "", "none"
-        return ((" Source row flagged archived on disk in the closed instance "
-                 f"{src_name} (the import had not)."), "flagged") \
+        where = (f"under a previous login of {src_name}, which its running app never loads"
+                 if match.get("staleLogin") is True else f"in the closed instance {src_name}")
+        return (f" Source row flagged archived on disk {where} (the import had not).", "flagged") \
             if _archive_source_on_disk(session_id, src_name, fleet) else \
             (f" ⚠ Source row is STILL VISIBLE in {src_name} and its flag could not be "
              "written. Not claiming a clean move.", "visible")

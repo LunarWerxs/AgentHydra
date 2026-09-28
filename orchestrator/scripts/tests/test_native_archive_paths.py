@@ -142,6 +142,24 @@ class NativeArchivePathsTest(unittest.TestCase):
         self.assert_no_legacy()
         self.tombstone.assert_not_called()
 
+    def test_a_previous_login_source_row_is_flagged_on_disk_not_sent_to_its_running_app(self):
+        # 2026-09-28: four chats moved off a running profile whose rows sat under its previous
+        # login. The app renders only its signed-in account, so native control answered "found 0"
+        # for each and every source row stayed unarchived. The disk flag is that row's only writer.
+        self.status = 409
+        self.reply.update(ok=False, verified=False, dispatch="not-sent",
+                          reason="Expected one exact native session match, found 0")
+        for probe in (self.disk_read, self.disk):
+            probe.side_effect = None
+            probe.return_value = True
+        note, state = migrate_chat._settle_source_row({**MATCH, "staleLogin": True}, TARGET, FLEET,
+                                                      SID, MATCH["title"])
+        self.assertEqual(state, "flagged")
+        self.assertIn("previous login", note)
+        self.assertEqual(self.native_posts(), [])
+        self.disk.assert_called_once_with(SID, "source", FLEET)
+        self.tombstone.assert_called_once_with(SID, "source", TARGET, FLEET)
+
     def test_verified_migration_skips_disk_confirmation_but_keeps_deliberate_tombstone(self):
         note, state = migrate_chat._settle_source_row(MATCH, TARGET, FLEET, SID, MATCH["title"])
         self.assertEqual(state, "settled")

@@ -333,6 +333,13 @@ class SourceWritingTest(unittest.TestCase):
         self.assertEqual(got["state"], "unsettled")
         self.assertNotIn("remedy", got)
 
+    def test_a_previous_login_row_lit_by_another_copys_engine_is_unsettled_not_source_writing(self):
+        # 2026-09-28: pid 37304 was the TARGET app's engine for a chat it had just landed; the
+        # source copy shares its chat id, so it read `live` too and --finish never settled it.
+        got = migrate_reconcile._state_when_on_target(
+            [{"archived": False, "staleLogin": True, "live": {"pid": 37304}}], "ccc", "5claude")
+        self.assertEqual(got["state"], "unsettled")
+
     def test_an_archived_source_row_is_settled_either_way(self):
         got = migrate_reconcile._state_when_on_target(
             [{"archived": True, "live": {"pid": 1}}], "#63", "#14")
