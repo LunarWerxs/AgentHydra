@@ -1000,23 +1000,29 @@ export async function runVersionDriftPass(
 let timer: ReturnType<typeof setInterval> | null = null
 let firstRun: ReturnType<typeof setTimeout> | null = null
 
+function logPass(r: DriftPassResult): void {
+  if (r.fixed.desktopUpdated)
+    console.log(
+      `[agenthydra] version drift: updated the Claude Desktop install to ${r.fixed.desktopUpdated}; each account moves to it on its next AgentHydra Open`,
+    )
+  if (r.fixed.linksRepaired.length)
+    console.log(
+      `[agenthydra] version drift: pointed Claude's ${r.fixed.linksRepaired.join(' and ')} at ${r.report.desktop.newestInstalled}`,
+    )
+  if (r.fixed.staged.length || r.fixed.cliUpdated)
+    console.log(
+      `[agenthydra] version drift: staged Claude Code ${r.report.engine.target} into #${r.fixed.staged.join(', #') || '-'}; CLI ${r.fixed.cliUpdated ? `updated to ${r.fixed.cliUpdated}` : 'unchanged'}`,
+    )
+}
+
 function tick(): void {
-  runVersionDriftPass()
-    .then((r) => {
-      if (r.fixed.desktopUpdated)
-        console.log(
-          `[agenthydra] version drift: updated the Claude Desktop install to ${r.fixed.desktopUpdated}; each account moves to it on its next AgentHydra Open`,
-        )
-      if (r.fixed.linksRepaired.length)
-        console.log(
-          `[agenthydra] version drift: pointed Claude's ${r.fixed.linksRepaired.join(' and ')} at ${r.report.desktop.newestInstalled}`,
-        )
-      if (r.fixed.staged.length || r.fixed.cliUpdated)
-        console.log(
-          `[agenthydra] version drift: staged Claude Code ${r.report.engine.target} into #${r.fixed.staged.join(', #') || '-'}; CLI ${r.fixed.cliUpdated ? `updated to ${r.fixed.cliUpdated}` : 'unchanged'}`,
-        )
-    })
-    .catch((err) => console.error('[agenthydra] version drift check error:', err))
+  try {
+    runVersionDriftPass()
+      .then(logPass)
+      .catch((err) => console.error('[agenthydra] version drift check error:', err))
+  } catch (err) {
+    console.error('[agenthydra] version drift check error:', err)
+  }
 }
 
 export function startVersionDriftWatch(): void {
