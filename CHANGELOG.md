@@ -387,6 +387,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   name had to be the full account name and only `list_chats` took the label, so `temp2` and
   `Artem` were refused. Both resolve now, under the same exactly-one-row rule as a name.
 
+### Changed
+
+- **The Discord link now opens AgentHydra's own channel and gives you the AgentHydra role** on joining,
+  instead of dropping you in the server's general room to find it yourself.
+
 ## [1.3.1] - 2026-09-25
 
 ### Fixed

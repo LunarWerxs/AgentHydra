@@ -286,6 +286,6 @@ watch(
         </template>
       </div>
     </div>
-    <AppFooter />
+    <AppFooter discord="https://discord.gg/A9A2FjzdSb" />
   </TooltipProvider>
 </template>
