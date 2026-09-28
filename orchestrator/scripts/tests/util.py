@@ -45,3 +45,19 @@ def isolate_state_dir(case) -> Path:
     state = Path(tmp.name) / "state"
     os.environ["ORCHESTRATOR_STATE_DIR"] = str(state)
     return state
+
+
+def isolate_policy(case, state_dir) -> None:
+    """Point the policy file at `state_dir` too; restored on cleanup.
+
+    configlib resolves CONFIG_PATH once, at import, from the checkout's own state/ - it does not
+    follow ORCHESTRATOR_STATE_DIR - so a test that isolates only the state dir still reads the
+    machine owner's LIVE policy. With archive.enabled switched off on the machine running the
+    suite, nine archive-lane tests failed wholesale (2026-09-28, the v1.4.0 pre-push deep lane).
+    test_mutationlib and test_policy_wiring carry the same three lines inline."""
+    from lib import configlib
+
+    case.addCleanup(setattr, configlib, "CONFIG_PATH", configlib.CONFIG_PATH)
+    case.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
+    configlib.CONFIG_PATH = Path(state_dir) / "config.json"
+    configlib._CACHE = None

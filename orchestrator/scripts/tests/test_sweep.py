@@ -22,7 +22,7 @@ DONE = "Done.\n## Am I 100% done?\n- Yes"
 OFFER = "Done.\n## Am I 100% done?\n- Yes\n\nSay the word and I start item 2."
 
 
-from util import run_cli  # noqa: E402
+from util import isolate_policy, run_cli  # noqa: E402
 
 
 def iso_now():
@@ -38,6 +38,7 @@ class SweepTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self._state = tempfile.TemporaryDirectory()
         os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
+        isolate_policy(self, self._state.name)
         # Default to an ARMED window so every pre-existing act test here keeps exercising the
         # real act path unchanged; the gate test below explicitly disarms to prove the refusal.
         armlib.arm(3600)

@@ -20,7 +20,7 @@ SID = "eeee1111-2222-3333-4444-555566667777"
 DONE = "Done.\n## Am I 100% done?\n- Yes"
 
 
-from util import run_cli  # noqa: E402
+from util import isolate_policy, run_cli  # noqa: E402
 
 
 class DrillTest(unittest.TestCase):
@@ -30,6 +30,7 @@ class DrillTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self._state = tempfile.TemporaryDirectory()
         os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
+        isolate_policy(self, self._state.name)
 
     def tearDown(self):
         self.stub.close()

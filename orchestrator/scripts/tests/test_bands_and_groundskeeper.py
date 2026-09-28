@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from stubdaemon import StubDaemon, dossier_query  # noqa: E402
-from util import isolate_state_dir  # noqa: E402
+from util import isolate_policy, isolate_state_dir  # noqa: E402
 
 import groundskeeper  # noqa: E402
 from lib import armlib  # noqa: E402
@@ -824,6 +824,7 @@ class GroundskeeperTest(unittest.TestCase):
     def setUp(self):
         self._state = tempfile.TemporaryDirectory()
         os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
+        isolate_policy(self, self._state.name)
         # Default to an ARMED window so every pre-existing act test here keeps exercising the
         # real act path unchanged; the gate test below explicitly disarms to prove the refusal.
         armlib.arm(3600)
