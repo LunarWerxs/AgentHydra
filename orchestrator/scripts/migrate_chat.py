@@ -113,7 +113,7 @@ from dataclasses import dataclass
 from pathlib import Path as _Path
 
 from lib import archivewatchlib
-from lib import clilib, holdlib
+from lib import clilib, configlib, holdlib
 from lib import hydralib
 from lib import windowlib
 from lib import ledgerlib
@@ -1795,7 +1795,10 @@ def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict],
         # survived. Four of the five chats moved on 2026-09-06 were reported as "ultracode
         # stamped" and had ultracode gone minutes later. Read the observation, not the intent.
         uc_ok = bool(watched.get("ultracode", got["ultracode"]))
-        if mode == stamplib.BYPASS and uc_ok:
+        if mode == stamplib.BYPASS and uc_ok and not configlib.get("doctrine.stamp_ultracode"):
+            uc_note = ("bypassPermissions stamped into the landed record (ultracode not stamped: "
+                       "doctrine.stamp_ultracode is off)")
+        elif mode == stamplib.BYPASS and uc_ok:
             uc_note = "bypassPermissions + ultracode stamped into the landed record"
         else:
             uc_note = (f"doctrine stamp INCOMPLETE (bypass={mode == stamplib.BYPASS}, "

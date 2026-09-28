@@ -25,6 +25,9 @@ class MutateMetaTest(unittest.TestCase):
     def setUp(self):
         self._state = tempfile.TemporaryDirectory()
         os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
+        # the shipped policy, never this machine's own state/config.json
+        self.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
+        configlib._CACHE = configlib.defaults()
         self._tmp = tempfile.TemporaryDirectory()
         self.meta = Path(self._tmp.name) / "local_abc.json"
         self.meta.write_text(json.dumps({"cliSessionId": "abc", "title": "Old title",
@@ -135,6 +138,7 @@ class AutomationProfileTest(unittest.TestCase):
         os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
+        configlib._CACHE = configlib.defaults()
         self.mine = self._meta("jacob-1")
         self.bot = self._meta("bot-1")
         stamplib.mark_automation("bot-1", "test")
@@ -192,6 +196,18 @@ class AutomationProfileTest(unittest.TestCase):
         m = self.read(self.bot)
         self.assertEqual((m["effort"], m["sessionSettings"]), ("high", {"ultracode": False, "keep": 1}))
         self.assertTrue(stamplib.is_stamped(m))
+
+    def test_with_the_ultracode_stamp_off_the_owners_chats_keep_their_own_settings(self):
+        # owner, 2026-09-28: "keep my chats on extra or max, just stay off ultracode". With the
+        # knob off the owner's chat is on doctrine as it is: no re-stamp, no false 'missing'.
+        self.policy(**{"doctrine.stamp_ultracode": False})
+        self.mine.write_text(json.dumps({"cliSessionId": "jacob-1", "permissionMode": "bypassPermissions",
+                                         "effort": "max", "sessionSettings": {"ultracode": False}}),
+                             encoding="utf-8")
+        self.assertTrue(stamplib.is_stamped(self.read(self.mine)))
+        self.assertFalse(stamplib.stamp_doctrine(self.mine)["changed"])
+        m = self.read(self.mine)
+        self.assertEqual((m["effort"], m["sessionSettings"]), ("max", {"ultracode": False}))
 
     def test_the_marker_is_matched_by_the_local_id_as_well_as_the_cli_id(self):
         stamplib.mark_automation("local_zz-9", "test")
