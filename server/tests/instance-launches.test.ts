@@ -12,7 +12,7 @@
 // CONFIG_DIR is redirected to a temp dir by tests/setup.ts (AGENTHYDRA_HOME), so nothing here
 // touches the developer's real ~/.agenthydra.
 
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import {
@@ -25,6 +25,13 @@ import { instanceLaunchesFile, normalizeInstancePath } from '../src/core/paths'
 const A = normalizeInstancePath('C:/fixture/instances/alpha')
 const B = normalizeInstancePath('C:/fixture/instances/beta')
 const host = os.hostname().trim().toLowerCase()
+
+// Before AND after: the temp CONFIG_DIR is shared by the whole run, and a test file that runs the
+// instance list against this machine's live Claude processes records real launches into it, so on a
+// PC with instances open the first test here found them (2026-09-28). CI's runners have none.
+beforeEach(() => {
+  rmSync(instanceLaunchesFile(), { force: true })
+})
 
 afterEach(() => {
   rmSync(instanceLaunchesFile(), { force: true })
