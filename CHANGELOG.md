@@ -19,6 +19,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   open ones still on the old build. A build the updater has not finished writing (or was stopped
   while writing) is never launched, and the next check finishes it. `check_versions` now shows
   the newest build on offer.
+- **`claude://` links and the browser extension find Claude after an update**
+  (`server/src/version-drift.ts`). Claude points both at the build it runs from each time it starts
+  from its install, which under AgentHydra it never does, so both were still on 2.7032.0, a build
+  the update then deleted, leaving sign-in links nothing to open. The version check now moves them
+  onto the newest installed build when they name an older one, and flags it if it cannot.
 
 - **Archiving a chat inside a running Claude Desktop works again on 2.9939.4**
   (`server/src/core/claude-native/native-program.ts`). That build moved the list of chats that are

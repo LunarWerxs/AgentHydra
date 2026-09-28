@@ -40,14 +40,16 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  renameSync,
   statSync,
+  writeFileSync,
 } from 'node:fs'
 import { copyFile, link, mkdir, rename, rm } from 'node:fs/promises'
 import { homedir, release } from 'node:os'
 import { join } from 'node:path'
 import { listCliInstances } from './core/cli-instances'
 import { listInstances } from './core/instances'
-import { scanClaudeProcesses, spawnCaptured } from './core/process'
+import { type CapturedRun, scanClaudeProcesses, spawnCaptured } from './core/process'
 import {
   isFinishedBuild,
   newestFinishedBuild,
@@ -622,7 +624,116 @@ export interface FixDeps {
   npmInstall: (version: string) => Promise<{ ok: boolean; detail: string }>
   /** Run the classic install's own `Update.exe --update` against Claude's feed. */
   updateDesktop: (installed: string) => Promise<{ ok: boolean; detail: string }>
+  /** Move the install's claude:// handler and browser-extension host onto build `newest`. */
+  repairLinks: (newest: string) => Promise<LinkRepair>
   autofix: boolean
+}
+
+// Claude re-registers its claude:// link handler and its browser-extension host every time it starts
+// FROM THE INSTALL, naming the app-<build> folder it runs from. Under AgentHydra it never does
+// (claude-native-launch-registry.ts puts back what was there before each managed launch), so both
+// stay on the last build that ran from the install and break once Squirrel deletes that folder:
+// measured 2026-09-28, both still named app-2.7032.0 after the 2.9939.4 update removed it, which
+// leaves sign-in and other claude:// links with nothing to open.
+
+const LINK_HANDLER_KEY = 'HKCU:\\Software\\Classes\\claude\\shell\\open\\command'
+const BROWSER_HOST_NAME = 'com.anthropic.claude_browser_extension'
+
+export interface LinkRepair {
+  repaired: string[]
+  failed: string[]
+}
+
+export interface LinkIo {
+  /** The claude:// handler's command, or null when there is none. */
+  readHandler: () => Promise<string | null>
+  /** Write it; true only when it reads back exactly as written. */
+  writeHandler: (value: string) => Promise<boolean>
+  /** The default profile's browser-extension host manifest. */
+  manifestPath: string
+}
+
+/** `value` moved onto `newest` when it names an OLDER app-<build> folder of this install (optionally
+ *  inside one leading quote, as a command does); null for anything else - a managed copy mid-launch,
+ *  another install, or the newest build already - which is never touched. */
+export function retargetInstallPath(
+  value: string,
+  installRoot: string,
+  newest: string,
+): string | null {
+  const root = installRoot.replace(/[\\/]+$/, '')
+  const lead = value.startsWith('"') ? 1 : 0
+  const prefix = `${root}\\app-`
+  if (value.slice(lead, lead + prefix.length).toLowerCase() !== prefix.toLowerCase()) return null
+  const m = /^(\d+(?:\.\d+)+)(\\[\s\S]*)$/.exec(value.slice(lead + prefix.length))
+  if (!m || !SEMVER_RE.test(newest) || compareVersion(m[1], newest) >= 0) return null
+  return `${value.slice(0, lead)}${root}\\app-${newest}${m[2]}`
+}
+
+/** The file a command or path names: the quoted first token of a command, else the whole value. */
+function namedFile(value: string): string {
+  return value.startsWith('"') ? value.slice(1, value.indexOf('"', 1)) : value
+}
+
+/** Point both registrations at `newest` where they name an older build of this install and the
+ *  newest build really holds the file they need. Anything else is left exactly as it is. */
+export async function repairInstallLinks(
+  installRoot: string,
+  newest: string,
+  io: LinkIo,
+): Promise<LinkRepair> {
+  const out: LinkRepair = { repaired: [], failed: [] }
+  try {
+    const current = await io.readHandler()
+    const next = current ? retargetInstallPath(current, installRoot, newest) : null
+    if (next && existsSync(namedFile(next)))
+      out[(await io.writeHandler(next)) ? 'repaired' : 'failed'].push('claude:// link handler')
+  } catch {
+    out.failed.push('claude:// link handler')
+  }
+  try {
+    const manifest = JSON.parse(readFileSync(io.manifestPath, 'utf8'))
+    const next =
+      manifest?.name === BROWSER_HOST_NAME && typeof manifest.path === 'string'
+        ? retargetInstallPath(manifest.path, installRoot, newest)
+        : null
+    if (next && existsSync(next)) {
+      manifest.path = next
+      // Written beside it and renamed over it, so a browser never reads half a manifest.
+      const tmp = `${io.manifestPath}.agenthydra-${process.pid}`
+      writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`)
+      renameSync(tmp, io.manifestPath)
+      out.repaired.push('browser extension host')
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') out.failed.push('browser extension host')
+  }
+  return out
+}
+
+function powershell(script: string): Promise<CapturedRun> {
+  return spawnCaptured(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script], {
+    timeoutMs: 20_000,
+  })
+}
+
+const windowsLinkIo: LinkIo = {
+  readHandler: async () => {
+    const run = await powershell(
+      `[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); $v = (Get-ItemProperty -LiteralPath '${LINK_HANDLER_KEY}' -ErrorAction SilentlyContinue).'(default)'; if ($v -is [string]) { [Console]::Out.Write($v) }`,
+    )
+    if (run.code !== 0 || run.timedOut) throw Error('could not read the claude:// handler')
+    return run.stdout || null
+  },
+  writeHandler: async (value) => {
+    // The value travels base64-encoded: a command holds quotes, which no argv quoting survives intact.
+    const b64 = Buffer.from(value, 'utf8').toString('base64')
+    const run = await powershell(
+      `$v = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')); Set-ItemProperty -LiteralPath '${LINK_HANDLER_KEY}' -Name '(default)' -Value $v; if ((Get-ItemProperty -LiteralPath '${LINK_HANDLER_KEY}').'(default)' -ceq $v) { 'ok' }`,
+    )
+    return run.code === 0 && run.stdout.trim() === 'ok'
+  },
+  manifestPath: join(appData(), 'Claude', 'ChromeNativeHost', `${BROWSER_HOST_NAME}.json`),
 }
 
 /** What the app's own updater does, run for it: Squirrel downloads the release, verifies it,
@@ -683,6 +794,10 @@ export const defaultFixDeps: FixDeps = {
     return { ok: run.code === 0, detail: run.timedOut ? 'npm timed out' : tail }
   },
   updateDesktop: squirrelUpdate,
+  repairLinks: async (newest) =>
+    process.platform === 'win32'
+      ? repairInstallLinks(DESKTOP_INSTALL_ROOT, newest, windowsLinkIo)
+      : { repaired: [], failed: [] },
   autofix: process.env.AGENTHYDRA_VERSION_AUTOFIX !== '0',
 }
 
@@ -694,6 +809,26 @@ export interface FixOutcome {
   /** The build the Desktop install was updated to, when the updater said it succeeded. */
   desktopUpdated: string | null
   desktopFlag: DriftFlag | null
+  /** Registrations moved onto the newest build this pass. */
+  linksRepaired: string[]
+  linksFlag: DriftFlag | null
+}
+
+async function repairLinksStep(
+  newest: string | null,
+  deps: FixDeps,
+): Promise<Pick<FixOutcome, 'linksRepaired' | 'linksFlag'>> {
+  if (!newest || !deps.autofix) return { linksRepaired: [], linksFlag: null }
+  const { repaired, failed } = await deps.repairLinks(newest)
+  return {
+    linksRepaired: repaired,
+    linksFlag: failed.length
+      ? {
+          key: 'desktop-links',
+          message: `Claude's ${failed.join(' and ')} still name an older Claude build than ${newest}, so claude:// links (sign-in among them) or the browser extension may find nothing to open. AgentHydra could not point them at ${newest}; opening Claude once from its own Start-menu shortcut re-registers them.`,
+        }
+      : null,
+  }
 }
 
 async function updateDesktopInstall(
@@ -774,11 +909,15 @@ export async function fixVersionDrift(
   deps: FixDeps = defaultFixDeps,
 ): Promise<FixOutcome> {
   const desktop = await updateDesktopInstall(report, deps)
+  const links = await repairLinksStep(
+    desktop.desktopUpdated ?? report.desktop.newestInstalled,
+    deps,
+  )
   const stage = deps.autofix
     ? await stageClosedProfiles(report, deps)
     : { staged: [], stageFailed: [] }
   const cli = await updateCli(report, deps)
-  return { ...desktop, ...stage, ...cli }
+  return { ...desktop, ...links, ...stage, ...cli }
 }
 
 // --- flags -> incidents --------------------------------------------------------------------------
@@ -851,6 +990,7 @@ export async function runVersionDriftPass(
     ...(installStill ? [fixed.desktopFlag ?? installStill] : []),
     ...report.flags.filter((f) => f.key !== 'cli' && f.key !== 'desktop-install'),
     ...(fixed.cliFlag && report.cli.behind ? [fixed.cliFlag] : []),
+    ...(fixed.linksFlag ? [fixed.linksFlag] : []),
     ...fixed.stageFailed,
   ]
   const resolvedIncidents = await syncDriftIncidents(flags, deps.incidents)
@@ -866,6 +1006,10 @@ function tick(): void {
       if (r.fixed.desktopUpdated)
         console.log(
           `[agenthydra] version drift: updated the Claude Desktop install to ${r.fixed.desktopUpdated}; each account moves to it on its next AgentHydra Open`,
+        )
+      if (r.fixed.linksRepaired.length)
+        console.log(
+          `[agenthydra] version drift: pointed Claude's ${r.fixed.linksRepaired.join(' and ')} at ${r.report.desktop.newestInstalled}`,
         )
       if (r.fixed.staged.length || r.fixed.cliUpdated)
         console.log(

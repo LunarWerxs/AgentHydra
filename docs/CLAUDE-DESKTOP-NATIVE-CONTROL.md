@@ -53,7 +53,10 @@ never run, so AgentHydra updates the install for it: the version-drift pass (eve
 or `sync_versions` now) asks Claude's own update feed and runs the install's `Update.exe --update`
 when a newer build is out. An `app-<build>` folder newer than the newest build
 `packages\RELEASES` lists is unfinished (an update still writing it, or killed while it did) and
-is neither launched nor counted as installed. A fuse-wire, manifest, source-inventory or
+is neither launched nor counted as installed. The same pass moves the `claude://` handler
+(`HKCU\Software\Classes\claude`) and the default profile's browser-extension host manifest onto
+the newest build when they name an older `app-<build>` of the install; the app only rewrites them
+when it starts from the install, and the managed-launch registry guard restores the old values. A fuse-wire, manifest, source-inventory or
 identity mismatch is refused; do not weaken those guards to make one launch.
 
 ## AgentHydra settings

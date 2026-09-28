@@ -27,6 +27,8 @@ const {
   fixVersionDrift,
   newestInReleases,
   releasesUrl,
+  repairInstallLinks,
+  retargetInstallPath,
   runVersionDriftPass,
   stageEngine,
   syncDriftIncidents,
@@ -102,12 +104,18 @@ function checkDeps(overrides: Partial<CheckDeps> = {}): CheckDeps {
 
 function fixDeps(
   overrides: Partial<FixDeps> = {},
-): FixDeps & { installs: string[]; desktopRuns: string[] } {
+): FixDeps & { installs: string[]; desktopRuns: string[]; linkRuns: string[] } {
   const installs: string[] = []
   const desktopRuns: string[] = []
+  const linkRuns: string[] = []
   return {
     installs,
     desktopRuns,
+    linkRuns,
+    repairLinks: async (newest) => {
+      linkRuns.push(newest)
+      return { repaired: [], failed: [] }
+    },
     updateDesktop: async (installed) => {
       desktopRuns.push(installed)
       return { ok: true, detail: '' }
@@ -522,5 +530,113 @@ describe('the Claude Desktop install behind its own update feed', () => {
       }),
     ).rejects.toThrow('boom')
     await desktopInstallSettled()
+  })
+})
+
+describe('the install registrations an update leaves behind', () => {
+  const ROOT = 'C:\\Users\\x\\AppData\\Local\\AnthropicClaude'
+
+  test('only a path into an OLDER app folder of this install is moved, and only its build part', () => {
+    expect(retargetInstallPath(`"${ROOT}\\app-2.7032.0\\claude.exe" "%1"`, ROOT, '2.9939.4')).toBe(
+      `"${ROOT}\\app-2.9939.4\\claude.exe" "%1"`,
+    )
+    expect(
+      retargetInstallPath(
+        `${ROOT.toLowerCase()}\\app-2.7032.0\\resources\\chrome-native-host.exe`,
+        ROOT,
+        '2.9939.4',
+      ),
+    ).toBe(`${ROOT}\\app-2.9939.4\\resources\\chrome-native-host.exe`)
+    for (const untouched of [
+      `"${ROOT}\\app-2.9939.4\\claude.exe" "%1"`, // already newest
+      `"${ROOT}\\app-3.0.0\\claude.exe" "%1"`, // newer than what is installed
+      `"C:\\Users\\x\\.agenthydra\\data\\claude-native\\2.9939.2-abc\\claude.exe" "%1"`, // mid-launch
+      `"${ROOT}\\claude.exe" "%1"`, // the stub
+      `"D:\\Other\\AnthropicClaude\\app-2.7032.0\\claude.exe" "%1"`, // another install
+      `cmd /c "${ROOT}\\app-2.7032.0\\claude.exe"`, // not a plain path or command
+    ])
+      expect(retargetInstallPath(untouched, ROOT, '2.9939.4')).toBeNull()
+  })
+
+  test('both registrations move onto the newest build, and only when that build holds the file', async () => {
+    const newest = join(install, 'app-2.9939.4')
+    mkdirSync(join(newest, 'resources'), { recursive: true })
+    writeFileSync(join(newest, 'claude.exe'), 'exe')
+    writeFileSync(join(newest, 'resources', 'chrome-native-host.exe'), 'host')
+    const manifestPath = join(root, 'host.json')
+    const oldHost = `${install}\\app-2.7032.0\\resources\\chrome-native-host.exe`
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        name: 'com.anthropic.claude_browser_extension',
+        path: oldHost,
+        type: 'stdio',
+      }),
+    )
+    let handler: string | null = `"${install}\\app-2.7032.0\\claude.exe" "%1"`
+    const io = {
+      readHandler: async () => handler,
+      writeHandler: async (v: string) => {
+        handler = v
+        return true
+      },
+      manifestPath,
+    }
+    const out = await repairInstallLinks(install, '2.9939.4', io)
+    expect(out).toEqual({
+      repaired: ['claude:// link handler', 'browser extension host'],
+      failed: [],
+    })
+    expect(handler).toBe(`"${join(newest, 'claude.exe')}" "%1"`)
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    expect(manifest).toEqual({
+      name: 'com.anthropic.claude_browser_extension',
+      path: join(newest, 'resources', 'chrome-native-host.exe'),
+      type: 'stdio',
+    })
+    // A second pass finds nothing to do; a newest build missing the file is never pointed at.
+    expect(await repairInstallLinks(install, '2.9939.4', io)).toEqual({ repaired: [], failed: [] })
+    handler = `"${install}\\app-2.7032.0\\claude.exe" "%1"`
+    expect(await repairInstallLinks(install, '2.9940.0', io)).toEqual({ repaired: [], failed: [] })
+    expect(handler).toBe(`"${install}\\app-2.7032.0\\claude.exe" "%1"`)
+  })
+
+  test('a write that does not read back, or a manifest for something else, is not claimed as fixed', async () => {
+    const newest = join(install, 'app-2.9939.4')
+    mkdirSync(join(newest, 'resources'), { recursive: true })
+    writeFileSync(join(newest, 'claude.exe'), 'exe')
+    writeFileSync(join(newest, 'resources', 'chrome-native-host.exe'), 'host')
+    const manifestPath = join(root, 'other.json')
+    const foreign = {
+      name: 'com.example.other',
+      path: `${install}\\app-2.7032.0\\resources\\chrome-native-host.exe`,
+    }
+    writeFileSync(manifestPath, JSON.stringify(foreign))
+    const out = await repairInstallLinks(install, '2.9939.4', {
+      readHandler: async () => `"${install}\\app-2.7032.0\\claude.exe" "%1"`,
+      writeHandler: async () => false,
+      manifestPath,
+    })
+    expect(out).toEqual({ repaired: [], failed: ['claude:// link handler'] })
+    expect(JSON.parse(readFileSync(manifestPath, 'utf8'))).toEqual(foreign)
+  })
+
+  test('the pass repairs onto the build it just installed, flags a failed repair, and never runs with autofix off', async () => {
+    const r = await checkVersionDrift(checkDeps({ desktopFeed: async () => '2.9939.4' }))
+    const on = fixDeps()
+    await fixVersionDrift(r, on)
+    expect(on.linkRuns).toEqual(['2.9939.4'])
+    const off = fixDeps({ autofix: false })
+    await fixVersionDrift(r, off)
+    expect(off.linkRuns).toEqual([])
+    const { deps, recorded } = incidentDeps()
+    await runVersionDriftPass({
+      check: checkDeps(),
+      fix: fixDeps({
+        repairLinks: async () => ({ repaired: [], failed: ['claude:// link handler'] }),
+      }),
+      incidents: deps,
+    })
+    expect(recorded).toContain('desktop-links')
   })
 })
