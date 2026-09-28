@@ -19,6 +19,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   open ones still on the old build. A build the updater has not finished writing (or was stopped
   while writing) is never launched, and the next check finishes it. `check_versions` now shows
   the newest build on offer.
+- **Claude opened from the Start menu is no longer stuck on an old build**
+  (`server/src/claude-start-shortcut.ts`). Claude started from AgentHydra's own copy writes a
+  "Claude" Start-menu shortcut aimed at that copy, which has no updater, so Claude opened from it,
+  or from a taskbar pin made from it, stayed on 2.9939.2 and said it could not update. AgentHydra
+  now points that shortcut back at Claude's real install after every launch and on every version
+  check, keeping its notification id, and leaves a shortcut aimed anywhere else alone.
 - **`claude://` links and the browser extension find Claude after an update**
   (`server/src/version-drift.ts`). Claude points both at the build it runs from each time it starts
   from its install, which under AgentHydra it never does, so both were still on 2.7032.0, a build

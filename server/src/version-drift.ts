@@ -47,6 +47,7 @@ import {
 import { copyFile, link, mkdir, rename, rm } from 'node:fs/promises'
 import { homedir, release } from 'node:os'
 import { join } from 'node:path'
+import { repointClaudeStartShortcut } from './claude-start-shortcut'
 import { listCliInstances } from './core/cli-instances'
 import { listInstances } from './core/instances'
 import { type CapturedRun, scanClaudeProcesses, spawnCaptured } from './core/process'
@@ -794,10 +795,14 @@ export const defaultFixDeps: FixDeps = {
     return { ok: run.code === 0, detail: run.timedOut ? 'npm timed out' : tail }
   },
   updateDesktop: squirrelUpdate,
-  repairLinks: async (newest) =>
-    process.platform === 'win32'
-      ? repairInstallLinks(DESKTOP_INSTALL_ROOT, newest, windowsLinkIo)
-      : { repaired: [], failed: [] },
+  repairLinks: async (newest) => {
+    if (process.platform !== 'win32') return { repaired: [], failed: [] }
+    const out = await repairInstallLinks(DESKTOP_INSTALL_ROOT, newest, windowsLinkIo)
+    const shortcut = await repointClaudeStartShortcut()
+    if (shortcut === 'repointed') out.repaired.push('Start menu shortcut')
+    if (shortcut === 'failed') out.failed.push('Start menu shortcut')
+    return out
+  },
   autofix: process.env.AGENTHYDRA_VERSION_AUTOFIX !== '0',
 }
 

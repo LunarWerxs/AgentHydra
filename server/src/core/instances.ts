@@ -29,6 +29,7 @@ import {
   ensureClaudeNativeProfileConfig,
   getClaudeNativeProfileConfig,
 } from '../claude-native-settings'
+import { repointClaudeStartShortcut } from '../claude-start-shortcut'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { pathKey } from '../path-key'
 import { detectDesktopInstall } from './desktop-install'
@@ -653,6 +654,8 @@ async function spawnVerifyAndRestore(args: {
         restorationError = error
       }
       if (attempt.nativeData) attempt.nativeData.registryRestoration = registryRestoration
+      // The managed copy aims Claude's Start-menu shortcut at itself; point it back at the install.
+      await repointClaudeStartShortcut()
     }
   }
   const failures = launchFailures(launchError, restorationError, registryRestoration, attempt)
