@@ -44,6 +44,13 @@ import { REPO_ROOT } from './repo-root'
 const win = process.platform === 'win32'
 const INSTALL_PS1 = join(REPO_ROOT, 'install.ps1')
 
+// Every scenario runs under EVERY PowerShell this machine has. This suite used to run pwsh 7 only,
+// and install.ps1 shipped broken under Windows PowerShell 5.1 (powershell.exe, what most Windows
+// users have) twice over: it could not parse a BOM-less UTF-8 file read as ANSI, and its canary
+// could not capture a GUI-subsystem exe's output (2026-09-28). powershell.exe is on every Windows
+// box, so it always runs; pwsh joins when it is installed (windows-latest has both).
+const PS_HOSTS = ['powershell', ...(win && Bun.which('pwsh') ? ['pwsh'] : [])]
+
 /** The .NET Framework's C# compiler — present on every Windows box without extra tooling. */
 function findCsc(): string | null {
   const windir = process.env.WINDIR || process.env.SystemRoot || 'C:\\Windows'
@@ -91,7 +98,12 @@ function compileFakeExe(exePath: string, version: string): void {
     '',
   ].join('\n')
   writeFileSync(srcPath, src)
-  execFileSync(CSC as string, ['/nologo', `/out:${exePath}`, srcPath], { timeout: 30_000 })
+  // /target:winexe: the real AgentHydra.exe is GUI-subsystem (scripts/build.ts's
+  // setWindowsGuiSubsystem), and that is what broke the canary under Windows PowerShell 5.1,
+  // which neither waits for a GUI program nor captures its output. A console fixture hid it.
+  execFileSync(CSC as string, ['/nologo', '/target:winexe', `/out:${exePath}`, srcPath], {
+    timeout: 30_000,
+  })
 }
 
 interface ReleaseDirOpts {
@@ -148,9 +160,10 @@ interface RunResult {
   stderr: string
 }
 
-function runInstall(args: string[], env?: Record<string, string>): RunResult {
+function runInstall(host: string, args: string[], env?: Record<string, string>): RunResult {
   try {
-    const stdout = execFileSync('pwsh', ['-NoProfile', '-File', INSTALL_PS1, ...args], {
+    const argv = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', INSTALL_PS1, ...args]
+    const stdout = execFileSync(host, argv, {
       timeout: 60_000,
       encoding: 'utf8',
       env: env ? { ...process.env, ...env } : process.env,
@@ -190,209 +203,211 @@ function leftoverArtifacts(installDir: string): string[] {
   return found
 }
 
-describe.skipIf(!win || !CSC)('install.ps1 transactional swap (AH-40)', () => {
-  test('a fresh install lands all components', () => {
-    const work = workDir('fresh')
-    const zip = buildReleaseZip(work, '0.20.0')
-    const installDir = join(work, 'install')
+for (const host of PS_HOSTS) {
+  describe.skipIf(!win || !CSC)(`install.ps1 transactional swap (AH-40) [${host}]`, () => {
+    test('a fresh install lands all components', () => {
+      const work = workDir('fresh')
+      const zip = buildReleaseZip(work, '0.20.0')
+      const installDir = join(work, 'install')
 
-    const result = runInstall([
-      '-FromZip',
-      zip,
-      '-InstallDir',
-      installDir,
-      '-NoShortcut',
-      '-NoLaunch',
-      '-Force',
-    ])
-    expect(result.status).toBe(0)
-
-    expect(existsSync(join(installDir, 'AgentHydra.exe'))).toBe(true)
-    expect(existsSync(join(installDir, 'misc', 'marker.txt'))).toBe(true)
-    expect(existsSync(join(installDir, 'orchestrator', 'orch.py'))).toBe(true)
-    expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.20.0')
-    // No leftover staging/aside artifacts on a clean fresh install.
-    expect(leftoverArtifacts(installDir)).toEqual([])
-  }, 30_000)
-
-  test('an upgrade replaces misc/ and orchestrator/ while orchestrator/state/ survives', () => {
-    const work = workDir('upgrade')
-    const installDir = join(work, 'install')
-
-    const zipV1 = buildReleaseZip(work, '0.20.0', { miscRetired: true })
-    expect(
-      runInstall([
+      const result = runInstall(host, [
         '-FromZip',
-        zipV1,
+        zip,
         '-InstallDir',
         installDir,
         '-NoShortcut',
         '-NoLaunch',
         '-Force',
-      ]).status,
-    ).toBe(0)
-    expect(existsSync(join(installDir, 'misc', 'retired-sidecar.txt'))).toBe(true)
+      ])
+      expect(result.status).toBe(0)
 
-    // Simulate user/runtime data the scheduler would have written into the release-owned
-    // orchestrator/ folder (orchestrator/scripts/lib/ledgerlib.py's _state_dir()).
-    const stateDir = join(installDir, 'orchestrator', 'state')
-    mkdirSync(stateDir, { recursive: true })
-    writeFileSync(join(stateDir, 'sentinel.json'), '{"attempts":["keep-me"]}')
+      expect(existsSync(join(installDir, 'AgentHydra.exe'))).toBe(true)
+      expect(existsSync(join(installDir, 'misc', 'marker.txt'))).toBe(true)
+      expect(existsSync(join(installDir, 'orchestrator', 'orch.py'))).toBe(true)
+      expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.20.0')
+      // No leftover staging/aside artifacts on a clean fresh install.
+      expect(leftoverArtifacts(installDir)).toEqual([])
+    }, 30_000)
 
-    // v2 ships a misc/ with no retired sidecar and an updated marker — proves the swap actually
-    // REPLACES the component rather than merging into it.
-    const zipV2 = buildReleaseZip(work, '0.20.1', { miscMarker: 'v2-marker' })
-    const result = runInstall([
-      '-FromZip',
-      zipV2,
-      '-InstallDir',
-      installDir,
-      '-NoShortcut',
-      '-NoLaunch',
-      '-Force',
-    ])
-    expect(result.status).toBe(0)
+    test('an upgrade replaces misc/ and orchestrator/ while orchestrator/state/ survives', () => {
+      const work = workDir('upgrade')
+      const installDir = join(work, 'install')
 
-    expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.20.1')
-    expect(readFileSync(join(installDir, 'misc', 'marker.txt'), 'utf8')).toBe('v2-marker')
-    expect(existsSync(join(installDir, 'misc', 'retired-sidecar.txt'))).toBe(false)
-    // The user's ledger survived the orchestrator/ swap.
-    expect(readFileSync(join(stateDir, 'sentinel.json'), 'utf8')).toBe('{"attempts":["keep-me"]}')
-  }, 30_000)
+      const zipV1 = buildReleaseZip(work, '0.20.0', { miscRetired: true })
+      expect(
+        runInstall(host, [
+          '-FromZip',
+          zipV1,
+          '-InstallDir',
+          installDir,
+          '-NoShortcut',
+          '-NoLaunch',
+          '-Force',
+        ]).status,
+      ).toBe(0)
+      expect(existsSync(join(installDir, 'misc', 'retired-sidecar.txt'))).toBe(true)
 
-  test('an injected failure during the swap leaves the prior install intact', () => {
-    const work = workDir('rollback')
-    const installDir = join(work, 'install')
+      // Simulate user/runtime data the scheduler would have written into the release-owned
+      // orchestrator/ folder (orchestrator/scripts/lib/ledgerlib.py's _state_dir()).
+      const stateDir = join(installDir, 'orchestrator', 'state')
+      mkdirSync(stateDir, { recursive: true })
+      writeFileSync(join(stateDir, 'sentinel.json'), '{"attempts":["keep-me"]}')
 
-    const zipV1 = buildReleaseZip(work, '0.21.0')
-    expect(
-      runInstall([
+      // v2 ships a misc/ with no retired sidecar and an updated marker — proves the swap actually
+      // REPLACES the component rather than merging into it.
+      const zipV2 = buildReleaseZip(work, '0.20.1', { miscMarker: 'v2-marker' })
+      const result = runInstall(host, [
         '-FromZip',
-        zipV1,
+        zipV2,
         '-InstallDir',
         installDir,
         '-NoShortcut',
         '-NoLaunch',
         '-Force',
-      ]).status,
-    ).toBe(0)
-    const stateDir = join(installDir, 'orchestrator', 'state')
-    mkdirSync(stateDir, { recursive: true })
-    writeFileSync(join(stateDir, 'sentinel.json'), 'untouched')
+      ])
+      expect(result.status).toBe(0)
 
-    // 'exe' is swapped before 'misc' in $ReleaseComponents, so failing after 'misc' proves the
-    // rollback undoes an ALREADY-swapped earlier component too, not just the one that failed.
-    const zipV2 = buildReleaseZip(work, '0.21.1')
-    const result = runInstall([
-      '-FromZip',
-      zipV2,
-      '-InstallDir',
-      installDir,
-      '-NoShortcut',
-      '-NoLaunch',
-      '-Force',
-      '-FailAfterStage',
-      'misc',
-    ])
-    expect(result.status).not.toBe(0)
+      expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.20.1')
+      expect(readFileSync(join(installDir, 'misc', 'marker.txt'), 'utf8')).toBe('v2-marker')
+      expect(existsSync(join(installDir, 'misc', 'retired-sidecar.txt'))).toBe(false)
+      // The user's ledger survived the orchestrator/ swap.
+      expect(readFileSync(join(stateDir, 'sentinel.json'), 'utf8')).toBe('{"attempts":["keep-me"]}')
+    }, 30_000)
 
-    // The prior install is back exactly as it was: old exe, old version, no leftovers.
-    expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.21.0')
-    expect(existsSync(join(stateDir, 'sentinel.json'))).toBe(true)
-    expect(leftoverArtifacts(installDir)).toEqual([])
-  }, 30_000)
+    test('an injected failure during the swap leaves the prior install intact', () => {
+      const work = workDir('rollback')
+      const installDir = join(work, 'install')
 
-  // THE ONE ABOVE CANNOT CATCH THE STATE BUG, which is why this one exists. 'misc' is swapped
-  // before 'orchestrator', so failing after it means the state-carry step never ran and the
-  // sentinel survives no matter what that step does. Failing after 'orchestrator' is the only
-  // ordering that exercises it: by then state/ has been carried into staging, and the outer
-  // `finally` deletes staging unconditionally. With the carry done as a MOVE (as it was until
-  // 2026-09-06) the rollback restored an orchestrator/ whose state/ had gone with the staging
-  // directory, silently destroying the scheduler's ledger in the one path built to protect it.
-  test('a failure AFTER the orchestrator swap still leaves the scheduler ledger intact', () => {
-    const work = workDir('rollback-state')
-    const installDir = join(work, 'install')
+      const zipV1 = buildReleaseZip(work, '0.21.0')
+      expect(
+        runInstall(host, [
+          '-FromZip',
+          zipV1,
+          '-InstallDir',
+          installDir,
+          '-NoShortcut',
+          '-NoLaunch',
+          '-Force',
+        ]).status,
+      ).toBe(0)
+      const stateDir = join(installDir, 'orchestrator', 'state')
+      mkdirSync(stateDir, { recursive: true })
+      writeFileSync(join(stateDir, 'sentinel.json'), 'untouched')
 
-    const zipV1 = buildReleaseZip(work, '0.23.0')
-    expect(
-      runInstall([
+      // 'exe' is swapped before 'misc' in $ReleaseComponents, so failing after 'misc' proves the
+      // rollback undoes an ALREADY-swapped earlier component too, not just the one that failed.
+      const zipV2 = buildReleaseZip(work, '0.21.1')
+      const result = runInstall(host, [
         '-FromZip',
-        zipV1,
+        zipV2,
         '-InstallDir',
         installDir,
         '-NoShortcut',
         '-NoLaunch',
         '-Force',
-      ]).status,
-    ).toBe(0)
+        '-FailAfterStage',
+        'misc',
+      ])
+      expect(result.status).not.toBe(0)
 
-    // A ledger with real shape: a file at the top and one nested a directory down, because the
-    // carry copies a TREE and a shallow copy would pass a one-file assertion.
-    const stateDir = join(installDir, 'orchestrator', 'state')
-    mkdirSync(join(stateDir, 'trash', 'abc'), { recursive: true })
-    writeFileSync(join(stateDir, 'sentinel.json'), '{"attempts":["keep-me"]}')
-    writeFileSync(join(stateDir, 'trash', 'abc', 'manifest.json'), '{"undo":true}')
+      // The prior install is back exactly as it was: old exe, old version, no leftovers.
+      expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.21.0')
+      expect(existsSync(join(stateDir, 'sentinel.json'))).toBe(true)
+      expect(leftoverArtifacts(installDir)).toEqual([])
+    }, 30_000)
 
-    const zipV2 = buildReleaseZip(work, '0.23.1')
-    const result = runInstall([
-      '-FromZip',
-      zipV2,
-      '-InstallDir',
-      installDir,
-      '-NoShortcut',
-      '-NoLaunch',
-      '-Force',
-      '-FailAfterStage',
-      'orchestrator',
-    ])
-    expect(result.status).not.toBe(0)
+    // THE ONE ABOVE CANNOT CATCH THE STATE BUG, which is why this one exists. 'misc' is swapped
+    // before 'orchestrator', so failing after it means the state-carry step never ran and the
+    // sentinel survives no matter what that step does. Failing after 'orchestrator' is the only
+    // ordering that exercises it: by then state/ has been carried into staging, and the outer
+    // `finally` deletes staging unconditionally. With the carry done as a MOVE (as it was until
+    // 2026-09-06) the rollback restored an orchestrator/ whose state/ had gone with the staging
+    // directory, silently destroying the scheduler's ledger in the one path built to protect it.
+    test('a failure AFTER the orchestrator swap still leaves the scheduler ledger intact', () => {
+      const work = workDir('rollback-state')
+      const installDir = join(work, 'install')
 
-    // Rolled back whole: the old executable, and every byte of the ledger, nested file included.
-    expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.23.0')
-    expect(readFileSync(join(stateDir, 'sentinel.json'), 'utf8')).toBe('{"attempts":["keep-me"]}')
-    expect(readFileSync(join(stateDir, 'trash', 'abc', 'manifest.json'), 'utf8')).toBe(
-      '{"undo":true}',
-    )
-    expect(leftoverArtifacts(installDir)).toEqual([])
-  }, 30_000)
+      const zipV1 = buildReleaseZip(work, '0.23.0')
+      expect(
+        runInstall(host, [
+          '-FromZip',
+          zipV1,
+          '-InstallDir',
+          installDir,
+          '-NoShortcut',
+          '-NoLaunch',
+          '-Force',
+        ]).status,
+      ).toBe(0)
 
-  test('a version-mismatch canary refuses before touching the install', () => {
-    const work = workDir('mismatch')
-    const installDir = join(work, 'install')
+      // A ledger with real shape: a file at the top and one nested a directory down, because the
+      // carry copies a TREE and a shallow copy would pass a one-file assertion.
+      const stateDir = join(installDir, 'orchestrator', 'state')
+      mkdirSync(join(stateDir, 'trash', 'abc'), { recursive: true })
+      writeFileSync(join(stateDir, 'sentinel.json'), '{"attempts":["keep-me"]}')
+      writeFileSync(join(stateDir, 'trash', 'abc', 'manifest.json'), '{"undo":true}')
 
-    const zipV1 = buildReleaseZip(work, '0.22.0')
-    expect(
-      runInstall([
+      const zipV2 = buildReleaseZip(work, '0.23.1')
+      const result = runInstall(host, [
         '-FromZip',
-        zipV1,
+        zipV2,
         '-InstallDir',
         installDir,
         '-NoShortcut',
         '-NoLaunch',
         '-Force',
-      ]).status,
-    ).toBe(0)
+        '-FailAfterStage',
+        'orchestrator',
+      ])
+      expect(result.status).not.toBe(0)
 
-    // The folder claims 0.22.1 but the compiled exe inside reports 0.9.9 — a corrupt/mismatched
-    // build install.ps1 must catch itself, without any of the release's own tooling lying to it.
-    const zipBad = buildReleaseZip(work, '0.22.1', { exeVersion: '0.9.9' })
-    const result = runInstall([
-      '-FromZip',
-      zipBad,
-      '-InstallDir',
-      installDir,
-      '-NoShortcut',
-      '-NoLaunch',
-      '-Force',
-    ])
-    expect(result.status).not.toBe(0)
-    expect(result.stderr + result.stdout).toMatch(/version canary failed/i)
+      // Rolled back whole: the old executable, and every byte of the ledger, nested file included.
+      expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.23.0')
+      expect(readFileSync(join(stateDir, 'sentinel.json'), 'utf8')).toBe('{"attempts":["keep-me"]}')
+      expect(readFileSync(join(stateDir, 'trash', 'abc', 'manifest.json'), 'utf8')).toBe(
+        '{"undo":true}',
+      )
+      expect(leftoverArtifacts(installDir)).toEqual([])
+    }, 30_000)
 
-    // Refused before touching the install: still the old version, nothing staged or left aside.
-    expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.22.0')
-    expect(leftoverArtifacts(installDir)).toEqual([])
-  }, 30_000)
-})
+    test('a version-mismatch canary refuses before touching the install', () => {
+      const work = workDir('mismatch')
+      const installDir = join(work, 'install')
+
+      const zipV1 = buildReleaseZip(work, '0.22.0')
+      expect(
+        runInstall(host, [
+          '-FromZip',
+          zipV1,
+          '-InstallDir',
+          installDir,
+          '-NoShortcut',
+          '-NoLaunch',
+          '-Force',
+        ]).status,
+      ).toBe(0)
+
+      // The folder claims 0.22.1 but the compiled exe inside reports 0.9.9 — a corrupt/mismatched
+      // build install.ps1 must catch itself, without any of the release's own tooling lying to it.
+      const zipBad = buildReleaseZip(work, '0.22.1', { exeVersion: '0.9.9' })
+      const result = runInstall(host, [
+        '-FromZip',
+        zipBad,
+        '-InstallDir',
+        installDir,
+        '-NoShortcut',
+        '-NoLaunch',
+        '-Force',
+      ])
+      expect(result.status).not.toBe(0)
+      expect(result.stderr + result.stdout).toMatch(/version canary failed/i)
+
+      // Refused before touching the install: still the old version, nothing staged or left aside.
+      expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.22.0')
+      expect(leftoverArtifacts(installDir)).toEqual([])
+    }, 30_000)
+  })
+}
 
 // ── the running-instance refusal (AH-40, guard (c)) ──────────────────────────────────────────
 //
@@ -408,139 +423,147 @@ describe.skipIf(!win || !CSC)('install.ps1 transactional swap (AH-40)', () => {
 // The pointer half is the same `if ($runningProcs -or $liveFromPointer)` branch and IS isolatable:
 // $env:AGENTHYDRA_HOME picks the config dir, so a temp runtime.json naming a pid that is certainly
 // alive (this test process) makes the guard see a live instance no matter what else is running.
-describe.skipIf(!win || !CSC)('install.ps1 refuses under a running instance (AH-40)', () => {
-  /** A config dir whose runtime.json points at `pid`, as the daemon writes it. */
-  function fakeHome(baseDir: string, pid: number): string {
-    const home = join(baseDir, 'agenthydra-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'runtime.json'), JSON.stringify({ pid, port: 7789 }))
-    return home
-  }
+for (const host of PS_HOSTS) {
+  describe.skipIf(!win || !CSC)(
+    `install.ps1 refuses under a running instance (AH-40) [${host}]`,
+    () => {
+      /** A config dir whose runtime.json points at `pid`, as the daemon writes it. */
+      function fakeHome(baseDir: string, pid: number): string {
+        const home = join(baseDir, 'agenthydra-home')
+        mkdirSync(home, { recursive: true })
+        writeFileSync(join(home, 'runtime.json'), JSON.stringify({ pid, port: 7789 }))
+        return home
+      }
 
-  test('a live runtime pointer stops the install before anything on disk is touched', () => {
-    const work = workDir('running')
-    const installDir = join(work, 'install')
+      test('a live runtime pointer stops the install before anything on disk is touched', () => {
+        const work = workDir('running')
+        const installDir = join(work, 'install')
 
-    // An install that is already there, so "untouched" is something we can actually measure.
-    expect(
-      runInstall([
-        '-FromZip',
-        buildReleaseZip(work, '0.23.0'),
-        '-InstallDir',
-        installDir,
-        '-NoShortcut',
-        '-NoLaunch',
-        '-Force',
-      ]).status,
-    ).toBe(0)
+        // An install that is already there, so "untouched" is something we can actually measure.
+        expect(
+          runInstall(host, [
+            '-FromZip',
+            buildReleaseZip(work, '0.23.0'),
+            '-InstallDir',
+            installDir,
+            '-NoShortcut',
+            '-NoLaunch',
+            '-Force',
+          ]).status,
+        ).toBe(0)
 
-    // process.pid is alive by definition for as long as this test runs, so the guard cannot miss.
-    const result = runInstall(
-      [
-        '-FromZip',
-        buildReleaseZip(work, '0.23.1'),
-        '-InstallDir',
-        installDir,
-        '-NoShortcut',
-        '-NoLaunch',
-      ],
-      { AGENTHYDRA_HOME: fakeHome(work, process.pid) },
-    )
+        // process.pid is alive by definition for as long as this test runs, so the guard cannot miss.
+        const result = runInstall(
+          host,
+          [
+            '-FromZip',
+            buildReleaseZip(work, '0.23.1'),
+            '-InstallDir',
+            installDir,
+            '-NoShortcut',
+            '-NoLaunch',
+          ],
+          { AGENTHYDRA_HOME: fakeHome(work, process.pid) },
+        )
 
-    expect(result.status).not.toBe(0)
-    expect(result.stderr + result.stdout).toMatch(/appears to be running/i)
-    // "before anything on disk is touched" is the half that matters: the refusal is worthless if
-    // it fires after the swap has already begun.
-    expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.23.0')
-    expect(leftoverArtifacts(installDir)).toEqual([])
-  }, 60_000)
+        expect(result.status).not.toBe(0)
+        expect(result.stderr + result.stdout).toMatch(/appears to be running/i)
+        // "before anything on disk is touched" is the half that matters: the refusal is worthless if
+        // it fires after the swap has already begun.
+        expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.23.0')
+        expect(leftoverArtifacts(installDir)).toEqual([])
+      }, 60_000)
 
-  test('-Force is still the way past it, and it installs for real', () => {
-    const work = workDir('running-force')
-    const installDir = join(work, 'install')
-    const home = fakeHome(work, process.pid)
+      test('-Force is still the way past it, and it installs for real', () => {
+        const work = workDir('running-force')
+        const installDir = join(work, 'install')
+        const home = fakeHome(work, process.pid)
 
-    expect(
-      runInstall(
-        [
-          '-FromZip',
-          buildReleaseZip(work, '0.24.0'),
-          '-InstallDir',
-          installDir,
-          '-NoShortcut',
-          '-NoLaunch',
-          '-Force',
-        ],
-        { AGENTHYDRA_HOME: home },
-      ).status,
-    ).toBe(0)
-    expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.24.0')
-  }, 60_000)
+        expect(
+          runInstall(
+            host,
+            [
+              '-FromZip',
+              buildReleaseZip(work, '0.24.0'),
+              '-InstallDir',
+              installDir,
+              '-NoShortcut',
+              '-NoLaunch',
+              '-Force',
+            ],
+            { AGENTHYDRA_HOME: home },
+          ).status,
+        ).toBe(0)
+        expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.24.0')
+      }, 60_000)
 
-  test('a runtime pointer whose pid is gone is not a running instance', () => {
-    // The other half of a trustworthy guard: one that refuses unconditionally is as useless as
-    // one that never refuses. This is the only case here that the machine's own state can spoil -
-    // a REAL AgentHydra or tray process satisfies the process-name half of the same `or`, and no
-    // env var can hide it - so it is skipped, loudly, rather than left to fail on the owner's box.
-    const running = execFileSync(
-      'pwsh',
-      [
-        '-NoProfile',
-        '-Command',
-        "@(Get-Process -Name 'AgentHydra','lunarwerx-tray' -ErrorAction SilentlyContinue).Count",
-      ],
-      { timeout: 20_000, encoding: 'utf8' },
-    ).trim()
-    if (running !== '0') {
-      console.log(`SKIPPED (a real AgentHydra/tray process is running: ${running}) - the "a dead
+      test('a runtime pointer whose pid is gone is not a running instance', () => {
+        // The other half of a trustworthy guard: one that refuses unconditionally is as useless as
+        // one that never refuses. This is the only case here that the machine's own state can spoil -
+        // a REAL AgentHydra or tray process satisfies the process-name half of the same `or`, and no
+        // env var can hide it - so it is skipped, loudly, rather than left to fail on the owner's box.
+        const running = execFileSync(
+          host,
+          [
+            '-NoProfile',
+            '-Command',
+            "@(Get-Process -Name 'AgentHydra','lunarwerx-tray' -ErrorAction SilentlyContinue).Count",
+          ],
+          { timeout: 20_000, encoding: 'utf8' },
+        ).trim()
+        if (running !== '0') {
+          console.log(`SKIPPED (a real AgentHydra/tray process is running: ${running}) - the "a dead
         pointer does not refuse" case cannot be isolated from the process-name check.`)
-      return
-    }
+          return
+        }
 
-    const work = workDir('dead-pid')
-    const installDir = join(work, 'install')
+        const work = workDir('dead-pid')
+        const installDir = join(work, 'install')
 
-    // A pid that has certainly exited: spawn, wait for it, then confirm it is gone rather than
-    // assume (Windows recycles pids, and a recycled one would make this test refuse for a real
-    // reason and read as a regression).
-    const deadPid = Number(
-      execFileSync(
-        'pwsh',
-        [
-          '-NoProfile',
-          '-Command',
-          '$p = Start-Process cmd -ArgumentList "/c","exit" -PassThru; $p.WaitForExit(); $p.Id',
-        ],
-        { timeout: 20_000, encoding: 'utf8' },
-      ).trim(),
-    )
-    const stillThere = execFileSync(
-      'pwsh',
-      [
-        '-NoProfile',
-        '-Command',
-        `@(Get-Process -Id ${deadPid} -ErrorAction SilentlyContinue).Count`,
-      ],
-      { timeout: 20_000, encoding: 'utf8' },
-    ).trim()
-    if (stillThere !== '0') {
-      console.log(`SKIPPED (pid ${deadPid} was recycled before it could be used as a dead one)`)
-      return
-    }
+        // A pid that has certainly exited: spawn, wait for it, then confirm it is gone rather than
+        // assume (Windows recycles pids, and a recycled one would make this test refuse for a real
+        // reason and read as a regression).
+        const deadPid = Number(
+          execFileSync(
+            host,
+            [
+              '-NoProfile',
+              '-Command',
+              '$p = Start-Process cmd -ArgumentList "/c","exit" -PassThru; $p.WaitForExit(); $p.Id',
+            ],
+            { timeout: 20_000, encoding: 'utf8' },
+          ).trim(),
+        )
+        const stillThere = execFileSync(
+          host,
+          [
+            '-NoProfile',
+            '-Command',
+            `@(Get-Process -Id ${deadPid} -ErrorAction SilentlyContinue).Count`,
+          ],
+          { timeout: 20_000, encoding: 'utf8' },
+        ).trim()
+        if (stillThere !== '0') {
+          console.log(`SKIPPED (pid ${deadPid} was recycled before it could be used as a dead one)`)
+          return
+        }
 
-    const result = runInstall(
-      [
-        '-FromZip',
-        buildReleaseZip(work, '0.25.0'),
-        '-InstallDir',
-        installDir,
-        '-NoShortcut',
-        '-NoLaunch',
-      ],
-      { AGENTHYDRA_HOME: fakeHome(work, deadPid) },
-    )
-    expect(result.stderr + result.stdout).not.toMatch(/appears to be running/i)
-    expect(result.status).toBe(0)
-    expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.25.0')
-  }, 60_000)
-})
+        const result = runInstall(
+          host,
+          [
+            '-FromZip',
+            buildReleaseZip(work, '0.25.0'),
+            '-InstallDir',
+            installDir,
+            '-NoShortcut',
+            '-NoLaunch',
+          ],
+          { AGENTHYDRA_HOME: fakeHome(work, deadPid) },
+        )
+        expect(result.stderr + result.stdout).not.toMatch(/appears to be running/i)
+        expect(result.status).toBe(0)
+        expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.25.0')
+      }, 60_000)
+    },
+  )
+}

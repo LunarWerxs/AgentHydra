@@ -39,6 +39,20 @@ const CMD_LINE = 'Command' + 'Line'
 // each check's own header comment documents, not a synthetic near-miss. A check that exports
 // findViolations but has no entry here fails loudly below rather than being silently skipped.
 const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = {
+  'ps1-read-as-ansi.mjs': {
+    broken: [
+      // install.ps1's canary exactly as it shipped: an em dash inside a double-quoted string, which
+      // Windows PowerShell 5.1 read as a closing quote and refused to parse (2026-09-28).
+      '    throw "The staged AgentHydra.exe exited $LASTEXITCODE on --version — refusing to install it."\n',
+      // A comment is not safe either: it is the same bytes, and one edit away from a string.
+      '# AH-40 — a running exe can hold files open mid-copy\n$x = 1\n',
+    ],
+    fixed: [
+      '    throw "The staged AgentHydra.exe exited $LASTEXITCODE on --version - refusing to install it."\n',
+      // A BOM-marked file is read as UTF-8 by 5.1, so its non-ASCII is fine.
+      '﻿# AH-40 — a running exe can hold files open mid-copy\n$x = 1\n',
+    ],
+  },
   'local-api-origin-allowlist.mjs': {
     broken: [
       // instance-mode.ts as it actually stood after AH-11 was marked closed: a second local server,

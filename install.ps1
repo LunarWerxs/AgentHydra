@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   We ship a bare .exe and a ZIP, and the instructions were "download it and put it somewhere". That
-  works, and it also means nobody checks what they downloaded — so this script exists mainly to make
+  works, and it also means nobody checks what they downloaded - so this script exists mainly to make
   the checksum step the DEFAULT rather than an extra thing a careful person does by hand.
 
   THE VERIFICATION IS THE POINT, so it is not optional and there is no -SkipVerify switch. Every
@@ -30,7 +30,7 @@
 
 .PARAMETER Force
   Install even though AgentHydra (or its tray host) appears to be running. Without this, a
-  detected running instance stops the install before anything on disk is touched (AH-40 — a
+  detected running instance stops the install before anything on disk is touched (AH-40 - a
   running exe or tray host can hold files open mid-copy, which used to corrupt an in-place copy
   silently instead of refusing).
 
@@ -71,6 +71,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# Keep this file pure ASCII. Windows PowerShell 5.1 reads a BOM-less script in the ANSI code page,
+# where an em dash's UTF-8 bytes include a curly quote that ends a "..." string early, so
+# `powershell -File install.ps1` failed to parse at all (2026-09-28). Enforced by
+# scripts/checks/ps1-read-as-ansi.mjs.
 
 if ($Sha256 -and -not $FromZip) { throw "-Sha256 only applies together with -FromZip." }
 
@@ -129,7 +134,7 @@ if ($FromZip) {
   Write-Note "release $tag"
 
   # The ZIP, not the bare .exe: it carries the tray toolkit (misc\), without which the app can only
-  # run console-style. That was a real regression once — see the long comment in release.yml.
+  # run console-style. That was a real regression once - see the long comment in release.yml.
   $assetName = "AgentHydra-$($tag.TrimStart('v'))-$target.zip"
   $asset = $release.assets | Where-Object { $_.name -eq $assetName }
   if (-not $asset) {
@@ -201,7 +206,7 @@ try {
   # --- (a) stage the payload on the DESTINATION volume ---------------------------------------
   # A sibling of $InstallDir shares its drive even before $InstallDir itself exists (a fresh
   # install), so the real swap below (Move-Item / Rename-Item) is a rename, never a cross-volume
-  # copy — the thing that made the old in-place Copy-Item vulnerable to a disk-full or interrupted
+  # copy - the thing that made the old in-place Copy-Item vulnerable to a disk-full or interrupted
   # partial write in the first place (AH-40).
   $stamp = Get-Date -Format 'yyyyMMddHHmmssfff'
   $staging = "$InstallDir.staging-$stamp"
@@ -214,19 +219,39 @@ try {
     foreach ($c in $ReleaseComponents) {
       $p = Join-Path $staging $c.RelPath
       if (-not (Test-Path $p)) {
-        throw "The staged release is missing '$($c.RelPath)' ($($c.Name)) — refusing to install a partial payload."
+        throw "The staged release is missing '$($c.RelPath)' ($($c.Name)) - refusing to install a partial payload."
       }
     }
     $stagedExe = Join-Path $staging 'AgentHydra.exe'
 
-    # Canary, the same one the release workflow and the self-updater run — but on the STAGED
+    # Canary, the same one the release workflow and the self-updater run - but on the STAGED
     # copy, before anything real is replaced. A binary that cannot print its own version, or
     # prints the wrong one, is not one to swap in for a working install.
-    $reported = & $stagedExe --version
-    if ($LASTEXITCODE -ne 0) {
-      throw "The staged AgentHydra.exe exited $LASTEXITCODE on --version — refusing to install it."
+    #
+    # Start-Process with redirected output, never `& $stagedExe --version`. AgentHydra.exe is a
+    # GUI-subsystem binary (scripts/build.ts's setWindowsGuiSubsystem, so a tray launch opens no
+    # console), and Windows PowerShell 5.1 neither waits for a GUI program nor captures its
+    # output: `&` returned $null and never set $LASTEXITCODE, so on the PowerShell most Windows
+    # users have, this canary died on a StrictMode error before checking anything. pwsh 7 does
+    # capture it, which is why the pwsh-only test suite never saw it (2026-09-28). Redirecting to
+    # files gives the exe real stdout/stderr handles under both, and the exit code comes from the
+    # process object rather than from $LASTEXITCODE.
+    $canaryOut = Join-Path $work 'canary-stdout.txt'
+    $canaryErr = Join-Path $work 'canary-stderr.txt'
+    $canary = Start-Process -FilePath $stagedExe -ArgumentList '--version' -NoNewWindow -Wait -PassThru `
+      -RedirectStandardOutput $canaryOut -RedirectStandardError $canaryErr
+    # "$(...)", not [string](...): Get-Content -Raw of an EMPTY file yields nothing, and in 5.1
+    # [string] over nothing is still $null, which is the null-method error all over again.
+    $reported = "$(Get-Content -LiteralPath $canaryOut -Raw -ErrorAction SilentlyContinue)"
+    $canaryStderr = "$(Get-Content -LiteralPath $canaryErr -Raw -ErrorAction SilentlyContinue)".Trim()
+    if ($null -eq $canary.ExitCode -or $canary.ExitCode -ne 0) {
+      $code = if ($null -eq $canary.ExitCode) { 'no readable exit code' } else { "exit code $($canary.ExitCode)" }
+      throw "The staged AgentHydra.exe failed its --version canary ($code) - refusing to install it.$(if ($canaryStderr) { "`n  stderr: $canaryStderr" })"
     }
-    $reportedVersion = ([string]$reported).Trim().TrimStart('v')
+    $reportedVersion = $reported.Trim().TrimStart('v')
+    if (-not $reportedVersion) {
+      throw "The staged AgentHydra.exe printed no version on --version (exit code 0, empty stdout) - refusing to install it."
+    }
     $expectedVersion = $null
     if ($tag) {
       $expectedVersion = $tag.TrimStart('v')
@@ -234,7 +259,7 @@ try {
       $expectedVersion = $Matches['v']
     }
     if ($expectedVersion -and $reportedVersion -ne $expectedVersion) {
-      throw "Version canary failed: the staged build reports '$reportedVersion' but the release is '$expectedVersion' — refusing to install it."
+      throw "Version canary failed: the staged build reports '$reportedVersion' but the release is '$expectedVersion' - refusing to install it."
     }
     Write-Note "staged version $reportedVersion"
 
@@ -296,12 +321,12 @@ try {
 
         Move-Item -LiteralPath (Join-Path $staging $c.RelPath) -Destination $target -Force
       }
-      # Every component landed — the old copies are no longer needed.
+      # Every component landed - the old copies are no longer needed.
       foreach ($m in $movedAside) {
         if ($m.WasPresent -and (Test-Path $m.Aside)) { Remove-Item $m.Aside -Recurse -Force -ErrorAction SilentlyContinue }
       }
     } catch {
-      Write-Step 'Install failed mid-swap — rolling back'
+      Write-Step 'Install failed mid-swap - rolling back'
       foreach ($m in $movedAside) {
         if (Test-Path $m.Target) { Remove-Item $m.Target -Recurse -Force -ErrorAction SilentlyContinue }
         if ($m.WasPresent -and (Test-Path $m.Aside)) {
@@ -341,12 +366,12 @@ try {
       $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
       Copy-Item -LiteralPath $lnk -Destination (Join-Path $startMenu 'AgentHydra.lnk') -Force
     } else {
-      Write-Note "Skipping the Start Menu entry (-NoLaunch) — the shortcut still lives at $lnk"
+      Write-Note "Skipping the Start Menu entry (-NoLaunch) - the shortcut still lives at $lnk"
     }
   }
 
   Write-Host ''
-  Write-Host "AgentHydra $reported is installed." -ForegroundColor Green
+  Write-Host "AgentHydra $reportedVersion is installed." -ForegroundColor Green
   Write-Host "  $exe"
   if (-not $NoShortcut) {
     Write-Host "  Launch it from the Start Menu entry 'AgentHydra' (or $InstallDir\AgentHydra.lnk) to get the tray icon."

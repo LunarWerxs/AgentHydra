@@ -136,6 +136,12 @@ jobs:
       - name: Guardrail (local API servers use an exact-origin allowlist)
         run: bun scripts/checks/local-api-origin-allowlist.mjs
 
+      # Fails if install.ps1 gains non-ASCII without a UTF-8 BOM. Windows PowerShell 5.1 reads a
+      # BOM-less script in the ANSI code page, where an em dash's bytes include a curly quote that
+      # ends a "..." string early: `powershell -File install.ps1` could not even parse (2026-09-28).
+      - name: Guardrail (install.ps1 parses under Windows PowerShell 5.1)
+        run: bun scripts/checks/ps1-read-as-ansi.mjs
+
       - name: Build (web SPA)
         run: bun run build
 
