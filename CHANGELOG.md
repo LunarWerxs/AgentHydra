@@ -378,6 +378,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   reason that was false. It now says the caller could not be traced and suggests calling again
   or naming the instance number.
 
+- **Setting a chat's effort and ultracode inside a running app works again**
+  (`server/src/core/claude-native/native-program.ts`). The installed Claude app no longer has
+  `startingSessionIds`, and the ultracode action read it through the archive snapshot, so every
+  call failed with "reading 'has'" before anything changed. It now reads only the chat's effort
+  and ultracode flag.
+
+- **Turning `doctrine.stamp_ultracode` off no longer reports every chat as missing ultracode**
+  (`orchestrator/scripts/lib/stamplib.py`, `migrate_chat.py`). With the knob off, your own chats
+  keep the effort and ultracode they were given, the doctrine pass leaves them alone, and a move
+  no longer says it stamped ultracode. The stamplib tests now run on the shipped policy rather
+  than the machine's own `state/config.json`.
+
 - **"Move chats to account" takes the chats off the old account's screen, not just its disk**
   (`server/src/move-source-settle.ts`, `server/src/routes/desktop-sessions.ts`). The Instances
   menu and the Sessions migrate settled the old copy with a disk flag alone, which a running app

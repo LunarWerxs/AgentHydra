@@ -689,8 +689,15 @@ async function nativeUltracode(env: any, found: any, request: any, settled: any,
   if (typeof manager.applyFlagSettings !== 'function') {
     nativeRefuse('native applyFlagSettings unavailable')
   }
+  // Only the two fields this action sets are read. nativeSnapshot also reads the archive-only
+  // busy bookkeeping (startingSessionIds and the rest), which an app update can rename: on
+  // 2026-09-28 it threw "reading 'has'" before dispatch and no chat's ultracode could change.
+  const pick = (s: any) => ({
+    effort: s.effort ?? null,
+    ultracode: s.sessionSettings?.ultracode ?? null,
+  })
   const session = nativeSelect(manager, request)
-  const before = nativeSnapshot(manager, session)
+  const before = pick(session)
   const wantUltracode = request.ultracode !== false
   state.dispatch = 'sent'
   await manager.applyFlagSettings(session.sessionId, {
@@ -698,18 +705,16 @@ async function nativeUltracode(env: any, found: any, request: any, settled: any,
     effortLevel: request.effort,
   })
   nativeCheckIdentity(env, found, request, settled)
-  const after = nativeSnapshot(manager, nativeSelect(manager, request))
-  const pick = (s: any) => ({ effort: s.effort, ultracode: s.sessionSettings?.ultracode ?? null })
-  const verified =
-    (after.sessionSettings?.ultracode === true) === wantUltracode && after.effort === request.effort
+  const after = pick(nativeSelect(manager, request))
+  const verified = (after.ultracode === true) === wantUltracode && after.effort === request.effort
   return {
     ok: verified,
     verified,
     dispatch: state.dispatch,
     action: 'ultracode',
     identity: nativeIdentity(env, found, null),
-    before: pick(before),
-    after: pick(after),
+    before,
+    after,
     evidence: "native manager state read back after the app's own applyFlagSettings",
   }
 }

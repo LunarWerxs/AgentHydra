@@ -186,6 +186,10 @@ def is_stamped(meta: dict) -> bool:
     auto = _automation_effort(meta)
     if auto is not None:
         return not ultra and meta.get("effort") == auto
+    # doctrine.stamp_ultracode OFF: the owner's chats keep the effort and ultracode they were
+    # given, so there is nothing to be missing (owner, 2026-09-28: "stay off ultracode").
+    if not configlib.get("doctrine.stamp_ultracode"):
+        return True
     return ultra and meta.get("effort") == ULTRACODE_EFFORT
 
 

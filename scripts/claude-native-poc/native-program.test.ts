@@ -548,6 +548,24 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
     expect(result).toMatchObject({ ok: false, verified: false, dispatch: 'sent' })
     expect(result.reason).toContain('save response lost')
   })
+  // 2026-09-28: the installed app no longer has startingSessionIds, and the ultracode action
+  // threw "reading 'has'" before dispatch on every chat. It needs only effort and the flag.
+  test('ultracode lands on a manager without the archive-only busy bookkeeping', async () => {
+    const h = harness()
+    delete h.manager.startingSessionIds
+    h.manager.applyFlagSettings = async (id: string, flags: any) => {
+      const s = h.manager.sessions.get(id)
+      s.sessionSettings = { ...s.sessionSettings, ultracode: flags.ultracode }
+      s.effort = flags.effortLevel
+    }
+    expect(await h.run({ action: 'ultracode', effort: 'xhigh', ultracode: false })).toMatchObject({
+      ok: true,
+      verified: true,
+      before: { effort: 'max', ultracode: true },
+      after: { effort: 'xhigh', ultracode: false },
+    })
+    expect(h.other.sessionSettings.ultracode).toBe(true)
+  })
   test('serialized identifiers cannot inject additional inspector code', async () => {
     const h = harness()
     const value = 'local_target");globalThis.injected=true;//'
