@@ -178,6 +178,23 @@ test('a newer app adjacent to the Squirrel stub is the one used, not an older ne
   )
 })
 
+test('an app folder newer than the builds packages/RELEASES lists is unfinished and never used', async () => {
+  const f = await fixture()
+  // An update killed mid-write: the folder and its exe exist, RELEASES still ends at the old build.
+  const partial = join(f.install, 'app-3.0.0')
+  await mkdir(partial)
+  await writeFile(join(partial, 'claude.exe'), f.original)
+  await mkdir(join(f.install, 'packages'))
+  const releases = join(f.install, 'packages', 'RELEASES')
+  await writeFile(releases, 'ABC AnthropicClaude-2.2553.1-full.nupkg 100\n')
+  expect(await resolveClaudeNativeSource(join(f.install, 'claude.exe'))).toBe(f.binary)
+  // Squirrel writes RELEASES last; once it names the build, the build is the one used.
+  await writeFile(releases, 'DEF AnthropicClaude-3.0.0-full.nupkg 100\n')
+  expect(await resolveClaudeNativeSource(join(f.install, 'claude.exe'))).toBe(
+    join(partial, 'claude.exe'),
+  )
+})
+
 test('an unreadable newest app fails closed instead of falling back to an older one', async () => {
   const f = await fixture()
   await mkdir(join(f.install, 'app-3.0.0'))

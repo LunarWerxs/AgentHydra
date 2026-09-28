@@ -9,6 +9,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Claude Desktop updates again** (`server/src/version-drift.ts`, `desktop-install-lock.ts`).
+  AgentHydra opens every account from its own copy of Claude, which has no updater beside it, so
+  Claude's update check failed with "Can not find Squirrel" and the real install was never run to
+  update itself: it sat on 2.9939.2 for two days while 2.9939.4 was out. The 10-minute version
+  check now asks Claude's own update feed and, when a newer build is out, runs the install's own
+  updater, the same step the app would have taken. Nothing open is closed; each account moves to
+  the new build the next time it is opened through AgentHydra, and the Incidents panel names the
+  open ones still on the old build. A build the updater has not finished writing (or was stopped
+  while writing) is never launched, and the next check finishes it. `check_versions` now shows
+  the newest build on offer.
+
 - **Archiving a chat inside a running Claude Desktop works again on 2.9939.4**
   (`server/src/core/claude-native/native-program.ts`). That build moved the list of chats that are
   still starting to a new place inside the app, and every native archive, including the step of a

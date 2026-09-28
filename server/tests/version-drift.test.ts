@@ -3,7 +3,15 @@
 // reads a real profile, spawns npm or records into the real incidents table.
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 
 const scratch = `${process.env.TEMP ?? '/tmp'}/agenthydra-version-drift-test-${crypto.randomUUID()}`
@@ -13,11 +21,19 @@ const {
   checkVersionDrift,
   compareVersion,
   desktopBuildFromCmdline,
+  desktopFeedUrl,
+  feedUrlFromDeviceId,
+  feedUrlFromSquirrelLogs,
   fixVersionDrift,
+  newestInReleases,
+  releasesUrl,
   runVersionDriftPass,
   stageEngine,
   syncDriftIncidents,
 } = await import('../src/version-drift')
+const { desktopInstallSettled, whileDesktopInstallUpdates } = await import(
+  '../src/desktop-install-lock'
+)
 
 type CheckDeps = Parameters<typeof checkVersionDrift>[0] & object
 type FixDeps = Parameters<typeof fixVersionDrift>[1] & object
@@ -76,16 +92,26 @@ function checkDeps(overrides: Partial<CheckDeps> = {}): CheckDeps {
         cmdline: `"C:\\Users\\x\\AppData\\Local\\AnthropicClaude\\app-2.2553.1\\claude.exe" --user-data-dir="${P.b}"`,
       },
     ],
+    // Claude's update feed is never asked from a test; a case that needs it says what it offers.
+    desktopFeed: async () => null,
     // A frozen clock far after every log line below, so it can never fall before them.
     now: () => new Date('2099-01-01T12:00:00Z'),
     ...overrides,
   }
 }
 
-function fixDeps(overrides: Partial<FixDeps> = {}): FixDeps & { installs: string[] } {
+function fixDeps(
+  overrides: Partial<FixDeps> = {},
+): FixDeps & { installs: string[]; desktopRuns: string[] } {
   const installs: string[] = []
+  const desktopRuns: string[] = []
   return {
     installs,
+    desktopRuns,
+    updateDesktop: async (installed) => {
+      desktopRuns.push(installed)
+      return { ok: true, detail: '' }
+    },
     runningDirs: async () => new Set([norm(P.a), norm(P.b)]),
     stage: stageEngine,
     cliInUse: async () => false,
@@ -305,5 +331,196 @@ describe('incidents', () => {
     // a successful install must not leave a flag behind anyway.
     expect(recorded.sort()).toEqual(['desktop-build:#7', 'live-engines'])
     expect(out.report.instances.find((i) => i.num === 13)?.engineBehind).toBe(false)
+  })
+})
+
+describe('the Claude Desktop install behind its own update feed', () => {
+  const DEVICE = '2ef35f69-cf02-4515-851a-c5b0c659cae5'
+  const FEED = `https://api.anthropic.com/api/desktop/win32/x64/squirrel/update?device_id=${DEVICE}&version=2.9939.2&os_version=10.0.26200`
+
+  test('only the Anthropic Windows feed with a device id is accepted, asking about what is installed', () => {
+    expect(desktopFeedUrl(FEED, '2.9939.4')).toBe(
+      FEED.replace('version=2.9939.2', 'version=2.9939.4'),
+    )
+    for (const bad of [
+      FEED.replace('https:', 'http:'),
+      FEED.replace('api.anthropic.com', 'api.anthropic.com.evil.test'),
+      FEED.replace('api.anthropic.com', 'api.anthropic.com:8443'),
+      FEED.replace('/squirrel/update', '/squirrel/other'),
+      FEED.replace(DEVICE, 'not-a-uuid'),
+      'not a url',
+    ])
+      expect(desktopFeedUrl(bad, '2.9939.2')).toBeNull()
+    expect(desktopFeedUrl(FEED, '2.9939.2 --evil')).toBeNull()
+  })
+
+  test('the feed URL comes from the newest Squirrel log that names one', () => {
+    writeFileSync(
+      join(install, 'Squirrel-CheckForUpdate.log'),
+      `[27/09/26 05:37:19] info: Program: Starting Squirrel Updater: --checkForUpdate ${FEED}\n[27/09/26 05:37:20] info: Program: Finished Squirrel Updater\n`,
+    )
+    expect(feedUrlFromSquirrelLogs(install, '2.9939.2')).toBe(FEED)
+    writeFileSync(
+      join(install, 'Squirrel-Update.log'),
+      '[28/09/26 01:00:00] info: Program: Starting Squirrel Updater: --update https://example.test/squirrel/update?device_id=x\n',
+    )
+    const later = new Date(Date.now() + 60_000)
+    utimesSync(join(install, 'Squirrel-Update.log'), later, later)
+    // The newest log names a foreign host: refused outright, never swapped for an older one.
+    expect(feedUrlFromSquirrelLogs(install, '2.9939.2')).toBeNull()
+    rmSync(join(install, 'Squirrel-Update.log'))
+    rmSync(join(install, 'Squirrel-CheckForUpdate.log'))
+    expect(feedUrlFromSquirrelLogs(install, '2.9939.2')).toBeNull()
+  })
+
+  test('with no log, the default profile base64 device id builds the URL', () => {
+    const did = join(root, 'ant-did')
+    writeFileSync(did, Buffer.from(DEVICE).toString('base64'))
+    expect(feedUrlFromDeviceId(did, '2.9939.2', 'x64', '10.0.26200')).toBe(FEED)
+    writeFileSync(did, Buffer.from('garbage').toString('base64'))
+    expect(feedUrlFromDeviceId(did, '2.9939.2', 'x64', '10.0.26200')).toBeNull()
+    expect(feedUrlFromDeviceId(join(root, 'missing'), '2.9939.2')).toBeNull()
+  })
+
+  test('RELEASES is read at the address Squirrel reads, and its newest build wins', () => {
+    const url = new URL(releasesUrl(FEED))
+    expect(url.pathname).toBe('/api/desktop/win32/x64/squirrel/update/RELEASES')
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({
+      device_id: DEVICE,
+      version: '2.9939.2',
+      id: 'AnthropicClaude',
+      localVersion: '2.9939.2',
+      arch: 'amd64',
+    })
+    expect(
+      newestInReleases(
+        [
+          'AAA https://downloads.claude.ai/releases/win32/x64/AnthropicClaude-2.9939.4-full.nupkg 255832775',
+          'BBB AnthropicClaude-2.10000.1-delta.nupkg 1000',
+          'CCC AnthropicClaude-2.9939.10-full.nupkg 1000',
+        ].join('\n'),
+      ),
+    ).toBe('2.10000.1')
+    expect(newestInReleases('{"type":"error"}')).toBeNull()
+  })
+
+  test('an install behind the feed is flagged; level with it, or an unreachable feed, is not', async () => {
+    const behind = await checkVersionDrift(checkDeps({ desktopFeed: async () => '2.9939.4' }))
+    expect(behind.desktop).toMatchObject({
+      newestInstalled: '2.2553.13',
+      available: '2.9939.4',
+      installBehind: true,
+    })
+    expect(behind.flags.find((f) => f.key === 'desktop-install')?.message).toContain('2.9939.4')
+    const feeds = [
+      async () => '2.2553.13',
+      async () => null,
+      async (): Promise<string | null> => {
+        throw Error('offline')
+      },
+    ]
+    for (const desktopFeed of feeds) {
+      const r = await checkVersionDrift(checkDeps({ desktopFeed }))
+      expect(r.desktop.installBehind).toBe(false)
+      expect(r.flags.some((f) => f.key === 'desktop-install')).toBe(false)
+    }
+  })
+
+  test('a folder an interrupted update left half-written is not counted, so the update runs again', async () => {
+    mkdirSync(join(install, 'app-2.9939.4'), { recursive: true })
+    writeFileSync(
+      join(install, 'packages', 'RELEASES'),
+      'ABC AnthropicClaude-2.2553.13-full.nupkg 100\n',
+    )
+    const r = await checkVersionDrift(checkDeps({ desktopFeed: async () => '2.9939.4' }))
+    expect(r.desktop).toMatchObject({ newestInstalled: '2.2553.13', installBehind: true })
+    writeFileSync(
+      join(install, 'packages', 'RELEASES'),
+      'DEF AnthropicClaude-2.9939.4-full.nupkg 100\n',
+    )
+    const done = await checkVersionDrift(checkDeps({ desktopFeed: async () => '2.9939.4' }))
+    expect(done.desktop).toMatchObject({ newestInstalled: '2.9939.4', installBehind: false })
+  })
+
+  test('the fixing pass runs the updater for the installed build, and never with autofix off', async () => {
+    const r = await checkVersionDrift(checkDeps({ desktopFeed: async () => '2.9939.4' }))
+    const on = fixDeps()
+    expect((await fixVersionDrift(r, on)).desktopUpdated).toBe('2.9939.4')
+    expect(on.desktopRuns).toEqual(['2.2553.13'])
+    const off = fixDeps({ autofix: false })
+    const out = await fixVersionDrift(r, off)
+    expect(off.desktopRuns).toEqual([])
+    expect(out.desktopFlag?.key).toBe('desktop-install')
+    const level = fixDeps()
+    await fixVersionDrift(await checkVersionDrift(checkDeps()), level)
+    expect(level.desktopRuns).toEqual([])
+  })
+
+  test('a pass that lands the update clears its flag and flags each open instance on the old build', async () => {
+    const { deps, recorded } = incidentDeps()
+    const out = await runVersionDriftPass({
+      check: checkDeps({ desktopFeed: async () => '2.9939.4' }),
+      fix: fixDeps({
+        // Nothing else is fixed in this pass, so only the Desktop update can cause the re-check.
+        runningDirs: async () => null,
+        cliInUse: async () => true,
+        updateDesktop: async () => {
+          mkdirSync(join(install, 'app-2.9939.4'), { recursive: true })
+          return { ok: true, detail: '' }
+        },
+      }),
+      incidents: deps,
+    })
+    expect(out.fixed.desktopUpdated).toBe('2.9939.4')
+    expect(out.report.desktop).toMatchObject({ newestInstalled: '2.9939.4', installBehind: false })
+    expect(recorded).not.toContain('desktop-install')
+    expect(recorded).toEqual(expect.arrayContaining(['desktop-build:#3', 'desktop-build:#7']))
+  })
+
+  test('a failed updater keeps its reason; one that claims success but changed nothing stays flagged', async () => {
+    const failed = incidentDeps()
+    const a = await runVersionDriftPass({
+      check: checkDeps({ desktopFeed: async () => '2.9939.4' }),
+      fix: fixDeps({ updateDesktop: async () => ({ ok: false, detail: 'Update.exe exited 1' }) }),
+      incidents: failed.deps,
+    })
+    expect(a.flags.find((f) => f.key === 'desktop-install')?.message).toContain(
+      'Update.exe exited 1',
+    )
+    const silent = incidentDeps()
+    const b = await runVersionDriftPass({
+      check: checkDeps({ desktopFeed: async () => '2.9939.4' }),
+      fix: fixDeps(),
+      incidents: silent.deps,
+    })
+    expect(b.fixed.desktopUpdated).toBe('2.9939.4')
+    expect(silent.recorded).toContain('desktop-install')
+  })
+
+  test('a managed launch waits for an update in flight, and a failed update does not wedge it', async () => {
+    let finish!: () => void
+    const order: string[] = []
+    const update = whileDesktopInstallUpdates(() =>
+      new Promise<void>((r) => {
+        finish = r
+      }).then(() => {
+        order.push('update')
+      }),
+    )
+    const launch = desktopInstallSettled().then(() => {
+      order.push('launch')
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(order).toEqual([])
+    finish()
+    await Promise.all([update, launch])
+    expect(order).toEqual(['update', 'launch'])
+    await expect(
+      whileDesktopInstallUpdates(async () => {
+        throw Error('boom')
+      }),
+    ).rejects.toThrow('boom')
+    await desktopInstallSettled()
   })
 })

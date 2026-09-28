@@ -20,6 +20,14 @@
 //      folder is byte-identical to what the app would have fetched, and appears in one rename.
 //   4. The CLI install behind the Desktop's version: updated with npm, pinned to the Desktop's
 //      version so terminal and desktop chats run one engine, only while nothing runs from it.
+//   5. The Claude Desktop INSTALL behind Claude's own update feed (owner, 2026-09-28: "wtf is
+//      claude pinned and can't update"). Every AgentHydra Open runs Claude from a managed copy
+//      (claude-native-launch.ts) with no Squirrel Update.exe beside it, so the app's updater fails
+//      with "Can not find Squirrel", and the real install under %LOCALAPPDATA%\AnthropicClaude is
+//      never run, so nothing updated it: measured on 2.9939.2 for two days while the feed offered
+//      2.9939.4. The pass asks the same feed the app asks and runs the install's own
+//      `Update.exe --update`, which is what the app would have done; the next Open copies the new
+//      build. Open instances then show up under 1 and are never restarted from here.
 // A flag that stops being true resolves its own incident, so the Incidents panel shows only what is
 // still wrong. AGENTHYDRA_VERSION_AUTOFIX=0 turns 3 and 4 into flags too.
 
@@ -35,11 +43,16 @@ import {
   statSync,
 } from 'node:fs'
 import { copyFile, link, mkdir, rename, rm } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, release } from 'node:os'
 import { join } from 'node:path'
 import { listCliInstances } from './core/cli-instances'
 import { listInstances } from './core/instances'
 import { scanClaudeProcesses, spawnCaptured } from './core/process'
+import {
+  isFinishedBuild,
+  newestFinishedBuild,
+  whileDesktopInstallUpdates,
+} from './desktop-install-lock'
 import {
   deliverIncidentNotification,
   listIncidents,
@@ -55,6 +68,13 @@ const LOG_TAIL_BYTES = 512 * 1024
 const NPM_TIMEOUT_MS = 5 * 60_000
 const CLI_PACKAGE = '@anthropic-ai/claude-code'
 const SEMVER_RE = /^\d+(?:\.\d+)+$/
+const FEED_HOST = 'api.anthropic.com'
+const FEED_PATH_RE = /^\/api\/desktop\/win32\/(x64|arm64)\/squirrel\/update$/i
+const FEED_CACHE_MS = 60 * 60_000 // the app itself asks hourly
+const FEED_TIMEOUT_MS = 20_000
+const DESKTOP_UPDATE_TIMEOUT_MS = 15 * 60_000
+const SQUIRREL_LOGS = ['Squirrel-CheckForUpdate.log', 'Squirrel-Update.log']
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // --- versions ------------------------------------------------------------------------------------
 
@@ -85,24 +105,24 @@ export function desktopBuildFromCmdline(cmdline: string): string | null {
   return squirrel ? squirrel[1] : null
 }
 
-/** The newest `app-<build>` folder of the Squirrel install, which is what every AgentHydra launch
- *  uses (claude-native-launch.ts resolveClaudeNativeSource). Null when there is none. */
+/** The newest FINISHED `app-<build>` folder of the Squirrel install, which is what every AgentHydra
+ *  launch uses (claude-native-launch.ts resolveClaudeNativeSource). A folder an interrupted update
+ *  left half-written is not counted, so the next pass runs the update again. Null when there is none. */
 export function newestInstalledDesktop(installRoot: string): string | null {
   try {
+    const finished = newestFinishedBuild(installRoot)
     const builds = readdirSync(installRoot, { withFileTypes: true })
       .filter((e) => e.isDirectory() && /^app-\d+(?:\.\d+)*$/.test(e.name))
       .map((e) => e.name.slice(4))
+      .filter((build) => isFinishedBuild(build, finished))
     return newest(builds)
   } catch {
     return null
   }
 }
 
-/** The Claude Code version this profile's Desktop last asked for, from the newest line in its
- *  main.log that names it. Reads the tail only - the log of a long-lived profile runs to tens of MB. */
-export function requestedEngineVersion(profileDir: string): string | null {
-  const path = join(profileDir, 'logs', 'main.log')
-  let text: string
+/** The last LOG_TAIL_BYTES of a log, or null when it cannot be read. Long-lived logs run to tens of MB. */
+function readLogTail(path: string): string | null {
   let fd: number | undefined
   try {
     const size = statSync(path).size
@@ -110,12 +130,95 @@ export function requestedEngineVersion(profileDir: string): string | null {
     const buf = Buffer.alloc(size - start)
     fd = openSync(path, 'r')
     const bytes = readSync(fd, buf, 0, buf.length, start)
-    text = buf.subarray(0, bytes).toString('utf8')
+    return buf.subarray(0, bytes).toString('utf8')
   } catch {
     return null
   } finally {
     if (fd !== undefined) closeSync(fd)
   }
+}
+
+/** `raw` as a Claude Desktop update-feed URL asking about `installed`, or null when it is anything
+ *  other than Anthropic's own Windows Squirrel feed with a device id. A URL read from a file is
+ *  handed to Update.exe, so nothing else is accepted. */
+export function desktopFeedUrl(raw: string, installed: string): string | null {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return null
+  }
+  if (url.protocol !== 'https:' || url.hostname !== FEED_HOST || url.port) return null
+  if (!FEED_PATH_RE.test(url.pathname) || !SEMVER_RE.test(installed)) return null
+  if (!UUID_RE.test(url.searchParams.get('device_id') ?? '')) return null
+  url.searchParams.set('version', installed)
+  return url.toString()
+}
+
+/** The feed URL the app itself last used, read back from the install's own Squirrel logs (the
+ *  newest log that names one wins). Null when no log does. */
+export function feedUrlFromSquirrelLogs(installRoot: string, installed: string): string | null {
+  let best: { at: number; url: string } | null = null
+  for (const name of SQUIRREL_LOGS) {
+    const path = join(installRoot, name)
+    const text = readLogTail(path)
+    if (text === null) continue
+    let last: string | null = null
+    for (const m of text.matchAll(/--(?:checkForUpdate|update) (https:\/\/\S+)/g)) last = m[1]
+    if (!last) continue
+    const at = statSync(path, { throwIfNoEntry: false })?.mtimeMs ?? 0
+    if (!best || at > best.at) best = { at, url: last }
+  }
+  return best ? desktopFeedUrl(best.url, installed) : null
+}
+
+/** The feed URL built from scratch, for an install whose logs name none: the default profile keeps
+ *  its device id base64-encoded in %APPDATA%\Claude\ant-did (checked 2026-09-28 against the id its
+ *  own update checks sent). */
+export function feedUrlFromDeviceId(
+  antDidPath: string,
+  installed: string,
+  arch: string = process.arch,
+  osVersion: string = release(),
+): string | null {
+  let id: string
+  try {
+    id = Buffer.from(readFileSync(antDidPath, 'utf8').trim(), 'base64').toString('utf8').trim()
+  } catch {
+    return null
+  }
+  if (!UUID_RE.test(id)) return null
+  const url = new URL(
+    `https://${FEED_HOST}/api/desktop/win32/${arch === 'arm64' ? 'arm64' : 'x64'}/squirrel/update`,
+  )
+  url.searchParams.set('device_id', id)
+  url.searchParams.set('version', installed)
+  url.searchParams.set('os_version', osVersion)
+  return desktopFeedUrl(url.toString(), installed)
+}
+
+/** Where Squirrel reads the list of releases for `feedUrl`, with the parameters it adds itself. */
+export function releasesUrl(feedUrl: string): string {
+  const url = new URL(feedUrl)
+  const arch = FEED_PATH_RE.exec(url.pathname)?.[1]?.toLowerCase() === 'arm64' ? 'arm64' : 'amd64'
+  url.pathname = `${url.pathname}/RELEASES`
+  url.searchParams.set('id', 'AnthropicClaude')
+  url.searchParams.set('localVersion', url.searchParams.get('version') ?? '')
+  url.searchParams.set('arch', arch)
+  return url.toString()
+}
+
+/** The newest build a Squirrel RELEASES file offers (`<sha1> <nupkg name or URL> <size>` lines). */
+export function newestInReleases(text: string): string | null {
+  const offered = text.matchAll(/AnthropicClaude-(\d+(?:\.\d+)+)-(?:full|delta)\.nupkg/gi)
+  return newest([...offered].map((m) => m[1]))
+}
+
+/** The Claude Code version this profile's Desktop last asked for, from the newest line in its
+ *  main.log that names it. Reads the tail only - the log of a long-lived profile runs to tens of MB. */
+export function requestedEngineVersion(profileDir: string): string | null {
+  const text = readLogTail(join(profileDir, 'logs', 'main.log'))
+  if (text === null) return null
   // `Initialized with version` is logged once per app start and scrolls out of a long-lived
   // profile's tail (measured on five open profiles, 2026-09-23); `required_version:` is logged on
   // every chat spawn, so between the two a profile that is doing anything always answers.
@@ -211,7 +314,15 @@ export interface DriftFlag {
 
 export interface VersionDriftReport {
   checkedAt: string
-  desktop: { newestInstalled: string | null; behind: number }
+  desktop: {
+    newestInstalled: string | null
+    /** Newest build Claude's own update feed offers this install; null when it could not be asked. */
+    available: string | null
+    /** True when the install itself is older than `available` (drift kind 5). */
+    installBehind: boolean
+    /** Open instances on an older build than the one installed. */
+    behind: number
+  }
   engine: {
     /** The Claude Code version the fleet should be on, and where that answer came from. */
     target: string | null
@@ -235,6 +346,8 @@ export interface VersionDriftDeps {
   >
   /** Main Desktop processes with their command lines, freshly scanned. */
   runningMains: () => Promise<Array<{ dir: string | null; cmdline: string }> | null>
+  /** Newest build Claude's update feed offers an install on `installed`; null = could not tell. */
+  desktopFeed: (installed: string) => Promise<string | null>
   now: () => Date
 }
 
@@ -246,8 +359,39 @@ function appData(): string {
   return process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming')
 }
 
+const DESKTOP_INSTALL_ROOT = join(localAppData(), 'AnthropicClaude')
+
+/** The feed URL for the classic install on `installed`: the one its own logs name, else one built
+ *  from the default profile's device id. Null off Windows or with no classic install to update. */
+function installFeedUrl(installRoot: string, installed: string): string | null {
+  if (process.platform !== 'win32' || !existsSync(join(installRoot, 'Update.exe'))) return null
+  return (
+    feedUrlFromSquirrelLogs(installRoot, installed) ??
+    feedUrlFromDeviceId(join(appData(), 'Claude', 'ant-did'), installed)
+  )
+}
+
+let feedCache: { installed: string; at: number; latest: string } | null = null
+
+/** One GET of the RELEASES list the app itself reads, at most hourly per installed build. */
+async function latestOnFeed(installed: string): Promise<string | null> {
+  const feed = installFeedUrl(DESKTOP_INSTALL_ROOT, installed)
+  if (!feed) return null
+  if (feedCache?.installed === installed && Date.now() - feedCache.at < FEED_CACHE_MS)
+    return feedCache.latest
+  try {
+    const res = await fetch(releasesUrl(feed), { signal: AbortSignal.timeout(FEED_TIMEOUT_MS) })
+    if (!res.ok) return null
+    const latest = newestInReleases(await res.text())
+    if (latest) feedCache = { installed, at: Date.now(), latest }
+    return latest
+  } catch {
+    return null
+  }
+}
+
 export const defaultVersionDriftDeps: VersionDriftDeps = {
-  desktopInstallRoot: join(localAppData(), 'AnthropicClaude'),
+  desktopInstallRoot: DESKTOP_INSTALL_ROOT,
   npmRoot: join(appData(), 'npm'),
   claudeHomes: () => {
     const homes = [process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')]
@@ -263,6 +407,7 @@ export const defaultVersionDriftDeps: VersionDriftDeps = {
     const scan = await scanClaudeProcesses({ fresh: true })
     return scan.ok ? scan.processes.map((p) => ({ dir: p.dir, cmdline: p.cmdline })) : null
   },
+  desktopFeed: latestOnFeed,
   now: () => new Date(),
 }
 
@@ -347,6 +492,16 @@ function desktopFlags(rows: DriftInstanceRow[], newestDesktop: string | null): D
     }))
 }
 
+function installFlag(installed: string | null, available: string | null): DriftFlag[] {
+  if (!isBehind(installed, available)) return []
+  return [
+    {
+      key: 'desktop-install',
+      message: `Claude Desktop ${available} is out, but the install AgentHydra opens every account from is still ${installed}. Claude runs from AgentHydra's own copy, which cannot update itself, so AgentHydra runs Claude's updater for it; each account moves to ${available} the next time it is opened through AgentHydra.`,
+    },
+  ]
+}
+
 function liveChatFlag(stale: DriftLiveChat[], target: string | null): DriftFlag[] {
   if (stale.length === 0) return []
   return [
@@ -371,9 +526,13 @@ function cliFlag(cli: string | null, target: string | null): DriftFlag[] {
 export async function checkVersionDrift(
   deps: VersionDriftDeps = defaultVersionDriftDeps,
 ): Promise<VersionDriftReport> {
-  const [instances, mains] = await Promise.all([deps.listInstances(), deps.runningMains()])
-  const builds = runningBuilds(mains)
   const newestDesktop = newestInstalledDesktop(deps.desktopInstallRoot)
+  const [instances, mains, available] = await Promise.all([
+    deps.listInstances(),
+    deps.runningMains(),
+    newestDesktop ? deps.desktopFeed(newestDesktop).catch(() => null) : Promise.resolve(null),
+  ])
+  const builds = runningBuilds(mains)
   const staged = new Map(instances.map((i) => [normDir(i.dir), stagedEngineVersions(i.dir)]))
   const { target, source } = engineTarget(instances, builds, newestDesktop, staged)
   const rows = instanceRows(instances, builds, staged, target)
@@ -383,11 +542,21 @@ export async function checkVersionDrift(
   const desktop = desktopFlags(rows, newestDesktop)
   return {
     checkedAt: deps.now().toISOString(),
-    desktop: { newestInstalled: newestDesktop, behind: desktop.length },
+    desktop: {
+      newestInstalled: newestDesktop,
+      available,
+      installBehind: isBehind(newestDesktop, available),
+      behind: desktop.length,
+    },
     engine: { target, targetSource: source, liveChats: chats, staleLiveChats: stale.length },
     cli: { version: cli, behind: isBehind(cli, target) },
     instances: rows,
-    flags: [...desktop, ...liveChatFlag(stale, target), ...cliFlag(cli, target)],
+    flags: [
+      ...installFlag(newestDesktop, available),
+      ...desktop,
+      ...liveChatFlag(stale, target),
+      ...cliFlag(cli, target),
+    ],
   }
 }
 
@@ -451,7 +620,29 @@ export interface FixDeps {
   /** True when some process runs from the npm CLI install (it cannot be replaced under it). */
   cliInUse: () => Promise<boolean>
   npmInstall: (version: string) => Promise<{ ok: boolean; detail: string }>
+  /** Run the classic install's own `Update.exe --update` against Claude's feed. */
+  updateDesktop: (installed: string) => Promise<{ ok: boolean; detail: string }>
   autofix: boolean
+}
+
+/** What the app's own updater does, run for it: Squirrel downloads the release, verifies it,
+ *  writes app-<build> beside the current one and keeps the current one. Nothing running is closed,
+ *  and the managed copies AgentHydra launches from live elsewhere, so none of them is touched. */
+async function squirrelUpdate(installed: string): Promise<{ ok: boolean; detail: string }> {
+  const feed = installFeedUrl(DESKTOP_INSTALL_ROOT, installed)
+  if (!feed) return { ok: false, detail: 'no Claude update feed address could be read' }
+  const run = await whileDesktopInstallUpdates(async () => {
+    // A pass that overlapped this one (the timer and sync_versions) may have just updated it.
+    if (newestInstalledDesktop(DESKTOP_INSTALL_ROOT) !== installed)
+      return { code: 0, stdout: 'already updated', stderr: '', timedOut: false }
+    return spawnCaptured([join(DESKTOP_INSTALL_ROOT, 'Update.exe'), '--update', feed], {
+      timeoutMs: DESKTOP_UPDATE_TIMEOUT_MS,
+    })
+  })
+  feedCache = null
+  const tail = (run.stderr || run.stdout).trim().split(/\r?\n/).slice(-3).join(' ')
+  if (run.timedOut) return { ok: false, detail: 'Update.exe timed out' }
+  return { ok: run.code === 0, detail: tail || `Update.exe exited ${run.code}` }
 }
 
 async function windowsCliInUse(npmRoot: string): Promise<boolean> {
@@ -491,6 +682,7 @@ export const defaultFixDeps: FixDeps = {
     const tail = (run.stderr || run.stdout).trim().split(/\r?\n/).slice(-3).join(' ')
     return { ok: run.code === 0, detail: run.timedOut ? 'npm timed out' : tail }
   },
+  updateDesktop: squirrelUpdate,
   autofix: process.env.AGENTHYDRA_VERSION_AUTOFIX !== '0',
 }
 
@@ -499,6 +691,28 @@ export interface FixOutcome {
   stageFailed: DriftFlag[]
   cliUpdated: string | null
   cliFlag: DriftFlag | null
+  /** The build the Desktop install was updated to, when the updater said it succeeded. */
+  desktopUpdated: string | null
+  desktopFlag: DriftFlag | null
+}
+
+async function updateDesktopInstall(
+  report: VersionDriftReport,
+  deps: FixDeps,
+): Promise<Pick<FixOutcome, 'desktopUpdated' | 'desktopFlag'>> {
+  const flag = report.flags.find((f) => f.key === 'desktop-install') ?? null
+  const { newestInstalled, available } = report.desktop
+  if (!flag || !newestInstalled || !available || !deps.autofix)
+    return { desktopUpdated: null, desktopFlag: flag }
+  const run = await deps.updateDesktop(newestInstalled)
+  if (run.ok) return { desktopUpdated: available, desktopFlag: null }
+  return {
+    desktopUpdated: null,
+    desktopFlag: {
+      key: 'desktop-install',
+      message: `${flag.message} The automatic update failed: ${run.detail}`,
+    },
+  }
 }
 
 async function stageClosedProfiles(
@@ -553,16 +767,18 @@ async function updateCli(
   }
 }
 
-/** Stage closed profiles and update the CLI where that is safe. With autofix off, nothing is written. */
+/** Update the Desktop install, stage closed profiles and update the CLI where that is safe. With
+ *  autofix off, nothing is written. */
 export async function fixVersionDrift(
   report: VersionDriftReport,
   deps: FixDeps = defaultFixDeps,
 ): Promise<FixOutcome> {
+  const desktop = await updateDesktopInstall(report, deps)
   const stage = deps.autofix
     ? await stageClosedProfiles(report, deps)
     : { staged: [], stageFailed: [] }
   const cli = await updateCli(report, deps)
-  return { ...stage, ...cli }
+  return { ...desktop, ...stage, ...cli }
 }
 
 // --- flags -> incidents --------------------------------------------------------------------------
@@ -625,9 +841,15 @@ export async function runVersionDriftPass(
   const first = await checkVersionDrift(deps.check)
   const fixed = await fixVersionDrift(first, deps.fix)
   const report =
-    fixed.staged.length > 0 || fixed.cliUpdated ? await checkVersionDrift(deps.check) : first
+    fixed.staged.length > 0 || fixed.cliUpdated || fixed.desktopUpdated
+      ? await checkVersionDrift(deps.check)
+      : first
+  // An updater that failed keeps its reason; one that said it worked while the re-check still
+  // reads the old build keeps the plain flag, so a silent no-op is never reported as fixed.
+  const installStill = report.flags.find((f) => f.key === 'desktop-install')
   const flags = [
-    ...report.flags.filter((f) => f.key !== 'cli'),
+    ...(installStill ? [fixed.desktopFlag ?? installStill] : []),
+    ...report.flags.filter((f) => f.key !== 'cli' && f.key !== 'desktop-install'),
     ...(fixed.cliFlag && report.cli.behind ? [fixed.cliFlag] : []),
     ...fixed.stageFailed,
   ]
@@ -641,6 +863,10 @@ let firstRun: ReturnType<typeof setTimeout> | null = null
 function tick(): void {
   runVersionDriftPass()
     .then((r) => {
+      if (r.fixed.desktopUpdated)
+        console.log(
+          `[agenthydra] version drift: updated the Claude Desktop install to ${r.fixed.desktopUpdated}; each account moves to it on its next AgentHydra Open`,
+        )
       if (r.fixed.staged.length || r.fixed.cliUpdated)
         console.log(
           `[agenthydra] version drift: staged Claude Code ${r.report.engine.target} into #${r.fixed.staged.join(', #') || '-'}; CLI ${r.fixed.cliUpdated ? `updated to ${r.fixed.cliUpdated}` : 'unchanged'}`,

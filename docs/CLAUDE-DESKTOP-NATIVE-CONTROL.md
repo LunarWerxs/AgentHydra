@@ -47,7 +47,13 @@ the POC runner is for diagnostics and bounded experiments, not the general move 
 It does **not** start the inspector and is **not required** by AgentHydra's managed automatic
 launch. The central `launchDebugger` setting is what makes native control start on each
 AgentHydra Open. A Claude update is picked up on the next Open with no code change: the
-build, fuse offset and hashes are derived at launch. A fuse-wire, manifest, source-inventory or
+build, fuse offset and hashes are derived at launch. The managed copy cannot update itself (no
+Squirrel `Update.exe` beside it; the app logs "Can not find Squirrel"), and the real install is
+never run, so AgentHydra updates the install for it: the version-drift pass (every 10 minutes,
+or `sync_versions` now) asks Claude's own update feed and runs the install's `Update.exe --update`
+when a newer build is out. An `app-<build>` folder newer than the newest build
+`packages\RELEASES` lists is unfinished (an update still writing it, or killed while it did) and
+is neither launched nor counted as installed. A fuse-wire, manifest, source-inventory or
 identity mismatch is refused; do not weaken those guards to make one launch.
 
 ## AgentHydra settings
@@ -303,7 +309,8 @@ the session manager and preview manager are found among already-loaded modules b
 the exports and method surface they must have, and anything ambiguous fails closed;
 the bundle file names and hashes that answered are recorded as evidence, not
 compared against constants. The managed copy omits the
-parent Squirrel updater; the live log confirmed its self-updater is disabled.
+parent Squirrel updater; the live log confirmed its self-updater is disabled, which is why
+AgentHydra's version-drift pass updates the install instead (see above).
 Managed startups are serialized while global registrations are snapshotted and
 restored. Restoration waits for Claude's browser-host startup task, restores only
 values still owned by that launch, and preserves unrelated concurrent changes.

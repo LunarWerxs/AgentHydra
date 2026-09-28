@@ -16,6 +16,7 @@ import { createServer } from 'node:net'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ClaudeNativeProfileConfig } from './claude-native-settings'
 import { DATA_DIR } from './config'
+import { desktopInstallSettled, isFinishedBuild, newestFinishedBuild } from './desktop-install-lock'
 
 const FUSE_MARKER = Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX')
 /** Electron's fuse wire: the marker, a schema byte, a fuse count, then one byte per fuse. */
@@ -239,8 +240,11 @@ export async function resolveClaudeNativeSource(binary: string): Promise<string>
   }
   const parent = dirname(binary)
   await regularDirectory(parent)
+  const finished = newestFinishedBuild(parent)
   const apps = (await readdir(parent, { withFileTypes: true }))
     .filter((entry) => /^app-\d+(?:\.\d+)*$/.test(entry.name))
+    // A folder Squirrel has not finished writing (or was killed while writing) is never copied.
+    .filter((entry) => isFinishedBuild(entry.name.slice(4), finished))
     .sort((a, b) => {
       const av = a.name.slice(4).split('.').map(Number)
       const bv = b.name.slice(4).split('.').map(Number)
@@ -501,6 +505,8 @@ export async function prepareClaudeNativeLaunch(
   }
   const checkPort = dependencies.assertPortAvailable ?? assertClaudeInspectorPortAvailable
   await checkPort(config.port)
+  // An update AgentHydra is applying writes the newest app-<build> folder; never copy it half-written.
+  await desktopInstallSettled()
   const sourceBinary = await resolveClaudeNativeSource(binary)
   const build = dependencies.build ?? (await discoverClaudeBuild(sourceBinary))
   const managedRoot = resolve(dependencies.managedRoot ?? join(DATA_DIR, 'claude-native'))

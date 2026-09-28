@@ -1184,14 +1184,14 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'check_versions',
     description:
-      "READ-ONLY: is the whole fleet on one Claude version? Returns the newest installed Claude Desktop build and the build each OPEN instance runs, the Claude Code version the newest Desktop asks for (`engine.target`) and every live chat's engine version, the Claude Code copy staged in every instance folder (closed ones included), the terminal CLI's version, and `flags`: one plain sentence per thing that is out of step. A closed instance whose staged copy is behind is NOT a problem by itself (the app fetches the new one on its next session); an OPEN instance on an old build or a live chat on an old engine only changes when it restarts, and nothing here restarts anything. The daemon runs the fixing pass every 10 minutes on its own; sync_versions runs it now.",
+      "READ-ONLY: is the whole fleet on one Claude version? Returns the newest installed Claude Desktop build, the newest one Claude's own update feed offers (`desktop.available`, asked at most hourly; `desktop.installBehind` when the install is older), the build each OPEN instance runs, the Claude Code version the newest Desktop asks for (`engine.target`) and every live chat's engine version, the Claude Code copy staged in every instance folder (closed ones included), the terminal CLI's version, and `flags`: one plain sentence per thing that is out of step. A closed instance whose staged copy is behind is NOT a problem by itself (the app fetches the new one on its next session); an OPEN instance on an old build or a live chat on an old engine only changes when it restarts, and nothing here restarts anything. The daemon runs the fixing pass every 10 minutes on its own; sync_versions runs it now.",
     inputSchema: S(),
     run: () => api('/api/versions'),
   },
   {
     name: 'sync_versions',
     description:
-      "MUTATES: run the version-drift pass now instead of waiting for its 10-minute timer. Stages the current Claude Code into every CLOSED instance that is behind (hard-linked from a copy the app already downloaded and verified, renamed into place in one step), updates the npm CLI install to the Desktop's version when no process runs from it, records one incident per thing still out of step and resolves the ones that are fixed. Never closes, restarts or stops an open instance or a live chat. AGENTHYDRA_VERSION_AUTOFIX=0 on the daemon makes it flag only.",
+      "MUTATES: run the version-drift pass now instead of waiting for its 10-minute timer. Updates the Claude Desktop install with its own Squirrel Update.exe when Claude's feed offers a newer build (AgentHydra runs Claude from a copy that cannot update itself; each account moves to the new build on its next AgentHydra Open). Stages the current Claude Code into every CLOSED instance that is behind (hard-linked from a copy the app already downloaded and verified, renamed into place in one step), updates the npm CLI install to the Desktop's version when no process runs from it, records one incident per thing still out of step and resolves the ones that are fixed. Never closes, restarts or stops an open instance or a live chat. AGENTHYDRA_VERSION_AUTOFIX=0 on the daemon makes it flag only.",
     inputSchema: S(),
     run: () => api('/api/versions/sync', { method: 'POST' }),
   },
