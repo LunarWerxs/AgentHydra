@@ -5,12 +5,25 @@ import { getSetting, setSetting } from '../src/db'
 const realNative = { ...(await import('../src/claude-native-archive')) }
 const realLaunch = { ...(await import('../src/session-launch')) }
 const realUi = { ...(await import('../src/ui-archive')) }
+const realRetire = { ...(await import('../src/move-retire-on-close')) }
 const profile = 'C:\\instances\\native-proof'
 const sid = '11111111-2222-4333-8444-555555555555'
 let result: Record<string, unknown>
 let calls: string[]
 let globallyLive: boolean
+// The route's fresh process scan: true/false answers, an Error is a scan that could not tell.
+let running: boolean | Error
+let appHeldFlag: boolean
 
+// A read, not a side effect, so it stays out of `calls`. Without it every test saw the fake
+// profile as closed and never reached the native adapter (the CI red since b3ba491).
+mock.module('../src/move-retire-on-close', () => ({
+  ...realRetire,
+  isProfileRunning: async () => {
+    if (running instanceof Error) throw running
+    return running
+  },
+}))
 mock.module('../src/claude-native-archive', () => ({
   ...realNative,
   tryNativeArchiveChat: async (dir: string, id: string) => {
@@ -26,7 +39,7 @@ mock.module('../src/session-launch', () => ({
   },
   archiveDesktopChat: async () => {
     calls.push('disk-write')
-    return { ok: true, hits: [{ profile, wasRunning: true, changed: true }] }
+    return { ok: true, hits: [{ profile, wasRunning: appHeldFlag, changed: true }] }
   },
   reassertChatArchive: async () => {
     calls.push('watcher')
@@ -45,6 +58,7 @@ afterAll(() => {
   mock.module('../src/claude-native-archive', () => realNative)
   mock.module('../src/session-launch', () => realLaunch)
   mock.module('../src/ui-archive', () => realUi)
+  mock.module('../src/move-retire-on-close', () => realRetire)
 })
 
 const { app } = await import('../src/http-app')
@@ -54,6 +68,8 @@ const http = new Hono().route('/', app)
 beforeEach(() => {
   calls = []
   globallyLive = false
+  running = true
+  appHeldFlag = true
   result = {
     kind: 'result',
     route: 'native',
@@ -115,6 +131,61 @@ test('only explicit pre-dispatch unavailability permits the existing archive pat
     'ui',
   ])
 })
+
+test('a profile the scan shows closed is flagged on disk without asking the app or the other account', async () => {
+  running = false
+  appHeldFlag = false
+  // After a move the chat's engine runs on its NEW account; the closed source is not that engine.
+  globallyLive = true
+  const response = await post('desktop-archive')
+  expect(response.status).toBe(200)
+  expect(calls).toEqual(['disk-write'])
+})
+
+test('a scan that cannot tell still takes the native route and keeps its refusal', async () => {
+  running = new Error('the process scan timed out')
+  result = { ...result, ok: false, verified: false, changed: false, reason: 'native refusal' }
+  const response = await post('desktop-archive')
+  expect(response.status).toBe(409)
+  expect(calls).toEqual([`native:${profile}:${sid}`])
+})
+
+const signedOut = 'NATIVE_REFUSAL: signed out, no chats loaded'
+
+test('a signed-out app refused before dispatch lets the scoped flag through', async () => {
+  result = {
+    kind: 'result',
+    route: 'native',
+    ok: false,
+    verified: false,
+    changed: false,
+    dispatch: 'not-sent',
+    reason: signedOut,
+  }
+  globallyLive = true
+  const response = await post('desktop-archive')
+  expect(response.status).toBe(200)
+  expect(calls.slice(0, 2)).toEqual([`native:${profile}:${sid}`, 'disk-write'])
+  expect(calls).not.toContain('global-live-check')
+})
+
+test.each(['sent', 'unknown'])(
+  'the signed-out text after dispatch %s stays a terminal refusal',
+  async (dispatch) => {
+    result = {
+      kind: 'result',
+      route: 'native',
+      ok: false,
+      verified: false,
+      changed: false,
+      dispatch,
+      reason: signedOut,
+    }
+    const response = await post('desktop-archive')
+    expect(response.status).toBe(409)
+    expect(calls).toEqual([`native:${profile}:${sid}`])
+  },
+)
 
 test('the native-only endpoint reports absence without doing any legacy work', async () => {
   result = { kind: 'unavailable', route: 'native', dispatch: 'not-sent', reason: 'not configured' }
