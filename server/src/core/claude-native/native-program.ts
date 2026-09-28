@@ -185,7 +185,13 @@ function nativeCheckIdentity(env: any, found: any, request: any, settled?: any):
   ) {
     nativeRefuse('native singleton changed')
   }
-  if (!manager.currentAccountId || !manager.currentOrgId) nativeRefuse('account is unavailable')
+  if (!manager.currentAccountId || !manager.currentOrgId) {
+    // A signed-out app loaded no chats, so it has nothing to write over an archive flag; the
+    // caller may flag the record instead (routes/desktop-sessions.ts). The text is matched there.
+    nativeRefuse(
+      manager.sessions.size === 0 ? 'signed out, no chats loaded' : 'account is unavailable',
+    )
+  }
   if (nativePathKey(env, manager.userDataPath) !== nativePathKey(env, request.profileDir)) {
     nativeRefuse('wrong manager profile')
   }
@@ -196,6 +202,17 @@ function nativeCheckIdentity(env: any, found: any, request: any, settled?: any):
   if (manager.currentAccountId !== settled.accountId || manager.currentOrgId !== settled.orgId) {
     nativeRefuse('account changed while inspecting')
   }
+}
+
+/**
+ * The ids of sessions mid-start. Older builds keep them on the manager as a Set; 2.9939.4 moved
+ * them to `manager.inFlightStarts.startingSessionIds` (a Map), and reading the old field threw
+ * "Cannot read properties of undefined (reading 'has')" on every archive (2026-09-28).
+ */
+function nativeStartingIds(manager: any): { has(id: string): boolean } {
+  const starting = manager.startingSessionIds ?? manager.inFlightStarts?.startingSessionIds
+  if (typeof starting?.has !== 'function') nativeRefuse('native starting-session state unavailable')
+  return starting
 }
 
 function nativeSnapshot(manager: any, session: any): any {
@@ -209,7 +226,7 @@ function nativeSnapshot(manager: any, session: any): any {
       isRunning: session.isRunning === true,
       isStopping: session.isStopping === true,
       hasQuery: session.query != null,
-      starting: manager.startingSessionIds.has(session.sessionId),
+      starting: nativeStartingIds(manager).has(session.sessionId),
       losableWork: manager.losableWorkKind(session.sessionId) ?? null,
       pendingInput: manager.hasPendingUserInput(session),
       pendingPermission: manager.permissionBroker.hasPendingFor(session.sessionId),
@@ -754,6 +771,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeOnly,
     nativeFindManager,
     nativeCheckIdentity,
+    nativeStartingIds,
     nativeSnapshot,
     nativeSelect,
     nativeIdentity,

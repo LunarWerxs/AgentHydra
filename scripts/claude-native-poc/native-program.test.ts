@@ -351,6 +351,20 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
       expect(h.calls).toEqual([])
     }
   })
+  test('2.9939.4 keeps starting ids on inFlightStarts: archive works, a start there refuses', async () => {
+    const h = harness()
+    const starting = new Map()
+    delete (h.manager as any).startingSessionIds
+    ;(h.manager as any).inFlightStarts = { startingSessionIds: starting }
+    expect(await h.run()).toMatchObject({ ok: true, dispatch: 'sent' })
+    const busy = harness()
+    delete (busy.manager as any).startingSessionIds
+    ;(busy.manager as any).inFlightStarts = {
+      startingSessionIds: new Map([[busy.target.sessionId, {}]]),
+    }
+    expect(await busy.run()).toMatchObject({ ok: false, dispatch: 'not-sent' })
+    expect(busy.calls).toEqual([])
+  })
   test('shared cwd is allowed when native server and HTML preview registries are empty', async () => {
     const h = harness()
     h.other.cwd = h.target.cwd

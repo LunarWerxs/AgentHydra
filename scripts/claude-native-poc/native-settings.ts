@@ -182,7 +182,8 @@ function guardSessionIdle(ctx: any, s: any) {
     s.backend?.remoteTarget ||
     s.rootDetected ||
     s.remoteControlSpawn ||
-    manager.startingSessionIds.has(s.sessionId) ||
+    // 2.9939.4 moved this Set onto manager.inFlightStarts (as a Map).
+    (manager.startingSessionIds ?? manager.inFlightStarts.startingSessionIds).has(s.sessionId) ||
     manager.hasLosableWork(s.sessionId) ||
     manager.hasPendingUserInput(s) ||
     manager.permissionBroker.hasPendingFor(s.sessionId) ||

@@ -9,6 +9,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Archiving a chat inside a running Claude Desktop works again on 2.9939.4**
+  (`server/src/core/claude-native/native-program.ts`). That build moved the list of chats that are
+  still starting to a new place inside the app, and every native archive, including the step of a
+  move that retires the old copy, failed with "Cannot read properties of undefined (reading
+  'has')". AgentHydra now finds the list in either place, so older builds keep working too.
+- **`archive_desktop_chat` can retire a chat on an account whose app is closed or signed out**
+  (`server/src/routes/desktop-sessions.ts`). An account set to native-only refused with "profile is
+  not running" when its app was closed, and "account is unavailable" when the app was signed out.
+  In both cases the app holds no chats in memory, so the old copy of a moved chat could not be
+  retired by any tool. Both cases now write the archive flag on disk, as a move already does for a
+  closed app. A scoped call is also no longer refused because the moved chat is running on its new
+  account.
+
 - **A move clears the old copy of a chat left under an account's previous login**
   (`orchestrator/scripts/migrate_chat.py`). An account's app shows only the chats of the login it
   is signed into now, so its own archive control cannot reach a chat still filed under an earlier

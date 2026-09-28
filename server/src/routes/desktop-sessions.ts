@@ -370,9 +370,28 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
   }
   // Native state decides whether THIS copy is busy. A migrated destination can be running
   // while its source is safely idle. Run this before both the global live guard and disk writes.
-  if (wantArchived && nativeProfile) {
+  // A profile a fresh scan shows CLOSED has no app to ask and none to write over the flag, so it
+  // goes straight to the flag below, as a move's source settle does. Native-only used to refuse
+  // it outright ("profile is not running"), leaving move leftovers no tool could retire
+  // (2026-09-28, #37). A scan that cannot answer still takes the native route.
+  const closed =
+    wantArchived && nativeProfile
+      ? await isProfileRunning(nativeProfile, {}).then(
+          (running) => !running,
+          () => false,
+        )
+      : false
+  let noEngineHere = closed
+  if (wantArchived && nativeProfile && !closed) {
     const native = await tryNativeArchiveChat(nativeProfile, sessionId)
-    if (native.kind === 'result') {
+    // Signed out: the app holds no chats in memory, the same as a closed app, so the flag below
+    // is safe and is the only route that reaches the record (2026-09-28, #37 signed out).
+    const signedOut =
+      native.kind === 'result' &&
+      native.dispatch === 'not-sent' &&
+      native.reason === 'NATIVE_REFUSAL: signed out, no chats loaded'
+    noEngineHere = signedOut
+    if (native.kind === 'result' && !signedOut) {
       return c.json(
         {
           ...native,
@@ -389,8 +408,11 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
       )
     }
   }
-  // Never hide a chat whose engine is running, unless a caller says so outright.
-  if (wantArchived && body.force !== true && liveSessionEntry(sessionId))
+  // Never hide a chat whose engine is running, unless a caller says so outright. The live read is
+  // by session id across every profile, so after a move it sees the TARGET's engine; a scoped
+  // copy on a closed or signed-out app cannot be the one running, and is not refused for it.
+  const liveElsewhere = noEngineHere && !!scopeRef
+  if (wantArchived && body.force !== true && !liveElsewhere && liveSessionEntry(sessionId))
     return c.json(
       {
         ok: false,
