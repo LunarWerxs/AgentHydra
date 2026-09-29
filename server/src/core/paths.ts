@@ -79,6 +79,12 @@ export function accountsCacheFile(): string {
   return path.join(appDataDir(), 'instances-cache.json')
 }
 
+/** Every account identity ever resolved, keyed by ACCOUNT uuid, never pruned — identity ONLY,
+ *  never a token (see server/src/core/known-accounts.ts). */
+export function knownAccountsFile(): string {
+  return path.join(appDataDir(), 'known-accounts.json')
+}
+
 /** Per-instance UI metadata (display label + icon + color), keyed by normalized dir. Pure
  *  presentation, never a secret; see server/src/core/instance-meta.ts. */
 export function instanceMetaFile(): string {

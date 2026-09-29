@@ -71,6 +71,20 @@ export default {
   // on different domains render the same chip, so the short form is for reading and the long form
   // is for pasting.
   accountCopyHint: 'Click to copy the full address.',
+  // The account cell's history flyout (LoginHistoryPopover): every account the profile has been
+  // signed into, read from the chats each one left there.
+  loginHistoryTitle: 'Accounts signed in on #{num}',
+  loginHistoryHint: 'Every account this profile has been signed into, newest first.',
+  loginHistoryNow: 'Now',
+  loginHistoryLast: 'Last signed in',
+  loginHistorySignedOut: 'Nobody is signed in to this profile right now.',
+  loginHistoryUnknown: 'Unidentified account {id}',
+  loginHistoryLastUsed: 'last used {when} · {count} chats here',
+  loginHistoryNoChats: 'signed in, no chats here yet',
+  loginHistoryEmpty: 'No account has used this profile yet.',
+  loginHistoryFailed: 'Could not read this profile’s login history.',
+  loginHistoryFootnote:
+    'Read from the chats each account left in this profile. An account shows as unidentified until AgentHydra has seen it signed in once.',
   // A name you typed once overrides everything and nothing ever re-checked it, so an instance
   // signed into a different account keeps the old account's name for good. The marker reports it;
   // the ⋯ menu clears it. Deliberately not automatic — the override is still the user's choice.

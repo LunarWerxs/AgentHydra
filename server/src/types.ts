@@ -64,6 +64,8 @@ export type {
   CMActionResult,
   CMDesktopInstall,
   CMInstance,
+  CMLoginHistory,
+  CMLoginHistoryEntry,
   InstanceColorKey,
   InstanceIconKey,
 } from './core/shared'

@@ -26,6 +26,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { decryptSafeStorage } from './crypto/index'
+import { readKnownAccounts, rememberAccount } from './known-accounts'
 import { accountsCacheFile, appDataDir, normalizeInstancePath } from './paths'
 import type { CMAccount, CMAccountCacheEntry } from './shared'
 import { OAUTH_BETA_HEADER, PROFILE_API_URL, prettyTier, resolvePlanLabel } from './shared'
@@ -124,6 +125,7 @@ function writeAccountsCacheEntry(instanceDir: string, entry: CMAccountCacheEntry
     }
 
     cache[key] = safeEntry
+    rememberAccount(safeEntry)
 
     const file = accountsCacheFile()
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
@@ -146,6 +148,9 @@ export function deleteAccountsCacheEntry(instanceDir: string): void {
     const cache = readAccountsCache()
     const key = normalizeInstancePath(instanceDir)
     if (!(key in cache)) return
+    // The entry leaves THIS dir, not the machine's memory: the account is still who it was, and
+    // login history needs its name after the profile has moved on (see core/known-accounts.ts).
+    rememberAccount(cache[key])
     delete cache[key]
     const file = accountsCacheFile()
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
@@ -154,6 +159,17 @@ export function deleteAccountsCacheEntry(instanceDir: string): void {
   } catch (err) {
     log('warn', `deleteAccountsCacheEntry: failed for '${instanceDir}': ${String(err)}`)
   }
+}
+
+/** Who one account uuid is, from whichever record resolved it most recently: the known-accounts
+ *  store or any profile's cache entry (entries cached before that store existed live only there).
+ *  Null when no live resolve on this machine has ever named it. Never throws. */
+export function identityForAccount(uuid: string): CMAccountCacheEntry | null {
+  let best: CMAccountCacheEntry | null = readKnownAccounts()[uuid] ?? null
+  for (const entry of Object.values(readAccountsCache())) {
+    if (entry?.uuid === uuid && (!best || entry.resolvedAt > best.resolvedAt)) best = entry
+  }
+  return best
 }
 
 function accountFromCache(
@@ -191,6 +207,10 @@ function accountFromCache(
     deleteAccountsCacheEntry(instanceDir)
     entry = undefined
   }
+
+  // No identity of its own for this login, but the ACCOUNT may be known: resolved on another
+  // profile, or on this one before it was signed into something else in between.
+  if (!entry && opts.currentUuid) entry = identityForAccount(opts.currentUuid) ?? undefined
 
   // "cache" only when we actually have a cached identity; otherwise "offline" — we resolved
   // nothing but (possibly) some locally-decrypted uuid/tier fragments.

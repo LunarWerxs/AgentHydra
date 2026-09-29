@@ -25,6 +25,7 @@ import {
   revealInstanceFolder,
 } from '../core/instances'
 import { createInstance, removeInstance } from '../core/lifecycle'
+import { readLoginHistory } from '../core/login-history'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from '../core/shared'
 import { createInstanceShortcut } from '../core/shortcut'
 import { app } from '../http-app'
@@ -91,6 +92,11 @@ app.get('/api/instances/:dir/account', async (c) => {
   })
   return c.json(account)
 })
+// Every account this profile has been signed into, newest first (core/login-history.ts): what the
+// row shows when its current account is signed out or unknown and you need to know where it went.
+app.get('/api/instances/:dir/login-history', (c) =>
+  c.json(readLoginHistory(decodeURIComponent(c.req.param('dir')))),
+)
 app.post('/api/instances/:dir/open', async (c) => {
   const dir = decodeURIComponent(c.req.param('dir'))
   const result = await openInstance(dir)

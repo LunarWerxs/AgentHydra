@@ -316,3 +316,27 @@ export interface CMAccountCacheEntry {
   orgType?: string | null
   resolvedAt: string
 }
+
+/** One account that has used a desktop profile, read from the chat store it left there
+ *  (see core/login-history.ts). Identity only — never a token. */
+export interface CMLoginHistoryEntry {
+  accountUuid: string
+  /** Null when this account was never identified on this machine (no live resolve ever named it). */
+  email: string | null
+  name: string | null
+  planLabel: string | null
+  /** The account config.json says the profile is signed into right now. */
+  current: boolean
+  /** Oldest and newest chat record filed under this account here (ISO); null when it has none. */
+  firstSeenAt: string | null
+  lastSeenAt: string | null
+  chats: number
+}
+
+/** Every account a desktop profile has been signed into, most recently used first. */
+export interface CMLoginHistory {
+  dir: string
+  /** Why the profile has (or has no) login right now; see core/login-state.ts LoginState. */
+  loginState: 'signed-in' | 'signed-out' | 'no-config' | 'unreadable'
+  entries: CMLoginHistoryEntry[]
+}

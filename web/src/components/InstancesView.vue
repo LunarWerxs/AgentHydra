@@ -46,6 +46,7 @@ import InstanceChatsDialog from '@/components/InstanceChatsDialog.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceSectionsMenu from '@/components/InstanceSectionsMenu.vue'
+import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import PrefixTaxSection from '@/components/PrefixTaxSection.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
@@ -1318,6 +1319,7 @@ onUnmounted(() => {
             v-for="inst in visibleRows"
             :key="inst.dir"
             :variant="filterDimmed(filterFacts(inst)) ? 'faded' : 'default'"
+            class="group/row"
             @contextmenu.prevent="rowMenuOpen = inst.dir"
           >
             <TableCell>
@@ -1484,27 +1486,44 @@ onUnmounted(() => {
                    Clicking it copies the FULL address (the cell only has room for the handle, and
                    the handle is not something you can paste at anything). Only a row with a
                    resolved email becomes a button: a signed-out row has a badge to show and
-                   nothing to copy, and a button that does nothing is worse than plain text. -->
-              <Badge
-                v-if="accountCellName(inst)"
-                :as="accountEmail(inst.account) ? 'button' : undefined"
-                :type="accountEmail(inst.account) ? 'button' : undefined"
-                :variant="accountBadgeVariant(inst)"
-                :title="accountTitle(inst)"
-                :aria-label="
-                  accountEmail(inst.account)
-                    ? $t('instances.copyAccountEmailAria', { email: accountEmail(inst.account) })
-                    : undefined
-                "
-                :interactive="!!accountEmail(inst.account)"
-                :class="!accountEmail(inst.account) && accountTitle(inst) ? 'cursor-help' : undefined"
-                @click="copyAccountEmail(inst)"
-              >
-                {{ accountCellName(inst) }}
-              </Badge>
-              <span v-else class="text-xs text-muted-foreground">
-                {{ $t('instances.resolving') }}
-              </span>
+                   nothing to copy, and a button that does nothing is worse than plain text.
+
+                   The history button beside it lists every account the profile has been signed
+                   into. Always shown when the row cannot name a live account (that is when you
+                   need to know where it went); on a healthy row it waits for hover or focus, so
+                   seventy rows do not each carry one more icon. -->
+              <div class="flex items-center gap-1">
+                <Badge
+                  v-if="accountCellName(inst)"
+                  :as="accountEmail(inst.account) ? 'button' : undefined"
+                  :type="accountEmail(inst.account) ? 'button' : undefined"
+                  :variant="accountBadgeVariant(inst)"
+                  :title="accountTitle(inst)"
+                  :aria-label="
+                    accountEmail(inst.account)
+                      ? $t('instances.copyAccountEmailAria', { email: accountEmail(inst.account) })
+                      : undefined
+                  "
+                  :interactive="!!accountEmail(inst.account)"
+                  :class="!accountEmail(inst.account) && accountTitle(inst) ? 'cursor-help' : undefined"
+                  @click="copyAccountEmail(inst)"
+                >
+                  {{ accountCellName(inst) }}
+                </Badge>
+                <span v-else class="text-xs text-muted-foreground">
+                  {{ $t('instances.resolving') }}
+                </span>
+                <span
+                  class="inline-flex"
+                  :class="
+                    inst.account?.status === 'live'
+                      ? 'opacity-0 group-hover/row:opacity-100 focus-within:opacity-100'
+                      : undefined
+                  "
+                >
+                  <LoginHistoryPopover :dir="inst.dir" :num="inst.num" />
+                </span>
+              </div>
             </TableCell>
             <template v-if="!usageMode">
               <TableCell><span class="mono text-muted-foreground">{{ inst.pid ?? '—' }}</span></TableCell>

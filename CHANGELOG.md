@@ -7,7 +7,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Each instance shows every account it has been signed into** (`server/src/core/login-history.ts`,
+  `web/src/components/LoginHistoryPopover.vue`). A history button beside the account in the
+  Instances table lists the accounts that have used that profile: the signed-in one first, then the
+  rest by when each was last busy there, with how many chats each left. When a row reads
+  "(not logged in)" or "(unknown account)", the top entry says which account it was on. It is always
+  shown on those rows and appears on hover everywhere else. The list comes from the chats each
+  account filed in the profile, so it already goes back before this release.
+
 ### Changed
+
+- **An account is remembered after the instance it was on moves to another one**
+  (`server/src/core/known-accounts.ts`). AgentHydra forgot who an account was the moment its
+  instance signed into someone else, so older entries in the history above had no name, and an
+  account signed into a second instance showed "(unknown account)" there until it could be checked
+  online. Every account it identifies is now kept by account, so both show the address straight
+  away.
 
 - **The daemon no longer re-reads a whole chat every time it grows**
   (`server/src/sessions.ts`). Each time a transcript changed, the sessions list parsed all of it

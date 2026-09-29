@@ -13,6 +13,7 @@ import type {
   CMActionResult,
   CMDesktopInstall,
   CMInstance,
+  CMLoginHistory,
   CodexAccount,
   CodexInstance,
   CodexMovePlan,
@@ -84,6 +85,8 @@ export type {
   CMActionResult,
   CMDesktopInstall,
   CMInstance,
+  CMLoginHistory,
+  CMLoginHistoryEntry,
   CodexAccount,
   CodexAccountStatus,
   CodexAuthMode,
@@ -489,6 +492,9 @@ export const getInstanceAccount = (dir: string, opts: { noNetwork?: boolean } = 
   j<CMAccount>(
     `/api/instances/${encodeURIComponent(dir)}/account${opts.noNetwork ? '?noNetwork=1' : ''}`,
   )
+/** Every account this profile has been signed into, the current one first, then newest first. */
+export const getInstanceLoginHistory = (dir: string) =>
+  j<CMLoginHistory>(`/api/instances/${encodeURIComponent(dir)}/login-history`)
 export const openInstance = (dir: string) =>
   j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}/open`, { method: 'POST' })
 /** `confirmExternal` is the explicit opt-in required to quit the DEFAULT (non-isolated) Claude
