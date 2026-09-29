@@ -101,7 +101,7 @@ test("tools/call runs the tool and wraps the JSON result as text content", async
     { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "echo", arguments: { msg: "hi" } } },
     ctx,
   );
-  expect(rpc(res)?.result?.content?.[0]).toEqual({ type: "text", text: JSON.stringify({ echoed: "hi" }, null, 2) });
+  expect(rpc(res)?.result?.content?.[0]).toEqual({ type: "text", text: JSON.stringify({ echoed: "hi" }) });
   expect(rpc(res)?.result?.isError).toBeUndefined();
 });
 
@@ -231,7 +231,7 @@ test("runMcpStdio: a slow tool no longer blocks ping/a fast tool queued behind i
   releaseLong("long-result");
   await waitUntil(() => lines.length >= 3, "all three responses written");
   const longRes = lines.map((l) => JSON.parse(l)).find((r) => r.id === 1);
-  expect(longRes.result.content[0].text).toBe(JSON.stringify("long-result", null, 2));
+  expect(longRes.result.content[0].text).toBe(JSON.stringify("long-result"));
 
   input.end();
   await done;

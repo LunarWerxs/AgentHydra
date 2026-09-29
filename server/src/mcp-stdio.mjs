@@ -103,7 +103,10 @@ async function handleToolsCall(id, msg, ctx, signal) {
   const args = params.arguments && typeof params.arguments === "object" ? params.arguments : {};
   try {
     const value = await tool.run(args, signal);
-    const content = [{ type: "text", text: JSON.stringify(value, null, 2) }];
+    // Compact on purpose: this text lands in the calling model's context and stays in its
+    // transcript, and pretty-printing (newline + indent per key) adds roughly 20-40% to the
+    // tokens of a nested result while telling the model nothing.
+    const content = [{ type: "text", text: JSON.stringify(value) }];
     if (signal?.aborted) {
       // A `notifications/cancelled` arrived for this id, but the tool doesn't check `signal`
       // (or checked and pressed on anyway), so it ran to completion regardless — say so rather
