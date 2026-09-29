@@ -39,6 +39,14 @@ export const DISCOVERY_WINDOW_MS = 12 * 60 * 60 * 1000
  *  readers budget. Comfortably covers the last few turns even with fat tool results. */
 const TAIL_BYTES = 256 * 1024
 
+/** Each candidate's last verdict by file revision. The monitor passes every 30 s over ~30 recent
+ *  transcripts, and most have not changed since the last pass: re-reading their 256 KB tails only
+ *  re-derives the same answer. Paths age out of the window, so the map is pruned to it each pass. */
+const tailVerdicts = new Map<
+  string,
+  { mtimeMs: number; sizeBytes: number; verdict: RateLimitVerdict | null }
+>()
+
 /** A rate-limited stop, shaped like the queue_items row monitor.ts already knows how to process.
  *  `discovered` marks the ones that came from disk rather than from a run we dispatched. */
 export type RateLimitedStop = QueueItem & { discovered: boolean }
@@ -114,6 +122,8 @@ export async function discoverPendingStops(
   const recent = listTranscriptFiles().filter(
     (f) => f.source === 'claude' && now - f.mtime_ms <= windowMs,
   )
+  const live = new Set(recent.map((f) => f.path))
+  for (const path of tailVerdicts.keys()) if (!live.has(path)) tailVerdicts.delete(path)
   const stops: RateLimitedStop[] = []
 
   for (const tf of recent) {
@@ -123,10 +133,16 @@ export async function discoverPendingStops(
     if (opts.hasQueueRow?.(tf.session_id)) continue
 
     let verdict: RateLimitVerdict | null
-    try {
-      verdict = classifyRateLimitTail(await readTail(tf.path, TAIL_BYTES))
-    } catch {
-      continue // an unreadable transcript is not a stop
+    const known = tailVerdicts.get(tf.path)
+    if (known && known.mtimeMs === tf.mtime_ms && known.sizeBytes === tf.size_bytes) {
+      verdict = known.verdict
+    } else {
+      try {
+        verdict = classifyRateLimitTail(await readTail(tf.path, TAIL_BYTES))
+      } catch {
+        continue // an unreadable transcript is not a stop
+      }
+      tailVerdicts.set(tf.path, { mtimeMs: tf.mtime_ms, sizeBytes: tf.size_bytes, verdict })
     }
     if (!verdict?.pending) continue
 

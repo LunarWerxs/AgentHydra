@@ -239,6 +239,7 @@ function startPolling() {
   refreshAgentStatuses()
   // queue + scheduler are cheap and change often while runs are active
   fastTimer = window.setInterval(() => {
+    if (document.hidden) return
     refreshQueue()
     refreshScheduler()
     refreshAgentStatuses()
@@ -246,9 +247,23 @@ function startPolling() {
   // sessions require disk scans - refresh more lazily. Incidents change only on a new failure or an
   // ack/resolve click (both already re-fetch on their own), so the slow cadence is plenty.
   slowTimer = window.setInterval(() => {
+    if (document.hidden) return
     refreshSessions()
     refreshIncidents()
   }, 12000)
+  // A window left open in the background or minimised to the tray kept every poll running, and
+  // each sessions poll makes the daemon re-scan the transcripts that changed. Nobody is looking,
+  // so the ticks above skip; coming back catches up at once instead of on the next tick.
+  document.addEventListener('visibilitychange', catchUpWhenShown)
+}
+
+function catchUpWhenShown() {
+  if (document.hidden) return
+  refreshSessions()
+  refreshQueue()
+  refreshIncidents()
+  refreshScheduler()
+  refreshAgentStatuses()
 }
 
 function stopPolling() {
@@ -256,6 +271,7 @@ function stopPolling() {
   if (slowTimer !== null) window.clearInterval(slowTimer)
   fastTimer = null
   slowTimer = null
+  document.removeEventListener('visibilitychange', catchUpWhenShown)
 }
 
 export function useData() {

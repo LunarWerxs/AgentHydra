@@ -473,17 +473,63 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta |
     return parseSharedStoreMeta(tf, key)
   }
 
-  // read up to the last 12 MB — covers effectively every real transcript
-  const file = Bun.file(tf.path)
-  const start = Math.max(0, file.size - 12 * 1024 * 1024)
-  let text: string
-  try {
-    text = start > 0 ? await file.slice(start).text() : await file.text()
-  } catch {
-    return null
-  }
+  return oneParseAtATime(key, async () => {
+    const state = await foldAppended(tf, key)
+    return state ? rememberScan(tf, key, metaFromState(tf, state)) : null
+  })
+}
 
-  const acc: MetaAccumulator = {
+// ── Reading only what a transcript gained ──────────────────────────────────────────────────────
+// A live chat's transcript only ever grows, and every size change sent the whole file (up to its
+// last 12 MB) back through JSON.parse: the UI's 12 s poll, the 5-minute title sweep and the
+// daemon's own timers each paid it to learn about the last few lines. Measured 2026-09-28: 186 MB
+// read a minute and a quarter of a core, all day. Every field the scan keeps is a left fold over
+// the file's records (applyMetaLine, the limit tracker), so the fold's state at byte N plus the
+// records after N is exactly what a full re-read computes. This keeps that state per transcript
+// and reads only the bytes appended since.
+//
+// A rewrite is not an append. The bytes just before where the last read stopped are kept, and a
+// resumed read starts that many bytes early to compare them; any difference, or a file that
+// shrank, drops the state and parses from scratch. One difference from a fresh parse, on purpose:
+// a transcript past the 12 MB window keeps folding from where its first parse started instead of
+// sliding the window, so its first-message fields stay the ones that parse saw. A daemon restart
+// re-anchors it.
+const READ_WINDOW_BYTES = 12 * 1024 * 1024
+const RESUME_CHECK_BYTES = 64
+// ~1,200 transcripts on a busy machine; past this the oldest-touched states are dropped and those
+// transcripts parse from scratch on their next change.
+const MAX_PARSE_STATES = 4000
+
+interface ParseState {
+  /** Bytes before this offset are folded into acc and limits. */
+  consumed: number
+  /** The (up to) RESUME_CHECK_BYTES ending at `consumed`, to tell an append from a rewrite. */
+  check: Uint8Array
+  acc: MetaAccumulator
+  limits: ReturnType<typeof createLimitStopTracker> | null
+}
+const parseStates = new Map<string, ParseState>()
+const parseChains = new Map<string, Promise<unknown>>()
+const utf8 = new TextDecoder()
+
+/** Parses of one transcript run one after another: two revisions in flight at once (scanMeta
+ *  dedupes a revision, not a file) must never fold the same bytes into one accumulator. */
+function oneParseAtATime<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const before = parseChains.get(key) ?? Promise.resolve()
+  const mine = before.then(run, run)
+  const settled = mine.then(
+    () => undefined,
+    () => undefined,
+  )
+  parseChains.set(key, settled)
+  void settled.then(() => {
+    if (parseChains.get(key) === settled) parseChains.delete(key)
+  })
+  return mine
+}
+
+function newAccumulator(): MetaAccumulator {
+  return {
     customTitle: '',
     aiTitle: '',
     lastPrompt: '',
@@ -499,29 +545,105 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta |
     threadKey: null,
     ending: null,
   }
-  /**
-   * "Did this conversation stop at a usage wall?", answered on the way past.
-   *
-   * This loop already JSON.parse-es every record of the transcript, so the verdict costs one extra
-   * function call per line and no extra I/O — which is the whole reason the sessions list can offer
-   * a "stopped by a usage limit" filter at all. rate-limit-discovery.ts answers the same question
-   * from a 256 KB tail for the auto-resume monitor; both call the SAME tracker so the badge and the
-   * monitor can never disagree.
-   *
-   * Claude only. The tracker's evidence gate keys on `isApiErrorMessage` / `<synthetic>`, which are
-   * Claude Code's own markers, so a Codex rollout would simply never trip it — but say so out loud
-   * rather than relying on that, because a detector that silently no-ops on a provider looks
-   * exactly like a provider that never hits limits.
-   */
-  const limits = tf.source === 'claude' ? createLimitStopTracker() : null
-  // acc.threadKey: the uuid of this transcript's FIRST message — the conversation's identity, not
-  // the file's. Interrupt a chat and resume it and the CLI opens a new transcript, replays the
-  // history and carries on, so one conversation ends up as two or three files with different
-  // session ids and the same opening message; that first uuid is the cheapest exact way to
-  // recognise them as each other, and it costs nothing here because this loop already reads every
-  // record. acc.ending: why this transcript stopped — the last meaningful record wins, because
-  // that is the one that ended it. See session-ending.ts for what the answers mean.
+}
 
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
+/** The transcript's fold state, brought up to its current end: resumed from the last read when
+ *  the file only grew, rebuilt from the 12 MB window otherwise. Null when it cannot be read. */
+async function foldAppended(tf: TranscriptFile, key: string): Promise<ParseState | null> {
+  const file = Bun.file(tf.path)
+  let state: ParseState | null = null
+  let base = 0
+  let bytes = new Uint8Array(0)
+  try {
+    const prev = parseStates.get(key)
+    if (prev && file.size >= prev.consumed) {
+      base = prev.consumed - prev.check.length
+      bytes = new Uint8Array(await file.slice(base).arrayBuffer())
+      if (
+        bytes.length >= prev.check.length &&
+        sameBytes(bytes.subarray(0, prev.check.length), prev.check)
+      ) {
+        state = prev
+      }
+    }
+    if (!state) {
+      base = Math.max(0, file.size - READ_WINDOW_BYTES)
+      bytes = new Uint8Array(await (base > 0 ? file.slice(base) : file).arrayBuffer())
+      state = {
+        consumed: base,
+        check: new Uint8Array(0),
+        acc: newAccumulator(),
+        /**
+         * "Did this conversation stop at a usage wall?", answered on the way past.
+         *
+         * The fold already JSON.parse-es every record of the transcript, so the verdict costs one
+         * extra function call per line and no extra I/O — which is the whole reason the sessions
+         * list can offer a "stopped by a usage limit" filter at all. rate-limit-discovery.ts
+         * answers the same question from a 256 KB tail for the auto-resume monitor; both call the
+         * SAME tracker so the badge and the monitor can never disagree.
+         *
+         * Claude only. The tracker's evidence gate keys on `isApiErrorMessage` / `<synthetic>`,
+         * which are Claude Code's own markers, so a Codex rollout would simply never trip it — but
+         * say so out loud rather than relying on that, because a detector that silently no-ops on
+         * a provider looks exactly like a provider that never hits limits.
+         */
+        limits: tf.source === 'claude' ? createLimitStopTracker() : null,
+      }
+    }
+  } catch {
+    parseStates.delete(key)
+    return null
+  }
+
+  // Only whole lines are folded (a newline byte never sits inside a UTF-8 sequence, so splitting
+  // on it is safe). A last line with no newline yet is folded only once it parses: a record is an
+  // object, so a half-written one never does, and it is read again next time.
+  const from = state.consumed - base
+  const lastNl = bytes.lastIndexOf(0x0a)
+  let end = from
+  if (lastNl >= from) {
+    foldLines(state, tf, utf8.decode(bytes.subarray(from, lastNl + 1)))
+    end = lastNl + 1
+  }
+  if (end < bytes.length) {
+    const tail = utf8.decode(bytes.subarray(end)).trim()
+    let ev: any
+    let whole = !tail
+    if (tail) {
+      try {
+        ev = JSON.parse(tail)
+        whole = true
+      } catch {
+        /* still being written */
+      }
+    }
+    if (whole) {
+      if (tail) applyMetaLine(state.acc, tf, ev, state.limits)
+      end = bytes.length
+    }
+  }
+  state.consumed = base + end
+  state.check = bytes.slice(Math.max(0, end - RESUME_CHECK_BYTES), end)
+  parseStates.delete(key) // re-inserted last: the Map's order is the eviction order
+  parseStates.set(key, state)
+  if (parseStates.size > MAX_PARSE_STATES) parseStates.delete(parseStates.keys().next().value!)
+  return state
+}
+
+/** Fold every line of `text` into the state. acc.threadKey is the uuid of the transcript's FIRST
+ *  message — the conversation's identity, not the file's. Interrupt a chat and resume it and the
+ *  CLI opens a new transcript, replays the history and carries on, so one conversation ends up as
+ *  two or three files with different session ids and the same opening message; that first uuid is
+ *  the cheapest exact way to recognise them as each other. acc.ending: why this transcript stopped
+ *  — the last meaningful record wins, because that is the one that ended it. See
+ *  session-ending.ts for what the answers mean. */
+function foldLines(state: ParseState, tf: TranscriptFile, text: string): void {
   // Walked by index rather than `text.split('\n')`: on a 12 MB transcript that split materialises
   // ~100k line strings and holds every one of them alive for the whole loop, roughly doubling the
   // peak for a file we only ever look at one line at a time.
@@ -538,9 +660,11 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta |
     } catch {
       continue
     }
-    applyMetaLine(acc, tf, ev, limits)
+    applyMetaLine(state.acc, tf, ev, state.limits)
   }
+}
 
+function metaFromState(tf: TranscriptFile, { acc, limits }: ParseState): ScannedMeta {
   // describeTaggedText (formerly unwrapTaggedText) only touches the two derived-from-a-turn
   // sources: an explicit custom/AI title is already a label and must never be second-guessed.
   const turn = describeTaggedText(acc.lastPrompt || acc.firstUser || '')
@@ -567,7 +691,7 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta |
     thread_key: acc.threadKey,
     ended_because: acc.ending,
   }
-  return rememberScan(tf, key, meta)
+  return meta
 }
 
 /**

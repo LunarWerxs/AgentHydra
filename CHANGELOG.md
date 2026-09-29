@@ -7,6 +7,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Changed
+
+- **The daemon no longer re-reads a whole chat every time it grows**
+  (`server/src/sessions.ts`). Each time a transcript changed, the sessions list parsed all of it
+  again, up to 12 MB, to learn about the last few lines. On a busy PC that was 186 MB of reads a
+  minute and a quarter of a CPU core, all day. It now reads only what was added since the last
+  read and checks that the file was not rewritten in between. A 10 MB chat that gains a turn now
+  costs 0.8 ms of CPU instead of 93 ms. The usage-limit monitor also stops re-reading chats that
+  have not changed since its last pass, and the dashboard stops polling while its window is
+  hidden, then catches up as soon as you look at it again.
+
 ### Fixed
 
 - **Claude Desktop updates again** (`server/src/version-drift.ts`, `desktop-install-lock.ts`).
