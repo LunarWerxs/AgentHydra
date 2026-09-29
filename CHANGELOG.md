@@ -38,6 +38,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **The session index costs about an eighth of the CPU it did** (`server/src/transcript.ts`). Every
+  refresh of the session list looked up the size and date of every transcript on the machine (4,910
+  here), about 10 seconds of CPU spread over every core, and a refresh ran whenever the list was
+  more than 10 seconds old: every few seconds while the web UI was open. It now re-checks only
+  transcripts written in the last hour on each refresh and the rest once a minute, so a refresh
+  costs about 1.3 seconds of CPU. New chats and active ones still show up at once; activity in a
+  chat that had been quiet for over an hour shows within a minute.
 - **The background daemon no longer spikes two to three CPU cores every five minutes**
   (`server/src/session-launch.ts`). The sweep that gives untitled desktop chats their real names
   read and parsed every chat record on the machine on every pass (3,494 files, 166 MB here) to

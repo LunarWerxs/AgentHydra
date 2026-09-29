@@ -553,6 +553,25 @@ const CODEX_ROLLOUT_GLOB = '**/rollout-*.jsonl'
  *  so a huge store cannot open thousands of handles at once. */
 const INDEX_SCAN_WIDTH = 24
 
+/**
+ * The last stat of every Claude transcript, so a sweep re-stats only what can have moved. Measured
+ * 2026-09-29: one sweep stat'ed all 4,910 transcripts on this machine, ~10 CPU-s across the fs
+ * thread pool (8-10 cores for about a second) every time the 10 s TTL lapsed - each web-UI sessions
+ * poll, and the five-minute title sweep when nothing else was asking. A transcript is appended only
+ * while its session runs, so one quiet for COLD_AFTER_MS is trusted between full re-stats, which
+ * still run every COLD_RESTAT_MS; a new transcript appears at once, because the glob runs every sweep.
+ */
+const COLD_AFTER_MS = 60 * 60_000
+const COLD_RESTAT_MS = 60_000
+const claudeStatCache = new Map<string, { mtimeMs: number; size: number }>()
+let lastFullClaudeStatAt = 0
+
+/** Tests: forget every remembered stat, so the next sweep stats the store whole. */
+export function resetClaudeStatCache(): void {
+  claudeStatCache.clear()
+  lastFullClaudeStatAt = 0
+}
+
 /** One claude-format store to scan: where it is, how its files are laid out, and whose it is. */
 interface ClaudeStore {
   root: string
@@ -1166,13 +1185,23 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
     mtimeMs: number
     size: number
   }> = []
+  const statNow = Date.now()
+  const restatCold = statNow - lastFullClaudeStatAt >= COLD_RESTAT_MS
+  const statSeen = new Set<string>()
   for (const store of claudeStores()) {
     const claudeRels = await scanRootAsync(new Bun.Glob(store.glob), store.root)
     const scanned = await mapPool(claudeRels, INDEX_SCAN_WIDTH, async (rel) => {
+      const path = join(store.root, rel)
+      statSeen.add(path)
+      const known = claudeStatCache.get(path)
+      if (known && !restatCold && statNow - known.mtimeMs > COLD_AFTER_MS)
+        return { rel, mtimeMs: known.mtimeMs, size: known.size }
       try {
-        const st = await statAsync(join(store.root, rel))
+        const st = await statAsync(path)
+        claudeStatCache.set(path, { mtimeMs: st.mtimeMs, size: st.size })
         return { rel, mtimeMs: st.mtimeMs, size: st.size }
       } catch {
+        claudeStatCache.delete(path)
         return null
       }
     })
@@ -1206,6 +1235,9 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
         })
   }
   promoteOrphans(files, claudeChildren, pendingChildren)
+  if (restatCold) lastFullClaudeStatAt = statNow
+  // A transcript the glob no longer lists is gone; its remembered stat goes with it.
+  for (const path of claudeStatCache.keys()) if (!statSeen.has(path)) claudeStatCache.delete(path)
 
   for (const store of codexStoreRoots()) {
     // Same per-store sidebar read as the sync builder.
