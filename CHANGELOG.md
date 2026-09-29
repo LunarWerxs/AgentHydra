@@ -12,8 +12,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Each instance shows every account it has been signed into** (`server/src/core/login-history.ts`,
   `web/src/components/LoginHistoryPopover.vue`). A history button beside the account in the
   Instances table lists the accounts that have used that profile: the signed-in one first, then the
-  rest by when each was last busy there, with how many chats each left. When a row reads
-  "(not logged in)" or "(unknown account)", the top entry says which account it was on. It is always
+  rest by when each was last busy there, with how many chats each left, which instance each one is
+  signed into now, and which others it passed through. When a row reads "(not logged in)" or
+  "(unknown account)", the top entry says which account it was on and where it went. It is always
   shown on those rows and appears on hover everywhere else. The list comes from the chats each
   account filed in the profile, so it already goes back before this release.
 

@@ -23,6 +23,7 @@ import {
 import os from 'node:os'
 import { join } from 'node:path'
 import { resolveAccount } from '../src/core/accounts'
+import { instanceNumberFor } from '../src/core/instance-numbers'
 import { readLoginHistory } from '../src/core/login-history'
 import { accountsCacheFile, normalizeInstancePath } from '../src/core/paths'
 
@@ -80,17 +81,22 @@ describe('login history', () => {
     chat(dir, OLD, 'a', new Date('2026-09-28T04:57:00Z'))
     chat(dir, NEW, 'b', new Date('2026-09-28T06:34:00Z'))
     cached(dir, OLD, 'before@example.com')
+    const movedToDir = profile(OLD)
+    chat(movedToDir, OLD, 'c', new Date('2026-09-28T07:00:00Z'))
+    const movedTo = instanceNumberFor('desktop', movedToDir)
 
     // The stale-login guard drops OLD's identity from this profile's cache...
     expect((await resolveAccount(dir, { noNetwork: true })).email).toBeNull()
 
-    // ...but the history still says who was here, current login first.
+    // ...but the history still says who was here, current login first, and where OLD went.
     const { entries, loginState } = readLoginHistory(dir)
     expect(loginState).toBe('signed-in')
-    expect(entries.map((e) => [e.accountUuid, e.current, e.email])).toEqual([
-      [NEW, true, null],
-      [OLD, false, 'before@example.com'],
-    ])
+    expect(entries.map((e) => [e.accountUuid, e.current, e.email, e.signedInOn, e.usedOn])).toEqual(
+      [
+        [NEW, true, null, [], []],
+        [OLD, false, 'before@example.com', [movedTo], [movedTo]],
+      ],
+    )
     expect(entries[1].lastSeenAt).toBe('2026-09-28T04:57:00.000Z')
     expect(entries[1].chats).toBe(1)
   })

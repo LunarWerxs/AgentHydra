@@ -331,6 +331,11 @@ export interface CMLoginHistoryEntry {
   firstSeenAt: string | null
   lastSeenAt: string | null
   chats: number
+  /** Numbers of the OTHER desktop instances signed into this account right now: where it went. */
+  signedInOn: number[]
+  /** Numbers of the OTHER desktop instances it has ever been signed into (it left chats there),
+   *  whether or not it still is. The trail to follow for an account nobody identified. */
+  usedOn: number[]
 }
 
 /** Every account a desktop profile has been signed into, most recently used first. */

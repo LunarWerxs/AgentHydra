@@ -79,12 +79,16 @@ export default {
   loginHistoryLast: 'Last signed in',
   loginHistorySignedOut: 'Nobody is signed in to this profile right now.',
   loginHistoryUnknown: 'Unidentified account {id}',
-  loginHistoryLastUsed: 'last used {when} · {count} chats here',
+  loginHistoryLastUsed:
+    'last used {when} · {count} chat here | last used {when} · {count} chats here',
   loginHistoryNoChats: 'signed in, no chats here yet',
+  loginHistoryChatsMoved: 'no chats left here (moved to another instance)',
+  loginHistorySignedInOn: 'Signed in on {nums} now',
+  loginHistoryUsedOn: 'Also used on {nums} before',
   loginHistoryEmpty: 'No account has used this profile yet.',
   loginHistoryFailed: 'Could not read this profile’s login history.',
   loginHistoryFootnote:
-    'Read from the chats each account left in this profile. An account shows as unidentified until AgentHydra has seen it signed in once.',
+    'Read from the chats each account left in this profile. Names come from every account AgentHydra has identified on this PC; one it never saw with a working login stays unidentified, and the instances it passed through are listed so you can find it.',
   // A name you typed once overrides everything and nothing ever re-checked it, so an instance
   // signed into a different account keeps the old account's name for good. The marker reports it;
   // the ⋯ menu clears it. Deliberately not automatic — the override is still the user's choice.

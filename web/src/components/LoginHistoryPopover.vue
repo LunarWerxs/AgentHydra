@@ -37,11 +37,17 @@ function who(e: CMLoginHistoryEntry): string {
 }
 
 function detail(e: CMLoginHistoryEntry): string {
+  // No chats under an account that is not signed in means they were moved out of this profile.
   const used = e.lastSeenAt
-    ? t('instances.loginHistoryLastUsed', { when: timeAgo(e.lastSeenAt), count: e.chats })
-    : t('instances.loginHistoryNoChats')
+    ? t('instances.loginHistoryLastUsed', { when: timeAgo(e.lastSeenAt), count: e.chats }, e.chats)
+    : t(e.current ? 'instances.loginHistoryNoChats' : 'instances.loginHistoryChatsMoved')
   return e.planLabel ? `${e.planLabel} · ${used}` : used
 }
+
+const numbers = (nums: number[]) => nums.map((n) => `#${n}`).join(', ')
+
+/** Instances it passed through and has since left: where to look for an account with no name. */
+const usedBefore = (e: CMLoginHistoryEntry) => e.usedOn.filter((n) => !e.signedInOn.includes(n))
 
 /** With nobody signed in, the top entry is the account the profile was on last: the one to name. */
 function isLastSignedIn(index: number): boolean {
@@ -82,10 +88,12 @@ function isLastSignedIn(index: number): boolean {
               <p v-if="history.loginState !== 'signed-in'" class="text-xs text-warning">
                 {{ $t('instances.loginHistorySignedOut') }}
               </p>
+              <!-- The list is capped with its own scroller: a profile that has hosted a dozen
+                   accounts would otherwise run the flyout off the bottom of the window. -->
               <p v-if="history.entries.length === 0" class="text-xs text-muted-foreground">
                 {{ $t('instances.loginHistoryEmpty') }}
               </p>
-              <ol v-else class="space-y-1.5">
+              <ol v-else class="max-h-80 space-y-1.5 overflow-y-auto">
                 <li
                   v-for="(e, i) in history.entries"
                   :key="e.accountUuid"
@@ -106,6 +114,12 @@ function isLastSignedIn(index: number): boolean {
                     </Badge>
                   </div>
                   <div class="text-xs text-muted-foreground">{{ detail(e) }}</div>
+                  <div v-if="e.signedInOn.length" class="text-xs font-medium text-primary">
+                    {{ $t('instances.loginHistorySignedInOn', { nums: numbers(e.signedInOn) }) }}
+                  </div>
+                  <div v-if="usedBefore(e).length" class="text-xs text-muted-foreground">
+                    {{ $t('instances.loginHistoryUsedOn', { nums: numbers(usedBefore(e)) }) }}
+                  </div>
                 </li>
               </ol>
               <p class="text-xs text-muted-foreground">{{ $t('instances.loginHistoryFootnote') }}</p>
