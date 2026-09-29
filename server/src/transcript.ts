@@ -560,9 +560,13 @@ const INDEX_SCAN_WIDTH = 24
  * poll, and the five-minute title sweep when nothing else was asking. A transcript is appended only
  * while its session runs, so one quiet for COLD_AFTER_MS is trusted between full re-stats, which
  * still run every COLD_RESTAT_MS; a new transcript appears at once, because the glob runs every sweep.
+ * Ten minutes, not one: an idle daemon's only sweep is the five-minute title sweep, so a one-minute
+ * window made every sweep a full re-stat (measured the same day, a 2.4-2.8 core burst per sweep). A
+ * continued or compacted chat writes a NEW transcript, so what waits up to ten minutes is only a
+ * chat reopened after an hour of quiet moving up the list.
  */
 const COLD_AFTER_MS = 60 * 60_000
-const COLD_RESTAT_MS = 60_000
+const COLD_RESTAT_MS = 10 * 60_000
 const claudeStatCache = new Map<string, { mtimeMs: number; size: number }>()
 let lastFullClaudeStatAt = 0
 

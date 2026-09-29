@@ -2,7 +2,7 @@
 //
 // Measured 2026-09-29: every index sweep stat'ed all 4,910 transcripts on the owner's machine, ~10 CPU-s
 // across the fs thread pool, and the 10 s TTL let each web-UI sessions poll start another. The sweep now
-// trusts a transcript quiet for over an hour between full re-stats (one a minute). What must still hold,
+// trusts a transcript quiet for over an hour between full re-stats (every ten minutes). What must still hold,
 // and is pinned here: a NEW transcript and a RECENTLY ACTIVE one's growth show on the very next sweep, a
 // deleted one disappears, and a quiet one's growth shows once the full re-stat comes round.
 //
