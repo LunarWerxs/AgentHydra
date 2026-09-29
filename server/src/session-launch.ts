@@ -40,6 +40,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
@@ -644,6 +645,14 @@ export function desktopChatArchiveState(
 const GENERIC_TITLE = GENERIC_CHAT_TITLE
 const PLUMBING_TITLE = PLUMBING_CHAT_TITLE
 
+/** What the last sweep learned about each metadata file, keyed by path and valid while its
+ *  (mtime, size) stands: `sid` null means it already had a real title. Measured 2026-09-29: the
+ *  five-minute sweep read and parsed every record on the machine (3,494 files, 166 MB across 22
+ *  profiles, ~48 KB each) to find the handful without a name, and the daemon ran 2-3 cores for
+ *  ~10 s on every tick. An unchanged record needs only a stat, and an unchanged untitled one only
+ *  the scanner's title, never another read. */
+const titleSweepSeen = new Map<string, { mtimeMs: number; size: number; sid: string | null }>()
+
 /** If `path`'s stored title is empty/generic/plumbing AND the scanner has something real for it,
  *  write the better title in place and report the rename. Returns null when nothing needed
  *  fixing (a real title already, or no better replacement) - one unreadable metadata file must
@@ -653,20 +662,33 @@ function renameIfUntitled(
   filename: string,
   lookupTitle: (cliSessionId: string) => string | null,
 ): { sessionId: string; title: string } | null {
+  const usable = (t: string | undefined, sid: string): t is string =>
+    !!t && !GENERIC_TITLE.test(t) && !PLUMBING_TITLE.test(t) && t !== sid
   try {
+    const st = statSync(path)
+    const seen = titleSweepSeen.get(path)
+    if (seen && seen.mtimeMs === st.mtimeMs && seen.size === st.size) {
+      if (seen.sid === null || !usable(lookupTitle(seen.sid)?.trim(), seen.sid)) return null
+    }
     const meta = JSON.parse(readFileSync(path, 'utf8'))
     const current = typeof meta.title === 'string' ? meta.title.trim() : ''
-    if (current && !GENERIC_TITLE.test(current) && !PLUMBING_TITLE.test(current)) return null
+    if (current && !GENERIC_TITLE.test(current) && !PLUMBING_TITLE.test(current)) {
+      titleSweepSeen.set(path, { mtimeMs: st.mtimeMs, size: st.size, sid: null })
+      return null
+    }
     const sid =
       typeof meta.cliSessionId === 'string' && meta.cliSessionId
         ? meta.cliSessionId
         : filename.slice('local_'.length, -'.json'.length)
     const better = lookupTitle(sid)?.trim()
-    if (!better || GENERIC_TITLE.test(better) || PLUMBING_TITLE.test(better) || better === sid)
+    if (!usable(better, sid)) {
+      titleSweepSeen.set(path, { mtimeMs: st.mtimeMs, size: st.size, sid })
       return null
+    }
     meta.title = better
     meta.titleSource = 'tool'
     writeFileSync(path, JSON.stringify(meta))
+    titleSweepSeen.delete(path) // rewritten: the next pass reads it once and learns its new stamp
     return { sessionId: sid, title: better }
   } catch {
     // one unreadable metadata file must not stop the sweep

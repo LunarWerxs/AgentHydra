@@ -38,6 +38,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **The background daemon no longer spikes two to three CPU cores every five minutes**
+  (`server/src/session-launch.ts`). The sweep that gives untitled desktop chats their real names
+  read and parsed every chat record on the machine on every pass (3,494 files, 166 MB here) to
+  find the few with no name. It now remembers each record until the file changes, so a pass costs
+  about 0.12 s of CPU instead of 1.1 s, reads nothing it has already read, and a chat the app
+  re-saves without its title is still renamed on the next pass.
 - **Claude Desktop updates again** (`server/src/version-drift.ts`, `desktop-install-lock.ts`).
   AgentHydra opens every account from its own copy of Claude, which has no updater beside it, so
   Claude's update check failed with "Can not find Squirrel" and the real install was never run to

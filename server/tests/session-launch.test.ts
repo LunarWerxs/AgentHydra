@@ -207,6 +207,26 @@ test('the title janitor names untitled chats, respects real names, skips generic
   expect(read('local_sid-nocandidate.json').title).toBeUndefined()
 })
 
+test('the janitor remembers what it read but still repairs a record the app blanked, and one that gained a name', () => {
+  const profile = mkdtempSync(join(ROOT, 'agenthydra-janitor-repeat-'))
+  const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  const named = join(store, 'local_sid-named.json')
+  writeFileSync(named, JSON.stringify({ cliSessionId: 'sid-named', title: 'My hand-picked name' }))
+  writeFileSync(join(store, 'local_sid-later.json'), JSON.stringify({ cliSessionId: 'sid-later' }))
+  const titles: Record<string, string | null> = { 'sid-named': 'Parser rewrite', 'sid-later': null }
+  expect(sweepUntitledDesktopChats((sid) => titles[sid] ?? null, [profile]).fixed).toBe(0)
+  // The clobber the janitor exists for: the running app re-saves the chat with its title unset.
+  writeFileSync(named, JSON.stringify({ cliSessionId: 'sid-named' }))
+  // And the scanner learns a name for a chat whose record never changed on disk.
+  titles['sid-later'] = 'Release notes pass'
+  const swept = sweepUntitledDesktopChats((sid) => titles[sid] ?? null, [profile])
+  expect(swept.fixed).toBe(2)
+  const read = (n: string) => JSON.parse(readFileSync(join(store, n), 'utf8'))
+  expect(read('local_sid-named.json').title).toBe('Parser rewrite')
+  expect(read('local_sid-later.json').title).toBe('Release notes pass')
+})
+
 test('imported chats are stamped bypassPermissions, not left to deadlock on a shell prompt', () => {
   // Measured 2026-08-26: the app creates an imported chat with permissionMode 'acceptEdits',
   // which auto-approves EDITS but prompts on every shell command - so five revived chats each
