@@ -20,6 +20,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **The chat journal no longer re-reads every chat every five minutes**
+  (`orchestrator/scripts/chatwatch.py`). Each pass walked every instance's whole profile folder
+  (about 20,000 directories) to find the chat records, then parsed all of them again. It now looks
+  only where the records are kept and reuses any record whose file has not changed: a pass takes
+  0.2 seconds of CPU instead of 3.7, and archives, renames and moves are journalled as before.
+
 - **An account is remembered after the instance it was on moves to another one**
   (`server/src/core/known-accounts.ts`). AgentHydra forgot who an account was the moment its
   instance signed into someone else, so older entries in the history above had no name, and an

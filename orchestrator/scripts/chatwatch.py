@@ -66,6 +66,10 @@ def _snapshot_path() -> Path:
     return _state() / "chat-watch-snapshot.json"
 
 
+def _stat_cache_path() -> Path:
+    return _state() / "chat-watch-stat-cache.json"
+
+
 # ── reading the app's own truth ────────────────────────────────────────────────
 
 def scan() -> dict[str, dict]:
@@ -73,29 +77,52 @@ def scan() -> dict[str, dict]:
 
     Deliberately reads the metadata files rather than asking the daemon: this has to work when
     the daemon is down, and the files are what the app actually believes.
+
+    Every record sits at one depth, and one whose (mtime, size) is unchanged since the last pass
+    keeps its row: a recursive walk also crawled each instance's whole Electron profile, and
+    every pass re-parsed every record (20,238 directories and 2,725 files, 3.7 CPU-s every five
+    minutes, 2026-09-29).
     """
     out: dict[str, dict] = {}
     root = _instances_root()
     if not root.is_dir():
         return out
-    for path in root.rglob("local_*.json"):
+    try:
+        cache = json.loads(_stat_cache_path().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - no cache only means a full read
+        cache = {}
+    seen: dict[str, list] = {}
+    for path in root.glob("*/claude-code-sessions/*/*/local_*.json"):
         try:
-            rec = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - a half-written file is not a reason to lose the pass
+            st = path.stat()
+        except OSError:
             continue
-        try:
+        hit = cache.get(str(path))
+        if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+            key, row = hit[2], hit[3]
+        else:
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001 - a half-written file is not a reason to lose the pass
+                continue
             instance = path.relative_to(root).parts[0]
-        except ValueError:
-            continue
-        chat_id = str(rec.get("sessionId") or path.stem)
-        out[f"{instance}/{chat_id}"] = {
-            "instance": instance,
-            "chatId": chat_id,
-            "sessionId": rec.get("cliSessionId"),
-            "title": rec.get("title"),
-            "archived": bool(rec.get("isArchived")),
-            "lastActivityAt": rec.get("lastActivityAt"),
-        }
+            chat_id = str(rec.get("sessionId") or path.stem)
+            key = f"{instance}/{chat_id}"
+            row = {
+                "instance": instance,
+                "chatId": chat_id,
+                "sessionId": rec.get("cliSessionId"),
+                "title": rec.get("title"),
+                "archived": bool(rec.get("isArchived")),
+                "lastActivityAt": rec.get("lastActivityAt"),
+            }
+        seen[str(path)] = [st.st_mtime_ns, st.st_size, key, row]
+        out[key] = row
+    if seen != cache:
+        _stat_cache_path().parent.mkdir(parents=True, exist_ok=True)
+        tmp = _stat_cache_path().with_suffix(".tmp")
+        tmp.write_text(json.dumps(seen), encoding="utf-8")
+        tmp.replace(_stat_cache_path())
     return out
 
 
