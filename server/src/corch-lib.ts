@@ -26,6 +26,7 @@ export type AttemptOutcome =
   | 'quota'
   | 'transient'
   | 'auth'
+  | 'interrupted' // the CLI ended with no result and no error: killed (a daemon restart), not failed
   | 'error'
   | 'cancelled'
 
@@ -67,7 +68,7 @@ export interface CorchWorker {
   costUsd: number // summed over every attempt's `result.total_cost_usd`
   turns: number // summed `result.num_turns`
   moves: number // how many times the session changed account
-  retries: number // transient retries used in the current turn
+  retries: number // transient or interrupted retries used in the current turn
   notBefore: number | null // epoch ms; a transient retry waits until then
   createdAt: number
   updatedAt: number
@@ -82,7 +83,21 @@ export interface CorchAccount {
   weekPct: number | null
 }
 
-export type CorchWalls = Record<string, { until: number; reason: string }>
+/** `cred` (signed-out walls only): the mtime of the account's `.credentials.json` when it was
+ *  walled, so a sign-in that rewrites the file is noticed before the wall runs out. */
+export type CorchWalls = Record<string, { until: number; reason: string; cred?: number | null }>
+
+/** A usage reading counts only while its window is open. Once `resetsAt` has passed, the
+ *  percentage describes a window that no longer exists, and an old 99% would keep an account
+ *  that has since refilled out of the pool until someone happened to check its usage again. */
+export function livePct(
+  limit: { pct: number; resetsAt?: string | null } | null | undefined,
+  now: number,
+): number | null {
+  if (!limit || typeof limit.pct !== 'number') return null
+  const ends = limit.resetsAt ? Date.parse(limit.resetsAt) : Number.NaN
+  return Number.isFinite(ends) && ends <= now ? null : limit.pct
+}
 
 /** The worker minus the long prompt and the log paths, plus what a reader wants at a glance. */
 export type CorchWorkerView = Omit<CorchWorker, 'prompt' | 'attempts'> & {
@@ -96,7 +111,13 @@ export const WORKER_BRIEF =
   "You are a Corch worker: a Claude Code CLI session that AgentHydra started on one of the owner's accounts, at the owner's request, to do one delegated task for an orchestrating chat. Do the whole task yourself, in this session. Nobody is watching to answer questions, so make the reasonable call and say which call you made. Follow the repository's own rules. Commit only the files you changed, and push if the repository's rules say to. Never read or print a secret value. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
 
 export const HANDOFF_PROMPT =
-  'This session was moved to another account because the previous one reached its usage limit. Continue the task exactly where you left off. Do not redo steps that are already finished.'
+  'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.'
+
+export const INTERRUPTED_PROMPT =
+  'This session was interrupted before it finished: its process was stopped (AgentHydra restarted), not by anything you did. Continue the task exactly where you left off. Do not redo steps that are already finished; run a command again only if its result is missing.'
+
+export const INTERRUPTED_NOTICE =
+  'Interrupted: the CLI process ended with no result and no error (AgentHydra restarted or the process was killed). Resumed automatically.'
 
 /** Env keys a worker must never inherit: it bills its OWN login, never a borrowed key or token. */
 export const ENV_SCRUB =
@@ -157,6 +178,10 @@ export function classifyAttempt(events: unknown[], stderr: string): AttemptVerdi
   const transient = trusted.find((t) => classifyLimit(t) === 'transient')
   if (transient !== undefined) return out('transient', transient)
   if (last && !errored) return out('done', null)
+  // No result, no API error, nothing on stderr: the process was killed from outside. On Windows a
+  // daemon restart does exactly this to every worker (they sit in the daemon's kill-on-close job),
+  // and the transcript on disk is intact, so the session is resumed rather than failed.
+  if (!last && !apiErrors.length && !stderr.trim()) return out('interrupted', INTERRUPTED_NOTICE)
   return out('error', null)
 }
 

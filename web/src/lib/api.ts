@@ -867,6 +867,7 @@ export type CorchAttemptOutcome =
   | 'quota'
   | 'transient'
   | 'auth'
+  | 'interrupted'
   | 'error'
   | 'cancelled'
 export interface CorchAccountRef {

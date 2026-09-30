@@ -52,7 +52,7 @@ import {
   updateAppearance,
 } from './connections'
 import { createChatGptContextPack } from './context-pack'
-import { startCorch } from './corch'
+import { corchRunningCount, startCorch } from './corch'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
 import { reconcileCodexInstanceDirs } from './core/codex-instances'
 import { createRunningCodeProbe, restartNeededMessage } from './core/running-code'
@@ -479,12 +479,17 @@ app.post('/api/daemon/restart', async (c) => {
   // auto-update loop already refuses (setAutoUpdateHooks.hasActiveRuns below). A person who knows
   // what they are restarting past may say so; the runs are detached and reattached at boot, so
   // this is a courtesy rather than data loss - but it must be a DECISION, never a surprise.
-  const active = activeCount()
+  // Corch workers count too: a restart kills their CLI (measured 2026-09-30), and each resumes its
+  // session afterwards, but the step it was on starts over.
+  const corch = corchRunningCount()
+  const active = activeCount() + corch
   if (active > 0 && body.force !== true)
     return c.json(
       {
         ok: false,
-        error: `${active} dispatch run(s) in flight - pass force:true to restart past them`,
+        error: corch
+          ? `${active} run(s) in flight, ${corch} of them Corch worker(s) - pass force:true to restart past them (each Corch worker resumes its session after the restart, but its current step starts over)`
+          : `${active} dispatch run(s) in flight - pass force:true to restart past them`,
         activeRuns: active,
       },
       409,
@@ -1252,8 +1257,8 @@ function spawnRelaunchSuccessor(): void {
 // (startAutoUpdate below), one interval out, so a fresh launch is never interrupted.
 loadAutoUpdateSettings()
 setAutoUpdateHooks({
-  // Don't auto-update (which relaunches the daemon) while dispatch runs are in flight.
-  hasActiveRuns: () => activeCount() > 0,
+  // Don't auto-update (which relaunches the daemon) while dispatch runs or Corch workers are in flight.
+  hasActiveRuns: () => activeCount() + corchRunningCount() > 0,
   relaunch: () => void relaunchDaemon(),
 })
 

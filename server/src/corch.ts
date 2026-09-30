@@ -36,6 +36,8 @@ import {
   classifyAttempt,
   copySessionTranscript,
   HANDOFF_PROMPT,
+  INTERRUPTED_PROMPT,
+  livePct,
   pickAccount,
   scrubbedEnv,
   summarizeEvent,
@@ -43,6 +45,7 @@ import {
   WORKER_BRIEF,
 } from './corch-lib'
 import { getCliInstance, listCliInstances } from './core/cli-instances'
+import { cliAuthStatus } from './core/cli-quick-add'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
 import { isPidAlive, killProcessTree } from './core/process'
 import { parseResetTime } from './usage'
@@ -84,10 +87,12 @@ const reads = new Map<
 const listeners = new Set<(w: CorchWorker) => void>()
 
 let claudeCommand: () => string[] = () => [resolveClaudeExe()]
-/** The production pool: every CLI instance with a credential file, with its last usage reading. A
- *  hollow or revoked login still passes that file check; its first attempt fails `auth` and the
- *  account is walled for 30 minutes, so a stale login costs one quick failure, not a stuck worker. */
+/** The production pool: every CLI instance with a credential file, with its last usage reading
+ *  (void once its window has reset). A hollow or revoked login still passes that file check; its
+ *  first attempt fails `auth` and the account stays walled until it signs in again
+ *  (recheckSignedOut), so a dead login costs one quick failure, once. */
 function signedInAccounts(): CorchAccount[] {
+  const now = Date.now()
   return listCliInstances()
     .filter((i) => i.loggedIn)
     .map((i) => ({
@@ -95,9 +100,46 @@ function signedInAccounts(): CorchAccount[] {
       num: i.num ?? null,
       name: i.name,
       configDir: i.configDir,
-      sessionPct: i.lastUsageCheck?.session?.pct ?? null,
-      weekPct: i.lastUsageCheck?.weekAll?.pct ?? null,
+      sessionPct: livePct(i.lastUsageCheck?.session, now),
+      weekPct: livePct(i.lastUsageCheck?.weekAll, now),
     }))
+}
+
+const SIGNED_OUT_MS = 30 * 60_000
+const credStamp = (configDir: string): number | null => {
+  try {
+    return statSync(join(configDir, '.credentials.json')).mtimeMs
+  } catch {
+    return null
+  }
+}
+const authChecks = new Set<string>()
+
+/** A signed-out wall is never lifted by the clock alone. When it runs out, or the account's
+ *  credential file changes (a new sign-in), the CLI's own `auth status` decides: about a quarter
+ *  of a second, no quota. A dead login stays walled, so it never costs another worker a failed
+ *  attempt (before this, an expired account took one attempt from some worker every 30 minutes);
+ *  a login that works again rejoins the pool at once. */
+function recheckSignedOut(accounts: CorchAccount[], now: number): void {
+  for (const a of accounts) {
+    const wall = walls[a.id]
+    if (wall?.reason !== 'signed out' || authChecks.has(a.id)) continue
+    const cred = credStamp(a.configDir)
+    if (wall.until > now && (wall.cred === undefined || wall.cred === cred)) continue
+    wall.until = now + SIGNED_OUT_MS
+    wall.cred = cred
+    authChecks.add(a.id)
+    void cliAuthStatus(a.configDir)
+      .then((s) => {
+        if (s.loggedIn) delete walls[a.id]
+      })
+      .catch(() => {})
+      .finally(() => {
+        authChecks.delete(a.id)
+        saveWalls()
+        schedule(0)
+      })
+  }
 }
 let accountsProvider: () => CorchAccount[] = signedInAccounts
 
@@ -162,6 +204,20 @@ function changed(w: CorchWorker): void {
 const isActive = (w: CorchWorker): boolean =>
   w.status === 'queued' || w.status === 'running' || w.status === 'waiting'
 
+const isInit = (ev: unknown): boolean =>
+  (ev as { type?: string; subtype?: string })?.type === 'system' &&
+  (ev as { subtype?: string }).subtype === 'init'
+
+/** Workers with a CLI process running now. A daemon restart kills them (on Windows they live in
+ *  the daemon's kill-on-close job), so the restart route and auto-update count them as runs in
+ *  flight; each resumes by itself afterwards, but its current step starts over. */
+export function corchRunningCount(): number {
+  load()
+  let n = 0
+  for (const w of workers.values()) if (w.status === 'running') n++
+  return n
+}
+
 function schedule(delay?: number): void {
   if (timer) clearTimeout(timer)
   const next = delay ?? ([...workers.values()].some(isActive) ? 3_000 : 15_000)
@@ -182,6 +238,7 @@ async function tick(): Promise<void> {
     } catch (err) {
       console.error('[corch] could not list accounts:', err)
     }
+    recheckSignedOut(accounts, now)
     const active = new Map<string, number>()
     for (const w of workers.values())
       if (w.status === 'running' && w.accountId)
@@ -335,11 +392,17 @@ function finish(w: CorchWorker, events: unknown[]): void {
       w.status = 'queued'
       break
     }
-    case 'auth':
-      walls[at.account.id] = { until: now + 30 * 60_000, reason: 'signed out' }
+    case 'auth': {
+      const dir = getCliInstance(at.account.id)?.configDir
+      walls[at.account.id] = {
+        until: now + SIGNED_OUT_MS,
+        reason: 'signed out',
+        cred: dir ? credStamp(dir) : null,
+      }
       saveWalls()
       w.status = 'queued'
       break
+    }
     case 'transient':
       if (w.retries < 3) {
         w.notBefore = now + [5_000, 10_000, 20_000][w.retries]!
@@ -348,6 +411,18 @@ function finish(w: CorchWorker, events: unknown[]): void {
       } else {
         w.status = 'failed'
         w.error = `Anthropic stayed overloaded through 3 retries: ${v.notice ?? ''}`.trim()
+      }
+      break
+    case 'interrupted':
+      // Killed from outside with the transcript intact: resume the same session on the same
+      // account. Three in one turn means something keeps killing it, and that needs a person.
+      if (w.retries < 3) {
+        w.notBefore = now + 2_000
+        w.retries++
+        w.status = 'queued'
+      } else {
+        w.status = 'failed'
+        w.error = 'The CLI was stopped before it finished three times in a row in this turn.'
       }
       break
     default:
@@ -389,9 +464,22 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
     text = resume ? HANDOFF_PROMPT : w.prompt
   else if (last.outcome === 'transient')
     text = tailText(join(PROMPTS, `${w.id}-${n - 1}.txt`), 1_000_000) || w.prompt
+  else if (last.outcome === 'interrupted')
+    // Killed after the CLI started (its init event is in the log): the message is already in the
+    // session, so ask it to carry on. Killed before that: the message never arrived, send it again.
+    text =
+      resume && readLog(last.log).events.some(isInit)
+        ? INTERRUPTED_PROMPT
+        : tailText(join(PROMPTS, `${w.id}-${n - 1}.txt`), 1_000_000) || w.prompt
   else if (w.pending.length) text = w.pending.shift() as string
   else text = w.prompt
-  if (!resume && text !== w.prompt && last?.outcome !== 'transient') text = `${w.prompt}\n\n${text}`
+  if (
+    !resume &&
+    text !== w.prompt &&
+    last?.outcome !== 'transient' &&
+    last?.outcome !== 'interrupted'
+  )
+    text = `${w.prompt}\n\n${text}`
 
   mkdirSync(LOGS, { recursive: true })
   mkdirSync(PROMPTS, { recursive: true })

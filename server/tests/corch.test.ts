@@ -14,6 +14,7 @@ import {
   corchList,
   corchRun,
   corchWait,
+  livePct,
   pickAccount,
   setCorchAccountsProvider,
   setCorchClaudeCommand,
@@ -68,6 +69,13 @@ describe('classifyAttempt', () => {
     expect(r.outcome).toBe('transient')
   })
 
+  test('a CLI killed from outside is interrupted (resumed), not an error', () => {
+    // Measured live 2026-09-30: a daemon restart kills every worker; its log ends mid-turn with no
+    // result and its stderr is empty.
+    expect(classifyAttempt([init, said('working on it')], '').outcome).toBe('interrupted')
+    expect(classifyAttempt([init], 'error: unknown option --bogus').outcome).toBe('error')
+  })
+
   test('a model that merely TALKS about a session limit is still done', () => {
     const r = classifyAttempt(
       [
@@ -114,6 +122,14 @@ describe('pickAccount', () => {
       attempts: [{ account: { id: 'a', num: 1, name: 'a' }, outcome: 'quota', notice: NOTICE }],
     })
     expect(pickAccount(w, accounts, {}, new Map(), 2, now)?.id).toBe('b')
+  })
+
+  test('a usage reading from a window that has already reset does not count', () => {
+    const past = new Date(now - 60_000).toISOString()
+    const future = new Date(now + 60_000).toISOString()
+    expect(livePct({ pct: 99, resetsAt: past }, now)).toBeNull()
+    expect(livePct({ pct: 99, resetsAt: future }, now)).toBe(99)
+    expect(livePct({ pct: 40 }, now)).toBe(40)
   })
 
   test('spreads by the active count', () => {

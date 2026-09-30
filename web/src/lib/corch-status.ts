@@ -77,6 +77,8 @@ export const CORCH_OUTCOME: Record<
   quota: { variant: 'warning', label: 'corch.outcomeQuota' },
   transient: { variant: 'muted', label: 'corch.outcomeTransient' },
   auth: { variant: 'warning', label: 'corch.outcomeAuth' },
+  // "stopped": killed from outside (a daemon restart) and resumed by itself; its notice says so.
+  interrupted: { variant: 'muted', label: 'corch.outcomeCancelled' },
   error: { variant: 'destructive', label: 'corch.outcomeError' },
   cancelled: { variant: 'outline', label: 'corch.outcomeCancelled' },
 }
