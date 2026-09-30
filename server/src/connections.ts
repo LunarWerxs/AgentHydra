@@ -129,11 +129,12 @@ export const NEVER_SYNCED = [
   'app_ping_reported',
   // '' means auto-detect; anything else is an ABSOLUTE PATH to an editor on this machine.
   'transcript_editor',
-  // Which providers exist HERE. A laptop without the Codex desktop app should not be told it has
-  // one because the desktop does.
+  // Which providers exist HERE. A laptop without the Codex desktop app (or without a DeepSeek key)
+  // should not be told it has one because the desktop does.
   'provider_chatgpt_handoff',
   'provider_codex_cli',
   'provider_codex_desktop',
+  'provider_dsh',
   // Unattended-action master switches. Both are off by default for the reason their own comments
   // in db.ts give — one auto-prompts your sessions while you sleep, the other reads everything
   // you are doing on a timer — and neither should turn itself on somewhere just because you
