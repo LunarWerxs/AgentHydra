@@ -34,7 +34,8 @@ Usage: python scripts/remote.py                 # status: serving? where? tunnel
        python scripts/remote.py --json          # status as JSON
        python scripts/remote.py --quiet         # (with --start) print nothing unless something changed
 Exit:  0 ok / already serving - 1 the gateway did not come up - 2 bun or the built web app is
-       missing (run: bun install && bun run remote:build) - 3 nothing to stop.
+       missing (run: bun install && bun run remote:build) - 3 nothing to stop - 4 another program
+       holds the gateway's port (package.json config.remotePort).
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -52,7 +54,8 @@ from pathlib import Path
 from lib import clilib
 
 REPO = Path(__file__).resolve().parents[1]
-DEFAULT_PORT = 7790
+# What the gateway's /api/health names itself (server/src/http.ts). Only that answer is the gateway.
+GATEWAY_SERVICE = "orchestrator-remote"
 START_WAIT_SECS = 20
 
 
@@ -69,11 +72,17 @@ def _log_path() -> Path:
     return _state_dir() / "logs" / "remote-gateway.log"
 
 
-def _port() -> int:
+def default_port() -> int:
+    """package.json `config.remotePort`: the one place the gateway's port is written."""
+    return int(json.loads((REPO / "package.json").read_text(encoding="utf-8"))["config"]["remotePort"])
+
+
+def gateway_port() -> int:
+    """ORCH_REMOTE_PORT for one run, else package.json. remote_tunnel.py's ingress uses this too."""
     try:
-        return int(os.environ.get("ORCH_REMOTE_PORT") or DEFAULT_PORT)
+        return int(os.environ.get("ORCH_REMOTE_PORT") or default_port())
     except ValueError:
-        return DEFAULT_PORT
+        return default_port()
 
 
 def _bun() -> str | None:
@@ -109,8 +118,42 @@ def _get_json(url: str, timeout: float = 3.0) -> dict | None:
 
 
 def health(port: int | None = None) -> dict | None:
-    """The gateway's own /api/health, or None when nothing answers on the port."""
-    return _get_json(f"http://127.0.0.1:{port or _port()}/api/health")
+    """The gateway's own /api/health, or None when the gateway is not what answers on the port.
+
+    ⛔ IDENTITY, NOT A 200. On 2026-09-30 zswarm's MCP server was found holding this gateway's
+    old port (7790). Anything answering there used to count as the gateway, and the tray adopts
+    a gateway it finds already up, so the icon could have believed another program was its
+    remote door. Only a body naming GATEWAY_SERVICE counts.
+    """
+    h = _get_json(f"http://127.0.0.1:{port or gateway_port()}/api/health")
+    return h if isinstance(h, dict) and h.get("service") == GATEWAY_SERVICE else None
+
+
+def port_holder(port: int) -> str | None:
+    """What is listening on `port` when the gateway's health check has already failed there, or
+    None when the port is free. A listener here is some other program standing in the gateway's
+    way, and the gateway would die on EADDRINUSE before its tunnel ever opened."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
+            pass
+    except OSError:
+        return None
+    if os.name == "nt":
+        try:
+            out = clilib.run_text(["netstat", "-ano", "-p", "TCP"], timeout=20).stdout or ""
+            for line in out.splitlines():
+                cols = line.split()
+                # A listener's foreign address is 0.0.0.0:0; matching that instead of the state
+                # word survives a localised Windows and skips the TIME_WAIT our probe just left.
+                if len(cols) >= 5 and cols[1] in (f"127.0.0.1:{port}", f"0.0.0.0:{port}") and cols[2] == "0.0.0.0:0":
+                    pid = cols[-1]
+                    rows = clilib.run_text(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                                           timeout=20).stdout or ""
+                    name = rows.split(",")[0].strip('"\r\n ') if rows.startswith('"') else "?"
+                    return f"pid {pid} ({name})"
+        except Exception:
+            pass
+    return "another program"
 
 
 def status_file() -> dict:
@@ -142,13 +185,14 @@ def _pid_alive(pid) -> bool:
 
 
 def status() -> dict:
-    port = _port()
+    port = gateway_port()
     h = health(port)
     rec = status_file()
     gateway = _get_json(f"http://127.0.0.1:{port}/api/status", timeout=8.0) if h else None
     out = {
         "serving": bool(h),
         "port": port,
+        "portHeldBy": None if h else port_holder(port),
         "local": f"http://127.0.0.1:{port}",
         "version": (h or {}).get("version"),
         "pid": rec.get("pid"),
@@ -172,6 +216,8 @@ def render(s: dict) -> str:
     lines = []
     if s["serving"]:
         lines.append(f"remote gateway v{s.get('version') or '?'} serving {s['local']} (pid {s.get('pid') or '?'})")
+    elif s.get("portHeldBy"):
+        lines.append(f"remote gateway NOT serving: :{s['port']} is held by {s['portHeldBy']}, which is not the gateway")
     else:
         lines.append(f"remote gateway NOT serving on :{s['port']}  -  start it: python scripts/remote.py --start")
     if s.get("stableUrl"):
@@ -197,11 +243,18 @@ def render(s: dict) -> str:
 
 
 def start(quiet: bool = False) -> int:
-    port = _port()
+    port = gateway_port()
     if health(port):
         if not quiet:
             print(f"already serving http://127.0.0.1:{port}")
         return 0
+    holder = port_holder(port)
+    if holder:
+        # Say it and stop: bun would only die on EADDRINUSE and leave a log line to decode.
+        print(f"port {port} is held by {holder}, which is not the orchestrator gateway. Free it, or move "
+              f"the gateway: package.json config.remotePort, then remote_tunnel.py --provision for both "
+              f"tunnels.", file=sys.stderr)
+        return 4
     bun = _bun()
     if not bun:
         print("bun is not installed (https://bun.sh) - the gateway cannot start", file=sys.stderr)

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
@@ -5,8 +6,11 @@ import { defineConfig } from 'vite'
 
 // The remote gateway (server/src/main.ts) serves web/dist and owns /api/* and /oauth/*. In dev
 // the Vite server proxies those two prefixes to it, so the SPA talks to the same daemon it will
-// be served by. GATEWAY_PORT must match server/src/config.ts DEFAULT_PORT.
-const GATEWAY = `http://127.0.0.1:${process.env.ORCH_REMOTE_PORT || 7790}`
+// be served by. The port is written once, in ../package.json config.remotePort.
+const REMOTE_PORT: number = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).config.remotePort
+const GATEWAY = `http://127.0.0.1:${process.env.ORCH_REMOTE_PORT || REMOTE_PORT}`
 
 export default defineConfig({
   plugins: [vue(), tailwindcss()],

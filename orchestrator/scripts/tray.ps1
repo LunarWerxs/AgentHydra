@@ -91,9 +91,15 @@ function Remove-Heartbeat {
 # need to un-pause. Only Exit (or "Remote access: off") closes the door.
 $RemotePrefFile = Join-Path $StateDir "remote\tray-remote.json"
 $RemoteStatusFile = Join-Path $StateDir "remote\status.json"
-$RemotePort = if ($env:ORCH_REMOTE_PORT) { [int]$env:ORCH_REMOTE_PORT } else { 7790 }
+# The port is written once, in package.json config.remotePort; remote.py and the named tunnels'
+# ingress read the same value.
+$RemotePort = if ($env:ORCH_REMOTE_PORT) { [int]$env:ORCH_REMOTE_PORT } else {
+    [int]((Get-Content -Raw (Join-Path $Repo "package.json") | ConvertFrom-Json).config.remotePort)
+}
 $RemoteLocalUrl = "http://127.0.0.1:$RemotePort"
 $script:RemoteFailures = 0
+# The last reason remote.py gave for not starting, so the give-up balloon can say it.
+$script:RemoteLastError = $null
 # After this many consecutive failed starts the icon stops retrying and says so. A watchdog
 # that hammers a broken start forever is the v2 mistake this whole program was rebuilt to avoid.
 $RemoteFailureCap = 3
@@ -116,10 +122,14 @@ function Set-RemoteEnabled([bool]$on) {
     } catch { }
 }
 
+# IDENTITY, NOT A 200. zswarm's MCP server was found holding this gateway's old port (7790) on
+# 2026-09-30, and Start-Remote adopts any gateway it finds already up, so "the port answers" is
+# not enough: only a /api/health that names the gateway counts (remote.py health() is the same).
 function Test-RemoteUp {
     try {
         $r = Invoke-WebRequest "$RemoteLocalUrl/api/health" -TimeoutSec 4 -UseBasicParsing
-        return $r.StatusCode -eq 200
+        if ($r.StatusCode -ne 200) { return $false }
+        return (($r.Content | ConvertFrom-Json).service -eq 'orchestrator-remote')
     } catch { return $false }
 }
 
@@ -139,8 +149,9 @@ function Start-Remote {
     # ORCH_TRAY_SUPERVISED is what tells the gateway to die with this icon. The child inherits
     # it, and remote.py spawns bun detached and window-less, so nothing ever flashes a console.
     $env:ORCH_TRAY_SUPERVISED = "1"
-    & python (Join-Path $PSScriptRoot "remote.py") --start --quiet 2>&1 | Out-Null
-    if (Test-RemoteUp) { $script:RemoteFailures = 0; return $true }
+    $out = & python (Join-Path $PSScriptRoot "remote.py") --start --quiet 2>&1
+    if (Test-RemoteUp) { $script:RemoteFailures = 0; $script:RemoteLastError = $null; return $true }
+    $script:RemoteLastError = $out | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -Last 1
     $script:RemoteFailures++
     return $false
 }
@@ -472,9 +483,11 @@ $timer.add_Tick({
             } elseif ($script:RemoteFailures -ge $RemoteFailureCap) {
                 # Say it once and stop trying. A watchdog that hammers a broken start forever
                 # is exactly the futile-retry shape this program was rebuilt to eliminate.
-                $notify.ShowBalloonTip(8000, "Orchestrator",
-                    "Remote access failed to start $RemoteFailureCap times - no more attempts. Use 'Restart remote access' after checking state\logs\remote-gateway.log.",
-                    [System.Windows.Forms.ToolTipIcon]::Error)
+                $why = if ($script:RemoteLastError) { $script:RemoteLastError } else { "Use 'Restart remote access' after checking state\logs\remote-gateway.log." }
+                $text = "Remote access failed to start $RemoteFailureCap times - no more attempts. $why"
+                # A balloon holds 255 characters; the shell cuts the rest mid-word.
+                if ($text.Length -gt 250) { $text = $text.Substring(0, 247) + "..." }
+                $notify.ShowBalloonTip(8000, "Orchestrator", $text, [System.Windows.Forms.ToolTipIcon]::Error)
             }
         }
     }

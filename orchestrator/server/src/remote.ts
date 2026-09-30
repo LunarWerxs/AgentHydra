@@ -11,8 +11,8 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   CONFIG_DIR,
-  DEFAULT_PORT,
   ensureConfigDir,
+  gatewayPort,
   namedTunnel,
   type RelayIdentity,
   type RemoteConfig,
@@ -234,7 +234,7 @@ export function getRemoteStatus(): RemoteStatus {
 }
 
 /** state/remote/status.json - so scripts/remote.py and the tray can print the address without asking the gateway. */
-function writeStatusFile(port = DEFAULT_PORT): void {
+function writeStatusFile(port = gatewayPort()): void {
   try {
     ensureConfigDir()
     writeFileSync(

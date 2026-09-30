@@ -27,5 +27,9 @@
     "remote:typecheck": "bun run --cwd web typecheck && bun run --cwd server typecheck",
     "remote:test": "bun run --cwd server test",
     "check:kit": "node ../../../lunarwerx-ui/sync.mjs --check --app orchestrator"
+  },
+  "config": {
+    "//remotePort": "THE remote gateway's loopback port, written only here. server/src/config.ts, scripts/remote.py, scripts/remote_tunnel.py (the named tunnels' Cloudflare ingress), scripts/tray.ps1 and web/vite.config.ts all read it; ORCH_REMOTE_PORT overrides it for one run. 7790 is zswarm's MCP server and 7787-7789 are the AgentHydra daemon's port hops. Changing it means re-running remote_tunnel.py --provision for BOTH tunnels, or their ingress keeps pointing at the old port.",
+    "remotePort": 7793
   }
 }

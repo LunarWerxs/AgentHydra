@@ -21,7 +21,7 @@ import type { Context } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
-import { authEnforced, type OAuthConfig, type RemoteConfig } from './config.ts'
+import { authEnforced, gatewayPort, type OAuthConfig, type RemoteConfig } from './config.ts'
 import { rotateKey, sign, unsign } from './signing.ts'
 
 const COOKIE = 'orch_session'
@@ -410,8 +410,7 @@ function resolveOwnership(
       return {
         ok: false,
         status: 403,
-        message:
-          'This orchestrator has no owner yet, and ownership can only be claimed at the machine itself — not over the tunnel. Sign in once on that computer (http://127.0.0.1:7790), then come back here.',
+        message: `This orchestrator has no owner yet, and ownership can only be claimed at the machine itself — not over the tunnel. Sign in once on that computer (http://127.0.0.1:${gatewayPort()}), then come back here.`,
         action: { href: '/', label: 'Back' },
       }
     }

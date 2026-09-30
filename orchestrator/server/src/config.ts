@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import orchestratorPkg from '../../package.json' with { type: 'json' }
 import { restrictToCurrentUser } from './fs-perms.ts'
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -21,7 +22,13 @@ export const STATE_DIR = process.env.ORCHESTRATOR_STATE_DIR
 export const CONFIG_DIR = join(STATE_DIR, 'remote')
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json')
 
-export const DEFAULT_PORT = 7790
+/** Written once, in the orchestrator's package.json `config.remotePort`; the tray, remote.py and
+ *  the named tunnels' ingress (remote_tunnel.py) read the same value. */
+export const DEFAULT_PORT: number = orchestratorPkg.config.remotePort
+/** The port this gateway binds: ORCH_REMOTE_PORT for one run, else DEFAULT_PORT. */
+export function gatewayPort(): number {
+  return Number(process.env.ORCH_REMOTE_PORT) || DEFAULT_PORT
+}
 /** scripts/dashboard.py's port - the read-only data layer this gateway fronts. */
 export const DASHBOARD_PORT = 7799
 /** The AgentHydra daemon, same env override hydralib honours. */
@@ -67,7 +74,6 @@ export interface RelayConfig {
 }
 
 export interface RemoteConfig {
-  port?: number
   oauth?: OAuthConfig
   tunnel?: TunnelConfig
   relay?: RelayConfig
@@ -77,8 +83,9 @@ export interface RemoteConfig {
  * The "Orchestrator" Sign-in-with-Connections app, registered 2026-09-02 through Studio's
  * /v1/oauth-apps (public client, PKCE, scopes openid profile email photo). Its redirect
  * allow-list is both named-tunnel hostnames' /oauth/callback (orch-michael / orch-jacob on
- * lunarwerx.com), the relay callback, and loopback on DEFAULT_PORT; a Quick Tunnel completes
- * through the relay, loopback completes directly on the gateway.
+ * lunarwerx.com), the relay callback, and loopback (registered as :7790; the IdP accepts any
+ * loopback port per RFC 8252 section 7.3, so DEFAULT_PORT can move without touching the app); a
+ * Quick Tunnel completes through the relay, loopback completes directly on the gateway.
  */
 export const CONNECTIONS_OAUTH: OAuthConfig = {
   issuer: 'https://accounts.connectionsapi.com',
@@ -147,7 +154,7 @@ export function relayBase(cfg: RemoteConfig): string {
 /** Key-free projection for /api/status - hostname + token PRESENCE, never a token or a private key. */
 export function redactConfig(cfg: RemoteConfig): Record<string, unknown> {
   return {
-    port: cfg.port ?? DEFAULT_PORT,
+    port: gatewayPort(),
     oauth: cfg.oauth
       ? {
           issuer: cfg.oauth.issuer,

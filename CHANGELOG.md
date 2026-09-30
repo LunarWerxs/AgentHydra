@@ -20,6 +20,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **The orchestrator's remote dashboard moved from port 7790 to 7793** (`orchestrator/package.json`
+  `config.remotePort`). The zswarm MCP server listens on 7790, so the remote gateway could not
+  start on a machine running both, and the phone dashboard stayed down. The port is now written in
+  one place that the gateway, `remote.py`, the tray icon, the tunnel setup and the dev server all
+  read, and `ORCH_REMOTE_PORT` still overrides it. The tray and `remote.py` now accept a server on
+  that port as the gateway only when its health answer says it is the gateway. When another
+  program holds the port, `remote.py --start` names it (process id and program) and exits with
+  code 4 instead of retrying, and the tray's give-up message repeats that reason. The named tunnels' Cloudflare
+  routing has to point at the new port: run `remote_tunnel.py --provision` for each of them.
+
 - **The chat journal no longer re-reads every chat every five minutes**
   (`orchestrator/scripts/chatwatch.py`). Each pass walked every instance's whole profile folder
   (about 20,000 directories) to find the chat records, then parsed all of them again. It now looks

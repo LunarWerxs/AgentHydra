@@ -1,17 +1,17 @@
 /**
  * The remote gateway. `bun run remote` from the repo root.
  *
- *   loopback :7790  ->  this gateway  ->  scripts/dashboard.py :7799 (data, read-only)
+ *   loopback :7793  ->  this gateway  ->  scripts/dashboard.py :7799 (data, read-only)
  *   cloudflared     ->  https://<quick>.trycloudflare.com  ->  this gateway (owner session required)
  *   app.repoyeti.com/r/<id>  ->  the permanent address, and the OAuth return route
  *
- * ORCH_REMOTE_PORT overrides the port; ORCH_NO_TUNNEL=1 serves loopback only; CF_TUNNEL_TOKEN with
+ * The port lives in ../package.json `config.remotePort` and ORCH_REMOTE_PORT overrides it; ORCH_NO_TUNNEL=1 serves loopback only; CF_TUNNEL_TOKEN with
  * `tunnel.hostname` in state/remote/config.json runs a named tunnel on the owner's own domain.
  */
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import pkg from '../package.json' with { type: 'json' }
-import { DEFAULT_PORT, loadConfig, REPO_ROOT, STATE_DIR } from './config.ts'
+import { gatewayPort, loadConfig, REPO_ROOT, STATE_DIR } from './config.ts'
 import { dashboardUp, ensureDashboard } from './dashboard.ts'
 import { buildApp } from './http.ts'
 import { startRemote } from './remote.ts'
@@ -51,7 +51,7 @@ function teeConsoleToLog(): void {
 teeConsoleToLog()
 
 const cfg = loadConfig()
-const port = Number(process.env.ORCH_REMOTE_PORT) || cfg.port || DEFAULT_PORT
+const port = gatewayPort()
 const webDist = join(REPO_ROOT, 'web', 'dist')
 
 const app = buildApp(cfg, { version: pkg.version, webDist })

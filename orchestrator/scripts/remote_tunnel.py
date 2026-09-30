@@ -61,6 +61,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from lib import clilib
+from remote import gateway_port
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -70,8 +71,10 @@ DEFAULT_ZONE_ID = "2b92ad2039f113c2bdf96f2e6208631e"
 DEFAULT_ZONE_NAME = "lunarwerx.com"
 API = "https://api.cloudflare.com/client/v4"
 
-# The gateway's local port - the tunnel's only ingress target (server/src/config.ts DEFAULT_PORT).
-GATEWAY_PORT = int(os.environ.get("ORCH_REMOTE_PORT") or 7790)
+# The gateway's local port - the tunnel's only ingress target. Read from the one place it is
+# written (package.json config.remotePort), so moving the port and re-running --provision for
+# both tunnels is the whole job.
+GATEWAY_PORT = gateway_port()
 
 # ⛔ ONE LABEL ONLY. lunarwerx.com is on Cloudflare's FREE plan, whose Universal SSL
 # certificate covers `lunarwerx.com` and `*.lunarwerx.com` - ONE level. A two-level name like
