@@ -513,15 +513,20 @@ export function pickAccount(
 ): CorchAccount | null {
   const lastAttempt = worker.attempts[worker.attempts.length - 1]
   const failedId =
-    lastAttempt &&
-    (lastAttempt.outcome === 'quota' ||
-      lastAttempt.outcome === 'auth' ||
-      lastAttempt.outcome === 'handoff')
+    lastAttempt && (lastAttempt.outcome === 'quota' || lastAttempt.outcome === 'auth')
       ? lastAttempt.account.id
       : null
+  // After a handoff the next session is a fresh one: no home to keep, and the account it left is
+  // only nudged back (it may well be the one with the most room: a handoff on request).
+  const handedOffFrom = lastAttempt?.outcome === 'handoff' ? lastAttempt.account.id : null
   const load = (a: CorchAccount): number => active.get(a.id) ?? 0
   const full = (a: CorchAccount): boolean =>
     (a.sessionPct !== null && a.sessionPct >= 98) || (a.weekPct !== null && a.weekPct >= 99)
+  // Past the wind-down line, new work there would be asked to hand off again at once (measured
+  // live: a continuation placed on #84 at 91% wound down immediately, while #83 sat at 58%).
+  const near = (a: CorchAccount): boolean =>
+    (a.sessionPct !== null && a.sessionPct >= WIND_DOWN_SESSION_PCT) ||
+    (a.weekPct !== null && a.weekPct >= WIND_DOWN_WEEK_PCT)
   const eligible = accounts.filter(
     (a) =>
       (!worker.accounts || worker.accounts.includes(a.id)) &&
@@ -531,14 +536,18 @@ export function pickAccount(
       load(a) < MAX_PER_ACCOUNT,
   )
   // A full home is kept only when every other choice is full too.
-  const home = eligible.find(
-    (a) => a.id === worker.accountId && a.id !== failedId && (!full(a) || eligible.every(full)),
-  )
+  const home = handedOffFrom
+    ? undefined
+    : eligible.find(
+        (a) => a.id === worker.accountId && a.id !== failedId && (!full(a) || eligible.every(full)),
+      )
   if (home) return home
   const score = (a: CorchAccount): number =>
     Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) +
     25 * load(a) +
     (full(a) ? 500 : 0) +
+    (near(a) ? 300 : 0) +
+    (a.id === handedOffFrom ? 100 : 0) +
     (a.id === failedId ? 1000 : 0)
   const byNum = (a: CorchAccount): number => a.num ?? Number.MAX_SAFE_INTEGER
   eligible.sort((a, b) => score(a) - score(b) || byNum(a) - byNum(b))

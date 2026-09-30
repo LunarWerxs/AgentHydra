@@ -276,6 +276,22 @@ describe('pickAccount', () => {
     expect(pickAccount(w, accounts, lifted, new Map(), 2, now)?.id).toBe('a')
   })
 
+  test('after a handoff the next session goes where there is room, not to an account near its limit', () => {
+    // Measured live: handed off from #83 (58%, the only account with room), the next session was
+    // put on #84 at 91%, which had to hand off again at once.
+    const accounts = [acct('a83', 83, 58, 54), acct('a84', 84, 91, 7), acct('a88', 88, 91, 12)]
+    const w = worker({
+      accountId: 'a83',
+      attempts: [
+        { account: { id: 'a83', num: 83, name: 'a83' }, outcome: 'handoff', notice: null },
+      ],
+    })
+    expect(pickAccount(w, accounts, {}, new Map(), 2, now)?.id).toBe('a83')
+    // With room elsewhere, the account it left is not taken back.
+    const roomy = [...accounts, acct('a90', 90, 20, 6)]
+    expect(pickAccount(w, roomy, {}, new Map(), 2, now)?.id).toBe('a90')
+  })
+
   test('the per-account cap counts only this group, never above MAX_PER_ACCOUNT in total', () => {
     const accounts = [acct('a', 1)]
     // Another group's worker on the account does not block a group started with per_account 1.
