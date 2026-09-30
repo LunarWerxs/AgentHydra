@@ -11,17 +11,15 @@
 import {
   ArrowDown,
   ArrowUp,
-  ChevronDown,
-  Copy,
   CreditCard,
   EllipsisVertical,
   Funnel,
   Link2,
   LogIn,
+  LogOut,
   Monitor,
   Pencil,
   Play,
-  Plus,
   RefreshCw,
   RotateCcw,
   Terminal,
@@ -38,8 +36,11 @@ import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
+import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
+import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
 import LinkCliInstanceDialog from '@/components/LinkCliInstanceDialog.vue'
+import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
 import { Badge } from '@/components/ui/badge'
@@ -48,7 +49,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -93,6 +93,7 @@ const {
   create,
   launch,
   login,
+  logout,
   rename,
   associate,
   linkDesktop,
@@ -382,16 +383,34 @@ async function onLimitResetDone() {
   if (inst) void checkUsage(inst.id)
 }
 
+// --- log out: a plain confirm first, the same dialog the desktop and Codex rows use ---
+const logoutOpen = ref(false)
+const logoutTarget = ref<CliInstance | null>(null)
+const loggingOut = ref(false)
+function openLogout(inst: CliInstance) {
+  logoutTarget.value = inst
+  logoutOpen.value = true
+}
+async function onLogoutConfirm() {
+  const inst = logoutTarget.value
+  if (!inst) return
+  loggingOut.value = true
+  try {
+    const result = await logout(inst.id)
+    if (result?.ok) toast.success(t('cliInstances.toastLogout'))
+    else toast.error(result?.message ?? t('cliInstances.toastLogoutFailed'))
+  } finally {
+    loggingOut.value = false
+    logoutOpen.value = false
+    logoutTarget.value = null
+  }
+}
+
 // --- launch / login / check usage ---
 async function onLaunch(inst: CliInstance) {
   const result = await launch(inst.id)
   if (result?.ok) toast.success(t('cliInstances.toastLaunched'))
   else toast.error(result?.message ?? t('cliInstances.toastLaunchFailed'))
-}
-/** Copy the bare number — same behavior as the desktop table's menu (see InstancesView). */
-function copyInstanceNumber(num: number) {
-  navigator.clipboard?.writeText(String(num)).catch(() => {})
-  toast.success(t('instances.toastNumberCopied', { num }))
 }
 async function onLogin(inst: CliInstance) {
   const result = await login(inst.id)
@@ -424,6 +443,36 @@ async function onCheckUsageFromPopover(inst: CliInstance) {
   void refreshCliInstances({ silent: true })
 }
 
+/** The icon row at the top of a row's kebab (InstanceMenuHeader), in the order every table uses. */
+function menuActionsFor(inst: CliInstance): MenuIconAction[] {
+  return [
+    {
+      key: 'checkUsage',
+      icon: RefreshCw,
+      label: t('cliInstances.checkUsage'),
+      run: () => void onCheckUsage(inst),
+      spin: isChecking(usageKey(inst)),
+      disabled: isBusy(inst),
+    },
+    {
+      key: 'rename',
+      icon: Pencil,
+      label: t('cliInstances.rename'),
+      closes: true,
+      run: () => openRenameDialog(inst),
+      disabled: isBusy(inst),
+    },
+    {
+      key: 'logout',
+      icon: LogOut,
+      label: t('cliInstances.logout'),
+      closes: true,
+      run: () => openLogout(inst),
+      disabled: !inst.loggedIn || isBusy(inst),
+    },
+  ]
+}
+
 const associateAccountOptions = computed(() => accounts.value)
 
 onMounted(() => startPolling())
@@ -434,64 +483,30 @@ onUnmounted(() => stopPolling())
   <!-- No border-t: the parent (InstancesView) separates its two tables with space instead. That
        hairline sat flush against the desktop table's last row, so the two tables read as one. -->
   <div>
-    <!-- Borderless toolbar, same as the Instances one above it — the table header below draws the
-         only line this heading needs. -->
-    <div class="flex flex-wrap items-center justify-between gap-2 p-3">
-      <!-- Heading doubles as the collapse trigger, mirroring the Instances table above. -->
-      <button
-        type="button"
-        class="flex items-center gap-2 rounded-md text-sm font-semibold transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-        :aria-expanded="cliOpen"
-        @click="cliOpen = !cliOpen"
-      >
-        <Terminal class="size-4" />
-        {{ $t('cliInstances.title') }}
-        <!-- "(0)" on its own read as "you have no CLI instances" to someone who could see one in
-             the quick-instances window — the linked ones are simply rendered on their account row
-             instead. Saying "0 of 1" makes the shortfall self-explanatory even while collapsed,
-             which is when the chips below are hidden. (See headingCount: the usage filter can now
-             cause the same shortfall, and it reads the same way.) -->
-        <span class="text-muted-foreground">({{ headingCount }})</span>
-        <!-- Linked ones aren't missing, they've moved up onto their account's row. Say so, or their
-             absence from this count reads as a bug. -->
+    <!-- The shared header every instance table uses; the count says "x of y" when rows are
+         elsewhere (see headingCount). -->
+    <InstanceSectionHeader
+      v-model:open="cliOpen"
+      provider="claude"
+      :title="$t('cliInstances.title')"
+      :count="headingCount"
+      :refresh-label="$t('cliInstances.refresh')"
+      :refreshing="loading"
+      :create-label="$t('cliInstances.createInstance')"
+      @refresh="refreshCliInstances()"
+      @create="openCreateDialog"
+    >
+      <template #meta>
+        <!-- Linked ones aren't missing, they've moved up onto their account's row. Say so, or
+             their absence from this count reads as a bug. -->
         <span v-if="linkedCount > 0" class="text-xs font-normal text-muted-foreground">
           {{ $t('cliInstances.linkedElsewhere', { count: linkedCount }) }}
         </span>
         <span v-if="hiddenByFilter > 0" class="text-xs font-normal text-muted-foreground">
           {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
         </span>
-        <ChevronDown
-          class="size-4 text-muted-foreground transition-transform duration-200"
-          :class="cliOpen ? '' : '-rotate-90'"
-        />
-      </button>
-      <div class="flex flex-wrap items-center gap-1.5">
-        <Button
-          variant="outline"
-          size="icon"
-          :disabled="loading"
-          :aria-label="$t('cliInstances.refresh')"
-          :title="$t('cliInstances.refresh')"
-          @click="refreshCliInstances()"
-        >
-          <RefreshCw :class="loading ? 'animate-spin' : ''" />
-        </Button>
-        <!-- Plus at rest, label on hover/focus — same expanding pill as Instances and New run. -->
-        <Button
-          size="sm"
-          class="group/create overflow-hidden"
-          :aria-label="$t('cliInstances.createInstance')"
-          @click="openCreateDialog"
-        >
-          <span class="inline-flex items-center">
-            <Plus class="shrink-0" />
-            <span
-              class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-36 group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-36 group-focus-visible/create:opacity-100"
-            >{{ $t('cliInstances.createInstance') }}</span>
-          </span>
-        </Button>
-      </div>
-    </div>
+      </template>
+    </InstanceSectionHeader>
 
     <!-- Quick add: type an email, confirm in the browser, the new CLI instance lands in the table. -->
     <CliQuickAdd class="px-3 pb-3" @signed-in="refreshCliInstances({ silent: true })" />
@@ -721,24 +736,9 @@ onUnmounted(() => stopPolling())
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" class="max-w-56">
-                    <!-- Which instance this menu belongs to, by number — see the desktop table's
-                         menu for why an open kebab needs to say so. -->
-                    <DropdownMenuLabel>
-                      <div class="-my-0.5 flex items-center justify-between gap-2">
-                        <span class="font-mono text-xs">{{
-                          $t('instances.numberMenuLabel', { num: inst.num })
-                        }}</span>
-                        <button
-                          type="button"
-                          class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          :aria-label="$t('instances.copyNumber')"
-                          @click.stop="copyInstanceNumber(inst.num)"
-                        >
-                          <Copy class="size-3.5" />
-                        </button>
-                      </div>
-                    </DropdownMenuLabel>
-                    <DropdownMenuSeparator />
+                    <!-- Which instance this menu belongs to, by number, then its quick actions as
+                         icons — the same header on every table's kebab. -->
+                    <InstanceMenuHeader :num="inst.num" :actions="menuActionsFor(inst)" />
                     <DropdownMenuItem :disabled="isBusy(inst)" @click="onLogin(inst)">
                       <LogIn /> {{ $t('cliInstances.login') }}
                     </DropdownMenuItem>
@@ -755,12 +755,6 @@ onUnmounted(() => stopPolling())
                       @click="openAssociateDialog(inst)"
                     >
                       <Link2 /> {{ $t('cliInstances.associate') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem :disabled="isBusy(inst)" @click="openRenameDialog(inst)">
-                      <Pencil /> {{ $t('cliInstances.rename') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem :disabled="isBusy(inst)" @click="onCheckUsage(inst)">
-                      <RefreshCw /> {{ $t('cliInstances.checkUsage') }}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       v-if="inst.loggedIn"
@@ -826,6 +820,14 @@ onUnmounted(() => stopPolling())
       :submitting="deleting"
       :error-message="deleteError"
       @confirm="onDeleteConfirm"
+    />
+    <LogoutInstanceDialog
+      v-model:open="logoutOpen"
+      :instance-name="logoutTarget?.name ?? null"
+      :account-email="logoutTarget?.associatedAccountLabel ?? null"
+      :description="$t('cliInstances.logoutDialogDescription')"
+      :submitting="loggingOut"
+      @confirm="onLogoutConfirm"
     />
     <CliLimitResetDialog
       v-model:open="limitResetOpen"

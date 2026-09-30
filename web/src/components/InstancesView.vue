@@ -5,9 +5,7 @@ import {
   ArrowRightLeft,
   ArrowUp,
   Boxes,
-  ChevronDown,
   Coins,
-  Copy,
   Cpu,
   CreditCard,
   EllipsisVertical,
@@ -20,7 +18,6 @@ import {
   MonitorDown,
   Pencil,
   Play,
-  Plus,
   RefreshCw,
   RotateCcw,
   Square,
@@ -44,7 +41,9 @@ import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceChatsDialog from '@/components/InstanceChatsDialog.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
+import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
+import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
 import InstanceSectionsMenu from '@/components/InstanceSectionsMenu.vue'
 import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
@@ -723,12 +722,39 @@ async function onFocus(inst: CMInstance) {
   if (result?.ok) toast.success(t('instances.toastFocused'))
   else toast.error(result?.message ?? t('instances.toastFocusFailed'))
 }
-/** Copy the bare number (not `#7`) — it is what gets pasted straight into an MCP `instance:` arg or
- *  typed at an agent, and both forms resolve anyway. The toast confirms the value because the whole
- *  point of the number is being able to quote it later with confidence. */
-function copyInstanceNumber(num: number) {
-  navigator.clipboard?.writeText(String(num)).catch(() => {})
-  toast.success(t('instances.toastNumberCopied', { num }))
+/**
+ * The icon row at the top of a row's ⋮ menu (InstanceMenuHeader adds Copy number last). Check
+ * usage is the former "Check usage" ITEM: re-checking one account is the thing you want twice in a
+ * row, so it keeps the menu open; Edit and Log out each open a dialog, so they close it.
+ */
+function menuActionsFor(inst: CMInstance): MenuIconAction[] {
+  const checking = isChecking(usageKeyFor(inst))
+  return [
+    {
+      key: 'check-usage',
+      icon: RefreshCw,
+      label: t('instances.checkUsage'),
+      run: () => void onCheckUsage(inst),
+      disabled: checking,
+      spin: checking,
+    },
+    {
+      key: 'edit',
+      icon: Pencil,
+      label: t('instances.edit'),
+      closes: true,
+      run: () => openEditDialog(inst),
+      disabled: isBusy(inst),
+    },
+    {
+      key: 'logout',
+      icon: LogOut,
+      label: t('instances.logout'),
+      closes: true,
+      run: () => openLogoutDialog(inst),
+      disabled: inst.isRunning || isBusy(inst),
+    },
+  ]
 }
 async function onRevealFolder(inst: CMInstance) {
   const result = await revealFolder(inst.dir)
@@ -977,43 +1003,40 @@ onUnmounted(() => {
   <div class="flex min-h-full flex-col">
     <!-- Borderless toolbar, matching Sessions/Queue and the app header (App.vue): the sticky table
          header right below already draws a line there, and two rules a row apart was one of them
-         doing nothing but adding weight. -->
-    <div class="flex flex-wrap items-center justify-between gap-2 p-3">
-      <!-- The heading doubles as the collapse trigger: someone who lives in the CLI wants this
-           table out of the way, and vice versa. Disabled as a trigger when the table is hidden
-           outright (Settings → Providers), where there is nothing to collapse. -->
-      <button
-        type="button"
-        class="flex items-center gap-2 rounded-md text-sm font-semibold transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-        :disabled="!showDesktopInstances"
-        :aria-expanded="desktopOpen"
-        @click="desktopOpen = !desktopOpen"
-      >
-        <Boxes class="size-4" />
-        {{ $t('instances.title') }}
-        <!-- "x of y" once the usage filter is hiding rows, so the count never silently disagrees
-             with the number of instances that exist (same convention as the CLI table's own
-             linked-elsewhere shortfall). -->
-        <span v-if="showDesktopInstances" class="text-muted-foreground">
-          ({{
-            hiddenByFilter > 0
-              ? $t('instances.countOfTotal', { shown: visibleRows.length, total: instances.length })
-              : instances.length
-          }})
-        </span>
+         doing nothing but adding weight.
+         The heading doubles as the collapse trigger: someone who lives in the CLI wants this table
+         out of the way, and vice versa. Not a trigger when the table is hidden outright
+         (Settings → Providers), where there is nothing to collapse. The count reads "x of y" once
+         the usage filter is hiding rows, so it never silently disagrees with the number of
+         instances that exist (same convention as the CLI table's linked-elsewhere shortfall). -->
+    <InstanceSectionHeader
+      v-model:open="desktopOpen"
+      provider="claude"
+      :title="$t('instances.title')"
+      :count="
+        showDesktopInstances
+          ? hiddenByFilter > 0
+            ? $t('instances.countOfTotal', { shown: visibleRows.length, total: instances.length })
+            : instances.length
+          : null
+      "
+      :refresh-label="$t('instances.refresh')"
+      :refresh-hint="$t('instances.refreshHint')"
+      :refreshing="loading"
+      :create-label="showDesktopInstances ? $t('instances.createInstance') : undefined"
+      :collapsible="showDesktopInstances"
+      @refresh="handleRefresh"
+      @create="openCreateDialog"
+    >
+      <template #meta>
         <span
           v-if="showDesktopInstances && hiddenByFilter > 0"
           class="text-xs font-normal text-muted-foreground"
         >
           {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
         </span>
-        <ChevronDown
-          v-if="showDesktopInstances"
-          class="size-4 text-muted-foreground transition-transform duration-200"
-          :class="desktopOpen ? '' : '-rotate-90'"
-        />
-      </button>
-      <div class="flex flex-wrap items-center gap-1.5">
+      </template>
+      <template #tools>
         <!-- Usage mode: swaps the process columns for the quota ones across the whole tab. Pressed
              (secondary) while on, so the toolbar itself says which set of columns you're looking
              at — the glyph flips too, from a stopwatch (quota/time-to-reset) to a chip (process). -->
@@ -1039,17 +1062,6 @@ onUnmounted(() => {
         <!-- Which tables this tab draws. Settings still has these switches; this is the copy that
              is one click from the gap where a hidden table used to be. -->
         <InstanceSectionsMenu />
-        <IconTooltip :label="$t('instances.refresh')" :description="$t('instances.refreshHint')">
-          <Button
-            variant="outline"
-            size="icon"
-            :disabled="loading"
-            :aria-label="$t('instances.refresh')"
-            @click="handleRefresh"
-          >
-            <RefreshCw :class="loading ? 'animate-spin' : ''" />
-          </Button>
-        </IconTooltip>
         <IconTooltip
           :label="$t('instances.refreshAllUsage')"
           :description="$t('instances.refreshAllUsageHint')"
@@ -1064,25 +1076,8 @@ onUnmounted(() => {
             <Gauge :class="refreshingAllUsage ? 'animate-pulse' : ''" />
           </Button>
         </IconTooltip>
-        <!-- Plus at rest, label on hover/focus: the toolbar's other controls are already icon-only,
-             and a lone labelled button set the row's width for a phrase you only need once.
-             Same expanding-pill mechanics as the queue drawer's New run. -->
-        <Button
-          v-if="showDesktopInstances"
-          size="sm"
-          class="group/create overflow-hidden"
-          :aria-label="$t('instances.createInstance')"
-          @click="openCreateDialog"
-        >
-          <span class="inline-flex items-center">
-            <Plus class="shrink-0" />
-            <span
-              class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-36 group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-36 group-focus-visible/create:opacity-100"
-            >{{ $t('instances.createInstance') }}</span>
-          </span>
-        </Button>
-      </div>
-    </div>
+      </template>
+    </InstanceSectionHeader>
 
     <div
       v-if="desktopWarning"
@@ -1650,64 +1645,7 @@ onUnmounted(() => {
                          fourteen near-identically named rows, an open kebab menu is otherwise
                          detached from the row it came from — and "Delete" is the wrong item to be
                          unsure about. Copying it here is one click from every row's menu. -->
-                    <DropdownMenuLabel>
-                      <div class="-my-0.5 flex items-center justify-between gap-2">
-                        <span class="font-mono text-xs">{{
-                          $t('instances.numberMenuLabel', { num: inst.num })
-                        }}</span>
-                        <!-- Icon row, everything to the LEFT of copy (owner spec, 2026-09-07).
-                             Refresh is the former "Check usage" ITEM: re-checking one account is the
-                             thing you want twice in a row, and as a menu item every click closed the
-                             menu and made you reopen it. It and Copy keep the menu open; Edit and Log
-                             out each open a dialog, so they close it first rather than leaving a menu
-                             floating over their own dialog. -->
-                        <div class="flex items-center gap-0.5">
-                          <button
-                            type="button"
-                            class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                            :disabled="isChecking(usageKeyFor(inst))"
-                            :aria-label="$t('instances.checkUsage')"
-                            :title="$t('instances.checkUsage')"
-                            @click.stop="onCheckUsage(inst)"
-                          >
-                            <RefreshCw
-                              class="size-3.5"
-                              :class="isChecking(usageKeyFor(inst)) ? 'animate-spin' : ''"
-                            />
-                          </button>
-                          <button
-                            type="button"
-                            class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                            :disabled="isBusy(inst)"
-                            :aria-label="$t('instances.edit')"
-                            :title="$t('instances.edit')"
-                            @click.stop="rowMenuOpen = null; openEditDialog(inst)"
-                          >
-                            <Pencil class="size-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                            :disabled="inst.isRunning || isBusy(inst)"
-                            :aria-label="$t('instances.logout')"
-                            :title="$t('instances.logout')"
-                            @click.stop="rowMenuOpen = null; openLogoutDialog(inst)"
-                          >
-                            <LogOut class="size-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                            :aria-label="$t('instances.copyNumber')"
-                            :title="$t('instances.copyNumber')"
-                            @click.stop="copyInstanceNumber(inst.num)"
-                          >
-                            <Copy class="size-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    </DropdownMenuLabel>
-                    <DropdownMenuSeparator />
+                    <InstanceMenuHeader :num="inst.num" :actions="menuActionsFor(inst)" />
                     <!-- Quit lives here now (the row's primary button is Focus when running);
                          disabled unless running, mirroring the old Focus item's guard -->
                     <DropdownMenuItem

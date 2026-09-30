@@ -4,16 +4,12 @@ import {
   ArrowDown,
   ArrowRightLeft,
   ArrowUp,
-  ChevronDown,
-  Copy,
   EllipsisVertical,
   Funnel,
   LogIn,
   LogOut,
   Pencil,
   Play,
-  Plus,
-  RefreshCw,
   RotateCcw,
   Square,
   Terminal,
@@ -26,7 +22,9 @@ import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
+import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
+import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
@@ -45,7 +43,6 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -418,10 +415,34 @@ async function onFocusDesktop(instance: CodexInstance) {
   else toast.error(result?.message ?? t('codexInstances.toastDesktopFocusFailed'))
 }
 
-/** Copy the bare number — same behavior as the Claude tables' menus (see InstancesView). */
-function copyInstanceNumber(num: number) {
-  navigator.clipboard?.writeText(String(num)).catch(() => {})
-  toast.success(t('instances.toastNumberCopied', { num }))
+/** The icons at the top of a row's ⋯ menu (InstanceMenuHeader, which adds Copy number last):
+ *  Rename, then Log out — an icon there on every table, never a list item. Both open a dialog. */
+function menuActionsFor(instance: CodexInstance): MenuIconAction[] {
+  const actions: MenuIconAction[] = [
+    {
+      key: 'rename',
+      icon: Pencil,
+      label: t('codexInstances.rename'),
+      closes: true,
+      disabled: isBusy(instance),
+      run: () => openRename(instance),
+    },
+  ]
+  if (instance.loggedIn && !instance.isExternal) {
+    actions.push({
+      key: 'logout',
+      icon: LogOut,
+      // An icon has no other place to say why it is disabled, so while the desktop is up the
+      // "quit it first" hint IS its label.
+      label: instance.isDesktopRunning
+        ? t('codexInstances.logoutQuitFirst')
+        : t('codexInstances.logout'),
+      closes: true,
+      disabled: instance.isDesktopRunning || isBusy(instance),
+      run: () => openLogout(instance),
+    })
+  }
+  return actions
 }
 
 /** Copy the ChatGPT address this CODEX_HOME is signed in with — the same click the Claude table's
@@ -534,56 +555,25 @@ onUnmounted(() => {
 
 <template>
   <div>
-    <div class="flex flex-wrap items-center justify-between gap-2 p-3">
-      <!-- Heading doubles as the collapse trigger, same as the two tables above it. -->
-      <button
-        type="button"
-        class="flex items-center gap-2 rounded-md text-sm font-semibold transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-        :aria-expanded="open"
-        @click="open = !open"
-      >
-        <AppWindow class="size-4" />
-        {{ $t('codexInstances.title') }}
-        <!-- "x of y" once the filter is hiding rows, so the count never silently disagrees with
-             the number of Codex instances that exist. -->
-        <span class="text-muted-foreground">({{ headingCount }})</span>
+    <!-- "x of y" in the count once the filter is hiding rows, so the count never silently
+         disagrees with the number of Codex instances that exist. -->
+    <InstanceSectionHeader
+      v-model:open="open"
+      provider="codex"
+      :title="$t('codexInstances.title')"
+      :count="headingCount"
+      :refresh-label="$t('codexInstances.refresh')"
+      :refreshing="loading || refreshingUsage"
+      :create-label="$t('codexInstances.createInstance')"
+      @refresh="refreshWithUsage()"
+      @create="createOpen = true"
+    >
+      <template #meta>
         <span v-if="hiddenByFilter > 0" class="text-xs font-normal text-muted-foreground">
           {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
         </span>
-        <ChevronDown
-          class="size-4 text-muted-foreground transition-transform duration-200"
-          :class="open ? '' : '-rotate-90'"
-        />
-      </button>
-      <div class="flex flex-wrap items-center gap-1.5">
-        <Button
-          variant="outline"
-          size="icon"
-          :disabled="loading || refreshingUsage"
-          :aria-label="$t('codexInstances.refresh')"
-          :title="$t('codexInstances.refresh')"
-          @click="refreshWithUsage()"
-        >
-          <RefreshCw :class="loading || refreshingUsage ? 'animate-spin' : ''" />
-        </Button>
-        <!-- Plus at rest, label on hover/focus — the same expanding pill as Instances and CLI
-             instances. A permanently-labelled button here was the one control in the tab whose
-             width was set by a phrase you only read once. -->
-        <Button
-          size="sm"
-          class="group/create overflow-hidden"
-          :aria-label="$t('codexInstances.createInstance')"
-          @click="createOpen = true"
-        >
-          <span class="inline-flex items-center">
-            <Plus class="shrink-0" />
-            <span
-              class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-36 group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-36 group-focus-visible/create:opacity-100"
-            >{{ $t('codexInstances.createInstance') }}</span>
-          </span>
-        </Button>
-      </div>
-    </div>
+      </template>
+    </InstanceSectionHeader>
 
     <!-- ExpandArea, not the kit's ExpandTransition: its permanent overflow clip would break this
          table's `sticky top-0` header. See ExpandArea.vue. -->
@@ -891,23 +881,7 @@ onUnmounted(() => {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" class="max-w-52">
-                  <!-- Which instance this menu belongs to, by number — see InstancesView. -->
-                  <DropdownMenuLabel>
-                    <div class="-my-0.5 flex items-center justify-between gap-2">
-                      <span class="font-mono text-xs">{{
-                        $t('instances.numberMenuLabel', { num: instance.num })
-                      }}</span>
-                      <button
-                        type="button"
-                        class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        :aria-label="$t('instances.copyNumber')"
-                        @click.stop="copyInstanceNumber(instance.num)"
-                      >
-                        <Copy class="size-3.5" />
-                      </button>
-                    </div>
-                  </DropdownMenuLabel>
-                  <DropdownMenuSeparator />
+                  <InstanceMenuHeader :num="instance.num" :actions="menuActionsFor(instance)" />
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger :disabled="moveBusy || isBusy(instance)">
                       <ArrowRightLeft /> {{ $t('instances.moveChats') }}
@@ -948,14 +922,6 @@ onUnmounted(() => {
                   >
                     <LogIn /> {{ $t('codexInstances.login') }}
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    v-if="instance.loggedIn && !instance.isExternal"
-                    :disabled="instance.isDesktopRunning || isBusy(instance)"
-                    :title="instance.isDesktopRunning ? $t('codexInstances.logoutQuitFirst') : undefined"
-                    @click="openLogout(instance)"
-                  >
-                    <LogOut /> {{ $t('codexInstances.logout') }}
-                  </DropdownMenuItem>
                   <!-- Only for a signed-in ChatGPT login: an API-key auth has no ChatGPT
                        subscription and so no bankable reset credits. Disabled (with a title
                        explaining why) when the cached usage already shows the redeem would be
@@ -968,9 +934,6 @@ onUnmounted(() => {
                     @click="onRedeemResetCredit(instance)"
                   >
                     <RotateCcw /> {{ $t('codexInstances.redeemResetCredit') }}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem :disabled="isBusy(instance)" @click="openRename(instance)">
-                    <Pencil /> {{ $t('codexInstances.rename') }}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem

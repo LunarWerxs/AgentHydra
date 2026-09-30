@@ -12,6 +12,7 @@
 import { ref } from 'vue'
 import type { UsageSnapshot } from '@/lib/api'
 import * as api from '@/lib/api'
+import { reconcileMap, sameData } from '@/lib/reconcile'
 import type { UsageReason } from '@/lib/usage'
 
 const snapshots = ref<Map<string, UsageSnapshot>>(new Map())
@@ -39,8 +40,10 @@ function setChecking(key: string, active: boolean) {
 }
 
 /** Push an already-fetched snapshot into the shared cache (e.g. from a CliInstance's own
- *  `lastUsageCheck` field, or another composable that performed the check itself). */
+ *  `lastUsageCheck` field, or another composable that performed the check itself). An equal
+ *  snapshot changes nothing, so re-seeding on every poll redraws nothing. */
 function setSnapshot(key: string, snap: UsageSnapshot) {
+  if (sameData(snapshots.value.get(key), snap)) return
   const next = new Map(snapshots.value)
   next.set(key, snap)
   snapshots.value = next
@@ -48,20 +51,21 @@ function setSnapshot(key: string, snap: UsageSnapshot) {
 
 /** Push a check's `reason` into the shared cache under the same key its snapshot landed under. */
 function setReason(key: string, reason: UsageReason) {
+  if (sameData(reasons.value.get(key), reason)) return
   const next = new Map(reasons.value)
   next.set(key, reason)
   reasons.value = next
 }
 
 /** Bulk-hydrate from the server's whole usage cache (a plain read of cached snapshots — it checks
- *  nothing). Safe to call more than once; a later call just re-syncs. */
+ *  nothing). Safe to call more than once; a later call just re-syncs, and an unchanged cache
+ *  assigns nothing. */
 async function hydrate(): Promise<void> {
   const res = await guard(api.getUsageCache())
   if (res) {
-    const next = new Map(snapshots.value)
-    for (const [key, snap] of Object.entries(res.cache)) next.set(key, snap)
-    snapshots.value = next
-    lastAutoRefreshAt.value = res.lastAutoRefreshAt
+    snapshots.value = reconcileMap(snapshots.value, Object.entries(res.cache))
+    if (lastAutoRefreshAt.value !== res.lastAutoRefreshAt)
+      lastAutoRefreshAt.value = res.lastAutoRefreshAt
   }
   hydrated.value = true
 }

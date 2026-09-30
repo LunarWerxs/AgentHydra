@@ -10,24 +10,16 @@
 // ⛔ The SPA never sees a server's URL. `dsh web` prints a one-time `?token=` that is the whole of
 // its authentication, so "launch" and "open" are daemon actions that open the window on the machine
 // the daemon runs on and answer with an outcome. See server/src/core/dsh-instances.ts.
-import {
-  ChevronDown,
-  Copy,
-  EllipsisVertical,
-  Pencil,
-  Play,
-  Plus,
-  RefreshCw,
-  Square,
-  Trash2,
-} from '@lucide/vue'
+import { Copy, EllipsisVertical, Pencil, Play, Square, Trash2 } from '@lucide/vue'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
+import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
+import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -46,6 +38,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useUiPrefs } from '@/composables/useUiPrefs'
 import {
   createDshInstance,
   type DshInstance,
@@ -55,12 +48,13 @@ import {
   quitDshInstance,
   renameDshInstance,
 } from '@/lib/api'
+import { reconcileList } from '@/lib/reconcile'
 
 const { t } = useI18n()
+const { dshOpen } = useUiPrefs()
 
 const instances = ref<DshInstance[]>([])
 const loading = ref(true)
-const open = ref(true)
 /** The id of whatever action is in flight, so one row's button can be busy without freezing the
  *  table: a launch legitimately takes seconds (the harness prints its address only once serving). */
 const busyId = ref<string | null>(null)
@@ -68,7 +62,8 @@ let timer: number | undefined
 
 async function refresh(): Promise<void> {
   try {
-    instances.value = await listDshInstances()
+    // Reconciled, so a poll that brings nothing new redraws nothing.
+    instances.value = reconcileList(instances.value, await listDshInstances(), (i) => i.id)
   } catch {
     // A failed poll leaves the last good list on screen: a table that empties itself on one dropped
     // request reads as "your instances are gone".
@@ -110,6 +105,21 @@ function openCreate(): void {
 function openRename(inst: DshInstance): void {
   dialogError.value = null
   nameDialog.value = { mode: 'rename', target: inst }
+}
+
+/** The icon row at the top of a row's ⋯ menu. The default home is the machine's own install and
+ *  keeps its name, so it has no quick actions of its own (Copy number is always there). */
+function menuActionsFor(inst: DshInstance): MenuIconAction[] {
+  if (inst.isDefault) return []
+  return [
+    {
+      key: 'rename',
+      icon: Pencil,
+      label: t('dshInstances.rename'),
+      closes: true,
+      run: () => openRename(inst),
+    },
+  ]
 }
 
 async function onNameSubmit(name: string): Promise<void> {
@@ -184,30 +194,23 @@ onUnmounted(() => window.clearInterval(timer))
 </script>
 
 <template>
-  <div class="mt-6">
-    <div class="mb-2 flex items-center gap-2">
-      <button
-        type="button"
-        class="flex cursor-pointer items-center gap-1.5 font-medium text-sm"
-        @click="open = !open"
-      >
-        <ChevronDown class="size-4 transition-transform" :class="open ? '' : '-rotate-90'" />
-        {{ $t('dshInstances.title') }}
-        <span class="text-muted-foreground text-xs">({{ instances.length }})</span>
-      </button>
-      <div class="ms-auto flex items-center gap-1">
-        <Button variant="ghost" size="sm" :aria-label="$t('dshInstances.refresh')" @click="refresh">
-          <RefreshCw class="size-3.5" />
-        </Button>
-        <Button size="sm" @click="openCreate">
-          <Plus class="size-3.5" />{{ $t('dshInstances.createInstance') }}
-        </Button>
-      </div>
-    </div>
+  <!-- Bare root and the shared header, like the CLI and Codex sections above: the parent spaces the
+       tables, and the header carries its own padding. -->
+  <div>
+    <InstanceSectionHeader
+      v-model:open="dshOpen"
+      provider="deepseek"
+      :title="$t('dshInstances.title')"
+      :count="instances.length"
+      :refresh-label="$t('dshInstances.refresh')"
+      :create-label="$t('dshInstances.createInstance')"
+      @refresh="refresh"
+      @create="openCreate"
+    />
 
-    <ExpandArea :open="open">
+    <ExpandArea :open="dshOpen">
       <Table>
-        <TableHeader>
+        <TableHeader sticky>
           <TableRow>
             <!-- Same fixed widths as the three tables above, which is what keeps the stack aligned. -->
             <TableHead class="w-44">{{ $t('dshInstances.colName') }}</TableHead>
@@ -286,15 +289,13 @@ onUnmounted(() => window.clearInterval(timer))
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
+                    <InstanceMenuHeader :num="inst.num" :actions="menuActionsFor(inst)" />
                     <DropdownMenuItem
                       v-if="inst.running"
                       :title="$t('dshInstances.quitHint')"
                       @select="act(inst.id, () => quitDshInstance(inst.id))"
                     >
                       <Square />{{ $t('dshInstances.quit') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem v-if="!inst.isDefault" @select="openRename(inst)">
-                      <Pencil />{{ $t('dshInstances.rename') }}
                     </DropdownMenuItem>
                     <DropdownMenuItem @select="copyHome(inst)">
                       <Copy />{{ $t('dshInstances.copyHome') }}

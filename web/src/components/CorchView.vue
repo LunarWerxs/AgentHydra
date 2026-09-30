@@ -21,6 +21,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import type { CorchWorkerView } from '@/lib/api'
 import { getCorchWorker, listCorchWorkers } from '@/lib/api'
 import { corchQueuedNote, firstLine, isCorchActive } from '@/lib/corch-status'
+import { reconcileList, sameData } from '@/lib/reconcile'
 import { formatAgo } from '@/lib/relativeTime'
 
 const { t } = useI18n()
@@ -62,7 +63,8 @@ async function loadDetail() {
   if (!id) return
   try {
     const d = await getCorchWorker(id)
-    if (selectedId.value === id) detail.value = d
+    // An unchanged detail keeps the old reference, so a poll with nothing new redraws nothing.
+    if (selectedId.value === id && !sameData(detail.value, d)) detail.value = d
   } catch {
     // Keep the last detail; `unreachable` and its banner speak for a daemon that is down.
   }
@@ -73,7 +75,8 @@ async function load(opts: { silent?: boolean } = {}) {
   timer = null
   if (!opts.silent) loading.value = true
   try {
-    workers.value = await listCorchWorkers()
+    const list = await listCorchWorkers()
+    workers.value = reconcileList(workers.value, list, (w) => w.id)
     unreachable.value = false
     now.value = Date.now()
     if (!loaded.value) {

@@ -793,6 +793,9 @@ export const cliLimitReset = (id: string, opts: { check?: boolean } = {}) =>
   })
 export const cliInstanceLogin = (id: string) =>
   j<CMActionResult>(`/api/cli-instances/${encodeURIComponent(id)}/login`, { method: 'POST' })
+/** Sign a CLI instance out (its .credentials.json); refused while a session runs on it. */
+export const logoutCliInstance = (id: string) =>
+  j<CMActionResult>(`/api/cli-instances/${encodeURIComponent(id)}/logout`, { method: 'POST' })
 export const renameCliInstance = (id: string, name: string) =>
   j<CMActionResult>(`/api/cli-instances/${encodeURIComponent(id)}/rename`, {
     method: 'POST',

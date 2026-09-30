@@ -64,6 +64,7 @@ const view = createTabView(storedView, tabStorage())
 const desktopOpen = useStorage('agenthydra.instances.desktopOpen', true)
 const cliOpen = useStorage('agenthydra.instances.cliOpen', true)
 const codexOpen = useStorage('agenthydra.instances.codexOpen', true)
+const dshOpen = useStorage('agenthydra.instances.dshOpen', true)
 
 // --- Instances: how the desktop table is sorted ------------------------------------------------
 // Which column, and which way. The table used to forget its sort on every reload, which on a
@@ -124,6 +125,7 @@ registerSharedPref(APP_VIEW_KEY, storedView, APP_VIEWS)
 registerSharedPref('agenthydra.instances.desktopOpen', desktopOpen)
 registerSharedPref('agenthydra.instances.cliOpen', cliOpen)
 registerSharedPref('agenthydra.instances.codexOpen', codexOpen)
+registerSharedPref('agenthydra.instances.dshOpen', dshOpen)
 registerSharedPref('agenthydra.instances.desktopSortKey', desktopSortKey)
 registerSharedPref('agenthydra.instances.desktopSortDirection', desktopSortDirection, [
   '',
@@ -147,6 +149,7 @@ export function useUiPrefs() {
     desktopOpen,
     cliOpen,
     codexOpen,
+    dshOpen,
     desktopSortKey,
     desktopSortDirection,
     showTools,

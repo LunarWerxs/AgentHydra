@@ -6,6 +6,7 @@
 import { ref } from 'vue'
 import type { CliInstance } from '@/lib/api'
 import * as api from '@/lib/api'
+import { reconcileList } from '@/lib/reconcile'
 import { useUsage } from './useUsage'
 
 const cliInstances = ref<CliInstance[]>([])
@@ -33,9 +34,11 @@ async function refreshCliInstances(opts: { silent?: boolean } = {}) {
   if (!opts.silent) loading.value = true
   const r = await guard(api.listCliInstances())
   if (r) {
-    cliInstances.value = r
+    // Unchanged rows keep their old objects, so a poll with nothing new redraws nothing.
+    cliInstances.value = reconcileList(cliInstances.value, r, (i) => i.id)
     // Seed the shared usage cache from each instance's own last-known reading so the Usage
-    // column has something to show before any on-demand check runs this session.
+    // column has something to show before any on-demand check runs this session (an equal
+    // snapshot is a no-op there).
     const { setSnapshot } = useUsage()
     for (const inst of r)
       if (inst.lastUsageCheck) setSnapshot(`cli:${inst.id}`, inst.lastUsageCheck)
@@ -84,6 +87,18 @@ async function login(id: string): Promise<api.CMActionResult | undefined> {
   setBusy(id, true)
   try {
     return await guard(api.cliInstanceLogin(id))
+  } finally {
+    setBusy(id, false)
+  }
+}
+
+/** Sign a CLI instance out (server/src/core/cli-logout.ts). */
+async function logout(id: string): Promise<api.CMActionResult | undefined> {
+  setBusy(id, true)
+  try {
+    const result = await guard(api.logoutCliInstance(id))
+    if (result?.ok) await refreshCliInstances({ silent: true })
+    return result
   } finally {
     setBusy(id, false)
   }
@@ -174,6 +189,7 @@ export function useCliInstances() {
     create,
     launch,
     login,
+    logout,
     rename,
     associate,
     linkDesktop,

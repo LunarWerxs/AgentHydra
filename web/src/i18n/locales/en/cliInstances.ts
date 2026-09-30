@@ -26,6 +26,7 @@ export default {
   launch: 'Launch',
   moreActions: 'More actions',
   login: 'Log in',
+  logout: 'Log out',
   associate: 'Associate account',
   rename: 'Rename',
   checkUsage: 'Check usage',
@@ -94,5 +95,9 @@ export default {
   toastLaunchFailed: 'Failed to launch CLI instance.',
   toastLoginOpened: 'Terminal opened. Run /login there.',
   toastLoginFailed: 'Failed to open a login terminal.',
+  toastLogout: 'Signed out',
+  toastLogoutFailed: 'Could not sign this instance out',
+  logoutDialogDescription:
+    'Removes the saved Claude login (.credentials.json) from this CLI instance. Its chats, settings and folder stay, and Claude asks for a sign-in the next time it starts. Quit any Claude session running on it first.',
   toastUsageCheckFailed: 'Failed to check usage.',
 }

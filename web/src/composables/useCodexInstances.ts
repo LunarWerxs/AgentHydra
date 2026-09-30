@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import type { CodexInstance } from '@/lib/api'
 import * as api from '@/lib/api'
+import { reconcileList } from '@/lib/reconcile'
 
 const instances = ref<CodexInstance[]>([])
 const loading = ref(false)
@@ -26,7 +27,8 @@ async function guard<T>(promise: Promise<T>): Promise<T | undefined> {
 async function refresh(opts: { silent?: boolean } = {}) {
   if (!opts.silent) loading.value = true
   const result = await guard(api.listCodexInstances())
-  if (result) instances.value = result
+  // Unchanged rows keep their old objects, so a poll with nothing new redraws nothing.
+  if (result) instances.value = reconcileList(instances.value, result, (i) => i.id)
   if (!opts.silent) loading.value = false
 }
 

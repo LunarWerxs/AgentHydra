@@ -13,6 +13,7 @@ import {
   setCliInstanceUsage,
 } from '../core/cli-instances'
 import { runCliLimitReset } from '../core/cli-limit-reset'
+import { logoutCliInstance } from '../core/cli-logout'
 import { redeemCodexResetCredit, resolveCodexAccount } from '../core/codex-account'
 import { moveCodexChat, planCodexChatMove } from '../core/codex-chat-move'
 import {
@@ -56,6 +57,7 @@ import {
   checkUsageForCliInstance,
   checkUsageForCodex,
   checkUsageForDesktop,
+  cliKey,
   codexKey,
   surveyUsage,
 } from '../usage-service'
@@ -354,6 +356,14 @@ app.post('/api/cli-instances/:id/launch', async (c) => {
 app.post('/api/cli-instances/:id/login', (c) =>
   c.json(launchCliInstance(c.req.param('id'), { login: true })),
 )
+// Sign a CLI instance out (removes .credentials.json) - see core/cli-logout.ts for why it refuses
+// while a session runs on it. On success the cached quota is dropped: it belongs to the old login.
+app.post('/api/cli-instances/:id/logout', (c) => {
+  const id = c.req.param('id')
+  const result = logoutCliInstance(id)
+  if (result.ok) dropCachedUsage(cliKey(id))
+  return c.json(result)
+})
 // Use this account's limit reset through the CLI's own `/limit-reset` (core/cli-limit-reset.ts):
 // a person's click or an MCP call, never a background check, since running it can spend what it
 // finds. One run per account at a time is enforced there; the CLI's answer is kept on the record

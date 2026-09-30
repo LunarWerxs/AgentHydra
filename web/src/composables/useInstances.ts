@@ -6,6 +6,7 @@ import { ref } from 'vue'
 import type { CMInstance } from '@/lib/api'
 import * as api from '@/lib/api'
 import { loginChanged } from '@/lib/instance-appearance'
+import { reconcileList, sameData } from '@/lib/reconcile'
 
 const instances = ref<CMInstance[]>([])
 const loading = ref(false)
@@ -69,8 +70,11 @@ function upsert(next: CMInstance) {
   if (idx === -1) {
     instances.value = [...instances.value, next]
   } else {
+    const merged = { ...instances.value[idx], ...next }
+    // A re-resolve that found the same identity writes nothing, so the row does not redraw.
+    if (sameData(instances.value[idx], merged)) return
     const copy = instances.value.slice()
-    copy[idx] = { ...copy[idx], ...next }
+    copy[idx] = merged
     instances.value = copy
   }
 }
@@ -91,13 +95,15 @@ async function refreshInstances(
     // instead of carried — a blank cell for the tick it takes to re-resolve beats the previous
     // account's email.
     const prev = new Map(instances.value.map((i) => [i.dir, i.account]))
-    instances.value = r.map((i) => {
+    const built = r.map((i) => {
       if (i.account != null) return i
       const carried = prev.get(i.dir) ?? null
       if (!carried) return i
       const next = { ...i, account: carried }
       return loginChanged(next) ? i : next
     })
+    // Unchanged rows keep their old objects, so a poll with nothing new redraws nothing.
+    instances.value = reconcileList(instances.value, built, (i) => i.dir)
   }
   if (!opts.silent) loading.value = false
   void autoResolveAccounts({ force: opts.force, mode: opts.resolve ?? 'cache' })
@@ -212,7 +218,7 @@ function stopPolling() {
  *  answered ok only after it saw the app up (open) or its processes gone (quit), so the row was
  *  already known. The re-list still replaces the row with the server's own reading. */
 function showConfirmed(dir: string, running: boolean, pid: number | null) {
-  instances.value = instances.value.map((i) =>
+  const next = instances.value.map((i) =>
     i.dir === dir
       ? {
           ...i,
@@ -222,6 +228,7 @@ function showConfirmed(dir: string, running: boolean, pid: number | null) {
         }
       : i,
   )
+  if (!sameData(instances.value, next)) instances.value = next
   void refreshInstances({ silent: true })
 }
 
