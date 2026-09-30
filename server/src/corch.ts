@@ -65,6 +65,7 @@ import { cliAuthStatus } from './core/cli-quick-add'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
 import { isPidAlive, killProcessTree } from './core/process'
 import { POINTER_DIR } from './instance'
+import { MCP_SERVER_KEY } from './mcp-register'
 import { getProviderSettings } from './provider-settings'
 import type { UsageSnapshot } from './types'
 import { parseResetTime } from './usage'
@@ -913,13 +914,17 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
   writeFileSync(promptFile, text)
   const log = join(LOGS, `${w.id}-${n}.jsonl`)
   const errLog = join(LOGS, `${w.id}-${n}.err.log`)
-  // The wind-down channel: after every tool call the CLI runs this hook, which prints the worker's
-  // signal file when there is one (signalWindDown) and nothing otherwise, about 65 ms a call.
+  // The worker's own settings. The wind-down channel: after every tool call the CLI runs this hook,
+  // which prints the worker's signal file when there is one (signalWindDown) and nothing otherwise,
+  // about 65 ms a call. And no AgentHydra MCP server: 84 of a worker's 138 tools were AgentHydra's
+  // own (measured), with which a worker could start more workers, fan out, or move the owner's
+  // desktop chats. A worker does its task; orchestration stays with the chat that asked.
   mkdirSync(HOOKS, { recursive: true })
   const hookFile = join(HOOKS, `${w.id}.json`)
   writeFileSync(
     hookFile,
     JSON.stringify({
+      deniedMcpServers: [{ serverName: MCP_SERVER_KEY }],
       hooks: {
         PostToolUse: [
           {
