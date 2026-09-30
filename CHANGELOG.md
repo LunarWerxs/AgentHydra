@@ -72,6 +72,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Auto-resume picks a session back up after its weekly limit resets** (`server/src/monitor.ts`,
+  `rate-limit-discovery.ts`). A chat you started yourself that stopped at the weekly limit was
+  checked again only while its transcript was less than 12 hours old, and a stopped chat's
+  transcript never changes. So it was never resumed after the reset, and the resume list showed it
+  as blocked for good. It is now checked again when the reset comes, however long that takes.
+- **Auto-resume times a desktop chat by that chat's own account** (`server/src/monitor.ts`,
+  `usage-service.ts`). A stopped chat from a desktop instance was timed by the default `~/.claude`
+  login's usage instead of its own account's, so it could resume hours early or late, or wait on
+  another account's weekly limit. It now reads the usage of the instance the chat lives in. And a
+  chat whose 5-hour window had already reset by the time it was checked waited another five hours;
+  it now resumes right away.
 - **Sonnet 5 is costed at $2/$10, not $3/$15, after September 1** (`server/src/pricing.ts`).
   Anthropic kept Sonnet 5's launch price as its standard price and never made the planned rise to
   $3/$15. The built-in price list still made that switch on September 1, so on a first run, an

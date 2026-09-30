@@ -19,7 +19,7 @@
 // the per-session attempt cap, the idempotency check, the resume buffer. Nothing here schedules or
 // dispatches anything itself.
 
-import { instanceSessionMap } from './instance-sessions'
+import { instanceRefForSession } from './instance-sessions'
 import { createLimitStopTracker } from './rate-limit-signal'
 import { getSession } from './sessions'
 import { listTranscriptFiles } from './transcript'
@@ -31,6 +31,10 @@ import type { QueueItem } from './types'
  * the human moved on: a transcript that has sat untouched for half a day is an abandoned session,
  * not a queue the app should quietly restart. A PENDING stop never gets written to again (that is
  * what makes it pending), so the file's mtime IS the moment it stopped — the filter is exact.
+ *
+ * A WEEKLY wall is the exception, and the caller names those sessions (`keep`): its reset can be
+ * days away, and the monitor has already promised to look again then. Dropped from discovery at the
+ * 12-hour mark, such a stop was never handed in again, so it was never resumed after the reset.
  */
 export const DISCOVERY_WINDOW_MS = 12 * 60 * 60 * 1000
 
@@ -110,6 +114,8 @@ export async function discoverPendingStops(
     hasQueueRow?: (sessionId: string) => boolean
     now?: number
     windowMs?: number
+    /** Sessions to read however old their transcript is: the ones parked at a weekly wall. */
+    keep?: ReadonlySet<string>
   } = {},
 ): Promise<RateLimitedStop[]> {
   const now = opts.now ?? Date.now()
@@ -120,7 +126,8 @@ export async function discoverPendingStops(
   // index for viewing, but neither can be resumed by the Claude dispatcher and OpenCode's virtual
   // transcript path points at its SQLite store rather than a JSONL event stream.
   const recent = listTranscriptFiles().filter(
-    (f) => f.source === 'claude' && now - f.mtime_ms <= windowMs,
+    (f) =>
+      f.source === 'claude' && (now - f.mtime_ms <= windowMs || !!opts.keep?.has(f.session_id)),
   )
   const live = new Set(recent.map((f) => f.path))
   for (const path of tailVerdicts.keys()) if (!live.has(path)) tailVerdicts.delete(path)
@@ -163,13 +170,15 @@ export async function discoverPendingStops(
       // The resume prompt is monitor.ts's own locked constant; this field is never read for it.
       prompt: '',
       // Nothing on disk records the flags the session originally ran under, so a resume takes the
-      // CLI's defaults. account_id stays null on purpose: a terminal session has no pasted
-      // credential, and monitor.ts already reads the ambient login's quota for null accounts.
+      // CLI's defaults. account_id stays null on purpose: no discovered session ran on a pasted
+      // credential. The account is the desktop profile the chat lives in, as a real
+      // 'desktop:<dir>' ref (the chat store's bare label, which this once passed, names no
+      // account anywhere), and a terminal session has none, so monitor.ts reads the ambient login.
       model: null,
       effort: null,
       permission_mode: null,
       account_id: null,
-      instance_ref: instanceSessionMap().get(tf.session_id) ?? null,
+      instance_ref: instanceRefForSession(tf.session_id),
       new_chat: false,
       fork: false,
       status: 'rate_limited',

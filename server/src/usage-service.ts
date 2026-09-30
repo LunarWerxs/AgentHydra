@@ -442,6 +442,23 @@ export async function checkUsageForCliInstance(id: string): Promise<UsageCheckRe
   }
 }
 
+/**
+ * The quota of whichever login a run pinned to `ref` uses: a desktop profile ('desktop:<dir>'), a
+ * CLI instance ('cli:<id>'), or the ambient login when nothing pins it. A pinned run whose account
+ * cannot be read gets no data, never the ambient login's numbers: those belong to another account,
+ * and gating a resume on them is the very mistake this function exists to prevent.
+ */
+export async function checkUsageForInstanceRef(ref: string | null): Promise<UsageSnapshot> {
+  if (!ref) return checkUsageAmbient()
+  if (ref.startsWith('desktop:')) {
+    return (await checkUsageForDesktop(ref.slice('desktop:'.length))).snapshot
+  }
+  const cli = ref.startsWith('cli:')
+    ? await checkUsageForCliInstance(ref.slice('cli:'.length))
+    : null
+  return cli?.snapshot ?? parseUsageOutput('', null)
+}
+
 // --- survey every instance ----------------------------------------------------
 
 /** One row of the whole-fleet usage survey. */

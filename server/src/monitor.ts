@@ -41,7 +41,7 @@ import type {
   UsageSnapshot,
 } from './types'
 import { parseResetTime } from './usage'
-import { checkUsageAmbient, checkUsageForAccount } from './usage-service'
+import { checkUsageForAccount, checkUsageForInstanceRef } from './usage-service'
 
 /**
  * The one outside-world read this module makes, behind a seam so tests can drive the gate.
@@ -51,20 +51,26 @@ import { checkUsageAmbient, checkUsageForAccount } from './usage-service'
  * globally mock.module-ing usage-service — which in Bun leaks into every other test file in the run.
  */
 export interface MonitorDeps {
-  readUsage: (accountId: string | null) => Promise<UsageSnapshot>
+  readUsage: (stop: Pick<QueueItem, 'account_id' | 'instance_ref'>) => Promise<UsageSnapshot>
   /**
    * Rate-limited sessions found on disk that we never dispatched (rate-limit-discovery.ts). Behind
    * the same seam and for the same reason as readUsage: the real one globs the transcript store and
    * reads files, which a unit test has no business doing to the developer's actual ~/.claude.
+   * `keep` names the sessions parked at a weekly wall, which must be found however old they are.
    */
-  discoverStops: () => Promise<RateLimitedStop[]>
+  discoverStops: (keep: ReadonlySet<string>) => Promise<RateLimitedStop[]>
 }
 
 const defaultDeps: MonitorDeps = {
-  // A run with no dispatch account is not an unauthenticated run: it uses the ambient CLI login,
-  // whose quota is just as readable. See checkUsageAmbient.
-  readUsage: (accountId) => (accountId ? checkUsageForAccount(accountId) : checkUsageAmbient()),
-  discoverStops: () =>
+  // The credential the run actually used: a named dispatch account, else the instance it is
+  // pinned to (a desktop chat's own profile), else the ambient CLI login, whose quota is just as
+  // readable (see checkUsageAmbient). Reading the ambient login for a pinned chat timed its resume
+  // off ANOTHER account's reset and let another account's weekly % decide whether it waited.
+  readUsage: (stop) =>
+    stop.account_id
+      ? checkUsageForAccount(stop.account_id)
+      : checkUsageForInstanceRef(stop.instance_ref),
+  discoverStops: (keep) =>
     discoverPendingStops({
       isBusy: (sessionId) => isSessionActive(sessionId),
       hasQueueRow: (sessionId) =>
@@ -73,6 +79,7 @@ const defaultDeps: MonitorDeps = {
             'select count(*) as n from queue_items where session_id = ?',
           )
           .get(sessionId)?.n,
+      keep,
     }),
 }
 
@@ -734,7 +741,7 @@ async function processOneRateLimitedStop(
   // ran under: a named dispatch account, or (the DEFAULT) the ambient CLI login. Hard-refusing the
   // ambient case made the monitor inert for anyone who never pasted a token in, which is everyone
   // by default: it parked every real stop at "needs you — no dispatch account" and resumed nothing.
-  const snap = await deps.readUsage(item.account_id)
+  const snap = await deps.readUsage(item)
   const wk = snap.weekAll
   if (!wk) {
     // Unknown usage is NOT "plenty left" — refuse to resume blindly.
@@ -758,10 +765,18 @@ async function processOneRateLimitedStop(
     return
   }
 
-  // Schedule the resume just after the 5-hour session reset (+ buffer). If the
-  // 5h reset can't be parsed, fall back to now + 5h (the worst-case window length).
-  const sessIso = snap.session ? parseResetTime(snap.session.resets) : null
-  const base = sessIso ? new Date(sessIso) : new Date(Date.now() + 5 * 3600 * 1000)
+  // Schedule the resume just after the 5-hour session reset (+ buffer). A window with no reset
+  // clause has not started, i.e. it already reset since the stop ("Current session: 0% used"; the
+  // API's resets_at is null), so the resume is due now. Only a reset that is there but cannot be
+  // parsed falls back to now + 5h (the worst-case window length).
+  const sess = snap.session
+  const sessIso = sess?.resets ? parseResetTime(sess.resets) : null
+  const base =
+    sess && !sess.resets
+      ? new Date()
+      : sessIso
+        ? new Date(sessIso)
+        : new Date(Date.now() + 5 * 3600 * 1000)
   const notBefore = new Date(base.getTime() + settings.resumeBufferMin * 60_000).toISOString()
   const resumeId = enqueueResume(item, notBefore)
   upsertState(item, {
@@ -786,11 +801,35 @@ async function processRateLimited(deps: MonitorDeps): Promise<void> {
   let found: RateLimitedStop[] = []
   // Only a scan that actually ran may say a stop is gone; a failed one proves nothing.
   let discovered = false
+  // A discovered stop parked at a weekly wall waits days for its re-check, far past discovery's
+  // 12-hour window, and nothing else hands it back in; so discovery is told to keep reading it.
+  const weekly = new Set(
+    db
+      .query<{ session_id: string }, []>(
+        "select session_id from monitor_state where state = 'blocked_weekly' and discovered = 1",
+      )
+      .all()
+      .map((r) => r.session_id),
+  )
   try {
-    found = await deps.discoverStops()
+    found = await deps.discoverStops(weekly)
     discovered = true
   } catch (err) {
     console.error('[agenthydra] rate-limit discovery failed:', err)
+  }
+  // One of those no longer at its wall (resumed by hand, running, queued, archived) has nothing
+  // left to wait for, so its row goes: off the to-do list and out of the kept set. Deleted rather
+  // than marked done, because the row is keyed by session: a 'done' row would make the session's
+  // NEXT wall read as already resolved. Nothing is lost with it: a blocked row's attempt count is
+  // only ever copied from the session's other rows, which keep it.
+  if (discovered) {
+    const still = new Set(found.map((item) => item.session_id))
+    for (const sessionId of weekly) {
+      if (still.has(sessionId)) continue
+      db.query(
+        "delete from monitor_state where session_id = ? and state = 'blocked_weekly' and discovered = 1",
+      ).run(sessionId)
+    }
   }
 
   // Discovery already refuses archived sessions; a stop WE dispatched needs the same guard, or

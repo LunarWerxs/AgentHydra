@@ -42,7 +42,7 @@ const snapshot = (weekAllPct: number | null): UsageSnapshot => ({
 })
 
 /**
- * A usage reader that always answers with `snap`, and counts the accountIds it was asked about.
+ * A usage reader that always answers with `snap`, and records the account of each stop it read.
  * `stops` are transcript-discovered stops to hand the monitor — empty by default, so a test that
  * only cares about dispatched runs never touches the real ~/.claude transcript store.
  */
@@ -53,8 +53,8 @@ function reader(
   const asked: (string | null)[] = []
   return {
     asked,
-    readUsage: async (accountId) => {
-      asked.push(accountId)
+    readUsage: async (stop) => {
+      asked.push(stop.account_id)
       return snap
     },
     discoverStops: async () => stops,
@@ -185,6 +185,24 @@ describe('monitor gate', () => {
     expect(resume?.instance_ref).toBe('desktop:C:\\fake\\dir')
   })
 
+  // The regression this guards: once the 5-hour window has reset, /usage prints "Current session:
+  // 0% used" with no reset clause (the API path: resets_at null). parseResetTime('') is null, so
+  // the resume fell back to now + 5h and waited up to five hours for a window already open.
+  test('a stop whose 5-hour window has already reset resumes now, not five hours out', async () => {
+    setSetting('monitor_enabled', '1')
+    insertRateLimited(`${PREFIX}j`, `${PREFIX}sess-j`)
+    await runMonitorOnce(
+      reader({ ...snapshot(10), session: { pct: 0, resets: '', resetsAt: null } }),
+    )
+    const s = stateFor(`${PREFIX}j`)
+    expect(s?.state).toBe('scheduled')
+    const resume = db
+      .query<{ not_before: string }, [string]>('select not_before from queue_items where id = ?')
+      .get(s?.resumeItemId as string)
+    const buffer = getMonitorSettings().resumeBufferMin * 60_000
+    expect(Date.parse(resume?.not_before as string)).toBeLessThanOrEqual(Date.now() + buffer)
+  })
+
   test('is idempotent — a second pass does not add a duplicate state row or a second resume', async () => {
     setSetting('monitor_enabled', '1')
     insertRateLimited(`${PREFIX}c`, `${PREFIX}sess-c`)
@@ -290,6 +308,29 @@ describe('discovered stops (sessions we never dispatched)', () => {
     insertRateLimited(`${PREFIX}i`, `${PREFIX}sess-i`)
     await runMonitorOnce(reader(snapshot(10)))
     expect(stateFor(`${PREFIX}i`)?.discovered).toBe(false)
+  })
+
+  // The regression this guards: discovery reads only transcripts written in the last 12 hours, and a
+  // stopped session's transcript is never written again, while a weekly reset can be days away. So a
+  // stop parked at 'blocked_weekly' was never handed back in: never re-checked, never resumed, and
+  // listed as blocked long after the reset.
+  test('a stop parked at the weekly limit is re-checked when due, however old its transcript', async () => {
+    setSetting('monitor_enabled', '1')
+    const stop = discoveredStop(`${PREFIX}sess-weekly`)
+    await runMonitorOnce(reader(snapshot(100), [stop]))
+    expect(stateFor(stop.id)?.state).toBe('blocked_weekly')
+    // Days later: the weekly reset has passed, and the transcript is far past discovery's window.
+    db.query('update monitor_state set next_check_at = ? where item_id = ?').run(
+      new Date(Date.now() - 60_000).toISOString(),
+      stop.id,
+    )
+    await runMonitorOnce({
+      readUsage: async () => snapshot(10),
+      // Discovery past the 12-hour window: like the real one, it reads the old transcript only
+      // when told to keep that session.
+      discoverStops: async (keep) => (keep.has(stop.session_id) ? [stop] : []),
+    })
+    expect(stateFor(stop.id)?.state).toBe('scheduled')
   })
 })
 
