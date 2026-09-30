@@ -131,3 +131,30 @@ Other changes this round:
   (`000c848`).
 - **Stopping a group mid-command.** 6 of 6 cancelled, 0 CLI processes left, and the stopped
   attempts' spend recorded.
+
+## Round five, 2026-09-30: planned handoff instead of a move
+
+This was the owner's idea. The session that has the context writes a handoff before its account
+runs out, and the task goes on in a fresh, small session elsewhere, instead of the next account
+re-reading the whole conversation (`5de5bbc`, `2965507`).
+
+- **How the worker hears it.** At 85% of the 5-hour window (95% of the week), and only when
+  another account has room, Corch writes a signal that a PostToolUse hook shows the worker after its
+  next tool call. The hook is installed per worker with `--settings` and costs about 65 ms a call.
+  Proven live first: the CLI showed the hook's `additionalContext` mid-turn and the model acted on
+  it.
+- **What the continuation gets.** The task, the handoff, the old transcript's path, and any queued
+  messages, all in a new session. A hard limit, a sign-out or a restart still moves the whole
+  transcript, as before. `corch_handoff` (MCP) hands a running task off on request.
+- **Live run: a six-step task, handed off after step 2.**
+  - The first run had three handoffs. #88 (at 90%) wound down on its own after step 1, the manual
+    handoff followed, and the next session was placed on #84 at 91%, which wound down at once. The
+    fix: accounts past the line score last, and a handoff keeps no home.
+  - The rerun had exactly one handoff (#83 → a fresh session on #83, the account with room). Steps
+    1-6 ran once each, the codeword from the first message arrived through the handoff alone, and
+    the run cost $0.69 against $1.34 for the run with the extra handoffs.
+- **What a fresh session saves.** A fresh session starts at about 45k tokens (the CLI's own prompt
+  and tools). A long session can be 219k (the #90 review), so the saving grows with the length of
+  the conversation, and every later turn is smaller too.
+- **Workers no longer load AgentHydra's own MCP server** (`5fceb0c`). It supplied 84 of their 138
+  tools, enough for a worker to start more workers or move desktop chats.
