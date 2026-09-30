@@ -30,12 +30,22 @@ import {
 import { join } from 'node:path'
 import { resolveClaudeExe } from './config'
 import {
+  appendJournal,
+  type CorchJournalEntry,
+  type CorchJournalEvent,
+  firstLine,
+  formatJournalLine,
+  type JournalFilter,
+  readJournal,
+} from './corch-journal'
+import {
   aboutToBill,
   attemptSpend,
   type CorchAccount,
   type CorchLiveUsage,
   type CorchWalls,
   type CorchWorker,
+  type CorchWorkerBrief,
   type CorchWorkerView,
   classifyAttempt,
   continuationPrompt,
@@ -49,9 +59,11 @@ import {
   PAUSED_PROMPT,
   PRE_OVERAGE_NOTICE,
   pickAccount,
+  recentWorkers,
   scrubbedEnv,
   summarizeEvent,
   TRANSIENT_PROMPT,
+  toBrief,
   toView,
   WIND_DOWN_SESSION_PCT,
   WIND_DOWN_WEEK_PCT,
@@ -71,6 +83,7 @@ import type { UsageSnapshot } from './types'
 import { parseResetTime } from './usage'
 import { allCachedUsage } from './usage-cache'
 
+export * from './corch-journal'
 export * from './corch-lib'
 
 // POINTER_DIR is CONFIG_DIR for the primary install and a side-run's own data dir otherwise, so
@@ -85,6 +98,38 @@ const HANDOFFS = join(ROOT, 'handoffs')
 const slashed = (p: string): string => p.replace(/\\/g, '/')
 const signalPath = (workerId: string): string => join(SIGNALS, `${workerId}.json`)
 const WALLS_PATH = join(ROOT, 'walls.json')
+const JOURNAL_PATH = join(ROOT, 'journal.jsonl')
+
+/** `#84`, or the account's name when it has no number: the journal's short account label. */
+const acctLabel = (a: { num: number | null; name: string }): string =>
+  a.num === null ? a.name : `#${a.num}`
+
+/** One line in the orchestration journal (corch-journal.ts) for a state change of `w`. */
+function journal(
+  w: CorchWorker,
+  event: CorchJournalEvent,
+  details: Omit<Partial<CorchJournalEntry>, 'ts' | 'id' | 'group' | 'title' | 'event'> = {},
+): void {
+  appendJournal(JOURNAL_PATH, {
+    ts: new Date().toISOString(),
+    id: w.id,
+    group: w.group,
+    title: w.title,
+    event,
+    ...details,
+  })
+}
+
+/** The journal in scope, oldest first (the newest `limit`, default 100). */
+export function corchJournal(filter: JournalFilter = {}): CorchJournalEntry[] {
+  return readJournal(JOURNAL_PATH, filter)
+}
+
+/** The same entries as readable one-line strings (formatJournalLine), newest last. */
+export function corchJournalLines(filter: JournalFilter = {}): string[] {
+  const now = new Date()
+  return corchJournal(filter).map((e) => formatJournalLine(e, now))
+}
 
 interface Store {
   workers: CorchWorker[]
@@ -235,6 +280,21 @@ function recheckSignedOut(accounts: CorchAccount[], now: number): void {
       })
   }
 }
+/** Why an account whose credential file exists is nevertheless signed out, or null. Field note 3
+ *  (2026-09-30): the CLI instance list said `loggedIn: true` for two accounts whose login was dead,
+ *  because it only checks that the file exists. Corch's signed-out wall is the verified answer: set
+ *  when an attempt failed to authenticate, and lifted only when `claude auth status` says the login
+ *  works (recheckSignedOut, every 30 minutes and whenever the credential file changes). A file
+ *  rewritten since the wall (a new sign-in not yet rechecked) is given the benefit of the doubt.
+ *  Costs one map lookup and one stat, so the listing stays as fast as it was. */
+export function corchSignedOutReason(id: string, configDir: string): string | null {
+  load()
+  const wall = walls[id]
+  if (wall?.reason !== 'signed out') return null
+  if (wall.cred !== undefined && wall.cred !== credStamp(configDir)) return null
+  return 'Signed out: its credential file is there, but the login failed when Corch used it and has not worked since (checked again every 30 minutes, and as soon as the account signs in again). Sign in again: Quick add, or Log in.'
+}
+
 let accountsProvider: () => CorchAccount[] = signedInAccounts
 
 /** Tests: run a fake CLI instead of `claude`. null restores the real one. */
@@ -386,7 +446,7 @@ async function tick(): Promise<void> {
         const acct = pickAccount(w, accounts, walls, active, cap, now, groupActive, allowFull)
         if (acct) {
           try {
-            launch(w, acct, accounts)
+            launch(w, acct, accounts, active.get(acct.id) ?? 0)
           } catch (err) {
             console.error(`[corch] could not launch ${w.id}:`, err)
             // A throw after the spawn leaves a live attempt. One before it (a file lock on the
@@ -398,9 +458,16 @@ async function tick(): Promise<void> {
                 w.notBefore = Date.now() + 10_000
                 w.retries++
                 w.error = `Could not start the next attempt (will retry): ${msg}`
+                journal(w, 'retry', {
+                  account: acctLabel(acct),
+                  retry: w.retries,
+                  waitS: 10,
+                  notice: firstLine(`Could not start the next attempt: ${msg}`),
+                })
               } else {
                 w.status = 'failed'
                 w.error = `Could not start the next attempt: ${msg}`
+                journal(w, 'failed', { account: acctLabel(acct), error: firstLine(w.error) })
               }
               changed(w)
             }
@@ -442,6 +509,7 @@ async function tick(): Promise<void> {
         if (w.status !== 'waiting' || w.error !== why) {
           w.status = 'waiting'
           w.error = why
+          journal(w, 'waiting', { error: firstLine(why) })
           changed(w)
         }
       } catch (err) {
@@ -580,6 +648,7 @@ function signalWindDown(
     }),
   )
   at.windDown = { at: Date.now(), pct, path }
+  journal(w, 'handoff-requested', { account: acctLabel(at.account), pct, path })
   changed(w)
 }
 
@@ -704,7 +773,8 @@ function finish(w: CorchWorker, events: unknown[]): void {
   at.outcome = v.outcome
   at.notice = v.notice
   at.endedAt = now
-  w.costUsd += spentOf(w, at)
+  const spent = spentOf(w, at)
+  w.costUsd += spent
   w.turns += v.turns
   if (v.outcome === 'done' || v.outcome === 'handoff') w.result = v.result
   if (w.status === 'cancelled') {
@@ -792,8 +862,59 @@ function finish(w: CorchWorker, events: unknown[]): void {
   if (w.status === 'failed' && w.pending.length)
     w.error =
       `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
+  journalFinish(w, at, v, spent)
   changed(w)
   schedule(50)
+}
+
+/** The journal line for an attempt that just ended (finish), from its verdict and the worker's
+ *  new state. */
+function journalFinish(
+  w: CorchWorker,
+  at: CorchWorker['attempts'][number],
+  v: { outcome: CorchWorker['attempts'][number]['outcome']; notice: string | null; turns: number },
+  spent: number,
+): void {
+  const account = acctLabel(at.account)
+  const notice = v.notice ? firstLine(v.notice) : undefined
+  const until = (): string | undefined => {
+    const u = walls[at.account.id]?.until
+    return u ? new Date(u).toISOString() : undefined
+  }
+  if (w.status === 'failed') {
+    journal(w, 'failed', { account, error: firstLine(w.error) })
+    return
+  }
+  switch (v.outcome) {
+    case 'done':
+      journal(w, w.status === 'done' ? 'done' : 'turn-done', {
+        account,
+        costUsd: Math.round(spent * 10_000) / 10_000,
+        turns: v.turns,
+        totalCostUsd: Math.round(w.costUsd * 10_000) / 10_000,
+      })
+      break
+    case 'handoff':
+      journal(w, 'handoff-written', { account, path: at.windDown?.path })
+      break
+    case 'quota':
+      journal(w, 'limit', { account, notice, until: until() })
+      break
+    case 'auth':
+      journal(w, 'signed-out', { account, notice, until: until() })
+      break
+    case 'transient':
+      journal(w, 'retry', {
+        account,
+        notice,
+        retry: w.retries,
+        waitS: w.notBefore ? Math.round((w.notBefore - Date.now()) / 1000) : 0,
+      })
+      break
+    case 'interrupted':
+      journal(w, 'interrupted', { account, retry: w.retries })
+      break
+  }
 }
 
 /** An ended attempt's own spend, from its transcript on the account it ran on (attemptSpend). */
@@ -841,7 +962,14 @@ function configDirOf(id: string, accounts: CorchAccount[]): string | null {
   return accounts.find((a) => a.id === id)?.configDir ?? getCliInstance(id)?.configDir ?? null
 }
 
-function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): void {
+/** `activeOnAccount`: workers already running on `acct` (every group) when it was picked; the
+ *  journal records it with the account's usage, the two things pickAccount scores on. */
+function launch(
+  w: CorchWorker,
+  acct: CorchAccount,
+  accounts: CorchAccount[],
+  activeOnAccount = 0,
+): void {
   const n = w.attempts.length
   const last = w.attempts[n - 1]
   // After a planned handoff the task goes on in a NEW session, started from the handoff file.
@@ -852,13 +980,15 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
   // Moving accounts: carry the transcript over so `--resume` finds it there. A session that holds
   // work already must not start over empty on the new account.
   const fromId = w.accountId !== acct.id ? w.accountId : null
+  let copied: boolean | undefined
   if (fromId && !fresh) {
     const from = configDirOf(fromId, accounts)
-    const copied = from ? copySessionTranscript(from, acct.configDir, sessionId) : false
+    copied = from ? copySessionTranscript(from, acct.configDir, sessionId) : false
     if (!copied && w.attempts.some((a) => a.started === true || a.outcome === 'done')) {
       const label = acct.num === null ? acct.name : `#${acct.num} ${acct.name}`
       w.status = 'failed'
       w.error = `This session's transcript was not found on the account it last ran on, so it cannot move to ${label} without losing its context. Start it again as a new task.`
+      journal(w, 'failed', { account: acctLabel(acct), error: firstLine(w.error) })
       changed(w)
       return
     }
@@ -992,6 +1122,7 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
   } catch (err) {
     w.status = 'failed'
     w.error = `Could not start the CLI: ${err instanceof Error ? err.message : String(err)}`
+    journal(w, 'failed', { account: acctLabel(acct), error: firstLine(w.error) })
     changed(w)
     return
   } finally {
@@ -1013,6 +1144,22 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
     daemonPid: process.pid,
   })
   if (fromId) w.moves++
+  // The journal: a move first (the account it left), then the start and why this account.
+  if (fromId) {
+    const left = [...w.attempts].reverse().find((a) => a.account.id === fromId)?.account
+    journal(w, 'moved', {
+      from: left ? acctLabel(left) : fromId,
+      account: acctLabel(acct),
+      copied: fresh ? undefined : copied,
+    })
+  }
+  journal(w, fresh ? 'handoff-resumed' : delivers ? 'follow-up-delivered' : 'launched', {
+    account: acctLabel(acct),
+    attempt: n + 1,
+    sessionPct: acct.sessionPct,
+    weekPct: acct.weekPct,
+    active: activeOnAccount,
+  })
   if (delivers) w.pending.shift()
   if (fresh) {
     if (oldSession) w.sessions = [...(w.sessions ?? []), oldSession]
@@ -1080,6 +1227,7 @@ export function corchRun(input: {
   )
   for (const w of made) {
     workers.set(w.id, w)
+    journal(w, 'dispatched', { cwd: w.cwd, accounts: w.accounts?.length })
     changed(w)
   }
   startCorch()
@@ -1091,15 +1239,26 @@ function matches(w: CorchWorker, f: { group?: string; id?: string; active?: bool
   return (!f.id || w.id === f.id) && (!f.group || w.group === f.group) && (!f.active || isActive(w))
 }
 
-export function corchList(
-  filter: { group?: string; id?: string; active?: boolean } = {},
-): CorchWorkerView[] {
+/** `limit`: keep every active worker and only the `limit` most recently finished ones
+ *  (recentWorkers); `brief`: rows without the prompt and with the last 3 attempts (toBrief). */
+export interface CorchListFilter {
+  group?: string
+  id?: string
+  active?: boolean
+  limit?: number
+  brief?: boolean
+}
+
+export function corchList(filter: CorchListFilter & { brief: true }): CorchWorkerBrief[]
+export function corchList(filter?: CorchListFilter): CorchWorkerView[]
+export function corchList(filter: CorchListFilter = {}): CorchWorkerView[] | CorchWorkerBrief[] {
   load()
   const now = Date.now()
-  return [...workers.values()]
-    .filter((w) => matches(w, filter))
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .map((w) => toView(w, now))
+  const views = recentWorkers(
+    [...workers.values()].filter((w) => matches(w, filter)),
+    filter.limit,
+  ).map((w) => toView(w, now))
+  return filter.brief ? views.map(toBrief) : views
 }
 
 export function corchGet(id: string): (CorchWorkerView & { events: string[] }) | null {
@@ -1120,9 +1279,9 @@ export function corchGet(id: string): (CorchWorkerView & { events: string[] }) |
 }
 
 export function corchWait(
-  filter: { group?: string; id?: string },
+  filter: CorchListFilter,
   timeoutMs: number,
-): Promise<CorchWorkerView[]> {
+): Promise<CorchWorkerView[] | CorchWorkerBrief[]> {
   load()
   if (![...workers.values()].some((w) => matches(w, filter) && isActive(w)))
     return Promise.resolve(corchList(filter))
@@ -1170,6 +1329,7 @@ export function corchSend(id: string, text: string): { ok: boolean; message: str
   if (!w) return { ok: false, message: 'No such worker.' }
   if (!text.trim()) return { ok: false, message: 'The message is empty.' }
   w.pending.push(text)
+  journal(w, 'follow-up-queued', { pending: w.pending.length })
   if (w.status === 'running') {
     changed(w)
     return {
@@ -1228,6 +1388,7 @@ export function corchCancel(filter: { id?: string; group?: string }): { cancelle
     w.pending = []
     w.error = null
     delete w.revived
+    journal(w, 'cancelled', at ? { account: acctLabel(at.account) } : {})
     changed(w)
     cancelled.push(w.id)
   }

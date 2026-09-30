@@ -29,6 +29,7 @@
 // analytics, queue, incidents and agent-status tools are mcp-session-tools.ts; the fan-out tools
 // are mcp-fan-out.ts. TOOLS below assembles them in the order agents have always seen.
 import { VERSION } from './config'
+import { RECENT_FINISHED } from './corch-lib'
 import {
   AUTO_DETACH_MS,
   api,
@@ -644,7 +645,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'corch_run',
     description:
-      'MUTATES: CORCH A TASK. When the owner tells a chat to corch a task or fully delegate it, the chat keeps only the orchestration (split, dispatch, read results, check them) and every piece of real work goes here. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER\'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra\'s Corch view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what "done" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps concurrent workers per account. Returns the group and one view per worker; then corch_status {group, wait_seconds} waits for results.',
+      'MUTATES: CORCH A TASK. When the owner tells a chat to corch a task or fully delegate it, the chat keeps only the orchestration (split, dispatch, read results, check them) and every piece of real work goes here. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER\'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra\'s Corch view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what "done" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps concurrent workers per account. Returns the group and, per worker, its id, title, status and account; then corch_status {group, wait_seconds} waits for results.',
     inputSchema: S(
       {
         tasks: {
@@ -685,7 +686,7 @@ export const TOOLS: McpEngineTool[] = [
             }),
           )
         : undefined
-      return api('/api/corch/workers', {
+      const r = (await api('/api/corch/workers', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
@@ -694,27 +695,78 @@ export const TOOLS: McpEngineTool[] = [
           accounts,
           perAccount: a.per_account != null ? Number(a.per_account) : undefined,
         }),
-      })
+      })) as { group?: string; workers?: Array<Record<string, unknown>> }
+      // Field note 7 (2026-09-30): the whole view per worker echoed 300 characters of every prompt
+      // the orchestrator had just written, about 3k characters per five-task dispatch.
+      if (!Array.isArray(r?.workers)) return r
+      return {
+        group: r.group,
+        workers: r.workers.map((w) => ({
+          id: w.id,
+          title: w.title,
+          status: w.status,
+          account: w.account,
+        })),
+      }
     },
   },
   {
     name: 'corch_status',
-    description: `Read Corch workers (status, account, lastActivity, result/error, moves, cost), optionally scoped by \`group\` or \`id\`. With \`wait_seconds\` (1..${CORCH_MAX_WAIT_S}) it WAITS up to that long for the next status change in scope and then answers; call it again to keep waiting. Use that instead of polling. Longer waits are cut to ${CORCH_MAX_WAIT_S}: an MCP client drops a call held about 60 s (measured 2026-09-30: 55 s answered, 110 s and 300 s timed out with nothing returned).`,
+    description: `Read Corch workers (status, account, lastActivity, result/error, moves, cost). \`id\` answers that ONE worker's full detail, with \`events\` (its last 60 event lines on every account: read these to see why it failed). Otherwise a list, newest first, without prompts and with the last 3 attempts: scoped by \`group\` (all of its workers), else every active worker plus the ${RECENT_FINISHED} most recently finished (\`limit\` changes that number; \`active: true\` lists only queued/running/waiting ones). With \`wait_seconds\` (1..${CORCH_MAX_WAIT_S}) it WAITS up to that long for the next status change in scope and then answers; call it again to keep waiting. Use that instead of polling. Longer waits are cut to ${CORCH_MAX_WAIT_S}: an MCP client drops a call held about 60 s (measured 2026-09-30: 55 s answered, 110 s and 300 s timed out with nothing returned). The story of a run (dispatches, accounts picked and why, moves, retries, finishes) is corch_log.`,
     inputSchema: S({
       group: { type: 'string' },
       id: { type: 'string' },
+      active: { type: 'boolean', description: 'Only queued, running and waiting workers.' },
+      limit: {
+        type: 'number',
+        description: `How many finished workers to list beside the active ones (default ${RECENT_FINISHED} without a group, all of them with one).`,
+      },
       wait_seconds: { type: 'number' },
     }),
     run: (a) => {
       const wait = Math.min(CORCH_MAX_WAIT_S, Math.max(0, Number(a.wait_seconds) || 0))
+      if (a.id != null && str(a.id))
+        return api(
+          `/api/corch/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined })}`,
+        )
+      const group = a.group != null && str(a.group) ? str(a.group) : undefined
+      const limit =
+        a.limit != null && Number.isFinite(Number(a.limit))
+          ? Math.max(0, Math.floor(Number(a.limit)))
+          : group
+            ? undefined
+            : RECENT_FINISHED
       return api(
         `/api/corch/workers${qs({
-          group: a.group != null ? str(a.group) : undefined,
-          id: a.id != null ? str(a.id) : undefined,
+          group,
+          active: a.active === true ? 1 : undefined,
+          limit,
+          brief: 1,
           wait: wait > 0 ? wait : undefined,
         })}`,
       )
     },
+  },
+  {
+    name: 'corch_log',
+    description:
+      "Read Corch's orchestration journal: one line per state change of every worker (dispatched; launched on which account and why it was picked: its session/week % and how many workers it already ran; limit hit and when the wall ends; moved; handoff requested/written/resumed; follow-up queued/delivered; retries; done with cost and turns; failed with the error's first line; cancelled; interrupted by a restart). Scope by `group` or `id`; `since` (ISO time or epoch ms) for only newer lines; `limit` (default 100) for the newest that many. Newest last, one readable line each, e.g. `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`.",
+    inputSchema: S({
+      group: { type: 'string' },
+      id: { type: 'string' },
+      since: { type: ['string', 'number'] },
+      limit: { type: 'number' },
+    }),
+    run: (a) =>
+      api(
+        `/api/corch/journal${qs({
+          group: a.group != null ? str(a.group) : undefined,
+          id: a.id != null ? str(a.id) : undefined,
+          since: a.since != null ? str(a.since) : undefined,
+          limit: a.limit != null ? Math.max(1, Math.floor(Number(a.limit) || 100)) : undefined,
+          format: 'lines',
+        })}`,
+      ),
   },
   {
     name: 'corch_send',

@@ -8,6 +8,8 @@ import {
   corchCancel,
   corchGet,
   corchHandoff,
+  corchJournal,
+  corchJournalLines,
   corchList,
   corchRun,
   corchSend,
@@ -26,22 +28,52 @@ import { jsonBody } from '../route-helpers'
 
 const optStr = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
 
+const flag = (v: string | undefined): boolean => v === '1' || v === 'true'
+const waitMs = (v: string | undefined): number =>
+  Math.min(CORCH_MAX_WAIT_S, Math.max(0, Number(v) || 0)) * 1000
+/** A whole number, 0 or more, or undefined. */
+const optInt = (v: string | undefined): number | undefined => {
+  const n = Math.floor(Number(v))
+  return v !== undefined && v !== '' && Number.isFinite(n) && n >= 0 ? n : undefined
+}
+
 // --- Corch workers -----------------------------------------------------------
 // `wait` (seconds, capped at CORCH_MAX_WAIT_S) holds the answer until the next status change in
-// scope, for corch_status {wait_seconds}; without it the list answers at once.
+// scope, for corch_status {wait_seconds}; without it the list answers at once. `limit` keeps every
+// active worker and only that many recently finished ones; `brief=1` leaves out the prompt and all
+// but the last 3 attempts (corch_status uses both; the Corch view reads the full list).
 app.get('/api/corch/workers', async (c) => {
-  const active = c.req.query('active')
-  const group = optStr(c.req.query('group'))
-  const id = optStr(c.req.query('id'))
-  const wait = Math.min(CORCH_MAX_WAIT_S, Math.max(0, Number(c.req.query('wait')) || 0))
-  if (wait > 0) return c.json(await corchWait({ group, id }, wait * 1000))
-  return c.json(
-    corchList({ group, id, active: active === '1' || active === 'true' ? true : undefined }),
-  )
+  const filter = {
+    group: optStr(c.req.query('group')),
+    id: optStr(c.req.query('id')),
+    active: flag(c.req.query('active')) ? true : undefined,
+    limit: optInt(c.req.query('limit')),
+    brief: flag(c.req.query('brief')),
+  }
+  const wait = waitMs(c.req.query('wait'))
+  if (wait > 0) return c.json(await corchWait(filter, wait))
+  return c.json(corchList(filter))
 })
-app.get('/api/corch/workers/:id', (c) => {
-  const worker = corchGet(c.req.param('id'))
+// One worker's detail with its last 60 event lines; `wait` first waits for its next status change.
+app.get('/api/corch/workers/:id', async (c) => {
+  const id = c.req.param('id')
+  const wait = waitMs(c.req.query('wait'))
+  if (wait > 0 && corchGet(id)) await corchWait({ id }, wait)
+  const worker = corchGet(id)
   return worker ? c.json(worker) : c.json({ error: 'worker not found' }, 404)
+})
+// The orchestration journal (corch-journal.ts), oldest first, the newest `limit` (default 100).
+// `format=lines` answers readable one-line strings instead of the JSON entries (corch_log).
+app.get('/api/corch/journal', (c) => {
+  const filter = {
+    group: optStr(c.req.query('group')),
+    id: optStr(c.req.query('id')),
+    since: optStr(c.req.query('since')),
+    limit: optInt(c.req.query('limit')) || undefined,
+  }
+  return c.json(
+    c.req.query('format') === 'lines' ? corchJournalLines(filter) : corchJournal(filter),
+  )
 })
 // corchRun validates the tasks (cwd exists, prompt non-empty, perAccount 1..4) and throws on a bad
 // one; that is the caller's mistake, so it answers 400 with the reason rather than a 500.

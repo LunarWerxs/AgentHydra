@@ -603,9 +603,44 @@ function mergeNewer(from: string, to: string): void {
   }
 }
 
+const isLive = (w: Pick<CorchWorker, 'status'>): boolean =>
+  w.status === 'queued' || w.status === 'running' || w.status === 'waiting'
+
+/** How many finished workers a list with no id or group shows beside the active ones. */
+export const RECENT_FINISHED = 20
+
+/** Every active worker plus the `limit` most recently finished ones (by their last change), newest
+ *  first by creation. Field note 1 (2026-09-30): an unscoped corch_status answered all 141 workers
+ *  ever recorded, 51k characters, and overflowed the tool result. `limit` undefined keeps them all. */
+export function recentWorkers<T extends Pick<CorchWorker, 'status' | 'createdAt' | 'updatedAt'>>(
+  ws: T[],
+  limit: number | undefined,
+): T[] {
+  const keep =
+    limit === undefined
+      ? ws
+      : [
+          ...ws.filter(isLive),
+          ...ws
+            .filter((w) => !isLive(w))
+            .sort((a, b) => b.updatedAt - a.updatedAt)
+            .slice(0, Math.max(0, limit)),
+        ]
+  return [...keep].sort((a, b) => b.createdAt - a.createdAt)
+}
+
+/** A list row for an orchestrator: no prompt (it wrote it) and only the last 3 attempts, the bulk
+ *  of the stored record after results (measured on 142 real workers: attempts 82k characters,
+ *  results 44k, prompts 21k). The full record is corch_status { id }. */
+export type CorchWorkerBrief = Omit<CorchWorkerView, 'prompt'> & { attemptCount: number }
+export function toBrief(v: CorchWorkerView): CorchWorkerBrief {
+  const { prompt: _prompt, ...rest } = v
+  return { ...rest, attempts: v.attempts.slice(-3), attemptCount: v.attempts.length }
+}
+
 export function toView(w: CorchWorker, now: number): CorchWorkerView {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
-  const live = w.status === 'queued' || w.status === 'running' || w.status === 'waiting'
+  const live = isLive(w)
   return {
     ...w,
     prompt: w.prompt.slice(0, 300),

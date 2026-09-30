@@ -13,6 +13,9 @@ import {
   classifyAttempt,
   copySessionTranscript,
   corchCancel,
+  corchGet,
+  corchJournal,
+  corchJournalLines,
   corchList,
   corchRun,
   corchWait,
@@ -20,6 +23,8 @@ import {
   livePct,
   MAX_PER_ACCOUNT,
   pickAccount,
+  RECENT_FINISHED,
+  recentWorkers,
   setCorchAccountsProvider,
   setCorchClaudeCommand,
   startCorch,
@@ -366,6 +371,33 @@ describe('integration: a quota wall hands the session to the next account', () =
     expect(w?.result).toBe('FAKE DONE')
     expect(w?.moves).toBe(1)
     expect(w?.attempts[0]?.outcome).toBe('quota')
+
+    // The journal tells the move: the pick on #1 and why, its wall, the move, the pick on #2.
+    const log = corchJournal({ id })
+    expect(log.map((e) => e.event)).toEqual([
+      'dispatched',
+      'launched',
+      'limit',
+      'moved',
+      'launched',
+      'done',
+    ])
+    expect(log[1]).toMatchObject({ account: '#1', sessionPct: 0, weekPct: 0, active: 0 })
+    expect(log[2]?.notice).toContain('session limit')
+    expect(Date.parse(log[2]?.until ?? '')).toBeGreaterThan(Date.now())
+    expect(log[3]).toMatchObject({ from: '#1', account: '#2', copied: true })
+    expect(log[4]).toMatchObject({ account: '#2', attempt: 2, sessionPct: 50 })
+    const lines = corchJournalLines({ id })
+    expect(lines[1]).toMatch(
+      /^\d\d:\d\d:\d\d w-\w+ 'fake' launched on #1 \(session 0%, week 0%, 0 active\)$/,
+    )
+    expect(lines[3]).toContain('moved from #1 to #2')
+
+    // corch_status { id } is this detail: one object, with every attempt's event lines.
+    const detail = corchGet(id)
+    expect(Array.isArray(detail)).toBe(false)
+    expect(detail?.events.some((l) => l.startsWith('— attempt 2 on #2 free: done'))).toBe(true)
+    expect(typeof detail?.ranS).toBe('number')
   }, 45_000)
 })
 
@@ -437,6 +469,14 @@ describe('integration: paid extra usage is never spent', () => {
       expect(w?.result).toBe('FINISHED ON OVERAGE')
       expect(w?.moves).toBe(0)
       expect(w?.attempts).toHaveLength(1)
+      // A dispatch-to-done run is three journal lines; the last carries its turns and cost.
+      const log = corchJournal({ id })
+      expect(log.map((e) => e.event)).toEqual(['dispatched', 'launched', 'done'])
+      expect(log[2]).toMatchObject({ account: '#1', turns: 1 })
+      expect(typeof log[2]?.costUsd).toBe('number')
+      expect(corchJournalLines({ id })[2]).toMatch(
+        /'overage allowed' done on #1: \$\d+\.\d\d, 1 turn \(/,
+      )
     } finally {
       setProviderSettings({ allowExtraUsage: false })
     }
@@ -518,4 +558,75 @@ describe('integration: near its limit a worker hands off to a fresh session', ()
     expect(w?.sessions).toEqual([firstSession])
     expect(w?.sessionId).not.toBe(firstSession)
   }, 20_000)
+})
+
+describe('corch_status scope (field notes 1, 4 and 7)', () => {
+  const at = (status: string, createdAt: number, updatedAt = createdAt) =>
+    ({ status, createdAt, updatedAt }) as { status: 'done'; createdAt: number; updatedAt: number }
+
+  test('no filter: every active worker plus the most recently finished ones, newest first', () => {
+    const ws = [
+      at('done', 1, 100),
+      at('running', 2),
+      at('failed', 3, 50),
+      at('done', 4, 10),
+      at('queued', 5),
+      at('waiting', 6),
+    ]
+    const kept = recentWorkers(ws, 2)
+    // Finished ones by their last change (100 and 50 win over 10); active ones always.
+    expect(kept.map((w) => w.createdAt)).toEqual([6, 5, 3, 2, 1])
+    expect(recentWorkers(ws, undefined)).toHaveLength(6)
+    expect(RECENT_FINISHED).toBe(20)
+  })
+
+  describe('the MCP tools', () => {
+    const originalFetch = globalThis.fetch
+    let urls: string[] = []
+    let answer: unknown = []
+    afterAll(() => {
+      globalThis.fetch = originalFetch
+    })
+    const tool = async (name: string) => {
+      const { TOOLS } = await import('../src/mcp')
+      const t = TOOLS.find((x) => x.name === name)
+      if (!t) throw new Error(`no MCP tool named ${name}`)
+      globalThis.fetch = (async (input: string | URL | Request) => {
+        urls.push(String(input))
+        return new Response(JSON.stringify(answer), {
+          headers: { 'content-type': 'application/json' },
+        })
+      }) as typeof fetch
+      urls = []
+      return t
+    }
+
+    test('corch_status {} asks for active plus 20 recent, brief; { id } asks for the detail', async () => {
+      const t = await tool('corch_status')
+      await t.run({})
+      await t.run({ group: 'g-1' })
+      await t.run({ active: true, limit: 5 })
+      await t.run({ id: 'w-1', wait_seconds: 5 })
+      const paths = urls.map((u) => new URL(u).pathname + new URL(u).search)
+      expect(paths).toEqual([
+        '/api/corch/workers?limit=20&brief=1',
+        '/api/corch/workers?group=g-1&brief=1',
+        '/api/corch/workers?active=1&limit=5&brief=1',
+        '/api/corch/workers/w-1?wait=5',
+      ])
+    })
+
+    test('corch_run answers the group and, per worker, only id, title, status and account', async () => {
+      const t = await tool('corch_run')
+      answer = {
+        group: 'g-1',
+        workers: [{ id: 'w-1', title: 'x', status: 'queued', account: null, prompt: 'long' }],
+      }
+      const r = await t.run({ tasks: [{ prompt: 'long', cwd: '.' }] })
+      expect(r).toEqual({
+        group: 'g-1',
+        workers: [{ id: 'w-1', title: 'x', status: 'queued', account: null }],
+      })
+    })
+  })
 })
