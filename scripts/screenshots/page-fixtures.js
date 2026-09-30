@@ -360,14 +360,14 @@
       () => {
         const byModel = [
           {
-            key: 'claude-opus-5',
+            key: 'claude-opus-5-5',
             weighted: 812_000_000,
             costUsd: 214.4,
             sessions: 21,
             turns: 1840,
           },
           {
-            key: 'claude-sonnet-5',
+            key: 'claude-sonnet-5-5',
             weighted: 402_000_000,
             costUsd: 61.2,
             sessions: 14,
@@ -442,7 +442,12 @@
             { key: 'Sam Chen', weighted: 570_000_000, costUsd: 121.3, sessions: 19, turns: 0 },
           ],
           unpricedModels: [],
-          coverage: { sessions: 41, total: 41, refreshing: false, bytes: 24_800 },
+          // The cost tile's caption names where the rates came from and their date; without these
+          // it read "Rates shipped with this build," and stopped.
+          priceSource: 'bundled',
+          pricesAsOf: '2026-09-30',
+          // 43, matching `sessions` and the four tools above (26 + 11 + 4 + 2).
+          coverage: { sessions: 43, total: 43, refreshing: false, bytes: 24_800 },
         }
       },
     ],
@@ -536,8 +541,8 @@
     ],
     [
       // Invented, but internally consistent: total is the sum of the four counts, and the dollar
-      // figure is what those tokens actually come to at Opus 5's published rates (input 5, output
-      // 25, cache read 0.5, 5-minute cache write 6.25, per million). A fixture that photographed
+      // figure is what those tokens actually come to at Opus 5.5's published rates (input 4, output
+      // 20, cache read 0.2, 5-minute cache write 5, per million). A fixture that photographed
       // arithmetic the product cannot reproduce would be a lie in a public screenshot.
       /\/api\/sessions\/[^/]+\/usage/,
       () => ({
@@ -552,15 +557,24 @@
           total: 3276200,
           turns: 42,
         },
-        costUsd: 2.83,
-        pricedModels: ['claude-opus-5'],
+        costUsd: 1.64,
+        pricedModels: ['claude-opus-5-5'],
         unpricedModels: [],
-        pricesAsOf: '2026-08-13',
+        pricesAsOf: '2026-09-30',
       }),
     ],
     [/\/api\/sessions\/search/, () => []],
     [/\/api\/sessions/, () => sessions],
-    [/\/api\/instances\/[^/]+\/account/, () => instances[0].account],
+    [
+      // Each row's OWN account. Answering instances[0] for every directory let a late re-read
+      // relabel all four rows as the first one, depending only on whether it beat the shutter.
+      /\/api\/instances\/[^/]+\/account/,
+      (url) => {
+        const m = url.match(/\/api\/instances\/([^/?]+)\/account/)
+        const dir = m ? decodeURIComponent(m[1]) : ''
+        return instances.find((i) => i.dir === dir)?.account ?? loggedOut
+      },
+    ],
     [
       /\/api\/instances\/[^/]+\/usage/,
       (url) => {
@@ -618,6 +632,29 @@
     // Both of these were escaping to a live daemon (the escape assertion has been failing the run
     // since these features landed). Empty is also the honest fixture: no mirrored UI preferences
     // means the shots use the app's defaults, and no reset events means no notification banner.
+    // Two reads the Analytics tab gained after these fixtures were written. Unanswered, the stub's
+    // `[]` has no `.tools`, and the view threw while rendering instead of drawing its charts. No
+    // sinks report is what a daemon without that route answers, and the view hides the section.
+    [/\/api\/agent-tools/, () => ({ tools: [] })],
+    [/\/api\/analytics\/sinks/, () => null],
+    // The startup-cost table, likewise newer than these fixtures. Nothing measured is the honest
+    // state: a real install only measures it on a click.
+    [/\/api\/prefix-tax/, () => ({ running: null, rows: [] })],
+    // Three background polls that were escaping to a live daemon. The quiet state for each: no open
+    // incident, no hook report, and a daemon already running its checkout (no restart banner).
+    [/\/api\/incidents/, () => []],
+    [/\/api\/agent-status/, () => []],
+    [
+      /\/api\/health/,
+      () => ({
+        ok: true,
+        service: 'agenthydra',
+        version: '1.4.0',
+        distribution: 'compiled',
+        runningCode: { bootCommit: null, diskCommit: null, restartNeeded: false },
+        ts: Date.now(),
+      }),
+    ],
     [/\/api\/ui-prefs/, () => ({ prefs: {} })],
     [/\/api\/notifications\/events/, () => []],
     [/\/api\/monitor/, () => ({ accounts: [], enabled: false })],

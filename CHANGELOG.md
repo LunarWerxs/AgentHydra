@@ -72,6 +72,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Sonnet 5 is costed at $2/$10, not $3/$15, after September 1** (`server/src/pricing.ts`).
+  Anthropic kept Sonnet 5's launch price as its standard price and never made the planned rise to
+  $3/$15. The built-in price list still made that switch on September 1, so on a first run, an
+  offline machine or a failed price download, every Sonnet 5 turn since then read 50% too
+  expensive. Every Anthropic price was re-checked against Anthropic's pricing page on 2026-09-30.
+- **The README screenshots show the current app and current models** (`scripts/screenshots/`).
+  The capture had been failing since several views changed, so the images still showed August's
+  app with Opus 5 and Sonnet 5. It now runs cleanly again, and the images show Opus 5.5 and
+  Sonnet 5.5 and the Codex table on the Instances view.
 - **The session index costs about an eighth of the CPU it did** (`server/src/transcript.ts`). Every
   refresh of the session list looked up the size and date of every transcript on the machine (4,910
   here), about 10 seconds of CPU spread over every core, and a refresh ran whenever the list was

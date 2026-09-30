@@ -97,23 +97,27 @@ const SHOTS = [
   },
   {
     name: 'instances',
-    viewport: [1060, 560],
+    // Tall enough for the Codex table too: the CLI section's Quick add row pushed it out of a
+    // 560px frame, and this shot exists to show all three tables.
+    viewport: [1060, 720],
     steps: [{ eval: clickIn('nav', 'Instances'), wait: 3500 }],
-    // All three instance tables present, and both Claude account data and Codex isolation render.
-    expect: `document.querySelectorAll('table').length === 3 && /Max 20/.test(document.body.innerText) && /CODEX_HOME/.test(document.body.innerText)`,
+    // All three instance tables present, and both Claude account data and the Codex table's row
+    // render. Not the CODEX_HOME column: usage mode (the tab's default) swaps it for the reset
+    // countdowns, so asserting on it failed a view that had drawn perfectly.
+    expect: `document.querySelectorAll('table').length === 3 && /Max 20/.test(document.body.innerText) && /Codex instances/.test(document.body.innerText) && /work \\(Codex\\)/.test(document.body.innerText)`,
   },
   {
     name: 'analytics',
     viewport: [1180, 900],
     steps: [{ eval: clickIn('nav', 'Analytics'), wait: 3500 }],
-    // The four headline tiles, at least three charts drawn, and the hour grid's full 168 cells.
-    // Asserting on the CHARTS rather than on any text: the point of this shot is that the view
-    // draws, and a fixture change that emptied the reports would otherwise photograph an empty
+    // The four headline tiles, at least two charts drawn, and the "when you work" calendar's day
+    // cells. Asserting on the CHARTS rather than on any text: the point of this shot is that the
+    // view draws, and a fixture change that emptied the reports would otherwise photograph an empty
     // page with a perfectly correct heading on it.
-    // The hour grid is asserted through its cells' ACCESSIBLE NAMES, not a `title` attribute: the
-    // cells moved to a rich hover card and kept an aria-label, and this predicate catching that
-    // change is exactly its job.
-    expect: `/Cost by day/.test(document.body.innerText) && document.querySelectorAll('svg[role="img"]').length >= 2 && document.querySelectorAll('[aria-label*=":00, "]').length === 168`,
+    // The calendar is asserted through its cells' ACCESSIBLE NAMES ("<date>, $<cost>"), one per day
+    // of the fixture's 21-day spend series at least. It replaced the 168-cell hour grid as that
+    // section's default view; the hour grid is now one click away and not drawn until then.
+    expect: `/Cost by day/.test(document.body.innerText) && document.querySelectorAll('svg[role="img"]').length >= 2 && document.querySelectorAll('[aria-label*=", $"]').length >= 21`,
   },
   {
     name: 'queue',
@@ -457,8 +461,11 @@ async function main() {
   // The privacy guarantee, asserted rather than assumed: nothing may have reached a real API.
   const leaked = await evaluate('window.__fixtureEscapes ?? ["<stub never installed>"]');
   if (leaked.length > 0) {
+    // Every distinct path, not the first few calls: a poller repeats one route, and a list cut at
+    // five showed the same one three times while hiding the rest.
+    const paths = [...new Set(leaked.map((u) => u.replace(/^https?:\/\/[^/]+/, '').replace(/\?.*$/, '')))];
     throw new Error(
-      `${leaked.length} /api/ request(s) escaped the fixtures and could contain real data:\n  ${leaked.slice(0, 5).join('\n  ')}`,
+      `${leaked.length} /api/ request(s) escaped the fixtures and could contain real data:\n  ${paths.join('\n  ')}`,
     );
   }
 

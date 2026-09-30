@@ -123,7 +123,7 @@ Details are in [docs/CORCH.md](docs/CORCH.md).
 
 ## See where the time and the money went
 
-![The analytics view: headline cost, session and agent-hour tiles above a cost-by-day bar chart, cost broken down by model, project and account, and an hour-of-week grid showing when the work happens](.github/screenshots/analytics.png)
+![The analytics view: headline cost, session and agent-hour tiles above where the tokens went, tokens by tool across Claude, Codex, OpenCode and Hermes, a cost-by-day bar chart, and cost broken down by model and project](.github/screenshots/analytics.png)
 
 Cost by day, by model, by project, and by the account that ran it. When in the week you actually
 work. How many sessions were going at once. Which tools get used, which files changed recently, and
@@ -149,7 +149,7 @@ from the MCP `get_command_corrections` tool.
 
 ## Manage isolated instances
 
-![The instances view: four isolated Claude Desktop instances, each with its account, plan, remaining weekly quota, live memory and uptime](.github/screenshots/instances.png)
+![The instances view: four isolated Claude Desktop instances, each with its account, plan and remaining five-hour and weekly quota, above the CLI instances table with its add-by-email box and the Codex instances table](.github/screenshots/instances.png)
 
 If you keep separate Claude Desktop instances for separate accounts, this is where they live. Each
 row shows which account it is signed into, its plan, and, while it is running, its process, memory

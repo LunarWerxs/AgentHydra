@@ -7,7 +7,8 @@
 // CLI's effort ladder tops out at max (low, medium, high, xhigh, max). The thing that IS "a
 // level above max" is ULTRACODE - Claude Code's exhaustive multi-agent session mode, armed by
 // the literal keyword appearing in the prompt. So "Opus 5 Ultra code" = model 'opus' (the CLI
-// alias for the latest Opus, today claude-opus-5) + the ultracode keyword in the first prompt.
+// alias for the latest Opus, claude-opus-5-5 as of 2026-09-30) + the ultracode keyword in the
+// first prompt.
 //
 // The compelling-reason escape is EXPLICITNESS: a caller that names a model keeps it, and a
 // caller that passes ultracode:false skips the keyword. Defaults only ever fill silence.

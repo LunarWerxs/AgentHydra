@@ -45,14 +45,14 @@ describe('tokens and time', () => {
     const a = await scanSessionAnalytics(
       transcript([
         assistant('2024-08-10T10:00:00.000Z', U),
-        assistant('2024-08-10T10:01:00.000Z', U, 'claude-sonnet-5'),
+        assistant('2024-08-10T10:01:00.000Z', U, 'claude-sonnet-5-5'),
         assistant('2024-08-10T10:02:00.000Z', U),
       ]),
       'claude',
     )
-    expect(Object.keys(a.tokens).sort()).toEqual(['claude-opus-5', 'claude-sonnet-5'])
+    expect(Object.keys(a.tokens).sort()).toEqual(['claude-opus-5', 'claude-sonnet-5-5'])
     expect(a.tokens['claude-opus-5']?.turns).toBe(2)
-    expect(a.tokens['claude-sonnet-5']?.turns).toBe(1)
+    expect(a.tokens['claude-sonnet-5-5']?.turns).toBe(1)
     expect(a.tokens['claude-opus-5']?.input).toBe(200)
   })
 
