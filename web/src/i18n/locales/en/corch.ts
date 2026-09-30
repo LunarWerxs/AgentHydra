@@ -5,12 +5,12 @@ export default {
   // --- quick add ---
   qaTitle: 'Add a CLI account',
   qaHint:
-    'Type the email of a Claude account. A separate sign-in window opens (never your own browser): click "Continue with email", type the code from your inbox, then Authorize. The window closes by itself and the account joins the pool your tasks run on.',
+    'Type the email of a Claude account. A separate sign-in window opens (never your own browser): click "Continue with email", type the code from your inbox, then Authorize. If it shows a "Just a moment" check, use Copy sign-in link on your phone or a browser you already use instead. The account then joins the pool your tasks run on.',
   qaPlaceholder: "name{'@'}example.com",
   qaEmailLabel: 'Account email',
   qaAdd: 'Add account',
   qaWindowOpen:
-    'A sign-in window opened. Click "Continue with email", type the code from your inbox there, then Authorize. It closes by itself.',
+    'A sign-in window opened. Click "Continue with email", type the code from your inbox, then Authorize — it closes by itself. If it shows a "Just a moment" check that will not pass, use Copy sign-in link and open it on your phone or in a browser you already use, then paste the code the page ends on below.',
   qaConfirm:
     'Open the sign-in window again, or copy the link and open it where you can read this email.',
   qaReopen: 'Open sign-in window',
