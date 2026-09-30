@@ -27,7 +27,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { CONFIG_DIR, resolveClaudeExe } from './config'
+import { resolveClaudeExe } from './config'
 import {
   type CorchAccount,
   type CorchWalls,
@@ -41,6 +41,7 @@ import {
   pickAccount,
   scrubbedEnv,
   summarizeEvent,
+  TRANSIENT_PROMPT,
   toView,
   WORKER_BRIEF,
 } from './corch-lib'
@@ -48,11 +49,16 @@ import { getCliInstance, listCliInstances } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
 import { isPidAlive, killProcessTree } from './core/process'
+import { POINTER_DIR } from './instance'
+import type { UsageSnapshot } from './types'
 import { parseResetTime } from './usage'
+import { allCachedUsage } from './usage-cache'
 
 export * from './corch-lib'
 
-const ROOT = join(CONFIG_DIR, 'corch')
+// POINTER_DIR is CONFIG_DIR for the primary install and a side-run's own data dir otherwise, so
+// two daemons never tick and overwrite the same workers.json.
+const ROOT = join(POINTER_DIR, 'corch')
 const LOGS = join(ROOT, 'logs')
 const PROMPTS = join(ROOT, 'prompts')
 const WALLS_PATH = join(ROOT, 'walls.json')
@@ -79,11 +85,18 @@ let started = false
 let timer: ReturnType<typeof setTimeout> | null = null
 let ticking = false
 const procs = new Map<string, ReturnType<typeof Bun.spawn>>()
-/** Per attempt log: bytes read, an unfinished last line, the events kept, the summaries shown. */
-const reads = new Map<
-  string,
-  { offset: number; partial: string; events: unknown[]; recent: string[] }
->()
+const hasExited = (p: ReturnType<typeof Bun.spawn>): boolean =>
+  p.exitCode !== null || p.signalCode !== null
+/** Per attempt log: bytes read, an unfinished last line, the events kept, the summaries shown,
+ *  and whether system/init was ever seen (kept apart: the events list drops old ones). */
+interface LogRead {
+  offset: number
+  partial: string
+  events: unknown[]
+  recent: string[]
+  sawInit: boolean
+}
+const reads = new Map<string, LogRead>()
 const listeners = new Set<(w: CorchWorker) => void>()
 
 let claudeCommand: () => string[] = () => [resolveClaudeExe()]
@@ -93,16 +106,35 @@ let claudeCommand: () => string[] = () => [resolveClaudeExe()]
  *  (recheckSignedOut), so a dead login costs one quick failure, once. */
 function signedInAccounts(): CorchAccount[] {
   const now = Date.now()
+  const cache = allCachedUsage()
   return listCliInstances()
     .filter((i) => i.loggedIn)
-    .map((i) => ({
-      id: i.id,
-      num: i.num ?? null,
-      name: i.name,
-      configDir: i.configDir,
-      sessionPct: livePct(i.lastUsageCheck?.session, now),
-      weekPct: livePct(i.lastUsageCheck?.weekAll, now),
-    }))
+    .map((i) => {
+      const u = latestUsage(i.id, i.lastUsageCheck, cache)
+      return {
+        id: i.id,
+        num: i.num ?? null,
+        name: i.name,
+        configDir: i.configDir,
+        sessionPct: livePct(u?.session, now),
+        weekPct: livePct(u?.weekAll, now),
+      }
+    })
+}
+
+/** The newer of the background refresh's cached reading and a person's manual check (only the
+ *  latter lands in `lastUsageCheck`). */
+function latestUsage(
+  id: string,
+  manual: UsageSnapshot | null | undefined,
+  cache: Record<string, UsageSnapshot> = allCachedUsage(),
+): UsageSnapshot | null {
+  // The key cliKey (usage-service.ts) builds, spelled out so corch does not load that module and
+  // its database for one string.
+  const cached = cache[`cli:${id}`] ?? null
+  const at = (s: UsageSnapshot | null | undefined): number =>
+    s ? Date.parse(s.capturedAt) || 0 : -1
+  return at(cached) > at(manual) ? cached : (manual ?? null)
 }
 
 const SIGNED_OUT_MS = 30 * 60_000
@@ -136,7 +168,11 @@ function recheckSignedOut(accounts: CorchAccount[], now: number): void {
       .catch(() => {})
       .finally(() => {
         authChecks.delete(a.id)
-        saveWalls()
+        try {
+          saveWalls()
+        } catch (err) {
+          console.error('[corch] could not save walls:', err)
+        }
         schedule(0)
       })
   }
@@ -221,7 +257,10 @@ export function corchRunningCount(): number {
 function schedule(delay?: number): void {
   if (timer) clearTimeout(timer)
   const next = delay ?? ([...workers.values()].some(isActive) ? 3_000 : 15_000)
-  timer = setTimeout(() => void tick(), next)
+  timer = setTimeout(
+    () => void tick().catch((err) => console.error('[corch] tick failed:', err)),
+    next,
+  )
   timer.unref?.()
 }
 
@@ -231,7 +270,14 @@ async function tick(): Promise<void> {
   try {
     load()
     const now = Date.now()
-    for (const w of workers.values()) if (w.status === 'running') poll(w)
+    for (const w of workers.values()) {
+      if (w.status !== 'running') continue
+      try {
+        poll(w)
+      } catch (err) {
+        console.error(`[corch] could not read ${w.id}:`, err)
+      }
+    }
     let accounts: CorchAccount[] = []
     try {
       accounts = accountsProvider()
@@ -240,38 +286,83 @@ async function tick(): Promise<void> {
     }
     recheckSignedOut(accounts, now)
     const active = new Map<string, number>()
+    // Each group's running workers per account: `perAccount` caps a group, not the fleet.
+    const byGroup = new Map<string, Map<string, number>>()
+    const groupMap = (g: string): Map<string, number> => {
+      let m = byGroup.get(g)
+      if (!m) {
+        m = new Map()
+        byGroup.set(g, m)
+      }
+      return m
+    }
+    const bump = (m: Map<string, number>, id: string): void => {
+      m.set(id, (m.get(id) ?? 0) + 1)
+    }
     for (const w of workers.values())
-      if (w.status === 'running' && w.accountId)
-        active.set(w.accountId, (active.get(w.accountId) ?? 0) + 1)
+      if (w.status === 'running' && w.accountId) {
+        bump(active, w.accountId)
+        bump(groupMap(w.group), w.accountId)
+      }
     const due = [...workers.values()]
       .filter((w) => (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now)
       .sort((a, b) => a.createdAt - b.createdAt)
     for (const w of due) {
-      const cap = perAccount[w.group] ?? 2
-      const acct = pickAccount(w, accounts, walls, active, cap, now)
-      if (acct) {
-        launch(w, acct, accounts)
-        active.set(acct.id, (active.get(acct.id) ?? 0) + 1)
-        continue
-      }
-      // Busy (every eligible account at its worker cap) stays queued; nothing eligible at all waits.
-      if (pickAccount(w, accounts, walls, new Map(), Number.MAX_SAFE_INTEGER, now)) continue
-      const soonest = Object.values(walls)
-        .map((x) => x.until)
-        .filter((u) => u > now)
-        .sort((a, b) => a - b)[0]
-      const allSignedOut =
-        accounts.length > 0 &&
-        accounts.every((a) => walls[a.id]?.reason === 'signed out' && walls[a.id]!.until > now)
-      const why = !accounts.length
-        ? 'No signed-in CLI account. Add one: CLI instances, Quick add.'
-        : allSignedOut
-          ? 'Every CLI account is signed out. Sign one in again: CLI instances, Quick add (type its email).'
-          : `Every eligible account is at its usage limit or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.`
-      if (w.status !== 'waiting' || w.error !== why) {
-        w.status = 'waiting'
-        w.error = why
-        changed(w)
+      try {
+        const cap = perAccount[w.group] ?? 2
+        const groupActive = groupMap(w.group)
+        const acct = pickAccount(w, accounts, walls, active, cap, now, groupActive)
+        if (acct) {
+          try {
+            launch(w, acct, accounts)
+          } catch (err) {
+            console.error(`[corch] could not launch ${w.id}:`, err)
+            // A throw after the spawn leaves a live attempt; only one that never started fails.
+            if (w.status !== 'running') {
+              const msg = err instanceof Error ? err.message : String(err)
+              w.status = 'failed'
+              w.error = `Could not start the next attempt: ${msg}`
+              changed(w)
+            }
+          }
+          if (w.status === 'running') {
+            bump(active, acct.id)
+            bump(groupActive, acct.id)
+          }
+          continue
+        }
+        // Busy (every eligible account at its worker cap) stays queued; nothing eligible at all
+        // waits.
+        if (pickAccount(w, accounts, walls, new Map(), Number.MAX_SAFE_INTEGER, now)) {
+          if (w.status === 'waiting') {
+            w.status = 'queued'
+            w.error = null
+            changed(w)
+          }
+          continue
+        }
+        const allowed = accounts.filter((a) => !w.accounts || w.accounts.includes(a.id))
+        // A signed-out wall's `until` is only its next recheck, not a time the account frees up.
+        const soonest = allowed
+          .map((a) => walls[a.id])
+          .filter((x) => x !== undefined && x.reason !== 'signed out' && x.until > now)
+          .map((x) => x!.until)
+          .sort((a, b) => a - b)[0]
+        const allSignedOut =
+          allowed.length > 0 &&
+          allowed.every((a) => walls[a.id]?.reason === 'signed out' && walls[a.id]!.until > now)
+        const why = !accounts.length
+          ? 'No signed-in CLI account. Add one: CLI instances, Quick add.'
+          : allSignedOut
+            ? 'Every CLI account is signed out. Sign one in again: CLI instances, Quick add (type its email).'
+            : `Every eligible account is at its usage limit or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.`
+        if (w.status !== 'waiting' || w.error !== why) {
+          w.status = 'waiting'
+          w.error = why
+          changed(w)
+        }
+      } catch (err) {
+        console.error(`[corch] could not schedule ${w.id}:`, err)
       }
     }
   } finally {
@@ -280,12 +371,51 @@ async function tick(): Promise<void> {
   }
 }
 
-function readLog(path: string): { events: unknown[]; recent: string[] } {
+const freshRead = (): LogRead => ({
+  offset: 0,
+  partial: '',
+  events: [],
+  recent: [],
+  sawInit: false,
+})
+
+function readLog(path: string): LogRead {
   let r = reads.get(path)
   if (!r) {
-    r = { offset: 0, partial: '', events: [], recent: [] }
+    r = freshRead()
     reads.set(path, r)
   }
+  return readInto(path, r)
+}
+
+/** A finished attempt's log, parsed once without keeping it in `reads`. */
+function peekLog(path: string): LogRead {
+  return readInto(path, freshRead())
+}
+
+/** The summary lines of finished attempts, for corchGet: the Corch view asks for the selected
+ *  worker every 3 s while any worker runs, and re-parsing a long session's log (megabytes of tool
+ *  output) each time would burn the box. Bounded; the oldest entry goes first. */
+const finishedRecent = new Map<string, string[]>()
+function rememberFinished(path: string, recent: string[]): void {
+  finishedRecent.delete(path)
+  finishedRecent.set(path, recent)
+  if (finishedRecent.size > 50) finishedRecent.delete(finishedRecent.keys().next().value as string)
+}
+function finishedLines(path: string): string[] {
+  const kept = finishedRecent.get(path)
+  if (kept) return kept
+  const recent = peekLog(path).recent
+  rememberFinished(path, recent)
+  return recent
+}
+function forgetRead(path: string): void {
+  const r = reads.get(path)
+  if (r) rememberFinished(path, r.recent)
+  reads.delete(path)
+}
+
+function readInto(path: string, r: LogRead): LogRead {
   let size = 0
   try {
     size = statSync(path).size
@@ -308,6 +438,7 @@ function readLog(path: string): { events: unknown[]; recent: string[] } {
         } catch {
           continue
         }
+        if (isInit(ev)) r.sawInit = true
         r.events.push(ev)
         if (r.events.length > 400) r.events.splice(0, r.events.length - 400)
         const s = summarizeEvent(ev)
@@ -344,10 +475,15 @@ function poll(w: CorchWorker): void {
   const at = w.attempts[w.attempts.length - 1]
   if (!at) return
   const proc = procs.get(w.id)
+  // With no handle (the daemon restarted), a live PID proves nothing on Windows, which reuses
+  // them: an attempt another daemon launched died with that daemon's kill-on-close job (measured
+  // 2026-09-30), since workers are never detached.
   const exited = proc
-    ? proc.exitCode !== null || proc.signalCode !== null
-    : !(at.pid && isPidAlive(at.pid))
+    ? hasExited(proc)
+    : (process.platform === 'win32' && at.daemonPid !== process.pid) ||
+      !(at.pid && isPidAlive(at.pid))
   const r = readLog(at.log)
+  at.started ||= r.sawInit
   const latest = r.recent[r.recent.length - 1] ?? null
   if (latest && latest !== w.lastActivity) {
     w.lastActivity = latest
@@ -362,13 +498,14 @@ function finish(w: CorchWorker, events: unknown[]): void {
   procs.delete(w.id)
   const stderr = tailText(at.errLog, 4_000)
   const v = classifyAttempt(events, stderr)
+  forgetRead(at.log)
   const now = Date.now()
   at.outcome = v.outcome
   at.notice = v.notice
   at.endedAt = now
   w.costUsd += v.costUsd
   w.turns += v.turns
-  if (v.result && v.outcome === 'done') w.result = v.result
+  if (v.outcome === 'done') w.result = v.result
   if (w.status === 'cancelled') {
     changed(w)
     return
@@ -382,7 +519,13 @@ function finish(w: CorchWorker, events: unknown[]): void {
     case 'quota': {
       const resets = v.notice?.match(/resets\s+(.+?)\s*$/i)?.[1]
       const iso = resets ? parseResetTime(resets) : null
-      const until = iso ? Date.parse(iso) : Number.NaN
+      let until = iso ? Date.parse(iso) : Number.NaN
+      // A weekly notice prints only a clock time; the account's own weekly reset is the real end.
+      if (/weekly/i.test(v.notice ?? '')) {
+        const reading = latestUsage(at.account.id, getCliInstance(at.account.id)?.lastUsageCheck)
+        const week = Date.parse(reading?.weekAll?.resetsAt ?? '')
+        if (Number.isFinite(week) && week > now && !(week <= until)) until = week
+      }
       walls[at.account.id] = {
         until: Number.isFinite(until) && until > now ? until : now + 60 * 60_000,
         reason: v.notice ?? 'usage limit',
@@ -422,7 +565,7 @@ function finish(w: CorchWorker, events: unknown[]): void {
         w.status = 'queued'
       } else {
         w.status = 'failed'
-        w.error = 'The CLI was stopped before it finished three times in a row in this turn.'
+        w.error = `The CLI was stopped before it finished three times in a row in this turn.${stderr ? ` Its last error output: ${stderr.slice(-1_500)}` : ''}`
       }
       break
     default:
@@ -451,35 +594,45 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
   const last = w.attempts[n - 1]
   const sessionId = w.sessionId ?? crypto.randomUUID()
   w.sessionId = sessionId
-  // Moving accounts: carry the transcript over so `--resume` finds it there.
-  if (w.accountId && w.accountId !== acct.id) {
-    const from = configDirOf(w.accountId, accounts)
-    if (from) copySessionTranscript(from, acct.configDir, sessionId)
-    w.moves++
+  // Moving accounts: carry the transcript over so `--resume` finds it there. A session that holds
+  // work already must not start over empty on the new account.
+  const fromId = w.accountId !== acct.id ? w.accountId : null
+  if (fromId) {
+    const from = configDirOf(fromId, accounts)
+    const copied = from ? copySessionTranscript(from, acct.configDir, sessionId) : false
+    if (!copied && w.attempts.some((a) => a.started === true || a.outcome === 'done')) {
+      const label = acct.num === null ? acct.name : `#${acct.num} ${acct.name}`
+      w.status = 'failed'
+      w.error = `This session's transcript was not found on the account it last ran on, so it cannot move to ${label} without losing its context. Start it again as a new task.`
+      changed(w)
+      return
+    }
   }
   const resume = hasTranscript(acct.configDir, sessionId)
+  // Stopped after the CLI started (its init event is in the log): the message is already in the
+  // session, so ask it to carry on. Stopped before that: the message never arrived, send it again.
+  const inSession = !!last && (last.started ?? peekLog(last.log).sawInit)
+  const prevPrompt = (): string =>
+    tailText(join(PROMPTS, `${w.id}-${n - 1}.txt`), 1_000_000) || w.prompt
+  // A follow-up is shifted out of `pending` only once the spawn succeeded, so a failed spawn
+  // cannot lose it. Without a transcript here the task itself goes first.
+  const next = w.pending[0] ?? ''
+  const stopped = !!last && ['quota', 'auth', 'transient', 'interrupted'].includes(last.outcome)
+  const delivers = !!last && w.pending.length > 0 && (w.revived === true || !stopped)
   let text: string
   if (!last) text = w.prompt
+  // A revived worker gets the message at once, not a continue prompt for the work it stopped.
+  else if (delivers) text = resume ? next : `${w.prompt}\n\n${next}`
   else if (last.outcome === 'quota' || last.outcome === 'auth')
-    text = resume ? HANDOFF_PROMPT : w.prompt
-  else if (last.outcome === 'transient')
-    text = tailText(join(PROMPTS, `${w.id}-${n - 1}.txt`), 1_000_000) || w.prompt
-  else if (last.outcome === 'interrupted')
-    // Killed after the CLI started (its init event is in the log): the message is already in the
-    // session, so ask it to carry on. Killed before that: the message never arrived, send it again.
+    text = resume && inSession ? HANDOFF_PROMPT : prevPrompt()
+  else if (last.outcome === 'transient' || last.outcome === 'interrupted')
     text =
-      resume && readLog(last.log).events.some(isInit)
-        ? INTERRUPTED_PROMPT
-        : tailText(join(PROMPTS, `${w.id}-${n - 1}.txt`), 1_000_000) || w.prompt
-  else if (w.pending.length) text = w.pending.shift() as string
+      resume && inSession
+        ? last.outcome === 'transient'
+          ? TRANSIENT_PROMPT
+          : INTERRUPTED_PROMPT
+        : prevPrompt()
   else text = w.prompt
-  if (
-    !resume &&
-    text !== w.prompt &&
-    last?.outcome !== 'transient' &&
-    last?.outcome !== 'interrupted'
-  )
-    text = `${w.prompt}\n\n${text}`
 
   mkdirSync(LOGS, { recursive: true })
   mkdirSync(PROMPTS, { recursive: true })
@@ -535,7 +688,12 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
     outcome: 'running',
     notice: null,
     resumed: resume,
+    daemonPid: process.pid,
   })
+  if (fromId) w.moves++
+  if (delivers) w.pending.shift()
+  if (!last || delivers) w.result = null // a new turn: the previous turn's answer is not this one's
+  delete w.revived
   w.accountId = acct.id
   w.status = 'running'
   w.error = null
@@ -621,7 +779,13 @@ export function corchGet(id: string): (CorchWorkerView & { events: string[] }) |
   const w = workers.get(id)
   if (!w) return null
   const at = w.attempts[w.attempts.length - 1]
-  return { ...toView(w, Date.now()), events: at ? readLog(at.log).recent.slice() : [] }
+  // A finished attempt keeps only its summary lines (finishedLines), never its parsed events.
+  const events = !at
+    ? []
+    : at.outcome === 'running'
+      ? readLog(at.log).recent.slice()
+      : finishedLines(at.log).slice()
+  return { ...toView(w, Date.now()), events }
 }
 
 export function corchWait(
@@ -662,6 +826,7 @@ export function corchSend(id: string, text: string): { ok: boolean; message: str
     w.status = 'queued'
     w.retries = 0
     w.error = null
+    w.revived = true
   }
   changed(w)
   schedule(0)
@@ -675,15 +840,27 @@ export function corchCancel(filter: { id?: string; group?: string }): { cancelle
   for (const w of workers.values()) {
     if (!matches(w, filter) || !isActive(w)) continue
     const at = w.attempts[w.attempts.length - 1]
+    const had = procs.get(w.id)
+    // Stopped just after the CLI finished: record that turn's result, cost and turns first.
+    if (w.status === 'running' && had && hasExited(had)) {
+      poll(w)
+      if (!isActive(w)) continue
+    }
     if (w.status === 'running' && at?.pid) {
-      try {
-        killProcessTree(at.pid)
-      } catch {
-        // already gone
+      // Kill only a process known to be this worker's: a PID with no handle (the daemon
+      // restarted) may have been reused by Windows for a stranger.
+      const proc = procs.get(w.id)
+      if (proc ? !hasExited(proc) : process.platform !== 'win32' && isPidAlive(at.pid)) {
+        try {
+          killProcessTree(at.pid)
+        } catch {
+          // already gone
+        }
       }
       at.outcome = 'cancelled'
       at.endedAt = Date.now()
       procs.delete(w.id)
+      forgetRead(at.log)
     }
     w.status = 'cancelled'
     w.pending = []

@@ -15,6 +15,7 @@ import {
   corchRun,
   corchWait,
   livePct,
+  MAX_PER_ACCOUNT,
   pickAccount,
   setCorchAccountsProvider,
   setCorchClaudeCommand,
@@ -73,7 +74,10 @@ describe('classifyAttempt', () => {
     // Measured live 2026-09-30: a daemon restart kills every worker; its log ends mid-turn with no
     // result and its stderr is empty.
     expect(classifyAttempt([init, said('working on it')], '').outcome).toBe('interrupted')
-    expect(classifyAttempt([init], 'error: unknown option --bogus').outcome).toBe('error')
+    // A harmless warning a normal run prints on stderr does not turn the kill into an error.
+    const warning = '[mcp-sdk] SEP-2352: stored OAuth credential has no issuer stamp'
+    expect(classifyAttempt([init, said('working on it')], warning).outcome).toBe('interrupted')
+    expect(classifyAttempt([init, result('Something broke', true)], '').outcome).toBe('error')
   })
 
   test('a model that merely TALKS about a session limit is still done', () => {
@@ -122,6 +126,29 @@ describe('pickAccount', () => {
       attempts: [{ account: { id: 'a', num: 1, name: 'a' }, outcome: 'quota', notice: NOTICE }],
     })
     expect(pickAccount(w, accounts, {}, new Map(), 2, now)?.id).toBe('b')
+  })
+
+  test('the account a worker last failed on is picked again once its wall is gone', () => {
+    const accounts = [acct('a', 1), acct('b', 2)]
+    const w = worker({
+      accounts: ['a'],
+      accountId: 'a',
+      attempts: [{ account: { id: 'a', num: 1, name: 'a' }, outcome: 'quota', notice: NOTICE }],
+    })
+    const walled = { a: { until: now + 60_000, reason: 'quota' } }
+    expect(pickAccount(w, accounts, walled, new Map(), 2, now)).toBeNull()
+    const lifted = { a: { until: now - 1, reason: 'quota' } }
+    expect(pickAccount(w, accounts, lifted, new Map(), 2, now)?.id).toBe('a')
+  })
+
+  test('the per-account cap counts only this group, never above MAX_PER_ACCOUNT in total', () => {
+    const accounts = [acct('a', 1)]
+    // Another group's worker on the account does not block a group started with per_account 1.
+    const other = new Map([['a', 1]])
+    expect(pickAccount(worker(), accounts, {}, other, 1, now, new Map())?.id).toBe('a')
+    expect(pickAccount(worker(), accounts, {}, other, 1, now, new Map([['a', 1]]))).toBeNull()
+    const full = new Map([['a', MAX_PER_ACCOUNT]])
+    expect(pickAccount(worker(), accounts, {}, full, 4, now, new Map())).toBeNull()
   })
 
   test('a usage reading from a window that has already reset does not count', () => {

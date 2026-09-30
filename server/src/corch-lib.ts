@@ -46,6 +46,8 @@ export interface CorchAttempt {
   outcome: AttemptOutcome
   notice: string | null // the limit/error notice, compacted (compactNotice)
   resumed: boolean // true when this attempt ran `--resume` (a follow-up or a handoff)
+  started?: boolean // true once the CLI logged system/init: its message reached the session
+  daemonPid?: number // the daemon that launched it; its handle dies with that daemon
 }
 
 export interface CorchWorker {
@@ -70,6 +72,7 @@ export interface CorchWorker {
   moves: number // how many times the session changed account
   retries: number // transient or interrupted retries used in the current turn
   notBefore: number | null // epoch ms; a transient retry waits until then
+  revived?: boolean // a message revived it after it stopped: deliver that message next
   createdAt: number
   updatedAt: number
 }
@@ -115,6 +118,9 @@ export const HANDOFF_PROMPT =
 
 export const INTERRUPTED_PROMPT =
   'This session was interrupted before it finished: its process was stopped (AgentHydra restarted), not by anything you did. Continue the task exactly where you left off. Do not redo steps that are already finished; run a command again only if its result is missing.'
+
+export const TRANSIENT_PROMPT =
+  'The API was overloaded and this turn stopped part-way. Continue the task exactly where you left off. Do not redo steps that are already finished.'
 
 export const INTERRUPTED_NOTICE =
   'Interrupted: the CLI process ended with no result and no error (AgentHydra restarted or the process was killed). Resumed automatically.'
@@ -178,10 +184,12 @@ export function classifyAttempt(events: unknown[], stderr: string): AttemptVerdi
   const transient = trusted.find((t) => classifyLimit(t) === 'transient')
   if (transient !== undefined) return out('transient', transient)
   if (last && !errored) return out('done', null)
-  // No result, no API error, nothing on stderr: the process was killed from outside. On Windows a
-  // daemon restart does exactly this to every worker (they sit in the daemon's kill-on-close job),
-  // and the transcript on disk is intact, so the session is resumed rather than failed.
-  if (!last && !apiErrors.length && !stderr.trim()) return out('interrupted', INTERRUPTED_NOTICE)
+  // No result and no API error: the process was killed from outside. On Windows a daemon restart
+  // does exactly this to every worker (they sit in the daemon's kill-on-close job), and the
+  // transcript on disk is intact, so the session is resumed rather than failed. Stderr is not
+  // required to be empty: a normal run can print a harmless warning there (measured: an MCP OAuth
+  // 'issuer' stamp notice), and the retry is bounded at three per turn.
+  if (!last && !apiErrors.length) return out('interrupted', INTERRUPTED_NOTICE)
   return out('error', null)
 }
 
@@ -210,6 +218,13 @@ export function summarizeEvent(raw: unknown): string | null {
   return null
 }
 
+/** The most workers any one account runs at once, over every group. */
+export const MAX_PER_ACCOUNT = 4
+
+/** `perAccount` caps this group's workers (`groupActive`, default `active`) on an account;
+ *  `active` counts every group's and is held under MAX_PER_ACCOUNT. The account of a last
+ *  quota/auth attempt is not excluded (its wall keeps it out while the wall is real), only tried
+ *  last, so a worker restricted to it resumes once the limit resets or the login works again. */
 export function pickAccount(
   worker: Pick<CorchWorker, 'accounts' | 'accountId' | 'attempts'>,
   accounts: CorchAccount[],
@@ -217,6 +232,7 @@ export function pickAccount(
   active: Map<string, number>,
   perAccount: number,
   now: number,
+  groupActive: Map<string, number> = active,
 ): CorchAccount | null {
   const lastAttempt = worker.attempts[worker.attempts.length - 1]
   const failedId =
@@ -227,16 +243,16 @@ export function pickAccount(
   const eligible = accounts.filter(
     (a) =>
       (!worker.accounts || worker.accounts.includes(a.id)) &&
-      a.id !== failedId &&
       !((walls[a.id]?.until ?? 0) > now) &&
       (a.sessionPct === null || a.sessionPct < 98) &&
       (a.weekPct === null || a.weekPct < 99) &&
-      load(a) < perAccount,
+      (groupActive.get(a.id) ?? 0) < perAccount &&
+      load(a) < MAX_PER_ACCOUNT,
   )
-  const home = eligible.find((a) => a.id === worker.accountId)
+  const home = eligible.find((a) => a.id === worker.accountId && a.id !== failedId)
   if (home) return home
   const score = (a: CorchAccount): number =>
-    Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) + 25 * load(a)
+    Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) + 25 * load(a) + (a.id === failedId ? 1000 : 0)
   const byNum = (a: CorchAccount): number => a.num ?? Number.MAX_SAFE_INTEGER
   eligible.sort((a, b) => score(a) - score(b) || byNum(a) - byNum(b))
   return eligible[0] ?? null

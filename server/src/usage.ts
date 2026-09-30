@@ -239,31 +239,98 @@ const MONTHS: Record<string, number> = {
   dec: 11,
 }
 
+// "Jul 14, 2:59am", "Oct 3, 3am (America/Chicago)" — searched anywhere, as before.
+const RESET_DATED =
+  /(?<mon>[A-Za-z]{3})[a-z]*\s+(?<day>\d{1,2}),?\s+(?<hour>\d{1,2})(?::(?<min>\d{2}))?\s*(?<ap>[ap]m)?(?:\s*\((?<tz>[^)]+)\))?/i
+// "4am", "9:10am (America/Chicago)" — anchored, so free text like "Tomorrow 9am" stays unparsed.
+const RESET_TIME_ONLY =
+  /^(?:resets\s+)?(?<hour>\d{1,2})(?::(?<min>\d{2}))?\s*(?<ap>[ap]m)?(?:\s*\((?<tz>[^)]+)\))?[\s.]*$/i
+
+/** A formatter for an IANA zone, or null when the zone is missing or unknown to this runtime. */
+function zoneFormatter(tz: string | undefined): Intl.DateTimeFormat | null {
+  if (!tz?.trim()) return null
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: tz.trim(),
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+    })
+  } catch {
+    return null
+  }
+}
+
+/** The wall clock `fmt`'s zone shows at instant `ms`, read back as if it were UTC. */
+function wallAsUtc(fmt: Intl.DateTimeFormat, ms: number): number {
+  const p: Record<string, number> = {}
+  for (const x of fmt.formatToParts(ms)) if (x.type !== 'literal') p[x.type] = Number(x.value)
+  return Date.UTC(p.year!, p.month! - 1, p.day!, p.hour! % 24, p.minute!, p.second!)
+}
+
+/** The instant of a wall-clock time in `fmt`'s zone, or in the daemon's local time without one. */
+function wallToMs(
+  fmt: Intl.DateTimeFormat | null,
+  y: number,
+  mo: number,
+  d: number,
+  h: number,
+  mi: number,
+): number {
+  if (!fmt) return new Date(y, mo, d, h, mi, 0, 0).getTime()
+  const guess = Date.UTC(y, mo, d, h, mi)
+  // Take the zone's offset at the guess, then again at the corrected instant: the second pass
+  // fixes a guess that landed on the other side of a DST change from the real answer.
+  let ms = guess - (wallAsUtc(fmt, guess) - guess)
+  ms = guess - (wallAsUtc(fmt, ms) - ms)
+  return ms
+}
+
 /**
- * Best-effort parse of a `/usage` reset string ("Jul 14, 2:59am", the timezone already stripped by
- * parseUsageOutput) into an ISO timestamp, interpreted in the daemon machine's local time. Returns
- * null if it can't be parsed. The year is inferred from `now`; a result that lands in the past (a
- * reset that crosses the year boundary) rolls forward a year. Pure + tested so the auto-resume
- * monitor can schedule against it without depending on the fuzzy Date.parse of a yearless string.
+ * Best-effort parse of a reset string into an ISO timestamp; null if it can't be parsed. Shapes:
+ * `/usage`'s "Jul 14, 2:59am" and the CLI limit notice's "4am" / "9:10am (America/Chicago)",
+ * minutes optional ("3am"), a leading "resets" tolerated. The CLI prints the reset in the ACCOUNT
+ * OWNER's zone, which need not be the daemon's, so a parenthesised IANA zone is honoured (DST
+ * included); without one, or with a zone this runtime doesn't know, it is the daemon's local time.
+ * With a date, the year is inferred from `now` and a result more than a day in the past (a reset
+ * across the year boundary) rolls forward a year. Time only means the next such clock time strictly
+ * after `now`. Pure + tested so the monitor and Corch schedule against it, not a fuzzy Date.parse.
  */
 export function parseResetTime(resets: string, now = new Date()): string | null {
   if (!resets) return null
-  const m = /([A-Za-z]{3})[a-z]*\s+(\d{1,2}),?\s+(\d{1,2}):(\d{2})\s*([ap]m)?/i.exec(resets.trim())
-  if (!m) return null
-  const mon = MONTHS[m[1]!.toLowerCase()]
-  if (mon === undefined) return null
-  const day = Number(m[2])
-  let hour = Number(m[3])
-  const min = Number(m[4])
-  const ampm = m[5]?.toLowerCase()
+  const s = resets.trim()
+  const g = (RESET_DATED.exec(s) ?? RESET_TIME_ONLY.exec(s))?.groups
+  if (!g) return null
+  // A bare number ("Jul 14, 2026") is not a time: it needs minutes or am/pm.
+  if (g.min === undefined && !g.ap) return null
+  let hour = Number(g.hour)
+  const min = Number(g.min ?? 0)
+  const ampm = g.ap?.toLowerCase()
   if (ampm === 'pm' && hour < 12) hour += 12
   if (ampm === 'am' && hour === 12) hour = 0
-  const year = now.getFullYear()
-  let d = new Date(year, mon, day, hour, min, 0, 0)
-  // A reset that reads as "in the past" by more than a day is really next year (Dec→Jan wrap).
-  if (d.getTime() < now.getTime() - 24 * 3600 * 1000)
-    d = new Date(year + 1, mon, day, hour, min, 0, 0)
-  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+  const fmt = zoneFormatter(g.tz)
+  // Today's date where the reset is measured (the named zone, else local).
+  const today = fmt ? new Date(wallAsUtc(fmt, now.getTime())) : null
+  const year = today ? today.getUTCFullYear() : now.getFullYear()
+  let ms: number
+  if (g.mon !== undefined) {
+    const mon = MONTHS[g.mon.toLowerCase()]
+    if (mon === undefined) return null
+    const day = Number(g.day)
+    ms = wallToMs(fmt, year, mon, day, hour, min)
+    // A reset that reads as "in the past" by more than a day is really next year (Dec→Jan wrap).
+    if (ms < now.getTime() - 24 * 3600 * 1000) ms = wallToMs(fmt, year + 1, mon, day, hour, min)
+  } else {
+    const mon = today ? today.getUTCMonth() : now.getMonth()
+    const day = today ? today.getUTCDate() : now.getDate()
+    ms = wallToMs(fmt, year, mon, day, hour, min)
+    if (ms <= now.getTime()) ms = wallToMs(fmt, year, mon, day + 1, hour, min)
+  }
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString()
 }
 
 // --- live check: spawn `claude -p "/usage"` -----------------------------------
