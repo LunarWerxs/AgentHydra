@@ -11,11 +11,12 @@ import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
 import { Button } from '@/components/ui/button'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
-const open = defineModel<boolean>('open', { required: true })
+const open = defineModel<boolean>('open', { default: true })
 
 withDefaults(
   defineProps<{
-    provider: Provider
+    /** The provider's logo beside the title; omitted for a table that mixes providers. */
+    provider?: Provider
     title: string
     /** In brackets after the title ("4", "4 of 6"); null or omitted shows none. */
     count?: string | number | null
@@ -29,7 +30,13 @@ withDefaults(
     /** False hides the chevron (a table switched off in Settings has nothing to fold). */
     collapsible?: boolean
   }>(),
-  { count: null, refreshHint: undefined, createLabel: undefined, collapsible: true },
+  {
+    provider: undefined,
+    count: null,
+    refreshHint: undefined,
+    createLabel: undefined,
+    collapsible: true,
+  },
 )
 
 defineEmits<{ refresh: []; create: [] }>()
@@ -43,7 +50,7 @@ defineEmits<{ refresh: []; create: [] }>()
       :aria-expanded="collapsible ? open : undefined"
       @click="collapsible && (open = !open)"
     >
-      <ProviderLogo :provider="provider" class="size-4" />
+      <ProviderLogo v-if="provider" :provider="provider" class="size-4" />
       {{ title }}
       <span v-if="count !== null && count !== ''" class="text-muted-foreground">({{ count }})</span>
       <slot name="meta" />

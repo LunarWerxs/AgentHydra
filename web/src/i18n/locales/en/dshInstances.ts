@@ -1,7 +1,7 @@
-// DeepSeek Harness instances section (below the Codex table): one DSH_HOME per row, which is what a
-// second DeepSeek account actually is. No usage or plan columns on purpose — the harness bills a
-// pay-as-you-go API key, so there is no 5-hour or weekly window to report and an empty quota column
-// would only invite a question with no answer.
+// DeepSeek Harness instances (rows in the combined Instances table): one DSH_HOME per row, which is
+// what a second DeepSeek account actually is. The harness bills a pay-as-you-go API key, so there is
+// no 5-hour or weekly window to report: the quota cells show a dash that says why on hover, and the
+// plan cell names the API key rather than standing empty.
 //
 // The create / rename / delete dialogs are the SHARED ones (CliInstanceNameDialog,
 // DeleteInstanceDialog) driven by lib/instance-dialog-i18n.ts, which is why the `*Dialog*` keys
@@ -28,6 +28,10 @@ export default {
   defaultBadge: 'Default',
   defaultHint: 'This machine’s own harness home. AgentHydra reads it; it never created it.',
   port: 'port {port}',
+  runningOnPort: 'Serving on port {port}',
+  sessionCount: '{count} chat | {count} chats',
+  planApiKey: 'API key',
+  noQuota: 'Pay-as-you-go API key: there is no 5-hour or weekly window to report.',
   launch: 'Launch',
   launchHint: 'Start a server for this home and open its window',
   open: 'Open',

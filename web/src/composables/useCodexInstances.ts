@@ -78,7 +78,7 @@ const rename = (id: string, name: string) =>
 const remove = (id: string, confirmName: string) =>
   withBusy(id, () => api.deleteCodexInstance(id, confirmName), true)
 // No refreshAfter: a redeem changes quota, not the instance list — the caller re-checks usage
-// itself (see CodexInstancesSection.vue's onRedeemResetCredit).
+// itself (see CodexInstanceRows.vue's onRedeemResetCredit).
 const redeemResetCredit = (id: string, opts: { force?: boolean } = {}) =>
   withBusy(id, () => api.redeemCodexResetCredit(id, opts))
 

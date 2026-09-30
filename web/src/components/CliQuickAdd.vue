@@ -1,16 +1,21 @@
 <script setup lang="ts">
 // Quick add: one email in, a browser sign-in out (server/src/core/cli-quick-add.ts, docs/CORCH.md).
-// Self-contained so it can live both in CliInstancesSection and in CorchView — the owner may hide
-// the CLI Instances section, and Corch runs on these accounts. Polls every 2 s only while a flow is
-// waiting; emits 'signed-in' when a flow turns signed-in so the host can refresh its list.
-import { AppWindow, Copy, LoaderCircle, Plus, X } from '@lucide/vue'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+// Lives in CliInstancesSection, on the CLI tab right above Corch, which runs on these accounts. Polls
+// every 2 s only while a flow is waiting; emits 'signed-in' when a flow turns signed-in so the host
+// can refresh its list.
+//
+// With a target set (a CLI row's "Log in", composables/useQuickAddTarget.ts) the next sign-in goes
+// into THAT instance instead of a new one: a note says whose login it replaces, and the id rides along
+// as startQuickAdd's second argument. Without one it adds a new instance, as it always did.
+import { AppWindow, Copy, LoaderCircle, LogIn, Plus, X } from '@lucide/vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
 // biome-ignore lint/style/useImportType: a component used in the template. A type-only import erases it, the tag renders as a bare <input>, v-model never updates, and Add stays disabled (2026-09-30).
 import { Input } from '@/components/ui/input'
 import { useCliInstances } from '@/composables/useCliInstances'
+import { useQuickAddTarget } from '@/composables/useQuickAddTarget'
 import type { QuickAddFlow } from '@/lib/api'
 import {
   cancelQuickAdd,
@@ -19,12 +24,15 @@ import {
   startQuickAdd,
   submitQuickAddCode,
 } from '@/lib/api'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const emit = defineEmits<{ 'signed-in': [] }>()
 
 const { t } = useI18n()
 const { refreshCliInstances, checkUsage: checkCliUsage } = useCliInstances()
+const { target, clearQuickAddTarget } = useQuickAddTarget()
 
+const rootEl = ref<HTMLElement | null>(null)
 const qaEmail = ref('')
 const qaInput = ref<InstanceType<typeof Input> | null>(null)
 const qaStarting = ref(false)
@@ -70,9 +78,11 @@ async function onQuickAdd() {
   if (!email || qaStarting.value) return
   qaStarting.value = true
   try {
-    const r = await startQuickAdd(email)
+    const r = await startQuickAdd(email, target.value?.id)
     if ('error' in r) toast.error(r.error || t('corch.qaStartFailed'))
     else {
+      // The flow carries the instance now; the next Add is a new account again.
+      clearQuickAddTarget()
       qaMine.value = new Set(qaMine.value).add(r.id)
       qaFlows.value = [r, ...qaFlows.value.filter((f) => f.id !== r.id)]
       qaEmail.value = ''
@@ -134,11 +144,45 @@ function qaDismiss(flow: QuickAddFlow) {
   qaMine.value = next
 }
 
+/** Bring the box into view and put the cursor in the email field (a CLI row's "Log in" asks). */
+function focusEmail() {
+  rootEl.value?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  ;(qaInput.value?.$el as HTMLInputElement | undefined)?.focus({ preventScroll: true })
+}
+defineExpose({ focusEmail })
+
+/** A finished result leaves by itself after a few seconds (owner, 2026-09-30); a failure stays
+ *  longer, so its reason can be read. Dismiss still closes one at once. */
+const AUTO_DISMISS_MS: Record<Exclude<QuickAddFlow['state'], 'waiting'>, number> = {
+  'signed-in': 5_000,
+  cancelled: 5_000,
+  failed: 12_000,
+}
+const dismissTimers = new Map<string, number>()
+watch(
+  qaVisible,
+  (flows) => {
+    for (const f of flows) {
+      if (f.state === 'waiting' || dismissTimers.has(f.id)) continue
+      dismissTimers.set(
+        f.id,
+        window.setTimeout(() => {
+          dismissTimers.delete(f.id)
+          qaDismiss(f)
+        }, AUTO_DISMISS_MS[f.state]),
+      )
+    }
+  },
+  { immediate: true },
+)
+
 onMounted(() => void qaPoll())
 onUnmounted(() => {
   qaAlive = false
   if (qaTimer !== null) window.clearTimeout(qaTimer)
   qaTimer = null
+  for (const t of dismissTimers.values()) window.clearTimeout(t)
+  dismissTimers.clear()
 })
 </script>
 
@@ -147,7 +191,21 @@ onUnmounted(() => {
        of its own: each host places it (a class on the tag falls through to this root). Input and
        buttons share one height (h-7), and each flow's state text is the only live region, so a
        poll does not re-announce the whole row. -->
-  <div class="flex flex-col gap-2">
+  <div ref="rootEl" class="flex flex-col gap-2">
+    <p v-if="target" class="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <LogIn class="size-3.5 shrink-0" aria-hidden="true" />
+      <span class="min-w-0">{{ $t('cliInstances.quickAddTarget', { num: target.num, name: target.name }) }}</span>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        class="shrink-0"
+        :aria-label="$t('cliInstances.quickAddTargetClear')"
+        :title="$t('cliInstances.quickAddTargetClear')"
+        @click="clearQuickAddTarget"
+      >
+        <X />
+      </Button>
+    </p>
     <form class="flex items-center gap-2" @submit.prevent="onQuickAdd">
       <Input
         ref="qaInput"
@@ -163,6 +221,7 @@ onUnmounted(() => {
         <Plus v-else />
         {{ $t('corch.qaAdd') }}
       </Button>
+      <InfoHint :text="$t('corch.qaHint')" />
     </form>
     <div
       v-for="flow in qaVisible"

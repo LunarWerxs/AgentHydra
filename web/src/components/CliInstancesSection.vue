@@ -25,7 +25,7 @@ import {
   Terminal,
   Trash2,
 } from '@lucide/vue'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AssociateCliInstanceDialog from '@/components/AssociateCliInstanceDialog.vue'
@@ -35,7 +35,6 @@ import CliLimitResetIcon from '@/components/CliLimitResetIcon.vue'
 import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
-import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
@@ -66,8 +65,8 @@ import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
 import { useInstanceFilter } from '@/composables/useInstanceFilter'
 import { useInstances } from '@/composables/useInstances'
+import { useQuickAddTarget } from '@/composables/useQuickAddTarget'
 import { useSortable } from '@/composables/useSortable'
-import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
@@ -92,7 +91,6 @@ const {
   refreshCliInstances,
   create,
   launch,
-  login,
   logout,
   rename,
   associate,
@@ -102,9 +100,11 @@ const {
 } = useCliInstances()
 const { snapshotFor, isChecking, checkCli, reasonFor } = useUsage()
 const { accounts, refreshAccounts } = useData()
-// The desktop instances are the link targets. useInstances is a module singleton already loaded by
-// InstancesView above us, so this is a read of the same list, not a second fetch.
-const { instances: desktopInstances } = useInstances()
+// The desktop instances are the link targets. useInstances is a module singleton that the Instances
+// tab keeps loaded; this table lives on the CLI tab, so a window opened straight onto it reads the
+// list once on mount (below), or every linked CLI instance would show here as unlinked.
+const { instances: desktopInstances, refreshInstances } = useInstances()
+const { target: quickAddTarget, setQuickAddTarget, clearQuickAddTarget } = useQuickAddTarget()
 
 const { t } = useI18n()
 
@@ -224,9 +224,6 @@ const headingCount = computed(() =>
 function isBusy(inst: CliInstance): boolean {
   return busyIds.value.has(inst.id)
 }
-
-// Persisted collapse state, matching the Instances table's own (composables/useUiPrefs.ts).
-const { cliOpen } = useUiPrefs()
 
 // --- create ---
 const createOpen = ref(false)
@@ -359,6 +356,8 @@ async function onDeleteConfirm(confirmName: string) {
     const result = await remove(inst.id, confirmName)
     if (result?.ok) {
       toast.success(t('cliInstances.toastDeleted'))
+      // Quick add must not sign in again into an instance that is gone.
+      if (quickAddTarget.value?.id === inst.id) clearQuickAddTarget()
       deleteOpen.value = false
       deleteTarget.value = null
     } else {
@@ -412,10 +411,13 @@ async function onLaunch(inst: CliInstance) {
   if (result?.ok) toast.success(t('cliInstances.toastLaunched'))
   else toast.error(result?.message ?? t('cliInstances.toastLaunchFailed'))
 }
+// "Log in" signs this instance in again through Quick add, not a terminal running /login (owner,
+// 2026-09-30): point the box at it, bring it into view and put the cursor in its email field.
+const quickAdd = ref<{ focusEmail: () => void } | null>(null)
 async function onLogin(inst: CliInstance) {
-  const result = await login(inst.id)
-  if (result?.ok) toast.success(t('cliInstances.toastLoginOpened'))
-  else toast.error(result?.message ?? t('cliInstances.toastLoginFailed'))
+  setQuickAddTarget({ id: inst.id, num: inst.num, name: inst.name })
+  await nextTick()
+  quickAdd.value?.focusEmail()
 }
 async function onCheckUsage(inst: CliInstance) {
   const ok = await checkUsage(inst.id)
@@ -475,18 +477,21 @@ function menuActionsFor(inst: CliInstance): MenuIconAction[] {
 
 const associateAccountOptions = computed(() => accounts.value)
 
-onMounted(() => startPolling())
+onMounted(() => {
+  startPolling()
+  if (desktopInstances.value.length === 0) void refreshInstances({ silent: true })
+})
 onUnmounted(() => stopPolling())
 </script>
 
 <template>
-  <!-- No border-t: the parent (InstancesView) separates its two tables with space instead. That
-       hairline sat flush against the desktop table's last row, so the two tables read as one. -->
+  <!-- No border-t: the parent (CliView) separates this table from Corch with space instead. -->
   <div>
     <!-- The shared header every instance table uses; the count says "x of y" when rows are
-         elsewhere (see headingCount). -->
+         elsewhere (see headingCount). Not collapsible: it is the CLI tab's own table, and folding
+         it away would leave the tab's first screen empty. -->
     <InstanceSectionHeader
-      v-model:open="cliOpen"
+      :collapsible="false"
       provider="claude"
       :title="$t('cliInstances.title')"
       :count="headingCount"
@@ -497,8 +502,8 @@ onUnmounted(() => stopPolling())
       @create="openCreateDialog"
     >
       <template #meta>
-        <!-- Linked ones aren't missing, they've moved up onto their account's row. Say so, or
-             their absence from this count reads as a bug. -->
+        <!-- Linked ones aren't missing, they've moved onto their account's row in the Instances
+             tab. Say so, or their absence from this count reads as a bug. -->
         <span v-if="linkedCount > 0" class="text-xs font-normal text-muted-foreground">
           {{ $t('cliInstances.linkedElsewhere', { count: linkedCount }) }}
         </span>
@@ -509,276 +514,288 @@ onUnmounted(() => stopPolling())
     </InstanceSectionHeader>
 
     <!-- Quick add: type an email, confirm in the browser, the new CLI instance lands in the table. -->
-    <CliQuickAdd class="px-3 pb-3" @signed-in="refreshCliInstances({ silent: true })" />
+    <CliQuickAdd
+      ref="quickAdd"
+      class="px-3 pb-3"
+      @signed-in="refreshCliInstances({ silent: true })"
+    />
 
-    <!-- ExpandArea rather than the kit's ExpandTransition, for the same reason as the Instances
-         table: a permanently overflow-hidden wrapper would break this table's `sticky top-0`
-         header. ExpandArea only clips while the transition is actually running. -->
-    <ExpandArea :open="cliOpen">
     <Table>
-        <TableHeader sticky>
-          <TableRow>
-            <TableHead class="w-10 cursor-pointer select-none" @click="toggleSort('loggedIn')">
-              <span class="inline-flex items-center gap-0.5">
-                ● <ArrowUp v-if="indicatorFor('loggedIn') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('loggedIn') === 'desc'" class="size-3" />
-              </span>
-            </TableHead>
-            <TableHead class="w-44 cursor-pointer select-none" @click="toggleSort('name')">
-              <span class="inline-flex items-center gap-0.5">
-                {{ $t('cliInstances.colName') }}
-                <ArrowUp v-if="indicatorFor('name') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('name') === 'desc'" class="size-3" />
-              </span>
-            </TableHead>
-            <TableHead class="w-40 cursor-pointer select-none" @click="toggleSort('account')">
-              <span class="inline-flex items-center gap-0.5">
-                {{ $t('cliInstances.colAccount') }}
-                <ArrowUp v-if="indicatorFor('account') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('account') === 'desc'" class="size-3" />
-              </span>
-            </TableHead>
-            <TableHead
-              v-if="!usageMode"
-              class="cursor-pointer select-none"
-              @click="toggleSort('configDir')"
-            >
-              <span class="inline-flex items-center gap-0.5">
-                {{ $t('cliInstances.colConfigDir') }}
-                <ArrowUp v-if="indicatorFor('configDir') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('configDir') === 'desc'" class="size-3" />
-              </span>
-            </TableHead>
-            <!-- Fixed widths, matching InstancesView and CodexInstancesSection — see the comment on
-                 the desktop table's quota headers for why all three tables pin these. -->
-            <template v-else>
-              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
-                <span class="inline-flex items-center gap-0.5">
-                  {{ $t('instances.colSession') }}
-                  <ArrowUp v-if="indicatorFor('session') === 'asc'" class="size-3" />
-                  <ArrowDown v-else-if="indicatorFor('session') === 'desc'" class="size-3" />
-                </span>
-              </TableHead>
-              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('weekly')">
-                <span class="inline-flex items-center gap-0.5">
-                  {{ $t('instances.colWeekly') }}
-                  <ArrowUp v-if="indicatorFor('weekly') === 'asc'" class="size-3" />
-                  <ArrowDown v-else-if="indicatorFor('weekly') === 'desc'" class="size-3" />
-                </span>
-              </TableHead>
-            </template>
-            <TableHead
-              v-if="usageMode"
-              class="w-24 cursor-pointer select-none"
-              @click="toggleSort('usageSession')"
-            >
-              <span class="inline-flex items-center gap-0.5">
-                {{ $t('instances.colUsageSession') }}
-                <ArrowUp v-if="indicatorFor('usageSession') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('usageSession') === 'desc'" class="size-3" />
-              </span>
-            </TableHead>
-            <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('usage')">
-              <span class="inline-flex items-center gap-0.5">
-                {{ $t('cliInstances.colUsage') }}
-                <ArrowUp v-if="indicatorFor('usage') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('usage') === 'desc'" class="size-3" />
-              </span>
-            </TableHead>
-            <TableHead class="text-end">{{ $t('cliInstances.colActions') }}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <!-- visibleRows, not unlinkedCliInstances: with the usage filter set to hide, this table can
-             be emptied while it still has rows to show, and a blank tbody explains nothing. -->
-        <TableBody v-if="visibleRows.length === 0">
-          <TableEmpty v-if="!loading" :colspan="usageMode ? 8 : 6">
-            <div class="flex flex-col items-center gap-1 text-center">
-              <component :is="allHiddenByFilter ? Funnel : Terminal" class="mb-1 size-6 opacity-40" />
-              <p class="font-medium text-foreground">
-                {{
-                  allHiddenByFilter
-                    ? $t('instances.filterAllHidden')
-                    : linkedCount > 0
-                      ? $t('cliInstances.allLinked')
-                      : $t('cliInstances.empty')
-                }}
-              </p>
-              <p class="text-xs text-muted-foreground">
-                {{
-                  allHiddenByFilter
-                    ? $t('instances.filterAllHiddenHint')
-                    : linkedCount > 0
-                      ? $t('cliInstances.allLinkedHint')
-                      : $t('cliInstances.emptyHint')
-                }}
-              </p>
-            </div>
-          </TableEmpty>
-          <TableRow v-for="i in 2" v-else :key="i">
-            <TableCell><Skeleton class="size-2" /></TableCell>
-            <TableCell><Skeleton class="h-4 w-28" /></TableCell>
-            <TableCell><Skeleton class="h-5 w-20" /></TableCell>
-            <TableCell v-if="!usageMode"><Skeleton class="h-3 w-32" /></TableCell>
-            <template v-else>
-              <TableCell><Skeleton class="h-8 w-16" /></TableCell>
-              <TableCell><Skeleton class="h-8 w-16" /></TableCell>
-              <TableCell><Skeleton class="h-5 w-14" /></TableCell>
-            </template>
-            <TableCell><Skeleton class="h-5 w-14" /></TableCell>
-            <TableCell>
-              <div class="flex justify-end"><Skeleton class="h-6 w-20" /></div>
-            </TableCell>
-          </TableRow>
-        </TableBody>
-        <TableBody v-else>
-          <!-- Dimmed, never disabled, and inert to the pointer — same contract as the desktop table
-               above: a filtered row is one you've set aside, not one you've lost access to, and it
-               shouldn't light up every time the cursor crosses it. -->
-          <TableRow
-            v-for="inst in visibleRows"
-            :key="inst.id"
-            :variant="filterDimmed(filterFacts(inst)) ? 'faded' : 'default'"
+      <TableHeader sticky>
+        <TableRow>
+          <TableHead class="w-10 cursor-pointer select-none" @click="toggleSort('loggedIn')">
+            <span class="inline-flex items-center gap-0.5">
+              ● <ArrowUp v-if="indicatorFor('loggedIn') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('loggedIn') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
+          <TableHead class="w-44 cursor-pointer select-none" @click="toggleSort('name')">
+            <span class="inline-flex items-center gap-0.5">
+              {{ $t('cliInstances.colName') }}
+              <ArrowUp v-if="indicatorFor('name') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('name') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
+          <TableHead class="w-40 cursor-pointer select-none" @click="toggleSort('account')">
+            <span class="inline-flex items-center gap-0.5">
+              {{ $t('cliInstances.colAccount') }}
+              <ArrowUp v-if="indicatorFor('account') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('account') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
+          <TableHead
+            v-if="!usageMode"
+            class="cursor-pointer select-none"
+            @click="toggleSort('configDir')"
           >
-            <TableCell>
-              <span
-                class="inline-block size-2 rounded-full"
-                :class="inst.loggedIn ? 'bg-success' : 'bg-muted-foreground/40'"
-                :title="inst.loggedIn ? $t('cliInstances.loggedIn') : $t('cliInstances.loggedOut')"
-              />
-            </TableCell>
-            <TableCell>
-              <!-- Same chip as the desktop table on purpose: the number comes from ONE sequence
-                   spanning all three instance families, so it must look identical everywhere or
-                   that guarantee stops being obvious. -->
-              <div class="flex items-center gap-1.5 font-medium">
-                <InstanceNumber :num="inst.num" />
-                <!-- Capped to the column like the desktop table's name, with the full name on
-                     hover: these are names a person typed, so nothing stops one being a sentence,
-                     and table layout is auto — one long name widens this column and the three
-                     stacked tables stop lining up. Native title, not IconTooltip: this cell has no
-                     other hover to extend, and the row above it already reveals its path this way. -->
-                <span :title="nameOverflowTitle(inst.name)">{{ shortDisplayName(inst.name) }}</span>
-                <CliLimitResetIcon :result="inst.lastLimitReset" />
-                <!-- Paid extra usage ON: past its limits this account bills instead of stopping. -->
-                <IconTooltip
-                  v-if="billsPastLimit(usageFor(inst))"
-                  :label="$t('instances.usageCreditsOn')"
-                  :description="$t('instances.extraUsageOnHint')"
+            <span class="inline-flex items-center gap-0.5">
+              {{ $t('cliInstances.colConfigDir') }}
+              <ArrowUp v-if="indicatorFor('configDir') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('configDir') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
+          <!-- Fixed widths, matching the Instances table's quota columns, so the same fact has the
+               same bar length on both tabs. -->
+          <template v-else>
+            <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
+              <span class="inline-flex items-center gap-0.5">
+                {{ $t('instances.colSession') }}
+                <ArrowUp v-if="indicatorFor('session') === 'asc'" class="size-3" />
+                <ArrowDown v-else-if="indicatorFor('session') === 'desc'" class="size-3" />
+              </span>
+            </TableHead>
+            <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('weekly')">
+              <span class="inline-flex items-center gap-0.5">
+                {{ $t('instances.colWeekly') }}
+                <ArrowUp v-if="indicatorFor('weekly') === 'asc'" class="size-3" />
+                <ArrowDown v-else-if="indicatorFor('weekly') === 'desc'" class="size-3" />
+              </span>
+            </TableHead>
+          </template>
+          <TableHead
+            v-if="usageMode"
+            class="w-24 cursor-pointer select-none"
+            @click="toggleSort('usageSession')"
+          >
+            <span class="inline-flex items-center gap-0.5">
+              {{ $t('instances.colUsageSession') }}
+              <ArrowUp v-if="indicatorFor('usageSession') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('usageSession') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
+          <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('usage')">
+            <span class="inline-flex items-center gap-0.5">
+              {{ $t('cliInstances.colUsage') }}
+              <ArrowUp v-if="indicatorFor('usage') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('usage') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
+          <TableHead class="text-end">{{ $t('cliInstances.colActions') }}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <!-- visibleRows, not unlinkedCliInstances: with the usage filter set to hide, this table can
+           be emptied while it still has rows to show, and a blank tbody explains nothing. -->
+      <TableBody v-if="visibleRows.length === 0">
+        <TableEmpty v-if="!loading" :colspan="usageMode ? 8 : 6">
+          <div class="flex flex-col items-center gap-1 text-center">
+            <component :is="allHiddenByFilter ? Funnel : Terminal" class="mb-1 size-6 opacity-40" />
+            <p class="font-medium text-foreground">
+              {{
+                allHiddenByFilter
+                  ? $t('instances.filterAllHidden')
+                  : linkedCount > 0
+                    ? $t('cliInstances.allLinked')
+                    : $t('cliInstances.empty')
+              }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              {{
+                allHiddenByFilter
+                  ? $t('instances.filterAllHiddenHint')
+                  : linkedCount > 0
+                    ? $t('cliInstances.allLinkedHint')
+                    : $t('cliInstances.emptyHint')
+              }}
+            </p>
+          </div>
+        </TableEmpty>
+        <TableRow v-for="i in 2" v-else :key="i">
+          <TableCell><Skeleton class="size-2" /></TableCell>
+          <TableCell><Skeleton class="h-4 w-28" /></TableCell>
+          <TableCell><Skeleton class="h-5 w-20" /></TableCell>
+          <TableCell v-if="!usageMode"><Skeleton class="h-3 w-32" /></TableCell>
+          <template v-else>
+            <TableCell><Skeleton class="h-8 w-16" /></TableCell>
+            <TableCell><Skeleton class="h-8 w-16" /></TableCell>
+            <TableCell><Skeleton class="h-5 w-14" /></TableCell>
+          </template>
+          <TableCell><Skeleton class="h-5 w-14" /></TableCell>
+          <TableCell>
+            <div class="flex justify-end"><Skeleton class="h-6 w-20" /></div>
+          </TableCell>
+        </TableRow>
+      </TableBody>
+      <TableBody v-else>
+        <!-- Dimmed, never disabled, and inert to the pointer — same contract as the desktop table
+             above: a filtered row is one you've set aside, not one you've lost access to, and it
+             shouldn't light up every time the cursor crosses it. -->
+        <TableRow
+          v-for="inst in visibleRows"
+          :key="inst.id"
+          :variant="filterDimmed(filterFacts(inst)) ? 'faded' : 'default'"
+        >
+          <TableCell>
+            <span
+              class="inline-block size-2 rounded-full"
+              :class="inst.loggedIn ? 'bg-success' : 'bg-muted-foreground/40'"
+              :title="inst.loggedIn ? $t('cliInstances.loggedIn') : $t('cliInstances.loggedOut')"
+            />
+          </TableCell>
+          <TableCell>
+            <!-- Same chip as the desktop table on purpose: the number comes from ONE sequence
+                 spanning all three instance families, so it must look identical everywhere or
+                 that guarantee stops being obvious. -->
+            <div class="flex items-center gap-1.5 font-medium">
+              <InstanceNumber :num="inst.num" />
+              <!-- Capped to the column like the desktop table's name, with the full name on
+                   hover: these are names a person typed, so nothing stops one being a sentence,
+                   and table layout is auto — one long name widens this column and the three
+                   stacked tables stop lining up. Native title, not IconTooltip: this cell has no
+                   other hover to extend, and the row above it already reveals its path this way. -->
+              <span :title="nameOverflowTitle(inst.name)">{{ shortDisplayName(inst.name) }}</span>
+              <!-- How many Claude sessions run on this login right now, Corch's workers included.
+                   Hidden at 0: an idle account needs no badge saying so. -->
+              <IconTooltip
+                v-if="(inst.liveSessions ?? 0) > 0"
+                :label="$t('cliInstances.liveSessions', inst.liveSessions ?? 0)"
+              >
+                <span
+                  class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-info/15 px-1 text-3xs font-semibold tabular-nums text-info"
+                  :aria-label="$t('cliInstances.liveSessions', inst.liveSessions ?? 0)"
                 >
-                  <span class="inline-flex items-center" :aria-label="$t('instances.usageCreditsOn')">
-                    <CreditCard class="size-3.5 text-warning" />
-                  </span>
-                </IconTooltip>
-              </div>
+                  {{ inst.liveSessions }}
+                </span>
+              </IconTooltip>
+              <CliLimitResetIcon :result="inst.lastLimitReset" />
+              <!-- Paid extra usage ON: past its limits this account bills instead of stopping. -->
+              <IconTooltip
+                v-if="billsPastLimit(usageFor(inst))"
+                :label="$t('instances.usageCreditsOn')"
+                :description="$t('instances.extraUsageOnHint')"
+              >
+                <span class="inline-flex items-center" :aria-label="$t('instances.usageCreditsOn')">
+                  <CreditCard class="size-3.5 text-warning" />
+                </span>
+              </IconTooltip>
+            </div>
+          </TableCell>
+          <TableCell>
+            <Badge v-if="inst.associatedAccountLabel" variant="outline">
+              {{ inst.associatedAccountLabel }}
+            </Badge>
+            <span v-else class="text-xs text-muted-foreground">{{ $t('cliInstances.noAccount') }}</span>
+          </TableCell>
+          <TableCell v-if="!usageMode" class="max-w-[16rem]">
+            <span class="mono block truncate text-3xs text-muted-foreground">{{ inst.configDir }}</span>
+          </TableCell>
+          <template v-else>
+            <TableCell>
+              <UsageBar
+                v-if="sessionResetFor(inst)"
+                :fill-pct="sessionRemaining(inst)"
+                variant="neutral"
+                :label="sessionResetFor(inst) ?? ''"
+                :aria-label="$t('instances.resetsIn', { when: sessionResetFor(inst) })"
+              />
+              <span v-else class="text-muted-foreground">—</span>
             </TableCell>
             <TableCell>
-              <Badge v-if="inst.associatedAccountLabel" variant="outline">
-                {{ inst.associatedAccountLabel }}
-              </Badge>
-              <span v-else class="text-xs text-muted-foreground">{{ $t('cliInstances.noAccount') }}</span>
-            </TableCell>
-            <TableCell v-if="!usageMode" class="max-w-[16rem]">
-              <span class="mono block truncate text-3xs text-muted-foreground">{{ inst.configDir }}</span>
-            </TableCell>
-            <template v-else>
-              <TableCell>
+              <CopyResetDate v-if="weeklyResetFor(inst)" :limit="usageFor(inst)?.weekAll">
                 <UsageBar
-                  v-if="sessionResetFor(inst)"
-                  :fill-pct="sessionRemaining(inst)"
-                  variant="neutral"
-                  :label="sessionResetFor(inst) ?? ''"
-                  :aria-label="$t('instances.resetsIn', { when: sessionResetFor(inst) })"
+                  :fill-pct="weeklyRemaining(inst)"
+                  :variant="weeklyWait(inst)"
+                  :label="weeklyResetFor(inst) ?? ''"
+                  :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
                 />
-                <span v-else class="text-muted-foreground">—</span>
-              </TableCell>
-              <TableCell>
-                <CopyResetDate v-if="weeklyResetFor(inst)" :limit="usageFor(inst)?.weekAll">
-                  <UsageBar
-                    :fill-pct="weeklyRemaining(inst)"
-                    :variant="weeklyWait(inst)"
-                    :label="weeklyResetFor(inst) ?? ''"
-                    :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
-                  />
-                </CopyResetDate>
-                <span v-else class="text-muted-foreground">—</span>
-              </TableCell>
-            </template>
-            <TableCell v-if="usageMode">
-              <UsageBadge
-                scope="session"
-                :snapshot="usageFor(inst)"
-                :checking="isChecking(usageKey(inst)) || isBusy(inst)"
-                :usage-key="usageKey(inst)"
-                @check="onCheckUsageFromPopover(inst)"
-              />
+              </CopyResetDate>
+              <span v-else class="text-muted-foreground">—</span>
             </TableCell>
-            <TableCell>
-              <UsageBadge
-                :snapshot="usageFor(inst)"
-                :checking="isChecking(usageKey(inst)) || isBusy(inst)"
-                :usage-key="usageKey(inst)"
-                @check="onCheckUsageFromPopover(inst)"
-              />
-            </TableCell>
-            <TableCell>
-              <div class="flex items-center justify-end gap-1">
-                <Button variant="outline" size="sm" :disabled="isBusy(inst)" @click="onLaunch(inst)">
-                  <Play /> {{ $t('cliInstances.launch') }}
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger as-child>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      :aria-label="$t('cliInstances.moreActions')"
-                    >
-                      <EllipsisVertical />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" class="max-w-56">
-                    <!-- Which instance this menu belongs to, by number, then its quick actions as
-                         icons — the same header on every table's kebab. -->
-                    <InstanceMenuHeader :num="inst.num" :actions="menuActionsFor(inst)" />
-                    <DropdownMenuItem :disabled="isBusy(inst)" @click="onLogin(inst)">
-                      <LogIn /> {{ $t('cliInstances.login') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem :disabled="isBusy(inst)" @click="openLinkDialog(inst)">
-                      <Monitor /> {{ $t('cliInstances.linkDesktop') }}
-                    </DropdownMenuItem>
-                    <!-- "Associate account" points a CLI instance at a LEGACY pasted credential.
-                         With none saved (the norm now — accounts come from signing in instances),
-                         the dialog is an empty dead end, so hide it until such a credential exists.
-                         "Link to desktop instance" above is the primary path either way. -->
-                    <DropdownMenuItem
-                      v-if="associateAccountOptions.length > 0"
-                      :disabled="isBusy(inst)"
-                      @click="openAssociateDialog(inst)"
-                    >
-                      <Link2 /> {{ $t('cliInstances.associate') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      v-if="inst.loggedIn"
-                      :disabled="isBusy(inst)"
-                      @click="openLimitReset(inst)"
-                    >
-                      <RotateCcw /> {{ $t('cliInstances.limitReset') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      variant="destructive"
-                      :disabled="isBusy(inst)"
-                      @click="openDeleteDialog(inst)"
-                    >
-                      <Trash2 /> {{ $t('cliInstances.delete') }}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </TableCell>
-          </TableRow>
-        </TableBody>
-      </Table>
-    </ExpandArea>
+          </template>
+          <TableCell v-if="usageMode">
+            <UsageBadge
+              scope="session"
+              :snapshot="usageFor(inst)"
+              :checking="isChecking(usageKey(inst)) || isBusy(inst)"
+              :usage-key="usageKey(inst)"
+              @check="onCheckUsageFromPopover(inst)"
+            />
+          </TableCell>
+          <TableCell>
+            <UsageBadge
+              :snapshot="usageFor(inst)"
+              :checking="isChecking(usageKey(inst)) || isBusy(inst)"
+              :usage-key="usageKey(inst)"
+              @check="onCheckUsageFromPopover(inst)"
+            />
+          </TableCell>
+          <TableCell>
+            <div class="flex items-center justify-end gap-1">
+              <Button variant="outline" size="sm" :disabled="isBusy(inst)" @click="onLaunch(inst)">
+                <Play /> {{ $t('cliInstances.launch') }}
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    :aria-label="$t('cliInstances.moreActions')"
+                  >
+                    <EllipsisVertical />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" class="max-w-56">
+                  <!-- Which instance this menu belongs to, by number, then its quick actions as
+                       icons — the same header on every table's kebab. -->
+                  <InstanceMenuHeader :num="inst.num" :actions="menuActionsFor(inst)" />
+                  <DropdownMenuItem :disabled="isBusy(inst)" @click="onLogin(inst)">
+                    <LogIn /> {{ $t('cliInstances.login') }}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem :disabled="isBusy(inst)" @click="openLinkDialog(inst)">
+                    <Monitor /> {{ $t('cliInstances.linkDesktop') }}
+                  </DropdownMenuItem>
+                  <!-- "Associate account" points a CLI instance at a LEGACY pasted credential.
+                       With none saved (the norm now — accounts come from signing in instances),
+                       the dialog is an empty dead end, so hide it until such a credential exists.
+                       "Link to desktop instance" above is the primary path either way. -->
+                  <DropdownMenuItem
+                    v-if="associateAccountOptions.length > 0"
+                    :disabled="isBusy(inst)"
+                    @click="openAssociateDialog(inst)"
+                  >
+                    <Link2 /> {{ $t('cliInstances.associate') }}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    v-if="inst.loggedIn"
+                    :disabled="isBusy(inst)"
+                    @click="openLimitReset(inst)"
+                  >
+                    <RotateCcw /> {{ $t('cliInstances.limitReset') }}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    :disabled="isBusy(inst)"
+                    @click="openDeleteDialog(inst)"
+                  >
+                    <Trash2 /> {{ $t('cliInstances.delete') }}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
 
     <CliInstanceNameDialog
       v-model:open="createOpen"

@@ -2,10 +2,14 @@
 export default {
   title: 'Instances',
   refresh: 'Refresh',
-  refreshHint: 'Reload the instance list and re-check the Claude Desktop install',
+  refreshHint: 'Reload every instance list and re-check the Claude Desktop install',
   createInstance: 'Create instance',
+  // The + menu: one item per provider switched on in Settings → Providers.
+  createClaude: 'New Claude instance',
+  createCodex: 'New Codex instance',
+  createDeepseek: 'New DeepSeek instance',
   empty: 'No instances found.',
-  emptyHint: 'Create your first isolated Claude Desktop instance to get started.',
+  emptyHint: 'Create your first instance with the + button to get started.',
   sortByStatus: 'Sort by status',
   colName: 'Name',
   colNameHint:
@@ -153,7 +157,7 @@ export default {
   toastCliLaunchFailed: 'Failed to launch the linked CLI instance.',
   toastCliLoginOpened: 'Opened a terminal. Run /login there to sign this CLI instance in.',
   toastCliLoginFailed: 'Failed to open a terminal for the CLI sign-in.',
-  toastCliUnlinked: 'Unlinked. It is back in the CLI instances table below.',
+  toastCliUnlinked: 'Unlinked. It is back in the CLI tab’s instances table.',
   toastCliUnlinkFailed: 'Failed to unlink the CLI instance.',
   toastCliCreateFailed: 'Failed to create a CLI instance for this account.',
   quitExternalDialogTitle: 'Quit your regular Claude Desktop?',
@@ -178,10 +182,18 @@ export default {
   filterNothingSelected:
     'The filter is on but nothing is selected, so nothing is being filtered. Pick a status, a plan, or a quota window.',
   // Section captions inside the flyout.
+  filterProvider: 'Provider',
   filterStatusSection: 'Status',
   filterPlanSection: 'Plan',
   filterWindows: 'Quota windows',
   filterDisplay: 'Display behaviour',
+  // Provider choice: which providers' rows the table lists. Not a facet of the filter: it acts
+  // whether the filter is on or off, and it leaves rows out rather than dimming them.
+  filterProviderHint:
+    'Which providers the table lists. This applies whether or not the filter below is on.',
+  providerClaude: 'Claude',
+  providerCodex: 'Codex',
+  providerDeepseek: 'DeepSeek',
   // Status facet: is the instance's app open?
   filterStatusAny: 'Any',
   filterStatusOpen: 'Open',
@@ -210,6 +222,7 @@ export default {
   filterChipSession: '5h {pct}%',
   filterChipBoth: '{week}% · 5h {session}%',
   filterChipPlans: '{count} plans',
+  filterChipProviders: '{count} providers',
   filterChipNone: 'Off',
   filterHiddenCount: '{count} hidden',
   filterAllHidden: 'Every instance is filtered out.',
@@ -217,9 +230,6 @@ export default {
     'Loosen the filter in the toolbar, or turn it off. The button says what it is filtering on.',
   // "x of y" for a heading whose table is showing fewer rows than it has.
   countOfTotal: '{shown} of {total}',
-  // Sections flyout (toolbar) — the same provider switches Settings shows, where they apply.
-  sectionsTitle: 'Sections',
-  sectionsHint: 'Which instance tables this tab shows.',
   // Small-caps heading over the auto-refresh rows inside the usage flyout.
   usageDataTitle: 'Usage data',
   refreshAllUsage: 'Refresh all usage',

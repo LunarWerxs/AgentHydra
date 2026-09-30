@@ -1,5 +1,5 @@
-// CLI Instances section (below the desktop Instances table): an isolated CLAUDE_CONFIG_DIR
-// the daemon can spawn a real `claude` process against.
+// CLI Instances section (the CLI tab, above Corch): an isolated CLAUDE_CONFIG_DIR the daemon can
+// spawn a real `claude` process against.
 export default {
   title: 'CLI instances',
   refresh: 'Refresh',
@@ -17,15 +17,22 @@ export default {
   // Names the marker to look for. "shown on their desktop instance" was true but unactionable —
   // the row it pointed at had no visible sign of the link, so the reader was told where to look
   // and then found nothing there.
-  linkedElsewhere: '+ {count} on a desktop row above (⌨ marks them)',
+  linkedElsewhere: '+ {count} on a desktop row in the Instances tab (⌨ marks them)',
   // "(0)" alone reads as "you have none"; "(0 of 1)" says the missing one is elsewhere, not absent.
   countOfTotal: '{shown} of {total}',
   allLinked: 'Every CLI instance is linked to a desktop instance',
   allLinkedHint:
-    'Linked ones sit on their desktop instance’s row above, marked with a terminal icon, since they are the same account. Unlink one to bring it back here.',
+    'Linked ones sit on their desktop instance’s row in the Instances tab, marked with a terminal icon, since they are the same account. Unlink one to bring it back here.',
+  // The pill beside a row's name: Claude sessions live on this login now (GET /api/cli-instances).
+  liveSessions:
+    '{n} Claude session running on this account, Corch’s included | {n} Claude sessions running on this account, Corch’s included',
   launch: 'Launch',
   moreActions: 'More actions',
   login: 'Log in',
+  // "Log in" on a row points Quick add at that instance (CliQuickAdd.vue, useQuickAddTarget.ts).
+  quickAddTarget:
+    'Signing in #{num} {name} again: the account you sign in with replaces its current login.',
+  quickAddTargetClear: 'Clear: add a new account instead',
   logout: 'Log out',
   associate: 'Associate account',
   rename: 'Rename',
@@ -93,8 +100,6 @@ export default {
   toastDeleteFailed: 'Failed to delete CLI instance.',
   toastLaunched: 'CLI instance launched.',
   toastLaunchFailed: 'Failed to launch CLI instance.',
-  toastLoginOpened: 'Terminal opened. Run /login there.',
-  toastLoginFailed: 'Failed to open a login terminal.',
   toastLogout: 'Signed out',
   toastLogoutFailed: 'Could not sign this instance out',
   logoutDialogDescription:

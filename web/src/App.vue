@@ -6,17 +6,17 @@ import {
   MessagesSquare,
   Monitor,
   Moon,
-  Network,
   Power,
   RotateCw,
   Settings2,
   Sun,
+  Terminal,
 } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AnalyticsView from '@/components/AnalyticsView.vue'
-import CorchView from '@/components/CorchView.vue'
+import CliView from '@/components/CliView.vue'
 import InstancesView from '@/components/InstancesView.vue'
 import QueueBuilder from '@/components/QueueBuilder.vue'
 import QueueView from '@/components/QueueView.vue'
@@ -109,6 +109,14 @@ useShortcuts([
     groupKey: 'app.shortcutGroupApp',
     run: () => {
       view.value = 'analytics'
+    },
+  },
+  {
+    keys: 'mod+4',
+    labelKey: 'app.shortcutCli',
+    groupKey: 'app.shortcutGroupApp',
+    run: () => {
+      view.value = 'cli'
     },
   },
 ])
@@ -204,8 +212,8 @@ async function onShutdown() {
 const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
   { id: 'sessions', labelKey: 'app.tabSessions', icon: MessagesSquare },
   { id: 'instances', labelKey: 'app.tabInstances', icon: Boxes },
+  { id: 'cli', labelKey: 'app.tabCli', icon: Terminal },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
-  { id: 'corch', labelKey: 'app.tabCorch', icon: Network },
 ]
 
 const runningCount = computed(() => queue.value.filter((q) => q.status === 'running').length)
@@ -397,12 +405,12 @@ onUnmounted(stopAvailabilityPolling)
     <div class="min-h-0 flex-1 pe-(--push-shift) transition-padding duration-300 ease-in-out">
       <main
         class="h-full min-h-0"
-        :class="view === 'instances' || view === 'corch' ? 'overflow-y-auto scroll-slim' : ''"
+        :class="view === 'instances' || view === 'cli' ? 'overflow-y-auto scroll-slim' : ''"
       >
         <Transition name="view-fade" mode="out-in">
           <SessionsView v-if="view === 'sessions'" />
           <AnalyticsView v-else-if="view === 'analytics'" />
-          <CorchView v-else-if="view === 'corch'" />
+          <CliView v-else-if="view === 'cli'" />
           <InstancesView v-else />
         </Transition>
       </main>

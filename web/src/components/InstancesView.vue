@@ -18,6 +18,7 @@ import {
   MonitorDown,
   Pencil,
   Play,
+  Plus,
   RefreshCw,
   RotateCcw,
   Square,
@@ -28,26 +29,24 @@ import {
   Unlink,
   UserRound,
 } from '@lucide/vue'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import CliInstancesSection from '@/components/CliInstancesSection.vue'
-import CodexInstancesSection from '@/components/CodexInstancesSection.vue'
+import CodexInstanceRows from '@/components/CodexInstanceRows.vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
-import DshInstancesSection from '@/components/DshInstancesSection.vue'
+import DshInstanceRows from '@/components/DshInstanceRows.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
-import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceChatsDialog from '@/components/InstanceChatsDialog.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
 import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
-import InstanceSectionsMenu from '@/components/InstanceSectionsMenu.vue'
 import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import PrefixTaxSection from '@/components/PrefixTaxSection.vue'
+import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
@@ -86,6 +85,7 @@ import {
 import { useAppSettings } from '@/composables/useAppSettings'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useCodexInstances } from '@/composables/useCodexInstances'
+import { useDshInstances } from '@/composables/useDshInstances'
 import { useInstanceFilter } from '@/composables/useInstanceFilter'
 import { useInstances } from '@/composables/useInstances'
 import { useMoveAllChats } from '@/composables/useMoveAllChats'
@@ -256,7 +256,8 @@ function weeklyWait(inst: CMInstance) {
   return waitSeverity(weeklyRemaining(inst))
 }
 
-// The sort survives a reload: persisted through useUiPrefs like the table's collapse state.
+// The sort survives a reload: persisted through useUiPrefs. It orders the Claude rows; the Codex
+// and DeepSeek rows below them keep their own order.
 const { desktopSortKey, desktopSortDirection } = useUiPrefs()
 
 const { sortedRows, toggleSort, indicatorFor } = useSortable(
@@ -315,7 +316,14 @@ function lastLaunchedExact(inst: CMInstance): string | undefined {
 // --- filter -----------------------------------------------------------------------------------
 // "Show me the rows I'm after" (composables/useInstanceFilter.ts): open or closed, which plan, how
 // much quota is left. It runs AFTER the sort — it removes or greys rows, it never reorders them.
-const { dimmed: filterDimmed, visible: filterVisible } = useInstanceFilter()
+// Its provider choice decides which providers' rows the table draws at all (see "which providers
+// the table draws" below).
+const {
+  dimmed: filterDimmed,
+  visible: filterVisible,
+  providerShown,
+  showProvider,
+} = useInstanceFilter()
 
 /** What one row is, as far as the filter is concerned. A desktop instance knows all three facts:
  *  it has a window that is open or shut, and an account with a plan and a quota reading. */
@@ -330,35 +338,22 @@ const filterFacts = (inst: CMInstance): InstanceFacts => ({
 })
 
 const visibleRows = computed(() => filterVisible(sortedRows.value, filterFacts))
-/** How many rows the filter took out of this table — the heading has to say so, or an instance
- *  that quietly stopped being listed reads as a bug rather than as the filter working. */
-const hiddenByFilter = computed(() => sortedRows.value.length - visibleRows.value.length)
-/** Every row filtered away. The table is not empty (there ARE instances), so the empty state has to
- *  explain the filter rather than tell the user to create their first instance. */
-const allHiddenByFilter = computed(
-  () => instances.value.length > 0 && visibleRows.value.length === 0,
-)
 
 /**
- * The plan labels the FILTER FLYOUT offers, gathered from every table it can act on.
+ * The plan labels the FILTER FLYOUT offers, gathered from every provider it can act on.
  *
  * Read from the module-scope singletons rather than passed down, because the plans on offer are a
- * property of the whole tab, not of this table: filtering to "Pro" has to be possible when the only
- * Pro account on the machine is a Codex one. Reading `instances` does not start that section's
- * polling — it is rendered below and does its own — so an unused provider simply contributes
- * nothing. (CLI logins have no plan of their own: a linked one shares its desktop row's account,
- * and an unlinked one carries no account record at all.)
+ * property of the whole tab, not of the Claude rows: filtering to "Pro" has to be possible when the
+ * only Pro account on the machine is a Codex one. Reading `instances` does not start Codex's
+ * polling — its rows are rendered below and do their own — so an unused provider simply
+ * contributes nothing. (CLI logins have no plan of their own: a linked one shares its desktop row's
+ * account, and an unlinked one carries no account record at all.)
  */
-const { instances: codexInstances } = useCodexInstances()
+const { instances: codexInstances, refresh: refreshCodex } = useCodexInstances()
 const presentPlans = computed(() => [
   ...instances.value.map((i) => i.account?.planLabel),
   ...codexInstances.value.map((i) => i.account?.planLabel),
 ])
-
-// Collapse state, persisted: someone who only uses the desktop app (or only the CLI) collapses the
-// other table once and expects it to stay that way. Owned by composables/useUiPrefs.ts, which is
-// where every preference that is also mirrored through the daemon lives.
-const { desktopOpen } = useUiPrefs()
 
 const createOpen = ref(false)
 const creating = ref(false)
@@ -465,9 +460,12 @@ async function handleRefresh() {
   // hitting Refresh actually clears the warning banner below.
   // force: re-resolve every account live. Accounts resolve themselves now, so this button is the
   // one way left to say "that identity is stale, go ask again" (e.g. after a plan upgrade).
+  // The Codex and DeepSeek rows share this table, so the one Refresh reloads them too.
   await Promise.all([
     refreshInstances({ force: true, resolve: 'full' }),
     refreshDesktopInstall(true),
+    ...(codexEnabled.value ? [refreshRows(codexRows.value, () => refreshCodex())] : []),
+    ...(dshEnabled.value ? [refreshRows(dshRows.value, () => refreshDsh())] : []),
   ])
 }
 
@@ -484,7 +482,8 @@ async function onCheckUsage(inst: CMInstance) {
   if (reasonKey) toast.error(t(reasonKey))
 }
 
-// Which tables to show, and the CLI instances (so "refresh all" covers them too, not just desktop).
+// Which providers to show, and the CLI instances (so "refresh all" covers them too, not just
+// desktop).
 const {
   showDesktopInstances,
   showCliInstances,
@@ -495,6 +494,8 @@ const {
 } = useAppSettings()
 const {
   cliInstances,
+  startPolling: startCliPolling,
+  stopPolling: stopCliPolling,
   checkUsage: checkCliUsage,
   create: createCli,
   launch: launchCli,
@@ -503,6 +504,91 @@ const {
   remove: removeCli,
 } = useCliInstances()
 onMounted(loadAppSettings)
+
+// --- which providers the table draws ------------------------------------------------------------
+// One table for every desktop instance (owner, 2026-09-30): the Claude rows here, then the Codex
+// and DeepSeek rows, which are their own components rendering the same ten cells. A provider's rows
+// are drawn when Settings → Providers has it on AND the filter's provider choice keeps it.
+const { instances: dshInstances, refresh: refreshDsh } = useDshInstances()
+const codexEnabled = computed(() => codexDesktopEnabled.value || codexCliEnabled.value)
+const claudeShown = computed(() => showDesktopInstances.value && providerShown('claude'))
+const codexShown = computed(() => codexEnabled.value && providerShown('codex'))
+const dshShown = computed(() => dshEnabled.value && providerShown('deepseek'))
+
+/**
+ * What CodexInstanceRows and DshInstanceRows hand this table through defineExpose. `refresh` and
+ * `visibleCount` are optional: a component that filters its own rows can say how many it drew, and
+ * one that does not draws its whole list.
+ */
+interface ProviderRowsHandle {
+  openCreate: () => void
+  refresh?: () => unknown
+  visibleCount?: number
+}
+const codexRows = ref<ProviderRowsHandle | null>(null)
+const dshRows = ref<ProviderRowsHandle | null>(null)
+
+/** A row component's own refresh while it is mounted, else the bare list, so a provider the filter
+ *  is leaving out still has a current count. */
+function refreshRows(rows: ProviderRowsHandle | null, list: () => unknown): unknown {
+  return rows?.refresh ? rows.refresh() : list()
+}
+
+// Rows per provider: every row Settings lets this tab list, and the rows actually drawn.
+const claudeTotal = computed(() => (showDesktopInstances.value ? instances.value.length : 0))
+const codexTotal = computed(() => (codexEnabled.value ? codexInstances.value.length : 0))
+const dshTotal = computed(() => (dshEnabled.value ? dshInstances.value.length : 0))
+const claudeDrawn = computed(() => (claudeShown.value ? visibleRows.value.length : 0))
+const codexDrawn = computed(() =>
+  codexShown.value ? (codexRows.value?.visibleCount ?? codexInstances.value.length) : 0,
+)
+const dshDrawn = computed(() =>
+  dshShown.value ? (dshRows.value?.visibleCount ?? dshInstances.value.length) : 0,
+)
+const totalRows = computed(() => claudeTotal.value + codexTotal.value + dshTotal.value)
+const shownRows = computed(() => claudeDrawn.value + codexDrawn.value + dshDrawn.value)
+/** How many rows the filter (its provider choice included) took out of the table — the heading has
+ *  to say so, or an instance that quietly stopped being listed reads as a bug rather than as the
+ *  filter working. */
+const hiddenByFilter = computed(() => totalRows.value - shownRows.value)
+/** Every row filtered away. The table is not empty (there ARE instances), so the empty state has to
+ *  explain the filter rather than tell the user to create their first instance. */
+const allHiddenByFilter = computed(() => totalRows.value > 0 && shownRows.value === 0)
+
+/** The provider whose rows close the table: its last row drops the bottom border, the others keep
+ *  theirs so one provider's rows do not run straight into the next one's. */
+const lastProvider = computed<Provider>(() =>
+  dshShown.value ? 'deepseek' : codexShown.value ? 'codex' : 'claude',
+)
+
+// --- create: one + menu for every provider --------------------------------------------------------
+/** The providers the + menu offers: those switched on in Settings → Providers. */
+const createProviders = computed<Provider[]>(() => [
+  ...(showDesktopInstances.value ? (['claude'] as const) : []),
+  ...(codexEnabled.value ? (['codex'] as const) : []),
+  ...(dshEnabled.value ? (['deepseek'] as const) : []),
+])
+const CREATE_LABEL: Record<Provider, string> = {
+  claude: 'instances.createClaude',
+  codex: 'instances.createCodex',
+  deepseek: 'instances.createDeepseek',
+}
+
+/**
+ * "New … instance". A provider the filter is leaving out is listed again first, so the row being
+ * created is one you will see, and so its row component, which owns that provider's create
+ * dialog, is mounted to open it.
+ */
+async function onCreateFor(provider: Provider) {
+  showProvider(provider)
+  if (provider === 'claude') {
+    openCreateDialog()
+    return
+  }
+  await nextTick()
+  const rows = provider === 'codex' ? codexRows.value : dshRows.value
+  rows?.openCreate()
+}
 
 // --- unified per-account view -------------------------------------------------------------------
 // A desktop instance and the CLI instance linked to it are the SAME Anthropic account, signed in
@@ -584,7 +670,7 @@ async function onRefreshAllUsage() {
     await Promise.all([
       ...(showDesktopInstances.value ? instances.value.map((i) => checkDesktop(i.dir)) : []),
       ...(showCliInstances.value ? cliInstances.value.map((i) => checkCliUsage(i.id)) : []),
-      ...(codexDesktopEnabled.value || codexCliEnabled.value
+      ...(codexEnabled.value
         ? codexInstances.value
             .filter((i) => i.account?.authMode === 'chatgpt')
             .map((i) => checkCodex(i.id))
@@ -983,6 +1069,10 @@ let desktopInstallTimer: number | null = null
 onMounted(() => {
   startPolling()
   startUsagePolling()
+  // The CLI table lives on the CLI tab now, but the Claude rows here still read the CLI list (the
+  // linked-CLI badge and the ⋯ menu's CLI items), so this tab keeps it current while it is open.
+  // One shared timer: the two tabs are never mounted at the same time.
+  startCliPolling()
   refreshDesktopInstall()
   desktopInstallTimer = window.setInterval(() => {
     if (desktopWarning.value) void refreshDesktopInstall(true)
@@ -991,6 +1081,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopPolling()
   stopUsagePolling()
+  stopCliPolling()
   // Leaving the tab cancels whatever is still trickling through the catch-up queue: those probes
   // exist to fill in THIS table, and a tab you have navigated away from has no business holding a
   // slow queue of network requests open behind you.
@@ -1004,33 +1095,26 @@ onUnmounted(() => {
     <!-- Borderless toolbar, matching Sessions/Queue and the app header (App.vue): the sticky table
          header right below already draws a line there, and two rules a row apart was one of them
          doing nothing but adding weight.
-         The heading doubles as the collapse trigger: someone who lives in the CLI wants this table
-         out of the way, and vice versa. Not a trigger when the table is hidden outright
-         (Settings → Providers), where there is nothing to collapse. The count reads "x of y" once
-         the usage filter is hiding rows, so it never silently disagrees with the number of
-         instances that exist (same convention as the CLI table's linked-elsewhere shortfall). -->
+         One table for every provider's desktop instances, so the heading is a title, not a
+         collapse toggle, and carries no provider logo (each row carries its own). The count covers
+         every provider and reads "x of y" once the filter is hiding rows, so it never silently
+         disagrees with the number of instances that exist. -->
     <InstanceSectionHeader
-      v-model:open="desktopOpen"
-      provider="claude"
       :title="$t('instances.title')"
       :count="
-        showDesktopInstances
-          ? hiddenByFilter > 0
-            ? $t('instances.countOfTotal', { shown: visibleRows.length, total: instances.length })
-            : instances.length
-          : null
+        hiddenByFilter > 0
+          ? $t('instances.countOfTotal', { shown: shownRows, total: totalRows })
+          : totalRows
       "
       :refresh-label="$t('instances.refresh')"
       :refresh-hint="$t('instances.refreshHint')"
       :refreshing="loading"
-      :create-label="showDesktopInstances ? $t('instances.createInstance') : undefined"
-      :collapsible="showDesktopInstances"
+      :collapsible="false"
       @refresh="handleRefresh"
-      @create="openCreateDialog"
     >
       <template #meta>
         <span
-          v-if="showDesktopInstances && hiddenByFilter > 0"
+          v-if="hiddenByFilter > 0"
           class="text-xs font-normal text-muted-foreground"
         >
           {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
@@ -1059,9 +1143,6 @@ onUnmounted(() => {
              composables/useInstanceFilter.ts). A dimmed or short table must always have the
              control that explains it visible in the same toolbar. -->
         <InstanceFilterMenu :present-plans="presentPlans" />
-        <!-- Which tables this tab draws. Settings still has these switches; this is the copy that
-             is one click from the gap where a hidden table used to be. -->
-        <InstanceSectionsMenu />
         <IconTooltip
           :label="$t('instances.refreshAllUsage')"
           :description="$t('instances.refreshAllUsageHint')"
@@ -1069,13 +1150,45 @@ onUnmounted(() => {
           <Button
             variant="outline"
             size="icon"
-            :disabled="refreshingAllUsage || (instances.length === 0 && cliInstances.length === 0)"
+            :disabled="
+              refreshingAllUsage ||
+              instances.length + cliInstances.length + codexInstances.length === 0
+            "
             :aria-label="$t('instances.refreshAllUsage')"
             @click="onRefreshAllUsage"
           >
             <Gauge :class="refreshingAllUsage ? 'animate-pulse' : ''" />
           </Button>
         </IconTooltip>
+        <!-- Create: the header's plus pill, now a menu with one item per provider switched on in
+             Settings. Same look (Plus at rest, label on hover), but no tooltip wrapper: nesting a
+             TooltipTrigger around a DropdownMenuTrigger swallows the click (see the row kebab). -->
+        <DropdownMenu v-if="createProviders.length > 0">
+          <DropdownMenuTrigger as-child>
+            <Button
+              size="sm"
+              class="group/create overflow-hidden"
+              :aria-label="$t('instances.createInstance')"
+            >
+              <span class="inline-flex items-center">
+                <Plus class="shrink-0" />
+                <span
+                  class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-36 group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-36 group-focus-visible/create:opacity-100"
+                >{{ $t('instances.createInstance') }}</span>
+              </span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              v-for="provider in createProviders"
+              :key="provider"
+              @click="onCreateFor(provider)"
+            >
+              <ProviderLogo :provider="provider" class="size-3.5" />
+              {{ $t(CREATE_LABEL[provider]) }}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </template>
     </InstanceSectionHeader>
 
@@ -1108,19 +1221,11 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- gap-10, not a divider: the two tables used to abut with a hairline between them, which read
-         as one continuous table whose last rows happened to have different columns. A flex gap only
-         applies BETWEEN children, so hiding either table leaves no orphan space behind it.
-         pb-16: with every section shown, the last one (DeepSeek) sat flush against the bottom edge
-         of the scroll area, its last row half-hidden behind the window chrome (owner, 2026-09-20). -->
+    <!-- gap-10 between the table and the prefix-tax section under it: a flex gap only applies
+         BETWEEN children, so it leaves no orphan space when either is empty.
+         pb-16: the last section sat flush against the bottom edge of the scroll area, its last row
+         half-hidden behind the window chrome (owner, 2026-09-20). -->
     <div class="flex flex-col gap-10 pb-16">
-      <!-- Both tables are hideable (Settings → Providers): plenty of people use only the desktop app,
-           or only the CLI, and shouldn't have to look at an empty table for the other. -->
-      <!-- ExpandArea, not the kit's ExpandTransition: this table's header is `sticky top-0`, and
-           a wrapper with a permanent `overflow: hidden` becomes the scrollport sticky resolves
-           against, so the header would silently stop sticking. ExpandArea only clips WHILE the
-           transition runs, which is the one moment nothing is being scrolled anyway. -->
-      <ExpandArea :open="showDesktopInstances && desktopOpen">
       <!-- px-1.5 rather than the kit's px-2: ten columns in the 1000px frame, and the 36px this
            gives back is what lets every capped name fit the Name column whole. -->
       <Table density="compact">
@@ -1186,12 +1291,11 @@ onUnmounted(() => {
             </template>
             <!-- … swapped one-for-one for the quota columns in usage mode, so the table keeps its
                  shape and only its subject changes. -->
-            <!-- The quota columns carry FIXED widths (w-28 / w-24) here and in the CLI and Codex
-                 tables, which is the one thing that makes the three stacked tables actually line
-                 up. Auto table layout sizes each table's columns from its own content, so the same
-                 "Weekly" column came out 110px here and 78px below — the bars for one kind of fact
-                 were different lengths depending on which table you read them in. Change a width
-                 here and you must change the matching one in the other two. -->
+            <!-- The quota columns carry FIXED widths (w-28 / w-24), here and in the CLI tab's table.
+                 Auto table layout sizes columns from their content, so without them the same
+                 "Weekly" column came out 110px in one table and 78px in the next, and here the
+                 columns would shift as one provider's rows came and went. The Codex and DeepSeek
+                 rows render into these same columns, so their cells follow this header. -->
             <template v-else>
               <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
                 <span class="inline-flex items-center gap-0.5">
@@ -1247,35 +1351,11 @@ onUnmounted(() => {
             <TableHead class="text-end">{{ $t('instances.colActions') }}</TableHead>
           </TableRow>
         </TableHeader>
-        <!-- visibleRows, not instances: with "hide" on, the filter can empty a table that still has
-             instances in it. Keying the empty branch off the rows actually rendered is what stops
-             that landing as a blank tbody with no explanation. -->
-        <TableBody v-if="visibleRows.length === 0">
-          <!-- Usage mode swaps three process columns for two quota ones and adds the 5-hour
-               usage chip, which lands back on ten either way (Last launched shows in both). Kept as
-               an expression rather than a literal so a future column change cannot silently desync
-               the span from the header. -->
-          <TableEmpty v-if="!loading" :colspan="usageMode ? 10 : 10">
-            <div class="flex flex-col items-center gap-1 text-center">
-              <component :is="allHiddenByFilter ? Funnel : Boxes" class="mb-1 size-6 opacity-40" />
-              <p class="font-medium text-foreground">
-                {{
-                  allHiddenByFilter
-                    ? $t('instances.filterAllHidden')
-                    : $t('instances.empty')
-                }}
-              </p>
-              <p class="text-xs text-muted-foreground">
-                {{
-                  allHiddenByFilter
-                    ? $t('instances.filterAllHiddenHint')
-                    : $t('instances.emptyHint')
-                }}
-              </p>
-            </div>
-          </TableEmpty>
-          <!-- first-load skeleton rows so the table never looks blank -->
-          <TableRow v-for="i in 4" v-else :key="i">
+        <!-- One body per provider, Claude first: a table may hold several tbody elements, and the
+             Codex and DeepSeek row components render bare rows into theirs. -->
+        <!-- first-load skeleton rows so the table never looks blank -->
+        <TableBody v-if="claudeShown && loading && visibleRows.length === 0">
+          <TableRow v-for="i in 4" :key="i">
             <TableCell><Skeleton class="size-2" /></TableCell>
             <TableCell>
               <Skeleton class="h-4 w-(--skeleton-w)" :style="{ '--skeleton-w': `${9 - (i % 3) * 2}rem` }" />
@@ -1301,11 +1381,12 @@ onUnmounted(() => {
           </TableRow>
         </TableBody>
         <TransitionGroup
-          v-else
+          v-else-if="claudeShown"
           tag="tbody"
           name="row-fade"
           data-slot="table-body"
-          class="[&_tr:last-child]:border-0 [&>tr]:transition-colors [&>tr]:duration-200"
+          class="[&>tr]:transition-colors [&>tr]:duration-200"
+          :class="lastProvider === 'claude' ? '[&_tr:last-child]:border-0' : undefined"
         >
           <!-- Dimmed, not disabled: a filtered-out instance is one you've decided against for now,
                not one you can't touch — every action on the row still works. It does not react to
@@ -1321,23 +1402,15 @@ onUnmounted(() => {
             @contextmenu.prevent="rowMenuOpen = inst.dir"
           >
             <TableCell>
-              <!-- per-instance icon (replaces the old status dot); the chosen glyph + color are
-                   its identity, and a small pulsing badge on the top-right marks the active state -->
+              <!-- A status dot, as on every provider's rows, so the first column reads one way down
+                   the whole table. The instance's own glyph moved beside its name. -->
               <span
-                class="relative inline-flex size-5 items-center justify-center"
+                role="img"
+                class="inline-block size-2 rounded-full"
+                :class="inst.isRunning ? 'bg-success animate-pulse' : 'bg-muted-foreground/40'"
                 :title="inst.isRunning ? $t('instances.running') : $t('instances.stopped')"
-              >
-                <component
-                  :is="iconComponent(resolveIconKey(inst))"
-                  class="size-4.5 text-(--icon-color)"
-                  :style="{ '--icon-color': colorValue(resolveColorKey(inst)) }"
-                  :class="inst.isRunning ? '' : 'opacity-40'"
-                />
-                <span
-                  v-if="inst.isRunning"
-                  class="absolute -right-1 -top-1 size-2 rounded-full bg-success ring-2 ring-background animate-pulse"
-                />
-              </span>
+                :aria-label="inst.isRunning ? $t('instances.running') : $t('instances.stopped')"
+              />
             </TableCell>
             <TableCell class="max-w-0">
               <!-- The folder used to sit under the name as a permanent mono sub-line, which made
@@ -1348,10 +1421,19 @@ onUnmounted(() => {
                    A name too long for the column takes the first line instead, and pushes both of
                    those down one — see nameTooltip. -->
               <div class="flex min-w-0 items-center gap-1.5 font-medium">
+                <!-- The provider's mark first: Claude, Codex and DeepSeek rows share this table. -->
+                <ProviderLogo provider="claude" class="size-3.5" />
                 <!-- The permanent number sits BEFORE the name because the name is the untrustworthy
                      half: a profile signed into a different account than the folder it was named
                      after keeps showing the old name, and the number never drifts. -->
                 <InstanceNumber :num="inst.num" />
+                <!-- The instance's own glyph and colour, its identity; faded while it is closed. -->
+                <component
+                  :is="iconComponent(resolveIconKey(inst))"
+                  class="size-4 shrink-0 text-(--icon-color)"
+                  :style="{ '--icon-color': colorValue(resolveColorKey(inst)) }"
+                  :class="inst.isRunning ? '' : 'opacity-40'"
+                />
                 <!-- min-w-0 + truncate: when the column is squeezed, the name elides and the number
                      and marker icons around it keep their size. -->
                 <IconTooltip v-bind="nameTooltip(inst)">
@@ -1787,20 +1869,49 @@ onUnmounted(() => {
             </TableCell>
           </TableRow>
         </TransitionGroup>
+        <tbody
+          v-if="codexShown"
+          data-slot="table-body"
+          :class="lastProvider === 'codex' ? '[&_tr:last-child]:border-0' : undefined"
+        >
+          <CodexInstanceRows ref="codexRows" :usage-mode="usageMode" />
+        </tbody>
+        <!-- Hideable in Settings → Providers like Codex (owner, 2026-09-30): someone who never
+             uses DeepSeek should not have to scroll past its rows. -->
+        <tbody v-if="dshShown" data-slot="table-body" class="[&_tr:last-child]:border-0">
+          <DshInstanceRows ref="dshRows" :usage-mode="usageMode" />
+        </tbody>
+        <!-- Keyed off the rows actually drawn, across every provider, not off the instance lists:
+             with "hide" on (or a provider left out), the filter can empty a table that still has
+             instances behind it, and that must not land as a blank table with no explanation. -->
+        <TableBody v-if="shownRows === 0 && !(claudeShown && loading)">
+          <!-- Usage mode swaps three process columns for two quota ones and adds the 5-hour
+               usage chip, which lands back on ten either way (Last launched shows in both). Kept as
+               an expression rather than a literal so a future column change cannot silently desync
+               the span from the header. -->
+          <TableEmpty :colspan="usageMode ? 10 : 10">
+            <div class="flex flex-col items-center gap-1 text-center">
+              <component :is="allHiddenByFilter ? Funnel : Boxes" class="mb-1 size-6 opacity-40" />
+              <p class="font-medium text-foreground">
+                {{
+                  allHiddenByFilter
+                    ? $t('instances.filterAllHidden')
+                    : $t('instances.empty')
+                }}
+              </p>
+              <p class="text-xs text-muted-foreground">
+                {{
+                  allHiddenByFilter
+                    ? $t('instances.filterAllHiddenHint')
+                    : $t('instances.emptyHint')
+                }}
+              </p>
+            </div>
+          </TableEmpty>
+        </TableBody>
       </Table>
-      </ExpandArea>
 
-      <CliInstancesSection v-if="showCliInstances" />
-      <CodexInstancesSection
-        v-if="codexDesktopEnabled || codexCliEnabled"
-        :desktop-enabled="codexDesktopEnabled"
-        :cli-enabled="codexCliEnabled"
-      />
-      <!-- Hideable in Settings → Providers like the Codex table (owner, 2026-09-30): the section
-           lists what is on the machine and shows an empty state when the harness is not
-           installed, but someone who never uses DeepSeek should not have to scroll past it. -->
-      <DshInstancesSection v-if="dshEnabled" />
-      <!-- Last on purpose: it reads the homes the tables above list, and measuring is a click. -->
+      <!-- Last on purpose: it reads the homes the table above lists, and measuring is a click. -->
       <PrefixTaxSection />
     </div>
 

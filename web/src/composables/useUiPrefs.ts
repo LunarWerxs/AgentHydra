@@ -58,14 +58,6 @@ const storedView = useStorage<AppView>(APP_VIEW_KEY, 'sessions', undefined, {
 /** Where THIS window is, which is what the shell's tabs bind to. */
 const view = createTabView(storedView, tabStorage())
 
-// --- Instances: which tables are expanded -------------------------------------------------------
-// Someone who runs only CLI logins collapses the other table once and expects it to stay that way.
-
-const desktopOpen = useStorage('agenthydra.instances.desktopOpen', true)
-const cliOpen = useStorage('agenthydra.instances.cliOpen', true)
-const codexOpen = useStorage('agenthydra.instances.codexOpen', true)
-const dshOpen = useStorage('agenthydra.instances.dshOpen', true)
-
 // --- Instances: how the desktop table is sorted ------------------------------------------------
 // Which column, and which way. The table used to forget its sort on every reload, which on a
 // long-lived tray window means every update, restart or stray F5 threw away the ordering someone
@@ -122,10 +114,6 @@ watch(sidebarWidth, (w) => {
 
 // Mirrored through the daemon, at module scope, for the reasons in the header.
 registerSharedPref(APP_VIEW_KEY, storedView, APP_VIEWS)
-registerSharedPref('agenthydra.instances.desktopOpen', desktopOpen)
-registerSharedPref('agenthydra.instances.cliOpen', cliOpen)
-registerSharedPref('agenthydra.instances.codexOpen', codexOpen)
-registerSharedPref('agenthydra.instances.dshOpen', dshOpen)
 registerSharedPref('agenthydra.instances.desktopSortKey', desktopSortKey)
 registerSharedPref('agenthydra.instances.desktopSortDirection', desktopSortDirection, [
   '',
@@ -146,10 +134,6 @@ registerSharedPref('agenthydra.sessions.copyPathPrompt', copyPathPrompt)
 export function useUiPrefs() {
   return {
     view,
-    desktopOpen,
-    cliOpen,
-    codexOpen,
-    dshOpen,
     desktopSortKey,
     desktopSortDirection,
     showTools,

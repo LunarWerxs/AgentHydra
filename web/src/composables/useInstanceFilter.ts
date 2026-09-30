@@ -24,12 +24,19 @@
 // * AN UNKNOWN FACT NEVER SETS A ROW ASIDE (see lib/instance-filter.ts) — an unresolved plan or a
 //   row with no window to be open is not a "no".
 //
-// Module-scope singleton + useStorage, matching useUsageMode.ts: the desktop table, the CLI table,
-// the Codex table, the toolbar flyout and the compact quick window all read this, and a
-// per-component ref would let them disagree.
+// Beside the three facets sits the PROVIDER choice (owner, 2026-09-30: Claude, Codex and DeepSeek
+// rows share one Instances table, and he picks which of them it lists). It is not a match rule:
+// it decides which providers' rows the table draws at all, so it neither dims nor waits for the
+// master switch. Behind the switch, turning the filter off would bring back a provider you chose
+// not to see.
+//
+// Module-scope singleton + useStorage, matching useUsageMode.ts: the Instances table, the CLI tab's
+// table, the toolbar flyout and the compact quick window all read this, and a per-component ref
+// would let them disagree.
 
 import { useStorage } from '@vueuse/core'
 import { computed } from 'vue'
+import type { Provider } from '@/components/ProviderLogo.vue'
 import {
   decodePlans,
   encodePlans,
@@ -79,6 +86,18 @@ const weekThreshold = useStorage(`${KEY}.threshold`, DEFAULT_USAGE_THRESHOLD)
 const sessionEnabled = useStorage(`${KEY}.session`, false)
 const sessionThreshold = useStorage(`${KEY}.sessionThreshold`, DEFAULT_USAGE_THRESHOLD)
 
+/** Every provider the Instances table lists, in the order its rows and the flyout draw them. */
+export const INSTANCE_PROVIDERS: readonly Provider[] = ['claude', 'codex', 'deepseek']
+
+/** The providers the table leaves out, comma-joined. Stored as what is HIDDEN rather than what is
+ *  shown, so the default (empty) is every provider, and a provider added later is listed without
+ *  anyone having to tick it. */
+const hiddenProvidersRaw = useStorage(`${KEY}.hiddenProviders`, '')
+
+function decodeProviders(raw: string): Provider[] {
+  return INSTANCE_PROVIDERS.filter((p) => raw.split(',').includes(p))
+}
+
 // Every switch, threshold and selection above is ALSO mirrored through the daemon, because the
 // quick-instances window can be served from a different PORT and browser storage is scoped per
 // origin — so without this, "the filter I set in the full manager" would not follow you into the
@@ -92,6 +111,7 @@ registerSharedPref(`${KEY}.week`, weekEnabled)
 registerSharedPref(`${KEY}.threshold`, weekThreshold)
 registerSharedPref(`${KEY}.session`, sessionEnabled)
 registerSharedPref(`${KEY}.sessionThreshold`, sessionThreshold)
+registerSharedPref(`${KEY}.hiddenProviders`, hiddenProvidersRaw)
 
 export function useInstanceFilter() {
   // No clock needed: nothing here counts down, it only compares percentages.
@@ -153,6 +173,22 @@ export function useInstanceFilter() {
     return hideMatches.value && matches(facts)
   }
 
+  const hiddenProviders = computed(() => decodeProviders(hiddenProvidersRaw.value))
+  /** The providers whose rows the table draws. */
+  const providers = computed(() =>
+    INSTANCE_PROVIDERS.filter((p) => !hiddenProviders.value.includes(p)),
+  )
+  /** Some provider is left out, so the toolbar has to say so. */
+  const providersNarrowed = computed(() => hiddenProviders.value.length > 0)
+
+  function providerShown(provider: Provider): boolean {
+    return !hiddenProviders.value.includes(provider)
+  }
+
+  function setHiddenProviders(next: readonly Provider[]): void {
+    hiddenProvidersRaw.value = next.join(',')
+  }
+
   /** Drop the hidden rows from a list. Sort first, then filter — the filter removes rows, it
    *  never reorders them. Takes a readonly array because that is what useSortable hands back. */
   function visible<T>(rows: readonly T[], factsOf: (row: T) => InstanceFacts): readonly T[] {
@@ -180,6 +216,21 @@ export function useInstanceFilter() {
     dimmed,
     hidden,
     visible,
+    providers,
+    providersNarrowed,
+    providerShown,
+    /** Show or leave out one provider. The last one shown stays: a table listing no provider at
+     *  all is an empty table with nothing on screen to say why. */
+    toggleProvider: (provider: Provider) => {
+      const hiddenNow = hiddenProviders.value
+      if (hiddenNow.includes(provider)) setHiddenProviders(hiddenNow.filter((p) => p !== provider))
+      else if (providers.value.length > 1) setHiddenProviders([...hiddenNow, provider])
+    },
+    /** List this provider again, if it was left out (creating one of its instances does this). */
+    showProvider: (provider: Provider) => {
+      const hiddenNow = hiddenProviders.value
+      if (hiddenNow.includes(provider)) setHiddenProviders(hiddenNow.filter((p) => p !== provider))
+    },
     /** Add or remove one plan from the selection. A toggle, not an append: the selection is a set,
      *  and every control that writes it is a two-state button. */
     togglePlan: (plan: string) => {

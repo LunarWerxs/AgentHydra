@@ -26,8 +26,12 @@
 
 import { type Ref, ref, watch } from 'vue'
 
-export type AppView = 'sessions' | 'instances' | 'analytics' | 'corch'
-export const APP_VIEWS: readonly AppView[] = ['sessions', 'instances', 'analytics', 'corch']
+export type AppView = 'sessions' | 'instances' | 'cli' | 'analytics'
+export const APP_VIEWS: readonly AppView[] = ['sessions', 'instances', 'cli', 'analytics']
+
+/** Tabs that were folded into another one, and where they went. Corch became part of the CLI tab
+ *  (2026-09-30); a window that last stood on it opens there rather than falling back to Sessions. */
+const RENAMED_VIEWS: Readonly<Record<string, AppView>> = { corch: 'cli' }
 
 /** The one key, under both storages. Same name deliberately: they hold the same kind of value, for
  *  different lifetimes, and a reader looking at either one should not have to learn two names. */
@@ -36,7 +40,9 @@ export const APP_VIEW_KEY = 'agenthydra.app.view'
 /** Validated on read, never trusted: a stale, hand-edited or downgrade-era value must fall back
  *  rather than render a tab that no longer exists. Null means "nothing usable here". */
 export function parseAppView(raw: string | null | undefined): AppView | null {
-  return raw != null && APP_VIEWS.includes(raw as AppView) ? (raw as AppView) : null
+  if (raw == null) return null
+  if (Object.hasOwn(RENAMED_VIEWS, raw)) return RENAMED_VIEWS[raw] ?? null
+  return APP_VIEWS.includes(raw as AppView) ? (raw as AppView) : null
 }
 
 /** Session storage, or null where it cannot be had. Private-browsing modes throw on the ACCESS,

@@ -848,10 +848,11 @@ export interface QuickAddFlow {
   account: { email: string | null; plan: string | null } | null
   startedAt: number
 }
-export const startQuickAdd = (email: string) =>
+/** `instanceId` signs that existing CLI instance in again, replacing its login. */
+export const startQuickAdd = (email: string, instanceId?: string) =>
   j<QuickAddFlow | { error: string }>('/api/cli-instances/quick-add', {
     method: 'POST',
-    body: JSON.stringify({ email }),
+    body: JSON.stringify({ email, ...(instanceId ? { instanceId } : {}) }),
   })
 /** The last 20 flows, newest first. */
 export const listQuickAdds = () => j<QuickAddFlow[]>('/api/cli-instances/quick-add')

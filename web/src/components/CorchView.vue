@@ -5,15 +5,14 @@
 // and again when the page is shown or the window regains focus.
 //
 // Layout (2026-09-30 review, three lenses agreeing): the header comes first and says what Corch is;
-// "Add a CLI account" is a labelled button there, opening Quick add as a card rather than a stray
-// form above the title; the list is one bordered panel with the hand-off as a subheader; the detail
-// pane is sticky so a row low in a long list does not open its detail off screen. Quick add stays
-// mounted when closed (v-show), so a sign-in waiting for a code keeps polling.
-import { CloudOff, Network, Plus, RefreshCw, X } from '@lucide/vue'
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+// the list is one bordered panel with the hand-off as a subheader; the detail pane is sticky so a row
+// low in a long list does not open its detail off screen. It sits on the CLI tab under the CLI
+// accounts table (CliView.vue), whose Quick add is where an account is added, so it has none of its
+// own.
+import { CloudOff, Network, RefreshCw } from '@lucide/vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import CorchStatusBadge from '@/components/CorchStatusBadge.vue'
 import CorchWorkerDetail from '@/components/CorchWorkerDetail.vue'
 import { Button } from '@/components/ui/button'
@@ -31,8 +30,6 @@ const loading = ref(false)
 const loaded = ref(false)
 const selectedId = ref<string | null>(null)
 const detail = ref<(CorchWorkerView & { events: string[] }) | null>(null)
-const addOpen = ref(false)
-const quickAddEl = ref<HTMLElement | null>(null)
 const now = ref(Date.now())
 /** The last load failed. Before anything loaded that is an error state (never "No tasks yet");
  *  after, a banner over the last known list, whose spinners would otherwise look alive. */
@@ -81,13 +78,11 @@ async function load(opts: { silent?: boolean } = {}) {
     now.value = Date.now()
     if (!loaded.value) {
       loaded.value = true
-      // First paint: open the newest live task (else the newest one), and open Quick add when
-      // there is nothing to look at yet, since adding an account is then the next step.
+      // First paint: open the newest live task, else the newest one.
       const first =
         [...workers.value].sort((a, b) => b.createdAt - a.createdAt).find(isCorchActive) ??
         groups.value[0]?.items[0]
       if (first) selectedId.value = first.id
-      else addOpen.value = true
     }
     await loadDetail()
   } catch {
@@ -117,12 +112,6 @@ function select(w: CorchWorkerView) {
   selectedId.value = w.id
   detail.value = null
   void loadDetail()
-}
-
-async function openAdd() {
-  addOpen.value = true
-  await nextTick()
-  quickAddEl.value?.querySelector<HTMLInputElement>('input[type="email"]')?.focus()
 }
 
 const startedAgo = (w: CorchWorkerView) => formatAgo(now.value, w.createdAt)
@@ -158,52 +147,17 @@ onUnmounted(() => {
         </h2>
         <p class="max-w-2xl text-xs text-muted-foreground">{{ $t('corch.subtitle') }}</p>
       </div>
-      <div class="flex items-center gap-1.5">
-        <Button
-          variant="outline"
-          size="icon"
-          :disabled="loading"
-          :aria-label="$t('corch.refresh')"
-          :title="$t('corch.refresh')"
-          @click="load()"
-        >
-          <RefreshCw :class="loading ? 'animate-spin' : ''" />
-        </Button>
-        <Button
-          :variant="addOpen ? 'secondary' : 'default'"
-          :aria-expanded="addOpen"
-          aria-controls="corch-quick-add"
-          @click="addOpen ? (addOpen = false) : openAdd()"
-        >
-          <Plus /> {{ $t('corch.addAccount') }}
-        </Button>
-      </div>
+      <Button
+        variant="outline"
+        size="icon"
+        :disabled="loading"
+        :aria-label="$t('corch.refresh')"
+        :title="$t('corch.refresh')"
+        @click="load()"
+      >
+        <RefreshCw :class="loading ? 'animate-spin' : ''" />
+      </Button>
     </header>
-
-    <section
-      v-show="addOpen"
-      id="corch-quick-add"
-      ref="quickAddEl"
-      aria-labelledby="corch-qa-title"
-      class="flex flex-col gap-3 rounded-lg border bg-card p-4"
-    >
-      <div class="flex items-start justify-between gap-3">
-        <div class="flex min-w-0 flex-col gap-0.5">
-          <h3 id="corch-qa-title" class="text-sm font-medium">{{ $t('corch.qaTitle') }}</h3>
-          <p class="max-w-2xl text-xs text-muted-foreground">{{ $t('corch.qaHint') }}</p>
-        </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          :aria-label="$t('corch.qaCancel')"
-          :title="$t('corch.qaCancel')"
-          @click="addOpen = false"
-        >
-          <X />
-        </Button>
-      </div>
-      <CliQuickAdd />
-    </section>
 
     <p
       v-if="loaded && unreachable"
@@ -238,9 +192,6 @@ onUnmounted(() => {
       <Network class="size-7 text-muted-foreground" />
       <p class="text-sm font-medium">{{ $t('corch.emptyTitle') }}</p>
       <p class="max-w-md text-xs text-muted-foreground">{{ $t('corch.empty') }}</p>
-      <Button v-if="!addOpen" variant="outline" class="mt-2" @click="openAdd">
-        <Plus /> {{ $t('corch.addAccount') }}
-      </Button>
     </div>
 
     <div v-else class="grid items-start gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]">

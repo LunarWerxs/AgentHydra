@@ -24,6 +24,7 @@ export default {
   shortcutSessions: 'Go to Sessions',
   shortcutInstances: 'Go to Instances',
   shortcutAnalytics: 'Go to Analytics',
+  shortcutCli: 'Go to CLI',
   tabAnalytics: 'Analytics',
-  tabCorch: 'Corch',
+  tabCli: 'CLI',
 }

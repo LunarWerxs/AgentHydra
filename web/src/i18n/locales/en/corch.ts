@@ -1,9 +1,9 @@
 // Corch view (components/CorchView.vue, CorchWorkerDetail.vue) and the CLI Quick add row
-// (CliQuickAdd.vue, also shown in CliInstancesSection.vue). Plain words on purpose: the owner reads
-// this tab, so no "moves", "groups" or "turns" without saying what they mean (2026-09-30 review).
+// (CliQuickAdd.vue, in CliInstancesSection.vue; both sit on the CLI tab). Plain words on purpose:
+// the owner reads this tab, so no "moves", "groups" or "turns" without saying what they mean
+// (2026-09-30 review).
 export default {
   // --- quick add ---
-  qaTitle: 'Add a CLI account',
   qaHint:
     'Type the email of a Claude account. In the sign-in window, complete the human check if shown, then open the sign-in link from your email in that window. The code is entered automatically, and the window closes when the account joins the pool your tasks run on.',
   qaPlaceholder: "name{'@'}example.com",
@@ -32,7 +32,6 @@ export default {
   subtitle:
     'Tasks a chat handed to your Claude CLI accounts. When an account hits its usage limit, the task moves to another one by itself.',
   refresh: 'Refresh',
-  addAccount: 'Add a CLI account',
   emptyTitle: 'No tasks yet',
   empty:
     'Ask any chat to corch a task (run it on your Claude CLI accounts) and each piece shows up here.',

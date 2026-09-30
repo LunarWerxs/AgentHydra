@@ -22,15 +22,20 @@
 // rows. With three facets, two of them carrying a switch and a threshold, an undifferentiated list
 // left the eye no way to tell which control belonged to which question; a card that visibly
 // contains its own controls answers that before it has to be read.
-import { Funnel } from '@lucide/vue'
+//
+// The PROVIDER section sits first, above the master switch, because it is not one of the things
+// that switch turns on: it picks which providers' rows the Instances table lists at all, and acts
+// whether the filter is on or off (see composables/useInstanceFilter.ts).
+import { Check, Funnel } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
 import UsageFilterWindow from '@/components/UsageFilterWindow.vue'
 import UsageRefreshRows from '@/components/UsageRefreshRows.vue'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
-import { useInstanceFilter } from '@/composables/useInstanceFilter'
+import { INSTANCE_PROVIDERS, useInstanceFilter } from '@/composables/useInstanceFilter'
 import { planOptions, STATUS_FILTERS, type StatusFilter } from '@/lib/instance-filter'
 import { cn } from '@/lib/utils'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
@@ -66,17 +71,28 @@ const {
   noRule,
   setWeekThreshold,
   setSessionThreshold,
+  providers,
+  providersNarrowed,
+  providerShown,
+  toggleProvider,
 } = useInstanceFilter()
 
-// The trigger carries the rule when the filter is on, so the toolbar says what the tables are doing
-// without needing the flyout opened. `secondary` matches the pressed usage-mode toggle beside it,
-// which is the established "this mode is on" signal in this toolbar.
-const triggerVariant = computed(() => (enabled.value ? 'secondary' : 'outline'))
+// The trigger carries the rule when the filter is on or a provider is left out, so the toolbar says
+// what the tables are doing without needing the flyout opened. `secondary` matches the pressed
+// usage-mode toggle beside it, which is the established "this mode is on" signal in this toolbar.
+const showsRule = computed(() => enabled.value || providersNarrowed.value)
+const triggerVariant = computed(() => (showsRule.value ? 'secondary' : 'outline'))
 
 const STATUS_LABEL: Record<StatusFilter, string> = {
   all: 'instances.filterStatusAny',
   open: 'instances.filterStatusOpen',
   closed: 'instances.filterStatusClosed',
+}
+
+const PROVIDER_LABEL: Record<Provider, string> = {
+  claude: 'instances.providerClaude',
+  codex: 'instances.providerCodex',
+  deepseek: 'instances.providerDeepseek',
 }
 
 /** Every plan the flyout offers: what is on screen now, plus what is selected. */
@@ -89,10 +105,21 @@ const options = computed(() => planOptions(props.presentPlans, plans.value))
  * 5-hour line carries a "5h" tag — so the common single-window case reads exactly as it did before
  * there were three facets. Plans collapse to a count past the first, because a toolbar button
  * cannot carry "Max 20× · Max 5× · Pro" and a button that wraps to two lines is worse than a
- * button that says "3 plans".
+ * button that says "3 plans". Providers lead and follow the same rule: the one provider listed by
+ * name, two as "2 providers". They are counted whether or not the filter is on, because they act
+ * either way.
  */
 const triggerLabel = computed(() => {
   const parts: string[] = []
+  if (providersNarrowed.value) {
+    const shown = providers.value
+    parts.push(
+      shown.length === 1
+        ? t(PROVIDER_LABEL[shown[0]])
+        : t('instances.filterChipProviders', { count: shown.length }),
+    )
+  }
+  if (!enabled.value) return parts.join(' · ')
   if (statusFilter.value !== 'all') parts.push(t(STATUS_LABEL[statusFilter.value]))
   const picked = plans.value
   if (picked.length === 1) parts.push(picked[0])
@@ -133,11 +160,11 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
         <PopoverTrigger as-child>
           <button
             type="button"
-            :class="cn(buttonVariants({ variant: triggerVariant, size: enabled ? 'default' : 'icon' }))"
+            :class="cn(buttonVariants({ variant: triggerVariant, size: showsRule ? 'default' : 'icon' }))"
             :aria-label="$t('instances.filterTitle')"
           >
             <Funnel />
-            <span v-if="enabled" class="tabular-nums">{{ triggerLabel }}</span>
+            <span v-if="showsRule" class="tabular-nums">{{ triggerLabel }}</span>
           </button>
         </PopoverTrigger>
         <!-- Wider than the default popover: two threshold cards, each with a four-up preset row,
@@ -148,21 +175,56 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
                was worse than the height it saved — expanding a window moved the controls under the
                cursor, and the section you had just opened could land below the fold. -->
           <div class="space-y-3 p-3">
-            <header class="space-y-1.5">
-              <h2 class="text-sm font-semibold text-foreground">
-                {{ $t('instances.filterTitle') }}
-              </h2>
-              <!-- The master switch sits at top level rather than inside a card: the cards below are
-                   the things it turns on, and nesting it among them would make it look like one more
-                   of them. -->
-              <div class="flex items-center gap-3">
-                <span class="flex min-w-0 flex-1 items-center gap-1.5 text-ui text-foreground">
-                  {{ $t('instances.filterEnable') }}
-                  <InfoHint :text="$t('instances.filterHint')" />
-                </span>
-                <Switch v-model="enabled" />
+            <h2 class="text-sm font-semibold text-foreground">
+              {{ $t('instances.filterTitle') }}
+            </h2>
+
+            <!-- PROVIDER. Checkboxes, not a segmented row: any mix of the three is an answer. The
+                 last one ticked cannot be cleared (useInstanceFilter.toggleProvider), so it is
+                 greyed rather than left as a dead click. -->
+            <section class="space-y-1.5">
+              <h3 :class="CAPTION">{{ $t('instances.filterProvider') }}</h3>
+              <div :class="cn(CARD, 'space-y-1.5 px-2.5 py-2')">
+                <p class="text-xs text-muted-foreground">
+                  {{ $t('instances.filterProviderHint') }}
+                </p>
+                <div class="grid grid-cols-3 gap-1">
+                  <button
+                    v-for="provider in INSTANCE_PROVIDERS"
+                    :key="provider"
+                    type="button"
+                    role="checkbox"
+                    :aria-checked="providerShown(provider)"
+                    :disabled="providerShown(provider) && providers.length === 1"
+                    class="flex h-7 min-w-0 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
+                    @click="toggleProvider(provider)"
+                  >
+                    <span
+                      class="flex size-3.5 shrink-0 items-center justify-center rounded-sm border"
+                      :class="
+                        providerShown(provider)
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-muted-foreground/50'
+                      "
+                    >
+                      <Check v-if="providerShown(provider)" class="size-3" />
+                    </span>
+                    <ProviderLogo :provider="provider" class="size-3.5" />
+                    <span class="truncate">{{ $t(PROVIDER_LABEL[provider]) }}</span>
+                  </button>
+                </div>
               </div>
-            </header>
+            </section>
+
+            <!-- The master switch sits outside every card: the cards below it are the things it
+                 turns on, and nesting it among them would make it look like one more of them. -->
+            <div class="flex items-center gap-3">
+              <span class="flex min-w-0 flex-1 items-center gap-1.5 text-ui text-foreground">
+                {{ $t('instances.filterEnable') }}
+                <InfoHint :text="$t('instances.filterHint')" />
+              </span>
+              <Switch v-model="enabled" />
+            </div>
 
             <!-- Everything below is dead weight while the filter is off — collapse it rather than
                  leaving choices you can make and controls that do nothing. -->
