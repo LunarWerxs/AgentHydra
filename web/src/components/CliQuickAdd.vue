@@ -8,7 +8,8 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
-import type { Input } from '@/components/ui/input'
+// biome-ignore lint/style/useImportType: a component used in the template. A type-only import erases it, the tag renders as a bare <input>, v-model never updates, and Add stays disabled (2026-09-30).
+import { Input } from '@/components/ui/input'
 import type { QuickAddFlow } from '@/lib/api'
 import { cancelQuickAdd, listQuickAdds, startQuickAdd, submitQuickAddCode } from '@/lib/api'
 

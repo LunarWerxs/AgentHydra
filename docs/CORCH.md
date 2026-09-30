@@ -293,3 +293,20 @@ a `result` with `is_error: true` and the same text, then exits 1. Otherwise on `
 requires `projects/*/<id>.jsonl` in its own config dir (else prints `No conversation found` to
 stderr and exits 1), appends to it, prints init, an assistant text and a `result` with
 `is_error: false`, `result: 'FAKE DONE'`, `total_cost_usd: 0.01`, `num_turns: 1`, exits 0.
+
+## Status (2026-09-30)
+
+- Shipped on `main`: the runtime (`server/src/corch.ts`), its pure half (`server/src/corch-lib.ts`),
+  quick add (`server/src/core/cli-quick-add.ts`), the routes, the four MCP tools, the Corch view with
+  Quick add at its top (`web/src/components/CorchView.vue`, `CliQuickAdd.vue`), and the `corch` skill
+  in the shared claude-memory repo.
+- Proven: `server/tests/corch.test.ts` (9 tests, including a two-account handoff through
+  `tests/mocks/fake-claude.ts`), and a live run against the real CLI instances: #69 failed `auth`,
+  was walled, the worker moved to #68, which also failed `auth`, and the worker waited with the
+  signed-out reason. That run found the `Failed to authenticate: OAuth session expired` wording,
+  which is now classified `auth`.
+- Not yet proven: a real task finishing on a signed-in account, and a quick-add sign-in completed in
+  the browser. Both need the owner to add an account first.
+- Quick add's Add button stayed disabled on first ship: a lint auto-fix turned `import { Input }`
+  into a type-only import, so the tag rendered as a bare `<input>` whose v-model never updated.
+  Fixed, with a `biome-ignore` naming why.
