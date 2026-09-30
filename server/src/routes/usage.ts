@@ -342,30 +342,19 @@ app.post('/api/cli-instances/:id/login', (c) =>
   c.json(launchCliInstance(c.req.param('id'), { login: true })),
 )
 // Use this account's limit reset through the CLI's own `/limit-reset` (core/cli-limit-reset.ts):
-// a person's click or an MCP call, never a background check, since running it spends what it finds.
-// One at a time per account; the CLI's answer is kept on the record for the row's icon.
-const limitResetRunning = new Set<string>()
+// a person's click or an MCP call, never a background check, since running it can spend what it
+// finds. One run per account at a time is enforced there; the CLI's answer is kept on the record
+// for the row's icon.
 app.post('/api/cli-instances/:id/limit-reset', async (c) => {
   const inst = getCliInstance(c.req.param('id'))
   if (!inst) return c.json({ error: 'CLI instance not found' }, 404)
-  if (limitResetRunning.has(inst.id))
-    return c.json({
-      ok: false,
-      outcome: 'error',
-      message: 'A reset is already running for this account.',
-    })
-  limitResetRunning.add(inst.id)
-  try {
-    // `check: true` backs out of a banked reset's question instead of using it (see the core file:
-    // the weekly session reset asks nothing, so a check still uses that one).
-    const body = await jsonBody(c)
-    const result = await runCliLimitReset(inst.configDir, { confirm: body.check !== true })
-    // A failure to reach the CLI says nothing about the reset; keep the last real answer then.
-    if (result.outcome !== 'error') setCliInstanceLimitReset(inst.id, result)
-    return c.json(result)
-  } finally {
-    limitResetRunning.delete(inst.id)
-  }
+  // `check: true` backs out of a banked reset's question instead of using it (see the core file:
+  // the weekly session reset asks nothing, so a check still uses that one).
+  const body = await jsonBody(c)
+  const result = await runCliLimitReset(inst.configDir, { confirm: body.check !== true })
+  // A failure to reach the CLI says nothing about the reset; keep the last real answer then.
+  if (result.outcome !== 'error') setCliInstanceLimitReset(inst.id, result)
+  return c.json(result)
 })
 app.post('/api/cli-instances/:id/rename', async (c) => {
   const body = await jsonBody(c)

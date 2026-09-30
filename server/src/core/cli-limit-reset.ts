@@ -103,10 +103,14 @@ function prepareConfig(configDir: string): void {
   cfg.theme ??= 'dark'
   projects[key] = { ...(projects[key] ?? {}), hasTrustDialogAccepted: true }
   cfg.projects = projects
-  const tmp = `${file}.${process.pid}.tmp`
+  const tmp = `${file}.${process.pid}.${crypto.randomUUID().slice(0, 8)}.tmp`
   writeFileSync(tmp, JSON.stringify(cfg, null, 2))
   renameSync(tmp, file)
 }
+
+/** Accounts with a run in flight, by config dir: two runs on one account could each reach the
+ *  question and spend a grant apiece, whichever caller (button, MCP tool) started them. */
+const running = new Set<string>()
 
 /** Run `/limit-reset` for the account whose CLI config lives in `configDir`. Never throws. */
 export async function runCliLimitReset(
@@ -117,7 +121,24 @@ export async function runCliLimitReset(
     confirm?: boolean
   } = {},
 ): Promise<LimitResetResult> {
-  const confirm = opts.confirm !== false
+  const key = configDir.replaceAll('\\', '/').toLowerCase()
+  if (running.has(key))
+    return {
+      ok: false,
+      outcome: 'error',
+      message: 'A reset is already running for this account.',
+      nextAvailable: null,
+      at: Date.now(),
+    }
+  running.add(key)
+  try {
+    return await runOnce(configDir, opts.confirm !== false)
+  } finally {
+    running.delete(key)
+  }
+}
+
+async function runOnce(configDir: string, confirm: boolean): Promise<LimitResetResult> {
   const at = Date.now()
   const fail = (message: string): LimitResetResult => ({
     ok: false,
@@ -164,9 +185,12 @@ export async function runCliLimitReset(
       // The CLI already exited; the screen says why.
     }
   }
+  // The overall deadline bounds getting TO the command; the answer, once the command is sent, gets
+  // its own full wait. Cutting that short after a confirmed reset would report "no answer" for a
+  // reset that may already be spent, and invite a second one.
   const deadline = at + TOTAL_MS
-  const until = async (test: () => boolean, ms: number) => {
-    const end = Math.min(Date.now() + ms, deadline)
+  const until = async (test: () => boolean, ms: number, capped = true) => {
+    const end = capped ? Math.min(Date.now() + ms, deadline) : Date.now() + ms
     while (Date.now() < end) {
       if (test() || proc.exitCode !== null) return test()
       await Bun.sleep(250)
@@ -197,36 +221,45 @@ export async function runCliLimitReset(
 
     let confirmed = false
     let answer: { outcome: LimitResetOutcome; say: string; screen: string } | null = null
-    await until(() => {
-      const s = screen()
-      if (!confirmed && /Use your reset\?|Yes,\s*use\s*my\s*reset/i.test(s)) {
-        if (!confirm) {
-          // Checking only: back out of the question ("No, keep it") and report what it offered.
-          send('\x1b')
-          const left = /(\d+)\s*left/i.exec(s)?.[1]
-          const by = /use\s*by\s*([A-Za-z]{3,9}\s*\d{1,2})/i
-            .exec(s)?.[1]
-            ?.replace(/([A-Za-z])(\d)/, '$1 $2')
-          const detail = [left ? `${left} left` : '', by ? `use by ${by}` : '']
-            .filter(Boolean)
-            .join(', ')
-          answer = {
-            outcome: 'available',
-            say: `A reset is available${detail ? ` (${detail})` : ''}. It was not used.`,
-            screen: s,
+    await until(
+      () => {
+        const s = screen()
+        if (!confirmed && /Use your reset\?|Yes,\s*use\s*my\s*reset/i.test(s)) {
+          if (!confirm) {
+            // Checking only: back out of the question ("No, keep it") and report what it offered.
+            send('\x1b')
+            const left = /(\d+)\s*left/i.exec(s)?.[1]
+            const by = /use\s*by\s*([A-Za-z]{3,9}\s*\d{1,2})/i
+              .exec(s)?.[1]
+              ?.replace(/([A-Za-z])(\d)/, '$1 $2')
+            const detail = [left ? `${left} left` : '', by ? `use by ${by}` : '']
+              .filter(Boolean)
+              .join(', ')
+            answer = {
+              outcome: 'available',
+              say: `A reset is available${detail ? ` (${detail})` : ''}. It was not used.`,
+              screen: s,
+            }
+            return true
           }
-          return true
+          // The person asked for this reset by clicking; the first choice is "Yes, use my reset".
+          confirmed = true
+          send('\r')
+          return false
         }
-        // The person asked for this reset by clicking; the first choice is "Yes, use my reset".
-        confirmed = true
-        send('\r')
-        return false
-      }
-      const hit = classifyLimitResetScreen(s)
-      if (hit) answer = { ...hit, screen: s }
-      return hit !== null
-    }, 40_000)
-    if (!answer) return fail('The Claude CLI gave no answer to /limit-reset.')
+        const hit = classifyLimitResetScreen(s)
+        if (hit) answer = { ...hit, screen: s }
+        return hit !== null
+      },
+      40_000,
+      false,
+    )
+    if (!answer)
+      return fail(
+        confirmed
+          ? "The reset was confirmed, but the CLI's answer never arrived. It may have been used: check this account's usage before trying again."
+          : 'The Claude CLI gave no answer to /limit-reset.',
+      )
     const {
       outcome,
       say,
