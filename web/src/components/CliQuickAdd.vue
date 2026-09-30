@@ -3,7 +3,7 @@
 // Self-contained so it can live both in CliInstancesSection and in CorchView — the owner may hide
 // the CLI Instances section, and Corch runs on these accounts. Polls every 2 s only while a flow is
 // waiting; emits 'signed-in' when a flow turns signed-in so the host can refresh its list.
-import { ExternalLink, LoaderCircle, Plus, X } from '@lucide/vue'
+import { Copy, LoaderCircle, Plus, X } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -91,6 +91,16 @@ async function onQuickAddCancel(flow: QuickAddFlow) {
   void qaPoll()
 }
 
+async function qaCopyLink(flow: QuickAddFlow) {
+  if (!flow.url) return
+  try {
+    await navigator.clipboard.writeText(flow.url)
+    toast.success(t('corch.qaCopied'))
+  } catch {
+    toast.error(t('corch.qaCopyFailed'))
+  }
+}
+
 /** Hide a finished flow from this window. The server keeps its record; nothing is undone. */
 function qaDismiss(flow: QuickAddFlow) {
   const next = new Set(qaMine.value)
@@ -171,8 +181,10 @@ onUnmounted(() => {
         </Button>
       </div>
       <div v-if="flow.state === 'waiting'" class="flex flex-wrap items-center gap-2">
-        <Button v-if="flow.url" as="a" :href="flow.url" target="_blank" rel="noopener" variant="outline">
-          <ExternalLink /> {{ $t('corch.qaOpenPage') }}
+        <!-- Copy, never open: this page may be running in the owner's own browser, which is signed
+             in to another Claude account (owner, 2026-09-30; see cli-quick-add.ts). -->
+        <Button v-if="flow.url" variant="outline" @click="qaCopyLink(flow)">
+          <Copy /> {{ $t('corch.qaCopyLink') }}
         </Button>
         <form class="flex items-center gap-2" @submit.prevent="onQuickAddCode(flow)">
           <label :for="`qa-code-${flow.id}`" class="text-muted-foreground">{{ $t('corch.qaCodeHint') }}</label>

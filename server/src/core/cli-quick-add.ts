@@ -3,10 +3,19 @@
 //
 // Why: Corch spreads work across the owner's CLI accounts, and adding one used to mean naming an
 // instance, opening a terminal and typing `/login`. Here the daemon runs `claude auth login --email`
-// with the instance's CLAUDE_CONFIG_DIR; the CLI opens the person's default browser on the sign-in
-// page and the PERSON confirms there. The daemon never types or sees a credential: it only relays
-// the optional fallback code the person pastes, and checks the result with `claude auth status`.
+// with the instance's CLAUDE_CONFIG_DIR and shows the sign-in link it prints. The PERSON opens that
+// link wherever they can read the account's email (a private window, a phone), signs in there, and
+// pastes the code the page ends on into Quick add. The daemon never types or sees a credential: it
+// relays that pasted code to the CLI and checks the result with `claude auth status`.
+//
+// ⛔ NEVER THE PERSON'S OWN BROWSER (owner, 2026-09-30). It is signed in to a different Claude
+// account and the new account's email arrives on another device, so the CLI popping it open was
+// wrong twice over. The CLI opens whatever `BROWSER` names (else rundll32 url,OpenURL), so BROWSER is
+// pointed at a program that does nothing with a URL. Driving the sign-in page ourselves is not an
+// option either: claude.ai answers a headless browser with a Cloudflare human check (measured
+// 2026-09-30, title "Just a moment..."), and passing that check is not ours to automate.
 
+import { join } from 'node:path'
 import { resolveClaudeExe } from '../config'
 import {
   createCliInstance,
@@ -34,6 +43,11 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const ENV_SCRUB =
   /^(ANTHROPIC_(API_KEY|AUTH_TOKEN|BASE_URL)|CLAUDE_CODE_(OAUTH_\w+|ENTRYPOINT|SSE_PORT|SESSION\w*)|CLAUDECODE|CLAUDE_CONFIG_DIR)$/
 const URL_RE = /If the browser didn't open, visit:\s*(\S+)/
+/** A program that takes a URL argument, prints nothing useful and exits: BROWSER for the login. */
+const NO_BROWSER =
+  process.platform === 'win32'
+    ? join(process.env.SystemRoot ?? 'C:/Windows', 'System32', 'where.exe')
+    : 'true'
 const FLOW_TIMEOUT_MS = 10 * 60_000
 const KEEP = 20
 
@@ -130,7 +144,7 @@ export function startQuickAdd(email: string): QuickAddFlow | { error: string } {
     num: rec.num ?? null,
     state: 'waiting',
     url: null,
-    message: 'Confirm in your browser.',
+    message: 'Open the sign-in link where you can read that email.',
     account: null,
     startedAt: Date.now(),
   }
@@ -141,9 +155,9 @@ export function startQuickAdd(email: string): QuickAddFlow | { error: string } {
 
   let proc: ReturnType<typeof Bun.spawn>
   try {
-    // No BROWSER override: the CLI opens the person's default browser, which is the step he confirms.
+    // BROWSER = a no-op, so the CLI never opens the person's own browser (see the header).
     proc = Bun.spawn([resolveClaudeExe(), 'auth', 'login', '--email', trimmed], {
-      env: scrubbedEnv(rec.configDir),
+      env: { ...scrubbedEnv(rec.configDir), BROWSER: NO_BROWSER },
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
