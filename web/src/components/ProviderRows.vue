@@ -1,13 +1,13 @@
 <script setup lang="ts">
 // Provider surfaces: which installed tools AgentHydra exposes, and the one optional handoff.
 //
-// Extracted from SettingsView for the same reason as UsageRefreshRows: four of these five switches
+// Extracted from SettingsView for the same reason as UsageRefreshRows: five of these switches
 // decide which TABLES the Instances tab draws, so they belong on that tab's toolbar as much as they
 // belong in Settings. Shared markup over the shared useAppSettings singleton means both surfaces
 // are the same control, not two that have to be kept in step.
 //
 // `showHandoff` is off in the toolbar flyout: the ChatGPT handoff is a button in the session
-// composer, not a section of the instances tab, and listing it beside four table toggles would say
+// composer, not a section of the instances tab, and listing it beside five table toggles would say
 // it hides a table too.
 import { AppWindow, Gauge, MessageCircleQuestion, Monitor, Terminal, Timer } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
@@ -27,6 +27,7 @@ const {
   showCliInstances,
   codexDesktopEnabled,
   codexCliEnabled,
+  dshEnabled,
   chatGptHandoffEnabled,
   keepaliveEnabled,
   keepaliveWeeklyFloorPct,
@@ -85,6 +86,17 @@ async function patchProvider(value: Partial<ProviderSettings>) {
       <Switch
         :model-value="codexCliEnabled"
         @update:model-value="(v: boolean) => patchProvider({ codexCliEnabled: v })"
+      />
+    </template>
+  </SettingsRow>
+  <SettingsRow :icon="Terminal" :label="$t('settings.dshProviderLabel')">
+    <template #info>
+      <InfoHint :text="$t('settings.dshProviderHint')" />
+    </template>
+    <template #control>
+      <Switch
+        :model-value="dshEnabled"
+        @update:model-value="(v: boolean) => patchProvider({ dshEnabled: v })"
       />
     </template>
   </SettingsRow>

@@ -315,7 +315,7 @@ function writeCodexCacheEntry(codexHome: string, entry: CodexAccountCacheEntry):
   }
 }
 
-function deleteCodexCacheEntry(codexHome: string): void {
+export function deleteCodexCacheEntry(codexHome: string): void {
   try {
     const cache = readCodexCache()
     const key = normalizeInstancePath(codexHome)

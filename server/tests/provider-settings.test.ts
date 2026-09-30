@@ -5,6 +5,7 @@ test('provider settings default on for installed surfaces and off for ChatGPT ha
   expect(getProviderSettings()).toEqual({
     codexDesktopEnabled: true,
     codexCliEnabled: true,
+    dshEnabled: true,
     chatGptHandoffEnabled: false,
     // The keepalive spends quota, so its default is the only one that matters for safety: OFF,
     // with a floor that leaves an account alone once its weekly cap is 80% gone.
@@ -23,6 +24,7 @@ test('provider settings round-trip independently', () => {
   ).toEqual({
     codexDesktopEnabled: false,
     codexCliEnabled: true,
+    dshEnabled: true,
     chatGptHandoffEnabled: true,
     keepaliveEnabled: false,
     keepaliveWeeklyFloorPct: 80,

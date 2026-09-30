@@ -67,6 +67,7 @@ async function withBusy<T extends { ok: boolean }>(
 
 const launchCli = (id: string) => withBusy(id, () => api.launchCodexInstance(id))
 const login = (id: string) => withBusy(id, () => api.codexInstanceLogin(id), true)
+const logout = (id: string) => withBusy(id, () => api.codexInstanceLogout(id), true)
 const openDesktop = (id: string) => withBusy(id, () => api.openCodexDesktopInstance(id), true)
 const focusDesktop = (id: string) => withBusy(id, () => api.focusCodexDesktopInstance(id))
 const quitDesktop = (id: string) => withBusy(id, () => api.quitCodexDesktopInstance(id), true)
@@ -91,6 +92,7 @@ export function useCodexInstances() {
     create,
     launchCli,
     login,
+    logout,
     openDesktop,
     focusDesktop,
     quitDesktop,

@@ -1378,6 +1378,8 @@ export interface CodexInstance {
 export interface ProviderSettings {
   codexDesktopEnabled: boolean
   codexCliEnabled: boolean
+  /** Show the DeepSeek Harness instances section. Default on. */
+  dshEnabled: boolean
   chatGptHandoffEnabled: boolean
   /** Keep every account's rolling 5-hour window ticking by spending one throwaway turn on any that
    *  is idle. OFF by default — it is the only setting here that costs quota. */

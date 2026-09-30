@@ -966,6 +966,10 @@ export const codexInstanceLogin = (id: string) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/login`, {
     method: 'POST',
   })
+export const codexInstanceLogout = (id: string) =>
+  j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/logout`, {
+    method: 'POST',
+  })
 export const openCodexDesktopInstance = (id: string) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/desktop/open`, {
     method: 'POST',

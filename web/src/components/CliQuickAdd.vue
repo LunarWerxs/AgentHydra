@@ -3,7 +3,7 @@
 // Self-contained so it can live both in CliInstancesSection and in CorchView — the owner may hide
 // the CLI Instances section, and Corch runs on these accounts. Polls every 2 s only while a flow is
 // waiting; emits 'signed-in' when a flow turns signed-in so the host can refresh its list.
-import { ExternalLink, Plus } from '@lucide/vue'
+import { ExternalLink, LoaderCircle, Plus, X } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -21,14 +21,15 @@ const qaEmail = ref('')
 const qaInput = ref<InstanceType<typeof Input> | null>(null)
 const qaStarting = ref(false)
 const qaFlows = ref<QuickAddFlow[]>([])
-/** Flows started from this window; the rest of the server's last-20 list is only shown while waiting. */
-const qaMine = new Set<string>()
+/** Flows started from this window; the rest of the server's last-20 list is only shown while waiting.
+ *  A ref, so Dismiss (which drops an id) re-renders the list. */
+const qaMine = ref(new Set<string>())
 const qaCodes = ref<Record<string, string>>({})
 let qaTimer: number | null = null
 let qaAlive = true
 
 const qaVisible = computed(() =>
-  qaFlows.value.filter((f) => f.state === 'waiting' || qaMine.has(f.id)),
+  qaFlows.value.filter((f) => f.state === 'waiting' || qaMine.value.has(f.id)),
 )
 
 function qaSchedule() {
@@ -56,7 +57,7 @@ async function onQuickAdd() {
     const r = await startQuickAdd(email)
     if ('error' in r) toast.error(r.error || t('corch.qaStartFailed'))
     else {
-      qaMine.add(r.id)
+      qaMine.value = new Set(qaMine.value).add(r.id)
       qaFlows.value = [r, ...qaFlows.value.filter((f) => f.id !== r.id)]
       qaEmail.value = ''
       qaSchedule()
@@ -90,6 +91,13 @@ async function onQuickAddCancel(flow: QuickAddFlow) {
   void qaPoll()
 }
 
+/** Hide a finished flow from this window. The server keeps its record; nothing is undone. */
+function qaDismiss(flow: QuickAddFlow) {
+  const next = new Set(qaMine.value)
+  next.delete(flow.id)
+  qaMine.value = next
+}
+
 onMounted(() => void qaPoll())
 onUnmounted(() => {
   qaAlive = false
@@ -99,60 +107,90 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <!-- Type an email, confirm in the browser, the new CLI instance lands in the CLI table. No padding
-       of its own: each host places it (a class on the tag falls through to this root). -->
-  <div class="flex flex-col gap-1.5">
+  <!-- Type an email, approve in the browser, the new CLI instance lands in the CLI table. No padding
+       of its own: each host places it (a class on the tag falls through to this root). Input and
+       buttons share one height (h-7), and each flow's state text is the only live region, so a
+       poll does not re-announce the whole row. -->
+  <div class="flex flex-col gap-2">
     <form class="flex items-center gap-2" @submit.prevent="onQuickAdd">
       <Input
         ref="qaInput"
         v-model="qaEmail"
         type="email"
+        autocomplete="email"
         class="max-w-sm"
         :placeholder="$t('corch.qaPlaceholder')"
-        :aria-label="$t('corch.qaPlaceholder')"
+        :aria-label="$t('corch.qaEmailLabel')"
       />
-      <Button type="submit" size="sm" :disabled="qaStarting || !qaEmail.trim()">
-        <Plus /> {{ $t('corch.qaAdd') }}
+      <Button type="submit" :disabled="qaStarting || !qaEmail.trim()">
+        <LoaderCircle v-if="qaStarting" class="animate-spin" />
+        <Plus v-else />
+        {{ $t('corch.qaAdd') }}
       </Button>
     </form>
     <div
       v-for="flow in qaVisible"
       :key="flow.id"
-      class="flex flex-wrap items-center gap-2 text-xs"
-      role="status"
+      class="flex flex-col gap-1.5 rounded-md border bg-background/40 px-3 py-2 text-xs"
     >
-      <span class="font-medium">{{ flow.email }}</span>
-      <template v-if="flow.state === 'waiting'">
-        <span class="text-muted-foreground">{{ $t('corch.qaConfirm') }}</span>
-        <Button v-if="flow.url" as="a" :href="flow.url" target="_blank" rel="noopener" variant="link" size="sm">
+      <div class="flex min-w-0 items-center gap-2">
+        <LoaderCircle
+          v-if="flow.state === 'waiting'"
+          class="size-3.5 shrink-0 animate-spin text-muted-foreground"
+          aria-hidden="true"
+        />
+        <span class="shrink-0 font-medium">{{ flow.email }}</span>
+        <span
+          role="status"
+          class="min-w-0 flex-1"
+          :class="{
+            'text-muted-foreground': flow.state === 'waiting' || flow.state === 'cancelled',
+            'text-success': flow.state === 'signed-in',
+            'text-destructive': flow.state === 'failed',
+          }"
+        >
+          <template v-if="flow.state === 'waiting'">{{ $t('corch.qaConfirm') }}</template>
+          <template v-else-if="flow.state === 'signed-in'">{{
+            flow.account?.plan
+              ? $t('corch.qaSignedIn', { email: flow.account?.email ?? flow.email, plan: flow.account.plan })
+              : $t('corch.qaSignedInNoPlan', { email: flow.account?.email ?? flow.email })
+          }}</template>
+          <template v-else-if="flow.state === 'failed'">{{ $t('corch.qaFailed', { reason: flow.message }) }}</template>
+          <template v-else>{{ $t('corch.qaCancelled') }}</template>
+        </span>
+        <Button
+          v-if="flow.state !== 'waiting'"
+          variant="ghost"
+          size="icon-xs"
+          class="shrink-0"
+          :aria-label="$t('corch.qaDismiss')"
+          :title="$t('corch.qaDismiss')"
+          @click="qaDismiss(flow)"
+        >
+          <X />
+        </Button>
+      </div>
+      <div v-if="flow.state === 'waiting'" class="flex flex-wrap items-center gap-2">
+        <Button v-if="flow.url" as="a" :href="flow.url" target="_blank" rel="noopener" variant="outline">
           <ExternalLink /> {{ $t('corch.qaOpenPage') }}
         </Button>
-        <form class="flex items-center gap-1" @submit.prevent="onQuickAddCode(flow)">
+        <form class="flex items-center gap-2" @submit.prevent="onQuickAddCode(flow)">
+          <label :for="`qa-code-${flow.id}`" class="text-muted-foreground">{{ $t('corch.qaCodeHint') }}</label>
           <Input
+            :id="`qa-code-${flow.id}`"
             v-model="qaCodes[flow.id]"
-            class="h-7 w-36"
+            class="w-32"
+            autocomplete="one-time-code"
             :placeholder="$t('corch.qaCodePlaceholder')"
-            :aria-label="$t('corch.qaCodePlaceholder')"
           />
-          <Button type="submit" variant="outline" size="sm" :disabled="!qaCodes[flow.id]?.trim()">
+          <Button type="submit" variant="outline" :disabled="!qaCodes[flow.id]?.trim()">
             {{ $t('corch.qaSendCode') }}
           </Button>
         </form>
-        <Button variant="ghost" size="sm" @click="onQuickAddCancel(flow)">
+        <Button variant="ghost" class="ms-auto" @click="onQuickAddCancel(flow)">
           {{ $t('corch.qaCancel') }}
         </Button>
-      </template>
-      <span v-else-if="flow.state === 'signed-in'" class="text-success">
-        {{
-          flow.account?.plan
-            ? $t('corch.qaSignedIn', { email: flow.account?.email ?? flow.email, plan: flow.account.plan })
-            : $t('corch.qaSignedInNoPlan', { email: flow.account?.email ?? flow.email })
-        }}
-      </span>
-      <span v-else-if="flow.state === 'failed'" class="text-destructive">
-        {{ $t('corch.qaFailed', { reason: flow.message }) }}
-      </span>
-      <span v-else class="text-muted-foreground">{{ $t('corch.qaCancelled') }}</span>
+      </div>
     </div>
   </div>
 </template>

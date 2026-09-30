@@ -1,6 +1,8 @@
 <script setup lang="ts">
-// Prefix tax: what every spawn on each Claude/Codex home re-ships before it says a word - tool
-// count, MCP tool count, schema kB and the MCP servers that weigh the most.
+// Prefix tax, shown as "Startup cost per new chat": what every spawn on each Claude/Codex home
+// re-ships before it says a word - tool count, MCP tool count, schema kB and the MCP servers that
+// weigh the most. The one-line subtitle stays visible while the table is collapsed, because the
+// title alone did not tell the owner what the numbers were (2026-09-30).
 //
 // WHY: a worker pays its home's whole MCP loadout on its first request, and a fan-out pays it once
 // per worker. This makes a bloated loadout visible BEFORE fanning out. Measuring runs the home's
@@ -83,6 +85,7 @@ onMounted(() => void refresh())
         </Button>
       </div>
     </div>
+    <p class="mb-2 text-xs text-muted-foreground">{{ $t('prefixTax.subtitle') }}</p>
 
     <ExpandArea :open="open">
       <Table>

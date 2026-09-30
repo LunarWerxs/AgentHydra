@@ -45,6 +45,10 @@ export default {
   launchCli: 'Launch CLI',
   moreActions: 'More actions',
   login: 'Log in',
+  logout: 'Log out',
+  logoutQuitFirst: 'Quit this Codex Desktop instance first.',
+  logoutDialogDescription:
+    'Removes the saved OpenAI login (auth.json) from this instance. Its chats, settings and folder stay, and Codex asks for a sign-in the next time it starts.',
   redeemResetCredit: 'Redeem reset credit',
   /** Disabled-button tooltip: the cached usage already shows no banked credits. */
   redeemNoCredits: 'No banked reset credits. Nothing to redeem.',
@@ -89,6 +93,8 @@ export default {
   toastDesktopQuitFailed: 'Failed to stop Codex Desktop.',
   toastLoginOpened: 'Codex login opened in a terminal.',
   toastLoginFailed: 'Failed to open Codex login.',
+  toastLoggedOut: 'Signed out.',
+  toastLogoutFailed: 'Failed to log out of this Codex instance.',
   toastRedeemed: 'Reset credit redeemed.',
   toastRedeemFailed: 'Failed to redeem reset credit.',
 }

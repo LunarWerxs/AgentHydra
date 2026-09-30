@@ -1,25 +1,28 @@
-// Prefix tax section (below the instance tables): what each Claude/Codex home re-ships on every
-// spawn. Measured through a loopback sink, so the hints say plainly that no quota is spent but the
-// home's MCP servers are started.
+// "Startup cost per new chat" (below the instance tables; the code calls it the prefix tax): what
+// each Claude/Codex account sends before a new chat says a word. Measured through a loopback sink,
+// so the hints say plainly that no quota is spent but the account's MCP servers are started. On
+// 2026-09-30 the owner said "Prefix tax per spawn" meant nothing, so every label here is plain words.
 export default {
-  title: 'Prefix tax per spawn',
+  title: 'Startup cost per new chat',
+  subtitle:
+    'What every new Claude or Codex chat on each account sends before it starts: the system prompt plus its tool and MCP definitions. Measured on this PC, so it uses none of your quota.',
   refresh: 'Refresh',
   measureAll: 'Measure all',
   measureAllHint:
-    'Start each home once against a local sink and read its first request. No model runs and no quota is spent, but each home boots its MCP servers.',
+    'Start each account once against a local stand-in and read what it sends first. No model runs and no quota is used, but each account starts its MCP servers.',
   measure: 'Measure',
   measureHint:
-    'Start this home once against a local sink and read its first request. No quota is spent.',
+    'Start this account once against a local stand-in and read what it sends first. No quota is used.',
   measuring: 'Measuring…',
-  measured: 'Homes measured: {count}',
-  someFailed: 'Homes that could not be measured: {count}',
-  empty: 'No Claude or Codex homes found.',
+  measured: 'Accounts measured: {count}',
+  someFailed: 'Accounts that could not be measured: {count}',
+  empty: 'No Claude or Codex accounts found.',
   notMeasured: 'Not measured yet.',
-  colName: 'Home',
+  colName: 'Account',
   colTools: 'Tools',
-  colSchemas: 'Schemas',
-  colPrefix: 'Prefix',
-  colHeaviest: 'Heaviest MCP servers',
+  colSchemas: 'Tool definitions',
+  colPrefix: 'Sent per chat',
+  colHeaviest: 'Largest MCP servers',
   colActions: 'Actions',
   kindClaude: 'Claude',
   kindCodex: 'Codex',
@@ -28,7 +31,7 @@ export default {
   mcpShare: 'MCP share: {kb}',
   tokens: '~{tokens} tokens',
   prefixHint:
-    'System prompt, tool schemas and opening context of the first request, at about 4 bytes per token.',
+    'System prompt, tool definitions and opening context of a new chat’s first request, at about 4 bytes per token.',
   noMcp: 'No MCP tools',
   server: '{server} {kb} ({tools})',
 }

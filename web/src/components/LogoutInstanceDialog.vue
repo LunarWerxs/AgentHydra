@@ -27,6 +27,8 @@ defineProps<{
   /** The account address, when one is resolved. Null while unresolved or already signed out. */
   accountEmail?: string | null
   submitting?: boolean
+  /** Replaces the default body copy, which is written for Claude Desktop. */
+  description?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -43,7 +45,7 @@ const emit = defineEmits<{
           {{ $t('instances.logoutDialogTitle', { name: instanceName ?? '' }) }}
         </DialogTitle>
         <DialogDescription>
-          {{ $t('instances.logoutDialogDescription') }}
+          {{ description ?? $t('instances.logoutDialogDescription') }}
         </DialogDescription>
       </DialogHeader>
 

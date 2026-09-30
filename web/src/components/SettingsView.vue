@@ -1017,7 +1017,7 @@ defineExpose({ save })
       :description="$t('settings.providersHint')"
     >
       <!-- The rows themselves live in components/ProviderRows.vue, because the Instances toolbar
-           renders the same four table switches in a flyout (InstanceSectionsMenu.vue) where they
+           renders the same five table switches in a flyout (InstanceSectionsMenu.vue) where they
            take effect. One component, one behaviour — the two surfaces cannot drift. -->
       <ProviderRows />
     </SettingsGroup>

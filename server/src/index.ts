@@ -584,6 +584,7 @@ app.post('/api/settings', async (c) => {
     codexDesktopEnabled:
       typeof body.codexDesktopEnabled === 'boolean' ? body.codexDesktopEnabled : undefined,
     codexCliEnabled: typeof body.codexCliEnabled === 'boolean' ? body.codexCliEnabled : undefined,
+    dshEnabled: typeof body.dshEnabled === 'boolean' ? body.dshEnabled : undefined,
     chatGptHandoffEnabled:
       typeof body.chatGptHandoffEnabled === 'boolean' ? body.chatGptHandoffEnabled : undefined,
     keepaliveEnabled:

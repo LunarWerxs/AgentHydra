@@ -1,50 +1,39 @@
 <script setup lang="ts">
-// Corch view: the workers a chat started through Corch (server/src/corch.ts, docs/CORCH.md).
-// Grouped by run group, newest first. Selecting a row shows its events, result or error, a
-// follow-up box (POST /send) and Stop (POST /cancel). Polls every 3 s only while a worker is active.
-import { Network, RefreshCw, Send, Square } from '@lucide/vue'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+// Corch view: the tasks a chat handed to the owner's Claude CLI accounts (server/src/corch.ts,
+// docs/CORCH.md). A task list grouped by hand-off on the left, the selected task on the right
+// (CorchWorkerDetail.vue). Polls every 3 s only while a task can still change.
+//
+// Layout (2026-09-30 review, three lenses agreeing): the header comes first and says what Corch is;
+// "Add a CLI account" is a labelled button there, opening Quick add as a card rather than a stray
+// form above the title; the list is one bordered panel with the hand-off as a subheader; the detail
+// pane is sticky so a row low in a long list does not open its detail off screen. Quick add stays
+// mounted when closed (v-show), so a sign-in waiting for a code keeps polling.
+import { Network, Plus, RefreshCw, X } from '@lucide/vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliQuickAdd from '@/components/CliQuickAdd.vue'
-import { Badge } from '@/components/ui/badge'
-import type { BadgeVariants } from '@/components/ui/badge/badge-variants'
+import CorchStatusBadge from '@/components/CorchStatusBadge.vue'
+import CorchWorkerDetail from '@/components/CorchWorkerDetail.vue'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import type { CorchStatus, CorchWorkerView } from '@/lib/api'
-import { cancelCorch, getCorchWorker, listCorchWorkers, sendCorchWorker } from '@/lib/api'
+import { Skeleton } from '@/components/ui/skeleton'
+import type { CorchWorkerView } from '@/lib/api'
+import { getCorchWorker, listCorchWorkers } from '@/lib/api'
+import { firstLine, isCorchActive } from '@/lib/corch-status'
+import { formatAgo } from '@/lib/relativeTime'
 
 const { t } = useI18n()
 
 const workers = ref<CorchWorkerView[]>([])
 const loading = ref(false)
+const loaded = ref(false)
 const selectedId = ref<string | null>(null)
 const detail = ref<(CorchWorkerView & { events: string[] }) | null>(null)
-const followUp = ref('')
-const sending = ref(false)
-const stopping = ref(false)
+const addOpen = ref(false)
+const quickAddEl = ref<HTMLElement | null>(null)
+const now = ref(Date.now())
 
-const ACTIVE: CorchStatus[] = ['queued', 'running', 'waiting']
-const isActive = (w: CorchWorkerView) => ACTIVE.includes(w.status)
-
-const STATUS_VARIANT: Record<CorchStatus, BadgeVariants['variant']> = {
-  queued: 'muted',
-  running: 'info',
-  waiting: 'warning',
-  done: 'success',
-  failed: 'destructive',
-  cancelled: 'outline',
-}
-const STATUS_KEY: Record<CorchStatus, string> = {
-  queued: 'corch.statusQueued',
-  running: 'corch.statusRunning',
-  waiting: 'corch.statusWaiting',
-  done: 'corch.statusDone',
-  failed: 'corch.statusFailed',
-  cancelled: 'corch.statusCancelled',
-}
-
-/** Groups ordered by their newest worker, workers inside newest first. */
+/** Hand-offs ordered by their newest task, tasks inside newest first. */
 const groups = computed(() => {
   const sorted = [...workers.value].sort((a, b) => b.createdAt - a.createdAt)
   const map = new Map<string, CorchWorkerView[]>()
@@ -60,9 +49,8 @@ const selected = computed(
   () => detail.value ?? workers.value.find((w) => w.id === selectedId.value) ?? null,
 )
 
-const elapsed = (s: number) => t('corch.elapsed', { m: Math.floor(s / 60), s: Math.floor(s % 60) })
-
 let timer: number | null = null
+let clock: number | null = null
 let alive = true
 
 async function loadDetail() {
@@ -82,182 +70,189 @@ async function load(opts: { silent?: boolean } = {}) {
   if (!opts.silent) loading.value = true
   try {
     workers.value = await listCorchWorkers()
+    now.value = Date.now()
+    if (!loaded.value) {
+      loaded.value = true
+      // First paint: open the newest live task (else the newest one), and open Quick add when
+      // there is nothing to look at yet, since adding an account is then the next step.
+      const first =
+        [...workers.value].sort((a, b) => b.createdAt - a.createdAt).find(isCorchActive) ??
+        groups.value[0]?.items[0]
+      if (first) selectedId.value = first.id
+      else addOpen.value = true
+    }
     await loadDetail()
   } catch {
     if (!opts.silent) toast.error(t('corch.loadFailed'))
   } finally {
     if (!opts.silent) loading.value = false
   }
-  // Poll only while something can still change.
-  if (alive && workers.value.some(isActive))
+  if (alive && workers.value.some(isCorchActive))
     timer = window.setTimeout(() => load({ silent: true }), 3000)
 }
 
 function select(w: CorchWorkerView) {
+  if (selectedId.value === w.id) return
   selectedId.value = w.id
   detail.value = null
-  followUp.value = ''
   void loadDetail()
 }
 
-async function onSend() {
-  const id = selectedId.value
-  const text = followUp.value.trim()
-  if (!id || !text || sending.value) return
-  sending.value = true
-  try {
-    const r = await sendCorchWorker(id, text)
-    if (r.ok) {
-      followUp.value = ''
-      await load({ silent: true })
-    } else toast.error(r.message || t('corch.sendFailed'))
-  } catch {
-    toast.error(t('corch.sendFailed'))
-  } finally {
-    sending.value = false
-  }
+async function openAdd() {
+  addOpen.value = true
+  await nextTick()
+  quickAddEl.value?.querySelector<HTMLInputElement>('input[type="email"]')?.focus()
 }
 
-async function onStop() {
-  const id = selectedId.value
-  if (!id || stopping.value) return
-  stopping.value = true
-  try {
-    await cancelCorch({ id })
-    toast.success(t('corch.stopped'))
-    await load({ silent: true })
-  } catch {
-    toast.error(t('corch.stopFailed'))
-  } finally {
-    stopping.value = false
-  }
-}
+const startedAgo = (w: CorchWorkerView) => formatAgo(now.value, w.createdAt)
 
-onMounted(() => load())
+onMounted(() => {
+  void load()
+  // Keeps "Started 3m ago" honest while nothing is polling.
+  clock = window.setInterval(() => {
+    now.value = Date.now()
+  }, 30_000)
+})
 onUnmounted(() => {
   alive = false
   if (timer !== null) window.clearTimeout(timer)
+  if (clock !== null) window.clearInterval(clock)
   timer = null
+  clock = null
 })
 </script>
 
 <template>
-  <div class="flex flex-col gap-3 p-3">
-    <!-- Corch runs on CLI accounts; Quick add lives here too because the CLI Instances section can
-         be switched off in settings. -->
-    <section class="flex flex-col gap-1">
-      <h3 class="px-1 text-xs font-medium text-muted-foreground">{{ $t('corch.qaTitle') }}</h3>
+  <div class="flex flex-col gap-5 p-4">
+    <header class="flex flex-wrap items-start justify-between gap-3">
+      <div class="flex min-w-0 flex-col gap-1">
+        <h2 class="flex items-center gap-2 text-base font-semibold">
+          <Network class="size-4.5" />
+          {{ $t('corch.title') }}
+          <span v-if="workers.length" class="font-normal text-muted-foreground">({{ workers.length }})</span>
+        </h2>
+        <p class="max-w-2xl text-xs text-muted-foreground">{{ $t('corch.subtitle') }}</p>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <Button
+          variant="outline"
+          size="icon"
+          :disabled="loading"
+          :aria-label="$t('corch.refresh')"
+          :title="$t('corch.refresh')"
+          @click="load()"
+        >
+          <RefreshCw :class="loading ? 'animate-spin' : ''" />
+        </Button>
+        <Button
+          :variant="addOpen ? 'secondary' : 'default'"
+          :aria-expanded="addOpen"
+          aria-controls="corch-quick-add"
+          @click="addOpen ? (addOpen = false) : openAdd()"
+        >
+          <Plus /> {{ $t('corch.addAccount') }}
+        </Button>
+      </div>
+    </header>
+
+    <section
+      v-show="addOpen"
+      id="corch-quick-add"
+      ref="quickAddEl"
+      aria-labelledby="corch-qa-title"
+      class="flex flex-col gap-3 rounded-lg border bg-card p-4"
+    >
+      <div class="flex items-start justify-between gap-3">
+        <div class="flex min-w-0 flex-col gap-0.5">
+          <h3 id="corch-qa-title" class="text-sm font-medium">{{ $t('corch.qaTitle') }}</h3>
+          <p class="max-w-2xl text-xs text-muted-foreground">{{ $t('corch.qaHint') }}</p>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          :aria-label="$t('corch.qaCancel')"
+          :title="$t('corch.qaCancel')"
+          @click="addOpen = false"
+        >
+          <X />
+        </Button>
+      </div>
       <CliQuickAdd />
     </section>
 
-    <div class="flex items-center justify-between gap-2">
-      <h2 class="flex items-center gap-2 text-sm font-semibold">
-        <Network class="size-4" />
-        {{ $t('corch.title') }}
-        <span class="text-muted-foreground">({{ workers.length }})</span>
-      </h2>
-      <Button
-        variant="outline"
-        size="icon"
-        :disabled="loading"
-        :aria-label="$t('corch.refresh')"
-        :title="$t('corch.refresh')"
-        @click="load()"
-      >
-        <RefreshCw :class="loading ? 'animate-spin' : ''" />
+    <div v-if="!loaded && loading" class="flex flex-col gap-2 lg:max-w-80" aria-busy="true">
+      <Skeleton v-for="i in 3" :key="i" class="h-16 rounded-lg" />
+    </div>
+
+    <div
+      v-else-if="workers.length === 0"
+      class="flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
+    >
+      <Network class="size-7 text-muted-foreground" />
+      <p class="text-sm font-medium">{{ $t('corch.emptyTitle') }}</p>
+      <p class="max-w-md text-xs text-muted-foreground">{{ $t('corch.empty') }}</p>
+      <Button v-if="!addOpen" variant="outline" class="mt-2" @click="openAdd">
+        <Plus /> {{ $t('corch.addAccount') }}
       </Button>
     </div>
 
-    <p v-if="!loading && workers.length === 0" class="text-sm text-muted-foreground">
-      {{ $t('corch.empty') }}
-    </p>
-
-    <div v-else class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <div class="flex flex-col gap-3">
-        <section v-for="g in groups" :key="g.group" class="flex flex-col gap-1">
-          <h3 class="px-1 text-xs font-medium text-muted-foreground">
-            {{ $t('corch.group', { group: g.group }) }}
-          </h3>
-          <button
-            v-for="w in g.items"
-            :key="w.id"
-            type="button"
-            class="flex flex-col gap-1 rounded-md border px-3 py-2 text-start text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-            :class="w.id === selectedId ? 'bg-accent' : ''"
-            :aria-pressed="w.id === selectedId"
-            @click="select(w)"
+    <div v-else class="grid items-start gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]">
+      <div class="divide-y overflow-hidden rounded-lg border bg-card">
+        <section v-for="g in groups" :key="g.group" :aria-label="g.group">
+          <h3
+            class="flex items-center justify-between gap-2 border-b bg-muted/40 px-3 py-1.5 text-2xs font-medium text-muted-foreground"
           >
-            <div class="flex min-w-0 items-center gap-2">
-              <Badge :variant="STATUS_VARIANT[w.status]">{{ $t(STATUS_KEY[w.status]) }}</Badge>
-              <span class="truncate font-medium">{{ w.title }}</span>
-            </div>
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-              <span>{{ w.account ?? $t('corch.noAccount') }}</span>
-              <span class="tabular-nums">{{ elapsed(w.elapsedS) }}</span>
-              <span v-if="w.moves > 0">{{ $t('corch.moves', { n: w.moves }) }}</span>
-            </div>
-            <div v-if="w.lastActivity" class="truncate text-xs text-muted-foreground">
-              {{ w.lastActivity }}
-            </div>
-          </button>
+            <span class="mono truncate" :title="g.group">{{ g.group }}</span>
+            <span class="shrink-0 tabular-nums">{{ g.items.length }}</span>
+          </h3>
+          <ul class="divide-y">
+            <li v-for="w in g.items" :key="w.id">
+              <button
+                type="button"
+                class="flex w-full flex-col gap-1 px-3 py-2.5 text-start text-sm transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                :class="w.id === selectedId ? 'bg-accent shadow-[inset_3px_0_0_var(--color-primary)]' : ''"
+                :aria-current="w.id === selectedId ? 'true' : undefined"
+                @click="select(w)"
+              >
+                <span class="flex min-w-0 items-center gap-2">
+                  <CorchStatusBadge :status="w.status" />
+                  <span class="truncate font-medium" :title="w.title">{{ w.title }}</span>
+                </span>
+                <span class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                  <span class="truncate" :title="w.account ?? undefined">{{ w.account ?? $t('corch.noAccount') }}</span>
+                  <span aria-hidden="true">·</span>
+                  <time
+                    class="shrink-0"
+                    :datetime="new Date(w.createdAt).toISOString()"
+                    :title="new Date(w.createdAt).toLocaleString()"
+                  >{{ startedAgo(w) }}</time>
+                </span>
+                <!-- The one line that says what needs attention: a failure's reason, what a
+                     waiting task waits for, or what a live one is doing. A finished task has its
+                     chip, and "finished (1 turn, $0.00)" under a Failed chip read as a success. -->
+                <span
+                  v-if="(w.status === 'failed' || w.status === 'waiting') && w.error"
+                  class="truncate text-xs"
+                  :class="w.status === 'failed' ? 'text-destructive' : 'text-warning'"
+                  :title="w.error"
+                >{{ firstLine(w.error) }}</span>
+                <span
+                  v-else-if="isCorchActive(w) && w.lastActivity"
+                  class="truncate text-xs text-muted-foreground"
+                  :title="w.lastActivity"
+                >{{ w.lastActivity }}</span>
+              </button>
+            </li>
+          </ul>
         </section>
       </div>
 
-      <div class="flex min-w-0 flex-col gap-3 rounded-md border p-3">
-        <p v-if="!selected" class="text-sm text-muted-foreground">{{ $t('corch.selectHint') }}</p>
-        <template v-else>
-          <div class="flex items-center justify-between gap-2">
-            <div class="flex min-w-0 items-center gap-2">
-              <Badge :variant="STATUS_VARIANT[selected.status]">
-                {{ $t(STATUS_KEY[selected.status]) }}
-              </Badge>
-              <span class="truncate text-sm font-medium">{{ selected.title }}</span>
-            </div>
-            <Button
-              v-if="isActive(selected)"
-              variant="outline"
-              size="sm"
-              :disabled="stopping"
-              @click="onStop"
-            >
-              <Square /> {{ $t('corch.stop') }}
-            </Button>
-          </div>
-
-          <div v-if="selected.result" class="flex flex-col gap-1">
-            <h4 class="text-xs font-medium text-muted-foreground">{{ $t('corch.result') }}</h4>
-            <pre class="mono max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 text-xs scroll-slim">{{ selected.result }}</pre>
-          </div>
-          <div v-if="selected.error" class="flex flex-col gap-1">
-            <h4 class="text-xs font-medium text-destructive">{{ $t('corch.error') }}</h4>
-            <pre class="mono max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-destructive/10 p-2 text-xs text-destructive scroll-slim">{{ selected.error }}</pre>
-          </div>
-
-          <div class="flex flex-col gap-1">
-            <h4 class="text-xs font-medium text-muted-foreground">{{ $t('corch.events') }}</h4>
-            <ul
-              v-if="detail?.events.length"
-              class="mono max-h-80 overflow-auto rounded-md bg-muted p-2 text-xs scroll-slim"
-            >
-              <li v-for="(e, i) in detail.events" :key="i" class="whitespace-pre-wrap">{{ e }}</li>
-            </ul>
-            <p v-else class="text-xs text-muted-foreground">{{ $t('corch.noEvents') }}</p>
-          </div>
-
-          <form class="flex items-center gap-2" @submit.prevent="onSend">
-            <Input
-              v-model="followUp"
-              class="flex-1"
-              :placeholder="$t('corch.followUp')"
-              :aria-label="$t('corch.followUp')"
-              :disabled="sending"
-            />
-            <Button type="submit" size="sm" :disabled="sending || !followUp.trim()">
-              <Send /> {{ $t('corch.send') }}
-            </Button>
-          </form>
-        </template>
-      </div>
+      <CorchWorkerDetail
+        :worker="selected"
+        :events-loading="!!selectedId && !detail"
+        :now="now"
+        @changed="load({ silent: true })"
+      />
     </div>
   </div>
 </template>

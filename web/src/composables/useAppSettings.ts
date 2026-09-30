@@ -19,6 +19,7 @@ const showDesktopInstances = ref(true)
 const showCliInstances = ref(true)
 const codexDesktopEnabled = ref(true)
 const codexCliEnabled = ref(true)
+const dshEnabled = ref(true)
 const chatGptHandoffEnabled = ref(false)
 // The 5-hour keepalive. Mirrors the server's defaults (provider-settings.ts): OFF, and a floor that
 // leaves an account alone once 80% of its weekly cap is gone. It is the one setting on this screen
@@ -61,6 +62,7 @@ function absorb(s: api.AppSettings): void {
   showCliInstances.value = s.showCliInstances
   codexDesktopEnabled.value = s.codexDesktopEnabled
   codexCliEnabled.value = s.codexCliEnabled
+  dshEnabled.value = s.dshEnabled
   chatGptHandoffEnabled.value = s.chatGptHandoffEnabled
   keepaliveEnabled.value = s.keepaliveEnabled
   keepaliveWeeklyFloorPct.value = s.keepaliveWeeklyFloorPct
@@ -115,6 +117,7 @@ export function useAppSettings() {
     showCliInstances,
     codexDesktopEnabled,
     codexCliEnabled,
+    dshEnabled,
     chatGptHandoffEnabled,
     keepaliveEnabled,
     keepaliveWeeklyFloorPct,

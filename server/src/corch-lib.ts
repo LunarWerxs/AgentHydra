@@ -165,7 +165,8 @@ const oneLine = (s: string, n: number): string => s.replace(/\s+/g, ' ').trim().
 export function summarizeEvent(raw: unknown): string | null {
   const ev = raw as any
   if (ev?.type === 'result') {
-    return `finished (${ev.num_turns ?? 0} turns, $${(Number(ev.total_cost_usd) || 0).toFixed(2)})`
+    const turns = Number(ev.num_turns) || 0
+    return `finished (${turns} ${turns === 1 ? 'turn' : 'turns'}, $${(Number(ev.total_cost_usd) || 0).toFixed(2)})`
   }
   if (ev?.type === 'system' && ev.subtype === 'init') return `started (${ev.model ?? 'unknown'})`
   if (ev?.type !== 'assistant' || !Array.isArray(ev.message?.content)) return null

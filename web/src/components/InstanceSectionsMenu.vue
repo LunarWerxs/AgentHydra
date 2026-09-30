@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The Instances toolbar's "which tables does this tab show" flyout.
 //
-// These four switches are Settings → Providers, rendered where they take effect. In Settings they
+// These five switches are Settings → Providers, rendered where they take effect. In Settings they
 // are a group you have to already suspect exists; on this toolbar they are one click from the empty
 // space where the table you turned off used to be — which is the moment anyone actually wants them.
 //

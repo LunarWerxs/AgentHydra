@@ -9,6 +9,7 @@ import {
   EllipsisVertical,
   Funnel,
   LogIn,
+  LogOut,
   Pencil,
   Play,
   Plus,
@@ -26,6 +27,7 @@ import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
+import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
 import { Badge } from '@/components/ui/badge'
@@ -96,6 +98,7 @@ const {
   create,
   launchCli,
   login,
+  logout,
   openDesktop,
   focusDesktop,
   quitDesktop,
@@ -376,6 +379,31 @@ async function onLogin(instance: CodexInstance) {
   const result = await login(instance.id)
   if (result?.ok) toast.success(t('codexInstances.toastLoginOpened'))
   else toast.error(result?.message ?? t('codexInstances.toastLoginFailed'))
+}
+
+// Log out goes through a confirm dialog, like the Claude Desktop rows: it removes the stored login.
+const logoutOpen = ref(false)
+const logoutTarget = ref<CodexInstance | null>(null)
+const loggingOut = ref(false)
+
+function openLogout(instance: CodexInstance) {
+  logoutTarget.value = instance
+  logoutOpen.value = true
+}
+
+async function onLogoutConfirm() {
+  const target = logoutTarget.value
+  if (!target) return
+  loggingOut.value = true
+  try {
+    const result = await logout(target.id)
+    if (result?.ok) toast.success(result.message || t('codexInstances.toastLoggedOut'))
+    else toast.error(result?.message ?? t('codexInstances.toastLogoutFailed'))
+  } finally {
+    loggingOut.value = false
+    logoutOpen.value = false
+    logoutTarget.value = null
+  }
 }
 
 async function onOpenDesktop(instance: CodexInstance) {
@@ -920,6 +948,14 @@ onUnmounted(() => {
                   >
                     <LogIn /> {{ $t('codexInstances.login') }}
                   </DropdownMenuItem>
+                  <DropdownMenuItem
+                    v-if="instance.loggedIn && !instance.isExternal"
+                    :disabled="instance.isDesktopRunning || isBusy(instance)"
+                    :title="instance.isDesktopRunning ? $t('codexInstances.logoutQuitFirst') : undefined"
+                    @click="openLogout(instance)"
+                  >
+                    <LogOut /> {{ $t('codexInstances.logout') }}
+                  </DropdownMenuItem>
                   <!-- Only for a signed-in ChatGPT login: an API-key auth has no ChatGPT
                        subscription and so no bankable reset credits. Disabled (with a title
                        explaining why) when the cached usage already shows the redeem would be
@@ -1000,6 +1036,14 @@ onUnmounted(() => {
       :submitting="deleting"
       :error-message="deleteError"
       @confirm="onDelete"
+    />
+    <LogoutInstanceDialog
+      v-model:open="logoutOpen"
+      :instance-name="logoutTarget?.name ?? null"
+      :account-email="logoutTarget?.account?.email ?? null"
+      :description="$t('codexInstances.logoutDialogDescription')"
+      :submitting="loggingOut"
+      @confirm="onLogoutConfirm"
     />
   </div>
 </template>

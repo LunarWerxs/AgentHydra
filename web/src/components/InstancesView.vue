@@ -489,6 +489,7 @@ const {
   showCliInstances,
   codexDesktopEnabled,
   codexCliEnabled,
+  dshEnabled,
   load: loadAppSettings,
 } = useAppSettings()
 const {
@@ -1855,10 +1856,10 @@ onUnmounted(() => {
         :desktop-enabled="codexDesktopEnabled"
         :cli-enabled="codexCliEnabled"
       />
-      <!-- No settings toggle gating this one, matching OpenCode and Hermes rather than Codex: the
-           section lists what is on the machine and shows an empty state when the harness is not
-           installed, so there is nothing for a switch to protect against. -->
-      <DshInstancesSection />
+      <!-- Hideable in Settings → Providers like the Codex table (owner, 2026-09-30): the section
+           lists what is on the machine and shows an empty state when the harness is not
+           installed, but someone who never uses DeepSeek should not have to scroll past it. -->
+      <DshInstancesSection v-if="dshEnabled" />
       <!-- Last on purpose: it reads the homes the tables above list, and measuring is a click. -->
       <PrefixTaxSection />
     </div>

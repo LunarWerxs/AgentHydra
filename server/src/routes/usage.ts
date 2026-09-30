@@ -24,6 +24,7 @@ import {
   quitCodexDesktopInstance,
   renameCodexInstance,
 } from '../core/codex-instances'
+import { logoutCodexInstance } from '../core/codex-logout'
 import { resolveInstance, resolveInstanceError } from '../core/instance-ref'
 import { listInstances } from '../core/instances'
 import {
@@ -45,12 +46,14 @@ import {
   usageAdvice,
 } from '../usage'
 import { budgetSummary, buildUsageBudget } from '../usage-budget'
+import { dropCachedUsage } from '../usage-cache'
 import { lastAutoRefreshAt, sweepUsage } from '../usage-refresh'
 import {
   checkUsageForAccount,
   checkUsageForCliInstance,
   checkUsageForCodex,
   checkUsageForDesktop,
+  codexKey,
   surveyUsage,
 } from '../usage-service'
 import { deepseekBalance } from '../zswarm-cost'
@@ -466,6 +469,14 @@ app.post('/api/codex-instances/:id/launch', async (c) => {
 app.post('/api/codex-instances/:id/login', (c) =>
   c.json(launchCodexInstance(c.req.param('id'), { login: true })),
 )
+// Sign a stored Codex instance out (removes auth.json) — see core/codex-logout.ts for why it
+// refuses while the desktop runs. On success the cached quota is dropped: it belongs to the old login.
+app.post('/api/codex-instances/:id/logout', async (c) => {
+  const id = c.req.param('id')
+  const result = await logoutCodexInstance(id)
+  if (result.ok) dropCachedUsage(codexKey(id))
+  return c.json(result)
+})
 app.post('/api/codex-instances/:id/desktop/open', async (c) =>
   c.json(await openCodexDesktopInstance(c.req.param('id'))),
 )

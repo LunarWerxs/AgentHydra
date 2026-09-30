@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Monitor, Plug, RefreshCw } from '@lucide/vue'
+import { ChevronDown, Info, Monitor, Plug, RefreshCw } from '@lucide/vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -24,6 +24,8 @@ import {
   normalizeClaudeNativeProfileKey,
 } from '@/lib/claude-native-settings'
 import { displayName } from '@/lib/instance-appearance'
+import ExpandTransition from '@/shell/ExpandTransition.vue'
+import InfoHint from '@/shell/InfoHint.vue'
 import SettingsRow from '@/shell/SettingsRow.vue'
 
 const { t } = useI18n()
@@ -35,6 +37,7 @@ const loading = ref(false)
 const saving = ref(false)
 const loaded = ref(false)
 const error = ref('')
+const detailsOpen = ref(false)
 const profiles = computed(() =>
   instances.value
     .filter((instance) => /^[a-z]:[\\/]/i.test(instance.dir))
@@ -126,35 +129,48 @@ watch(settingsOpen, (open) => {
 </script>
 
 <template>
-  <div class="space-y-2 px-3.5 py-3">
-    <div class="flex items-center gap-2">
-      <label class="flex-1 text-sm" for="claude-native-account">{{ $t('settings.claudeNativeAccount') }}</label>
+  <!-- Owner, 2026-09-30: this section read like a manual. On screen now: the account, the one
+       switch and one status line. The how-it-works text sits behind the switch's info icon and the
+       rest (port, the managed copy, which accounts start automatically, the reset) under Details. -->
+  <SettingsRow :icon="Monitor" :label="$t('settings.claudeNativeAccount')">
+    <template #control>
+      <Select v-model="selectedProfile" :disabled="loading || saving || !profiles.length">
+        <SelectTrigger
+          id="claude-native-account"
+          size="sm"
+          class="w-52"
+          :aria-label="$t('settings.claudeNativeAccount')"
+        >
+          <SelectValue :placeholder="$t(loading ? 'settings.claudeNativeLoading' : 'settings.claudeNativeNoAccounts')" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem v-for="instance in profiles" :key="instance.dir" :value="instance.dir">
+            {{ $t('settings.claudeNativeAccountLabel', { n: instance.num, name: displayName(instance) }) }}
+          </SelectItem>
+        </SelectContent>
+      </Select>
       <Button
         variant="ghost"
         size="icon-sm"
         :disabled="loading || saving"
         :aria-label="$t('settings.claudeNativeRefresh')"
+        :title="$t('settings.claudeNativeRefresh')"
         @click="load"
       >
         <RefreshCw class="size-3.5" :class="loading ? 'animate-spin' : ''" />
       </Button>
-    </div>
-    <Select v-model="selectedProfile" :disabled="loading || saving || !profiles.length">
-      <SelectTrigger id="claude-native-account" class="w-full">
-        <SelectValue :placeholder="$t(loading ? 'settings.claudeNativeLoading' : 'settings.claudeNativeNoAccounts')" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem v-for="instance in profiles" :key="instance.dir" :value="instance.dir">
-          {{ $t('settings.claudeNativeAccountLabel', { n: instance.num, name: displayName(instance) }) }}
-        </SelectItem>
-      </SelectContent>
-    </Select>
-  </div>
-  <SettingsRow
-    :icon="Plug"
-    :label="$t('settings.claudeNativeAutoLabel')"
-    :description="$t('settings.claudeNativeAutoHint')"
-  >
+    </template>
+  </SettingsRow>
+  <SettingsRow :icon="Plug" :label="$t('settings.claudeNativeAutoLabel')">
+    <template #info>
+      <InfoHint :text="$t('settings.claudeNativeAutoHint')" />
+    </template>
+    <template v-if="error || (loaded && selectedInstance)" #description>
+      <span v-if="error" role="alert" class="wrap-break-word text-destructive">{{ error }}</span>
+      <span v-else aria-live="polite" :class="config?.launchDebugger ? 'text-success' : ''">
+        {{ saving ? $t('settings.claudeNativeSaving') : status }}
+      </span>
+    </template>
     <template #control>
       <Switch
         :aria-label="$t('settings.claudeNativeAutoLabel')"
@@ -164,26 +180,36 @@ watch(settingsOpen, (open) => {
       />
     </template>
   </SettingsRow>
-  <div class="space-y-2 px-3.5 py-3 text-xs" aria-live="polite">
-    <p v-if="error" role="alert" class="wrap-break-word text-destructive">{{ error }}</p>
-    <template v-if="loaded && selectedInstance">
-      <p class="font-medium" :class="config?.launchDebugger ? 'text-success' : 'text-foreground'">
-        {{ saving ? $t('settings.claudeNativeSaving') : status }}
-      </p>
-      <p class="text-muted-foreground">{{ $t('settings.claudeNativeNextOpen') }}</p>
-      <p v-if="config" class="text-muted-foreground">
-        {{ $t('settings.claudeNativePort', { port: config.port }) }}
+  <SettingsRow
+    v-if="loaded"
+    :icon="Info"
+    :label="$t('settings.claudeNativeDetails')"
+    clickable
+    role="button"
+    tabindex="0"
+    :aria-expanded="detailsOpen"
+    @click="detailsOpen = !detailsOpen"
+    @keydown.enter.prevent="detailsOpen = !detailsOpen"
+    @keydown.space.prevent="detailsOpen = !detailsOpen"
+  >
+    <template #control>
+      <ChevronDown class="size-4 transition-transform duration-200" :class="detailsOpen ? 'rotate-180' : ''" />
+    </template>
+  </SettingsRow>
+  <ExpandTransition :open="detailsOpen">
+    <div class="space-y-2 px-3.5 pb-3.5 pt-1 text-xs leading-snug text-muted-foreground">
+      <p v-if="config">{{ $t('settings.claudeNativePort', { port: config.port }) }}</p>
+      <p>{{ $t('settings.claudeNativeNextOpen') }}</p>
+      <p>{{ $t('settings.claudeNativeSupport') }}</p>
+      <p class="wrap-break-word">
+        {{ automaticProfiles.length
+          ? $t('settings.claudeNativeEnabledAccounts', { accounts: automaticProfiles.join(', ') })
+          : $t('settings.claudeNativeNoAutomaticAccounts') }}
       </p>
       <Button v-if="config" variant="outline" size="xs" :disabled="disabled" @click="save(null)">
         <Monitor class="size-3.5" />
         {{ $t('settings.claudeNativeReset') }}
       </Button>
-    </template>
-    <p v-if="loaded" class="wrap-break-word text-muted-foreground">
-      {{ automaticProfiles.length
-        ? $t('settings.claudeNativeEnabledAccounts', { accounts: automaticProfiles.join(', ') })
-        : $t('settings.claudeNativeNoAutomaticAccounts') }}
-    </p>
-    <p class="text-muted-foreground">{{ $t('settings.claudeNativeSupport') }}</p>
-  </div>
+    </div>
+  </ExpandTransition>
 </template>

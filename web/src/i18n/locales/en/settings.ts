@@ -78,23 +78,23 @@ export default {
   claudeNativeTitle: 'Claude native control',
   claudeNativeHint:
     'A direct local connection for archiving chats and cleaning up the source after a move. Other migration steps may still use desktop controls.',
-  claudeNativeAccount: 'Claude Desktop account',
+  claudeNativeAccount: 'Account',
   claudeNativeAccountLabel: '#{n} {name}',
   claudeNativeRefresh: 'Refresh native control settings',
   claudeNativeLoading: 'Loading accounts…',
   claudeNativeNoAccounts: 'No Windows Claude Desktop accounts found',
   claudeNativeAutoLabel: 'Start debugger automatically',
   claudeNativeAutoHint:
-    'Open this account through AgentHydra with its native control connection ready.',
-  claudeNativeAutomaticStatus: 'Automatic startup is enabled for this account.',
-  claudeNativeManualStatus:
-    'Automatic startup is off. Native control still requires a manually started debugger. Use standard controls below to turn native control off completely.',
-  claudeNativeStandardStatus: 'This account uses standard desktop controls.',
+    'Opens this Claude Desktop account with a local debugger connection, so AgentHydra can archive chats and clean up after a move directly instead of clicking through the app. Takes effect the next time you open the account from AgentHydra.',
+  claudeNativeAutomaticStatus: 'On. Ready the next time you open it from AgentHydra.',
+  claudeNativeManualStatus: 'Off. Native control needs a debugger you start yourself.',
+  claudeNativeStandardStatus: 'Off. This account uses standard desktop controls.',
+  claudeNativeDetails: 'Details',
   claudeNativeNextOpen:
     'Saved changes apply the next time you open this account from AgentHydra. Running desktops are not restarted.',
   claudeNativePort: 'Local connection: 127.0.0.1:{port}',
   claudeNativeReset: 'Use standard controls',
-  claudeNativeEnabledAccounts: 'Automatic startup: {accounts}',
+  claudeNativeEnabledAccounts: 'Starts automatically: {accounts}',
   claudeNativeNoAutomaticAccounts: 'Automatic startup is not enabled for any account.',
   claudeNativeSupport:
     'Automatic startup uses a separate managed copy of Claude, rebuilt from whatever Windows Claude is installed. An executable it cannot verify is refused.',
@@ -112,6 +112,8 @@ export default {
   codexDesktopProviderHint: 'Show desktop launch, focus, quit, and running status for Codex.',
   codexCliProviderLabel: 'Codex CLI',
   codexCliProviderHint: 'Show Codex CLI launch and login actions.',
+  dshProviderLabel: 'DeepSeek',
+  dshProviderHint: 'Show the DeepSeek Harness instances table.',
   // ⛔ THE ONLY SETTING ON THIS SCREEN THAT SPENDS QUOTA. Say so plainly: a toggle whose cost you
   // discover later is a toggle that should not have existed.
   keepaliveLabel: 'Keep the 5-hour window running',
