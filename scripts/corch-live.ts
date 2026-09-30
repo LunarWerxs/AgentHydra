@@ -8,6 +8,7 @@
 //   bun scripts/corch-live.ts restart        a daemon restart under two running workers (it
 //                                            RESTARTS THE DAEMON: other sessions see a blip)
 //   bun scripts/corch-live.ts burst [n]      n tasks (default 10) over every signed-in account
+//   bun scripts/corch-live.ts subagent       a session that used a subagent moves with its files
 //
 // Accounts are found, not named: "good" = has a credential file and no signed-out wall, least used
 // first; "dead" = has a credential file but no wall yet and `claude auth status` says signed out
@@ -470,8 +471,58 @@ async function burst(n: number) {
   })
 }
 
+/** A session that used a subagent moves with its `<session>/subagents/` files, and the resumed turn
+ *  on the other account still knows what the subagent reported. */
+async function subagentMove(a: Instance, b: Instance) {
+  await scenario('subagent session moves', async (check, note) => {
+    const cwd = dir('subagent')
+    const group = `live-sub-${rnd()}`
+    const salt = `corch-sub-${rnd()}`
+    const [w] = await run(
+      group,
+      [
+        {
+          title: 'subagent then move',
+          cwd,
+          prompt: `Use the Task tool to start a general-purpose subagent whose job is to run this in Bash and report the output: python -c "import hashlib; print(hashlib.sha256(b'${salt}').hexdigest()[:16])". Then reply with exactly the 16-character value the subagent reported and nothing else.`,
+        },
+      ],
+      [a.id, b.id],
+      1,
+    )
+    let v = await settled(w!.id)
+    const expected = new Bun.CryptoHasher('sha256').update(salt).digest('hex').slice(0, 16)
+    check((v.result ?? '').includes(expected), `turn 1 on ${path(v)}: ${v.result}`)
+    const sid = rawWorker(w!.id).sessionId as string
+    const home = v.accountId!
+    const homeDir = live.find((i) => i.id === home)?.configDir ?? ''
+    const hasSubagents = (configDir: string) =>
+      existsSync(join(configDir, 'projects')) &&
+      readdirSync(join(configDir, 'projects')).some((d) =>
+        existsSync(join(configDir, 'projects', d, sid, 'subagents')),
+      )
+    note(`subagent files beside the transcript on the home account: ${hasSubagents(homeDir)}`)
+    const [bl] = await blocker(group, home, cwd, 60)
+    await running(bl!.id)
+    await send(
+      w!.id,
+      'Without using any tools: what exact 16-character value did your subagent report? Reply with just that value.',
+    )
+    v = await settled(w!.id)
+    const newDir = live.find((i) => i.id === v.accountId)?.configDir ?? ''
+    check(
+      v.moves === 1 && (v.result ?? '').includes(expected) && hasSubagents(newDir),
+      `turn 2 moved (${path(v)}), subagent files copied: ${hasSubagents(newDir)}, answer: ${v.result}`,
+    )
+    await settled(bl!.id, 200)
+  })
+}
+
 const [l0, l1, l2, l3] = live
-if (phase === 'handoff') {
+if (phase === 'subagent') {
+  if (l0 && l1) await subagentMove(l0, l1)
+  else skip('subagent session moves', 'needs two live accounts')
+} else if (phase === 'handoff') {
   const jobs: Promise<void>[] = []
   if (l0 && l1) jobs.push(moveAndBack(l0, l1))
   else skip('move-and-back', 'needs two live accounts')
@@ -489,7 +540,7 @@ if (phase === 'handoff') {
 } else if (phase === 'burst') {
   await burst(Number(process.argv[3] ?? 10))
 } else {
-  console.error(`unknown phase '${phase}': handoff | restart | burst [n]`)
+  console.error(`unknown phase '${phase}': handoff | restart | burst [n] | subagent`)
   process.exit(2)
 }
 
