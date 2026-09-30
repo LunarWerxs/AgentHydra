@@ -508,12 +508,16 @@ function removeCodexHome(dir: string): void {
   try {
     rmSync(dir, { recursive: true, force: true })
   } catch (error) {
-    for (const entry of readdirSync(dir)) {
-      try {
-        rmSync(join(dir, entry), { recursive: true, force: true })
-      } catch {
-        // Held; onlySandboxGuardsLeft decides whether that still counts as deleted.
+    try {
+      for (const entry of readdirSync(dir)) {
+        try {
+          rmSync(join(dir, entry), { recursive: true, force: true })
+        } catch {
+          // Held; onlySandboxGuardsLeft decides whether that still counts as deleted.
+        }
       }
+    } catch {
+      // Unreadable or already gone: the remove's own error below is the one worth reporting.
     }
     throw error
   }
@@ -635,8 +639,8 @@ export async function deleteCodexInstance(
           action: 'codex-delete',
           dir: instance.codexHome,
           message: failure
-            ? `Could not delete '${instance.codexHome}': ${failure}. The instance record was kept so it can be retried; its login data is still on disk.`
-            : `'${instance.codexHome}' still exists after the delete (something is holding it open). The instance record was kept so it can be retried; its login data is still on disk.`,
+            ? `Could not delete '${instance.codexHome}': ${failure}. The instance record was kept so the delete can be retried; part of its folder may already be gone, so if you keep it, it may need signing in again.`
+            : `'${instance.codexHome}' still exists after the delete (something is holding it open). The instance record was kept so the delete can be retried; part of its folder may already be gone, so if you keep it, it may need signing in again.`,
           data: { id, partial: true },
         }
     }
