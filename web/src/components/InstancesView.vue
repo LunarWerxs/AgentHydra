@@ -119,6 +119,7 @@ import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import {
+  billsPastLimit,
   bindingWeeklyPct,
   flaggedCodeCredit,
   formatMoney,
@@ -215,6 +216,7 @@ const usageCreditsOnFor = (inst: CMInstance) => {
 
 function usageCreditsHint(inst: CMInstance): string {
   const credits = usageCreditsOnFor(inst)
+  if (!credits) return t('instances.extraUsageOnHint')
   const used = formatMoney(credits?.used, credits?.currency ?? null)
   const checked = appCheckedAgo(inst)
   return credits?.limit == null
@@ -1434,7 +1436,7 @@ onUnmounted(() => {
                 <!-- Usage credits ON: this account bills usage past its plan limits. Off is the
                      quiet default and gets no icon (the usage chip's popover says it either way). -->
                 <IconTooltip
-                  v-if="usageCreditsOnFor(inst)"
+                  v-if="billsPastLimit(usageFor(inst))"
                   :label="$t('instances.usageCreditsOn')"
                   :description="usageCreditsHint(inst)"
                 >

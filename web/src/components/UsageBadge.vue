@@ -12,6 +12,7 @@ import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import { turnOffExtraUsage, type UsageSnapshot } from '@/lib/api'
 import {
+  billsPastLimit,
   formatMoney,
   isNoDataSnap,
   isStaleSnap,
@@ -121,9 +122,7 @@ const appCheckedAgo = computed(() => (app.value ? usageCheckedAgo(app.value.chec
 // Paid extra usage ON: past its limits this account BILLS instead of stopping. The owner never
 // wants that paid, so the popover says so and offers the switch that turns it off at claude.ai
 // (server/src/extra-usage.ts); until then the guard stops this account's sessions near its limit.
-const billsPastLimit = computed(
-  () => props.snapshot?.extraUsage === true || app.value?.usageCredits?.enabled === true,
-)
+const canBill = computed(() => billsPastLimit(props.snapshot))
 const canTurnOff = computed(() => /^(desktop|cli):/.test(props.usageKey ?? ''))
 const turningOff = ref(false)
 const turnOffNote = ref('')
@@ -286,7 +285,7 @@ function onRootOpenChange(v: boolean): void {
             {{ $t('instances.usageAppCheckedAgo', { when: appCheckedAgo }) }}
           </p>
         </div>
-        <div v-if="billsPastLimit" class="space-y-1.5 border-t border-border/60 pt-1.5">
+        <div v-if="canBill" class="space-y-1.5 border-t border-border/60 pt-1.5">
           <p class="font-medium text-warning">{{ $t('instances.usageExtraUsageOn') }}</p>
           <Button
             v-if="canTurnOff"

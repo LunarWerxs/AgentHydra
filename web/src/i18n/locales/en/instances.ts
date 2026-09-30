@@ -112,9 +112,11 @@ export default {
   // claude.ai "usage credits": usage past the plan limits is billed to the account.
   usageCreditsOn: 'Usage credits on: usage past the plan limits is billed',
   usageCreditsOnHint:
-    '{used} spent of a {limit} monthly cap. Turn it off in Claude: Settings → Usage. Checked {checked}.',
+    '{used} spent of a {limit} monthly cap. Turn it off from the usage chip on this row. Checked {checked}.',
   usageCreditsOnHintUncapped:
-    '{used} spent, with no monthly cap. Turn it off in Claude: Settings → Usage. Checked {checked}.',
+    '{used} spent, with no monthly cap. Turn it off from the usage chip on this row. Checked {checked}.',
+  extraUsageOnHint:
+    'Past its limits this account keeps working and bills you. While "Allow paid extra usage" is off, AgentHydra stops its sessions near the limit. Turn extra usage off for good from the usage chip on this row.',
   useAccountName: 'Name it after the account',
   toastUsingAccountName: 'Cleared the typed name. This instance is called “{name}” again.',
   copyAccountEmailAria: 'Copy the account address {email}',

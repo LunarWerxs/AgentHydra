@@ -13,6 +13,7 @@ import {
   ArrowUp,
   ChevronDown,
   Copy,
+  CreditCard,
   EllipsisVertical,
   Funnel,
   Link2,
@@ -71,7 +72,7 @@ import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
 import { nameOverflowTitle, shortDisplayName } from '@/lib/instance-appearance'
-import { bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
+import { billsPastLimit, bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
 import {
   msUntilReset,
   resetLabel,
@@ -80,6 +81,7 @@ import {
   waitSeverity,
   windowRemainingPct,
 } from '@/lib/usage-reset'
+import IconTooltip from '@/shell/IconTooltip.vue'
 
 const {
   cliInstances,
@@ -642,6 +644,16 @@ onUnmounted(() => stopPolling())
                      other hover to extend, and the row above it already reveals its path this way. -->
                 <span :title="nameOverflowTitle(inst.name)">{{ shortDisplayName(inst.name) }}</span>
                 <CliLimitResetIcon :result="inst.lastLimitReset" />
+                <!-- Paid extra usage ON: past its limits this account bills instead of stopping. -->
+                <IconTooltip
+                  v-if="billsPastLimit(usageFor(inst))"
+                  :label="$t('instances.usageCreditsOn')"
+                  :description="$t('instances.extraUsageOnHint')"
+                >
+                  <span class="inline-flex items-center" :aria-label="$t('instances.usageCreditsOn')">
+                    <CreditCard class="size-3.5 text-warning" />
+                  </span>
+                </IconTooltip>
               </div>
             </TableCell>
             <TableCell>

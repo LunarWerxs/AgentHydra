@@ -191,4 +191,32 @@ describe('AH-03: a delete whose directory survives keeps the record and says so'
       expect(existsSync(codexHome)).toBe(false)
     }
   })
+
+  test("Codex: a folder left holding only the sandbox service's lock still deletes the instance", async () => {
+    // Codex's Windows sandbox service keeps `.codex-provisioning-<hash>.guard` open for as long as
+    // it runs (owner hit EBUSY on exactly that file, 2026-09-30). The injected remove stands in for
+    // it: everything goes except the guard, and the remove reports the lock.
+    const name = `codex-guarded-${crypto.randomUUID()}`
+    const created = createCodexInstance(name)
+    expect(created.ok).toBe(true)
+    const id = created.data?.id as string
+    const codexHome = created.data?.codexHome as string
+    writeFileSync(join(codexHome, 'auth.json'), '{}')
+    writeFileSync(join(codexHome, '.codex-provisioning-30aa2a3ad5e8ebfa.guard'), '')
+    try {
+      const result = await deleteCodexInstance(id, name, {
+        ...NO_PROCESSES,
+        removeDir: (dir) => {
+          rmSync(join(dir, 'auth.json'), { force: true })
+          throw new Error('EBUSY: resource busy or locked (injected)')
+        },
+      })
+      expect(result.ok).toBe(true)
+      expect(result.message).toContain('sandbox service')
+      expect(getCodexInstance(id)).toBeNull()
+      expect(existsSync(join(codexHome, 'auth.json'))).toBe(false)
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true })
+    }
+  })
 })

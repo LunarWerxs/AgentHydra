@@ -121,6 +121,12 @@ export function shortDate(iso: string | null | undefined): string {
     : new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
+/** Whether the account bills usage past its limits instead of stopping (claude.ai "extra usage"):
+ *  the usage endpoint's reading, or the running desktop app's usage credits. */
+export function billsPastLimit(snap: UsageSnapshot | null | undefined): boolean {
+  return snap?.extraUsage === true || snap?.claudeApp?.usageCredits?.enabled === true
+}
+
 /** The Code credit worth a row icon: spendable money left, or one held back or never claimed
  *  (both are money the account is not getting). A spent-out credit is not news. */
 export function flaggedCodeCredit(snap: UsageSnapshot | null | undefined): ClaudeCodeCredit | null {

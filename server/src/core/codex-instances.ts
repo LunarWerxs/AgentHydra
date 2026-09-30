@@ -56,6 +56,9 @@ type StoredCodexInstance = Omit<
 
 interface Store {
   instances: StoredCodexInstance[]
+  /** CODEX_HOMEs of deleted instances that Codex's sandbox service still held a lock in (see
+   *  onlySandboxGuardsLeft). Retried by sweepCodexLeftovers until they are gone. */
+  leftoverDirs?: string[]
 }
 
 // Persistence goes through core/json-store.ts, exactly as cli-instances.ts's does: a corrupt or
@@ -70,7 +73,13 @@ const STORE_SPEC: JsonStoreSpec<Store> = {
     if (!parsed || typeof parsed !== 'object') return null
     const instances = (parsed as { instances?: unknown }).instances
     if (!Array.isArray(instances)) return null
-    return { instances: instances as StoredCodexInstance[] }
+    const leftovers = (parsed as { leftoverDirs?: unknown }).leftoverDirs
+    return {
+      instances: instances as StoredCodexInstance[],
+      ...(Array.isArray(leftovers)
+        ? { leftoverDirs: leftovers.filter((d): d is string => typeof d === 'string') }
+        : {}),
+    }
   },
   empty: () => ({ instances: [] }),
 }
@@ -261,6 +270,7 @@ export interface ListCodexInstancesOptions {
 export async function listCodexInstances(
   options: ListCodexInstancesOptions = {},
 ): Promise<CodexInstance[]> {
+  sweepCodexLeftovers()
   const runtimes = await (options.listDesktopProcesses ?? listCodexDesktopProcesses)()
   const runtimeByDir = new Map(
     runtimes.map((runtime) => [normalizePath(runtime.desktopUserDataDir), runtime]),
@@ -466,6 +476,74 @@ export function renameCodexInstance(id: string, name: string): CMActionResult {
   }
 }
 
+/** Codex's Windows sandbox service (codex-windows-sandbox-service.exe, a system service) keeps a
+ *  `.codex-provisioning-<hash>.guard` file open in every CODEX_HOME it has provisioned, for as long
+ *  as it runs, so that folder cannot be removed until the service restarts (found 2026-09-30: a
+ *  signed-out instance's delete failed EBUSY on exactly that one empty file). */
+const SANDBOX_GUARD_RE = /^\.codex-provisioning-[0-9a-f]+\.guard$/i
+
+/** Whether what is left of a CODEX_HOME is only sandbox guards (at least one): nothing of the
+ *  login or its sessions, just the lock the sandbox service holds. */
+function onlySandboxGuardsLeft(dir: string): boolean {
+  let guards = 0
+  const walk = (at: string): boolean => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (!walk(join(at, entry.name))) return false
+      } else if (SANDBOX_GUARD_RE.test(entry.name)) guards++
+      else return false
+    }
+    return true
+  }
+  try {
+    return walk(dir) && guards > 0
+  } catch {
+    return false
+  }
+}
+
+/** Remove a CODEX_HOME. When the one-shot remove fails, every entry is removed on its own before
+ *  the error is passed on, so a single held file costs that file, not the whole login beside it. */
+function removeCodexHome(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true })
+  } catch (error) {
+    for (const entry of readdirSync(dir)) {
+      try {
+        rmSync(join(dir, entry), { recursive: true, force: true })
+      } catch {
+        // Held; onlySandboxGuardsLeft decides whether that still counts as deleted.
+      }
+    }
+    throw error
+  }
+}
+
+let lastLeftoverSweep = 0
+
+/** Retry the folders deleted instances left behind in the sandbox service's hands (at most every
+ *  10 minutes; the service lets go when it restarts). Only paths this app recorded are touched. */
+function sweepCodexLeftovers(now = Date.now()): void {
+  if (now - lastLeftoverSweep < 10 * 60_000) return
+  lastLeftoverSweep = now
+  const pending = readStore().leftoverDirs ?? []
+  if (!pending.length) return
+  const gone = pending.filter((dir) => {
+    if (!isPathInside(CODEX_INSTANCES_ROOT, dir)) return true
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      // Still held.
+    }
+    return !existsSync(dir)
+  })
+  if (!gone.length) return
+  mutate((store) => {
+    store.leftoverDirs = (store.leftoverDirs ?? []).filter((d) => !gone.includes(d))
+    return { result: null, changed: true }
+  })
+}
+
 export interface DeleteCodexInstanceOptions {
   /** Legacy/test injection: a plain runtime list, treated as a SUCCESSFUL scan. */
   listDesktopProcesses?: () => Promise<CodexDesktopRuntime[]>
@@ -480,7 +558,8 @@ export interface DeleteCodexInstanceOptions {
  * audit AH-02 - when the OS could not say whether it is running: a failed process scan used to read
  * as "not running" and wave the delete through. Since AH-03 the record is also kept whenever the
  * CODEX_HOME survives the remove, instead of being dropped with a success message over a login
- * that is still on disk.
+ * that is still on disk - unless all that survives is the lock Codex's sandbox service holds
+ * (onlySandboxGuardsLeft): then the login is gone, the delete stands and the folder is retried.
  */
 export async function deleteCodexInstance(
   id: string,
@@ -531,38 +610,52 @@ export async function deleteCodexInstance(
     }
   }
 
+  // Only the sandbox service's lock left behind: the login is gone, so the delete stands and the
+  // empty folder is retried later (sweepCodexLeftovers).
+  let heldBySandbox = false
   if (isPathInside(CODEX_INSTANCES_ROOT, instance.codexHome)) {
-    const removeDir =
-      options.removeDir ?? ((dir: string) => rmSync(dir, { recursive: true, force: true }))
+    const removeDir = options.removeDir ?? removeCodexHome
+    let failure: string | null = null
     try {
       removeDir(instance.codexHome)
     } catch (error) {
-      return {
-        ok: false,
-        action: 'codex-delete',
-        dir: instance.codexHome,
-        message: `Could not delete '${instance.codexHome}': ${error instanceof Error ? error.message : String(error)}. The instance record was kept so it can be retried; its login data is still on disk.`,
-        data: { id, partial: true },
-      }
+      failure = error instanceof Error ? error.message : String(error)
     }
     if (existsSync(instance.codexHome)) {
-      return {
-        ok: false,
-        action: 'codex-delete',
-        dir: instance.codexHome,
-        message: `'${instance.codexHome}' still exists after the delete (something is holding it open). The instance record was kept so it can be retried; its login data is still on disk.`,
-        data: { id, partial: true },
-      }
+      heldBySandbox = onlySandboxGuardsLeft(instance.codexHome)
+      if (!heldBySandbox)
+        return {
+          ok: false,
+          action: 'codex-delete',
+          dir: instance.codexHome,
+          message: failure
+            ? `Could not delete '${instance.codexHome}': ${failure}. The instance record was kept so it can be retried; its login data is still on disk.`
+            : `'${instance.codexHome}' still exists after the delete (something is holding it open). The instance record was kept so it can be retried; its login data is still on disk.`,
+          data: { id, partial: true },
+        }
     }
   }
   const outcome = mutate((store) => {
     const index = store.instances.findIndex((candidate) => candidate.id === id)
     if (index < 0) return { result: false, changed: false }
     store.instances.splice(index, 1)
+    if (heldBySandbox)
+      store.leftoverDirs = [
+        ...(store.leftoverDirs ?? []).filter((d) => d !== instance.codexHome),
+        instance.codexHome,
+      ]
     return { result: true, changed: true }
   })
   if (!outcome.ok)
     return refusal('codex-delete', instance.codexHome, { id, dirRemoved: true }, outcome)
+  if (heldBySandbox)
+    return {
+      ok: true,
+      action: 'codex-delete',
+      dir: instance.codexHome,
+      message: `Codex instance '${instance.name}' deleted. Codex's sandbox service still holds one empty lock file in its old folder, so that folder is removed once the service lets go of it (after a restart at the latest).`,
+      data: { id, leftover: instance.codexHome },
+    }
   return {
     ok: true,
     action: 'codex-delete',

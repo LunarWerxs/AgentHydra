@@ -18,6 +18,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   now says when an account can bill, and its "Turn off extra usage" button switches it off at
   claude.ai for that account, so it simply stops at its limits from then on. Corch uses the same
   switch and the same line for its workers.
+  CLI instance rows now show the same credit-card icon when an account has extra usage on.
 
 - **Corch: hand a task's pieces to your CLI accounts; each worker moves to another account by
   itself when one hits its usage limit** (`server/src/corch.ts`, `web/src/components/CorchView.vue`).
@@ -81,6 +82,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   hidden, then catches up as soon as you look at it again.
 
 ### Fixed
+
+- **Deleting a Codex instance no longer fails with "EBUSY: resource busy or locked"**
+  (`server/src/core/codex-instances.ts`). Codex's Windows sandbox service keeps one empty lock file
+  open in every Codex folder it has set up, for as long as it runs, so the folder could never be
+  removed. The delete now removes everything else (the login and its sessions), finishes, and
+  removes the leftover empty folder once the service lets go of it.
 
 - **Auto-resume picks a session back up after its weekly limit resets** (`server/src/monitor.ts`,
   `rate-limit-discovery.ts`). A chat you started yourself that stopped at the weekly limit was
