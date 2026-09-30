@@ -44,9 +44,9 @@ import {
   aboutToBill,
   addTokens,
   attemptSpend,
-  type CorchTokens,
   type CorchAccount,
   type CorchLiveUsage,
+  type CorchTokens,
   type CorchWalls,
   type CorchWorker,
   type CorchWorkerBrief,
@@ -1363,20 +1363,54 @@ export function corchHandoff(id: string): { ok: boolean; message: string } {
   }
 }
 
-export function corchSend(id: string, text: string): { ok: boolean; message: string } {
+/** What a message to a running worker waits for: a `-p` session takes no input mid-run, so it is
+ *  delivered only when the whole current task ends. Field note 10 (2026-09-30): only this answer
+ *  said so, and a "fix the build first" message could not reach a worker that was breaking it. */
+export const HELD_MESSAGE =
+  'Held until this worker finishes its WHOLE current task: a running CLI session takes no input mid-run, so it gets this only after it ends (that can be many minutes). If it must act on it now, send it again with urgent: true, which stops the running work and continues the same session with your message first.'
+
+/** Preface of an urgent message, so the session knows why its turn ended mid-step. */
+const URGENT_PREFIX =
+  'AgentHydra stopped your previous turn mid-step to deliver this message from the orchestrator. Act on it first; then continue the task only if it still applies, checking the state of anything you were in the middle of.'
+
+/** `urgent`: a running worker is stopped cleanly (its attempt recorded with its cost, the transcript
+ *  kept) and the same session continues at once with this message first; messages already queued
+ *  follow it, in order. Without it, a running worker gets the message when its task ends. */
+export function corchSend(
+  id: string,
+  text: string,
+  opts: { urgent?: boolean } = {},
+): { ok: boolean; message: string; urgent?: boolean } {
   load()
   const w = workers.get(id)
   if (!w) return { ok: false, message: 'No such worker.' }
   if (!text.trim()) return { ok: false, message: 'The message is empty.' }
-  w.pending.push(text)
-  journal(w, 'follow-up-queued', { pending: w.pending.length })
+  if (w.status === 'running' && opts.urgent) {
+    w.pending.unshift(`${URGENT_PREFIX}\n\n${text}`)
+    journal(w, 'follow-up-queued', { pending: w.pending.length, urgent: true })
+    if (stopRunning(w, 'Stopped to deliver an urgent message from the orchestrator.')) {
+      w.status = 'queued'
+      w.retries = 0
+      w.error = null
+      w.notBefore = null
+      w.revived = true
+      changed(w)
+      schedule(0)
+      const more = w.pending.length - 1
+      return {
+        ok: true,
+        urgent: true,
+        message: `Stopped its running work; the same session continues now with this message first${more ? `, then the ${more} message(s) queued before it` : ''}.`,
+      }
+    }
+    // It finished on its own a moment ago: the message leads its next turn like any other.
+  } else {
+    w.pending.push(text)
+    journal(w, 'follow-up-queued', { pending: w.pending.length })
+  }
   if (w.status === 'running') {
     changed(w)
-    return {
-      ok: true,
-      message:
-        'Queued: the task gets it after it finishes its current work. To change course now, stop it and continue it with your message.',
-    }
+    return { ok: true, message: HELD_MESSAGE }
   }
   if (!isActive(w)) {
     w.status = 'queued'
@@ -1389,50 +1423,70 @@ export function corchSend(id: string, text: string): { ok: boolean; message: str
   return { ok: true, message: 'Queued as the next turn of the same session.' }
 }
 
-export function corchCancel(filter: { id?: string; group?: string }): { cancelled: string[] } {
+/** End a running worker's attempt now: kill its CLI and record the attempt as stopped, with its
+ *  spend. False when the CLI had already finished (that turn is recorded instead, by poll) and the
+ *  worker is no longer active. */
+function stopRunning(w: CorchWorker, notice: string | null): boolean {
+  const at = w.attempts[w.attempts.length - 1]
+  const had = procs.get(w.id)
+  // Stopped just after the CLI finished: record that turn's result, cost and turns first.
+  if (w.status === 'running' && had && hasExited(had)) {
+    try {
+      poll(w)
+    } catch (err) {
+      // One worker's read error must not stop a group cancel; the kill path below still runs.
+      console.error(`[corch] could not read ${w.id}:`, err)
+    }
+    if (!isActive(w)) return false
+  }
+  if (w.status === 'running' && at?.pid) {
+    // Kill only a process known to be this worker's: a PID with no handle (the daemon
+    // restarted) may have been reused by Windows for a stranger.
+    const proc = procs.get(w.id)
+    if (proc ? !hasExited(proc) : process.platform !== 'win32' && isPidAlive(at.pid)) {
+      try {
+        killProcessTree(at.pid)
+      } catch {
+        // already gone
+      }
+    }
+    at.outcome = 'cancelled'
+    at.notice = notice
+    at.endedAt = Date.now()
+    charge(w, at)
+    procs.delete(w.id)
+    forgetRead(at.log)
+    rmSync(signalPath(w.id), { force: true })
+  }
+  return true
+}
+
+/** Queued messages survive a cancel (field note 11, 2026-09-30: a cancel dropped three silently):
+ *  they are delivered, in order, when the worker is continued, and the answer counts them. */
+export function corchCancel(filter: { id?: string; group?: string }): {
+  cancelled: string[]
+  keptMessages: Record<string, number>
+} {
   load()
-  if (!filter.id && !filter.group) return { cancelled: [] }
   const cancelled: string[] = []
+  const keptMessages: Record<string, number> = {}
+  if (!filter.id && !filter.group) return { cancelled, keptMessages }
   for (const w of workers.values()) {
     if (!matches(w, filter) || !isActive(w)) continue
+    if (!stopRunning(w, null)) continue
     const at = w.attempts[w.attempts.length - 1]
-    const had = procs.get(w.id)
-    // Stopped just after the CLI finished: record that turn's result, cost and turns first.
-    if (w.status === 'running' && had && hasExited(had)) {
-      try {
-        poll(w)
-      } catch (err) {
-        // One worker's read error must not stop a group cancel; the kill path below still runs.
-        console.error(`[corch] could not read ${w.id}:`, err)
-      }
-      if (!isActive(w)) continue
-    }
-    if (w.status === 'running' && at?.pid) {
-      // Kill only a process known to be this worker's: a PID with no handle (the daemon
-      // restarted) may have been reused by Windows for a stranger.
-      const proc = procs.get(w.id)
-      if (proc ? !hasExited(proc) : process.platform !== 'win32' && isPidAlive(at.pid)) {
-        try {
-          killProcessTree(at.pid)
-        } catch {
-          // already gone
-        }
-      }
-      at.outcome = 'cancelled'
-      at.endedAt = Date.now()
-      charge(w, at)
-      procs.delete(w.id)
-      forgetRead(at.log)
-    }
     w.status = 'cancelled'
-    w.pending = []
     w.error = null
     delete w.revived
-    journal(w, 'cancelled', at ? { account: acctLabel(at.account) } : {})
+    if (w.pending.length) keptMessages[w.id] = w.pending.length
+    journal(w, 'cancelled', {
+      ...(at ? { account: acctLabel(at.account) } : {}),
+      ...(w.pending.length ? { pending: w.pending.length } : {}),
+    })
     changed(w)
     cancelled.push(w.id)
   }
-  return { cancelled }
+  return { cancelled, keptMessages }
 }
 
 /** What Corch has taken off the chats that handed it work, over every task on record: tasks, the

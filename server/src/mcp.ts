@@ -771,13 +771,24 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'corch_send',
     description:
-      'MUTATES: send a follow-up message to a Corch worker: it runs as the next turn in the SAME session (queued if the worker is busy). Like the task, it must be self-contained: the worker sees nothing of this chat.',
-    inputSchema: S({ id: { type: 'string' }, text: { type: 'string' } }, ['id', 'text']),
+      'MUTATES: send a follow-up message to a Corch worker, as the next turn in the SAME session. To a finished, failed or stopped worker it starts at once. To a RUNNING worker it is HELD UNTIL THE WHOLE CURRENT TASK ENDS (a running CLI session takes no input mid-run; that can be many minutes), unless `urgent: true`: then the running work is stopped cleanly (cost recorded, transcript kept) and the same session continues at once with this message first, followed by anything queued before it. Use urgent for steering that cannot wait (stop, change course, fix what you broke). Like the task, the message must be self-contained: the worker sees nothing of this chat.',
+    inputSchema: S(
+      {
+        id: { type: 'string' },
+        text: { type: 'string' },
+        urgent: {
+          type: 'boolean',
+          description:
+            'Stop a running worker now and deliver this first (default false: held until its task ends).',
+        },
+      },
+      ['id', 'text'],
+    ),
     run: (a) =>
       api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/send`, {
         method: 'POST',
         headers: JSON_HEADERS,
-        body: JSON.stringify({ text: str(a.text) }),
+        body: JSON.stringify({ text: str(a.text), urgent: a.urgent === true }),
       }),
   },
   {
@@ -794,7 +805,8 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'corch_cancel',
-    description: 'MUTATES: stop a Corch worker (`id`) or every worker of a `group`.',
+    description:
+      'MUTATES: stop a Corch worker (`id`) or every worker of a `group`. Messages queued for it are kept (`keptMessages` counts them) and delivered, in order, when it is continued with corch_send.',
     inputSchema: S({ id: { type: 'string' }, group: { type: 'string' } }),
     run: async (a) => {
       if (a.id == null && a.group == null) throw new Error('pass `id` or `group`')

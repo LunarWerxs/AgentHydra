@@ -103,7 +103,7 @@ app.post('/api/corch/workers/:id/send', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.text !== 'string' || !body.text.trim())
     return c.json({ error: 'text is required' }, 400)
-  return c.json(corchSend(c.req.param('id'), body.text))
+  return c.json(corchSend(c.req.param('id'), body.text, { urgent: body.urgent === true }))
 })
 app.post('/api/corch/workers/:id/handoff', (c) => c.json(corchHandoff(c.req.param('id'))))
 app.post('/api/corch/cancel', async (c) => {

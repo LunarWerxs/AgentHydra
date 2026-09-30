@@ -66,10 +66,13 @@ export default {
   whyWaiting: 'Why it is waiting',
   beforeStopped: 'Before it was stopped',
   pending: 'Waiting to be sent ({n})',
-  stopDiscards: 'Stop task (drops 1 waiting message) | Stop task (drops {n} waiting messages)',
+  stopKeeps: 'Stop task (keeps its 1 waiting message) | Stop task (keeps its {n} waiting messages)',
+  stopped: 'Task stopped',
+  stoppedKept:
+    'Task stopped. Its waiting message is kept and goes first when you continue it. | Task stopped. Its {n} waiting messages are kept and go first when you continue it.',
   messageLabel: 'Message this task',
   messageHint:
-    'Queued: the task gets it after it finishes its current work. To change course now, stop it, then continue it with your message.',
+    'Held until the task finishes its current work, which can take a long while. To change course now, use Stop and send now.',
   continueLabel: 'Continue this task',
   continueHint: 'Picks up the same conversation, on whichever account is free.',
   continueHintStuck:
@@ -80,7 +83,9 @@ export default {
   sendShortcut: 'Ctrl+Enter to send',
   stop: 'Stop task',
   sendFailed: 'Could not send the message',
-  stopped: 'Task stopped',
+  sendNow: 'Stop and send now',
+  sendNowHint:
+    'Stops the work it is doing and continues the same conversation with this message first. Anything already waiting follows.',
   stopFailed: 'Could not stop the task',
   // --- status chips (sentence case, each with an icon so colour is never the only signal) ---
   statusQueued: 'Queued',
@@ -112,4 +117,40 @@ export default {
   queuedHandoff: 'Continuing in a fresh session on the account with the most room.',
   queuedRetry: 'Retrying in {s}s (try {n} of 3).',
   queuedRestart: 'Resuming after AgentHydra restarted.',
+  // --- the orchestration log (CorchJournal.vue; server/src/corch-journal.ts): one line per change ---
+  log: {
+    title: 'Log',
+    scopeTask: 'This task',
+    scopeGroup: 'Everything handed off with it',
+    scopeLabel: 'Show the log of',
+    empty: 'Nothing logged yet.',
+    loadFailed: 'Could not load the log.',
+    dispatched: 'Handed off, to run in {cwd}',
+    dispatchedLimited: 'Handed off, to run in {cwd}, only on the accounts it was given ({n})',
+    launched:
+      'Started on {account} (5-hour window {session}, week {week}, {active} other tasks running there)',
+    launchedAgain:
+      'Attempt {attempt} started on {account} (5-hour window {session}, week {week}, {active} other tasks running there)',
+    moved: 'Moved from {from} to {account}',
+    movedEmpty: 'Moved from {from} to {account}; there was no conversation to carry over yet',
+    limit: '{account} hit its usage limit; not used again until {until}',
+    signedOut: '{account} is signed out; checked again at {until}',
+    handoffRequested: 'Asked to wrap up and write a handoff: {account} is at {pct} of its limit',
+    handoffAsked: 'Asked to wrap up and write a handoff, on request',
+    handoffWritten: 'Wrote its handoff on {account}',
+    handoffResumed:
+      'Continued from its handoff in a fresh session on {account} (5-hour window {session}, week {week}, {active} other tasks running there)',
+    followUpQueued: 'Message queued ({n} waiting)',
+    followUpUrgent: 'Urgent message: its running work was stopped to deliver it first',
+    followUpDelivered: 'Message delivered, on {account}',
+    retry: 'Trying again on {account} in {s}s (try {n} of 3)',
+    interrupted: 'Interrupted on {account} (AgentHydra restarted); resuming (try {n} of 3)',
+    waiting: 'Waiting for an account',
+    turnDone: 'Finished a turn on {account}: {cost}, {turns} turns; a waiting message comes next',
+    done: 'Done on {account}: {cost} for this session, {total} in all',
+    failed: 'Failed on {account}',
+    failedNoAccount: 'Failed',
+    cancelled: 'Stopped',
+    cancelledKept: 'Stopped; {n} waiting messages kept for when it continues',
+  },
 }

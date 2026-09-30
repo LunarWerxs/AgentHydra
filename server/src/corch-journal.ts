@@ -49,7 +49,8 @@ export interface CorchJournalEntry {
   until?: string // limit: the wall's end; signed-out: its next recheck (ISO)
   pct?: number | null // handoff-requested: how far into its limit (null: on request)
   path?: string // handoff file
-  pending?: number // follow-up-queued: messages waiting now
+  pending?: number // follow-up-queued: messages waiting now; cancelled: messages kept
+  urgent?: boolean // follow-up-queued: the running work is stopped to deliver it first
   retry?: number // retry / interrupted: which retry this is, of 3
   waitS?: number // retry: seconds until it
   costUsd?: number // done / turn-done: this attempt's spend
@@ -183,7 +184,9 @@ export function describeJournalEntry(e: CorchJournalEntry, now: Date = new Date(
     case 'handoff-resumed':
       return `resumed from its handoff${on} ${pick}`
     case 'follow-up-queued':
-      return `follow-up queued (${e.pending ?? 1} waiting)`
+      return e.urgent
+        ? `urgent follow-up: its running work is stopped to deliver it first (${e.pending ?? 1} waiting)`
+        : `follow-up queued (${e.pending ?? 1} waiting)`
     case 'follow-up-delivered':
       return `follow-up delivered${on} ${pick}`
     case 'retry':
@@ -199,7 +202,7 @@ export function describeJournalEntry(e: CorchJournalEntry, now: Date = new Date(
     case 'failed':
       return `failed${on}: ${e.error ?? '?'}`
     case 'cancelled':
-      return 'cancelled'
+      return `cancelled${on}${e.pending ? `; ${e.pending} queued message(s) kept for when it is continued` : ''}`
     default:
       return String(e.event)
   }

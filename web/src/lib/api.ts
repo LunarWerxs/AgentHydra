@@ -944,16 +944,72 @@ export const runCorch = (input: {
     method: 'POST',
     body: JSON.stringify(input),
   })
-export const sendCorchWorker = (id: string, text: string) =>
-  j<{ ok: boolean; message: string }>(`/api/corch/workers/${encodeURIComponent(id)}/send`, {
-    method: 'POST',
-    body: JSON.stringify({ text }),
-  })
+/** `urgent`: stop a running task's work and continue its session with this message first. */
+export const sendCorchWorker = (id: string, text: string, urgent = false) =>
+  j<{ ok: boolean; message: string; urgent?: boolean }>(
+    `/api/corch/workers/${encodeURIComponent(id)}/send`,
+    { method: 'POST', body: JSON.stringify({ text, urgent }) },
+  )
+/** `keptMessages`: per stopped task, the waiting messages kept for when it is continued. */
 export const cancelCorch = (filter: { id?: string; group?: string }) =>
-  j<{ cancelled: string[] }>('/api/corch/cancel', {
+  j<{ cancelled: string[]; keptMessages?: Record<string, number> }>('/api/corch/cancel', {
     method: 'POST',
     body: JSON.stringify(filter),
   })
+/** One line of Corch's orchestration journal (server/src/corch-journal.ts CorchJournalEntry). */
+export interface CorchJournalEntry {
+  ts: string
+  id: string
+  group: string
+  title: string
+  event:
+    | 'dispatched'
+    | 'launched'
+    | 'moved'
+    | 'limit'
+    | 'signed-out'
+    | 'handoff-requested'
+    | 'handoff-written'
+    | 'handoff-resumed'
+    | 'follow-up-queued'
+    | 'follow-up-delivered'
+    | 'retry'
+    | 'interrupted'
+    | 'waiting'
+    | 'turn-done'
+    | 'done'
+    | 'failed'
+    | 'cancelled'
+  account?: string
+  from?: string
+  attempt?: number
+  sessionPct?: number | null
+  weekPct?: number | null
+  active?: number
+  copied?: boolean
+  notice?: string
+  until?: string
+  pct?: number | null
+  path?: string
+  pending?: number
+  urgent?: boolean
+  retry?: number
+  waitS?: number
+  costUsd?: number
+  turns?: number
+  totalCostUsd?: number
+  error?: string
+  cwd?: string
+  accounts?: number
+}
+/** The journal for one task or one hand-off, oldest first (the newest `limit`). */
+export const getCorchJournal = (filter: { id?: string; group?: string; limit?: number }) => {
+  const q = new URLSearchParams()
+  if (filter.id) q.set('id', filter.id)
+  if (filter.group) q.set('group', filter.group)
+  if (filter.limit) q.set('limit', String(filter.limit))
+  return j<CorchJournalEntry[]>(`/api/corch/journal?${q.toString()}`)
+}
 
 // --- Codex CLI + Desktop instances -------------------------------------------
 export type {

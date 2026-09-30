@@ -8,11 +8,14 @@
 // it moved on (limit, signed out, error). The box speaks to what sending actually does
 // (server/src/corch.ts corchSend): on a live task it waits until the task finishes its current work
 // (a CLI turn is the whole piece of work, not one step), and it is shown until then; on a finished,
-// failed or stopped one it continues the SAME conversation as a new turn.
-import { RotateCcw, Send, Square } from '@lucide/vue'
+// failed or stopped one it continues the SAME conversation as a new turn. "Stop and send now" is
+// the urgent send: it stops the running work and continues the session with the message first.
+// Stopping keeps the waiting messages (field note 11); they go first when the task continues.
+import { RotateCcw, Send, Square, Zap } from '@lucide/vue'
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import CorchJournal from '@/components/CorchJournal.vue'
 import CorchStatusBadge from '@/components/CorchStatusBadge.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -60,7 +63,7 @@ const errorHeading = computed(() => {
 })
 const stopLabel = computed(() => {
   const n = props.worker?.pending.length ?? 0
-  return n ? t('corch.stopDiscards', { n }, n) : t('corch.stop')
+  return n ? t('corch.stopKeeps', { n }, n) : t('corch.stop')
 })
 
 function duration(totalS: number): string {
@@ -92,13 +95,13 @@ watch(
   },
 )
 
-async function onSend() {
+async function onSend(urgent = false) {
   const w = props.worker
   const text = followUp.value.trim()
   if (!w || !text || sending.value) return
   sending.value = true
   try {
-    const r = await sendCorchWorker(w.id, text)
+    const r = await sendCorchWorker(w.id, text, urgent)
     if (r.ok) {
       followUp.value = ''
       toast.success(r.message)
@@ -116,8 +119,9 @@ async function onStop() {
   if (!w || stopping.value) return
   stopping.value = true
   try {
-    await cancelCorch({ id: w.id })
-    toast.success(t('corch.stopped'))
+    const r = await cancelCorch({ id: w.id })
+    const kept = r.keptMessages?.[w.id] ?? 0
+    toast.success(kept ? t('corch.stoppedKept', { n: kept }, kept) : t('corch.stopped'))
     emit('changed')
   } catch {
     toast.error(t('corch.stopFailed'))
@@ -245,9 +249,11 @@ async function onStop() {
             {{ eventsLoading ? $t('corch.loadingEvents') : $t('corch.noEvents') }}
           </p>
         </div>
+
+        <CorchJournal :worker-id="worker.id" :group="worker.group" :updated-at="worker.updatedAt" />
       </div>
 
-      <form class="flex flex-col gap-1.5 border-t px-4 py-3" @submit.prevent="onSend">
+      <form class="flex flex-col gap-1.5 border-t px-4 py-3" @submit.prevent="onSend()">
         <label for="corch-follow-up" class="text-xs font-medium">
           {{ active ? $t('corch.messageLabel') : $t('corch.continueLabel') }}
         </label>
@@ -258,8 +264,8 @@ async function onStop() {
           class="min-h-14 resize-y"
           :placeholder="$t('corch.messagePlaceholder')"
           :disabled="sending"
-          @keydown.ctrl.enter.prevent="onSend"
-          @keydown.meta.enter.prevent="onSend"
+          @keydown.ctrl.enter.prevent="onSend()"
+          @keydown.meta.enter.prevent="onSend()"
         />
         <div class="flex items-center justify-between gap-3">
           <span class="text-2xs text-muted-foreground">
@@ -268,11 +274,24 @@ async function onStop() {
             }}
             <span class="hidden sm:inline">· {{ $t('corch.sendShortcut') }}</span>
           </span>
-          <Button type="submit" class="shrink-0" :disabled="sending || !followUp.trim()">
-            <Send v-if="active" />
-            <RotateCcw v-else />
-            {{ active ? $t('corch.send') : $t('corch.continue') }}
-          </Button>
+          <div class="flex shrink-0 items-center gap-1.5">
+            <Button
+              v-if="worker.status === 'running'"
+              type="button"
+              variant="outline"
+              class="shrink-0"
+              :disabled="sending || !followUp.trim()"
+              :title="$t('corch.sendNowHint')"
+              @click="onSend(true)"
+            >
+              <Zap /> {{ $t('corch.sendNow') }}
+            </Button>
+            <Button type="submit" class="shrink-0" :disabled="sending || !followUp.trim()">
+              <Send v-if="active" />
+              <RotateCcw v-else />
+              {{ active ? $t('corch.send') : $t('corch.continue') }}
+            </Button>
+          </div>
         </div>
       </form>
     </template>

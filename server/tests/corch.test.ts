@@ -18,6 +18,7 @@ import {
   corchJournalLines,
   corchList,
   corchRun,
+  corchSend,
   corchWait,
   freshestPct,
   livePct,
@@ -644,4 +645,77 @@ describe('corch_status scope (field notes 1, 4 and 7)', () => {
       })
     })
   })
+})
+
+describe('integration: steering a running worker (field notes 10 and 11)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-corch-steer-'))
+  const cwd = join(root, 'work')
+  const slowDir = join(root, 'acct-slow')
+  for (const d of [cwd, slowDir]) mkdirSync(d, { recursive: true })
+  writeFileSync(join(slowDir, 'fake-slow'), '')
+  const groups: string[] = []
+
+  afterAll(() => {
+    for (const group of groups) corchCancel({ group })
+    setCorchClaudeCommand(null)
+    setCorchAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  const start = async (title: string, account: string) => {
+    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCorchAccountsProvider(() => [
+      { id: account, num: 7, name: 'slow', configDir: slowDir, sessionPct: 0, weekPct: 0 },
+    ])
+    startCorch()
+    const run = corchRun({ tasks: [{ prompt: 'a slow task', cwd, title }] })
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+    const deadline = Date.now() + 10_000
+    while (corchList({ id })[0]?.status !== 'running' && Date.now() < deadline)
+      await corchWait({ id }, 1_000)
+    await Bun.sleep(1_500) // its init line is in the log: the message reached the session
+    return id
+  }
+  const settle = async (id: string, ms: number) => {
+    const deadline = Date.now() + ms
+    let w = corchList({ id })[0]
+    while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = corchList({ id })[0]
+    }
+    return w
+  }
+
+  test('a plain message is held and says so; urgent stops the work and goes first', async () => {
+    const id = await start('steer', 'slow-1')
+    expect(corchSend(id, 'queued one').message).toContain('Held until this worker finishes')
+    const urgent = corchSend(id, 'STEER NOW', { urgent: true })
+    expect(urgent).toMatchObject({ ok: true, urgent: true })
+    expect(urgent.message).toContain('then the 1 message(s) queued before it')
+
+    const w = await settle(id, 15_000)
+    expect(w?.status).toBe('done')
+    expect(w?.pending).toEqual([])
+    expect(w?.attempts.map((a) => a.outcome)).toEqual(['cancelled', 'done', 'done'])
+    expect(w?.attempts[0]?.notice).toContain('urgent message')
+    const events = corchJournal({ id }).map((e) => e.event)
+    expect(events.filter((e) => e === 'follow-up-delivered')).toHaveLength(2)
+    expect(corchJournal({ id }).find((e) => e.urgent)?.event).toBe('follow-up-queued')
+  }, 25_000)
+
+  test('a cancel keeps queued messages and delivers them when the worker is continued', async () => {
+    const id = await start('cancel keeps', 'slow-2')
+    corchSend(id, 'first')
+    corchSend(id, 'second')
+    const r = corchCancel({ id })
+    expect(r).toEqual({ cancelled: [id], keptMessages: { [id]: 2 } })
+    expect(corchList({ id })[0]?.pending).toEqual(['first', 'second'])
+
+    corchSend(id, 'third')
+    const w = await settle(id, 15_000)
+    expect(w?.status).toBe('done')
+    expect(w?.pending).toEqual([])
+    expect(corchJournal({ id }).filter((e) => e.event === 'follow-up-delivered')).toHaveLength(3)
+  }, 25_000)
 })

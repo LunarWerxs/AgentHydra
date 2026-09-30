@@ -154,6 +154,26 @@ if (existsSync(join(configDir, 'fake-winddown'))) {
   process.exit(0)
 }
 
+// `fake-slow`: a first turn that runs 30 s (long enough to be steered or cancelled mid-run); a
+// resumed turn answers at once, saying whether it was given the steering message.
+if (existsSync(join(configDir, 'fake-slow'))) {
+  let file = findTranscript()
+  if (!file) {
+    const dir = join(configDir, 'projects', 'fake-proj')
+    mkdirSync(dir, { recursive: true })
+    file = join(dir, `${sessionId}.jsonl`)
+  }
+  appendFileSync(file, line({ type: 'user', sessionId, message: { role: 'user', content: prompt } }))
+  init()
+  if (!resume) {
+    emit({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'Working slowly.' }] } })
+    await Bun.sleep(30_000)
+  }
+  const answer = prompt.includes('STEER NOW') ? 'STEERED' : 'SLOW DONE'
+  emit({ type: 'result', subtype: 'success', is_error: false, result: answer, session_id: sessionId, total_cost_usd: 0.01, num_turns: 1 })
+  process.exit(0)
+}
+
 let transcript = findTranscript()
 if (resume && !transcript) {
   process.stderr.write(`No conversation found with session ID: ${sessionId}\n`)
