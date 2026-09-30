@@ -9,8 +9,10 @@ import {
   listCliInstances,
   pruneCliInstanceAccountAssociations,
   renameCliInstance,
+  setCliInstanceLimitReset,
   setCliInstanceUsage,
 } from '../core/cli-instances'
+import { runCliLimitReset } from '../core/cli-limit-reset'
 import { redeemCodexResetCredit, resolveCodexAccount } from '../core/codex-account'
 import { moveCodexChat, planCodexChatMove } from '../core/codex-chat-move'
 import {
@@ -339,6 +341,29 @@ app.post('/api/cli-instances/:id/launch', async (c) => {
 app.post('/api/cli-instances/:id/login', (c) =>
   c.json(launchCliInstance(c.req.param('id'), { login: true })),
 )
+// Use this account's limit reset through the CLI's own `/limit-reset` (core/cli-limit-reset.ts):
+// a person's click or an MCP call, never a background check, since running it spends what it finds.
+// One at a time per account; the CLI's answer is kept on the record for the row's icon.
+const limitResetRunning = new Set<string>()
+app.post('/api/cli-instances/:id/limit-reset', async (c) => {
+  const inst = getCliInstance(c.req.param('id'))
+  if (!inst) return c.json({ error: 'CLI instance not found' }, 404)
+  if (limitResetRunning.has(inst.id))
+    return c.json({
+      ok: false,
+      outcome: 'error',
+      message: 'A reset is already running for this account.',
+    })
+  limitResetRunning.add(inst.id)
+  try {
+    const result = await runCliLimitReset(inst.configDir)
+    // A failure to reach the CLI says nothing about the reset; keep the last real answer then.
+    if (result.outcome !== 'error') setCliInstanceLimitReset(inst.id, result)
+    return c.json(result)
+  } finally {
+    limitResetRunning.delete(inst.id)
+  }
+})
 app.post('/api/cli-instances/:id/rename', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.name !== 'string') return c.json({ error: 'name is required' }, 400)

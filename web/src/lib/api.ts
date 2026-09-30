@@ -9,6 +9,7 @@ import type {
   ChatGptContextPack,
   ChatListResult,
   CliInstance,
+  CliLimitResetResult,
   CMAccount,
   CMActionResult,
   CMDesktopInstall,
@@ -80,6 +81,7 @@ export type {
   ClaudeCodeCredit,
   ClaudeUsageCredits,
   CliInstance,
+  CliLimitResetResult,
   CMAccount,
   CMAccountStatus,
   CMActionResult,
@@ -773,6 +775,12 @@ export const launchCliInstance = (id: string, opts: { model?: string; effort?: s
     body: JSON.stringify(opts),
   })
 /** Open a terminal for the USER to /login this CLI instance (the daemon never logs in itself). */
+/** Use this CLI account's limit reset through the CLI's own `/limit-reset` (up to about a minute).
+ *  Spends what it finds; the answer is the CLI's own words. See server/src/core/cli-limit-reset.ts. */
+export const cliLimitReset = (id: string) =>
+  j<CliLimitResetResult>(`/api/cli-instances/${encodeURIComponent(id)}/limit-reset`, {
+    method: 'POST',
+  })
 export const cliInstanceLogin = (id: string) =>
   j<CMActionResult>(`/api/cli-instances/${encodeURIComponent(id)}/login`, { method: 'POST' })
 export const renameCliInstance = (id: string, name: string) =>

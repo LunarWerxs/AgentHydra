@@ -29,7 +29,7 @@ import {
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { CONFIG_DIR, resolveClaudeExe } from '../config'
-import type { CliInstance, UsageSnapshot } from '../types'
+import type { CliInstance, CliLimitResetResult, UsageSnapshot } from '../types'
 import { instanceNumberFor, instanceNumbers, instanceRef } from './instance-numbers'
 import {
   describeStoreRefusal,
@@ -564,6 +564,17 @@ export function setCliInstanceUsage(id: string, snap: UsageSnapshot): void {
   })
   // A usage reading is a cache, not an identity: losing one costs a re-check, so a refusal here is
   // only worth the log line the reader already emits. Nothing else to do.
+  void outcome
+}
+
+/** Keep what the CLI said the last time its `/limit-reset` ran (core/cli-limit-reset.ts). */
+export function setCliInstanceLimitReset(id: string, result: CliLimitResetResult): void {
+  const outcome = mutate((store) => {
+    const rec = store.instances.find((i) => i.id === id)
+    if (!rec) return { result: null, changed: false }
+    rec.lastLimitReset = result
+    return { result: null, changed: true }
+  })
   void outcome
 }
 

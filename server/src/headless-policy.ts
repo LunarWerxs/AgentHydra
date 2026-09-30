@@ -33,7 +33,10 @@
 // NOT COVERED, deliberately: the `/usage` probe in usage.ts. It also spawns `claude -p`, and it is
 // not a chat - it asks the CLI a question and reads a number back, then deletes the transcript. It
 // never reaches the dispatch chokepoint, and banning it would cost the fleet its quota readings
-// for nothing. "Headless chat" means a conversation, not every child process.
+// for nothing. "Headless chat" means a conversation, not every child process. The same goes for
+// core/cli-limit-reset.ts (2026-09-30): on a person's click it opens the CLI in a hidden terminal,
+// runs the one local command `/limit-reset` (no model turn, no conversation), reads the answer and
+// closes it.
 
 /**
  * Always false. Kept as a function rather than deleted at the call sites so the refusal stays a

@@ -22,6 +22,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Terminal,
   Trash2,
 } from '@lucide/vue'
@@ -30,6 +31,8 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AssociateCliInstanceDialog from '@/components/AssociateCliInstanceDialog.vue'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
+import CliLimitResetDialog from '@/components/CliLimitResetDialog.vue'
+import CliLimitResetIcon from '@/components/CliLimitResetIcon.vue'
 import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
@@ -363,6 +366,20 @@ async function onDeleteConfirm(confirmName: string) {
   }
 }
 
+// --- limit reset: the CLI's own /limit-reset, confirmed first (CliLimitResetDialog.vue) ---
+const limitResetOpen = ref(false)
+const limitResetTarget = ref<CliInstance | null>(null)
+function openLimitReset(inst: CliInstance) {
+  limitResetTarget.value = inst
+  limitResetOpen.value = true
+}
+async function onLimitResetDone() {
+  const inst = limitResetTarget.value
+  await refreshCliInstances({ silent: true })
+  // A reset changes the quota numbers; read them again rather than show the old ones.
+  if (inst) void checkUsage(inst.id)
+}
+
 // --- launch / login / check usage ---
 async function onLaunch(inst: CliInstance) {
   const result = await launch(inst.id)
@@ -624,6 +641,7 @@ onUnmounted(() => stopPolling())
                      stacked tables stop lining up. Native title, not IconTooltip: this cell has no
                      other hover to extend, and the row above it already reveals its path this way. -->
                 <span :title="nameOverflowTitle(inst.name)">{{ shortDisplayName(inst.name) }}</span>
+                <CliLimitResetIcon :result="inst.lastLimitReset" />
               </div>
             </TableCell>
             <TableCell>
@@ -732,6 +750,13 @@ onUnmounted(() => stopPolling())
                     <DropdownMenuItem :disabled="isBusy(inst)" @click="onCheckUsage(inst)">
                       <RefreshCw /> {{ $t('cliInstances.checkUsage') }}
                     </DropdownMenuItem>
+                    <DropdownMenuItem
+                      v-if="inst.loggedIn"
+                      :disabled="isBusy(inst)"
+                      @click="openLimitReset(inst)"
+                    >
+                      <RotateCcw /> {{ $t('cliInstances.limitReset') }}
+                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       variant="destructive"
@@ -788,6 +813,11 @@ onUnmounted(() => stopPolling())
       :submitting="deleting"
       :error-message="deleteError"
       @confirm="onDeleteConfirm"
+    />
+    <CliLimitResetDialog
+      v-model:open="limitResetOpen"
+      :instance="limitResetTarget"
+      @done="onLimitResetDone"
     />
   </div>
 </template>

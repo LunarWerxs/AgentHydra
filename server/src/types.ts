@@ -1337,7 +1337,22 @@ export interface CliInstance {
   associatedDesktopLabel: string | null
   loggedIn: boolean
   lastUsageCheck: UsageSnapshot | null
+  /** What the CLI said the last time its `/limit-reset` was run from AgentHydra (core/cli-limit-reset.ts).
+   *  Undefined until then. The only honest reading there is: the usage endpoint will not say. */
+  lastLimitReset?: CliLimitResetResult | null
   createdAt: number
+}
+
+/** One run of a CLI account's `/limit-reset`, in the CLI's own words (core/cli-limit-reset.ts). */
+export interface CliLimitResetResult {
+  ok: boolean
+  /** reset: it happened. used: this week's reset is spent. unavailable: none offered now. */
+  outcome: 'reset' | 'used' | 'unavailable' | 'error'
+  /** The CLI's own line, or why it could not be reached. */
+  message: string
+  /** When the next weekly reset becomes available, as the CLI worded it ("Oct 7"), if it said. */
+  nextAvailable: string | null
+  at: number
 }
 
 /** An isolated Codex CLI + Desktop login rooted at its own CODEX_HOME. */
