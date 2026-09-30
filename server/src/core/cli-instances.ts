@@ -168,6 +168,15 @@ function refusal(
 
 // --- login detection ---------------------------------------------------------
 
+/** Why a login whose credential file exists is dead anyway, or null (null: trust the file). Corch
+ *  registers its verified signed-out walls here (corch.ts corchSignedOutReason); nothing else does. */
+let loginVeto: ((id: string, configDir: string) => string | null) | null = null
+export function setCliLoginVeto(
+  fn: ((id: string, configDir: string) => string | null) | null,
+): void {
+  loginVeto = fn
+}
+
 /** True when the config dir has been `/login`'d once (a `.credentials.json` is present). */
 export function isLoggedIn(configDir: string): boolean {
   try {
@@ -213,8 +222,14 @@ export function canonicalConfigDir(rec: Pick<CliInstance, 'id' | 'configDir'>): 
  *  have no `associatedDesktop*` keys at all), so callers never see `undefined` where they expect null. */
 function hydrate(rec: CliInstance, num?: number): CliInstance {
   const configDir = canonicalConfigDir(rec)
+  // A credential file is not a working login (field note 3, 2026-09-30: two accounts listed
+  // `loggedIn: true` had failed to authenticate in every run). The veto is a lookup, never a spawn,
+  // so a listing stays as fast as it was.
+  const cred = isLoggedIn(configDir)
+  const loginNote = (cred && loginVeto?.(rec.id, configDir)) || null
+  const { loginNote: _stale, ...stored } = rec
   return {
-    ...rec,
+    ...stored,
     // The registry is the source of truth for the number, not whatever the store file happens to
     // hold — a store written before numbers existed has none at all. `num` is passed in by the
     // bulk lister so a 14-instance list is one registry read, not fourteen.
@@ -222,7 +237,8 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
     configDir,
     associatedDesktopDir: rec.associatedDesktopDir ?? null,
     associatedDesktopLabel: rec.associatedDesktopLabel ?? null,
-    loggedIn: isLoggedIn(configDir),
+    loggedIn: cred && !loginNote,
+    ...(loginNote ? { loginNote } : {}),
   }
 }
 

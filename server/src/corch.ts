@@ -72,7 +72,7 @@ import {
   windDownAt,
   windDownMessage,
 } from './corch-lib'
-import { getCliInstance, listCliInstances } from './core/cli-instances'
+import { getCliInstance, listCliInstances, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
 import { isPidAlive, killProcessTree } from './core/process'
@@ -194,8 +194,10 @@ let claudeCommand: () => string[] = () => [resolveClaudeExe()]
 function signedInAccounts(): CorchAccount[] {
   const now = Date.now()
   const cache = allCachedUsage()
+  // A login vetoed by Corch's own signed-out wall stays in the pool, walled, so recheckSignedOut
+  // can find out when it works again.
   return listCliInstances()
-    .filter((i) => i.loggedIn)
+    .filter((i) => i.loggedIn || !!i.loginNote)
     .map((i) => {
       const u = latestUsage(i.id, i.lastUsageCheck, cache)
       const snapshotAt = u ? Date.parse(u.capturedAt) || 0 : 0
@@ -294,6 +296,8 @@ export function corchSignedOutReason(id: string, configDir: string): string | nu
   if (wall.cred !== undefined && wall.cred !== credStamp(configDir)) return null
   return 'Signed out: its credential file is there, but the login failed when Corch used it and has not worked since (checked again every 30 minutes, and as soon as the account signs in again). Sign in again: Quick add, or Log in.'
 }
+
+setCliLoginVeto(corchSignedOutReason)
 
 let accountsProvider: () => CorchAccount[] = signedInAccounts
 

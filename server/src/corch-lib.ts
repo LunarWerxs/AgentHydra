@@ -503,8 +503,16 @@ export function summarizeEvent(raw: unknown): string | null {
 /** The most workers any one account runs at once, over every group. */
 export const MAX_PER_ACCOUNT = 4
 
+/** What one worker already running on an account (from ANY group) adds to its score: a full usage
+ *  window's worth, so an idle account wins over a busy one unless it is near its limit. Field note 8
+ *  (2026-09-30): at 25 a worker, a busy account at 5% scored 30 against an idle one whose usage was
+ *  unknown (50), so eight workers from four dispatches stacked two each on four accounts while #83
+ *  and #91 sat idle, draining four accounts together instead of spreading over six. */
+export const ACTIVE_WEIGHT = 100
+
 /** `perAccount` caps this group's workers (`groupActive`, default `active`) on an account;
- *  `active` counts every group's and is held under MAX_PER_ACCOUNT. The account of a last
+ *  `active` counts every group's, is held under MAX_PER_ACCOUNT, and is what the score spreads by
+ *  (ACTIVE_WEIGHT). The account of a last
  *  quota/auth attempt is not excluded (its wall keeps it out while the wall is real), only tried
  *  last, so a worker restricted to it resumes once the limit resets or the login works again.
  *  `allowFull` (the owner allowed paid extra usage): accounts at or above the 98% session / 99%
@@ -553,7 +561,7 @@ export function pickAccount(
   if (home) return home
   const score = (a: CorchAccount): number =>
     Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) +
-    25 * load(a) +
+    ACTIVE_WEIGHT * load(a) +
     (full(a) ? 500 : 0) +
     (near(a) ? 300 : 0) +
     (a.id === handedOffFrom ? 100 : 0) +

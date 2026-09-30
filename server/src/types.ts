@@ -1348,6 +1348,9 @@ export interface CliInstance {
   associatedDesktopDir: string | null
   /** Display label of the linked desktop instance, cached for rendering. */
   associatedDesktopLabel: string | null
+  /** Why `loggedIn` is false although the credential file exists: a login Corch found dead and
+   *  `claude auth status` has not passed since (core/cli-instances.ts setCliLoginVeto). */
+  loginNote?: string
   loggedIn: boolean
   lastUsageCheck: UsageSnapshot | null
   /** What the CLI said the last time its `/limit-reset` was run from AgentHydra (core/cli-limit-reset.ts).

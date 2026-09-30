@@ -329,6 +329,17 @@ describe('pickAccount', () => {
     expect(pickAccount(worker(), accounts, {}, new Map(), 2, now)?.id).toBe('a')
     expect(pickAccount(worker(), accounts, {}, new Map([['a', 1]]), 2, now)?.id).toBe('b')
   })
+
+  test("an idle account beats one busy with another group's worker, even at lower usage (note 8)", () => {
+    // Measured live: #84 at 5% ran a worker of another group; #83 (week 49%, session unknown) was
+    // idle and still lost, 30 to 50. This group has nothing running anywhere.
+    const accounts = [acct('a83', 83, null, 49), acct('a84', 84, 5, 0)]
+    const otherGroups = new Map([['a84', 1]])
+    expect(pickAccount(worker(), accounts, {}, otherGroups, 2, now, new Map())?.id).toBe('a83')
+    // Near its limit, the idle account is still passed over for the busy one with room.
+    const near = [acct('a83', 83, 90, 49), acct('a84', 84, 5, 0)]
+    expect(pickAccount(worker(), near, {}, otherGroups, 2, now, new Map())?.id).toBe('a84')
+  })
 })
 
 describe('integration: a quota wall hands the session to the next account', () => {
