@@ -8,7 +8,7 @@
 // own API-error events, an errored terminal `result`, or stderr are evidence of a wall. Model prose
 // and tool output never are, or a worker that merely TALKS about a session limit gets walled.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { priceTokens } from './pricing'
 import {
@@ -496,9 +496,27 @@ export function copySessionTranscript(
     cpSync(file, join(dest, `${sessionId}.jsonl`))
     const dir = join(root, d.name, sessionId)
     if (existsSync(dir)) cpSync(dir, join(dest, sessionId), { recursive: true })
+    // The CLI's auto-memory lives beside the transcripts, per account: `projects/<project>/memory/`.
+    // A note the session saved there on the old account would be missing on the new one, so the
+    // project's memory comes along too, newer file wins, nothing on the destination is removed.
+    const memory = join(root, d.name, 'memory')
+    if (existsSync(memory)) mergeNewer(memory, join(dest, 'memory'))
     return true
   }
   return false
+}
+
+/** Copy every file of `from` into `to` that is missing there or older there, keeping mtimes (so the
+ *  next merge compares like with like). Files only in `to` are left alone. */
+function mergeNewer(from: string, to: string): void {
+  mkdirSync(to, { recursive: true })
+  for (const e of readdirSync(from, { withFileTypes: true })) {
+    const src = join(from, e.name)
+    const dst = join(to, e.name)
+    if (e.isDirectory()) mergeNewer(src, dst)
+    else if (e.isFile() && (!existsSync(dst) || statSync(src).mtimeMs > statSync(dst).mtimeMs))
+      cpSync(src, dst, { preserveTimestamps: true })
+  }
 }
 
 export function toView(w: CorchWorker, now: number): CorchWorkerView {

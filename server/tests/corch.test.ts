@@ -5,12 +5,13 @@
 // accounts are fakes pointing at temp config dirs, and the CLI is tests/mocks/fake-claude.ts run by
 // the same bun that runs this suite.
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   attemptSpend,
   classifyAttempt,
+  copySessionTranscript,
   corchCancel,
   corchList,
   corchRun,
@@ -160,6 +161,32 @@ describe('wallUntil', () => {
   test('a future text reset ends 60 s after it; nothing parsed is an hour', () => {
     expect(wall(null, '9:10pm (America/Chicago)')).toBe(Date.parse('2026-10-01T02:11:00Z'))
     expect(wall(null, null)).toBe(Date.parse('2026-09-30T22:30:04Z'))
+  })
+})
+
+describe('copySessionTranscript', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-corch-move-'))
+  afterAll(() => rmSync(root, { recursive: true, force: true }))
+
+  test("a moved session brings its project's memory: the newer file wins, nothing is removed", () => {
+    const from = join(root, 'a')
+    const to = join(root, 'b')
+    const mem = (dir: string) => join(dir, 'projects', 'p', 'memory')
+    mkdirSync(mem(from), { recursive: true })
+    mkdirSync(mem(to), { recursive: true })
+    writeFileSync(join(from, 'projects', 'p', 'S.jsonl'), '{}')
+    writeFileSync(join(mem(from), 'MEMORY.md'), 'from A')
+    writeFileSync(join(mem(from), 'note.md'), 'learned on A')
+    writeFileSync(join(mem(to), 'MEMORY.md'), 'older on B')
+    writeFileSync(join(mem(to), 'only-b.md'), 'kept')
+    const old = new Date(Date.now() - 60_000)
+    utimesSync(join(mem(to), 'MEMORY.md'), old, old)
+
+    expect(copySessionTranscript(from, to, 'S')).toBe(true)
+    const read = (f: string) => readFileSync(join(mem(to), f), 'utf8')
+    expect(read('MEMORY.md')).toBe('from A')
+    expect(read('note.md')).toBe('learned on A')
+    expect(read('only-b.md')).toBe('kept')
   })
 })
 
