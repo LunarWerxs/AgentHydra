@@ -52,6 +52,35 @@ if (existsSync(join(configDir, 'fake-quota'))) {
   process.exit(1)
 }
 
+if (existsSync(join(configDir, 'fake-overage'))) {
+  // An account with paid extra usage switched on: the window runs out, the CLI says so in its own
+  // rate_limit_event (shape measured live 2026-09-30) and carries on, billing overage, for as
+  // long as nobody stops it.
+  const dir = join(configDir, 'projects', 'fake-proj')
+  mkdirSync(dir, { recursive: true })
+  appendFileSync(
+    join(dir, `${sessionId}.jsonl`),
+    line({ type: 'user', sessionId, message: { role: 'user', content: prompt } }),
+  )
+  init()
+  emit({
+    type: 'rate_limit_event',
+    session_id: sessionId,
+    rate_limit_info: {
+      status: 'rejected',
+      rateLimitType: 'five_hour',
+      resetsAt: Math.floor(Date.now() / 1000) + 3600,
+      overageStatus: 'allowed',
+      isUsingOverage: true,
+      overageInUse: true,
+    },
+  })
+  emit({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'Still working, on overage.' }] } })
+  await Bun.sleep(20_000)
+  emit({ type: 'result', subtype: 'success', is_error: false, result: 'FINISHED ON OVERAGE', session_id: sessionId, total_cost_usd: 1, num_turns: 1 })
+  process.exit(0)
+}
+
 let transcript = findTranscript()
 if (resume && !transcript) {
   process.stderr.write(`No conversation found with session ID: ${sessionId}\n`)

@@ -21,7 +21,9 @@ import {
   setCorchAccountsProvider,
   setCorchClaudeCommand,
   startCorch,
+  wallUntil,
 } from '../src/corch'
+import { parseResetTime } from '../src/usage'
 
 const NOTICE = "You've hit your session limit · resets 4am"
 const init = { type: 'system', subtype: 'init', model: 'fake-model' }
@@ -93,6 +95,69 @@ describe('classifyAttempt', () => {
       '',
     )
     expect(r.outcome).toBe('done')
+  })
+
+  test('a clean result is done even when stderr says 429', () => {
+    const stderr = '[mcp-sdk] token refresh for github failed: HTTP 429'
+    const r = classifyAttempt([init, said('ok'), result('all good', false)], stderr)
+    expect(r).toMatchObject({ outcome: 'done', result: 'all good' })
+  })
+
+  test('an organization that disabled subscription access is auth', () => {
+    // Real notice, 237 occurrences, `error:"oauth_org_not_allowed"`.
+    const text =
+      'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access'
+    const synthetic = {
+      type: 'assistant',
+      message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text }] },
+    }
+    expect(classifyAttempt([init, synthetic, result(text, true)], '').outcome).toBe('auth')
+  })
+
+  test("a rejected rate_limit_event is quota, with the CLI's own resetsAt", () => {
+    const text =
+      "You've reached your Fable limit. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue."
+    const rejected = {
+      type: 'rate_limit_event',
+      rate_limit_info: { status: 'rejected', rateLimitType: 'seven_day', resetsAt: 1785225600 },
+    }
+    const synthetic = {
+      type: 'assistant',
+      message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text }] },
+      error: 'rate_limit',
+    }
+    const r = classifyAttempt([init, rejected, synthetic, result(text, true)], '')
+    expect(r).toMatchObject({ outcome: 'quota', resetsAt: 1785225600000, window: 'weekly' })
+  })
+
+  test('a notice only on stderr is its own line, not the warning before it', () => {
+    const stderr =
+      "[mcp-sdk] SEP-2352: stored OAuth credential has no 'issuer' stamp\nYou've hit your weekly limit · resets Oct 3, 3am (America/Chicago)"
+    const r = classifyAttempt([init], stderr)
+    expect(r.outcome).toBe('quota')
+    expect(r.notice).toContain('weekly limit')
+    expect(r.resets).toBe('Oct 3, 3am (America/Chicago)')
+  })
+})
+
+describe('wallUntil', () => {
+  // 4:30pm America/Chicago on 2026-09-30 (CDT, UTC-5) is 21:30Z.
+  const now = Date.parse('2026-09-30T21:30:04Z')
+  const wall = (resetsAt: number | null, resets: string | null) =>
+    wallUntil(now, { resetsAt, resets }, parseResetTime)
+
+  test('a reset that has just passed is a 2-minute wall, not tomorrow', () => {
+    expect(wall(null, '4:30pm (America/Chicago)')).toBe(Date.parse('2026-09-30T21:32:04Z'))
+  })
+
+  test('a known resetsAt ends the wall 60 s after it, ahead of the text', () => {
+    const resetsAt = Date.parse('2026-10-01T02:00:00Z')
+    expect(wall(resetsAt, '4:30pm (America/Chicago)')).toBe(Date.parse('2026-10-01T02:01:00Z'))
+  })
+
+  test('a future text reset ends 60 s after it; nothing parsed is an hour', () => {
+    expect(wall(null, '9:10pm (America/Chicago)')).toBe(Date.parse('2026-10-01T02:11:00Z'))
+    expect(wall(null, null)).toBe(Date.parse('2026-09-30T22:30:04Z'))
   })
 })
 
@@ -248,4 +313,48 @@ describe('integration: a quota wall hands the session to the next account', () =
     expect(w?.moves).toBe(1)
     expect(w?.attempts[0]?.outcome).toBe('quota')
   }, 45_000)
+})
+
+describe('integration: paid extra usage is never spent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-corch-overage-'))
+  const cwd = join(root, 'work')
+  const overDir = join(root, 'acct-over')
+  const freeDir = join(root, 'acct-free')
+  for (const d of [cwd, overDir, freeDir]) mkdirSync(d, { recursive: true })
+  writeFileSync(join(overDir, 'fake-overage'), '')
+  let group: string | null = null
+
+  afterAll(() => {
+    if (group) corchCancel({ group })
+    setCorchClaudeCommand(null)
+    setCorchAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test('a turn that starts billing overage is stopped at once and the session moves on', async () => {
+    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    // The overage account scores lower, so it is picked first. Left alone, the fake would go on
+    // for 20 s and finish there on overage ('FINISHED ON OVERAGE', no move).
+    setCorchAccountsProvider(() => [
+      { id: 'over-1', num: 1, name: 'overage', configDir: overDir, sessionPct: 0, weekPct: 0 },
+      { id: 'over-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
+    ])
+    startCorch()
+    const run = corchRun({ tasks: [{ prompt: 'a long task', cwd, title: 'overage' }] })
+    group = run.group
+    const id = run.workers[0]?.id as string
+
+    const deadline = Date.now() + 15_000
+    let w = corchList({ id })[0]
+    while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = corchList({ id })[0]
+    }
+
+    expect(w?.status).toBe('done')
+    expect(w?.result).toBe('FAKE DONE')
+    expect(w?.moves).toBe(1)
+    expect(w?.attempts[0]?.outcome).toBe('quota')
+    expect(w?.attempts[0]?.notice).toContain('extra usage')
+  }, 20_000)
 })

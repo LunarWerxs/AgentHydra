@@ -39,6 +39,8 @@ import {
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
   livePct,
+  OVERAGE_NOTICE,
+  overageStart,
   PAUSED_PROMPT,
   pickAccount,
   scrubbedEnv,
@@ -46,6 +48,7 @@ import {
   TRANSIENT_PROMPT,
   toView,
   WORKER_BRIEF,
+  wallUntil,
 } from './corch-lib'
 import { getCliInstance, listCliInstances } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
@@ -97,6 +100,8 @@ interface LogRead {
   events: unknown[]
   recent: string[]
   sawInit: boolean
+  /** The CLI said the account ran out and paid extra usage took over (overageStart). */
+  overage: { resetsAt: number | null } | null
 }
 const reads = new Map<string, LogRead>()
 const listeners = new Set<(w: CorchWorker) => void>()
@@ -389,6 +394,7 @@ const freshRead = (): LogRead => ({
   events: [],
   recent: [],
   sawInit: false,
+  overage: null,
 })
 
 function readLog(path: string): LogRead {
@@ -451,6 +457,7 @@ function readInto(path: string, r: LogRead): LogRead {
           continue
         }
         if (isInit(ev)) r.sawInit = true
+        r.overage ??= overageStart(ev)
         r.events.push(ev)
         if (r.events.length > 400) r.events.splice(0, r.events.length - 400)
         const s = summarizeEvent(ev)
@@ -496,6 +503,7 @@ function poll(w: CorchWorker): void {
       !(at.pid && isPidAlive(at.pid))
   const r = readLog(at.log)
   at.started ||= r.sawInit
+  if (r.overage && !at.overage) stopForOverage(w, at, r.overage, !exited)
   const latest = r.recent[r.recent.length - 1] ?? null
   if (latest && latest !== w.lastActivity) {
     w.lastActivity = latest
@@ -504,12 +512,54 @@ function poll(w: CorchWorker): void {
   if (exited) finish(w, r.events)
 }
 
+/** The account ran out and started billing paid extra usage. Nobody asked for that spend (Corch
+ *  exists to use FREE quota across accounts), so the account is walled until its window resets
+ *  and the running turn is stopped now; finish() then treats it as a limit, and the session moves
+ *  to an account with room, or waits for one, without spending another cent of overage. */
+function stopForOverage(
+  w: CorchWorker,
+  at: CorchWorker['attempts'][number],
+  overage: { resetsAt: number | null },
+  running: boolean,
+): void {
+  at.overage = overage
+  walls[at.account.id] = {
+    until: wallUntil(Date.now(), { resetsAt: overage.resetsAt, resets: null }, parseResetTime),
+    reason: OVERAGE_NOTICE,
+  }
+  try {
+    saveWalls()
+  } catch (err) {
+    console.error('[corch] could not save walls:', err)
+  }
+  const proc = procs.get(w.id)
+  if (running && proc && !hasExited(proc) && at.pid) {
+    try {
+      killProcessTree(at.pid)
+    } catch {
+      // already gone
+    }
+  }
+  changed(w)
+}
+
 function finish(w: CorchWorker, events: unknown[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (at?.outcome !== 'running') return
   procs.delete(w.id)
   const stderr = tailText(at.errLog, 4_000)
-  const v = classifyAttempt(events, stderr, at.started === true)
+  let v = classifyAttempt(events, stderr, at.started === true)
+  // Stopped to spare paid extra usage: a limit, whatever the killed process left behind. A turn
+  // that still finished cleanly keeps its result; its account is walled either way.
+  if (at.overage && v.outcome !== 'done')
+    v = {
+      ...v,
+      outcome: 'quota',
+      notice: OVERAGE_NOTICE,
+      resetsAt: at.overage.resetsAt,
+      window: 'session',
+      resets: null,
+    }
   forgetRead(at.log)
   const now = Date.now()
   at.outcome = v.outcome
@@ -529,17 +579,16 @@ function finish(w: CorchWorker, events: unknown[]): void {
       w.status = w.pending.length ? 'queued' : 'done'
       break
     case 'quota': {
-      const resets = v.notice?.match(/resets\s+(.+?)\s*$/i)?.[1]
-      const iso = resets ? parseResetTime(resets) : null
-      let until = iso ? Date.parse(iso) : Number.NaN
-      // A weekly notice prints only a clock time; the account's own weekly reset is the real end.
-      if (/weekly/i.test(v.notice ?? '')) {
+      // The CLI's own resetsAt when it streamed one, else the notice's text (wallUntil). A weekly
+      // wall with neither falls back to the account's own weekly reset rather than an hour.
+      let weekly: number | null = null
+      if (v.resetsAt === null && (v.window === 'weekly' || /weekly/i.test(v.notice ?? ''))) {
         const reading = latestUsage(at.account.id, getCliInstance(at.account.id)?.lastUsageCheck)
         const week = Date.parse(reading?.weekAll?.resetsAt ?? '')
-        if (Number.isFinite(week) && week > now && !(week <= until)) until = week
+        if (Number.isFinite(week)) weekly = week
       }
       walls[at.account.id] = {
-        until: Number.isFinite(until) && until > now ? until : now + 60 * 60_000,
+        until: wallUntil(now, v, parseResetTime, weekly),
         reason: v.notice ?? 'usage limit',
       }
       // The wall holds in memory either way; a throw here must not leave the worker 'running'.

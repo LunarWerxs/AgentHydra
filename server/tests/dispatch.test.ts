@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { db } from '../src/db'
 import * as dispatch from '../src/dispatch'
 import { invalidateSessionMetaCache } from '../src/instance-sessions'
+import { classifyLimit } from '../src/rate-limit-signal'
 
 // AGENTHYDRA_DB / AGENTHYDRA_HOME / AGENTHYDRA_RUN_LOG_DIR / AGENTHYDRA_INSTANCES_ROOT are isolated
 // by the preload (tests/setup.ts). INSTANCES_ROOT is the instance store the no-headless tests below
@@ -208,6 +209,42 @@ test('an unknown failure (pid vanished, no exit code) is never auto-retried, and
   const events = dispatch.getRunEvents(item.id)
   expect(events.some((e) => e.text.includes('UNKNOWN outcome'))).toBe(true)
   expect(events.some((e) => e.text.includes('will not be auto-retried'))).toBe(true)
+})
+
+// --- classifyLimit on the CLI's real notices ----------------------------------------------------
+//
+// Every text below is verbatim from real CLI API-error events on this machine (2026-09-30 review
+// of 6,283 of them). The throttle that says "not your usage limit" is transient, not a wall; the
+// "reached your … limit" and "out of usage credits" walls are quota; a connection that died
+// mid-response is transient; an SSL certificate error is neither.
+test('classifyLimit sorts the real CLI notices', () => {
+  const table: Array<[string, 'quota' | 'transient' | null]> = [
+    ["You've hit your session limit · resets 4am", 'quota'],
+    ['API Error: 529 Overloaded', 'transient'],
+    [
+      'API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited',
+      'transient',
+    ],
+    [
+      "You've reached your Fable limit. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue.",
+      'quota',
+    ],
+    ['You’ve reached your Fable limit.', 'quota'],
+    [
+      "You're out of usage credits. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue.",
+      'quota',
+    ],
+    ['API Error: Connection lost mid-response. The response above may be incomplete.', 'transient'],
+    ['API Error: Connection dropped (ECONNRESET)', 'transient'],
+    ['API Error: Server error mid-response. The response above may be incomplete.', 'transient'],
+    [
+      'API Error: The response stopped arriving. The response above may be incomplete.',
+      'transient',
+    ],
+    ['API Error: Connection closed mid-response.', 'transient'],
+    ['SSL certificate has expired', null],
+  ]
+  for (const [text, kind] of table) expect([text, classifyLimit(text)]).toEqual([text, kind])
 })
 
 // --- the transient-retry sweep's own gating (dispatchDueRetries) -------------------------------

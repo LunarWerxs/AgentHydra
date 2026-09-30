@@ -35,6 +35,11 @@ const QUOTA_PATTERNS: RegExp[] = [
   // matched nothing at all and finalized as a bare 'failed' — no rate-limited badge, and invisible
   // to monitor.ts's resume-after-reset, which selects on that status (observed 2026-07-27).
   /\byou['’]?ve hit your\b[^.]{0,40}\blimit\b/i,
+  // A per-model or credit wall words it differently (measured 2026-09-30, both `error:"rate_limit"`):
+  // "You've reached your Fable limit. Switch to another model, …" and "You're out of usage credits.
+  // …". Neither says "hit", "session", "weekly" or "usage limit", so both used to match nothing.
+  /\byou['’]?ve reached your\b[^.]{0,40}\blimit\b/i,
+  /\bout of usage credits\b/i,
   /\bsession limit\b/i,
   /\bweekly limit\b/i,
   /\busage limit\b/i,
@@ -44,12 +49,31 @@ const QUOTA_PATTERNS: RegExp[] = [
   /\b429\b/,
 ]
 
+/**
+ * The CLI saying in so many words that this is NOT the user's quota: "API Error: Server is
+ * temporarily limiting requests (not your usage limit) · Rate limited" (341 real occurrences,
+ * `error:"rate_limit"`). It carries "usage limit" and "Rate limited", so it must be answered before
+ * the quota list sees it; its own denial is as unmistakable as a signature gets.
+ */
+const NOT_QUOTA_PATTERNS: RegExp[] = [
+  /\bnot your usage limit\b/i,
+  /\btemporarily limiting requests\b/i,
+]
+
 /** ANTHROPIC'S servers are saturated — seconds, not hours. Only unmistakable signatures. */
 const TRANSIENT_PATTERNS: RegExp[] = [
   /\b529\b/,
   /\boverloaded\b/i,
   /\btemporarily unavailable\b/i,
   /\btry again (?:later|in a moment)\b/i,
+  // The connection died part-way through a response (all `error:"server_error"`): "Connection lost
+  // mid-response", "Server error mid-response", "Connection dropped (ECONNRESET)", "The response
+  // stopped arriving". The transcript is intact, so a resume is the right answer. A certificate
+  // error is none of these and stays an error.
+  /\bmid-response\b/i,
+  /\bECONNRESET\b/,
+  /\bconnection (?:lost|dropped|closed)\b/i,
+  /\bresponse stopped arriving\b/i,
 ]
 
 export type LimitKind = 'quota' | 'transient'
@@ -62,8 +86,13 @@ export type LimitKind = 'quota' | 'transient'
  * is the behavior that already ships. Only text that names NO quota concept at all can be promoted
  * to transient — which the real 529 notice satisfies exactly (it says 529/Overloaded/try again in a
  * moment and never says limit, quota, or 429).
+ *
+ * The one thing answered before quota is text that itself denies being a usage limit
+ * (NOT_QUOTA_PATTERNS). Walling an account for an hour on a server throttle the CLI labels "not
+ * your usage limit" walls every account in turn for something that clears in seconds.
  */
 export function classifyLimit(text: string): LimitKind | null {
+  if (NOT_QUOTA_PATTERNS.some((re) => re.test(text))) return 'transient'
   if (QUOTA_PATTERNS.some((re) => re.test(text))) return 'quota'
   if (TRANSIENT_PATTERNS.some((re) => re.test(text))) return 'transient'
   return null

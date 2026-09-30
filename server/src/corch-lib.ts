@@ -50,6 +50,7 @@ export interface CorchAttempt {
   resumed: boolean // true when this attempt ran `--resume` (a follow-up or a handoff)
   started?: boolean // true once the CLI logged system/init: its message reached the session
   daemonPid?: number // the daemon that launched it; its handle dies with that daemon
+  overage?: { resetsAt: number | null } // its account ran out and started spending paid extra usage
 }
 
 export interface CorchWorker {
@@ -127,6 +128,25 @@ export const INTERRUPTED_PROMPT =
 export const TRANSIENT_PROMPT =
   'The API was overloaded and this turn stopped part-way. Continue the task exactly where you left off. Do not redo steps that are already finished.'
 
+export const OVERAGE_NOTICE =
+  "The account's 5-hour limit ran out and it started spending paid extra usage, so Corch stopped the turn and moved the session to an account with free quota."
+
+/** The CLI's own sign that an account ran out and PAID EXTRA USAGE took over: a main-agent
+ *  `rate_limit_event` with status 'rejected' whose overage is in use. Measured live on #90,
+ *  2026-09-30: `{"status":"rejected","rateLimitType":"five_hour","resetsAt":1790803800,
+ *  "overageStatus":"allowed","isUsingOverage":true,"overageInUse":true,…}`, and the turn went on,
+ *  on credits: a Pro account with extra usage switched on never hits the wall, it bills. That test
+ *  ran $3.82 of a $4.67 turn on overage before anything noticed. Null for any other event. */
+export function overageStart(raw: unknown): { resetsAt: number | null } | null {
+  const ev = raw as any
+  if (ev?.type !== 'rate_limit_event' || ev.parent_tool_use_id) return null
+  const info = ev.rate_limit_info
+  if (info?.status !== 'rejected' || !(info.isUsingOverage === true || info.overageInUse === true))
+    return null
+  const secs = Number(info.resetsAt)
+  return { resetsAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : null }
+}
+
 export const INTERRUPTED_NOTICE =
   'Interrupted: the CLI process ended with no result and no error (AgentHydra restarted or the process was killed). Resumed automatically.'
 
@@ -134,8 +154,11 @@ export const INTERRUPTED_NOTICE =
 export const ENV_SCRUB =
   /^(ANTHROPIC_(API_KEY|AUTH_TOKEN|BASE_URL)|CLAUDE_CODE_(OAUTH_\w+|ENTRYPOINT|SSE_PORT|SESSION\w*)|CLAUDECODE|CLAUDE_CONFIG_DIR)$/
 
+// "disabled claude subscription access": the account's organization turned off subscription access
+// for Claude Code (`error:"oauth_org_not_allowed"`). It is the account's problem, not the task's,
+// so the task moves on and the account is walled like a signed-out one.
 const AUTH_RE =
-  /please run \/login|not logged in|invalid api key|failed to authenticate|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error/i
+  /please run \/login|not logged in|invalid api key|failed to authenticate|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error|disabled claude subscription access/i
 
 export function scrubbedEnv(configDir: string, workerId?: string): Record<string, string> {
   const env: Record<string, string> = {}
@@ -152,9 +175,22 @@ export interface AttemptVerdict {
   notice: string | null
   result: string | null
   turns: number
+  /** A quota wall's end from the CLI's own `rate_limit_event` (epoch ms), else null. */
+  resetsAt: number | null
+  /** Which window that event named, else null. */
+  window: 'session' | 'weekly' | null
+  /** A quota notice's "resets …" phrase, read from the full text before it was compacted. */
+  resets: string | null
 }
 
-/** `started`: the CLI logged system/init (the caller may know it when the events list was cut). */
+/** `started`: the CLI logged system/init (the caller may know it when the events list was cut).
+ *
+ *  A clean terminal `result` is the CLI saying the turn completed, so it is 'done' before anything
+ *  else is looked at: a wall word on stderr (an MCP server's token refresh answering 429) or in an
+ *  earlier API error the CLI recovered from must not throw a finished task away. Stderr is read
+ *  only when there is no terminal result, one line at a time: the notice is the line that says it,
+ *  not a 4 KB tail whose first 200 characters are some unrelated warning. A subagent's events
+ *  (`parent_tool_use_id` set) are its own business and do not judge the main turn. */
 export function classifyAttempt(
   events: unknown[],
   stderr: string,
@@ -163,37 +199,79 @@ export function classifyAttempt(
   ),
 ): AttemptVerdict {
   const tracker = createLimitStopTracker()
-  const apiErrors: string[] = [] // CLI-reported API-error events
+  const apiErrors: string[] = [] // CLI-reported API-error events of the main agent
   let last: any = null // the terminal `result` event
+  // The CLI's structured wall ({"type":"rate_limit_event","rate_limit_info":{"status":"rejected",
+  // "rateLimitType":"seven_day","resetsAt":<epoch s>}}), until something shows the turn went on.
+  let rejected: { resetsAt: number | null; window: 'session' | 'weekly' | null } | null = null
   for (const raw of events) {
     const ev = raw as any
+    if (ev?.parent_tool_use_id) continue
     tracker.observe(ev)
-    if (ev?.type === 'result') last = ev
-    else if (isApiErrorEvent(ev)) apiErrors.push(limitEventText(ev))
+    if (ev?.type === 'result') {
+      last = ev
+      if (ev.is_error !== true) rejected = null
+    } else if (ev?.type === 'rate_limit_event') {
+      const info = ev.rate_limit_info
+      if (info?.status !== 'rejected') rejected = null
+      else {
+        const secs = Number(info.resetsAt)
+        const type = String(info.rateLimitType ?? '')
+        rejected = {
+          resetsAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : null,
+          window: type.startsWith('seven_day') ? 'weekly' : type === 'five_hour' ? 'session' : null,
+        }
+      }
+    } else if (isApiErrorEvent(ev)) apiErrors.push(limitEventText(ev))
+    else if (ev?.type === 'assistant') rejected = null // real output after it: the turn went on
   }
   const errored = last?.is_error === true
   const resultText = typeof last?.result === 'string' ? last.result : null
   const errText = errored ? (resultText ?? '') : ''
-  const trusted = [...apiErrors, errText, stderr] // the only places a wall can be read from
+  const stderrLines = last
+    ? []
+    : stderr
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .reverse() // the last line that says it wins
+  const trusted = [...apiErrors, errText, ...stderrLines] // the only places a wall can be read from
   const base = {
     result: resultText,
     turns: Number(last?.num_turns) || 0,
+    resetsAt: null,
+    window: null,
+    resets: null,
   }
   const out = (outcome: AttemptOutcome, notice: string | null): AttemptVerdict => ({
+    ...base,
     outcome,
     notice: notice ? compactNotice(notice) : null,
-    ...base,
+  })
+  const quota = (notice: string | null): AttemptVerdict => ({
+    ...out('quota', notice),
+    resetsAt: rejected?.resetsAt ?? null,
+    window: rejected?.window ?? null,
+    resets:
+      notice
+        ?.replace(/\s+/g, ' ')
+        .trim()
+        .match(/\bresets\s+(.+?)\s*$/i)?.[1] ?? null,
   })
 
   const stop = tracker.verdict()
-  if (stop?.pending) return out('quota', stop.notice)
-  const quotaText = [errText, stderr].find((t) => classifyLimit(t) === 'quota')
-  if (quotaText !== undefined) return out('quota', quotaText)
+  // A clean result clears both the tracker's stop and `rejected`, so either one still set here
+  // came after the last clean result: the turn did not finish.
+  if (last && !errored && !stop?.pending && !rejected) return out('done', null)
+  // The errored result carries the same notice uncut; the tracker's copy is already compacted.
+  if (stop?.pending) return quota(classifyLimit(errText) === 'quota' ? errText : stop.notice)
+  const quotaText = [errText, ...stderrLines].find((t) => t && classifyLimit(t) === 'quota')
+  if (quotaText !== undefined) return quota(quotaText)
+  if (rejected) return quota(errText || apiErrors[apiErrors.length - 1] || null)
   const auth = trusted.find((t) => AUTH_RE.test(t))
   if (auth !== undefined) return out('auth', auth)
   const transient = trusted.find((t) => classifyLimit(t) === 'transient')
   if (transient !== undefined) return out('transient', transient)
-  if (last && !errored) return out('done', null)
   // No result and no API error: the process was killed from outside. On Windows a daemon restart
   // does exactly this to every worker (they sit in the daemon's kill-on-close job), and the
   // transcript on disk is intact, so the session is resumed rather than failed. Stderr need not be
@@ -203,6 +281,37 @@ export function classifyAttempt(
   if (!last && !apiErrors.length && (started || !stderr.trim()))
     return out('interrupted', INTERRUPTED_NOTICE)
   return out('error', null)
+}
+
+/** A wall ends this long after its reset, not on it: the relaunch must not reach Anthropic before
+ *  its window has flipped. */
+export const WALL_MARGIN_MS = 60_000
+/** The wall for a reset that has just passed: the window flipped a moment after the notice. */
+export const WALL_RETRY_MS = 2 * 60_000
+/** The wall when nothing says when the limit resets. */
+export const WALL_FALLBACK_MS = 60 * 60_000
+
+/** When a quota wall ends (epoch ms). The CLI's own `resetsAt` wins; the notice's "resets …"
+ *  text is parsed only without it, against a clock 10 minutes earlier, because a relaunch that
+ *  reaches Anthropic a moment before its window flips is told "resets 4:30pm" at 4:30:04pm, and
+ *  read against the current clock that is tomorrow: a whole day's wall for a few seconds' skew. A
+ *  reset that has just passed gets a short retry wall instead. `fallback` (for a weekly notice,
+ *  the account's own weekly reset) is used only when nothing parses. `parse` is usage.ts's
+ *  parseResetTime, passed in so this file stays pure. */
+export function wallUntil(
+  now: number,
+  reset: { resetsAt: number | null; resets: string | null },
+  parse: (resets: string, now: Date) => string | null,
+  fallback: number | null = null,
+): number {
+  let at = reset.resetsAt ?? Number.NaN
+  if (!Number.isFinite(at) && reset.resets) {
+    const iso = parse(reset.resets, new Date(now - 10 * 60_000))
+    at = iso ? Date.parse(iso) : Number.NaN
+  }
+  if (!Number.isFinite(at) && fallback !== null && fallback > now) at = fallback
+  if (!Number.isFinite(at)) return now + WALL_FALLBACK_MS
+  return at > now ? at + WALL_MARGIN_MS : now + WALL_RETRY_MS
 }
 
 /** What one attempt spent: the turns its session transcript recorded on that attempt's account
