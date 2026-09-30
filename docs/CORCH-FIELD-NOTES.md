@@ -1,0 +1,24 @@
+# Corch field notes
+
+What the orchestrating chat ran into while using Corch on real work. Each note says what happened,
+why it matters, and where it stands. Newest run first; a note is updated in place when it is fixed.
+
+## Run 1, 2026-09-30: Connections mobile fixes (the owner's first real corch task)
+
+Task: fix the phone layout of events.connections.icu (the Events list rows, the Guests tab's
+"3 ahead" chip, its "Person" header and its tall "Check in" buttons), then sweep the rest of the
+Connections site on a phone. Orchestrator: a desktop Opus 5.5 chat in the Connections repo.
+Accounts signed in at start: #83, #84, #88, #90, #91, #94 (and #68, #69, which report signed in but
+failed `auth` in earlier runs).
+
+| # | What happened | Why it matters | State |
+| --- | --- | --- | --- |
+| 1 | `corch_status {}` with no filter returned every worker ever recorded (141 of them, 51k characters), which overflowed the tool result, so the call answered nothing useful. | The first call a new orchestrator makes is "what is running?", and it fails. | Open: sent to a Corch worker (default to active and recent workers, add `active` and `limit`). |
+| 2 | There is no log of the orchestration as a whole. Each worker keeps its own stream-json log and its last 60 events, but nothing records the group's story in one place: what was dispatched, which account each attempt got and why, moves, handoffs, retries, finishes, cost. | The owner asked for logging on the first run; after a run there is no single thing to read to see what happened. | Open: sent to a Corch worker. |
+| 3 | `list_cli_instances` reports #68 and #69 `loggedIn: true` with no usage, although both failed `auth` in the earlier live runs. | A dead login looks alive in the list; only Corch's walls know better. | Open: sent to a Corch worker. |
+| 4 | `corch_status { id }` returns the list view (an array of one, no `events`), while the skill says a failed worker's last events are read there. The HTTP route `GET /api/corch/workers/:id` has them. The view's elapsed field is `ranS`, where CORCH.md says `elapsedS`. | An orchestrator diagnosing a failure gets no events through MCP. | Open: sent to a Corch worker. |
+| 6 | The corch skill's waiter (`until [ ... = "[]" ]; do sleep 20; done` in a background shell) is refused by the global unbounded-background-wait hook, because it has no deadline. The waiter that worked: a small script that polls `/api/corch/workers?group=`, exits when any worker reaches a terminal state or `waiting`, and gives up after 30 minutes. | Following the skill to the letter fails on the first try. | Open: the skill (claude-memory repo) needs the deadline in its waiter, or a `corch_wait` script beside it. |
+| 7 | `corch_run` echoes every worker's full view back, including 300 characters of each prompt, so a five-task dispatch returns about 3k characters the orchestrator already wrote. | Wasted context on every dispatch. | Open. |
+| 8 | Eight workers over four dispatches landed two per account on #84, #88, #90 and #94, while #83 (week 49%) and #91 (week 20%) stayed idle. `per_account` and the `+25 per active` score count only the worker's own group, so different groups stack on the same account although a fresher one is free. | A heavy wave concentrates on four accounts and drains them together, instead of spreading over six. | Open. |
+| 9 | Seen live: workers ran `grep -rlnI ... .` and `find . -path ./node_modules ...` over the Connections tree within their first minute. The owner's walk_guard hook blocks exactly this on the desktop (about 51 s of CPU per walk on Connections). It is note 5 in practice. | Several workers walking the tree at once is the load pattern that pinned this PC on 2026-09-24. | Open (fixed by note 5). |
+| 5 | A worker runs with `CLAUDE_CONFIG_DIR` set to its account's folder (`~/.agenthydra/cli-instances/<id>`), which holds no `CLAUDE.md`, no skills and a `settings.json` with only a theme. The owner's global instructions, skills and hooks never reach a worker; only the repository's own `CLAUDE.md`/`AGENTS.md` do. | Rules such as "never open a visible window" and "heavy commands go through fairjob" are absent unless the orchestrator repeats them in every prompt (run 1 does). | Open: sent to a Corch worker. |
