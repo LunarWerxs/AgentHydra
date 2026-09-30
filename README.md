@@ -104,8 +104,12 @@ carries on where it stopped. Workers run without a console window, but none is h
 readable live and steerable in the **Corch** view, and its transcript is an ordinary session you can
 resume by hand. Corch only runs when you start it.
 
-**Quick add** gets accounts in fast: type an email in the Instances view, confirm in the browser,
-and that account is a signed-in CLI instance Corch can use.
+**Quick add** gets accounts in fast: type an email in the Corch or Instances view, sign in in the
+separate window it opens (never your own browser), and that account is a signed-in CLI instance
+Corch can use, with its usage loaded.
+
+**Limit reset**: a CLI row's menu has "Use limit reset" (with "Check only"), which runs the CLI's own
+`/limit-reset`; see [docs/CLI-LIMIT-RESET.md](docs/CLI-LIMIT-RESET.md).
 
 Over MCP:
 
@@ -113,6 +117,7 @@ Over MCP:
 - `corch_status` lists them, and can wait for the next status change instead of polling.
 - `corch_send` sends a worker a follow-up in the same session.
 - `corch_cancel` stops a worker or a whole group.
+- `cli_limit_reset` uses (or, with `check`, looks for) a CLI account's limit reset.
 
 Details are in [docs/CORCH.md](docs/CORCH.md).
 
