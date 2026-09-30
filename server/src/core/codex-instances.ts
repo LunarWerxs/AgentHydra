@@ -526,10 +526,16 @@ let lastLeftoverSweep = 0
 function sweepCodexLeftovers(now = Date.now()): void {
   if (now - lastLeftoverSweep < 10 * 60_000) return
   lastLeftoverSweep = now
-  const pending = readStore().leftoverDirs ?? []
+  const store = readStore()
+  const pending = store.leftoverDirs ?? []
   if (!pending.length) return
+  const claimed = new Set(store.instances.map((i) => normalizePath(i.codexHome)))
+  // Re-checked before every delete: a path a record claims again, or one that now holds anything
+  // but the sandbox guard, is dropped from the list and never removed.
   const gone = pending.filter((dir) => {
-    if (!isPathInside(CODEX_INSTANCES_ROOT, dir)) return true
+    if (!isPathInside(CODEX_INSTANCES_ROOT, dir) || claimed.has(normalizePath(dir))) return true
+    if (!existsSync(dir)) return true
+    if (!onlySandboxGuardsLeft(dir)) return true
     try {
       rmSync(dir, { recursive: true, force: true })
     } catch {
