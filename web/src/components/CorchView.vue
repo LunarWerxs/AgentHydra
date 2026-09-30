@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Corch view: the tasks a chat handed to the owner's Claude CLI accounts (server/src/corch.ts,
 // docs/CORCH.md). A task list grouped by hand-off on the left, the selected task on the right
-// (CorchWorkerDetail.vue). Polls every 3 s only while a task can still change.
+// (CorchWorkerDetail.vue). Polls every 3 s while a task can still change, every 15 s otherwise,
+// and again when the page is shown or the window regains focus.
 //
 // Layout (2026-09-30 review, three lenses agreeing): the header comes first and says what Corch is;
 // "Add a CLI account" is a labelled button there, opening Quick add as a card rather than a stray
@@ -87,8 +88,20 @@ async function load(opts: { silent?: boolean } = {}) {
   } finally {
     if (!opts.silent) loading.value = false
   }
-  if (alive && workers.value.some(isCorchActive))
-    timer = window.setTimeout(() => load({ silent: true }), 3000)
+  // 3 s while a task can still change; otherwise 15 s (the server tick's idle rate), because a
+  // chat can start new tasks or revive a finished one at any time. Clear again first: a focus
+  // reload overlapping a poll must not leave two timers running.
+  if (timer !== null) window.clearTimeout(timer)
+  timer = null
+  if (alive)
+    timer = window.setTimeout(
+      () => load({ silent: true }),
+      workers.value.some(isCorchActive) ? 3000 : 15_000,
+    )
+}
+
+function onVisible() {
+  if (document.visibilityState === 'visible') void load({ silent: true })
 }
 
 function select(w: CorchWorkerView) {
@@ -108,13 +121,17 @@ const startedAgo = (w: CorchWorkerView) => formatAgo(now.value, w.createdAt)
 
 onMounted(() => {
   void load()
-  // Keeps "Started 3m ago" honest while nothing is polling.
+  // Keeps "Started 3m ago" honest between the slow idle polls.
   clock = window.setInterval(() => {
     now.value = Date.now()
   }, 30_000)
+  document.addEventListener('visibilitychange', onVisible)
+  window.addEventListener('focus', onVisible)
 })
 onUnmounted(() => {
   alive = false
+  document.removeEventListener('visibilitychange', onVisible)
+  window.removeEventListener('focus', onVisible)
   if (timer !== null) window.clearTimeout(timer)
   if (clock !== null) window.clearInterval(clock)
   timer = null
@@ -228,8 +245,10 @@ onUnmounted(() => {
                   >{{ startedAgo(w) }}</time>
                 </span>
                 <!-- The one line that says what needs attention: a failure's reason, what a
-                     waiting task waits for, or what a live one is doing. A finished task has its
-                     chip, and "finished (1 turn, $0.00)" under a Failed chip read as a success. -->
+                     waiting task waits for, or what a running one is doing. A finished task has its
+                     chip, and "finished (1 turn, $0.00)" under a Failed chip read as a success.
+                     Only 'running': a task queued after a limit or restart still carries the dead
+                     attempt's last command, which would read as if it were running it now. -->
                 <span
                   v-if="(w.status === 'failed' || w.status === 'waiting') && w.error"
                   class="truncate text-xs"
@@ -237,7 +256,7 @@ onUnmounted(() => {
                   :title="w.error"
                 >{{ firstLine(w.error) }}</span>
                 <span
-                  v-else-if="isCorchActive(w) && w.lastActivity"
+                  v-else-if="w.status === 'running' && w.lastActivity"
                   class="truncate text-xs text-muted-foreground"
                   :title="w.lastActivity"
                 >{{ w.lastActivity }}</span>
