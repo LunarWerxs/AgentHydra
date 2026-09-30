@@ -412,8 +412,8 @@ describe('integration: paid extra usage is never spent', () => {
     expect(w?.attempts[0]?.notice).toContain('extra usage')
   }, 20_000)
 
-  test('with corchAllowOverage on, the turn is not stopped and finishes on the overage account', async () => {
-    setProviderSettings({ corchAllowOverage: true })
+  test('with allowExtraUsage on, the turn is not stopped and finishes on the overage account', async () => {
+    setProviderSettings({ allowExtraUsage: true })
     try {
       setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
       // New account ids: the test above walled 'over-1'.
@@ -438,7 +438,7 @@ describe('integration: paid extra usage is never spent', () => {
       expect(w?.moves).toBe(0)
       expect(w?.attempts).toHaveLength(1)
     } finally {
-      setProviderSettings({ corchAllowOverage: false })
+      setProviderSettings({ allowExtraUsage: false })
     }
   }, 20_000)
 

@@ -26,9 +26,9 @@ const chatGptHandoffEnabled = ref(false)
 // that spends quota, so the default has to be the safe one.
 const keepaliveEnabled = ref(false)
 const keepaliveWeeklyFloorPct = ref(80)
-// Corch on paid extra usage (usage credits). Mirrors the server's default: OFF, because it spends
+// Work on paid extra usage (usage credits). Mirrors the server's default: OFF, because it spends
 // money rather than quota.
-const corchAllowOverage = ref(false)
+const allowExtraUsage = ref(false)
 // Reset notifications (server/src/reset-watch.ts). Defaults mirror getNotificationSettings():
 // announcing a rollover is on, the intrusive channels (persistent repeats, email) are opt-in.
 const notifyEnabled = ref(true)
@@ -69,7 +69,7 @@ function absorb(s: api.AppSettings): void {
   chatGptHandoffEnabled.value = s.chatGptHandoffEnabled
   keepaliveEnabled.value = s.keepaliveEnabled
   keepaliveWeeklyFloorPct.value = s.keepaliveWeeklyFloorPct
-  corchAllowOverage.value = s.corchAllowOverage
+  allowExtraUsage.value = s.allowExtraUsage
   transcriptEditor.value = s.transcriptEditor
   transcriptEditorResolved.value = s.transcriptEditorResolved
   notifyEnabled.value = s.notifyEnabled
@@ -125,7 +125,7 @@ export function useAppSettings() {
     chatGptHandoffEnabled,
     keepaliveEnabled,
     keepaliveWeeklyFloorPct,
-    corchAllowOverage,
+    allowExtraUsage,
     transcriptEditor,
     transcriptEditorResolved,
     notifyEnabled,

@@ -128,12 +128,12 @@ const reads = new Map<string, LogRead>()
  *  here). The usage snapshot is refreshed only every 15 minutes; this is seconds old. */
 const liveByAccount = new Map<string, CorchLiveUsage>()
 
-/** The owner's rule is never to spend paid extra usage; the `corchAllowOverage` setting (default
+/** The owner's rule is never to spend paid extra usage; the `allowExtraUsage` setting (default
  *  false) lifts it: overage is then neither stopped nor walled, and accounts at their caps stay
  *  in the pool behind every account below them. Unreadable counts as false. */
 function overageAllowed(): boolean {
   try {
-    return getProviderSettings().corchAllowOverage === true
+    return getProviderSettings().allowExtraUsage === true
   } catch {
     return false
   }
@@ -310,6 +310,15 @@ export function corchRunningCount(): number {
   let n = 0
   for (const w of workers.values()) if (w.status === 'running') n++
   return n
+}
+
+/** The pids of the CLI processes Corch's workers run in now. The extra-usage guard leaves these
+ *  to Corch, which stops its own workers at the same line and moves the task on: a kill from
+ *  outside would read as 'interrupted' and resume the task on the very account that can bill. */
+export function corchWorkerPids(): Set<number> {
+  const pids = new Set<number>()
+  for (const p of procs.values()) if (!hasExited(p)) pids.add(p.pid)
+  return pids
 }
 
 function schedule(delay?: number): void {

@@ -123,9 +123,9 @@ export default {
   keepaliveFloorHint:
     'Accounts at or above this share of their WEEKLY cap are skipped. The weekly window is the one that matters. A 5-hour window refills the same day, so spending the last of a weekly allowance to start one is a bad trade. Set 0 to stop the keepalive spending on anything.',
   // ⛔ SPENDS MONEY: paid extra usage is billed. Off by default, and the hint says what off does.
-  corchOverageLabel: 'Let Corch use paid extra usage',
-  corchOverageHint:
-    'Off by default. Some Claude accounts keep working past their 5-hour limit on paid extra usage (usage credits) instead of stopping. With this off, Corch stops a task the moment its account starts billing extra usage and moves it to an account with free quota, or waits for one. Turn it on only if you want Corch to spend those credits when every account is full.',
+  extraUsageLabel: 'Allow paid extra usage',
+  extraUsageHint:
+    'Off by default. Some Claude accounts keep working past their limits on paid extra usage (usage credits) instead of stopping. With this off, nothing AgentHydra manages is allowed to bill it: Corch moves a task to an account with free quota before its account would bill, and any Claude session on an account that has extra usage switched on is stopped as that account nears its limit. The chat itself is kept and can carry on later or on another account. Turn it on only if you want work to spend those credits.',
   chatGptHandoffLabel: 'ChatGPT handoff',
   chatGptHandoffHint:
     'Adds a composer action that downloads a bounded, secret-screened repository context file, copies the task prompt, and opens ChatGPT. You still review and submit everything manually.',

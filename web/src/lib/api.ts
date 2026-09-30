@@ -26,6 +26,7 @@ import type {
   DispatchedScope,
   EditEntry,
   EffortLevel,
+  ExtraUsageOffResult,
   Incident,
   IncidentState,
   InstanceColorKey,
@@ -103,6 +104,7 @@ export type {
   DispatchedScope,
   EditEntry,
   EffortLevel,
+  ExtraUsageOffResult,
   Incident,
   IncidentState,
   InstanceColorKey,
@@ -748,6 +750,13 @@ export const getUsageCache = () =>
 /** Force one background refresh sweep now (the same pass the auto-refresh timer runs). */
 export const refreshAllUsage = () =>
   j<{ ok: boolean; checked: number }>('/api/usage/refresh', { method: 'POST' })
+/** MUTATES THE ACCOUNT: switch claude.ai paid extra usage off for one instance's account
+ *  (`desktop:<dir>` / `cli:<id>`), so it stops at its limits instead of billing. */
+export const turnOffExtraUsage = (instanceRef: string) =>
+  j<ExtraUsageOffResult>('/api/usage/extra-usage/off', {
+    method: 'POST',
+    body: JSON.stringify({ instance_ref: instanceRef }),
+  })
 
 // --- reset notifications (see server/src/reset-watch.ts) ----------------------------------------
 // Quota-window rollovers the daemon noticed. They are raised server-side (so a notification still

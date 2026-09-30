@@ -87,6 +87,8 @@ describe('mapUsageApiResponse', () => {
       severity: 'critical',
     })
     expect(snap.source).toBe('api')
+    // The extra-usage guard's input: whether this account bills past its limits.
+    expect(snap.extraUsage).toBe(false)
     expect(snap.account).toBe('lunarwerx@example.com')
     expect(snap.capturedAt).toBe('2024-07-14T02:00:00.000Z')
   })

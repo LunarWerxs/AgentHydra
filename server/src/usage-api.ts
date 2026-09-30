@@ -62,7 +62,7 @@ const CLAUDE_USER_AGENT_FALLBACK = 'claude-code/2.1.80'
  * with nothing to remember. The literal above remains only as the answer when that read fails.
  */
 let cachedUserAgent: string | null = null
-function claudeUserAgent(): string {
+export function claudeUserAgent(): string {
   if (cachedUserAgent) return cachedUserAgent
   try {
     const pkg = join(
@@ -123,6 +123,8 @@ interface ApiResponse {
   /** Pre-`limits[]` shape, kept as a fallback: utilization is a 0-100 float. */
   five_hour?: { utilization?: number | null; resets_at?: string | null } | null
   seven_day?: { utilization?: number | null; resets_at?: string | null } | null
+  /** claude.ai "extra usage": `is_enabled` true means usage past the limits is BILLED, not refused. */
+  extra_usage?: { is_enabled?: boolean | null } | null
 }
 
 // --- mapping -----------------------------------------------------------------
@@ -219,6 +221,8 @@ export function mapUsageApiResponse(
   if (!snap.weekAll && typeof body.seven_day?.utilization === 'number') {
     snap.weekAll = toLimit(body.seven_day.utilization, body.seven_day.resets_at)
   }
+  if (typeof body.extra_usage?.is_enabled === 'boolean')
+    snap.extraUsage = body.extra_usage.is_enabled
   return snap
 }
 

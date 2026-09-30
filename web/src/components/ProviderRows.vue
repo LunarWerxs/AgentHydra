@@ -39,7 +39,7 @@ const {
   chatGptHandoffEnabled,
   keepaliveEnabled,
   keepaliveWeeklyFloorPct,
-  corchAllowOverage,
+  allowExtraUsage,
   update: updateAppSettings,
 } = useAppSettings()
 
@@ -163,16 +163,16 @@ async function patchProvider(value: Partial<ProviderSettings>) {
   </SettingsRow>
 
   <!-- ⛔ SPENDS MONEY, NOT JUST QUOTA. Some Claude accounts keep working past their 5-hour limit on
-       paid extra usage (usage credits). Off by default: Corch stops a task the moment its account
-       starts billing and moves it, rather than running up a bill nobody asked for. -->
-  <SettingsRow :icon="CreditCard" :label="$t('settings.corchOverageLabel')">
+       paid extra usage (usage credits). Off by default: nothing AgentHydra manages may bill it -
+       Corch moves a task first, and the guard stops any session on an account that could bill. -->
+  <SettingsRow :icon="CreditCard" :label="$t('settings.extraUsageLabel')">
     <template #info>
-      <InfoHint :text="$t('settings.corchOverageHint')" />
+      <InfoHint :text="$t('settings.extraUsageHint')" />
     </template>
     <template #control>
       <Switch
-        :model-value="corchAllowOverage"
-        @update:model-value="(v: boolean) => patchProvider({ corchAllowOverage: v })"
+        :model-value="allowExtraUsage"
+        @update:model-value="(v: boolean) => patchProvider({ allowExtraUsage: v })"
       />
     </template>
   </SettingsRow>

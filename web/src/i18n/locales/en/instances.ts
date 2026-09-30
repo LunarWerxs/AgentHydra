@@ -258,6 +258,9 @@ export default {
   usageAppUsageCreditsOn: 'On · {used} of {limit}',
   usageAppUsageCreditsOnUncapped: 'On · {used}, no cap',
   usageAppUsageCreditsOff: 'Off',
+  usageExtraUsageOn:
+    'Paid extra usage is on: past its limits this account bills instead of stopping',
+  usageExtraUsageTurnOff: 'Turn off extra usage',
   usageAppWeeklySplit: 'This week',
   usageAppCheckedAgo: 'From the Claude app, {when}',
   usageChecking: 'Checking…',

@@ -834,6 +834,82 @@ export function invalidateClaudeProcessCache(): void {
 }
 
 // ----------------------------------------------------------------------------
+// Claude Desktop's Code engines — "which account is this running chat on?"
+// ----------------------------------------------------------------------------
+
+/** One Claude Code engine a Claude Desktop profile runs for a Code chat. */
+export interface DesktopEngine {
+  pid: number
+  /** The profile (user-data dir) whose account the engine runs on. */
+  instanceDir: string
+}
+
+const ENGINE_PATH_RE = /^(.+)[\\/]claude-code[\\/]\d+\.\d+[^\\/]*[\\/]claude(?:\.exe)?$/i
+
+/** The profile a Code engine's executable belongs to, or null when the path is not an engine's.
+ *  A desktop profile runs its engines from `<instanceDir>/claude-code/<version>/claude.exe`
+ *  (checked live 2026-09-30); the npm CLI's `.../@anthropic-ai/claude-code/bin/claude.exe` has
+ *  no version segment and is never mistaken for one. */
+export function desktopEngineDir(exePath: string | null | undefined): string | null {
+  const m = exePath ? ENGINE_PATH_RE.exec(exePath.trim()) : null
+  return m?.[1] ? m[1] : null
+}
+
+/**
+ * Every Code engine a Claude Desktop profile is running, from ONE process query. The engine's own
+ * executable path names its profile, so this needs neither the chat stores nor an ancestry walk.
+ * Null when the OS could not be asked (never folded into "none running").
+ */
+export async function listDesktopEngines(): Promise<DesktopEngine[] | null> {
+  const rows: { pid: number; exe: string | null }[] = []
+  if (process.platform === 'win32') {
+    const stdout = await runCaptureStdout([
+      'powershell',
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      [
+        "$ErrorActionPreference = 'Stop'",
+        '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+        'Get-CimInstance -ClassName Win32_Process -Filter "Name=\'claude.exe\'" | ' +
+          'Select-Object ProcessId, ExecutablePath | ConvertTo-Json -Compress',
+      ].join('; '),
+    ])
+    if (stdout === null) return null
+    const trimmed = sanitizeCimJson(stdout).trim()
+    if (!trimmed) return []
+    try {
+      const parsed: unknown = JSON.parse(trimmed)
+      for (const r of Array.isArray(parsed) ? parsed : [parsed]) {
+        const rec = r as { ProcessId?: unknown; ExecutablePath?: unknown }
+        const pid = Number(rec?.ProcessId)
+        if (Number.isFinite(pid))
+          rows.push({
+            pid,
+            exe: typeof rec.ExecutablePath === 'string' ? rec.ExecutablePath : null,
+          })
+      }
+    } catch {
+      return null
+    }
+  } else {
+    // `comm` is the executable's full path on macOS (the only other OS Claude Desktop ships on).
+    const stdout = await runCaptureStdout(['ps', '-eo', 'pid=,comm='])
+    if (stdout === null) return null
+    for (const line of stdout.split(/\r?\n/)) {
+      const m = /^\s*(\d+)\s+(.+)$/.exec(line)
+      if (m) rows.push({ pid: Number(m[1]), exe: m[2] ?? null })
+    }
+  }
+  const engines: DesktopEngine[] = []
+  for (const r of rows) {
+    const instanceDir = desktopEngineDir(r.exe)
+    if (instanceDir) engines.push({ pid: r.pid, instanceDir })
+  }
+  return engines
+}
+
+// ----------------------------------------------------------------------------
 // "Who just called me?" — the owner of a loopback TCP connection.
 // ----------------------------------------------------------------------------
 

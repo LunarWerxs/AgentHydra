@@ -67,6 +67,7 @@ import {
   startImportSweep,
   startRetrySweep,
 } from './dispatch'
+import { startExtraUsageGuard } from './extra-usage'
 import { findFreePort } from './find-free-port.mjs'
 import { cleanupStaleUpdateArtifacts, missingComponents } from './github-updater'
 import { app } from './http-app'
@@ -599,8 +600,7 @@ app.post('/api/settings', async (c) => {
       typeof body.keepaliveEnabled === 'boolean' ? body.keepaliveEnabled : undefined,
     keepaliveWeeklyFloorPct:
       typeof body.keepaliveWeeklyFloorPct === 'number' ? body.keepaliveWeeklyFloorPct : undefined,
-    corchAllowOverage:
-      typeof body.corchAllowOverage === 'boolean' ? body.corchAllowOverage : undefined,
+    allowExtraUsage: typeof body.allowExtraUsage === 'boolean' ? body.allowExtraUsage : undefined,
   })
   // Notifications: whitelisted field by field, same as the blocks above. setNotificationSettings
   // ignores anything absent, so a patch touching one toggle leaves the rest (and the stored SMTP
@@ -1370,6 +1370,10 @@ startCorch()
 // your quota does not consume it — so keeping the numbers warm costs essentially nothing. Toggle in
 // Settings → Usage.
 startUsageRefresh()
+
+// Paid extra usage is never billed unless Settings allows it: on an account that has it switched
+// on, every Claude session is stopped as the account reaches its limit (server/src/extra-usage.ts).
+startExtraUsageGuard()
 
 // --- one-time repair: CLI config dirs still naming the pre-rebrand config root ------------------
 // See migrateCliInstanceConfigDirs. A no-op on every install except one carried across the

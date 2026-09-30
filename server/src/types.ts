@@ -1014,6 +1014,10 @@ export interface UsageSnapshot {
   weekAll: UsageLimit | null
   /** A per-model weekly sub-limit (e.g. "Fable"), when present. */
   weekModel: (UsageLimit & { label: string }) | null
+  /** Whether the account has claude.ai "extra usage" switched on, i.e. BILLS usage past its limits
+   *  instead of stopping (the usage endpoint's `extra_usage.is_enabled`). Absent or null when the
+   *  reading did not say (the CLI text fallback, Codex). */
+  extraUsage?: boolean | null
   capturedAt: string
   /** arkitect-allow: no-bandaids permanent — cached snapshots persist across app upgrades, so a
    *  pre-existing cache entry from before this field existed must still deserialize.
@@ -1031,6 +1035,15 @@ export interface UsageSnapshot {
   /** Claude Desktop: what only the signed-in claude.ai session serves. Undefined until the running
    *  app has been read once; a closed app keeps its last reading. */
   claudeApp?: ClaudeAppUsage
+}
+
+/** What switching an account's claude.ai extra usage off did (extra-usage.ts turnOffExtraUsage). */
+export interface ExtraUsageOffResult {
+  /** True only when a fresh reading confirms extra usage is now off. */
+  ok: boolean
+  /** The account's extra usage after the call, from a fresh reading; null when it could not be read. */
+  extraUsage: boolean | null
+  detail: string
 }
 
 /** Claude Desktop facts read from the running app's own claude.ai session (claude-app-usage.ts). */
@@ -1402,10 +1415,11 @@ export interface ProviderSettings {
   keepaliveEnabled: boolean
   /** Weekly-usage percentage at or above which an account is left alone by the keepalive. */
   keepaliveWeeklyFloorPct: number
-  /** Let Corch keep a task running on an account's paid extra usage (usage credits) past its
-   *  5-hour limit. OFF by default — with it off, Corch stops a task the moment its account starts
-   *  billing overage and moves it to an account with free quota, or waits for one. */
-  corchAllowOverage: boolean
+  /** Let work on this machine's Claude accounts run on paid extra usage (usage credits) past their
+   *  limits. OFF by default — with it off nothing AgentHydra manages bills it: Corch stops a task
+   *  before its account would bill and moves it, and the extra-usage guard (extra-usage.ts) stops
+   *  every Claude session on an account that has extra usage switched on once it nears its limit. */
+  allowExtraUsage: boolean
 }
 
 /** Bounded, secret-screened repository context returned for a manual ChatGPT handoff. */

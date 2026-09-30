@@ -35,6 +35,7 @@ import {
   launchOptionError,
 } from '../core/launch-options'
 import { db } from '../db'
+import { turnOffExtraUsage } from '../extra-usage'
 import { app } from '../http-app'
 import { jsonBody } from '../route-helpers'
 import type { UsageCheckResult } from '../types'
@@ -201,6 +202,18 @@ app.get('/api/usage/survey', async (c) => {
 
 // Force one background sweep now (the same pass the auto-refresh timer runs).
 app.post('/api/usage/refresh', async (c) => c.json({ ok: true, checked: await sweepUsage() }))
+
+// MUTATES THE ACCOUNT: switch claude.ai paid extra usage off for one instance's account, so it stops
+// at its limits instead of billing. `instance_ref` is 'desktop:<dir>' or 'cli:<id>'. A person's
+// click, never a background job (extra-usage.ts).
+app.post('/api/usage/extra-usage/off', async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { instance_ref?: unknown }
+  const ref = typeof body.instance_ref === 'string' ? body.instance_ref.trim() : ''
+  if (!ref.startsWith('desktop:') && !ref.startsWith('cli:'))
+    return c.json({ ok: false, error: "instance_ref must be 'desktop:<dir>' or 'cli:<id>'" }, 400)
+  const result = await turnOffExtraUsage(ref)
+  return result.ok ? c.json(result) : c.json({ ...result, error: result.detail }, 502)
+})
 
 // The BUDGET: the percentage turned into quantities an agent can actually plan with — a burn rate, a
 // deadline, and an estimated token headroom derived from real transcript spend. See usage-budget.ts.

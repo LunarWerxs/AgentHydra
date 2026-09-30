@@ -151,6 +151,12 @@ export function liveUsage(raw: unknown, at: number): CorchLiveUsage | null {
   }
 }
 
+/** The line an account that can bill (paid extra usage switched on) is stopped at: 98% of its
+ *  5-hour window or 99% of its week. Corch's workers and the extra-usage guard (extra-usage.ts)
+ *  both use it, so every kind of session stops at the same place. */
+export const BILL_GUARD_SESSION_PCT = 98
+export const BILL_GUARD_WEEK_PCT = 99
+
 /** A turn on an account that can bill (paid extra usage switched on) is stopped at 98% of its
  *  5-hour window or 99% of its week, BEFORE a request can run into overage: waiting for the
  *  'rejected' event would already have billed that request. Measured 2026-09-30: of the four CLI
@@ -158,8 +164,10 @@ export function liveUsage(raw: unknown, at: number): CorchLiveUsage | null {
  *  bill. Null when the reading says nothing needs stopping. */
 export function aboutToBill(live: CorchLiveUsage | null): { resetsAt: number | null } | null {
   if (!live?.overageAllowed) return null
-  if (live.sessionPct !== null && live.sessionPct >= 98) return { resetsAt: live.sessionResetsAt }
-  if (live.weekPct !== null && live.weekPct >= 99) return { resetsAt: live.weekResetsAt }
+  if (live.sessionPct !== null && live.sessionPct >= BILL_GUARD_SESSION_PCT)
+    return { resetsAt: live.sessionResetsAt }
+  if (live.weekPct !== null && live.weekPct >= BILL_GUARD_WEEK_PCT)
+    return { resetsAt: live.weekResetsAt }
   return null
 }
 
@@ -521,7 +529,8 @@ export function pickAccount(
   const handedOffFrom = lastAttempt?.outcome === 'handoff' ? lastAttempt.account.id : null
   const load = (a: CorchAccount): number => active.get(a.id) ?? 0
   const full = (a: CorchAccount): boolean =>
-    (a.sessionPct !== null && a.sessionPct >= 98) || (a.weekPct !== null && a.weekPct >= 99)
+    (a.sessionPct !== null && a.sessionPct >= BILL_GUARD_SESSION_PCT) ||
+    (a.weekPct !== null && a.weekPct >= BILL_GUARD_WEEK_PCT)
   // Past the wind-down line, new work there would be asked to hand off again at once (measured
   // live: a continuation placed on #84 at 91% wound down immediately, while #83 sat at 58%).
   const near = (a: CorchAccount): boolean =>

@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
-import type { UsageSnapshot } from '@/lib/api'
+import { turnOffExtraUsage, type UsageSnapshot } from '@/lib/api'
 import {
   formatMoney,
   isNoDataSnap,
@@ -38,7 +38,7 @@ const props = defineProps<{
   scope?: UsageScope
 }>()
 
-defineEmits<{ check: [] }>()
+const emit = defineEmits<{ check: [] }>()
 
 const { t } = useI18n()
 const { reasonFor } = useUsage()
@@ -117,6 +117,29 @@ const appSplit = computed(
       .join(' · ') || null,
 )
 const appCheckedAgo = computed(() => (app.value ? usageCheckedAgo(app.value.checkedAt) : ''))
+
+// Paid extra usage ON: past its limits this account BILLS instead of stopping. The owner never
+// wants that paid, so the popover says so and offers the switch that turns it off at claude.ai
+// (server/src/extra-usage.ts); until then the guard stops this account's sessions near its limit.
+const billsPastLimit = computed(
+  () => props.snapshot?.extraUsage === true || app.value?.usageCredits?.enabled === true,
+)
+const canTurnOff = computed(() => /^(desktop|cli):/.test(props.usageKey ?? ''))
+const turningOff = ref(false)
+const turnOffNote = ref('')
+async function onTurnOffExtraUsage(): Promise<void> {
+  if (!props.usageKey) return
+  turningOff.value = true
+  turnOffNote.value = ''
+  try {
+    turnOffNote.value = (await turnOffExtraUsage(props.usageKey)).detail
+    emit('check')
+  } catch (err) {
+    turnOffNote.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    turningOff.value = false
+  }
+}
 
 // --- open on HOVER as well as on click ----------------------------------------------------------
 // The breakdown (both reset times, the per-model sub-limit, how stale the reading is) is the whole
@@ -262,6 +285,21 @@ function onRootOpenChange(v: boolean): void {
           <p class="text-muted-foreground">
             {{ $t('instances.usageAppCheckedAgo', { when: appCheckedAgo }) }}
           </p>
+        </div>
+        <div v-if="billsPastLimit" class="space-y-1.5 border-t border-border/60 pt-1.5">
+          <p class="font-medium text-warning">{{ $t('instances.usageExtraUsageOn') }}</p>
+          <Button
+            v-if="canTurnOff"
+            size="xs"
+            variant="outline"
+            class="w-full"
+            :disabled="turningOff"
+            @click="onTurnOffExtraUsage"
+          >
+            <Loader2 v-if="turningOff" class="animate-spin" />
+            {{ $t('instances.usageExtraUsageTurnOff') }}
+          </Button>
+          <p v-if="turnOffNote" class="text-muted-foreground">{{ turnOffNote }}</p>
         </div>
         <p class="text-muted-foreground">
           {{ $t('instances.usageCheckedAgo', { when: checkedAgo }) }}

@@ -9,6 +9,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Paid extra usage is never billed unless you allow it** (`server/src/extra-usage.ts`). Some
+  Claude accounts have claude.ai "extra usage" switched on: past their limits they keep working
+  and bill you instead of stopping. The new Settings switch "Allow paid extra usage" is off by
+  default, and while it is off AgentHydra stops every Claude session on such an account (desktop
+  Code chats and CLI sessions alike) as the account reaches 98% of its 5-hour window or 99% of its
+  week. The chat is kept and can carry on after the reset or on another account. The usage popover
+  now says when an account can bill, and its "Turn off extra usage" button switches it off at
+  claude.ai for that account, so it simply stops at its limits from then on. Corch uses the same
+  switch and the same line for its workers.
+
 - **Corch: hand a task's pieces to your CLI accounts; each worker moves to another account by
   itself when one hits its usage limit** (`server/src/corch.ts`, `web/src/components/CorchView.vue`).
   Tell a chat to corch a task and it keeps only the orchestration: it splits the task, gives each
