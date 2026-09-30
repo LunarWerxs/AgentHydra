@@ -9,6 +9,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Corch: hand a task's pieces to your CLI accounts; each worker moves to another account by
+  itself when one hits its usage limit** (`server/src/corch.ts`, `web/src/components/CorchView.vue`).
+  Tell a chat to corch a task and it keeps only the orchestration: it splits the task, gives each
+  piece to a Claude Code CLI session on one of your signed-in CLI accounts, and checks the results.
+  Work is spread across the accounts by how much of their limit is left. When an account reaches
+  its limit, the worker continues on another one from where it stopped, so you no longer move the
+  thread by hand. Workers have no console window, but every one can be watched and steered in the
+  new Corch view, and chats drive them with the MCP tools `corch_run`, `corch_status`, `corch_send`
+  and `corch_cancel`. See [docs/CORCH.md](docs/CORCH.md).
+
+- **Quick add: type an email, confirm in the browser, and the account is a signed-in CLI instance**
+  (`server/src/core/cli-quick-add.ts`, `web/src/components/CliInstancesSection.vue`). The Instances
+  view has one email box at the top. Press Enter, confirm the sign-in page that opens in your
+  browser, and the account is ready for Corch, with no naming, terminal or `/login`. The box clears
+  and keeps focus for the next account. If the browser page does not open, you can open it again
+  or paste the code it gives you. Entering the email of an instance whose sign-in went stale signs
+  that instance in again instead of making a new one.
+
 - **Each instance shows every account it has been signed into** (`server/src/core/login-history.ts`,
   `web/src/components/LoginHistoryPopover.vue`). A history button beside the account in the
   Instances table lists the accounts that have used that profile: the signed-in one first, then the

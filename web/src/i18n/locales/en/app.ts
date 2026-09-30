@@ -25,4 +25,5 @@ export default {
   shortcutInstances: 'Go to Instances',
   shortcutAnalytics: 'Go to Analytics',
   tabAnalytics: 'Analytics',
+  tabCorch: 'Corch',
 }

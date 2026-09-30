@@ -26,8 +26,8 @@
 
 import { type Ref, ref, watch } from 'vue'
 
-export type AppView = 'sessions' | 'instances' | 'analytics'
-export const APP_VIEWS: readonly AppView[] = ['sessions', 'instances', 'analytics']
+export type AppView = 'sessions' | 'instances' | 'analytics' | 'corch'
+export const APP_VIEWS: readonly AppView[] = ['sessions', 'instances', 'analytics', 'corch']
 
 /** The one key, under both storages. Same name deliberately: they hold the same kind of value, for
  *  different lifetimes, and a reader looking at either one should not have to learn two names. */

@@ -6,6 +6,7 @@ import {
   MessagesSquare,
   Monitor,
   Moon,
+  Network,
   Power,
   RotateCw,
   Settings2,
@@ -15,6 +16,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AnalyticsView from '@/components/AnalyticsView.vue'
+import CorchView from '@/components/CorchView.vue'
 import InstancesView from '@/components/InstancesView.vue'
 import QueueBuilder from '@/components/QueueBuilder.vue'
 import QueueView from '@/components/QueueView.vue'
@@ -203,6 +205,7 @@ const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
   { id: 'sessions', labelKey: 'app.tabSessions', icon: MessagesSquare },
   { id: 'instances', labelKey: 'app.tabInstances', icon: Boxes },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
+  { id: 'corch', labelKey: 'app.tabCorch', icon: Network },
 ]
 
 const runningCount = computed(() => queue.value.filter((q) => q.status === 'running').length)
@@ -394,11 +397,12 @@ onUnmounted(stopAvailabilityPolling)
     <div class="min-h-0 flex-1 pe-(--push-shift) transition-padding duration-300 ease-in-out">
       <main
         class="h-full min-h-0"
-        :class="view === 'instances' ? 'overflow-y-auto scroll-slim' : ''"
+        :class="view === 'instances' || view === 'corch' ? 'overflow-y-auto scroll-slim' : ''"
       >
         <Transition name="view-fade" mode="out-in">
           <SessionsView v-if="view === 'sessions'" />
           <AnalyticsView v-else-if="view === 'analytics'" />
+          <CorchView v-else-if="view === 'corch'" />
           <InstancesView v-else />
         </Transition>
       </main>

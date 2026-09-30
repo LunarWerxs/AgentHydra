@@ -95,6 +95,27 @@ hidden; the screenshot below is historical.
 
 ![The run queue drawer, from before headless dispatch was removed: five runs, one running, three queued and one finished, each showing its project, model, effort and scheduled time](.github/screenshots/queue.png)
 
+## Corch: hand a task's pieces to your CLI accounts
+
+Tell a chat to corch a task and it keeps only the orchestration: it splits the work, hands each
+piece to a Claude Code CLI session on one of your signed-in CLI accounts, then reads and checks the
+results. When an account hits its usage limit, the worker moves to another account by itself and
+carries on where it stopped. Workers run without a console window, but none is hidden: each one is
+readable live and steerable in the **Corch** view, and its transcript is an ordinary session you can
+resume by hand. Corch only runs when you start it.
+
+**Quick add** gets accounts in fast: type an email in the Instances view, confirm in the browser,
+and that account is a signed-in CLI instance Corch can use.
+
+Over MCP:
+
+- `corch_run` starts workers for a list of self-contained tasks.
+- `corch_status` lists them, and can wait for the next status change instead of polling.
+- `corch_send` sends a worker a follow-up in the same session.
+- `corch_cancel` stops a worker or a whole group.
+
+Details are in [docs/CORCH.md](docs/CORCH.md).
+
 ## See where the time and the money went
 
 ![The analytics view: headline cost, session and agent-hour tiles above a cost-by-day bar chart, cost broken down by model, project and account, and an hour-of-week grid showing when the work happens](.github/screenshots/analytics.png)

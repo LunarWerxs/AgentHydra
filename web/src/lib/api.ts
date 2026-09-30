@@ -813,6 +813,117 @@ export const checkCliInstanceUsage = (id: string, refresh = false) =>
     `/api/cli-instances/${encodeURIComponent(id)}/usage${refresh ? '?refresh=1' : ''}`,
   )
 
+/** One quick-add sign-in flow (server/src/core/cli-quick-add.ts). */
+export interface QuickAddFlow {
+  id: string
+  email: string
+  instanceId: string
+  num: number | null
+  state: 'waiting' | 'signed-in' | 'failed' | 'cancelled'
+  url: string | null
+  message: string
+  account: { email: string | null; plan: string | null } | null
+  startedAt: number
+}
+export const startQuickAdd = (email: string) =>
+  j<QuickAddFlow | { error: string }>('/api/cli-instances/quick-add', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+/** The last 20 flows, newest first. */
+export const listQuickAdds = () => j<QuickAddFlow[]>('/api/cli-instances/quick-add')
+export const submitQuickAddCode = (id: string, code: string) =>
+  j<{ ok: boolean; message: string }>(
+    `/api/cli-instances/quick-add/${encodeURIComponent(id)}/code`,
+    { method: 'POST', body: JSON.stringify({ code }) },
+  )
+export const cancelQuickAdd = (id: string) =>
+  j<{ ok: boolean; message: string }>(
+    `/api/cli-instances/quick-add/${encodeURIComponent(id)}/cancel`,
+    { method: 'POST' },
+  )
+
+// --- Corch workers (server/src/corch.ts, docs/CORCH.md) ----------------------
+export type CorchStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled'
+export type CorchAttemptOutcome =
+  | 'running'
+  | 'done'
+  | 'quota'
+  | 'transient'
+  | 'auth'
+  | 'error'
+  | 'cancelled'
+export interface CorchAccountRef {
+  id: string
+  num: number | null
+  name: string
+}
+export interface CorchWorkerView {
+  id: string
+  group: string
+  title: string
+  cwd: string
+  prompt: string
+  pending: string[]
+  model: string | null
+  effort: string | null
+  accounts: string[] | null
+  status: CorchStatus
+  sessionId: string | null
+  accountId: string | null
+  /** `#<num> <name>` or null */
+  account: string | null
+  attempts: { account: CorchAccountRef; outcome: CorchAttemptOutcome; notice: string | null }[]
+  result: string | null
+  error: string | null
+  lastActivity: string | null
+  costUsd: number
+  turns: number
+  moves: number
+  retries: number
+  notBefore: number | null
+  elapsedS: number
+  createdAt: number
+  updatedAt: number
+}
+export interface CorchTask {
+  prompt: string
+  cwd: string
+  title?: string
+  model?: string
+  effort?: string
+}
+export const listCorchWorkers = (filter: { group?: string; active?: boolean } = {}) => {
+  const q = new URLSearchParams()
+  if (filter.group) q.set('group', filter.group)
+  if (filter.active) q.set('active', '1')
+  const qs = q.toString()
+  return j<CorchWorkerView[]>(`/api/corch/workers${qs ? `?${qs}` : ''}`)
+}
+/** One worker plus its last 60 summarised event lines. */
+export const getCorchWorker = (id: string) =>
+  j<(CorchWorkerView & { events: string[] }) | null>(`/api/corch/workers/${encodeURIComponent(id)}`)
+export const runCorch = (input: {
+  tasks: CorchTask[]
+  group?: string
+  accounts?: string[]
+  perAccount?: number
+}) =>
+  j<{ group: string; workers: CorchWorkerView[] }>('/api/corch/workers', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+export const sendCorchWorker = (id: string, text: string) =>
+  j<{ ok: boolean; message: string }>(`/api/corch/workers/${encodeURIComponent(id)}/send`, {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  })
+export const cancelCorch = (filter: { id?: string; group?: string }) =>
+  j<{ cancelled: string[] }>('/api/corch/cancel', {
+    method: 'POST',
+    body: JSON.stringify(filter),
+  })
+
 // --- Codex CLI + Desktop instances -------------------------------------------
 export type {
   CodexMoveChat,

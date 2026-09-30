@@ -604,6 +604,101 @@ export const TOOLS: McpEngineTool[] = [
     },
   },
 
+  // --- Corch: delegate work onto the CLI accounts (docs/CORCH.md) ---------------
+  // ponytail: in-process calls into ./corch, so workers belong to whichever process serves this
+  // tool (the daemon over HTTP); a stdio MCP process would need REST proxies over /api/corch.
+  {
+    name: 'corch_run',
+    description:
+      'MUTATES: CORCH A TASK. When the owner tells a chat to corch a task or fully delegate it, the chat keeps only the orchestration (split, dispatch, read results, check them) and every piece of real work goes here. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER\'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra\'s Corch view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what "done" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps concurrent workers per account. Returns the group and one view per worker; then corch_status {group, wait_seconds} waits for results.',
+    inputSchema: S(
+      {
+        tasks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              prompt: { type: 'string' },
+              cwd: { type: 'string' },
+              title: { type: 'string' },
+              model: { type: 'string' },
+              effort: { type: 'string' },
+            },
+            required: ['prompt', 'cwd'],
+          },
+        },
+        group: { type: 'string' },
+        accounts: {
+          type: 'array',
+          items: INSTANCE_PARAM,
+          description:
+            'CLI instances to use: numbers (7, "#7") or ids. Omit for every signed-in one.',
+        },
+        per_account: { type: 'number' },
+      },
+      ['tasks'],
+    ),
+    run: async (a) => {
+      const { corchRun } = await import('./corch')
+      const accounts = Array.isArray(a.accounts)
+        ? await Promise.all(
+            a.accounts.map(async (ref) => {
+              const row = await resolveRef(ref)
+              if (row.kind !== 'cli')
+                throw new Error(
+                  `${instanceLabel(row)} is a ${row.kind} instance; Corch runs only on CLI instances.`,
+                )
+              return row.handle
+            }),
+          )
+        : undefined
+      return corchRun({
+        tasks: (Array.isArray(a.tasks) ? a.tasks : []) as Parameters<typeof corchRun>[0]['tasks'],
+        group: a.group != null ? str(a.group) : undefined,
+        accounts,
+        perAccount: a.per_account != null ? Number(a.per_account) : undefined,
+      })
+    },
+  },
+  {
+    name: 'corch_status',
+    description:
+      'Read Corch workers (status, account, lastActivity, result/error, moves, cost), optionally scoped by `group` or `id`. With `wait_seconds` (0..600) it WAITS for the next status change in scope and then answers: use that instead of polling.',
+    inputSchema: S({
+      group: { type: 'string' },
+      id: { type: 'string' },
+      wait_seconds: { type: 'number' },
+    }),
+    run: async (a) => {
+      const { corchList, corchWait } = await import('./corch')
+      const filter = {
+        group: a.group != null ? str(a.group) : undefined,
+        id: a.id != null ? str(a.id) : undefined,
+      }
+      const wait = Math.min(600, Math.max(0, Number(a.wait_seconds) || 0))
+      return wait > 0 ? corchWait(filter, wait * 1000) : corchList(filter)
+    },
+  },
+  {
+    name: 'corch_send',
+    description:
+      'MUTATES: send a follow-up message to a Corch worker: it runs as the next turn in the SAME session (queued if the worker is busy). Like the task, it must be self-contained: the worker sees nothing of this chat.',
+    inputSchema: S({ id: { type: 'string' }, text: { type: 'string' } }, ['id', 'text']),
+    run: async (a) => (await import('./corch')).corchSend(str(a.id), str(a.text)),
+  },
+  {
+    name: 'corch_cancel',
+    description: 'MUTATES: stop a Corch worker (`id`) or every worker of a `group`.',
+    inputSchema: S({ id: { type: 'string' }, group: { type: 'string' } }),
+    run: async (a) => {
+      if (a.id == null && a.group == null) throw new Error('pass `id` or `group`')
+      return (await import('./corch')).corchCancel({
+        id: a.id != null ? str(a.id) : undefined,
+        group: a.group != null ? str(a.group) : undefined,
+      })
+    },
+  },
+
   // --- Codex CLI + Desktop instances --------------------------------------------
   {
     name: 'list_codex_instances',

@@ -52,6 +52,7 @@ import {
   updateAppearance,
 } from './connections'
 import { createChatGptContextPack } from './context-pack'
+import { startCorch } from './corch'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
 import { reconcileCodexInstanceDirs } from './core/codex-instances'
 import { createRunningCodeProbe, restartNeededMessage } from './core/running-code'
@@ -762,6 +763,7 @@ await import('./routes/desktop-sessions')
 await import('./routes/session-message')
 await import('./routes/versions')
 await import('./routes/prefix-tax')
+await import('./routes/corch')
 
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------
 app.post('/api/portable-window', async (c) => {
@@ -1346,6 +1348,11 @@ startTitleSweep()
 // fleet, stages the current Claude Code into closed profiles and keeps the CLI install in step.
 // See version-drift.ts.
 startVersionDriftWatch()
+
+// --- Corch (see server/src/corch.ts, docs/CORCH.md) ----------------------------------------------
+// Watches the CLI workers a person delegated, and moves one to another account at a usage limit.
+// Launches nothing on its own: with no worker queued each tick is a no-op.
+startCorch()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading

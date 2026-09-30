@@ -6,6 +6,7 @@ import builder from './en/builder'
 import cliInstances from './en/cliInstances'
 import codexInstances from './en/codexInstances'
 import composer from './en/composer'
+import corch from './en/corch'
 import dshInstances from './en/dshInstances'
 import incidents from './en/incidents'
 import instances from './en/instances'
@@ -24,6 +25,7 @@ export default {
   cliInstances,
   codexInstances,
   composer,
+  corch,
   dshInstances,
   incidents,
   instances,
