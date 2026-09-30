@@ -35,14 +35,19 @@ import {
   apiOrLocal,
   busyRefusal,
   CORCH_MAX_WAIT_S,
+  detachedAnswer,
   handleFrom,
   INSTANCE_PARAM,
   JSON_HEADERS,
+  MCP_WAIT_MAX_MS,
   qs,
   type ResolvedInstanceRow,
   resolveRef,
+  runScript,
   S,
+  stillRunningNote,
   str,
+  withCallBudget,
   withDaemonWarning,
 } from './mcp-client'
 import { FAN_OUT_TOOLS } from './mcp-fan-out'
@@ -62,7 +67,12 @@ import { runMcpStdio } from './mcp-stdio.mjs'
 import type { UsageSnapshot } from './types'
 
 // Tests, index.ts and main.ts import these from here, where they have always lived.
-export { daemonBase, resetDaemonResolutionForTests, withDaemonWarning } from './mcp-client'
+export {
+  daemonBase,
+  resetDaemonResolutionForTests,
+  withCallBudget,
+  withDaemonWarning,
+} from './mcp-client'
 export { callerPidFromArgs } from './mcp-self'
 
 /** Daemon-offline usage read for one identified instance, mirroring `/api/usage?instance=N`'s
@@ -686,8 +696,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'corch_status',
-    description:
-      'Read Corch workers (status, account, lastActivity, result/error, moves, cost), optionally scoped by `group` or `id`. With `wait_seconds` (1..50) it WAITS up to that long for the next status change in scope and then answers; call it again to keep waiting. Use that instead of polling. Longer waits are cut to 50: an MCP client drops a call held about 60 s (measured 2026-09-30: 55 s answered, 110 s and 300 s timed out with nothing returned).',
+    description: `Read Corch workers (status, account, lastActivity, result/error, moves, cost), optionally scoped by \`group\` or \`id\`. With \`wait_seconds\` (1..${CORCH_MAX_WAIT_S}) it WAITS up to that long for the next status change in scope and then answers; call it again to keep waiting. Use that instead of polling. Longer waits are cut to ${CORCH_MAX_WAIT_S}: an MCP client drops a call held about 60 s (measured 2026-09-30: 55 s answered, 110 s and 300 s timed out with nothing returned).`,
     inputSchema: S({
       group: { type: 'string' },
       id: { type: 'string' },
@@ -901,7 +910,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'move_chat',
     description:
-      'MUTATES: MOVE ONE CHAT BETWEEN ACCOUNTS IN ONE CALL — the path for "move the X chat from Martin to here" (owner, 2026-09-04: by hand this took a dozen round trips and minutes; now it is this call). `chat` is a title fragment — matched FUZZILY, so case, punctuation and a misspelling still find it ("arkitecht cleanup" finds "Arkitekt cleanup") — or a session id. `from` (optional) is the account it lives on — instance number, name, label or email — and scopes the search, so a title two accounts share is not ambiguous. `to` defaults to "here" (the instance THIS process runs as, resolved like whoami; refused unless that identity is exact); "best" picks the running desktop instance with the most real headroom (tier × remaining weekly %, from the usage survey, never the source); or name any instance by number/name/label/email. It runs the orchestrator\'s migrate_chat with EVERY rail it has — hold, breaker, live-writer refusal, verified landing, source row settled so the old account no longer shows it — plus --now: a chat whose turn is finished and whose transcript shows NO background job outstanding moves after 15s of quiet instead of the standing 300s (an outstanding job, a working or stuck engine still wait or refuse). `wait_secs` (default 330, max 360) is how long the call itself waits for a chat that is idle but not yet quiet enough. THE CHAT KEEPS ITS EFFORT: the source\'s own effort + ultracode are carried and pushed into a running target app; read `effortCarried` ({from, to, verified, via}). EVERY LANDING IS STAMPED bypassPermissions + ultracode, and then ADJUDICATED, because a disk read is not the mode the chat opens with: the app holds each chat\'s mode in MEMORY and only re-reads its store at its own process boot. Read `bypassVerdict`, never `permissionMode` (which is only what the disk said last). `app-confirmed` = the target app\'s own permission picker was driven and agreed; `adopted-at-boot` = the target app is closed, so it will read this stamp at its next boot; both are real. `disk-only` = NOT a guarantee, the chat may open on a prompting mode, and `bypassRemedy` is the exact command that fixes it. `bypassStamped` is true only for the two earned verdicts. `force` is a PERSON\'S word — pass it only when the human asked for this move (it overrides a hold or a superseded lineage; a live writer is never overridden). `dry_run` resolves the chat, the target, the hold and the engine\'s idleness and reports the plan without moving anything. Read `report`; `landed` is the verdict. ⛔ READ `collateral`: a move now reads every chat record on the machine before and after itself, and any chat OUTSIDE the move that went archived while it ran is named there, with `ok` false and the report saying which account to unarchive it from (a bystander was archived this way on 2026-09-16 and nothing reported it). `targetNote` CONFIRMS the resolved account by NAME AND EMAIL ("to = instance #12 (pap3r rotate2 · Max 20×) — someone@example.com") — a stale identity signal has landed chats on the wrong account before (2026-09-07); when `to`/"here" is not obviously right, call this with `dry_run: true` FIRST and read `targetNote` before the real move. A just-landed chat does not process peer messages until the user first interacts with it.',
+      'MUTATES: MOVE ONE CHAT BETWEEN ACCOUNTS IN ONE CALL — the path for "move the X chat from Martin to here" (owner, 2026-09-04: by hand this took a dozen round trips and minutes; now it is this call). `chat` is a title fragment — matched FUZZILY, so case, punctuation and a misspelling still find it ("arkitecht cleanup" finds "Arkitekt cleanup") — or a session id. `from` (optional) is the account it lives on — instance number, name, label or email — and scopes the search, so a title two accounts share is not ambiguous. `to` defaults to "here" (the instance THIS process runs as, resolved like whoami; refused unless that identity is exact); "best" picks the running desktop instance with the most real headroom (tier × remaining weekly %, from the usage survey, never the source); or name any instance by number/name/label/email. It runs the orchestrator\'s migrate_chat with EVERY rail it has — hold, breaker, live-writer refusal, verified landing, source row settled so the old account no longer shows it — plus --now: a chat whose turn is finished and whose transcript shows NO background job outstanding moves after 15s of quiet instead of the standing 300s (an outstanding job, a working or stuck engine still wait or refuse). `wait_secs` (default 330, max 360) is how long the MOVE waits, in the daemon, for a chat that is idle but not yet quiet enough. THE CALL WAITS AT MOST 45s FOR THE VERDICT: a move still waiting or working then answers with `operationId` and a `poll` line, and `orchestrator_operation {id}` hands back migrate_chat\'s JSON report on stdout once it lands (read `landed` and `collateral` there). Calling move_chat again with the same arguments returns that SAME operation, never a second move. THE CHAT KEEPS ITS EFFORT: the source\'s own effort + ultracode are carried and pushed into a running target app; read `effortCarried` ({from, to, verified, via}). EVERY LANDING IS STAMPED bypassPermissions + ultracode, and then ADJUDICATED, because a disk read is not the mode the chat opens with: the app holds each chat\'s mode in MEMORY and only re-reads its store at its own process boot. Read `bypassVerdict`, never `permissionMode` (which is only what the disk said last). `app-confirmed` = the target app\'s own permission picker was driven and agreed; `adopted-at-boot` = the target app is closed, so it will read this stamp at its next boot; both are real. `disk-only` = NOT a guarantee, the chat may open on a prompting mode, and `bypassRemedy` is the exact command that fixes it. `bypassStamped` is true only for the two earned verdicts. `force` is a PERSON\'S word — pass it only when the human asked for this move (it overrides a hold or a superseded lineage; a live writer is never overridden). `dry_run` resolves the chat, the target, the hold and the engine\'s idleness and reports the plan without moving anything. Read `report`; `landed` is the verdict. ⛔ READ `collateral`: a move now reads every chat record on the machine before and after itself, and any chat OUTSIDE the move that went archived while it ran is named there, with `ok` false and the report saying which account to unarchive it from (a bystander was archived this way on 2026-09-16 and nothing reported it). `targetNote` CONFIRMS the resolved account by NAME AND EMAIL ("to = instance #12 (pap3r rotate2 · Max 20×) — someone@example.com") — a stale identity signal has landed chats on the wrong account before (2026-09-07); when `to`/"here" is not obviously right, call this with `dry_run: true` FIRST and read `targetNote` before the real move. A just-landed chat does not process peer messages until the user first interacts with it.',
     inputSchema: S(
       {
         chat: { type: 'string', description: 'Title fragment (fuzzy) or session id.' },
@@ -928,7 +937,7 @@ export const TOOLS: McpEngineTool[] = [
         wait_secs: {
           type: 'number',
           description:
-            "Seconds to wait inside the call for an idle-but-young engine (default 330, max 360). For a whole-account drain - several chats, a resume prompt typed into each landed chat, or a live engine killed on a person's word - use move_chats, which takes one chat as happily as twenty and has `resume` and `terminate_live`.",
+            "Seconds the move waits, in the daemon, for an idle-but-young engine (default 330, max 360). Past 45s the call answers with the operation id and the wait carries on there. For a whole-account drain - several chats, a resume prompt typed into each landed chat, or a live engine killed on a person's word - use move_chats, which takes one chat as happily as twenty and has `resume` and `terminate_live`.",
         },
         dry_run: { type: 'boolean', description: 'Plan only: resolve everything, move nothing.' },
         archived: {
@@ -967,16 +976,27 @@ export const TOOLS: McpEngineTool[] = [
       // so omitting this can only ever be safe. Owner, Michael, 2026-09-05: a move touches
       // unarchived chats only, unless the human asked for that specific chat.
       if (a.archived === true) args.push('--archived')
-      const run = (await api('/api/orchestrator/run', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          script: 'migrate_chat',
-          args,
-          // the wait happens INSIDE the script, so the deadline must outlast it
-          timeoutMs: (wait + 180) * 1000,
-        }),
-      })) as Record<string, unknown>
+      // ⛔ THE MOVE MAY OUTLAST THE CALL (2026-09-30): the desktop app's MCP client drops a call at
+      // about 60 s, and a move sleeping out its quiet window runs up to wait_secs + its work. So it
+      // runs detached and this call waits at most MCP_WAIT_MAX_MS for the verdict; the window
+      // itself is unchanged (it is the script's --idle-wait). The key makes a re-fire of the same
+      // move return the SAME operation, never a second move; a dry run moves nothing and gets a
+      // fresh run each time, for the reason move_chats gives below.
+      const run = await runScript({
+        script: 'migrate_chat',
+        args,
+        // the wait happens INSIDE the script, so the deadline must outlast it
+        timeoutMs: (wait + 180) * 1000,
+        idempotencyKey:
+          a.dry_run === true
+            ? `move_chat:dry:${Date.now()}:${JSON.stringify(args)}`
+            : `move_chat:${JSON.stringify(args)}`,
+      })
+      if (run.detached === true)
+        return {
+          ...detachedAnswer(run, stillRunningNote('The move')),
+          targetNote,
+        }
       let payload: Record<string, unknown> | null = null
       try {
         const parsed: unknown = JSON.parse(str(run.stdout))
@@ -1086,7 +1106,7 @@ export const TOOLS: McpEngineTool[] = [
         background: {
           type: 'boolean',
           description:
-            "ALREADY THE DEFAULT (2026-09-13) whenever this batch's own declared length exceeds 120s, which is nearly always - only a batch you declare SHORT (one chat, a small idle-wait, no resume) ever runs blocking. True answers AT ONCE with `operationId` instead of holding the connection open; poll `orchestrator_operation {id}` for the full report. `false` FORCES blocking even past 120s - only for a caller who knows their own transport can wait. Omit it to get the auto rule. This batch's own deadline runs to an hour, which is far longer than most MCP callers will wait, and a caller that gives up first loses the entire per-chat report - what landed, every bypassVerdict, whether each resume was delivered - for work that is still running and WILL finish.",
+            "ALREADY THE DEFAULT (2026-09-13) whenever this batch's own declared length exceeds 50s, which is every real batch (one chat already declares 270s). True answers AT ONCE with `operationId` instead of holding the connection open; poll `orchestrator_operation {id}` for the full report. Any other batch waits at most 45s for its report and then answers with the id the same way, because an MCP client drops a call at about 60s. `false` FORCES blocking even past 50s - only for a caller who knows their own transport can wait. Omit it to get the auto rule. This batch's own deadline runs to an hour, which is far longer than most MCP callers will wait, and a caller that gives up first loses the entire per-chat report - what landed, every bypassVerdict, whether each resume was delivered - for work that is still running and WILL finish.",
         },
       },
       [],
@@ -1186,17 +1206,10 @@ export const TOOLS: McpEngineTool[] = [
         a.background === true || (a.background == null && timeoutMs > AUTO_DETACH_MS)
       let run: Record<string, unknown>
       try {
-        run = (await api('/api/orchestrator/run', {
-          method: 'POST',
-          headers: JSON_HEADERS,
-          body: JSON.stringify({
-            script: 'migrate_batch',
-            args,
-            timeoutMs,
-            async: background,
-            idempotencyKey,
-          }),
-        })) as Record<string, unknown>
+        run = await runScript(
+          { script: 'migrate_batch', args, timeoutMs, idempotencyKey },
+          background ? 'detach' : a.background === false ? 'block' : 'wait',
+        )
       } catch (err) {
         // The route said no - another batch holds it and this call does not cover its chats (see
         // mayPreempt). Hand back the daemon's refusal as an object, not a thrown string. Its
@@ -1219,17 +1232,18 @@ export const TOOLS: McpEngineTool[] = [
               }),
         }
       }
-      // `background` answers with the id and nothing else yet - there is no report to parse.
-      if (background)
+      // A detached run answers with the id and nothing else yet - there is no report to parse.
+      if (run.detached === true)
         return {
-          ...run,
-          started: true,
-          targetNote,
-          poll: `orchestrator_operation { id: "${str(run.operationId)}" }`,
-          note:
+          ...detachedAnswer(
+            run,
             a.background === true
               ? 'The batch is running in the daemon. Poll the id above for the full per-chat report; re-calling move_chats with these exact arguments returns this same operation rather than moving anything twice.'
-              : `Detached automatically: this batch's own declared length (${Math.round(timeoutMs / 1000)}s) is longer than an MCP client will hold a connection open, and a call the client abandons loses the report - what landed, every bypassVerdict, whether each resume was delivered - for work that keeps running anyway. Poll the id above for the full per-chat report; pass background:false if you really do want to block (only worth it for a batch you know is short).`,
+              : background
+                ? `Detached automatically: this batch's own declared length (${Math.round(timeoutMs / 1000)}s) is longer than an MCP client will hold a connection open, and a call the client abandons loses the report - what landed, every bypassVerdict, whether each resume was delivered - for work that keeps running anyway. Poll the id above for the full per-chat report; pass background:false if you really do want to block (only worth it for a batch you know is short).`
+                : stillRunningNote('The batch'),
+          ),
+          targetNote,
         }
       let payload: Record<string, unknown> | null = null
       try {
@@ -1329,7 +1343,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'orchestrator_run',
     description:
-      "Run ONE orchestrator script by its menu name (`chats`, `migrate_chat`, `dossier`, `audit_twins`, `archive_chat`, `census`, ...) with its own arguments, exactly as `python orch.py <script> ...` would. OBSERVE scripts are read-only; ACT scripts MUTATE, and they keep every rail they have on the command line: NOTHING ACTS WITHOUT THE TRAY ICON (orchestrator_switch {action:'armed'} tells you), a live chat is never moved or archived, every attempt is counted, and `--force` is a PERSON'S word for one act - pass it only when the human asked for that act. TWO SCRIPTS ARE HAND-RUN AND DO NOT NEED THE ICON: `migrate_chat` and `chats --move-to` (the icon gates the unattended lanes, not a person's own move) - so for a targeted move do NOT arm first: arming resumes `saturate`, which wakes dormant chats, and a chat with a live engine cannot move until it has been quiet 300s. Pass `--idle-wait 330` with `--stop-idle` and the command sleeps out that window itself instead of you retrying on a guess (a working or stuck engine still refuses in a second). Returns stdout, stderr, the exit code and what the driver's codes mean (0 ok · 2 something failed · 3 refused/unknown/not armed · 1 daemon failure); a script's own codes are in its `--help`, which you can run here too (args: ['--help']). Long scripts get `timeout_secs` (default 600, server cap 3600) - but YOUR client's transport gives up far below that, so a blocking call that outlives it loses the report for work the daemon keeps running. Anything you declare longer than 120s is DETACHED for you: you get an `operationId` and a `poll` line at once, and `orchestrator_operation {id}` hands back the same verdict the blocking call would have (kept for an hour, FOR AS LONG AS THE DAEMON THAT RAN IT STAYS UP). Lost a call anyway? `orchestrator_operation {}` with no id lists the recent runs. ⛔ But a RESTART wipes those records while the detached child keeps running: if a poll says `reason: 'daemon-restarted'`, the act may well have COMPLETED - never re-fire it, read the toolbox's own ledger and verify the effect directly.",
+      "Run ONE orchestrator script by its menu name (`chats`, `migrate_chat`, `dossier`, `audit_twins`, `archive_chat`, `census`, ...) with its own arguments, exactly as `python orch.py <script> ...` would. OBSERVE scripts are read-only; ACT scripts MUTATE, and they keep every rail they have on the command line: NOTHING ACTS WITHOUT THE TRAY ICON (orchestrator_switch {action:'armed'} tells you), a live chat is never moved or archived, every attempt is counted, and `--force` is a PERSON'S word for one act - pass it only when the human asked for that act. TWO SCRIPTS ARE HAND-RUN AND DO NOT NEED THE ICON: `migrate_chat` and `chats --move-to` (the icon gates the unattended lanes, not a person's own move) - so for a targeted move do NOT arm first: arming resumes `saturate`, which wakes dormant chats, and a chat with a live engine cannot move until it has been quiet 300s. Pass `--idle-wait 330` with `--stop-idle` and the command sleeps out that window itself instead of you retrying on a guess (a working or stuck engine still refuses in a second). Returns stdout, stderr, the exit code and what the driver's codes mean (0 ok · 2 something failed · 3 refused/unknown/not armed · 1 daemon failure); a script's own codes are in its `--help`, which you can run here too (args: ['--help']). Long scripts get `timeout_secs` (default 600, server cap 3600) - but YOUR client's transport gives up at about 60s, so a blocking call that outlives it loses the report for work the daemon keeps running. Anything you declare longer than 50s is DETACHED for you: you get an `operationId` and a `poll` line at once. Any other run is answered inline if it finishes within 45s, and otherwise the same way, with the id. `orchestrator_operation {id}` hands back the same verdict the blocking call would have (kept for an hour, FOR AS LONG AS THE DAEMON THAT RAN IT STAYS UP). Lost a call anyway? `orchestrator_operation {}` with no id lists the recent runs. ⛔ But a RESTART wipes those records while the detached child keeps running: if a poll says `reason: 'daemon-restarted'`, the act may well have COMPLETED - never re-fire it, read the toolbox's own ledger and verify the effect directly.",
     inputSchema: S(
       {
         script: {
@@ -1345,7 +1359,7 @@ export const TOOLS: McpEngineTool[] = [
         background: {
           type: 'boolean',
           description:
-            "Answer AT ONCE with `operationId` instead of holding the connection open until the script finishes. USE THIS for anything that runs longer than a minute or two - migrate_batch, courier over several chats, loop --live, a --idle-wait that sleeps out a window. Then poll `orchestrator_operation {id}` for the same result the blocking call would have returned. Without it a long script is at the mercy of the CALLER's transport timeout, and the work keeps running with nobody able to read its verdict.",
+            'true: answer AT ONCE with `operationId` instead of waiting up to 45s for the verdict first - for anything you know runs long (migrate_batch, courier over several chats, loop --live, a --idle-wait that sleeps out a window). Then poll `orchestrator_operation {id}` for the same result the blocking call would have returned. false: block until the script finishes, however long - only for a caller whose transport can wait, since a call your client drops (at about 60s) loses the verdict for work that keeps running. Omit it for the auto rule.',
         },
         idempotency_key: {
           type: 'string',
@@ -1365,32 +1379,32 @@ export const TOOLS: McpEngineTool[] = [
       // to ask for it, which is a rail nobody can follow the first time. A caller that DECLARES
       // a run longer than this now gets detached automatically, with the id and how to poll it.
       // An explicit `background: false` is still honoured - that is someone who wants to wait.
+      // Every other run is detached on the wire and waited on for at most MCP_WAIT_MAX_MS
+      // (2026-09-30: the desktop app's MCP client drops a call at about 60 s, and an undeclared
+      // run carries the daemon's 10-minute default).
       const detach =
         a.background === true || (a.background == null && (timeoutMs ?? 0) > AUTO_DETACH_MS)
-      const run = (await api('/api/orchestrator/run', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
+      const run = await runScript(
+        {
           script: a.script,
           args: Array.isArray(a.args) ? a.args : [],
           timeoutMs,
-          async: detach,
           idempotencyKey:
             typeof a.idempotency_key === 'string' && a.idempotency_key.trim()
               ? a.idempotency_key.trim()
               : undefined,
-        }),
-      })) as Record<string, unknown>
-      if (!detach) return run
-      return {
-        ...run,
-        started: true,
-        poll: `orchestrator_operation { id: "${str(run.operationId)}" }`,
-        note:
-          a.background === true
-            ? 'Running in the daemon. Poll the id above for stdout, the exit code and the verdict; kept for an hour unless the daemon restarts, which wipes the record while the run itself carries on.'
-            : `Detached automatically: you declared timeout_secs ${Number(a.timeout_secs)}, longer than an MCP client will hold a connection open, and a call the client abandons loses the report for work that keeps running. Poll the id above for the full result; pass background:false if you really do want to block.`,
-      }
+        },
+        detach ? 'detach' : a.background === false ? 'block' : 'wait',
+      )
+      if (run.detached !== true) return run
+      return detachedAnswer(
+        run,
+        a.background === true
+          ? 'Running in the daemon. Poll the id above for stdout, the exit code and the verdict; kept for an hour unless the daemon restarts, which wipes the record while the run itself carries on.'
+          : detach
+            ? `Detached automatically: you declared timeout_secs ${Number(a.timeout_secs)}, longer than an MCP client will hold a connection open, and a call the client abandons loses the report for work that keeps running. Poll the id above for the full result; pass background:false if you really do want to block.`
+            : stillRunningNote(`orchestrator ${str(a.script)}`),
+      )
     },
   },
   {
@@ -1437,7 +1451,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'orchestrator_loop',
     description:
-      "THE LOOP. Default is DRY: walk the whole orchestration - census, waiting scan, accounts and usage bands, the sweep's four lanes, naming, reconcile, the judgment queue - and print what it WOULD do, touching nothing. This is where stalled chats, holds, collisions, hand-offs and pending deliveries are reported. STOP AND INVESTIGATE if its census sanity rail fails or the plan says INCOMPLETE: a read failed, so every lane is a lower bound. `live: true` MUTATES - the same walk with the acting lanes armed (identical to `sweep --all --yes`), which still does nothing unless the tray icon is up.",
+      "THE LOOP. Default is DRY: walk the whole orchestration - census, waiting scan, accounts and usage bands, the sweep's four lanes, naming, reconcile, the judgment queue - and print what it WOULD do, touching nothing. This is where stalled chats, holds, collisions, hand-offs and pending deliveries are reported. STOP AND INVESTIGATE if its census sanity rail fails or the plan says INCOMPLETE: a read failed, so every lane is a lower bound. `live: true` MUTATES - the same walk with the acting lanes armed (identical to `sweep --all --yes`), which still does nothing unless the tray icon is up. A live walk answers AT ONCE with `operationId` (it runs for minutes); a dry one that takes longer than 45s answers the same way. Poll `orchestrator_operation {id}` for the plan or the report.",
     inputSchema: S({
       live: { type: 'boolean', description: 'Act instead of plan. Default false (dry).' },
       json: { type: 'boolean', description: 'Machine-readable plan (dry only).' },
@@ -1446,15 +1460,18 @@ export const TOOLS: McpEngineTool[] = [
       const args: string[] = []
       if (a.live === true) args.push('--live')
       else if (a.json === true) args.push('--json')
-      return api('/api/orchestrator/run', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          script: 'loop',
-          args,
-          timeoutMs: a.live === true ? 30 * 60_000 : undefined,
-        }),
-      })
+      const run = await runScript(
+        { script: 'loop', args, timeoutMs: a.live === true ? 30 * 60_000 : undefined },
+        a.live === true ? 'detach' : 'wait',
+      )
+      return run.detached === true
+        ? detachedAnswer(
+            run,
+            a.live === true
+              ? 'The live walk is running in the daemon (it can take many minutes). Poll the id above for its report.'
+              : stillRunningNote('The dry walk'),
+          )
+        : run
     },
   },
   {
@@ -1483,11 +1500,10 @@ export const TOOLS: McpEngineTool[] = [
       const words = argv[action]
       if (!words) throw new Error(`action must be one of ${Object.keys(argv).join(', ')}`)
       const [script, ...args] = words
-      return api('/api/orchestrator/run', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ script, args, timeoutMs: 120_000 }),
-      })
+      const run = await runScript({ script, args, timeoutMs: 120_000 })
+      return run.detached === true
+        ? detachedAnswer(run, stillRunningNote(`orchestrator_switch ${action}`))
+        : run
     },
   },
   {
@@ -1528,12 +1544,14 @@ export const TOOLS: McpEngineTool[] = [
       if (a.min_wait_secs != null) scan.push('--min-wait', String(Number(a.min_wait_secs)))
       if (a.max != null) scan.push('--max', String(Number(a.max)))
 
-      const runScript = async (args: string[], timeoutMs: number) =>
-        (await api('/api/orchestrator/run', {
-          method: 'POST',
-          headers: JSON_HEADERS,
-          body: JSON.stringify({ script: 'unblock_prompts', args, timeoutMs }),
-        })) as { stdout?: string; stderr?: string; exitCode?: number }
+      // The plan and the press share ONE wait budget, so the whole call answers inside it.
+      const deadline = Date.now() + MCP_WAIT_MAX_MS
+      const runUnblock = (args: string[], timeoutMs: number) =>
+        runScript(
+          { script: 'unblock_prompts', args, timeoutMs },
+          'wait',
+          deadline - Date.now(),
+        ) as Promise<{ stdout?: string; stderr?: string; exitCode?: number; detached?: boolean }>
       const report = (r: { stdout?: string }): Record<string, unknown> | null => {
         try {
           const parsed: unknown = JSON.parse(String(r.stdout ?? ''))
@@ -1550,7 +1568,13 @@ export const TOOLS: McpEngineTool[] = [
       // `--yes` attached, the failure mode of a version skew is pressing prompts in chats nobody
       // named. So a targeted ACT plans first and refuses unless the script names the flag itself.
       if (sessions.length && act) {
-        const plan = report(await runScript(scan, 5 * 60_000))
+        const planned = await runUnblock(scan, 5 * 60_000)
+        if (planned.detached === true)
+          return detachedAnswer(
+            planned,
+            `The planning scan that must run before any press is still running after ${MCP_WAIT_MAX_MS / 1000}s. NOTHING WAS PRESSED. Poll the id above until it is done, then call unblock_prompts again.`,
+          )
+        const plan = report(planned)
         const supports = Array.isArray(plan?.supports) ? (plan.supports as unknown[]).map(str) : []
         if (!supports.includes('session'))
           throw new Error(
@@ -1564,7 +1588,13 @@ export const TOOLS: McpEngineTool[] = [
       const args = [...scan]
       if (act) args.push('--yes')
       if (a.force === true) args.push('--force')
-      const result = await runScript(args, 20 * 60_000)
+      const result = await runUnblock(args, 20 * 60_000)
+      if (result.detached === true)
+        return detachedAnswer(
+          result,
+          stillRunningNote(act ? 'The press' : 'The scan') +
+            " Its report is the JSON on the operation's stdout.",
+        )
       return { ...result, report: report(result) }
     },
   },
@@ -1643,8 +1673,9 @@ export function runMcp(): Promise<void> {
   return runMcpStdio({
     serverInfo: SERVER_INFO,
     // Projection + size guard beneath the side-run warning, so the warning rides on the shaped
-    // answer instead of being projected away (mcp-output.ts).
-    tools: withDaemonWarning(withOutputShaping(TOOLS)),
+    // answer instead of being projected away (mcp-output.ts); the call budget outermost, so it
+    // times the whole call.
+    tools: withCallBudget(withDaemonWarning(withOutputShaping(TOOLS))),
     instructions: SERVER_INSTRUCTIONS,
   })
 }

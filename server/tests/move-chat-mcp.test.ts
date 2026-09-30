@@ -37,6 +37,21 @@ const instances: Record<
   },
 }
 
+let lastRunBody: Record<string, unknown> = {}
+function finishedRun() {
+  return {
+    ok: scriptExit === 0,
+    script: lastRunBody.script,
+    args: lastRunBody.args,
+    exitCode: scriptExit,
+    exitMeaning: scriptExit === 0 ? 'ok' : 'refused',
+    timedOut: false,
+    durationMs: 5,
+    stdout: scriptStdout,
+    stderr: '',
+  }
+}
+
 function respond(url: string, init?: RequestInit): Response {
   const u = new URL(url)
   if (u.pathname === '/api/instance-numbers/resolve') {
@@ -55,20 +70,23 @@ function respond(url: string, init?: RequestInit): Response {
       isRunning: true,
     })
   }
+  // The run route as the daemon really answers it: a blocking POST gets the finished run, a
+  // detached one a 202 with the operation id, whose record then reads settled with that run.
   if (u.pathname === '/api/orchestrator/run') {
-    const body = init?.body ? JSON.parse(String(init.body)) : {}
-    return Response.json({
-      ok: scriptExit === 0,
-      script: body.script,
-      args: body.args,
-      exitCode: scriptExit,
-      exitMeaning: scriptExit === 0 ? 'ok' : 'refused',
-      timedOut: false,
-      durationMs: 5,
-      stdout: scriptStdout,
-      stderr: '',
-    })
+    lastRunBody = init?.body ? JSON.parse(String(init.body)) : {}
+    if (lastRunBody.async === true)
+      return Response.json(
+        { ok: true, operationId: 'op-1', status: 'running', reused: false },
+        { status: 202 },
+      )
+    return Response.json(finishedRun())
   }
+  if (u.pathname === '/api/orchestrator/operations/op-1')
+    return Response.json({
+      id: 'op-1',
+      status: scriptExit === 0 ? 'done' : 'failed',
+      result: finishedRun(),
+    })
   return new Response(JSON.stringify({ error: `stub has no route for ${u.pathname}` }), {
     status: 404,
   })
@@ -186,6 +204,24 @@ describe('what it sends to the orchestrator', () => {
     expect(args).toContain('--dry-run')
     expect(args[args.indexOf('--title') + 1]).toBe('A real name')
     expect(args[args.indexOf('--idle-wait') + 1]).toBe('360')
+  })
+
+  // ⛔ THE MOVE MAY OUTLAST THE CALL (2026-09-30): the desktop app's MCP client drops a call at
+  // about 60 s, so move_chat runs detached and answers with the operation id once it has waited
+  // 45 s. A caller who then calls again must get THAT operation back, never a second move.
+  test('a move runs detached under a key that is the same on a re-fire; a dry run gets a fresh one', async () => {
+    await moveChat().run({ chat: 'x', to: 36 })
+    await moveChat().run({ chat: 'x', to: 36 })
+    const moves = calls.filter((c) => c.url.endsWith('/api/orchestrator/run')).map((c) => c.body)
+    expect(moves.map((b) => b?.async)).toEqual([true, true])
+    expect(String(moves[0]?.idempotencyKey)).toStartWith('move_chat:')
+    expect(moves[1]?.idempotencyKey).toBe(moves[0]?.idempotencyKey)
+    calls = []
+    await moveChat().run({ chat: 'x', to: 36, dry_run: true })
+    await Bun.sleep(2)
+    await moveChat().run({ chat: 'x', to: 36, dry_run: true })
+    const dry = calls.filter((c) => c.url.endsWith('/api/orchestrator/run')).map((c) => c.body)
+    expect(dry[1]?.idempotencyKey).not.toBe(dry[0]?.idempotencyKey)
   })
 
   test('force is NEVER added on its own - a person has to say it', async () => {

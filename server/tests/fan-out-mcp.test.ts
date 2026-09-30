@@ -11,7 +11,7 @@ import { SERVER_INSTRUCTIONS, TOOLS } from '../src/mcp'
 
 type Call = { url: string; method: string; body: Record<string, unknown> | null }
 let calls: Call[] = []
-let answer: (url: string) => unknown = () => ({ ok: true })
+let answer: (url: string, body: Record<string, unknown> | null) => unknown = () => ({ ok: true })
 const originalFetch = globalThis.fetch
 
 function tool(name: string) {
@@ -20,12 +20,25 @@ function tool(name: string) {
   return t
 }
 
-/** A daemon that answers the run route with a fan_out.py report on stdout. */
+/** A daemon that answers the run route with a fan_out.py report on stdout, the way the route
+ *  really does: at once for a blocking POST, and for a detached one a 202 with the operation id,
+ *  whose record then reads done with that same report. */
 function reportRun(report: unknown, exitCode = 0, stderr = '') {
-  answer = (url) =>
-    url.includes('/api/orchestrator/run')
-      ? { ok: true, exitCode, stdout: JSON.stringify(report), stderr }
-      : { ok: true }
+  const result = { ok: true, exitCode, stdout: JSON.stringify(report), stderr }
+  answer = (url, body) => {
+    if (url.includes('/api/orchestrator/run'))
+      return body?.async === true
+        ? { ok: true, operationId: 'op-1', status: 'running', reused: false }
+        : result
+    if (url.includes('/api/orchestrator/operations/op-1'))
+      return { id: 'op-1', status: 'done', result }
+    return { ok: true }
+  }
+}
+
+/** Every body POSTed to the run route, in order (a detached run's operation reads left out). */
+function runBodies() {
+  return calls.filter((x) => x.url.includes('/api/orchestrator/run')).map((x) => x.body)
 }
 
 function runBody() {
@@ -57,12 +70,9 @@ beforeEach(() => {
   }
   // @ts-expect-error test stub, narrower than the real fetch signature
   globalThis.fetch = async (url: string, init?: RequestInit) => {
-    calls.push({
-      url: String(url),
-      method: init?.method ?? 'GET',
-      body: init?.body ? JSON.parse(String(init.body)) : null,
-    })
-    return new Response(JSON.stringify(answer(String(url))), {
+    const body = init?.body ? JSON.parse(String(init.body)) : null
+    calls.push({ url: String(url), method: init?.method ?? 'GET', body })
+    return new Response(JSON.stringify(answer(String(url), body)), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     })
@@ -151,7 +161,7 @@ describe('what fan_out sends to the daemon', () => {
 
   test('group, per_account, open_closed, force and dry_run map onto the script flags', async () => {
     reportRun({ id: 'fo-2', dryRun: true, members: [] })
-    await tool('fan_out').run({
+    const res = await tool('fan_out').run({
       tasks: twoTasks,
       group: 'lint sweep',
       per_account: 2,
@@ -172,7 +182,9 @@ describe('what fan_out sends to the daemon', () => {
       '--dry-run',
     ])
     expect(b.timeoutMs).toBe(180_000) // a dry run only ranks and plans
-    expect(b.async).toBe(false) // a dry run never backgrounds
+    // a dry run never backgrounds: it is waited on, and its plan comes back in the same call
+    expect((res as Record<string, unknown>).started).toBeUndefined()
+    expect((res as Record<string, unknown>).id).toBe('fo-2')
   })
 
   test('per_account of 1 (the default) adds no flag; the spawn deadline grows with the task count', async () => {
@@ -650,7 +662,7 @@ describe('fan_out_status and fan_out_send', () => {
     reportRun({ id: 'fo-7', counts: { working: 2 }, members: [] })
     await tool('fan_out_status').run({})
     await tool('fan_out_status').run({ group: 'lint sweep' })
-    const bodies = calls.map((c) => c.body as { args: string[]; timeoutMs: number })
+    const bodies = runBodies() as unknown as { args: string[]; timeoutMs: number }[]
     expect(bodies[0]!.args).toEqual(['status', '--json'])
     expect(bodies[1]!.args).toEqual(['status', 'lint sweep', '--json'])
     expect(bodies[0]!.timeoutMs).toBe(180_000)
@@ -707,7 +719,7 @@ describe('fan_out_delete - the cleanup a probe fan-out owes', () => {
     expect(b.timeoutMs).toBe(15 * 60_000)
     expect(res.ok).toBe(true)
     await tool('fan_out_delete').run({ group: 'fo-9' })
-    expect((calls[1]!.body as { args: string[] }).args).toEqual(['delete', 'fo-9', '--json'])
+    expect((runBodies()[1] as { args: string[] }).args).toEqual(['delete', 'fo-9', '--json'])
   })
 
   test('refuses a missing group before any request', async () => {

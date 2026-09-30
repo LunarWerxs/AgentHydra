@@ -15,17 +15,26 @@ function tool(name: string) {
   return t
 }
 
+/** The bodies POSTed to the run route (a detached run's operation reads are left out). */
+const runBodies = () =>
+  calls.filter((c) => c.url.endsWith('/api/orchestrator/run')).map((c) => c.body)
+
 beforeEach(() => {
   calls = []
   // @ts-expect-error test stub, narrower than the real fetch signature
   globalThis.fetch = async (url: string, init?: RequestInit) => {
-    calls.push({
-      url: String(url),
-      method: init?.method ?? 'GET',
-      body: init?.body ? JSON.parse(String(init.body)) : null,
-    })
-    return new Response(JSON.stringify({ ok: true, echoed: true }), {
-      status: 200,
+    const body = init?.body ? JSON.parse(String(init.body)) : null
+    calls.push({ url: String(url), method: init?.method ?? 'GET', body })
+    // The run route as the daemon answers it: a detached POST gets a 202 with the operation id,
+    // and that operation then reads done with the run's result.
+    const [status, answer] =
+      String(url).endsWith('/api/orchestrator/run') && body?.async === true
+        ? [202, { ok: true, operationId: 'op-1', status: 'running', reused: false }]
+        : String(url).endsWith('/api/orchestrator/operations/op-1')
+          ? [200, { id: 'op-1', status: 'done', result: { ok: true, echoed: true } }]
+          : [200, { ok: true, echoed: true }]
+    return new Response(JSON.stringify(answer), {
+      status,
       headers: { 'content-type': 'application/json' },
     })
   }
@@ -61,24 +70,24 @@ describe('what each tool sends to the daemon', () => {
     await tool('orchestrator_run').run({
       script: 'migrate_chat',
       args: ['Odin', '--to', '3claude'],
-      timeout_secs: 90,
+      timeout_secs: 30,
     })
     expect(calls[0]!.url).toMatch(/\/api\/orchestrator\/run$/)
     expect(calls[0]!.method).toBe('POST')
     expect(calls[0]!.body).toEqual({
       script: 'migrate_chat',
       args: ['Odin', '--to', '3claude'],
-      timeoutMs: 90_000,
-      // `background` gained an explicit false rather than being omitted (mcp.ts, 2026-09-09):
-      // a run's sync/async shape is a decision the route should read off the body, not infer
-      // from an absent key. Asserted, not loosened - the value is part of the contract.
-      async: false,
+      timeoutMs: 30_000,
+      // `async` is always explicit (mcp.ts, 2026-09-09): a run's sync/async shape is a decision
+      // the route reads off the body. Since 2026-09-30 every run is detached on the wire unless
+      // the caller said background:false, so no call is held past the MCP client's ~60 s.
+      async: true,
     })
   })
 
   test('orchestrator_run with no args and no timeout sends an empty argv and no deadline', async () => {
     await tool('orchestrator_run').run({ script: 'census' })
-    expect(calls[0]!.body).toEqual({ script: 'census', args: [], async: false })
+    expect(calls[0]!.body).toEqual({ script: 'census', args: [], async: true })
   })
 
   test('orchestrator_run never lets a non-array args through as argv', async () => {
@@ -89,24 +98,29 @@ describe('what each tool sends to the daemon', () => {
   test('orchestrator_loop is dry by default, --json when asked, --live with a 30-minute deadline', async () => {
     await tool('orchestrator_loop').run({})
     await tool('orchestrator_loop').run({ json: true })
-    await tool('orchestrator_loop').run({ live: true, json: true })
-    expect(calls.map((c) => c.body)).toEqual([
-      { script: 'loop', args: [] },
-      { script: 'loop', args: ['--json'] },
-      { script: 'loop', args: ['--live'], timeoutMs: 30 * 60_000 },
+    const live = (await tool('orchestrator_loop').run({ live: true, json: true })) as Record<
+      string,
+      unknown
+    >
+    expect(runBodies()).toEqual([
+      { script: 'loop', args: [], async: true },
+      { script: 'loop', args: ['--json'], async: true },
+      { script: 'loop', args: ['--live'], timeoutMs: 30 * 60_000, async: true },
     ])
+    // the live walk runs for minutes, so it answers with its operation at once
+    expect(String(live.poll)).toContain('orchestrator_operation')
   })
 
   test('orchestrator_switch maps every action onto the driver words', async () => {
     for (const action of ['armed', 'arm', 'arm_now', 'resume', 'pause', 'disarm'])
       await tool('orchestrator_switch').run({ action })
     expect(
-      calls.map((c) => {
-        const b = c.body as { script: string; args: string[] }
+      runBodies().map((body) => {
+        const b = body as { script: string; args: string[] }
         return [b.script, ...b.args]
       }),
     ).toEqual([['armed'], ['arm'], ['arm', '--now'], ['resume'], ['pause'], ['disarm']])
-    for (const c of calls) expect((c.body as { timeoutMs: number }).timeoutMs).toBe(120_000)
+    for (const b of runBodies()) expect((b as { timeoutMs: number }).timeoutMs).toBe(120_000)
   })
 
   test('orchestrator_switch refuses an action that is not on the list, before any request', async () => {
@@ -123,26 +137,33 @@ describe('what each tool sends to the daemon', () => {
 // finished verdict was unreachable. The detached path already existed; nobody could be expected to
 // know to ask for it the first time, so a declared-long run now detaches itself.
 describe('a run that will outlive the caller detaches instead of losing its report', () => {
-  test('a declared timeout past the ceiling is sent async, with the id and how to poll it', async () => {
-    const out = (await tool('orchestrator_run').run({
-      script: 'sweep',
-      args: ['--all', '--yes'],
-      timeout_secs: 1200,
-    })) as Record<string, unknown>
-    expect((calls[0]!.body as { async: boolean }).async).toBe(true)
-    expect(out.started).toBe(true)
-    expect(String(out.poll)).toContain('orchestrator_operation')
-    expect(String(out.note)).toContain('Detached automatically')
-  })
+  // 90 s: past the desktop app's MCP client, which drops a call at about 60 s (measured
+  // 2026-09-30), though under the old 120 s ceiling that let such a run block and lose its report.
+  test.each([90, 1200])(
+    'a declared timeout of %ds is detached at once, with the id and how to poll it',
+    async (secs) => {
+      const out = (await tool('orchestrator_run').run({
+        script: 'sweep',
+        args: ['--all', '--yes'],
+        timeout_secs: secs,
+      })) as Record<string, unknown>
+      expect((calls[0]!.body as { async: boolean }).async).toBe(true)
+      expect(calls).toHaveLength(1) // answered at once: not even one wait on the operation
+      expect(out.started).toBe(true)
+      expect(String(out.poll)).toContain('orchestrator_operation')
+      expect(String(out.note)).toContain('Detached automatically')
+    },
+  )
 
-  test('a short run still blocks, exactly as before', async () => {
+  test('a short run is waited on and answers inline with its verdict', async () => {
     const out = (await tool('orchestrator_run').run({
       script: 'census',
-      timeout_secs: 60,
+      timeout_secs: 30,
     })) as Record<string, unknown>
-    expect((calls[0]!.body as { async: boolean }).async).toBe(false)
     expect(out.started).toBeUndefined()
     expect(out.poll).toBeUndefined()
+    expect(out.echoed).toBe(true) // the run's own result, read off its settled operation
+    expect(out.operationStatus).toBe('done')
   })
 
   test('an explicit background:false is a person choosing to wait, and is honoured', async () => {

@@ -5,7 +5,18 @@ import { randomUUID } from 'node:crypto'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AUTO_DETACH_MS, api, busyRefusal, JSON_HEADERS, resolveRef, S, str } from './mcp-client'
+import {
+  AUTO_DETACH_MS,
+  api,
+  busyRefusal,
+  detachedAnswer,
+  type RunMode,
+  resolveRef,
+  runScript,
+  S,
+  stillRunningNote,
+  str,
+} from './mcp-client'
 import { instanceLabel, selfIdentity } from './mcp-self'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
@@ -163,21 +174,17 @@ function fanOutVerdict(
  *  code translated. No JSON on stdout means the script never reached its own report (python
  *  missing, usage error), so the raw run comes back with ok:false rather than a bare failure.
  *
- *  `background: true` posts `async: true` and hands back the daemon's 202 (`operationId`,
- *  `status`) verbatim - there is no stdout to parse yet, exactly like move_chats' own detached
- *  path (mcp.ts's orchestrator_run / move_chats). The caller decorates that with the group id it
- *  already knows (see the `fan_out` tool) and how to poll it. */
+ *  It goes through runScript, so no call is held past the budget: a run still going after
+ *  MCP_WAIT_MAX_MS (or at once, in `detach` mode) comes back as the daemon's operation with
+ *  `detached: true` - there is no stdout to parse yet, exactly like move_chats' own detached path.
+ *  The caller decorates that with what it knows (the group id, for `fan_out`) and how to poll. */
 async function runFanOut(
   args: string[],
   timeoutMs: number,
-  opts: { background?: boolean } = {},
+  mode: RunMode = 'wait',
 ): Promise<Record<string, unknown>> {
-  const run = (await api('/api/orchestrator/run', {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ script: 'fan_out', args, timeoutMs, async: opts.background === true }),
-  })) as Record<string, unknown>
-  if (opts.background === true) return run
+  const run = await runScript({ script: 'fan_out', args, timeoutMs }, mode)
+  if (run.detached === true) return run
   let payload: Record<string, unknown> | null = null
   try {
     const parsed: unknown = JSON.parse(str(run.stdout))
@@ -207,7 +214,7 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
   {
     name: 'fan_out',
     description:
-      "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. SPAWN TREE CAP: every fan-out, a brand-new one included, belongs to a tree of at most 12 chats by default (`max_nodes`), so tasks past that come back UNASSIGNED even with room left; a member fanning out again is found by its own session and can only narrow its group's envelope (accounts, per_account, closed apps, quota ceiling, depth). Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). DELIVERY IS PROVEN, NOT ASSUMED: every prompt carries a short task receipt (token, repo, task id, expected artifact) the chat is asked to echo first; after the last spawn fan_out waits `receipt_secs` for every echo, nudges a chat that never started ONCE, and never types into a chat whose first turn lacks its token (`receipt: false` opts out). ⛔ SPAWNING RUNS IN THE DAEMON, NOT ON THIS CONNECTION: a real fan-out (~30-90s per chat, sequential) is always DETACHED automatically past 120s declared - you get the group id and an operationId AT ONCE, and the daemon keeps spawning every chat regardless of whether this call's own connection is abandoned (a lost client can no longer cancel work mid-spawn). Poll fan_out_status { group } for each member's progress; pass `background: false` only for a one-or-two-chat call you know your transport can hold open. Then fan_out_status reads them and fan_out_send steers them. Each member's first prompt ends with a [fan-out beacon] line naming its group and index and asking it to call report_progress, so fan_out_status also shows each member's own phase, next step and blocked-on-user flag. `dry_run: true` returns the plan and spawns nothing, and always blocks (it only ranks and plans). This is a person's act and does not need the tray icon. WRONG TOOL when every Claude account is at/above 90% weekly (check list_usage first): mechanical, checkable batch work belongs on the DeepSeek zswarm instead (zswarm_run) rather than queued behind N account resets; fan_out remains right for work that needs a real Claude Desktop chat. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
+      "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. SPAWN TREE CAP: every fan-out, a brand-new one included, belongs to a tree of at most 12 chats by default (`max_nodes`), so tasks past that come back UNASSIGNED even with room left; a member fanning out again is found by its own session and can only narrow its group's envelope (accounts, per_account, closed apps, quota ceiling, depth). Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). DELIVERY IS PROVEN, NOT ASSUMED: every prompt carries a short task receipt (token, repo, task id, expected artifact) the chat is asked to echo first; after the last spawn fan_out waits `receipt_secs` for every echo, nudges a chat that never started ONCE, and never types into a chat whose first turn lacks its token (`receipt: false` opts out). ⛔ SPAWNING RUNS IN THE DAEMON, NOT ON THIS CONNECTION: a real fan-out (~30-90s per chat, sequential) is always DETACHED automatically past 50s declared, which is every real one - you get the group id and an operationId AT ONCE, and the daemon keeps spawning every chat regardless of whether this call's own connection is abandoned (a lost client can no longer cancel work mid-spawn). Poll fan_out_status { group } for each member's progress; pass `background: false` only for a one-or-two-chat call you know your transport can hold open. Then fan_out_status reads them and fan_out_send steers them. Each member's first prompt ends with a [fan-out beacon] line naming its group and index and asking it to call report_progress, so fan_out_status also shows each member's own phase, next step and blocked-on-user flag. `dry_run: true` returns the plan and spawns nothing, and always blocks (it only ranks and plans). This is a person's act and does not need the tray icon. WRONG TOOL when every Claude account is at/above 90% weekly (check list_usage first): mechanical, checkable batch work belongs on the DeepSeek zswarm instead (zswarm_run) rather than queued behind N account resets; fan_out remains right for work that needs a real Claude Desktop chat. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
     inputSchema: S(
       {
         tasks: {
@@ -298,7 +305,7 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
         background: {
           type: 'boolean',
           description:
-            'ALREADY THE DEFAULT whenever this spawn declares itself longer than 120s, which is nearly every real fan-out (~30-90s per chat, sequential): answers AT ONCE with the group id and an operationId instead of holding the connection open for the whole spawn, which keeps running in the daemon regardless. Poll fan_out_status { group } for per-member progress. `false` forces blocking even past 120s - only for a caller whose own transport can wait that long. Omit it to get the auto rule; a dry_run never backgrounds (it only ranks and plans, in seconds).',
+            'ALREADY THE DEFAULT whenever this spawn declares itself longer than 50s, which is every real fan-out (~30-90s per chat, sequential): answers AT ONCE with the group id and an operationId instead of holding the connection open for the whole spawn, which keeps running in the daemon regardless. Poll fan_out_status { group } for per-member progress. `false` forces blocking even past 50s - only for a caller whose own transport can wait that long (an MCP client drops a call at about 60s). Omit it to get the auto rule; a dry_run never backgrounds (it only ranks and plans, in seconds, and answers with the id only if that takes over 45s).',
         },
       },
       ['tasks'],
@@ -432,9 +439,16 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
       const background =
         a.dry_run !== true &&
         (a.background === true || (a.background == null && timeoutMs > AUTO_DETACH_MS))
+      // Whether the call answered while the script may still be starting (see the finally).
+      let detached = false
       try {
-        const run = await runFanOut(args, timeoutMs, { background })
-        if (background)
+        const run = await runFanOut(
+          args,
+          timeoutMs,
+          background ? 'detach' : a.background === false && a.dry_run !== true ? 'block' : 'wait',
+        )
+        detached = run.detached === true
+        if (detached)
           return {
             ...run,
             groupId,
@@ -444,7 +458,9 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
             note:
               a.background === true
                 ? `Spawning is running in the daemon under group ${groupId}. Poll fan_out_status { group: "${groupId}" } for each member's progress; it does not block on the spawn.`
-                : `Detached automatically: this spawn's own declared length (${Math.round(timeoutMs / 1000)}s, ${tasks.length} chat(s) at ~30-90s each) is longer than an MCP client will hold a connection open, and a call the client abandons loses the report for work that keeps running anyway. Group ${groupId} is spawning in the daemon regardless of this call's connection; poll fan_out_status { group: "${groupId}" } for per-member progress, or pass background:false if you really do want to block (only worth it for one or two chats).`,
+                : background
+                  ? `Detached automatically: this spawn's own declared length (${Math.round(timeoutMs / 1000)}s, ${tasks.length} chat(s) at ~30-90s each) is longer than an MCP client will hold a connection open, and a call the client abandons loses the report for work that keeps running anyway. Group ${groupId} is spawning in the daemon regardless of this call's connection; poll fan_out_status { group: "${groupId}" } for per-member progress, or pass background:false if you really do want to block (only worth it for one or two chats).`
+                  : `${stillRunningNote(a.dry_run === true ? 'The plan' : 'The spawn')} Operation ${str(run.operationId)} holds it; for group ${groupId}, fan_out_status { group: "${groupId}" } also reads its progress.`,
           }
         return { ...run, groupId, selfNote }
       } catch (e) {
@@ -467,8 +483,8 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
         // (review 2026-09-05: nothing else ever deleted it)
         const specPath = args[1]
         if (specPath !== spec) {
-          if (background) {
-            // ⛔ THE SCRIPT MAY NOT HAVE READ ITS OWN ARGV YET. Backgrounding answers as soon as
+          if (detached) {
+            // ⛔ THE SCRIPT MAY NOT HAVE READ ITS OWN ARGV YET. Detaching answers as soon as
             // the daemon has STARTED the child, not once fan_out.py has parsed --spec - Python
             // interpreter startup (importing orch.py, fan_out.py and everything it pulls in) can
             // take longer than this call's own round trip, and deleting the file the instant we
@@ -509,6 +525,7 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
       if (group) args.push(group)
       args.push('--json')
       const r = await runFanOut(args, 180_000)
+      if (r.detached === true) return detachedAnswer(r, stillRunningNote('The status read'))
       if (!group || r.exitCode !== 3) return r
       // ⛔ "NO SUCH GROUP" FOR AN ID fan_out HANDED OUT MUST SAY WHY (found live 2026-09-24):
       // the id is minted before fan_out.py runs, so a run that was refused, or died before it
@@ -583,6 +600,7 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
         throw new Error('member is required: your member index from your first prompt')
       if (!str(a.task_name).trim()) throw new Error('task_name is required')
       const r = await runFanOut(['beacon', group, '--beacon', beaconArg(a), '--json'], 60_000)
+      if (r.detached === true) return detachedAnswer(r, stillRunningNote('Recording the beacon'))
       // A beacon report has no members to count, so runFanOut's exit-code fallback verdict
       // ("every member spawned...") would describe the wrong act; say what happened instead.
       return r.recorded === true
@@ -593,7 +611,7 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
   {
     name: 'fan_out_send',
     description:
-      "MUTATES: deliver ONE follow-up message into every chat of a fan_out group (or just the `only` session ids) — the steering half of managing a fan-out. THE PEER PIPE IS NOT USED: a spawned chat nobody has clicked never drains peer messages (measured 2026-09-04), so each member's IDLE engine is stopped first (a working or stuck one refuses and that member is skipped with the reason) and the daemon's message route then types the text into the app's OWN composer, which boots the chat and is verified from the transcript. A member whose app has not yet written its sidebar record cannot be reached this way and says so. A HELD chat is skipped and named; `force` is a PERSON's word past a hold. Deliveries are sequential and each waits for the chat to move, so budget ~1-3 minutes per member. Returns per-member delivered / route / detail / engine; the group record keeps every send.",
+      "MUTATES: deliver ONE follow-up message into every chat of a fan_out group (or just the `only` session ids) — the steering half of managing a fan-out. THE PEER PIPE IS NOT USED: a spawned chat nobody has clicked never drains peer messages (measured 2026-09-04), so each member's IDLE engine is stopped first (a working or stuck one refuses and that member is skipped with the reason) and the daemon's message route then types the text into the app's OWN composer, which boots the chat and is verified from the transcript. A member whose app has not yet written its sidebar record cannot be reached this way and says so. A HELD chat is skipped and named; `force` is a PERSON's word past a hold. Deliveries are sequential and each waits for the chat to move, so budget ~1-3 minutes per member; past 45s the call answers with an operationId to poll (orchestrator_operation) while delivery carries on. Returns per-member delivered / route / detail / engine; the group record keeps every send.",
     inputSchema: S(
       {
         group: { type: 'string', description: 'Group id, name, or unique id prefix.' },
@@ -618,7 +636,13 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
       for (const sid of only) args.push('--only', sid.trim())
       if (a.force === true) args.push('--force')
       args.push('--json')
-      return runFanOut(args, 20 * 60_000)
+      const r = await runFanOut(args, 20 * 60_000)
+      return r.detached === true
+        ? detachedAnswer(
+            r,
+            `${stillRunningNote('Delivery')} Do NOT send the text again: the members not yet reached are still being typed into.`,
+          )
+        : r
     },
   },
   {
@@ -642,6 +666,7 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
       if (a.force === true) args.push('--force')
       args.push('--json')
       const res = await runFanOut(args, 20 * 60_000)
+      if (res.detached === true) return detachedAnswer(res, stillRunningNote('Recovery'))
       // exit 2 with no rows is "no member is in a known failure": an answer, not a failure
       if (res.exitCode === 2 && Array.isArray(res.results) && res.results.length === 0)
         return {
@@ -670,7 +695,8 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
       const args = ['delete', group]
       if (a.force === true) args.push('--force')
       args.push('--json')
-      return runFanOut(args, 15 * 60_000)
+      const r = await runFanOut(args, 15 * 60_000)
+      return r.detached === true ? detachedAnswer(r, stillRunningNote('Deleting the group')) : r
     },
   },
 ]

@@ -90,6 +90,7 @@ import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
   SERVER_INFO as MCP_SERVER_INFO,
   toolsForCaller as mcpToolsForCaller,
+  withCallBudget as mcpWithCallBudget,
   withDaemonWarning as mcpWithDaemonWarning,
 } from './mcp'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
@@ -368,7 +369,9 @@ app.post('/api/mcp', async (c) => {
   const ctx = {
     serverInfo: MCP_SERVER_INFO,
     tools: withRestartWarning(
-      mcpWithDaemonWarning(mcpWithOutputShaping(mcpToolsForCaller(() => callerPidOf(c)))),
+      mcpWithCallBudget(
+        mcpWithDaemonWarning(mcpWithOutputShaping(mcpToolsForCaller(() => callerPidOf(c)))),
+      ),
     ),
     instructions: MCP_INSTRUCTIONS,
   }

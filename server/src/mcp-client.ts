@@ -203,14 +203,153 @@ export const S = (properties: Record<string, unknown> = {}, required: string[] =
 })
 export const JSON_HEADERS = { 'content-type': 'application/json' }
 export const str = (v: unknown): string => String(v ?? '')
-// Past this DECLARED run length, orchestrator_run detaches instead of blocking: no MCP client
-// holds a connection open that long, and a call the client abandons loses the report for work
-// the daemon finishes anyway (2026-09-11, the lost `sweep --all --yes`).
-export const AUTO_DETACH_MS = 120_000
-/** The longest corch_status may hold a call waiting. The desktop app's MCP client drops a call at
- *  about 60 s (the MCP SDK's default request timeout; measured 2026-09-30: a 55 s wait answered,
- *  110 s and 300 s timed out with nothing returned), so a longer wait only loses its answer. */
-export const CORCH_MAX_WAIT_S = 50
+/** The longest any AgentHydra MCP tool holds a call. The desktop app's MCP client drops a call at
+ *  about 60 s (the MCP SDK's default request timeout; measured 2026-09-30: a 55 s call answered,
+ *  110 s and 300 s timed out with nothing returned), so an answer later than that is an answer
+ *  lost - and for an act, the caller's only record of what it did. withCallBudget enforces it. */
+export const MCP_CALL_BUDGET_MS = 50_000
+/** The longest a tool WAITS on purpose inside one call: corch_status's watch, an orchestrator
+ *  run's verdict (runScript). Under MCP_CALL_BUDGET_MS, so the answer that says "still running,
+ *  here is the id" is itself never the one the client drops. */
+export const MCP_WAIT_MAX_MS = 45_000
+export const CORCH_MAX_WAIT_S = MCP_WAIT_MAX_MS / 1000
+// Past this DECLARED run length, orchestrator_run, move_chats and fan_out detach AT ONCE instead
+// of first waiting MCP_WAIT_MAX_MS for a verdict that cannot arrive inside the call (2026-09-11,
+// the lost `sweep --all --yes`; lowered from 120 s on 2026-09-30, the client drops a call at ~60 s).
+export const AUTO_DETACH_MS = 50_000
+
+/** How an orchestrator script is run through the daemon. `wait` (the default): detached, and the
+ *  tool waits up to MCP_WAIT_MAX_MS for the verdict. `detach`: the operation id at once. `block`:
+ *  the old blocking route, only for a caller who said `background: false`. */
+export type RunMode = 'wait' | 'detach' | 'block'
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Run ONE orchestrator script and never hold the call past the budget.
+ *
+ * `wait` posts the run detached, polls its operation, and when it settles inside `waitMs` answers
+ * in the blocking route's own shape (`{...result, operationId, operationStatus}`), so a quick
+ * script reads exactly as it always did. Still running then, it answers with the operation and
+ * `detached: true`; the run keeps going in the daemon and `orchestrator_operation {id}` reads its
+ * verdict. A refusal (409 busy, 400) comes back from the POST itself, as before.
+ */
+export async function runScript(
+  body: { script: unknown; args: unknown; timeoutMs?: number; idempotencyKey?: string },
+  mode: RunMode = 'wait',
+  waitMs: number = MCP_WAIT_MAX_MS,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + Math.max(0, waitMs)
+  const run = (await api('/api/orchestrator/run', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ ...body, async: mode !== 'block' }),
+  })) as Record<string, unknown>
+  // Only the route's 202 (`{operationId, status}`, no `operationStatus`) is a run still to be
+  // read; a blocking answer or a refusal is the verdict already.
+  const id = typeof run.operationId === 'string' ? run.operationId : ''
+  const accepted = mode !== 'block' && id !== '' && typeof run.status === 'string'
+  if (!accepted || 'operationStatus' in run) return run
+  let status = str(run.status)
+  let pause = 100
+  while (mode === 'wait' || status !== 'running') {
+    if (status !== 'running') {
+      // settled (or an idempotent re-fire of a run that already finished): read its verdict
+      try {
+        const op = (await api(`/api/orchestrator/operations/${encodeURIComponent(id)}`)) as Record<
+          string,
+          unknown
+        >
+        const result = (op.result ?? {
+          ok: false,
+          error: 'operation finished without a result',
+        }) as Record<string, unknown>
+        return { ...result, operationId: id, operationStatus: op.status, reused: run.reused }
+      } catch (e) {
+        return { ...run, detached: true, pollError: e instanceof Error ? e.message : String(e) }
+      }
+    }
+    const left = deadline - Date.now()
+    if (left <= 0) break
+    await sleep(Math.min(pause, left))
+    pause = Math.min(pause * 2, 1_000)
+    try {
+      const op = (await api(`/api/orchestrator/operations/${encodeURIComponent(id)}`)) as Record<
+        string,
+        unknown
+      >
+      status = str(op.status)
+    } catch (e) {
+      // The record is gone (a daemon restart) or the daemon stopped answering: the id is still
+      // the caller's best handle, so hand it back rather than throwing it away.
+      return { ...run, detached: true, pollError: e instanceof Error ? e.message : String(e) }
+    }
+  }
+  return { ...run, detached: true }
+}
+
+/** The answer for a run that is still going: the id, the one call that reads it, and why. */
+export function detachedAnswer(run: Record<string, unknown>, note: string) {
+  return {
+    ...run,
+    started: true,
+    poll: `orchestrator_operation { id: "${str(run.operationId)}" }`,
+    note,
+  }
+}
+
+/** Why a `wait` run came back without its verdict, in words a caller can act on. */
+export function stillRunningNote(what: string): string {
+  return `${what} is still running after ${MCP_WAIT_MAX_MS / 1000}s, so this call hands back its operation instead of being dropped by your MCP client (it gives up at about 60s). The run keeps going in the daemon; poll the id above for the full result. Do NOT call this again to find out: poll.`
+}
+
+/**
+ * The call budget, for EVERY tool: a tool still running at `budgetMs` is answered with what is
+ * known (it is still running, and an act may yet land) instead of being cut off by the client with
+ * nothing. The work itself is not stopped; its late result is logged. Applied where tools meet a
+ * transport, like withDaemonWarning. Orchestrator runs never reach it (runScript detaches first);
+ * it is the guarantee for the routes that do their work inside one request.
+ */
+export function withCallBudget(
+  tools: McpEngineTool[],
+  budgetMs: number = MCP_CALL_BUDGET_MS,
+): McpEngineTool[] {
+  return tools.map((t) => ({
+    ...t,
+    run: async (args: Record<string, unknown>, signal?: AbortSignal) => {
+      const work = Promise.resolve().then(() => t.run(args, signal))
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const overBudget = Symbol('over-budget')
+      const budget = new Promise<typeof overBudget>((resolve) => {
+        timer = setTimeout(() => resolve(overBudget), budgetMs)
+      })
+      try {
+        const value = await Promise.race([work, budget])
+        if (value !== overBudget) return value
+      } finally {
+        clearTimeout(timer)
+      }
+      const started = Date.now() - budgetMs
+      work.then(
+        () =>
+          console.error(
+            `[agenthydra mcp] ${t.name} finished ${Math.round((Date.now() - started) / 1000)}s after it was called, past the ${budgetMs / 1000}s call budget; its answer was not delivered.`,
+          ),
+        (e) =>
+          console.error(
+            `[agenthydra mcp] ${t.name} failed past the call budget: ${e instanceof Error ? e.message : String(e)}`,
+          ),
+      )
+      return {
+        ok: false,
+        stillRunning: true,
+        tool: t.name,
+        heldSecs: budgetMs / 1000,
+        note: `${t.name} did not finish within ${budgetMs / 1000}s, and your MCP client drops a call at about 60s, so this answer stands in for it. The work was NOT stopped and may still complete. Do NOT call it again blind if it changes anything: read the state it changes first (list_chats, list_instances, orchestrator_operation {}, fan_out_status) to see whether it landed.`,
+      }
+    },
+  }))
+}
 export const qs = (params: Record<string, unknown>): string => {
   const p = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) if (v != null) p.set(k, String(v))
