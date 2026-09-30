@@ -3,8 +3,8 @@
 //
 // Why: Corch spreads work across the owner's CLI accounts, and adding one used to mean naming an
 // instance, opening a terminal and typing `/login`. Here the daemon runs `claude auth login --email`
-// with the instance's CLAUDE_CONFIG_DIR and opens the sign-in link it prints in a throwaway browser
-// window (core/signin-window.ts). The PERSON clicks "Continue with email", types the code from their
+// with the instance's CLAUDE_CONFIG_DIR and opens the sign-in link it prints in a new private window
+// run by zendriver, the owner's chosen engine (core/signin-window.ts). The PERSON clicks "Continue with email", types the code from their
 // inbox and authorizes there; the window's final page carries the code the CLI needs, which is
 // handed to the CLI and the window closes. The link and a paste box stay as the fallback (no browser
 // installed, or the window closed early). The daemon never types a password or an email code: it
@@ -275,11 +275,16 @@ function openWindow(id: string): boolean {
       if (flow.state === 'waiting')
         flow.message = 'The sign-in window was closed. Open it again, or copy the link.'
     },
+    onFailed: (why) => {
+      flow.window = false
+      if (flow.state === 'waiting')
+        flow.message = `The sign-in window could not open (${why}). Copy the link instead.`
+    },
   })
   flow.window = !!l.window
   flow.message = l.window
     ? 'A sign-in window opened. Click "Continue with email", type the code from your inbox there, then Authorize. It closes by itself.'
-    : 'No Chrome or Edge to open. Copy the sign-in link, open it where you can read that email, then paste the code the page ends on here.'
+    : 'The sign-in window script is missing. Copy the sign-in link, open it where you can read that email, then paste the code the page ends on here.'
   return flow.window
 }
 

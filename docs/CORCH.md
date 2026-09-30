@@ -307,11 +307,13 @@ stderr and exits 1), appends to it, prints init, an assistant text and a `result
   which is now classified `auth`.
 - Proven 2026-09-30: a quick-add sign-in completed by the owner renamed the new instance to
   `abdoamdah3@gmail.com (pro)` (#83), and a real task restricted to #83 finished `done` with the
-  result `OK` in 6 s. Quick add then got its sign-in window (`core/signin-window.ts`): Add account
-  opens Chrome (else Edge) on a throwaway profile, the owner does "Continue with email", the email
-  code and Authorize there, and the page's final code goes to the CLI by itself before the window
-  closes. The hand-off was checked headless (code in 1.5 s, nothing left behind); a full sign-in
-  through the window is the next account the owner adds.
+  result `OK` in 6 s. Quick add then got its sign-in window (`core/signin-window.ts`, driving
+  `orchestrator/scripts/lib/signin_window.py`): Add account opens a new private window with
+  zendriver (the owner's chosen engine; `python -m pip install zendriver`) on a throwaway profile,
+  the owner does "Continue with email", the email code and Authorize there, and the page's final
+  code goes to the CLI by itself before the window closes. The hand-off was checked headless (code
+  in 1 s, no browser, Python process or profile left behind); a full sign-in through the window is
+  the next account the owner adds.
 - Quick add's Add button stayed disabled on first ship: a lint auto-fix turned `import { Input }`
   into a type-only import, so the tag rendered as a bare `<input>` whose v-model never updated.
   Fixed, with a `biome-ignore` naming why.
