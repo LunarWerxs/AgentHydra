@@ -271,8 +271,10 @@ export default {
   deleteDialogTitle: 'Delete instance',
   deleteDialogDescription:
     'This permanently removes the instance profile and all its local data. This cannot be undone.',
-  deleteDialogLabel: 'Type "{name}" to confirm',
   deleteDialogPlaceholder: 'Instance name',
+  deleteDialogTypeName: 'Type this name to confirm. Click it to copy.',
+  copyName: 'Copy the name',
+  toastNameCopied: 'Copied "{name}"',
   deleteDialogSubmit: 'Delete instance',
   deleteDialogDeleting: 'Deleting…',
   deleteDialogMismatch: "Name doesn't match.",

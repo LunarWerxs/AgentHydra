@@ -60,7 +60,6 @@ export default {
   deleteDialogTitle: 'Delete CLI instance',
   deleteDialogDescription:
     'This permanently removes the CLI instance and its local config directory. This cannot be undone.',
-  deleteDialogLabel: 'Type "{name}" to confirm',
   deleteDialogPlaceholder: 'Instance name',
   deleteDialogSubmit: 'Delete instance',
   deleteDialogDeleting: 'Deleting…',

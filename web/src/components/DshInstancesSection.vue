@@ -25,7 +25,7 @@ import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
-import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
+import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import { Badge } from '@/components/ui/badge'
@@ -331,7 +331,7 @@ onUnmounted(() => window.clearInterval(timer))
       @update:open="(v) => { if (!v) nameDialog = null }"
       @submit="onNameSubmit"
     />
-    <DeleteCliInstanceDialog
+    <DeleteInstanceDialog
       :open="deleteTarget !== null"
       namespace="dshInstances"
       :instance-name="deleteTarget?.name ?? null"

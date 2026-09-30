@@ -14,13 +14,6 @@ export const CLI_INSTANCE_DIALOG_KEYS = {
     renameDialogDescription: 'cliInstances.renameDialogDescription',
     renameDialogSubmit: 'cliInstances.renameDialogSubmit',
     renameDialogRenaming: 'cliInstances.renameDialogRenaming',
-    deleteDialogTitle: 'cliInstances.deleteDialogTitle',
-    deleteDialogDescription: 'cliInstances.deleteDialogDescription',
-    deleteDialogLabel: 'cliInstances.deleteDialogLabel',
-    deleteDialogPlaceholder: 'cliInstances.deleteDialogPlaceholder',
-    deleteDialogMismatch: 'cliInstances.deleteDialogMismatch',
-    deleteDialogSubmit: 'cliInstances.deleteDialogSubmit',
-    deleteDialogDeleting: 'cliInstances.deleteDialogDeleting',
   },
   dshInstances: {
     nameLabel: 'dshInstances.nameLabel',
@@ -33,13 +26,6 @@ export const CLI_INSTANCE_DIALOG_KEYS = {
     renameDialogDescription: 'dshInstances.renameDialogDescription',
     renameDialogSubmit: 'dshInstances.renameDialogSubmit',
     renameDialogRenaming: 'dshInstances.renameDialogRenaming',
-    deleteDialogTitle: 'dshInstances.deleteDialogTitle',
-    deleteDialogDescription: 'dshInstances.deleteDialogDescription',
-    deleteDialogLabel: 'dshInstances.deleteDialogLabel',
-    deleteDialogPlaceholder: 'dshInstances.deleteDialogPlaceholder',
-    deleteDialogMismatch: 'dshInstances.deleteDialogMismatch',
-    deleteDialogSubmit: 'dshInstances.deleteDialogSubmit',
-    deleteDialogDeleting: 'dshInstances.deleteDialogDeleting',
   },
   codexInstances: {
     nameLabel: 'codexInstances.nameLabel',
@@ -52,12 +38,44 @@ export const CLI_INSTANCE_DIALOG_KEYS = {
     renameDialogDescription: 'codexInstances.renameDialogDescription',
     renameDialogSubmit: 'codexInstances.renameDialogSubmit',
     renameDialogRenaming: 'codexInstances.renameDialogRenaming',
-    deleteDialogTitle: 'codexInstances.deleteDialogTitle',
-    deleteDialogDescription: 'codexInstances.deleteDialogDescription',
-    deleteDialogLabel: 'codexInstances.deleteDialogLabel',
-    deleteDialogPlaceholder: 'codexInstances.deleteDialogPlaceholder',
-    deleteDialogMismatch: 'codexInstances.deleteDialogMismatch',
-    deleteDialogSubmit: 'codexInstances.deleteDialogSubmit',
-    deleteDialogDeleting: 'codexInstances.deleteDialogDeleting',
   },
 } as const
+
+/** The delete dialog (DeleteInstanceDialog.vue) on all four instance tables. The type-the-name prompt
+ *  and the copy-name chip are one shared wording (instances.deleteDialogTypeName), not per table. */
+export type DeleteDialogNamespace = 'instances' | CliDialogNamespace
+
+export const DELETE_DIALOG_KEYS = {
+  instances: {
+    title: 'instances.deleteDialogTitle',
+    description: 'instances.deleteDialogDescription',
+    placeholder: 'instances.deleteDialogPlaceholder',
+    mismatch: 'instances.deleteDialogMismatch',
+    submit: 'instances.deleteDialogSubmit',
+    deleting: 'instances.deleteDialogDeleting',
+  },
+  cliInstances: {
+    title: 'cliInstances.deleteDialogTitle',
+    description: 'cliInstances.deleteDialogDescription',
+    placeholder: 'cliInstances.deleteDialogPlaceholder',
+    mismatch: 'cliInstances.deleteDialogMismatch',
+    submit: 'cliInstances.deleteDialogSubmit',
+    deleting: 'cliInstances.deleteDialogDeleting',
+  },
+  codexInstances: {
+    title: 'codexInstances.deleteDialogTitle',
+    description: 'codexInstances.deleteDialogDescription',
+    placeholder: 'codexInstances.deleteDialogPlaceholder',
+    mismatch: 'codexInstances.deleteDialogMismatch',
+    submit: 'codexInstances.deleteDialogSubmit',
+    deleting: 'codexInstances.deleteDialogDeleting',
+  },
+  dshInstances: {
+    title: 'dshInstances.deleteDialogTitle',
+    description: 'dshInstances.deleteDialogDescription',
+    placeholder: 'dshInstances.deleteDialogPlaceholder',
+    mismatch: 'dshInstances.deleteDialogMismatch',
+    submit: 'dshInstances.deleteDialogSubmit',
+    deleting: 'dshInstances.deleteDialogDeleting',
+  },
+} as const satisfies Record<DeleteDialogNamespace, Record<string, string>>

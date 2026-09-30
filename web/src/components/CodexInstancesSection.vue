@@ -24,7 +24,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
-import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
+import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
@@ -1029,7 +1029,7 @@ onUnmounted(() => {
       :error-message="renameError"
       @submit="onRename"
     />
-    <DeleteCliInstanceDialog
+    <DeleteInstanceDialog
       v-model:open="deleteOpen"
       namespace="codexInstances"
       :instance-name="deleteTarget?.name ?? null"

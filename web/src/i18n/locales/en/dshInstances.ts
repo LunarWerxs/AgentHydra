@@ -4,7 +4,7 @@
 // would only invite a question with no answer.
 //
 // The create / rename / delete dialogs are the SHARED ones (CliInstanceNameDialog,
-// DeleteCliInstanceDialog) driven by lib/instance-dialog-i18n.ts, which is why the `*Dialog*` keys
+// DeleteInstanceDialog) driven by lib/instance-dialog-i18n.ts, which is why the `*Dialog*` keys
 // below match that map exactly.
 export default {
   title: 'DeepSeek instances',
@@ -59,7 +59,6 @@ export default {
   deleteDialogTitle: 'Delete this instance?',
   deleteDialogDescription:
     'Deletes the home directory and every conversation in it. AgentHydra cannot get them back.',
-  deleteDialogLabel: 'Type the instance name to confirm',
   deleteDialogPlaceholder: 'instance name',
   deleteDialogMismatch: 'That does not match the instance name.',
   deleteDialogSubmit: 'Delete',

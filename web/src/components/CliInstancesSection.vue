@@ -36,7 +36,7 @@ import CliLimitResetDialog from '@/components/CliLimitResetDialog.vue'
 import CliLimitResetIcon from '@/components/CliLimitResetIcon.vue'
 import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
-import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
+import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import LinkCliInstanceDialog from '@/components/LinkCliInstanceDialog.vue'
@@ -819,7 +819,8 @@ onUnmounted(() => stopPolling())
       :error-message="linkError"
       @submit="onLinkSubmit"
     />
-    <DeleteCliInstanceDialog
+    <DeleteInstanceDialog
+      namespace="cliInstances"
       v-model:open="deleteOpen"
       :instance-name="deleteTarget?.name ?? null"
       :submitting="deleting"
