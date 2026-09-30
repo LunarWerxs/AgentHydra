@@ -162,13 +162,26 @@ const blocker = (group: string, acct: string, cwd: string, secs: number) =>
     1,
   )
 
-const walls: Record<string, { reason: string }> = existsSync(WALLS)
+const walls: Record<string, { reason: string; until: number }> = existsSync(WALLS)
   ? JSON.parse(readFileSync(WALLS, 'utf8'))
   : {}
+// The background refresh's readings (what Corch itself schedules by). An account at 98% or more of
+// a window that has not reset is skipped: Corch will not place a worker there, and one with paid
+// extra usage switched on would bill it.
+type Reading = { session?: { pct?: number; resetsAt?: string | null } | null } | null
+const USAGE_CACHE = join(AH, 'data', 'usage-cache.json')
+const cache: Record<string, Reading> = existsSync(USAGE_CACHE)
+  ? JSON.parse(readFileSync(USAGE_CACHE, 'utf8'))
+  : {}
+const full = (id: string): boolean => {
+  const s = cache[`cli:${id}`]?.session
+  return (s?.pct ?? 0) >= 98 && Date.parse(s?.resetsAt ?? '') > Date.now()
+}
 const instances = (await api<Instance[]>('/api/cli-instances')).filter((i) => i.loggedIn)
 const good = instances
   .filter((i) => walls[i.id]?.reason !== 'signed out')
   .sort((a, b) => (a.lastUsageCheck?.weekAll?.pct ?? 50) - (b.lastUsageCheck?.weekAll?.pct ?? 50))
+const skipped = good.filter((i) => full(i.id) || (walls[i.id]?.until ?? 0) > Date.now())
 async function authOk(configDir: string): Promise<boolean> {
   const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir }
   const p = Bun.spawn(['claude', 'auth', 'status', '--json'], {
@@ -185,10 +198,13 @@ async function authOk(configDir: string): Promise<boolean> {
 }
 const live: Instance[] = []
 const dead: Instance[] = []
-for (const i of good) ((await authOk(i.configDir)) ? live : dead).push(i)
+for (const i of good) {
+  if (skipped.includes(i)) continue
+  ;((await authOk(i.configDir)) ? live : dead).push(i)
+}
 const label = (i?: Instance) => (i ? `#${i.num}` : 'none')
 log(
-  `accounts: live ${live.map((i) => label(i)).join(' ')}; dead and not yet walled ${dead.map((i) => label(i)).join(' ') || 'none'}; scratch ${ROOT}`,
+  `accounts: live ${live.map((i) => label(i)).join(' ')}; full or walled (skipped) ${skipped.map((i) => label(i)).join(' ') || 'none'}; dead and not yet walled ${dead.map((i) => label(i)).join(' ') || 'none'}; scratch ${ROOT}`,
 )
 
 const results: Array<{ name: string; pass: boolean | 'skip' }> = []

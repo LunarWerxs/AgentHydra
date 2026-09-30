@@ -77,3 +77,29 @@ tested (server suite 1974 pass, 0 fail) and landed as `c638e59` and `41fb0ff`:
 Live on the new code: move-and-back #90 → #84 → #90 with both codewords, restart (both workers
 `interrupted`, then done on their own accounts), burst 8 of 8 in 10 s, cancel-and-revive, queued
 follow-ups; a stopped attempt now shows its spend ($0.25 for one cut mid-command).
+
+## Round three, 2026-09-30: a real limit, paid overage, and the cost ledger
+
+- **A real limit-driven move.** #90 was driven to 100% of its 5-hour window by real work (a
+  max-effort review). Its next turn went to #88 (`#90:done > #88:done`, one move). The session
+  still knew the codeword from its first message, how many findings its report had (10), and the
+  title of the worst one.
+- **Paid extra usage (overage).** #90 never hit a wall: with extra usage switched on, the CLI
+  streamed `rate_limit_event {status: "rejected", isUsingOverage: true}` 36 s into the turn and went
+  on, billing credits. $3.82 of that $4.67 turn, plus a $0.24 probe, ran on #90's overage. Corch
+  now walls such an account until its window resets the moment the event appears, and stops the
+  turn, and the session moves to an account with free quota (commit `0dcffa0`). The script skips
+  accounts at 98% or more of an open window.
+- **The cost ledger double-counted.** On a resumed session the CLI's `total_cost_usd` is the whole
+  session's cost so far ($4.67, then $6.44 for a one-turn follow-up that cost $1.77). Adding it per
+  attempt counted every earlier turn again on each follow-up, handoff and resume. Each attempt is
+  now priced from its own transcript turns, which matches the CLI to the cent (`1e7c871`).
+  Move-and-back now costs $0.78, where the same scenario showed $1.69 before.
+- **Limit detection, checked against 6,283 real CLI error lines** (`0dcffa0`):
+  - A clean result is `done` first.
+  - "Not your usage limit" throttles are transient.
+  - "Reached your Fable limit" and "out of usage credits" are quota.
+  - A dropped connection is transient.
+  - The CLI's own `resetsAt` ends the wall, 60 s after the reset.
+- **Also:** the `corch_*` MCP tools now reach Corch only over HTTP (`a63ab65`). The 409 restart
+  gate held for real when another session tried to restart the daemon under a running worker.
