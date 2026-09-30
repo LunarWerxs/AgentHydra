@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  attemptSpend,
   classifyAttempt,
   corchCancel,
   corchList,
@@ -19,7 +20,6 @@ import {
   pickAccount,
   setCorchAccountsProvider,
   setCorchClaudeCommand,
-  spentFromLog,
   startCorch,
 } from '../src/corch'
 
@@ -39,9 +39,9 @@ const result = (text: string, isError: boolean) => ({
 })
 
 describe('classifyAttempt', () => {
-  test('a clean result is done, with its text, cost and turns', () => {
+  test('a clean result is done, with its text and turns', () => {
     const r = classifyAttempt([init, said('ok'), result('all good', false)], '')
-    expect(r).toMatchObject({ outcome: 'done', result: 'all good', costUsd: 0.02, turns: 3 })
+    expect(r).toMatchObject({ outcome: 'done', result: 'all good', turns: 3 })
   })
 
   test('the CLI synthetic limit notice is quota', () => {
@@ -96,24 +96,41 @@ describe('classifyAttempt', () => {
   })
 })
 
-describe('spentFromLog', () => {
-  // One API response, logged as two stream-json lines (a text block, then a tool call), as the CLI
-  // writes it; a killed attempt has no closing `result` to take the price from.
-  const usage = { input_tokens: 10, output_tokens: 2_000, cache_read_input_tokens: 50_000 }
-  const block = (type: string) =>
+describe('attemptSpend', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ah-corch-spend-'))
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
+  const turn = (iso: string, id: string) =>
     JSON.stringify({
       type: 'assistant',
-      request_id: 'req_1',
-      message: { id: 'msg_1', model: 'claude-opus-5-5', content: [{ type }], usage },
+      timestamp: iso,
+      requestId: `req_${id}`,
+      message: {
+        id: `msg_${id}`,
+        model: 'claude-opus-5-5',
+        usage: { input_tokens: 10, output_tokens: 1_000, cache_read_input_tokens: 20_000 },
+      },
     })
+  const write = (lines: string[]) => {
+    mkdirSync(join(dir, 'projects', 'p'), { recursive: true })
+    writeFileSync(join(dir, 'projects', 'p', 'S.jsonl'), lines.join('\n'))
+  }
 
-  test('a killed turn is priced from its log, once per response however many blocks it logged', () => {
-    const once = spentFromLog(block('text'))
-    expect(once).toBeGreaterThan(0)
-    expect(spentFromLog([block('text'), block('tool_use'), JSON.stringify(init)].join('\n'))).toBe(
-      once,
-    )
-    expect(spentFromLog(JSON.stringify(init))).toBe(0)
+  test("an attempt is charged for its own turns only, never the session's earlier or later ones", () => {
+    const start = Date.parse('2026-09-30T12:00:00Z')
+    const end = Date.parse('2026-09-30T12:10:00Z')
+    write([turn('2026-09-30T12:05:00Z', 'b')])
+    const own = attemptSpend(dir, 'S', start, end)
+    expect(own).toBeGreaterThan(0)
+    // The same turn (logged twice, one record per content block), a turn copied in from before the
+    // attempt started, and one from a later attempt on the same account.
+    write([
+      turn('2026-09-30T11:00:00Z', 'a'),
+      turn('2026-09-30T12:05:00Z', 'b'),
+      turn('2026-09-30T12:05:00Z', 'b'),
+      turn('2026-09-30T13:00:00Z', 'c'),
+    ])
+    expect(attemptSpend(dir, 'S', start, end)).toBeCloseTo(own, 10)
+    expect(attemptSpend(dir, 'missing', start, end)).toBe(0)
   })
 })
 

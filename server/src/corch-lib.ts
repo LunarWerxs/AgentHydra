@@ -8,7 +8,7 @@
 // own API-error events, an errored terminal `result`, or stderr are evidence of a wall. Model prose
 // and tool output never are, or a worker that merely TALKS about a session limit gets walled.
 
-import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { priceTokens } from './pricing'
 import {
@@ -18,7 +18,7 @@ import {
   isApiErrorEvent,
   limitEventText,
 } from './rate-limit-signal'
-import { accumulateUsageLine, emptySpend, newUsageSeen } from './usage-tokens'
+import { sumTranscriptTokens } from './usage-tokens'
 
 export type CorchStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled'
 // waiting = no eligible account right now (all at their limit or signed out); retried every tick
@@ -69,7 +69,7 @@ export interface CorchWorker {
   result: string | null // the final `result` text of the last completed turn
   error: string | null
   lastActivity: string | null // one line: the newest event summarised (summarizeEvent)
-  costUsd: number // summed over every attempt's `result.total_cost_usd`
+  costUsd: number // summed over every attempt's own spend (attemptSpend), from the transcript
   turns: number // summed `result.num_turns`
   moves: number // how many times the session changed account
   retries: number // transient or interrupted retries used in the current turn
@@ -151,7 +151,6 @@ export interface AttemptVerdict {
   outcome: AttemptOutcome
   notice: string | null
   result: string | null
-  costUsd: number
   turns: number
 }
 
@@ -178,7 +177,6 @@ export function classifyAttempt(
   const trusted = [...apiErrors, errText, stderr] // the only places a wall can be read from
   const base = {
     result: resultText,
-    costUsd: Number(last?.total_cost_usd) || 0,
     turns: Number(last?.num_turns) || 0,
   }
   const out = (outcome: AttemptOutcome, notice: string | null): AttemptVerdict => ({
@@ -207,27 +205,39 @@ export function classifyAttempt(
   return out('error', null)
 }
 
-/** What an attempt that never wrote its closing `result` event spent (killed by a restart, or
- *  stopped): the CLI prices a turn only in that event, so without this a long interrupted turn
- *  counted as $0 (measured 2026-09-30: a 15-minute review showed $0.31, its resumed tail). Priced
- *  from the usage its stream-json log recorded, through the product's one per-turn parser, so a
- *  reply the log repeats once per content block is charged once. 0 when nothing in it prices. */
-export function spentFromLog(text: string, at = Date.now()): number {
-  const spend = emptySpend()
-  const seen = newUsageSeen()
-  for (const line of text.split('\n')) {
-    if (!line.includes('"usage"')) continue
-    let ev: Record<string, unknown>
-    try {
-      ev = JSON.parse(line)
-    } catch {
-      continue
+/** What one attempt spent: the turns its session transcript recorded on that attempt's account
+ *  between its start and its end, priced through the product's one per-turn parser. This is the
+ *  only pricing Corch uses. The CLI's `result.total_cost_usd` cannot be: on a resumed session it is
+ *  the WHOLE session's cost so far (measured 2026-09-30: a one-turn follow-up after a $4.67 turn
+ *  reported $6.44 = $4.67 + $1.77), so adding it per attempt counted every earlier turn again on
+ *  every follow-up, handoff and resume. A killed or stopped attempt writes no result at all, and
+ *  its stream-json log under-reports output; the transcript has both right (this reproduces the
+ *  CLI's own figures to the cent). Turns copied in from another account keep their older
+ *  timestamps, so they are not counted again. 0 when the transcript is not there. */
+export function attemptSpend(
+  configDir: string,
+  sessionId: string,
+  startedAt: number,
+  endedAt: number,
+): number {
+  const root = join(configDir, 'projects')
+  let text = ''
+  try {
+    for (const d of readdirSync(root)) {
+      const file = join(root, d, `${sessionId}.jsonl`)
+      if (existsSync(file)) {
+        text = readFileSync(file, 'utf8')
+        break
+      }
     }
-    if (ev.type !== 'assistant') continue
-    // stream-json names the request `request_id`; the transcript parser keys on `requestId`.
-    accumulateUsageLine(spend, JSON.stringify({ ...ev, requestId: ev.request_id }), 0, seen)
+  } catch {
+    return 0
   }
-  return priceTokens(spend.byModel, at).costUsd ?? 0
+  if (!text) return 0
+  // Everything from the start, minus everything after the end: pricing is linear per model.
+  const cost = (since: number) =>
+    priceTokens(sumTranscriptTokens(text, since).byModel, startedAt).costUsd ?? 0
+  return Math.max(0, cost(startedAt) - cost(endedAt + 1))
 }
 
 const oneLine = (s: string, n: number): string => s.replace(/\s+/g, ' ').trim().slice(0, n)
@@ -236,7 +246,8 @@ export function summarizeEvent(raw: unknown): string | null {
   const ev = raw as any
   if (ev?.type === 'result') {
     const turns = Number(ev.num_turns) || 0
-    return `finished (${turns} ${turns === 1 ? 'turn' : 'turns'}, $${(Number(ev.total_cost_usd) || 0).toFixed(2)})`
+    // total_cost_usd is the whole session's cost so far on a resumed session, not this turn's.
+    return `finished (${turns} ${turns === 1 ? 'turn' : 'turns'}; session so far $${(Number(ev.total_cost_usd) || 0).toFixed(2)})`
   }
   if (ev?.type === 'system' && ev.subtype === 'init') return `started (${ev.model ?? 'unknown'})`
   if (ev?.type !== 'assistant' || !Array.isArray(ev.message?.content)) return null

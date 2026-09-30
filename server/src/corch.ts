@@ -29,6 +29,7 @@ import {
 import { join } from 'node:path'
 import { resolveClaudeExe } from './config'
 import {
+  attemptSpend,
   type CorchAccount,
   type CorchWalls,
   type CorchWorker,
@@ -41,7 +42,6 @@ import {
   PAUSED_PROMPT,
   pickAccount,
   scrubbedEnv,
-  spentFromLog,
   summarizeEvent,
   TRANSIENT_PROMPT,
   toView,
@@ -466,14 +466,6 @@ function readInto(path: string, r: LogRead): LogRead {
   return r
 }
 
-const readText = (path: string): string => {
-  try {
-    return readFileSync(path, 'utf8')
-  } catch {
-    return ''
-  }
-}
-
 function tailText(path: string, max: number): string {
   try {
     const size = statSync(path).size
@@ -523,11 +515,7 @@ function finish(w: CorchWorker, events: unknown[]): void {
   at.outcome = v.outcome
   at.notice = v.notice
   at.endedAt = now
-  w.costUsd += v.costUsd
-  // A turn with no closing result (killed, or stopped in an API-error backoff) has nothing to read
-  // its price from; price it from its own log.
-  if (!events.some((ev) => (ev as { type?: string })?.type === 'result'))
-    w.costUsd += spentFromLog(readText(at.log))
+  w.costUsd += spentOf(w, at)
   w.turns += v.turns
   if (v.outcome === 'done') w.result = v.result
   if (w.status === 'cancelled') {
@@ -611,6 +599,13 @@ function finish(w: CorchWorker, events: unknown[]): void {
       `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
   changed(w)
   schedule(50)
+}
+
+/** An ended attempt's own spend, from its transcript on the account it ran on (attemptSpend). */
+function spentOf(w: CorchWorker, at: CorchWorker['attempts'][number]): number {
+  const dir = getCliInstance(at.account.id)?.configDir
+  if (!dir || !w.sessionId) return 0
+  return attemptSpend(dir, w.sessionId, at.startedAt, at.endedAt ?? Date.now())
 }
 
 function hasTranscript(configDir: string, sessionId: string): boolean {
@@ -917,9 +912,9 @@ export function corchCancel(filter: { id?: string; group?: string }): { cancelle
           // already gone
         }
       }
-      w.costUsd += spentFromLog(readText(at.log))
       at.outcome = 'cancelled'
       at.endedAt = Date.now()
+      w.costUsd += spentOf(w, at)
       procs.delete(w.id)
       forgetRead(at.log)
     }
