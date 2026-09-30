@@ -564,7 +564,7 @@ describe('the install registrations an update leaves behind', () => {
     writeFileSync(join(newest, 'claude.exe'), 'exe')
     writeFileSync(join(newest, 'resources', 'chrome-native-host.exe'), 'host')
     const manifestPath = join(root, 'host.json')
-    const oldHost = `${install}\\app-2.7032.0\\resources\\chrome-native-host.exe`
+    const oldHost = join(install, 'app-2.7032.0', 'resources', 'chrome-native-host.exe')
     writeFileSync(
       manifestPath,
       JSON.stringify({
@@ -573,7 +573,7 @@ describe('the install registrations an update leaves behind', () => {
         type: 'stdio',
       }),
     )
-    let handler: string | null = `"${install}\\app-2.7032.0\\claude.exe" "%1"`
+    let handler: string | null = `"${join(install, 'app-2.7032.0', 'claude.exe')}" "%1"`
     const io = {
       readHandler: async () => handler,
       writeHandler: async (v: string) => {
@@ -596,9 +596,9 @@ describe('the install registrations an update leaves behind', () => {
     })
     // A second pass finds nothing to do; a newest build missing the file is never pointed at.
     expect(await repairInstallLinks(install, '2.9939.4', io)).toEqual({ repaired: [], failed: [] })
-    handler = `"${install}\\app-2.7032.0\\claude.exe" "%1"`
+    handler = `"${join(install, 'app-2.7032.0', 'claude.exe')}" "%1"`
     expect(await repairInstallLinks(install, '2.9940.0', io)).toEqual({ repaired: [], failed: [] })
-    expect(handler).toBe(`"${install}\\app-2.7032.0\\claude.exe" "%1"`)
+    expect(handler).toBe(`"${join(install, 'app-2.7032.0', 'claude.exe')}" "%1"`)
   })
 
   test('a write that does not read back, or a manifest for something else, is not claimed as fixed', async () => {
@@ -609,11 +609,11 @@ describe('the install registrations an update leaves behind', () => {
     const manifestPath = join(root, 'other.json')
     const foreign = {
       name: 'com.example.other',
-      path: `${install}\\app-2.7032.0\\resources\\chrome-native-host.exe`,
+      path: join(install, 'app-2.7032.0', 'resources', 'chrome-native-host.exe'),
     }
     writeFileSync(manifestPath, JSON.stringify(foreign))
     const out = await repairInstallLinks(install, '2.9939.4', {
-      readHandler: async () => `"${install}\\app-2.7032.0\\claude.exe" "%1"`,
+      readHandler: async () => `"${join(install, 'app-2.7032.0', 'claude.exe')}" "%1"`,
       writeHandler: async () => false,
       manifestPath,
     })

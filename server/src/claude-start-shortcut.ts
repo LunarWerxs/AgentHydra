@@ -37,21 +37,27 @@ function defaultPaths(): ShortcutPaths {
 // Every path travels in the child's environment, never in the script text, so no path can break
 // out into PowerShell (the same convention as core/shortcut.ts). Re-saving through WScript.Shell
 // keeps the shortcut's property store, notification id included (checked 2026-09-28).
+// The shell reads a target back in long form (C:\Users\runneradmin\...) whatever spelling it was
+// given, so every path is compared through GetFullPath, which on Windows PowerShell also expands an
+// 8.3 short name (C:\Users\RUNNER~1\...) of a path that exists; a raw -ieq against a short-named
+// stub reported a repair that had worked as 'failed' (CI, 2026-09-30).
 const SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
 if (-not (Test-Path -LiteralPath $env:CM_LNK)) { 'unchanged'; exit 0 }
 if (-not (Test-Path -LiteralPath $env:CM_STUB)) { 'unchanged'; exit 0 }
+$stub = [IO.Path]::GetFullPath($env:CM_STUB)
 $ws = New-Object -ComObject WScript.Shell
 $l = $ws.CreateShortcut($env:CM_LNK)
 if (-not $l.TargetPath) { 'unchanged'; exit 0 }
 $target = [IO.Path]::GetFullPath($l.TargetPath)
 $root = [IO.Path]::GetFullPath($env:CM_ROOT).TrimEnd('\') + '\'
 if (-not $target.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { 'unchanged'; exit 0 }
-$l.TargetPath = $env:CM_STUB
-$l.WorkingDirectory = [IO.Path]::GetDirectoryName($env:CM_STUB)
+$l.TargetPath = $stub
+$l.WorkingDirectory = [IO.Path]::GetDirectoryName($stub)
 if (Test-Path -LiteralPath $env:CM_ICON) { $l.IconLocation = $env:CM_ICON + ',0' }
 $l.Save()
-if ($ws.CreateShortcut($env:CM_LNK).TargetPath -ieq $env:CM_STUB) { 'repointed' } else { 'failed' }
+$saved = $ws.CreateShortcut($env:CM_LNK).TargetPath
+if ($saved -and [IO.Path]::GetFullPath($saved) -ieq $stub) { 'repointed' } else { 'failed' }
 `
 
 /** Point Claude's Start-menu shortcut at the install's stub when it names a managed copy. Never

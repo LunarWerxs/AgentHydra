@@ -664,11 +664,11 @@ export function retargetInstallPath(
 ): string | null {
   const root = installRoot.replace(/[\\/]+$/, '')
   const lead = value.startsWith('"') ? 1 : 0
-  const prefix = `${root}\\app-`
-  if (value.slice(lead, lead + prefix.length).toLowerCase() !== prefix.toLowerCase()) return null
-  const m = /^(\d+(?:\.\d+)+)(\\[\s\S]*)$/.exec(value.slice(lead + prefix.length))
-  if (!m || !SEMVER_RE.test(newest) || compareVersion(m[1], newest) >= 0) return null
-  return `${value.slice(0, lead)}${root}\\app-${newest}${m[2]}`
+  if (value.slice(lead, lead + root.length).toLowerCase() !== root.toLowerCase()) return null
+  // Either separator, kept as the value wrote it: only the build part moves.
+  const m = /^([\\/])app-(\d+(?:\.\d+)+)([\\/][\s\S]*)$/i.exec(value.slice(lead + root.length))
+  if (!m || !SEMVER_RE.test(newest) || compareVersion(m[2], newest) >= 0) return null
+  return `${value.slice(0, lead)}${root}${m[1]}app-${newest}${m[3]}`
 }
 
 /** The file a command or path names: the quoted first token of a command, else the whole value. */

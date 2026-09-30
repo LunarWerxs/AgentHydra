@@ -2,7 +2,7 @@
 // and onto the install's stub, keeping its notification id, and nothing else is ever touched.
 // Real .lnk files in a scratch folder, so it runs on Windows only.
 import { afterAll, expect, test } from 'bun:test'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnCaptured } from '../src/core/process'
 
@@ -34,6 +34,12 @@ async function readLink(lnk: string): Promise<string> {
   return ps(`(New-Object -ComObject WScript.Shell).CreateShortcut($env:L).TargetPath`, { L: lnk })
 }
 
+/** An existing file as the shell reads a shortcut target back: long form, lower case. The scratch
+ *  folder sits under TEMP, which on a CI runner is an 8.3 short name (C:\Users\RUNNER~1). */
+function longForm(path: string): string {
+  return realpathSync.native(path).toLowerCase()
+}
+
 function fixture() {
   const root = join(scratch, crypto.randomUUID())
   const managedRoot = join(root, 'data', 'claude-native')
@@ -56,7 +62,7 @@ test.skipIf(!win)('a shortcut aimed at a managed copy is moved onto the install 
   const f = fixture()
   await makeLink(f.paths.lnk, f.managed)
   expect(await repointClaudeStartShortcut(f.paths)).toBe('repointed')
-  expect((await readLink(f.paths.lnk)).toLowerCase()).toBe(f.paths.stub.toLowerCase())
+  expect((await readLink(f.paths.lnk)).toLowerCase()).toBe(longForm(f.paths.stub))
   // Already on the stub: a second pass leaves it alone.
   expect(await repointClaudeStartShortcut(f.paths)).toBe('unchanged')
 })
@@ -70,7 +76,7 @@ test.skipIf(!win)(
     writeFileSync(elsewhere, 'other')
     await makeLink(f.paths.lnk, elsewhere)
     expect(await repointClaudeStartShortcut(f.paths)).toBe('unchanged')
-    expect((await readLink(f.paths.lnk)).toLowerCase()).toBe(elsewhere.toLowerCase())
+    expect((await readLink(f.paths.lnk)).toLowerCase()).toBe(longForm(elsewhere))
     // A sibling folder that merely starts with the managed root's name is not inside it.
     const lookalike = `${f.paths.managedRoot}-old\\claude.exe`
     await makeLink(f.paths.lnk, lookalike)
