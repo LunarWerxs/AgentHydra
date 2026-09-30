@@ -18,7 +18,8 @@
 // 805 ms (profiled), inside the health handler. status() now answers from what it has and re-reads
 // in the background.
 
-import { readFile, stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 const SHA = /^[0-9a-f]{40}$/
@@ -73,6 +74,29 @@ export async function readCheckoutCommit(root: string): Promise<string | null> {
   }
 }
 
+/** A fingerprint of the server source a daemon started from `root` runs: every file under
+ *  server/src, by path and content. Null when it cannot be read. Never rejects. */
+export async function readSourcePrint(root: string): Promise<string | null> {
+  try {
+    const dir = path.join(root, 'server', 'src')
+    const files = (await readdir(dir, { recursive: true, withFileTypes: true }))
+      .filter((e) => e.isFile())
+      .map((e) => path.relative(dir, path.join(e.parentPath, e.name)).replace(/\\/g, '/'))
+      .sort()
+    if (!files.length) return null
+    const hash = createHash('sha1')
+    for (const f of files)
+      hash
+        .update(f)
+        .update('\0')
+        .update(await readFile(path.join(dir, f)))
+        .update('\0')
+    return hash.digest('hex')
+  } catch {
+    return null
+  }
+}
+
 export interface RunningCodeStatus {
   /** The commit this daemon booted on; null for a compiled build or an unreadable checkout. */
   bootCommit: string | null
@@ -84,7 +108,14 @@ export interface RunningCodeStatus {
 
 /**
  * Record the commit at boot and answer "has the checkout moved since?" on demand. Call it once,
- * at startup. `readCommit` and `now` are injectable for tests.
+ * at startup. `readCommit`, `readPrint` and `now` are injectable for tests.
+ *
+ * A moved commit alone is not "stale": a daemon restarted onto uncommitted server edits already
+ * runs them, and the commit that records them later moved HEAD while the code stayed the same.
+ * That false alarm told every agent to restart (seen 2026-09-30, three times in one session), and
+ * a restart interrupts every running Corch worker. So when the commit moves, the server source is
+ * fingerprinted again and compared with the boot's; only a fingerprint that cannot be read falls
+ * back to the commits alone.
  *
  * status() never reads the disk itself: it returns the last answer and, once that is `ttlMs` old,
  * starts a re-read whose result the next call sees. Until the boot read lands the daemon reports
@@ -95,27 +126,37 @@ export function createRunningCodeProbe(opts: {
   compiled: boolean
   ttlMs?: number
   readCommit?: (root: string) => Promise<string | null>
+  readPrint?: (root: string) => Promise<string | null>
   now?: () => number
 }): { status: () => RunningCodeStatus } {
   const read = opts.readCommit ?? readCheckoutCommit
+  const readPrint = opts.readPrint ?? readSourcePrint
   const now = opts.now ?? Date.now
   const ttl = opts.ttlMs ?? 10_000
   let bootCommit: string | null = null
+  let bootPrint: string | null = null
+  let printedCommit: string | null = null
+  let diskPrint: string | null = null
   let value: RunningCodeStatus = { bootCommit: null, diskCommit: null, restartNeeded: false }
   let checkedAt = now()
   let reading: Promise<void> | null = null
-  const reread = (apply: (commit: string | null) => void): void => {
+  const reread = (apply: (commit: string | null) => Promise<void> | void): void => {
     checkedAt = now()
     reading = read(opts.root)
-      .then(apply, () => {})
+      .then(apply)
+      .catch(() => {})
       .finally(() => {
         reading = null
       })
   }
   if (!opts.compiled)
-    reread((commit) => {
+    reread(async (commit) => {
       bootCommit = commit
-      if (commit) value = { bootCommit: commit, diskCommit: commit, restartNeeded: false }
+      if (!commit) return
+      value = { bootCommit: commit, diskCommit: commit, restartNeeded: false }
+      bootPrint = await readPrint(opts.root)
+      printedCommit = commit
+      diskPrint = bootPrint
     })
   return {
     status() {
@@ -123,12 +164,15 @@ export function createRunningCodeProbe(opts: {
       // Compiled, unreadable at boot, or not read yet: never reported stale.
       if (!boot) return value
       if (!reading && now() - checkedAt >= ttl)
-        reread((diskCommit) => {
-          value = {
-            bootCommit: boot,
-            diskCommit,
-            restartNeeded: diskCommit !== null && diskCommit !== boot,
+        reread(async (diskCommit) => {
+          let restartNeeded = diskCommit !== null && diskCommit !== boot
+          if (restartNeeded && diskCommit !== printedCommit) {
+            diskPrint = await readPrint(opts.root)
+            printedCommit = diskCommit
           }
+          if (restartNeeded && bootPrint !== null && diskPrint !== null)
+            restartNeeded = diskPrint !== bootPrint
+          value = { bootCommit: boot, diskCommit, restartNeeded }
         })
       return value
     },

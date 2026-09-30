@@ -5,7 +5,8 @@
 // on serving the old routes, and nothing says so. Pinned here:
 //  * the checkout's commit is read straight from git's files for a branch, a packed ref, a detached
 //    HEAD and a linked worktree, and an unreadable checkout answers null rather than throwing;
-//  * restartNeeded is true only when BOTH commits are known and differ, never on a guess;
+//  * restartNeeded is true only when BOTH commits are known and differ, never on a guess, and not
+//    when the server source is the same as at boot (a commit of edits the daemon already runs);
 //  * a compiled build is never "stale" (it updates by replacing itself);
 //  * the answer is re-read at most once per TTL, and never inside the call: /api/health reports it,
 //    and a read of git's files during a commit held that handler for 805 ms (2026-09-27);
@@ -87,6 +88,7 @@ test('restart is needed only when the checkout moved after boot', async () => {
     compiled: false,
     ttlMs: 10_000,
     readCommit: async () => disk,
+    readPrint: async () => null, // no source fingerprint: the commits alone decide
     now: () => clock,
   })
   await settle()
@@ -108,6 +110,35 @@ test('restart is needed only when the checkout moved after boot', async () => {
   probe.status()
   await settle()
   expect(probe.status()).toEqual({ bootCommit: A, diskCommit: null, restartNeeded: false })
+})
+
+test('a commit that only records code the daemon already runs is not a restart', async () => {
+  // The daemon was restarted onto uncommitted server edits; committing them moves HEAD, not code.
+  let disk: string | null = A
+  let print = 'running-source'
+  let clock = 0
+  const probe = createRunningCodeProbe({
+    root: 'unused',
+    compiled: false,
+    ttlMs: 10_000,
+    readCommit: async () => disk,
+    readPrint: async () => print,
+    now: () => clock,
+  })
+  await settle()
+  disk = B
+  clock = 10_000
+  probe.status()
+  await settle()
+  expect(probe.status()).toEqual({ bootCommit: A, diskCommit: B, restartNeeded: false })
+
+  // The next commit changes the server source: now it is stale.
+  disk = C
+  print = 'newer-source'
+  clock = 20_000
+  probe.status()
+  await settle()
+  expect(probe.status()).toEqual({ bootCommit: A, diskCommit: C, restartNeeded: true })
 })
 
 test('a compiled build, or a checkout unreadable at boot, is never reported stale', async () => {
