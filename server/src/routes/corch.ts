@@ -11,8 +11,10 @@ import {
   corchJournal,
   corchJournalLines,
   corchList,
+  corchRemove,
   corchRun,
   corchSend,
+  corchTotals,
   corchWait,
 } from '../corch'
 import {
@@ -112,11 +114,27 @@ app.post('/api/corch/cancel', async (c) => {
   return c.json(corchCancel({ id, group }))
 })
 
+// What Corch has offloaded, over every task on record: the Corch view's counter.
+app.get('/api/corch/totals', (c) => c.json(corchTotals()))
+
+// Remove finished tasks by id; their logs and transcripts move to corch/archive, never deleted.
+app.post('/api/corch/remove', async (c) => {
+  const body = await jsonBody(c)
+  const ids = Array.isArray(body.ids)
+    ? body.ids.filter((x): x is string => typeof x === 'string')
+    : []
+  if (!ids.length) return c.json({ error: 'ids is required' }, 400)
+  return c.json(corchRemove(ids))
+})
+
 // --- quick add ---------------------------------------------------------------
 app.post('/api/cli-instances/quick-add', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.email !== 'string') return c.json({ error: 'email is required' }, 400)
-  const flow = startQuickAdd(body.email)
+  const flow = startQuickAdd(
+    body.email,
+    typeof body.instanceId === 'string' ? body.instanceId : undefined,
+  )
   return 'error' in flow ? c.json(flow, 400) : c.json(flow)
 })
 app.get('/api/cli-instances/quick-add', (c) => c.json(listQuickAdds()))

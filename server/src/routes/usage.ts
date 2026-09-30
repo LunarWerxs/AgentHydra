@@ -38,6 +38,7 @@ import {
 import { db } from '../db'
 import { turnOffExtraUsage } from '../extra-usage'
 import { app } from '../http-app'
+import { readLiveRegistry } from '../live-registry'
 import { jsonBody } from '../route-helpers'
 import type { UsageCheckResult } from '../types'
 import {
@@ -334,7 +335,11 @@ app.get('/api/cli-instances', (c) => {
       .all()
       .map((r) => r.id),
   )
-  return c.json(listCliInstances())
+  // How many Claude sessions run on each account right now (the CLI's own live registry, Corch's
+  // workers included): the CLI table's per-account count (owner, 2026-09-30).
+  return c.json(
+    listCliInstances().map((i) => ({ ...i, liveSessions: readLiveRegistry(i.configDir).length })),
+  )
 })
 app.post('/api/cli-instances', async (c) => {
   const body = await jsonBody(c)

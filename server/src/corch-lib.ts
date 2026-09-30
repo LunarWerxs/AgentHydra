@@ -53,6 +53,28 @@ export interface CorchAttempt {
   daemonPid?: number // the daemon that launched it; its handle dies with that daemon
   overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
   windDown?: { at: number; pct: number | null; path: string } // asked to hand off to `path` (pct null: on request)
+  tokens?: CorchTokens // this attempt's own tokens (attemptSpend); absent on attempts before 2026-09-30
+}
+
+/** Tokens a Corch session ran, from its transcript: what Corch took off the orchestrating chat
+ *  (owner, 2026-09-30: record each session's tokens, and count the total offloaded). */
+export interface CorchTokens {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+export const noTokens = (): CorchTokens => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
+
+export function addTokens(a: CorchTokens | undefined, b: CorchTokens): CorchTokens {
+  const t = a ?? noTokens()
+  return {
+    input: t.input + b.input,
+    output: t.output + b.output,
+    cacheRead: t.cacheRead + b.cacheRead,
+    cacheWrite: t.cacheWrite + b.cacheWrite,
+  }
 }
 
 export interface CorchWorker {
@@ -73,6 +95,7 @@ export interface CorchWorker {
   error: string | null
   lastActivity: string | null // one line: the newest event summarised (summarizeEvent)
   costUsd: number // summed over every attempt's own spend (attemptSpend), from the transcript
+  tokens?: CorchTokens // summed the same way; absent on tasks recorded before 2026-09-30
   turns: number // summed `result.num_turns`
   moves: number // how many times the session changed account
   retries: number // transient or interrupted retries used in the current turn
@@ -453,7 +476,7 @@ export function attemptSpend(
   sessionId: string,
   startedAt: number,
   endedAt: number,
-): number {
+): { costUsd: number; tokens: CorchTokens } {
   const root = join(configDir, 'projects')
   let text = ''
   try {
@@ -465,13 +488,23 @@ export function attemptSpend(
       }
     }
   } catch {
-    return 0
+    return { costUsd: 0, tokens: noTokens() }
   }
-  if (!text) return 0
+  if (!text) return { costUsd: 0, tokens: noTokens() }
   // Everything from the start, minus everything after the end: pricing is linear per model.
-  const cost = (since: number) =>
-    priceTokens(sumTranscriptTokens(text, since).byModel, startedAt).costUsd ?? 0
-  return Math.max(0, cost(startedAt) - cost(endedAt + 1))
+  const from = sumTranscriptTokens(text, startedAt)
+  const after = sumTranscriptTokens(text, endedAt + 1)
+  const cost = (s: typeof from) => priceTokens(s.byModel, startedAt).costUsd ?? 0
+  const less = (a: number, b: number) => Math.max(0, a - b)
+  return {
+    costUsd: less(cost(from), cost(after)),
+    tokens: {
+      input: less(from.input, after.input),
+      output: less(from.output, after.output),
+      cacheRead: less(from.cacheRead, after.cacheRead),
+      cacheWrite: less(from.cacheCreation, after.cacheCreation),
+    },
+  }
 }
 
 const oneLine = (s: string, n: number): string => s.replace(/\s+/g, ' ').trim().slice(0, n)

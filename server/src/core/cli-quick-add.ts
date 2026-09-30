@@ -120,7 +120,13 @@ async function readLines(stream: ReadableStream<Uint8Array>, onLine: (line: stri
   if (buf) onLine(buf)
 }
 
-export function startQuickAdd(email: string): QuickAddFlow | { error: string } {
+/** `instanceId` signs that existing instance in again with whatever account the person completes
+ *  (a row's Log in, owner 2026-09-30): its login is replaced, its folder and history kept. Without
+ *  it, the email finds or creates the instance. */
+export function startQuickAdd(
+  email: string,
+  instanceId?: string,
+): QuickAddFlow | { error: string } {
   const trimmed = (email ?? '').trim()
   if (!EMAIL_RE.test(trimmed)) return { error: 'Enter a valid email address.' }
   for (const f of flows.values())
@@ -130,11 +136,14 @@ export function startQuickAdd(email: string): QuickAddFlow | { error: string } {
   // A signed-in flow renames the instance to "<email> (<plan>)", so match that shape too: adding the
   // same email again re-signs its instance instead of minting a duplicate.
   const lower = trimmed.toLowerCase()
-  let rec =
-    listCliInstances().find((i) => {
-      const n = i.name.toLowerCase()
-      return n === lower || n.startsWith(`${lower} (`)
-    }) ?? null
+  if (instanceId && !getCliInstance(instanceId))
+    return { error: 'That CLI instance no longer exists.' }
+  let rec = instanceId
+    ? getCliInstance(instanceId)
+    : (listCliInstances().find((i) => {
+        const n = i.name.toLowerCase()
+        return n === lower || n.startsWith(`${lower} (`)
+      }) ?? null)
   const created = !rec
   if (!rec) {
     const res = createCliInstance(trimmed)

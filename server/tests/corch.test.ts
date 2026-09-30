@@ -219,7 +219,9 @@ describe('attemptSpend', () => {
     const end = Date.parse('2026-09-30T12:10:00Z')
     write([turn('2026-09-30T12:05:00Z', 'b')])
     const own = attemptSpend(dir, 'S', start, end)
-    expect(own).toBeGreaterThan(0)
+    expect(own.costUsd).toBeGreaterThan(0)
+    // Its tokens are the one turn's, counted once (owner, 2026-09-30: each session's tokens kept).
+    expect(own.tokens).toEqual({ input: 10, output: 1_000, cacheRead: 20_000, cacheWrite: 0 })
     // The same turn (logged twice, one record per content block), a turn copied in from before the
     // attempt started, and one from a later attempt on the same account.
     write([
@@ -228,8 +230,10 @@ describe('attemptSpend', () => {
       turn('2026-09-30T12:05:00Z', 'b'),
       turn('2026-09-30T13:00:00Z', 'c'),
     ])
-    expect(attemptSpend(dir, 'S', start, end)).toBeCloseTo(own, 10)
-    expect(attemptSpend(dir, 'missing', start, end)).toBe(0)
+    const again = attemptSpend(dir, 'S', start, end)
+    expect(again.costUsd).toBeCloseTo(own.costUsd, 10)
+    expect(again.tokens).toEqual(own.tokens)
+    expect(attemptSpend(dir, 'missing', start, end).costUsd).toBe(0)
   })
 })
 

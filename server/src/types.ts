@@ -1353,6 +1353,9 @@ export interface CliInstance {
   loginNote?: string
   loggedIn: boolean
   lastUsageCheck: UsageSnapshot | null
+  /** Claude sessions running on this account now (its live registry, Corch workers included). Set by
+   *  GET /api/cli-instances only; absent elsewhere. */
+  liveSessions?: number
   /** What the CLI said the last time its `/limit-reset` was run from AgentHydra (core/cli-limit-reset.ts).
    *  Undefined until then. The only honest reading there is: the usage endpoint will not say. */
   lastLimitReset?: CliLimitResetResult | null

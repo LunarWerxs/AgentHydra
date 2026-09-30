@@ -17,12 +17,14 @@
 
 import {
   closeSync,
+  cpSync,
   existsSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
   readSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -40,7 +42,9 @@ import {
 } from './corch-journal'
 import {
   aboutToBill,
+  addTokens,
   attemptSpend,
+  type CorchTokens,
   type CorchAccount,
   type CorchLiveUsage,
   type CorchWalls,
@@ -54,6 +58,7 @@ import {
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
   liveUsage,
+  noTokens,
   OVERAGE_NOTICE,
   overageStart,
   PAUSED_PROMPT,
@@ -322,6 +327,7 @@ function load(): void {
   if (read.status === 'ok') {
     for (const w of read.value.workers) workers.set(w.id, w)
     perAccount = read.value.perAccount
+    if (backfillTokens()) save()
   } else if (read.status !== 'missing') {
     console.error(
       `[corch] ${STORE_SPEC.path} is ${read.status}; starting with no workers and not overwriting it.`,
@@ -777,8 +783,7 @@ function finish(w: CorchWorker, events: unknown[]): void {
   at.outcome = v.outcome
   at.notice = v.notice
   at.endedAt = now
-  const spent = spentOf(w, at)
-  w.costUsd += spent
+  const spent = charge(w, at)
   w.turns += v.turns
   if (v.outcome === 'done' || v.outcome === 'handoff') w.result = v.result
   if (w.status === 'cancelled') {
@@ -921,11 +926,42 @@ function journalFinish(
   }
 }
 
-/** An ended attempt's own spend, from its transcript on the account it ran on (attemptSpend). */
-function spentOf(w: CorchWorker, at: CorchWorker['attempts'][number]): number {
+/** An ended attempt's own spend and tokens, from its transcript on the account it ran on
+ *  (attemptSpend). */
+function spentOf(
+  w: CorchWorker,
+  at: CorchWorker['attempts'][number],
+): { costUsd: number; tokens: CorchTokens } {
   const dir = getCliInstance(at.account.id)?.configDir
-  if (!dir || !w.sessionId) return 0
+  if (!dir || !w.sessionId) return { costUsd: 0, tokens: noTokens() }
   return attemptSpend(dir, w.sessionId, at.startedAt, at.endedAt ?? Date.now())
+}
+
+/** Charge an ended attempt to its task: its own cost and tokens. Returns the cost. */
+function charge(w: CorchWorker, at: CorchWorker['attempts'][number]): number {
+  const spent = spentOf(w, at)
+  at.tokens = spent.tokens
+  w.costUsd += spent.costUsd
+  w.tokens = addTokens(w.tokens, spent.tokens)
+  return spent.costUsd
+}
+
+/** Tasks recorded before attempts kept their tokens get them once, from their transcripts, so the
+ *  view's totals cover them too. Their cost was already charged and is left alone. */
+function backfillTokens(): boolean {
+  let any = false
+  for (const w of workers.values()) {
+    if (w.tokens) continue
+    let total = noTokens()
+    for (const at of w.attempts) {
+      if (at.endedAt === null) continue
+      at.tokens ??= spentOf(w, at).tokens
+      total = addTokens(total, at.tokens)
+    }
+    w.tokens = total
+    any = true
+  }
+  return any
 }
 
 /** The handoff file exists and was written after the wind-down was asked for (a stale one from an
@@ -1384,7 +1420,7 @@ export function corchCancel(filter: { id?: string; group?: string }): { cancelle
       }
       at.outcome = 'cancelled'
       at.endedAt = Date.now()
-      w.costUsd += spentOf(w, at)
+      charge(w, at)
       procs.delete(w.id)
       forgetRead(at.log)
     }
@@ -1397,6 +1433,90 @@ export function corchCancel(filter: { id?: string; group?: string }): { cancelle
     cancelled.push(w.id)
   }
   return { cancelled }
+}
+
+/** What Corch has taken off the chats that handed it work, over every task on record: tasks, the
+ *  CLI sessions they ran (attempts), their tokens and cost (the Corch view's counter). */
+export function corchTotals(): {
+  tasks: number
+  sessions: number
+  tokens: CorchTokens
+  costUsd: number
+} {
+  load()
+  let sessions = 0
+  let costUsd = 0
+  let tokens = noTokens()
+  for (const w of workers.values()) {
+    sessions += w.attempts.length
+    costUsd += w.costUsd
+    if (w.tokens) tokens = addTokens(tokens, w.tokens)
+  }
+  return { tasks: workers.size, sessions, tokens, costUsd }
+}
+
+/** Move a file or folder into the archive, keeping it (a rename, or a copy then remove across
+ *  drives). A missing source is not an error. */
+function archiveMove(from: string, to: string): void {
+  if (!existsSync(from)) return
+  mkdirSync(join(to, '..'), { recursive: true })
+  try {
+    renameSync(from, to)
+  } catch {
+    cpSync(from, to, { recursive: true })
+    rmSync(from, { recursive: true, force: true })
+  }
+}
+
+/** Remove finished tasks from Corch's list (owner, 2026-09-30: clear out the test sessions). Their
+ *  records go; their logs and CLI transcripts are MOVED to corch/archive/<stamp>/<task id>/, never
+ *  deleted, so a removal can be undone by hand. A task still queued, running or waiting is skipped. */
+export function corchRemove(ids: string[]): {
+  removed: string[]
+  skipped: string[]
+  archive: string
+} {
+  load()
+  const archive = join(ROOT, 'archive', new Date().toISOString().replace(/[:.]/g, '-'))
+  const removed: string[] = []
+  const skipped: string[] = []
+  for (const id of ids) {
+    const w = workers.get(id)
+    if (!w || isActive(w)) {
+      skipped.push(id)
+      continue
+    }
+    const dest = join(archive, w.id)
+    for (const [i, at] of w.attempts.entries()) {
+      archiveMove(at.log, join(dest, 'logs', `${i}-out.jsonl`))
+      archiveMove(at.errLog, join(dest, 'logs', `${i}-err.log`))
+    }
+    const sessionIds = [
+      ...new Set([...(w.sessions ?? []), w.sessionId].filter(Boolean)),
+    ] as string[]
+    const accounts = [...new Set(w.attempts.map((a) => a.account.id))]
+    for (const accountId of accounts) {
+      const dir = getCliInstance(accountId)?.configDir
+      if (!dir) continue
+      const projects = join(dir, 'projects')
+      let keys: string[] = []
+      try {
+        keys = readdirSync(projects)
+      } catch {
+        continue
+      }
+      for (const key of keys)
+        for (const sid of sessionIds) {
+          const base = join(dest, 'transcripts', accountId, key)
+          archiveMove(join(projects, key, `${sid}.jsonl`), join(base, `${sid}.jsonl`))
+          archiveMove(join(projects, key, sid), join(base, sid))
+        }
+    }
+    workers.delete(w.id)
+    removed.push(w.id)
+  }
+  if (removed.length) save()
+  return { removed, skipped, archive }
 }
 
 /** Idempotent: load the store and start watching. Called at daemon boot. */
