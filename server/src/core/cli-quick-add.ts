@@ -3,10 +3,12 @@
 //
 // Why: Corch spreads work across the owner's CLI accounts, and adding one used to mean naming an
 // instance, opening a terminal and typing `/login`. Here the daemon runs `claude auth login --email`
-// with the instance's CLAUDE_CONFIG_DIR and shows the sign-in link it prints. The PERSON opens that
-// link wherever they can read the account's email (a private window, a phone), signs in there, and
-// pastes the code the page ends on into Quick add. The daemon never types or sees a credential: it
-// relays that pasted code to the CLI and checks the result with `claude auth status`.
+// with the instance's CLAUDE_CONFIG_DIR and opens the sign-in link it prints in a throwaway browser
+// window (core/signin-window.ts). The PERSON clicks "Continue with email", types the code from their
+// inbox and authorizes there; the window's final page carries the code the CLI needs, which is
+// handed to the CLI and the window closes. The link and a paste box stay as the fallback (no browser
+// installed, or the window closed early). The daemon never types a password or an email code: it
+// relays the page's final code to the CLI and checks the result with `claude auth status`.
 //
 // ⛔ NEVER THE PERSON'S OWN BROWSER (owner, 2026-09-30). It is signed in to a different Claude
 // account and the new account's email arrives on another device, so the CLI popping it open was
@@ -25,6 +27,7 @@ import {
   renameCliInstance,
 } from './cli-instances'
 import { killProcessTree } from './process'
+import { openSigninWindow, type SigninWindow } from './signin-window'
 
 export interface QuickAddFlow {
   id: string
@@ -33,6 +36,8 @@ export interface QuickAddFlow {
   num: number | null
   state: 'waiting' | 'signed-in' | 'failed' | 'cancelled'
   url: string | null
+  /** True while the sign-in window Quick add opened is up. */
+  window: boolean
   message: string
   account: { email: string | null; plan: string | null } | null
   startedAt: number
@@ -56,6 +61,7 @@ interface Live {
   created: boolean
   timer: ReturnType<typeof setTimeout> | null
   lastLine: string
+  window: SigninWindow | null
 }
 
 // In memory only: a flow is a few minutes of a person at a browser; a daemon restart ends it.
@@ -86,6 +92,8 @@ function finish(id: string, state: 'signed-in' | 'failed' | 'cancelled', message
   flow.state = state
   flow.message = message
   if (l?.timer) clearTimeout(l.timer)
+  l?.window?.close()
+  flow.window = false
   if (l?.proc && l.proc.exitCode === null) killProcessTree(l.proc.pid)
   // A NEW instance that never signed in is taken back; a re-sign of an existing one is left alone.
   if (state !== 'signed-in' && l?.created) {
@@ -144,11 +152,12 @@ export function startQuickAdd(email: string): QuickAddFlow | { error: string } {
     num: rec.num ?? null,
     state: 'waiting',
     url: null,
-    message: 'Open the sign-in link where you can read that email.',
+    window: false,
+    message: 'Opening the sign-in window.',
     account: null,
     startedAt: Date.now(),
   }
-  const l: Live = { proc: null, created, timer: null, lastLine: '' }
+  const l: Live = { proc: null, created, timer: null, lastLine: '', window: null }
   flows.set(id, flow)
   live.set(id, l)
   prune()
@@ -179,7 +188,10 @@ export function startQuickAdd(email: string): QuickAddFlow | { error: string } {
     const t = line.trim()
     if (!t) return
     const m = URL_RE.exec(t)
-    if (m) flow.url = m[1] ?? null
+    if (m?.[1] && !flow.url) {
+      flow.url = m[1]
+      openWindow(id)
+    }
     l.lastLine = t.slice(0, 300)
   }
   const configDir = rec.configDir
@@ -219,17 +231,16 @@ export function listQuickAdds(): QuickAddFlow[] {
   return [...flows.values()].sort((a, b) => b.startedAt - a.startedAt).slice(0, KEEP)
 }
 
-export function submitQuickAddCode(id: string, code: string): { ok: boolean; message: string } {
+/** Write one line to the waiting CLI's code prompt. */
+function sendToCli(id: string, code: string): { ok: boolean; message: string } {
   const flow = flows.get(id)
   const proc = live.get(id)?.proc
   if (!flow) return { ok: false, message: 'No such sign-in.' }
   if (flow.state !== 'waiting' || !proc || proc.exitCode !== null)
     return { ok: false, message: 'This sign-in is no longer waiting for a code.' }
-  const clean = (code ?? '').trim()
-  if (!clean || /[\r\n]/.test(clean)) return { ok: false, message: 'Paste the code as one line.' }
   try {
     const stdin = proc.stdin as import('bun').FileSink
-    stdin.write(`${clean}\n`)
+    stdin.write(`${code}\n`)
     stdin.flush()
   } catch (err) {
     return {
@@ -238,6 +249,61 @@ export function submitQuickAddCode(id: string, code: string): { ok: boolean; mes
     }
   }
   return { ok: true, message: 'Code sent.' }
+}
+
+/** Open (or reopen) the throwaway sign-in window for a waiting flow; see core/signin-window.ts. */
+function openWindow(id: string): boolean {
+  const flow = flows.get(id)
+  const l = live.get(id)
+  if (!flow?.url || !l || flow.state !== 'waiting') return false
+  l.window?.close()
+  let callbackPrefix: string
+  try {
+    callbackPrefix = new URL(flow.url).searchParams.get('redirect_uri') ?? ''
+  } catch {
+    callbackPrefix = ''
+  }
+  if (!callbackPrefix.startsWith('https://')) return false
+  l.window = openSigninWindow(flow.url, {
+    callbackPrefix,
+    onCode: (code) => {
+      const r = sendToCli(id, code)
+      flow.message = r.ok ? 'Finishing the sign-in.' : r.message
+    },
+    onClosed: () => {
+      flow.window = false
+      if (flow.state === 'waiting')
+        flow.message = 'The sign-in window was closed. Open it again, or copy the link.'
+    },
+  })
+  flow.window = !!l.window
+  flow.message = l.window
+    ? 'A sign-in window opened. Click "Continue with email", type the code from your inbox there, then Authorize. It closes by itself.'
+    : 'No Chrome or Edge to open. Copy the sign-in link, open it where you can read that email, then paste the code the page ends on here.'
+  return flow.window
+}
+
+export function reopenQuickAddWindow(id: string): { ok: boolean; message: string } {
+  const flow = flows.get(id)
+  if (!flow) return { ok: false, message: 'No such sign-in.' }
+  if (flow.state !== 'waiting') return { ok: false, message: `Already ${flow.state}.` }
+  return openWindow(id)
+    ? { ok: true, message: 'Sign-in window opened.' }
+    : { ok: false, message: flow.message }
+}
+
+export function submitQuickAddCode(id: string, code: string): { ok: boolean; message: string } {
+  const clean = (code ?? '').trim()
+  if (!clean || /[\r\n]/.test(clean)) return { ok: false, message: 'Paste the code as one line.' }
+  // The 6-digit code from the email belongs on the sign-in page; the CLI wants the long code the
+  // page shows at the very end (owner pasted the email code here, 2026-09-30).
+  if (/^\d{4,8}$/.test(clean))
+    return {
+      ok: false,
+      message:
+        'That is the code from your email. Type it on the sign-in page; this box takes the long code the page shows at the end.',
+    }
+  return sendToCli(id, clean)
 }
 
 export function cancelQuickAdd(id: string): { ok: boolean; message: string } {

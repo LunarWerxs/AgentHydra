@@ -6,6 +6,7 @@ import { corchCancel, corchGet, corchList, corchRun, corchSend } from '../corch'
 import {
   cancelQuickAdd,
   listQuickAdds,
+  reopenQuickAddWindow,
   startQuickAdd,
   submitQuickAddCode,
 } from '../core/cli-quick-add'
@@ -77,6 +78,10 @@ app.post('/api/cli-instances/quick-add/:id/code', async (c) => {
   if (typeof body.code !== 'string') return c.json({ error: 'code is required' }, 400)
   return c.json(submitQuickAddCode(c.req.param('id'), body.code))
 })
+// Open the throwaway sign-in window again after the person closed it (core/signin-window.ts).
+app.post('/api/cli-instances/quick-add/:id/window', (c) =>
+  c.json(reopenQuickAddWindow(c.req.param('id'))),
+)
 app.post('/api/cli-instances/quick-add/:id/cancel', (c) =>
   c.json(cancelQuickAdd(c.req.param('id'))),
 )

@@ -821,6 +821,8 @@ export interface QuickAddFlow {
   num: number | null
   state: 'waiting' | 'signed-in' | 'failed' | 'cancelled'
   url: string | null
+  /** True while the sign-in window Quick add opened is up. */
+  window: boolean
   message: string
   account: { email: string | null; plan: string | null } | null
   startedAt: number
@@ -836,6 +838,11 @@ export const submitQuickAddCode = (id: string, code: string) =>
   j<{ ok: boolean; message: string }>(
     `/api/cli-instances/quick-add/${encodeURIComponent(id)}/code`,
     { method: 'POST', body: JSON.stringify({ code }) },
+  )
+export const reopenQuickAddWindow = (id: string) =>
+  j<{ ok: boolean; message: string }>(
+    `/api/cli-instances/quick-add/${encodeURIComponent(id)}/window`,
+    { method: 'POST' },
   )
 export const cancelQuickAdd = (id: string) =>
   j<{ ok: boolean; message: string }>(

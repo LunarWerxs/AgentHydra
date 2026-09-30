@@ -3,7 +3,7 @@
 // Self-contained so it can live both in CliInstancesSection and in CorchView — the owner may hide
 // the CLI Instances section, and Corch runs on these accounts. Polls every 2 s only while a flow is
 // waiting; emits 'signed-in' when a flow turns signed-in so the host can refresh its list.
-import { Copy, LoaderCircle, Plus, X } from '@lucide/vue'
+import { AppWindow, Copy, LoaderCircle, Plus, X } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -11,7 +11,13 @@ import { Button } from '@/components/ui/button'
 // biome-ignore lint/style/useImportType: a component used in the template. A type-only import erases it, the tag renders as a bare <input>, v-model never updates, and Add stays disabled (2026-09-30).
 import { Input } from '@/components/ui/input'
 import type { QuickAddFlow } from '@/lib/api'
-import { cancelQuickAdd, listQuickAdds, startQuickAdd, submitQuickAddCode } from '@/lib/api'
+import {
+  cancelQuickAdd,
+  listQuickAdds,
+  reopenQuickAddWindow,
+  startQuickAdd,
+  submitQuickAddCode,
+} from '@/lib/api'
 
 const emit = defineEmits<{ 'signed-in': [] }>()
 
@@ -101,6 +107,16 @@ async function qaCopyLink(flow: QuickAddFlow) {
   }
 }
 
+async function qaReopen(flow: QuickAddFlow) {
+  try {
+    const r = await reopenQuickAddWindow(flow.id)
+    if (!r.ok) toast.error(r.message)
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e))
+  }
+  void qaPoll()
+}
+
 /** Hide a finished flow from this window. The server keeps its record; nothing is undone. */
 function qaDismiss(flow: QuickAddFlow) {
   const next = new Set(qaMine.value)
@@ -159,7 +175,9 @@ onUnmounted(() => {
             'text-destructive': flow.state === 'failed',
           }"
         >
-          <template v-if="flow.state === 'waiting'">{{ $t('corch.qaConfirm') }}</template>
+          <template v-if="flow.state === 'waiting'">{{
+            flow.window ? $t('corch.qaWindowOpen') : $t('corch.qaConfirm')
+          }}</template>
           <template v-else-if="flow.state === 'signed-in'">{{
             flow.account?.plan
               ? $t('corch.qaSignedIn', { email: flow.account?.email ?? flow.email, plan: flow.account.plan })
@@ -183,7 +201,10 @@ onUnmounted(() => {
       <div v-if="flow.state === 'waiting'" class="flex flex-wrap items-center gap-2">
         <!-- Copy, never open: this page may be running in the owner's own browser, which is signed
              in to another Claude account (owner, 2026-09-30; see cli-quick-add.ts). -->
-        <Button v-if="flow.url" variant="outline" @click="qaCopyLink(flow)">
+        <Button v-if="flow.url && !flow.window" variant="outline" @click="qaReopen(flow)">
+          <AppWindow /> {{ $t('corch.qaReopen') }}
+        </Button>
+        <Button v-if="flow.url" :variant="flow.window ? 'ghost' : 'outline'" @click="qaCopyLink(flow)">
           <Copy /> {{ $t('corch.qaCopyLink') }}
         </Button>
         <form class="flex items-center gap-2" @submit.prevent="onQuickAddCode(flow)">

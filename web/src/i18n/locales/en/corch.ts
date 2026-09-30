@@ -5,16 +5,19 @@ export default {
   // --- quick add ---
   qaTitle: 'Add a CLI account',
   qaHint:
-    'Type the email of a Claude account. You get a sign-in link: open it where you can read that email (a private window or your phone), sign in, then paste the code the page ends on back here. Your own browser is never opened.',
+    'Type the email of a Claude account. A separate sign-in window opens (never your own browser): click "Continue with email", type the code from your inbox, then Authorize. The window closes by itself and the account joins the pool your tasks run on.',
   qaPlaceholder: "name{'@'}example.com",
   qaEmailLabel: 'Account email',
   qaAdd: 'Add account',
+  qaWindowOpen:
+    'A sign-in window opened. Click "Continue with email", type the code from your inbox there, then Authorize. It closes by itself.',
   qaConfirm:
-    'Open the sign-in link in a private window or on your phone and sign in with the code emailed to this address.',
+    'Open the sign-in window again, or copy the link and open it where you can read this email.',
+  qaReopen: 'Open sign-in window',
   qaCopyLink: 'Copy sign-in link',
   qaCopied: 'Sign-in link copied',
   qaCopyFailed: 'Could not copy the link',
-  qaCodeHint: 'Then paste the code the page shows:',
+  qaCodeHint: 'Only if it does not finish by itself, paste the code the page ends on:',
   qaCodePlaceholder: 'Code',
   qaSendCode: 'Submit code',
   qaCancel: 'Cancel',
