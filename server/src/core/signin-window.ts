@@ -86,7 +86,20 @@ export function openSigninWindow(
   let port: number | null = null
   let handedOver = false
   let closed = false
+  // One poll at a time: the fetch may outlast the 1 s tick, and two in flight could both find the
+  // callback page and hand the same code to the CLI twice.
+  let polling = false
   const poll = setInterval(async () => {
+    if (handedOver || closed || polling) return
+    polling = true
+    try {
+      await pollOnce()
+    } finally {
+      polling = false
+    }
+  }, 1000)
+
+  async function pollOnce(): Promise<void> {
     if (handedOver || closed) return
     if (port === null) {
       try {
@@ -102,6 +115,7 @@ export function openSigninWindow(
       const tabs = (await fetch(`http://127.0.0.1:${port}/json/list`, {
         signal: AbortSignal.timeout(2000),
       }).then((r) => r.json())) as Array<{ type?: string; url?: string }>
+      if (handedOver || closed) return
       for (const tab of tabs) {
         if (tab.type !== 'page' || !tab.url?.startsWith(opts.callbackPrefix)) continue
         const at = new URL(tab.url)
@@ -115,7 +129,7 @@ export function openSigninWindow(
     } catch {
       // Still starting, or between pages.
     }
-  }, 1000)
+  }
 
   void proc.exited.then(() => {
     clearInterval(poll)
