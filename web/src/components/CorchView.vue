@@ -6,6 +6,7 @@ import { Network, RefreshCw, Send, Square } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import { Badge } from '@/components/ui/badge'
 import type { BadgeVariants } from '@/components/ui/badge/badge-variants'
 import { Button } from '@/components/ui/button'
@@ -142,6 +143,13 @@ onUnmounted(() => {
 
 <template>
   <div class="flex flex-col gap-3 p-3">
+    <!-- Corch runs on CLI accounts; Quick add lives here too because the CLI Instances section can
+         be switched off in settings. -->
+    <section class="flex flex-col gap-1">
+      <h3 class="px-1 text-xs font-medium text-muted-foreground">{{ $t('corch.qaTitle') }}</h3>
+      <CliQuickAdd />
+    </section>
+
     <div class="flex items-center justify-between gap-2">
       <h2 class="flex items-center gap-2 text-sm font-semibold">
         <Network class="size-4" />

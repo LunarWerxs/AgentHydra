@@ -1,6 +1,7 @@
 // Corch view (components/CorchView.vue) and the CLI Quick add row (CliInstancesSection.vue).
 export default {
   // --- quick add ---
+  qaTitle: 'Add a CLI account',
   qaPlaceholder: 'Email of a Claude account to add',
   qaAdd: 'Add',
   qaConfirm: 'Confirm in your browser',
