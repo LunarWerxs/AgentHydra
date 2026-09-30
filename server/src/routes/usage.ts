@@ -356,7 +356,10 @@ app.post('/api/cli-instances/:id/limit-reset', async (c) => {
     })
   limitResetRunning.add(inst.id)
   try {
-    const result = await runCliLimitReset(inst.configDir)
+    // `check: true` backs out of a banked reset's question instead of using it (see the core file:
+    // the weekly session reset asks nothing, so a check still uses that one).
+    const body = await jsonBody(c)
+    const result = await runCliLimitReset(inst.configDir, { confirm: body.check !== true })
     // A failure to reach the CLI says nothing about the reset; keep the last real answer then.
     if (result.outcome !== 'error') setCliInstanceLimitReset(inst.id, result)
     return c.json(result)

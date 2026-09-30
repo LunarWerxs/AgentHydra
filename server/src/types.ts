@@ -1346,8 +1346,9 @@ export interface CliInstance {
 /** One run of a CLI account's `/limit-reset`, in the CLI's own words (core/cli-limit-reset.ts). */
 export interface CliLimitResetResult {
   ok: boolean
-  /** reset: it happened. used: this week's reset is spent. unavailable: none offered now. */
-  outcome: 'reset' | 'used' | 'unavailable' | 'error'
+  /** reset: it happened. used: this week's reset is spent. unavailable: none offered now.
+   *  available: a check found a banked reset and backed out of using it. */
+  outcome: 'reset' | 'used' | 'unavailable' | 'available' | 'error'
   /** The CLI's own line, or why it could not be reached. */
   message: string
   /** When the next weekly reset becomes available, as the CLI worded it ("Oct 7"), if it said. */

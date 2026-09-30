@@ -109,7 +109,15 @@ function prepareConfig(configDir: string): void {
 }
 
 /** Run `/limit-reset` for the account whose CLI config lives in `configDir`. Never throws. */
-export async function runCliLimitReset(configDir: string): Promise<LimitResetResult> {
+export async function runCliLimitReset(
+  configDir: string,
+  opts: {
+    /** false = CHECK: at the banked reset's "Use your reset?" question, press Escape and report it
+     *  as available. The weekly session reset asks nothing, so a check still uses that one. */
+    confirm?: boolean
+  } = {},
+): Promise<LimitResetResult> {
+  const confirm = opts.confirm !== false
   const at = Date.now()
   const fail = (message: string): LimitResetResult => ({
     ok: false,
@@ -192,6 +200,23 @@ export async function runCliLimitReset(configDir: string): Promise<LimitResetRes
     await until(() => {
       const s = screen()
       if (!confirmed && /Use your reset\?|Yes,\s*use\s*my\s*reset/i.test(s)) {
+        if (!confirm) {
+          // Checking only: back out of the question ("No, keep it") and report what it offered.
+          send('\x1b')
+          const left = /(\d+)\s*left/i.exec(s)?.[1]
+          const by = /use\s*by\s*([A-Za-z]{3,9}\s*\d{1,2})/i
+            .exec(s)?.[1]
+            ?.replace(/([A-Za-z])(\d)/, '$1 $2')
+          const detail = [left ? `${left} left` : '', by ? `use by ${by}` : '']
+            .filter(Boolean)
+            .join(', ')
+          answer = {
+            outcome: 'available',
+            say: `A reset is available${detail ? ` (${detail})` : ''}. It was not used.`,
+            screen: s,
+          }
+          return true
+        }
         // The person asked for this reset by clicking; the first choice is "Yes, use my reset".
         confirmed = true
         send('\r')

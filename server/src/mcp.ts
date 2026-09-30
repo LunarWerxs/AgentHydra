@@ -543,11 +543,23 @@ export const TOOLS: McpEngineTool[] = [
     name: 'cli_limit_reset',
     description:
       "MUTATES: use a Claude CLI account's limit reset, through the CLI's own `/limit-reset` run in a hidden terminal. Spends it: a banked reset grant refills the limits (its count goes down), the once-a-week session reset refills the 5-hour limit and still counts toward the weekly one. Only on the owner's word. Returns the CLI's own answer: outcome reset | used (this week's is spent; `nextAvailable` says when) | unavailable (none offered to this account now) | error. There is no way to check first: the usage endpoint will not say, and running the command spends what it finds. Takes up to about a minute. Identify the instance by number (`instance`) or by `id`.",
-    inputSchema: S({ instance: INSTANCE_PARAM, id: { type: 'string' } }),
+    inputSchema: S({
+      instance: INSTANCE_PARAM,
+      id: { type: 'string' },
+      check: {
+        type: 'boolean',
+        description:
+          "Check only: at a banked reset's 'Use your reset?' question, back out and report outcome 'available'. The weekly session reset asks nothing, so a check still uses that one if it is there.",
+      },
+    }),
     run: async (a) =>
       api(
         `/api/cli-instances/${encodeURIComponent(await handleFrom(a.id, a.instance, 'id'))}/limit-reset`,
-        { method: 'POST' },
+        {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ check: a.check === true }),
+        },
       ),
   },
   {

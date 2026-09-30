@@ -33,8 +33,11 @@ export default {
   limitReset: 'Use limit reset',
   limitResetTitle: 'Use the limit reset on {name}?',
   limitResetBody:
-    'AgentHydra runs the CLI’s own /limit-reset for this account. If it has a reset, it is used right away: a banked reset refills its limits, and the weekly session reset refills the 5-hour limit (it still counts toward the weekly one). There is no way to check first, because only running it tells.',
+    'AgentHydra runs the CLI’s own /limit-reset for this account. Use reset spends one if it is there: a banked reset refills its limits, the weekly session reset refills the 5-hour limit (still counting toward the weekly one). Check only backs out when the CLI asks “Use your reset?”, but the weekly session reset asks nothing, so a check uses that one if it is available.',
   limitResetConfirm: 'Use reset',
+  limitResetCheck: 'Check only',
+  limitResetAvailableLabel: 'Limit reset available',
+  limitResetAvailableHint: '{message} Checked {ago}.',
   limitResetWorking: 'Working… up to a minute',
   limitResetCancel: 'Cancel',
   limitResetFailed: 'Could not run the limit reset.',

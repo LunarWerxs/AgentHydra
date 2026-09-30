@@ -10,6 +10,7 @@ import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
 // biome-ignore lint/style/useImportType: a component used in the template. A type-only import erases it, the tag renders as a bare <input>, v-model never updates, and Add stays disabled (2026-09-30).
 import { Input } from '@/components/ui/input'
+import { useCliInstances } from '@/composables/useCliInstances'
 import type { QuickAddFlow } from '@/lib/api'
 import {
   cancelQuickAdd,
@@ -22,6 +23,7 @@ import {
 const emit = defineEmits<{ 'signed-in': [] }>()
 
 const { t } = useI18n()
+const { refreshCliInstances, checkUsage: checkCliUsage } = useCliInstances()
 
 const qaEmail = ref('')
 const qaInput = ref<InstanceType<typeof Input> | null>(null)
@@ -51,8 +53,16 @@ async function qaPoll() {
   } catch {
     // Transient; try again on the next tick.
   }
-  if (qaFlows.value.some((f) => f.state === 'signed-in' && prev.get(f.id) === 'waiting'))
+  const justAdded = qaFlows.value.filter(
+    (f) => f.state === 'signed-in' && prev.get(f.id) === 'waiting',
+  )
+  if (justAdded.length) {
     emit('signed-in')
+    // Owner, 2026-09-30: a newly added account should show its usage without a manual Refresh.
+    // One check per account, right after it signs in; the list refreshes with it.
+    await refreshCliInstances({ silent: true })
+    for (const f of justAdded) void checkCliUsage(f.instanceId)
+  }
   qaSchedule()
 }
 async function onQuickAdd() {

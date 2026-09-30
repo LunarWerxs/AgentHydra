@@ -777,9 +777,10 @@ export const launchCliInstance = (id: string, opts: { model?: string; effort?: s
 /** Open a terminal for the USER to /login this CLI instance (the daemon never logs in itself). */
 /** Use this CLI account's limit reset through the CLI's own `/limit-reset` (up to about a minute).
  *  Spends what it finds; the answer is the CLI's own words. See server/src/core/cli-limit-reset.ts. */
-export const cliLimitReset = (id: string) =>
+export const cliLimitReset = (id: string, opts: { check?: boolean } = {}) =>
   j<CliLimitResetResult>(`/api/cli-instances/${encodeURIComponent(id)}/limit-reset`, {
     method: 'POST',
+    body: JSON.stringify({ check: opts.check === true }),
   })
 export const cliInstanceLogin = (id: string) =>
   j<CMActionResult>(`/api/cli-instances/${encodeURIComponent(id)}/login`, { method: 'POST' })

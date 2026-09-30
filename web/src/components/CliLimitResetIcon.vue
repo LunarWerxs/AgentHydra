@@ -15,9 +15,16 @@ const { t } = useI18n()
 
 const view = computed(() => {
   const r = props.result
-  if (!r || (r.outcome !== 'reset' && r.outcome !== 'used')) return null
+  if (!r || (r.outcome !== 'reset' && r.outcome !== 'used' && r.outcome !== 'available'))
+    return null
   const date = r.nextAvailable ?? t('cliInstances.limitResetUnknownDate')
   const ago = formatAgo(Date.now(), r.at)
+  if (r.outcome === 'available')
+    return {
+      tone: 'text-success',
+      label: t('cliInstances.limitResetAvailableLabel'),
+      hint: t('cliInstances.limitResetAvailableHint', { message: r.message, ago }),
+    }
   return r.outcome === 'reset'
     ? {
         tone: 'text-success',
