@@ -75,9 +75,12 @@ agent's own initiative, and a caller passing it now fails the schema loudly inst
 sweeping an archive.
 
 **A drain of any size answers immediately, not at the end.** Since 2026-09-13 `move_chats`
-auto-detaches whenever its own declared length exceeds 120s, which a one-chat batch already does
-(its floor is 180s), so the call returns an `operationId` and the per-chat report is read with
-`orchestrator_operation {id}`. Before that, a long batch could die on a bare transport timeout
+auto-detaches whenever its own declared length exceeds 50s (120s until 2026-09-30, when the
+desktop app's MCP client was measured dropping calls at about 60s), which a one-chat batch
+already does (its floor is 180s), so the call returns an `operationId` and the per-chat report
+is read with `orchestrator_operation {id}`. A single `move_chat` waits at most 45s for its
+verdict and otherwise answers the same way; calling it again with the same arguments returns
+that operation, never a second move. Before that, a long batch could die on a bare transport timeout
 and return nothing at all about work it had in fact done. If a batch is stuck or was launched
 with the wrong scope, `orchestrator_cancel {id}` stops it and frees the route lock; that is not
 an undo, so read the fleet afterwards to see what had already landed - and since 2026-09-14,
