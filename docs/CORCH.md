@@ -310,3 +310,9 @@ stderr and exits 1), appends to it, prints init, an assistant text and a `result
 - Quick add's Add button stayed disabled on first ship: a lint auto-fix turned `import { Input }`
   into a type-only import, so the tag rendered as a bare `<input>` whose v-model never updated.
   Fixed, with a `biome-ignore` naming why.
+- UI rebuilt after a three-lens review (layout, states, affordance): the header says what Corch is
+  and carries an "Add a CLI account" button that opens Quick add as a card; tasks sit in one panel
+  grouped by hand-off; the sticky detail pane lists every account a task tried and why it moved on
+  (`CorchWorkerDetail.vue`); status chips carry an icon and plain words (`lib/corch-status.ts`). The
+  message box says what sending does: queued after the current step on a live task, a new turn of
+  the same conversation on a finished or stopped one (that is what `corchSend` does).
