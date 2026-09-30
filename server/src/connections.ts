@@ -149,6 +149,8 @@ export const NEVER_SYNCED = [
   // accounts with nobody watching, and the accounts on one machine are not the accounts on another.
   // Turning it on here must never turn it on somewhere its owner has not looked.
   'keepalive_enabled',
+  // Corch's paid-extra-usage permission. It permits SPENDING MONEY on this machine's accounts.
+  'corch_allow_overage',
   // Whether consoles appear on THIS screen. About this machine's desktop, not about a person.
   'terminal_windows_visible',
   // Whether this install has already said it has no tray icon. A fact about THIS COPY's packaging

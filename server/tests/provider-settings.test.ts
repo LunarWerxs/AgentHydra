@@ -11,6 +11,8 @@ test('provider settings default on for installed surfaces and off for ChatGPT ha
     // with a floor that leaves an account alone once its weekly cap is 80% gone.
     keepaliveEnabled: false,
     keepaliveWeeklyFloorPct: 80,
+    // Paid extra usage spends money, so Corch may only use it once the owner turns this on.
+    corchAllowOverage: false,
   })
 })
 
@@ -28,6 +30,7 @@ test('provider settings round-trip independently', () => {
     chatGptHandoffEnabled: true,
     keepaliveEnabled: false,
     keepaliveWeeklyFloorPct: 80,
+    corchAllowOverage: false,
   })
 
   setProviderSettings({

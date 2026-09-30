@@ -76,7 +76,7 @@ if (existsSync(join(configDir, 'fake-overage'))) {
     },
   })
   emit({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'Still working, on overage.' }] } })
-  await Bun.sleep(20_000)
+  await Bun.sleep(6_000)
   emit({ type: 'result', subtype: 'success', is_error: false, result: 'FINISHED ON OVERAGE', session_id: sessionId, total_cost_usd: 1, num_turns: 1 })
   process.exit(0)
 }

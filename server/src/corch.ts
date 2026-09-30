@@ -31,14 +31,16 @@ import { resolveClaudeExe } from './config'
 import {
   attemptSpend,
   type CorchAccount,
+  type CorchLiveUsage,
   type CorchWalls,
   type CorchWorker,
   type CorchWorkerView,
   classifyAttempt,
   copySessionTranscript,
+  freshestPct,
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
-  livePct,
+  liveUsage,
   OVERAGE_NOTICE,
   overageStart,
   PAUSED_PROMPT,
@@ -55,6 +57,7 @@ import { cliAuthStatus } from './core/cli-quick-add'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
 import { isPidAlive, killProcessTree } from './core/process'
 import { POINTER_DIR } from './instance'
+import { getProviderSettings } from './provider-settings'
 import type { UsageSnapshot } from './types'
 import { parseResetTime } from './usage'
 import { allCachedUsage } from './usage-cache'
@@ -102,15 +105,32 @@ interface LogRead {
   sawInit: boolean
   /** The CLI said the account ran out and paid extra usage took over (overageStart). */
   overage: { resetsAt: number | null } | null
+  /** The newest usage reading the CLI streamed (liveUsage). */
+  live: CorchLiveUsage | null
 }
 const reads = new Map<string, LogRead>()
+/** Each account's newest live usage reading from any of its workers' streams (poll copies it
+ *  here). The usage snapshot is refreshed only every 15 minutes; this is seconds old. */
+const liveByAccount = new Map<string, CorchLiveUsage>()
+
+/** The owner's rule is never to spend paid extra usage; the `corchAllowOverage` setting (default
+ *  false) lifts it: overage is then neither stopped nor walled, and accounts at their caps stay
+ *  in the pool behind every account below them. Unreadable counts as false. */
+function overageAllowed(): boolean {
+  try {
+    return getProviderSettings().corchAllowOverage === true
+  } catch {
+    return false
+  }
+}
 const listeners = new Set<(w: CorchWorker) => void>()
 
 let claudeCommand: () => string[] = () => [resolveClaudeExe()]
 /** The production pool: every CLI instance with a credential file, with its last usage reading
- *  (void once its window has reset). A hollow or revoked login still passes that file check; its
- *  first attempt fails `auth` and the account stays walled until it signs in again
- *  (recheckSignedOut), so a dead login costs one quick failure, once. */
+ *  (void once its window has reset), or a running worker's live one when that is newer. A hollow
+ *  or revoked login still passes that file check; its first attempt fails `auth` and the account
+ *  stays walled until it signs in again (recheckSignedOut), so a dead login costs one quick
+ *  failure, once. */
 function signedInAccounts(): CorchAccount[] {
   const now = Date.now()
   const cache = allCachedUsage()
@@ -118,13 +138,29 @@ function signedInAccounts(): CorchAccount[] {
     .filter((i) => i.loggedIn)
     .map((i) => {
       const u = latestUsage(i.id, i.lastUsageCheck, cache)
+      const snapshotAt = u ? Date.parse(u.capturedAt) || 0 : 0
+      const live = liveByAccount.get(i.id) ?? null
       return {
         id: i.id,
         num: i.num ?? null,
         name: i.name,
         configDir: i.configDir,
-        sessionPct: livePct(u?.session, now),
-        weekPct: livePct(u?.weekAll, now),
+        sessionPct: freshestPct(
+          u?.session,
+          snapshotAt,
+          live && live.sessionPct !== null
+            ? { pct: live.sessionPct, resetsAt: live.sessionResetsAt, at: live.at }
+            : null,
+          now,
+        ),
+        weekPct: freshestPct(
+          u?.weekAll,
+          snapshotAt,
+          live && live.weekPct !== null
+            ? { pct: live.weekPct, resetsAt: live.weekResetsAt, at: live.at }
+            : null,
+          now,
+        ),
       }
     })
 }
@@ -263,7 +299,11 @@ export function corchRunningCount(): number {
 
 function schedule(delay?: number): void {
   if (timer) clearTimeout(timer)
-  const next = delay ?? ([...workers.values()].some(isActive) ? 3_000 : 15_000)
+  // poll() runs every tick, so the overage stop is only as fast as the tick, and each second of
+  // overage bills the owner: 1 s while a worker runs, 3 s while one is queued or waiting.
+  const all = [...workers.values()]
+  const next =
+    delay ?? (all.some((w) => w.status === 'running') ? 1_000 : all.some(isActive) ? 3_000 : 15_000)
   timer = setTimeout(
     () => void tick().catch((err) => console.error('[corch] tick failed:', err)),
     next,
@@ -292,6 +332,7 @@ async function tick(): Promise<void> {
       console.error('[corch] could not list accounts:', err)
     }
     recheckSignedOut(accounts, now)
+    const allowFull = overageAllowed()
     const active = new Map<string, number>()
     // Each group's running workers per account: `perAccount` caps a group, not the fleet.
     const byGroup = new Map<string, Map<string, number>>()
@@ -318,7 +359,7 @@ async function tick(): Promise<void> {
       try {
         const cap = perAccount[w.group] ?? 2
         const groupActive = groupMap(w.group)
-        const acct = pickAccount(w, accounts, walls, active, cap, now, groupActive)
+        const acct = pickAccount(w, accounts, walls, active, cap, now, groupActive, allowFull)
         if (acct) {
           try {
             launch(w, acct, accounts)
@@ -348,7 +389,8 @@ async function tick(): Promise<void> {
         }
         // Busy (every eligible account at its worker cap) stays queued; nothing eligible at all
         // waits.
-        if (pickAccount(w, accounts, walls, new Map(), Number.MAX_SAFE_INTEGER, now)) {
+        const idle = new Map<string, number>()
+        if (pickAccount(w, accounts, walls, idle, Number.MAX_SAFE_INTEGER, now, idle, allowFull)) {
           if (w.status === 'waiting') {
             w.status = 'queued'
             w.error = null
@@ -395,6 +437,7 @@ const freshRead = (): LogRead => ({
   recent: [],
   sawInit: false,
   overage: null,
+  live: null,
 })
 
 function readLog(path: string): LogRead {
@@ -458,6 +501,7 @@ function readInto(path: string, r: LogRead): LogRead {
         }
         if (isInit(ev)) r.sawInit = true
         r.overage ??= overageStart(ev)
+        r.live = liveUsage(ev, Date.now()) ?? r.live
         r.events.push(ev)
         if (r.events.length > 400) r.events.splice(0, r.events.length - 400)
         const s = summarizeEvent(ev)
@@ -503,7 +547,13 @@ function poll(w: CorchWorker): void {
       !(at.pid && isPidAlive(at.pid))
   const r = readLog(at.log)
   at.started ||= r.sawInit
-  if (r.overage && !at.overage) stopForOverage(w, at, r.overage, !exited)
+  // Only from a process this daemon is watching now: after a restart an old log is read again from
+  // the start, and its readings would be stamped as fresh.
+  if (r.live && proc) {
+    const prev = liveByAccount.get(at.account.id)
+    if (!prev || prev.at <= r.live.at) liveByAccount.set(at.account.id, r.live)
+  }
+  if (r.overage && !at.overage && !overageAllowed()) stopForOverage(w, at, r.overage, !exited)
   const latest = r.recent[r.recent.length - 1] ?? null
   if (latest && latest !== w.lastActivity) {
     w.lastActivity = latest
@@ -512,8 +562,8 @@ function poll(w: CorchWorker): void {
   if (exited) finish(w, r.events)
 }
 
-/** The account ran out and started billing paid extra usage. Nobody asked for that spend (Corch
- *  exists to use FREE quota across accounts), so the account is walled until its window resets
+/** The account ran out and started billing paid extra usage. Unless the owner allowed it
+ *  (overageAllowed), nobody asked for that spend (Corch exists to use FREE quota across accounts), so the account is walled until its window resets
  *  and the running turn is stopped now; finish() then treats it as a limit, and the session moves
  *  to an account with room, or waits for one, without spending another cent of overage. */
 function stopForOverage(
@@ -628,9 +678,10 @@ function finish(w: CorchWorker, events: unknown[]): void {
       break
     case 'interrupted':
       // Killed from outside with the transcript intact: resume the same session on the same
-      // account. Three in one turn means something keeps killing it, and that needs a person.
+      // account. Three in one turn means something keeps killing it, and that needs a person. No
+      // delay: with one, a resume took 3.1 s every time (6 real cases), all of it waiting.
       if (w.retries < 3) {
-        w.notBefore = now + 2_000
+        w.notBefore = null
         w.retries++
         w.status = 'queued'
       } else {
@@ -756,7 +807,11 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
     // `detached` (DETACHED_PROCESS would flash a console per child); windowsHide hides the tree.
     proc = Bun.spawn(argv, {
       cwd: w.cwd,
-      env: scrubbedEnv(acct.configDir, w.id),
+      // No claude.ai connectors (Gmail, Calendar, Drive, Notion, ...; several answer needs-auth).
+      // Measured on #83 with the real CLI: with them it took 2.0-3.0 s to its init event and loaded
+      // 158-202 tools (a different number run to run); without, 1.2-1.3 s and a steady 137 tools.
+      // Local MCP servers still load. Here, not in scrubbedEnv: quick add uses that too.
+      env: { ...scrubbedEnv(acct.configDir, w.id), ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
       stdin: Bun.file(promptFile),
       stdout: outFd,
       stderr: errFd,

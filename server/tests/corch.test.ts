@@ -15,6 +15,7 @@ import {
   corchList,
   corchRun,
   corchWait,
+  freshestPct,
   livePct,
   MAX_PER_ACCOUNT,
   pickAccount,
@@ -23,6 +24,7 @@ import {
   startCorch,
   wallUntil,
 } from '../src/corch'
+import { setProviderSettings } from '../src/provider-settings'
 import { parseResetTime } from '../src/usage'
 
 const NOTICE = "You've hit your session limit · resets 4am"
@@ -265,6 +267,15 @@ describe('pickAccount', () => {
     expect(livePct({ pct: 40 }, now)).toBe(40)
   })
 
+  test('a live reading newer than the usage snapshot wins; an older or reset one does not', () => {
+    const snapshot = { pct: 40, resetsAt: new Date(now + 3_600_000).toISOString() }
+    const snapshotAt = now - 60_000
+    const live = (at: number, resetsAt: number) => ({ pct: 75, resetsAt, at })
+    expect(freshestPct(snapshot, snapshotAt, live(now - 1_000, now + 3_600_000), now)).toBe(75)
+    expect(freshestPct(snapshot, snapshotAt, live(now - 120_000, now + 3_600_000), now)).toBe(40)
+    expect(freshestPct(snapshot, snapshotAt, live(now - 1_000, now - 1), now)).toBeNull()
+  })
+
   test('spreads by the active count', () => {
     const accounts = [acct('a', 1), acct('b', 2)]
     expect(pickAccount(worker(), accounts, {}, new Map(), 2, now)?.id).toBe('a')
@@ -322,10 +333,10 @@ describe('integration: paid extra usage is never spent', () => {
   const freeDir = join(root, 'acct-free')
   for (const d of [cwd, overDir, freeDir]) mkdirSync(d, { recursive: true })
   writeFileSync(join(overDir, 'fake-overage'), '')
-  let group: string | null = null
+  const groups: string[] = []
 
   afterAll(() => {
-    if (group) corchCancel({ group })
+    for (const group of groups) corchCancel({ group })
     setCorchClaudeCommand(null)
     setCorchAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -334,14 +345,14 @@ describe('integration: paid extra usage is never spent', () => {
   test('a turn that starts billing overage is stopped at once and the session moves on', async () => {
     setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
     // The overage account scores lower, so it is picked first. Left alone, the fake would go on
-    // for 20 s and finish there on overage ('FINISHED ON OVERAGE', no move).
+    // for 6 s and finish there on overage ('FINISHED ON OVERAGE', no move).
     setCorchAccountsProvider(() => [
       { id: 'over-1', num: 1, name: 'overage', configDir: overDir, sessionPct: 0, weekPct: 0 },
       { id: 'over-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
     ])
     startCorch()
     const run = corchRun({ tasks: [{ prompt: 'a long task', cwd, title: 'overage' }] })
-    group = run.group
+    groups.push(run.group)
     const id = run.workers[0]?.id as string
 
     const deadline = Date.now() + 15_000
@@ -356,5 +367,35 @@ describe('integration: paid extra usage is never spent', () => {
     expect(w?.moves).toBe(1)
     expect(w?.attempts[0]?.outcome).toBe('quota')
     expect(w?.attempts[0]?.notice).toContain('extra usage')
+  }, 20_000)
+
+  test('with corchAllowOverage on, the turn is not stopped and finishes on the overage account', async () => {
+    setProviderSettings({ corchAllowOverage: true })
+    try {
+      setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+      // New account ids: the test above walled 'over-1'.
+      setCorchAccountsProvider(() => [
+        { id: 'allow-1', num: 1, name: 'overage', configDir: overDir, sessionPct: 0, weekPct: 0 },
+        { id: 'allow-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
+      ])
+      startCorch()
+      const run = corchRun({ tasks: [{ prompt: 'a long task', cwd, title: 'overage allowed' }] })
+      groups.push(run.group)
+      const id = run.workers[0]?.id as string
+
+      const deadline = Date.now() + 15_000
+      let w = corchList({ id })[0]
+      while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+        await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
+        w = corchList({ id })[0]
+      }
+
+      expect(w?.status).toBe('done')
+      expect(w?.result).toBe('FINISHED ON OVERAGE')
+      expect(w?.moves).toBe(0)
+      expect(w?.attempts).toHaveLength(1)
+    } finally {
+      setProviderSettings({ corchAllowOverage: false })
+    }
   }, 20_000)
 })

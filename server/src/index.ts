@@ -599,6 +599,8 @@ app.post('/api/settings', async (c) => {
       typeof body.keepaliveEnabled === 'boolean' ? body.keepaliveEnabled : undefined,
     keepaliveWeeklyFloorPct:
       typeof body.keepaliveWeeklyFloorPct === 'number' ? body.keepaliveWeeklyFloorPct : undefined,
+    corchAllowOverage:
+      typeof body.corchAllowOverage === 'boolean' ? body.corchAllowOverage : undefined,
   })
   // Notifications: whitelisted field by field, same as the blocks above. setNotificationSettings
   // ignores anything absent, so a patch touching one toggle leaves the rest (and the stored SMTP

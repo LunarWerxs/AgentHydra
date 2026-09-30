@@ -1402,6 +1402,10 @@ export interface ProviderSettings {
   keepaliveEnabled: boolean
   /** Weekly-usage percentage at or above which an account is left alone by the keepalive. */
   keepaliveWeeklyFloorPct: number
+  /** Let Corch keep a task running on an account's paid extra usage (usage credits) past its
+   *  5-hour limit. OFF by default — with it off, Corch stops a task the moment its account starts
+   *  billing overage and moves it to an account with free quota, or waits for one. */
+  corchAllowOverage: boolean
 }
 
 /** Bounded, secret-screened repository context returned for a manual ChatGPT handoff. */

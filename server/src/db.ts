@@ -592,6 +592,11 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // weekly cap to start a window that refills the same day is exactly backwards.
   keepalive_enabled: '0',
   keepalive_weekly_floor: '80',
+  // Corch's permission to keep a task running on paid extra usage (usage credits) - OFF by default,
+  // and like the keepalive this is a permission, not a preference: some accounts keep working past
+  // their 5-hour limit and BILL for it instead of stopping. Off means Corch stops a task the moment
+  // its account starts billing overage and moves it to an account with free quota, or waits.
+  corch_allow_overage: '0',
   // Keep this daemon registered as an MCP server in Claude Code's user config (see
   // server/src/mcp-register.ts). ON by default and deliberately so: the tools are the product's
   // whole agent-facing surface, and until 2026-09-07 getting them required following a doc that

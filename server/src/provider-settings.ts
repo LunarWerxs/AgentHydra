@@ -15,6 +15,9 @@ export function getProviderSettings(): ProviderSettings {
     // accounts, with nobody watching. See server/src/session-keepalive.ts.
     keepaliveEnabled: getSetting('keepalive_enabled') === '1',
     keepaliveWeeklyFloorPct: clampFloor(getSetting('keepalive_weekly_floor')),
+    // OPT-IN FOR THE SAME REASON AS THE KEEPALIVE, ONLY STRONGER: this one SPENDS MONEY. Some
+    // accounts bill paid extra usage past their 5-hour limit; only an explicit '1' lets Corch do so.
+    corchAllowOverage: getSetting('corch_allow_overage') === '1',
   }
 }
 
@@ -40,5 +43,7 @@ export function setProviderSettings(patch: Partial<ProviderSettings>): ProviderS
     setSetting('keepalive_enabled', patch.keepaliveEnabled ? '1' : '0')
   if (typeof patch.keepaliveWeeklyFloorPct === 'number')
     setSetting('keepalive_weekly_floor', String(clampFloor(String(patch.keepaliveWeeklyFloorPct))))
+  if (typeof patch.corchAllowOverage === 'boolean')
+    setSetting('corch_allow_overage', patch.corchAllowOverage ? '1' : '0')
   return getProviderSettings()
 }

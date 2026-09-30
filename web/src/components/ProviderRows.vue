@@ -9,7 +9,15 @@
 // `showHandoff` is off in the toolbar flyout: the ChatGPT handoff is a button in the session
 // composer, not a section of the instances tab, and listing it beside five table toggles would say
 // it hides a table too.
-import { AppWindow, Gauge, MessageCircleQuestion, Monitor, Terminal, Timer } from '@lucide/vue'
+import {
+  AppWindow,
+  CreditCard,
+  Gauge,
+  MessageCircleQuestion,
+  Monitor,
+  Terminal,
+  Timer,
+} from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Input } from '@/components/ui/input'
@@ -31,6 +39,7 @@ const {
   chatGptHandoffEnabled,
   keepaliveEnabled,
   keepaliveWeeklyFloorPct,
+  corchAllowOverage,
   update: updateAppSettings,
 } = useAppSettings()
 
@@ -149,6 +158,21 @@ async function patchProvider(value: Partial<ProviderSettings>) {
         @update:model-value="
           (v: string | number) => patchProvider({ keepaliveWeeklyFloorPct: Number(v) })
         "
+      />
+    </template>
+  </SettingsRow>
+
+  <!-- ⛔ SPENDS MONEY, NOT JUST QUOTA. Some Claude accounts keep working past their 5-hour limit on
+       paid extra usage (usage credits). Off by default: Corch stops a task the moment its account
+       starts billing and moves it, rather than running up a bill nobody asked for. -->
+  <SettingsRow :icon="CreditCard" :label="$t('settings.corchOverageLabel')">
+    <template #info>
+      <InfoHint :text="$t('settings.corchOverageHint')" />
+    </template>
+    <template #control>
+      <Switch
+        :model-value="corchAllowOverage"
+        @update:model-value="(v: boolean) => patchProvider({ corchAllowOverage: v })"
       />
     </template>
   </SettingsRow>

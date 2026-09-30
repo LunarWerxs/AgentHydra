@@ -105,6 +105,60 @@ export function livePct(
   return Number.isFinite(ends) && ends <= now ? null : limit.pct
 }
 
+/** An account's live usage as a running CLI streamed it (liveUsage): percentages 0..100, resets
+ *  and `at` (when it was read) in epoch ms. A window the event did not carry is null. */
+export interface CorchLiveUsage {
+  sessionPct: number | null
+  sessionResetsAt: number | null
+  weekPct: number | null
+  weekResetsAt: number | null
+  at: number
+}
+
+/** The usage every main-agent `rate_limit_event` carries, measured in real logs:
+ *  `{"status":"allowed","rateLimitType":"five_hour","resetsAt":1790803800,"overageStatus":"allowed",
+ *  "isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.52,"resetsAt":1790803800},
+ *  "seven_day":{"utilization":0.03,"resetsAt":1791356400}}}` (utilization 0..1, resetsAt epoch
+ *  seconds). Null for any other event, or one with neither window. */
+export function liveUsage(raw: unknown, at: number): CorchLiveUsage | null {
+  const ev = raw as any
+  if (ev?.type !== 'rate_limit_event' || ev.parent_tool_use_id) return null
+  const windows = ev.rate_limit_info?.unifiedWindows
+  if (!windows || typeof windows !== 'object') return null
+  const read = (w: any): { pct: number | null; resetsAt: number | null } => {
+    const u = w?.utilization
+    const secs = Number(w?.resetsAt)
+    return {
+      pct: typeof u === 'number' && Number.isFinite(u) ? Math.round(u * 1000) / 10 : null,
+      resetsAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : null,
+    }
+  }
+  const session = read(windows.five_hour)
+  const week = read(windows.seven_day)
+  if (session.pct === null && week.pct === null) return null
+  return {
+    sessionPct: session.pct,
+    sessionResetsAt: session.pct === null ? null : session.resetsAt,
+    weekPct: week.pct,
+    weekResetsAt: week.pct === null ? null : week.resetsAt,
+    at,
+  }
+}
+
+/** The percentage to route on: a worker's live reading when it is newer than the snapshot (taken
+ *  at `snapshotAt`, epoch ms), else the snapshot. Either one counts only while its window is open
+ *  (livePct's rule), so a live reading whose window has reset gives null. */
+export function freshestPct(
+  snapshot: { pct: number; resetsAt?: string | null } | null | undefined,
+  snapshotAt: number,
+  live: { pct: number; resetsAt: number | null; at: number } | null,
+  now: number,
+): number | null {
+  if (live && live.at > snapshotAt)
+    return live.resetsAt !== null && live.resetsAt <= now ? null : live.pct
+  return livePct(snapshot, now)
+}
+
 /** The worker minus the long prompt and the log paths, plus what a reader wants at a glance. */
 export type CorchWorkerView = Omit<CorchWorker, 'prompt' | 'attempts'> & {
   prompt: string // first 300 chars
@@ -381,7 +435,9 @@ export const MAX_PER_ACCOUNT = 4
 /** `perAccount` caps this group's workers (`groupActive`, default `active`) on an account;
  *  `active` counts every group's and is held under MAX_PER_ACCOUNT. The account of a last
  *  quota/auth attempt is not excluded (its wall keeps it out while the wall is real), only tried
- *  last, so a worker restricted to it resumes once the limit resets or the login works again. */
+ *  last, so a worker restricted to it resumes once the limit resets or the login works again.
+ *  `allowFull` (the owner allowed paid extra usage): accounts at or above the 98% session / 99%
+ *  weekly caps stay eligible, but only after every account below them. */
 export function pickAccount(
   worker: Pick<CorchWorker, 'accounts' | 'accountId' | 'attempts'>,
   accounts: CorchAccount[],
@@ -390,6 +446,7 @@ export function pickAccount(
   perAccount: number,
   now: number,
   groupActive: Map<string, number> = active,
+  allowFull = false,
 ): CorchAccount | null {
   const lastAttempt = worker.attempts[worker.attempts.length - 1]
   const failedId =
@@ -397,19 +454,26 @@ export function pickAccount(
       ? lastAttempt.account.id
       : null
   const load = (a: CorchAccount): number => active.get(a.id) ?? 0
+  const full = (a: CorchAccount): boolean =>
+    (a.sessionPct !== null && a.sessionPct >= 98) || (a.weekPct !== null && a.weekPct >= 99)
   const eligible = accounts.filter(
     (a) =>
       (!worker.accounts || worker.accounts.includes(a.id)) &&
       !((walls[a.id]?.until ?? 0) > now) &&
-      (a.sessionPct === null || a.sessionPct < 98) &&
-      (a.weekPct === null || a.weekPct < 99) &&
+      (allowFull || !full(a)) &&
       (groupActive.get(a.id) ?? 0) < perAccount &&
       load(a) < MAX_PER_ACCOUNT,
   )
-  const home = eligible.find((a) => a.id === worker.accountId && a.id !== failedId)
+  // A full home is kept only when every other choice is full too.
+  const home = eligible.find(
+    (a) => a.id === worker.accountId && a.id !== failedId && (!full(a) || eligible.every(full)),
+  )
   if (home) return home
   const score = (a: CorchAccount): number =>
-    Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) + 25 * load(a) + (a.id === failedId ? 1000 : 0)
+    Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) +
+    25 * load(a) +
+    (full(a) ? 500 : 0) +
+    (a.id === failedId ? 1000 : 0)
   const byNum = (a: CorchAccount): number => a.num ?? Number.MAX_SAFE_INTEGER
   eligible.sort((a, b) => score(a) - score(b) || byNum(a) - byNum(b))
   return eligible[0] ?? null
