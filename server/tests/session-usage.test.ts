@@ -6,6 +6,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { appendFileSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import { join } from 'node:path'
+import { clearFetchedPrices, setFetchedPrices } from '../src/pricing'
 import { sessionUsage } from '../src/session-usage'
 import type { TranscriptFile } from '../src/transcript'
 import type { SessionSource } from '../src/types'
@@ -90,20 +91,31 @@ describe('sessionUsage', () => {
   })
 
   test('an introductory rate is billed as of the session, not as of today', async () => {
-    // Sonnet 5's introductory rate ran to 2026-08-31. A session from after that date must not be
-    // repriced at the intro rate just because the table still lists it.
-    const during = fixture([
-      turn('claude-sonnet-5', { output_tokens: 1_000_000 }, '2024-08-10T12:00:00.000Z'),
-    ])
-    // Must stay past the real, fixed introductory-rate cutover in server/src/pricing.ts
-    // (2026-09-01T00:00:00.000Z) — not "now"-relative, so deliberately not shifted with the rest
-    // of this file's fixture dates.
-    const after = fixture([
-      // arkitect-allow: spec-drifting-date-fixture - a fixed session turn date, used only as the pricing instant sessionUsage derives from the transcript itself, never compared with the real clock
-      turn('claude-sonnet-5', { output_tokens: 1_000_000 }, '2026-10-10T12:00:00.000Z'),
-    ])
-    expect((await sessionUsage(during)).costUsd).toBeCloseTo(10, 10)
-    expect((await sessionUsage(after)).costUsd).toBeCloseTo(15, 10)
+    // A session from after an intro rate's expiry must not be repriced at the intro rate just
+    // because the table still lists it, nor an older one at today's rate. No bundled model is on
+    // an introductory rate today, so a synthetic one with a fixed 2024 cutover pins the mechanic.
+    setFetchedPrices(
+      {
+        'synthetic-intro-model': {
+          input: 3,
+          output: 15,
+          intro: { input: 2, output: 10, until: '2024-09-01T00:00:00.000Z' },
+        },
+      },
+      Date.parse('2024-08-10T00:00:00.000Z'),
+    )
+    try {
+      const during = fixture([
+        turn('synthetic-intro-model', { output_tokens: 1_000_000 }, '2024-08-10T12:00:00.000Z'),
+      ])
+      const after = fixture([
+        turn('synthetic-intro-model', { output_tokens: 1_000_000 }, '2024-10-10T12:00:00.000Z'),
+      ])
+      expect((await sessionUsage(during)).costUsd).toBeCloseTo(10, 10)
+      expect((await sessionUsage(after)).costUsd).toBeCloseTo(15, 10)
+    } finally {
+      clearFetchedPrices()
+    }
   })
 
   test('malformed lines, user echoes and non-turn records are skipped, not fatal', async () => {

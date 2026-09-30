@@ -71,15 +71,26 @@ describe('priceFor', () => {
   })
 
   test('introductory rate applies before its expiry and the standard rate after', () => {
-    // These bracket the real, fixed introductory-rate cutover in server/src/pricing.ts
-    // (2026-09-01T00:00:00.000Z) and must stay on their respective sides of it — they are not
-    // "now"-relative, so they are deliberately NOT part of the file-wide date shift below.
-    // arkitect-allow: spec-drifting-date-fixture - one day before that fixed cutover and passed in as `at`, so it is an anchor rather than a "now": no real clock is read
-    const during = Date.parse('2026-08-13T00:00:00.000Z')
-    // arkitect-allow: spec-drifting-date-fixture - one day after the same fixed cutover, likewise passed in as `at`; drifting past it in wall-clock time changes nothing here
-    const after = Date.parse('2026-09-02T00:00:00.000Z')
-    expect(priceFor('claude-sonnet-5', during)).toMatchObject({ input: 2, output: 10 })
-    expect(priceFor('claude-sonnet-5', after)).toMatchObject({ input: 3, output: 15 })
+    // No bundled model is on an introductory rate today (Sonnet 5's became its standard price), so
+    // a synthetic one pins the mechanic. Its cutover is fixed and every instant is passed in as
+    // `at`, so no real clock is read.
+    setFetchedPrices(
+      {
+        'synthetic-intro-model': {
+          input: 3,
+          output: 15,
+          intro: { input: 2, output: 10, until: '2024-09-01T00:00:00.000Z' },
+        },
+      },
+      NOW,
+    )
+    try {
+      expect(priceFor('synthetic-intro-model', NOW)).toMatchObject({ input: 2, output: 10 })
+      const after = Date.parse('2024-09-02T00:00:00.000Z')
+      expect(priceFor('synthetic-intro-model', after)).toMatchObject({ input: 3, output: 15 })
+    } finally {
+      clearFetchedPrices()
+    }
   })
 
   test('the bundled table is dated, so a stale figure can be shown as stale', () => {

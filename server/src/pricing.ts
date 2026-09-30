@@ -26,9 +26,10 @@
 //      and either way the effective date travels with the numbers into the UI, so a stale figure
 //      is visibly stale rather than silently wrong.
 //
-// NOT MODELLED (documented rather than approximated): Anthropic's fast mode re-prices Opus 5 at
-// 10/50, and transcripts do not record which turns used it; batch requests are half price and
-// Claude Code does not make them. Both would need data the transcript does not carry.
+// NOT MODELLED (documented rather than approximated): Anthropic's fast mode re-prices Opus 5.5 at
+// 8/40 and Opus 5 / 4.8 at 10/50, and transcripts do not record which turns used it; batch requests
+// are half price and Claude Code does not make them. Both would need data the transcript does not
+// carry.
 
 /** Per-million-token list prices for one model, in USD. */
 export interface ModelPrice {
@@ -58,14 +59,16 @@ export const CACHE_WRITE_5M_RATIO = 1.25
 export const CACHE_WRITE_1H_RATIO = 2
 
 /** The day this table was last checked against Anthropic's published pricing. Surfaced in the UI. */
-export const PRICES_AS_OF = '2026-08-13'
+export const PRICES_AS_OF = '2026-09-30'
 
 // Keys are canonical (lowercased, date suffix stripped) model ids. Entries below the divider are
 // models that no longer take new traffic but still appear in an archived transcript.
 const PRICES: Record<string, ModelPrice> = {
-  // The 5.5 / 5.1 generation (Claude API reference, cached 2026-09-25). Two of them publish a cache
-  // read below the 0.1x ratio: Opus 5.5 reads at $0.20 on a $4 input, Fable/Mythos 5.1 at $0.25 on
-  // $10, so it is stated outright. Sonnet 5.5's $0.20 on $2 is the ordinary ratio.
+  // Every Anthropic row still listed at platform.claude.com/docs/en/about-claude/pricing was checked
+  // against it on 2026-09-30; the Claude 3.x rows below the divider are no longer on that page.
+  // In the 5.5 / 5.1 generation two publish a cache read below the 0.1x ratio: Opus 5.5 reads at
+  // $0.20 on a $4 input, Fable/Mythos 5.1 at $0.25 on $10, so it is stated outright. Sonnet 5.5's
+  // $0.20 on $2 is the ordinary ratio.
   'claude-fable-5-1': { input: 10, output: 50, cacheReadUsd: 0.25 },
   'claude-mythos-5-1': { input: 10, output: 50, cacheReadUsd: 0.25 },
   'claude-opus-5-5': { input: 4, output: 20, cacheReadUsd: 0.2 },
@@ -77,14 +80,10 @@ const PRICES: Record<string, ModelPrice> = {
   'claude-opus-4-7': { input: 5, output: 25 },
   'claude-opus-4-6': { input: 5, output: 25 },
   'claude-opus-4-5': { input: 5, output: 25 },
-  // Sonnet 5 is on an introductory rate through 2026-08-31, and it is by far the most common model
-  // in a current transcript — billing it at the standard rate would overstate a live session's cost
-  // by 50%, which is exactly the kind of confidently-wrong figure this module exists to avoid.
-  'claude-sonnet-5': {
-    input: 3,
-    output: 15,
-    intro: { input: 2, output: 10, until: '2026-09-01T00:00:00.000Z' },
-  },
+  // Sonnet 5 launched at an introductory $2/$10 through 2026-08-31, and Anthropic then made that the
+  // standard price: the scheduled rise to $3/$15 on 2026-09-01 never happened (pricing page footnote,
+  // checked 2026-09-30). So $2/$10 is right for every turn on either side of the old cutover.
+  'claude-sonnet-5': { input: 2, output: 10 },
   'claude-sonnet-4-6': { input: 3, output: 15 },
   'claude-sonnet-4-5': { input: 3, output: 15 },
   'claude-haiku-4-5': { input: 1, output: 5 },
