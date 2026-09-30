@@ -79,6 +79,8 @@ describe('classifyAttempt', () => {
     const warning = '[mcp-sdk] SEP-2352: stored OAuth credential has no issuer stamp'
     expect(classifyAttempt([init, said('working on it')], warning).outcome).toBe('interrupted')
     expect(classifyAttempt([init, result('Something broke', true)], '').outcome).toBe('error')
+    // A CLI that failed before system/init, with its reason on stderr, is an error.
+    expect(classifyAttempt([], 'error: unknown option --bogus').outcome).toBe('error')
   })
 
   test('a model that merely TALKS about a session limit is still done', () => {

@@ -118,6 +118,9 @@ export const WORKER_BRIEF =
 export const HANDOFF_PROMPT =
   'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.'
 
+export const PAUSED_PROMPT =
+  'This session was paused because its account reached its usage limit or was signed out, and it can continue now on the same account. Continue the task exactly where you left off. Do not redo steps that are already finished.'
+
 export const INTERRUPTED_PROMPT =
   'This session was interrupted before it finished: its process was stopped (AgentHydra restarted), not by anything you did. Continue the task exactly where you left off. Do not redo steps that are already finished; run a command again only if its result is missing.'
 
@@ -152,7 +155,14 @@ export interface AttemptVerdict {
   turns: number
 }
 
-export function classifyAttempt(events: unknown[], stderr: string): AttemptVerdict {
+/** `started`: the CLI logged system/init (the caller may know it when the events list was cut). */
+export function classifyAttempt(
+  events: unknown[],
+  stderr: string,
+  started: boolean = events.some(
+    (ev) => (ev as any)?.type === 'system' && (ev as any)?.subtype === 'init',
+  ),
+): AttemptVerdict {
   const tracker = createLimitStopTracker()
   const apiErrors: string[] = [] // CLI-reported API-error events
   let last: any = null // the terminal `result` event
@@ -188,10 +198,12 @@ export function classifyAttempt(events: unknown[], stderr: string): AttemptVerdi
   if (last && !errored) return out('done', null)
   // No result and no API error: the process was killed from outside. On Windows a daemon restart
   // does exactly this to every worker (they sit in the daemon's kill-on-close job), and the
-  // transcript on disk is intact, so the session is resumed rather than failed. Stderr is not
-  // required to be empty: a normal run can print a harmless warning there (measured: an MCP OAuth
-  // 'issuer' stamp notice), and the retry is bounded at three per turn.
-  if (!last && !apiErrors.length) return out('interrupted', INTERRUPTED_NOTICE)
+  // transcript on disk is intact, so the session is resumed rather than failed. Stderr need not be
+  // empty once the CLI started: a normal run can print a harmless warning there (measured: an MCP
+  // OAuth 'issuer' stamp notice). One that wrote to stderr before system/init failed to start (an
+  // unknown option, a missing session), and that is an error, not a restart.
+  if (!last && !apiErrors.length && (started || !stderr.trim()))
+    return out('interrupted', INTERRUPTED_NOTICE)
   return out('error', null)
 }
 

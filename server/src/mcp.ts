@@ -639,8 +639,8 @@ export const TOOLS: McpEngineTool[] = [
   },
 
   // --- Corch: delegate work onto the CLI accounts (docs/CORCH.md) ---------------
-  // ponytail: in-process calls into ./corch, so workers belong to whichever process serves this
-  // tool (the daemon over HTTP); a stdio MCP process would need REST proxies over /api/corch.
+  // Over /api/corch like every other tool: the workers belong to the daemon, and a stdio MCP server
+  // running Corch in its own process would relaunch them as dead and could not cancel them.
   {
     name: 'corch_run',
     description:
@@ -673,7 +673,6 @@ export const TOOLS: McpEngineTool[] = [
       ['tasks'],
     ),
     run: async (a) => {
-      const { corchRun } = await import('./corch')
       const accounts = Array.isArray(a.accounts)
         ? await Promise.all(
             a.accounts.map(async (ref) => {
@@ -686,11 +685,15 @@ export const TOOLS: McpEngineTool[] = [
             }),
           )
         : undefined
-      return corchRun({
-        tasks: (Array.isArray(a.tasks) ? a.tasks : []) as Parameters<typeof corchRun>[0]['tasks'],
-        group: a.group != null ? str(a.group) : undefined,
-        accounts,
-        perAccount: a.per_account != null ? Number(a.per_account) : undefined,
+      return api('/api/corch/workers', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          tasks: Array.isArray(a.tasks) ? a.tasks : [],
+          group: a.group != null ? str(a.group) : undefined,
+          accounts,
+          perAccount: a.per_account != null ? Number(a.per_account) : undefined,
+        }),
       })
     },
   },
@@ -702,14 +705,15 @@ export const TOOLS: McpEngineTool[] = [
       id: { type: 'string' },
       wait_seconds: { type: 'number' },
     }),
-    run: async (a) => {
-      const { corchList, corchWait } = await import('./corch')
-      const filter = {
-        group: a.group != null ? str(a.group) : undefined,
-        id: a.id != null ? str(a.id) : undefined,
-      }
+    run: (a) => {
       const wait = Math.min(CORCH_MAX_WAIT_S, Math.max(0, Number(a.wait_seconds) || 0))
-      return wait > 0 ? corchWait(filter, wait * 1000) : corchList(filter)
+      return api(
+        `/api/corch/workers${qs({
+          group: a.group != null ? str(a.group) : undefined,
+          id: a.id != null ? str(a.id) : undefined,
+          wait: wait > 0 ? wait : undefined,
+        })}`,
+      )
     },
   },
   {
@@ -717,7 +721,12 @@ export const TOOLS: McpEngineTool[] = [
     description:
       'MUTATES: send a follow-up message to a Corch worker: it runs as the next turn in the SAME session (queued if the worker is busy). Like the task, it must be self-contained: the worker sees nothing of this chat.',
     inputSchema: S({ id: { type: 'string' }, text: { type: 'string' } }, ['id', 'text']),
-    run: async (a) => (await import('./corch')).corchSend(str(a.id), str(a.text)),
+    run: (a) =>
+      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/send`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ text: str(a.text) }),
+      }),
   },
   {
     name: 'corch_cancel',
@@ -725,9 +734,13 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S({ id: { type: 'string' }, group: { type: 'string' } }),
     run: async (a) => {
       if (a.id == null && a.group == null) throw new Error('pass `id` or `group`')
-      return (await import('./corch')).corchCancel({
-        id: a.id != null ? str(a.id) : undefined,
-        group: a.group != null ? str(a.group) : undefined,
+      return api('/api/corch/cancel', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          id: a.id != null ? str(a.id) : undefined,
+          group: a.group != null ? str(a.group) : undefined,
+        }),
       })
     },
   },

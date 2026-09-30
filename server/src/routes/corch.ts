@@ -1,8 +1,10 @@
 // server/src/routes/corch.ts — HTTP face of Corch (delegating work onto the owner's CLI accounts)
 // and of quick add (signing a CLI account in from an email). See docs/CORCH.md "Routes".
-// The Corch view and the Quick add row in the web app are the callers; MCP calls corch.ts directly.
+// The Corch view, the Quick add row in the web app and the corch_* MCP tools are the callers. The
+// MCP tools go through here too, never corch.ts directly: a stdio MCP server is its own process,
+// and a second Corch there would relaunch the daemon's workers as if they had died.
 
-import { corchCancel, corchGet, corchList, corchRun, corchSend } from '../corch'
+import { corchCancel, corchGet, corchList, corchRun, corchSend, corchWait } from '../corch'
 import {
   cancelQuickAdd,
   listQuickAdds,
@@ -11,18 +13,22 @@ import {
   submitQuickAddCode,
 } from '../core/cli-quick-add'
 import { app } from '../http-app'
+import { CORCH_MAX_WAIT_S } from '../mcp-client'
 import { jsonBody } from '../route-helpers'
 
 const optStr = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
 
 // --- Corch workers -----------------------------------------------------------
-app.get('/api/corch/workers', (c) => {
+// `wait` (seconds, capped at CORCH_MAX_WAIT_S) holds the answer until the next status change in
+// scope, for corch_status {wait_seconds}; without it the list answers at once.
+app.get('/api/corch/workers', async (c) => {
   const active = c.req.query('active')
+  const group = optStr(c.req.query('group'))
+  const id = optStr(c.req.query('id'))
+  const wait = Math.min(CORCH_MAX_WAIT_S, Math.max(0, Number(c.req.query('wait')) || 0))
+  if (wait > 0) return c.json(await corchWait({ group, id }, wait * 1000))
   return c.json(
-    corchList({
-      group: optStr(c.req.query('group')),
-      active: active === '1' || active === 'true' ? true : undefined,
-    }),
+    corchList({ group, id, active: active === '1' || active === 'true' ? true : undefined }),
   )
 })
 app.get('/api/corch/workers/:id', (c) => {
