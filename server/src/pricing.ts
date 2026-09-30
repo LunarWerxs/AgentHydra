@@ -63,6 +63,13 @@ export const PRICES_AS_OF = '2026-08-13'
 // Keys are canonical (lowercased, date suffix stripped) model ids. Entries below the divider are
 // models that no longer take new traffic but still appear in an archived transcript.
 const PRICES: Record<string, ModelPrice> = {
+  // The 5.5 / 5.1 generation (Claude API reference, cached 2026-09-25). Two of them publish a cache
+  // read below the 0.1x ratio: Opus 5.5 reads at $0.20 on a $4 input, Fable/Mythos 5.1 at $0.25 on
+  // $10, so it is stated outright. Sonnet 5.5's $0.20 on $2 is the ordinary ratio.
+  'claude-fable-5-1': { input: 10, output: 50, cacheReadUsd: 0.25 },
+  'claude-mythos-5-1': { input: 10, output: 50, cacheReadUsd: 0.25 },
+  'claude-opus-5-5': { input: 4, output: 20, cacheReadUsd: 0.2 },
+  'claude-sonnet-5-5': { input: 2, output: 10 },
   'claude-fable-5': { input: 10, output: 50 },
   'claude-mythos-5': { input: 10, output: 50 },
   'claude-opus-5': { input: 5, output: 25 },

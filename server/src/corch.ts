@@ -40,6 +40,7 @@ import {
   livePct,
   pickAccount,
   scrubbedEnv,
+  spentFromLog,
   summarizeEvent,
   TRANSIENT_PROMPT,
   toView,
@@ -454,6 +455,14 @@ function readInto(path: string, r: LogRead): LogRead {
   return r
 }
 
+const readText = (path: string): string => {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
 function tailText(path: string, max: number): string {
   try {
     const size = statSync(path).size
@@ -504,6 +513,8 @@ function finish(w: CorchWorker, events: unknown[]): void {
   at.notice = v.notice
   at.endedAt = now
   w.costUsd += v.costUsd
+  // A killed turn has no closing result to read its price from; price it from its own log.
+  if (v.outcome === 'interrupted') w.costUsd += spentFromLog(readText(at.log))
   w.turns += v.turns
   if (v.outcome === 'done') w.result = v.result
   if (w.status === 'cancelled') {
@@ -857,6 +868,7 @@ export function corchCancel(filter: { id?: string; group?: string }): { cancelle
           // already gone
         }
       }
+      w.costUsd += spentFromLog(readText(at.log))
       at.outcome = 'cancelled'
       at.endedAt = Date.now()
       procs.delete(w.id)

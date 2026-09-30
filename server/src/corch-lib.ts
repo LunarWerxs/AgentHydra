@@ -10,6 +10,7 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { priceTokens } from './pricing'
 import {
   classifyLimit,
   compactNotice,
@@ -17,6 +18,7 @@ import {
   isApiErrorEvent,
   limitEventText,
 } from './rate-limit-signal'
+import { accumulateUsageLine, emptySpend, newUsageSeen } from './usage-tokens'
 
 export type CorchStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled'
 // waiting = no eligible account right now (all at their limit or signed out); retried every tick
@@ -191,6 +193,29 @@ export function classifyAttempt(events: unknown[], stderr: string): AttemptVerdi
   // 'issuer' stamp notice), and the retry is bounded at three per turn.
   if (!last && !apiErrors.length) return out('interrupted', INTERRUPTED_NOTICE)
   return out('error', null)
+}
+
+/** What an attempt that never wrote its closing `result` event spent (killed by a restart, or
+ *  stopped): the CLI prices a turn only in that event, so without this a long interrupted turn
+ *  counted as $0 (measured 2026-09-30: a 15-minute review showed $0.31, its resumed tail). Priced
+ *  from the usage its stream-json log recorded, through the product's one per-turn parser, so a
+ *  reply the log repeats once per content block is charged once. 0 when nothing in it prices. */
+export function spentFromLog(text: string, at = Date.now()): number {
+  const spend = emptySpend()
+  const seen = newUsageSeen()
+  for (const line of text.split('\n')) {
+    if (!line.includes('"usage"')) continue
+    let ev: Record<string, unknown>
+    try {
+      ev = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (ev.type !== 'assistant') continue
+    // stream-json names the request `request_id`; the transcript parser keys on `requestId`.
+    accumulateUsageLine(spend, JSON.stringify({ ...ev, requestId: ev.request_id }), 0, seen)
+  }
+  return priceTokens(spend.byModel, at).costUsd ?? 0
 }
 
 const oneLine = (s: string, n: number): string => s.replace(/\s+/g, ' ').trim().slice(0, n)

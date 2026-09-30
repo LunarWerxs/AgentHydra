@@ -146,6 +146,8 @@ const dir = (name: string) => {
   mkdirSync(d, { recursive: true })
   return d
 }
+/** Keeps `acct` busy for `secs`. It joins the worker's own group: `per_account` caps a group's
+ *  workers, so only a worker of the same group makes the account full for it. */
 const blocker = (group: string, acct: string, cwd: string, secs: number) =>
   run(
     group,
@@ -218,8 +220,9 @@ async function moveAndBack(a: Instance, b: Instance) {
     const cwd = dir('move')
     const c1 = `MANGO-${rnd()}`
     const c2 = `KIWI-${rnd()}`
+    const group = `live-move-${rnd()}`
     const [w] = await run(
-      `live-move-${rnd()}`,
+      group,
       [
         {
           title: 'move and back',
@@ -234,7 +237,7 @@ async function moveAndBack(a: Instance, b: Instance) {
     const home = v.accountId!
     const other = home === a.id ? b.id : a.id
     check(v.status === 'done', `turn 1: ${v.status} ${v.result}`)
-    const [b1] = await blocker(`live-busy-${rnd()}`, home, cwd, 70)
+    const [b1] = await blocker(group, home, cwd, 70)
     await running(b1!.id)
     await send(
       w!.id,
@@ -245,7 +248,7 @@ async function moveAndBack(a: Instance, b: Instance) {
       v.accountId === other && (v.result ?? '').includes(c1),
       `turn 2 moved (${path(v)}) and remembered ${c1}: ${v.result}`,
     )
-    const [b2] = await blocker(`live-busy-${rnd()}`, other, cwd, 90)
+    const [b2] = await blocker(group, other, cwd, 90)
     await running(b2!.id)
     await send(
       w!.id,
@@ -344,8 +347,9 @@ async function deadLoginFollowUp(deadAcct: Instance, a: Instance) {
     const cwd = dir('dead')
     const code = `PEAR-${rnd()}`
     const token = `FOLLOWUP-${rnd()}`
+    const group = `live-dead-${rnd()}`
     const [w] = await run(
-      `live-dead-${rnd()}`,
+      group,
       [
         {
           title: 'dead login',
@@ -357,7 +361,7 @@ async function deadLoginFollowUp(deadAcct: Instance, a: Instance) {
       1,
     )
     await settled(w!.id)
-    const [b] = await blocker(`live-busy-${rnd()}`, a.id, cwd, 60)
+    const [b] = await blocker(group, a.id, cwd, 60)
     await running(b!.id)
     await send(w!.id, `Reply with ${token}, one space, then the codeword, and nothing else.`)
     const v = await settled(w!.id, 300)

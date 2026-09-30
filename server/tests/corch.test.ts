@@ -19,6 +19,7 @@ import {
   pickAccount,
   setCorchAccountsProvider,
   setCorchClaudeCommand,
+  spentFromLog,
   startCorch,
 } from '../src/corch'
 
@@ -90,6 +91,27 @@ describe('classifyAttempt', () => {
       '',
     )
     expect(r.outcome).toBe('done')
+  })
+})
+
+describe('spentFromLog', () => {
+  // One API response, logged as two stream-json lines (a text block, then a tool call), as the CLI
+  // writes it; a killed attempt has no closing `result` to take the price from.
+  const usage = { input_tokens: 10, output_tokens: 2_000, cache_read_input_tokens: 50_000 }
+  const block = (type: string) =>
+    JSON.stringify({
+      type: 'assistant',
+      request_id: 'req_1',
+      message: { id: 'msg_1', model: 'claude-opus-5-5', content: [{ type }], usage },
+    })
+
+  test('a killed turn is priced from its log, once per response however many blocks it logged', () => {
+    const once = spentFromLog(block('text'))
+    expect(once).toBeGreaterThan(0)
+    expect(spentFromLog([block('text'), block('tool_use'), JSON.stringify(init)].join('\n'))).toBe(
+      once,
+    )
+    expect(spentFromLog(JSON.stringify(init))).toBe(0)
   })
 })
 
