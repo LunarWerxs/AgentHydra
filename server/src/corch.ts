@@ -203,9 +203,14 @@ async function tick(): Promise<void> {
         .map((x) => x.until)
         .filter((u) => u > now)
         .sort((a, b) => a - b)[0]
+      const allSignedOut =
+        accounts.length > 0 &&
+        accounts.every((a) => walls[a.id]?.reason === 'signed out' && walls[a.id]!.until > now)
       const why = !accounts.length
         ? 'No signed-in CLI account. Add one: CLI instances, Quick add.'
-        : `Every eligible account is at its usage limit or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.`
+        : allSignedOut
+          ? 'Every CLI account is signed out. Sign one in again: CLI instances, Quick add (type its email).'
+          : `Every eligible account is at its usage limit or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.`
       if (w.status !== 'waiting' || w.error !== why) {
         w.status = 'waiting'
         w.error = why
