@@ -189,7 +189,7 @@ export function freshestPct(
 export type CorchWorkerView = Omit<CorchWorker, 'prompt' | 'attempts'> & {
   prompt: string // first 300 chars
   account: string | null // `#<num> <name>`
-  elapsedS: number
+  ranS: number // seconds its CLI sessions actually ran, summed over every attempt
   attempts: Array<{ account: CorchAccountRef; outcome: AttemptOutcome; notice: string | null }>
 }
 
@@ -610,7 +610,14 @@ export function toView(w: CorchWorker, now: number): CorchWorkerView {
     ...w,
     prompt: w.prompt.slice(0, 300),
     account: ref ? (ref.num === null ? ref.name : `#${ref.num} ${ref.name}`) : null,
-    elapsedS: Math.max(0, Math.round(((live ? now : w.updatedAt) - w.createdAt) / 1000)),
+    // Working time, not time since it was created: hours spent waiting for an account, or a day
+    // between a finished task and its follow-up, are not time it ran.
+    ranS: Math.round(
+      w.attempts.reduce(
+        (sum, a) => sum + Math.max(0, (a.endedAt ?? (live ? now : a.startedAt)) - a.startedAt),
+        0,
+      ) / 1000,
+    ),
     attempts: w.attempts.map((a) => ({ account: a.account, outcome: a.outcome, notice: a.notice })),
   }
 }

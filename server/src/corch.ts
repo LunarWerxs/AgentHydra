@@ -1172,7 +1172,11 @@ export function corchSend(id: string, text: string): { ok: boolean; message: str
   w.pending.push(text)
   if (w.status === 'running') {
     changed(w)
-    return { ok: true, message: 'Queued: it is delivered when the current turn ends.' }
+    return {
+      ok: true,
+      message:
+        'Queued: the task gets it after it finishes its current work. To change course now, stop it and continue it with your message.',
+    }
   }
   if (!isActive(w)) {
     w.status = 'queued'

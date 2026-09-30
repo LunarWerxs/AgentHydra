@@ -29,6 +29,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   thread by hand. Workers have no console window, but every one can be watched and steered in the
   new Corch view, and chats drive them with the MCP tools `corch_run`, `corch_status`, `corch_send`
   and `corch_cancel`. See [docs/CORCH.md](docs/CORCH.md).
+  Each task shows its working time, cost and turns, the messages still waiting to reach it, why a
+  queued task is queued again (moving accounts, retrying, resuming after a restart), and a banner
+  when AgentHydra cannot be reached instead of a list that only looks alive.
 
 - **Quick add: type an email, confirm in the browser, and the account is a signed-in CLI instance**
   (`server/src/core/cli-quick-add.ts`, `web/src/components/CliInstancesSection.vue`). The Instances

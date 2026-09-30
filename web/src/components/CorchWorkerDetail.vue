@@ -6,8 +6,9 @@
 // scrolling body (accounts tried, result, why it stopped, the event log) and a footer form. The
 // accounts list is the point of Corch made visible: each account the task tried, in order, and why
 // it moved on (limit, signed out, error). The box speaks to what sending actually does
-// (server/src/corch.ts corchSend): on a live task it queues for after the current step; on a
-// finished, failed or stopped one it continues the SAME conversation as a new turn.
+// (server/src/corch.ts corchSend): on a live task it waits until the task finishes its current work
+// (a CLI turn is the whole piece of work, not one step), and it is shown until then; on a finished,
+// failed or stopped one it continues the SAME conversation as a new turn.
 import { RotateCcw, Send, Square } from '@lucide/vue'
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -18,7 +19,12 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import type { CorchWorkerView } from '@/lib/api'
 import { cancelCorch, sendCorchWorker } from '@/lib/api'
-import { CORCH_OUTCOME, corchAccountLabel, isCorchActive } from '@/lib/corch-status'
+import {
+  CORCH_OUTCOME,
+  corchAccountLabel,
+  corchQueuedNote,
+  isCorchActive,
+} from '@/lib/corch-status'
 import { formatAgo } from '@/lib/relativeTime'
 
 const props = defineProps<{
@@ -39,6 +45,23 @@ const stickToBottom = ref(true)
 
 const active = computed(() => (props.worker ? isCorchActive(props.worker) : false))
 const failed = computed(() => props.worker?.status === 'failed')
+const queuedNote = computed(() => (props.worker ? corchQueuedNote(props.worker, props.now) : null))
+/** Its transcript is only on the account it last ran on, so Continue cannot move it elsewhere. */
+const stuck = computed(
+  () =>
+    failed.value && !!props.worker?.error?.startsWith("This session's transcript was not found"),
+)
+const errorHeading = computed(() => {
+  const status = props.worker?.status
+  if (status === 'failed') return t('corch.error')
+  if (status === 'waiting') return t('corch.whyWaiting')
+  if (status === 'cancelled') return t('corch.beforeStopped')
+  return t('corch.whyStopped')
+})
+const stopLabel = computed(() => {
+  const n = props.worker?.pending.length ?? 0
+  return n ? t('corch.stopDiscards', { n }, n) : t('corch.stop')
+})
 
 function duration(totalS: number): string {
   const s = Math.floor(totalS % 60)
@@ -120,16 +143,19 @@ async function onStop() {
             <h3 class="line-clamp-2 break-words text-sm font-semibold" :title="worker.title">
               {{ worker.title }}
             </h3>
+            <p v-if="queuedNote" class="text-xs text-muted-foreground">
+              {{ $t(queuedNote.key, queuedNote.values ?? {}) }}
+            </p>
           </div>
           <Button
             v-if="active"
             variant="outline"
             class="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
             :disabled="stopping"
-            :aria-label="`${$t('corch.stop')}: ${worker.title}`"
+            :aria-label="`${stopLabel}: ${worker.title}`"
             @click="onStop"
           >
-            <Square /> {{ $t('corch.stop') }}
+            <Square /> {{ stopLabel }}
           </Button>
         </div>
         <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-xs">
@@ -145,7 +171,11 @@ async function onStop() {
             >{{ formatAgo(now, worker.createdAt) }}</time>
           </dd>
           <dt class="text-muted-foreground">{{ $t('corch.detailRan') }}</dt>
-          <dd class="tabular-nums">{{ duration(worker.elapsedS) }}</dd>
+          <dd class="tabular-nums">{{ duration(worker.ranS) }}</dd>
+          <dt class="text-muted-foreground">{{ $t('corch.detailCost') }}</dt>
+          <dd class="tabular-nums" :title="$t('corch.detailCostHint')">${{ worker.costUsd.toFixed(2) }}</dd>
+          <dt class="text-muted-foreground">{{ $t('corch.detailTurns') }}</dt>
+          <dd class="tabular-nums">{{ worker.turns }}</dd>
           <dt class="text-muted-foreground">{{ $t('corch.detailGroup') }}</dt>
           <dd class="mono truncate" :title="worker.group">{{ worker.group }}</dd>
         </dl>
@@ -173,6 +203,17 @@ async function onStop() {
           </ol>
         </div>
 
+        <div v-if="worker.pending.length" class="flex flex-col gap-1.5">
+          <h4 class="text-xs font-medium">{{ $t('corch.pending', { n: worker.pending.length }) }}</h4>
+          <ol class="flex flex-col gap-1 text-xs">
+            <li
+              v-for="(m, i) in worker.pending"
+              :key="i"
+              class="whitespace-pre-wrap break-words rounded-md bg-muted p-2"
+            >{{ m }}</li>
+          </ol>
+        </div>
+
         <div v-if="worker.result" class="flex flex-col gap-1.5">
           <h4 class="text-xs font-medium">{{ $t('corch.result') }}</h4>
           <pre class="mono scroll-slim max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2.5 text-xs">{{ worker.result }}</pre>
@@ -182,7 +223,7 @@ async function onStop() {
              failure is red; "no account was free" on a task you stopped is information. -->
         <div v-if="worker.error" class="flex flex-col gap-1.5">
           <h4 class="text-xs font-medium" :class="failed ? 'text-destructive' : ''">
-            {{ failed ? $t('corch.error') : $t('corch.whyStopped') }}
+            {{ errorHeading }}
           </h4>
           <pre
             class="mono scroll-slim max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md p-2.5 text-xs"
@@ -222,7 +263,9 @@ async function onStop() {
         />
         <div class="flex items-center justify-between gap-3">
           <span class="text-2xs text-muted-foreground">
-            {{ active ? $t('corch.messageHint') : $t('corch.continueHint') }}
+            {{
+              active ? $t('corch.messageHint') : stuck ? $t('corch.continueHintStuck') : $t('corch.continueHint')
+            }}
             <span class="hidden sm:inline">· {{ $t('corch.sendShortcut') }}</span>
           </span>
           <Button type="submit" class="shrink-0" :disabled="sending || !followUp.trim()">

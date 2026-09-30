@@ -5,12 +5,12 @@ export default {
   // --- quick add ---
   qaTitle: 'Add a CLI account',
   qaHint:
-    'Type the email of a Claude account. A separate sign-in window opens (never your own browser): click "Continue with email", type the code from your inbox, then Authorize. If it shows a "Just a moment" check, use Copy sign-in link on your phone or a browser you already use instead. The account then joins the pool your tasks run on.',
+    'Type the email of a Claude account. In the sign-in window, complete the human check if shown, then open the sign-in link from your email in that window. The code is entered automatically, and the window closes when the account joins the pool your tasks run on.',
   qaPlaceholder: "name{'@'}example.com",
   qaEmailLabel: 'Account email',
   qaAdd: 'Add account',
   qaWindowOpen:
-    'A sign-in window opened. Click "Continue with email", type the code from your inbox, then Authorize — it closes by itself. If it shows a "Just a moment" check that will not pass, use Copy sign-in link and open it on your phone or in a browser you already use, then paste the code the page ends on below.',
+    'Complete the human check if shown, then open the sign-in link from your email in this window. The code is entered automatically, and the window closes when the account is added.',
   qaConfirm:
     'Open the sign-in window again, or copy the link and open it where you can read this email.',
   qaReopen: 'Open sign-in window',
@@ -37,6 +37,11 @@ export default {
   empty:
     'Ask any chat to corch a task (run it on your Claude CLI accounts) and each piece shows up here.',
   loadFailed: 'Could not load the Corch tasks',
+  loadFailedTitle: 'Could not reach AgentHydra',
+  loadFailedBody:
+    'Your tasks are not lost: they are kept on disk. Retrying by itself every 15 seconds.',
+  retry: 'Retry',
+  staleBanner: 'Cannot reach AgentHydra. Showing the last known state; retrying.',
   noAccount: 'No account yet',
   seconds: '{s}s',
   minutes: '{m}m {s}s',
@@ -45,20 +50,30 @@ export default {
   // --- detail ---
   detailAccount: 'Account',
   detailStarted: 'Started',
-  detailRan: 'Ran for',
+  detailRan: 'Working time',
+  detailCost: 'Cost',
+  detailTurns: 'Turns',
+  detailCostHint: 'Every attempt on every account, stopped ones included.',
   detailGroup: 'Handed off together as',
   attempts: 'Accounts tried',
   switchedAccount: 'Stayed on one account | Switched account once | Switched account {n} times',
-  events: 'What it did',
+  events: 'What it did, on every account',
   noEvents: 'Nothing yet.',
   loadingEvents: 'Loading…',
   result: 'Result',
   error: 'Error',
   whyStopped: 'Why it stopped',
+  whyWaiting: 'Why it is waiting',
+  beforeStopped: 'Before it was stopped',
+  pending: 'Waiting to be sent ({n})',
+  stopDiscards: 'Stop task (drops 1 waiting message) | Stop task (drops {n} waiting messages)',
   messageLabel: 'Message this task',
-  messageHint: 'Delivered when its current step ends.',
+  messageHint:
+    'Queued: the task gets it after it finishes its current work. To change course now, stop it, then continue it with your message.',
   continueLabel: 'Continue this task',
   continueHint: 'Picks up the same conversation, on whichever account is free.',
+  continueHintStuck:
+    'It can only continue on the account it last ran on, once that account is free or signed in again.',
   messagePlaceholder: 'What should it do next?',
   send: 'Send',
   continue: 'Continue',
@@ -74,7 +89,7 @@ export default {
   statusDone: 'Done',
   statusFailed: 'Failed',
   statusCancelled: 'Stopped',
-  statusQueuedHint: 'Not started yet.',
+  statusQueuedHint: 'Waiting for its turn to start.',
   statusRunningHint: 'Working now.',
   statusWaitingHint:
     'Every account it may use is at its usage limit or signed out. It resumes by itself when one frees up.',
@@ -85,8 +100,16 @@ export default {
   outcomeRunning: 'running',
   outcomeDone: 'done',
   outcomeQuota: 'hit its limit',
-  outcomeTransient: 'network hiccup',
+  outcomeTransient: 'API overloaded',
   outcomeAuth: 'signed out',
   outcomeError: 'error',
   outcomeCancelled: 'stopped',
+  outcomeInterrupted: 'interrupted by a restart',
+  outcomeHandoff: 'handed off',
+  // --- why a queued task that has already run is queued again (corchQueuedNote) ---
+  queuedLimit: 'Moving to another account: this one reached its limit.',
+  queuedSignedOut: 'Moving to another account: this one is signed out.',
+  queuedHandoff: 'Continuing in a fresh session on the account with the most room.',
+  queuedRetry: 'Retrying in {s}s (try {n} of 3).',
+  queuedRestart: 'Resuming after AgentHydra restarted.',
 }

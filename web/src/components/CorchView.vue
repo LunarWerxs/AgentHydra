@@ -9,7 +9,7 @@
 // form above the title; the list is one bordered panel with the hand-off as a subheader; the detail
 // pane is sticky so a row low in a long list does not open its detail off screen. Quick add stays
 // mounted when closed (v-show), so a sign-in waiting for a code keeps polling.
-import { Network, Plus, RefreshCw, X } from '@lucide/vue'
+import { CloudOff, Network, Plus, RefreshCw, X } from '@lucide/vue'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -20,7 +20,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { CorchWorkerView } from '@/lib/api'
 import { getCorchWorker, listCorchWorkers } from '@/lib/api'
-import { firstLine, isCorchActive } from '@/lib/corch-status'
+import { corchQueuedNote, firstLine, isCorchActive } from '@/lib/corch-status'
 import { formatAgo } from '@/lib/relativeTime'
 
 const { t } = useI18n()
@@ -33,6 +33,9 @@ const detail = ref<(CorchWorkerView & { events: string[] }) | null>(null)
 const addOpen = ref(false)
 const quickAddEl = ref<HTMLElement | null>(null)
 const now = ref(Date.now())
+/** The last load failed. Before anything loaded that is an error state (never "No tasks yet");
+ *  after, a banner over the last known list, whose spinners would otherwise look alive. */
+const unreachable = ref(false)
 
 /** Hand-offs ordered by their newest task, tasks inside newest first. */
 const groups = computed(() => {
@@ -61,7 +64,7 @@ async function loadDetail() {
     const d = await getCorchWorker(id)
     if (selectedId.value === id) detail.value = d
   } catch {
-    // Keep the last detail; the list error toast already speaks for the daemon being down.
+    // Keep the last detail; `unreachable` and its banner speak for a daemon that is down.
   }
 }
 
@@ -71,6 +74,7 @@ async function load(opts: { silent?: boolean } = {}) {
   if (!opts.silent) loading.value = true
   try {
     workers.value = await listCorchWorkers()
+    unreachable.value = false
     now.value = Date.now()
     if (!loaded.value) {
       loaded.value = true
@@ -84,7 +88,8 @@ async function load(opts: { silent?: boolean } = {}) {
     }
     await loadDetail()
   } catch {
-    if (!opts.silent) toast.error(t('corch.loadFailed'))
+    unreachable.value = true
+    if (!opts.silent && loaded.value) toast.error(t('corch.loadFailed'))
   } finally {
     if (!opts.silent) loading.value = false
   }
@@ -197,8 +202,30 @@ onUnmounted(() => {
       <CliQuickAdd />
     </section>
 
+    <p
+      v-if="loaded && unreachable"
+      role="status"
+      class="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
+    >
+      <CloudOff class="size-3.5 shrink-0" />
+      {{ $t('corch.staleBanner') }}
+    </p>
+
     <div v-if="!loaded && loading" class="flex flex-col gap-2 lg:max-w-80" aria-busy="true">
       <Skeleton v-for="i in 3" :key="i" class="h-16 rounded-lg" />
+    </div>
+
+    <div
+      v-else-if="!loaded && unreachable"
+      role="alert"
+      class="flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
+    >
+      <CloudOff class="size-7 text-muted-foreground" />
+      <p class="text-sm font-medium">{{ $t('corch.loadFailedTitle') }}</p>
+      <p class="max-w-md text-xs text-muted-foreground">{{ $t('corch.loadFailedBody') }}</p>
+      <Button variant="outline" class="mt-2" @click="load()">
+        <RefreshCw /> {{ $t('corch.retry') }}
+      </Button>
     </div>
 
     <div
@@ -255,6 +282,10 @@ onUnmounted(() => {
                   :class="w.status === 'failed' ? 'text-destructive' : 'text-warning'"
                   :title="w.error"
                 >{{ firstLine(w.error) }}</span>
+                <span
+                  v-else-if="corchQueuedNote(w, now)"
+                  class="truncate text-xs text-muted-foreground"
+                >{{ $t(corchQueuedNote(w, now)?.key ?? '', corchQueuedNote(w, now)?.values ?? {}) }}</span>
                 <span
                   v-else-if="w.status === 'running' && w.lastActivity"
                   class="truncate text-xs text-muted-foreground"

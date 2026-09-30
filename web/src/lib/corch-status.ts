@@ -77,13 +77,34 @@ export const CORCH_OUTCOME: Record<
   quota: { variant: 'warning', label: 'corch.outcomeQuota' },
   transient: { variant: 'muted', label: 'corch.outcomeTransient' },
   auth: { variant: 'warning', label: 'corch.outcomeAuth' },
-  // "stopped": killed from outside (a daemon restart) and resumed by itself; its notice says so.
-  interrupted: { variant: 'muted', label: 'corch.outcomeCancelled' },
-  // Wound down near its limit and handed off to a fresh session; its notice says so. "hit its
-  // limit" is the closest existing words until the Corch strings file can take new ones.
-  handoff: { variant: 'info', label: 'corch.outcomeQuota' },
+  // Killed from outside (a daemon restart) and resumed by itself: never the word for a manual Stop.
+  interrupted: { variant: 'muted', label: 'corch.outcomeInterrupted' },
+  // Wound down near its limit and handed off to a fresh session; its notice says so.
+  handoff: { variant: 'info', label: 'corch.outcomeHandoff' },
   error: { variant: 'destructive', label: 'corch.outcomeError' },
   cancelled: { variant: 'outline', label: 'corch.outcomeCancelled' },
+}
+
+/** Why a task that has already run is queued again, as an i18n key and its values; null for one
+ *  that simply has not started. Without it a task moving accounts after a limit looked exactly like
+ *  one that had never run (2026-09-30 UI review). */
+export function corchQueuedNote(
+  w: Pick<CorchWorkerView, 'status' | 'attempts' | 'notBefore' | 'retries'>,
+  now: number,
+): { key: string; values?: Record<string, number> } | null {
+  if (w.status !== 'queued') return null
+  const last = w.attempts[w.attempts.length - 1]
+  if (!last) return null
+  if (w.notBefore !== null && w.notBefore > now)
+    return {
+      key: 'corch.queuedRetry',
+      values: { s: Math.ceil((w.notBefore - now) / 1000), n: Math.max(1, w.retries) },
+    }
+  if (last.outcome === 'quota') return { key: 'corch.queuedLimit' }
+  if (last.outcome === 'auth') return { key: 'corch.queuedSignedOut' }
+  if (last.outcome === 'handoff') return { key: 'corch.queuedHandoff' }
+  if (last.outcome === 'interrupted') return { key: 'corch.queuedRestart' }
+  return null
 }
 
 export const isCorchActive = (w: Pick<CorchWorkerView, 'status'>): boolean =>

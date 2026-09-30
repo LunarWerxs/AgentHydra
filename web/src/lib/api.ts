@@ -909,7 +909,8 @@ export interface CorchWorkerView {
   moves: number
   retries: number
   notBefore: number | null
-  elapsedS: number
+  /** Seconds its CLI sessions actually ran, summed over every attempt. */
+  ranS: number
   createdAt: number
   updatedAt: number
 }
