@@ -103,3 +103,31 @@ follow-ups; a stopped attempt now shows its spend ($0.25 for one cut mid-command
   - The CLI's own `resetsAt` ends the wall, 60 s after the reset.
 - **Also:** the `corch_*` MCP tools now reach Corch only over HTTP (`a63ab65`). The 409 restart
   gate held for real when another session tried to restart the daemon under a running worker.
+
+## Round four, 2026-09-30: never spend overage, faster starts, what a move carries
+
+The owner's rule is to never go into paid extra usage. It is now a setting, **Settings >
+Providers > Let Corch use paid extra usage**, off by default and never synced to another machine
+(`350a078`). With it off:
+
+- On an account that CAN bill (usage events say `overageStatus: "allowed"`; of the four, only #90
+  does), a turn is stopped at 98% of the 5-hour window or 99% of the week, before any request
+  bills. It then moves to an account with free quota (`4f17474`).
+- If overage starts anyway, the turn is stopped within about a second: while a worker runs, the
+  tick is 1 s.
+
+Other changes this round:
+
+- **Faster starts.** Workers start without the account's claude.ai connectors. Measured on #83:
+  2.0-3.0 s to the CLI's init with them and 1.2-1.3 s without, with a steady 137 tools instead of
+  158-202. On a whole task this is inside the noise of the model's own time (a burst's median
+  attempt stayed 7-9 s).
+- **Faster resumes.** An interrupted attempt resumes on the next tick (was 3.1 s every time).
+- **Fresher routing.** Routing uses each account's live usage from its workers' own streams when
+  that is newer than the 15-minute snapshot.
+- **What a move carries.** A session that used a subagent moves with its `subagents/` files, and
+  the resumed turn still knows the subagent's output (`subagent` phase, passed #88 → #84). The
+  project's auto-memory (`projects/<project>/memory/`, kept per account by the CLI) now moves too
+  (`000c848`).
+- **Stopping a group mid-command.** 6 of 6 cancelled, 0 CLI processes left, and the stopped
+  attempts' spend recorded.
