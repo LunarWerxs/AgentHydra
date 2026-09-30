@@ -74,7 +74,10 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
       if (!r.ok) throw new Error(`${path} ${r.status} ${JSON.stringify(j)}`)
       return j as T
     } catch (e) {
-      if (i >= 40 || / 4\d\d /.test(String(e))) throw e
+      // Only a read is retried through a daemon restart. A POST is sent once: re-sending one that
+      // may have landed would queue a message twice, start extra workers on real accounts, or
+      // restart the daemon a second time.
+      if (body !== undefined || i >= 40 || / 4\d\d /.test(String(e))) throw e
       await sleep(1500) // the daemon is restarting
     }
   }
