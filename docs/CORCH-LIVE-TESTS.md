@@ -25,7 +25,7 @@ bun scripts/corch-live.ts burst 10
 
 | Scenario | What it does | What must hold |
 | --- | --- | --- |
-| move-and-back | Turn 1 on account A; A kept busy, so turn 2 runs on B; B kept busy, so turn 3 runs on A again | Turn 3 knows the codeword given in turn 2 (only B's newer transcript had it, so A's stale copy was overwritten); the file it edits has all three lines |
+| move-and-back | Turn 1 on account A; A kept busy, so turn 2 runs on B; B kept busy, so turn 3 runs on A again | Turn 3 knows the codeword given in turn 2 (only B's newer transcript had it, so A's stale copy was overwritten); the file it edits has all three lines. "Kept busy" is a worker of the SAME group: `per_account` caps a group's own workers, so another group's worker does not make the account full |
 | queued follow-ups | Two messages sent while the worker runs a command | Both arrive in order in the same session (`STEP3 STEP2 STEP1-…`) |
 | cancel-and-revive | Stop during a command, then send a message | The CLI process is gone; the next turn resumes the session and still knows the codeword |
 | follow-up on a dead login | A turn lands on an account whose login is dead | It fails `auth`, and the session finishes on the live account with the follow-up answered |
@@ -48,3 +48,32 @@ bun scripts/corch-live.ts burst 10
   with python's `time.sleep`.
 - Not yet seen live: a real usage-limit (`quota`) handoff. The same move and resume path is proven
   by the dead-login and busy-account moves above, and the limit notice is pinned by the unit tests.
+
+## Round two, 2026-09-30: Corch reviewed and fixed by Corch
+
+Two review workers ran through Corch itself on #84 and #90, one on context loss and one on
+scheduling and process lifecycle. A forced daemon restart hit both mid-review; both resumed and
+wrote their reports. Every finding was checked against the code before a fix. Two more Corch workers
+wrote the fixes (the reset-time parser on #84, the 17 Corch items on #90), which were reviewed,
+tested (server suite 1974 pass, 0 fail) and landed as `c638e59` and `41fb0ff`:
+
+- **Stuck forever:** the account a worker last failed on was excluded for good, even after its wall
+  lifted. A reused PID after a restart kept a dead worker `running`, which also blocked every
+  restart behind the 409.
+- **Lost work:** a long turn cut by a restart re-sent its whole task, because `system/init` had
+  fallen out of the 400-event window. A 529 retry re-sent its message. A handoff with no transcript
+  dropped the follow-up. A message to a stopped worker re-ran the stopped work first. A failed spawn
+  lost the follow-up. A stderr warning turned a restart kill into a lost `error`.
+- **Wrong numbers:** `parseResetTime` could not read any real limit notice ("resets 4am", "9:10am
+  (America/Chicago)"), so every wall was a blind 60 minutes. Corch read the usage field only a
+  manual check writes. A killed or stopped attempt's spend counted $0. Opus 5.5, Sonnet 5.5,
+  Fable 5.1 and Mythos 5.1 had no prices at all.
+- **Daemon health:** any fs error in the tick exited the daemon. A side-run daemon shared (and
+  overwrote) the primary's store. Finished logs stayed parsed in memory.
+- **Also fixed on the way:** `corch_status` waits at most 50 s (the desktop MCP client drops a call
+  at about 60 s: 55 s answered, 110 s and 300 s timed out). "Restart needed" no longer fires for a
+  commit of server edits the daemon already runs (`0c21768`).
+
+Live on the new code: move-and-back #90 → #84 → #90 with both codewords, restart (both workers
+`interrupted`, then done on their own accounts), burst 8 of 8 in 10 s, cancel-and-revive, queued
+follow-ups; a stopped attempt now shows its spend ($0.25 for one cut mid-command).
