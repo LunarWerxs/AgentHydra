@@ -77,7 +77,7 @@ export function openSigninWindow(
       opts.onFailed?.(msg.error)
     }
   }
-  void (async () => {
+  const readerDone = (async () => {
     const decoder = new TextDecoder()
     let buf = ''
     try {
@@ -91,7 +91,9 @@ export function openSigninWindow(
       // The script ended.
     }
   })()
-  void proc.exited.then(() => {
+  // After BOTH the exit and the last stdout line: the script prints its closed/error line and exits
+  // at once, and an exit seen first would bury the real reason under "stopped unexpectedly".
+  void Promise.all([readerDone, proc.exited]).then(() => {
     if (!settled && !closing) {
       settled = true
       opts.onFailed?.('The sign-in window stopped unexpectedly.')

@@ -48,6 +48,7 @@ async def main(url: str, prefix: str, headless: bool) -> int:
     except ImportError:
         emit({"error": "zendriver is not installed (python -m pip install zendriver)"})
         return 2
+    browser = None
     try:
         browser = await zd.start(
             headless=headless,
@@ -56,23 +57,33 @@ async def main(url: str, prefix: str, headless: bool) -> int:
         await browser.get(url)
     except Exception as err:  # noqa: BLE001 - reported to the caller as the reason
         emit({"error": f"could not open the sign-in window: {err}"})
+        if browser is not None:
+            try:
+                await browser.stop()
+            except Exception:  # noqa: BLE001 - already gone
+                pass
         return 1
     emit({"ready": True})
 
     stop = asyncio.Event()
     threading.Thread(target=watch_stdin, args=(asyncio.get_running_loop(), stop), daemon=True).start()
     handed_over = False
+    misses = 0  # polls in a row that found no tab: a redirect can blip one, a closed window keeps it
     try:
         while not stop.is_set():
             try:
                 await browser.update_targets()
                 tabs = browser.tabs
-            except Exception:  # noqa: BLE001 - the browser is gone
+            except Exception:  # noqa: BLE001 - mid-navigation, or the browser is gone
                 tabs = []
-            if not tabs:
-                # The person closed the window (the browser exits with its last one).
-                emit({"closed": True})
-                break
+            if tabs:
+                misses = 0
+            else:
+                misses += 1
+                if browser.stopped or misses >= 3:
+                    # The person closed the window (the browser exits with its last one).
+                    emit({"closed": True})
+                    break
             if not handed_over:
                 for tab in tabs:
                     code = callback_code(tab.url or "", prefix)
