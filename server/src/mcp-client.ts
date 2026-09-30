@@ -207,6 +207,10 @@ export const str = (v: unknown): string => String(v ?? '')
 // holds a connection open that long, and a call the client abandons loses the report for work
 // the daemon finishes anyway (2026-09-11, the lost `sweep --all --yes`).
 export const AUTO_DETACH_MS = 120_000
+/** The longest corch_status may hold a call waiting. The desktop app's MCP client drops a call at
+ *  about 60 s (the MCP SDK's default request timeout; measured 2026-09-30: a 55 s wait answered,
+ *  110 s and 300 s timed out with nothing returned), so a longer wait only loses its answer. */
+export const CORCH_MAX_WAIT_S = 50
 export const qs = (params: Record<string, unknown>): string => {
   const p = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) if (v != null) p.set(k, String(v))

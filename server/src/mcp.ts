@@ -34,6 +34,7 @@ import {
   api,
   apiOrLocal,
   busyRefusal,
+  CORCH_MAX_WAIT_S,
   handleFrom,
   INSTANCE_PARAM,
   JSON_HEADERS,
@@ -686,7 +687,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'corch_status',
     description:
-      'Read Corch workers (status, account, lastActivity, result/error, moves, cost), optionally scoped by `group` or `id`. With `wait_seconds` (0..600) it WAITS for the next status change in scope and then answers: use that instead of polling.',
+      'Read Corch workers (status, account, lastActivity, result/error, moves, cost), optionally scoped by `group` or `id`. With `wait_seconds` (1..50) it WAITS up to that long for the next status change in scope and then answers; call it again to keep waiting. Use that instead of polling. Longer waits are cut to 50: an MCP client drops a call held about 60 s (measured 2026-09-30: 55 s answered, 110 s and 300 s timed out with nothing returned).',
     inputSchema: S({
       group: { type: 'string' },
       id: { type: 'string' },
@@ -698,7 +699,7 @@ export const TOOLS: McpEngineTool[] = [
         group: a.group != null ? str(a.group) : undefined,
         id: a.id != null ? str(a.id) : undefined,
       }
-      const wait = Math.min(600, Math.max(0, Number(a.wait_seconds) || 0))
+      const wait = Math.min(CORCH_MAX_WAIT_S, Math.max(0, Number(a.wait_seconds) || 0))
       return wait > 0 ? corchWait(filter, wait * 1000) : corchList(filter)
     },
   },
