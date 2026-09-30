@@ -58,6 +58,9 @@ describe('classifyAttempt', () => {
 
   test('a signed-out CLI is auth', () => {
     expect(classifyAttempt([], 'Invalid API key · Please run /login').outcome).toBe('auth')
+    // Measured live 2026-09-30: an expired CLI login ends its turn with exactly this result.
+    const expired = 'Failed to authenticate: OAuth session expired and could not be refreshed'
+    expect(classifyAttempt([result(expired, true)], '').outcome).toBe('auth')
   })
 
   test('an overloaded API is transient', () => {

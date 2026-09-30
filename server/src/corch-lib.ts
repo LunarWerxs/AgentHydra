@@ -103,7 +103,7 @@ export const ENV_SCRUB =
   /^(ANTHROPIC_(API_KEY|AUTH_TOKEN|BASE_URL)|CLAUDE_CODE_(OAUTH_\w+|ENTRYPOINT|SSE_PORT|SESSION\w*)|CLAUDECODE|CLAUDE_CONFIG_DIR)$/
 
 const AUTH_RE =
-  /please run \/login|not logged in|invalid api key|oauth token (?:has )?(?:expired|been revoked)|authentication_error/i
+  /please run \/login|not logged in|invalid api key|failed to authenticate|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error/i
 
 export function scrubbedEnv(configDir: string, workerId?: string): Record<string, string> {
   const env: Record<string, string> = {}
