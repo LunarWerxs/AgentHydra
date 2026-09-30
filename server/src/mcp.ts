@@ -729,6 +729,18 @@ export const TOOLS: McpEngineTool[] = [
       }),
   },
   {
+    name: 'corch_handoff',
+    description:
+      'MUTATES: hand a RUNNING Corch worker to a fresh session: after its current step it writes a handoff file, and the task continues in a new, small session (on the account with the most room) that starts from that handoff instead of re-reading the whole conversation. Corch does this by itself when a worker nears its usage limit; call it to free an account or to give a task whose conversation has grown huge a clean start.',
+    inputSchema: S({ id: { type: 'string' } }, ['id']),
+    run: (a) =>
+      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/handoff`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: '{}',
+      }),
+  },
+  {
     name: 'corch_cancel',
     description: 'MUTATES: stop a Corch worker (`id`) or every worker of a `group`.',
     inputSchema: S({ id: { type: 'string' }, group: { type: 'string' } }),

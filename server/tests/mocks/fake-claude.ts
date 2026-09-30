@@ -5,7 +5,7 @@
 // marker answers with the CLI's own synthetic session-limit notice and exits 1; any other account
 // finishes the turn with result 'FAKE DONE'. A --resume needs the transcript in its OWN config dir,
 // exactly like the real CLI, so a handoff that forgot to copy it fails loudly.
-import { appendFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const args = process.argv.slice(2)
@@ -111,6 +111,49 @@ if (existsSync(join(configDir, 'fake-near-limit'))) {
   process.exit(0)
 }
 
+if (existsSync(join(configDir, 'fake-winddown'))) {
+  // An account at 90% of its window, mid-task. After each "tool call" it reads the wind-down
+  // signal the way the CLI's PostToolUse hook would (the hook command names the signal file), and
+  // when one appears it writes the handoff the message asks for and ends its turn.
+  const dir = join(configDir, 'projects', 'fake-proj')
+  mkdirSync(dir, { recursive: true })
+  appendFileSync(
+    join(dir, `${sessionId}.jsonl`),
+    line({ type: 'user', sessionId, message: { role: 'user', content: prompt } }),
+  )
+  init()
+  const resetsAt = Math.floor(Date.now() / 1000) + 3600
+  emit({
+    type: 'rate_limit_event',
+    session_id: sessionId,
+    rate_limit_info: {
+      status: 'allowed_warning',
+      rateLimitType: 'five_hour',
+      resetsAt,
+      utilization: 0.9,
+      overageStatus: 'rejected',
+      isUsingOverage: false,
+      unifiedWindows: { five_hour: { utilization: 0.9, resetsAt }, seven_day: { utilization: 0.1, resetsAt: resetsAt + 86400 } },
+    },
+  })
+  const settings = flag('--settings')
+  const command: string = settings
+    ? JSON.parse(readFileSync(settings, 'utf8')).hooks?.PostToolUse?.[0]?.hooks?.[0]?.command ?? ''
+    : ''
+  const signal = /cat '([^']+)'/.exec(command)?.[1] ?? ''
+  for (let i = 0; i < 50; i++) {
+    await Bun.sleep(200)
+    if (!signal || !existsSync(signal)) continue
+    const context: string = JSON.parse(readFileSync(signal, 'utf8')).hookSpecificOutput.additionalContext
+    const path = /Write tool to (\S+?\.md)/.exec(context)?.[1]
+    if (path) writeFileSync(path, 'HANDOFF: step 3 of 5 done; next is step 4.')
+    emit({ type: 'result', subtype: 'success', is_error: false, result: 'Handoff written.', session_id: sessionId, total_cost_usd: 0.5, num_turns: 1 })
+    process.exit(0)
+  }
+  emit({ type: 'result', subtype: 'success', is_error: false, result: 'NO WIND-DOWN', session_id: sessionId, total_cost_usd: 1, num_turns: 1 })
+  process.exit(0)
+}
+
 let transcript = findTranscript()
 if (resume && !transcript) {
   process.stderr.write(`No conversation found with session ID: ${sessionId}\n`)
@@ -128,5 +171,7 @@ appendFileSync(
 )
 init()
 emit({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'Working on it.' }] } })
-emit({ type: 'result', subtype: 'success', is_error: false, result: 'FAKE DONE', session_id: sessionId, total_cost_usd: 0.01, num_turns: 1 })
+// A session started from a handoff says so, so a test can see the handoff reached it.
+const answer = prompt.includes('HANDOFF: step 3 of 5 done') ? 'FAKE DONE FROM HANDOFF' : 'FAKE DONE'
+emit({ type: 'result', subtype: 'success', is_error: false, result: answer, session_id: sessionId, total_cost_usd: 0.01, num_turns: 1 })
 process.exit(0)

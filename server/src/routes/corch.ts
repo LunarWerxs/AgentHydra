@@ -4,7 +4,15 @@
 // MCP tools go through here too, never corch.ts directly: a stdio MCP server is its own process,
 // and a second Corch there would relaunch the daemon's workers as if they had died.
 
-import { corchCancel, corchGet, corchList, corchRun, corchSend, corchWait } from '../corch'
+import {
+  corchCancel,
+  corchGet,
+  corchHandoff,
+  corchList,
+  corchRun,
+  corchSend,
+  corchWait,
+} from '../corch'
 import {
   cancelQuickAdd,
   listQuickAdds,
@@ -63,6 +71,7 @@ app.post('/api/corch/workers/:id/send', async (c) => {
     return c.json({ error: 'text is required' }, 400)
   return c.json(corchSend(c.req.param('id'), body.text))
 })
+app.post('/api/corch/workers/:id/handoff', (c) => c.json(corchHandoff(c.req.param('id'))))
 app.post('/api/corch/cancel', async (c) => {
   const body = await jsonBody(c)
   const id = optStr(body.id)

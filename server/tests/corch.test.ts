@@ -455,3 +455,51 @@ describe('integration: paid extra usage is never spent', () => {
     expect(w?.attempts[0]?.notice).toContain('before it could bill')
   }, 20_000)
 })
+
+describe('integration: near its limit a worker hands off to a fresh session', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-corch-winddown-'))
+  const cwd = join(root, 'work')
+  const nearDir = join(root, 'acct-near')
+  const freeDir = join(root, 'acct-free')
+  for (const d of [cwd, nearDir, freeDir]) mkdirSync(d, { recursive: true })
+  writeFileSync(join(nearDir, 'fake-winddown'), '')
+  let group: string | null = null
+
+  afterAll(() => {
+    if (group) corchCancel({ group })
+    setCorchClaudeCommand(null)
+    setCorchAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test('it writes a handoff and the task goes on from it in a new session elsewhere', async () => {
+    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    // The near-limit account scores lower, so it is picked first. Left alone it works on and
+    // finishes there ('NO WIND-DOWN'); the other account has room.
+    setCorchAccountsProvider(() => [
+      { id: 'wind-1', num: 1, name: 'near', configDir: nearDir, sessionPct: 0, weekPct: 0 },
+      { id: 'wind-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
+    ])
+    startCorch()
+    const run = corchRun({ tasks: [{ prompt: 'a long task', cwd, title: 'wind down' }] })
+    group = run.group
+    const id = run.workers[0]?.id as string
+    const firstSession = run.workers[0]?.sessionId as string
+
+    const deadline = Date.now() + 15_000
+    let w = corchList({ id })[0]
+    while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = corchList({ id })[0]
+    }
+
+    expect(w?.status).toBe('done')
+    expect(w?.result).toBe('FAKE DONE FROM HANDOFF')
+    expect(w?.attempts.map((a) => [a.account.id, a.outcome])).toEqual([
+      ['wind-1', 'handoff'],
+      ['wind-2', 'done'],
+    ])
+    expect(w?.sessions).toEqual([firstSession])
+    expect(w?.sessionId).not.toBe(firstSession)
+  }, 20_000)
+})

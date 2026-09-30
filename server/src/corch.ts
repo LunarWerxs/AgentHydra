@@ -23,6 +23,7 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
@@ -37,6 +38,7 @@ import {
   type CorchWorker,
   type CorchWorkerView,
   classifyAttempt,
+  continuationPrompt,
   copySessionTranscript,
   freshestPct,
   HANDOFF_PROMPT,
@@ -51,8 +53,12 @@ import {
   summarizeEvent,
   TRANSIENT_PROMPT,
   toView,
+  WIND_DOWN_SESSION_PCT,
+  WIND_DOWN_WEEK_PCT,
   WORKER_BRIEF,
   wallUntil,
+  windDownAt,
+  windDownMessage,
 } from './corch-lib'
 import { getCliInstance, listCliInstances } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
@@ -71,6 +77,12 @@ export * from './corch-lib'
 const ROOT = join(POINTER_DIR, 'corch')
 const LOGS = join(ROOT, 'logs')
 const PROMPTS = join(ROOT, 'prompts')
+const HOOKS = join(ROOT, 'hooks')
+const SIGNALS = join(ROOT, 'signals')
+const HANDOFFS = join(ROOT, 'handoffs')
+/** Forward slashes: the path goes into a bash command (the hook) and into the model's prompt. */
+const slashed = (p: string): string => p.replace(/\\/g, '/')
+const signalPath = (workerId: string): string => join(SIGNALS, `${workerId}.json`)
 const WALLS_PATH = join(ROOT, 'walls.json')
 
 interface Store {
@@ -319,19 +331,19 @@ async function tick(): Promise<void> {
   try {
     load()
     const now = Date.now()
-    for (const w of workers.values()) {
-      if (w.status !== 'running') continue
-      try {
-        poll(w)
-      } catch (err) {
-        console.error(`[corch] could not read ${w.id}:`, err)
-      }
-    }
     let accounts: CorchAccount[] = []
     try {
       accounts = accountsProvider()
     } catch (err) {
       console.error('[corch] could not list accounts:', err)
+    }
+    for (const w of workers.values()) {
+      if (w.status !== 'running') continue
+      try {
+        poll(w, accounts)
+      } catch (err) {
+        console.error(`[corch] could not read ${w.id}:`, err)
+      }
     }
     recheckSignedOut(accounts, now)
     const allowFull = overageAllowed()
@@ -536,7 +548,47 @@ function tailText(path: string, max: number): string {
   }
 }
 
-function poll(w: CorchWorker): void {
+/** Ask a running session to wrap up and write a handoff (windDownMessage). The PostToolUse hook its
+ *  launch installed prints this signal after the session's next tool call, so it winds down mid-
+ *  turn without being killed (proven live 2026-09-30: the CLI showed the hook's additionalContext
+ *  and the model acted on it). */
+function signalWindDown(
+  w: CorchWorker,
+  at: CorchWorker['attempts'][number],
+  pct: number | null,
+): void {
+  const path = slashed(join(HANDOFFS, `${w.id}-${w.attempts.length - 1}.md`))
+  mkdirSync(HANDOFFS, { recursive: true })
+  mkdirSync(SIGNALS, { recursive: true })
+  writeFileSync(
+    signalPath(w.id),
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext: windDownMessage(pct, path),
+      },
+    }),
+  )
+  at.windDown = { at: Date.now(), pct, path }
+  changed(w)
+}
+
+/** Some OTHER account this worker may use has room below the wind-down thresholds. Without one a
+ *  handoff would only restart the task on the same nearly-full account, so the session keeps
+ *  working until its real limit, where the move (transcript copy) takes over. */
+function roomElsewhere(w: CorchWorker, from: string, accounts: CorchAccount[]): boolean {
+  const now = Date.now()
+  return accounts.some(
+    (a) =>
+      a.id !== from &&
+      (!w.accounts || w.accounts.includes(a.id)) &&
+      !((walls[a.id]?.until ?? 0) > now) &&
+      (a.sessionPct ?? 0) < WIND_DOWN_SESSION_PCT &&
+      (a.weekPct ?? 0) < WIND_DOWN_WEEK_PCT,
+  )
+}
+
+function poll(w: CorchWorker, accounts?: CorchAccount[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (!at) return
   const proc = procs.get(w.id)
@@ -562,6 +614,12 @@ function poll(w: CorchWorker): void {
       const soon = proc ? aboutToBill(r.live) : null
       if (soon) stopForOverage(w, at, { ...soon, notice: PRE_OVERAGE_NOTICE }, !exited)
     }
+  }
+  // Near its limit, with room elsewhere: the session writes a handoff and the task goes on in a
+  // fresh, small session on another account instead of re-reading this whole conversation there.
+  if (proc && !exited && accounts && !at.windDown && !at.overage) {
+    const pct = windDownAt(r.live)
+    if (pct !== null && roomElsewhere(w, at.account.id, accounts)) signalWindDown(w, at, pct)
   }
   const latest = r.recent[r.recent.length - 1] ?? null
   if (latest && latest !== w.lastActivity) {
@@ -619,6 +677,18 @@ function finish(w: CorchWorker, events: unknown[]): void {
       window: 'session',
       resets: null,
     }
+  // Asked to wind down: a handoff written after the signal means the task goes on in a fresh
+  // session elsewhere; none means the session reported the whole task complete instead.
+  if (at.windDown && v.outcome === 'done' && handoffWritten(at.windDown))
+    v = {
+      ...v,
+      outcome: 'handoff',
+      notice:
+        at.windDown.pct === null
+          ? 'Handed off on request: wrote a handoff; the task continues in a fresh session.'
+          : `Wound down at ${Math.round(at.windDown.pct)}% of its usage limit and wrote a handoff; the task continues in a fresh session on another account.`,
+    }
+  rmSync(signalPath(w.id), { force: true })
   forgetRead(at.log)
   const now = Date.now()
   at.outcome = v.outcome
@@ -626,7 +696,7 @@ function finish(w: CorchWorker, events: unknown[]): void {
   at.endedAt = now
   w.costUsd += spentOf(w, at)
   w.turns += v.turns
-  if (v.outcome === 'done') w.result = v.result
+  if (v.outcome === 'done' || v.outcome === 'handoff') w.result = v.result
   if (w.status === 'cancelled') {
     changed(w)
     return
@@ -636,6 +706,12 @@ function finish(w: CorchWorker, events: unknown[]): void {
       w.retries = 0
       w.error = null
       w.status = w.pending.length ? 'queued' : 'done'
+      break
+    case 'handoff':
+      // launch() starts the next session from the handoff; the wound-down account is tried last.
+      w.retries = 0
+      w.error = null
+      w.status = 'queued'
       break
     case 'quota': {
       // The CLI's own resetsAt when it streamed one, else the notice's text (wallUntil). A weekly
@@ -717,6 +793,31 @@ function spentOf(w: CorchWorker, at: CorchWorker['attempts'][number]): number {
   return attemptSpend(dir, w.sessionId, at.startedAt, at.endedAt ?? Date.now())
 }
 
+/** The handoff file exists and was written after the wind-down was asked for (a stale one from an
+ *  earlier run with the same name does not count). */
+function handoffWritten(windDown: { at: number; path: string }): boolean {
+  try {
+    return statSync(windDown.path).mtimeMs >= windDown.at - 1_000
+  } catch {
+    return false
+  }
+}
+
+/** A session's transcript file on an account, or null. */
+function transcriptFile(configDir: string | null, sessionId: string): string | null {
+  if (!configDir) return null
+  const root = join(configDir, 'projects')
+  try {
+    for (const d of readdirSync(root)) {
+      const f = join(root, d, `${sessionId}.jsonl`)
+      if (existsSync(f)) return f
+    }
+  } catch {
+    // no projects folder
+  }
+  return null
+}
+
 function hasTranscript(configDir: string, sessionId: string): boolean {
   const root = join(configDir, 'projects')
   try {
@@ -733,12 +834,15 @@ function configDirOf(id: string, accounts: CorchAccount[]): string | null {
 function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): void {
   const n = w.attempts.length
   const last = w.attempts[n - 1]
-  const sessionId = w.sessionId ?? crypto.randomUUID()
-  w.sessionId = sessionId
+  // After a planned handoff the task goes on in a NEW session, started from the handoff file.
+  const fresh = last?.outcome === 'handoff' && !!last.windDown
+  const oldSession = w.sessionId
+  const sessionId = fresh || !w.sessionId ? crypto.randomUUID() : w.sessionId
+  if (!fresh) w.sessionId = sessionId
   // Moving accounts: carry the transcript over so `--resume` finds it there. A session that holds
   // work already must not start over empty on the new account.
   const fromId = w.accountId !== acct.id ? w.accountId : null
-  if (fromId) {
+  if (fromId && !fresh) {
     const from = configDirOf(fromId, accounts)
     const copied = from ? copySessionTranscript(from, acct.configDir, sessionId) : false
     if (!copied && w.attempts.some((a) => a.started === true || a.outcome === 'done')) {
@@ -749,7 +853,7 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
       return
     }
   }
-  const resume = hasTranscript(acct.configDir, sessionId)
+  const resume = !fresh && hasTranscript(acct.configDir, sessionId)
   // Stopped after the CLI started (its init event is in the log): the message is already in the
   // session, so ask it to carry on. Stopped before that: the message never arrived, send it again.
   const inSession = !!last && (last.started ?? peekLog(last.log).sawInit)
@@ -759,9 +863,29 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
   // cannot lose it. Without a transcript here the task itself goes first.
   const next = w.pending[0] ?? ''
   const stopped = !!last && ['quota', 'auth', 'transient', 'interrupted'].includes(last.outcome)
-  const delivers = !!last && w.pending.length > 0 && (w.revived === true || !stopped)
+  const delivers = !fresh && !!last && w.pending.length > 0 && (w.revived === true || !stopped)
   let text: string
   if (!last) text = w.prompt
+  // The continuation of a planned handoff: the task, the handoff, where the old transcript is, and
+  // any messages that arrived while the old session was winding down.
+  else if (fresh && last.windDown) {
+    let handoff = ''
+    try {
+      handoff = readFileSync(last.windDown.path, 'utf8')
+    } catch {
+      handoff = '(The handoff file could not be read; use the earlier transcript.)'
+    }
+    const old = oldSession
+      ? transcriptFile(configDirOf(last.account.id, accounts), oldSession)
+      : null
+    text = continuationPrompt(
+      w.prompt,
+      handoff,
+      last.windDown.path,
+      old ? slashed(old) : null,
+      w.pending,
+    )
+  }
   // A revived worker gets the message at once, not a continue prompt for the work it stopped. If
   // the stopped attempt never started, its own message never arrived either: send it first.
   else if (delivers)
@@ -789,6 +913,29 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
   writeFileSync(promptFile, text)
   const log = join(LOGS, `${w.id}-${n}.jsonl`)
   const errLog = join(LOGS, `${w.id}-${n}.err.log`)
+  // The wind-down channel: after every tool call the CLI runs this hook, which prints the worker's
+  // signal file when there is one (signalWindDown) and nothing otherwise, about 65 ms a call.
+  mkdirSync(HOOKS, { recursive: true })
+  const hookFile = join(HOOKS, `${w.id}.json`)
+  writeFileSync(
+    hookFile,
+    JSON.stringify({
+      hooks: {
+        PostToolUse: [
+          {
+            matcher: '*',
+            hooks: [
+              {
+                type: 'command',
+                command: `cat '${slashed(signalPath(w.id))}' 2>/dev/null || true`,
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  )
+  rmSync(signalPath(w.id), { force: true })
   const argv = [
     ...claudeCommand(),
     '-p',
@@ -799,6 +946,8 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
     ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
     ...(w.model ? ['--model', w.model] : []),
     ...(w.effort ? ['--effort', w.effort] : []),
+    '--settings',
+    hookFile,
     '--append-system-prompt',
     WORKER_BRIEF,
   ]
@@ -851,7 +1000,12 @@ function launch(w: CorchWorker, acct: CorchAccount, accounts: CorchAccount[]): v
   })
   if (fromId) w.moves++
   if (delivers) w.pending.shift()
-  if (!last || delivers) w.result = null // a new turn: the previous turn's answer is not this one's
+  if (fresh) {
+    if (oldSession) w.sessions = [...(w.sessions ?? []), oldSession]
+    w.sessionId = sessionId
+    w.pending = [] // they went into the continuation prompt
+  }
+  if (!last || delivers || fresh) w.result = null // a new turn: the previous answer is not this one's
   delete w.revived
   w.accountId = acct.id
   w.status = 'running'
@@ -973,6 +1127,27 @@ export function corchWait(
       resolve(corchList(filter))
     }
   })
+}
+
+/** Hand a running task to a fresh session now, the same way a worker near its limit does: it
+ *  finishes the step it is on, writes a handoff, and the task goes on from that handoff in a new
+ *  session (on the account with the most room). For freeing an account, or giving a task whose
+ *  conversation has grown huge a clean start without losing where it was. */
+export function corchHandoff(id: string): { ok: boolean; message: string } {
+  load()
+  const w = workers.get(id)
+  if (!w) return { ok: false, message: 'No such worker.' }
+  const at = w.attempts[w.attempts.length - 1]
+  const proc = procs.get(w.id)
+  if (w.status !== 'running' || !at || !proc || hasExited(proc))
+    return { ok: false, message: 'Only a running worker can hand off; this one is not running.' }
+  if (at.windDown) return { ok: true, message: 'It is already winding down.' }
+  signalWindDown(w, at, null)
+  return {
+    ok: true,
+    message:
+      'Asked to wrap up after its current step and write a handoff; the task then continues in a fresh session.',
+  }
 }
 
 export function corchSend(id: string, text: string): { ok: boolean; message: string } {

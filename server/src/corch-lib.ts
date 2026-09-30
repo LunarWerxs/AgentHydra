@@ -29,6 +29,7 @@ export type AttemptOutcome =
   | 'transient'
   | 'auth'
   | 'interrupted' // the CLI ended with no result and no error: killed (a daemon restart), not failed
+  | 'handoff' // wound down near its limit and wrote a handoff; the task goes on in a fresh session
   | 'error'
   | 'cancelled'
 
@@ -51,6 +52,7 @@ export interface CorchAttempt {
   started?: boolean // true once the CLI logged system/init: its message reached the session
   daemonPid?: number // the daemon that launched it; its handle dies with that daemon
   overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
+  windDown?: { at: number; pct: number | null; path: string } // asked to hand off to `path` (pct null: on request)
 }
 
 export interface CorchWorker {
@@ -76,6 +78,7 @@ export interface CorchWorker {
   retries: number // transient or interrupted retries used in the current turn
   notBefore: number | null // epoch ms; a transient retry waits until then
   revived?: boolean // a message revived it after it stopped: deliver that message next
+  sessions?: string[] // earlier sessions of this task, oldest first (each handoff starts a new one)
   createdAt: number
   updatedAt: number
 }
@@ -196,6 +199,48 @@ export const INTERRUPTED_PROMPT =
 
 export const TRANSIENT_PROMPT =
   'The API was overloaded and this turn stopped part-way. Continue the task exactly where you left off. Do not redo steps that are already finished.'
+
+/** A planned handoff starts when a worker's own stream says its account is this far into a window.
+ *  Early enough for the session to finish the step it is on and write a handoff before the wall;
+ *  a Pro 5-hour window lasts about ten minutes of heavy work, so 15% is roughly a minute and a half. */
+export const WIND_DOWN_SESSION_PCT = 85
+export const WIND_DOWN_WEEK_PCT = 95
+
+/** The percentage that calls for a wind-down now, or null. */
+export function windDownAt(live: CorchLiveUsage | null): number | null {
+  if (live?.sessionPct != null && live.sessionPct >= WIND_DOWN_SESSION_PCT) return live.sessionPct
+  if (live?.weekPct != null && live.weekPct >= WIND_DOWN_WEEK_PCT) return live.weekPct
+  return null
+}
+
+/** What a winding-down worker is told after its next tool call (a PostToolUse hook shows it). The
+ *  session that has the whole context writes the handoff, while its own cache is warm; the next
+ *  account then starts a small fresh session from it instead of re-reading the whole conversation
+ *  (a move re-reads it all uncached: 219k tokens cost $1.77 on one live move, 2026-09-30). */
+export function windDownMessage(pct: number | null, path: string): string {
+  const why =
+    pct === null
+      ? 'the orchestrator asked this session to hand the task to a fresh session'
+      : `this account is at ${Math.round(pct)}% of its usage limit, so this session must hand the task to a fresh session on another account`
+  return `AgentHydra: ${why}. Wrap up now: finish or safely stop the step you are on and do not start anything new. Then write a handoff with the Write tool to ${path} for the session that continues this task. It sees only the original task, your handoff and your transcript, so include: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state; the next steps in order; the facts, decisions and gotchas you learned; and the commands or checks that prove the work. If the whole task is already complete, do not write a handoff: finish normally with your final report. After writing the handoff, end your turn with one line saying the handoff is written.`
+}
+
+/** The first prompt of the session that continues a task from a handoff. */
+export function continuationPrompt(
+  task: string,
+  handoff: string,
+  handoffPath: string,
+  transcript: string | null,
+  messages: string[],
+): string {
+  const more = messages.length
+    ? `\n\nThe orchestrator also sent these messages, which the earlier session did not get to:\n${messages.map((m) => `- ${m}`).join('\n')}`
+    : ''
+  const where = transcript
+    ? ` Its full transcript is at ${transcript} if you need a detail the handoff left out (read it with the Read or Grep tools; it is JSON lines).`
+    : ''
+  return `${task}\n\n---\nAn earlier session already worked on this task on another account and wound down before its usage limit. Continue from its handoff below (also saved at ${handoffPath}).${where} Do not redo steps it reports finished; check its claims where a command can.${more}\n\n--- HANDOFF ---\n${handoff}`
+}
 
 export const PRE_OVERAGE_NOTICE =
   'The account reached 98% of its limit and has paid extra usage switched on, so Corch stopped the turn before it could bill and moved the session to an account with free quota.'
@@ -468,7 +513,10 @@ export function pickAccount(
 ): CorchAccount | null {
   const lastAttempt = worker.attempts[worker.attempts.length - 1]
   const failedId =
-    lastAttempt && (lastAttempt.outcome === 'quota' || lastAttempt.outcome === 'auth')
+    lastAttempt &&
+    (lastAttempt.outcome === 'quota' ||
+      lastAttempt.outcome === 'auth' ||
+      lastAttempt.outcome === 'handoff')
       ? lastAttempt.account.id
       : null
   const load = (a: CorchAccount): number => active.get(a.id) ?? 0

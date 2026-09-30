@@ -79,6 +79,9 @@ export const CORCH_OUTCOME: Record<
   auth: { variant: 'warning', label: 'corch.outcomeAuth' },
   // "stopped": killed from outside (a daemon restart) and resumed by itself; its notice says so.
   interrupted: { variant: 'muted', label: 'corch.outcomeCancelled' },
+  // Wound down near its limit and handed off to a fresh session; its notice says so. "hit its
+  // limit" is the closest existing words until the Corch strings file can take new ones.
+  handoff: { variant: 'info', label: 'corch.outcomeQuota' },
   error: { variant: 'destructive', label: 'corch.outcomeError' },
   cancelled: { variant: 'outline', label: 'corch.outcomeCancelled' },
 }
