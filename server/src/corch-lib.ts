@@ -50,7 +50,7 @@ export interface CorchAttempt {
   resumed: boolean // true when this attempt ran `--resume` (a follow-up or a handoff)
   started?: boolean // true once the CLI logged system/init: its message reached the session
   daemonPid?: number // the daemon that launched it; its handle dies with that daemon
-  overage?: { resetsAt: number | null } // its account ran out and started spending paid extra usage
+  overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
 }
 
 export interface CorchWorker {
@@ -112,6 +112,8 @@ export interface CorchLiveUsage {
   sessionResetsAt: number | null
   weekPct: number | null
   weekResetsAt: number | null
+  /** The account has paid extra usage switched on (`overageStatus: "allowed"`): past its limit it bills. */
+  overageAllowed: boolean
   at: number
 }
 
@@ -141,8 +143,21 @@ export function liveUsage(raw: unknown, at: number): CorchLiveUsage | null {
     sessionResetsAt: session.pct === null ? null : session.resetsAt,
     weekPct: week.pct,
     weekResetsAt: week.pct === null ? null : week.resetsAt,
+    overageAllowed: ev.rate_limit_info?.overageStatus === 'allowed',
     at,
   }
+}
+
+/** A turn on an account that can bill (paid extra usage switched on) is stopped at 98% of its
+ *  5-hour window or 99% of its week, BEFORE a request can run into overage: waiting for the
+ *  'rejected' event would already have billed that request. Measured 2026-09-30: of the four CLI
+ *  accounts only #90 reports `overageStatus: "allowed"`; the others stop at their limit and cannot
+ *  bill. Null when the reading says nothing needs stopping. */
+export function aboutToBill(live: CorchLiveUsage | null): { resetsAt: number | null } | null {
+  if (!live?.overageAllowed) return null
+  if (live.sessionPct !== null && live.sessionPct >= 98) return { resetsAt: live.sessionResetsAt }
+  if (live.weekPct !== null && live.weekPct >= 99) return { resetsAt: live.weekResetsAt }
+  return null
 }
 
 /** The percentage to route on: a worker's live reading when it is newer than the snapshot (taken
@@ -181,6 +196,9 @@ export const INTERRUPTED_PROMPT =
 
 export const TRANSIENT_PROMPT =
   'The API was overloaded and this turn stopped part-way. Continue the task exactly where you left off. Do not redo steps that are already finished.'
+
+export const PRE_OVERAGE_NOTICE =
+  'The account reached 98% of its limit and has paid extra usage switched on, so Corch stopped the turn before it could bill and moved the session to an account with free quota.'
 
 export const OVERAGE_NOTICE =
   "The account's 5-hour limit ran out and it started spending paid extra usage, so Corch stopped the turn and moved the session to an account with free quota."

@@ -425,4 +425,33 @@ describe('integration: paid extra usage is never spent', () => {
       setProviderSettings({ corchAllowOverage: false })
     }
   }, 20_000)
+
+  test('on an account that can bill, the turn is stopped at 98%, before any request bills', async () => {
+    const nearDir = join(root, 'acct-near')
+    mkdirSync(nearDir, { recursive: true })
+    writeFileSync(join(nearDir, 'fake-near-limit'), '')
+    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    // Left alone, the fake finishes on the near-limit account after 6 s ('FINISHED NEAR LIMIT').
+    setCorchAccountsProvider(() => [
+      { id: 'near-1', num: 1, name: 'near', configDir: nearDir, sessionPct: 0, weekPct: 0 },
+      { id: 'near-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
+    ])
+    startCorch()
+    const run = corchRun({ tasks: [{ prompt: 'a long task', cwd, title: 'near the limit' }] })
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+
+    const deadline = Date.now() + 15_000
+    let w = corchList({ id })[0]
+    while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = corchList({ id })[0]
+    }
+
+    expect(w?.status).toBe('done')
+    expect(w?.result).toBe('FAKE DONE')
+    expect(w?.moves).toBe(1)
+    expect(w?.attempts[0]?.outcome).toBe('quota')
+    expect(w?.attempts[0]?.notice).toContain('before it could bill')
+  }, 20_000)
 })

@@ -81,6 +81,36 @@ if (existsSync(join(configDir, 'fake-overage'))) {
   process.exit(0)
 }
 
+if (existsSync(join(configDir, 'fake-near-limit'))) {
+  // An account that CAN bill (extra usage switched on), at 98.5% of its 5-hour window: the next
+  // requests would run into overage. Left alone it finishes here.
+  const dir = join(configDir, 'projects', 'fake-proj')
+  mkdirSync(dir, { recursive: true })
+  appendFileSync(
+    join(dir, `${sessionId}.jsonl`),
+    line({ type: 'user', sessionId, message: { role: 'user', content: prompt } }),
+  )
+  init()
+  const resetsAt = Math.floor(Date.now() / 1000) + 3600
+  emit({
+    type: 'rate_limit_event',
+    session_id: sessionId,
+    rate_limit_info: {
+      status: 'allowed_warning',
+      rateLimitType: 'five_hour',
+      resetsAt,
+      utilization: 0.985,
+      overageStatus: 'allowed',
+      isUsingOverage: false,
+      unifiedWindows: { five_hour: { utilization: 0.985, resetsAt }, seven_day: { utilization: 0.1, resetsAt: resetsAt + 86400 } },
+    },
+  })
+  emit({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'Still working, near the limit.' }] } })
+  await Bun.sleep(6_000)
+  emit({ type: 'result', subtype: 'success', is_error: false, result: 'FINISHED NEAR LIMIT', session_id: sessionId, total_cost_usd: 1, num_turns: 1 })
+  process.exit(0)
+}
+
 let transcript = findTranscript()
 if (resume && !transcript) {
   process.stderr.write(`No conversation found with session ID: ${sessionId}\n`)

@@ -29,6 +29,7 @@ import {
 import { join } from 'node:path'
 import { resolveClaudeExe } from './config'
 import {
+  aboutToBill,
   attemptSpend,
   type CorchAccount,
   type CorchLiveUsage,
@@ -44,6 +45,7 @@ import {
   OVERAGE_NOTICE,
   overageStart,
   PAUSED_PROMPT,
+  PRE_OVERAGE_NOTICE,
   pickAccount,
   scrubbedEnv,
   summarizeEvent,
@@ -553,7 +555,14 @@ function poll(w: CorchWorker): void {
     const prev = liveByAccount.get(at.account.id)
     if (!prev || prev.at <= r.live.at) liveByAccount.set(at.account.id, r.live)
   }
-  if (r.overage && !at.overage && !overageAllowed()) stopForOverage(w, at, r.overage, !exited)
+  if (!at.overage && !overageAllowed()) {
+    if (r.overage) stopForOverage(w, at, r.overage, !exited)
+    else {
+      // Stop BEFORE the first billed request on an account that can bill (aboutToBill).
+      const soon = proc ? aboutToBill(r.live) : null
+      if (soon) stopForOverage(w, at, { ...soon, notice: PRE_OVERAGE_NOTICE }, !exited)
+    }
+  }
   const latest = r.recent[r.recent.length - 1] ?? null
   if (latest && latest !== w.lastActivity) {
     w.lastActivity = latest
@@ -569,13 +578,13 @@ function poll(w: CorchWorker): void {
 function stopForOverage(
   w: CorchWorker,
   at: CorchWorker['attempts'][number],
-  overage: { resetsAt: number | null },
+  overage: { resetsAt: number | null; notice?: string },
   running: boolean,
 ): void {
   at.overage = overage
   walls[at.account.id] = {
     until: wallUntil(Date.now(), { resetsAt: overage.resetsAt, resets: null }, parseResetTime),
-    reason: OVERAGE_NOTICE,
+    reason: overage.notice ?? OVERAGE_NOTICE,
   }
   try {
     saveWalls()
@@ -605,7 +614,7 @@ function finish(w: CorchWorker, events: unknown[]): void {
     v = {
       ...v,
       outcome: 'quota',
-      notice: OVERAGE_NOTICE,
+      notice: at.overage.notice ?? OVERAGE_NOTICE,
       resetsAt: at.overage.resetsAt,
       window: 'session',
       resets: null,
