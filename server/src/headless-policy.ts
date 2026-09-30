@@ -23,6 +23,13 @@
 // as a real chat the owner can see and continue. Work that automation wants started belongs in a
 // desktop app, not in a process.
 //
+// THE ONE NAMED EXEMPTION, Corch (corch.ts, owner 2026-09-30: "I want this fully delegated ...
+// orchestrating them only to CLI"). A Corch worker has no window, and it is still not a chat nobody
+// can see: every worker is readable live and steerable in AgentHydra's Corch view and through
+// corch_status, it runs only because a person told a chat to corch that task, and its transcript is
+// an ordinary session in that account's folder that he can resume by hand. Queue dispatch below
+// stays refused.
+//
 // NOT COVERED, deliberately: the `/usage` probe in usage.ts. It also spawns `claude -p`, and it is
 // not a chat - it asks the CLI a question and reads a number back, then deletes the transcript. It
 // never reaches the dispatch chokepoint, and banning it would cost the fleet its quota readings
