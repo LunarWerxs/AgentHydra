@@ -381,6 +381,31 @@ Pro accounts, where tasks costing about a quarter of a window each could never a
   each worker it starts to the projection before the next one is placed. When nothing fits, the
   lowest projection still wins: finishing part of the work and handing off beats waiting hours.
 
+### Sizing (`server/src/climayte-placement.ts` sizeTask and waitsForRoom, `0c2c13b`)
+
+Owner, 2026-10-01: estimate the size of the task, check the accounts' available usage, then send the
+whole task or smaller ones. Max 5x and 20x accounts join the Pro ones, so every figure weighs the
+plan: a Max 5x window holds five Pro windows (`planFactor`).
+
+- **At dispatch** (`climayte_run`): each task's expected cost (`expectedCost`: its kind on its model
+  and effort, else its kind, else its model family, else 25%) against the biggest window among the
+  accounts it may use. Over half of it (`SPLIT_SHARE`) the whole dispatch starts nothing and answers
+  `split needed` (HTTP 409 with `splitNeeded: [{task, title, expected, window, pieces}]`), with
+  pieces that each stay under half; `size: 'whole'` on the task or the dispatch runs it as it is.
+  Every answer carries `sizing` per worker: the expected % and its basis, the biggest window, and the
+  most room any account has now (`room`, `roomOn`), all in % of a Pro window.
+- **At start** (the tick): when the best account pickAccount finds would not hold the task to the
+  end (projected over FIT_PCT) but a fresh window of an account it may use would, the task waits
+  ("Waiting for room ...") and smaller tasks take that room; it starts first once an account has
+  room (a reset, or the work there finishing). A session going on at home, and a task no window
+  fits (sent `whole`), are never held.
+- **Why half:** run 1's 49 finished tasks averaged 24% of a Pro window and 80% stayed under 36%, but
+  single tasks ran to 93% and 107%, and code on Opus high (33% on average) moved 33 times over 19
+  tasks. An estimate is an average; over half a window a task runs past the whole one often enough
+  that pieces cost less than its moves.
+- An attempt's spend is read from the folder it ran in (`account.configDir` on the attempt), not from
+  wherever the instance store points now.
+
 ### Journal (`server/src/climayte-journal.ts`)
 
 The owner's ask on the first real run ("we probably also need logging in CliMayte"): one short JSON
@@ -605,10 +630,34 @@ stderr and exits 1), appends to it, prints init, an assistant text and a `result
   result `OK` in 6 s. Quick add then got its sign-in window (`core/signin-window.ts`, driving
   `orchestrator/scripts/lib/signin_window.py`): Add account opens a new private window with
   zendriver (the owner's chosen engine; `python -m pip install zendriver`) on a throwaway profile,
-  the owner does "Continue with email", the email code and Authorize there, and the page's final
+  the owner completes any Cloudflare check, the window submits the matching prefilled email once,
+  and the owner opens their email's sign-in link in that window. The window relays the copyable
+  six-digit verification code to its waiting email form (restoring the form from browser history
+  if the link replaced that tab), then authorizes only the original OAuth path and state. The page's final
   code goes to the CLI by itself before the window closes. The hand-off was checked headless (code
   in 1 s, no browser, Python process or profile left behind); a full sign-in through the window is
   the next account the owner adds.
+  The popup remembers its last normal screen position on close in
+  `<AgentHydra config dir>/signin-window-position.json`, outside the throwaway profile. Manual
+  closure uses the last sampled position; automatic closure samples once more before stopping.
+  Minimized/maximized coordinates and headless checks do not overwrite the saved location.
+  Claude's `claude.com/cai/oauth/authorize` redirects to `claude.ai/login`; both exact HTTPS
+  origins are allowed for email submission and code entry. Authorization remains bound to the
+  original OAuth state and the two known authorization routes. The sign-in helper's
+  `--assist-port` mode can update automation in an existing managed popup while its original
+  controller retains the CLI handoff and browser shutdown.
+  Once the verification code is read back from the waiting input, its separate source tab/window
+  closes automatically. The destination stays open for verification, authorization and CLI handoff;
+  a same-tab email link returns to that destination without closing it.
+  When the matching authorization page appears without focus, the driver brings that page to the
+  front once. This lets Claude enable its Authorize button through its normal focus handling;
+  the driver still waits for the button to be enabled before submitting it.
+  The waiting step checks both open popup tabs for a verification code and, on Windows,
+  the clipboard. A copied six-digit code uses the same fill/confirmation/submission flow.
+  The small clipboard watcher reads text only while the email-code form is waiting.
+  Copying a `https://claude.ai/magic-link#...` link for that account opens it once in a new tab
+  in the same popup and continues the code-transfer/authorization flow. Links and clipboard
+  contents are kept out of logs; headless checks do not read the clipboard.
 - Quick add's Add button stayed disabled on first ship: a lint auto-fix turned `import { Input }`
   into a type-only import, so the tag rendered as a bare `<input>` whose v-model never updated.
   Fixed, with a `biome-ignore` naming why.
