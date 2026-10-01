@@ -330,7 +330,16 @@ function recheckSignedOut(accounts: CorchAccount[], now: number): void {
     // `auth status` passes a login whose organization turned Claude Code off, so only a new login
     // (the credential file changing) lifts that wall; the next attempt then tells.
     if (wall?.reason === ORG_DISABLED_WALL) {
-      if (wall.cred !== undefined && wall.cred !== credStamp(a.configDir)) {
+      // A wall from before walls kept the credential's stamp takes today's, so a new login can
+      // still lift it.
+      if (wall.cred === undefined) {
+        wall.cred = credStamp(a.configDir)
+        try {
+          saveWalls()
+        } catch (err) {
+          console.error('[corch] could not save walls:', err)
+        }
+      } else if (wall.cred !== credStamp(a.configDir)) {
         delete walls[a.id]
         try {
           saveWalls()
@@ -1146,7 +1155,8 @@ function spentOf(
   at: CorchWorker['attempts'][number],
 ): { costUsd: number; tokens: CorchTokens } {
   const dir = getCliInstance(at.account.id)?.configDir
-  const session = at.sessionId ?? w.sessionId
+  // null: its log names no session, the CLI never started, so it spent nothing.
+  const session = at.sessionId === undefined ? w.sessionId : at.sessionId
   if (!dir || !session) return { costUsd: 0, tokens: noTokens() }
   return attemptSpend(dir, session, at.startedAt, at.endedAt ?? Date.now())
 }
