@@ -41,6 +41,7 @@ import {
   readJournal,
 } from './climayte-journal'
 import {
+  type AttemptSpend,
   aboutToBill,
   addResults,
   addTokens,
@@ -112,6 +113,7 @@ import {
   ladderModel,
   nextRung,
   pickConfig,
+  rereadUnits,
   scoreRows,
   UNITS_PER_PRO_PERCENT,
 } from './climayte-scorecard'
@@ -748,9 +750,13 @@ function placementState(): {
     .filter((w) => w.status === 'done' && w.tokens)
     .map((w) => ({
       model: ladderModel(w.model ?? w.attempts.at(-1)?.model),
+      // The work only: a move's re-read is what the move cost, not what the task costs.
       pct:
-        w.attempts.reduce((s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl), 0) /
-        UNITS_PER_PRO_PERCENT,
+        w.attempts.reduce(
+          (s, a) =>
+            s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl) - rereadUnits(a, w.model),
+          0,
+        ) / UNITS_PER_PRO_PERCENT,
     }))
   const costOf = (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort'>): CostEstimate =>
     expectedCost({ kind: w.kind, model: ladderModel(w.model), effort: w.effort }, rows, finished)
@@ -1450,15 +1456,36 @@ function journalFinish(
 
 /** An ended attempt's own spend and tokens, from its transcript on the account it ran on
  *  (attemptSpend). */
-function spentOf(
-  w: CliMayteWorker,
-  at: CliMayteWorker['attempts'][number],
-): { costUsd: number; tokens: CliMayteTokens } {
+function spentOf(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): AttemptSpend {
   const dir = at.account.configDir ?? getCliInstance(at.account.id)?.configDir
   // null: its log names no session, the CLI never started, so it spent nothing.
   const session = at.sessionId === undefined ? w.sessionId : at.sessionId
-  if (!dir || !session) return { costUsd: 0, tokens: noTokens() }
+  if (!dir) return { costUsd: 0, tokens: noTokens(), turns: 0, first: null, found: false }
+  if (!session) return { costUsd: 0, tokens: noTokens(), turns: 0, first: null, found: true }
   return attemptSpend(dir, session, at.startedAt, at.endedAt ?? Date.now())
+}
+
+/** An attempt's `spend` from its transcript. The first request is a re-read only when an attempt
+ *  before it ran: a task whose first try never started (refused, signed out) starts fresh. */
+function spendRecord(
+  w: CliMayteWorker,
+  at: CliMayteWorker['attempts'][number],
+  spent: AttemptSpend,
+): CliMayteWorker['attempts'][number]['spend'] {
+  if (!spent.found) return null
+  const before = w.attempts.slice(0, Math.max(0, w.attempts.indexOf(at)))
+  const ranBefore = before.some(
+    (a) =>
+      a.started || (a.tokens ? a.tokens.input + a.tokens.cacheRead + a.tokens.cacheWrite : 0) > 0,
+  )
+  return {
+    costUsd: Math.round(spent.costUsd * 10_000) / 10_000,
+    turns: spent.turns,
+    reread:
+      ranBefore && spent.first
+        ? { input: spent.first.input, output: 0, cacheRead: 0, cacheWrite: spent.first.cacheWrite }
+        : null,
+  }
 }
 
 /** The session id the CLI reported in an attempt's log (its system/init event), or null. */
@@ -1490,6 +1517,7 @@ function sessionOfLog(log: string): string | null {
 function charge(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): number {
   const spent = spentOf(w, at)
   at.tokens = spent.tokens
+  at.spend = spendRecord(w, at, spent)
   w.costUsd += spent.costUsd
   w.tokens = addTokens(w.tokens, spent.tokens)
   return spent.costUsd
@@ -1513,6 +1541,23 @@ function backfillTokens(): boolean {
       if (had.input + had.output + had.cacheRead + had.cacheWrite > 0) continue
       at.tokens = spentOf(w, at).tokens
       w.tokens = addTokens(w.tokens, at.tokens)
+    }
+    // Each ended attempt's cost, requests and re-read, once. Its tokens and the task's cost were
+    // recorded when it ended and stay as they are.
+    for (const at of w.attempts) {
+      if (at.endedAt === null || at.spend !== undefined) continue
+      at.spend = spendRecord(w, at, spentOf(w, at))
+      any = true
+    }
+    // What each verdict's work spent re-reading: the attempts it judged, those started since the
+    // verdict before it.
+    for (const [i, v] of (w.verdicts ?? []).entries()) {
+      if (v.reread !== undefined) continue
+      const since = w.verdicts?.[i - 1]?.at ?? 0
+      v.reread = w.attempts
+        .filter((a) => a.startedAt >= since && a.startedAt < v.at)
+        .reduce((sum, a) => sum + rereadUnits(a, w.model), 0)
+      any = true
     }
     if (w.tokens) continue
     let total = noTokens()
@@ -2352,6 +2397,7 @@ export function climayteVerdict(
     model: ladderModel(w.model ?? reported),
     effort: w.effort,
     units: ran.reduce((sum, a) => sum + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl), 0),
+    reread: ran.reduce((sum, a) => sum + rereadUnits(a, w.model), 0),
     by: input.by === 'check' || input.by === 'owner' ? input.by : 'orchestrator',
   }
   w.verdicts = [...(w.verdicts ?? []), verdict]
@@ -2499,19 +2545,41 @@ export function climayteTotals(): {
   cliSessions: number
   tokens: CliMayteTokens
   costUsd: number
+  /** Usage over every attempt in % of a Pro 5-hour window, the part of it that re-read a
+   *  conversation into a cold cache at the start of an attempt after one that ran (restart
+   *  overhead), that part as a share of the whole (%), and by what ended the attempt before it
+   *  (`done`: a follow-up after the task had finished). `unmeasured`: ended attempts whose
+   *  transcript could not be read, so their re-read is not in these figures. */
+  usedPct: number
+  rereadPct: number
+  rereadShare: number
+  rereadByCause: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>>
+  unmeasured: number
 } {
   load()
   let sessions = 0
   let costUsd = 0
   let tokens = noTokens()
+  let used = 0
+  let reread = 0
+  let unmeasured = 0
+  const byCause: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>> = {}
   const runsByOutcome: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>> = {}
   const distinct = new Set<string>()
   for (const w of workers.values()) {
     sessions += w.attempts.length
     costUsd += w.costUsd
     if (w.tokens) tokens = addTokens(tokens, w.tokens)
-    for (const at of w.attempts) {
+    for (const [i, at] of w.attempts.entries()) {
       runsByOutcome[at.outcome] = (runsByOutcome[at.outcome] ?? 0) + 1
+      used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
+      if (at.endedAt !== null && !at.spend) unmeasured++
+      const r = rereadUnits(at, w.model)
+      const cause = w.attempts[i - 1]?.outcome
+      if (r > 0 && cause) {
+        reread += r
+        byCause[cause] = (byCause[cause] ?? 0) + r
+      }
       // A run the account refused before the CLI started holds no conversation.
       const spent = at.tokens ? at.tokens.cacheRead + at.tokens.cacheWrite + at.tokens.input : 0
       if (!at.started && spent === 0) continue
@@ -2526,8 +2594,18 @@ export function climayteTotals(): {
     cliSessions: distinct.size,
     tokens,
     costUsd,
+    usedPct: pct1(used),
+    rereadPct: pct1(reread),
+    rereadShare: used > 0 ? Math.round((reread / used) * 1000) / 10 : 0,
+    rereadByCause: Object.fromEntries(
+      Object.entries(byCause).map(([k, v]) => [k, pct1(v ?? 0)]),
+    ) as Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>>,
+    unmeasured,
   }
 }
+
+/** Weighted units as % of a Pro 5-hour window, to one decimal. */
+const pct1 = (units: number): number => Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10
 
 /** Move a file or folder into the archive, keeping it (a rename, or a copy then remove across
  *  drives). A missing source is not an error. */

@@ -124,7 +124,10 @@ const totalsHint = computed(() =>
         cacheRead: formatTokens(totals.value.tokens.cacheRead),
         cacheWrite: formatTokens(totals.value.tokens.cacheWrite),
         cost: `$${totals.value.costUsd.toFixed(2)}`,
-      })
+      }) +
+      (totals.value.rereadShare
+        ? ` ${t('climayte.offloadedReread', { share: totals.value.rereadShare, pct: totals.value.rereadPct })}`
+        : '')
     : '',
 )
 

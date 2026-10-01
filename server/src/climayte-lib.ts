@@ -11,7 +11,12 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { type CliMaytePlacement, FIT_PCT, projectedPct } from './climayte-placement'
-import { type CliMayteVerdict, UNITS_PER_PRO_PERCENT } from './climayte-scorecard'
+import {
+  attemptUnits,
+  type CliMayteVerdict,
+  rereadUnits,
+  UNITS_PER_PRO_PERCENT,
+} from './climayte-scorecard'
 import { priceTokens } from './pricing'
 import {
   classifyLimit,
@@ -66,6 +71,11 @@ export interface CliMayteAttempt {
   overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
   windDown?: { at: number; pct: number | null; path: string } // asked to hand off to `path` (pct null: on request)
   tokens?: CliMayteTokens // this attempt's own tokens (attemptSpend); absent on attempts before 2026-09-30
+  /** Its cost at API prices and its model requests, from its transcript when it ended, and `reread`:
+   *  on an attempt after one that ran, its first request's input and cache writes, the conversation
+   *  read again into a cold cache after a move, a limit, a handoff or a gap. That is restart
+   *  overhead, not work (rereadUnits). null: its transcript could not be read. Absent until set. */
+  spend?: { costUsd: number; turns: number; reread: CliMayteTokens | null } | null
   /** The session this attempt ran in. A planned handoff starts a new one, so the worker's current
    *  `sessionId` is not every attempt's. null: the log names none (the CLI never started). */
   sessionId?: string | null
@@ -300,7 +310,17 @@ export type CliMayteWorkerView = Omit<CliMayteWorker, 'prompt' | 'attempts' | 'v
     notice: string | null
     requested?: { model: string | null; effort: string | null }
     model?: string
+    tokens?: CliMayteTokens
+    /** Its cost at API prices and its model requests; null when not measured. */
+    costUsd: number | null
+    turns: number | null
+    /** What it used, and of that its re-read (restart overhead), in % of a Pro 5-hour window. */
+    pct: number | null
+    rereadPct: number | null
   }>
+  /** What the task used over every attempt, in % of a Pro 5-hour window: `rereadPct` re-reading its
+   *  conversation into a cold cache after a move, a limit, a handoff or a gap, `workPct` the rest. */
+  used: { pct: number; workPct: number; rereadPct: number }
 }
 
 /** The models a worker may run (owner, 2026-09-30: Opus 5.5 or Sonnet 5.5), by the names the CLI
@@ -675,9 +695,10 @@ export function attemptSpend(
   sessionId: string,
   startedAt: number,
   endedAt: number,
-): { costUsd: number; tokens: CliMayteTokens } {
+): AttemptSpend {
   const root = join(configDir, 'projects')
   let files: string[] = []
+  const none: AttemptSpend = { costUsd: 0, tokens: noTokens(), turns: 0, first: null, found: false }
   try {
     for (const d of readdirSync(root)) {
       const file = join(root, d, `${sessionId}.jsonl`)
@@ -687,11 +708,14 @@ export function attemptSpend(
       }
     }
   } catch {
-    return { costUsd: 0, tokens: noTokens() }
+    return none
   }
+  if (!files.length) return none
   let costUsd = 0
   let tokens = noTokens()
-  for (const file of files) {
+  let turns = 0
+  let first: CliMayteTokens | null = null
+  for (const [i, file] of files.entries()) {
     let text = ''
     try {
       text = readFileSync(file, 'utf8')
@@ -704,14 +728,53 @@ export function attemptSpend(
     const cost = (s: typeof from) => priceTokens(s.byModel, startedAt).costUsd ?? 0
     const less = (a: number, b: number) => Math.max(0, a - b)
     costUsd += less(cost(from), cost(after))
+    turns += less(from.turns, after.turns)
     tokens = addTokens(tokens, {
       input: less(from.input, after.input),
       output: less(from.output, after.output),
       cacheRead: less(from.cacheRead, after.cacheRead),
       cacheWrite: less(from.cacheCreation, after.cacheCreation),
     })
+    if (i === 0) first = firstRequest(text, startedAt, endedAt)
   }
-  return { costUsd, tokens }
+  return { costUsd, tokens, turns, first, found: true }
+}
+
+/** What attemptSpend read from an attempt's transcript. */
+export interface AttemptSpend {
+  costUsd: number
+  tokens: CliMayteTokens
+  /** Model requests in the attempt, its sub-agents' included. */
+  turns: number
+  /** The session's first request in the attempt: on any attempt after the task's first, the whole
+   *  conversation read again into a cache that does not hold it. null with no request. */
+  first: CliMayteTokens | null
+  /** False when no transcript was there: nothing measured, which is not a measured zero. */
+  found: boolean
+}
+
+/** The first assistant request's usage in [startedAt, endedAt] of a transcript, or null. */
+function firstRequest(text: string, startedAt: number, endedAt: number): CliMayteTokens | null {
+  for (const line of text.split('\n')) {
+    if (!line.includes('"usage"') || !line.includes('"assistant"')) continue
+    let rec: { type?: string; timestamp?: string; message?: { usage?: Record<string, unknown> } }
+    try {
+      rec = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const at = rec.timestamp ? Date.parse(rec.timestamp) : Number.NaN
+    const u = rec.message?.usage
+    if (rec.type !== 'assistant' || !u || !(at >= startedAt && at <= endedAt)) continue
+    const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+    return {
+      input: n(u.input_tokens),
+      output: n(u.output_tokens),
+      cacheRead: n(u.cache_read_input_tokens),
+      cacheWrite: n(u.cache_creation_input_tokens),
+    }
+  }
+  return null
 }
 
 /** Every `*.jsonl` under `dir`, at most `depth` folders down; none when it does not exist. */
@@ -1004,11 +1067,27 @@ export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
       pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
     })),
     attempts: w.attempts.map((a) => ({
-      account: a.account,
+      account: { id: a.account.id, num: a.account.num, name: a.account.name },
       outcome: a.outcome,
       notice: a.notice,
       requested: a.requested,
       model: a.model,
+      tokens: a.tokens,
+      costUsd: a.spend ? a.spend.costUsd : null,
+      turns: a.spend ? a.spend.turns : null,
+      pct: a.tokens ? pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)) : null,
+      rereadPct: a.spend ? pctOf(rereadUnits(a, w.model)) : null,
     })),
+    used: (() => {
+      const all = w.attempts.reduce(
+        (s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),
+        0,
+      )
+      const reread = w.attempts.reduce((s, a) => s + rereadUnits(a, w.model), 0)
+      return { pct: pctOf(all), workPct: pctOf(all - reread), rereadPct: pctOf(reread) }
+    })(),
   }
 }
+
+/** Weighted units as % of a Pro 5-hour window, to one decimal. */
+const pctOf = (units: number): number => Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10

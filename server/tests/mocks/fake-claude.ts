@@ -200,12 +200,16 @@ if (!transcript) {
   transcript = join(dir, `${sessionId}.jsonl`)
 }
 // `FAKE-SPEND:<n>` in the prompt: the done turn bills n output tokens, so the task has a cost on record.
-const spend = Number(/FAKE-SPEND:(\d+)/.exec(prompt)?.[1] ?? 0)
+// A `fake-reread` file (holding n) on the account: a resumed session's first request writes n tokens
+// to the cache, the conversation read again where the cache does not hold it, and outputs 50k.
+const rereadFile = join(configDir, 'fake-reread')
+const reread = resume && existsSync(rereadFile) ? Number(readFileSync(rereadFile, 'utf8')) : 0
+const spend = Number(/FAKE-SPEND:(\d+)/.exec(prompt)?.[1] ?? 0) || (reread ? 50_000 : 0)
 const billed = spend
   ? {
       timestamp: new Date().toISOString(),
-      requestId: `req-${sessionId}`,
-      usage: { input_tokens: 0, output_tokens: spend, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      requestId: `req-${sessionId}-${Date.now()}`,
+      usage: { input_tokens: 0, output_tokens: spend, cache_read_input_tokens: 0, cache_creation_input_tokens: reread },
     }
   : null
 appendFileSync(

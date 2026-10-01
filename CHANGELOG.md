@@ -96,6 +96,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   window but not what any account has left now waits for room, while smaller tasks take that room,
   instead of starting where it would run out partway and move.
 
+- **CliMayte shows what every run cost, and what restarts cost** (`server/src/climayte-lib.ts`).
+  Each run of a task keeps its own cost, requests and tokens, stopped runs included, and the
+  first request of a run that picks a conversation up again (after a move, a limit, a handoff or a
+  gap) counts as re-reading, apart from the work. A task shows both, the counter's hover says what
+  share of everything went to re-reading, and what a kind of task costs counts only the work.
+
 - **The token budget weighs tokens the way the plan meter does** (`server/src/usage-tokens.ts`,
   `scripts/quota-weights/`). `usage_budget` turned tokens into one unit using list-price ratios,
   but the meter charges output and cache writes far more than that relative to cache reads, and

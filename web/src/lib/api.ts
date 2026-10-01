@@ -999,6 +999,11 @@ export interface CliMayteTotals {
   cliSessions?: number
   tokens: CliMayteTokens
   costUsd: number
+  /** Usage in % of a Pro 5-hour window; the part spent re-reading a conversation into a cold cache
+   *  at the start of a run after one that ran, as % of a window and as a share (%) of the whole. */
+  usedPct?: number
+  rereadPct?: number
+  rereadShare?: number
 }
 export const getCliMayteTotals = () => j<CliMayteTotals>('/api/corch/totals')
 export const listCliMayteWorkers = (filter: { group?: string; active?: boolean } = {}) => {

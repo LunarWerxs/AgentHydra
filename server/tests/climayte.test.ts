@@ -28,8 +28,10 @@ import {
   climayteJournalLines,
   climayteList,
   climayteRun,
+  climayteScorecard,
   climayteSend,
   climayteSetPriority,
+  climayteTotals,
   climayteVerdict,
   climayteWait,
   copySessionTranscript,
@@ -1241,4 +1243,60 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     expect(done?.status).toBe('done')
     expect(done?.waitUntil).toBeUndefined()
   }, 60_000)
+})
+
+describe('spend per attempt (field note 41): what each run used, the re-read after a move apart', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-spend-'))
+  const cwd = join(root, 'work')
+  const quotaDir = join(root, 'acct-quota')
+  const nextDir = join(root, 'acct-next')
+  for (const d of [cwd, quotaDir, nextDir]) mkdirSync(d, { recursive: true })
+  writeFileSync(join(quotaDir, 'fake-quota'), '')
+  writeFileSync(join(nextDir, 'fake-reread'), '2000000')
+  let group: string | null = null
+
+  afterAll(() => {
+    if (group) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test('a moved task records every attempt, splits work from re-read, and its kind costs the work only', async () => {
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteAccountsProvider(() => [
+      { id: 'spend-a', num: 51, name: 'a', configDir: quotaDir, sessionPct: 0, weekPct: 0 },
+      // Room for the whole task, so it moves rather than waits (sizing); #51 is tried first by number.
+      { id: 'spend-b', num: 52, name: 'b', configDir: nextDir, sessionPct: 0, weekPct: 0 },
+    ])
+    startCliMayte()
+    const run = climayteRun({
+      tasks: [{ prompt: 'a task that moves', cwd, kind: 'docs', model: 'sonnet', effort: 'high' }],
+      size: 'whole',
+    })
+    group = run.group
+    const id = run.workers[0]?.id as string
+    const deadline = Date.now() + 30_000
+    let w = climayteList({ id })[0]
+    while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+      await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = climayteList({ id })[0]
+    }
+    expect(w?.attempts.map((a) => a.outcome)).toEqual(['quota', 'done'])
+    const [first, moved] = w?.attempts ?? []
+    // The run that hit the limit is measured too, and its first request re-read nothing.
+    expect(first).toMatchObject({ costUsd: 0, turns: 0, rereadPct: 0 })
+    expect(moved?.turns).toBe(1)
+    expect(moved?.costUsd).toBeGreaterThan(0)
+    expect(moved?.rereadPct).toBeGreaterThan(0)
+    expect(w?.used.rereadPct).toBe(moved?.rereadPct as number)
+    expect(w?.used.workPct).toBeCloseTo((w?.used.pct ?? 0) - (w?.used.rereadPct ?? 0), 0)
+    expect(climayteTotals().rereadByCause.quota).toBeGreaterThan(0)
+
+    expect(climayteVerdict(id, { verdict: 'pass', by: 'orchestrator' }).ok).toBe(true)
+    const row = climayteScorecard().rows.find(
+      (r) => r.kind === 'docs' && r.model === 'claude-sonnet-5-5' && r.effort === 'high',
+    )
+    expect(row?.pctPerTask).toBeCloseTo(w?.used.workPct ?? -1, 0)
+  }, 40_000)
 })

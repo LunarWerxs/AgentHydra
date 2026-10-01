@@ -66,6 +66,8 @@ export default {
   offloadedHint:
     'Every task listed here, from every chat. {runs} {sessions} separate CLI conversations: a handoff starts a new one, a resume or a move carries one on. Tokens: {input} input, {output} output, {cacheRead} cache read and {cacheWrite} cache write, about {cost} at list prices. Cache reads are most of it: every request re-reads the conversation so far, at a tenth of the input price.',
   offloadedRuns: 'Runs: {list}.',
+  offloadedReread:
+    'Re-reading a conversation into an empty cache when a run picks it up again (after a move, a limit, a handoff or a gap) took {share}% of what they used: {pct}% of a Pro 5-hour window.',
   detailCostHint: 'Every attempt on every account, stopped ones included.',
   detailMore: 'More about this task: started, turns, model, thinking, group',
   detailGroup: 'Handed off together as',

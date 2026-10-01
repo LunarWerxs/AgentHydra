@@ -87,6 +87,9 @@ export interface CliMayteVerdict {
   effort: string | null
   /** Weighted units the work since the previous verdict cost (attemptUnits). */
   units: number
+  /** The part of `units` that was re-reading conversations into a cold cache (rereadUnits): left out
+   *  of what a kind costs. Absent on verdicts recorded before 2026-10-01 until the load backfill. */
+  reread?: number
   /** Who judged: the task's own check command, the orchestrating chat, or the owner in the view. */
   by?: 'check' | 'orchestrator' | 'owner'
 }
@@ -107,6 +110,16 @@ export function attemptUnits(
     cacheWrite1h: fiveMinute ? 0 : tokens.cacheWrite,
     output: tokens.output,
   })
+}
+
+/** An attempt's restart overhead in weighted units: its first request's input and cache writes when
+ *  it came after an attempt that ran (`spend.reread`), 0 otherwise. */
+export function rereadUnits(
+  at: { spend?: { reread: CliMayteTokens | null } | null; model?: string; cacheTtl?: string },
+  model: string | null | undefined,
+): number {
+  const r = at.spend?.reread
+  return r ? attemptUnits({ ...r, output: 0, cacheRead: 0 }, at.model ?? model, at.cacheTtl) : 0
 }
 
 export interface ScoreRow {
@@ -138,7 +151,8 @@ export function scoreRows(
       }
       if (v.verdict === 'pass') row.pass++
       else row.fail++
-      row.units += v.units
+      // The work only: a move's re-read is what the move cost, not what the kind costs.
+      row.units += Math.max(0, v.units - (v.reread ?? 0))
       rows.set(key, row)
     }
   }
