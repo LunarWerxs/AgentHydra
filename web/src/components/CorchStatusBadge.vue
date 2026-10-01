@@ -1,17 +1,42 @@
 <script setup lang="ts">
-// One Corch task status as a chip: icon + sentence-case label, with what it means on hover. Shared by
-// the task list and the detail pane so the two always read the same (lib/corch-status.ts).
+// One Corch task status: icon + sentence-case label as a chip, with what it means on hover. Shared
+// by the task list and the detail pane so the two always read the same (lib/corch-status.ts).
+// `iconOnly` is the list's compact form (owner, 2026-09-30: one line per task): the icon in the
+// status colour, its label kept for screen readers and the hover.
 import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
 import type { CorchStatus } from '@/lib/api'
 import { CORCH_STATUS } from '@/lib/corch-status'
 
-const props = defineProps<{ status: CorchStatus }>()
+const props = defineProps<{ status: CorchStatus; iconOnly?: boolean }>()
 const meta = computed(() => CORCH_STATUS[props.status])
+
+/** The chip's colour, for the bare icon. */
+const ICON_TONE: Record<string, string> = {
+  info: 'text-info',
+  success: 'text-success',
+  warning: 'text-warning',
+  destructive: 'text-destructive',
+}
+const tone = computed(() => ICON_TONE[meta.value.variant ?? ''] ?? 'text-muted-foreground')
 </script>
 
 <template>
-  <Badge :variant="meta.variant" class="h-5 text-2xs" :title="$t(meta.hint)">
+  <span
+    v-if="iconOnly"
+    class="inline-flex shrink-0 items-center"
+    :class="tone"
+    :title="`${$t(meta.label)}: ${$t(meta.hint)}`"
+  >
+    <component
+      :is="meta.icon"
+      class="size-3.5"
+      :class="meta.spin ? 'animate-spin' : ''"
+      aria-hidden="true"
+    />
+    <span class="sr-only">{{ $t(meta.label) }}</span>
+  </span>
+  <Badge v-else :variant="meta.variant" class="h-5 text-2xs" :title="$t(meta.hint)">
     <component :is="meta.icon" :class="meta.spin ? 'animate-spin' : ''" aria-hidden="true" />
     {{ $t(meta.label) }}
   </Badge>

@@ -137,6 +137,23 @@ function select(w: CorchWorkerView) {
 
 const startedAgo = (w: CorchWorkerView) => formatAgo(now.value, w.createdAt)
 
+/** The row's hover: the title in full, its account, and the one line that needs attention (a
+ *  failure's reason, what a waiting or re-queued task waits for, what a running one is doing). */
+function rowHint(w: CorchWorkerView): string {
+  const note = corchQueuedNote(w, now.value)
+  const line =
+    (w.status === 'failed' || w.status === 'waiting') && w.error
+      ? firstLine(w.error)
+      : note
+        ? t(note.key, note.values ?? {})
+        : w.status === 'running'
+          ? w.lastActivity
+          : null
+  return [w.title, w.account ?? t('corch.noAccount'), line, new Date(w.createdAt).toLocaleString()]
+    .filter(Boolean)
+    .join('\n')
+}
+
 onMounted(() => {
   void load()
   // Keeps "Started 3m ago" honest between the slow idle polls.
@@ -247,46 +264,23 @@ onUnmounted(() => {
           </h3>
           <ul class="divide-y">
             <li v-for="w in g.items" :key="w.id">
+              <!-- One line per task (owner, 2026-09-30): the status as an icon, the title, when it
+                   started. The account and what it is doing or why it stopped ride on the hover;
+                   the detail pane has all of it. -->
               <button
                 type="button"
-                class="flex w-full flex-col gap-1 px-3 py-2.5 text-start text-sm transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                class="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-start text-sm transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 :class="w.id === selectedId ? 'bg-accent shadow-[inset_3px_0_0_var(--color-primary)]' : ''"
                 :aria-current="w.id === selectedId ? 'true' : undefined"
+                :title="rowHint(w)"
                 @click="select(w)"
               >
-                <span class="flex min-w-0 items-center gap-2">
-                  <CorchStatusBadge :status="w.status" />
-                  <span class="truncate font-medium" :title="w.title">{{ w.title }}</span>
-                </span>
-                <span class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                  <span class="truncate" :title="w.account ?? undefined">{{ w.account ?? $t('corch.noAccount') }}</span>
-                  <span aria-hidden="true">·</span>
-                  <time
-                    class="shrink-0"
-                    :datetime="new Date(w.createdAt).toISOString()"
-                    :title="new Date(w.createdAt).toLocaleString()"
-                  >{{ startedAgo(w) }}</time>
-                </span>
-                <!-- The one line that says what needs attention: a failure's reason, what a
-                     waiting task waits for, or what a running one is doing. A finished task has its
-                     chip, and "finished (1 turn, $0.00)" under a Failed chip read as a success.
-                     Only 'running': a task queued after a limit or restart still carries the dead
-                     attempt's last command, which would read as if it were running it now. -->
-                <span
-                  v-if="(w.status === 'failed' || w.status === 'waiting') && w.error"
-                  class="truncate text-xs"
-                  :class="w.status === 'failed' ? 'text-destructive' : 'text-warning'"
-                  :title="w.error"
-                >{{ firstLine(w.error) }}</span>
-                <span
-                  v-else-if="corchQueuedNote(w, now)"
-                  class="truncate text-xs text-muted-foreground"
-                >{{ $t(corchQueuedNote(w, now)?.key ?? '', corchQueuedNote(w, now)?.values ?? {}) }}</span>
-                <span
-                  v-else-if="w.status === 'running' && w.lastActivity"
-                  class="truncate text-xs text-muted-foreground"
-                  :title="w.lastActivity"
-                >{{ w.lastActivity }}</span>
+                <CorchStatusBadge :status="w.status" icon-only />
+                <span class="min-w-0 flex-1 truncate font-medium">{{ w.title }}</span>
+                <time
+                  class="shrink-0 text-xs text-muted-foreground tabular-nums"
+                  :datetime="new Date(w.createdAt).toISOString()"
+                >{{ startedAgo(w) }}</time>
               </button>
             </li>
           </ul>
