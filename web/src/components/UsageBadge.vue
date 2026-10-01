@@ -302,7 +302,11 @@ function onRootOpenChange(v: boolean): void {
           <p v-if="turnOffNote" class="text-muted-foreground">{{ turnOffNote }}</p>
         </div>
         <p class="text-muted-foreground">
-          {{ $t('instances.usageCheckedAgo', { when: checkedAgo }) }}
+          {{
+            snapshot?.signedOutAt
+              ? $t('instances.usageSignedOutKept', { when: checkedAgo })
+              : $t('instances.usageCheckedAgo', { when: checkedAgo })
+          }}
         </p>
       </div>
       <Button

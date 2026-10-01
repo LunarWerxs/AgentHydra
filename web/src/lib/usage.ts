@@ -152,6 +152,8 @@ const STALE_AFTER_MS = 30 * 60 * 1000
 
 export function isStaleSnap(snap: UsageSnapshot | null | undefined): boolean {
   if (!snap) return false
+  // A signed-out account's kept reading is old by definition, whatever its age.
+  if (snap.signedOutAt) return true
   const ms = Date.parse(snap.capturedAt)
   if (!Number.isFinite(ms)) return false
   return Date.now() - ms > STALE_AFTER_MS

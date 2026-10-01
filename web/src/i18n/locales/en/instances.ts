@@ -260,6 +260,8 @@ export default {
   usageSessionResetsIn: 'Session resets in',
   usageWeekResetsIn: 'Week resets in',
   usageCheckedAgo: 'Checked {when}',
+  // A signed-out account's last reading, kept (usage-cache.ts lastKnownUsage).
+  usageSignedOutKept: 'Last reading before it signed out, checked {when}',
   // The popover's section of facts only the running Claude app serves (claude-app-usage.ts).
   usageAppResets: 'Banked resets',
   usageAppResetsValue: '{count} · until {expires}',

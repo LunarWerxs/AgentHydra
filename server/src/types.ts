@@ -1035,6 +1035,10 @@ export interface UsageSnapshot {
   /** Claude Desktop: what only the signed-in claude.ai session serves. Undefined until the running
    *  app has been read once; a closed app keeps its last reading. */
   claudeApp?: ClaudeAppUsage
+  /** Set only on a reading KEPT after its account signed out (usage-cache.ts lastKnownUsage): when
+   *  it was set aside. The numbers are from before that, for the tables to show dimmed; nothing
+   *  that ranks accounts by room ever reads them (owner, 2026-10-01). */
+  signedOutAt?: string
 }
 
 /** What switching an account's claude.ai extra usage off did (extra-usage.ts turnOffExtraUsage). */

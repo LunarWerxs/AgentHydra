@@ -16,6 +16,10 @@ import { reconcileMap, sameData } from '@/lib/reconcile'
 import type { UsageReason } from '@/lib/usage'
 
 const snapshots = ref<Map<string, UsageSnapshot>>(new Map())
+/** A signed-out account's last reading (server usage-cache.ts lastKnownUsage), shown in its row
+ *  dimmed until it signs in again (owner, 2026-10-01: "don't clear the last usage stats when they
+ *  go yellow"). A live reading for the key always wins. */
+const lastKnown = ref<Map<string, UsageSnapshot>>(new Map())
 /** ISO time of the server's last background auto-refresh sweep, or null. */
 const lastAutoRefreshAt = ref<string | null>(null)
 // Why each cached snapshot has the value it does (esp. why a no-data one is empty), keyed the
@@ -64,6 +68,7 @@ async function hydrate(): Promise<void> {
   const res = await guard(api.getUsageCache())
   if (res) {
     snapshots.value = reconcileMap(snapshots.value, Object.entries(res.cache))
+    lastKnown.value = reconcileMap(lastKnown.value, Object.entries(res.lastKnown ?? {}))
     if (lastAutoRefreshAt.value !== res.lastAutoRefreshAt)
       lastAutoRefreshAt.value = res.lastAutoRefreshAt
   }
@@ -96,7 +101,7 @@ function stopPolling(): void {
 }
 
 function snapshotFor(key: string): UsageSnapshot | undefined {
-  return snapshots.value.get(key)
+  return snapshots.value.get(key) ?? lastKnown.value.get(key)
 }
 
 function reasonFor(key: string): UsageReason | undefined {

@@ -1,5 +1,8 @@
 // ⛔ OWNER RULE (Michael, 2026-09-07): *"when I log out... when the account is not logged in, it
-// should reset and clear the usage data, session, weekly, five-hour."*
+// should reset and clear the usage data, session, weekly, five-hour."* AMENDED 2026-10-01: *"don't
+// clear the last usage stats when they go yellow."* So a sign-out still takes the reading out of the
+// cache every ranking reads (the drops below), and keeps it in a file of its own that only the
+// tables show, dimmed (usage-cache.ts lastKnownUsage; the last test here).
 //
 // Why this needs pinning rather than trusting the code to stay right: NOT caching the signed-out
 // no-data result already looked correct, and was not enough. The PREVIOUS reading stayed in the
@@ -16,15 +19,16 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { UsageSnapshot } from '../src/types'
+import { allCachedUsage, dropCachedUsage, lastKnownUsage, setCachedUsage } from '../src/usage-cache'
 
 const SRC = join(import.meta.dir, '..', 'src')
 const usageService = readFileSync(join(SRC, 'usage-service.ts'), 'utf8')
 const instancesRoute = readFileSync(join(SRC, 'routes', 'instances.ts'), 'utf8')
 
 test('a signed-out DESKTOP instance drops its cached usage', () => {
-  expect(usageService).toContain(
-    "if (reason === 'logged_out' || apiFail?.status === 401) dropCachedUsage(key)",
-  )
+  expect(usageService).toContain("if (reason === 'logged_out' || apiFail?.status === 401) {")
+  expect(usageService).toContain('dropCachedUsage(key, { keepLastKnown: true })')
 })
 
 // ⛔ A REVOKED TOKEN'S STALE READING MUST NOT OUTLIVE THE REVOCATION (defect 4, 2026-09-15).
@@ -36,15 +40,17 @@ test('a signed-out DESKTOP instance drops its cached usage', () => {
 // (balance.py's usage_rows_with_fallback), and a fresh-looking stale reading there is exactly
 // "room" the account no longer has - it assigned a task to an account revoked the day before.
 test('a 401 (an expired or REVOKED token) also drops the cached usage, not just logged_out', () => {
-  expect(usageService).toContain('apiFail?.status === 401')
-  const drops = guardedDrops(usageService)
-  const revokedDrop = drops.find((d) => d.line.includes('401'))
-  expect(revokedDrop).toBeDefined()
-  expect(revokedDrop?.guarded).toBe(true)
+  // The drop is the first statement of the block the 401 opens.
+  expect(usageService).toMatch(
+    /if \(reason === 'logged_out' \|\| apiFail\?\.status === 401\) \{\s*dropCachedUsage\(key, \{ keepLastKnown: true \}\)/,
+  )
+  expect(guardedDrops(usageService).every((d) => d.guarded)).toBe(true)
 })
 
 test('a signed-out CLI instance drops its cached usage', () => {
-  expect(usageService).toContain('if (!hasAnyCredential) dropCachedUsage(key)')
+  expect(usageService).toContain(
+    'if (!hasAnyCredential) dropCachedUsage(key, { keepLastKnown: true })',
+  )
 })
 
 test('the drop is conditional - a FAILED check must keep the last good reading', () => {
@@ -119,5 +125,27 @@ function guardedDrops(source: string): Array<{ line: string; guarded: boolean }>
 test('pressing Log out clears the numbers immediately, not at the next check', () => {
   // The routes serve the cache before checking, so waiting for "the next check" means waiting for
   // the 30-minute sweep - during which the row still shows a signed-out account's quota.
-  expect(instancesRoute).toContain('dropCachedUsage(desktopKey(dir))')
+  expect(instancesRoute).toContain('dropCachedUsage(desktopKey(dir), { keepLastKnown: true })')
+})
+
+test('a sign-out keeps the reading for the table, never in the cache rankings read', () => {
+  // Owner, 2026-10-01: the row keeps its last numbers. But fan_out's ranking and CliMayte read the
+  // cache as room (2026-09-15: a task sent to an account revoked the day before), so the kept
+  // reading must live outside it, marked, until a live reading replaces it.
+  const key = 'cli:logout-keeps-last-known'
+  const reading: UsageSnapshot = {
+    account: 'kept@example.com',
+    session: { pct: 41, resets: '', resetsAt: '2026-10-01T20:00:00.000Z' },
+    weekAll: { pct: 63, resets: '', resetsAt: '2026-10-07T22:00:00.000Z' },
+    weekModel: null,
+    capturedAt: '2026-10-01T18:00:00.000Z',
+  }
+  setCachedUsage(key, reading)
+  dropCachedUsage(key, { keepLastKnown: true })
+  expect(allCachedUsage()[key]).toBeUndefined()
+  expect(lastKnownUsage()[key]?.weekAll?.pct).toBe(63)
+  expect(typeof lastKnownUsage()[key]?.signedOutAt).toBe('string')
+  setCachedUsage(key, { ...reading, capturedAt: '2026-10-01T19:00:00.000Z' })
+  expect(lastKnownUsage()[key]).toBeUndefined()
+  dropCachedUsage(key)
 })

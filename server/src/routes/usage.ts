@@ -43,7 +43,7 @@ import { app } from '../http-app'
 import { readLiveRegistry } from '../live-registry'
 import { jsonBody } from '../route-helpers'
 import { fileNudgeStore } from '../session-keepalive'
-import type { UsageCheckResult } from '../types'
+import type { UsageCheckResult, UsageSnapshot } from '../types'
 import {
   allCachedUsage,
   checkUsage,
@@ -54,7 +54,8 @@ import {
   usageAdvice,
 } from '../usage'
 import { budgetSummary, buildUsageBudget } from '../usage-budget'
-import { dropCachedUsage } from '../usage-cache'
+import { dropCachedUsage, keepLastKnownIfMissing, lastKnownUsage } from '../usage-cache'
+import { lastSampleSnapshot, usageHistoryKeys } from '../usage-history'
 import { withLimitWall, withLiveReading } from '../usage-live'
 import { lastAutoRefreshAt, sweepUsage } from '../usage-refresh'
 import {
@@ -199,8 +200,28 @@ app.get('/api/usage/cache', (c) => {
     const walled = withLimitWall(cache[cliKey(id)] ?? null, wall)
     if (walled) cache[cliKey(id)] = walled
   }
-  return c.json({ cache, lastAutoRefreshAt: lastAutoRefreshAt() })
+  return c.json({
+    cache,
+    lastKnown: lastKnownWithHistory(),
+    lastAutoRefreshAt: lastAutoRefreshAt(),
+  })
 })
+
+/** Accounts that signed out before readings were kept had theirs deleted; the usage history still
+ *  holds their last one. Claude desktop and CLI keys only (a Codex key's cache is also dropped when
+ *  its login changes account), once per daemon. */
+let historyBackfilled = false
+function lastKnownWithHistory(): Record<string, UsageSnapshot> {
+  if (!historyBackfilled) {
+    historyBackfilled = true
+    for (const key of usageHistoryKeys()) {
+      if (!key.startsWith('desktop:') && !key.startsWith('cli:')) continue
+      const snap = lastSampleSnapshot(key)
+      if (snap) keepLastKnownIfMissing(key, snap)
+    }
+  }
+  return lastKnownUsage()
+}
 
 // Every instance's usage in ONE call: the whole-fleet survey. This is the endpoint an AI agent wants
 // ("which of my accounts has headroom?") and what the auto-refresh sweep exposes on demand. Each row
@@ -396,7 +417,7 @@ app.post('/api/cli-instances/:id/login', (c) =>
 app.post('/api/cli-instances/:id/logout', (c) => {
   const id = c.req.param('id')
   const result = logoutCliInstance(id)
-  if (result.ok) dropCachedUsage(cliKey(id))
+  if (result.ok) dropCachedUsage(cliKey(id), { keepLastKnown: true })
   return c.json(result)
 })
 // Move CLI logins to another PC (core/cli-login-move.ts): out = one encrypted bundle in Downloads and
@@ -413,7 +434,8 @@ app.post('/api/cli-instances/move-out', async (c) => {
     passphrase: typeof body.passphrase === 'string' ? body.passphrase : '',
   })
   // Signed out here: the cached quota belongs to a login this PC no longer holds (as for a logout).
-  if (result.file) for (const r of result.rows) if (r.ok) dropCachedUsage(cliKey(r.id))
+  if (result.file)
+    for (const r of result.rows) if (r.ok) dropCachedUsage(cliKey(r.id), { keepLastKnown: true })
   return c.json(result)
 })
 app.post('/api/cli-instances/move-in', async (c) => {
@@ -580,7 +602,7 @@ app.post('/api/codex-instances/:id/login', (c) =>
 app.post('/api/codex-instances/:id/logout', async (c) => {
   const id = c.req.param('id')
   const result = await logoutCodexInstance(id)
-  if (result.ok) dropCachedUsage(codexKey(id))
+  if (result.ok) dropCachedUsage(codexKey(id), { keepLastKnown: true })
   return c.json(result)
 })
 app.post('/api/codex-instances/:id/desktop/open', async (c) =>

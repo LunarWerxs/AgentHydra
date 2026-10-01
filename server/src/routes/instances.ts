@@ -126,7 +126,8 @@ app.post('/api/instances/:dir/logout', async (c) => {
   // outlived it, and since the usage routes serve the cache before checking anything, the row
   // went on showing the signed-out account's percentages. Dropped here so it clears the moment
   // the button is pressed rather than whenever a check next happens to run.
-  if (result.ok) dropCachedUsage(desktopKey(dir))
+  // Kept as the row's last-known reading, dimmed (owner, 2026-10-01), never as a live one.
+  if (result.ok) dropCachedUsage(desktopKey(dir), { keepLastKnown: true })
   return c.json(result)
 })
 app.post('/api/instances/:dir/focus', async (c) => {

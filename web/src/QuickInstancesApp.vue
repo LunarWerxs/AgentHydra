@@ -287,7 +287,12 @@ async function refresh(silent = false): Promise<void> {
     })
     claudeCli.value = cliRows
     codex.value = codexRows
-    if (usageResult) usageSnapshots.value = new Map(Object.entries(usageResult.cache))
+    // A signed-out account's kept reading under its live one (usage-cache.ts lastKnownUsage).
+    if (usageResult)
+      usageSnapshots.value = new Map([
+        ...Object.entries(usageResult.lastKnown ?? {}),
+        ...Object.entries(usageResult.cache),
+      ])
     error.value = null
     void hydrateClaudeAccounts(claude.value, !silent)
   } catch (cause) {

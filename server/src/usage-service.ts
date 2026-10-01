@@ -350,7 +350,11 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   // live 2026-09-15: fan_out assigned a task to an account revoked the day before). Dropping the
   // stale entry the moment the daemon itself notices is what makes "an unknown or stale reading
   // is never room" true rather than merely documented.
-  if (reason === 'logged_out' || apiFail?.status === 401) dropCachedUsage(key)
+  // The reading leaves the cache that ranks accounts by room, and stays as the row's last-known
+  // reading, shown dimmed (owner, 2026-10-01: "don't clear the last usage stats when they go yellow").
+  if (reason === 'logged_out' || apiFail?.status === 401) {
+    dropCachedUsage(key, { keepLastKnown: true })
+  }
   const snapshot = parseUsageOutput('', label)
   // Say WHAT failed, not just that something did. See UsageCheckResult.detail.
   // The server's own words FIRST (see usage-api.ts), plus the retry window when it gave one. Both,
@@ -431,7 +435,7 @@ export async function checkUsageForCliInstance(id: string): Promise<UsageCheckRe
     inst.loggedIn || !!inst.associatedAccountId || !!inst.associatedDesktopDir
   // Same owner rule as the desktop path above: signed out clears the numbers, a failed check does
   // not. `hasAnyCredential` false IS the signed-out case for a CLI instance.
-  if (!hasAnyCredential) dropCachedUsage(key)
+  if (!hasAnyCredential) dropCachedUsage(key, { keepLastKnown: true })
   const snapshot = parseUsageOutput('', inst.name)
   return {
     snapshot,

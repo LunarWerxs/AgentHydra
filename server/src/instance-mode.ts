@@ -181,8 +181,9 @@ app.get('/api/instances/:dir/account', async (c) => {
 app.get('/api/usage/cache', async (c) => {
   // Cached readings only: the quick daemon never starts a live quota sweep. Keeping cache access
   // dynamically imported also keeps it off the first-render path until the browser asks for it.
-  const { allCachedUsage } = await import('./usage-cache')
-  return c.json({ cache: allCachedUsage(), lastAutoRefreshAt: null })
+  const { allCachedUsage, lastKnownUsage } = await import('./usage-cache')
+  // A signed-out account's kept reading, for its row to show dimmed (the full daemon's route).
+  return c.json({ cache: allCachedUsage(), lastKnown: lastKnownUsage(), lastAutoRefreshAt: null })
 })
 
 // The SAME cross-window preferences the full daemon serves, backed by the same file (see

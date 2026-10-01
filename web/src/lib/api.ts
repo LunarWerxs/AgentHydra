@@ -749,7 +749,12 @@ export const checkDesktopInstanceUsage = (dir: string, refresh = false) =>
   )
 /** The whole server-side usage cache, keyed by `desktop:<dir>` / `acct:<id>` / `cli:<id>` etc. */
 export const getUsageCache = () =>
-  j<{ cache: Record<string, UsageSnapshot>; lastAutoRefreshAt: string | null }>('/api/usage/cache')
+  j<{
+    cache: Record<string, UsageSnapshot>
+    /** Signed-out accounts' last readings, each marked `signedOutAt`: shown dimmed, never as live. */
+    lastKnown?: Record<string, UsageSnapshot>
+    lastAutoRefreshAt: string | null
+  }>('/api/usage/cache')
 /** Force one background refresh sweep now (the same pass the auto-refresh timer runs). */
 export const refreshAllUsage = () =>
   j<{ ok: boolean; checked: number }>('/api/usage/refresh', { method: 'POST' })

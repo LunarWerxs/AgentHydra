@@ -96,6 +96,28 @@ export function dropUsageHistory(key: string): void {
   writeHistory(h)
 }
 
+/** Every key with a stored series. */
+export function usageHistoryKeys(): string[] {
+  return Object.keys(readHistory())
+}
+
+/** A key's last recorded reading as a snapshot marked `signedOutAt` (its own time), or null: what a
+ *  table shows for an account that signed out before kept readings existed (usage-cache.ts). */
+export function lastSampleSnapshot(key: string): UsageSnapshot | null {
+  const last = readHistory()[key]?.at(-1)
+  if (!last) return null
+  const limit = (pct: number | null, resetsAt: string | null | undefined) =>
+    pct === null ? null : { pct, resets: '', resetsAt: resetsAt ?? null }
+  return {
+    account: null,
+    session: limit(last.sessionPct, last.sessionResetsAt),
+    weekAll: limit(last.weekAllPct, last.weekResetsAt),
+    weekModel: null,
+    capturedAt: last.at,
+    signedOutAt: last.at,
+  }
+}
+
 /** Every stored sample for a key, oldest first. */
 export function usageSamples(key: string): UsageSample[] {
   return readHistory()[key] ?? []
