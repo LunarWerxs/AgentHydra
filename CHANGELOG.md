@@ -7,24 +7,6 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
-### Changed
-
-- **A signed-out account keeps its last usage numbers** (`server/src/usage-cache.ts`,
-  `web/src/composables/useUsage.ts`). When an account goes yellow (signed out, or its login was
-  rejected), its row keeps showing the last session and weekly numbers, dimmed, and the usage
-  popover says "Last reading before it signed out". Accounts that were already blank get theirs
-  back from the usage history. Those numbers are for reading only: fan-out, CliMayte and the usage
-  survey still treat a signed-out account as having no room.
-
-### Fixed
-
-- **Moving a login between PCs is safer** (`server/src/core/cli-login-move.ts`). A login file only
-  opens with the settings AgentHydra itself writes (a tampered one could have frozen the app for an
-  hour), and only when the list it shows matches what is inside. This PC is signed out of a login
-  only if nothing refreshed it while the file was being made. An account already signed in on the
-  other PC is replaced only by a newer login of the same account: importing the same file twice,
-  or an older one, changes nothing.
-
 ## [1.5.0] - 2026-10-01
 
 ### Added
@@ -113,7 +95,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   saves the login to a file encrypted with a passphrase the page makes and shows you, and signs this
   PC out of it in the same step. "Import logins" in the header of the other PC shows which logins the
   file holds before it opens it, puts each one on the instance with the same number or account, and
-  checks that it is signed in. Moving a login that is running a session is refused.
+  checks that it is signed in. Moving a login that is running a session is refused. The file only
+  opens with the settings AgentHydra itself writes, and only when the list it shows matches what is
+  inside; this PC is signed out only if nothing refreshed the login while the file was being made;
+  and an account already signed in on the other PC is replaced only by a newer login of the same
+  account, so importing the same file twice, or an older one, changes nothing.
 
 - **Each instance shows every account it has been signed into** (`server/src/core/login-history.ts`,
   `web/src/components/LoginHistoryPopover.vue`). A history button beside the account in the
@@ -127,11 +113,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ### Changed
 
 - **A signed-out account keeps its last usage numbers** (`server/src/usage-cache.ts`,
-  `web/src/components/UsageBadge.vue`). The tables used to blank an account's usage the moment it
-  signed out. Now they show its last reading, dimmed and marked as the last one before it signed
-  out, until a live reading replaces it; accounts already blanked get theirs back from the usage
-  history. Nothing that picks an account for work (fan_out, CliMayte, the usage survey) counts that
-  old reading as room.
+  `web/src/composables/useUsage.ts`). When an account goes yellow (signed out, or its login was
+  rejected), its row keeps showing the last session and weekly numbers, dimmed, and the usage
+  popover says "Last reading before it signed out". Accounts that were already blank get theirs
+  back from the usage history. Those numbers are for reading only: fan-out, CliMayte and the usage
+  survey still treat a signed-out account as having no room.
 
 - **CliMayte starts a task where it can finish** (`server/src/climayte-placement.ts`). It counts what
   each account has left, what the tasks already running there will still use, and what this
