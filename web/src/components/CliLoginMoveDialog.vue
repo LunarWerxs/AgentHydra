@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// Move CLI logins between the owner's PCs (server/src/core/cli-login-move.ts; owner, 2026-10-01).
+// Carry CLI logins between the owner's PCs (server/src/core/cli-login-move.ts; owner, 2026-10-01).
 // Out: pick the logins, keep the passphrase made here, and the server writes one encrypted file to
-// Downloads and signs this PC out of each, in one step. In: choose that file on the other PC and type
-// the passphrase. The passphrase is made in this page and sent once; the server never sends it back,
+// Downloads. This PC stays signed in unless "Also sign this PC out" is ticked (owner, the same day:
+// "I sometimes need both to stay logged in"). In: choose that file on the other PC and type the
+// passphrase. The passphrase is made in this page and sent once; the server never sends it back,
 // so it is shown here until the dialog closes.
 import { ArrowRightLeft, Check, Copy, FileDown, RefreshCw, X } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
@@ -47,6 +48,8 @@ function makePassphrase(): string {
 }
 
 const passphrase = ref('')
+/** Out: sign this PC out of the logins too (a move). Off by default: a copy keeps both signed in. */
+const signOut = ref(false)
 const picked = ref<Set<string>>(new Set())
 const working = ref(false)
 const result = ref<CliLoginMoveResult | null>(null)
@@ -71,6 +74,7 @@ watch(
     bundleInfo.value = null
     fileError.value = null
     passphrase.value = props.mode === 'out' ? makePassphrase() : ''
+    signOut.value = false
     picked.value = new Set(
       props.preselect.filter((id) => movable.value.some((i) => i.id === id && !busy(i))),
     )
@@ -134,7 +138,7 @@ async function submit() {
   try {
     const r =
       props.mode === 'out'
-        ? await moveCliLoginsOut([...picked.value], passphrase.value)
+        ? await moveCliLoginsOut([...picked.value], passphrase.value, signOut.value)
         : await moveCliLoginsIn(bundle.value, passphrase.value)
     result.value = r
     if (r.ok) toast.success(r.message)
@@ -266,6 +270,16 @@ async function submit() {
                   : ''
             }}
           </span>
+        </label>
+
+        <label v-if="mode === 'out'" class="flex cursor-pointer items-center gap-2 text-xs">
+          <input
+            v-model="signOut"
+            type="checkbox"
+            class="size-4 accent-primary"
+            :disabled="working || done"
+          />
+          {{ $t('cliInstances.moveSignOut') }}
         </label>
 
         <!-- What happened, login by login. -->

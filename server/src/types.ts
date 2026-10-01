@@ -1389,6 +1389,36 @@ export interface CliNudgeRecord {
   costUsd: number | null
 }
 
+/** What the Login sync dialog shows (core/cli-login-sync.ts). Never a token, key or login. */
+export interface CliLoginSyncStatus {
+  configured: boolean
+  enabled: boolean
+  /** The store's host, or null when not set up. */
+  url: string | null
+  lastSyncAt: number | null
+  lastError: string | null
+  logins: Array<{
+    id: string
+    num: number | null
+    name: string
+    /** Signed in on this PC. */
+    here: boolean
+    /** The store holds a copy (as of the last pass). */
+    inStore: boolean
+    /** Left out of sync on this PC. */
+    excluded: boolean
+    /** This PC and the store agreed on it at the last pass. */
+    inSync: boolean
+  }>
+  /** The newest first: what the passes did. */
+  events: Array<{
+    at: number
+    num: number | null
+    action: 'pushed' | 'pulled' | 'created' | 'skipped' | 'error'
+    note: string
+  }>
+}
+
 /** One login's line in a move between PCs (core/cli-login-move.ts). Never carries a secret. */
 export interface CliLoginMoveRow {
   id: string

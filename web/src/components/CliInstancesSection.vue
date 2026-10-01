@@ -12,6 +12,7 @@ import {
   ArrowDown,
   ArrowRightLeft,
   ArrowUp,
+  Cloud,
   CreditCard,
   EllipsisVertical,
   FileDown,
@@ -37,6 +38,7 @@ import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import CliLimitResetDialog from '@/components/CliLimitResetDialog.vue'
 import CliLimitResetIcon from '@/components/CliLimitResetIcon.vue'
 import CliLoginMoveDialog from '@/components/CliLoginMoveDialog.vue'
+import CliLoginSyncDialog from '@/components/CliLoginSyncDialog.vue'
 import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
@@ -505,6 +507,8 @@ function openMoveOut(inst: CliInstance) {
   movePreselect.value = [inst.id]
   moveOpen.value = true
 }
+/** Login sync through the owner's own store (CliLoginSyncDialog.vue, core/cli-login-sync.ts). */
+const syncOpen = ref(false)
 function openMoveIn() {
   moveMode.value = 'in'
   movePreselect.value = []
@@ -585,6 +589,16 @@ onUnmounted(() => stopPolling())
               @update:model-value="onKeepaliveSwitch"
             />
           </label>
+        </IconTooltip>
+        <IconTooltip :label="$t('cliInstances.sync')" :description="$t('cliInstances.syncHint')">
+          <Button
+            variant="outline"
+            size="icon"
+            :aria-label="$t('cliInstances.sync')"
+            @click="syncOpen = true"
+          >
+            <Cloud />
+          </Button>
         </IconTooltip>
         <IconTooltip :label="$t('cliInstances.moveIn')">
           <Button
@@ -999,6 +1013,7 @@ onUnmounted(() => stopPolling())
       :instance="limitResetTarget"
       @done="onLimitResetDone"
     />
+    <CliLoginSyncDialog v-model:open="syncOpen" @changed="refreshCliInstances({ silent: true })" />
     <CliLoginMoveDialog
       v-model:open="moveOpen"
       :mode="moveMode"

@@ -39,7 +39,11 @@ describe('moving a CLI login between PCs', () => {
       out = mkdtempSync(join(tmpdir(), 'ah-login-move-'))
       const passphrase = 'correct horse battery staple'
 
-      const exported = exportCliLogins({ ids: [id], passphrase, dir: out })
+      // A copy (the default, owner 2026-10-01: "I sometimes need both to stay logged in") keeps
+      // this PC signed in; a move signs it out.
+      expect(exportCliLogins({ ids: [id], passphrase, dir: out }).ok).toBe(true)
+      expect(existsSync(join(dir, '.credentials.json'))).toBe(true)
+      const exported = exportCliLogins({ ids: [id], passphrase, dir: out, signOut: true })
       expect(exported.ok).toBe(true)
       const bundle = readFileSync(exported.file!, 'utf8')
       expect(bundle).not.toContain('rt-plain-SECRET-456')

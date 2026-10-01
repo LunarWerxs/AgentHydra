@@ -15,6 +15,16 @@ import {
 } from '../core/cli-instances'
 import { runCliLimitReset } from '../core/cli-limit-reset'
 import { exportCliLogins, importCliLogins } from '../core/cli-login-move'
+import {
+  configureLoginSync,
+  disconnectLoginSync,
+  joinLoginSync,
+  loginSyncPairingCode,
+  loginSyncStatus,
+  runLoginSync,
+  setLoginSyncEnabled,
+  setLoginSyncExcluded,
+} from '../core/cli-login-sync'
 import { logoutCliInstance } from '../core/cli-logout'
 import { redeemCodexResetCredit, resolveCodexAccount } from '../core/codex-account'
 import { moveCodexChat, planCodexChatMove } from '../core/codex-chat-move'
@@ -417,7 +427,11 @@ app.post('/api/cli-instances/:id/login', (c) =>
 app.post('/api/cli-instances/:id/logout', (c) => {
   const id = c.req.param('id')
   const result = logoutCliInstance(id)
-  if (result.ok) dropCachedUsage(cliKey(id), { keepLastKnown: true })
+  if (result.ok) {
+    dropCachedUsage(cliKey(id), { keepLastKnown: true })
+    // Signed out here on purpose: login sync must not sign it straight back in from the store.
+    setLoginSyncExcluded(id, true)
+  }
   return c.json(result)
 })
 // Move CLI logins to another PC (core/cli-login-move.ts): out = one encrypted bundle in Downloads and
@@ -429,15 +443,59 @@ app.post('/api/cli-instances/move-out', async (c) => {
   const ids = Array.isArray(body.ids)
     ? body.ids.filter((x): x is string => typeof x === 'string')
     : []
+  const signOut = body.signOut === true
   const result = exportCliLogins({
     ids,
     passphrase: typeof body.passphrase === 'string' ? body.passphrase : '',
+    signOut,
   })
-  // Signed out here: the cached quota belongs to a login this PC no longer holds (as for a logout).
-  if (result.file)
-    for (const r of result.rows) if (r.ok) dropCachedUsage(cliKey(r.id), { keepLastKnown: true })
+  // A move signs this PC out: the cached quota belongs to a login this PC no longer holds (as for a
+  // logout), and login sync leaves it out here so the store does not sign it back in.
+  if (result.file && signOut)
+    for (const r of result.rows)
+      if (r.ok) {
+        dropCachedUsage(cliKey(r.id), { keepLastKnown: true })
+        setLoginSyncExcluded(r.id, true)
+      }
   return c.json(result)
 })
+
+// Login sync through the owner's own store (core/cli-login-sync.ts, cloud/login-sync-worker).
+// Answers carry statuses only; the pairing route is the one that returns a secret, for the Login
+// sync dialog's copy button. No MCP tool on purpose, as for the move.
+app.get('/api/cli-instances/sync', (c) => c.json(loginSyncStatus()))
+app.post('/api/cli-instances/sync/setup', async (c) => {
+  const body = await jsonBody(c)
+  return c.json(
+    await configureLoginSync({
+      url: typeof body.url === 'string' ? body.url : '',
+      token: typeof body.token === 'string' ? body.token : '',
+    }),
+  )
+})
+app.post('/api/cli-instances/sync/join', async (c) => {
+  const body = await jsonBody(c)
+  return c.json(await joinLoginSync(typeof body.code === 'string' ? body.code : ''))
+})
+app.post('/api/cli-instances/sync/run', async (c) => {
+  const result = await runLoginSync()
+  return c.json({ result, status: loginSyncStatus() })
+})
+app.post('/api/cli-instances/sync/enabled', async (c) => {
+  const body = await jsonBody(c)
+  return c.json(setLoginSyncEnabled(body.enabled === true))
+})
+app.post('/api/cli-instances/sync/exclude', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.id !== 'string') return c.json({ error: 'id is required' }, 400)
+  setLoginSyncExcluded(body.id, body.excluded === true)
+  return c.json(loginSyncStatus())
+})
+app.post('/api/cli-instances/sync/pairing', (c) => {
+  const code = loginSyncPairingCode()
+  return code ? c.json({ code }) : c.json({ error: 'login sync is not set up' }, 404)
+})
+app.post('/api/cli-instances/sync/disconnect', (c) => c.json(disconnectLoginSync()))
 app.post('/api/cli-instances/move-in', async (c) => {
   const body = await jsonBody(c)
   const result = await importCliLogins({

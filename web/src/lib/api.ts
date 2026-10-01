@@ -11,6 +11,7 @@ import type {
   CliInstance,
   CliLimitResetResult,
   CliLoginMoveResult,
+  CliLoginSyncStatus,
   CMAccount,
   CMActionResult,
   CMDesktopInstall,
@@ -85,6 +86,7 @@ export type {
   CliInstance,
   CliLimitResetResult,
   CliLoginMoveResult,
+  CliLoginSyncStatus,
   CliNudgeRecord,
   CMAccount,
   CMAccountStatus,
@@ -837,13 +839,46 @@ export const deleteCliInstance = (id: string, confirmName: string) =>
     method: 'DELETE',
     body: JSON.stringify({ confirmName }),
   })
-/** Move CLI logins to another PC: one encrypted bundle in Downloads, and this PC signed out of each
- *  (server/src/core/cli-login-move.ts). The passphrase is made here and never comes back. */
-export const moveCliLoginsOut = (ids: string[], passphrase: string) =>
+/** Copy CLI logins to another PC: one encrypted bundle in Downloads; `signOut` also signs this PC
+ *  out of each (a move). See server/src/core/cli-login-move.ts. The passphrase is made here and
+ *  never comes back. */
+export const moveCliLoginsOut = (ids: string[], passphrase: string, signOut = false) =>
   j<CliLoginMoveResult>('/api/cli-instances/move-out', {
     method: 'POST',
-    body: JSON.stringify({ ids, passphrase }),
+    body: JSON.stringify({ ids, passphrase, signOut }),
   })
+/** Login sync through the owner's own store (server/src/core/cli-login-sync.ts). */
+export const getLoginSync = () => j<CliLoginSyncStatus>('/api/cli-instances/sync')
+export const setupLoginSync = (url: string, token: string) =>
+  j<{ ok: boolean; message: string }>('/api/cli-instances/sync/setup', {
+    method: 'POST',
+    body: JSON.stringify({ url, token }),
+  })
+export const joinLoginSync = (code: string) =>
+  j<{ ok: boolean; message: string }>('/api/cli-instances/sync/join', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  })
+export const runLoginSyncNow = () =>
+  j<{ result: { ok: boolean; problems: string[] }; status: CliLoginSyncStatus }>(
+    '/api/cli-instances/sync/run',
+    { method: 'POST' },
+  )
+export const setLoginSyncEnabled = (enabled: boolean) =>
+  j<{ ok: boolean; message: string }>('/api/cli-instances/sync/enabled', {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  })
+export const setLoginSyncExcluded = (id: string, excluded: boolean) =>
+  j<CliLoginSyncStatus>('/api/cli-instances/sync/exclude', {
+    method: 'POST',
+    body: JSON.stringify({ id, excluded }),
+  })
+/** The pairing code (the store's address, token and key): only for the dialog's copy button. */
+export const getLoginSyncPairingCode = () =>
+  j<{ code: string }>('/api/cli-instances/sync/pairing', { method: 'POST' })
+export const disconnectLoginSync = () =>
+  j<{ ok: boolean; message: string }>('/api/cli-instances/sync/disconnect', { method: 'POST' })
 /** Sign in here the logins of a bundle made on another PC, each checked with `claude auth status`. */
 export const moveCliLoginsIn = (bundle: unknown, passphrase: string) =>
   j<CliLoginMoveResult>('/api/cli-instances/move-in', {
