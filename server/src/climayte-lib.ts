@@ -10,7 +10,7 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { type CliMaytePlacement, FIT_PCT, projectedPct } from './climayte-placement'
+import { type CliMaytePlacement, FIT_PCT, paceGap, projectedPct } from './climayte-placement'
 import {
   attemptUnits,
   type CliMayteVerdict,
@@ -206,6 +206,8 @@ export interface CliMayteAccount {
   planFactor?: number
   /** When the 5-hour window `sessionPct` was read from resets (epoch ms); null when unknown. */
   sessionResetsAt?: number | null
+  /** When the 7-day window `weekPct` was read from resets (epoch ms); null when unknown. */
+  weekResetsAt?: number | null
 }
 
 /** `cred` (signed-out walls only): the mtime of the account's `.credentials.json` when it was
@@ -1023,7 +1025,9 @@ export function pickAccount(
       )
   if (home) return home
   // With a placement (climayte-placement.ts): where the task is projected to finish under FIT_PCT,
-  // counting what the work already running there still owes; else the flat ACTIVE_WEIGHT spread.
+  // counting what the work already running there still owes, and behind an account that has spent
+  // its week faster than the week has gone (paceGap: usage is usage, wherever it runs); else the
+  // flat ACTIVE_WEIGHT spread.
   const base = (a: CliMayteAccount): number => {
     if (!placement) return Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) + ACTIVE_WEIGHT * load(a)
     const projected = projectedPct(
@@ -1032,7 +1036,11 @@ export function pickAccount(
       placement.expected,
       placement.finishedSince?.get(a.id) ?? 0,
     )
-    return Math.max(projected, a.weekPct ?? 50) + (projected <= FIT_PCT ? 0 : 200)
+    return (
+      Math.max(projected, a.weekPct ?? 50) +
+      (projected <= FIT_PCT ? 0 : 200) +
+      Math.max(0, paceGap(a, now) ?? 0)
+    )
   }
   const score = (a: CliMayteAccount): number =>
     base(a) +

@@ -88,6 +88,7 @@ import {
   toReport,
   toView,
   WIND_DOWN_SESSION_PCT,
+  WIND_DOWN_WEEK_PCT,
   WORKER_BRIEF,
   wallUntil,
   windDownAt,
@@ -103,7 +104,9 @@ import {
   projectedPct,
   type RunningLoad,
   sizeTask,
+  waitsForCooldown,
   waitsForRoom,
+  weekPacePct,
 } from './climayte-placement'
 import { launchRunner, readRunnerExit, readRunnerPids } from './climayte-runner'
 import {
@@ -329,6 +332,17 @@ function signedInAccounts(): CliMayteAccount[] {
           : u?.session?.resetsAt
             ? Date.parse(u.session.resetsAt) || null
             : null
+      const liveWeek =
+        live && live.weekPct !== null
+          ? { pct: live.weekPct, resetsAt: live.weekResetsAt, at: live.at }
+          : null
+      const weekPct = freshestPct(u?.weekAll, snapshotAt, liveWeek, now)
+      const weekResets =
+        liveWeek && liveWeek.at > snapshotAt
+          ? liveWeek.resetsAt
+          : u?.weekAll?.resetsAt
+            ? Date.parse(u.weekAll.resetsAt) || null
+            : null
       return {
         id: i.id,
         num: i.num ?? null,
@@ -337,14 +351,9 @@ function signedInAccounts(): CliMayteAccount[] {
         planFactor: planFactor(i.planLabel),
         sessionPct,
         sessionResetsAt: sessionPct !== null && resets !== null && resets > now ? resets : null,
-        weekPct: freshestPct(
-          u?.weekAll,
-          snapshotAt,
-          live && live.weekPct !== null
-            ? { pct: live.weekPct, resetsAt: live.weekResetsAt, at: live.at }
-            : null,
-          now,
-        ),
+        weekPct,
+        weekResetsAt:
+          weekPct !== null && weekResets !== null && weekResets > now ? weekResets : null,
       }
     })
 }
@@ -937,6 +946,44 @@ async function tick(): Promise<void> {
               roomOn: acctLabel(acct),
             }
             journal(w, 'waiting', { error: firstLine(why), until: until ?? undefined })
+            changed(w)
+          }
+          continue
+        }
+        // Ahead of its weekly pace while another account refills soon: wait for that one
+        // (waitsForCooldown, owner 2026-10-01: not everything into the 5x because the Pros are low).
+        const cooldown =
+          acct &&
+          waitsForCooldown(
+            acct,
+            // When each refills: the end of its limit wall, else its 5-hour reset (freesAt).
+            allowed
+              .filter(
+                (a) =>
+                  !isLoginWall(walls[a.id]?.reason) &&
+                  (a.weekPct ?? 0) < WIND_DOWN_WEEK_PCT &&
+                  (groupActive.get(a.id) ?? 0) < cap,
+              )
+              .map((a) => ({ ...a, sessionResetsAt: freesAt(a) })),
+            expected,
+            now,
+            {
+              home:
+                acct.id === w.accountId &&
+                !['handoff', 'quota', 'auth'].includes(w.attempts.at(-1)?.outcome ?? 'handoff'),
+              priority: w.priority ?? 0,
+            },
+          )
+        if (acct && cooldown) {
+          const until = new Date(cooldown).toISOString()
+          const head = `Waiting for a reset: ${acctLabel(acct)} has used ${Math.round(acct.weekPct ?? 0)}% of its week with ${Math.round(weekPacePct(acct, now) ?? 0)}% of the week gone`
+          const why = `${head}, and an account this task fits refills its 5-hour window at ${new Date(cooldown).toLocaleTimeString()}. It starts then (or sooner, where room opens); other tasks keep going meanwhile, and priority work never waits.`
+          if (w.status !== 'waiting' || !w.error?.startsWith(head) || w.waitUntil !== until) {
+            if (w.status !== 'waiting' || !w.error?.startsWith(head))
+              journal(w, 'waiting', { error: firstLine(why), until })
+            w.status = 'waiting'
+            w.error = why
+            w.waitUntil = until
             changed(w)
           }
           continue

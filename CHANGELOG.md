@@ -19,6 +19,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **CliMayte paces each account's week instead of draining the biggest one**
+  (`server/src/climayte-placement.ts` paceGap, waitsForCooldown). An account that has used more of its
+  week than the week has run ranks behind the others, and a task waits up to half an hour for
+  another account that refills its 5-hour window soon rather than piling onto it. So when the Pro
+  accounts run low, the Max 5x account is not handed everything at once. Priority work never waits.
+
+- **The running-sessions count in the CLI table is green** (`web/src/components/CliInstancesSection.vue`),
+  the colour of running, instead of blue.
+
 - **CliMayte workers no longer explain deploying.** A worker is told not to deploy unless its task
   says so, and to answer a repository's deploy reminder in one line. On 2026-10-01, 22 of 47 reports
   carried a second turn about why the worker had not deployed.

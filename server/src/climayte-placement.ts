@@ -169,6 +169,70 @@ export function sizeTask(
   return { window, share, split, pieces: split ? Math.ceil(share / SPLIT_SHARE) : 1 }
 }
 
+/** A week, the length of the all-models usage window. */
+export const WEEK_MS = 7 * 24 * 3_600_000
+
+/** How far the account's 7-day window has run, in % (0 just after its reset, 100 at the next):
+ *  spending its week at exactly this pace lasts until the reset. Null when the reset is unknown. */
+export function weekPacePct(acct: { weekResetsAt?: number | null }, now: number): number | null {
+  const at = acct.weekResetsAt
+  if (!at || at <= now) return null
+  return Math.min(100, Math.max(0, 100 * (1 - (at - now) / WEEK_MS)))
+}
+
+/** How many points the account's weekly usage runs ahead of that pace: above 0 it is spending days
+ *  it has not reached yet, below 0 it has room it loses at the reset unless used. Null when unknown. */
+export function paceGap(
+  acct: { weekPct?: number | null; weekResetsAt?: number | null },
+  now: number,
+): number | null {
+  const pace = weekPacePct(acct, now)
+  return pace === null || acct.weekPct === null || acct.weekPct === undefined
+    ? null
+    : acct.weekPct - pace
+}
+
+/** The longest a task waits for another account's 5-hour reset instead of starting on one that is
+ *  ahead of its weekly pace. */
+export const COOLDOWN_WAIT_MS = 30 * 60_000
+
+/** Owner, 2026-10-01: with several Pro accounts and a Max 5x one, "just because the pro accounts have
+ *  run low on usage does not mean you should begin immediately dumping everything into the 5X ...
+ *  usage is usage, but it should smartly take into account the cool-down rate of up-and-coming
+ *  accounts, the overhead it will take to do the work, what other things it can start or finish in
+ *  the meantime while it's waiting". The 5-hour windows refill every five hours; the week is what
+ *  runs out. So a task is held off `chosen` (pickAccount's best) when `chosen` has spent more of its
+ *  week than the week has run, and an account it may use (`others`: allowed, signed in, under the
+ *  weekly stop line) refills its 5-hour window within COOLDOWN_WAIT_MS with room for the task and is
+ *  less ahead of its own pace. Answers that reset (epoch ms), or null to start now. Held, it costs
+ *  nothing: no session starts, so there is no overhead to lose, and other tasks keep starting and
+ *  finishing meanwhile. Never held: a session going on at home (warm cache) and priority work. */
+export function waitsForCooldown(
+  chosen: Pick<CliMayteAccount, 'id' | 'weekPct' | 'weekResetsAt'>,
+  others: Array<
+    Pick<CliMayteAccount, 'id' | 'sessionResetsAt' | 'planFactor' | 'weekPct' | 'weekResetsAt'>
+  >,
+  expected: number,
+  now: number,
+  opts: { home: boolean; priority: number },
+): number | null {
+  if (opts.home || opts.priority > 0) return null
+  const gap = paceGap(chosen, now)
+  if (gap === null || gap <= 0) return null
+  const resets = others
+    .filter(
+      (a) =>
+        a.id !== chosen.id &&
+        !!a.sessionResetsAt &&
+        a.sessionResetsAt > now &&
+        a.sessionResetsAt - now <= COOLDOWN_WAIT_MS &&
+        expected / (a.planFactor ?? 1) <= FIT_PCT &&
+        (paceGap(a, now) ?? 0) < gap,
+    )
+    .map((a) => a.sessionResetsAt as number)
+  return resets.length ? Math.min(...resets) : null
+}
+
 /** Hold a task rather than start it on `chosen` (the best account pickAccount found) when it is not
  *  projected to finish there but would fit a fresh window of an account it may use: it would run
  *  out partway and move, re-writing its whole conversation into a cold cache. Smaller tasks take the

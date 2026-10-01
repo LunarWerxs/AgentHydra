@@ -408,6 +408,21 @@ Pro accounts, where tasks costing about a quarter of a window each could never a
   instead of `max(session%, week%) + 100 per worker`; the tick passes it for every start, and adds
   each worker it starts to the projection before the next one is placed. When nothing fits, the
   lowest projection still wins: finishing part of the work and handing off beats waiting hours.
+- Weekly pace (owner, 2026-10-01, with several Pro accounts and a Max 5x: "just because the pro
+  accounts have run low on usage does not mean you should begin immediately dumping everything into
+  the 5X ... usage is usage, but it should smartly take into account the cool-down rate of
+  up-and-coming accounts, the overhead it will take to do the work, what other things it can start
+  or finish in the meantime"). The 5-hour windows refill every five hours; the week is what runs
+  out. `paceGap(account)` is how many points its weekly usage runs ahead of the share of its 7-day
+  window already gone (`weekPacePct`, from the reading's `weekResetsAt`); the score adds it when
+  above 0, so an account spending its week faster than the week passes ranks behind one that is
+  not. `waitsForCooldown` holds a task off its best account when that account is ahead of its pace
+  and another account the task may use (signed in, under the weekly stop line, under the group's
+  cap) refills its 5-hour window (its reset, or the end of its limit wall) within 30 minutes
+  (`COOLDOWN_WAIT_MS`), has room for the task in a fresh window and is less ahead of its own pace.
+  The row waits ("Waiting for a reset: ...", `waitUntil` that reset). A held task starts no session,
+  so it loses nothing; the other tasks keep starting and finishing. Never held: a session going on
+  at home, priority work (`priority` above 0), and anything when the weekly reset is unknown.
 
 ### Sizing (`server/src/climayte-placement.ts` sizeTask and waitsForRoom, `0c2c13b`)
 

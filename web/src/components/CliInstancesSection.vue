@@ -783,13 +783,14 @@ onUnmounted(() => stopPolling())
                    other hover to extend, and the row above it already reveals its path this way. -->
               <span :title="nameOverflowTitle(inst.name)">{{ shortDisplayName(inst.name) }}</span>
               <!-- How many Claude sessions run on this login right now, CliMayte's workers included.
-                   Hidden at 0: an idle account needs no badge saying so. -->
+                   Hidden at 0: an idle account needs no badge saying so. Green, the colour of
+                   running (owner, 2026-10-01: "that should be green, not blue"). -->
               <IconTooltip
                 v-if="(inst.liveSessions ?? 0) > 0"
                 :label="$t('cliInstances.liveSessions', inst.liveSessions ?? 0)"
               >
                 <span
-                  class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-info/15 px-1 text-3xs font-semibold tabular-nums text-info"
+                  class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-success/15 px-1 text-3xs font-semibold tabular-nums text-success"
                   :aria-label="$t('cliInstances.liveSessions', inst.liveSessions ?? 0)"
                 >
                   {{ inst.liveSessions }}

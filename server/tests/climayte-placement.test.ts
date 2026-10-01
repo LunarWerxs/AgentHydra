@@ -5,6 +5,8 @@ import {
   expectedCost,
   planFactor,
   projectedPct,
+  WEEK_MS,
+  waitsForCooldown,
   waitsForRoom,
 } from '../src/climayte-placement'
 
@@ -53,6 +55,36 @@ describe('expectedCost', () => {
     expect(
       expectedCost(sonnetCode, [...opus, ...done('code', S, 'medium', 5, 20)]).pct,
     ).toBeCloseTo(5, 0)
+  })
+})
+
+describe('waitsForCooldown', () => {
+  test('an account ahead of its weekly pace waits for one that refills soon; never on priority', () => {
+    const now = 1_000_000_000_000
+    const halfWeek = now + WEEK_MS / 2 // half the week gone: pace is 50%
+    const max5 = { id: 'max5', weekPct: 70, weekResetsAt: halfWeek, planFactor: 5 }
+    const pro = (resetInMin: number, weekPct = 30) => ({
+      id: `pro-${resetInMin}`,
+      weekPct,
+      weekResetsAt: halfWeek,
+      planFactor: 1,
+      sessionResetsAt: now + resetInMin * 60_000,
+    })
+    const go = { home: false, priority: 0 }
+    // The owner's case: the Max 5x has spent 70% of its week at the half-week mark, and a Pro that
+    // refills in 12 minutes can take the 20% task: wait for that reset.
+    expect(waitsForCooldown(max5, [pro(12), pro(45)], 20, now, go)).toBe(now + 12 * 60_000)
+    // Nothing refills within half an hour: start on the 5x now.
+    expect(waitsForCooldown(max5, [pro(45)], 20, now, go)).toBeNull()
+    // The 5x behind its pace (its week is room it loses at the reset): use it.
+    expect(waitsForCooldown({ ...max5, weekPct: 40 }, [pro(12)], 20, now, go)).toBeNull()
+    // The Pro is further ahead of its own pace than the 5x: nothing gained by waiting.
+    expect(waitsForCooldown(max5, [pro(12, 90)], 20, now, go)).toBeNull()
+    // A task no fresh Pro window holds: the 5x is where it fits.
+    expect(waitsForCooldown(max5, [pro(12)], 120, now, go)).toBeNull()
+    // Priority work and a session at home never wait.
+    expect(waitsForCooldown(max5, [pro(12)], 20, now, { home: false, priority: 1 })).toBeNull()
+    expect(waitsForCooldown(max5, [pro(12)], 20, now, { home: true, priority: 0 })).toBeNull()
   })
 })
 
