@@ -83,6 +83,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **CliMayte starts a task where it can finish** (`server/src/climayte-placement.ts`). It counts what
+  each account has left, what the tasks already running there will still use, and what this
+  kind of task usually costs, so tasks no longer pile four to an account and run out halfway
+  (the first real run moved tasks between accounts 48 times).
+
 - **The token budget weighs tokens the way the plan meter does** (`server/src/usage-tokens.ts`,
   `scripts/quota-weights/`). `usage_budget` turned tokens into one unit using list-price ratios,
   but the meter charges output and cache writes far more than that relative to cache reads, and

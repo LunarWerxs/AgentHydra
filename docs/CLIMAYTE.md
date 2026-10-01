@@ -361,6 +361,26 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   fitted on run 1, R^2 0.48) per kind and setting, `pick` on the next auto setting. The CliMayte view
   shows it as "What works" and puts thumbs up/down on a finished task.
 
+### Placement (`server/src/climayte-placement.ts`, `a6569b4`)
+
+A task starts where it can FINISH, so it does not move. Run 1: of 101 attempts 23 ended done and 48
+moved; a move re-writes the whole conversation into the next account's cold cache (a 200k
+conversation is about 4% of a Pro 5-hour window) and cache writes were about a third of the meter.
+The old score added a flat 100 per worker already on an account, so an idle account at 75% beat one
+at 10% running one worker, and at the 23:30 reset twelve workers went four to an account onto three
+Pro accounts, where tasks costing about a quarter of a window each could never all finish.
+
+- `projectedPct(account, running, expected)`: the account's 5-hour usage now, plus what the work
+  running there still owes (its expected cost less how far the meter rose since the first of it
+  started, from each attempt's `startPct`), plus this task's expected cost; costs are in % of a Pro
+  window and shrink by `planFactor` (Pro 1, Max 5x 5, Max 20x 20, from the CLI instance's plan).
+- `expectedPct(task)`: the scorecard's average cost for its kind and setting, else its kind, else
+  the average finished task of its model family, else 25% (`DEFAULT_TASK_PCT`).
+- `pickAccount(..., placement)` scores `max(projected, week%) + 200 when projected > FIT_PCT (95)`
+  instead of `max(session%, week%) + 100 per worker`; the tick passes it for every start, and adds
+  each worker it starts to the projection before the next one is placed. When nothing fits, the
+  lowest projection still wins: finishing part of the work and handing off beats waiting hours.
+
 ### Journal (`server/src/climayte-journal.ts`)
 
 The owner's ask on the first real run ("we probably also need logging in CliMayte"): one short JSON
