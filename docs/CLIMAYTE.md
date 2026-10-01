@@ -269,12 +269,16 @@ Emit a change event (`onCliMayteChange(cb) → unsubscribe`) whenever a worker's
   the workers running on the account from EVERY group (field note 8: at 25, a busy account at 0%
   still beat an idle one at 30%, so two orchestrations piled onto one account); `perAccount` stays
   a per-group cap, with `MAX_PER_ACCOUNT` above it in total. Past the wind-down line (85% session,
-  95% week) an account takes no NEW work: not a new task, a handoff's continuation or a moved
+  85% week since `df4bb96`, was 95) an account takes no NEW work: not a new task, a handoff's continuation or a moved
   session, only the session already on it (its home). Run 1, 19:32-19:36: the one account below
   the line was at its worker cap, so twenty continuations went to accounts at 89-97% and were told
   to hand off again within three calls (about 290k tokens and $0.75 each). A session that reaches
   the line hands off whether or not another account has room (`fc1ca87`, owner: never the limit,
-  stop at 85-90%); with none, the task waits for the first reset (`waitUntil`).
+  stop at 85-90%); with none, the task waits for the first reset (`waitUntil`). At `CEILING_PCT`
+  (90, either window; `df4bb96`) a turn still running is stopped on the spot and the account walled
+  until that window resets: it goes on from its handoff if it wrote one, else moves or waits. Those
+  are ceiling stops (`ceiling` on the attempt, `ceilingStops` in the totals), never limit hits. An
+  owner who allows paid extra usage lifts both lines.
 - `copySessionTranscript(fromConfigDir, toConfigDir, sessionId): boolean`: find
   `<from>/projects/*/<sessionId>.jsonl`, copy it (and a sibling `<sessionId>/` directory when
   present, recursively) into `<to>/projects/<same folder name>/`, keeping the source's mtime.
