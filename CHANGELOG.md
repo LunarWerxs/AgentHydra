@@ -15,7 +15,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   up from Sonnet at low thinking towards Opus at max. Tasks sent with model "auto" get the
   cheapest setting that keeps passing for their kind of work, and now and then try one step
   cheaper. "What works" shows the passes, the fails and what each costs as a share of a Pro
-  account's 5-hour window.
+  account's 5-hour window. A task can also carry a check command (a test, a
+  type check): Corch runs it when the worker finishes and judges the result itself.
 
 - **Tidier, more consistent instance screens** (`web/src/components/InstanceSectionHeader.vue`,
   `InstanceMenuHeader.vue`, `DeleteInstanceDialog.vue`). Every table's ⋯ menu opens with the

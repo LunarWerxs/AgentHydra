@@ -326,6 +326,14 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   of `usage-tokens.ts`, 5-minute or 1-hour writes by the attempt's `cacheTtl`). A fail needs a note
   and goes back to the same session one rung up (`nextRung`, through `corchSend`), unless `retry`
   is false. Journal event `verdict`.
+- **The check** (`fa547d2`; owner: verdicts should be "whatever is best for the AI"). A task may
+  carry `check`, one bash command whose exit 0 proves it done. When the worker reports done, Corch
+  runs it in the task's folder (`startCheck`: status `checking`, Git's bash, hidden, output in
+  `logs/<id>-check-<n>.log`, 20-minute cap) and judges by the exit code itself (`by: check`): a fail
+  goes back to the same session one rung up with the end of the output; three failed rounds stop the
+  task as `failed` for the orchestrator. The check runs under the daemon, so a restart ends it and
+  the next tick runs it again. An orchestrator that must remember to judge every result forgets
+  some, and a worker's own "the tests pass" is a claim; a command is neither.
 - **The ladder**, cheapest first: Sonnet 5.5 low, medium, high, then Opus 5.5 medium, high, xhigh,
   max. A CLI-default setting counts as Opus high.
 - **Kinds**: code, debug, review, sweep, mechanical, docs, trivial (`corch_run` `kind`). Each starts
