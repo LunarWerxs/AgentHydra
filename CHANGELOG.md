@@ -9,6 +9,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Corch learns which model each kind of task needs** (`server/src/corch-scorecard.ts`).
+  Give a finished task a thumbs up or down in the Corch view (or the orchestrating chat does it
+  after checking the work). A thumbs down asks what was wrong and sends the task back, one step
+  up from Sonnet at low thinking towards Opus at max. Tasks sent with model "auto" get the
+  cheapest setting that keeps passing for their kind of work, and now and then try one step
+  cheaper. "What works" shows the passes, the fails and what each costs as a share of a Pro
+  account's 5-hour window.
+
 - **Tidier, more consistent instance screens** (`web/src/components/InstanceSectionHeader.vue`,
   `InstanceMenuHeader.vue`, `DeleteInstanceDialog.vue`). Every table's ⋯ menu opens with the
   instance number and its quick actions as icons (refresh, rename, log out, copy); Claude CLI

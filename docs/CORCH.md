@@ -312,6 +312,34 @@ CLAUDE.md, skills and hooks) is not what it reads (field notes 5 and 9). Before 
   (Connections) when it arrived, and that prefix is re-read on every request and written to cache
   on every fresh session and move.
 
+### Scorecard (`server/src/corch-scorecard.ts`, `5710553`)
+
+Owner, 2026-09-30: "the AI can try a model, and if it works, it gives it a thumbs up ... if it
+does not, it reports the failure, and what model it tries next." Output, thinking included, is about
+half of what fills a Pro account's 5-hour meter (field note 27), so the model and thinking level are
+the biggest quota levers left, and the safe way to lower them is to learn from real results.
+
+- **Verdicts.** `corchVerdict(id, { verdict, note?, retry?, kind? })` judges a FINISHED task (the
+  orchestrator after checking its proof, or the owner's thumbs in the Corch view). Each
+  `CorchVerdict { at, verdict, note, model, effort, units }` keeps the setting that produced the
+  result and what the work since the previous verdict cost (`attemptUnits`: the plan-meter weights
+  of `usage-tokens.ts`, 5-minute or 1-hour writes by the attempt's `cacheTtl`). A fail needs a note
+  and goes back to the same session one rung up (`nextRung`, through `corchSend`), unless `retry`
+  is false. Journal event `verdict`.
+- **The ladder**, cheapest first: Sonnet 5.5 low, medium, high, then Opus 5.5 medium, high, xhigh,
+  max. A CLI-default setting counts as Opus high.
+- **Kinds**: code, debug, review, sweep, mechanical, docs, trivial (`corch_run` `kind`). Each starts
+  where the corch skill's table puts it (sweep, mechanical and docs on Sonnet medium, trivial on
+  Sonnet low, code and review on Opus high, debug on Opus xhigh).
+- **`model: "auto"`** (`pickConfig`): the cheapest rung with at least 3 verdicts at 80% or more
+  passes, else the kind's start moved up past any rung with two or more verdicts under half; every
+  4th auto pick of a kind tries the rung below that, unless it keeps failing. The pick and its reason
+  go in the `dispatched` journal line.
+- **`corchScorecard()`** (`GET /api/corch/scorecard`, `corch_scorecard`): passes, fails and cost per
+  task as a share of a Pro 5-hour window (`UNITS_PER_PRO_PERCENT` = 320,000 weighted units per 1%,
+  fitted on run 1, R^2 0.48) per kind and setting, `pick` on the next auto setting. The Corch view
+  shows it as "What works" and puts thumbs up/down on a finished task.
+
 ### Journal (`server/src/corch-journal.ts`)
 
 The owner's ask on the first real run ("we probably also need logging in Corch"): one short JSON
@@ -457,6 +485,10 @@ boot after the stores are ready.
   `urgent` stops a running worker and delivers this first; `model`/`effort` switch them for that
   turn and later ones (e.g. escalate a stuck Sonnet worker to Opus at `max`).
 - `corch_handoff { id }` MUTATES: a running worker writes a handoff and goes on in a fresh session.
+- `corch_verdict { id, verdict, note?, retry?, kind? }` MUTATES: pass or fail on a finished task; a
+  fail goes back one rung up and the answer names `next`. `corch_run` takes `kind` per task and as a
+  group default, and `model: "auto"`.
+- `corch_scorecard {}`: what works per kind (see "Scorecard").
 - `corch_cancel { id?, group? }` MUTATES; answers `keptMessages`, the queued follow-ups it kept.
 `accounts` accepts CLI instance numbers or ids (resolve through the existing instance resolver).
 
