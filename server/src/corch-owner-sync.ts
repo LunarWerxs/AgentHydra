@@ -17,6 +17,13 @@
 //   rmSync(recursive) on an account folder removes a junction, never the owner's files behind it.
 // Hooks and settings.json are NOT carried: desktop-only hooks can block a headless worker.
 //
+// THE LEAN WORKER PROFILE (owner, 2026-09-30, after the run-1 audit). When `~/.claude/corch-worker/`
+// holds a CLAUDE.md, workers get THAT instead of the full one, and when it holds `skills.txt` (one
+// skill name per line, `#` comments), only those skills are linked. Measured on run 1: the full
+// CLAUDE.md (44 KB, mostly rules for the desktop chat: routing, releases, memory) and 84 skill
+// descriptions added 24-33k tokens to every request a worker made, and a cache write of that size
+// to every fresh session and every move (cache writes were 32% of what filled the 5-hour meter).
+//
 // Cheap: a signature (CLAUDE.md's size and mtime, the skill names) is kept in memory per account
 // and in `<account>/.agenthydra-owner-sync.json`; an unchanged one costs a stat and a readdir.
 
@@ -79,6 +86,29 @@ function ownerSkills(ownerDir: string): string[] {
   }
 }
 
+const WORKER_DIR = 'corch-worker'
+
+/** The CLAUDE.md a worker gets: the lean worker profile's when there is one, else the owner's. */
+function workerClaudeMd(ownerDir: string): string {
+  const lean = join(ownerDir, WORKER_DIR, 'CLAUDE.md')
+  return existsSync(lean) ? lean : join(ownerDir, 'CLAUDE.md')
+}
+
+/** The skills the lean profile allows (`corch-worker/skills.txt`), or null for every skill. */
+function workerSkillList(ownerDir: string): Set<string> | null {
+  try {
+    const text = readFileSync(join(ownerDir, WORKER_DIR, 'skills.txt'), 'utf8')
+    return new Set(
+      text
+        .split(/\r?\n/)
+        .map((l) => l.replace(/#.*/, '').trim())
+        .filter(Boolean),
+    )
+  } catch {
+    return null
+  }
+}
+
 /** A link at `path` that points into `skillsRoot` (one this code made), or false. */
 function isOurLink(path: string, skillsRoot: string): boolean {
   try {
@@ -110,9 +140,10 @@ export function syncOwnerClaude(ownerDir: string, accountDir: string): OwnerSync
     shadowed: [],
   }
   try {
-    const srcMd = join(ownerDir, 'CLAUDE.md')
-    const skills = ownerSkills(ownerDir)
-    const sig = `${stampOf(srcMd) ?? '-'}|${skills.join('/')}`
+    const srcMd = workerClaudeMd(ownerDir)
+    const allowed = workerSkillList(ownerDir)
+    const skills = ownerSkills(ownerDir).filter((name) => !allowed || allowed.has(name))
+    const sig = `${srcMd}|${stampOf(srcMd) ?? '-'}|${skills.join('/')}`
     if (seen.get(accountDir) === sig) return result
     const stamp = readStamp(accountDir)
     const dstMd = join(accountDir, 'CLAUDE.md')

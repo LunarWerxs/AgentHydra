@@ -564,6 +564,27 @@ describe("syncOwnerClaude: the owner's CLAUDE.md and skills in an account folder
     rmSync(acct, { recursive: true, force: true })
     expect(readFileSync(join(owner, 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe('alpha skill')
   })
+
+  test('a lean worker profile replaces the full CLAUDE.md and limits the skills', () => {
+    // Run 1: the full CLAUDE.md and every skill description added 24-33k tokens to each request.
+    const lean = join(root, 'lean-owner')
+    const leanAcct = join(root, 'lean-acct')
+    for (const s of ['alpha', 'beta']) mkdirSync(join(lean, 'skills', s), { recursive: true })
+    mkdirSync(leanAcct)
+    writeFileSync(join(lean, 'CLAUDE.md'), 'every rule the desktop chat needs')
+    expect(syncOwnerClaude(lean, leanAcct).linked).toEqual(['alpha', 'beta'])
+
+    mkdirSync(join(lean, 'corch-worker'))
+    writeFileSync(join(lean, 'corch-worker', 'CLAUDE.md'), 'the few rules a worker needs')
+    writeFileSync(join(lean, 'corch-worker', 'skills.txt'), '# worker skills\nbeta\r\n')
+    expect(syncOwnerClaude(lean, leanAcct)).toMatchObject({
+      claudeMd: 'copied',
+      unlinked: ['alpha'],
+    })
+    expect(readFileSync(join(leanAcct, 'CLAUDE.md'), 'utf8')).toBe('the few rules a worker needs')
+    expect(existsSync(join(leanAcct, 'skills', 'alpha'))).toBe(false)
+    expect(existsSync(join(leanAcct, 'skills', 'beta'))).toBe(true)
+  })
 })
 
 describe('integration: paid extra usage is never spent', () => {
