@@ -149,9 +149,8 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
     const [UA, UB, UC] = [randomUUID(), randomUUID(), randomUUID()]
     const made: string[] = []
     try {
-      made.push(await profile('acct-a', UA, 1000, 'sk-a1'))
       expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
-      await runLoginSync()
+      await runLoginSync() // the pass that setting up starts: later calls would otherwise join it
       const key = Buffer.from(
         JSON.parse(
           Buffer.from(loginSyncPairingCode()!.slice('ahsync1:'.length), 'base64url').toString(),
@@ -190,13 +189,9 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
         session: (await readAuthCookies(dir))?.find((c) => c.name === 'sessionKey')?.value,
       })
 
-      // This PC's login went up, keyed by its account.
-      expect(await meta(UA)).toMatchObject({
-        meta: { kind: 'desktop', name: 'acct-a', expiresAt: 1000 },
-      })
-
-      // An account only the store holds: a profile here with the sender's folder name and number,
-      // signed in under its OWN key, its cookie written the way Chromium stores one.
+      // An account only the store holds, on a PC with no desktop profile yet (so no cookie database
+      // to copy a layout from): a profile here with the sender's folder name and number, signed in
+      // under its OWN key, its cookie written the way Chromium stores one.
       await otherPc(UB, 'from-pc1', 4242, 5000, 'sk-b')
       await runLoginSync()
       const b = listDesktopProfiles().find((p) => p.name === 'from-pc1')!
@@ -215,23 +210,36 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
         Buffer.from(plain.subarray(0, 32)).equals(createHash('sha256').update(HOST).digest()),
       ).toBe(true)
 
+      // A login signed in here goes up, keyed by its account.
+      const a = await profile('acct-a', UA, 1000, 'sk-a1')
+      made.push(a)
+      await runLoginSync()
+      expect(await meta(UA)).toMatchObject({
+        meta: { kind: 'desktop', name: 'acct-a', expiresAt: 1000 },
+      })
       // The other PC refreshed the shared login: its newer copy lands here.
       await otherPc(UA, 'acct-a', 1, 2000, 'sk-a2')
       await runLoginSync()
-      expect(await here(made[0]!)).toEqual({ expiry: 2000, session: 'sk-a2' })
+      expect(await here(a)).toEqual({ expiry: 2000, session: 'sk-a2' })
       // An older copy in the store never replaces the newer one here; this PC's goes back up.
       await otherPc(UA, 'acct-a', 1, 500, 'sk-old')
       await runLoginSync()
-      expect(await here(made[0]!)).toEqual({ expiry: 2000, session: 'sk-a2' })
+      expect(await here(a)).toEqual({ expiry: 2000, session: 'sk-a2' })
       expect((await meta(UA)).meta.expiresAt).toBe(2000)
+      // The same tokens with other cookies (a profile that was open when its tokens went up sends
+      // its cookies once it closes): the cookies land.
+      await otherPc(UA, 'acct-a', 1, 2000, 'sk-a3')
+      await runLoginSync()
+      expect(await here(a)).toEqual({ expiry: 2000, session: 'sk-a3' })
 
       // Signed in here on its own while the store holds the other PC's sign-in of that account:
       // neither replaces the other.
       await otherPc(UC, 'solo', 9, 9000, 'sk-theirs')
-      made.push(await profile('solo', UC, 100, 'sk-mine'))
+      const solo = await profile('solo', UC, 100, 'sk-mine')
+      made.push(solo)
       const before = (await meta(UC)).version
       await runLoginSync()
-      expect(await here(made[2]!)).toEqual({ expiry: 100, session: 'sk-mine' })
+      expect(await here(solo)).toEqual({ expiry: 100, session: 'sk-mine' })
       expect((await meta(UC)).version).toBe(before)
       expect(loginSyncStatus().logins.find((l) => l.id === UC)?.problem).toContain('on its own')
 
@@ -239,7 +247,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       setLoginSyncExcluded(UA, true)
       await otherPc(UA, 'acct-a', 1, 9999, 'sk-a9')
       await runLoginSync()
-      expect(await here(made[0]!)).toEqual({ expiry: 2000, session: 'sk-a2' })
+      expect(await here(a)).toEqual({ expiry: 2000, session: 'sk-a3' })
     } finally {
       disconnectLoginSync()
       for (const dir of made) rmSync(dir, { recursive: true, force: true })

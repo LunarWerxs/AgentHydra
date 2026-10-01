@@ -265,9 +265,30 @@ export async function readAuthCookies(dir: string): Promise<DesktopCookie[] | nu
   return out
 }
 
-/** A cookie database's schema (tables, indexes, meta rows) from another profile here: a profile this
- *  PC makes has none until its app first runs, and the sign-in cookies need one. */
-function cookieSchema(except: string): { sql: string[]; meta: Array<[string, string]> } | null {
+interface CookieSchema {
+  sql: string[]
+  meta: Array<[string, string]>
+}
+
+/** Chromium's cookie database at version 24, as Claude Desktop made it on 2026-10-01: what a PC
+ *  with no desktop profile of its own to copy from gets (the first stand-in second PC had none, and
+ *  every login landed without its cookies). An app on a later version migrates it on first open. */
+const COOKIE_SCHEMA_V24: CookieSchema = {
+  sql: [
+    'CREATE TABLE meta(key LONGVARCHAR NOT NULL UNIQUE PRIMARY KEY, value LONGVARCHAR)',
+    'CREATE TABLE cookies(creation_utc INTEGER NOT NULL,host_key TEXT NOT NULL,top_frame_site_key TEXT NOT NULL,name TEXT NOT NULL,value TEXT NOT NULL,encrypted_value BLOB NOT NULL,path TEXT NOT NULL,expires_utc INTEGER NOT NULL,is_secure INTEGER NOT NULL,is_httponly INTEGER NOT NULL,last_access_utc INTEGER NOT NULL,has_expires INTEGER NOT NULL,is_persistent INTEGER NOT NULL,priority INTEGER NOT NULL,samesite INTEGER NOT NULL,source_scheme INTEGER NOT NULL,source_port INTEGER NOT NULL,last_update_utc INTEGER NOT NULL,source_type INTEGER NOT NULL,has_cross_site_ancestor INTEGER NOT NULL)',
+    'CREATE UNIQUE INDEX cookies_unique_index ON cookies(host_key, top_frame_site_key, has_cross_site_ancestor, name, path, source_scheme, source_port)',
+  ],
+  meta: [
+    ['mmap_status', '-1'],
+    ['version', '24'],
+    ['last_compatible_version', '24'],
+  ],
+}
+
+/** A cookie database's schema (tables, indexes, meta rows) for a profile this PC makes, which has
+ *  none until its app first runs: another profile's here (this PC's app version), else version 24. */
+function cookieSchema(except: string): CookieSchema {
   for (const p of listDesktopProfiles()) {
     if (p.dir === except) continue
     const schema = withCookieCopy(p.dir, (d) => ({
@@ -284,12 +305,11 @@ function cookieSchema(except: string): { sql: string[]; meta: Array<[string, str
     }))
     if (schema?.sql.some((s) => /create table\s+cookies/i.test(s))) return schema
   }
-  return null
+  return COOKIE_SCHEMA_V24
 }
 
 /** Write the sign-in cookies into a closed profile's database under its key, replacing its own
- *  claude.ai sign-in cookies. False when there is no database and none to copy the schema from, or
- *  the write fails (the app opened meanwhile). */
+ *  claude.ai sign-in cookies. False when the write fails (the app opened meanwhile). */
 async function writeAuthCookies(
   dir: string,
   key: Uint8Array,
@@ -298,7 +318,6 @@ async function writeAuthCookies(
   const path = cookieDb(dir)
   if (!existsSync(path)) {
     const schema = cookieSchema(dir)
-    if (!schema) return false
     mkdirSync(join(dir, 'Network'), { recursive: true })
     const fresh = new Database(path, { create: true })
     try {
@@ -502,6 +521,19 @@ export interface DesktopSyncContext {
  *  newer ones waiting for a running profile to close, as of the last pass: the status says so. */
 export const desktopNotes = { own: new Set<string>(), waiting: new Set<string>() }
 
+/** A store version this PC decided to wait on (its profile's app was running), by account, as
+ *  `<store version>:<local token hash>`: the same wait is not downloaded again each pass. */
+const deferred = new Map<string, string>()
+
+const cookieMarks = (cs: DesktopCookie[] | null): string =>
+  (cs ?? [])
+    .map((c) => `${c.host_key}|${c.name}|${c.path ?? ''}|${c.value}`)
+    .sort()
+    .join('\n')
+/** The same sign-in cookies (host, name, path and value), whatever their timestamps. */
+const sameCookies = (a: DesktopCookie[] | null, b: DesktopCookie[] | null): boolean =>
+  cookieMarks(a) === cookieMarks(b)
+
 /** The desktop half of one sync pass (see the header). */
 export async function syncDesktopLogins(ctx: DesktopSyncContext): Promise<void> {
   if (process.platform !== 'win32') return
@@ -546,18 +578,30 @@ export async function syncDesktopLogins(ctx: DesktopSyncContext): Promise<void> 
     const hash = tokensHash(tokens.v2, tokens.v1)
     const st = ctx.state[uuid]
     const cookiesAt = mtimeOf(cookieDb(p.dir))
-    // Fresh cookies while closed; otherwise the store's, so an upload never drops them.
-    const cookies = async (): Promise<DesktopCookie[] | null> =>
-      (closed(p.dir) ? await readAuthCookies(p.dir) : null) ??
-      (remote ? ((await ctx.download(uuid))?.cookies ?? null) : null)
-    const send = async (expect: number): Promise<void> => {
-      const fresh = closed(p.dir)
-      const v = await ctx.upload(await portableDesktopLogin(p, tokens, await cookies()), expect)
+    const isClosed = closed(p.dir)
+    // This profile's sign-in cookies, read at most once a pass; null while its app runs.
+    let read: Promise<DesktopCookie[] | null> | null = null
+    const fresh = (): Promise<DesktopCookie[] | null> => {
+      read ??= isClosed ? readAuthCookies(p.dir) : Promise.resolve(null)
+      return read
+    }
+    // An upload carries this profile's cookies when it has some, else the store's: tokens sent
+    // while the app runs must not wipe the cookies a closed profile sent before.
+    const send = async (expect: number, theirs?: DesktopCookie[] | null): Promise<void> => {
+      const own = await fresh()
+      const cookies = own?.length
+        ? own
+        : theirs !== undefined
+          ? theirs
+          : remote
+            ? ((await ctx.download(uuid))?.cookies ?? null)
+            : null
+      const v = await ctx.upload(await portableDesktopLogin(p, tokens, cookies), expect)
       if (v !== null)
-        ctx.state[uuid] = { version: v, hash, cookies: fresh ? cookiesAt : st?.cookies }
+        ctx.state[uuid] = { version: v, hash, cookies: isClosed ? cookiesAt : st?.cookies }
     }
     if (!remote) {
-      await send(0)
+      await send(0, null)
       continue
     }
     // Signed in here on its own while the store holds the other PC's: two separate sign-ins, each
@@ -567,20 +611,47 @@ export async function syncDesktopLogins(ctx: DesktopSyncContext): Promise<void> 
       continue
     }
     if (st.version === remote.version) {
-      const cookiesMoved = closed(p.dir) && cookiesAt > (st.cookies ?? 0)
-      if (st.hash === hash && !cookiesMoved) ctx.out.unchanged++
-      else await send(remote.version)
+      const cookiesMoved = isClosed && cookiesAt > (st.cookies ?? 0)
+      if (st.hash !== hash) await send(remote.version)
+      else if (!cookiesMoved) ctx.out.unchanged++
+      else {
+        // Only the cookie database changed since the last look (the app ran and closed): upload
+        // when its sign-in cookies really differ from the store's, else just note the look.
+        const local = await fresh()
+        const theirs = (await ctx.download(uuid))?.cookies ?? null
+        if (local?.length && !sameCookies(local, theirs)) await send(remote.version, theirs)
+        else {
+          ctx.state[uuid] = { ...st, cookies: cookiesAt }
+          ctx.out.unchanged++
+        }
+      }
       continue
     }
-    // The store moved on since this PC last agreed with it: the later expiry wins.
+    // The store moved on since this PC last agreed with it. A decision that waits for the app to
+    // close is remembered, so a profile open for days is not downloaded again every pass.
+    const pending = `${remote.version}:${hash}`
+    if (!isClosed && deferred.get(uuid) === pending) {
+      waiting.add(uuid)
+      continue
+    }
     const theirs = await ctx.download(uuid)
     if (!theirs) continue
-    if (tokensHash(theirs.tokenCacheV2, theirs.tokenCache) === hash) {
+    const sameTokens = tokensHash(theirs.tokenCacheV2, theirs.tokenCache) === hash
+    // The same tokens with other cookies: the store's are the ones that moved (a profile that was
+    // open when its tokens went up sends its cookies once it closes).
+    const cookiesToLand =
+      sameTokens &&
+      !!theirs.cookies?.length &&
+      !(isClosed && sameCookies(await fresh(), theirs.cookies))
+    if (sameTokens && !cookiesToLand) {
       ctx.state[uuid] = { version: remote.version, hash, cookies: st.cookies }
       ctx.out.unchanged++
-    } else if (tokenExpiry(tokens.v2, tokens.v1) > theirs.expiresAt) await send(remote.version)
-    else if (!closed(p.dir)) waiting.add(uuid)
-    else await land(theirs, p, remote.version)
+    } else if (!sameTokens && tokenExpiry(tokens.v2, tokens.v1) > theirs.expiresAt)
+      await send(remote.version, theirs.cookies)
+    else if (!isClosed) {
+      deferred.set(uuid, pending)
+      waiting.add(uuid)
+    } else await land(theirs, p, remote.version)
   }
 
   // Accounts only the store holds: a signed-out profile here of the same folder name, else a new one.

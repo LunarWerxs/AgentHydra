@@ -687,8 +687,17 @@ Desktop account signed in on one PC is signed in on the other without the browse
   where it has none: a signed-out profile of the same folder name, else a new profile with that
   name (or `<name>-synced`) and number. From then on the later expiry among the grants wins.
 - Cookies are read only while the profile is closed (Chromium locks the database); a pass while it
-  runs uploads the new tokens with the cookies the store already has. A new profile's cookie
-  database is made from another local profile's schema.
+  runs uploads the new tokens with the cookies the store already has, and the profile's own cookies
+  follow once it closes (an upload only when they differ from the store's). The same tokens with
+  other cookies land on the other PC too. A new profile's cookie database is made from another
+  local profile's schema, or the version-24 schema in the code on a PC with no desktop profile yet.
+- Verified live (2026-10-01): this PC uploaded its 14 signed-in desktop logins; a separate
+  AgentHydra home and instances folder joined with the pairing code and made 14 profiles with the
+  same names and numbers, each token cache identical to the original after decrypting with the new
+  profile's own key, the sign-in cookies identical for the 11 whose original was closed (three
+  were open, so their cookies follow), and two landed logins answered live from Anthropic. The run
+  found both gaps above (no cookies on a PC with no profile; later cookies ignored), each now
+  pinned by the test.
 - A Log out of a desktop instance leaves that account out of sync on that PC, like a CLI one.
 - Windows only (elsewhere the profile key is in the Keychain or a keyring).
 - The test (`server/tests/desktop-login-sync.test.ts`, Windows) proves the key round trip, a
