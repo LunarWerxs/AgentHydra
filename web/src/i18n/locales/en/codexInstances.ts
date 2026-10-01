@@ -1,25 +1,10 @@
 export default {
-  title: 'Codex instances',
-  refresh: 'Refresh',
-  createInstance: 'New Codex instance',
-  empty: 'No Codex instances found.',
-  emptyHint: 'Create an isolated Codex Desktop and CLI profile for each OpenAI login.',
-  colStatus: 'Status',
-  colName: 'Name',
-  colAccount: 'Account',
-  colUsage: 'Usage',
-  colPlan: 'Plan',
   noSessionLimit:
     'This account does not report a main five-hour limit. Separate model limits are listed below when available.',
   moveDescription:
     'Copy each active local chat into the destination account, keeping its conversation and working folder. Archive each original after its copy is verified. Archived chats stay on the source. This does not transfer cloud chats or start a new turn.',
   moveCloseSource:
     'Close the source Codex desktop and its CLI sessions before moving. You can keep the destination open; refresh or reopen it to see the moved chats.',
-  colHome: 'CODEX_HOME',
-  colActions: 'Actions',
-  /** "x of y" for a heading whose table is showing fewer rows than it has — the filter is hiding
-   *  the rest. */
-  countOfTotal: '{shown} of {total}',
   /** An OPENAI_API_KEY login: a valid Codex auth, but no ChatGPT subscription and so no plan
    *  or quota to report. */
   authApiKey: 'API key',

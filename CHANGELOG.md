@@ -64,6 +64,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **Every account row looks the same** (`web/src/components/InstanceGlyph.vue`, `InstanceAccountBadge.vue`). Codex and
+  DeepSeek rows now show the instance's own icon beside its number and the same email-handle pill as a Claude row,
+  instead of a full name over an email or a folder path under the name (DeepSeek's folder and chat count moved
+  into the name's hover). All three kinds of row draw these cells from one component each, so they cannot drift
+  apart again.
 - **The orchestrator's remote dashboard moved from port 7790 to 7793** (`orchestrator/package.json`
   `config.remotePort`). The zswarm MCP server listens on 7790, so the remote gateway could not
   start on a machine running both, and the phone dashboard stayed down. The port is now written in
@@ -95,6 +100,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   costs 0.8 ms of CPU instead of 93 ms. The usage-limit monitor also stops re-reading chats that
   have not changed since its last pass, and the dashboard stops polling while its window is
   hidden, then catches up as soon as you look at it again.
+
+### Removed
+
+- **The "Startup cost per new chat" panel** and `agenthydra --prefix-tax`. Nothing used its numbers, and every row
+  read "not measured" until you clicked it.
 
 ### Fixed
 

@@ -49,5 +49,6 @@ describe('logoutCliInstance', () => {
     const done = logoutCliInstance(id)
     expect(done.ok).toBe(true)
     expect(existsSync(credentials)).toBe(false)
-  })
+    // A real child process: a cold box can take seconds to start it, past bun's 5 s default.
+  }, 20_000)
 })

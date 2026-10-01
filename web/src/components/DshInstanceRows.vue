@@ -17,6 +17,8 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
+import InstanceAccountBadge from '@/components/InstanceAccountBadge.vue'
+import InstanceGlyph from '@/components/InstanceGlyph.vue'
 import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import ProviderLogo from '@/components/ProviderLogo.vue'
@@ -38,6 +40,8 @@ import {
   quitDshInstance,
   renameDshInstance,
 } from '@/lib/api'
+import { shortDisplayName } from '@/lib/instance-appearance'
+import IconTooltip from '@/shell/IconTooltip.vue'
 
 defineProps<{ usageMode: boolean }>()
 
@@ -54,13 +58,6 @@ function statusTitle(inst: DshInstance): string {
   return inst.port
     ? t('dshInstances.runningOnPort', { port: inst.port })
     : t('dshInstances.running')
-}
-
-/** The full name as a hover only when the column actually cut it, so a name shown whole does not
- *  sprout a box repeating itself. */
-function titleIfClipped(event: PointerEvent, text: string): void {
-  const el = event.currentTarget as HTMLElement
-  el.title = el.scrollWidth > el.clientWidth ? text : ''
 }
 
 /** Run one action, then re-read: every verb here changes something the list reports (a port, a
@@ -201,26 +198,24 @@ defineExpose({ openCreate, refresh })
         <!-- Same chip as every other instance row: the number comes from ONE sequence spanning
              all four families, so it has to look identical everywhere. -->
         <InstanceNumber :num="inst.num" />
-        <span class="min-w-0 truncate" @pointerenter="titleIfClipped($event, inst.name)">{{ inst.name }}</span>
-        <Badge
-          v-if="inst.isDefault"
-          variant="outline"
-          class="shrink-0"
-          :title="$t('dshInstances.defaultHint')"
+        <InstanceGlyph :dir="inst.home" :running="inst.running" />
+        <!-- The home and its chat count are the hover, the same place the Claude rows keep their
+             profile folder, so every row is one line tall. -->
+        <IconTooltip
+          :label="inst.name"
+          :description="inst.home"
+          :detail="$t('dshInstances.sessionCount', { count: inst.sessions }, inst.sessions)"
         >
+          <span class="min-w-0 cursor-default truncate">{{ shortDisplayName(inst.name) }}</span>
+        </IconTooltip>
+        <!-- The machine's own install, badged like the Claude rows' External one. -->
+        <Badge v-if="inst.isDefault" variant="outline" :title="$t('dshInstances.defaultHint')">
           {{ $t('dshInstances.defaultBadge') }}
         </Badge>
       </div>
-      <div class="flex min-w-0 items-center gap-1 text-3xs text-muted-foreground">
-        <span class="mono min-w-0 truncate" :title="inst.home">{{ inst.home }}</span>
-        <span class="shrink-0" aria-hidden="true">·</span>
-        <span class="shrink-0">{{
-          $t('dshInstances.sessionCount', { count: inst.sessions }, inst.sessions)
-        }}</span>
-      </div>
     </TableCell>
-    <!-- 3 account: a home is signed in with an API key, not an account with a name. -->
-    <TableCell><span class="text-xs text-muted-foreground">—</span></TableCell>
+    <!-- 3 account: a home is signed in with an API key, not an account; the shared cell's dash. -->
+    <TableCell><InstanceAccountBadge :email="null" /></TableCell>
     <!-- 4-6 PID, Uptime, Memory: the list reports whether a server answers for the home, not which
          process it is. -->
     <template v-if="!usageMode">

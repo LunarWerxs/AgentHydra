@@ -321,14 +321,41 @@
   ]
   const codexInstances = [
     {
+      num: 6,
       id: 'codex-1',
       name: 'work (Codex)',
+      account: {
+        status: 'live',
+        authMode: 'chatgpt',
+        email: 'jordan@example.com',
+        name: 'Jordan Lee',
+        planType: 'plus',
+        planLabel: 'Plus',
+        accountId: null,
+        userId: null,
+        orgTitle: 'Personal',
+      },
+      isExternal: false,
       codexHome: 'C:\\Users\\dev\\.agenthydra\\codex-instances\\codex-1',
       desktopUserDataDir: 'C:\\Users\\dev\\.agenthydra\\codex-instances\\codex-1\\desktop',
       isDesktopRunning: true,
       desktopPid: 48216,
       loggedIn: true,
       createdAt: ago(4_320),
+    },
+  ]
+  // A DeepSeek Harness home, so the shot shows all three providers' rows in the one table.
+  const dshInstances = [
+    {
+      num: 7,
+      id: 'dsh-default',
+      name: 'DeepSeek',
+      home: 'C:\\Users\\dev\\.dsh',
+      isDefault: true,
+      sessions: 12,
+      port: null,
+      running: false,
+      createdAt: ago(2_880),
     },
   ]
 
@@ -594,6 +621,7 @@
     ],
     [/\/api\/cli-instances/, () => cliInstances],
     [/\/api\/codex-instances/, () => codexInstances],
+    [/\/api\/dsh-instances/, () => dshInstances],
     [/\/api\/usage\/cache/, () => usageCache],
     [/\/api\/usage/, () => ({ key: 'acct:1', snapshot: snap(72, 55), reason: 'ok' })],
     [/\/api\/queue/, () => queue],
@@ -611,6 +639,7 @@
         showCliInstances: true,
         codexDesktopEnabled: true,
         codexCliEnabled: true,
+        dshEnabled: true,
         chatGptHandoffEnabled: true,
         transcriptEditor: '',
         transcriptEditorResolved: 'VS Code',
@@ -637,9 +666,6 @@
     // sinks report is what a daemon without that route answers, and the view hides the section.
     [/\/api\/agent-tools/, () => ({ tools: [] })],
     [/\/api\/analytics\/sinks/, () => null],
-    // The startup-cost table, likewise newer than these fixtures. Nothing measured is the honest
-    // state: a real install only measures it on a click.
-    [/\/api\/prefix-tax/, () => ({ running: null, rows: [] })],
     // Three background polls that were escaping to a live daemon. The quiet state for each: no open
     // incident, no hook report, and a daemon already running its checkout (no restart banner).
     [/\/api\/incidents/, () => []],

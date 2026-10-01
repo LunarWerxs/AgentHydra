@@ -97,14 +97,14 @@ const SHOTS = [
   },
   {
     name: 'instances',
-    // Tall enough for the Codex table too: the CLI section's Quick add row pushed it out of a
-    // 560px frame, and this shot exists to show all three tables.
+    // Tall enough for every provider's rows: Claude, Codex and DeepSeek share one table now.
     viewport: [1060, 720],
     steps: [{ eval: clickIn('nav', 'Instances'), wait: 3500 }],
-    // All three instance tables present, and both Claude account data and the Codex table's row
-    // render. Not the CODEX_HOME column: usage mode (the tab's default) swaps it for the reset
-    // countdowns, so asserting on it failed a view that had drawn perfectly.
-    expect: `document.querySelectorAll('table').length === 3 && /Max 20/.test(document.body.innerText) && /Codex instances/.test(document.body.innerText) && /work \\(Codex\\)/.test(document.body.innerText)`,
+    // Claude account data, the Codex row with its account pill (the email HANDLE, never the full
+    // address or the profile name), and the DeepSeek row all render. Not the CODEX_HOME column:
+    // usage mode (the tab's default) swaps it for the reset countdowns, so asserting on it failed a
+    // view that had drawn perfectly.
+    expect: `/Max 20/.test(document.body.innerText) && /work \\(Codex\\)/.test(document.body.innerText) && /\\bjordan\\b/.test(document.body.innerText) && !/Jordan Lee|jordan@example/.test(document.body.innerText) && /DeepSeek/.test(document.body.innerText)`,
   },
   {
     name: 'analytics',

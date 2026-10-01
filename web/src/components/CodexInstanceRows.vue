@@ -22,6 +22,8 @@ import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
+import InstanceAccountBadge from '@/components/InstanceAccountBadge.vue'
+import InstanceGlyph from '@/components/InstanceGlyph.vue'
 import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
@@ -428,21 +430,6 @@ function menuActionsFor(instance: CodexInstance): MenuIconAction[] {
   return actions
 }
 
-/** Copy the ChatGPT address this CODEX_HOME is signed in with — the same click the Claude rows'
- *  account column has, so "click the account, get the address" is one habit across the whole table.
- *  Silent no-op with nothing resolved; the cell is only a button when there is an address behind it.
- *  "Copied" only once the write lands: a refused clipboard (no focus, insecure context) says so,
- *  the way prepareMove surfaces its own failures, instead of claiming a copy that never happened. */
-async function copyAccountEmail(instance: CodexInstance) {
-  const email = instance.account?.email?.trim()
-  if (!email) return
-  try {
-    await navigator.clipboard.writeText(email)
-    toast.success(t('instances.toastEmailCopied', { email }))
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
-  }
-}
 async function onQuitDesktop(instance: CodexInstance) {
   const result = await quitDesktop(instance.id)
   if (result?.ok) toast.success(t('codexInstances.toastDesktopQuit'))
@@ -570,49 +557,26 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
       <div class="flex min-w-0 items-center gap-1.5 font-medium">
         <ProviderLogo provider="codex" class="size-3.5" />
         <InstanceNumber :num="instance.num" />
+        <InstanceGlyph :dir="instance.codexHome" :running="statusOn(instance)" />
         <IconTooltip :label="instance.name" :description="instance.codexHome">
           <span class="min-w-0 cursor-default truncate">{{ shortDisplayName(instance.name) }}</span>
         </IconTooltip>
+        <Badge v-if="instance.isExternal" variant="outline">{{ $t('instances.external') }}</Badge>
       </div>
     </TableCell>
-    <!-- 3. Account: which ChatGPT account this CODEX_HOME is signed into. The name/email come
-         straight off the list payload (the server resolves them from auth.json), so this fills in
-         on first paint with no per-row request. -->
-    <TableCell class="max-w-40">
-      <template v-if="instance.account?.email || instance.account?.name">
-        <!-- A button only when there IS an address to copy: with a name and no email the cell is
-             text, because a control that silently does nothing is worse than none. -->
-        <component
-          :is="instance.account.email ? 'button' : 'div'"
-          :type="instance.account.email ? 'button' : undefined"
-          class="block w-full truncate text-start font-medium"
-          :class="
-            instance.account.email ? 'cursor-pointer transition-colors hover:text-primary' : undefined
-          "
-          :title="instance.account.email ? $t('instances.accountCopyHint') : undefined"
-          :aria-label="
-            instance.account.email
-              ? $t('instances.copyAccountEmailAria', { email: instance.account.email })
-              : undefined
-          "
-          @click="copyAccountEmail(instance)"
-        >
-          {{ instance.account.name ?? instance.account.email }}
-        </component>
-        <div
-          v-if="instance.account.name && instance.account.email"
-          class="truncate text-3xs text-muted-foreground"
-        >
-          {{ instance.account.email }}
-        </div>
-      </template>
-      <span v-else class="text-xs text-muted-foreground">
-        {{
+    <!-- 3. Account: the same email-handle pill as the Claude rows (InstanceAccountBadge). The
+         email comes straight off the list payload (the server resolves it from auth.json). -->
+    <TableCell>
+      <InstanceAccountBadge
+        :email="instance.account?.email"
+        :profile="instance.account?.name"
+        :fallback="
           instance.account?.authMode === 'apikey'
             ? $t('codexInstances.authApiKey')
             : $t('codexInstances.loggedOutShort')
-        }}
-      </span>
+        "
+        :variant="instance.account?.email ? 'success' : 'outline'"
+      />
     </TableCell>
     <!-- 4-6. Process columns: the desktop's PID; Codex reports no start time or memory. -->
     <template v-if="!usageMode">

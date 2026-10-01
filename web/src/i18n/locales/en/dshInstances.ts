@@ -7,27 +7,12 @@
 // DeleteInstanceDialog) driven by lib/instance-dialog-i18n.ts, which is why the `*Dialog*` keys
 // below match that map exactly.
 export default {
-  title: 'DeepSeek instances',
-  refresh: 'Refresh',
-  createInstance: 'New DeepSeek instance',
-  empty: 'No DeepSeek Harness homes found.',
-  // NO literal "@" in this string: vue-i18n reads a bare @ as the start of a linked-message
-  // reference and throws at render time — the same trap instances.ts's colAccountHint documents,
-  // which is why the package name is spelled without its scope here.
-  emptyHint:
-    'Install the harness (npm i -g the deepseek-ai/dsh package), or create an instance here to give a second account its own home.',
-  colName: 'Name',
-  colHome: 'Home',
-  colSessions: 'Chats',
-  colStatus: 'Status',
-  colActions: 'Actions',
   running: 'Serving',
   stopped: 'Not running',
   // The machine's own ~/.dsh (or $DSH_HOME). Marked because it is the one row AgentHydra did not
   // create and will not delete.
   defaultBadge: 'Default',
   defaultHint: 'This machine’s own harness home. AgentHydra reads it; it never created it.',
-  port: 'port {port}',
   runningOnPort: 'Serving on port {port}',
   sessionCount: '{count} chat | {count} chats',
   planApiKey: 'API key',

@@ -473,7 +473,7 @@ export interface ActivityReport {
  *
  * WHY: a skill listing or an MCP server's instructions are re-sent on every API call of every
  * session they load into, used or not. This row is the evidence for "which of them are pure
- * prefix tax": loaded in N sessions, used in M.
+ * prefix overhead": loaded in N sessions, used in M.
  */
 export interface DeadLoadRow {
   /** Skill name, or MCP server name as its tools are prefixed (`mcp__<server>__...`). */

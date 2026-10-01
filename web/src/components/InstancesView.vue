@@ -38,14 +38,15 @@ import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import DshInstanceRows from '@/components/DshInstanceRows.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
+import InstanceAccountBadge from '@/components/InstanceAccountBadge.vue'
 import InstanceChatsDialog from '@/components/InstanceChatsDialog.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
+import InstanceGlyph from '@/components/InstanceGlyph.vue'
 import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
 import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
-import PrefixTaxSection from '@/components/PrefixTaxSection.vue'
 import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
@@ -105,12 +106,8 @@ import {
   accountDisplayName,
   accountEmail,
   accountHandle,
-  colorValue,
   displayName,
-  iconComponent,
   labelDisagreesWithAccount,
-  resolveColorKey,
-  resolveIconKey,
   shortDisplayName,
 } from '@/lib/instance-appearance'
 import type { InstanceFacts } from '@/lib/instance-filter'
@@ -413,40 +410,8 @@ function accountCellName(inst: CMInstance): string | null {
   return accountHandle(inst.account) ?? inst.account?.label ?? null
 }
 
-// The hover reveal: the full address, plus the Anthropic profile name when the account has one and
-// it isn't just the handle again, and the line saying the cell copies. This is where the friendly
-// name went — it is still one hover away, it just no longer competes with the handle for the same
-// slot, which is what made the column unreadable (some rows a person's name, some rows an email
-// fragment, no way to tell).
-function accountTitle(inst: CMInstance): string | undefined {
-  const email = accountEmail(inst.account)
-  if (!email) return undefined
-  const profile = inst.account?.name?.trim()
-  const head =
-    profile && profile !== accountHandle(inst.account)
-      ? t('instances.accountTitleWithProfile', { email, profile })
-      : email
-  return `${head}\n${t('instances.accountCopyHint')}`
-}
-
-/**
- * Copy the account's FULL address, not the handle the cell shows.
- *
- * The handle is a display compromise — it fits the column — but it is not an identifier you can
- * paste anywhere: two accounts on different domains render the same chip. So the cell shows the
- * short form and hands over the long one, the same split the tooltip already made.
- *
- * A row with no resolved email is not clickable at all (see the template), so there is no silent
- * no-op: a signed-out account's label ("(not logged in)") must never reach the clipboard looking
- * like an address.
- */
-function copyAccountEmail(inst: CMInstance) {
-  const email = accountEmail(inst.account)
-  if (!email) return
-  navigator.clipboard?.writeText(email).catch(() => {})
-  toast.success(t('instances.toastEmailCopied', { email }))
-}
-
+// The pill itself (hover, copy-the-full-address click) is InstanceAccountBadge, shared by every
+// provider's rows.
 function accountBadgeVariant(inst: CMInstance) {
   switch (inst.account?.status) {
     case 'live':
@@ -1227,9 +1192,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- gap-10 between the table and the prefix-tax section under it: a flex gap only applies
-         BETWEEN children, so it leaves no orphan space when either is empty.
-         pb-16: the last section sat flush against the bottom edge of the scroll area, its last row
+    <!-- pb-16: the last section sat flush against the bottom edge of the scroll area, its last row
          half-hidden behind the window chrome (owner, 2026-09-20). -->
     <div class="flex flex-col gap-10 pb-16">
       <!-- px-1.5 rather than the kit's px-2: ten columns in the 1000px frame, and the 36px this
@@ -1434,11 +1397,11 @@ onUnmounted(() => {
                      after keeps showing the old name, and the number never drifts. -->
                 <InstanceNumber :num="inst.num" />
                 <!-- The instance's own glyph and colour, its identity; faded while it is closed. -->
-                <component
-                  :is="iconComponent(resolveIconKey(inst))"
-                  class="size-4 shrink-0 text-(--icon-color)"
-                  :style="{ '--icon-color': colorValue(resolveColorKey(inst)) }"
-                  :class="inst.isRunning ? '' : 'opacity-40'"
+                <InstanceGlyph
+                  :dir="inst.dir"
+                  :icon="inst.icon"
+                  :color="inst.color"
+                  :running="inst.isRunning"
                 />
                 <!-- min-w-0 + truncate: when the column is squeezed, the name elides and the number
                      and marker icons around it keep their size. -->
@@ -1579,23 +1542,13 @@ onUnmounted(() => {
                    need to know where it went); on a healthy row it waits for hover or focus, so
                    seventy rows do not each carry one more icon. -->
               <div class="flex items-center gap-1">
-                <Badge
+                <InstanceAccountBadge
                   v-if="accountCellName(inst)"
-                  :as="accountEmail(inst.account) ? 'button' : undefined"
-                  :type="accountEmail(inst.account) ? 'button' : undefined"
+                  :email="inst.account?.email"
+                  :profile="inst.account?.name"
+                  :fallback="inst.account?.label"
                   :variant="accountBadgeVariant(inst)"
-                  :title="accountTitle(inst)"
-                  :aria-label="
-                    accountEmail(inst.account)
-                      ? $t('instances.copyAccountEmailAria', { email: accountEmail(inst.account) })
-                      : undefined
-                  "
-                  :interactive="!!accountEmail(inst.account)"
-                  :class="!accountEmail(inst.account) && accountTitle(inst) ? 'cursor-help' : undefined"
-                  @click="copyAccountEmail(inst)"
-                >
-                  {{ accountCellName(inst) }}
-                </Badge>
+                />
                 <span v-else class="text-xs text-muted-foreground">
                   {{ $t('instances.resolving') }}
                 </span>
@@ -1917,9 +1870,6 @@ onUnmounted(() => {
           </TableEmpty>
         </TableBody>
       </Table>
-
-      <!-- Last on purpose: it reads the homes the table above lists, and measuring is a click. -->
-      <PrefixTaxSection />
     </div>
 
     <!-- "Chats": this one account's chats, read-only. No action on the account itself, so it

@@ -76,5 +76,6 @@ describe('the extra-usage guard', () => {
     await Promise.race([billing.exited, Bun.sleep(5_000)])
     expect(alive(billing)).toBe(false)
     expect(alive(capped)).toBe(true)
-  })
+    // Real child processes, and the race above alone may wait 5 s: bun's 5 s default cannot hold it.
+  }, 20_000)
 })
