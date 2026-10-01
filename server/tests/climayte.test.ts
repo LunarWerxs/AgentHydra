@@ -27,6 +27,7 @@ import {
   climayteJournal,
   climayteJournalLines,
   climayteList,
+  climayteLiveReadings,
   climayteRun,
   climayteScorecard,
   climayteSend,
@@ -868,6 +869,47 @@ describe('integration: near its limit a worker hands off to a fresh session', ()
     expect(w?.sessions).toEqual([firstSession])
     expect(w?.sessionId).not.toBe(firstSession)
   }, 20_000)
+
+  test('with no room elsewhere it still stops at the line, and the task waits for the reset', async () => {
+    // Owner, 2026-10-01: never the limit, stop at 85-90%. The account reports 90% (as
+    // signedInAccounts merges a running worker's reading, so does this provider).
+    const aloneDir = join(root, 'acct-alone')
+    mkdirSync(aloneDir, { recursive: true })
+    writeFileSync(join(aloneDir, 'fake-winddown'), '')
+    setCliMayteAccountsProvider(() => {
+      const live = climayteLiveReadings().get('wind-3')
+      return [
+        {
+          id: 'wind-3',
+          num: 3,
+          name: 'alone',
+          configDir: aloneDir,
+          sessionPct: live?.sessionPct ?? 0,
+          weekPct: 0,
+          sessionResetsAt: live?.sessionResetsAt ?? null,
+        },
+      ]
+    })
+    const run = climayteRun({
+      tasks: [{ prompt: 'a long task', cwd, title: 'alone' }],
+      group: 'wind-alone',
+    })
+    const id = run.workers[0]?.id as string
+    const deadline = Date.now() + 15_000
+    let w = climayteList({ id })[0]
+    while (w && w.status !== 'waiting' && w.status !== 'failed' && Date.now() < deadline) {
+      await climayteWait({ id }, Math.min(2_000, deadline - Date.now()))
+      w = climayteList({ id })[0]
+    }
+    climayteCancel({ group: 'wind-alone' })
+    expect(w?.attempts.map((a) => [a.account.id, a.outcome])).toEqual([['wind-3', 'handoff']])
+    expect(w?.status).toBe('waiting')
+    expect(w?.error).toContain('85% stop line')
+    const resetsAt = climayteLiveReadings().get('wind-3')?.sessionResetsAt as number
+    expect(w?.waitUntil).toBe(new Date(resetsAt).toISOString())
+    // Its peak is on record: 90, under the limit.
+    expect(climayteTotals().peaks.find((p) => p.account === '#3')?.peakPct).toBe(90)
+  }, 20_000)
 })
 
 describe('climayte_status scope (field notes 1, 4 and 7)', () => {
@@ -1187,7 +1229,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     expect(refused).toBeInstanceOf(CliMayteSplitNeeded)
     expect((refused as CliMayteSplitNeeded).message).toContain('split needed')
     expect((refused as CliMayteSplitNeeded).tasks).toEqual([
-      { task: 2, title: 'a big debug task', expected: 150, window: 95, pieces: 4 },
+      { task: 2, title: 'a big debug task', expected: 150, window: 85, pieces: 4 },
     ])
     expect(climayteList().length).toBe(before)
 
@@ -1195,7 +1237,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     const whole = climayteRun({ tasks: [{ ...big, size: 'whole' }], group: 'size-whole' })
     groups.push(whole.group)
     const wholeId = whole.workers[0]?.id as string
-    expect(whole.workers[0]?.size).toMatchObject({ window: 95, roomOn: '#41' })
+    expect(whole.workers[0]?.size).toMatchObject({ window: 85, roomOn: '#41' })
     expect(whole.workers[0]?.size?.basis).toBe('debug on claude-sonnet-5-5 low, 1 finished')
     expect(Math.round(whole.workers[0]?.size?.expected ?? 0)).toBe(150)
     expect(['running', 'done']).toContain((await settle(wholeId))?.status)
@@ -1204,7 +1246,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     factor = 20
     const max = climayteRun({ tasks: [big], group: 'size-max' })
     groups.push(max.group)
-    expect(max.workers[0]?.size?.window).toBe(1900)
+    expect(max.workers[0]?.size?.window).toBe(1700)
     climayteCancel({ group: 'size-max' })
   }, 60_000)
 
@@ -1235,7 +1277,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     expect(w?.status).toBe('waiting')
     expect(w?.error).toContain('Waiting for room')
     // The row a status read returns carries the size, with the room when it started waiting.
-    expect(w?.size).toMatchObject({ window: 95, room: 25, roomOn: '#41' })
+    expect(w?.size).toMatchObject({ window: 85, room: 15, roomOn: '#41' })
     // When it expects room, for a waiter to sleep until: the account's 5-hour reset, in UTC.
     expect(w?.waitUntil).toBe(new Date(resetAt).toISOString())
     sessionPct = 10
@@ -1300,7 +1342,14 @@ describe('spend per attempt (field note 41): what each run used, the re-read aft
     expect(moved?.rereadPct).toBeGreaterThan(0)
     expect(w?.used.rereadPct).toBe(moved?.rereadPct as number)
     expect(w?.used.workPct).toBeCloseTo((w?.used.pct ?? 0) - (w?.used.rereadPct ?? 0), 0)
-    expect(climayteTotals().rereadByCause.quota).toBeGreaterThan(0)
+    const totals = climayteTotals()
+    expect(totals.rereadByCause.quota).toBeGreaterThan(0)
+    // The test metrics: its limit is a hit (target 0), and its size is set against what it used.
+    expect(totals.limitHitList.some((h) => h.id === id && h.account === '#51')).toBe(true)
+    expect(totals.sizing.list.find((x) => x.id === id)).toMatchObject({
+      expected: w?.size?.expected,
+      used: w?.used.pct,
+    })
 
     expect(climayteVerdict(id, { verdict: 'pass', by: 'orchestrator' }).ok).toBe(true)
     const row = climayteScorecard().rows.find(

@@ -96,6 +96,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   window but not what any account has left now waits for room, while smaller tasks take that room,
   instead of starting where it would run out partway and move.
 
+- **CliMayte stops each account at about 85% and never runs it into its limit**
+  (`server/src/climayte.ts`). A task now starts only where it is expected to finish under 85% of
+  the 5-hour window, and a running task that reaches 85% writes a handoff even when no other
+  account has room; it then waits for the first account to reset. Before, with nowhere to go, it
+  worked on until the account hit its limit. The totals report limit hits, each account's peak per
+  window and estimated against actual cost, to test it.
+
 - **CliMayte shows what every run cost, and what restarts cost** (`server/src/climayte-lib.ts`).
   Each run of a task keeps its own cost, requests and tokens, stopped runs included, and the
   first request of a run that picks a conversation up again (after a move, a limit, a handoff or a

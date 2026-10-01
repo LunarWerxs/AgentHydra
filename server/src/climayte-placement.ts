@@ -18,8 +18,11 @@ import type { CliMayteAccount } from './climayte-lib'
 import { type ScoreRow, UNITS_PER_PRO_PERCENT } from './climayte-scorecard'
 import { modelMultiplier } from './usage-tokens'
 
-/** A task fits on an account when its projected 5-hour usage stays at or under this. */
-export const FIT_PCT = 95
+/** A task fits on an account when its projected 5-hour usage stays at or under this: the stop line
+ *  (climayte-lib WIND_DOWN_SESSION_PCT), so a task is started only where it is expected to finish
+ *  before the account is asked to stop (owner, 2026-10-01: "The goal is to NOT hit 'limit' ... at
+ *  85/90%"). It was 95, which started tasks that the line then stopped partway. */
+export const FIT_PCT = 85
 
 /** A task's cost with nothing on record, in % of a Pro 5-hour window. Run 1: code on Opus high
  *  26.6% a task, a sweep on Opus high 35.9%, mechanical on Sonnet medium 0.8%. */

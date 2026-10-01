@@ -83,6 +83,10 @@ export interface CliMayteAttempt {
   cacheTtl?: '5m'
   /** The account's 5-hour usage when it started (placement measures what running work spent). */
   startPct?: number | null
+  /** The highest 5-hour usage its account reported while it ran (the CLI's rate_limit_event), with
+   *  that window's reset (epoch ms): the test metric for "stop at 85-90%, never the limit". null: no
+   *  reading in its log. Absent until set. */
+  peak?: { pct: number; resetsAt: number | null } | null
   /** What it was launched with (`--model`, `--effort`; null: the CLI's default). Absent before 2026-10-01. */
   requested?: { model: string | null; effort: string | null }
   /** The model the CLI reported in its system/init event: what really ran. */
@@ -398,7 +402,7 @@ export function windDownMessage(pct: number | null, path: string): string {
   const why =
     pct === null
       ? 'the orchestrator asked this session to hand the task to a fresh session'
-      : `this account is at ${Math.round(pct)}% of its usage limit, so this session must hand the task to a fresh session on another account`
+      : `this account is at ${Math.round(pct)}% of its 5-hour usage, past the line where CliMayte stops work so it never reaches the limit, so this session must hand the task to a fresh session (on another account with room, or on this one once its window resets)`
   return `AgentHydra: ${why}. Wrap up now: finish or safely stop the step you are on and do not start anything new. Then write a handoff with the Write tool to ${path} for the session that continues this task. It sees only the original task, your handoff and your transcript, so include: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message, subject and body verbatim, and the exact paths); the next steps in order; the facts, decisions and gotchas you learned; and the commands or checks that prove the work. If the whole task is already complete, do not write a handoff: finish normally with your final report. After writing the handoff, end your turn with one line saying the handoff is written.`
 }
 

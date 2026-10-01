@@ -922,6 +922,13 @@ async function tick(): Promise<void> {
           continue
         }
         if (acct) {
+          // The row's size says what this start was placed on, not the estimate at dispatch.
+          if (w.size)
+            w.size = {
+              ...w.size,
+              expected: Math.round(expected * 10) / 10,
+              basis: basisText(cost, w),
+            }
           try {
             launch(w, acct, accounts, active.get(acct.id) ?? 0)
           } catch (err) {
@@ -978,7 +985,7 @@ async function tick(): Promise<void> {
             ? 'None of the accounts this task may use is signed in. Sign one in: CLI instances, Quick add (type its email).'
             : allSignedOut
               ? 'Every CLI account is signed out. Sign one in again: CLI instances, Quick add (type its email).'
-              : `Every eligible account is at its usage limit or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.`
+              : `Every eligible account is at its usage limit, past the ${WIND_DOWN_SESSION_PCT}% stop line, or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.`
         if (w.status !== 'waiting' || w.error !== why || w.waitUntil !== until) {
           if (w.status !== 'waiting' || w.error !== why)
             journal(w, 'waiting', { error: firstLine(why) })
@@ -1132,41 +1139,6 @@ function signalWindDown(
   changed(w)
 }
 
-/** Some OTHER account this worker may use would take its continuation now: below the wind-down
- *  thresholds AND with a free worker slot, asked of pickAccount itself so the two never disagree.
- *  Without one a handoff would only park the task, so the session keeps working until its real
- *  limit, where the move (transcript copy) takes over. Run 1: this checked usage but not the worker
- *  caps, so a session wound down "for" #98 (52%, already at its cap) and its continuation went to
- *  the next-best account, at 89-97%, which asked for another handoff at once. */
-function roomElsewhere(w: CliMayteWorker, from: string, accounts: CliMayteAccount[]): boolean {
-  const active = new Map<string, number>()
-  const groupActive = new Map<string, number>()
-  for (const o of workers.values()) {
-    if (o.status !== 'running' || !o.accountId) continue
-    active.set(o.accountId, (active.get(o.accountId) ?? 0) + 1)
-    if (o.group === w.group) groupActive.set(o.accountId, (groupActive.get(o.accountId) ?? 0) + 1)
-  }
-  const continuation = {
-    accounts: w.accounts,
-    accountId: null,
-    attempts: [{ account: { id: from, num: null, name: from }, outcome: 'handoff' }],
-  } as Pick<CliMayteWorker, 'accounts' | 'accountId' | 'attempts'>
-  const pick = pickAccount(
-    continuation,
-    accounts.filter((a) => a.id !== from),
-    walls,
-    active,
-    perAccount[w.group] ?? 2,
-    Date.now(),
-    groupActive,
-  )
-  return (
-    !!pick &&
-    (pick.sessionPct ?? 0) < WIND_DOWN_SESSION_PCT &&
-    (pick.weekPct ?? 0) < WIND_DOWN_WEEK_PCT
-  )
-}
-
 function poll(w: CliMayteWorker, accounts?: CliMayteAccount[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (!at) return
@@ -1179,6 +1151,9 @@ function poll(w: CliMayteWorker, accounts?: CliMayteAccount[]): void {
   if (r.model) at.model = r.model
   // Only from a process this daemon is watching now: after a restart an old log is read again from
   // the start, and its readings would be stamped as fresh.
+  const reading = r.live?.sessionPct
+  if (r.live && reading != null && (!at.peak || reading > at.peak.pct))
+    at.peak = { pct: reading, resetsAt: r.live.sessionResetsAt }
   if (r.live && watching) {
     const prev = liveByAccount.get(at.account.id)
     if (!prev || prev.at < r.live.at) {
@@ -1194,11 +1169,14 @@ function poll(w: CliMayteWorker, accounts?: CliMayteAccount[]): void {
       if (soon) stopForOverage(w, at, { ...soon, notice: PRE_OVERAGE_NOTICE }, !exited)
     }
   }
-  // Near its limit, with room elsewhere: the session writes a handoff and the task goes on in a
-  // fresh, small session on another account instead of re-reading this whole conversation there.
-  if (watching && accounts && !at.windDown && !at.overage) {
+  // At the stop line the session writes a handoff, room elsewhere or not (owner, 2026-10-01: "The
+  // goal is to NOT hit 'limit' ... at 85/90%"). With room elsewhere the task goes on in a fresh,
+  // small session there; without, it waits for the first account with room (waitUntil). Until then
+  // a session with nowhere to go worked on into the wall: w-228dcdcc on #98, 85% to 100% in 15
+  // requests, outcome quota.
+  if (watching && !at.windDown && !at.overage) {
     const pct = windDownAt(r.live)
-    if (pct !== null && roomElsewhere(w, at.account.id, accounts)) signalWindDown(w, at, pct)
+    if (pct !== null) signalWindDown(w, at, pct)
   }
   const latest = r.recent[r.recent.length - 1] ?? null
   if (latest && latest !== w.lastActivity) {
@@ -1538,6 +1516,31 @@ function charge(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): numb
   return spent.costUsd
 }
 
+/** The highest 5-hour usage a log's main-agent rate_limit_events reported, with that window's
+ *  reset; null with none (or no log). */
+function peakOfLog(log: string): { pct: number; resetsAt: number | null } | null {
+  let text = ''
+  try {
+    text = readFileSync(log, 'utf8')
+  } catch {
+    return null
+  }
+  let peak: { pct: number; resetsAt: number | null } | null = null
+  for (const line of text.split('\n')) {
+    if (!line.includes('"rate_limit_event"')) continue
+    let ev: unknown
+    try {
+      ev = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const live = liveUsage(ev, 0)
+    if (live?.sessionPct != null && (!peak || live.sessionPct > peak.pct))
+      peak = { pct: live.sessionPct, resetsAt: live.sessionResetsAt }
+  }
+  return peak
+}
+
 /** Tasks recorded before attempts kept their tokens get them once, from their transcripts, so the
  *  view's totals cover them too. Their cost was already charged and is left alone. */
 function backfillTokens(): boolean {
@@ -1556,6 +1559,12 @@ function backfillTokens(): boolean {
       if (had.input + had.output + had.cacheRead + had.cacheWrite > 0) continue
       at.tokens = spentOf(w, at).tokens
       w.tokens = addTokens(w.tokens, at.tokens)
+    }
+    // Each ended attempt's peak 5-hour usage, once, from its log's rate_limit_events.
+    for (const at of w.attempts) {
+      if (at.endedAt === null || at.peak !== undefined) continue
+      at.peak = peakOfLog(at.log)
+      any = true
     }
     // Each ended attempt's cost, requests and re-read, once. Its tokens and the task's cost were
     // recorded when it ended and stay as they are.
@@ -2557,7 +2566,7 @@ export function climayteCancel(filter: { id?: string; group?: string }): {
 
 /** What CliMayte has taken off the chats that handed it work, over every task on record: tasks, the
  *  CLI sessions they ran (attempts), their tokens and cost (the CliMayte view's counter). */
-export function climayteTotals(): {
+export function climayteTotals(since = 0): {
   tasks: number
   /** Attempts ("runs"): every start of the CLI, retries, resumes and handoffs included. */
   sessions: number
@@ -2578,6 +2587,30 @@ export function climayteTotals(): {
   rereadShare: number
   rereadByCause: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>>
   unmeasured: number
+  /** The test metrics (owner, 2026-10-01: the goal is to stop each account at 85-90% of its
+   *  5-hour window, never at its limit), over attempts and tasks since `since` (epoch ms; 0 = all):
+   *  `limitHits` runs that ended at a usage limit (target 0), with the newest ones listed; `peaks`
+   *  each account's highest 5-hour usage per window while CliMayte ran on it (target 85-90, never
+   *  100), newest first; `sizing` finished tasks' expected cost against what they used, both in %
+   *  of a Pro window (`ratio` above 1: estimates run low). */
+  since: string | null
+  limitHits: number
+  limitHitList: Array<{
+    id: string
+    title: string
+    account: string
+    at: string
+    pct: number | null
+  }>
+  peaks: Array<{ account: string; resetsAt: string | null; peakPct: number; runs: number }>
+  sizing: {
+    tasks: number
+    expectedPct: number
+    usedPct: number
+    workPct: number
+    ratio: number | null
+    list: Array<{ id: string; title: string; expected: number; used: number; work: number }>
+  }
 } {
   load()
   let sessions = 0
@@ -2587,6 +2620,20 @@ export function climayteTotals(): {
   let reread = 0
   let unmeasured = 0
   const byCause: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>> = {}
+  const hits: Array<{
+    id: string
+    title: string
+    account: string
+    at: string
+    pct: number | null
+    t: number
+  }> = []
+  const peaks = new Map<
+    string,
+    { account: string; resetsAt: number | null; peakPct: number; runs: number; t: number }
+  >()
+  const sized: Array<{ id: string; title: string; expected: number; used: number; work: number }> =
+    []
   const runsByOutcome: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>> = {}
   const distinct = new Set<string>()
   for (const w of workers.values()) {
@@ -2594,6 +2641,30 @@ export function climayteTotals(): {
     costUsd += w.costUsd
     if (w.tokens) tokens = addTokens(tokens, w.tokens)
     for (const at of w.attempts) {
+      const recent = (at.endedAt ?? Date.now()) >= since
+      if (recent && at.outcome === 'quota')
+        hits.push({
+          id: w.id,
+          title: w.title,
+          account: acctLabel(at.account),
+          at: new Date(at.endedAt ?? at.startedAt).toISOString(),
+          pct: at.peak?.pct ?? null,
+          t: at.endedAt ?? at.startedAt,
+        })
+      if (recent && at.peak) {
+        const key = `${at.account.id}|${at.peak.resetsAt ?? ''}`
+        const p = peaks.get(key) ?? {
+          account: acctLabel(at.account),
+          resetsAt: at.peak.resetsAt,
+          peakPct: 0,
+          runs: 0,
+          t: 0,
+        }
+        p.peakPct = Math.max(p.peakPct, at.peak.pct)
+        p.runs++
+        p.t = Math.max(p.t, at.endedAt ?? Date.now())
+        peaks.set(key, p)
+      }
       runsByOutcome[at.outcome] = (runsByOutcome[at.outcome] ?? 0) + 1
       used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
       if (at.endedAt !== null && !at.spend) unmeasured++
@@ -2611,6 +2682,23 @@ export function climayteTotals(): {
       if (sid) distinct.add(sid)
     }
   }
+  for (const w of workers.values()) {
+    if (w.status !== 'done' || !w.size || w.createdAt < since) continue
+    const all = w.attempts.reduce(
+      (s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),
+      0,
+    )
+    const rr = w.attempts.reduce((s, a) => s + rereadUnits(a, w.model), 0)
+    sized.push({
+      id: w.id,
+      title: w.title,
+      expected: w.size.expected,
+      used: pct1(all),
+      work: pct1(all - rr),
+    })
+  }
+  const sum = (k: 'expected' | 'used' | 'work'): number =>
+    Math.round(sized.reduce((s, x) => s + x[k], 0) * 10) / 10
   return {
     tasks: workers.size,
     sessions,
@@ -2625,6 +2713,26 @@ export function climayteTotals(): {
       Object.entries(byCause).map(([k, v]) => [k, pct1(v ?? 0)]),
     ) as Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>>,
     unmeasured,
+    since: since ? new Date(since).toISOString() : null,
+    limitHits: hits.length,
+    limitHitList: hits
+      .sort((a, b) => b.t - a.t)
+      .slice(0, 20)
+      .map(({ t: _t, ...h }) => h),
+    peaks: [...peaks.values()]
+      .sort((a, b) => b.t - a.t)
+      .map(({ t: _t, resetsAt, ...p }) => ({
+        ...p,
+        resetsAt: resetsAt ? new Date(resetsAt).toISOString() : null,
+      })),
+    sizing: {
+      tasks: sized.length,
+      expectedPct: sum('expected'),
+      usedPct: sum('used'),
+      workPct: sum('work'),
+      ratio: sum('expected') > 0 ? Math.round((sum('used') / sum('expected')) * 100) / 100 : null,
+      list: sized.slice(-50),
+    },
   }
 }
 

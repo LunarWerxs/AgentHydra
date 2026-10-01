@@ -155,7 +155,14 @@ app.post('/api/corch/cancel', async (c) => {
 })
 
 // What CliMayte has offloaded, over every task on record: the CliMayte view's counter.
-app.get('/api/corch/totals', (c) => c.json(climayteTotals()))
+// `since` (ISO or epoch ms) scopes the test metrics (limit hits, peaks, sizing) to a run.
+app.get('/api/corch/totals', (c) => {
+  const raw = c.req.query('since')
+  const since = raw ? (/^\d+$/.test(raw) ? Number(raw) : Date.parse(raw)) : 0
+  if (raw && !Number.isFinite(since))
+    return c.json({ error: 'since must be an ISO time or epoch ms' }, 400)
+  return c.json(climayteTotals(since))
+})
 
 // Remove finished tasks by id; their logs and transcripts move to corch/archive, never deleted.
 app.post('/api/corch/remove', async (c) => {
