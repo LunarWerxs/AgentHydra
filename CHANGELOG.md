@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-01
+
 ### Added
 
 - **CliMayte learns which model each kind of task needs** (`server/src/climayte-scorecard.ts`).
@@ -71,6 +73,29 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   and keeps focus for the next account. If the browser page does not open, you can open it again
   or paste the code it gives you. Entering the email of an instance whose sign-in went stale signs
   that instance in again instead of making a new one.
+  The sign-in window now does the typing (`server/src/core/signin-window.ts`,
+  `orchestrator/scripts/lib/signin_window.py`): you pass Claude's human check if it shows one and
+  open the sign-in link from your email in that window; it fills in the email you typed, moves the
+  six-digit code to the waiting form, and authorizes only the request it was opened for. On Windows,
+  a code or a Claude sign-in link you copy while it waits is picked up as well. Codes never leave
+  the throwaway browser, and the window opens where you last left it.
+
+- **Keep windows running: idle CLI accounts start their 5-hour window on their own**
+  (`server/src/session-keepalive.ts`, `web/src/components/CliInstancesSection.vue`). With the CLI
+  tab's "Keep windows running" switch on, a signed-in CLI account with no 5-hour window running
+  gets one tiny request (Haiku, low effort, one turn, no tools, nothing saved), so its window is
+  already counting down when you need it. Accounts that are signed out, at a limit, busy, or past
+  85% of their weekly usage are left alone. A timer icon marks a row whose window the nudge started
+  or whose last nudge failed, and every nudge is listed in the CliMayte journal. A nudge costs about
+  two cents at list price. The weekly line it stops at moved from 80% to 85%.
+
+- **Move CLI logins to another PC** (`server/src/core/cli-login-move.ts`,
+  `web/src/components/CliLoginMoveDialog.vue`). A login used on two PCs at once can leave one of
+  them with a session that no longer refreshes. "Move login to another PC" in a CLI row's menu
+  saves the login to a file encrypted with a passphrase the page makes and shows you, and signs this
+  PC out of it in the same step. "Import logins" in the header of the other PC shows which logins the
+  file holds before it opens it, puts each one on the instance with the same number or account, and
+  checks that it is signed in. Moving a login that is running a session is refused.
 
 - **Each instance shows every account it has been signed into** (`server/src/core/login-history.ts`,
   `web/src/components/LoginHistoryPopover.vue`). A history button beside the account in the
