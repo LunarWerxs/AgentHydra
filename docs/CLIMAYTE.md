@@ -706,6 +706,31 @@ Desktop account signed in on one PC is signed in on the other without the browse
   staying put. Not proven by a test: that Claude Desktop itself accepts a landed profile; that
   takes opening one, which only the owner does.
 
+### One sign-in for desktop and CLI: `server/src/core/desktop-cli-feed.ts` (owner, 2026-10-01)
+
+"If I log into desktop, can it auto-log into CLI? Or if I log into CLI, can it auto-log into the
+desktop? ... to save me from having to do both individually."
+
+- Desktop to CLI: yes. A desktop token cache holds a grant with the Claude Code scopes
+  (`user:inference user:file_upload user:profile user:sessions:claude_code`) whose access token is
+  good for weeks (checked on real logins by field names and lifetimes only). A `.credentials.json`
+  made from it (access token, expiry, scopes, plan) passed `claude auth status` and answered
+  `/usage` from Anthropic, run against a scratch config dir.
+- CLI to desktop: no. A desktop sign-in also needs the claude.ai browser cookie and grants under
+  the desktop's own client, which a CLI login never has.
+- The rule: a CLI instance LINKED to a desktop instance ("Add a CLI login…" in the desktop row's
+  menu, `linkCliInstanceToDesktop`) with no login of its own takes the desktop's: at once when
+  linked (the route answers `signedInFromDesktop` and the menu skips the sign-in terminal), and
+  every minute after (`startDesktopCliFeed`), so a renewed desktop grant follows. A credential with
+  a refresh token is a CLI sign-in of its own and is never touched.
+- No refresh token is copied: the desktop app owns it, and a CLI refreshing with it would rotate it
+  and sign the desktop out. So the fed login lasts as long as the grant; a desktop instance left
+  closed past that leaves its CLI login expired until it is opened once.
+- A Log out of a fed CLI instance cuts the link (`logoutCliInstance`), so it stays out.
+- A fed login never goes to the login sync store (it has no refresh token); the desktop login
+  syncs, and each PC feeds its own CLI instance. The sync dialog says so on that row.
+- CliMayte sees a fed instance as any signed-in CLI account.
+
 ## Routes: `server/src/routes/climayte.ts`
 
 - `GET /api/corch/workers?group=&id=&ids=&active=1&limit=&brief=1&wait=` → `climayteList` (`wait`

@@ -619,6 +619,12 @@ async function onSignInCli(inst: CMInstance) {
       toast.error(linked?.message ?? t('instances.toastCliCreateFailed'))
       return
     }
+    // Signed in from this desktop instance's own login (server core/desktop-cli-feed.ts): no
+    // terminal, no second sign-in.
+    if (linked.data?.signedInFromDesktop) {
+      toast.success(t('instances.toastCliSignedInFromDesktop'))
+      return
+    }
     const result = await loginCli(id)
     if (result?.ok) toast.success(t('instances.toastCliLoginOpened'))
     else toast.error(result?.message ?? t('instances.toastCliLoginFailed'))

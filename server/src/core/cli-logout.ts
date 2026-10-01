@@ -12,10 +12,14 @@
 //
 // ⛔ IT IS NOT A DELETE. Transcripts, settings, memory and the folder stay; this only forgets who
 // was signed in.
+//
+// A login the instance took from its linked desktop instance (desktop-cli-feed.ts) is logged out by
+// cutting that link as well: the feed would write the login straight back otherwise.
 import { existsSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { readLiveRegistry } from '../live-registry'
-import { getCliInstance } from './cli-instances'
+import { getCliInstance, linkCliInstanceToDesktop } from './cli-instances'
+import { hasOwnCliLogin } from './desktop-cli-feed'
 import type { CMActionResult } from './shared'
 
 /** Remove the stored login from a CLI instance. Never throws. */
@@ -35,6 +39,8 @@ export function logoutCliInstance(id: string): CMActionResult {
     }
   }
   const credentials = path.join(dir, '.credentials.json')
+  const fed = !!instance.associatedDesktopDir && !hasOwnCliLogin(dir)
+  if (fed) linkCliInstanceToDesktop(id, null, null)
   if (!existsSync(credentials))
     return {
       ok: true,

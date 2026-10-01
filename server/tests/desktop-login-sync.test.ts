@@ -14,8 +14,14 @@
 import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import {
+  createCliInstance,
+  deleteCliInstance,
+  getCliInstance,
+  linkCliInstanceToDesktop,
+} from '../src/core/cli-instances'
 import {
   configureLoginSync,
   disconnectLoginSync,
@@ -25,6 +31,7 @@ import {
   sealLogin,
   setLoginSyncExcluded,
 } from '../src/core/cli-login-sync'
+import { logoutCliInstance } from '../src/core/cli-logout'
 import {
   decryptSafeStorage,
   decryptV10Gcm,
@@ -32,6 +39,7 @@ import {
   encryptV10Gcm,
 } from '../src/core/crypto'
 import { ensureWindowsMasterKey } from '../src/core/crypto/keys.win'
+import { feedCliFromDesktop, feedLinkedCliLogins } from '../src/core/desktop-cli-feed'
 import {
   listDesktopProfiles,
   type PortableDesktopLogin,
@@ -253,4 +261,70 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       for (const dir of made) rmSync(dir, { recursive: true, force: true })
     }
   }, 120_000)
+
+  test('a linked CLI instance takes its desktop login, a CLI sign-in of its own is never touched, and a logout cuts the link', async () => {
+    const dir = await profile('feeds', randomUUID(), 1000, 'sk')
+    const made = createCliInstance('fed (CLI)')
+    const id = (made.data as { id: string }).id
+    const cliDir = getCliInstance(id)!.configDir
+    const far = Date.now() + 30 * 86_400_000
+    /** The desktop app's token cache: its Claude Code grant, and one a CLI cannot use. */
+    const desktopHas = async (accessToken: string, expiresAt: number) =>
+      writeFileSync(
+        join(dir, 'config.json'),
+        JSON.stringify({
+          lastKnownAccountUuid: randomUUID(),
+          'oauth:tokenCacheV2': await encryptSafeStorage(
+            JSON.stringify({
+              'c:o:https://api.anthropic.com:user:profile': { token: 'profile-only', expiresAt },
+              'c:o:https://api.anthropic.com:user:inference user:file_upload user:profile user:sessions:claude_code':
+                {
+                  token: accessToken,
+                  refreshToken: 'the-desktop-keeps-this',
+                  expiresAt,
+                  subscriptionType: 'max',
+                  rateLimitTier: 'tier',
+                },
+            }),
+            dir,
+          ),
+        }),
+      )
+    const login = () =>
+      JSON.parse(readFileSync(join(cliDir, '.credentials.json'), 'utf8')).claudeAiOauth
+    try {
+      await desktopHas('desk-1', far)
+      linkCliInstanceToDesktop(id, dir, 'feeds')
+      expect(await feedLinkedCliLogins()).toBe(1)
+      // The Claude Code grant, and no refresh token: that one stays the desktop app's.
+      expect(login()).toEqual({
+        accessToken: 'desk-1',
+        expiresAt: far,
+        scopes: ['user:inference', 'user:file_upload', 'user:profile', 'user:sessions:claude_code'],
+        subscriptionType: 'max',
+        rateLimitTier: 'tier',
+      })
+      // The desktop app renewed its grant: the CLI login follows.
+      await desktopHas('desk-2', far + 1000)
+      await feedLinkedCliLogins()
+      expect(login().accessToken).toBe('desk-2')
+      // Logged out: the link goes with it, so the feed does not sign it back in.
+      expect(logoutCliInstance(id).ok).toBe(true)
+      expect(getCliInstance(id)?.associatedDesktopDir ?? null).toBeNull()
+      expect(await feedLinkedCliLogins()).toBe(0)
+      // A CLI sign-in of its own (it can refresh itself) is left exactly as it is.
+      linkCliInstanceToDesktop(id, dir, 'feeds')
+      writeFileSync(
+        join(cliDir, '.credentials.json'),
+        JSON.stringify({
+          claudeAiOauth: { accessToken: 'own', refreshToken: 'own-refresh', expiresAt: far },
+        }),
+      )
+      expect(await feedCliFromDesktop(getCliInstance(id)!)).toBe('own-login')
+      expect(login().accessToken).toBe('own')
+    } finally {
+      deleteCliInstance(id, getCliInstance(id)?.name)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

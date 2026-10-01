@@ -9,6 +9,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **One sign-in for desktop and CLI** (`server/src/core/desktop-cli-feed.ts`). "Add a CLI login…"
+  on a signed-in desktop instance now gives the CLI instance that desktop login straight away: no
+  terminal, no second sign-in. A linked CLI instance with no login of its own keeps following the
+  desktop's as it renews; one you signed in separately is left alone, and logging it out unlinks
+  it. It works one way only: a CLI login cannot sign a desktop instance in.
+
 - **Login sync carries desktop logins too** (`server/src/core/desktop-login-sync.ts`). A Claude Desktop
   account signed in on one PC is signed in on the other, in a profile with the same name and
   number, without the browser sign-in there. A newer login is written only while that desktop

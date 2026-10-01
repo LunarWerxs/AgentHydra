@@ -46,6 +46,7 @@ import {
   readPortableLogin,
   readText,
 } from './cli-login-move'
+import { hasOwnCliLogin } from './desktop-cli-feed'
 import {
   asDesktopLogin,
   desktopNotes,
@@ -570,6 +571,9 @@ export function loginSyncStatus(): CliLoginSyncStatus {
     const file = !!readText(credPath(i.configDir))
     // Here but never in the store: say why when this PC's copy cannot go (a hollow login).
     const read = file && !remote ? readPortableLogin(i.id, { whileRunning: true }) : null
+    // A login it takes from its desktop instance (desktop-cli-feed.ts) has no refresh token by
+    // design: the desktop login is the one that syncs.
+    const fed = !!i.associatedDesktopDir && !hasOwnCliLogin(i.configDir)
     logins.push({
       id: i.id,
       kind: 'cli',
@@ -579,7 +583,11 @@ export function loginSyncStatus(): CliLoginSyncStatus {
       inStore: !!remote,
       excluded: excluded.has(i.id),
       inSync: !!remote && c.state[i.id]?.version === remote.version,
-      problem: read && 'error' in read ? read.error : null,
+      problem: !(read && 'error' in read)
+        ? null
+        : fed
+          ? 'Takes its login from its desktop instance, which is the one that syncs.'
+          : read.error,
     })
   }
   // Desktop profiles signed in here, by account (desktop-login-sync.ts).

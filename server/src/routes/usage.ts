@@ -40,6 +40,7 @@ import {
   renameCodexInstance,
 } from '../core/codex-instances'
 import { logoutCodexInstance } from '../core/codex-logout'
+import { feedCliFromDesktop } from '../core/desktop-cli-feed'
 import { resolveInstance, resolveInstanceError } from '../core/instance-ref'
 import { listInstances } from '../core/instances'
 import {
@@ -557,7 +558,19 @@ app.post('/api/cli-instances/:id/link-desktop', async (c) => {
     if (!inst) return c.json({ error: `unknown desktop instance '${desktopDir}'` }, 404)
     desktopLabel = inst.label ?? inst.name
   }
-  return c.json(linkCliInstanceToDesktop(c.req.param('id'), desktopDir, desktopLabel))
+  const result = linkCliInstanceToDesktop(c.req.param('id'), desktopDir, desktopLabel)
+  // Linked to a signed-in desktop instance with no login of its own: it takes the desktop's now
+  // (core/desktop-cli-feed.ts), so the caller need not open a sign-in.
+  const cli = result.ok && desktopDir ? getCliInstance(c.req.param('id')) : null
+  const feed = cli ? await feedCliFromDesktop(cli).catch(() => null) : null
+  return c.json(
+    feed
+      ? {
+          ...result,
+          data: { ...result.data, signedInFromDesktop: feed === 'fed' || feed === 'current' },
+        }
+      : result,
+  )
 })
 
 app.get('/api/cli-instances/:id/usage', async (c) => {
