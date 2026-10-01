@@ -2,8 +2,10 @@
 // The selected Corch task (CorchView.vue's right-hand pane): what it is, where it ran, what it did,
 // and a box to message or continue it.
 //
-// Three parts, so the message box never scrolls away: a header (status, title, Stop, the facts), one
-// scrolling body (accounts tried, result, why it stopped, the event log) and a footer form. The
+// Three parts at their natural height: a header (title, Stop, then one row of stat chips: status,
+// account, working time, tokens with the cost; the rest of the facts in a hover), a body (accounts
+// tried, result, why it stopped, the event log; the long ones scroll in their own box) and a footer
+// form. The panel itself does not scroll (owner, 2026-10-01: fewer, better). The
 // accounts list is the point of Corch made visible: each account the task tried, in order, and why
 // it moved on (limit, signed out, error). The box speaks to what sending actually does
 // (server/src/corch.ts corchSend): on a live task it waits until the task finishes its current work
@@ -11,15 +13,17 @@
 // failed or stopped one it continues the SAME conversation as a new turn. "Stop and send now" is
 // the urgent send: it stops the running work and continues the session with the message first.
 // Stopping keeps the waiting messages (field note 11); they go first when the task continues.
-import { RotateCcw, Send, Square, Zap } from '@lucide/vue'
-import { computed, nextTick, ref, watch } from 'vue'
+import { Info, RotateCcw, Send, Square, Timer, UserRound, Zap } from '@lucide/vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CorchJournal from '@/components/CorchJournal.vue'
 import CorchStatusBadge from '@/components/CorchStatusBadge.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CorchWorkerView } from '@/lib/api'
 import { cancelCorch, sendCorchWorker } from '@/lib/api'
 import {
@@ -81,6 +85,43 @@ function duration(totalS: number): string {
   return m > 0 ? t('corch.minutes', { m, s }) : t('corch.seconds', { s })
 }
 
+// The details popover (started, turns, model, thinking, group) opens on hover like UsageBadge's,
+// with the same delays so passing over it does not strobe; a click pins it open.
+const OPEN_DELAY_MS = 130
+const CLOSE_DELAY_MS = 220
+const moreOpen = ref(false)
+const morePinned = ref(false)
+let moreTimer: number | null = null
+
+function clearMoreTimer() {
+  if (moreTimer !== null) window.clearTimeout(moreTimer)
+  moreTimer = null
+}
+onUnmounted(clearMoreTimer)
+
+function onMoreEnter() {
+  clearMoreTimer()
+  if (moreOpen.value) return
+  moreTimer = window.setTimeout(() => {
+    moreOpen.value = true
+  }, OPEN_DELAY_MS)
+}
+
+function onMoreLeave() {
+  clearMoreTimer()
+  if (morePinned.value) return
+  moreTimer = window.setTimeout(() => {
+    moreOpen.value = false
+  }, CLOSE_DELAY_MS)
+}
+
+/** Click, Escape and outside-click; only a click arrives with `v` true (hover sets `moreOpen`). */
+function onMoreOpenChange(v: boolean) {
+  clearMoreTimer()
+  moreOpen.value = v
+  morePinned.value = v
+}
+
 function onEventsScroll() {
   const el = eventsEl.value
   if (el) stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 24
@@ -91,6 +132,7 @@ watch(
   () => {
     followUp.value = ''
     stickToBottom.value = true
+    onMoreOpenChange(false)
   },
 )
 watch(
@@ -140,10 +182,7 @@ async function onStop() {
 </script>
 
 <template>
-  <section
-    class="flex min-w-0 flex-col overflow-hidden rounded-lg border bg-card lg:sticky lg:top-4 lg:max-h-[calc(100dvh-7rem)]"
-    :aria-label="worker?.title"
-  >
+  <section class="flex min-w-0 flex-col overflow-hidden rounded-lg border bg-card" :aria-label="worker?.title">
     <p v-if="!worker" class="px-4 py-12 text-center text-sm text-muted-foreground">
       {{ $t('corch.selectHint') }}
     </p>
@@ -151,7 +190,6 @@ async function onStop() {
       <header class="flex flex-col gap-3 border-b px-4 py-3">
         <div class="flex items-start justify-between gap-3">
           <div class="flex min-w-0 flex-col items-start gap-1.5">
-            <CorchStatusBadge :status="worker.status" />
             <h3 class="line-clamp-2 break-words text-sm font-semibold" :title="worker.title">
               {{ worker.title }}
             </h3>
@@ -170,59 +208,109 @@ async function onStop() {
             <Square /> {{ stopLabel }}
           </Button>
         </div>
-        <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-xs">
-          <dt class="text-muted-foreground">{{ $t('corch.detailAccount') }}</dt>
-          <dd class="truncate" :title="worker.account ?? undefined">
-            {{ worker.account ?? $t('corch.noAccount') }}
-          </dd>
-          <dt class="text-muted-foreground">{{ $t('corch.detailStarted') }}</dt>
-          <dd>
-            <time
-              :datetime="new Date(worker.createdAt).toISOString()"
-              :title="new Date(worker.createdAt).toLocaleString()"
-            >{{ formatAgo(now, worker.createdAt) }}</time>
-          </dd>
-          <dt class="text-muted-foreground">{{ $t('corch.detailRan') }}</dt>
-          <dd class="tabular-nums">{{ duration(worker.ranS) }}</dd>
-          <dt class="text-muted-foreground">{{ $t('corch.detailCost') }}</dt>
-          <dd class="tabular-nums" :title="$t('corch.detailCostHint')">${{ worker.costUsd.toFixed(2) }}</dd>
-          <template v-if="worker.tokens">
-            <dt class="text-muted-foreground">{{ $t('corch.detailTokens') }}</dt>
-            <dd
-              class="tabular-nums"
-              :title="
-                $t('corch.tokensBreakdown', {
-                  input: formatTokens(worker.tokens.input),
-                  output: formatTokens(worker.tokens.output),
-                  cacheRead: formatTokens(worker.tokens.cacheRead),
-                  cacheWrite: formatTokens(worker.tokens.cacheWrite),
-                })
-              "
+        <!-- The stats row: what it is doing, where, for how long, and what it has cost. Everything
+             else is one hover away: the token split on the tokens, the rest behind the info button. -->
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+            <CorchStatusBadge :status="worker.status" />
+            <Badge
+              variant="outline"
+              class="h-5 max-w-[14rem] text-2xs"
+              :title="`${$t('corch.detailAccount')}: ${worker.account ?? $t('corch.noAccount')}`"
             >
-              {{ formatTokens(tokenTotal(worker.tokens)) }}
-            </dd>
-          </template>
-          <dt class="text-muted-foreground">{{ $t('corch.detailTurns') }}</dt>
-          <dd class="tabular-nums">{{ worker.turns }}</dd>
-          <dt class="text-muted-foreground">{{ $t('corch.detailModel') }}</dt>
-          <dd
-            :class="run?.differs ? 'text-amber-600 dark:text-amber-400' : ''"
-            :title="[worker.model, worker.reportedModel].filter(Boolean).join(' / ')"
-          >
-            {{
-              run?.differs
-                ? $t('corch.modelAskedRan', { asked: run.model, ran: run.ran })
-                : (run?.ran ?? run?.model ?? $t('corch.runDefault'))
-            }}
-          </dd>
-          <dt class="text-muted-foreground">{{ $t('corch.detailEffort') }}</dt>
-          <dd>{{ worker.effort ?? $t('corch.runDefault') }}</dd>
-          <dt class="text-muted-foreground">{{ $t('corch.detailGroup') }}</dt>
-          <dd class="mono truncate" :title="worker.group">{{ worker.group }}</dd>
-        </dl>
+              <UserRound aria-hidden="true" />
+              <span class="truncate">{{ worker.account ?? $t('corch.noAccount') }}</span>
+            </Badge>
+            <Badge variant="muted" class="h-5 text-2xs tabular-nums" :title="$t('corch.detailRan')">
+              <Timer aria-hidden="true" />
+              {{ duration(worker.ranS) }}
+            </Badge>
+          </div>
+          <div class="ms-auto flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <button
+                  type="button"
+                  class="flex items-baseline gap-1.5 rounded-md px-1.5 py-0.5 tabular-nums transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <template v-if="worker.tokens">
+                    <span class="text-base font-semibold leading-none">{{ formatTokens(tokenTotal(worker.tokens)) }}</span>
+                    <span class="text-xs text-muted-foreground">{{ $t('corch.offloadedTokens') }}</span>
+                    <span aria-hidden="true" class="text-xs text-muted-foreground">·</span>
+                    <span class="text-xs text-muted-foreground">${{ worker.costUsd.toFixed(2) }}</span>
+                  </template>
+                  <span v-else class="text-base font-semibold leading-none">${{ worker.costUsd.toFixed(2) }}</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" align="end" class="flex-col items-start gap-0.5">
+                <span v-if="worker.tokens">
+                  {{
+                    $t('corch.tokensBreakdown', {
+                      input: formatTokens(worker.tokens.input),
+                      output: formatTokens(worker.tokens.output),
+                      cacheRead: formatTokens(worker.tokens.cacheRead),
+                      cacheWrite: formatTokens(worker.tokens.cacheWrite),
+                    })
+                  }}
+                </span>
+                <span>{{ $t('corch.detailCost') }} ${{ worker.costUsd.toFixed(2) }}: {{ $t('corch.detailCostHint') }}</span>
+              </TooltipContent>
+            </Tooltip>
+            <Popover :open="moreOpen" @update:open="onMoreOpenChange">
+              <PopoverTrigger as-child>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  :class="run?.differs ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'"
+                  :aria-label="$t('corch.detailMore')"
+                  @mouseenter="onMoreEnter"
+                  @mouseleave="onMoreLeave"
+                >
+                  <Info />
+                </Button>
+              </PopoverTrigger>
+              <!-- Opens on hover, so it must not take the caret (same as UsageBadge's popover). -->
+              <PopoverContent
+                align="end"
+                class="w-80"
+                :trap-focus="false"
+                @open-auto-focus.prevent
+                @mouseenter="onMoreEnter"
+                @mouseleave="onMoreLeave"
+              >
+                <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1">
+                  <dt class="text-muted-foreground">{{ $t('corch.detailStarted') }}</dt>
+                  <dd>
+                    <time
+                      :datetime="new Date(worker.createdAt).toISOString()"
+                      :title="new Date(worker.createdAt).toLocaleString()"
+                    >{{ formatAgo(now, worker.createdAt) }}</time>
+                  </dd>
+                  <dt class="text-muted-foreground">{{ $t('corch.detailTurns') }}</dt>
+                  <dd class="tabular-nums">{{ worker.turns }}</dd>
+                  <dt class="text-muted-foreground">{{ $t('corch.detailModel') }}</dt>
+                  <dd
+                    :class="run?.differs ? 'text-amber-600 dark:text-amber-400' : ''"
+                    :title="[worker.model, worker.reportedModel].filter(Boolean).join(' / ')"
+                  >
+                    {{
+                      run?.differs
+                        ? $t('corch.modelAskedRan', { asked: run.model, ran: run.ran })
+                        : (run?.ran ?? run?.model ?? $t('corch.runDefault'))
+                    }}
+                  </dd>
+                  <dt class="text-muted-foreground">{{ $t('corch.detailEffort') }}</dt>
+                  <dd>{{ worker.effort ?? $t('corch.runDefault') }}</dd>
+                  <dt class="text-muted-foreground">{{ $t('corch.detailGroup') }}</dt>
+                  <dd class="mono break-all">{{ worker.group }}</dd>
+                </dl>
+              </PopoverContent>
+            </Popover>
+          </div>
+        </div>
       </header>
 
-      <div class="scroll-slim flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-4 py-3">
+      <div class="flex flex-col gap-4 px-4 py-3">
         <div v-if="worker.attempts.length" class="flex flex-col gap-1.5">
           <h4 class="flex items-baseline justify-between gap-2 text-xs font-medium">
             {{ $t('corch.attempts') }}
@@ -257,15 +345,20 @@ async function onStop() {
 
         <div v-if="worker.result" class="flex flex-col gap-1.5">
           <h4 class="text-xs font-medium">{{ $t('corch.result') }}</h4>
-          <template v-if="turnResults.length > 1">
+          <!-- One bounded box for the whole report, every turn in it, so the panel never grows a
+               scroll of its own and no box scrolls inside another. -->
+          <div
+            v-if="turnResults.length > 1"
+            class="scroll-slim flex max-h-96 flex-col gap-3 overflow-auto rounded-md bg-muted p-2.5"
+          >
             <div v-for="(text, i) in turnResults" :key="i" class="flex flex-col gap-1">
               <span class="text-[11px] text-muted-foreground">
                 {{ $t('corch.resultTurn', { n: i + 1, total: turnResults.length }) }}
               </span>
-              <pre class="mono scroll-slim max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2.5 text-xs">{{ text }}</pre>
+              <pre class="mono whitespace-pre-wrap break-words text-xs">{{ text }}</pre>
             </div>
-          </template>
-          <pre v-else class="mono scroll-slim max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2.5 text-xs">{{ worker.result }}</pre>
+          </div>
+          <pre v-else class="mono scroll-slim max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2.5 text-xs">{{ worker.result }}</pre>
         </div>
 
         <!-- A stopped or waiting task keeps the reason it could not go on in `error`. Only a real

@@ -951,7 +951,11 @@ export interface CorchTokens {
 /** What Corch has offloaded over every task on record: the Corch view's counter. */
 export interface CorchTotals {
   tasks: number
+  /** Runs: every start of the CLI (retries, resumes, handoffs included). */
   sessions: number
+  runsByOutcome?: Partial<Record<CorchAttemptOutcome, number>>
+  /** Distinct CLI conversations (a handoff starts one; a resume or a move continues one). */
+  cliSessions?: number
   tokens: CorchTokens
   costUsd: number
 }

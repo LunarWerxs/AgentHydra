@@ -16,6 +16,7 @@ import {
   formatMoney,
   isNoDataSnap,
   isStaleSnap,
+  pctDetail,
   shortDate,
   type UsageScope,
   usageBadgeVariant,
@@ -227,27 +228,27 @@ function onRootOpenChange(v: boolean): void {
         </p>
         <div v-if="snapshot?.session" class="flex items-center justify-between gap-2">
           <span class="text-muted-foreground">{{ $t('instances.usageSession') }}</span>
-          <span class="font-medium">{{ snapshot.session.pct }}% · {{ snapshot.session.resets }}</span>
+          <span class="font-medium">{{ pctDetail(snapshot.session.pct) }} · {{ snapshot.session.resets }}</span>
         </div>
         <div v-if="snapshot?.weekAll" class="flex items-center justify-between gap-2">
           <span class="text-muted-foreground">{{ $t('instances.usageWeekAll') }}</span>
-          <span class="font-medium">{{ snapshot.weekAll.pct }}% · {{ snapshot.weekAll.resets }}</span>
+          <span class="font-medium">{{ pctDetail(snapshot.weekAll.pct) }} · {{ snapshot.weekAll.resets }}</span>
         </div>
         <div v-if="snapshot?.weekModel" class="flex items-center justify-between gap-2">
           <span class="text-muted-foreground">
             {{ $t('instances.usageWeekModel', { model: snapshot.weekModel.label }) }}
           </span>
-          <span class="font-medium">{{ snapshot.weekModel.pct }}% · {{ snapshot.weekModel.resets }}</span>
+          <span class="font-medium">{{ pctDetail(snapshot.weekModel.pct) }} · {{ snapshot.weekModel.resets }}</span>
         </div>
         <div v-for="limit in snapshot?.additionalLimits" :key="limit.label" class="border-t border-border/60 pt-1.5">
           <p class="font-medium">{{ limit.label }}</p>
           <div v-if="limit.session" class="flex justify-between gap-2">
             <span class="text-muted-foreground">{{ $t('instances.usageSession') }}</span>
-            <span>{{ limit.session.pct }}% · {{ limit.session.resets }}</span>
+            <span>{{ pctDetail(limit.session.pct) }} · {{ limit.session.resets }}</span>
           </div>
           <div v-if="limit.weekAll" class="flex justify-between gap-2">
             <span class="text-muted-foreground">{{ $t('instances.usageWeekAll') }}</span>
-            <span>{{ limit.weekAll.pct }}% · {{ limit.weekAll.resets }}</span>
+            <span>{{ pctDetail(limit.weekAll.pct) }} · {{ limit.weekAll.resets }}</span>
           </div>
         </div>
         <!-- Live countdowns, the thing the reset strings above can't tell you at a glance:

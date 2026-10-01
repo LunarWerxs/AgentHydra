@@ -5,8 +5,10 @@
 // and again when the page is shown or the window regains focus.
 //
 // Layout (2026-09-30 review, three lenses agreeing): the header comes first and says what Corch is;
-// the list is one bordered panel with the hand-off as a subheader; the detail pane is sticky so a row
-// low in a long list does not open its detail off screen. It sits on the CLI tab under the CLI
+// the list is one bordered panel with the hand-off as a subheader. The list has a fixed height of
+// about 24 rows and scrolls inside itself, so a row low in a long list still opens its detail beside
+// it; the detail lays out at its natural height and only its long parts (event log, result) scroll,
+// each in its own box (owner, 2026-10-01). It sits on the CLI tab under the CLI
 // accounts table (CliView.vue), whose Quick add is where an account is added, so it has none of its
 // own.
 import { CloudOff, Network, RefreshCw } from '@lucide/vue'
@@ -20,6 +22,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import type { CorchWorkerView } from '@/lib/api'
 import { type CorchTotals, getCorchTotals, getCorchWorker, listCorchWorkers } from '@/lib/api'
 import {
+  CORCH_OUTCOME,
   corchQueuedNote,
   corchRunLabel,
   firstLine,
@@ -76,9 +79,23 @@ async function loadDetail() {
 
 /** What Corch has offloaded so far (owner, 2026-09-30: a running count of sessions and tokens). */
 const totals = ref<CorchTotals | null>(null)
+/** "39 done, 23 handed off, ...": a run is any start of the CLI, so the count alone read as that
+ *  many sessions (owner, 2026-09-30, about "99 CLI sessions"). */
+const runsLine = computed(() => {
+  const by = totals.value?.runsByOutcome
+  if (!by) return ''
+  const list = (Object.keys(CORCH_OUTCOME) as (keyof typeof CORCH_OUTCOME)[])
+    .filter((k) => (by[k] ?? 0) > 0)
+    .sort((a, b) => (by[b] ?? 0) - (by[a] ?? 0))
+    .map((k) => `${by[k]} ${t(CORCH_OUTCOME[k].label).toLowerCase()}`)
+    .join(', ')
+  return t('corch.offloadedRuns', { list })
+})
 const totalsHint = computed(() =>
   totals.value
     ? t('corch.offloadedHint', {
+        runs: runsLine.value,
+        sessions: totals.value.cliSessions ?? totals.value.sessions,
         input: formatTokens(totals.value.tokens.input),
         output: formatTokens(totals.value.tokens.output),
         cacheRead: formatTokens(totals.value.tokens.cacheRead),
@@ -232,6 +249,7 @@ onUnmounted(() => {
           <span>
             <span class="font-semibold tabular-nums">{{ formatTokens(tokenTotal(totals.tokens)) }}</span>
             {{ $t('corch.offloadedTokens') }}
+            <span class="tabular-nums text-muted-foreground">(${{ totals.costUsd.toFixed(2) }})</span>
           </span>
         </p>
       </div>
@@ -283,7 +301,8 @@ onUnmounted(() => {
     </div>
 
     <div v-else class="grid items-start gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]">
-      <div class="divide-y overflow-hidden rounded-lg border bg-card">
+      <!-- 24 task rows: a row is 2rem (py-1.5 around a text-sm line) plus its 1px divider. -->
+      <div class="scroll-slim max-h-[49.5rem] divide-y overflow-y-auto rounded-lg border bg-card">
         <section v-for="g in groups" :key="g.group" :aria-label="g.group">
           <h3
             class="flex items-center justify-between gap-2 border-b bg-muted/40 px-3 py-1.5 text-2xs font-medium text-muted-foreground"

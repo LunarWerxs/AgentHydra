@@ -83,7 +83,18 @@ export function usageCellLabel(
   if (scope === 'session' && snap.sessionLimitUnavailable) return 'N/A'
   const pct = usagePctFor(snap, scope, now)
   if (pct == null) return '—'
-  return withScope ? `${pct}% ${scope === 'session' ? '5h' : 'wk'}` : `${pct}%`
+  const shown = pctText(pct)
+  return withScope ? `${shown} ${scope === 'session' ? '5h' : 'wk'}` : shown
+}
+
+/** "42%", or "Limit" at or past 100%. Anthropic reports a window over 100% once it is spent
+ *  (measured 2026-09-30: 101-106% on four Pro accounts) because requests already running when the
+ *  limit hit still count; "104%" read as a bug (owner, 2026-09-30). `pctDetail` keeps the number. */
+export function pctText(pct: number): string {
+  return pct >= 100 ? 'Limit' : `${pct}%`
+}
+export function pctDetail(pct: number): string {
+  return pct >= 100 ? `Limit reached (${pct}% used)` : `${pct}%`
 }
 
 /** "3m ago" style relative time for a snapshot's `capturedAt`, English fallback (see
