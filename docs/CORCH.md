@@ -158,6 +158,13 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   hover. Run 1 measured: 2,105 requests averaging 160k tokens of context, so 324M of 337M tokens
   were cache reads (35% of the cost); cache writes were 3% of the tokens and 45% of the cost
   (1-hour writes at 2x input), output 19%.
+- What fills a Pro account's 5-hour meter is not the token count. Fitted on run 1 (77 intervals
+  over 7 accounts: the five_hour utilization each request streams, against the account's requests
+  in between): output, thinking included, about 54%; cache writes about 32%; cache reads about 14%
+  (per 1M tokens: read 0.4%, write 26%, output 272% of a window; the raw token count predicts the
+  meter with R^2 0.02). So Corch does not turn on the CLI's compaction
+  (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`): replayed on run 1, a 200k window cut tokens 26% but its
+  summaries and re-written cache would have spent about two more Pro windows.
 - `corchRemove(ids)` (`POST /api/corch/remove`) drops finished tasks; their logs and transcripts
   move to `corch/archive/<stamp>/<id>/`, never deleted. 121 test tasks were archived this way.
 - `corchLiveReadings()` hands each account's newest streamed reading to `usage-live.ts`, which lays
@@ -296,6 +303,14 @@ CLAUDE.md, skills and hooks) is not what it reads (field notes 5 and 9). Before 
   `<account>/.agenthydra-owner-sync.json`; an unchanged one costs a stat and a readdir.
 - Hooks and `settings.json` are NOT carried: the owner's desktop-only hooks can block a headless
   worker. Tests turn it on with `setCorchOwnerDir(dir | null)`; under `NODE_ENV=test` it is off.
+- **The lean worker profile** (`8b3add7`, owner's yes 2026-09-30): when `~/.claude/corch-worker/`
+  holds a `CLAUDE.md`, workers get that instead of the full one, and when it holds `skills.txt`
+  (one skill name per line, `#` comments) only those skills are linked; the rest are unlinked at
+  the next launch. The owner's profile lives in the claude-memory repo (`home/corch-worker/`,
+  installed by `install.mjs`): 3 KB of rules and 12 engineering skills, against 44 KB and 84. Run 1
+  measured what the full set cost: a fresh session's first request grew 57k -> 90k tokens
+  (Connections) when it arrived, and that prefix is re-read on every request and written to cache
+  on every fresh session and move.
 
 ### Journal (`server/src/corch-journal.ts`)
 

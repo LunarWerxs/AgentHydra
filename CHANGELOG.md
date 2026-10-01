@@ -74,6 +74,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **Corch workers carry a short rule set** (`server/src/corch-owner-sync.ts`). When
+  `~/.claude/corch-worker/` holds a `CLAUDE.md` and a `skills.txt`, workers get those instead of
+  your full instructions and every skill: about 3 KB and 12 skills instead of 44 KB and 84, which
+  added 24-33k tokens to every step a worker took.
+
 - **Every account row looks the same** (`web/src/components/InstanceGlyph.vue`, `InstanceAccountBadge.vue`). Codex and
   DeepSeek rows now show the instance's own icon beside its number and the same email-handle pill as a Claude row,
   instead of a full name over an email or a folder path under the name (DeepSeek's folder and chat count moved
