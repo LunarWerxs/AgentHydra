@@ -250,8 +250,11 @@ defineExpose({ openCreate, refresh })
         $t('dshInstances.planApiKey')
       }}</span>
     </TableCell>
-    <!-- 9 last launched: the list carries no launch time for a home. -->
-    <TableCell><span class="text-xs text-muted-foreground">—</span></TableCell>
+    <!-- 9 last running: "Now" while its server runs; the list keeps no record of when it last did. -->
+    <TableCell>
+      <span v-if="inst.running" class="text-xs text-success">{{ $t('instances.lastRunningNow') }}</span>
+      <span v-else class="text-xs text-muted-foreground">—</span>
+    </TableCell>
     <!-- 10 actions -->
     <TableCell class="text-end">
       <div class="flex items-center justify-end gap-1">

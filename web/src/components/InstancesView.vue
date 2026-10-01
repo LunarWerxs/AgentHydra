@@ -293,23 +293,29 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
     { key: 'plan', accessor: (i: CMInstance) => i.account?.planLabel ?? undefined },
     // By the instant, not the "3h ago" text, so the order is true across units.
     {
-      key: 'lastLaunched',
-      accessor: (i: CMInstance) => (i.lastLaunchedAt ? Date.parse(i.lastLaunchedAt) : undefined),
+      key: 'lastRunning',
+      accessor: (i: CMInstance) =>
+        i.isRunning
+          ? Number.MAX_SAFE_INTEGER
+          : i.lastRunningAt
+            ? Date.parse(i.lastRunningAt)
+            : undefined,
     },
   ],
   { key: desktopSortKey, direction: desktopSortDirection },
   { rowKey: (i: CMInstance) => i.dir },
 )
 
-/** "3h ago" for the last launch on this PC. Reads the shared clock so the cell ticks with the tab. */
-function lastLaunchedLabel(inst: CMInstance): string {
+/** "Now" while it runs, else "3h ago" since it was last seen running on this PC (owner,
+ *  2026-09-30: last running, not last launched). Reads the shared clock so the cell ticks. */
+function lastRunningLabel(inst: CMInstance): string {
   void now.value
-  return timeAgo(inst.lastLaunchedAt)
+  return inst.isRunning ? t('instances.lastRunningNow') : timeAgo(inst.lastRunningAt)
 }
 /** The exact local time behind the relative label, for the hover. */
-function lastLaunchedExact(inst: CMInstance): string | undefined {
-  if (!inst.lastLaunchedAt) return undefined
-  const at = Date.parse(inst.lastLaunchedAt)
+function lastRunningExact(inst: CMInstance): string | undefined {
+  if (!inst.lastRunningAt) return undefined
+  const at = Date.parse(inst.lastRunningAt)
   return Number.isFinite(at) ? new Date(at).toLocaleString() : undefined
 }
 
@@ -1340,12 +1346,12 @@ onUnmounted(() => {
             <!-- After Plan, before Actions, in both column modes: when an account was last opened
                  is as true in usage mode as in process mode, and placing it right of every other
                  column keeps the fixed-width quota columns aligned with the tables below. -->
-            <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('lastLaunched')">
+            <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('lastRunning')">
               <span class="inline-flex items-center gap-0.5">
-                {{ $t('instances.colLastLaunched') }}
-                <InfoHint :text="$t('instances.colLastLaunchedHint')" @click.stop />
-                <ArrowUp v-if="indicatorFor('lastLaunched') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('lastLaunched') === 'desc'" class="size-3" />
+                {{ $t('instances.colLastRunning') }}
+                <InfoHint :text="$t('instances.colLastRunningHint')" @click.stop />
+                <ArrowUp v-if="indicatorFor('lastRunning') === 'asc'" class="size-3" />
+                <ArrowDown v-else-if="indicatorFor('lastRunning') === 'desc'" class="size-3" />
               </span>
             </TableHead>
             <TableHead class="text-end">{{ $t('instances.colActions') }}</TableHead>
@@ -1667,11 +1673,12 @@ onUnmounted(() => {
             </TableCell>
             <TableCell>
               <span
-                v-if="inst.lastLaunchedAt"
+                v-if="inst.isRunning || inst.lastRunningAt"
                 class="text-xs tabular-nums"
-                :title="tooltipsEnabled ? lastLaunchedExact(inst) : undefined"
+                :class="inst.isRunning ? 'text-success' : ''"
+                :title="tooltipsEnabled ? lastRunningExact(inst) : undefined"
               >
-                {{ lastLaunchedLabel(inst) }}
+                {{ lastRunningLabel(inst) }}
               </span>
               <span v-else class="text-xs text-muted-foreground">—</span>
             </TableCell>

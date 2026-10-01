@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import { corchLiveReadings } from '../corch'
 import {
   associateCliInstance,
   createCliInstance,
@@ -52,6 +53,7 @@ import {
 } from '../usage'
 import { budgetSummary, buildUsageBudget } from '../usage-budget'
 import { dropCachedUsage } from '../usage-cache'
+import { withLiveReading } from '../usage-live'
 import { lastAutoRefreshAt, sweepUsage } from '../usage-refresh'
 import {
   checkUsageForAccount,
@@ -181,9 +183,16 @@ app.get('/api/usage', async (c) => {
 })
 
 // Whole usage cache (bulk-hydrate the Instances table on load without checking anything).
-app.get('/api/usage/cache', (c) =>
-  c.json({ cache: allCachedUsage(), lastAutoRefreshAt: lastAutoRefreshAt() }),
-)
+// Corch's live readings are laid over the CLI accounts' cached snapshots: the cache is up to 30
+// minutes old, a running worker's reading is seconds old (usage-live.ts).
+app.get('/api/usage/cache', (c) => {
+  const cache = { ...allCachedUsage() }
+  for (const [id, live] of corchLiveReadings()) {
+    const fresh = withLiveReading(cache[cliKey(id)] ?? null, live)
+    if (fresh) cache[cliKey(id)] = fresh
+  }
+  return c.json({ cache, lastAutoRefreshAt: lastAutoRefreshAt() })
+})
 
 // Every instance's usage in ONE call: the whole-fleet survey. This is the endpoint an AI agent wants
 // ("which of my accounts has headroom?") and what the auto-refresh sweep exposes on demand. Each row
@@ -337,8 +346,13 @@ app.get('/api/cli-instances', (c) => {
   )
   // How many Claude sessions run on each account right now (the CLI's own live registry, Corch's
   // workers included): the CLI table's per-account count (owner, 2026-09-30).
+  const live = corchLiveReadings()
   return c.json(
-    listCliInstances().map((i) => ({ ...i, liveSessions: readLiveRegistry(i.configDir).length })),
+    listCliInstances().map((i) => ({
+      ...i,
+      liveSessions: readLiveRegistry(i.configDir).length,
+      lastUsageCheck: withLiveReading(i.lastUsageCheck, live.get(i.id), i.name),
+    })),
   )
 })
 app.post('/api/cli-instances', async (c) => {

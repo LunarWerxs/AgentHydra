@@ -95,13 +95,40 @@ export function recordInstanceLaunches(
   return mine
 }
 
+/** When each profile was last SEEN RUNNING on this PC, by the list's process scan: the Instances
+ *  table's "Last running" (owner, 2026-09-30). Kept in the same file under `<host>#running`, and
+ *  stamped at most once a minute per profile, so the list's refresh timer stays nearly write-free. */
+const runningKey = (): string => `${thisMachine()}#running`
+const RUNNING_STAMP_MS = 60_000
+
+export function recordInstanceRunning(
+  dirs: readonly string[],
+  now = Date.now(),
+): Record<string, number> {
+  const data = readFile()
+  const mine = { ...(data[runningKey()] ?? {}) }
+  let changed = false
+  for (const dir of dirs) {
+    const key = normalizeInstancePath(dir)
+    if (now - (mine[key] ?? 0) < RUNNING_STAMP_MS) continue
+    mine[key] = now
+    changed = true
+  }
+  if (changed) writeFile({ ...data, [runningKey()]: mine })
+  return mine
+}
+
 /** Forget a deleted profile on this machine, so a folder re-created later starts with no history. */
 export function deleteInstanceLaunch(dir: string): void {
   const data = readFile()
-  const host = thisMachine()
   const key = normalizeInstancePath(dir)
-  if (!data[host] || !(key in data[host])) return
-  const mine = { ...data[host] }
-  delete mine[key]
-  writeFile({ ...data, [host]: mine })
+  let changed = false
+  for (const host of [thisMachine(), runningKey()]) {
+    if (!data[host] || !(key in data[host])) continue
+    const mine = { ...data[host] }
+    delete mine[key]
+    data[host] = mine
+    changed = true
+  }
+  if (changed) writeFile(data)
 }

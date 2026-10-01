@@ -227,6 +227,9 @@ export interface CMInstance {
    *  anywhere else the process scan saw it running; null = never seen launched on this machine.
    *  Survives the instance being closed, unlike `startTime`. See core/instance-launches.ts. */
   lastLaunchedAt: string | null
+  /** When this profile was last seen running on this PC (ISO); null while it runs (it is running
+   *  now) or when it has never been seen running here. See core/instance-launches.ts. */
+  lastRunningAt: string | null
   sizeBytes: number | null
   /** Live resident memory (summed working set across the instance's whole process tree —
    *  Electron main + renderer/gpu/utility children). Null when the instance isn't running or

@@ -33,7 +33,7 @@ import { repointClaudeStartShortcut } from '../claude-start-shortcut'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { pathKey } from '../path-key'
 import { detectDesktopInstall } from './desktop-install'
-import { recordInstanceLaunches } from './instance-launches'
+import { recordInstanceLaunches, recordInstanceRunning } from './instance-launches'
 import { readInstanceMetaMap } from './instance-meta'
 import { instanceNumbers, instanceRef } from './instance-numbers'
 import { readLoginUuid } from './login-state'
@@ -223,6 +223,9 @@ export async function listInstances(options: ListInstancesOptions = {}): Promise
       .filter((launch) => Number.isFinite(launch.at)),
   )
 
+  // When each profile was last seen running (the "Last running" column), from the same scan.
+  const lastRunning = recordInstanceRunning([...runningByDir.keys()])
+
   // …and one read of the number registry for the WHOLE fleet, which also assigns a number to any
   // instance seen for the first time. Bulk rather than per-row: this list runs on a refresh timer.
   const numbers = instanceNumbers([...known.values()].map((m) => instanceRef('desktop', m.dir)))
@@ -237,6 +240,7 @@ export async function listInstances(options: ListInstancesOptions = {}): Promise
         metaMap,
         numbers,
         launches,
+        lastRunning,
       }),
     )
   }
@@ -289,9 +293,16 @@ async function buildInstanceRow(
     metaMap: ReturnType<typeof readInstanceMetaMap>
     numbers: Map<string, number>
     launches: Record<string, number>
+    lastRunning: Record<string, number>
   },
 ): Promise<CMInstance> {
-  const { options, running, memoryByDir, metaMap, numbers, launches } = ctx
+  const { options, running, memoryByDir, metaMap, numbers, launches, lastRunning } = ctx
+  // Running now reads as "Now" on screen, so no timestamp is sent for it: one that moved every
+  // minute would redraw the row for nothing. A profile closed before this was tracked falls back to
+  // its last launch, the last moment it is known to have been running.
+  const lastRunningMs = running
+    ? null
+    : Math.max(lastRunning[meta.dir] ?? 0, launches[meta.dir] ?? 0) || null
   let account: CMInstance['account'] = null
   if (options.includeAccount && options.resolveAccount) {
     try {
@@ -313,6 +324,7 @@ async function buildInstanceRow(
     pid: running?.pid ?? null,
     startTime: running?.startTime ?? null,
     lastLaunchedAt: launches[meta.dir] ? new Date(launches[meta.dir]).toISOString() : null,
+    lastRunningAt: lastRunningMs ? new Date(lastRunningMs).toISOString() : null,
     sizeBytes,
     memoryBytes,
     account,

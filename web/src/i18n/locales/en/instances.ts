@@ -39,9 +39,10 @@ export default {
   // time are in the message so they can still be read off the screen and typed.
   toastResetDateCopyFailed: 'Could not reach the clipboard. This limit resets {date}.',
   colPlan: 'Plan',
-  colLastLaunched: 'Last launched',
-  colLastLaunchedHint:
-    'When this profile was last started on this PC: opened from AgentHydra, or on Windows seen starting from anywhere else (Start menu, taskbar, Claude itself). A dash means it has not been seen starting on this machine yet.',
+  colLastRunning: 'Last running',
+  colLastRunningHint:
+    'When this instance was last open on this PC, however it was started. "Now" while it runs; a dash means it has not been seen running on this machine yet.',
+  lastRunningNow: 'Now',
   colActions: 'Actions',
   running: 'Running',
   stopped: 'Stopped',

@@ -178,6 +178,11 @@ const reads = new Map<string, LogRead>()
  *  here). The usage snapshot is refreshed only every 15 minutes; this is seconds old. */
 const liveByAccount = new Map<string, CorchLiveUsage>()
 
+/** A copy of each account's newest live reading, for the usage tables (usage-live.ts). */
+export function corchLiveReadings(): Map<string, CorchLiveUsage> {
+  return new Map(liveByAccount)
+}
+
 /** The owner's rule is never to spend paid extra usage; the `allowExtraUsage` setting (default
  *  false) lifts it: overage is then neither stopped nor walled, and accounts at their caps stay
  *  in the pool behind every account below them. Unreadable counts as false. */

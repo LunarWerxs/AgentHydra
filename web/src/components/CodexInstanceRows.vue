@@ -683,8 +683,13 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
       </Badge>
       <span v-else class="text-xs text-muted-foreground">—</span>
     </TableCell>
-    <!-- 9. Last launched: Codex keeps no launch record. -->
-    <TableCell><span class="text-xs text-muted-foreground">—</span></TableCell>
+    <!-- 9. Last running: "Now" while its desktop runs; Codex keeps no record of when it last did. -->
+    <TableCell>
+      <span v-if="instance.isDesktopRunning" class="text-xs text-success">
+        {{ $t('instances.lastRunningNow') }}
+      </span>
+      <span v-else class="text-xs text-muted-foreground">—</span>
+    </TableCell>
     <!-- 10. Actions -->
     <TableCell>
       <!-- A DISCOVERED row (the default install, or a Codex Desktop running from a profile we
