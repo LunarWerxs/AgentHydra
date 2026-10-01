@@ -64,6 +64,12 @@ mkdirSync(process.env.AGENTHYDRA_DATA_DIR, { recursive: true })
 // explicitly in that child's env; inheriting this value there would silently outrank their HOME.
 process.env.AGENTHYDRA_INSTANCES_ROOT = path.join(scratch, '.claude-instances')
 mkdirSync(process.env.AGENTHYDRA_INSTANCES_ROOT, { recursive: true })
+// And the Claude Code transcript store (~/.claude/projects): left real, any test that reached the
+// transcript index walked the developer's whole store (6 s on the owner's PC, 2026-10-01). The same
+// rule as the instance store: a test that gives a child its own HOME sets this to that home too,
+// or the inherited scratch value outranks it.
+process.env.AGENTHYDRA_CLAUDE_PROJECTS_ROOT = path.join(scratch, '.claude', 'projects')
+mkdirSync(process.env.AGENTHYDRA_CLAUDE_PROJECTS_ROOT, { recursive: true })
 // THE ORCHESTRATOR'S REMOTE GATEWAY (orchestrator/server, a root workspace since 2026-09-03) has
 // its own bunfig preload doing exactly this - but a whole-repo `bun test` from THIS root loads
 // only THIS preload, so its suite ran against the real orchestrator/state/ and left a signing key

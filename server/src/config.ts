@@ -136,8 +136,12 @@ if (
   })
 }
 
-/** Canonical Claude Code CLI transcript store: <home>/.claude/projects/<encoded-cwd>/<session-id>.jsonl */
-export const CLAUDE_PROJECTS_ROOT = join(HOME, '.claude', 'projects')
+/** Canonical Claude Code CLI transcript store: <home>/.claude/projects/<encoded-cwd>/<session-id>.jsonl
+ *  `AGENTHYDRA_CLAUDE_PROJECTS_ROOT` points it elsewhere. The test preload does, so the suite never
+ *  walks a developer's real store (on the owner's PC a first spend report spent 6 s there and timed
+ *  out a 5 s test that CI, with an empty home, passed). */
+export const CLAUDE_PROJECTS_ROOT =
+  appEnv('CLAUDE_PROJECTS_ROOT')?.trim() || join(HOME, '.claude', 'projects')
 
 /**
  * The DEFAULT Codex install's home. Active rollouts live in date folders under `sessions/`,

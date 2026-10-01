@@ -10,22 +10,13 @@
 // The permanent record (db.ts session_stats) is written as each session is scanned and is NEVER
 // pruned; the prune stamps `gone_at` instead. These tests pin the parts that make that true.
 
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { markSessionGone, scanSessionAnalytics, spendReport } from '../src/analytics'
 import { db } from '../src/db'
-import { listTranscriptFiles } from '../src/transcript'
 import { weighCounts } from '../src/usage-tokens'
-
-// spendReport's coverage line counts the transcript index, and the index's first build walks this
-// machine's real ~/.claude/projects (the preload does not redirect it: tests that spawn a child with
-// their own HOME rely on it following HOME). On the owner's PC that walk took 6 s and timed out a
-// 5 s test that CI, with an empty home, passed (2026-10-01); it is paid here, once, instead.
-beforeAll(() => {
-  listTranscriptFiles()
-}, 60_000)
 
 const dir = mkdtempSync(join(tmpdir(), 'ah-permanent-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))

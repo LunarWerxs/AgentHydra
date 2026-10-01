@@ -26,6 +26,7 @@ const env = {
   ...process.env,
   USERPROFILE: home,
   HOME: home,
+  AGENTHYDRA_CLAUDE_PROJECTS_ROOT: join(home, '.claude', 'projects'),
   AGENTHYDRA_HOME: join(home, '.agenthydra'),
   AGENTHYDRA_DB: join(home, 'test.db'),
   AGENTHYDRA_INSTANCES_ROOT: join(home, '.claude-instances'),
