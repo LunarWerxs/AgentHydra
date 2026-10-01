@@ -13,12 +13,14 @@ import {
   climayteJournalLines,
   climayteList,
   climayteRemove,
+  climayteReports,
   climayteRun,
   climayteScorecard,
   climayteSend,
   climayteSetPriority,
   climayteTotals,
   climayteVerdict,
+  climayteVerdicts,
   climayteWait,
 } from '../climayte'
 import {
@@ -48,15 +50,26 @@ const optInt = (v: string | undefined): number | undefined => {
 // scope, for climayte_status {wait_seconds}; without it the list answers at once. `limit` keeps every
 // active worker and only that many recently finished ones; `brief=1` leaves out the prompt and all
 // but the last 3 attempts (climayte_status uses both; the CliMayte view reads the full list).
+// `report=1` answers the report view instead (toReport: status, verdict, what it used, `chars` of its
+// report, default 1500); `ids` (comma-separated) keeps only those workers.
 app.get('/api/corch/workers', async (c) => {
+  const ids = optStr(c.req.query('ids'))
+    ?.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
   const filter = {
     group: optStr(c.req.query('group')),
     id: optStr(c.req.query('id')),
+    ids: ids?.length ? ids : undefined,
     active: flag(c.req.query('active')) ? true : undefined,
     limit: optInt(c.req.query('limit')),
     brief: flag(c.req.query('brief')),
   }
   const wait = waitMs(c.req.query('wait'))
+  if (flag(c.req.query('report'))) {
+    if (wait > 0) await climayteWait(filter, wait)
+    return c.json(climayteReports(filter, optInt(c.req.query('chars'))))
+  }
   if (wait > 0) return c.json(await climayteWait(filter, wait))
   return c.json(climayteList(filter))
 })
@@ -142,6 +155,23 @@ app.post('/api/corch/workers/:id/verdict', async (c) => {
     by: body.by === 'owner' ? 'owner' : 'orchestrator',
   })
   return c.json(r, r.ok ? 200 : 400)
+})
+// The same verdict for several finished workers in one call; each id answers on its own.
+app.post('/api/corch/verdicts', async (c) => {
+  const body = await jsonBody(c)
+  const ids = Array.isArray(body.ids)
+    ? body.ids.filter((x): x is string => typeof x === 'string')
+    : []
+  if (!ids.length) return c.json({ error: 'ids is required' }, 400)
+  return c.json(
+    climayteVerdicts(ids, {
+      verdict: body.verdict,
+      note: body.note,
+      retry: body.retry,
+      kind: body.kind,
+      by: body.by === 'owner' ? 'owner' : 'orchestrator',
+    }),
+  )
 })
 // What works per kind of task, from every verdict (climayte-scorecard.ts).
 app.get('/api/corch/scorecard', (c) => c.json(climayteScorecard()))

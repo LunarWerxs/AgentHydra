@@ -29,6 +29,7 @@ import {
   climayteJournalLines,
   climayteList,
   climayteLiveReadings,
+  climayteReports,
   climayteRun,
   climayteScorecard,
   climayteSend,
@@ -1140,7 +1141,15 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     expect(climayteGet(id)?.sessionId).toBe(session)
     const delivered = climayteJournal({ id }).filter((e) => e.event === 'follow-up-delivered')
     expect(delivered.at(-1)).toMatchObject({ model: 'claude-opus-5-5', effort: 'xhigh' })
-  }, 25_000)
+
+    // `judged` is the waiter's handled list (--unjudged): a verdict covers the work before it, and
+    // a later follow-up's result needs judging again, or its report would never wake anyone.
+    expect(w?.judged).toBe(false)
+    expect(climayteVerdict(id, { verdict: 'pass' }).ok).toBe(true)
+    expect(climayteList({ id })[0]?.judged).toBe(true)
+    climayteSend(id, 'one more thing')
+    expect((await settle(id, 15_000))?.judged).toBe(false)
+  }, 40_000)
 
   test('a cancel keeps queued messages and delivers them when the worker is continued', async () => {
     const id = await start('cancel keeps', 'slow-2')
@@ -1218,6 +1227,13 @@ describe('integration: a task with a check is judged by it', () => {
     ])
     expect(w?.verdicts?.[0]?.note).toContain('not yet')
     expect(w?.status).toBe('done')
+    // The check's pass covers the retry too, and the report view says who judged it.
+    expect(climayteReports({ ids: [id] })[0]).toMatchObject({
+      judged: true,
+      verdict: 'pass',
+      by: 'check',
+      attempts: 2,
+    })
   }, 30_000)
 })
 

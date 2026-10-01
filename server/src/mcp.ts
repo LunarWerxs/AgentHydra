@@ -770,10 +770,24 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'climayte_status',
-    description: `Read CliMayte workers (status, account, lastActivity, result/error, moves, cost). \`id\` answers that ONE worker's full detail, with \`events\` (its last 60 event lines on every account: read these to see why it failed). Otherwise a list, newest first, without prompts and with the last 3 attempts: scoped by \`group\` (all of its workers), else every active worker plus the ${RECENT_FINISHED} most recently finished (\`limit\` changes that number; \`active: true\` lists only queued/running/waiting ones). With \`wait_seconds\` (1..${CLIMAYTE_MAX_WAIT_S}) it WAITS up to that long for the next status change in scope and then answers; call it again to keep waiting. Use that instead of polling. Longer waits are cut to ${CLIMAYTE_MAX_WAIT_S}: an MCP client drops a call held about 60 s (measured 2026-09-30: 55 s answered, 110 s and 300 s timed out with nothing returned). The story of a run (dispatches, accounts picked and why, moves, retries, finishes) is climayte_log.`,
+    description: `Read CliMayte workers (status, account, lastActivity, result/error, moves, cost). \`id\` answers that ONE worker's full detail, with \`events\` (its last 60 event lines on every account: read these to see why it failed). Otherwise a list, newest first, without prompts and with the last 3 attempts: scoped by \`group\` (all of its workers), else every active worker plus the ${RECENT_FINISHED} most recently finished (\`limit\` changes that number; \`active: true\` lists only queued/running/waiting ones). With \`wait_seconds\` (1..${CLIMAYTE_MAX_WAIT_S}) it WAITS up to that long for the next status change in scope and then answers; call it again to keep waiting. Use that instead of polling. Longer waits are cut to ${CLIMAYTE_MAX_WAIT_S}: an MCP client drops a call held about 60 s (measured 2026-09-30: 55 s answered, 110 s and 300 s timed out with nothing returned). The story of a run (dispatches, accounts picked and why, moves, retries, finishes) is climayte_log. \`report: true\` answers the REPORT VIEW instead: one compact row per worker with its status, \`judged\` (a verdict already covers its newest work), its newest \`verdict\` and who gave it (\`by\`: check, orchestrator, owner), \`usedPct\` of a Pro 5-hour window, \`attempts\` and how each ended, and \`report\` (the recap its first turn ends with, else that turn from the top, cut to \`chars\`). Read finished work with it, several workers in one call (\`ids\`), then judge them with one climayte_verdict { ids }.`,
     inputSchema: S({
       group: { type: 'string' },
       id: { type: 'string' },
+      ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Only these workers (with or without `group`).',
+      },
+      report: {
+        type: 'boolean',
+        description: 'The report view: one compact row per worker, with its report.',
+      },
+      chars: {
+        type: 'number',
+        description:
+          'With `report`: how many characters of each report (default 1500, 0 for none).',
+      },
       active: { type: 'boolean', description: 'Only queued, running and waiting workers.' },
       limit: {
         type: 'number',
@@ -783,7 +797,8 @@ export const TOOLS: McpEngineTool[] = [
     }),
     run: (a) => {
       const wait = Math.min(CLIMAYTE_MAX_WAIT_S, Math.max(0, Number(a.wait_seconds) || 0))
-      if (a.id != null && str(a.id))
+      const ids = Array.isArray(a.ids) ? a.ids.map((x) => str(x)).filter(Boolean) : []
+      if (a.id != null && str(a.id) && a.report !== true)
         return api(
           `/api/corch/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined })}`,
         )
@@ -794,12 +809,18 @@ export const TOOLS: McpEngineTool[] = [
           : group
             ? undefined
             : RECENT_FINISHED
+      const report = a.report === true
+      const chars = Number(a.chars)
       return api(
         `/api/corch/workers${qs({
           group,
+          id: report && a.id != null && str(a.id) ? str(a.id) : undefined,
+          ids: ids.length ? ids.join(',') : undefined,
           active: a.active === true ? 1 : undefined,
-          limit,
-          brief: 1,
+          limit: ids.length ? undefined : limit,
+          brief: report ? undefined : 1,
+          report: report ? 1 : undefined,
+          chars: report && Number.isFinite(chars) && chars >= 0 ? Math.floor(chars) : undefined,
           wait: wait > 0 ? wait : undefined,
         })}`,
       )
@@ -866,28 +887,39 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'climayte_verdict',
     description:
-      "MUTATES: judge a FINISHED CliMayte worker's result after you checked its proof: `verdict` pass or fail. Every verdict is kept with the model and thinking level that produced the result and what it cost, and climayte_scorecard learns from them which setting each kind of task needs (model `auto` in climayte_run uses that). A fail needs `note` (what was wrong, self-contained: the worker gets it) and sends the task back to the SAME session one rung up the ladder (Sonnet low, medium, high, then Opus medium, high, xhigh, max); the answer names that `next` setting. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one.",
+      "MUTATES: judge a FINISHED CliMayte worker's result after you checked its proof: `verdict` pass or fail. Every verdict is kept with the model and thinking level that produced the result and what it cost, and climayte_scorecard learns from them which setting each kind of task needs (model `auto` in climayte_run uses that). A fail needs `note` (what was wrong, self-contained: the worker gets it) and sends the task back to the SAME session one rung up the ladder (Sonnet low, medium, high, then Opus medium, high, xhigh, max); the answer names that `next` setting. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one. `ids` gives several workers the same verdict in one call (a batch you checked together); each id answers on its own.",
     inputSchema: S(
       {
         id: { type: 'string' },
+        ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Several finished workers, instead of `id`: the same verdict for each.',
+        },
         verdict: { type: 'string', enum: ['pass', 'fail'] },
         note: { type: 'string' },
         retry: { type: 'boolean' },
         kind: { type: 'string' },
       },
-      ['id', 'verdict'],
+      ['verdict'],
     ),
-    run: (a) =>
-      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/verdict`, {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          verdict: str(a.verdict),
-          note: a.note != null ? str(a.note) : undefined,
-          retry: a.retry === false ? false : undefined,
-          kind: a.kind != null ? str(a.kind) : undefined,
-        }),
-      }),
+    run: (a) => {
+      const ids = Array.isArray(a.ids) ? a.ids.map((x) => str(x)).filter(Boolean) : []
+      if (!ids.length && (a.id == null || !str(a.id))) throw new Error('pass `id` or `ids`')
+      const body = JSON.stringify({
+        ...(ids.length ? { ids } : {}),
+        verdict: str(a.verdict),
+        note: a.note != null ? str(a.note) : undefined,
+        retry: a.retry === false ? false : undefined,
+        kind: a.kind != null ? str(a.kind) : undefined,
+      })
+      return api(
+        ids.length
+          ? '/api/corch/verdicts'
+          : `/api/corch/workers/${encodeURIComponent(str(a.id))}/verdict`,
+        { method: 'POST', headers: JSON_HEADERS, body },
+      )
+    },
   },
   {
     name: 'climayte_priority',

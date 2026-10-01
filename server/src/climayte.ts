@@ -54,6 +54,7 @@ import {
   type CliMayteWalls,
   type CliMayteWorker,
   type CliMayteWorkerBrief,
+  type CliMayteWorkerReport,
   type CliMayteWorkerView,
   ceilingNotice,
   classifyAttempt,
@@ -84,6 +85,7 @@ import {
   summarizeEvent,
   TRANSIENT_PROMPT,
   toBrief,
+  toReport,
   toView,
   WIND_DOWN_SESSION_PCT,
   WORKER_BRIEF,
@@ -2280,15 +2282,25 @@ function sizeTasks(
   return sized
 }
 
-function matches(w: CliMayteWorker, f: { group?: string; id?: string; active?: boolean }): boolean {
-  return (!f.id || w.id === f.id) && (!f.group || w.group === f.group) && (!f.active || isActive(w))
+function matches(
+  w: CliMayteWorker,
+  f: { group?: string; id?: string; ids?: string[]; active?: boolean },
+): boolean {
+  return (
+    (!f.id || w.id === f.id) &&
+    (!f.ids || f.ids.includes(w.id)) &&
+    (!f.group || w.group === f.group) &&
+    (!f.active || isActive(w))
+  )
 }
 
 /** `limit`: keep every active worker and only the `limit` most recently finished ones
- *  (recentWorkers); `brief`: rows without the prompt and with the last 3 attempts (toBrief). */
+ *  (recentWorkers); `brief`: rows without the prompt and with the last 3 attempts (toBrief);
+ *  `ids`: only these workers. */
 export interface CliMayteListFilter {
   group?: string
   id?: string
+  ids?: string[]
   active?: boolean
   limit?: number
   brief?: boolean
@@ -2306,6 +2318,23 @@ export function climayteList(
     filter.limit,
   ).map((w) => toView(w, now))
   return filter.brief ? views.map(toBrief) : views
+}
+
+/** The report view of the same list (toReport): one compact row per worker, `chars` of its report. */
+export function climayteReports(
+  filter: CliMayteListFilter = {},
+  chars?: number,
+): CliMayteWorkerReport[] {
+  return climayteList({ ...filter, brief: false }).map((v) => toReport(v, chars))
+}
+
+/** One verdict for several finished workers (the same `verdict`, `note` and `kind` for each), in
+ *  one call: a batch wake hands an orchestrator several results it checked together. */
+export function climayteVerdicts(
+  ids: string[],
+  input: Parameters<typeof climayteVerdict>[1],
+): Array<{ id: string } & ReturnType<typeof climayteVerdict>> {
+  return ids.map((id) => ({ id, ...climayteVerdict(id, input) }))
 }
 
 export function climayteGet(id: string): (CliMayteWorkerView & { events: string[] }) | null {

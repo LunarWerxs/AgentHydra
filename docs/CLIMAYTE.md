@@ -647,8 +647,17 @@ same logins signed in; a refresh on one reaches the other within a pass.
 
 ## Routes: `server/src/routes/climayte.ts`
 
-- `GET /api/corch/workers?group=&id=&active=1&limit=&brief=1&wait=` → `climayteList` (`wait`
-  seconds: first wait for the next status change in scope, via `climayteWait`)
+- `GET /api/corch/workers?group=&id=&ids=&active=1&limit=&brief=1&wait=` → `climayteList` (`wait`
+  seconds: first wait for the next status change in scope, via `climayteWait`; `ids` a
+  comma-separated list). Every row carries `judged`: finished, and a verdict covers its newest work
+  (no attempt started since); a follow-up or a sent-back fail makes it unjudged again.
+- `GET /api/corch/workers?report=1&chars=` (same filters) → `climayteReports`: the report view, one
+  compact row per worker (`toReport`: status, account, `judged`, newest `verdict` and `by`,
+  `usedPct`, `rereadPct`, `attempts`, `outcomes`, and `report`: its first turn's recap from
+  "## What I did" when it wrote one, else that turn from the top, `chars` long, default 1500;
+  `reportCut` counts what is not shown). The waiter prints these under each changed worker.
+- `POST /api/corch/verdicts` `{ ids, verdict, note?, retry?, kind? }` → `climayteVerdicts`: the same
+  verdict for several finished workers, each answering on its own.
 - `GET /api/corch/workers/:id?wait=` → `climayteGet` (404 when unknown)
 - `GET /api/corch/journal?group=&id=&since=&limit=&format=lines` → `climayteJournal`, or
   `climayteJournalLines` with `format=lines`; `since` is an ISO time or epoch ms
@@ -677,7 +686,9 @@ boot after the stores are ready.
   only `{ group, workers: [{ id, title, status, account }] }` (field note 7: the full view echoed
   every prompt back). `model` (opus or sonnet) and `effort` (low..max) get one description line
   each; the top-level pair is the group default.
-- `climayte_status { group?, id?, active?, limit?, wait_seconds? }`: `id` → that ONE worker's detail
+- `climayte_status { group?, id?, ids?, report?, chars?, active?, limit?, wait_seconds? }`:
+  `report: true` → the report view (above) for the scope, `ids` several workers at once. Without it,
+  `id` → that ONE worker's detail
   (`climayteGet`, with its `events`; field note 4). Otherwise a brief list, newest first: a `group`'s
   workers, else every active worker plus the 20 (`RECENT_FINISHED`, or `limit`) most recently
   finished (field note 1: unscoped, it answered all 141 workers ever recorded, 51k characters, and
@@ -690,7 +701,8 @@ boot after the stores are ready.
   `urgent` stops a running worker and delivers this first; `model`/`effort` switch them for that
   turn and later ones (e.g. escalate a stuck Sonnet worker to Opus at `max`).
 - `climayte_handoff { id }` MUTATES: a running worker writes a handoff and goes on in a fresh session.
-- `climayte_verdict { id, verdict, note?, retry?, kind? }` MUTATES: pass or fail on a finished task; a
+- `climayte_verdict { id | ids, verdict, note?, retry?, kind? }` MUTATES: pass or fail on a finished
+  task (`ids`: the same verdict for each, one call for a batch checked together); a
   fail goes back one rung up and the answer names `next`. `climayte_run` takes `kind` per task and as a
   group default, and `model: "auto"`.
 - `climayte_scorecard {}`: what works per kind (see "Scorecard").

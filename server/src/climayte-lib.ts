@@ -330,6 +330,77 @@ export type CliMayteWorkerView = Omit<CliMayteWorker, 'prompt' | 'attempts' | 'v
   /** What the task used over every attempt, in % of a Pro 5-hour window: `rereadPct` re-reading its
    *  conversation into a cold cache after a move, a limit, a handoff or a gap, `workPct` the rest. */
   used: { pct: number; workPct: number; rereadPct: number }
+  /** Finished, and a verdict (a check's, the orchestrator's or the owner's) covers its newest work:
+   *  nothing ran since. A follow-up or a sent-back fail makes it unjudged again. The waiter's
+   *  `--unjudged` wakes an orchestrator only for finished work that is not. */
+  judged: boolean
+}
+
+/** One row of the report view (`GET /api/corch/workers?report=1`, `climayte_status { report }`): what
+ *  an orchestrator needs to judge a worker in one read, and nothing it wrote itself. Run 2
+ *  (2026-10-01): each finished worker cost the orchestrator its own read, its own verdict call and
+ *  a line in a hand-kept list, 8 requests a wake at 437k tokens of context each. */
+export interface CliMayteWorkerReport {
+  id: string
+  group: string
+  title: string
+  status: CliMayteWorker['status']
+  account: string | null
+  kind: CliMayteWorker['kind']
+  model: string | null
+  effort: string | null
+  lastActivity: string | null
+  waitUntil?: string | null
+  error: string | null
+  judged: boolean
+  /** Its newest verdict and who gave it; null when it has none. */
+  verdict: 'pass' | 'fail' | null
+  by: CliMayteVerdict['by'] | null
+  /** % of a Pro 5-hour window over every attempt, and of that the restart re-reading. */
+  usedPct: number
+  rereadPct: number
+  /** How many runs it took, and how each ended (`handoff, done`). */
+  attempts: number
+  outcomes: string
+  /** The report to judge: the recap of its first turn when it wrote one (from "## What I did"), else
+   *  that turn from the top, cut to the asked length. `reportCut` counts the characters of every
+   *  turn not shown; the whole text is `climayte_status { id }`. */
+  report: string
+  reportCut: number
+}
+
+/** How much of a report the report view shows by default. Run 2's median report was 2,337
+ *  characters; the recap most of them end with is under 700. */
+export const REPORT_CHARS = 1500
+
+export function toReport(v: CliMayteWorkerView, chars = REPORT_CHARS): CliMayteWorkerReport {
+  const turns = v.results?.length ? v.results : v.result ? [v.result] : []
+  const main = turns[0] ?? ''
+  const recap = main.lastIndexOf('## What I did')
+  const report = (recap >= 0 ? main.slice(recap) : main).slice(0, Math.max(0, chars))
+  const last = v.verdicts?.at(-1)
+  return {
+    id: v.id,
+    group: v.group,
+    title: v.title,
+    status: v.status,
+    account: v.account,
+    kind: v.kind,
+    model: v.model ?? null,
+    effort: v.effort ?? null,
+    lastActivity: v.lastActivity ? v.lastActivity.slice(0, 120) : null,
+    ...(v.waitUntil !== undefined ? { waitUntil: v.waitUntil } : {}),
+    error: v.error,
+    judged: v.judged,
+    verdict: last?.verdict ?? null,
+    by: last?.by ?? null,
+    usedPct: v.used.pct,
+    rereadPct: v.used.rereadPct,
+    attempts: v.attempts.length,
+    outcomes: v.attempts.map((a) => a.outcome).join(', '),
+    report,
+    reportCut: turns.reduce((n, t) => n + t.length, 0) - report.length,
+  }
 }
 
 /** The models a worker may run (owner, 2026-09-30: Opus 5.5 or Sonnet 5.5), by the names the CLI
@@ -372,7 +443,7 @@ export function climayteEffort(v: unknown): string | null {
 }
 
 export const WORKER_BRIEF =
-  "You are a CliMayte worker: a Claude Code CLI session that AgentHydra started on one of the owner's accounts, at the owner's request, to do one delegated task for an orchestrating chat. Do the whole task yourself, in this session. Nobody is watching to answer questions, so make the reasonable call and say which call you made. Follow the repository's own rules. Commit only the files you changed, and push if the repository's rules say to. Never read or print a secret value. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
+  "You are a CliMayte worker: a Claude Code CLI session that AgentHydra started on one of the owner's accounts, at the owner's request, to do one delegated task for an orchestrating chat. Do the whole task yourself, in this session. Nobody is watching to answer questions, so make the reasonable call and say which call you made. Follow the repository's own rules. Commit only the files you changed, and push if the repository's rules say to. Never read or print a secret value. Do not deploy, publish or release unless the task says to: the orchestrator ships finished work. If a hook in the repository asks about deploying, answer in one line that the orchestrator deploys, and do not explain how. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
 
 export const HANDOFF_PROMPT =
   'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.'
@@ -1148,6 +1219,10 @@ export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
       )
       const reread = w.attempts.reduce((s, a) => s + rereadUnits(a, w.model), 0)
       return { pct: pctOf(all), workPct: pctOf(all - reread), rereadPct: pctOf(reread) }
+    })(),
+    judged: (() => {
+      const at = w.verdicts?.at(-1)?.at
+      return !live && at !== undefined && !w.attempts.some((a) => a.startedAt >= at)
     })(),
   }
 }

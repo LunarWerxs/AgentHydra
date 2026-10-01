@@ -7,6 +7,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **An orchestrating chat can read and judge finished CliMayte work in one go**
+  (`server/src/climayte-lib.ts` toReport, `climayte_status { report }`, `climayte_verdict { ids }`).
+  A report view gives each worker in one short row: its status, what it used, how its runs ended,
+  its verdict and the recap of what it did; several workers can get the same verdict in one call;
+  and every worker says whether a verdict already covers its newest work, so the orchestrator's
+  waiter only wakes it for results nobody has judged. On 2026-10-01 each finished worker cost the
+  orchestrator about eight model requests at its full context.
+
+### Changed
+
+- **CliMayte workers no longer explain deploying.** A worker is told not to deploy unless its task
+  says so, and to answer a repository's deploy reminder in one line. On 2026-10-01, 22 of 47 reports
+  carried a second turn about why the worker had not deployed.
+
 ## [1.5.0] - 2026-10-01
 
 ### Added
