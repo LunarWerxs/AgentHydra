@@ -49,7 +49,10 @@ import { getCachedUsage } from './usage-cache'
  *  chattily costs more output than one told exactly what to say, and the reply is discarded. */
 export const KEEPALIVE_PROMPT = 'Reply with the single word: ok'
 
-/** The cheapest setting that still starts the window: the CLI's Haiku alias, at its lowest effort. */
+/** The cheapest setting that still starts the window: the CLI's Haiku alias, at its lowest effort.
+ *  The owner asked for exactly that ("cheapest model, lowest effort", 2026-10-01). His standing
+ *  "never Haiku" rule (2026-09-06) is about work whose answers were wrong four times in five; a
+ *  nudge's one-word answer is thrown away, so nothing here depends on Haiku being right. */
 export const KEEPALIVE_MODEL = 'haiku'
 export const KEEPALIVE_EFFORT = 'low'
 

@@ -556,6 +556,10 @@ sooner. Off by default (it spends quota); on in the CLI tab ("Keep windows runni
   prompt, $0.028 with the one-line prompt, $0.018 with the 5-minute cache too; the 5-hour meter
   read 0% after it. It counts as started when the CLI's own `rate_limit_event` or the usage check
   after it shows the window running.
+- Why Haiku, despite the owner's "never Haiku, however mechanical the task" (2026-09-06): that rule
+  is about work, after a Haiku pass was wrong four times in five. A nudge does no work: its one-word
+  answer is discarded and only the request itself matters. For this feature the owner asked for the
+  cheapest model at the lowest effort (2026-10-01), which is Haiku.
 - Skipped: a signed-out or org-disabled login (listCliInstances lists it `loggedIn: false`), an
   account CliMayte walled at a limit, one with a Claude session running (its live registry, CliMayte
   workers included), one at or above the weekly floor (85, the owner's line), an unreadable reading,
