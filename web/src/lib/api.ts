@@ -873,7 +873,14 @@ export const cancelQuickAdd = (id: string) =>
   )
 
 // --- Corch workers (server/src/corch.ts, docs/CORCH.md) ----------------------
-export type CorchStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled'
+export type CorchStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting'
+  | 'checking'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
 export type CorchAttemptOutcome =
   | 'running'
   | 'done'
@@ -1021,7 +1028,7 @@ export const getCorchScorecard = () => j<CorchScorecard>('/api/corch/scorecard')
  *  model/thinking ladder, and `next` says which. */
 export const postCorchVerdict = (
   id: string,
-  body: { verdict: 'pass' | 'fail'; note?: string; retry?: boolean },
+  body: { verdict: 'pass' | 'fail'; note?: string; retry?: boolean; by?: 'owner' },
 ) =>
   j<{ ok: boolean; message: string; next?: { model: string; effort: string } | null }>(
     `/api/corch/workers/${encodeURIComponent(id)}/verdict`,

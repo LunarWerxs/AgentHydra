@@ -125,6 +125,8 @@ app.post('/api/corch/workers/:id/verdict', async (c) => {
     note: body.note,
     retry: body.retry,
     kind: body.kind,
+    // Only the view says 'owner'; a check's verdict never comes over HTTP.
+    by: body.by === 'owner' ? 'owner' : 'orchestrator',
   })
   return c.json(r, r.ok ? 200 : 400)
 })

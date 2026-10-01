@@ -8,6 +8,7 @@ import {
   CircleX,
   Clock,
   Hourglass,
+  ListChecks,
   LoaderCircle,
   type LucideIcon,
 } from '@lucide/vue'
@@ -44,6 +45,14 @@ export const CORCH_STATUS: Record<CorchStatus, CorchStatusMeta> = {
     spin: false,
     label: 'corch.statusWaiting',
     hint: 'corch.statusWaitingHint',
+  },
+  // The worker reported done and Corch is running the task's check command (corch.ts startCheck).
+  checking: {
+    variant: 'info',
+    icon: ListChecks,
+    spin: false,
+    label: 'corch.statusChecking',
+    hint: 'corch.statusCheckingHint',
   },
   done: {
     variant: 'success',
@@ -108,7 +117,10 @@ export function corchQueuedNote(
 }
 
 export const isCorchActive = (w: Pick<CorchWorkerView, 'status'>): boolean =>
-  w.status === 'queued' || w.status === 'running' || w.status === 'waiting'
+  w.status === 'queued' ||
+  w.status === 'running' ||
+  w.status === 'waiting' ||
+  w.status === 'checking'
 
 /** `#68 Darragh (CLI)`, or the bare name when the account has no instance number. */
 export const corchAccountLabel = (a: { num: number | null; name: string }): string =>

@@ -930,3 +930,62 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     expect(corchJournal({ id }).filter((e) => e.event === 'follow-up-delivered')).toHaveLength(3)
   }, 25_000)
 })
+
+describe('integration: a task with a check is judged by it', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-corch-check-'))
+  const cwd = join(root, 'work')
+  const acct = join(root, 'acct')
+  for (const d of [cwd, acct]) mkdirSync(d, { recursive: true })
+  const groups: string[] = []
+
+  afterAll(() => {
+    for (const group of groups) corchCancel({ group })
+    setCorchClaudeCommand(null)
+    setCorchAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test('a failing check sends the task back one rung up; the passing one records the pass', async () => {
+    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCorchAccountsProvider(() => [
+      { id: 'check-1', num: 1, name: 'check', configDir: acct, sessionPct: 0, weekPct: 0 },
+    ])
+    startCorch()
+    // Fails the first time (leaving a marker), passes the second.
+    const check = 'test -f proved || { touch proved; echo not yet; exit 1; }'
+    const run = corchRun({
+      tasks: [
+        {
+          prompt: 'prove it',
+          cwd,
+          title: 'checked',
+          kind: 'code',
+          model: 'sonnet',
+          effort: 'high',
+          check,
+        },
+      ],
+    })
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+
+    const deadline = Date.now() + 25_000
+    let w = corchList({ id })[0]
+    while (
+      w &&
+      !(w.status === 'done' && (w.verdicts?.length ?? 0) >= 2) &&
+      w.status !== 'failed' &&
+      Date.now() < deadline
+    ) {
+      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = corchList({ id })[0]
+    }
+
+    expect(w?.verdicts?.map((v) => [v.verdict, v.by, v.model, v.effort])).toEqual([
+      ['fail', 'check', 'claude-sonnet-5-5', 'high'],
+      ['pass', 'check', 'claude-opus-5-5', 'medium'],
+    ])
+    expect(w?.verdicts?.[0]?.note).toContain('not yet')
+    expect(w?.status).toBe('done')
+  }, 30_000)
+})

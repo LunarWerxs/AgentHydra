@@ -29,6 +29,7 @@ export type CorchJournalEvent =
   | 'waiting' // no account it may use is free
   | 'turn-done' // a turn finished and a queued follow-up comes next
   | 'turn-end' // a turn ended with this text (a Stop hook can force more turns after the report)
+  | 'check' // the worker reported done; Corch runs the task's check command (`notice`: the command)
   | 'verdict' // its result was judged pass or fail (corchVerdict); a fail names the next setting
   | 'done'
   | 'failed'
@@ -212,6 +213,8 @@ export function describeJournalEntry(e: CorchJournalEntry, now: Date = new Date(
       return `turn done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task so far ${usd(e.totalCostUsd)}); next queued message follows`
     case 'turn-end':
       return `turn ended${on}${e.said ? `: ${e.said}` : ''}`
+    case 'check':
+      return `checking its result: ${e.notice ?? '?'}`
     case 'verdict':
       return `judged ${e.verdict === 'pass' ? 'a pass' : 'a fail'}${runs}${e.notice ? `: ${e.notice}` : ''}${e.verdict === 'fail' && e.reason ? `; ${e.reason}` : ''}`
     case 'done':

@@ -671,6 +671,11 @@ export const TOOLS: McpEngineTool[] = [
                 description:
                   'What kind of work it is, so the scorecard learns per kind: code, debug, review, sweep (read-only survey or capture), mechanical (an edit a script can check), docs or trivial.',
               },
+              check: {
+                type: 'string',
+                description:
+                  'One bash command that PROVES the task is done (exit 0), e.g. `bun test tests/x.test.ts` or a curl that greps the deployed page; run it through `~/.claude/tools/fairjob.cmd -Weight 3 -Run "..."` when it is heavy. Corch runs it in `cwd` the moment the worker reports done (status `checking`), records the verdict itself, and sends a fail back to the same session one rung up with the end of the command\'s output (3 failed rounds stop the task as failed). Give one whenever a command can tell; your own corch_verdict is for what it cannot.',
+              },
             },
             required: ['prompt', 'cwd'],
           },

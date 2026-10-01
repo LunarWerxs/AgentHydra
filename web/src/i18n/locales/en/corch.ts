@@ -134,6 +134,7 @@ export default {
   statusQueued: 'Queued',
   statusRunning: 'Running',
   statusWaiting: 'Waiting for an account',
+  statusChecking: 'Checking',
   statusDone: 'Done',
   statusFailed: 'Failed',
   statusCancelled: 'Stopped',
@@ -141,6 +142,8 @@ export default {
   statusRunningHint: 'Working now.',
   statusWaitingHint:
     'Every account it may use is at its usage limit or signed out. It resumes by itself when one frees up.',
+  statusCheckingHint:
+    'The worker says it is done; Corch is running its check command. A pass is recorded, a fail goes back to it one step up.',
   statusDoneHint: 'Finished.',
   statusFailedHint: 'Stopped on an error.',
   statusCancelledHint: 'Stopped by hand. Send a message to continue it.',

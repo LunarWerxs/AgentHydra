@@ -87,6 +87,8 @@ export interface CorchVerdict {
   effort: string | null
   /** Weighted units the work since the previous verdict cost (attemptUnits). */
   units: number
+  /** Who judged: the task's own check command, the orchestrating chat, or the owner in the view. */
+  by?: 'check' | 'orchestrator' | 'owner'
 }
 
 /** One attempt's tokens in weighted units. Writes are 5-minute ones for attempts launched with the

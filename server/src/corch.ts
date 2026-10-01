@@ -502,7 +502,107 @@ function changed(w: CorchWorker): void {
 }
 
 const isActive = (w: CorchWorker): boolean =>
-  w.status === 'queued' || w.status === 'running' || w.status === 'waiting'
+  w.status === 'queued' ||
+  w.status === 'running' ||
+  w.status === 'waiting' ||
+  w.status === 'checking'
+
+/** The task's proof, run by Corch itself (owner, 2026-09-30: "whatever is best for the AI"): an
+ *  orchestrator that has to remember to judge every result forgets some, and a worker's own "the
+ *  tests pass" is a claim. A task with a `check` command is judged by its exit code the moment the
+ *  worker reports done; a fail goes back to the same session one rung up the ladder with the end of
+ *  the command's output, so nobody has to read it first. It runs under the daemon, so a restart
+ *  ends it and the next daemon runs it again (tick). */
+const checks = new Map<string, { kill: () => void }>()
+/** A check that still fails after this many rounds stops the task for the orchestrator. */
+const MAX_CHECK_FAILS = 3
+const CHECK_TIMEOUT_MS = 20 * 60_000
+
+/** Git's bash on Windows, never the WSL `bash.exe` in System32 that PATH may find first. */
+function checkShell(): string {
+  if (process.platform !== 'win32') return 'bash'
+  for (const root of [
+    process.env.ProgramFiles,
+    process.env['ProgramFiles(x86)'],
+    process.env.LOCALAPPDATA,
+  ]) {
+    if (!root) continue
+    for (const sub of [
+      ['Git', 'bin', 'bash.exe'],
+      ['Programs', 'Git', 'bin', 'bash.exe'],
+    ]) {
+      const exe = join(root, ...sub)
+      if (existsSync(exe)) return exe
+    }
+  }
+  return 'bash'
+}
+
+function startCheck(w: CorchWorker): void {
+  if (!w.check || checks.has(w.id)) return
+  w.status = 'checking'
+  w.checkRuns = (w.checkRuns ?? 0) + 1
+  mkdirSync(LOGS, { recursive: true })
+  const out = join(LOGS, `${w.id}-check-${w.checkRuns}.log`)
+  const fd = openSync(out, 'w')
+  journal(w, 'check', { notice: firstLine(w.check) })
+  let timedOut = false
+  let proc: ReturnType<typeof Bun.spawn>
+  try {
+    proc = Bun.spawn([checkShell(), '-c', w.check], {
+      cwd: w.cwd,
+      stdin: 'ignore',
+      stdout: fd,
+      stderr: fd,
+      windowsHide: true,
+    })
+  } catch (err) {
+    closeSync(fd)
+    judgeCheck(w, null, `could not start: ${err instanceof Error ? err.message : String(err)}`)
+    return
+  }
+  const timer = setTimeout(() => {
+    timedOut = true
+    killProcessTree(proc.pid)
+  }, CHECK_TIMEOUT_MS)
+  checks.set(w.id, { kill: () => killProcessTree(proc.pid) })
+  changed(w)
+  void proc.exited.then((code) => {
+    clearTimeout(timer)
+    try {
+      closeSync(fd)
+    } catch {
+      // already closed
+    }
+    if (!checks.delete(w.id) || w.status !== 'checking') return // cancelled meanwhile
+    judgeCheck(
+      w,
+      timedOut ? null : code,
+      timedOut ? 'timed out after 20 minutes' : tailText(out, 1500),
+    )
+  })
+}
+
+function judgeCheck(w: CorchWorker, code: number | null, output: string): void {
+  w.status = 'done'
+  const cmd = firstLine(w.check, 200)
+  if (code === 0) {
+    corchVerdict(w.id, { verdict: 'pass', note: `The check passed: ${cmd}`, by: 'check' })
+    return
+  }
+  const fails =
+    (w.verdicts ?? []).filter((v) => v.by === 'check' && v.verdict === 'fail').length + 1
+  const retry = fails < MAX_CHECK_FAILS
+  const note = `The check \`${cmd}\` failed (${code === null ? output : `exit ${code}`}). The end of its output:
+${code === null ? '' : output.trim()}`
+  corchVerdict(w.id, { verdict: 'fail', note, retry, by: 'check' })
+  if (!retry) {
+    w.status = 'failed'
+    w.error = `The check still failed after ${MAX_CHECK_FAILS} rounds; it needs the orchestrator. Last: ${firstLine(output)}`
+    journal(w, 'failed', { error: firstLine(w.error) })
+    changed(w)
+  }
+}
 
 const isInit = (ev: unknown): boolean =>
   (ev as { type?: string; subtype?: string })?.type === 'system' &&
@@ -632,6 +732,9 @@ async function tick(): Promise<void> {
       }
     }
     saveLive()
+    // A check a restart ended (it ran under the old daemon) runs again.
+    for (const w of workers.values())
+      if (w.status === 'checking' && !checks.has(w.id)) startCheck(w)
     recheckSignedOut(accounts, now)
     const allowFull = overageAllowed()
     const active = new Map<string, number>()
@@ -1112,6 +1215,7 @@ function finish(w: CorchWorker, events: unknown[]): void {
     w.error =
       `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
   journalFinish(w, at, v, spent)
+  if (w.status === 'done' && w.check) startCheck(w)
   changed(w)
   schedule(50)
 }
@@ -1532,6 +1636,7 @@ export function corchRun(input: {
     model?: string
     effort?: string
     kind?: string
+    check?: string
   }>
   group?: string
   accounts?: string[]
@@ -1560,6 +1665,12 @@ export function corchRun(input: {
       throw new Error(`task ${i + 1}: prompt is empty`)
     if (typeof t.cwd !== 'string' || !existsSync(t.cwd) || !statSync(t.cwd).isDirectory())
       throw new Error(`task ${i + 1}: cwd '${t.cwd}' is not an existing folder`)
+    if (
+      t.check !== undefined &&
+      t.check !== null &&
+      (typeof t.check !== 'string' || t.check.length > 2000)
+    )
+      throw new Error(`task ${i + 1}: check must be one shell command (at most 2000 characters)`)
     try {
       const kind = corchKind(t.kind) ?? groupKind
       const own = t.model === undefined || t.model === null || t.model === ''
@@ -1599,6 +1710,7 @@ export function corchRun(input: {
       effort: settings[i]?.effort ?? null,
       kind: settings[i]?.kind ?? null,
       ...(settings[i]?.auto ? { auto: true } : {}),
+      ...(t.check?.trim() ? { check: t.check.trim() } : {}),
       accounts: input.accounts?.length ? input.accounts : null,
       status: 'queued',
       sessionId: crypto.randomUUID(),
@@ -1827,7 +1939,7 @@ const configLabel = (c: { model: string | null; effort: string | null }): string
  *  rung up the ladder unless `retry` is false. `kind` tags a task dispatched without one. */
 export function corchVerdict(
   id: string,
-  input: { verdict?: unknown; note?: unknown; retry?: unknown; kind?: unknown },
+  input: { verdict?: unknown; note?: unknown; retry?: unknown; kind?: unknown; by?: unknown },
 ): { ok: boolean; message: string; next?: { model: string; effort: string } | null } {
   load()
   const w = workers.get(id)
@@ -1857,6 +1969,7 @@ export function corchVerdict(
     model: ladderModel(w.model ?? reported),
     effort: w.effort,
     units: ran.reduce((sum, a) => sum + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl), 0),
+    by: input.by === 'check' || input.by === 'owner' ? input.by : 'orchestrator',
   }
   w.verdicts = [...(w.verdicts ?? []), verdict]
   let next: { model: string; effort: string } | null = null
@@ -1972,6 +2085,8 @@ export function corchCancel(filter: { id?: string; group?: string }): {
   if (!filter.id && !filter.group) return { cancelled, keptMessages }
   for (const w of workers.values()) {
     if (!matches(w, filter) || !isActive(w)) continue
+    checks.get(w.id)?.kill()
+    checks.delete(w.id)
     if (!stopRunning(w, null)) continue
     const at = w.attempts[w.attempts.length - 1]
     w.status = 'cancelled'

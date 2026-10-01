@@ -21,7 +21,14 @@ import {
 } from './rate-limit-signal'
 import { sumTranscriptTokens } from './usage-tokens'
 
-export type CorchStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled'
+export type CorchStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting'
+  | 'checking' // the worker reported done; Corch is running the task's `check` command
+  | 'done'
+  | 'failed'
+  | 'cancelled'
 // waiting = no eligible account right now (all at their limit or signed out); retried every tick
 export type AttemptOutcome =
   | 'running'
@@ -126,6 +133,11 @@ export interface CorchWorker {
   auto?: boolean
   /** Each judgement of its result, oldest first (corchVerdict). */
   verdicts?: CorchVerdict[]
+  /** A shell command that proves the task is done (exit 0). Corch runs it in `cwd` after the worker
+   *  reports, records the verdict itself and sends a fail back one rung up (corch.ts startCheck). */
+  check?: string | null
+  /** How many times `check` has run. */
+  checkRuns?: number
   createdAt: number
   updatedAt: number
 }
@@ -814,7 +826,10 @@ function mergeNewer(from: string, to: string): void {
 }
 
 const isLive = (w: Pick<CorchWorker, 'status'>): boolean =>
-  w.status === 'queued' || w.status === 'running' || w.status === 'waiting'
+  w.status === 'queued' ||
+  w.status === 'running' ||
+  w.status === 'waiting' ||
+  w.status === 'checking'
 
 /** How many finished workers a list with no id or group shows beside the active ones. */
 export const RECENT_FINISHED = 20

@@ -203,7 +203,9 @@ async function onVerdict(verdict: 'pass' | 'fail') {
     const note = failNote.value.trim()
     const r = await postCorchVerdict(
       w.id,
-      verdict === 'pass' ? { verdict } : { verdict, note: note || undefined, retry: true },
+      verdict === 'pass'
+        ? { verdict, by: 'owner' }
+        : { verdict, note: note || undefined, retry: true, by: 'owner' },
     )
     if (r.ok) {
       failOpen.value = false
