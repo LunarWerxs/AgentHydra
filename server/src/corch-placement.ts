@@ -37,6 +37,9 @@ export interface CorchPlacement {
   expected: number
   /** Per account id, the workers running there now. */
   running: Map<string, RunningLoad[]>
+  /** Per account id, what attempts that ended since its first running worker started spent there
+   *  (% of a Pro window). */
+  finishedSince?: Map<string, number>
 }
 
 /** Pro 1, Max 5x 5, Max 20x 20: how many Pro windows an account's 5-hour window holds. */
@@ -47,18 +50,22 @@ export function planFactor(planLabel: string | null | undefined): number {
 }
 
 /** The account's 5-hour usage once this task and the work already running there are done, in % of
- *  ITS window. What the running tasks still owe is their expected cost less how far the account's
- *  meter rose since the first of them started (the live reading already counts what they spent).
- *  Costs are in % of a Pro window and shrink by the plan. Unknown usage counts as 50%. */
+ *  ITS window. What the running tasks still owe is their expected cost less what they have spent:
+ *  the meter's rise since the first of them started, less what attempts that ENDED in that time
+ *  spent (`finishedSince`, % of a Pro window, from their recorded tokens). Whatever is left of the
+ *  rise is the running tasks' own, however staggered their starts; crediting each task with the
+ *  whole rise since its own start would count every concurrent task's spend once per task. Costs
+ *  are in % of a Pro window and shrink by the plan. Unknown usage counts as 50%. */
 export function projectedPct(
   acct: Pick<CorchAccount, 'sessionPct'> & { planFactor?: number },
   running: RunningLoad[],
   expected: number,
+  finishedSince = 0,
 ): number {
   const factor = acct.planFactor ?? 1
   const now = acct.sessionPct ?? 50
   const starts = running.map((r) => r.startPct).filter((p): p is number => p !== null)
-  const spent = starts.length ? Math.max(0, now - Math.min(...starts)) : 0
+  const spent = starts.length ? Math.max(0, now - Math.min(...starts) - finishedSince / factor) : 0
   const owed = Math.max(0, running.reduce((sum, r) => sum + r.expected, 0) / factor - spent)
   return now + owed + expected / factor
 }
