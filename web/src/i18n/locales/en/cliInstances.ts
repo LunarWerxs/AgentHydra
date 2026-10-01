@@ -154,10 +154,14 @@ export default {
   // Login sync through the owner's own store (CliLoginSyncDialog.vue, server/src/core/cli-login-sync.ts).
   sync: 'Login sync',
   syncHint:
-    'Keeps the CLI logins the same on your PCs through a small store in your own Cloudflare account, so both can stay signed in.',
+    'Keeps your CLI and desktop logins the same on your PCs through a small store in your own Cloudflare account, so both can stay signed in.',
   syncTitle: 'Login sync',
   syncIntro:
     'Both PCs point at one store (a small Cloudflare Worker of yours). When either PC refreshes a login, the other gets the new one within about a minute, so both stay signed in. The store only ever holds logins encrypted with a key that stays on your PCs.',
+  syncDesktopNote:
+    'Desktop logins sync too. A desktop account signed in on one PC is signed in on the other, in a profile of the same name and number. A newer login is written only while that desktop instance is closed (AgentHydra does it just before it opens one), so keep a synced desktop account open on one PC at a time. A desktop account you signed in separately on both PCs is left alone.',
+  syncKindDesktop: 'Desktop',
+  syncKindCli: 'CLI',
   syncJoinTitle: 'Join from your other PC',
   syncJoinHint: 'Paste the pairing code from the other PC’s Login sync.',
   syncJoinPlaceholder: 'ahsync1:…',

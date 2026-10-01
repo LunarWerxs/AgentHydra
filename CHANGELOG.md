@@ -9,6 +9,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Login sync carries desktop logins too** (`server/src/core/desktop-login-sync.ts`). A Claude Desktop
+  account signed in on one PC is signed in on the other, in a profile with the same name and
+  number, without the browser sign-in there. A newer login is written only while that desktop
+  instance is closed (AgentHydra does it just before it opens one), so keep a synced desktop account
+  open on one PC at a time. An account you signed in separately on both PCs is left alone, and a
+  Log out leaves it out of sync on that PC. Windows only. Both PCs need this version.
+
 - **An orchestrating chat can read and judge finished CliMayte work in one go**
   (`server/src/climayte-lib.ts` toReport, `climayte_status { report }`, `climayte_verdict { ids }`).
   A report view gives each worker in one short row: its status, what it used, how its runs ended,

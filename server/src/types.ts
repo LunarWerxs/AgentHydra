@@ -1398,8 +1398,11 @@ export interface CliLoginSyncStatus {
   lastSyncAt: number | null
   lastError: string | null
   logins: Array<{
+    /** A CLI instance's id, or a desktop account's uuid. */
     id: string
+    kind: 'cli' | 'desktop'
     num: number | null
+    /** The CLI instance's name, or the desktop profile's folder name. */
     name: string
     /** Signed in on this PC. */
     here: boolean

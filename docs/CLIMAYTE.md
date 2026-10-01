@@ -660,6 +660,43 @@ same logins signed in; a refresh on one reaches the other within a pass.
   API and plays the other PC through the store: a refresh there lands here, one here goes up, one
   made by the sign-in check goes up, an older copy never wins, a left-out login stays put.
 
+### Desktop logins: `server/src/core/desktop-login-sync.ts` (owner, 2026-10-01)
+
+"Yes, build the desktop login sync." The same pass, store and key carry desktop logins, so a Claude
+Desktop account signed in on one PC is signed in on the other without the browser sign-in there.
+
+- What a desktop login is (checked on seven profiles by key and cookie names, never values):
+  config.json's `lastKnownAccountUuid` and `oauth:tokenCacheV2` / `oauth:tokenCache` (Electron
+  safeStorage: `v10` + nonce + AES-256-GCM under the profile's own key, which `Local State` keeps
+  DPAPI-sealed for this Windows user), plus the claude.ai sign-in cookies in `Network/Cookies`
+  (`sessionKey*`, `lastActiveOrg`, `routingHint`; cookie database version 24: the same cipher, the
+  plaintext led by SHA-256 of the cookie's host). Every profile on every PC has its own key, so
+  nothing copies as bytes: a login travels decrypted inside the sync's encryption and is encrypted
+  again on arrival (`encryptSafeStorage`, `encryptV10Gcm` in `core/crypto`; a profile this PC makes
+  gets its key from `ensureWindowsMasterKey`, written the way Chromium writes one).
+- Store rows: keyed by the account's uuid, `meta.kind: 'desktop'` with the sender's folder `name`
+  and `num`. The CLI half skips them. A PC still on 1.5.0 cannot open them and says so every pass
+  until it updates.
+- A profile is never written while its app runs (the app holds config.json and Cookies and saves
+  over them): a pass leaves it, the dialog says a newer login waits, and AgentHydra runs one pass
+  just before it opens a desktop instance (`syncBeforeLaunch`, a second before-launch hook beside
+  move-retire's; ten seconds at most).
+- A login a PC signed in on its own is never replaced and never uploaded over the store's: two
+  separate sign-ins of one account each keep their own tokens and both stay signed in, and tying
+  them together would let either PC's refresh sign the other out. A PC joins the store's copy only
+  where it has none: a signed-out profile of the same folder name, else a new profile with that
+  name (or `<name>-synced`) and number. From then on the later expiry among the grants wins.
+- Cookies are read only while the profile is closed (Chromium locks the database); a pass while it
+  runs uploads the new tokens with the cookies the store already has. A new profile's cookie
+  database is made from another local profile's schema.
+- A Log out of a desktop instance leaves that account out of sync on that PC, like a CLI one.
+- Windows only (elsewhere the profile key is in the Keychain or a keyring).
+- The test (`server/tests/desktop-login-sync.test.ts`, Windows) proves the key round trip, a
+  store-only account landing in a new profile under its own key with the cookie in Chromium's
+  format, the later expiry winning both ways, a separate sign-in left alone, and a left-out login
+  staying put. Not proven by a test: that Claude Desktop itself accepts a landed profile; that
+  takes opening one, which only the owner does.
+
 ## Routes: `server/src/routes/climayte.ts`
 
 - `GET /api/corch/workers?group=&id=&ids=&active=1&limit=&brief=1&wait=` → `climayteList` (`wait`

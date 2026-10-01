@@ -23,6 +23,10 @@
 // store with no instance here gets one, with the same id and number. A login left out here
 // (`excluded`: "Stop syncing", a Log out, a move away) is neither uploaded nor landed.
 //
+// DESKTOP LOGINS ride the same pass, store and key (core/desktop-login-sync.ts): keyed by account uuid
+// with meta.kind 'desktop', landed only into closed profiles, never over a login a PC signed in on
+// its own. The CLI half leaves those rows alone.
+//
 // ⛔ SECRETS: the token and key are read only to make requests and encrypt; status answers never
 // carry them. The pairing code is the one answer that does, for the owner's copy button.
 
@@ -42,6 +46,14 @@ import {
   readPortableLogin,
   readText,
 } from './cli-login-move'
+import {
+  asDesktopLogin,
+  desktopNotes,
+  listDesktopProfiles,
+  type PortableDesktopLogin,
+  syncDesktopLogins,
+} from './desktop-login-sync'
+import { setBeforeLaunchHook } from './instances'
 
 export const SYNC_EVERY_MS = 30_000
 const CONFIG_PATH = join(CONFIG_DIR, 'login-sync.json')
@@ -51,8 +63,11 @@ const MAX_EVENTS = 30
 interface SyncState {
   /** The store's version of this login the last time this PC and the store agreed. */
   version: number
-  /** SHA-256 of this PC's credential file then: a different hash now means it changed here. */
+  /** SHA-256 of this PC's credential file then (a desktop login: of its token caches): a different
+   *  hash now means it changed here. */
   hash: string
+  /** A desktop login: its cookie database's mtime when last read or written. */
+  cookies?: number
 }
 
 interface SyncConfig {
@@ -87,8 +102,9 @@ function writeConfig(c: SyncConfig): void {
 
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
 
-/** Encrypt one login for the store: base64 of {iv, tag, data}, its instance id bound in as AAD. */
-export function sealLogin(key: Buffer, login: PortableLogin): string {
+/** Encrypt one login for the store: base64 of {iv, tag, data}, its id (a CLI instance's, a desktop
+ *  account's uuid) bound in as AAD. */
+export function sealLogin(key: Buffer, login: { id: string }): string {
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', key, iv)
   cipher.setAAD(Buffer.from(login.id, 'utf8'))
@@ -105,6 +121,12 @@ export function sealLogin(key: Buffer, login: PortableLogin): string {
 
 /** Decrypt a store blob for login `id`, or null (wrong key, another login's blob, damage). */
 export function openLogin(key: Buffer, id: string, blob: string): PortableLogin | null {
+  const login = openBlob(key, id, blob) as PortableLogin | null
+  return login?.id === id && typeof login.credentials === 'string' ? login : null
+}
+
+/** A store blob's content for `id`, whatever kind of login it holds; null when it does not open. */
+function openBlob(key: Buffer, id: string, blob: string): unknown {
   try {
     const b = JSON.parse(Buffer.from(blob, 'base64').toString('utf8')) as {
       v: number
@@ -120,8 +142,7 @@ export function openLogin(key: Buffer, id: string, blob: string): PortableLogin 
       decipher.update(Buffer.from(b.data, 'base64')),
       decipher.final(),
     ]).toString('utf8')
-    const login = JSON.parse(plain) as PortableLogin
-    return login?.id === id && typeof login.credentials === 'string' ? login : null
+    return JSON.parse(plain) as unknown
   } catch {
     return null
   }
@@ -255,7 +276,7 @@ export async function joinLoginSync(code: string): Promise<{ ok: boolean; messag
   }
   writeConfig(freshConfig(url.toString(), p.t, key))
   void runLoginSync()
-  return { ok: true, message: 'Joined. This PC now syncs its CLI logins with the store.' }
+  return { ok: true, message: 'Joined. This PC now syncs its logins with the store.' }
 }
 
 export function setLoginSyncEnabled(enabled: boolean): { ok: boolean; message: string } {
@@ -305,8 +326,16 @@ export interface LoginSyncPassResult {
 }
 
 let running: Promise<LoginSyncPassResult> | null = null
+interface StoreRow {
+  version: number
+  num: number | null
+  /** 'desktop' for a desktop login (keyed by account uuid), 'cli' otherwise. */
+  kind: string
+  /** A desktop login's profile folder name on the PC that sent it. */
+  name: string | null
+}
 /** What the store held at the last pass, for the status's per-login rows. */
-let lastStore = new Map<string, { version: number; num: number | null }>()
+let lastStore = new Map<string, StoreRow>()
 
 /** One sync pass (see the header). Never two at once: a second call shares the running one. */
 export function runLoginSync(): Promise<LoginSyncPassResult> {
@@ -334,11 +363,13 @@ async function pass(): Promise<LoginSyncPassResult> {
     const list = await call(l, 'GET', '/v1/logins')
     if (list.status !== 200 || !Array.isArray(list.json?.logins))
       throw httpError('Reading the store', list)
-    const store = new Map<string, { version: number; num: number | null }>()
+    const store = new Map<string, StoreRow>()
     for (const r of list.json.logins as Array<{ id: string; version: number; meta?: any }>)
       store.set(r.id, {
         version: r.version,
         num: typeof r.meta?.num === 'number' ? r.meta.num : null,
+        kind: r.meta?.kind === 'desktop' ? 'desktop' : 'cli',
+        name: typeof r.meta?.name === 'string' ? r.meta.name : null,
       })
     lastStore = store
 
@@ -355,7 +386,7 @@ async function pass(): Promise<LoginSyncPassResult> {
       })
       if (r.status === 200 && typeof r.json?.version === 'number') {
         c.state[login.id] = { version: r.json.version, hash: sha256(login.credentials) }
-        store.set(login.id, { version: r.json.version, num: login.num })
+        store.set(login.id, { version: r.json.version, num: login.num, kind: 'cli', name: null })
         out.pushed++
         note(c, login.num, 'pushed', 'Uploaded this PC’s newer login.')
       } else if (r.status === 409) {
@@ -444,9 +475,60 @@ async function pass(): Promise<LoginSyncPassResult> {
     }
     // Logins only the store holds: an instance for each here, same id and number.
     for (const [id, remote] of store) {
-      if (here.has(id) || excluded.has(id)) continue
+      if (here.has(id) || excluded.has(id) || remote.kind === 'desktop') continue
       const login = await download(id)
       if (login) await land(login, remote.version)
+    }
+    try {
+      await syncDesktopLogins({
+        store,
+        state: c.state,
+        excluded,
+        out,
+        note: (num, action, text) => note(c, num, action, text),
+        upload: async (login: PortableDesktopLogin, expect: number) => {
+          const r = await call(l, 'PUT', `/v1/logins/${login.id}`, {
+            version: expect,
+            blob: sealLogin(l.key, login),
+            meta: {
+              kind: 'desktop',
+              num: login.num,
+              name: login.name,
+              expiresAt: login.expiresAt,
+              by,
+              at: Date.now(),
+            },
+          })
+          if (r.status === 200 && typeof r.json?.version === 'number') {
+            store.set(login.id, {
+              version: r.json.version,
+              num: login.num,
+              kind: 'desktop',
+              name: login.name,
+            })
+            out.pushed++
+            note(c, login.num, 'pushed', 'Uploaded this PC’s newer desktop login.')
+            return r.json.version as number
+          }
+          if (r.status === 409) {
+            out.problems.push(`#${login.num}: changed in the store meanwhile; next pass decides.`)
+            return null
+          }
+          throw httpError(`Uploading #${login.num}`, r)
+        },
+        download: async (id: string) => {
+          const r = await call(l, 'GET', `/v1/logins/${id}`)
+          if (r.status !== 200 || typeof r.json?.blob !== 'string')
+            throw httpError('Downloading', r)
+          const login = asDesktopLogin(openBlob(l.key, id, r.json.blob), id)
+          if (!login) out.problems.push(`${id}: the store's copy does not open with this PC's key.`)
+          return login
+        },
+      })
+    } catch (err) {
+      const msg = `Desktop logins: ${err instanceof Error ? err.message : String(err)}`
+      out.problems.push(msg)
+      note(c, null, 'error', msg)
     }
     c.lastError = out.problems.length ? out.problems[0]! : null
   } catch (err) {
@@ -490,6 +572,7 @@ export function loginSyncStatus(): CliLoginSyncStatus {
     const read = file && !remote ? readPortableLogin(i.id, { whileRunning: true }) : null
     logins.push({
       id: i.id,
+      kind: 'cli',
       num: i.num ?? null,
       name: i.name,
       here: i.loggedIn || file,
@@ -499,17 +582,41 @@ export function loginSyncStatus(): CliLoginSyncStatus {
       problem: read && 'error' in read ? read.error : null,
     })
   }
+  // Desktop profiles signed in here, by account (desktop-login-sync.ts).
+  for (const p of listDesktopProfiles()) {
+    if (!p.uuid || seen.has(p.uuid)) continue
+    seen.add(p.uuid)
+    const remote = lastStore.get(p.uuid)
+    logins.push({
+      id: p.uuid,
+      kind: 'desktop',
+      num: p.num,
+      name: p.name,
+      here: true,
+      inStore: !!remote,
+      excluded: excluded.has(p.uuid),
+      inSync: !!remote && c.state[p.uuid]?.version === remote.version,
+      problem: desktopNotes.own.has(p.uuid)
+        ? 'Signed in on its own on this PC: sync leaves it alone, and both stay signed in.'
+        : desktopNotes.waiting.has(p.uuid)
+          ? 'A newer login waits until this desktop instance is closed (or opened from AgentHydra).'
+          : null,
+    })
+  }
   for (const [id, remote] of lastStore)
     if (!seen.has(id))
       logins.push({
         id,
+        kind: remote.kind === 'desktop' ? 'desktop' : 'cli',
         num: remote.num,
-        name: id,
+        name: remote.name ?? id,
         here: false,
         inStore: true,
         excluded: excluded.has(id),
         inSync: false,
-        problem: null,
+        problem: desktopNotes.waiting.has(id)
+          ? 'Waits until its signed-out desktop instance here is closed.'
+          : null,
       })
   let host: string | null = null
   try {
@@ -528,10 +635,21 @@ export function loginSyncStatus(): CliLoginSyncStatus {
   }
 }
 
+/** Before AgentHydra opens a desktop profile: one pass first, so a newer login lands while the
+ *  profile is still closed. At most ten seconds: a launch never waits long on the store. */
+export async function syncBeforeLaunch(_dir: string): Promise<void> {
+  if (!readConfig()?.enabled) return
+  await Promise.race([
+    runLoginSync().catch(() => undefined),
+    new Promise((resolve) => setTimeout(resolve, 10_000)),
+  ])
+}
+
 let timer: ReturnType<typeof setInterval> | null = null
 /** Start the sync loop (daemon boot). Each tick is a no-op until sync is set up and on. */
 export function startLoginSync(): void {
   if (timer) return
+  setBeforeLaunchHook(syncBeforeLaunch, 'login-sync')
   timer = setInterval(() => {
     if (readConfig()?.enabled) void runLoginSync().catch(() => {})
   }, SYNC_EVERY_MS)

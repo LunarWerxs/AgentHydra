@@ -7,9 +7,7 @@
 // this pins. The store is the real Worker, run here on bun:sqlite behind D1's prepare/bind API; the
 // other PC is played by writing to the store with the key from this PC's pairing code.
 
-import { Database } from 'bun:sqlite'
-import { afterAll, describe, expect, test } from 'bun:test'
-import { createHash, randomBytes } from 'node:crypto'
+import { describe, expect, test } from 'bun:test'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,6 +22,7 @@ import {
   sealLogin,
   setLoginSyncExcluded,
 } from '../src/core/cli-login-sync'
+import { base, store, token } from './login-sync-store'
 
 /** A stand-in `claude` whose `auth status` refreshes a login landed at expiry 2000 to 2500, as the
  *  real one may when the access token has run out: landing a login must not hide that refresh. */
@@ -48,44 +47,6 @@ console.log(JSON.stringify({ loggedIn: true, email: 'synced@example.com' }))
   chmodSync(join(dir, 'claude'), 0o755)
   return { path: join(dir, 'claude'), dir }
 }
-
-/** D1's prepare/bind/first/all/run over bun:sqlite: the Worker's storage, nothing more. */
-function d1(db: Database) {
-  return {
-    prepare(sql: string) {
-      let args: Array<string | number> = []
-      const stmt = {
-        bind(...a: Array<string | number>) {
-          args = a
-          return stmt
-        },
-        first: async () => db.query(sql).get(...args) ?? null,
-        all: async () => ({ results: db.query(sql).all(...args) }),
-        run: async () => ({ meta: { changes: db.query(sql).run(...args).changes } }),
-      }
-      return stmt
-    },
-  }
-}
-
-const token = randomBytes(24).toString('base64url')
-const worker = (
-  await import(join(import.meta.dir, '..', '..', 'cloud', 'login-sync-worker', 'worker.js'))
-).default as { fetch: (r: Request, env: unknown) => Promise<Response> }
-const env = {
-  DB: d1(new Database(':memory:')),
-  TOKEN_SHA256: createHash('sha256').update(token).digest('hex'),
-}
-const server = Bun.serve({ port: 0, fetch: (req) => worker.fetch(req, env) })
-const base = `http://127.0.0.1:${server.port}`
-afterAll(() => server.stop(true))
-
-const store = (method: string, path: string, body?: unknown) =>
-  fetch(`${base}${path}`, {
-    method,
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  }).then(async (r) => ({ status: r.status, json: (await r.json()) as any }))
 
 const creds = (expiresAt: number) =>
   JSON.stringify({

@@ -1,4 +1,5 @@
 import { resolveAccount } from '../core/accounts'
+import { setLoginSyncExcluded } from '../core/cli-login-sync'
 import { detectDesktopInstall } from '../core/desktop-install'
 import {
   createDshInstance,
@@ -22,6 +23,7 @@ import {
   listInstances,
   openInstance,
   quitInstance,
+  readLoginUuid,
   revealInstanceFolder,
 } from '../core/instances'
 import { createInstance, removeInstance } from '../core/lifecycle'
@@ -120,7 +122,11 @@ app.post('/api/instances/:dir/quit', async (c) => {
 // Electron app is worse than not doing it at all).
 app.post('/api/instances/:dir/logout', async (c) => {
   const dir = decodeURIComponent(c.req.param('dir'))
+  // The account it was signed in to, read before the logout removes it: login sync leaves it out on
+  // this PC, so the store does not sign it straight back in (core/desktop-login-sync.ts).
+  const account = readLoginUuid(dir)
   const result = await logoutInstance(dir)
+  if (result.ok && account) setLoginSyncExcluded(account, true)
   // OWNER RULE (Michael, 2026-09-07): signing out clears the usage numbers - session, weekly,
   // five-hour. logoutInstance already drops our cached IDENTITY for the dir; the cached USAGE
   // outlived it, and since the usage routes serve the cache before checking anything, the row

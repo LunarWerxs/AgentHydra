@@ -16,6 +16,10 @@
 //
 // Never throws: every expected failure (bad base64, wrong/missing version prefix, truncated
 // blob, key retrieval failure, decrypt/tag-mismatch failure, bad UTF-8) returns `null`.
+//
+// The Windows path also runs the other way (encryptSafeStorage, encryptV10Gcm): desktop login sync
+// (core/desktop-login-sync.ts) writes a login into a profile under that profile's own key, since a
+// key is per profile and per PC and an encrypted value cannot be copied between them.
 
 import { deriveLinuxKey, getLinuxMasterKey, linuxFallbackPassword } from './keys.linux'
 import { deriveMacKey, getMacMasterKey } from './keys.mac'
@@ -86,6 +90,30 @@ async function decryptAesCbc(key: Uint8Array, ciphertext: Uint8Array): Promise<U
     // padding — that's an expected "wrong key" signal here, so we swallow it as null.
     return null
   }
+}
+
+/** Chromium's os_crypt value on Windows: 'v10' + 12-byte nonce + AES-256-GCM ciphertext + tag, the
+ *  inverse of decryptV10Gcm. Throws only on a key that is not 32 bytes. */
+export async function encryptV10Gcm(key: Uint8Array, plain: Uint8Array): Promise<Uint8Array> {
+  const nonce = crypto.getRandomValues(new Uint8Array(GCM_NONCE_LENGTH))
+  const cryptoKey = await crypto.subtle.importKey('raw', key.slice(), 'AES-GCM', false, ['encrypt'])
+  const sealed = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: nonce, tagLength: GCM_TAG_LENGTH * 8 },
+      cryptoKey,
+      plain.slice(),
+    ),
+  )
+  const out = new Uint8Array(3 + nonce.length + sealed.length)
+  out.set([0x76, 0x31, 0x30]) // 'v10'
+  out.set(nonce, 3)
+  out.set(sealed, 3 + nonce.length)
+  return out
+}
+
+/** A whole os_crypt value (prefix included) under `key`, or null: wrong key, damage, another prefix. */
+export async function decryptV10Gcm(key: Uint8Array, blob: Uint8Array): Promise<Uint8Array | null> {
+  return readVersionPrefix(blob) === 'v10' ? decryptAesGcm(key, blob.subarray(3)) : null
 }
 
 function utf8DecodeOrNull(bytes: Uint8Array): string | null {
@@ -180,6 +208,27 @@ export async function decryptSafeStorage(
     if (platform === 'win32') return decryptWin32(version, afterPrefix, instanceDir)
     if (platform === 'darwin') return decryptDarwin(version, afterPrefix, instanceDir)
     return decryptLinux(afterPrefix, instanceDir)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Encrypt a string the way Electron's safeStorage does on Windows, under `instanceDir`'s own master
+ * key: the inverse of decryptSafeStorage, base64 like the values in a profile's config.json. Null
+ * when the profile's key cannot be read, and on any other OS (their keys live in the Keychain or a
+ * keyring, which nothing here writes). Never throws.
+ */
+export async function encryptSafeStorage(
+  plaintext: string,
+  instanceDir: string,
+): Promise<string | null> {
+  try {
+    if (process.platform !== 'win32' || !instanceDir?.trim()) return null
+    const key = await getWindowsMasterKey(instanceDir)
+    if (key?.length !== 32) return null
+    const sealed = await encryptV10Gcm(key, new TextEncoder().encode(plaintext))
+    return Buffer.from(sealed).toString('base64')
   } catch {
     return null
   }

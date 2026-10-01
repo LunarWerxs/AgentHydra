@@ -15,7 +15,8 @@
 // Nothing here throws for expected failure conditions (missing/locked file, bad JSON, missing
 // key, DPAPI failure because a different user encrypted it, etc.) — every path returns `null`.
 
-import { existsSync, readFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnCaptured } from '../process.ts'
 
@@ -127,6 +128,95 @@ async function unprotectViaFfi(blob: Uint8Array): Promise<Uint8Array | null> {
         // ignore
       }
     }
+  } catch {
+    return null
+  }
+}
+
+/** DPAPI CryptProtectData (CurrentUser scope, no UI) through bun:ffi, the inverse of
+ *  unprotectViaFfi. Null when the call is unavailable or fails. */
+async function protectViaFfi(data: Uint8Array): Promise<Uint8Array | null> {
+  try {
+    const { dlopen, FFIType, ptr, toArrayBuffer } = await import('bun:ffi')
+    type Pointer = number & { __pointer__: null }
+    const args = [
+      FFIType.ptr,
+      FFIType.ptr,
+      FFIType.ptr,
+      FFIType.ptr,
+      FFIType.ptr,
+      FFIType.u32,
+      FFIType.ptr,
+    ] as const
+    const crypt32 = dlopen('crypt32.dll', { CryptProtectData: { args, returns: FFIType.i32 } })
+    const kernel32 = dlopen('kernel32.dll', {
+      LocalFree: { args: [FFIType.ptr], returns: FFIType.ptr },
+    })
+    try {
+      const inBlob = makeDataBlobStruct(data, (b) => ptr(b))
+      const outBlobBuf = new ArrayBuffer(16)
+      const CRYPTPROTECT_UI_FORBIDDEN = 0x1
+      if (
+        !crypt32.symbols.CryptProtectData(
+          ptr(inBlob),
+          null,
+          null,
+          null,
+          null,
+          CRYPTPROTECT_UI_FORBIDDEN,
+          ptr(outBlobBuf),
+        )
+      )
+        return null
+      const outView = new DataView(outBlobBuf)
+      const outLen = outView.getUint32(0, true)
+      const outPtr = outView.getBigUint64(8, true)
+      if (outLen === 0 || outPtr === 0n) return null
+      const outPtrValue = Number(outPtr) as Pointer
+      const result = new Uint8Array(toArrayBuffer(outPtrValue, 0, outLen)).slice()
+      try {
+        kernel32.symbols.LocalFree(outPtrValue)
+      } catch {
+        // A small leak on failure is not fatal.
+      }
+      return result
+    } finally {
+      crypt32.close()
+      kernel32.close()
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Give a profile that has none its safeStorage master key, the way Chromium makes one on a first
+ * start: 32 random bytes, DPAPI-protected for this Windows user, stored base64 behind the 'DPAPI'
+ * prefix as `Local State`'s os_crypt.encrypted_key (desktop login sync, for a profile it makes on
+ * this PC). Chromium reads an existing key and keeps it. A profile that already has a key keeps it:
+ * that key encrypts its stored data. Returns the profile's key either way, or null. Never throws.
+ */
+export async function ensureWindowsMasterKey(instanceDir: string): Promise<Uint8Array | null> {
+  try {
+    const existing = await getWindowsMasterKey(instanceDir)
+    if (existing) return existing
+    const path = join(instanceDir, 'Local State')
+    if (existsSync(path)) return null // a Local State whose key does not open: never replaced
+    const key = new Uint8Array(randomBytes(32))
+    const sealed = await protectViaFfi(key)
+    if (!sealed) return null
+    mkdirSync(instanceDir, { recursive: true })
+    const tmp = `${path}.${process.pid}.tmp`
+    writeFileSync(
+      tmp,
+      JSON.stringify({
+        os_crypt: {
+          encrypted_key: Buffer.concat([DPAPI_PREFIX, Buffer.from(sealed)]).toString('base64'),
+        },
+      }),
+    )
+    renameSync(tmp, path)
+    return await getWindowsMasterKey(instanceDir)
   } catch {
     return null
   }

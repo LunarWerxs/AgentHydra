@@ -507,12 +507,17 @@ async function noLaunchBinaryResult(normDir: string): Promise<CMActionResult> {
   }
 }
 
-/** Work that must land in a profile's store before its app starts and reads it (the daemon sets
- *  it: move-retire-on-close.ts retireBeforeLaunch). Never allowed to fail a launch. */
-let beforeLaunchHook: ((normDir: string) => Promise<void>) | null = null
+/** Work that must land in a profile before its app starts and reads it, by name: the daemon sets
+ *  them (move-retire-on-close.ts retireBeforeLaunch; cli-login-sync.ts syncBeforeLaunch, a newer
+ *  desktop login). Run in turn; none is allowed to fail a launch. */
+const beforeLaunchHooks = new Map<string, (normDir: string) => Promise<void>>()
 
-export function setBeforeLaunchHook(hook: ((normDir: string) => Promise<void>) | null): void {
-  beforeLaunchHook = hook
+export function setBeforeLaunchHook(
+  hook: ((normDir: string) => Promise<void>) | null,
+  name = 'default',
+): void {
+  if (hook) beforeLaunchHooks.set(name, hook)
+  else beforeLaunchHooks.delete(name)
 }
 
 /** When AgentHydra last started launching each profile, keyed by pathKey. */
@@ -530,7 +535,7 @@ async function openConfiguredInstance(
 ): Promise<CMActionResult> {
   const running = await probeRunningInstance(normDir, nativeConfig)
   if (running) return running
-  await beforeLaunchHook?.(normDir).catch(() => {})
+  for (const hook of beforeLaunchHooks.values()) await hook(normDir).catch(() => {})
   launchStarts.set(pathKey(normDir, true), Date.now())
 
   const binary = await resolveLaunchBinaryOrNull()

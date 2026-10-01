@@ -3,7 +3,8 @@
 // cloud thingy, and it manages and syncs my logins between the 2 PCs"). Not set up: join with the
 // other PC's pairing code, or point at a new store (its address and access token). Set up: whether
 // it runs, when it last synced, every login's state with a switch to leave one out here, what the
-// last passes did, and the pairing code to copy to the other PC. Nothing here shows a login.
+// last passes did, and the pairing code to copy to the other PC. CLI and desktop logins are listed
+// together, each tagged with its kind. Nothing here shows a login.
 import { Cloud, Copy, RefreshCw, Unplug } from '@lucide/vue'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -228,6 +229,7 @@ const EVENT_KEY: Record<string, string> = {
           </span>
         </div>
         <p v-if="status.lastError" class="text-xs text-destructive">{{ status.lastError }}</p>
+        <p class="text-xs text-muted-foreground">{{ $t('cliInstances.syncDesktopNote') }}</p>
 
         <div class="max-h-56 overflow-y-auto rounded-md border">
           <table class="w-full text-xs">
@@ -244,6 +246,13 @@ const EVENT_KEY: Record<string, string> = {
                   <span class="flex items-center gap-1.5">
                     <InstanceNumber :num="l.num ?? 0" />
                     <span class="truncate">{{ l.name }}</span>
+                    <span class="rounded border px-1 text-3xs text-muted-foreground">
+                      {{
+                        l.kind === 'desktop'
+                          ? $t('cliInstances.syncKindDesktop')
+                          : $t('cliInstances.syncKindCli')
+                      }}
+                    </span>
                   </span>
                 </td>
                 <td class="px-2 py-1 text-muted-foreground">{{ stateOf(l) }}</td>
