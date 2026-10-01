@@ -695,3 +695,10 @@ stderr and exits 1), appends to it, prints init, an assistant text and a `result
 - Next run, check: `limitHits` stays 0 and peaks sit at 85-90; how often the ceiling fires
   (`ceilingStops`: the 85% handoff came late); `sizing.ratio` near 1; the re-read share falls
   below 14%; `cleaned` events in the journal; waiting tasks' `waitUntil` matches the real reset.
+- First ceiling stop (reported by the Connections orchestrator after `df4bb96`): #102 reached 90%
+  with 4 Sonnet workers running at once; `sizing.ratio` was 0.59 (Sonnet now under its estimate).
+  Every worker there is already asked at 85% (each reads the account's usage in its own stream),
+  but four sessions each writing a handoff move the meter past 90. To weigh: start the stop line
+  lower as more workers share an account (for example 85 minus a point or two per extra worker),
+  and add a `ceilingStopList` to the totals like `limitHitList` (task, account, pct, workers
+  running then).
