@@ -405,6 +405,9 @@ plan: a Max 5x window holds five Pro windows (`planFactor`).
   single tasks ran to 93% and 107%, and code on Opus high (33% on average) moved 33 times over 19
   tasks. An estimate is an average; over half a window a task runs past the whole one often enough
   that pieces cost less than its moves.
+- A waiting task carries `waitUntil` (ISO, UTC): when the first of its accounts frees up, a usage
+  wall's end or else its 5-hour reset; waiting for room, the first reset of an account whose fresh
+  window holds it. A waiter sleeps until it rather than parse the error text's local time.
 - An attempt's spend is read from the folder it ran in (`account.configDir` on the attempt), not from
   wherever the instance store points now.
 
