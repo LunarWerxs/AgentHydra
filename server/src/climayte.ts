@@ -2575,7 +2575,15 @@ export function climayteTotals(): {
       used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
       if (at.endedAt !== null && !at.spend) unmeasured++
       const r = rereadUnits(at, w.model)
-      const cause = w.attempts[i - 1]?.outcome
+      // What stopped the last run that ran: a refused sign-in in between re-read nothing itself.
+      const cause = w.attempts
+        .slice(0, i)
+        .reverse()
+        .find(
+          (a) =>
+            a.started ||
+            (a.tokens ? a.tokens.input + a.tokens.cacheRead + a.tokens.cacheWrite : 0) > 0,
+        )?.outcome
       if (r > 0 && cause) {
         reread += r
         byCause[cause] = (byCause[cause] ?? 0) + r
