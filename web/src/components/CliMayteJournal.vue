@@ -125,6 +125,10 @@ function line(e: CliMayteJournalEntry): string {
       return e.pending
         ? t('climayte.log.cancelledKept', { n: e.pending })
         : t('climayte.log.cancelled')
+    case 'nudged':
+      return e.ok
+        ? t('climayte.log.nudged', { account, until: clock(e.until) })
+        : t('climayte.log.nudgeFailed', { account })
     default:
       return String((e as { event: string }).event)
   }

@@ -210,5 +210,8 @@ export default {
     failedNoAccount: 'Failed',
     cancelled: 'Stopped',
     cancelledKept: 'Stopped; {n} waiting messages kept for when it continues',
+    // The keepalive's nudges (group 'keepalive'; server/src/session-keepalive.ts).
+    nudged: 'Started the 5-hour window on {account}; it resets {until}',
+    nudgeFailed: 'A nudge on {account} did not start its window',
   },
 }

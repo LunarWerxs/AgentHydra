@@ -10,9 +10,11 @@
 // associate / delete) still lives here; the account row carries launch / sign-in / unlink.
 import {
   ArrowDown,
+  ArrowRightLeft,
   ArrowUp,
   CreditCard,
   EllipsisVertical,
+  FileDown,
   Funnel,
   Link2,
   LogIn,
@@ -23,6 +25,7 @@ import {
   RefreshCw,
   RotateCcw,
   Terminal,
+  Timer,
   Trash2,
 } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
@@ -33,6 +36,7 @@ import AssociateCliInstanceDialog from '@/components/AssociateCliInstanceDialog.
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import CliLimitResetDialog from '@/components/CliLimitResetDialog.vue'
 import CliLimitResetIcon from '@/components/CliLimitResetIcon.vue'
+import CliLoginMoveDialog from '@/components/CliLoginMoveDialog.vue'
 import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
@@ -53,6 +57,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import {
   Table,
   TableBody,
@@ -62,6 +67,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useAppSettings } from '@/composables/useAppSettings'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
 import { useInstanceFilter } from '@/composables/useInstanceFilter'
@@ -71,6 +77,7 @@ import { useSortable } from '@/composables/useSortable'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
+import { formatUsd, timeAgo } from '@/lib/format'
 import { nameOverflowTitle, shortDisplayName } from '@/lib/instance-appearance'
 import { billsPastLimit, bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
 import {
@@ -448,6 +455,62 @@ async function onCheckUsageFromPopover(inst: CliInstance) {
   void refreshCliInstances({ silent: true })
 }
 
+// The keepalive's switch (server/src/session-keepalive.ts): the same setting as in Settings.
+const {
+  keepaliveEnabled,
+  keepaliveWeeklyFloorPct,
+  loaded: settingsLoaded,
+  load: loadSettings,
+  update: updateSettings,
+} = useAppSettings()
+async function onKeepaliveSwitch(value: boolean) {
+  if (!(await updateSettings({ keepaliveEnabled: value })))
+    toast.error(t('cliInstances.keepaliveSaveFailed'))
+  // A switch turned on runs a pass at once; its nudges reach the rows on a later poll.
+  else if (value) setTimeout(() => void refreshCliInstances({ silent: true }), 15_000)
+}
+/** A row's nudge note: shown while the window a nudge started still runs, or for six hours after a
+ *  nudge that did not start one (it is tried again after an hour; the note says why it failed). */
+function nudgeNote(inst: CliInstance): { ok: boolean; label: string; description: string } | null {
+  const n = inst.lastNudge
+  if (!n) return null
+  const nowMs = now.value.getTime()
+  if (n.ok) {
+    const until = n.resetsAt ? Date.parse(n.resetsAt) : n.at + SESSION_WINDOW_MS
+    if (!(until > nowMs)) return null
+    return {
+      ok: true,
+      label: t('cliInstances.nudgedLabel', { ago: timeAgo(n.at) }),
+      description: t('cliInstances.nudgedHint', {
+        when: new Date(until).toLocaleString(),
+        model: n.model ?? 'Haiku',
+        cost: n.costUsd == null ? '?' : formatUsd(n.costUsd),
+      }),
+    }
+  }
+  if (nowMs - n.at > 6 * 3_600_000) return null
+  return {
+    ok: false,
+    label: t('cliInstances.nudgeFailedLabel'),
+    description: t('cliInstances.nudgeFailedHint', { note: n.note, ago: timeAgo(n.at) }),
+  }
+}
+
+// Move logins to the other PC (CliLoginMoveDialog.vue, server/src/core/cli-login-move.ts).
+const moveOpen = ref(false)
+const moveMode = ref<'out' | 'in'>('out')
+const movePreselect = ref<string[]>([])
+function openMoveOut(inst: CliInstance) {
+  moveMode.value = 'out'
+  movePreselect.value = [inst.id]
+  moveOpen.value = true
+}
+function openMoveIn() {
+  moveMode.value = 'in'
+  movePreselect.value = []
+  moveOpen.value = true
+}
+
 /** The icon row at the top of a row's kebab (InstanceMenuHeader), in the order every table uses. */
 function menuActionsFor(inst: CliInstance): MenuIconAction[] {
   return [
@@ -482,6 +545,7 @@ const associateAccountOptions = computed(() => accounts.value)
 
 onMounted(() => {
   startPolling()
+  if (!settingsLoaded.value) void loadSettings()
   if (desktopInstances.value.length === 0) void refreshInstances({ silent: true })
 })
 onUnmounted(() => stopPolling())
@@ -505,6 +569,34 @@ onUnmounted(() => stopPolling())
       @refresh="refreshCliInstances()"
       @create="openCreateDialog"
     >
+      <template #tools>
+        <!-- The keepalive's switch, here as well as in Settings (owner, 2026-10-01: "a fleet switch
+             in the CLI tab"), and the way in for logins moved from the other PC. -->
+        <IconTooltip
+          :label="$t('cliInstances.keepaliveSwitch')"
+          :description="$t('cliInstances.keepaliveSwitchHint', { floor: keepaliveWeeklyFloorPct })"
+        >
+          <label class="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+            <Timer class="size-3.5" />
+            <span class="hidden sm:inline">{{ $t('cliInstances.keepaliveSwitch') }}</span>
+            <Switch
+              :model-value="keepaliveEnabled"
+              :aria-label="$t('cliInstances.keepaliveSwitch')"
+              @update:model-value="onKeepaliveSwitch"
+            />
+          </label>
+        </IconTooltip>
+        <IconTooltip :label="$t('cliInstances.moveIn')">
+          <Button
+            variant="outline"
+            size="icon"
+            :aria-label="$t('cliInstances.moveIn')"
+            @click="openMoveIn"
+          >
+            <FileDown />
+          </Button>
+        </IconTooltip>
+      </template>
       <template #meta>
         <!-- Linked ones aren't missing, they've moved onto their account's row in the Instances
              tab. Say so, or their absence from this count reads as a bug. -->
@@ -690,6 +782,37 @@ onUnmounted(() => stopPolling())
                 </span>
               </IconTooltip>
               <CliLimitResetIcon :result="inst.lastLimitReset" />
+              <!-- The keepalive started this window, or its last nudge did not (session-keepalive.ts). -->
+              <IconTooltip
+                v-if="nudgeNote(inst)"
+                :label="nudgeNote(inst)!.label"
+                :description="nudgeNote(inst)!.description"
+              >
+                <span class="inline-flex items-center" :aria-label="nudgeNote(inst)!.label">
+                  <Timer
+                    class="size-3.5"
+                    :class="nudgeNote(inst)!.ok ? 'text-info' : 'text-warning'"
+                  />
+                </span>
+              </IconTooltip>
+              <!-- Its login went to the other PC from here (cli-login-move.ts). -->
+              <IconTooltip
+                v-if="inst.movedAway"
+                :label="$t('cliInstances.movedAwayLabel')"
+                :description="
+                  $t('cliInstances.movedAwayHint', {
+                    ago: timeAgo(inst.movedAway.at),
+                    file: inst.movedAway.file,
+                  })
+                "
+              >
+                <span
+                  class="inline-flex items-center"
+                  :aria-label="$t('cliInstances.movedAwayLabel')"
+                >
+                  <ArrowRightLeft class="size-3.5 text-muted-foreground" />
+                </span>
+              </IconTooltip>
               <!-- Paid extra usage ON: past its limits this account bills instead of stopping. -->
               <IconTooltip
                 v-if="billsPastLimit(usageFor(inst))"
@@ -798,6 +921,13 @@ onUnmounted(() => stopPolling())
                   >
                     <RotateCcw /> {{ $t('cliInstances.limitReset') }}
                   </DropdownMenuItem>
+                  <DropdownMenuItem
+                    v-if="inst.loggedIn"
+                    :disabled="isBusy(inst) || (inst.liveSessions ?? 0) > 0"
+                    @click="openMoveOut(inst)"
+                  >
+                    <ArrowRightLeft /> {{ $t('cliInstances.moveOut') }}
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     variant="destructive"
@@ -868,6 +998,13 @@ onUnmounted(() => stopPolling())
       v-model:open="limitResetOpen"
       :instance="limitResetTarget"
       @done="onLimitResetDone"
+    />
+    <CliLoginMoveDialog
+      v-model:open="moveOpen"
+      :mode="moveMode"
+      :instances="cliInstances"
+      :preselect="movePreselect"
+      @done="refreshCliInstances({ silent: true })"
     />
   </div>
 </template>

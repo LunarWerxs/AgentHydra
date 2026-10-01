@@ -174,14 +174,22 @@ export interface NudgeOutcome {
   costUsd: number | null
 }
 
+/** The whole system prompt of a nudge, in place of the CLI's own (see keepaliveArgv). */
+export const KEEPALIVE_SYSTEM_PROMPT = 'Reply with exactly the word the user asks for.'
+
 /** The nudge's command line. No tools, no MCP servers (CLAUDE_PROBE_NO_MCP_ARGS: 7 child processes
  *  per probe without them, measured), no skills, one turn, nothing saved; stream-json so the CLI's
- *  own usage event says which window the turn started. */
+ *  own usage event says which window the turn started. Its own one-line system prompt: measured on
+ *  three idle Pro accounts (2026-10-01), a nudge with the CLI's default prompt cost $0.040 at list
+ *  price (about 20k tokens of 1-hour cache writes), with this one $0.028 (13.7k), and with the
+ *  5-minute cache as well (nudgeWindow's env) $0.018; the 5-hour meter read 0% after it. */
 export function keepaliveArgv(exe: string): string[] {
   return [
     exe,
     '-p',
     KEEPALIVE_PROMPT,
+    '--system-prompt',
+    KEEPALIVE_SYSTEM_PROMPT,
     '--model',
     KEEPALIVE_MODEL,
     '--effort',
@@ -259,9 +267,14 @@ export async function nudgeWindow(
   let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
   try {
     proc = Bun.spawn(keepaliveArgv(resolveClaudeExe()), {
-      // The account's own login, never a borrowed key or token (CliMayte's scrub), and no claude.ai
-      // connectors: the same environment a CliMayte worker gets, minus its task.
-      env: { ...scrubbedEnv(target.configDir), ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
+      // The account's own login, never a borrowed key or token (CliMayte's scrub), no claude.ai
+      // connectors and the 5-minute prompt cache: the environment a CliMayte worker gets. A one-shot
+      // call never reads its cache back, so the 1-hour default's dearer write is pure cost.
+      env: {
+        ...scrubbedEnv(target.configDir),
+        ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
+        CLAUDE_CODE_PROMPT_CACHE_TTL: '5m',
+      },
       cwd: usageProbeCwd() ?? undefined,
       stdin: 'ignore',
       stdout: 'pipe',

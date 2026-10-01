@@ -41,6 +41,10 @@ import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import { CONFIG_DIR } from '../config'
 import { readLiveRegistry } from '../live-registry'
+import type {
+  CliLoginMoveResult as LoginMoveResult,
+  CliLoginMoveRow as LoginMoveRow,
+} from '../types'
 import {
   createCliInstance,
   getCliInstance,
@@ -82,27 +86,6 @@ export interface LoginBundle {
   iv: string
   tag: string
   data: string
-}
-
-/** One login's line in an export or import answer. Never carries a secret. */
-export interface LoginMoveRow {
-  id: string
-  num: number | null
-  name: string
-  ok: boolean
-  message: string
-  /** Import: how the instance here was found ('id', 'account') or that it was 'created'. */
-  matchedBy?: 'id' | 'account' | 'created'
-  /** Import: what `claude auth status` said about the login here. */
-  signedInAs?: string | null
-}
-
-export interface LoginMoveResult {
-  ok: boolean
-  message: string
-  /** Export: the bundle written. */
-  file?: string | null
-  rows: LoginMoveRow[]
 }
 
 const credPath = (configDir: string): string => join(configDir, '.credentials.json')

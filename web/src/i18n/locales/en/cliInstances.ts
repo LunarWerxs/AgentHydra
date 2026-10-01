@@ -105,4 +105,49 @@ export default {
   logoutDialogDescription:
     'Removes the saved Claude login (.credentials.json) from this CLI instance. Its chats, settings and folder stay, and Claude asks for a sign-in the next time it starts. Quit any Claude session running on it first.',
   toastUsageCheckFailed: 'Failed to check usage.',
+  // The keepalive's switch on this tab (server/src/session-keepalive.ts; also in Settings).
+  keepaliveSwitch: 'Keep windows running',
+  keepaliveSwitchHint:
+    'When a signed-in account has no 5-hour window running, AgentHydra sends it one tiny prompt (Haiku, one word back, about two cents at API prices) so its window starts now and resets sooner. Skips accounts at their limit, signed out, busy, or at {floor}% or more of their weekly limit. A timer icon on the row marks a window it started.',
+  keepaliveSaveFailed: 'Could not change the setting.',
+  // A row's nudge note (lastNudge from GET /api/cli-instances).
+  nudgedLabel: 'Window started by AgentHydra {ago}',
+  nudgedHint: 'It resets {when}. {model}, {cost} at API prices.',
+  nudgeFailedLabel: 'The last nudge did not start the window',
+  nudgeFailedHint: '{note} ({ago}). It tries again after an hour.',
+  // Moving a login to the other PC (CliLoginMoveDialog.vue, server/src/core/cli-login-move.ts).
+  moveOut: 'Move login to another PC',
+  moveIn: 'Import logins from another PC',
+  movedAwayLabel: 'Login moved to another PC',
+  movedAwayHint:
+    'Moved {ago} in {file}. Import that file on the other PC, or here to bring it back.',
+  moveOutTitle: 'Move logins to another PC',
+  moveOutBody:
+    'One login used on two PCs can break: each PC refreshes it, and the other one is left signed out. Moving a login puts it in one encrypted file and signs this PC out of it at the same time. Open the file on the other PC with the passphrase below.',
+  moveOutPick: 'Logins to move',
+  moveOutBusy: 'a session is running on it',
+  moveOutNone: 'No account here is signed in, so there is nothing to move.',
+  passphraseLabel: 'Passphrase',
+  passphraseHint:
+    'Write it down or copy it: the other PC needs it, and AgentHydra does not keep it. Anyone with the file and the passphrase gets these logins, so do not send both the same way.',
+  passphraseCopy: 'Copy passphrase',
+  passphraseCopied: 'Passphrase copied.',
+  passphraseNew: 'Make a new one',
+  passphraseShort: 'At least {min} characters.',
+  moveOutSubmit: 'Move {n} login | Move {n} logins',
+  moveOutWorking: 'Moving…',
+  moveFileCopy: 'Copy file path',
+  moveFileCopied: 'File path copied.',
+  moveInTitle: 'Import logins from another PC',
+  moveInBody:
+    'Choose the .ahlogins file made by “Move login to another PC” on your other PC, and type its passphrase. Each login lands on the same account here (or a new instance with the same number when this PC has never used it), and AgentHydra checks that it signs in.',
+  moveInFile: 'Login file',
+  moveInFrom: 'From {from}, {date}:',
+  moveInBadFile: 'That file is not an AgentHydra login file.',
+  moveInSubmit: 'Import',
+  moveInWorking: 'Importing and checking each sign-in…',
+  moveFailed: 'The move failed.',
+  copyFailed: 'Could not copy to the clipboard.',
+  moveClose: 'Close',
+  moveCancel: 'Cancel',
 }

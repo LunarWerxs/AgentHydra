@@ -10,6 +10,7 @@ import type {
   ChatListResult,
   CliInstance,
   CliLimitResetResult,
+  CliLoginMoveResult,
   CMAccount,
   CMActionResult,
   CMDesktopInstall,
@@ -83,6 +84,8 @@ export type {
   ClaudeUsageCredits,
   CliInstance,
   CliLimitResetResult,
+  CliLoginMoveResult,
+  CliNudgeRecord,
   CMAccount,
   CMAccountStatus,
   CMActionResult,
@@ -829,6 +832,19 @@ export const deleteCliInstance = (id: string, confirmName: string) =>
     method: 'DELETE',
     body: JSON.stringify({ confirmName }),
   })
+/** Move CLI logins to another PC: one encrypted bundle in Downloads, and this PC signed out of each
+ *  (server/src/core/cli-login-move.ts). The passphrase is made here and never comes back. */
+export const moveCliLoginsOut = (ids: string[], passphrase: string) =>
+  j<CliLoginMoveResult>('/api/cli-instances/move-out', {
+    method: 'POST',
+    body: JSON.stringify({ ids, passphrase }),
+  })
+/** Sign in here the logins of a bundle made on another PC, each checked with `claude auth status`. */
+export const moveCliLoginsIn = (bundle: unknown, passphrase: string) =>
+  j<CliLoginMoveResult>('/api/cli-instances/move-in', {
+    method: 'POST',
+    body: JSON.stringify({ bundle, passphrase }),
+  })
 export const checkCliInstanceUsage = (id: string, refresh = false) =>
   j<UsageCheckResult>(
     `/api/cli-instances/${encodeURIComponent(id)}/usage${refresh ? '?refresh=1' : ''}`,
@@ -1080,6 +1096,7 @@ export interface CliMayteJournalEntry {
     | 'done'
     | 'failed'
     | 'cancelled'
+    | 'nudged'
   account?: string
   from?: string
   attempt?: number
@@ -1104,6 +1121,8 @@ export interface CliMayteJournalEntry {
   effort?: string | null
   cwd?: string
   accounts?: number
+  /** nudged: the window was seen running after it. */
+  ok?: boolean
 }
 /** The journal for one task or one hand-off, oldest first (the newest `limit`). */
 export const getCliMayteJournal = (filter: { id?: string; group?: string; limit?: number }) => {

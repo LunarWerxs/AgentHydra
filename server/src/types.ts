@@ -1385,6 +1385,28 @@ export interface CliNudgeRecord {
   costUsd: number | null
 }
 
+/** One login's line in a move between PCs (core/cli-login-move.ts). Never carries a secret. */
+export interface CliLoginMoveRow {
+  id: string
+  num: number | null
+  name: string
+  ok: boolean
+  message: string
+  /** Import: how the instance here was found ('id', 'account') or that it was 'created'. */
+  matchedBy?: 'id' | 'account' | 'created'
+  /** Import: the account `claude auth status` reported for the login here. */
+  signedInAs?: string | null
+}
+
+/** The answer to a move out (export) or in (import) of CLI logins. */
+export interface CliLoginMoveResult {
+  ok: boolean
+  message: string
+  /** Export: the bundle written. */
+  file?: string | null
+  rows: CliLoginMoveRow[]
+}
+
 /** One run of a CLI account's `/limit-reset`, in the CLI's own words (core/cli-limit-reset.ts). */
 export interface CliLimitResetResult {
   ok: boolean
