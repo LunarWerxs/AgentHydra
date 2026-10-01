@@ -61,7 +61,10 @@ export interface CorchWorker {
   sessionId: string | null   // minted by Corch before the first launch (`--session-id`)
   accountId: string | null   // the account holding the session now
   attempts: CorchAttempt[]
-  result: string | null      // the final `result` text of the last completed turn
+  result: string | null      // the report: `results` joined, oldest turn first (RESULT_SEPARATOR)
+  results?: string[]         // each turn's closing text for the current message, oldest first
+                             // (MAX_RESULTS 12, MAX_RESULT_CHARS 20k each); reset when a new
+                             // message or a fresh session starts
   error: string | null
   lastActivity: string | null // one line: the newest event summarised (see summarizeEvent)
   costUsd: number            // summed over every attempt's `result.total_cost_usd`
@@ -148,7 +151,13 @@ Emit a change event (`onCorchChange(cb) → unsubscribe`) whenever a worker's st
 
 ### Pure helpers (exported; the tests pin these)
 
-- `classifyAttempt(events: unknown[], stderr: string): { outcome: AttemptOutcome; notice: string | null; result: string | null; costUsd: number; turns: number }`
+- `classifyAttempt(events: unknown[], stderr: string): { outcome: AttemptOutcome; notice: string | null; result: string | null; turnTexts: string[]; costUsd: number; turns: number }`
+  - `turnTexts`: every turn's closing text, oldest first. The CLI writes one `result` per run, but
+    a repo's Stop hook that refuses the stop sends a `user` message `Stop hook feedback: ...` and
+    the session goes on (field note 13: a "prove the deploy" turn's text replaced the worker's real
+    report). So the assistant text before each such message is a turn's text, and the clean
+    result's is the last. `finish` appends them to `results` (`addResults`), sets `result` to
+    `joinResults(results)` and journals a `turn-end` per turn.
   - Quota: a `createLimitStopTracker()` fed every event says `pending`, or the terminal `result`
     has `is_error` and `classifyLimit(text) === 'quota'`, or `classifyLimit(stderr) === 'quota'`.
     Model prose and tool output are never evidence (see `rate-limit-signal.ts`).
@@ -224,6 +233,7 @@ interface CorchJournalEntry {
   retry?: number; waitS?: number             // retry / interrupted
   costUsd?: number; turns?: number; totalCostUsd?: number  // done / turn-done
   error?: string                             // failed / waiting: the first line
+  said?: string                              // turn-end: the turn's closing text, first line
   cwd?: string; accounts?: number            // dispatched
 }
 ```
@@ -231,7 +241,8 @@ interface CorchJournalEntry {
 Events: `dispatched`, `launched` (with the account's session/week % and how many workers it already
 ran, the two things `pickAccount` scores on), `moved`, `limit`, `signed-out`, `handoff-requested`,
 `handoff-written`, `handoff-resumed`, `follow-up-queued`, `follow-up-delivered`, `retry`,
-`interrupted` (a daemon restart killed its CLI), `waiting`, `turn-done`, `done`, `failed`,
+`interrupted` (a daemon restart killed its CLI), `waiting`, `turn-end` (each turn's closing
+text, first line), `turn-done`, `done`, `failed`,
 `cancelled`. Read with `corchJournal(filter)` (entries, oldest first, the newest `limit`, default
 100) or `corchJournalLines(filter)`, one readable line each, e.g.
 `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`.
@@ -351,7 +362,8 @@ boot after the stores are ready.
   any flow is `waiting`; refresh the instance list when one signs in.
 - A **Corch** view (new `web/src/components/CorchView.vue`, reachable the same way the other top
   views are): workers grouped by `group`, newest first; each row: status chip, title, account,
-  elapsed, `lastActivity`, moves. Selecting a row shows `events`, `result`/`error`, a follow-up
+  elapsed, `lastActivity`, moves. Selecting a row shows `events`, `result` (each turn's text
+  under "Turn n of m" when there was more than one)/`error`, a follow-up
   box (`/send`) and Stop (`/cancel`). Poll every 3 s while any worker is active.
 - The selected worker's **Log** (`CorchJournal.vue`, in `CorchWorkerDetail.vue`): the journal for
   that task, or for its whole group (a toggle), one rendered line per entry, reloaded when the task
