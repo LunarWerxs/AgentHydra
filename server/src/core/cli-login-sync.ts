@@ -485,14 +485,18 @@ export function loginSyncStatus(): CliLoginSyncStatus {
   for (const i of listCliInstances()) {
     seen.add(i.id)
     const remote = lastStore.get(i.id)
+    const file = !!readText(credPath(i.configDir))
+    // Here but never in the store: say why when this PC's copy cannot go (a hollow login).
+    const read = file && !remote ? readPortableLogin(i.id, { whileRunning: true }) : null
     logins.push({
       id: i.id,
       num: i.num ?? null,
       name: i.name,
-      here: i.loggedIn || !!readText(credPath(i.configDir)),
+      here: i.loggedIn || file,
       inStore: !!remote,
       excluded: excluded.has(i.id),
       inSync: !!remote && c.state[i.id]?.version === remote.version,
+      problem: read && 'error' in read ? read.error : null,
     })
   }
   for (const [id, remote] of lastStore)
@@ -505,6 +509,7 @@ export function loginSyncStatus(): CliLoginSyncStatus {
         inStore: true,
         excluded: excluded.has(id),
         inSync: false,
+        problem: null,
       })
   let host: string | null = null
   try {

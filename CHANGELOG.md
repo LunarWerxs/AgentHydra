@@ -7,6 +7,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Login sync: keep your CLI logins the same on two PCs** (`server/src/core/cli-login-sync.ts`,
+  `cloud/login-sync-worker/`, the cloud button in the CLI tab). Point AgentHydra at a small
+  Cloudflare Worker of your own and both PCs can stay signed in to the same accounts: when one PC
+  refreshes a login, the other picks up the new one within about a minute, instead of being signed
+  out a few hours later. The Worker only stores logins encrypted with a key that stays on your PCs.
+  The second PC joins by pasting a pairing code from the first. Each login has a switch to leave it
+  out on one PC, and logging out on a PC leaves it out there.
+
+### Changed
+
+- **Copying a login to another PC keeps this PC signed in** (`server/src/core/cli-login-move.ts`).
+  "Copy login to another PC" no longer signs this PC out; tick "Also sign this PC out" for a move.
+
 ## [1.5.0] - 2026-10-01
 
 ### Added

@@ -1409,6 +1409,8 @@ export interface CliLoginSyncStatus {
     excluded: boolean
     /** This PC and the store agreed on it at the last pass. */
     inSync: boolean
+    /** Why this PC's copy cannot be shared (a credential file with no refresh token), or null. */
+    problem: string | null
   }>
   /** The newest first: what the passes did. */
   events: Array<{

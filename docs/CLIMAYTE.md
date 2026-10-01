@@ -571,7 +571,11 @@ sooner. Off by default (it spends quota); on in the CLI tab ("Keep windows runni
   costUsd`), shown on the CLI row as a timer icon (`lastNudge` on GET /api/cli-instances), and a
   journal line per nudge: `climayte_log { group: 'keepalive' }`, event `nudged`.
 
-## Moving a CLI login to the other PC: `server/src/core/cli-login-move.ts` (owner, 2026-10-01)
+## Carrying a CLI login to the other PC: `server/src/core/cli-login-move.ts` (owner, 2026-10-01)
+
+An export COPIES by default (owner, later the same day: "Make it not sign out when transferring. I
+sometimes need both to stay logged in."); "Also sign this PC out" makes it a move. Two PCs signed in
+to one login stay working only with login sync (below).
 
 A login used on two PCs is two processes refreshing one OAuth session, and the other PC's copy can
 end up unable to refresh ("OAuth session expired and could not be refreshed", the #88 symptom). So
@@ -602,7 +606,44 @@ there.
 - Verified live twice on #84 (2026-10-01): out of this PC, into a separate AgentHydra home standing
   in for the other PC (created under the same id and number #84, `claude auth status` passed), out
   again, and back here (matched by id, signed in, usage read normally).
-- How the file travels between PCs is the owner's choice (open question, 2026-10-01).
+- How the file travels: by hand (Downloads, any way the owner likes), or not at all once login sync
+  is on, which carries every login by itself.
+
+## Login sync: `server/src/core/cli-login-sync.ts` and `cloud/login-sync-worker/` (owner, 2026-10-01)
+
+"Give me the ability to utilize something like a cloudflare worker ... so I can just point the login
+manager at my cloud thingy, and it manages and syncs my logins between the 2 PCs." Both PCs keep the
+same logins signed in; a refresh on one reaches the other within a pass.
+
+- The store (`cloud/login-sync-worker/worker.js`): a Cloudflare Worker over D1 (strongly
+  consistent), versioned blobs keyed by CLI instance id, PUT compare-and-swap on the version (409 with
+  the current one), a bearer token checked against the `TOKEN_SHA256` plain-text binding (only the
+  hash lives in Cloudflare). The owner's: `agenthydra-login-sync` on the Lunawerx account's
+  workers.dev, D1 `agenthydra-login-sync`, deployed through the Connections MCP
+  (`cloudflare_worker_deploy`, value-blind).
+- On a PC: `<CONFIG_DIR>/login-sync.json` holds the address, the DPAPI-sealed token and 32-byte key,
+  the on switch, the logins left out, and per login the store version and credential hash this PC
+  last agreed on. Every 30 s (`startLoginSync`) and on Sync now: a login changed here since that
+  agreement goes up (even while a session runs: the file is what that CLI last wrote); when the
+  store moved on, the copy whose access token expires later wins (a refresh pushes the expiry out);
+  a newer copy lands through `landLogin` (the import's guards); a login only the store holds gets an
+  instance here with the same id and number. A landed login is recorded by what was landed, so a
+  refresh its sign-in check makes still goes up.
+- Each login is AES-256-GCM encrypted under the key with its instance id as associated data. The
+  pairing code (`ahsync1:` + base64url of address, token, key) is the only way the key leaves a PC:
+  the dialog's copy button, for the other PC's Join.
+- Left out on a PC (`excluded`): the dialog's per-login switch, a Log out there, a move away. Neither
+  uploaded nor landed there.
+- Routes: `GET /api/cli-instances/sync` (status, no secrets), `POST .../sync/setup {url, token}`,
+  `.../sync/join {code}`, `.../sync/run`, `.../sync/enabled {enabled}`, `.../sync/exclude {id,
+  excluded}`, `.../sync/pairing` (the copy button's code), `.../sync/disconnect`. No MCP tools.
+- Verified live (2026-10-01): health, 401 without or with a wrong token; this PC uploaded its 10
+  signed-in logins (#69 stays out: its credential file has no refresh token); a separate
+  AgentHydra home joined with the pairing code, landed all 10 under the same numbers (#83-#103) and
+  `claude auth status` passed for each; both sides' next passes found all 10 unchanged.
+- The test (`server/tests/cli-login-sync.test.ts`) runs the real Worker on bun:sqlite behind D1's
+  API and plays the other PC through the store: a refresh there lands here, one here goes up, one
+  made by the sign-in check goes up, an older copy never wins, a left-out login stays put.
 
 ## Routes: `server/src/routes/climayte.ts`
 

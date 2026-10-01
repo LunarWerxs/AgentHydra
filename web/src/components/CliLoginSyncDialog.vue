@@ -127,6 +127,7 @@ async function copyPairing() {
 type Login = CliLoginSyncStatus['logins'][number]
 function stateOf(l: Login): string {
   if (l.excluded) return t('cliInstances.syncStateOut')
+  if (l.problem) return l.problem
   if (l.inSync) return t('cliInstances.syncStateInSync')
   if (l.inStore && !l.here) return t('cliInstances.syncStateStoreOnly')
   if (l.here && !l.inStore) return t('cliInstances.syncStateHereOnly')
