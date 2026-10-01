@@ -542,6 +542,54 @@ export async function cliAuthStatus(configDir: string): Promise<{ loggedIn: bool
 hollow or revoked credential file passes that check (measured 2026-09-30: two instances with the
 file present answered `loggedIn: false`).
 
+## The nudge: `server/src/session-keepalive.ts` (owner, 2026-10-01)
+
+When a signed-in CLI account has no 5-hour window running (its reading has no reset time, or the
+reset is in the past), the keepalive sends it one cheap prompt so the window starts now and resets
+sooner. Off by default (it spends quota); on in the CLI tab ("Keep windows running") or Settings.
+
+- A nudge: `claude -p 'Reply with the single word: ok' --system-prompt <one line> --model haiku
+  --effort low --max-turns 1 --tools '' --disable-slash-commands --no-session-persistence
+  --output-format stream-json --verbose` plus `CLAUDE_PROBE_NO_MCP_ARGS`, in `scrubbedEnv(configDir)`
+  with `ENABLE_CLAUDEAI_MCP_SERVERS=false` and `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, `windowsHide`.
+  Measured on three idle Pro accounts: $0.040 a nudge at list price with the CLI's default system
+  prompt, $0.028 with the one-line prompt, $0.018 with the 5-minute cache too; the 5-hour meter
+  read 0% after it. It counts as started when the CLI's own `rate_limit_event` or the usage check
+  after it shows the window running.
+- Skipped: a signed-out or org-disabled login (listCliInstances lists it `loggedIn: false`), an
+  account CliMayte walled at a limit, one with a Claude session running (its live registry, CliMayte
+  workers included), one at or above the weekly floor (85, the owner's line), an unreadable reading,
+  one nudged already whose window still runs, one whose last nudge failed within the hour.
+- When: after every usage sweep (30 minutes), and on a timer at the soonest window end among the CLI
+  accounts plus 90 seconds (`armKeepalive`, usage-refresh.ts), and at once when the switch is turned
+  on (`keepaliveSettingsChanged`, the settings route).
+- Records: `<DATA_DIR>/keepalive.json` (last nudge per instance id: `at, ok, note, resetsAt, model,
+  costUsd`), shown on the CLI row as a timer icon (`lastNudge` on GET /api/cli-instances), and a
+  journal line per nudge: `climayte_log { group: 'keepalive' }`, event `nudged`.
+
+## Moving a CLI login to the other PC: `server/src/core/cli-login-move.ts` (owner, 2026-10-01)
+
+A login used on two PCs is two processes refreshing one OAuth session, and the other PC's copy can
+end up unable to refresh ("OAuth session expired and could not be refreshed", the #88 symptom). So
+a login lives on one PC, and moving it is export here, this PC signed out in the same step, import
+there.
+
+- Export (`POST /api/cli-instances/move-out { ids, passphrase }`, the row menu's "Move login to
+  another PC"): all or nothing; refused while a session runs on a login or when its credential file
+  holds no refresh token. Writes `agenthydra-logins-<host>-<stamp>.ahlogins` to Downloads: the
+  numbers, names and plans in the clear, the `.credentials.json` text and the `.claude.json`
+  `oauthAccount` block AES-256-GCM encrypted under scrypt (N 2^15, r 8, p 1) of the passphrase. The
+  bundle is read back and opened before any login is signed out; then each `.credentials.json` is
+  removed and the record gets `movedAway { at, file }` (a row icon).
+- The passphrase is made in the web dialog (24 characters, 120 bits), sent once, never returned.
+  No MCP tool on purpose: a chat would have to hold it.
+- Import (`POST /api/cli-instances/move-in { bundle, passphrase }`, the header's import button):
+  the same instance id first, then the same account (the email in a `.claude.json` or a
+  "<email> (<plan>)" name), else a new instance under the same id, with the same number when this PC
+  never used it (`claimInstanceNumber`). Refused for an instance with a session running or one
+  signed in to another account. Then `claude auth status` on each, and a usage check.
+- How the file travels between PCs is the owner's choice (open question, 2026-10-01).
+
 ## Routes: `server/src/routes/climayte.ts`
 
 - `GET /api/corch/workers?group=&id=&active=1&limit=&brief=1&wait=` → `climayteList` (`wait`
@@ -736,3 +784,11 @@ stderr and exits 1), appends to it, prints init, an assistant text and a `result
   `ceilingStopList` (`pct`, `askedPct`, `workers`). The journal shows a ceiling stop whose handoff
   was written, and a waiting row's `until`. Each worker runs the owner's edit_claims hook (its
   PreToolUse in the worker's settings), claiming under its task id.
+- Verified live on the next run (the D: and H: drive survey, groups dhsurvey-w1..w4, 19:00-19:25
+  UTC): 12 tasks, 0 limit hits, 0 ceiling stops, re-read share 0; no account without a reading got
+  a second worker (the two doubled starts, #95 and #102, had readings at 3% and 6%); every worker's
+  `hooks/<id>.json` carries the edit_claims PreToolUse and 9 `w-*.json` claims were written.
+- Note 47 (an external budget a brief spends): no CliMayte side for now. The Connections
+  orchestrator's answer: the waste was one tool minting a sign-in on every run, fixed where it
+  happened (w-7dd056e4), and a declared-budget feature waits until a second outside budget bites.
+  Run 2 never hit "split needed" (409): every task was sized well under half a window.

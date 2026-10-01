@@ -7,6 +7,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **The CLI tab no longer scrolls as a page** (`web/src/components/CliMayteStatusBadge.vue`). Every
+  task row in the CliMayte list carries a status label for screen readers, and those labels were
+  placed against the page instead of their row, so a long task list made the whole tab 4,777 px
+  taller at 1920x1080. They stay in their rows now: at 1920x1080 and 3840x2112 the tab is exactly
+  the window's height, the accounts table still folds away, and Hide finished still works.
+
 ## [1.5.0] - 2026-10-01
 
 ### Added
