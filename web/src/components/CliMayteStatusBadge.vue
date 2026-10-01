@@ -22,9 +22,12 @@ const tone = computed(() => ICON_TONE[meta.value.variant ?? ''] ?? 'text-muted-f
 </script>
 
 <template>
+  <!-- `relative` holds the sr-only label (absolutely positioned) inside this icon. Without it the
+       label's containing block was the page, so in a scrolled task list every row's label hung
+       below the list and the whole CLI tab scrolled (4,777 px at 1920x1080, 2026-10-01). -->
   <span
     v-if="iconOnly"
-    class="inline-flex shrink-0 items-center"
+    class="relative inline-flex shrink-0 items-center"
     :class="tone"
     :title="`${$t(meta.label)}: ${$t(meta.hint)}`"
   >
