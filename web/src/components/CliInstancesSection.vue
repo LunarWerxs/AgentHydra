@@ -465,11 +465,24 @@ const {
   load: loadSettings,
   update: updateSettings,
 } = useAppSettings()
+// A switch turned on runs a pass at once; its nudges reach the rows on a refresh 15 s later. One
+// pending refresh at a time, and none after the tab is left.
+let keepaliveRefresh: ReturnType<typeof setTimeout> | null = null
+const clearKeepaliveRefresh = (): void => {
+  if (keepaliveRefresh !== null) clearTimeout(keepaliveRefresh)
+  keepaliveRefresh = null
+}
 async function onKeepaliveSwitch(value: boolean) {
-  if (!(await updateSettings({ keepaliveEnabled: value })))
+  if (!(await updateSettings({ keepaliveEnabled: value }))) {
     toast.error(t('cliInstances.keepaliveSaveFailed'))
-  // A switch turned on runs a pass at once; its nudges reach the rows on a later poll.
-  else if (value) setTimeout(() => void refreshCliInstances({ silent: true }), 15_000)
+    return
+  }
+  clearKeepaliveRefresh()
+  if (value)
+    keepaliveRefresh = setTimeout(() => {
+      keepaliveRefresh = null
+      void refreshCliInstances({ silent: true })
+    }, 15_000)
 }
 /** A row's nudge note: shown while the window a nudge started still runs, or for six hours after a
  *  nudge that did not start one (it is tried again after an hour; the note says why it failed). */
@@ -552,7 +565,10 @@ onMounted(() => {
   if (!settingsLoaded.value) void loadSettings()
   if (desktopInstances.value.length === 0) void refreshInstances({ silent: true })
 })
-onUnmounted(() => stopPolling())
+onUnmounted(() => {
+  stopPolling()
+  clearKeepaliveRefresh()
+})
 </script>
 
 <template>
