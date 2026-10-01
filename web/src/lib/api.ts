@@ -909,6 +909,8 @@ export interface CorchWorkerView {
   error: string | null
   lastActivity: string | null
   costUsd: number
+  /** Tokens its CLI sessions ran, summed over every attempt (absent on tasks recorded earlier). */
+  tokens?: CorchTokens
   turns: number
   moves: number
   retries: number
@@ -925,6 +927,21 @@ export interface CorchTask {
   model?: string
   effort?: string
 }
+/** Tokens a Corch session ran (server/src/corch-lib.ts CorchTokens). */
+export interface CorchTokens {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+/** What Corch has offloaded over every task on record: the Corch view's counter. */
+export interface CorchTotals {
+  tasks: number
+  sessions: number
+  tokens: CorchTokens
+  costUsd: number
+}
+export const getCorchTotals = () => j<CorchTotals>('/api/corch/totals')
 export const listCorchWorkers = (filter: { group?: string; active?: boolean } = {}) => {
   const q = new URLSearchParams()
   if (filter.group) q.set('group', filter.group)

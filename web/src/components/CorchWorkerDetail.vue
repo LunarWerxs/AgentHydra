@@ -26,7 +26,9 @@ import {
   CORCH_OUTCOME,
   corchAccountLabel,
   corchQueuedNote,
+  formatTokens,
   isCorchActive,
+  tokenTotal,
 } from '@/lib/corch-status'
 import { formatAgo } from '@/lib/relativeTime'
 
@@ -178,6 +180,22 @@ async function onStop() {
           <dd class="tabular-nums">{{ duration(worker.ranS) }}</dd>
           <dt class="text-muted-foreground">{{ $t('corch.detailCost') }}</dt>
           <dd class="tabular-nums" :title="$t('corch.detailCostHint')">${{ worker.costUsd.toFixed(2) }}</dd>
+          <template v-if="worker.tokens">
+            <dt class="text-muted-foreground">{{ $t('corch.detailTokens') }}</dt>
+            <dd
+              class="tabular-nums"
+              :title="
+                $t('corch.tokensBreakdown', {
+                  input: formatTokens(worker.tokens.input),
+                  output: formatTokens(worker.tokens.output),
+                  cacheRead: formatTokens(worker.tokens.cacheRead),
+                  cacheWrite: formatTokens(worker.tokens.cacheWrite),
+                })
+              "
+            >
+              {{ formatTokens(tokenTotal(worker.tokens)) }}
+            </dd>
+          </template>
           <dt class="text-muted-foreground">{{ $t('corch.detailTurns') }}</dt>
           <dd class="tabular-nums">{{ worker.turns }}</dd>
           <dt class="text-muted-foreground">{{ $t('corch.detailGroup') }}</dt>

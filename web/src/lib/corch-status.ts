@@ -12,7 +12,7 @@ import {
   type LucideIcon,
 } from '@lucide/vue'
 import type { BadgeVariants } from '@/components/ui/badge/badge-variants'
-import type { CorchAttemptOutcome, CorchStatus, CorchWorkerView } from '@/lib/api'
+import type { CorchAttemptOutcome, CorchStatus, CorchTokens, CorchWorkerView } from '@/lib/api'
 
 export interface CorchStatusMeta {
   variant: BadgeVariants['variant']
@@ -113,6 +113,14 @@ export const isCorchActive = (w: Pick<CorchWorkerView, 'status'>): boolean =>
 /** `#68 Darragh (CLI)`, or the bare name when the account has no instance number. */
 export const corchAccountLabel = (a: { num: number | null; name: string }): string =>
   a.num === null ? a.name : `#${a.num} ${a.name}`
+
+/** Every token a session ran (cache reads included: real traffic, a tenth of the price). */
+export const tokenTotal = (t: CorchTokens): number =>
+  t.input + t.output + t.cacheRead + t.cacheWrite
+
+const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
+/** "85.3M": token counts are read at a glance, not to the unit. */
+export const formatTokens = (n: number): string => compact.format(n)
 
 /** The first line of a multi-line message, for a one-line row. */
 export const firstLine = (s: string): string => s.split('\n', 1)[0] ?? s

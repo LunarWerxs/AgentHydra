@@ -18,8 +18,14 @@ import CorchWorkerDetail from '@/components/CorchWorkerDetail.vue'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { CorchWorkerView } from '@/lib/api'
-import { getCorchWorker, listCorchWorkers } from '@/lib/api'
-import { corchQueuedNote, firstLine, isCorchActive } from '@/lib/corch-status'
+import { type CorchTotals, getCorchTotals, getCorchWorker, listCorchWorkers } from '@/lib/api'
+import {
+  corchQueuedNote,
+  firstLine,
+  formatTokens,
+  isCorchActive,
+  tokenTotal,
+} from '@/lib/corch-status'
 import { reconcileList, sameData } from '@/lib/reconcile'
 import { formatAgo } from '@/lib/relativeTime'
 
@@ -67,13 +73,28 @@ async function loadDetail() {
   }
 }
 
+/** What Corch has offloaded so far (owner, 2026-09-30: a running count of sessions and tokens). */
+const totals = ref<CorchTotals | null>(null)
+const totalsHint = computed(() =>
+  totals.value
+    ? t('corch.offloadedHint', {
+        input: formatTokens(totals.value.tokens.input),
+        output: formatTokens(totals.value.tokens.output),
+        cacheRead: formatTokens(totals.value.tokens.cacheRead),
+        cacheWrite: formatTokens(totals.value.tokens.cacheWrite),
+        cost: `$${totals.value.costUsd.toFixed(2)}`,
+      })
+    : '',
+)
+
 async function load(opts: { silent?: boolean } = {}) {
   if (timer !== null) window.clearTimeout(timer)
   timer = null
   if (!opts.silent) loading.value = true
   try {
-    const list = await listCorchWorkers()
+    const [list, sums] = await Promise.all([listCorchWorkers(), getCorchTotals()])
     workers.value = reconcileList(workers.value, list, (w) => w.id)
+    if (!sameData(totals.value, sums)) totals.value = sums
     unreachable.value = false
     now.value = Date.now()
     if (!loaded.value) {
@@ -146,6 +167,27 @@ onUnmounted(() => {
           <span v-if="workers.length" class="font-normal text-muted-foreground">({{ workers.length }})</span>
         </h2>
         <p class="max-w-2xl text-xs text-muted-foreground">{{ $t('corch.subtitle') }}</p>
+        <!-- The running count of what Corch has taken off the chats that handed it work. -->
+        <p
+          v-if="totals && totals.tasks > 0"
+          class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"
+          :title="totalsHint"
+        >
+          <span>
+            <span class="font-semibold tabular-nums">{{ totals.tasks }}</span>
+            {{ $t('corch.offloadedTasks', totals.tasks) }}
+          </span>
+          <span aria-hidden="true" class="text-muted-foreground">·</span>
+          <span>
+            <span class="font-semibold tabular-nums">{{ totals.sessions }}</span>
+            {{ $t('corch.offloadedSessions', totals.sessions) }}
+          </span>
+          <span aria-hidden="true" class="text-muted-foreground">·</span>
+          <span>
+            <span class="font-semibold tabular-nums">{{ formatTokens(tokenTotal(totals.tokens)) }}</span>
+            {{ $t('corch.offloadedTokens') }}
+          </span>
+        </p>
       </div>
       <Button
         variant="outline"

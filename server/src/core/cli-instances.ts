@@ -45,7 +45,7 @@ import {
   windowsTerminalArgv,
 } from './launch-options'
 import { isPathInside } from './paths'
-import type { CMActionResult } from './shared'
+import { type CMActionResult, prettyTier, resolvePlanLabel } from './shared'
 
 export type { CliInstance } from '../types'
 
@@ -220,6 +220,24 @@ export function canonicalConfigDir(rec: Pick<CliInstance, 'id' | 'configDir'>): 
 /** A stored record hydrated with its LIVE loggedIn state (the store value is only a hint).
  *  Also backfills fields added after a store was first written (records predating the desktop link
  *  have no `associatedDesktop*` keys at all), so callers never see `undefined` where they expect null. */
+/** The plan a CLI login is on, from the non-secret fields of its `.credentials.json`
+ *  (`subscriptionType` "pro"/"max" and `rateLimitTier` "default_claude_max_20x"), as the same
+ *  label the desktop rows show: "Pro", "Max 5×", "Max 20×" (owner, 2026-09-30). Only those two
+ *  fields are used; the token beside them is never returned or logged. Null when there is no login
+ *  or it states no plan. */
+export function cliPlanLabel(configDir: string): string | null {
+  try {
+    const path = join(configDir, '.credentials.json')
+    if (!existsSync(path)) return null
+    const oauth = JSON.parse(readFileSync(path, 'utf8'))?.claudeAiOauth
+    const plan = typeof oauth?.subscriptionType === 'string' ? oauth.subscriptionType : null
+    const tier = typeof oauth?.rateLimitTier === 'string' ? oauth.rateLimitTier : null
+    return resolvePlanLabel(plan, prettyTier(tier))
+  } catch {
+    return null
+  }
+}
+
 function hydrate(rec: CliInstance, num?: number): CliInstance {
   const configDir = canonicalConfigDir(rec)
   // A credential file is not a working login (field note 3, 2026-09-30: two accounts listed
@@ -238,6 +256,7 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
     associatedDesktopDir: rec.associatedDesktopDir ?? null,
     associatedDesktopLabel: rec.associatedDesktopLabel ?? null,
     loggedIn: cred && !loginNote,
+    planLabel: cred ? cliPlanLabel(configDir) : null,
     ...(loginNote ? { loginNote } : {}),
   }
 }

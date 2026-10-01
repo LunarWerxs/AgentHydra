@@ -52,6 +52,14 @@ export default {
   detailRan: 'Working time',
   detailCost: 'Cost',
   detailTurns: 'Turns',
+  detailTokens: 'Tokens',
+  tokensBreakdown:
+    '{input} input · {output} output · {cacheRead} cache read · {cacheWrite} cache write',
+  offloadedTasks: 'task offloaded | tasks offloaded',
+  offloadedSessions: 'CLI session | CLI sessions',
+  offloadedTokens: 'tokens',
+  offloadedHint:
+    'Taken off the chats that handed Corch the work, over every task listed here: {input} input, {output} output, {cacheRead} cache read and {cacheWrite} cache write tokens, about {cost} at list prices.',
   detailCostHint: 'Every attempt on every account, stopped ones included.',
   detailGroup: 'Handed off together as',
   attempts: 'Accounts tried',

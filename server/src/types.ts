@@ -1352,6 +1352,9 @@ export interface CliInstance {
    *  `claude auth status` has not passed since (core/cli-instances.ts setCliLoginVeto). */
   loginNote?: string
   loggedIn: boolean
+  /** The signed-in account's plan ("Pro", "Max 5×", "Max 20×", ...), from the login's own
+   *  credentials (cliPlanLabel); null when signed out or not stated. */
+  planLabel?: string | null
   lastUsageCheck: UsageSnapshot | null
   /** Claude sessions running on this account now (its live registry, Corch workers included). Set by
    *  GET /api/cli-instances only; absent elsewhere. */

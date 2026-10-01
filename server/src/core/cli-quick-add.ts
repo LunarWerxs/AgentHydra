@@ -20,6 +20,7 @@
 import { join } from 'node:path'
 import { resolveClaudeExe } from '../config'
 import {
+  cliPlanLabel,
   createCliInstance,
   deleteCliInstance,
   getCliInstance,
@@ -358,7 +359,9 @@ export async function cliAuthStatus(
     return {
       loggedIn: j.loggedIn === true,
       email: str('email', 'emailAddress'),
-      plan: str('subscriptionType', 'subscription', 'plan'),
+      // The same label the rows show ("Pro", "Max 20×"), from the login's credentials; the CLI's
+      // bare "max" says nothing about 5× or 20×.
+      plan: cliPlanLabel(configDir) ?? str('subscriptionType', 'subscription', 'plan'),
     }
   } catch {
     return none

@@ -590,13 +590,15 @@ onUnmounted(() => stopPolling())
               <ArrowDown v-else-if="indicatorFor('usage') === 'desc'" class="size-3" />
             </span>
           </TableHead>
+          <!-- The account's plan, the same badge as the Instances table (owner, 2026-09-30). -->
+          <TableHead class="w-24">{{ $t('instances.colPlan') }}</TableHead>
           <TableHead class="text-end">{{ $t('cliInstances.colActions') }}</TableHead>
         </TableRow>
       </TableHeader>
       <!-- visibleRows, not unlinkedCliInstances: with the usage filter set to hide, this table can
            be emptied while it still has rows to show, and a blank tbody explains nothing. -->
       <TableBody v-if="visibleRows.length === 0">
-        <TableEmpty v-if="!loading" :colspan="usageMode ? 8 : 6">
+        <TableEmpty v-if="!loading" :colspan="usageMode ? 9 : 7">
           <div class="flex flex-col items-center gap-1 text-center">
             <component :is="allHiddenByFilter ? Funnel : Terminal" class="mb-1 size-6 opacity-40" />
             <p class="font-medium text-foreground">
@@ -629,6 +631,7 @@ onUnmounted(() => stopPolling())
             <TableCell><Skeleton class="h-8 w-16" /></TableCell>
             <TableCell><Skeleton class="h-5 w-14" /></TableCell>
           </template>
+          <TableCell><Skeleton class="h-5 w-14" /></TableCell>
           <TableCell><Skeleton class="h-5 w-14" /></TableCell>
           <TableCell>
             <div class="flex justify-end"><Skeleton class="h-6 w-20" /></div>
@@ -737,6 +740,10 @@ onUnmounted(() => stopPolling())
               :usage-key="usageKey(inst)"
               @check="onCheckUsageFromPopover(inst)"
             />
+          </TableCell>
+          <TableCell>
+            <Badge v-if="inst.planLabel" variant="outline">{{ inst.planLabel }}</Badge>
+            <span v-else class="text-xs text-muted-foreground">—</span>
           </TableCell>
           <TableCell>
             <div class="flex items-center justify-end gap-1">
