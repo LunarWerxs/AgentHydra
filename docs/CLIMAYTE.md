@@ -327,9 +327,10 @@ and only a changed credential file lifts it.
 
 ### The owner's CLAUDE.md and skills (`server/src/climayte-owner-sync.ts`)
 
-A worker runs with `CLAUDE_CONFIG_DIR` = its account's folder, so `~/.claude` (the owner's global
-CLAUDE.md, skills and hooks) is not what it reads (field notes 5 and 9). Before each launch,
-`syncOwnerClaude('~/.claude', account.configDir)` makes the account folder match:
+A worker runs with `CLAUDE_CONFIG_DIR` = its account's folder, so the owner's own Claude Code folder
+(`.claude` in the home directory: the global CLAUDE.md, skills and hooks) is not what it reads
+(field notes 5 and 9). Before each launch, `syncOwnerClaude(ownerDir, account.configDir)`, with
+that folder as `ownerDir`, makes the account folder match:
 
 - `CLAUDE.md` is COPIED (a file symlink needs admin rights or developer mode on Windows; a hard
   link breaks the first time an editor saves by replacing the file), only when the owner's changed,
@@ -341,8 +342,8 @@ CLAUDE.md, skills and hooks) is not what it reads (field notes 5 and 9). Before 
   `<account>/.agenthydra-owner-sync.json`; an unchanged one costs a stat and a readdir.
 - Hooks and `settings.json` are NOT carried: the owner's desktop-only hooks can block a headless
   worker. Tests turn it on with `setCliMayteOwnerDir(dir | null)`; under `NODE_ENV=test` it is off.
-- **The lean worker profile** (`8b3add7`, owner's yes 2026-09-30): when `~/.claude/climayte-worker/`
-  holds a `CLAUDE.md`, workers get that instead of the full one, and when it holds `skills.txt`
+- **The lean worker profile** (`8b3add7`, owner's yes 2026-09-30): when that folder's
+  `climayte-worker/` holds a `CLAUDE.md`, workers get that instead of the full one, and when it holds `skills.txt`
   (one skill name per line, `#` comments) only those skills are linked; the rest are unlinked at
   the next launch. The owner's profile lives in the claude-memory repo (`home/climayte-worker/`,
   installed by `install.mjs`): 3 KB of rules and 12 engineering skills, against 44 KB and 84. Run 1

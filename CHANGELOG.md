@@ -358,7 +358,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   transcript never changes. So it was never resumed after the reset, and the resume list showed it
   as blocked for good. It is now checked again when the reset comes, however long that takes.
 - **Auto-resume times a desktop chat by that chat's own account** (`server/src/monitor.ts`,
-  `usage-service.ts`). A stopped chat from a desktop instance was timed by the default `~/.claude`
+  `usage-service.ts`). A stopped chat from a desktop instance was timed by the plain Claude Code
   login's usage instead of its own account's, so it could resume hours early or late, or wait on
   another account's weekly limit. It now reads the usage of the instance the chat lives in. And a
   chat whose 5-hour window had already reset by the time it was checked waited another five hours;

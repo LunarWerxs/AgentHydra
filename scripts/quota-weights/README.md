@@ -17,7 +17,7 @@ python scripts/quota-weights/final.py
 
 | Script | What it does |
 | --- | --- |
-| `build.py` | Reads every assistant request (deduplicated by message and request id) from each CLI instance's config dir and from `~/.claude/projects`, attributing desktop chats through each profile's `claude-code-sessions`. Reads meter readings from CliMayte stream logs (per request), AgentHydra's `usage-history.json` and each desktop profile's `plan-usage-history.json`. Writes `data.pkl` to `QUOTA_WEIGHTS_DATA` (default `~/.agenthydra/quota-weights`), never into the repo. About 3 minutes over 25 GB of transcripts. |
+| `build.py` | Reads every assistant request (deduplicated by message and request id) from each CLI instance's config dir and from the plain Claude Code login's own `projects` folder, attributing desktop chats through each profile's `claude-code-sessions`. Reads meter readings from CliMayte stream logs (per request), AgentHydra's `usage-history.json` and each desktop profile's `plan-usage-history.json`. Writes `data.pkl` to `QUOTA_WEIGHTS_DATA` (default `~/.agenthydra/quota-weights`), never into the repo. About 3 minutes over 25 GB of transcripts. |
 | `analyze.py` | Library: per-account cumulative spend, CliMayte intervals, whole 5-hour windows, the scaled non-negative least-squares fit (one free scale per account, so Pro and Max windows pool). |
 | `fit.py` | Read, write and output ratios per source and per tier, to see whether the sources agree. |
 | `evaluate.py` | The budget replay: calibrate on the last 6 hours, predict the next hour (5-hour meter) or 6 hours (weekly meter); leave-one-account-out and cross-group splits. |
