@@ -22,11 +22,12 @@ export function getProviderSettings(): ProviderSettings {
 }
 
 /** The floor is a PERCENTAGE and a safety rail, so a nonsense value must land somewhere safe rather
- *  than somewhere permissive: anything unparseable becomes 80, and the range is clamped so a typo
- *  cannot turn "never spend" into "always spend". */
+ *  than somewhere permissive: anything unparseable becomes 85 (the owner's weekly line, 2026-10-01:
+ *  "any at 85%+ weekly"), and the range is clamped so a typo cannot turn "never spend" into "always
+ *  spend". */
 function clampFloor(raw: string): number {
   const n = Number.parseFloat(raw)
-  if (!Number.isFinite(n)) return 80
+  if (!Number.isFinite(n)) return 85
   return Math.min(100, Math.max(0, n))
 }
 

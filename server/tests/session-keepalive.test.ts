@@ -8,7 +8,14 @@
 // decideKeepalive is pure precisely so this can be pinned without spawning anything.
 
 import { describe, expect, test } from 'bun:test'
-import { decideKeepalive, runKeepaliveSweep, windowRunning } from '../src/session-keepalive'
+import {
+  decideKeepalive,
+  type NudgeOutcome,
+  type NudgeRecords,
+  type NudgeStore,
+  runKeepaliveSweep,
+  windowRunning,
+} from '../src/session-keepalive'
 import type { UsageSnapshot } from '../src/types'
 
 function snap(patch: Partial<UsageSnapshot> = {}): UsageSnapshot {
@@ -33,8 +40,20 @@ describe('windowRunning', () => {
     expect(
       windowRunning(
         snap({ session: { pct: 12, resets: '', resetsAt: '2024-09-06T17:00:00.000Z' } }),
+        Date.parse('2024-09-06T12:00:00.000Z'),
       ),
     ).toBe(true)
+  })
+
+  test('a reset instant that has passed means the window is over', () => {
+    // Owner, 2026-10-01: nudge when "the reset is in the past". A reading kept from before its
+    // reset still carries the old instant, and it used to read as running until the next sweep.
+    const after = Date.parse('2024-09-06T17:00:01.000Z')
+    const stale = snap({
+      session: { pct: 40, resets: 'Sep 6, 5:00pm', resetsAt: '2024-09-06T17:00:00.000Z' },
+    })
+    expect(windowRunning(stale, after)).toBe(false)
+    expect(decideKeepalive(stale, 85, { now: after }).action).toBe('nudge')
   })
 
   test('no session figure at all is UNKNOWN, not "not running"', () => {
@@ -81,6 +100,34 @@ describe('decideKeepalive', () => {
     expect(decideKeepalive(snap({ weekAll: { pct: 0, resets: 'x' } }), 0).action).toBe('skip')
   })
 
+  test('never spends on a blocked account, nor twice on one whose nudged window still runs', () => {
+    // A signed-out, walled or busy account is the caller's knowledge, not the reading's; and a
+    // usage reading lags a nudge by up to a sweep, so without the record every sweep in between
+    // would nudge again.
+    const now = Date.parse('2024-09-06T12:00:00.000Z')
+    const idle = snap()
+    expect(decideKeepalive(idle, 85, { now, blocked: '1 Claude session running on it' })).toEqual({
+      action: 'skip',
+      reason: '1 Claude session running on it',
+    })
+    const nudged = {
+      at: now - 60_000,
+      ok: true,
+      note: 'started',
+      resetsAt: '2024-09-06T16:59:00.000Z',
+      model: 'claude-haiku-4-5',
+      costUsd: 0.001,
+    }
+    expect(decideKeepalive(idle, 85, { now, last: nudged }).action).toBe('skip')
+    expect(
+      decideKeepalive(idle, 85, { now: Date.parse('2024-09-06T17:00:00.000Z'), last: nudged })
+        .action,
+    ).toBe('nudge')
+    const failed = { ...nudged, ok: false, note: 'claude exited 1', resetsAt: null }
+    expect(decideKeepalive(idle, 85, { now, last: failed }).action).toBe('skip')
+    expect(decideKeepalive(idle, 85, { now: now + 61 * 60_000, last: failed }).action).toBe('nudge')
+  })
+
   test('every decision says why, including the ones that act', () => {
     // These end up in a log the owner reads to answer "why did it spend that?".
     for (const d of [
@@ -95,11 +142,34 @@ describe('decideKeepalive', () => {
 
 // --- the sweep: what it does, and what it refuses to do -------------------------------------------
 describe('runKeepaliveSweep', () => {
+  const target = (label: string, usageKey: string) => ({
+    id: label,
+    label,
+    configDir: '',
+    usageKey,
+  })
   const targets = [
-    { label: 'idle-1', usageKey: 'desktop:a' },
-    { label: 'running-1', usageKey: 'desktop:b' },
-    { label: 'spent-1', usageKey: 'desktop:c' },
+    target('idle-1', 'desktop:a'),
+    target('running-1', 'desktop:b'),
+    target('spent-1', 'desktop:c'),
   ]
+  /** A fresh in-memory record store per sweep, so one test's nudge never holds off another's. */
+  const memory = (): NudgeStore => {
+    const all: NudgeRecords = {}
+    return {
+      read: () => ({ ...all }),
+      write: (id, rec) => {
+        all[id] = rec
+      },
+    }
+  }
+  const started = async (): Promise<NudgeOutcome> => ({
+    started: true,
+    note: 'started',
+    resetsAt: null,
+    model: null,
+    costUsd: null,
+  })
   const readings: Record<string, UsageSnapshot> = {
     'desktop:a': snap(),
     'desktop:b': snap({ session: { pct: 5, resets: 'Sep 6, 5:00pm' } }),
@@ -114,9 +184,10 @@ describe('runKeepaliveSweep', () => {
       weeklyFloorPct: 80,
       targets,
       reading,
+      store: memory(),
       nudge: async () => {
         called++
-        return true
+        return started()
       },
     })
     expect(called).toBe(0)
@@ -131,9 +202,10 @@ describe('runKeepaliveSweep', () => {
       weeklyFloorPct: 80,
       targets,
       reading,
+      store: memory(),
       nudge: async (t) => {
         poked.push(t.label)
-        return true
+        return started()
       },
     })
     expect(poked).toEqual(['idle-1'])
@@ -149,24 +221,23 @@ describe('runKeepaliveSweep', () => {
       weeklyFloorPct: 80,
       targets: [targets[0]!],
       reading,
-      nudge: async () => false,
+      store: memory(),
+      nudge: async () => ({ ...(await started()), started: false, note: 'claude exited 1' }),
     })
     expect(r.nudged).toEqual([])
-    expect(r.skipped['idle-1']).toContain('still does not report as running')
+    expect(r.skipped['idle-1']).toBe('claude exited 1')
   })
 
   test('one account throwing does not stop the sweep, and the reason is kept', async () => {
     const r = await runKeepaliveSweep({
       enabled: true,
       weeklyFloorPct: 80,
-      targets: [
-        { label: 'boom', usageKey: 'desktop:a' },
-        { label: 'fine', usageKey: 'desktop:a' },
-      ],
+      targets: [target('boom', 'desktop:a'), target('fine', 'desktop:a')],
       reading,
+      store: memory(),
       nudge: async (t) => {
         if (t.label === 'boom') throw new Error('spawn refused')
-        return true
+        return started()
       },
     })
     expect(r.skipped.boom).toContain('spawn refused')

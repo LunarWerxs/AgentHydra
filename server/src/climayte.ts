@@ -179,6 +179,22 @@ export function climayteJournalLines(filter: JournalFilter = {}): string[] {
   return climayteJournal(filter).map((e) => formatJournalLine(e, now))
 }
 
+/** A journal line about an account rather than a worker: the keepalive's nudges (usage-refresh.ts),
+ *  under id and group 'keepalive', so `climayte_log { group: 'keepalive' }` lists them and a run's
+ *  log shows when an idle account's window was started beside the work placed on it. */
+export function climayteJournalNudge(
+  details: Omit<Partial<CliMayteJournalEntry>, 'ts' | 'id' | 'group' | 'title' | 'event'>,
+): void {
+  appendJournal(JOURNAL_PATH, {
+    ts: new Date().toISOString(),
+    id: 'keepalive',
+    group: 'keepalive',
+    title: 'Start the 5-hour window',
+    event: 'nudged',
+    ...details,
+  })
+}
+
 interface Store {
   workers: CliMayteWorker[]
   perAccount: Record<string, number>

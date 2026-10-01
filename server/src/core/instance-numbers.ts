@@ -145,6 +145,25 @@ export function instanceNumbers(refs: InstanceRef[]): Map<InstanceRef, number> {
   return out
 }
 
+/**
+ * Give `ref` the number `num`, when `ref` has none yet and `num` was never handed out here.
+ *
+ * For a login moved in from another PC (core/cli-login-move.ts): the owner knows an account by its
+ * number, so the instance keeps it when this PC has never used that number. A number already used
+ * here, even by a deleted instance, stays what it was (the registry's whole guarantee), and the
+ * instance gets the next free one instead. Returns whether `ref` now has `num`.
+ */
+export function claimInstanceNumber(ref: InstanceRef, num: number): boolean {
+  if (!Number.isInteger(num) || num < 1 || !parseInstanceRef(ref)) return false
+  const reg = read()
+  if (reg.byRef[ref] !== undefined) return reg.byRef[ref] === num
+  if (Object.values(reg.byRef).includes(num)) return false
+  reg.byRef[ref] = num
+  if (num >= reg.next) reg.next = num + 1
+  write(reg)
+  return true
+}
+
 /** One instance's number, assigning it if this is the first sighting. */
 export function instanceNumberFor(kind: InstanceKind, id: string): number {
   const ref = instanceRef(kind, id)

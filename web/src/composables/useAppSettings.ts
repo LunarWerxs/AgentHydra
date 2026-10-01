@@ -22,10 +22,10 @@ const codexCliEnabled = ref(true)
 const dshEnabled = ref(true)
 const chatGptHandoffEnabled = ref(false)
 // The 5-hour keepalive. Mirrors the server's defaults (provider-settings.ts): OFF, and a floor that
-// leaves an account alone once 80% of its weekly cap is gone. It is the one setting on this screen
-// that spends quota, so the default has to be the safe one.
+// leaves an account alone once 85% of its weekly cap is gone (CliMayte's stop line). It is the one
+// setting on this screen that spends quota, so the default has to be the safe one.
 const keepaliveEnabled = ref(false)
-const keepaliveWeeklyFloorPct = ref(80)
+const keepaliveWeeklyFloorPct = ref(85)
 // Work on paid extra usage (usage credits). Mirrors the server's default: OFF, because it spends
 // money rather than quota.
 const allowExtraUsage = ref(false)

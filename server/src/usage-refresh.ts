@@ -16,13 +16,22 @@
 // Turn it off in Settings → Usage. The manual "Refresh usage" buttons work exactly the same either
 // way; this only decides whether the numbers go stale between visits.
 
+import { climayteJournalNudge, climayteLimitWalls, climayteLiveReadings } from './climayte'
+import type { CliMayteLiveUsage } from './climayte-lib'
 import { listCliInstances } from './core/cli-instances'
 import { listCodexInstances } from './core/codex-instances'
 import { listInstances } from './core/instances'
 import { getSetting, setSetting } from './db'
+import { readLiveRegistry } from './live-registry'
 import { getProviderSettings } from './provider-settings'
-import { runKeepaliveSweep } from './session-keepalive'
-import type { UsageSettings } from './types'
+import {
+  type KeepaliveSweepResult,
+  lastReading,
+  nudgeWindow,
+  runKeepaliveSweep,
+} from './session-keepalive'
+import type { UsageSettings, UsageSnapshot } from './types'
+import { withLiveReading } from './usage-live'
 import {
   checkUsageForCliInstance,
   checkUsageForCodex,
@@ -154,33 +163,135 @@ async function sweepCodexInstances(): Promise<number> {
   return checked
 }
 
+/** Why a signed-in CLI login must not be nudged right now, or null: CliMayte walled it at a limit, or
+ *  a Claude session runs on it (its window runs already, and a second process refreshing the same
+ *  login is how a refresh token gets invalidated). Signed-out and org-disabled logins never get this
+ *  far: listCliInstances() lists them `loggedIn: false` (CliMayte's login veto). */
+function keepaliveBlock(
+  id: string,
+  configDir: string,
+  walls: Map<string, { until: number; weekly: boolean }>,
+): string | null {
+  const wall = walls.get(id)
+  if (wall && wall.until > Date.now())
+    return `walled by CliMayte at its ${wall.weekly ? 'weekly' : '5-hour'} limit until ${new Date(wall.until).toISOString()}`
+  const running = readLiveRegistry(configDir).length
+  return running ? `${running} Claude session${running === 1 ? '' : 's'} running on it` : null
+}
+
+/** A CLI login's freshest reading: the cached usage check, with a newer CliMayte stream reading laid
+ *  over it (usage-live.ts), the numbers the CLI table shows. */
+function keepaliveReading(
+  live: Map<string, CliMayteLiveUsage>,
+): (usageKey: string) => UsageSnapshot | null {
+  return (usageKey) =>
+    withLiveReading(lastReading(usageKey), live.get(usageKey.replace(/^cli:/, '')))
+}
+
+/** The window end the armed nudge waits for, plus a margin for the server-side window to roll. */
+const KEEPALIVE_MARGIN_MS = 90_000
+let keepaliveRunning = false
+let keepaliveTimer: ReturnType<typeof setTimeout> | null = null
+let keepaliveNextAt: number | null = null
+
+/** When the armed nudge pass runs next (epoch ms), or null when none is armed. */
+export function keepaliveNextRunAt(): number | null {
+  return keepaliveNextAt
+}
+
 /**
- * The keepalive rides on the BACK of a sweep, deliberately: its decision is made from the quota
- * readings the loops just refreshed, so it acts on numbers seconds old rather than on whatever was
- * cached hours ago. It is a no-op unless switched on (see provider-settings), and it declines on
- * its own terms besides — session-keepalive.ts.
+ * Arm one timer for the soonest 5-hour reset among the signed-in CLI logins, so an account is nudged
+ * within a couple of minutes of its window ending instead of at the next sweep, up to 30 minutes
+ * later (a sixth of a Pro window). Nothing is armed while the switch is off.
+ */
+function armKeepalive(): void {
+  if (keepaliveTimer) clearTimeout(keepaliveTimer)
+  keepaliveTimer = null
+  keepaliveNextAt = null
+  if (!getProviderSettings().keepaliveEnabled) return
+  const now = Date.now()
+  const read = keepaliveReading(climayteLiveReadings())
+  let soonest = Number.POSITIVE_INFINITY
+  for (const c of listCliInstances()) {
+    if (!c.loggedIn) continue
+    const resetsAt = read(`cli:${c.id}`)?.session?.resetsAt
+    const at = resetsAt ? Date.parse(resetsAt) : Number.NaN
+    if (Number.isFinite(at) && at > now && at < soonest) soonest = at
+  }
+  if (!Number.isFinite(soonest)) return
+  keepaliveNextAt = soonest + KEEPALIVE_MARGIN_MS
+  keepaliveTimer = setTimeout(
+    () => {
+      keepaliveTimer = null
+      void runCliKeepalive()
+    },
+    Math.min(keepaliveNextAt - now, 2 ** 31 - 1),
+  )
+  keepaliveTimer.unref?.()
+}
+
+/**
+ * One nudge pass over the CLI logins (session-keepalive.ts decides, spends and records). It rides on
+ * the back of a sweep, so it acts on readings seconds old, and on its own timer at the next window
+ * end (armKeepalive). A no-op unless switched on, and it declines on its own terms besides.
  *
  * CLI logins only. The nudge is a `claude -p` spawn pointed at a CLAUDE_CONFIG_DIR, which is what a
  * CLI instance IS; a desktop profile keeps its credential somewhere that spawn cannot read, so a
  * desktop-only account is reached through its linked CLI login or not at all.
  */
-async function runKeepaliveOnFreshQuota(): Promise<void> {
+export async function runCliKeepalive(): Promise<KeepaliveSweepResult | null> {
+  if (keepaliveRunning) return null
+  keepaliveRunning = true
   try {
     const provider = getProviderSettings()
+    const walls = climayteLimitWalls()
     const result = await runKeepaliveSweep({
       enabled: provider.keepaliveEnabled,
       weeklyFloorPct: provider.keepaliveWeeklyFloorPct,
       targets: listCliInstances()
         .filter((c) => c.loggedIn)
-        .map((c) => ({ label: c.name, configDir: c.configDir, usageKey: `cli:${c.id}` })),
+        .map((c) => ({
+          id: c.id,
+          label: c.num ? `#${c.num}` : c.name,
+          configDir: c.configDir,
+          usageKey: `cli:${c.id}`,
+          blocked: keepaliveBlock(c.id, c.configDir, walls),
+        })),
+      reading: keepaliveReading(climayteLiveReadings()),
+      // The read-back is the usage check the sweep runs, so the tables show the new window at once.
+      nudge: (t) =>
+        nudgeWindow(t, {
+          readBack: async (x) => (await checkUsageForCliInstance(x.id))?.snapshot ?? null,
+        }),
+      // Logged, not silent: this is the one loop here that SPENDS, so every nudge is a journal line
+      // (climayte_log { group: 'keepalive' }) and a record the CLI table shows.
+      onNudge: (t, rec) =>
+        climayteJournalNudge({
+          account: t.label,
+          ok: rec.ok,
+          until: rec.resetsAt ?? undefined,
+          model: rec.model,
+          costUsd: rec.costUsd ?? undefined,
+          notice: rec.ok ? undefined : rec.note,
+        }),
     })
-    // Logged, not silent: this is the one loop here that SPENDS, so what it did (and what it
-    // declined to do, with the reason) has to be answerable after the fact.
     if (result.nudged.length)
       console.log(`[keepalive] started the 5-hour window on: ${result.nudged.join(', ')}`)
+    return result
   } catch (err) {
     console.error('[keepalive] sweep failed:', err)
+    return null
+  } finally {
+    keepaliveRunning = false
+    armKeepalive()
   }
+}
+
+/** The switch or the floor changed (the settings route): re-arm, and run a pass now when it is on, so
+ *  the person who switched it on sees it act instead of waiting for the next sweep. */
+export function keepaliveSettingsChanged(): void {
+  if (getProviderSettings().keepaliveEnabled) void runCliKeepalive()
+  else armKeepalive()
 }
 
 /**
@@ -198,7 +309,7 @@ export async function sweepUsage(): Promise<number> {
     if (providers.codexDesktopEnabled || providers.codexCliEnabled)
       checked += await sweepCodexInstances()
     lastSweepAt = new Date().toISOString()
-    await runKeepaliveOnFreshQuota()
+    await runCliKeepalive()
     return checked
   } finally {
     sweeping = false
@@ -226,6 +337,9 @@ function rearm(settings = getUsageSettings()): void {
 export function startUsageRefresh(): void {
   const settings = getUsageSettings()
   rearm(settings)
+  // The nudge's own timer, from the readings already cached: with the sweep switched off, this is
+  // what still starts a window as the last one ends.
+  armKeepalive()
   if (!settings.autoRefresh) return
   const kickoff = setTimeout(() => {
     void sweepUsage().catch((err) => console.error('[usage-refresh] initial sweep failed:', err))

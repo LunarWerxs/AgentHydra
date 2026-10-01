@@ -139,7 +139,12 @@ import { startTrayInvariant } from './tray-invariant'
 import { materializeTrayToolkit } from './tray-toolkit'
 import { updateProgress } from './update-progress'
 import { applyUpdate, checkForUpdate } from './updater'
-import { getUsageSettings, setUsageSettings, startUsageRefresh } from './usage-refresh'
+import {
+  getUsageSettings,
+  keepaliveSettingsChanged,
+  setUsageSettings,
+  startUsageRefresh,
+} from './usage-refresh'
 import { checkUsageForCliInstance, checkUsageForDesktop } from './usage-service'
 import { startVersionDriftWatch } from './version-drift'
 import { WINDOW_SIZE_HINT_PARAM, windowSizeHintFor } from './window-size'
@@ -608,6 +613,13 @@ app.post('/api/settings', async (c) => {
       typeof body.keepaliveWeeklyFloorPct === 'number' ? body.keepaliveWeeklyFloorPct : undefined,
     allowExtraUsage: typeof body.allowExtraUsage === 'boolean' ? body.allowExtraUsage : undefined,
   })
+  // The nudge acts on its switch at once (a pass now when it was switched on, its timer re-armed),
+  // not at the next sweep up to 30 minutes later.
+  if (
+    typeof body.keepaliveEnabled === 'boolean' ||
+    typeof body.keepaliveWeeklyFloorPct === 'number'
+  )
+    keepaliveSettingsChanged()
   // Notifications: whitelisted field by field, same as the blocks above. setNotificationSettings
   // ignores anything absent, so a patch touching one toggle leaves the rest (and the stored SMTP
   // password) alone.

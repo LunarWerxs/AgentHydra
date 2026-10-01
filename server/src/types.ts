@@ -1362,7 +1362,27 @@ export interface CliInstance {
   /** What the CLI said the last time its `/limit-reset` was run from AgentHydra (core/cli-limit-reset.ts).
    *  Undefined until then. The only honest reading there is: the usage endpoint will not say. */
   lastLimitReset?: CliLimitResetResult | null
+  /** The last nudge the keepalive sent this account (session-keepalive.ts). Set by GET
+   *  /api/cli-instances only; null when it was never nudged. */
+  lastNudge?: CliNudgeRecord | null
+  /** The login was moved to another PC from here (core/cli-login-move.ts): when, and the bundle file.
+   *  Cleared when this instance is signed in again. */
+  movedAway?: { at: number; file: string } | null
   createdAt: number
+}
+
+/** One nudge the keepalive sent an idle CLI account to start its 5-hour window (session-keepalive.ts). */
+export interface CliNudgeRecord {
+  at: number
+  /** The window was seen running after it. */
+  ok: boolean
+  /** What happened, in words: the window it started, or why it did not. */
+  note: string
+  /** When the window it started ends (ISO), when a reading said so. */
+  resetsAt: string | null
+  /** The model the CLI reported running. */
+  model: string | null
+  costUsd: number | null
 }
 
 /** One run of a CLI account's `/limit-reset`, in the CLI's own words (core/cli-limit-reset.ts). */

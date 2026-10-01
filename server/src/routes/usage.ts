@@ -14,6 +14,7 @@ import {
   setCliInstanceUsage,
 } from '../core/cli-instances'
 import { runCliLimitReset } from '../core/cli-limit-reset'
+import { exportCliLogins, importCliLogins } from '../core/cli-login-move'
 import { logoutCliInstance } from '../core/cli-logout'
 import { redeemCodexResetCredit, resolveCodexAccount } from '../core/codex-account'
 import { moveCodexChat, planCodexChatMove } from '../core/codex-chat-move'
@@ -41,6 +42,7 @@ import { turnOffExtraUsage } from '../extra-usage'
 import { app } from '../http-app'
 import { readLiveRegistry } from '../live-registry'
 import { jsonBody } from '../route-helpers'
+import { fileNudgeStore } from '../session-keepalive'
 import type { UsageCheckResult } from '../types'
 import {
   allCachedUsage,
@@ -354,9 +356,12 @@ app.get('/api/cli-instances', (c) => {
   // workers included): the CLI table's per-account count (owner, 2026-09-30).
   const live = climayteLiveReadings()
   const limits = climayteLimitWalls()
+  // The keepalive's last nudge per account (session-keepalive.ts), for the row's note.
+  const nudges = fileNudgeStore.read()
   return c.json(
     listCliInstances().map((i) => ({
       ...i,
+      lastNudge: nudges[i.id] ?? null,
       liveSessions: readLiveRegistry(i.configDir).length,
       lastUsageCheck: withLimitWall(
         withLiveReading(i.lastUsageCheck, live.get(i.id), i.name),
@@ -392,6 +397,37 @@ app.post('/api/cli-instances/:id/logout', (c) => {
   const id = c.req.param('id')
   const result = logoutCliInstance(id)
   if (result.ok) dropCachedUsage(cliKey(id))
+  return c.json(result)
+})
+// Move CLI logins to another PC (core/cli-login-move.ts): out = one encrypted bundle in Downloads and
+// this PC signed out of each; in = the bundle's logins signed in here, each checked with `claude auth
+// status`. The passphrase comes from the dialog and is never sent back; the answers carry paths and
+// statuses only. No MCP tool on purpose: a chat would have to hold the passphrase.
+app.post('/api/cli-instances/move-out', async (c) => {
+  const body = await jsonBody(c)
+  const ids = Array.isArray(body.ids)
+    ? body.ids.filter((x): x is string => typeof x === 'string')
+    : []
+  const result = exportCliLogins({
+    ids,
+    passphrase: typeof body.passphrase === 'string' ? body.passphrase : '',
+  })
+  // Signed out here: the cached quota belongs to a login this PC no longer holds (as for a logout).
+  if (result.file) for (const r of result.rows) if (r.ok) dropCachedUsage(cliKey(r.id))
+  return c.json(result)
+})
+app.post('/api/cli-instances/move-in', async (c) => {
+  const body = await jsonBody(c)
+  const result = await importCliLogins({
+    bundle: body.bundle,
+    passphrase: typeof body.passphrase === 'string' ? body.passphrase : '',
+  })
+  // Read each landed login's quota now (free), so its row fills in without a click.
+  for (const r of result.rows)
+    if (r.ok)
+      void checkUsageForCliInstance(r.id).catch((err) =>
+        console.error(`[cli-login-move] usage check for ${r.id} failed:`, err),
+      )
   return c.json(result)
 })
 // Use this account's limit reset through the CLI's own `/limit-reset` (core/cli-limit-reset.ts):

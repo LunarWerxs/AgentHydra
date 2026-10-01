@@ -591,7 +591,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // an account at or above this weekly percentage is left alone, because burning the last of a
   // weekly cap to start a window that refills the same day is exactly backwards.
   keepalive_enabled: '0',
-  keepalive_weekly_floor: '80',
+  keepalive_weekly_floor: '85',
   // The permission to run work on paid extra usage (usage credits) - OFF by default, and like the
   // keepalive this is a permission, not a preference: some accounts keep working past their limits
   // and BILL for it instead of stopping. Off means nothing AgentHydra manages may bill it: CliMayte

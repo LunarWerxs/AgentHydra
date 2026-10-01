@@ -257,6 +257,8 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
     associatedDesktopLabel: rec.associatedDesktopLabel ?? null,
     loggedIn: cred && !loginNote,
     planLabel: cred ? cliPlanLabel(configDir) : null,
+    // A login signed in here again since it moved away is simply here.
+    movedAway: cred ? null : (rec.movedAway ?? null),
     ...(loginNote ? { loginNote } : {}),
   }
 }
@@ -368,17 +370,31 @@ function validName(name: string): { ok: boolean; reason: string } {
   return { ok: true, reason: '' }
 }
 
+/** The shape of an id this module mints (crypto.randomUUID). */
+const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 /**
  * Create a new CLI instance: mint an id, mkdir its `CLAUDE_CONFIG_DIR`, persist a record with
  * loggedIn=false. Login is deferred to the user (see openCliTerminal). Idempotent per id (a fresh
  * uuid each call), never collides.
+ *
+ * `opts.id`: create it under that id instead (a login moved in from another PC keeps the id it had
+ * there, core/cli-login-move.ts); refused when it is not a minted id or is already taken here.
  */
-export function createCliInstance(name: string): CMActionResult {
+export function createCliInstance(name: string, opts: { id?: string } = {}): CMActionResult {
   const v = validName(name)
   if (!v.ok) {
     return { ok: false, action: 'cli-create', dir: null, message: v.reason, data: { name } }
   }
-  const id = crypto.randomUUID()
+  if (opts.id !== undefined && (!ID_RE.test(opts.id) || getCliInstance(opts.id)))
+    return {
+      ok: false,
+      action: 'cli-create',
+      dir: null,
+      message: `Cannot create a CLI instance with id '${opts.id}': it is not an instance id, or one with it exists.`,
+      data: { name },
+    }
+  const id = opts.id ?? crypto.randomUUID()
   const configDir = join(CLI_INSTANCES_ROOT, id)
   try {
     mkdirSync(configDir, { recursive: true })
@@ -599,6 +615,20 @@ export function setCliInstanceUsage(id: string, snap: UsageSnapshot): void {
   })
   // A usage reading is a cache, not an identity: losing one costs a re-check, so a refusal here is
   // only worth the log line the reader already emits. Nothing else to do.
+  void outcome
+}
+
+/** Record that this instance's login was moved to another PC (core/cli-login-move.ts), or clear it. */
+export function setCliInstanceMovedAway(
+  id: string,
+  movedAway: { at: number; file: string } | null,
+): void {
+  const outcome = mutate((store) => {
+    const rec = store.instances.find((i) => i.id === id)
+    if (!rec || (!movedAway && !rec.movedAway)) return { result: null, changed: false }
+    rec.movedAway = movedAway
+    return { result: null, changed: true }
+  })
   void outcome
 }
 

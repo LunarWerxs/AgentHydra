@@ -33,6 +33,7 @@ export type CliMayteJournalEvent =
   | 'check' // the worker reported done; CliMayte runs the task's check command (`notice`: the command)
   | 'verdict' // its result was judged pass or fail (climayteVerdict); a fail names the next setting
   | 'priority' // its priority was changed (climayteSetPriority)
+  | 'nudged' // an idle account was sent one cheap prompt to start its 5-hour window (session-keepalive.ts); id and group 'keepalive'
   | 'done'
   | 'failed'
   | 'cancelled'
@@ -73,6 +74,7 @@ export interface CliMayteJournalEntry {
   priority?: number // dispatched / priority: higher starts first (0: the default)
   was?: number // priority: the one it replaced
   ceiling?: boolean // limit: CliMayte stopped it at its ceiling (90%), not the account's limit
+  ok?: boolean // nudged: the window was seen running after it
 }
 
 export const JOURNAL_MAX_BYTES = 5 * 1024 * 1024
@@ -228,6 +230,10 @@ export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Da
       return `judged ${e.verdict === 'pass' ? 'a pass' : 'a fail'}${runs}${e.notice ? `: ${e.notice}` : ''}${e.verdict === 'fail' && e.reason ? `; ${e.reason}` : ''}`
     case 'priority':
       return `priority set to ${e.priority ?? 0} (was ${e.was ?? 0})`
+    case 'nudged':
+      return e.ok
+        ? `started the 5-hour window${on}${e.until ? `; it resets ${at(e.until)}` : ''}${e.model ? ` (${e.model}, ${usd(e.costUsd)})` : ''}`
+        : `nudge${on} did not start the window: ${e.notice ?? '?'}`
     case 'done':
       return `done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task total ${usd(e.totalCostUsd)})`
     case 'failed':
