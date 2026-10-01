@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import { corchLiveReadings } from '../corch'
+import { corchLimitWalls, corchLiveReadings } from '../corch'
 import {
   associateCliInstance,
   createCliInstance,
@@ -53,7 +53,7 @@ import {
 } from '../usage'
 import { budgetSummary, buildUsageBudget } from '../usage-budget'
 import { dropCachedUsage } from '../usage-cache'
-import { withLiveReading } from '../usage-live'
+import { withLimitWall, withLiveReading } from '../usage-live'
 import { lastAutoRefreshAt, sweepUsage } from '../usage-refresh'
 import {
   checkUsageForAccount,
@@ -190,6 +190,12 @@ app.get('/api/usage/cache', (c) => {
   for (const [id, live] of corchLiveReadings()) {
     const fresh = withLiveReading(cache[cliKey(id)] ?? null, live)
     if (fresh) cache[cliKey(id)] = fresh
+  }
+  // An account Corch saw hit its limit reads as at its limit until the wall ends, never as the
+  // lower percentage of a snapshot taken before (field note 19).
+  for (const [id, wall] of corchLimitWalls()) {
+    const walled = withLimitWall(cache[cliKey(id)] ?? null, wall)
+    if (walled) cache[cliKey(id)] = walled
   }
   return c.json({ cache, lastAutoRefreshAt: lastAutoRefreshAt() })
 })
@@ -347,11 +353,16 @@ app.get('/api/cli-instances', (c) => {
   // How many Claude sessions run on each account right now (the CLI's own live registry, Corch's
   // workers included): the CLI table's per-account count (owner, 2026-09-30).
   const live = corchLiveReadings()
+  const limits = corchLimitWalls()
   return c.json(
     listCliInstances().map((i) => ({
       ...i,
       liveSessions: readLiveRegistry(i.configDir).length,
-      lastUsageCheck: withLiveReading(i.lastUsageCheck, live.get(i.id), i.name),
+      lastUsageCheck: withLimitWall(
+        withLiveReading(i.lastUsageCheck, live.get(i.id), i.name),
+        limits.get(i.id),
+        i.name,
+      ),
     })),
   )
 })

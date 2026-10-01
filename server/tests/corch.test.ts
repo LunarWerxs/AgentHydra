@@ -275,6 +275,26 @@ describe('attemptSpend', () => {
     expect(again.tokens).toEqual(own.tokens)
     expect(attemptSpend(dir, 'missing', start, end).costUsd).toBe(0)
   })
+
+  test("a subagent's requests in the attempt's window are the attempt's too", () => {
+    const start = Date.parse('2026-09-30T12:00:00Z')
+    const end = Date.parse('2026-09-30T12:10:00Z')
+    write([turn('2026-09-30T12:05:00Z', 'b')])
+    const subs = join(dir, 'projects', 'p', 'S', 'subagents')
+    mkdirSync(subs, { recursive: true })
+    // One request inside the window, one copied in with the session from before it started.
+    writeFileSync(
+      join(subs, 'agent-x.jsonl'),
+      [turn('2026-09-30T12:06:00Z', 's'), turn('2026-09-30T11:00:00Z', 'old')].join('\n'),
+    )
+    expect(attemptSpend(dir, 'S', start, end).tokens).toEqual({
+      input: 20,
+      output: 2_000,
+      cacheRead: 40_000,
+      cacheWrite: 0,
+    })
+    rmSync(join(dir, 'projects', 'p', 'S'), { recursive: true, force: true })
+  })
 })
 
 describe('pickAccount', () => {
@@ -304,7 +324,7 @@ describe('pickAccount', () => {
   })
 
   test('a handoff never goes back to the account that hit its limit', () => {
-    const accounts = [acct('a', 1, 0), acct('b', 2, 90)]
+    const accounts = [acct('a', 1, 0), acct('b', 2, 70)]
     const w = worker({
       accountId: 'a',
       attempts: [{ account: { id: 'a', num: 1, name: 'a' }, outcome: 'quota', notice: NOTICE }],
@@ -339,6 +359,36 @@ describe('pickAccount', () => {
     // With room elsewhere, the account it left is not taken back.
     const roomy = [...accounts, acct('a90', 90, 20, 6)]
     expect(pickAccount(w, roomy, {}, new Map(), 2, now)?.id).toBe('a90')
+  })
+
+  test('no new work goes to an account past the wind-down line; the session already there stays', () => {
+    // Run 1, 19:32-19:36: the one account below the line (#98, 52%) was at its worker cap, so each
+    // continuation went to the next best, at 89-97%, and was told to hand off again within three
+    // calls: twenty hops, about $0.75 each. It waits for a free slot below the line instead.
+    const crowded = [acct('a84', 84, 91, 7), acct('a88', 88, 93, 12), acct('a98', 98, 52, 64)]
+    const capped = new Map([['a98', 2]])
+    const handedOff = worker({
+      accountId: 'a95',
+      attempts: [
+        { account: { id: 'a95', num: 95, name: 'a95' }, outcome: 'handoff', notice: null },
+      ],
+    })
+    expect(pickAccount(handedOff, crowded, {}, capped, 2, now)).toBeNull()
+    expect(pickAccount(worker(), crowded, {}, capped, 2, now)).toBeNull()
+    const moved = worker({
+      accountId: 'a95',
+      attempts: [
+        { account: { id: 'a95', num: 95, name: 'a95' }, outcome: 'quota', notice: NOTICE },
+      ],
+    })
+    expect(pickAccount(moved, crowded, {}, capped, 2, now)).toBeNull()
+    const home = worker({
+      accountId: 'a84',
+      attempts: [
+        { account: { id: 'a84', num: 84, name: 'a84' }, outcome: 'interrupted', notice: null },
+      ],
+    })
+    expect(pickAccount(home, crowded, {}, capped, 2, now)?.id).toBe('a84')
   })
 
   test('the per-account cap counts only this group, never above MAX_PER_ACCOUNT in total', () => {

@@ -54,6 +54,9 @@ export interface CorchAttempt {
   overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
   windDown?: { at: number; pct: number | null; path: string } // asked to hand off to `path` (pct null: on request)
   tokens?: CorchTokens // this attempt's own tokens (attemptSpend); absent on attempts before 2026-09-30
+  /** The session this attempt ran in. A planned handoff starts a new one, so the worker's current
+   *  `sessionId` is not every attempt's. null: the log names none (the CLI never started). */
+  sessionId?: string | null
   /** What it was launched with (`--model`, `--effort`; null: the CLI's default). Absent before 2026-10-01. */
   requested?: { model: string | null; effort: string | null }
   /** The model the CLI reported in its system/init event: what really ran. */
@@ -368,6 +371,18 @@ export const ENV_SCRUB =
 const AUTH_RE =
   /please run \/login|not logged in|invalid api key|failed to authenticate|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error|disabled claude subscription access/i
 
+/** The wall reason for an account whose organization turned Claude Code off. `claude auth status`
+ *  still says such a login works, so the 30-minute signed-out recheck lifted its wall every time,
+ *  and each lift sent every waiting task at it at once (run 1: #91, 7 failed attempts, 4 in one
+ *  second). Only a different login (its credential file changing) lifts this one. */
+export const ORG_DISABLED_WALL = 'organization disabled Claude Code'
+const ORG_DISABLED_RE = /disabled claude subscription access|oauth_org_not_allowed/i
+export const isOrgDisabled = (notice: string | null): boolean =>
+  !!notice && ORG_DISABLED_RE.test(notice)
+/** A wall about the login, not the usage: its `until` is a recheck time, never when it frees up. */
+export const isLoginWall = (reason: string | undefined): boolean =>
+  reason === 'signed out' || reason === ORG_DISABLED_WALL
+
 export function scrubbedEnv(configDir: string, workerId?: string): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) {
@@ -577,7 +592,9 @@ export function wallUntil(
  *  every follow-up, handoff and resume. A killed or stopped attempt writes no result at all, and
  *  its stream-json log under-reports output; the transcript has both right (this reproduces the
  *  CLI's own figures to the cent). Turns copied in from another account keep their older
- *  timestamps, so they are not counted again. 0 when the transcript is not there. */
+ *  timestamps, so they are not counted again. 0 when the transcript is not there. A subagent's
+ *  requests bill the same account and sit in their own files under `<session>/subagents/`, so
+ *  those are counted too. */
 export function attemptSpend(
   configDir: string,
   sessionId: string,
@@ -585,33 +602,60 @@ export function attemptSpend(
   endedAt: number,
 ): { costUsd: number; tokens: CorchTokens } {
   const root = join(configDir, 'projects')
-  let text = ''
+  let files: string[] = []
   try {
     for (const d of readdirSync(root)) {
       const file = join(root, d, `${sessionId}.jsonl`)
       if (existsSync(file)) {
-        text = readFileSync(file, 'utf8')
+        files = [file, ...jsonlUnder(join(root, d, sessionId, 'subagents'), 3)]
         break
       }
     }
   } catch {
     return { costUsd: 0, tokens: noTokens() }
   }
-  if (!text) return { costUsd: 0, tokens: noTokens() }
-  // Everything from the start, minus everything after the end: pricing is linear per model.
-  const from = sumTranscriptTokens(text, startedAt)
-  const after = sumTranscriptTokens(text, endedAt + 1)
-  const cost = (s: typeof from) => priceTokens(s.byModel, startedAt).costUsd ?? 0
-  const less = (a: number, b: number) => Math.max(0, a - b)
-  return {
-    costUsd: less(cost(from), cost(after)),
-    tokens: {
+  let costUsd = 0
+  let tokens = noTokens()
+  for (const file of files) {
+    let text = ''
+    try {
+      text = readFileSync(file, 'utf8')
+    } catch {
+      continue
+    }
+    // Everything from the start, minus everything after the end: pricing is linear per model.
+    const from = sumTranscriptTokens(text, startedAt)
+    const after = sumTranscriptTokens(text, endedAt + 1)
+    const cost = (s: typeof from) => priceTokens(s.byModel, startedAt).costUsd ?? 0
+    const less = (a: number, b: number) => Math.max(0, a - b)
+    costUsd += less(cost(from), cost(after))
+    tokens = addTokens(tokens, {
       input: less(from.input, after.input),
       output: less(from.output, after.output),
       cacheRead: less(from.cacheRead, after.cacheRead),
       cacheWrite: less(from.cacheCreation, after.cacheCreation),
-    },
+    })
   }
+  return { costUsd, tokens }
+}
+
+/** Every `*.jsonl` under `dir`, at most `depth` folders down; none when it does not exist. */
+function jsonlUnder(dir: string, depth: number): string[] {
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  return entries.flatMap((e) =>
+    e.isDirectory()
+      ? depth > 1
+        ? jsonlUnder(join(dir, e.name), depth - 1)
+        : []
+      : e.name.endsWith('.jsonl')
+        ? [join(dir, e.name)]
+        : [],
+  )
 }
 
 const oneLine = (s: string, n: number): string => s.replace(/\s+/g, ' ').trim().slice(0, n)
@@ -684,11 +728,18 @@ export function pickAccount(
   const near = (a: CorchAccount): boolean =>
     (a.sessionPct !== null && a.sessionPct >= WIND_DOWN_SESSION_PCT) ||
     (a.weekPct !== null && a.weekPct >= WIND_DOWN_WEEK_PCT)
+  // Past the line an account takes no NEW work: a new task, a handoff's continuation or a moved
+  // session is told to hand off within a few calls, or hits the limit on its first. Run 1, 19:32
+  // to 19:36: twenty such hops at 89-97%, about 290k tokens and $0.75 each, and seven tasks ended up
+  // waiting anyway. Only the session already on it carries on there (its home); the rest wait.
+  const keepsHome = (a: CorchAccount): boolean =>
+    !handedOffFrom && a.id === worker.accountId && a.id !== failedId
   const eligible = accounts.filter(
     (a) =>
       (!worker.accounts || worker.accounts.includes(a.id)) &&
       !((walls[a.id]?.until ?? 0) > now) &&
       (allowFull || !full(a)) &&
+      (allowFull || !near(a) || keepsHome(a)) &&
       (groupActive.get(a.id) ?? 0) < perAccount &&
       load(a) < MAX_PER_ACCOUNT,
   )

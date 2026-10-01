@@ -61,9 +61,12 @@ import {
   freshestPct,
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
+  isLoginWall,
+  isOrgDisabled,
   joinResults,
   liveUsage,
   noTokens,
+  ORG_DISABLED_WALL,
   OVERAGE_NOTICE,
   overageStart,
   PAUSED_PROMPT,
@@ -110,6 +113,7 @@ const HANDOFFS = join(ROOT, 'handoffs')
 const slashed = (p: string): string => p.replace(/\\/g, '/')
 const signalPath = (workerId: string): string => join(SIGNALS, `${workerId}.json`)
 const WALLS_PATH = join(ROOT, 'walls.json')
+const LIVE_PATH = join(ROOT, 'live.json')
 const JOURNAL_PATH = join(ROOT, 'journal.jsonl')
 
 /** `#84`, or the account's name when it has no number: the journal's short account label. */
@@ -184,9 +188,54 @@ const reads = new Map<string, LogRead>()
  *  here). The usage snapshot is refreshed only every 15 minutes; this is seconds old. */
 const liveByAccount = new Map<string, CorchLiveUsage>()
 
+/** The live readings are kept on disk too: an account whose workers stopped at its limit has no
+ *  stream left to read, and a restart used to drop its last reading, so the tables and the routing
+ *  fell back to a usage snapshot from before the limit (run 1: #88 showed 43% while walled until
+ *  11:30pm; its last live reading was 97%). A reading whose window has reset is void anyway. */
+let liveDirty = false
+function loadLive(): void {
+  try {
+    const raw = JSON.parse(readFileSync(LIVE_PATH, 'utf8')) as Record<string, CorchLiveUsage>
+    for (const [id, live] of Object.entries(raw)) {
+      const prev = liveByAccount.get(id)
+      if (live && typeof live.at === 'number' && (!prev || prev.at < live.at))
+        liveByAccount.set(id, live)
+    }
+  } catch {
+    // none yet, or unreadable: the next reading writes it again
+  }
+}
+function saveLive(): void {
+  if (!liveDirty) return
+  liveDirty = false
+  try {
+    mkdirSync(ROOT, { recursive: true })
+    const tmp = `${LIVE_PATH}.tmp`
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(liveByAccount)))
+    renameSync(tmp, LIVE_PATH)
+  } catch (err) {
+    console.error('[corch] could not save live readings:', err)
+  }
+}
+
 /** A copy of each account's newest live reading, for the usage tables (usage-live.ts). */
 export function corchLiveReadings(): Map<string, CorchLiveUsage> {
+  load()
   return new Map(liveByAccount)
+}
+
+/** Accounts Corch has walled at a usage limit, with when the wall ends and whether the limit is
+ *  the weekly one: the tables show those as at their limit (usage-live.ts withLimitWall), not the
+ *  percentage of a snapshot read before the limit hit (field note 19). */
+export function corchLimitWalls(): Map<string, { until: number; weekly: boolean }> {
+  load()
+  const now = Date.now()
+  const out = new Map<string, { until: number; weekly: boolean }>()
+  for (const [id, wall] of Object.entries(walls)) {
+    if (isLoginWall(wall.reason) || wall.until <= now) continue
+    out.set(id, { until: wall.until, weekly: /weekly/i.test(wall.reason) })
+  }
+  return out
 }
 
 /** The owner's rule is never to spend paid extra usage; the `allowExtraUsage` setting (default
@@ -259,6 +308,8 @@ function latestUsage(
 }
 
 const SIGNED_OUT_MS = 30 * 60_000
+/** An organization's switch is not on a clock: its wall waits for a new login (recheckSignedOut). */
+const ORG_WALL_MS = 365 * 24 * 3_600_000
 const credStamp = (configDir: string): number | null => {
   try {
     return statSync(join(configDir, '.credentials.json')).mtimeMs
@@ -276,6 +327,19 @@ const authChecks = new Set<string>()
 function recheckSignedOut(accounts: CorchAccount[], now: number): void {
   for (const a of accounts) {
     const wall = walls[a.id]
+    // `auth status` passes a login whose organization turned Claude Code off, so only a new login
+    // (the credential file changing) lifts that wall; the next attempt then tells.
+    if (wall?.reason === ORG_DISABLED_WALL) {
+      if (wall.cred !== undefined && wall.cred !== credStamp(a.configDir)) {
+        delete walls[a.id]
+        try {
+          saveWalls()
+        } catch (err) {
+          console.error('[corch] could not save walls:', err)
+        }
+      }
+      continue
+    }
     if (wall?.reason !== 'signed out' || authChecks.has(a.id)) continue
     const cred = credStamp(a.configDir)
     if (wall.until > now && (wall.cred === undefined || wall.cred === cred)) continue
@@ -308,8 +372,10 @@ function recheckSignedOut(accounts: CorchAccount[], now: number): void {
 export function corchSignedOutReason(id: string, configDir: string): string | null {
   load()
   const wall = walls[id]
-  if (wall?.reason !== 'signed out') return null
-  if (wall.cred !== undefined && wall.cred !== credStamp(configDir)) return null
+  if (!isLoginWall(wall?.reason)) return null
+  if (wall!.cred !== undefined && wall!.cred !== credStamp(configDir)) return null
+  if (wall!.reason === ORG_DISABLED_WALL)
+    return 'Claude Code is turned off for this account\'s organization ("Your organization has disabled Claude subscription access for Claude Code"), so Corch does not use it. Sign it in with a different login to use it again.'
   return 'Signed out: its credential file is there, but the login failed when Corch used it and has not worked since (checked again every 30 minutes, and as soon as the account signs in again). Sign in again: Quick add, or Log in.'
 }
 
@@ -359,6 +425,30 @@ function load(): void {
   } catch {
     walls = {}
   }
+  if (orgWallsFromAttempts()) saveWalls()
+  loadLive()
+}
+
+/** A signed-out wall whose account's newest refusal said its organization turned Claude Code off
+ *  (set before that case had its own wall) becomes that wall, so the next recheck does not lift it
+ *  and send every waiting task at the account again. */
+function orgWallsFromAttempts(): boolean {
+  const newest = new Map<string, { at: number; org: boolean }>()
+  for (const w of workers.values())
+    for (const at of w.attempts) {
+      if (at.outcome !== 'auth') continue
+      const prev = newest.get(at.account.id)
+      if (!prev || prev.at < at.startedAt)
+        newest.set(at.account.id, { at: at.startedAt, org: isOrgDisabled(at.notice) })
+    }
+  let any = false
+  for (const [id, n] of newest) {
+    const wall = walls[id]
+    if (!n.org || wall?.reason !== 'signed out') continue
+    walls[id] = { ...wall, reason: ORG_DISABLED_WALL, until: Date.now() + ORG_WALL_MS }
+    any = true
+  }
+  return any
 }
 
 function save(): void {
@@ -514,6 +604,7 @@ async function tick(): Promise<void> {
         console.error(`[corch] could not read ${w.id}:`, err)
       }
     }
+    saveLive()
     recheckSignedOut(accounts, now)
     const allowFull = overageAllowed()
     const active = new Map<string, number>()
@@ -589,15 +680,15 @@ async function tick(): Promise<void> {
           continue
         }
         const allowed = accounts.filter((a) => !w.accounts || w.accounts.includes(a.id))
-        // A signed-out wall's `until` is only its next recheck, not a time the account frees up.
+        // A login wall's `until` is only its next recheck, not a time the account frees up.
         const soonest = allowed
           .map((a) => walls[a.id])
-          .filter((x) => x !== undefined && x.reason !== 'signed out' && x.until > now)
+          .filter((x) => x !== undefined && !isLoginWall(x.reason) && x.until > now)
           .map((x) => x!.until)
           .sort((a, b) => a - b)[0]
         const allSignedOut =
           allowed.length > 0 &&
-          allowed.every((a) => walls[a.id]?.reason === 'signed out' && walls[a.id]!.until > now)
+          allowed.every((a) => isLoginWall(walls[a.id]?.reason) && walls[a.id]!.until > now)
         const why = !accounts.length
           ? 'No signed-in CLI account. Add one: CLI instances, Quick add.'
           : w.accounts && !allowed.length
@@ -756,18 +847,38 @@ function signalWindDown(
   changed(w)
 }
 
-/** Some OTHER account this worker may use has room below the wind-down thresholds. Without one a
- *  handoff would only restart the task on the same nearly-full account, so the session keeps
- *  working until its real limit, where the move (transcript copy) takes over. */
+/** Some OTHER account this worker may use would take its continuation now: below the wind-down
+ *  thresholds AND with a free worker slot, asked of pickAccount itself so the two never disagree.
+ *  Without one a handoff would only park the task, so the session keeps working until its real
+ *  limit, where the move (transcript copy) takes over. Run 1: this checked usage but not the worker
+ *  caps, so a session wound down "for" #98 (52%, already at its cap) and its continuation went to
+ *  the next-best account, at 89-97%, which asked for another handoff at once. */
 function roomElsewhere(w: CorchWorker, from: string, accounts: CorchAccount[]): boolean {
-  const now = Date.now()
-  return accounts.some(
-    (a) =>
-      a.id !== from &&
-      (!w.accounts || w.accounts.includes(a.id)) &&
-      !((walls[a.id]?.until ?? 0) > now) &&
-      (a.sessionPct ?? 0) < WIND_DOWN_SESSION_PCT &&
-      (a.weekPct ?? 0) < WIND_DOWN_WEEK_PCT,
+  const active = new Map<string, number>()
+  const groupActive = new Map<string, number>()
+  for (const o of workers.values()) {
+    if (o.status !== 'running' || !o.accountId) continue
+    active.set(o.accountId, (active.get(o.accountId) ?? 0) + 1)
+    if (o.group === w.group) groupActive.set(o.accountId, (groupActive.get(o.accountId) ?? 0) + 1)
+  }
+  const continuation = {
+    accounts: w.accounts,
+    accountId: null,
+    attempts: [{ account: { id: from, num: null, name: from }, outcome: 'handoff' }],
+  } as Pick<CorchWorker, 'accounts' | 'accountId' | 'attempts'>
+  const pick = pickAccount(
+    continuation,
+    accounts.filter((a) => a.id !== from),
+    walls,
+    active,
+    perAccount[w.group] ?? 2,
+    Date.now(),
+    groupActive,
+  )
+  return (
+    !!pick &&
+    (pick.sessionPct ?? 0) < WIND_DOWN_SESSION_PCT &&
+    (pick.weekPct ?? 0) < WIND_DOWN_WEEK_PCT
   )
 }
 
@@ -785,7 +896,10 @@ function poll(w: CorchWorker, accounts?: CorchAccount[]): void {
   // the start, and its readings would be stamped as fresh.
   if (r.live && watching) {
     const prev = liveByAccount.get(at.account.id)
-    if (!prev || prev.at <= r.live.at) liveByAccount.set(at.account.id, r.live)
+    if (!prev || prev.at < r.live.at) {
+      liveByAccount.set(at.account.id, r.live)
+      liveDirty = true
+    }
   }
   if (!at.overage && !overageAllowed()) {
     if (r.overage) stopForOverage(w, at, r.overage, !exited)
@@ -925,9 +1039,10 @@ function finish(w: CorchWorker, events: unknown[]): void {
     }
     case 'auth': {
       const dir = getCliInstance(at.account.id)?.configDir
+      const org = isOrgDisabled(v.notice)
       walls[at.account.id] = {
-        until: now + SIGNED_OUT_MS,
-        reason: 'signed out',
+        until: now + (org ? ORG_WALL_MS : SIGNED_OUT_MS),
+        reason: org ? ORG_DISABLED_WALL : 'signed out',
         cred: dir ? credStamp(dir) : null,
       }
       try {
@@ -1031,8 +1146,34 @@ function spentOf(
   at: CorchWorker['attempts'][number],
 ): { costUsd: number; tokens: CorchTokens } {
   const dir = getCliInstance(at.account.id)?.configDir
-  if (!dir || !w.sessionId) return { costUsd: 0, tokens: noTokens() }
-  return attemptSpend(dir, w.sessionId, at.startedAt, at.endedAt ?? Date.now())
+  const session = at.sessionId ?? w.sessionId
+  if (!dir || !session) return { costUsd: 0, tokens: noTokens() }
+  return attemptSpend(dir, session, at.startedAt, at.endedAt ?? Date.now())
+}
+
+/** The session id the CLI reported in an attempt's log (its system/init event), or null. */
+function sessionOfLog(log: string): string | null {
+  let fd: number | null = null
+  try {
+    fd = openSync(log, 'r')
+    const buf = Buffer.alloc(256 * 1024)
+    const n = readSync(fd, buf, 0, buf.length, 0)
+    for (const line of buf.subarray(0, n).toString('utf8').split('\n')) {
+      if (!line.includes('"init"')) continue
+      try {
+        const ev = JSON.parse(line)
+        if (ev?.type === 'system' && ev.subtype === 'init' && typeof ev.session_id === 'string')
+          return ev.session_id
+      } catch {
+        // a partial last line
+      }
+    }
+  } catch {
+    // no log
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+  return null
 }
 
 /** Charge an ended attempt to its task: its own cost and tokens. Returns the cost. */
@@ -1049,6 +1190,20 @@ function charge(w: CorchWorker, at: CorchWorker['attempts'][number]): number {
 function backfillTokens(): boolean {
   let any = false
   for (const w of workers.values()) {
+    // Attempts recorded before they kept their session: the session is the one their log names.
+    // The first backfill read every attempt against the task's CURRENT session, so the attempts
+    // before a planned handoff (a new session) got 0 tokens: 47M uncounted in run 1. Recounted
+    // once here; their cost was charged at the time, from the right session, and stays.
+    for (const at of w.attempts) {
+      if (at.endedAt === null || at.sessionId !== undefined) continue
+      at.sessionId = sessionOfLog(at.log)
+      any = true
+      if (!w.tokens || !at.tokens || at.sessionId === null) continue
+      const had = at.tokens
+      if (had.input + had.output + had.cacheRead + had.cacheWrite > 0) continue
+      at.tokens = spentOf(w, at).tokens
+      w.tokens = addTokens(w.tokens, at.tokens)
+    }
     if (w.tokens) continue
     let total = noTokens()
     for (const at of w.attempts) {
@@ -1283,6 +1438,7 @@ function launch(
     outcome: 'running',
     notice: null,
     resumed: resume,
+    sessionId,
     daemonPid: process.pid,
     runner,
     requested: { model: w.model, effort: w.effort },
@@ -1644,7 +1800,13 @@ export function corchCancel(filter: { id?: string; group?: string }): {
  *  CLI sessions they ran (attempts), their tokens and cost (the Corch view's counter). */
 export function corchTotals(): {
   tasks: number
+  /** Attempts ("runs"): every start of the CLI, retries, resumes and handoffs included. */
   sessions: number
+  /** Those runs by how they ended (owner, 2026-09-30: "99 CLI sessions" read as 99 sessions when
+   *  23 were handoffs, 21 stopped at a limit, 8 resumed after a restart and 7 never signed in). */
+  runsByOutcome: Partial<Record<CorchWorker['attempts'][number]['outcome'], number>>
+  /** Distinct CLI conversations: a resume, a follow-up or a move continues one; a handoff starts one. */
+  cliSessions: number
   tokens: CorchTokens
   costUsd: number
 } {
@@ -1652,12 +1814,29 @@ export function corchTotals(): {
   let sessions = 0
   let costUsd = 0
   let tokens = noTokens()
+  const runsByOutcome: Partial<Record<CorchWorker['attempts'][number]['outcome'], number>> = {}
+  const distinct = new Set<string>()
   for (const w of workers.values()) {
     sessions += w.attempts.length
     costUsd += w.costUsd
     if (w.tokens) tokens = addTokens(tokens, w.tokens)
+    for (const at of w.attempts) {
+      runsByOutcome[at.outcome] = (runsByOutcome[at.outcome] ?? 0) + 1
+      // A run the account refused before the CLI started holds no conversation.
+      const spent = at.tokens ? at.tokens.cacheRead + at.tokens.cacheWrite + at.tokens.input : 0
+      if (!at.started && spent === 0) continue
+      const sid = at.sessionId ?? w.sessionId
+      if (sid) distinct.add(sid)
+    }
   }
-  return { tasks: workers.size, sessions, tokens, costUsd }
+  return {
+    tasks: workers.size,
+    sessions,
+    runsByOutcome,
+    cliSessions: distinct.size,
+    tokens,
+    costUsd,
+  }
 }
 
 /** Move a file or folder into the archive, keeping it (a rename, or a copy then remove across
