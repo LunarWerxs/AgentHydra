@@ -44,6 +44,14 @@ fi
 
 printf '%s\n' "$refs" | "$runner" .githooks/check-public-push.mjs "$remote" "$url" || exit 1
 
+# Git runs this hook with GIT_DIR exported (and, from a linked worktree, GIT_WORK_TREE and
+# GIT_INDEX_FILE too). The lanes below are not git commands on this repo: their tests build
+# throwaway repos and the kit check asks the kit's own git, and every one inherited these and aimed
+# git at this checkout instead. Pushing the 1.5.0 tag from a worktree (2026-10-01) read a clean kit
+# as dirty and failed 29 git-backed tests. The lanes find this repo from the working directory.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_NAMESPACE
+
 kit=../../lunarwerx-ui/sync.mjs
 if [ ! -f "$kit" ]; then
   echo "pre-push: no lunarwerx-ui kit checkout at $kit, so the host-only kit lanes cannot run here; skipped." >&2
