@@ -110,6 +110,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   estimated at 14%. A setting with a few finished tasks now blends in, pulling the estimate
   toward its own record, instead of being ignored until it has enough.
 
+- **CliMayte works each account between 85% and 90%, on its 5-hour and its weekly usage**
+  (`server/src/climayte-lib.ts`). At 85% of either an account takes no new work and its running
+  task is asked to hand off (the weekly line was 95%); at 90% a task still running there is stopped
+  on the spot and the account rests until that window resets. Those stops show as "stopped at 90%",
+  never as a limit hit. Allowing paid extra usage in Settings lifts both lines.
+
 - **CliMayte stops each account at about 85% and never runs it into its limit**
   (`server/src/climayte.ts`). A task now starts only where it is expected to finish under 85% of
   the 5-hour window, and a running task that reaches 85% writes a handoff even when no other

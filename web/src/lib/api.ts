@@ -885,6 +885,8 @@ export type CliMayteAttemptOutcome =
   | 'running'
   | 'done'
   | 'quota'
+  // Display only: a 'quota' attempt CliMayte stopped at its 90% ceiling (attempt.ceiling), not the limit.
+  | 'ceiling'
   | 'transient'
   | 'auth'
   | 'interrupted'
@@ -919,6 +921,8 @@ export interface CliMayteWorkerView {
     requested?: { model: string | null; effort: string | null }
     /** The model the CLI reported at init. */
     model?: string
+    /** Stopped at CliMayte's 90% ceiling rather than the account's limit. */
+    ceiling?: boolean
   }[]
   /** The model the CLI reported at init on the newest attempt that got that far (`model` and
    *  `effort` are what was asked for; null model or effort: the CLI's default). */

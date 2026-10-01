@@ -45,6 +45,7 @@ import {
   aboutToBill,
   addResults,
   addTokens,
+  atCeiling,
   attemptSpend,
   type CliMayteAccount,
   type CliMayteLiveUsage,
@@ -54,6 +55,7 @@ import {
   type CliMayteWorker,
   type CliMayteWorkerBrief,
   type CliMayteWorkerView,
+  ceilingNotice,
   classifyAttempt,
   climayteEffort,
   climayteModel,
@@ -1161,7 +1163,14 @@ function poll(w: CliMayteWorker): void {
       liveDirty = true
     }
   }
-  if (!at.overage && !overageAllowed()) {
+  // The ceiling (CEILING_PCT, 90 on either window): stopped there, whatever it is doing. Not when
+  // the owner allowed paid extra usage: that setting says to go past the limit, and lifts the stop
+  // line the same way (pickAccount's allowFull).
+  if (watching && !at.ceiling && !at.overage && !overageAllowed()) {
+    const c = atCeiling(r.live)
+    if (c) stopAtCeiling(w, at, c, !exited)
+  }
+  if (!at.overage && !at.ceiling && !overageAllowed()) {
     if (r.overage) stopForOverage(w, at, r.overage, !exited)
     else {
       // Stop BEFORE the first billed request on an account that can bill (aboutToBill).
@@ -1174,7 +1183,7 @@ function poll(w: CliMayteWorker): void {
   // small session there; without, it waits for the first account with room (waitUntil). Until then
   // a session with nowhere to go worked on into the wall: w-228dcdcc on #98, 85% to 100% in 15
   // requests, outcome quota.
-  if (watching && !at.windDown && !at.overage) {
+  if (watching && !at.windDown && !at.overage && !at.ceiling) {
     const pct = windDownAt(r.live)
     if (pct !== null) signalWindDown(w, at, pct)
   }
@@ -1200,6 +1209,30 @@ function stopForOverage(
   walls[at.account.id] = {
     until: wallUntil(Date.now(), { resetsAt: overage.resetsAt, resets: null }, parseResetTime),
     reason: overage.notice ?? OVERAGE_NOTICE,
+  }
+  try {
+    saveWalls()
+  } catch (err) {
+    console.error('[climayte] could not save walls:', err)
+  }
+  if (running) killAttempt(at)
+  changed(w)
+}
+
+/** At the ceiling the turn is stopped where it is and the account walled until that window
+ *  resets. finish() goes on from the handoff when the session wrote one after the stop line asked,
+ *  else the session moves to an account with room or waits for one, like a limit, but journalled
+ *  and counted as a ceiling stop, never a limit hit. */
+function stopAtCeiling(
+  w: CliMayteWorker,
+  at: CliMayteWorker['attempts'][number],
+  c: { pct: number; week: boolean; resetsAt: number | null },
+  running: boolean,
+): void {
+  at.ceiling = c
+  walls[at.account.id] = {
+    until: wallUntil(Date.now(), { resetsAt: c.resetsAt, resets: null }, parseResetTime),
+    reason: ceilingNotice(c),
   }
   try {
     saveWalls()
@@ -1239,6 +1272,23 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
       window: 'session',
       resets: null,
     }
+  // Stopped at the ceiling: from its handoff when it wrote one, else on like a limit (the wall is up).
+  if (at.ceiling && v.outcome !== 'done')
+    v =
+      at.windDown && handoffWritten(at.windDown)
+        ? {
+            ...v,
+            outcome: 'handoff',
+            notice: `${ceilingNotice(at.ceiling)} Its handoff was written; the task continues in a fresh session.`,
+          }
+        : {
+            ...v,
+            outcome: 'quota',
+            notice: ceilingNotice(at.ceiling),
+            resetsAt: at.ceiling.resetsAt,
+            window: at.ceiling.week ? 'weekly' : 'session',
+            resets: null,
+          }
   // Asked to wind down: a handoff written after the signal means the task goes on in a fresh
   // session elsewhere; none means the session reported the whole task complete instead.
   if (at.windDown && v.outcome === 'done' && handoffWritten(at.windDown))
@@ -1422,7 +1472,12 @@ function journalFinish(
       journal(w, 'handoff-written', { account, path: at.windDown?.path })
       break
     case 'quota':
-      journal(w, 'limit', { account, notice, until: until() })
+      journal(w, 'limit', {
+        account,
+        notice,
+        until: until(),
+        ...(at.ceiling ? { ceiling: true } : {}),
+      })
       break
     case 'auth':
       journal(w, 'signed-out', { account, notice, until: until() })
@@ -2581,7 +2636,7 @@ export function climayteTotals(since = 0): {
   sessions: number
   /** Those runs by how they ended (owner, 2026-09-30: "99 CLI sessions" read as 99 sessions when
    *  23 were handoffs, 21 stopped at a limit, 8 resumed after a restart and 7 never signed in). */
-  runsByOutcome: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>>
+  runsByOutcome: Partial<Record<CliMayteWorker['attempts'][number]['outcome'] | 'ceiling', number>>
   /** Distinct CLI conversations: a resume, a follow-up or a move continues one; a handoff starts one. */
   cliSessions: number
   tokens: CliMayteTokens
@@ -2604,6 +2659,8 @@ export function climayteTotals(since = 0): {
    *  of a Pro window (`ratio` above 1: estimates run low). */
   since: string | null
   limitHits: number
+  /** Runs stopped at CliMayte's ceiling (90%) instead: the stop line (85) was not enough. */
+  ceilingStops: number
   limitHitList: Array<{
     id: string
     title: string
@@ -2629,6 +2686,7 @@ export function climayteTotals(since = 0): {
   let reread = 0
   let unmeasured = 0
   const byCause: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>> = {}
+  let ceilingStops = 0
   const hits: Array<{
     id: string
     title: string
@@ -2643,7 +2701,9 @@ export function climayteTotals(since = 0): {
   >()
   const sized: Array<{ id: string; title: string; expected: number; used: number; work: number }> =
     []
-  const runsByOutcome: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>> = {}
+  const runsByOutcome: Partial<
+    Record<CliMayteWorker['attempts'][number]['outcome'] | 'ceiling', number>
+  > = {}
   const distinct = new Set<string>()
   for (const w of workers.values()) {
     sessions += w.attempts.length
@@ -2651,7 +2711,8 @@ export function climayteTotals(since = 0): {
     if (w.tokens) tokens = addTokens(tokens, w.tokens)
     for (const at of w.attempts) {
       const recent = (at.endedAt ?? Date.now()) >= since
-      if (recent && at.outcome === 'quota')
+      if (recent && at.ceiling) ceilingStops++
+      if (recent && at.outcome === 'quota' && !at.ceiling)
         hits.push({
           id: w.id,
           title: w.title,
@@ -2674,7 +2735,8 @@ export function climayteTotals(since = 0): {
         p.t = Math.max(p.t, at.endedAt ?? Date.now())
         peaks.set(key, p)
       }
-      runsByOutcome[at.outcome] = (runsByOutcome[at.outcome] ?? 0) + 1
+      const shown = at.ceiling && at.outcome === 'quota' ? 'ceiling' : at.outcome
+      runsByOutcome[shown] = (runsByOutcome[shown] ?? 0) + 1
       used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
       if (at.endedAt !== null && !at.spend) unmeasured++
       const r = rereadUnits(at, w.model)
@@ -2724,6 +2786,7 @@ export function climayteTotals(since = 0): {
     unmeasured,
     since: since ? new Date(since).toISOString() : null,
     limitHits: hits.length,
+    ceilingStops,
     limitHitList: hits
       .sort((a, b) => b.t - a.t)
       .slice(0, 20)

@@ -791,7 +791,7 @@ describe('integration: paid extra usage is never spent', () => {
     }
   }, 20_000)
 
-  test('on an account that can bill, the turn is stopped at 98%, before any request bills', async () => {
+  test('at the 90% ceiling the turn is stopped, short of billing and of the limit, and goes on elsewhere', async () => {
     const nearDir = join(root, 'acct-near')
     mkdirSync(nearDir, { recursive: true })
     writeFileSync(join(nearDir, 'fake-near-limit'), '')
@@ -816,8 +816,16 @@ describe('integration: paid extra usage is never spent', () => {
     expect(w?.status).toBe('done')
     expect(w?.result).toBe('FAKE DONE')
     expect(w?.moves).toBe(1)
-    expect(w?.attempts[0]?.outcome).toBe('quota')
-    expect(w?.attempts[0]?.notice).toContain('before it could bill')
+    // Owner, 2026-10-01: "85 with a max of 90". The account reads 98.5% (and could bill): the
+    // ceiling stops it first, and that is a ceiling stop, not a limit hit.
+    expect(w?.attempts[0]).toMatchObject({ outcome: 'quota', ceiling: true })
+    expect(w?.attempts[0]?.notice).toContain("CliMayte's ceiling of 90%")
+    const totals = climayteTotals()
+    expect(totals.limitHitList.some((h) => h.id === id)).toBe(false)
+    expect(totals.ceilingStops).toBeGreaterThan(0)
+    expect(climayteJournal({ id }).find((e) => e.event === 'limit')).toMatchObject({
+      ceiling: true,
+    })
   }, 20_000)
 })
 
@@ -872,7 +880,7 @@ describe('integration: near its limit a worker hands off to a fresh session', ()
   }, 20_000)
 
   test('with no room elsewhere it still stops at the line, and the task waits for the reset', async () => {
-    // Owner, 2026-10-01: never the limit, stop at 85-90%. The account reports 90% (as
+    // Owner, 2026-10-01: never the limit, stop at 85-90%. The account reports 87% (as
     // signedInAccounts merges a running worker's reading, so does this provider).
     const aloneDir = join(root, 'acct-alone')
     mkdirSync(aloneDir, { recursive: true })
@@ -908,8 +916,8 @@ describe('integration: near its limit a worker hands off to a fresh session', ()
     expect(w?.error).toContain('85% stop line')
     const resetsAt = climayteLiveReadings().get('wind-3')?.sessionResetsAt as number
     expect(w?.waitUntil).toBe(new Date(resetsAt).toISOString())
-    // Its peak is on record: 90, under the limit.
-    expect(climayteTotals().peaks.find((p) => p.account === '#3')?.peakPct).toBe(90)
+    // Its peak is on record: 87, inside the 85-90 band.
+    expect(climayteTotals().peaks.find((p) => p.account === '#3')?.peakPct).toBe(87)
   }, 20_000)
 })
 

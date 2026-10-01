@@ -89,6 +89,7 @@ export const CLIMAYTE_OUTCOME: Record<
   running: { variant: 'info', label: 'climayte.outcomeRunning' },
   done: { variant: 'success', label: 'climayte.outcomeDone' },
   quota: { variant: 'warning', label: 'climayte.outcomeQuota' },
+  ceiling: { variant: 'info', label: 'climayte.outcomeCeiling' },
   transient: { variant: 'muted', label: 'climayte.outcomeTransient' },
   auth: { variant: 'warning', label: 'climayte.outcomeAuth' },
   // Killed from outside (a daemon restart) and resumed by itself: never the word for a manual Stop.

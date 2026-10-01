@@ -72,6 +72,7 @@ export interface CliMayteJournalEntry {
   verdict?: 'pass' | 'fail' // verdict
   priority?: number // dispatched / priority: higher starts first (0: the default)
   was?: number // priority: the one it replaced
+  ceiling?: boolean // limit: CliMayte stopped it at its ceiling (90%), not the account's limit
 }
 
 export const JOURNAL_MAX_BYTES = 5 * 1024 * 1024
@@ -192,6 +193,7 @@ export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Da
     case 'moved':
       return `moved from ${e.from ?? '?'} to ${e.account ?? '?'}${e.copied === false ? ' (no transcript to carry)' : ''}`
     case 'limit':
+      if (e.ceiling) return `stopped at CliMayte's ceiling${on}; account rests until ${at(e.until)}`
       return `hit its limit${on}; walled until ${at(e.until)}${e.notice ? `: ${e.notice}` : ''}`
     case 'signed-out':
       return `signed out${on}; rechecked at ${at(e.until)}${e.notice ? `: ${e.notice}` : ''}`

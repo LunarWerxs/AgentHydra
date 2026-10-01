@@ -69,6 +69,9 @@ export interface CliMayteAttempt {
   started?: boolean // true once the CLI logged system/init: its message reached the session
   daemonPid?: number // the daemon that launched it; its handle dies with that daemon
   overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
+  /** Stopped at CEILING_PCT of that window (`week`), the account walled until it resets. Its outcome
+   *  is 'quota' or 'handoff' for what follows; it is not a limit hit. */
+  ceiling?: { pct: number; week: boolean; resetsAt: number | null }
   windDown?: { at: number; pct: number | null; path: string } // asked to hand off to `path` (pct null: on request)
   tokens?: CliMayteTokens // this attempt's own tokens (attemptSpend); absent on attempts before 2026-09-30
   /** Its cost at API prices and its model requests, from its transcript when it ended, and `reread`:
@@ -314,6 +317,8 @@ export type CliMayteWorkerView = Omit<CliMayteWorker, 'prompt' | 'attempts' | 'v
     notice: string | null
     requested?: { model: string | null; effort: string | null }
     model?: string
+    /** Stopped at CliMayte's ceiling (not the account's limit). */
+    ceiling?: boolean
     tokens?: CliMayteTokens
     /** Its cost at API prices and its model requests; null when not measured. */
     costUsd: number | null
@@ -385,7 +390,29 @@ export const TRANSIENT_PROMPT =
  *  Early enough for the session to finish the step it is on and write a handoff before the wall;
  *  a Pro 5-hour window lasts about ten minutes of heavy work, so 15% is roughly a minute and a half. */
 export const WIND_DOWN_SESSION_PCT = 85
-export const WIND_DOWN_WEEK_PCT = 95
+/** 85 like the 5-hour line (owner, 2026-10-01: "85 with a max of 90 ... on both the five-hour and
+ *  the total usage"); it was 95. */
+export const WIND_DOWN_WEEK_PCT = 85
+
+/** The hard ceiling on both windows (owner, 2026-10-01, the same words). The stop line at 85 asks a
+ *  session to hand off; one still working at 90 is stopped there, whatever it is doing, and its
+ *  account walled until that window resets (climayte.ts stopAtCeiling). */
+export const CEILING_PCT = 90
+
+/** Where a reading has reached CEILING_PCT, if it has: the 5-hour window first. */
+export function atCeiling(
+  live: CliMayteLiveUsage | null,
+): { pct: number; week: boolean; resetsAt: number | null } | null {
+  if (live?.sessionPct != null && live.sessionPct >= CEILING_PCT)
+    return { pct: live.sessionPct, week: false, resetsAt: live.sessionResetsAt }
+  if (live?.weekPct != null && live.weekPct >= CEILING_PCT)
+    return { pct: live.weekPct, week: true, resetsAt: live.weekResetsAt }
+  return null
+}
+
+/** What a turn stopped at the ceiling says (its attempt's notice, the account's wall). */
+export const ceilingNotice = (c: { pct: number; week: boolean }): string =>
+  `Stopped at ${Math.round(c.pct)}% of its ${c.week ? 'weekly' : '5-hour'} usage, CliMayte's ceiling of ${CEILING_PCT}%, well short of the limit. The account rests until that window resets.`
 
 /** The percentage that calls for a wind-down now, or null. */
 export function windDownAt(live: CliMayteLiveUsage | null): number | null {
@@ -1076,6 +1103,7 @@ export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
       notice: a.notice,
       requested: a.requested,
       model: a.model,
+      ...(a.ceiling ? { ceiling: true } : {}),
       tokens: a.tokens,
       costUsd: a.spend ? a.spend.costUsd : null,
       turns: a.spend ? a.spend.turns : null,

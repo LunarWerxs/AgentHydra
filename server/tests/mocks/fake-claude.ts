@@ -144,7 +144,7 @@ if (existsSync(join(configDir, 'fake-near-limit'))) {
 }
 
 if (existsSync(join(configDir, 'fake-winddown'))) {
-  // An account at 90% of its window, mid-task. After each "tool call" it reads the wind-down
+  // An account at 87% of its window (past the stop line, short of the ceiling), mid-task. After each "tool call" it reads the wind-down
   // signal the way the CLI's PostToolUse hook would (the hook command names the signal file), and
   // when one appears it writes the handoff the message asks for and ends its turn.
   const dir = join(configDir, 'projects', 'fake-proj')
@@ -162,10 +162,10 @@ if (existsSync(join(configDir, 'fake-winddown'))) {
       status: 'allowed_warning',
       rateLimitType: 'five_hour',
       resetsAt,
-      utilization: 0.9,
+      utilization: 0.87,
       overageStatus: 'rejected',
       isUsingOverage: false,
-      unifiedWindows: { five_hour: { utilization: 0.9, resetsAt }, seven_day: { utilization: 0.1, resetsAt: resetsAt + 86400 } },
+      unifiedWindows: { five_hour: { utilization: 0.87, resetsAt }, seven_day: { utilization: 0.1, resetsAt: resetsAt + 86400 } },
     },
   })
   const settings = flag('--settings')

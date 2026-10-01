@@ -161,6 +161,7 @@ export default {
   outcomeRunning: 'running',
   outcomeDone: 'done',
   outcomeQuota: 'hit its limit',
+  outcomeCeiling: 'stopped at 90%',
   outcomeTransient: 'API overloaded',
   outcomeAuth: 'signed out',
   outcomeError: 'error',

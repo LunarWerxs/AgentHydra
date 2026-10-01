@@ -476,8 +476,8 @@ async function onStop() {
               <span class="max-w-[14rem] shrink-0 truncate font-medium" :title="climayteAccountLabel(a.account)">
                 {{ climayteAccountLabel(a.account) }}
               </span>
-              <Badge :variant="CLIMAYTE_OUTCOME[a.outcome].variant" class="shrink-0">
-                {{ $t(CLIMAYTE_OUTCOME[a.outcome].label) }}
+              <Badge :variant="CLIMAYTE_OUTCOME[a.ceiling ? 'ceiling' : a.outcome].variant" class="shrink-0">
+                {{ $t(CLIMAYTE_OUTCOME[a.ceiling ? 'ceiling' : a.outcome].label) }}
               </Badge>
               <span v-if="a.notice" class="min-w-0 truncate text-muted-foreground" :title="a.notice">
                 {{ a.notice }}
