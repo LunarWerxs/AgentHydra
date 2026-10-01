@@ -4,18 +4,19 @@
 // Why: CliMayte spreads work across the owner's CLI accounts, and adding one used to mean naming an
 // instance, opening a terminal and typing `/login`. Here the daemon runs `claude auth login --email`
 // with the instance's CLAUDE_CONFIG_DIR and opens the sign-in link it prints in a new private window
-// run by zendriver, the owner's chosen engine (core/signin-window.ts). The PERSON clicks "Continue with email", types the code from their
-// inbox and authorizes there; the window's final page carries the code the CLI needs, which is
+// run by zendriver, the owner's chosen engine (core/signin-window.ts). After the person completes
+// Cloudflare, the window submits the prefilled email once. The person opens their email link in
+// that window; it relays the link's verification code to the waiting form and authorizes. The
+// window's final page carries the code the CLI needs, which is
 // handed to the CLI and the window closes. The link and a paste box stay as the fallback (no browser
-// installed, or the window closed early). The daemon never types a password or an email code: it
-// relays the page's final code to the CLI and checks the result with `claude auth status`.
+// installed, or the window closed early). Verification codes stay inside the throwaway browser;
+// only the page's final OAuth code goes to the CLI, checked with `claude auth status`.
 //
 // ⛔ NEVER THE PERSON'S OWN BROWSER (owner, 2026-09-30). It is signed in to a different Claude
 // account and the new account's email arrives on another device, so the CLI popping it open was
 // wrong twice over. The CLI opens whatever `BROWSER` names (else rundll32 url,OpenURL), so BROWSER is
-// pointed at a program that does nothing with a URL. Driving the sign-in page ourselves is not an
-// option either: claude.ai answers a headless browser with a Cloudflare human check (measured
-// 2026-09-30, title "Just a moment..."), and passing that check is not ours to automate.
+// pointed at a program that does nothing with a URL. Cloudflare's human check remains manual;
+// only the enabled email submit button after that check is clicked automatically.
 
 import { join } from 'node:path'
 import { resolveClaudeExe } from '../config'
@@ -276,6 +277,7 @@ function openWindow(id: string): boolean {
   if (!callbackPrefix.startsWith('https://')) return false
   l.window = openSigninWindow(flow.url, {
     callbackPrefix,
+    email: flow.email,
     onCode: (code) => {
       const r = sendToCli(id, code)
       flow.message = r.ok ? 'Finishing the sign-in.' : r.message
@@ -293,7 +295,7 @@ function openWindow(id: string): boolean {
   })
   flow.window = !!l.window
   flow.message = l.window
-    ? 'A sign-in window opened. Click "Continue with email", type the code from your inbox there, then Authorize. It closes by itself.'
+    ? 'Complete the human check if shown, then open your email’s sign-in link in this window. The code is entered automatically, and the window closes when the account is added.'
     : 'The sign-in window script is missing. Copy the sign-in link, open it where you can read that email, then paste the code the page ends on here.'
   return flow.window
 }

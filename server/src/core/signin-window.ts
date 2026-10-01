@@ -6,10 +6,11 @@
 // (never the person's own browser, which is signed in to a different Claude account) and reports,
 // one JSON line at a time, when a tab reaches the sign-in's callback page with its code.
 //
-// The person does the human part in that window - "Continue with email", the code from their inbox,
-// Authorize. Nothing is clicked or typed for them; the script only reads each tab's address.
+// The person completes Cloudflare and opens their email link in this window. The script submits
+// the prefilled email, relays the link page's verification code and authorizes this OAuth request.
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { CONFIG_DIR } from '../config'
 import { orchestratorDir, pythonBinary } from '../orchestrator'
 import { killProcessTree } from './process'
 
@@ -30,6 +31,8 @@ export function openSigninWindow(
   url: string,
   opts: {
     callbackPrefix: string
+    /** Submit this prefilled email once after the person completes any human check. */
+    email?: string
     onCode: (code: string) => void
     onClosed?: () => void
     onFailed?: (why: string) => void
@@ -42,7 +45,16 @@ export function openSigninWindow(
   let proc: ReturnType<typeof Bun.spawn>
   try {
     proc = Bun.spawn(
-      [pythonBinary(), script, url, opts.callbackPrefix, ...(opts.headless ? ['--headless'] : [])],
+      [
+        pythonBinary(),
+        script,
+        url,
+        opts.callbackPrefix,
+        '--position-file',
+        join(CONFIG_DIR, 'signin-window-position.json'),
+        ...(opts.email ? ['--email', opts.email] : []),
+        ...(opts.headless ? ['--headless'] : []),
+      ],
       {
         stdin: 'pipe',
         stdout: 'pipe',
