@@ -13,6 +13,7 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CLAUDE_PROBE_NO_MCP_ARGS } from '../src/config'
+import { KEEPALIVE_PROMPT, keepaliveArgv } from '../src/session-keepalive'
 import { cliProbeGate, rememberCliProbe, resetCliProbeCooldowns } from '../src/usage'
 
 const SRC = join(import.meta.dir, '..', 'src')
@@ -29,15 +30,25 @@ test('the no-MCP probe args disable every configured server, not merely some', (
 
 // Source assertions, because a spawn cannot be exercised in a unit test and the regression is
 // silent: dropping the args costs 7 extra processes per probe and nothing fails.
-test.each([
-  ['usage.ts', "'/usage'"],
-  ['session-keepalive.ts', 'KEEPALIVE_PROMPT'],
-])('the %s probe spawn still passes the no-MCP args', (file, marker) => {
-  const src = read(file)
-  const spawnLine = src.split('\n').find((l) => l.includes('Bun.spawn([resolveClaudeExe()'))
+test('the usage.ts probe spawn still passes the no-MCP args', () => {
+  const spawnLine = read('usage.ts')
+    .split('\n')
+    .find((l) => l.includes('Bun.spawn([resolveClaudeExe()'))
   expect(spawnLine).toBeDefined()
-  expect(spawnLine).toContain(marker)
+  expect(spawnLine).toContain("'/usage'")
   expect(spawnLine).toContain('...CLAUDE_PROBE_NO_MCP_ARGS')
+})
+
+// The keepalive builds its command line in keepaliveArgv, so the argv itself is checked, and the
+// source only for the spawn going through it.
+test('the session-keepalive.ts nudge spawn still passes the no-MCP args', () => {
+  const spawnLine = read('session-keepalive.ts')
+    .split('\n')
+    .find((l) => l.includes('Bun.spawn(keepaliveArgv(resolveClaudeExe())'))
+  expect(spawnLine).toBeDefined()
+  const argv = keepaliveArgv('claude')
+  expect(argv).toContain(KEEPALIVE_PROMPT)
+  expect(argv.slice(-CLAUDE_PROBE_NO_MCP_ARGS.length)).toEqual([...CLAUDE_PROBE_NO_MCP_ARGS])
 })
 
 test('a second CLI probe for the same key inside the cooldown is refused', () => {
