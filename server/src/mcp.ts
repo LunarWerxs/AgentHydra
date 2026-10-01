@@ -659,12 +659,17 @@ export const TOOLS: McpEngineTool[] = [
               model: {
                 type: 'string',
                 description:
-                  'Model: opus (Opus 5.5) or sonnet (Sonnet 5.5); the full ids claude-opus-5-5 / claude-sonnet-5-5 work too. Omit for the CLI default.',
+                  "Model: opus (Opus 5.5) or sonnet (Sonnet 5.5); the full ids claude-opus-5-5 / claude-sonnet-5-5 work too. `auto`: Corch picks model AND effort for the task's `kind` from the scorecard (the cheapest setting that keeps passing; every 4th pick tries one rung cheaper so it keeps learning). Omit for the CLI default.",
               },
               effort: {
                 type: 'string',
                 description:
                   'Thinking level: low, medium, high, xhigh or max (how hard the model thinks on every turn). Omit for the default.',
+              },
+              kind: {
+                type: 'string',
+                description:
+                  'What kind of work it is, so the scorecard learns per kind: code, debug, review, sweep (read-only survey or capture), mechanical (an edit a script can check), docs or trivial.',
               },
             },
             required: ['prompt', 'cwd'],
@@ -686,6 +691,10 @@ export const TOOLS: McpEngineTool[] = [
           type: 'string',
           description:
             'Default thinking level for every task without its own: low, medium, high, xhigh or max.',
+        },
+        kind: {
+          type: 'string',
+          description: 'Default kind for every task without its own (see the task `kind`).',
         },
       },
       ['tasks'],
@@ -713,6 +722,7 @@ export const TOOLS: McpEngineTool[] = [
           perAccount: a.per_account != null ? Number(a.per_account) : undefined,
           model: a.model != null ? str(a.model) : undefined,
           effort: a.effort != null ? str(a.effort) : undefined,
+          kind: a.kind != null ? str(a.kind) : undefined,
         }),
       })) as { group?: string; workers?: Array<Record<string, unknown>> }
       // Field note 7 (2026-09-30): the whole view per worker echoed 300 characters of every prompt
@@ -725,6 +735,7 @@ export const TOOLS: McpEngineTool[] = [
           title: w.title,
           status: w.status,
           account: w.account,
+          ...(w.auto ? { model: w.model, effort: w.effort } : {}),
         })),
       }
     },
@@ -823,6 +834,39 @@ export const TOOLS: McpEngineTool[] = [
           effort: a.effort != null ? str(a.effort) : undefined,
         }),
       }),
+  },
+  {
+    name: 'corch_verdict',
+    description:
+      "MUTATES: judge a FINISHED Corch worker's result after you checked its proof: `verdict` pass or fail. Every verdict is kept with the model and thinking level that produced the result and what it cost, and corch_scorecard learns from them which setting each kind of task needs (model `auto` in corch_run uses that). A fail needs `note` (what was wrong, self-contained: the worker gets it) and sends the task back to the SAME session one rung up the ladder (Sonnet low, medium, high, then Opus medium, high, xhigh, max); the answer names that `next` setting. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one.",
+    inputSchema: S(
+      {
+        id: { type: 'string' },
+        verdict: { type: 'string', enum: ['pass', 'fail'] },
+        note: { type: 'string' },
+        retry: { type: 'boolean' },
+        kind: { type: 'string' },
+      },
+      ['id', 'verdict'],
+    ),
+    run: (a) =>
+      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/verdict`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          verdict: str(a.verdict),
+          note: a.note != null ? str(a.note) : undefined,
+          retry: a.retry === false ? false : undefined,
+          kind: a.kind != null ? str(a.kind) : undefined,
+        }),
+      }),
+  },
+  {
+    name: 'corch_scorecard',
+    description:
+      "What works, per kind of Corch task: every verdict on record summed by model and thinking level (passes, fails, and what a task cost on average as a share of a Pro account's 5-hour window), with `pick` on the setting a model-`auto` task of that kind gets next.",
+    inputSchema: S({}),
+    run: () => api('/api/corch/scorecard'),
   },
   {
     name: 'corch_handoff',

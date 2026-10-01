@@ -87,6 +87,19 @@ import {
 } from './corch-lib'
 import { syncOwnerClaude } from './corch-owner-sync'
 import { launchRunner, readRunnerExit, readRunnerPids } from './corch-runner'
+import {
+  attemptUnits,
+  bestRung,
+  type CorchKind,
+  type CorchVerdict,
+  corchKind,
+  ladderIndex,
+  ladderModel,
+  nextRung,
+  pickConfig,
+  scoreRows,
+  UNITS_PER_PRO_PERCENT,
+} from './corch-scorecard'
 import { getCliInstance, listCliInstances, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
@@ -1463,6 +1476,7 @@ function launch(
     notice: null,
     resumed: resume,
     sessionId,
+    cacheTtl: '5m',
     daemonPid: process.pid,
     runner,
     requested: { model: w.model, effort: w.effort },
@@ -1506,30 +1520,62 @@ function launch(
 
 const hex = (n: number): string => crypto.randomUUID().replace(/-/g, '').slice(0, n)
 
-/** `model` / `effort` at the top level are the group's default: a task that names its own wins.
- *  Both are validated (corchModel, corchEffort) before anything is created. */
+/** `model` / `effort` / `kind` at the top level are the group's default: a task that names its
+ *  own wins. All are validated (corchModel, corchEffort, corchKind) before anything is created.
+ *  Model `auto` lets the scorecard choose model AND effort for the task's kind (default `code`):
+ *  the cheapest setting that keeps passing, or one rung cheaper on every 4th pick (pickConfig). */
 export function corchRun(input: {
-  tasks: Array<{ prompt: string; cwd: string; title?: string; model?: string; effort?: string }>
+  tasks: Array<{
+    prompt: string
+    cwd: string
+    title?: string
+    model?: string
+    effort?: string
+    kind?: string
+  }>
   group?: string
   accounts?: string[]
   perAccount?: number
   model?: string
   effort?: string
+  kind?: string
 }): { group: string; workers: CorchWorkerView[] } {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
-  const groupModel = corchModel(input.model)
-  const groupEffort = corchEffort(input.effort)
+  const isAuto = (v: unknown): boolean => typeof v === 'string' && v.trim().toLowerCase() === 'auto'
+  const groupAuto = isAuto(input.model)
+  const groupModel = groupAuto ? null : corchModel(input.model)
+  const groupEffort = groupAuto || isAuto(input.effort) ? null : corchEffort(input.effort)
+  const groupKind = corchKind(input.kind)
+  const rows = scoreRows(workers.values())
+  const autoSoFar = new Map<CorchKind, number>()
+  for (const w of workers.values())
+    if (w.auto && w.kind) {
+      const k = w.kind as CorchKind
+      autoSoFar.set(k, (autoSoFar.get(k) ?? 0) + 1)
+    }
   const settings = input.tasks.map((t, i) => {
     if (typeof t?.prompt !== 'string' || !t.prompt.trim())
       throw new Error(`task ${i + 1}: prompt is empty`)
     if (typeof t.cwd !== 'string' || !existsSync(t.cwd) || !statSync(t.cwd).isDirectory())
       throw new Error(`task ${i + 1}: cwd '${t.cwd}' is not an existing folder`)
     try {
+      const kind = corchKind(t.kind) ?? groupKind
+      const own = t.model === undefined || t.model === null || t.model === ''
+      if (isAuto(t.model) || (own && groupAuto)) {
+        const k = kind ?? 'code'
+        const n = autoSoFar.get(k) ?? 0
+        autoSoFar.set(k, n + 1)
+        const pick = pickConfig(k, rows, n)
+        return { ...pick.config, kind: k, auto: true, reason: pick.reason }
+      }
       return {
         model: corchModel(t.model) ?? groupModel,
-        effort: corchEffort(t.effort) ?? groupEffort,
+        effort: (isAuto(t.effort) ? null : corchEffort(t.effort)) ?? groupEffort,
+        kind,
+        auto: false,
+        reason: undefined,
       }
     } catch (err) {
       throw new Error(`task ${i + 1}: ${err instanceof Error ? err.message : String(err)}`)
@@ -1551,6 +1597,8 @@ export function corchRun(input: {
       pending: [],
       model: settings[i]?.model ?? null,
       effort: settings[i]?.effort ?? null,
+      kind: settings[i]?.kind ?? null,
+      ...(settings[i]?.auto ? { auto: true } : {}),
       accounts: input.accounts?.length ? input.accounts : null,
       status: 'queued',
       sessionId: crypto.randomUUID(),
@@ -1569,13 +1617,15 @@ export function corchRun(input: {
       updatedAt: now,
     }),
   )
-  for (const w of made) {
+  for (const [i, w] of made.entries()) {
     workers.set(w.id, w)
     journal(w, 'dispatched', {
       cwd: w.cwd,
       accounts: w.accounts?.length,
       model: w.model,
       effort: w.effort,
+      kind: w.kind ?? undefined,
+      reason: settings[i]?.reason,
     })
     changed(w)
   }
@@ -1762,6 +1812,124 @@ export function corchSend(
     message: 'Queued as the next turn of the same session.',
     model: w.model,
     effort: w.effort,
+  }
+}
+
+const SENT_BACK = 'The orchestrator checked your result and it did not pass. What was wrong:'
+
+const configLabel = (c: { model: string | null; effort: string | null }): string =>
+  `${c.model?.includes('sonnet') ? 'Sonnet 5.5' : c.model?.includes('opus') ? 'Opus 5.5' : (c.model ?? 'the default model')} · ${c.effort ?? 'default effort'}`
+
+/** Judge a finished task's result (owner, 2026-09-30: "if it works, it gives it a thumbs up ... if
+ *  it does not, it reports the failure, and what model it tries next"). The verdict is kept with the
+ *  setting that produced the result and what that work cost, and the scorecard learns from it. A
+ *  fail (with `note`, required: the worker gets it) sends the task back to the same session one
+ *  rung up the ladder unless `retry` is false. `kind` tags a task dispatched without one. */
+export function corchVerdict(
+  id: string,
+  input: { verdict?: unknown; note?: unknown; retry?: unknown; kind?: unknown },
+): { ok: boolean; message: string; next?: { model: string; effort: string } | null } {
+  load()
+  const w = workers.get(id)
+  if (!w) return { ok: false, message: 'No such worker.' }
+  if (input.verdict !== 'pass' && input.verdict !== 'fail')
+    return { ok: false, message: "verdict must be 'pass' or 'fail'." }
+  if (isActive(w))
+    return { ok: false, message: 'It is still working: judge its result once it has finished.' }
+  const note =
+    typeof input.note === 'string' && input.note.trim() ? input.note.trim().slice(0, 1000) : null
+  if (input.verdict === 'fail' && !note)
+    return { ok: false, message: 'Say what was wrong (note): the worker gets it with the retry.' }
+  try {
+    const kind = corchKind(input.kind)
+    if (kind) w.kind = kind
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+  }
+  // The work this verdict judges: every attempt since the previous verdict.
+  const since = w.verdicts?.at(-1)?.at ?? 0
+  const ran = w.attempts.filter((a) => a.startedAt >= since)
+  const reported = [...ran].reverse().find((a) => a.model)?.model ?? null
+  const verdict: CorchVerdict = {
+    at: Date.now(),
+    verdict: input.verdict,
+    note,
+    model: ladderModel(w.model ?? reported),
+    effort: w.effort,
+    units: ran.reduce((sum, a) => sum + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl), 0),
+  }
+  w.verdicts = [...(w.verdicts ?? []), verdict]
+  let next: { model: string; effort: string } | null = null
+  let message = verdict.verdict === 'pass' ? 'Recorded a pass.' : 'Recorded a fail; not sent back.'
+  if (verdict.verdict === 'fail' && input.retry !== false) {
+    next = nextRung(verdict)
+    if (!next)
+      message =
+        'Recorded a fail. It already ran on the top setting (Opus 5.5 · max), so it was not sent back.'
+    else {
+      const sent = corchSend(
+        id,
+        `${SENT_BACK} ${note}\n\nFix it, prove the fix with a command and what it printed, and report again.`,
+        next,
+      )
+      message = sent.ok ? `Recorded a fail. Sent back on ${configLabel(next)}.` : sent.message
+      if (!sent.ok) next = null
+    }
+  }
+  journal(w, 'verdict', {
+    verdict: verdict.verdict,
+    notice: note ? firstLine(note) : undefined,
+    model: verdict.model,
+    effort: verdict.effort,
+    kind: w.kind ?? undefined,
+    reason: next ? `sent back on ${configLabel(next)}` : undefined,
+  })
+  changed(w)
+  return { ok: true, message, next }
+}
+
+/** What works, per kind of task: every verdict on record summed by setting, with what a task cost
+ *  on average as a share of a Pro 5-hour window, and the setting an `auto` task of that kind gets
+ *  next (`pick`; an exploring pick one rung cheaper is not marked). */
+export function corchScorecard(): {
+  unitsPerPercent: number
+  rows: Array<{
+    kind: string
+    model: string | null
+    effort: string | null
+    pass: number
+    fail: number
+    pctPerTask: number | null
+    pick: boolean
+  }>
+} {
+  load()
+  const rows = scoreRows(workers.values())
+  const picks = new Map<string, number>()
+  for (const r of rows) {
+    if (picks.has(r.kind)) continue
+    try {
+      const k = corchKind(r.kind)
+      if (k) picks.set(r.kind, bestRung(k, rows))
+    } catch {
+      // a kind no longer on the list: shown, never picked
+    }
+  }
+  return {
+    unitsPerPercent: UNITS_PER_PRO_PERCENT,
+    rows: rows.map((r) => {
+      const n = r.pass + r.fail
+      const best = picks.get(r.kind)
+      return {
+        kind: r.kind,
+        model: r.model,
+        effort: r.effort,
+        pass: r.pass,
+        fail: r.fail,
+        pctPerTask: n ? Math.round((r.units / n / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
+        pick: best !== undefined && ladderIndex(r) === best,
+      }
+    }),
   }
 }
 

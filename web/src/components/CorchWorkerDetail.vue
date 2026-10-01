@@ -13,7 +13,20 @@
 // failed or stopped one it continues the SAME conversation as a new turn. "Stop and send now" is
 // the urgent send: it stops the running work and continues the session with the message first.
 // Stopping keeps the waiting messages (field note 11); they go first when the task continues.
-import { Info, RotateCcw, Send, Square, Timer, UserRound, Zap } from '@lucide/vue'
+//
+// A finished task gets a thumbs up or down (a verdict), so Corch learns which model and thinking
+// level each kind of task needs; thumbs down sends it back one rung up the ladder with the note.
+import {
+  Info,
+  RotateCcw,
+  Send,
+  Square,
+  ThumbsDown,
+  ThumbsUp,
+  Timer,
+  UserRound,
+  Zap,
+} from '@lucide/vue'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -25,7 +38,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CorchWorkerView } from '@/lib/api'
-import { cancelCorch, sendCorchWorker } from '@/lib/api'
+import { cancelCorch, postCorchVerdict, sendCorchWorker } from '@/lib/api'
 import {
   CORCH_OUTCOME,
   corchAccountLabel,
@@ -33,6 +46,7 @@ import {
   corchRunLabel,
   formatTokens,
   isCorchActive,
+  modelName,
   tokenTotal,
 } from '@/lib/corch-status'
 import { formatAgo } from '@/lib/relativeTime'
@@ -49,6 +63,10 @@ const { t } = useI18n()
 const followUp = ref('')
 const sending = ref(false)
 const stopping = ref(false)
+/** A verdict is being posted; the thumbs-down popover and its note. */
+const judging = ref(false)
+const failOpen = ref(false)
+const failNote = ref('')
 const eventsEl = ref<HTMLElement | null>(null)
 /** Follow the log's newest line unless the reader scrolled up to read an older one. */
 const stickToBottom = ref(true)
@@ -77,6 +95,15 @@ const stopLabel = computed(() => {
   const n = props.worker?.pending.length ?? 0
   return n ? t('corch.stopKeeps', { n }, n) : t('corch.stop')
 })
+/** Only a finished task can be judged: done or failed (a stopped one never finished its work). */
+const finished = computed(
+  () => props.worker?.status === 'done' || props.worker?.status === 'failed',
+)
+const verdicts = computed(() => props.worker?.verdicts ?? [])
+const latestVerdict = computed(() => verdicts.value[verdicts.value.length - 1] ?? null)
+/** `Opus 5.5 · xhigh` for one verdict's setting; the CLI default where it asked for none. */
+const verdictRun = (v: { model: string | null; effort: string | null }) =>
+  `${v.model ? modelName(v.model) : t('corch.runDefault')} · ${v.effort ?? t('corch.runDefault')}`
 
 function duration(totalS: number): string {
   const s = Math.floor(totalS % 60)
@@ -133,6 +160,8 @@ watch(
     followUp.value = ''
     stickToBottom.value = true
     onMoreOpenChange(false)
+    failOpen.value = false
+    failNote.value = ''
   },
 )
 watch(
@@ -161,6 +190,35 @@ async function onSend(urgent = false) {
     toast.error(t('corch.sendFailed'))
   } finally {
     sending.value = false
+  }
+}
+
+/** Thumbs up posts a pass; thumbs down (from its popover) a fail with the note, sent back one rung
+ *  up the ladder. The toast names the rung it went back on, else says what the server said. */
+async function onVerdict(verdict: 'pass' | 'fail') {
+  const w = props.worker
+  if (!w || judging.value) return
+  judging.value = true
+  try {
+    const note = failNote.value.trim()
+    const r = await postCorchVerdict(
+      w.id,
+      verdict === 'pass' ? { verdict } : { verdict, note: note || undefined, retry: true },
+    )
+    if (r.ok) {
+      failOpen.value = false
+      failNote.value = ''
+      toast.success(
+        r.next
+          ? t('corch.verdictSentBack', { model: modelName(r.next.model), effort: r.next.effort })
+          : r.message || t('corch.verdictSaved'),
+      )
+      emit('changed')
+    } else toast.error(r.message || t('corch.verdictSaveFailed'))
+  } catch {
+    toast.error(t('corch.verdictSaveFailed'))
+  } finally {
+    judging.value = false
   }
 }
 
@@ -214,6 +272,16 @@ async function onStop() {
           <div class="flex min-w-0 flex-wrap items-center gap-1.5">
             <CorchStatusBadge :status="worker.status" />
             <Badge
+              v-if="latestVerdict"
+              :variant="latestVerdict.verdict === 'pass' ? 'success' : 'destructive'"
+              class="h-5 text-2xs"
+              :title="latestVerdict.note ?? undefined"
+            >
+              <ThumbsUp v-if="latestVerdict.verdict === 'pass'" aria-hidden="true" />
+              <ThumbsDown v-else aria-hidden="true" />
+              {{ latestVerdict.verdict === 'pass' ? $t('corch.verdictPassed') : $t('corch.verdictFailed') }}
+            </Badge>
+            <Badge
               variant="outline"
               class="h-5 max-w-[14rem] text-2xs"
               :title="`${$t('corch.detailAccount')}: ${worker.account ?? $t('corch.noAccount')}`"
@@ -225,8 +293,56 @@ async function onStop() {
               <Timer aria-hidden="true" />
               {{ duration(worker.ranS) }}
             </Badge>
+            <Badge v-if="worker.kind" variant="muted" class="h-5 text-2xs" :title="$t('corch.detailKind')">
+              {{ worker.kind }}
+            </Badge>
           </div>
           <div class="ms-auto flex items-center gap-1">
+            <template v-if="finished">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                :class="latestVerdict?.verdict === 'pass' ? 'text-success' : 'text-muted-foreground'"
+                :disabled="judging"
+                :aria-label="$t('corch.verdictUp')"
+                :title="$t('corch.verdictUp')"
+                @click="onVerdict('pass')"
+              >
+                <ThumbsUp />
+              </Button>
+              <Popover v-model:open="failOpen">
+                <PopoverTrigger as-child>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    :class="latestVerdict?.verdict === 'fail' ? 'text-destructive' : 'text-muted-foreground'"
+                    :disabled="judging"
+                    :aria-label="$t('corch.verdictDown')"
+                    :title="$t('corch.verdictDown')"
+                  >
+                    <ThumbsDown />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" class="w-72">
+                  <form class="flex flex-col gap-2" @submit.prevent="onVerdict('fail')">
+                    <label for="corch-verdict-note" class="text-xs font-medium">
+                      {{ $t('corch.verdictWhatWrong') }}
+                    </label>
+                    <Textarea
+                      id="corch-verdict-note"
+                      v-model="failNote"
+                      rows="1"
+                      class="min-h-9 resize-y"
+                      :disabled="judging"
+                      @keydown.enter.exact.prevent="onVerdict('fail')"
+                    />
+                    <Button type="submit" size="sm" class="self-end" :disabled="judging">
+                      <RotateCcw /> {{ $t('corch.verdictSendBack') }}
+                    </Button>
+                  </form>
+                </PopoverContent>
+              </Popover>
+            </template>
             <Tooltip>
               <TooltipTrigger as-child>
                 <button
@@ -300,10 +416,41 @@ async function onStop() {
                     }}
                   </dd>
                   <dt class="text-muted-foreground">{{ $t('corch.detailEffort') }}</dt>
-                  <dd>{{ worker.effort ?? $t('corch.runDefault') }}</dd>
+                  <dd>
+                    {{ worker.effort ?? $t('corch.runDefault') }}
+                    <span v-if="worker.auto" class="text-muted-foreground">({{ $t('corch.pickedByCorch') }})</span>
+                  </dd>
                   <dt class="text-muted-foreground">{{ $t('corch.detailGroup') }}</dt>
                   <dd class="mono break-all">{{ worker.group }}</dd>
                 </dl>
+                <div v-if="verdicts.length" class="mt-3 flex flex-col gap-1.5 border-t pt-2">
+                  <h4 class="text-xs font-medium">{{ $t('corch.verdicts') }}</h4>
+                  <ol class="flex flex-col gap-1.5 text-xs">
+                    <li v-for="(v, i) in [...verdicts].reverse()" :key="i" class="flex flex-col gap-0.5">
+                      <span class="flex flex-wrap items-center gap-x-1.5">
+                        <ThumbsUp v-if="v.verdict === 'pass'" class="size-3 text-success" aria-hidden="true" />
+                        <ThumbsDown v-else class="size-3 text-destructive" aria-hidden="true" />
+                        <span :class="v.verdict === 'pass' ? 'text-success' : 'text-destructive'">
+                          {{ v.verdict === 'pass' ? $t('corch.verdictPassed') : $t('corch.verdictFailed') }}
+                        </span>
+                        <time
+                          class="text-muted-foreground"
+                          :datetime="new Date(v.at).toISOString()"
+                          :title="new Date(v.at).toLocaleString()"
+                        >{{ formatAgo(now, v.at) }}</time>
+                        <span aria-hidden="true" class="text-muted-foreground">·</span>
+                        <span>{{ verdictRun(v) }}</span>
+                        <template v-if="v.pct !== null">
+                          <span aria-hidden="true" class="text-muted-foreground">·</span>
+                          <span class="tabular-nums text-muted-foreground">
+                            {{ $t('corch.verdictPct', { pct: v.pct.toFixed(1) }) }}
+                          </span>
+                        </template>
+                      </span>
+                      <span v-if="v.note" class="whitespace-pre-wrap break-words text-muted-foreground">{{ v.note }}</span>
+                    </li>
+                  </ol>
+                </div>
               </PopoverContent>
             </Popover>
           </div>

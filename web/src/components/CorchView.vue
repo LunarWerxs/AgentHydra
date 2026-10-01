@@ -11,16 +11,38 @@
 // each in its own box (owner, 2026-10-01). It sits on the CLI tab under the CLI
 // accounts table (CliView.vue), whose Quick add is where an account is added, so it has none of its
 // own.
-import { CloudOff, Network, RefreshCw } from '@lucide/vue'
+//
+// "What works" (the scorecard: per kind of task, which model and thinking level passed and what it
+// cost) is a collapsed one-line section under the counter, so it never pushes the list down.
+import {
+  Check,
+  ChevronRight,
+  CloudOff,
+  Network,
+  RefreshCw,
+  Star,
+  ThumbsDown,
+  ThumbsUp,
+  X,
+} from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CorchStatusBadge from '@/components/CorchStatusBadge.vue'
 import CorchWorkerDetail from '@/components/CorchWorkerDetail.vue'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { CorchWorkerView } from '@/lib/api'
-import { type CorchTotals, getCorchTotals, getCorchWorker, listCorchWorkers } from '@/lib/api'
+import {
+  type CorchScorecard,
+  type CorchTotals,
+  getCorchScorecard,
+  getCorchTotals,
+  getCorchWorker,
+  listCorchWorkers,
+} from '@/lib/api'
 import {
   CORCH_OUTCOME,
   corchQueuedNote,
@@ -28,6 +50,7 @@ import {
   firstLine,
   formatTokens,
   isCorchActive,
+  modelName,
   tokenTotal,
 } from '@/lib/corch-status'
 import { reconcileList, sameData } from '@/lib/reconcile'
@@ -105,14 +128,45 @@ const totalsHint = computed(() =>
     : '',
 )
 
+/** What passed per kind of task (GET /api/corch/scorecard); collapsed under the counter. */
+const scorecard = ref<CorchScorecard | null>(null)
+const scoreOpen = ref(false)
+/** The rows by kind, in the server's order (kind, then cheapest first). */
+const scoreKinds = computed(() => {
+  const map = new Map<string, CorchScorecard['rows']>()
+  for (const r of scorecard.value?.rows ?? []) {
+    const list = map.get(r.kind)
+    if (list) list.push(r)
+    else map.set(r.kind, [r])
+  }
+  return [...map.entries()].map(([kind, rows]) => ({ kind, rows }))
+})
+const scoreSummary = computed(() => {
+  const rows = scorecard.value?.rows ?? []
+  if (!rows.length) return t('corch.scoreNone')
+  const pass = rows.reduce((n, r) => n + r.pass, 0)
+  const fail = rows.reduce((n, r) => n + r.fail, 0)
+  const n = scoreKinds.value.length
+  return t('corch.scoreSummary', { pass, fail, n }, n)
+})
+const scoreModel = (m: string | null) => (m ? modelName(m) : t('corch.runDefault'))
+/** The task's newest verdict, for the row's check or cross. */
+const lastVerdict = (w: CorchWorkerView) => w.verdicts?.[w.verdicts.length - 1]?.verdict ?? null
+
 async function load(opts: { silent?: boolean } = {}) {
   if (timer !== null) window.clearTimeout(timer)
   timer = null
   if (!opts.silent) loading.value = true
   try {
-    const [list, sums] = await Promise.all([listCorchWorkers(), getCorchTotals()])
+    // The scorecard is extra: a failed read keeps the last one and never marks Corch unreachable.
+    const [list, sums, score] = await Promise.all([
+      listCorchWorkers(),
+      getCorchTotals(),
+      getCorchScorecard().catch(() => null),
+    ])
     workers.value = reconcileList(workers.value, list, (w) => w.id)
     if (!sameData(totals.value, sums)) totals.value = sums
+    if (score && !sameData(scorecard.value, score)) scorecard.value = score
     unreachable.value = false
     now.value = Date.now()
     if (!loaded.value) {
@@ -252,6 +306,66 @@ onUnmounted(() => {
             <span class="tabular-nums text-muted-foreground">(${{ totals.costUsd.toFixed(2) }})</span>
           </span>
         </p>
+        <!-- What works: one line until opened, so it never pushes the task list down. -->
+        <Collapsible v-if="scorecard" v-model:open="scoreOpen" class="max-w-2xl">
+          <CollapsibleTrigger
+            class="group flex items-center gap-1.5 rounded-md py-0.5 text-start text-xs transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            :title="$t('corch.scoreHint')"
+          >
+            <ChevronRight
+              class="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90"
+              aria-hidden="true"
+            />
+            <span class="font-medium">{{ $t('corch.scoreTitle') }}</span>
+            <span class="text-muted-foreground">{{ scoreSummary }}</span>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <p
+              v-if="!scorecard.rows.length"
+              class="mt-1.5 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground"
+            >
+              {{ $t('corch.scoreEmpty') }}
+            </p>
+            <div v-else class="scroll-slim mt-1.5 max-h-64 overflow-y-auto rounded-lg border bg-card text-xs">
+              <section v-for="k in scoreKinds" :key="k.kind" :aria-label="k.kind">
+                <h3 class="border-b bg-muted/40 px-3 py-1 text-2xs font-medium text-muted-foreground">
+                  {{ k.kind }}
+                </h3>
+                <ul class="divide-y">
+                  <li
+                    v-for="(r, i) in k.rows"
+                    :key="i"
+                    class="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1"
+                  >
+                    <span class="min-w-24 font-medium">
+                      {{ scoreModel(r.model) }}
+                      <span class="font-normal text-muted-foreground">· {{ r.effort ?? $t('corch.runDefault') }}</span>
+                    </span>
+                    <span
+                      class="flex items-center gap-1 tabular-nums text-success"
+                      :title="$t('corch.scorePasses', { n: r.pass })"
+                    >
+                      <ThumbsUp class="size-3" aria-hidden="true" />{{ r.pass }}
+                    </span>
+                    <span
+                      class="flex items-center gap-1 tabular-nums text-destructive"
+                      :title="$t('corch.scoreFails', { n: r.fail })"
+                    >
+                      <ThumbsDown class="size-3" aria-hidden="true" />{{ r.fail }}
+                    </span>
+                    <span class="tabular-nums text-muted-foreground">
+                      {{ r.pctPerTask === null ? '—' : $t('corch.scorePerTask', { pct: r.pctPerTask.toFixed(1) }) }}
+                    </span>
+                    <Badge v-if="r.pick" variant="success" class="ms-auto h-5 text-2xs" :title="$t('corch.scoreNextPickHint')">
+                      <Star aria-hidden="true" />
+                      {{ $t('corch.scoreNextPick') }}
+                    </Badge>
+                  </li>
+                </ul>
+              </section>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
       <Button
         variant="outline"
@@ -324,7 +438,19 @@ onUnmounted(() => {
                 @click="select(w)"
               >
                 <CorchStatusBadge :status="w.status" icon-only />
-                <span class="min-w-0 flex-1 truncate font-medium">{{ w.title }}</span>
+                <span class="flex min-w-0 flex-1 items-center gap-1">
+                  <span class="min-w-0 truncate font-medium">{{ w.title }}</span>
+                  <Check
+                    v-if="lastVerdict(w) === 'pass'"
+                    class="size-3.5 shrink-0 text-success"
+                    :aria-label="$t('corch.verdictPassed')"
+                  />
+                  <X
+                    v-else-if="lastVerdict(w) === 'fail'"
+                    class="size-3.5 shrink-0 text-destructive"
+                    :aria-label="$t('corch.verdictFailed')"
+                  />
+                </span>
                 <span
                   v-if="runTag(w)"
                   class="shrink-0 text-[11px] text-muted-foreground"

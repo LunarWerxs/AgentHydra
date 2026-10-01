@@ -13,8 +13,10 @@ import {
   corchList,
   corchRemove,
   corchRun,
+  corchScorecard,
   corchSend,
   corchTotals,
+  corchVerdict,
   corchWait,
 } from '../corch'
 import {
@@ -96,6 +98,7 @@ app.post('/api/corch/workers', async (c) => {
         // Validated by corchRun (unknown values are refused with the valid ones listed).
         model: body.model as string | undefined,
         effort: body.effort as string | undefined,
+        kind: body.kind as string | undefined,
       }),
     )
   } catch (err) {
@@ -114,6 +117,19 @@ app.post('/api/corch/workers/:id/send', async (c) => {
     }),
   )
 })
+// A thumbs up or down on a finished task's result; a fail goes back to it one rung up the ladder.
+app.post('/api/corch/workers/:id/verdict', async (c) => {
+  const body = await jsonBody(c)
+  const r = corchVerdict(c.req.param('id'), {
+    verdict: body.verdict,
+    note: body.note,
+    retry: body.retry,
+    kind: body.kind,
+  })
+  return c.json(r, r.ok ? 200 : 400)
+})
+// What works per kind of task, from every verdict (corch-scorecard.ts).
+app.get('/api/corch/scorecard', (c) => c.json(corchScorecard()))
 app.post('/api/corch/workers/:id/handoff', (c) => c.json(corchHandoff(c.req.param('id'))))
 app.post('/api/corch/cancel', async (c) => {
   const body = await jsonBody(c)

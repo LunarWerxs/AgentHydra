@@ -933,6 +933,36 @@ export interface CorchWorkerView {
   ranS: number
   createdAt: number
   updatedAt: number
+  /** What kind of task it is: code, debug, review, sweep, mechanical, docs, trivial. */
+  kind?: string | null
+  /** Corch picked the model and thinking level itself (from the scorecard). */
+  auto?: boolean
+  /** The thumbs up or down it got, oldest first. */
+  verdicts?: CorchVerdict[]
+}
+/** One thumbs up or down on a finished task (server/src/corch.ts). */
+export interface CorchVerdict {
+  at: number
+  verdict: 'pass' | 'fail'
+  note: string | null
+  model: string | null
+  effort: string | null
+  /** Share of a Pro 5-hour window the work it judges cost: 2.4 means 2.4%. */
+  pct: number | null
+}
+/** What passed per kind of task, per model and thinking level, and what it cost. */
+export interface CorchScorecard {
+  unitsPerPercent: number
+  /** Sorted by kind, then cheapest first; `pick` marks what Corch would choose next for that kind. */
+  rows: {
+    kind: string
+    model: string | null
+    effort: string | null
+    pass: number
+    fail: number
+    pctPerTask: number | null
+    pick: boolean
+  }[]
 }
 export interface CorchTask {
   prompt: string
@@ -985,6 +1015,17 @@ export const sendCorchWorker = (id: string, text: string, urgent = false) =>
   j<{ ok: boolean; message: string; urgent?: boolean }>(
     `/api/corch/workers/${encodeURIComponent(id)}/send`,
     { method: 'POST', body: JSON.stringify({ text, urgent }) },
+  )
+export const getCorchScorecard = () => j<CorchScorecard>('/api/corch/scorecard')
+/** A thumbs up or down on a finished task; a fail with `retry` sends it back one rung up the
+ *  model/thinking ladder, and `next` says which. */
+export const postCorchVerdict = (
+  id: string,
+  body: { verdict: 'pass' | 'fail'; note?: string; retry?: boolean },
+) =>
+  j<{ ok: boolean; message: string; next?: { model: string; effort: string } | null }>(
+    `/api/corch/workers/${encodeURIComponent(id)}/verdict`,
+    { method: 'POST', body: JSON.stringify(body) },
   )
 /** `keptMessages`: per stopped task, the waiting messages kept for when it is continued. */
 export const cancelCorch = (filter: { id?: string; group?: string }) =>

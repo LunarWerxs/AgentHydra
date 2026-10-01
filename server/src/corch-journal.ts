@@ -29,6 +29,7 @@ export type CorchJournalEvent =
   | 'waiting' // no account it may use is free
   | 'turn-done' // a turn finished and a queued follow-up comes next
   | 'turn-end' // a turn ended with this text (a Stop hook can force more turns after the report)
+  | 'verdict' // its result was judged pass or fail (corchVerdict); a fail names the next setting
   | 'done'
   | 'failed'
   | 'cancelled'
@@ -63,6 +64,9 @@ export interface CorchJournalEntry {
   effort?: string | null // the same, for the effort level
   cwd?: string // dispatched
   accounts?: number // dispatched: how many accounts it is restricted to (absent: any)
+  kind?: string // dispatched / verdict: the kind of work (corch-scorecard CORCH_KINDS)
+  reason?: string // dispatched with model auto: why the scorecard picked that setting
+  verdict?: 'pass' | 'fail' // verdict
 }
 
 export const JOURNAL_MAX_BYTES = 5 * 1024 * 1024
@@ -177,7 +181,7 @@ export function describeJournalEntry(e: CorchJournalEntry, now: Date = new Date(
   const at = (iso: string | undefined): string => (iso ? journalTime(iso, now) : '?')
   switch (e.event) {
     case 'dispatched':
-      return `dispatched in ${e.cwd ?? '?'}${e.accounts ? ` (restricted to ${e.accounts} account${e.accounts === 1 ? '' : 's'})` : ''}${runs}`
+      return `dispatched in ${e.cwd ?? '?'}${e.kind ? ` as ${e.kind}` : ''}${e.accounts ? ` (restricted to ${e.accounts} account${e.accounts === 1 ? '' : 's'})` : ''}${runs}${e.reason ? ` (${e.reason})` : ''}`
     case 'launched':
       return `launched${on} ${pick}${e.attempt && e.attempt > 1 ? `, attempt ${e.attempt}` : ''}${runs}`
     case 'moved':
@@ -208,6 +212,8 @@ export function describeJournalEntry(e: CorchJournalEntry, now: Date = new Date(
       return `turn done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task so far ${usd(e.totalCostUsd)}); next queued message follows`
     case 'turn-end':
       return `turn ended${on}${e.said ? `: ${e.said}` : ''}`
+    case 'verdict':
+      return `judged ${e.verdict === 'pass' ? 'a pass' : 'a fail'}${runs}${e.notice ? `: ${e.notice}` : ''}${e.verdict === 'fail' && e.reason ? `; ${e.reason}` : ''}`
     case 'done':
       return `done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task total ${usd(e.totalCostUsd)})`
     case 'failed':

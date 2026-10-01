@@ -10,6 +10,7 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { type CorchVerdict, UNITS_PER_PRO_PERCENT } from './corch-scorecard'
 import { priceTokens } from './pricing'
 import {
   classifyLimit,
@@ -57,6 +58,8 @@ export interface CorchAttempt {
   /** The session this attempt ran in. A planned handoff starts a new one, so the worker's current
    *  `sessionId` is not every attempt's. null: the log names none (the CLI never started). */
   sessionId?: string | null
+  /** The prompt cache it ran with ('5m' since 49e6ab1; absent: the 1-hour default). */
+  cacheTtl?: '5m'
   /** What it was launched with (`--model`, `--effort`; null: the CLI's default). Absent before 2026-10-01. */
   requested?: { model: string | null; effort: string | null }
   /** The model the CLI reported in its system/init event: what really ran. */
@@ -117,6 +120,12 @@ export interface CorchWorker {
   notBefore: number | null // epoch ms; a transient retry waits until then
   revived?: boolean // a message revived it after it stopped: deliver that message next
   sessions?: string[] // earlier sessions of this task, oldest first (each handoff starts a new one)
+  /** The kind of work (corch-scorecard CORCH_KINDS): the scorecard learns what each kind needs. */
+  kind?: string | null
+  /** Corch chose `model` and `effort` from the scorecard (dispatched with model `auto`). */
+  auto?: boolean
+  /** Each judgement of its result, oldest first (corchVerdict). */
+  verdicts?: CorchVerdict[]
   createdAt: number
   updatedAt: number
 }
@@ -224,8 +233,10 @@ export function freshestPct(
 }
 
 /** The worker minus the long prompt and the log paths, plus what a reader wants at a glance. */
-export type CorchWorkerView = Omit<CorchWorker, 'prompt' | 'attempts'> & {
+export type CorchWorkerView = Omit<CorchWorker, 'prompt' | 'attempts' | 'verdicts'> & {
   prompt: string // first 300 chars
+  /** Its verdicts, with what each judged stretch of work cost as a share of a Pro 5-hour window. */
+  verdicts?: Array<Omit<CorchVerdict, 'units'> & { pct: number | null }>
   account: string | null // `#<num> <name>`
   ranS: number // seconds its CLI sessions actually ran, summed over every attempt
   /** The model the CLI reported at init on its newest attempt that got that far (`model` and
@@ -855,6 +866,10 @@ export function toView(w: CorchWorker, now: number): CorchWorkerView {
       ) / 1000,
     ),
     reportedModel: [...w.attempts].reverse().find((a) => a.model)?.model ?? null,
+    verdicts: w.verdicts?.map(({ units, ...v }) => ({
+      ...v,
+      pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
+    })),
     attempts: w.attempts.map((a) => ({
       account: a.account,
       outcome: a.outcome,

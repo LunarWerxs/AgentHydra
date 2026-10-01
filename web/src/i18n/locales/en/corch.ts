@@ -102,6 +102,34 @@ export default {
   sendNowHint:
     'Stops the work it is doing and continues the same conversation with this message first. Anything already waiting follows.',
   stopFailed: 'Could not stop the task',
+  // --- verdicts: a thumbs up or down on a finished task, so Corch learns what each kind needs ---
+  detailKind: 'Kind of task',
+  pickedByCorch: 'picked by Corch',
+  verdictUp: 'Good result',
+  verdictDown: 'Not good: send it back',
+  verdictWhatWrong: 'What was wrong?',
+  verdictSendBack: 'Send back',
+  verdictSentBack: 'Sent back on {model} · {effort}',
+  verdictSaved: 'Thanks: Corch will remember that',
+  verdictSaveFailed: 'Could not save the verdict',
+  verdictPassed: 'Passed',
+  verdictFailed: 'Failed',
+  verdicts: 'Verdicts',
+  verdictPct: '{pct}% of a Pro window',
+  // --- the scorecard (CorchView.vue): what passed per kind of task, and what it cost ---
+  scoreTitle: 'What works',
+  scoreHint:
+    'Per kind of task, every model and thinking level that got a verdict: how often it passed, and what a task cost as a share of a Pro 5-hour window. Corch picks the cheapest setting that keeps passing.',
+  scoreSummary:
+    '{pass} passed, {fail} failed, on {n} kind of task | {pass} passed, {fail} failed, on {n} kinds of task',
+  scoreNone: 'no verdicts yet',
+  scoreEmpty:
+    'No verdicts yet. Give a finished task a thumbs up or down and Corch starts learning which model and thinking level each kind of task needs.',
+  scorePasses: '{n} passed',
+  scoreFails: '{n} failed',
+  scorePerTask: 'about {pct}% of a Pro window per task',
+  scoreNextPick: 'next pick',
+  scoreNextPickHint: 'What Corch picks next for this kind of task',
   // --- status chips (sentence case, each with an icon so colour is never the only signal) ---
   statusQueued: 'Queued',
   statusRunning: 'Running',
