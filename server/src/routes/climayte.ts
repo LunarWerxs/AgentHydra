@@ -47,7 +47,7 @@ const optInt = (v: string | undefined): number | undefined => {
 // scope, for climayte_status {wait_seconds}; without it the list answers at once. `limit` keeps every
 // active worker and only that many recently finished ones; `brief=1` leaves out the prompt and all
 // but the last 3 attempts (climayte_status uses both; the CliMayte view reads the full list).
-app.get('/api/climayte/workers', async (c) => {
+app.get('/api/corch/workers', async (c) => {
   const filter = {
     group: optStr(c.req.query('group')),
     id: optStr(c.req.query('id')),
@@ -60,7 +60,7 @@ app.get('/api/climayte/workers', async (c) => {
   return c.json(climayteList(filter))
 })
 // One worker's detail with its last 60 event lines; `wait` first waits for its next status change.
-app.get('/api/climayte/workers/:id', async (c) => {
+app.get('/api/corch/workers/:id', async (c) => {
   const id = c.req.param('id')
   const wait = waitMs(c.req.query('wait'))
   if (wait > 0 && climayteGet(id)) await climayteWait({ id }, wait)
@@ -69,7 +69,7 @@ app.get('/api/climayte/workers/:id', async (c) => {
 })
 // The orchestration journal (climayte-journal.ts), oldest first, the newest `limit` (default 100).
 // `format=lines` answers readable one-line strings instead of the JSON entries (climayte_log).
-app.get('/api/climayte/journal', (c) => {
+app.get('/api/corch/journal', (c) => {
   const filter = {
     group: optStr(c.req.query('group')),
     id: optStr(c.req.query('id')),
@@ -82,7 +82,7 @@ app.get('/api/climayte/journal', (c) => {
 })
 // climayteRun validates the tasks (cwd exists, prompt non-empty, perAccount 1..4) and throws on a bad
 // one; that is the caller's mistake, so it answers 400 with the reason rather than a 500.
-app.post('/api/climayte/workers', async (c) => {
+app.post('/api/corch/workers', async (c) => {
   const body = await jsonBody(c)
   if (!Array.isArray(body.tasks) || !body.tasks.length)
     return c.json({ error: 'tasks must be a non-empty array' }, 400)
@@ -107,7 +107,7 @@ app.post('/api/climayte/workers', async (c) => {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
   }
 })
-app.post('/api/climayte/workers/:id/send', async (c) => {
+app.post('/api/corch/workers/:id/send', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.text !== 'string' || !body.text.trim())
     return c.json({ error: 'text is required' }, 400)
@@ -120,13 +120,13 @@ app.post('/api/climayte/workers/:id/send', async (c) => {
   )
 })
 // A task's priority: queued and waiting work starts highest first (climayte_priority).
-app.post('/api/climayte/workers/:id/priority', async (c) => {
+app.post('/api/corch/workers/:id/priority', async (c) => {
   const body = await jsonBody(c)
   const r = climayteSetPriority(c.req.param('id'), body.priority)
   return c.json(r, r.ok ? 200 : 400)
 })
 // A thumbs up or down on a finished task's result; a fail goes back to it one rung up the ladder.
-app.post('/api/climayte/workers/:id/verdict', async (c) => {
+app.post('/api/corch/workers/:id/verdict', async (c) => {
   const body = await jsonBody(c)
   const r = climayteVerdict(c.req.param('id'), {
     verdict: body.verdict,
@@ -139,9 +139,9 @@ app.post('/api/climayte/workers/:id/verdict', async (c) => {
   return c.json(r, r.ok ? 200 : 400)
 })
 // What works per kind of task, from every verdict (climayte-scorecard.ts).
-app.get('/api/climayte/scorecard', (c) => c.json(climayteScorecard()))
-app.post('/api/climayte/workers/:id/handoff', (c) => c.json(climayteHandoff(c.req.param('id'))))
-app.post('/api/climayte/cancel', async (c) => {
+app.get('/api/corch/scorecard', (c) => c.json(climayteScorecard()))
+app.post('/api/corch/workers/:id/handoff', (c) => c.json(climayteHandoff(c.req.param('id'))))
+app.post('/api/corch/cancel', async (c) => {
   const body = await jsonBody(c)
   const id = optStr(body.id)
   const group = optStr(body.group)
@@ -150,10 +150,10 @@ app.post('/api/climayte/cancel', async (c) => {
 })
 
 // What CliMayte has offloaded, over every task on record: the CliMayte view's counter.
-app.get('/api/climayte/totals', (c) => c.json(climayteTotals()))
+app.get('/api/corch/totals', (c) => c.json(climayteTotals()))
 
 // Remove finished tasks by id; their logs and transcripts move to corch/archive, never deleted.
-app.post('/api/climayte/remove', async (c) => {
+app.post('/api/corch/remove', async (c) => {
   const body = await jsonBody(c)
   const ids = Array.isArray(body.ids)
     ? body.ids.filter((x): x is string => typeof x === 'string')

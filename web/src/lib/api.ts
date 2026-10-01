@@ -998,18 +998,18 @@ export interface CliMayteTotals {
   tokens: CliMayteTokens
   costUsd: number
 }
-export const getCliMayteTotals = () => j<CliMayteTotals>('/api/climayte/totals')
+export const getCliMayteTotals = () => j<CliMayteTotals>('/api/corch/totals')
 export const listCliMayteWorkers = (filter: { group?: string; active?: boolean } = {}) => {
   const q = new URLSearchParams()
   if (filter.group) q.set('group', filter.group)
   if (filter.active) q.set('active', '1')
   const qs = q.toString()
-  return j<CliMayteWorkerView[]>(`/api/climayte/workers${qs ? `?${qs}` : ''}`)
+  return j<CliMayteWorkerView[]>(`/api/corch/workers${qs ? `?${qs}` : ''}`)
 }
 /** One worker plus its last 60 summarised event lines. */
 export const getCliMayteWorker = (id: string) =>
   j<(CliMayteWorkerView & { events: string[] }) | null>(
-    `/api/climayte/workers/${encodeURIComponent(id)}`,
+    `/api/corch/workers/${encodeURIComponent(id)}`,
   )
 export const runCliMayte = (input: {
   tasks: CliMayteTask[]
@@ -1017,17 +1017,17 @@ export const runCliMayte = (input: {
   accounts?: string[]
   perAccount?: number
 }) =>
-  j<{ group: string; workers: CliMayteWorkerView[] }>('/api/climayte/workers', {
+  j<{ group: string; workers: CliMayteWorkerView[] }>('/api/corch/workers', {
     method: 'POST',
     body: JSON.stringify(input),
   })
 /** `urgent`: stop a running task's work and continue its session with this message first. */
 export const sendCliMayteWorker = (id: string, text: string, urgent = false) =>
   j<{ ok: boolean; message: string; urgent?: boolean }>(
-    `/api/climayte/workers/${encodeURIComponent(id)}/send`,
+    `/api/corch/workers/${encodeURIComponent(id)}/send`,
     { method: 'POST', body: JSON.stringify({ text, urgent }) },
   )
-export const getCliMayteScorecard = () => j<CliMayteScorecard>('/api/climayte/scorecard')
+export const getCliMayteScorecard = () => j<CliMayteScorecard>('/api/corch/scorecard')
 /** A thumbs up or down on a finished task; a fail with `retry` sends it back one rung up the
  *  model/thinking ladder, and `next` says which. */
 export const postCliMayteVerdict = (
@@ -1035,12 +1035,12 @@ export const postCliMayteVerdict = (
   body: { verdict: 'pass' | 'fail'; note?: string; retry?: boolean; by?: 'owner' },
 ) =>
   j<{ ok: boolean; message: string; next?: { model: string; effort: string } | null }>(
-    `/api/climayte/workers/${encodeURIComponent(id)}/verdict`,
+    `/api/corch/workers/${encodeURIComponent(id)}/verdict`,
     { method: 'POST', body: JSON.stringify(body) },
   )
 /** `keptMessages`: per stopped task, the waiting messages kept for when it is continued. */
 export const cancelCliMayte = (filter: { id?: string; group?: string }) =>
-  j<{ cancelled: string[]; keptMessages?: Record<string, number> }>('/api/climayte/cancel', {
+  j<{ cancelled: string[]; keptMessages?: Record<string, number> }>('/api/corch/cancel', {
     method: 'POST',
     body: JSON.stringify(filter),
   })
@@ -1100,7 +1100,7 @@ export const getCliMayteJournal = (filter: { id?: string; group?: string; limit?
   if (filter.id) q.set('id', filter.id)
   if (filter.group) q.set('group', filter.group)
   if (filter.limit) q.set('limit', String(filter.limit))
-  return j<CliMayteJournalEntry[]>(`/api/climayte/journal?${q.toString()}`)
+  return j<CliMayteJournalEntry[]>(`/api/corch/journal?${q.toString()}`)
 }
 
 // --- Codex CLI + Desktop instances -------------------------------------------

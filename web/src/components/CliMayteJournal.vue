@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The orchestration log of the selected CliMayte task, or of everything handed off with it
-// (server/src/climayte-journal.ts, GET /api/climayte/journal). One line per change: where each attempt ran
+// (server/src/climayte-journal.ts, GET /api/corch/journal). One line per change: where each attempt ran
 // and why that account was picked, limits, moves, handoffs, messages, retries, the finish and its
 // cost. The owner asked for it on the first real climayte run ("we probably also need logging in
 // CliMayte", 2026-09-30). The server keeps the facts; the words are rendered here, through vue-i18n.

@@ -91,17 +91,17 @@ const run = async (
   perAccount?: number,
 ) =>
   (
-    await api<{ workers: View[] }>('/api/climayte/workers', {
+    await api<{ workers: View[] }>('/api/corch/workers', {
       group,
       accounts,
       perAccount,
       tasks: tasks.map((t) => ({ ...t, effort: EFFORT })),
     })
   ).workers
-const get = (id: string) => api<View>(`/api/climayte/workers/${id}`)
+const get = (id: string) => api<View>(`/api/corch/workers/${id}`)
 const send = (id: string, text: string) =>
-  api<{ ok: boolean; message: string }>(`/api/climayte/workers/${id}/send`, { text })
-const cancel = (id: string) => api<{ cancelled: string[] }>('/api/climayte/cancel', { id })
+  api<{ ok: boolean; message: string }>(`/api/corch/workers/${id}/send`, { text })
+const cancel = (id: string) => api<{ cancelled: string[] }>('/api/corch/cancel', { id })
 
 async function until(
   id: string,

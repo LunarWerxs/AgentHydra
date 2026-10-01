@@ -912,10 +912,10 @@ describe('climayte_status scope (field notes 1, 4 and 7)', () => {
       await t.run({ id: 'w-1', wait_seconds: 5 })
       const paths = urls.map((u) => new URL(u).pathname + new URL(u).search)
       expect(paths).toEqual([
-        '/api/climayte/workers?limit=20&brief=1',
-        '/api/climayte/workers?group=g-1&brief=1',
-        '/api/climayte/workers?active=1&limit=5&brief=1',
-        '/api/climayte/workers/w-1?wait=5',
+        '/api/corch/workers?limit=20&brief=1',
+        '/api/corch/workers?group=g-1&brief=1',
+        '/api/corch/workers?active=1&limit=5&brief=1',
+        '/api/corch/workers/w-1?wait=5',
       ])
     })
 

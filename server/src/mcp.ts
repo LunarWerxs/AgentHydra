@@ -641,7 +641,7 @@ export const TOOLS: McpEngineTool[] = [
   },
 
   // --- CliMayte: delegate work onto the CLI accounts (docs/CLIMAYTE.md) ---------------
-  // Over /api/climayte like every other tool: the workers belong to the daemon, and a stdio MCP server
+  // Over /api/corch like every other tool: the workers belong to the daemon, and a stdio MCP server
   // running CliMayte in its own process would relaunch them as dead and could not cancel them.
   {
     name: 'climayte_run',
@@ -727,7 +727,7 @@ export const TOOLS: McpEngineTool[] = [
             }),
           )
         : undefined
-      const r = (await api('/api/climayte/workers', {
+      const r = (await api('/api/corch/workers', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
@@ -773,7 +773,7 @@ export const TOOLS: McpEngineTool[] = [
       const wait = Math.min(CLIMAYTE_MAX_WAIT_S, Math.max(0, Number(a.wait_seconds) || 0))
       if (a.id != null && str(a.id))
         return api(
-          `/api/climayte/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined })}`,
+          `/api/corch/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined })}`,
         )
       const group = a.group != null && str(a.group) ? str(a.group) : undefined
       const limit =
@@ -783,7 +783,7 @@ export const TOOLS: McpEngineTool[] = [
             ? undefined
             : RECENT_FINISHED
       return api(
-        `/api/climayte/workers${qs({
+        `/api/corch/workers${qs({
           group,
           active: a.active === true ? 1 : undefined,
           limit,
@@ -805,7 +805,7 @@ export const TOOLS: McpEngineTool[] = [
     }),
     run: (a) =>
       api(
-        `/api/climayte/journal${qs({
+        `/api/corch/journal${qs({
           group: a.group != null ? str(a.group) : undefined,
           id: a.id != null ? str(a.id) : undefined,
           since: a.since != null ? str(a.since) : undefined,
@@ -840,7 +840,7 @@ export const TOOLS: McpEngineTool[] = [
       ['id', 'text'],
     ),
     run: (a) =>
-      api(`/api/climayte/workers/${encodeURIComponent(str(a.id))}/send`, {
+      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/send`, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
@@ -866,7 +866,7 @@ export const TOOLS: McpEngineTool[] = [
       ['id', 'verdict'],
     ),
     run: (a) =>
-      api(`/api/climayte/workers/${encodeURIComponent(str(a.id))}/verdict`, {
+      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/verdict`, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
@@ -883,7 +883,7 @@ export const TOOLS: McpEngineTool[] = [
       "MUTATES: change a CliMayte worker's priority (whole number; climayte_run's default is 0). Queued and waiting work starts highest first, then oldest first, so a raised task takes the next free account slot ahead of the rest; a running worker is not stopped. The journal records the change.",
     inputSchema: S({ id: { type: 'string' }, priority: { type: 'number' } }, ['id', 'priority']),
     run: (a) =>
-      api(`/api/climayte/workers/${encodeURIComponent(str(a.id))}/priority`, {
+      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/priority`, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({ priority: Number(a.priority) }),
@@ -894,7 +894,7 @@ export const TOOLS: McpEngineTool[] = [
     description:
       "What works, per kind of CliMayte task: every verdict on record summed by model and thinking level (passes, fails, and what a task cost on average as a share of a Pro account's 5-hour window), with `pick` on the setting a model-`auto` task of that kind gets next.",
     inputSchema: S({}),
-    run: () => api('/api/climayte/scorecard'),
+    run: () => api('/api/corch/scorecard'),
   },
   {
     name: 'climayte_handoff',
@@ -902,7 +902,7 @@ export const TOOLS: McpEngineTool[] = [
       'MUTATES: hand a RUNNING CliMayte worker to a fresh session: after its current step it writes a handoff file, and the task continues in a new, small session (on the account with the most room) that starts from that handoff instead of re-reading the whole conversation. CliMayte does this by itself when a worker nears its usage limit; call it to free an account or to give a task whose conversation has grown huge a clean start.',
     inputSchema: S({ id: { type: 'string' } }, ['id']),
     run: (a) =>
-      api(`/api/climayte/workers/${encodeURIComponent(str(a.id))}/handoff`, {
+      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/handoff`, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: '{}',
@@ -915,7 +915,7 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S({ id: { type: 'string' }, group: { type: 'string' } }),
     run: async (a) => {
       if (a.id == null && a.group == null) throw new Error('pass `id` or `group`')
-      return api('/api/climayte/cancel', {
+      return api('/api/corch/cancel', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({

@@ -128,7 +128,7 @@ const totalsHint = computed(() =>
     : '',
 )
 
-/** What passed per kind of task (GET /api/climayte/scorecard); collapsed under the counter. */
+/** What passed per kind of task (GET /api/corch/scorecard); collapsed under the counter. */
 const scorecard = ref<CliMayteScorecard | null>(null)
 const scoreOpen = ref(false)
 /** The rows by kind, in the server's order (kind, then cheapest first). */
