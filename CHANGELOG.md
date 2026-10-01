@@ -38,6 +38,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **The CLI accounts table is as long as its rows** (`web/src/components/CliInstancesSection.vue`).
+  Unfolded, it no longer scrolls inside a third of the window; the tab scrolls instead. Its Tokens
+  column sorts, and hovering a figure gives the exact total and the split (output, input, cache
+  read, cache write). Launch moved from a button on every row into the row's ⋮ menu.
+
+- **The Login sync dialog is a short list** (`web/src/components/CliLoginSyncDialog.vue`). One line
+  says what it does; one row holds the switch, the last sync, how many logins are in sync and Sync
+  now; each login is one line with a state of a word or two (hover for the sentence), the ones that
+  cannot sync first; Recent groups what one pass did ("18m ago · uploaded #56 #14 #59"); the store,
+  the pairing code and Stop syncing sit at the bottom.
+
 - **Login sync says why a login is left as it is in two words** (`server/src/core/cli-login-sync.ts`,
   the `note` field: `own`, `waiting`, `fed`). The sentence that used to fill the state column is the
   hover text now; `problem` carries only real errors.
@@ -57,6 +68,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **CliMayte workers no longer explain deploying.** A worker is told not to deploy unless its task
   says so, and to answer a repository's deploy reminder in one line. On 2026-10-01, 22 of 47 reports
   carried a second turn about why the worker had not deployed.
+
+### Fixed
+
+- **Dialogs are as wide as they ask to be.** Ten dialogs that set their own width (Login sync, moving
+  logins, limit reset, an instance's chats, moving all chats, the queue builder, the bulk-move and
+  secrets dialogs in Sessions, the Codex move, the shortcut sheet) were all 384 px wide on any
+  window from 640 px up: the width they passed did not replace the dialog's own.
 
 ## [1.5.0] - 2026-10-01
 

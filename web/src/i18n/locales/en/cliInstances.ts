@@ -11,6 +11,12 @@ export default {
   colConfigDir: 'Config dir',
   colUsage: 'Usage',
   colActions: 'Actions',
+  // The Tokens column: what an account has run, from its own transcripts (cli-instance-tokens.ts).
+  colTokens: 'Tokens',
+  tokensLabel: '{total} tokens',
+  tokensBreakdown:
+    '{output} output · {input} input · {cacheRead} cache read · {cacheWrite} cache write',
+  tokensSource: 'From this instance’s transcripts on this PC',
   loggedIn: 'Logged in',
   loggedOut: 'Not logged in',
   noAccount: 'No account',
@@ -156,10 +162,11 @@ export default {
   syncHint:
     'Keeps your CLI and desktop logins the same on your PCs through a small store in your own Cloudflare account, so both can stay signed in.',
   syncTitle: 'Login sync',
+  // One line each (owner, 2026-10-01: the dialog was "verbose as FUCK"); the long version is
+  // cloud/login-sync-worker/README.md.
   syncIntro:
-    'Both PCs point at one store (a small Cloudflare Worker of yours). When either PC refreshes a login, the other gets the new one within about a minute, so both stay signed in. The store only ever holds logins encrypted with a key that stays on your PCs.',
-  syncDesktopNote:
-    'Desktop logins sync too. A desktop account signed in on one PC is signed in on the other, in a profile of the same name and number. A newer login is written only while that desktop instance is closed (AgentHydra does it just before it opens one), so keep a synced desktop account open on one PC at a time. A desktop account you signed in separately on both PCs is left alone.',
+    'Sign in on one PC and the other gets the login within a minute. The store only holds encrypted copies.',
+  syncDesktopNote: 'Keep a synced desktop account open on one PC at a time.',
   syncKindDesktop: 'Desktop',
   syncKindCli: 'CLI',
   syncJoinTitle: 'Join from your other PC',
@@ -181,16 +188,28 @@ export default {
   syncPairing: 'Copy pairing code',
   syncPairingCopied:
     'Pairing code copied. Paste it into Login sync on your other PC; keep it private.',
-  syncDisconnect: 'Stop syncing on this PC',
-  syncDisconnected: 'This PC no longer syncs logins.',
-  syncColLogin: 'Login',
-  syncColState: 'State',
-  syncColSync: 'Sync',
+  syncDisconnect: 'Stop syncing',
+  syncCount: '{n} of {total} in sync',
+  syncLogins: 'Logins',
+  // A row's state: the word on the row, and (…Hint) the sentence behind it, shown on hover.
   syncStateInSync: 'In sync',
-  syncStateHereOnly: 'Not in the store yet',
+  syncStateInSyncHint: 'This PC and the store hold the same login.',
+  syncStateHereOnly: 'Not uploaded yet',
+  syncStateHereOnlyHint: 'Signed in here; the next sync uploads it to the store.',
   syncStateStoreOnly: 'Only in the store',
-  syncStatePending: 'Waiting for the next sync',
+  syncStateStoreOnlyHint: 'The store holds it; this PC is not signed in to it yet.',
+  syncStatePending: 'Pending',
+  syncStatePendingHint: 'Waiting for the next sync.',
   syncStateOut: 'Left out',
+  syncStateOutHint: 'Not synced on this PC. Turn its switch on to sync it.',
+  syncStateOwn: 'Own sign-in',
+  syncStateOwnHint: 'Signed in separately on this PC, so sync leaves it alone.',
+  syncStateWaiting: 'Waiting',
+  syncStateWaitingHint:
+    'A newer login is in the store. It lands here once this desktop instance is closed.',
+  syncStateFed: 'From desktop',
+  syncStateFedHint: 'This CLI login comes from its desktop instance, which is the one that syncs.',
+  syncStateProblem: 'Can’t sync',
   syncInclude: 'Sync this login on this PC',
   syncRecent: 'Recent',
   syncEventPushed: 'uploaded',

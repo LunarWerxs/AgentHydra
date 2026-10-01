@@ -332,7 +332,7 @@ async function submit() {
 
 <template>
   <Dialog v-model:open="open">
-    <DialogContent class="max-w-165">
+    <DialogContent class="sm:max-w-165">
       <DialogHeader>
         <DialogTitle>{{ editing ? $t('builder.editDialogTitle') : $t('builder.dialogTitle') }}</DialogTitle>
       </DialogHeader>

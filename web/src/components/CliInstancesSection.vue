@@ -79,6 +79,7 @@ import { useSortable } from '@/composables/useSortable'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
+import { formatTokens } from '@/lib/climayte-status'
 import { formatUsd, timeAgo } from '@/lib/format'
 import { nameOverflowTitle, shortDisplayName } from '@/lib/instance-appearance'
 import { billsPastLimit, bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
@@ -188,6 +189,7 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
       },
     },
     { key: 'usageSession', accessor: (i: CliInstance) => usageFor(i)?.session?.pct ?? undefined },
+    { key: 'tokens', accessor: (i: CliInstance) => i.tokens?.total },
   ],
   undefined,
   { rowKey: (i: CliInstance) => i.id },
@@ -646,12 +648,9 @@ onUnmounted(() => {
       @signed-in="refreshCliInstances({ silent: true })"
     />
 
-    <!-- Wide screens: at most about a third of the window, scrolling inside under its sticky header,
-         so the tab never scrolls as a whole (CliView). -->
-    <div
-      v-show="accountsOpen"
-      class="lg:[&>[data-slot=table-container]]:max-h-[35vh] lg:[&>[data-slot=table-container]]:overflow-y-auto"
-    >
+    <!-- As long as its rows: unfolded, the table never scrolls inside itself, the tab scrolls instead
+         (owner, 2026-10-01: "make this not scroll when expanded (just make it long)"). -->
+    <div v-show="accountsOpen">
     <Table>
       <TableHeader sticky>
         <TableRow>
@@ -724,13 +723,21 @@ onUnmounted(() => {
           </TableHead>
           <!-- The account's plan, the same badge as the Instances table (owner, 2026-09-30). -->
           <TableHead class="w-24">{{ $t('instances.colPlan') }}</TableHead>
+          <!-- What the account has run, from its own transcripts on this PC (cli-instance-tokens.ts). -->
+          <TableHead class="w-20 cursor-pointer select-none" @click="toggleSort('tokens')">
+            <span class="inline-flex items-center gap-0.5">
+              {{ $t('cliInstances.colTokens') }}
+              <ArrowUp v-if="indicatorFor('tokens') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('tokens') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
           <TableHead class="text-end">{{ $t('cliInstances.colActions') }}</TableHead>
         </TableRow>
       </TableHeader>
       <!-- visibleRows, not unlinkedCliInstances: with the usage filter set to hide, this table can
            be emptied while it still has rows to show, and a blank tbody explains nothing. -->
       <TableBody v-if="visibleRows.length === 0">
-        <TableEmpty v-if="!loading" :colspan="usageMode ? 9 : 7">
+        <TableEmpty v-if="!loading" :colspan="usageMode ? 10 : 8">
           <div class="flex flex-col items-center gap-1 text-center">
             <component :is="allHiddenByFilter ? Funnel : Terminal" class="mb-1 size-6 opacity-40" />
             <p class="font-medium text-foreground">
@@ -765,8 +772,9 @@ onUnmounted(() => {
           </template>
           <TableCell><Skeleton class="h-5 w-14" /></TableCell>
           <TableCell><Skeleton class="h-5 w-14" /></TableCell>
+          <TableCell><Skeleton class="h-4 w-12" /></TableCell>
           <TableCell>
-            <div class="flex justify-end"><Skeleton class="h-6 w-20" /></div>
+            <div class="flex justify-end"><Skeleton class="size-6" /></div>
           </TableCell>
         </TableRow>
       </TableBody>
@@ -910,10 +918,25 @@ onUnmounted(() => {
             <span v-else class="text-xs text-muted-foreground">—</span>
           </TableCell>
           <TableCell>
+            <IconTooltip
+              v-if="inst.tokens"
+              :label="$t('cliInstances.tokensLabel', { total: inst.tokens.total.toLocaleString() })"
+              :description="
+                $t('cliInstances.tokensBreakdown', {
+                  output: formatTokens(inst.tokens.output),
+                  input: formatTokens(inst.tokens.input),
+                  cacheRead: formatTokens(inst.tokens.cacheRead),
+                  cacheWrite: formatTokens(inst.tokens.cacheWrite),
+                })
+              "
+              :detail="$t('cliInstances.tokensSource')"
+            >
+              <span class="text-xs tabular-nums">{{ formatTokens(inst.tokens.total) }}</span>
+            </IconTooltip>
+            <span v-else class="text-xs text-muted-foreground">—</span>
+          </TableCell>
+          <TableCell>
             <div class="flex items-center justify-end gap-1">
-              <Button variant="outline" size="sm" :disabled="isBusy(inst)" @click="onLaunch(inst)">
-                <Play /> {{ $t('cliInstances.launch') }}
-              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger as-child>
                   <Button
@@ -928,6 +951,11 @@ onUnmounted(() => {
                   <!-- Which instance this menu belongs to, by number, then its quick actions as
                        icons — the same header on every table's kebab. -->
                   <InstanceMenuHeader :num="inst.num" :actions="menuActionsFor(inst)" />
+                  <!-- Launch lives here, not on the row (owner, 2026-10-01: "I kinda never need to
+                       launch the cli"). -->
+                  <DropdownMenuItem :disabled="isBusy(inst)" @click="onLaunch(inst)">
+                    <Play /> {{ $t('cliInstances.launch') }}
+                  </DropdownMenuItem>
                   <DropdownMenuItem :disabled="isBusy(inst)" @click="onLogin(inst)">
                     <LogIn /> {{ $t('cliInstances.login') }}
                   </DropdownMenuItem>

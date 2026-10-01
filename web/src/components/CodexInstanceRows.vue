@@ -795,7 +795,7 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
     :open="moveJob !== null"
     @update:open="(value) => { if (!value && !moveBusy) moveJob = null }"
   >
-    <DialogContent class="max-w-lg">
+    <DialogContent class="sm:max-w-lg">
       <DialogHeader>
         <DialogTitle>
           {{

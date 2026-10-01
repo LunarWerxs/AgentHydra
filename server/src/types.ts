@@ -1424,7 +1424,9 @@ export interface CliLoginSyncStatus {
     excluded: boolean
     /** This PC and the store agreed on it at the last pass. */
     inSync: boolean
-    /** Why this PC's copy cannot be shared (a credential file with no refresh token), or null. */
+    /** A real error only: why this PC's copy cannot be shared (a credential file with no refresh
+     *  token), or null. The dialog shows it as "Can't sync"; a row sync leaves alone by design
+     *  says so in `note`, never here. */
     problem: string | null
     /** Why sync leaves it as it is, when that is by design: signed in separately on this PC
      *  ('own'), a newer login waiting for its desktop instance to close ('waiting'), or a CLI login

@@ -27,7 +27,7 @@ const groups = computed(() => {
 
 <template>
   <Dialog v-model:open="open">
-    <DialogContent class="max-w-md">
+    <DialogContent class="sm:max-w-md">
       <DialogHeader>
         <DialogTitle>{{ $t('app.shortcutsTitle') }}</DialogTitle>
         <DialogDescription>{{ $t('app.shortcutsHint') }}</DialogDescription>

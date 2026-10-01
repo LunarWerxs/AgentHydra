@@ -1825,7 +1825,7 @@ function onComposerSent(mode: 'now' | 'queued') {
     <!-- Bulk migrate confirmation: names the count and the destination, lists the chats, and makes
          the move a second deliberate click. -->
     <Dialog :open="bulkConfirm !== null" @update:open="(v) => { if (!v) bulkConfirm = null }">
-      <DialogContent class="max-w-md">
+      <DialogContent class="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
             {{ $t('sessions.migrateConfirmTitle', { n: bulkConfirm?.sessions.length ?? 0, name: bulkConfirm?.target.name ?? '' }) }}
@@ -1865,7 +1865,7 @@ function onComposerSent(mode: 'now' | 'queued') {
       </DialogContent>
     </Dialog>
     <Dialog v-model:open="secretsOpen">
-      <DialogContent class="max-w-xl">
+      <DialogContent class="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{{ $t('sessions.secretsTitle') }}</DialogTitle>
           <DialogDescription>{{ $t('sessions.secretsCaveat') }}</DialogDescription>

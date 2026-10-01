@@ -134,7 +134,7 @@ function openChatFromList(row: ChatListRow) {
 
 <template>
   <Dialog v-model:open="open">
-    <DialogContent class="max-w-lg">
+    <DialogContent class="sm:max-w-lg">
       <DialogHeader>
         <DialogTitle>
           {{ $t('instances.chatsTitle', { name: instance ? instLabel(instance) : '' }) }}

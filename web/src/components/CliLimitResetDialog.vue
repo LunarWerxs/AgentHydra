@@ -46,11 +46,13 @@ async function onConfirm(check: boolean) {
 
 <template>
   <Dialog v-model:open="open">
-    <DialogContent class="max-w-md">
+    <DialogContent class="sm:max-w-md">
       <DialogHeader>
-        <DialogTitle class="flex items-center gap-2">
-          <RotateCcw class="size-4" />
-          {{ $t('cliInstances.limitResetTitle', { name: instance?.name ?? '' }) }}
+        <DialogTitle>
+          <span class="flex items-center gap-2">
+            <RotateCcw class="size-4" />
+            {{ $t('cliInstances.limitResetTitle', { name: instance?.name ?? '' }) }}
+          </span>
         </DialogTitle>
         <DialogDescription>{{ $t('cliInstances.limitResetBody') }}</DialogDescription>
       </DialogHeader>

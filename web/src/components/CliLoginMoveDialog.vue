@@ -154,11 +154,13 @@ async function submit() {
 
 <template>
   <Dialog v-model:open="open">
-    <DialogContent class="max-w-lg">
+    <DialogContent class="sm:max-w-lg">
       <DialogHeader>
-        <DialogTitle class="flex items-center gap-2">
-          <component :is="mode === 'out' ? ArrowRightLeft : FileDown" class="size-4" />
-          {{ mode === 'out' ? $t('cliInstances.moveOutTitle') : $t('cliInstances.moveInTitle') }}
+        <DialogTitle>
+          <span class="flex items-center gap-2">
+            <component :is="mode === 'out' ? ArrowRightLeft : FileDown" class="size-4" />
+            {{ mode === 'out' ? $t('cliInstances.moveOutTitle') : $t('cliInstances.moveInTitle') }}
+          </span>
         </DialogTitle>
         <DialogDescription>
           {{ mode === 'out' ? $t('cliInstances.moveOutBody') : $t('cliInstances.moveInBody') }}
@@ -232,13 +234,14 @@ async function submit() {
         <label class="flex flex-col gap-1">
           <span class="text-xs font-medium text-muted-foreground">{{ $t('cliInstances.passphraseLabel') }}</span>
           <div class="flex items-center gap-1">
-            <Input
-              v-model="passphrase"
-              class="mono"
-              autocomplete="off"
-              spellcheck="false"
-              :readonly="working || done"
-            />
+            <div class="mono min-w-0 flex-1">
+              <Input
+                v-model="passphrase"
+                autocomplete="off"
+                spellcheck="false"
+                :readonly="working || done"
+              />
+            </div>
             <template v-if="mode === 'out'">
               <Button
                 variant="outline"

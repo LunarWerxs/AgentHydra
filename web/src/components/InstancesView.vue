@@ -1893,7 +1893,7 @@ onUnmounted(() => {
 
     <!-- "Move all chats" confirmation: the count, both accounts, the list, and a second click. -->
     <Dialog :open="moveAll !== null" @update:open="(v) => { if (!v) moveAll = null }">
-      <DialogContent class="max-w-md">
+      <DialogContent class="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
             {{ $t('instances.moveChatsConfirmTitle', { n: moveAll?.plan.chats.length ?? 0, from: moveAll ? instLabel(moveAll.from) : '', to: moveAll ? instLabel(moveAll.to) : '' }) }}
