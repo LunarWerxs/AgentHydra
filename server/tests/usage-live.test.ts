@@ -1,4 +1,4 @@
-// What the usage tables show for a CLI account Corch is using (server/src/usage-live.ts).
+// What the usage tables show for a CLI account CliMayte is using (server/src/usage-live.ts).
 import { describe, expect, test } from 'bun:test'
 import type { UsageSnapshot } from '../src/types'
 import { withLimitWall, withLiveReading } from '../src/usage-live'
@@ -13,7 +13,7 @@ const snapshot = (): UsageSnapshot => ({
 })
 
 describe('withLimitWall', () => {
-  test('an account Corch walled at its limit reads at its limit, not the snapshot from before', () => {
+  test('an account CliMayte walled at its limit reads at its limit, not the snapshot from before', () => {
     // Field note 19: walled until 11:30pm, the table still read 43% from 19:14.
     const until = Date.parse('2026-10-01T04:31:00Z')
     const walled = withLimitWall(snapshot(), { until, weekly: false }, 'a', now)

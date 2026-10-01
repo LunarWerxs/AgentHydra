@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import { corchLimitWalls, corchLiveReadings } from '../corch'
+import { climayteLimitWalls, climayteLiveReadings } from '../climayte'
 import {
   associateCliInstance,
   createCliInstance,
@@ -183,17 +183,17 @@ app.get('/api/usage', async (c) => {
 })
 
 // Whole usage cache (bulk-hydrate the Instances table on load without checking anything).
-// Corch's live readings are laid over the CLI accounts' cached snapshots: the cache is up to 30
+// CliMayte's live readings are laid over the CLI accounts' cached snapshots: the cache is up to 30
 // minutes old, a running worker's reading is seconds old (usage-live.ts).
 app.get('/api/usage/cache', (c) => {
   const cache = { ...allCachedUsage() }
-  for (const [id, live] of corchLiveReadings()) {
+  for (const [id, live] of climayteLiveReadings()) {
     const fresh = withLiveReading(cache[cliKey(id)] ?? null, live)
     if (fresh) cache[cliKey(id)] = fresh
   }
-  // An account Corch saw hit its limit reads as at its limit until the wall ends, never as the
+  // An account CliMayte saw hit its limit reads as at its limit until the wall ends, never as the
   // lower percentage of a snapshot taken before (field note 19).
-  for (const [id, wall] of corchLimitWalls()) {
+  for (const [id, wall] of climayteLimitWalls()) {
     const walled = withLimitWall(cache[cliKey(id)] ?? null, wall)
     if (walled) cache[cliKey(id)] = walled
   }
@@ -350,10 +350,10 @@ app.get('/api/cli-instances', (c) => {
       .all()
       .map((r) => r.id),
   )
-  // How many Claude sessions run on each account right now (the CLI's own live registry, Corch's
+  // How many Claude sessions run on each account right now (the CLI's own live registry, CliMayte's
   // workers included): the CLI table's per-account count (owner, 2026-09-30).
-  const live = corchLiveReadings()
-  const limits = corchLimitWalls()
+  const live = climayteLiveReadings()
+  const limits = climayteLimitWalls()
   return c.json(
     listCliInstances().map((i) => ({
       ...i,

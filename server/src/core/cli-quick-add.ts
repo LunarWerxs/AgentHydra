@@ -1,7 +1,7 @@
 // server/src/core/cli-quick-add.ts — sign a Claude Code CLI account in from just an email
-// (docs/CORCH.md "Server: quick add").
+// (docs/CLIMAYTE.md "Server: quick add").
 //
-// Why: Corch spreads work across the owner's CLI accounts, and adding one used to mean naming an
+// Why: CliMayte spreads work across the owner's CLI accounts, and adding one used to mean naming an
 // instance, opening a terminal and typing `/login`. Here the daemon runs `claude auth login --email`
 // with the instance's CLAUDE_CONFIG_DIR and opens the sign-in link it prints in a new private window
 // run by zendriver, the owner's chosen engine (core/signin-window.ts). The PERSON clicks "Continue with email", types the code from their
@@ -45,7 +45,7 @@ export interface QuickAddFlow {
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-// Same scrub as Corch: the login must land in THIS config dir, never ride an inherited key/token.
+// Same scrub as CliMayte: the login must land in THIS config dir, never ride an inherited key/token.
 const ENV_SCRUB =
   /^(ANTHROPIC_(API_KEY|AUTH_TOKEN|BASE_URL)|CLAUDE_CODE_(OAUTH_\w+|ENTRYPOINT|SSE_PORT|SESSION\w*)|CLAUDECODE|CLAUDE_CONFIG_DIR)$/
 const URL_RE = /If the browser didn't open, visit:\s*(\S+)/

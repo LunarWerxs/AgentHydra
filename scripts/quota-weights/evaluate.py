@@ -89,7 +89,7 @@ def predictions(rs, org, weighers, horizon):
             continue
         bad = False
         for u, v in zip(rs[a:j], rs[a + 1:j + 1]):
-            # Corch stamps several readings with the same request time; only a real gap can hide usage.
+            # CliMayte stamps several readings with the same request time; only a real gap can hide usage.
             if v[0] - u[0] >= 120 and v[1] - u[1] >= 2 and A.spend(org, u[0], v[0])[A.NC] == 0:
                 bad = True
                 break
@@ -139,7 +139,7 @@ def report(title, rows, fitted):
         print('  fitted weights (shipped model mult) [input, read, write, output]: median',
               np.round(np.median(bf[:, [0, 1, 2, 4]], axis=0), 2), ' write range',
               np.round([bf[:, 2].min(), bf[:, 2].max()], 2), ' output range', np.round([bf[:, 4].min(), bf[:, 4].max()], 2))
-    for src in ('corch', 'hist', 'plan', 'ALL'):
+    for src in ('climayte', 'hist', 'plan', 'ALL'):
         rr = [r for v in rows.values() for r in v] if src == 'ALL' else rows.get(src, [])
         if not rr:
             continue
@@ -164,19 +164,19 @@ def run(meter, horizon, folds, train_all):
 
 
 def main():
-    corch = [v for v in A.intervals(4 * 60, ('corch',)) if v['cen'] is None]
+    climayte = [v for v in A.intervals(4 * 60, ('climayte',)) if v['cen'] is None]
     wins = [v for v in A.windows() if v['cen'] is None]
-    train_all = corch + wins
+    train_all = climayte + wins
     orgs = sorted({o for (o, _) in A.R})
-    corch_orgs = {v['org'] for v in corch}
-    desk_orgs = set(orgs) - corch_orgs
+    climayte_orgs = {v['org'] for v in climayte}
+    desk_orgs = set(orgs) - climayte_orgs
     by_tier = defaultdict(set)
     for o in orgs:
         by_tier[A.tier_of(o)].add(o)
     experiments = [
         ('leave one account out', [({o}, lambda v: True) for o in orgs]),
-        ('fit on desktop accounts only, test on the Corch Pro CLI accounts', [(corch_orgs, lambda v: v['org'] in desk_orgs)]),
-        ('fit on the Corch Pro CLI accounts only, test on desktop accounts', [(desk_orgs, lambda v: v['org'] in corch_orgs)]),
+        ('fit on desktop accounts only, test on the CliMayte Pro CLI accounts', [(climayte_orgs, lambda v: v['org'] in desk_orgs)]),
+        ('fit on the CliMayte Pro CLI accounts only, test on desktop accounts', [(desk_orgs, lambda v: v['org'] in climayte_orgs)]),
         ('fit on Max 5x only, test on Max 20x', [(by_tier['max20'], lambda v: v['tier'] == 'max5')]),
         ('fit on Max 20x only, test on Max 5x', [(by_tier['max5'], lambda v: v['tier'] == 'max20')]),
         ('fit on Pro only, test on Max', [(by_tier['max5'] | by_tier['max20'], lambda v: v['tier'] == 'pro')]),

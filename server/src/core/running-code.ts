@@ -113,7 +113,7 @@ export interface RunningCodeStatus {
  * A moved commit alone is not "stale": a daemon restarted onto uncommitted server edits already
  * runs them, and the commit that records them later moved HEAD while the code stayed the same.
  * That false alarm told every agent to restart (seen 2026-09-30, three times in one session), and
- * a restart interrupts every running Corch worker. So when the commit moves, the server source is
+ * a restart interrupts every running CliMayte worker. So when the commit moves, the server source is
  * fingerprinted again and compared with the boot's; only a fingerprint that cannot be read falls
  * back to the commits alone.
  *

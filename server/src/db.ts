@@ -594,7 +594,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   keepalive_weekly_floor: '80',
   // The permission to run work on paid extra usage (usage credits) - OFF by default, and like the
   // keepalive this is a permission, not a preference: some accounts keep working past their limits
-  // and BILL for it instead of stopping. Off means nothing AgentHydra manages may bill it: Corch
+  // and BILL for it instead of stopping. Off means nothing AgentHydra manages may bill it: CliMayte
   // moves a task before its account would, and the extra-usage guard stops every Claude session on
   // an account with extra usage switched on as that account nears its limit (extra-usage.ts).
   allow_extra_usage: '0',

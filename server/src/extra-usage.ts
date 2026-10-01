@@ -8,10 +8,10 @@
 //   1. Which accounts can bill: every usage reading carries `extraUsage` (the usage endpoint's
 //      `extra_usage.is_enabled`, usage-api.ts); a desktop reading also has the app's usage credits.
 //   2. The guard: on such an account, once it reaches the billing line (98% of the 5-hour window or
-//      99% of the week, the same line Corch stops its own workers at), every Claude session running
+//      99% of the week, the same line CliMayte stops its own workers at), every Claude session running
 //      on it is killed: desktop Code chats and CLI sessions alike, and again for any started after.
 //      A chat is not lost - its transcript stays and it can carry on after the reset or on another
-//      account (move_chat). Corch's workers are left to Corch, which stops and moves them itself.
+//      account (move_chat). CliMayte's workers are left to CliMayte, which stops and moves them itself.
 //   3. Switching it off at the source: turnOffExtraUsage makes the call the CLI itself makes to
 //      switch extra usage ON (PUT .../overage_spend_limit), with is_enabled false. Once it is off
 //      the account simply stops at its limit, and the guard has nothing left to do there.
@@ -23,8 +23,8 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { corchWorkerPids } from './corch'
-import { BILL_GUARD_SESSION_PCT, BILL_GUARD_WEEK_PCT } from './corch-lib'
+import { climayteWorkerPids } from './climayte'
+import { BILL_GUARD_SESSION_PCT, BILL_GUARD_WEEK_PCT } from './climayte-lib'
 import { resolveAccount, resolveCliConfigDirToken, resolveInstanceTokens } from './core/accounts'
 import { cliInstanceForDesktop, getCliInstance, listCliInstances } from './core/cli-instances'
 import { listInstances } from './core/instances'
@@ -62,7 +62,7 @@ function pctOf(limit: UsageLimit | null, now: number): number | null {
 }
 
 /** Whether the next request could bill: the account is at 98% of its 5-hour window or 99% of its
- *  week (BILL_GUARD_*, the line Corch stops at). */
+ *  week (BILL_GUARD_*, the line CliMayte stops at). */
 export function atBillingLine(snap: UsageSnapshot, now: number): boolean {
   const session = pctOf(snap.session, now)
   const week = pctOf(snap.weekAll, now)
@@ -123,7 +123,7 @@ async function stores(): Promise<Store[]> {
   return out
 }
 
-/** The sessions running on a store now, Corch's workers left out. Null when they could not be
+/** The sessions running on a store now, CliMayte's workers left out. Null when they could not be
  *  listed (never read as "none"). */
 async function sessionsOn(store: Store, skip: Set<number>): Promise<number[] | null> {
   if (store.kind === 'cli') {
@@ -159,12 +159,12 @@ export async function guardExtraUsage(
 ): Promise<{ store: string; pids: number[] }[]> {
   if (allowed()) return []
   const stopped: { store: string; pids: number[] }[] = []
-  const corch = corchWorkerPids()
+  const climayte = climayteWorkerPids()
   for (const store of await stores()) {
     try {
       let snap = getCachedUsage(store.key)
       if (!snap || !billsPastLimit(snap) || !store.running) continue
-      let pids = await sessionsOn(store, corch)
+      let pids = await sessionsOn(store, climayte)
       if (!pids?.length) continue
       const age = now - (Date.parse(snap.capturedAt) || 0)
       const wait = recheckAfterMs(snap, now)
@@ -176,7 +176,7 @@ export async function guardExtraUsage(
       }
       if (!atBillingLine(snap, Date.now())) continue
       // Listed again right before the kill: the reading may have taken a while.
-      pids = await sessionsOn(store, corchWorkerPids())
+      pids = await sessionsOn(store, climayteWorkerPids())
       if (!pids?.length) continue
       for (const pid of pids) killProcessTree(pid)
       stopped.push({ store: store.label, pids })

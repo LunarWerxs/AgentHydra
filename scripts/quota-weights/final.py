@@ -35,20 +35,20 @@ def constrained(train):
 
 
 def main():
-    corch = [v for v in A.intervals(4 * 60, ('corch',)) if v['cen'] is None]
-    train_all = corch + [v for v in A.windows() if v['cen'] is None]
+    climayte = [v for v in A.intervals(4 * 60, ('climayte',)) if v['cen'] is None]
+    train_all = climayte + [v for v in A.windows() if v['cen'] is None]
     final_all = constrained(train_all)
     print('fitted on all accounts [input, read, w5m, w1h, output]:', np.round(final_all, 2))
     orgs = sorted({o for (o, _) in A.R})
-    corch_orgs = {v['org'] for v in corch}
-    desk_orgs = set(orgs) - corch_orgs
+    climayte_orgs = {v['org'] for v in climayte}
+    desk_orgs = set(orgs) - climayte_orgs
     tiers = defaultdict(set)
     for o in orgs:
         tiers[A.tier_of(o)].add(o)
     splits = [
         ('leave one account out', [({o}, lambda v: True) for o in orgs]),
-        ('desktop -> Corch Pro CLI', [(corch_orgs, lambda v: v['org'] in desk_orgs)]),
-        ('Corch Pro CLI -> desktop', [(desk_orgs, lambda v: v['org'] in corch_orgs)]),
+        ('desktop -> CliMayte Pro CLI', [(climayte_orgs, lambda v: v['org'] in desk_orgs)]),
+        ('CliMayte Pro CLI -> desktop', [(desk_orgs, lambda v: v['org'] in climayte_orgs)]),
         ('Max 5x -> Max 20x', [(tiers['max20'], lambda v: v['tier'] == 'max5')]),
         ('Max 20x -> Max 5x', [(tiers['max5'], lambda v: v['tier'] == 'max20')]),
         ('Pro -> Max', [(tiers['max5'] | tiers['max20'], lambda v: v['tier'] == 'pro')]),

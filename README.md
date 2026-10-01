@@ -95,31 +95,31 @@ hidden; the screenshot below is historical.
 
 ![The run queue drawer, from before headless dispatch was removed: five runs, one running, three queued and one finished, each showing its project, model, effort and scheduled time](.github/screenshots/queue.png)
 
-## Corch: hand a task's pieces to your CLI accounts
+## CliMayte: hand a task's pieces to your CLI accounts
 
-Tell a chat to corch a task and it keeps only the orchestration: it splits the work, hands each
+Tell a chat to climayte a task and it keeps only the orchestration: it splits the work, hands each
 piece to a Claude Code CLI session on one of your signed-in CLI accounts, then reads and checks the
 results. When an account hits its usage limit, the worker moves to another account by itself and
 carries on where it stopped. Workers run without a console window, but none is hidden: each one is
-readable live and steerable in the **Corch** view, and its transcript is an ordinary session you can
-resume by hand. Corch only runs when you start it.
+readable live and steerable in the **CliMayte** view, and its transcript is an ordinary session you can
+resume by hand. CliMayte only runs when you start it.
 
-**Quick add** gets accounts in fast: type an email in the Corch or Instances view, sign in in the
+**Quick add** gets accounts in fast: type an email in the CliMayte or Instances view, sign in in the
 separate window it opens (never your own browser), and that account is a signed-in CLI instance
-Corch can use, with its usage loaded.
+CliMayte can use, with its usage loaded.
 
 **Limit reset**: a CLI row's menu has "Use limit reset" (with "Check only"), which runs the CLI's own
 `/limit-reset`; see [docs/CLI-LIMIT-RESET.md](docs/CLI-LIMIT-RESET.md).
 
 Over MCP:
 
-- `corch_run` starts workers for a list of self-contained tasks.
-- `corch_status` lists them, and can wait for the next status change instead of polling.
-- `corch_send` sends a worker a follow-up in the same session.
-- `corch_cancel` stops a worker or a whole group.
+- `climayte_run` starts workers for a list of self-contained tasks.
+- `climayte_status` lists them, and can wait for the next status change instead of polling.
+- `climayte_send` sends a worker a follow-up in the same session.
+- `climayte_cancel` stops a worker or a whole group.
 - `cli_limit_reset` uses (or, with `check`, looks for) a CLI account's limit reset.
 
-Details are in [docs/CORCH.md](docs/CORCH.md).
+Details are in [docs/CLIMAYTE.md](docs/CLIMAYTE.md).
 
 ## See where the time and the money went
 

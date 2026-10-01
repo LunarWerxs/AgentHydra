@@ -9,26 +9,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
-- **Corch learns which model each kind of task needs** (`server/src/corch-scorecard.ts`).
-  Give a finished task a thumbs up or down in the Corch view (or the orchestrating chat does it
+- **CliMayte learns which model each kind of task needs** (`server/src/climayte-scorecard.ts`).
+  Give a finished task a thumbs up or down in the CliMayte view (or the orchestrating chat does it
   after checking the work). A thumbs down asks what was wrong and sends the task back, one step
   up from Sonnet at low thinking towards Opus at max. Tasks sent with model "auto" get the
   cheapest setting that keeps passing for their kind of work, and now and then try one step
   cheaper. "What works" shows the passes, the fails and what each costs as a share of a Pro
   account's 5-hour window. A task can also carry a check command (a test, a
-  type check): Corch runs it when the worker finishes and judges the result itself.
+  type check): CliMayte runs it when the worker finishes and judges the result itself.
 
 - **Tidier, more consistent instance screens** (`web/src/components/InstanceSectionHeader.vue`,
   `InstanceMenuHeader.vue`, `DeleteInstanceDialog.vue`). Every table's ⋯ menu opens with the
   instance number and its quick actions as icons (refresh, rename, log out, copy); Claude CLI
   instances can now log out too, and show their plan (Pro, Max 5×, Max 20×). The delete dialog's
   name to type copies itself on click. "Last running" (now, or how long ago) replaces "Last
-  launched". Quick add results close by themselves. The Corch list is one line per task: a status
+  launched". Quick add results close by themselves. The CliMayte list is one line per task: a status
   icon, the title and the time, in a list about 24 rows tall that scrolls by itself. A task's
   header shows its status, account, working time and tokens with cost; the rest is one hover away.
   Background refreshes only redraw what actually changed.
 
-- **Restarting AgentHydra no longer stops Corch tasks** (`server/src/corch-runner.ts`). Each task's
+- **Restarting AgentHydra no longer stops CliMayte tasks** (`server/src/climayte-runner.ts`). Each task's
   Claude CLI now runs under a small runner started outside AgentHydra's own process, so a restart or
   an update leaves it working; the restarted AgentHydra picks every running task up again from its
   files instead of redoing its current step.
@@ -36,8 +36,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **One Instances table, and a CLI tab** (`web/src/components/InstancesView.vue`,
   `web/src/components/CliView.vue`). Claude desktop, Codex and DeepSeek instances are listed in one
   table, each row with its provider's logo, and a Provider filter picks which to show. The new CLI
-  tab holds the Claude CLI instances and Corch together; each CLI row shows how many sessions run
-  on that account, and its Log in signs that same account in again through Quick add. Corch keeps
+  tab holds the Claude CLI instances and CliMayte together; each CLI row shows how many sessions run
+  on that account, and its Log in signs that same account in again through Quick add. CliMayte keeps
   the tokens every session ran and shows the totals it has taken off your chats.
 
 - **Paid extra usage is never billed unless you allow it** (`server/src/extra-usage.ts`). Some
@@ -47,19 +47,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   Code chats and CLI sessions alike) as the account reaches 98% of its 5-hour window or 99% of its
   week. The chat is kept and can carry on after the reset or on another account. The usage popover
   now says when an account can bill, and its "Turn off extra usage" button switches it off at
-  claude.ai for that account, so it simply stops at its limits from then on. Corch uses the same
+  claude.ai for that account, so it simply stops at its limits from then on. CliMayte uses the same
   switch and the same line for its workers.
   CLI instance rows now show the same credit-card icon when an account has extra usage on.
 
-- **Corch: hand a task's pieces to your CLI accounts; each worker moves to another account by
-  itself when one hits its usage limit** (`server/src/corch.ts`, `web/src/components/CorchView.vue`).
-  Tell a chat to corch a task and it keeps only the orchestration: it splits the task, gives each
+- **CliMayte: hand a task's pieces to your CLI accounts; each worker moves to another account by
+  itself when one hits its usage limit** (`server/src/climayte.ts`, `web/src/components/CliMayteView.vue`).
+  Tell a chat to climayte a task and it keeps only the orchestration: it splits the task, gives each
   piece to a Claude Code CLI session on one of your signed-in CLI accounts, and checks the results.
   Work is spread across the accounts by how much of their limit is left. When an account reaches
   its limit, the worker continues on another one from where it stopped, so you no longer move the
   thread by hand. Workers have no console window, but every one can be watched and steered in the
-  new Corch view, and chats drive them with the MCP tools `corch_run`, `corch_status`, `corch_send`
-  and `corch_cancel`. See [docs/CORCH.md](docs/CORCH.md).
+  new CliMayte view, and chats drive them with the MCP tools `climayte_run`, `climayte_status`, `climayte_send`
+  and `climayte_cancel`. See [docs/CLIMAYTE.md](docs/CLIMAYTE.md).
   Each task shows its working time, cost and turns, the messages still waiting to reach it, why a
   queued task is queued again (moving accounts, retrying, resuming after a restart), and a banner
   when AgentHydra cannot be reached instead of a list that only looks alive.
@@ -67,7 +67,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Quick add: type an email, confirm in the browser, and the account is a signed-in CLI instance**
   (`server/src/core/cli-quick-add.ts`, `web/src/components/CliInstancesSection.vue`). The Instances
   view has one email box at the top. Press Enter, confirm the sign-in page that opens in your
-  browser, and the account is ready for Corch, with no naming, terminal or `/login`. The box clears
+  browser, and the account is ready for CliMayte, with no naming, terminal or `/login`. The box clears
   and keeps focus for the next account. If the browser page does not open, you can open it again
   or paste the code it gives you. Entering the email of an instance whose sign-in went stale signs
   that instance in again instead of making a new one.
@@ -94,12 +94,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   transcripts are deleted, are recalculated with the new weights, and the token-sink panel
   rescans once to match.
 
-- **Corch workers use the 5-minute prompt cache** (`server/src/corch.ts`) instead of the 1-hour one,
+- **CliMayte workers use the 5-minute prompt cache** (`server/src/climayte.ts`) instead of the 1-hour one,
   whose writes cost more. Workers almost never pause that long (9 times in 2,105 steps), so
   this cuts the cost of cache writes by about a quarter.
 
-- **Corch workers carry a short rule set** (`server/src/corch-owner-sync.ts`). When
-  `~/.claude/corch-worker/` holds a `CLAUDE.md` and a `skills.txt`, workers get those instead of
+- **CliMayte workers carry a short rule set** (`server/src/climayte-owner-sync.ts`). When
+  `~/.claude/climayte-worker/` holds a `CLAUDE.md` and a `skills.txt`, workers get those instead of
   your full instructions and every skill: about 3 KB and 12 skills instead of 44 KB and 84, which
   added 24-33k tokens to every step a worker took.
 
@@ -147,23 +147,23 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
-- **Corch's token count is right, and says what it counts** (`server/src/corch.ts`). Work done
+- **CliMayte's token count is right, and says what it counts** (`server/src/climayte.ts`). Work done
   before a task was handed to a fresh session counted as 0 tokens, so the total showed 289M where
   the real figure was 337M. Each run now records its own session, and the counter says "runs"
   (every start of the CLI) with how they ended and how many separate conversations they were.
-- **Corch no longer bounces a task between nearly-full accounts** (`server/src/corch-lib.ts`). An
+- **CliMayte no longer bounces a task between nearly-full accounts** (`server/src/climayte-lib.ts`). An
   account past 85% of its window takes no new work, so a handed-off task waits for real room
   instead of hopping onto one account after another that is about to run out (20 such hops in 4
   minutes in the first real run).
-- **An account whose organization turned Claude Code off is left alone** (`server/src/corch.ts`).
-  Corch retried it every 30 minutes with every waiting task at once; it now stays out until it
+- **An account whose organization turned Claude Code off is left alone** (`server/src/climayte.ts`).
+  CliMayte retried it every 30 minutes with every waiting task at once; it now stays out until it
   signs in with another login, and the CLI list says why.
 - **Accounts at their limit read "Limit"** (`server/src/usage-live.ts`, `web/src/lib/usage.ts`).
-  An account Corch saw hit its limit no longer shows the lower number from before (43-50% while it
+  An account CliMayte saw hit its limit no longer shows the lower number from before (43-50% while it
   could not run anything), and one past 100% no longer reads "104%".
 - **Usage numbers no longer lag behind busy CLI accounts** (`server/src/usage-live.ts`). The
-  usage check runs every 30 minutes, so an account Corch was working hard showed a number up to
-  half an hour old (34% on an account really at 88%). Accounts with a Corch task running now show
+  usage check runs every 30 minutes, so an account CliMayte was working hard showed a number up to
+  half an hour old (34% on an account really at 88%). Accounts with a CliMayte task running now show
   the live reading that task receives with every request.
 
 - **Deleting a Codex instance no longer fails with "EBUSY: resource busy or locked"**

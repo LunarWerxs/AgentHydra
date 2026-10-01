@@ -1,5 +1,5 @@
-// server/src/corch-owner-sync.ts — the owner's global instructions and skills for Corch workers
-// (docs/CORCH.md "The owner's CLAUDE.md and skills").
+// server/src/climayte-owner-sync.ts — the owner's global instructions and skills for CliMayte workers
+// (docs/CLIMAYTE.md "The owner's CLAUDE.md and skills").
 //
 // WHY (field note 5, 2026-09-30): a worker runs with CLAUDE_CONFIG_DIR set to its account's folder
 // (`~/.agenthydra/cli-instances/<id>`), which had no CLAUDE.md and no skills, so the owner's global
@@ -17,7 +17,7 @@
 //   rmSync(recursive) on an account folder removes a junction, never the owner's files behind it.
 // Hooks and settings.json are NOT carried: desktop-only hooks can block a headless worker.
 //
-// THE LEAN WORKER PROFILE (owner, 2026-09-30, after the run-1 audit). When `~/.claude/corch-worker/`
+// THE LEAN WORKER PROFILE (owner, 2026-09-30, after the run-1 audit). When `~/.claude/climayte-worker/`
 // holds a CLAUDE.md, workers get THAT instead of the full one, and when it holds `skills.txt` (one
 // skill name per line, `#` comments), only those skills are linked. Measured on run 1: the full
 // CLAUDE.md (44 KB, mostly rules for the desktop chat: routing, releases, memory) and 84 skill
@@ -86,7 +86,7 @@ function ownerSkills(ownerDir: string): string[] {
   }
 }
 
-const WORKER_DIR = 'corch-worker'
+const WORKER_DIR = 'climayte-worker'
 
 /** The CLAUDE.md a worker gets: the lean worker profile's when there is one, else the owner's. */
 function workerClaudeMd(ownerDir: string): string {
@@ -94,7 +94,7 @@ function workerClaudeMd(ownerDir: string): string {
   return existsSync(lean) ? lean : join(ownerDir, 'CLAUDE.md')
 }
 
-/** The skills the lean profile allows (`corch-worker/skills.txt`), or null for every skill. */
+/** The skills the lean profile allows (`climayte-worker/skills.txt`), or null for every skill. */
 function workerSkillList(ownerDir: string): Set<string> | null {
   try {
     const text = readFileSync(join(ownerDir, WORKER_DIR, 'skills.txt'), 'utf8')
@@ -194,7 +194,7 @@ export function syncOwnerClaude(ownerDir: string, accountDir: string): OwnerSync
     result.changed =
       result.claudeMd === 'copied' || result.linked.length + result.unlinked.length > 0
   } catch (err) {
-    console.error(`[corch] could not give ${accountDir} the owner's CLAUDE.md and skills:`, err)
+    console.error(`[climayte] could not give ${accountDir} the owner's CLAUDE.md and skills:`, err)
   }
   return result
 }

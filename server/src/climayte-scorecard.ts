@@ -1,5 +1,5 @@
-// server/src/corch-scorecard.ts — which model and thinking level each KIND of Corch task needs,
-// learned from verdicts on real work (docs/CORCH.md "Scorecard"). Pure: corch.ts stores the
+// server/src/climayte-scorecard.ts — which model and thinking level each KIND of CliMayte task needs,
+// learned from verdicts on real work (docs/CLIMAYTE.md "Scorecard"). Pure: climayte.ts stores the
 // verdicts and calls these.
 //
 // WHY (owner, 2026-09-30): "the AI can try a model, and if it works, it gives it a thumbs up ... if
@@ -8,16 +8,16 @@
 // about half of what fills a Pro account's 5-hour meter, so the thinking level and the model are the
 // biggest quota levers left, and the only safe way to lower them is to watch real results.
 //
-// The loop: the orchestrator (or the owner in the Corch view) gives each finished task a verdict. A
+// The loop: the orchestrator (or the owner in the CliMayte view) gives each finished task a verdict. A
 // fail sends the task back to the same worker one rung up the ladder. A task dispatched with model
 // `auto` gets the cheapest rung that keeps passing for its kind, and every EXPLORE_EVERY-th auto pick
 // tries one rung cheaper, so the table keeps learning instead of settling on the first thing that
 // worked.
 
-import type { CorchTokens } from './corch-lib'
+import type { CliMayteTokens } from './climayte-lib'
 import { weighCounts } from './usage-tokens'
 
-export const CORCH_KINDS = [
+export const CLIMAYTE_KINDS = [
   'code',
   'debug',
   'review',
@@ -26,16 +26,16 @@ export const CORCH_KINDS = [
   'docs',
   'trivial',
 ] as const
-export type CorchKind = (typeof CORCH_KINDS)[number]
+export type CliMayteKind = (typeof CLIMAYTE_KINDS)[number]
 
-export interface CorchConfig {
+export interface CliMayteConfig {
   model: string
   effort: string
 }
 
 /** Cheapest first. Price: Opus 5.5 is twice Sonnet 5.5 per token (usage-tokens modelMultiplier),
  *  and a higher effort writes more thinking, which is output, the dearest token on the meter. */
-export const CORCH_LADDER: readonly CorchConfig[] = [
+export const CLIMAYTE_LADDER: readonly CliMayteConfig[] = [
   { model: 'claude-sonnet-5-5', effort: 'low' },
   { model: 'claude-sonnet-5-5', effort: 'medium' },
   { model: 'claude-sonnet-5-5', effort: 'high' },
@@ -45,9 +45,9 @@ export const CORCH_LADDER: readonly CorchConfig[] = [
   { model: 'claude-opus-5-5', effort: 'max' },
 ]
 
-/** Where a kind starts before it has verdicts: the corch skill's table (high for code was measured:
+/** Where a kind starts before it has verdicts: the climayte skill's table (high for code was measured:
  *  it matched xhigh on ten real fixes at 2.3x fewer tokens). */
-const START: Record<CorchKind, number> = {
+const START: Record<CliMayteKind, number> = {
   trivial: 0,
   sweep: 1,
   mechanical: 1,
@@ -70,15 +70,15 @@ export const EXPLORE_EVERY = 4
  *  costs about 3% of a Pro window". */
 export const UNITS_PER_PRO_PERCENT = 320_000
 
-export function corchKind(v: unknown): CorchKind | null {
+export function climayteKind(v: unknown): CliMayteKind | null {
   if (v === undefined || v === null || v === '') return null
   const k = typeof v === 'string' ? v.trim().toLowerCase() : ''
-  if (!(CORCH_KINDS as readonly string[]).includes(k))
-    throw new Error(`unknown kind '${String(v)}': use ${CORCH_KINDS.join(', ')}`)
-  return k as CorchKind
+  if (!(CLIMAYTE_KINDS as readonly string[]).includes(k))
+    throw new Error(`unknown kind '${String(v)}': use ${CLIMAYTE_KINDS.join(', ')}`)
+  return k as CliMayteKind
 }
 
-export interface CorchVerdict {
+export interface CliMayteVerdict {
   at: number
   verdict: 'pass' | 'fail'
   note: string | null
@@ -94,7 +94,7 @@ export interface CorchVerdict {
 /** One attempt's tokens in weighted units. Writes are 5-minute ones for attempts launched with the
  *  5-minute cache (`cacheTtl`), else 1-hour ones, as Claude Code wrote them before. */
 export function attemptUnits(
-  tokens: CorchTokens | undefined,
+  tokens: CliMayteTokens | undefined,
   model: string | null | undefined,
   cacheTtl?: string,
 ): number {
@@ -121,7 +121,7 @@ export interface ScoreRow {
 /** Every verdict on record, summed per kind and setting; ladder order (cheapest first) within a
  *  kind, settings off the ladder (a CLI default) after it. */
 export function scoreRows(
-  tasks: Iterable<{ kind?: string | null; verdicts?: CorchVerdict[] }>,
+  tasks: Iterable<{ kind?: string | null; verdicts?: CliMayteVerdict[] }>,
 ): ScoreRow[] {
   const rows = new Map<string, ScoreRow>()
   for (const t of tasks) {
@@ -144,7 +144,7 @@ export function scoreRows(
   }
   const rung = (r: ScoreRow): number => {
     const i = ladderIndex({ model: r.model, effort: r.effort })
-    return i === -1 ? CORCH_LADDER.length : i
+    return i === -1 ? CLIMAYTE_LADDER.length : i
   }
   return [...rows.values()].sort((a, b) => a.kind.localeCompare(b.kind) || rung(a) - rung(b))
 }
@@ -159,26 +159,26 @@ export function ladderModel(model: string | null | undefined): string | null {
 }
 
 export function ladderIndex(c: { model: string | null; effort: string | null }): number {
-  return CORCH_LADDER.findIndex((r) => r.model === c.model && r.effort === c.effort)
+  return CLIMAYTE_LADDER.findIndex((r) => r.model === c.model && r.effort === c.effort)
 }
 
 function statAt(rows: ScoreRow[], kind: string, i: number): { n: number; rate: number } {
-  const c = CORCH_LADDER[i]!
+  const c = CLIMAYTE_LADDER[i]!
   const r = rows.find((x) => x.kind === kind && x.model === c.model && x.effort === c.effort)
   const n = r ? r.pass + r.fail : 0
   return { n, rate: n ? r!.pass / n : 0 }
 }
 
-/** The rung Corch trusts for `kind`: the cheapest with MIN_SAMPLES verdicts at PASS_BAR, else the
+/** The rung CliMayte trusts for `kind`: the cheapest with MIN_SAMPLES verdicts at PASS_BAR, else the
  *  kind's start, moved up past any rung that keeps failing. */
-export function bestRung(kind: CorchKind, rows: ScoreRow[]): number {
-  const good = CORCH_LADDER.findIndex((_, i) => {
+export function bestRung(kind: CliMayteKind, rows: ScoreRow[]): number {
+  const good = CLIMAYTE_LADDER.findIndex((_, i) => {
     const s = statAt(rows, kind, i)
     return s.n >= MIN_SAMPLES && s.rate >= PASS_BAR
   })
   if (good !== -1) return good
   let i = START[kind]
-  while (i < CORCH_LADDER.length - 1 && isBad(kind, rows, i)) i++
+  while (i < CLIMAYTE_LADDER.length - 1 && isBad(kind, rows, i)) i++
   return i
 }
 
@@ -190,23 +190,23 @@ function isBad(kind: string, rows: ScoreRow[], i: number): boolean {
 /** The setting for an auto task: the best rung, or one cheaper on every EXPLORE_EVERY-th auto pick
  *  of the kind (`autoIndex` counts them from 0) unless that rung keeps failing. */
 export function pickConfig(
-  kind: CorchKind,
+  kind: CliMayteKind,
   rows: ScoreRow[],
   autoIndex: number,
-): { config: CorchConfig; reason: string } {
+): { config: CliMayteConfig; reason: string } {
   const best = bestRung(kind, rows)
   const label = (i: number): string => {
-    const c = CORCH_LADDER[i]!
+    const c = CLIMAYTE_LADDER[i]!
     return `${c.model.includes('sonnet') ? 'Sonnet' : 'Opus'} ${c.effort}`
   }
   if (autoIndex % EXPLORE_EVERY === EXPLORE_EVERY - 1 && best > 0 && !isBad(kind, rows, best - 1))
     return {
-      config: CORCH_LADDER[best - 1]!,
+      config: CLIMAYTE_LADDER[best - 1]!,
       reason: `trying one rung cheaper than ${label(best)} (${label(best - 1)}) for ${kind}`,
     }
   const s = statAt(rows, kind, best)
   return {
-    config: CORCH_LADDER[best]!,
+    config: CLIMAYTE_LADDER[best]!,
     reason:
       s.n >= MIN_SAMPLES && s.rate >= PASS_BAR
         ? `${label(best)} passed ${Math.round(s.rate * s.n)} of ${s.n} ${kind} tasks`
@@ -216,8 +216,11 @@ export function pickConfig(
 
 /** The rung above what produced a failed result, or null at the top. A setting off the ladder (the
  *  CLI's default model and effort) counts as Opus high, what the CLI runs by default here. */
-export function nextRung(c: { model: string | null; effort: string | null }): CorchConfig | null {
+export function nextRung(c: {
+  model: string | null
+  effort: string | null
+}): CliMayteConfig | null {
   let i = ladderIndex(c)
   if (i === -1) i = 4
-  return CORCH_LADDER[i + 1] ?? null
+  return CLIMAYTE_LADDER[i + 1] ?? null
 }

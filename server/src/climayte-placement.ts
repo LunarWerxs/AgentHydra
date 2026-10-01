@@ -1,7 +1,7 @@
-// server/src/corch-placement.ts — start a task where it can finish without moving (docs/CORCH.md
-// "Placement"). Pure: corch.ts gathers the numbers, pickAccount (corch-lib.ts) scores with them.
+// server/src/climayte-placement.ts — start a task where it can finish without moving (docs/CLIMAYTE.md
+// "Placement"). Pure: climayte.ts gathers the numbers, pickAccount (climayte-lib.ts) scores with them.
 //
-// WHY (owner, 2026-09-30: "a maximally efficient Corch"). Run 1: of 101 attempts only 23 ended
+// WHY (owner, 2026-09-30: "a maximally efficient CliMayte"). Run 1: of 101 attempts only 23 ended
 // done; 48 moves, 23 handoffs, 24 limits. A move re-writes the whole conversation into the next
 // account's cold cache (a 200k conversation is about 4% of a Pro 5-hour window) and a handoff starts
 // a fresh session; cache writes were about a third of what filled the meter. The old score added a
@@ -14,8 +14,8 @@
 // fits it still goes where the projection is lowest, because waiting hours for a reset is worse
 // than finishing part of the work and handing off.
 
-import type { CorchAccount } from './corch-lib'
-import { type ScoreRow, UNITS_PER_PRO_PERCENT } from './corch-scorecard'
+import type { CliMayteAccount } from './climayte-lib'
+import { type ScoreRow, UNITS_PER_PRO_PERCENT } from './climayte-scorecard'
 
 /** A task fits on an account when its projected 5-hour usage stays at or under this. */
 export const FIT_PCT = 95
@@ -32,7 +32,7 @@ export interface RunningLoad {
 }
 
 /** What pickAccount needs to place one task. */
-export interface CorchPlacement {
+export interface CliMaytePlacement {
   /** This task's expected cost (expectedPct). */
   expected: number
   /** Per account id, the workers running there now. */
@@ -57,7 +57,7 @@ export function planFactor(planLabel: string | null | undefined): number {
  *  whole rise since its own start would count every concurrent task's spend once per task. Costs
  *  are in % of a Pro window and shrink by the plan. Unknown usage counts as 50%. */
 export function projectedPct(
-  acct: Pick<CorchAccount, 'sessionPct'> & { planFactor?: number },
+  acct: Pick<CliMayteAccount, 'sessionPct'> & { planFactor?: number },
   running: RunningLoad[],
   expected: number,
   finishedSince = 0,

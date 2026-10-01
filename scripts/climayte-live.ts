@@ -1,20 +1,20 @@
 #!/usr/bin/env bun
-// scripts/corch-live.ts — live stress/smoke run of Corch against the owner's REAL CLI accounts,
+// scripts/climayte-live.ts — live stress/smoke run of CliMayte against the owner's REAL CLI accounts,
 // through the running daemon's HTTP API. It spends a little of each account's quota (each turn is
 // a one-line reply; moving a session to another account costs one uncached prompt, about $0.50).
 //
-//   bun scripts/corch-live.ts handoff        context across account moves, queued follow-ups,
+//   bun scripts/climayte-live.ts handoff        context across account moves, queued follow-ups,
 //                                            cancel-and-revive, a follow-up on a dead login
-//   bun scripts/corch-live.ts restart        a daemon restart under two running workers (it
+//   bun scripts/climayte-live.ts restart        a daemon restart under two running workers (it
 //                                            RESTARTS THE DAEMON: other sessions see a blip)
-//   bun scripts/corch-live.ts burst [n]      n tasks (default 10) over every signed-in account
-//   bun scripts/corch-live.ts subagent       a session that used a subagent moves with its files
+//   bun scripts/climayte-live.ts burst [n]      n tasks (default 10) over every signed-in account
+//   bun scripts/climayte-live.ts subagent       a session that used a subagent moves with its files
 //
 // Accounts are found, not named: "good" = has a credential file and no signed-out wall, least used
 // first; "dead" = has a credential file but no wall yet and `claude auth status` says signed out
-// (with no such account the dead-login scenario is skipped: once walled, Corch never hands a dead
+// (with no such account the dead-login scenario is skipped: once walled, CliMayte never hands a dead
 // login a worker again, which is the point). Workers write into a scratch folder under the OS temp.
-// Measured 2026-09-30 (docs/CORCH-LIVE-TESTS.md): every scenario passed on #83/#84/#88/#90.
+// Measured 2026-09-30 (docs/CLIMAYTE-LIVE-TESTS.md): every scenario passed on #83/#84/#88/#90.
 //
 // ⚠ The CLI refuses a bare `sleep N` in its Bash tool, so the "keep an account busy" steps use
 // python's time.sleep instead.
@@ -28,7 +28,7 @@ const AH = join(homedir(), '.agenthydra')
 const STORE = join(AH, 'corch', 'workers.json')
 const WALLS = join(AH, 'corch', 'walls.json')
 const phase = process.argv[2] ?? 'handoff'
-const ROOT = mkdtempSync(join(tmpdir(), 'corch-live-'))
+const ROOT = mkdtempSync(join(tmpdir(), 'climayte-live-'))
 const EFFORT = 'low'
 const rnd = () => Math.floor(1000 + Math.random() * 9000)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -91,17 +91,17 @@ const run = async (
   perAccount?: number,
 ) =>
   (
-    await api<{ workers: View[] }>('/api/corch/workers', {
+    await api<{ workers: View[] }>('/api/climayte/workers', {
       group,
       accounts,
       perAccount,
       tasks: tasks.map((t) => ({ ...t, effort: EFFORT })),
     })
   ).workers
-const get = (id: string) => api<View>(`/api/corch/workers/${id}`)
+const get = (id: string) => api<View>(`/api/climayte/workers/${id}`)
 const send = (id: string, text: string) =>
-  api<{ ok: boolean; message: string }>(`/api/corch/workers/${id}/send`, { text })
-const cancel = (id: string) => api<{ cancelled: string[] }>('/api/corch/cancel', { id })
+  api<{ ok: boolean; message: string }>(`/api/climayte/workers/${id}/send`, { text })
+const cancel = (id: string) => api<{ cancelled: string[] }>('/api/climayte/cancel', { id })
 
 async function until(
   id: string,
@@ -169,8 +169,8 @@ const blocker = (group: string, acct: string, cwd: string, secs: number) =>
 const walls: Record<string, { reason: string; until: number }> = existsSync(WALLS)
   ? JSON.parse(readFileSync(WALLS, 'utf8'))
   : {}
-// The background refresh's readings (what Corch itself schedules by). An account at 98% or more of
-// a window that has not reset is skipped: Corch will not place a worker there, and one with paid
+// The background refresh's readings (what CliMayte itself schedules by). An account at 98% or more of
+// a window that has not reset is skipped: CliMayte will not place a worker there, and one with paid
 // extra usage switched on would bill it.
 type Reading = { session?: { pct?: number; resetsAt?: string | null } | null } | null
 const USAGE_CACHE = join(AH, 'data', 'usage-cache.json')
@@ -423,7 +423,7 @@ async function restartMidRun(a: Instance, b: Instance) {
     })
     const j = (await r.json()) as { error?: string }
     check(
-      r.status === 409 && /Corch/.test(j.error ?? ''),
+      r.status === 409 && /CliMayte/.test(j.error ?? ''),
       `unforced restart refused: ${r.status} ${j.error}`,
     )
     note(`forced restart: ${JSON.stringify(await api('/api/daemon/restart', { force: true }))}`)
@@ -477,7 +477,7 @@ async function subagentMove(a: Instance, b: Instance) {
   await scenario('subagent session moves', async (check, note) => {
     const cwd = dir('subagent')
     const group = `live-sub-${rnd()}`
-    const salt = `corch-sub-${rnd()}`
+    const salt = `climayte-sub-${rnd()}`
     const [w] = await run(
       group,
       [
@@ -531,7 +531,7 @@ if (phase === 'subagent') {
   else
     skip(
       'follow-up on a dead login',
-      'no signed-out account without a wall (Corch already walls the known ones)',
+      'no signed-out account without a wall (CliMayte already walls the known ones)',
     )
   await Promise.all(jobs)
 } else if (phase === 'restart') {

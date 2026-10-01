@@ -1,7 +1,7 @@
-// server/tests/corch.test.ts — Corch: the pure helpers it decides with, and one real handoff.
+// server/tests/climayte.test.ts — CliMayte: the pure helpers it decides with, and one real handoff.
 //
 // CONFIG_DIR, the instance store and TMP are already redirected to a scratch dir by tests/setup.ts
-// (the bunfig preload), so corch's `<CONFIG_DIR>/corch/` state never touches a real install. The
+// (the bunfig preload), so climayte's `<CONFIG_DIR>/corch/` state never touches a real install. The
 // accounts are fakes pointing at temp config dirs, and the CLI is tests/mocks/fake-claude.ts run by
 // the same bun that runs this suite.
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -21,16 +21,16 @@ import {
   addResults,
   attemptSpend,
   classifyAttempt,
+  climayteCancel,
+  climayteGet,
+  climayteJournal,
+  climayteJournalLines,
+  climayteList,
+  climayteRun,
+  climayteSend,
+  climayteSetPriority,
+  climayteWait,
   copySessionTranscript,
-  corchCancel,
-  corchGet,
-  corchJournal,
-  corchJournalLines,
-  corchList,
-  corchRun,
-  corchSend,
-  corchSetPriority,
-  corchWait,
   dueOrder,
   freshestPct,
   joinResults,
@@ -41,13 +41,13 @@ import {
   RECENT_FINISHED,
   RESULT_SEPARATOR,
   recentWorkers,
-  setCorchAccountsProvider,
-  setCorchClaudeCommand,
-  setCorchOwnerDir,
-  startCorch,
+  setCliMayteAccountsProvider,
+  setCliMayteClaudeCommand,
+  setCliMayteOwnerDir,
+  startCliMayte,
   wallUntil,
-} from '../src/corch'
-import { forgetOwnerSync, syncOwnerClaude } from '../src/corch-owner-sync'
+} from '../src/climayte'
+import { forgetOwnerSync, syncOwnerClaude } from '../src/climayte-owner-sync'
 import { setProviderSettings } from '../src/provider-settings'
 import { parseResetTime } from '../src/usage'
 
@@ -212,7 +212,7 @@ describe('wallUntil', () => {
 })
 
 describe('copySessionTranscript', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-corch-move-'))
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-move-'))
   afterAll(() => rmSync(root, { recursive: true, force: true }))
 
   test("a moved session brings its project's memory: the newer file wins, nothing is removed", () => {
@@ -238,7 +238,7 @@ describe('copySessionTranscript', () => {
 })
 
 describe('attemptSpend', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ah-corch-spend-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ah-climayte-spend-'))
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
   const turn = (iso: string, id: string) =>
     JSON.stringify({
@@ -454,7 +454,7 @@ describe('pickAccount', () => {
 })
 
 describe('integration: a quota wall hands the session to the next account', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-corch-'))
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-'))
   const cwd = join(root, 'work')
   const walledDir = join(root, 'acct-1')
   const freeDir = join(root, 'acct-2')
@@ -466,32 +466,32 @@ describe('integration: a quota wall hands the session to the next account', () =
   let group: string | null = null
 
   afterAll(() => {
-    if (group) corchCancel({ group })
-    setCorchClaudeCommand(null)
-    setCorchAccountsProvider(null)
-    setCorchOwnerDir(null)
+    if (group) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    setCliMayteOwnerDir(null)
     rmSync(root, { recursive: true, force: true })
   })
 
   test('the worker ends done on the second account after one move', async () => {
-    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-    setCorchOwnerDir(ownerDir)
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteOwnerDir(ownerDir)
     // The walled account scores lower, so it is picked first and must hit the wall.
-    setCorchAccountsProvider(() => [
+    setCliMayteAccountsProvider(() => [
       { id: 'fake-1', num: 1, name: 'walled', configDir: walledDir, sessionPct: 0, weekPct: 0 },
       { id: 'fake-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
     ])
-    startCorch()
-    const run = corchRun({ tasks: [{ prompt: 'do the fake task', cwd, title: 'fake' }] })
+    startCliMayte()
+    const run = climayteRun({ tasks: [{ prompt: 'do the fake task', cwd, title: 'fake' }] })
     group = run.group
     const id = run.workers[0]?.id as string
     expect(id).toBeTruthy()
 
     const deadline = Date.now() + 40_000
-    let w = corchList({ id })[0]
+    let w = climayteList({ id })[0]
     while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
-      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
-      w = corchList({ id })[0]
+      await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = climayteList({ id })[0]
     }
 
     expect(w?.status).toBe('done')
@@ -500,7 +500,7 @@ describe('integration: a quota wall hands the session to the next account', () =
     expect(w?.attempts[0]?.outcome).toBe('quota')
 
     // The journal tells the move: the pick on #1 and why, its wall, the move, the pick on #2.
-    const log = corchJournal({ id })
+    const log = climayteJournal({ id })
     expect(log.map((e) => e.event)).toEqual([
       'dispatched',
       'launched',
@@ -516,14 +516,14 @@ describe('integration: a quota wall hands the session to the next account', () =
     expect(Date.parse(log[2]?.until ?? '')).toBeGreaterThan(Date.now())
     expect(log[3]).toMatchObject({ from: '#1', account: '#2', copied: true })
     expect(log[4]).toMatchObject({ account: '#2', attempt: 2, sessionPct: 50 })
-    const lines = corchJournalLines({ id })
+    const lines = climayteJournalLines({ id })
     expect(lines[1]).toMatch(
       /^\d\d:\d\d:\d\d w-\w+ 'fake' launched on #1 \(session 0%, week 0%, 0 active\)$/,
     )
     expect(lines[3]).toContain('moved from #1 to #2')
 
-    // corch_status { id } is this detail: one object, with every attempt's event lines.
-    const detail = corchGet(id)
+    // climayte_status { id } is this detail: one object, with every attempt's event lines.
+    const detail = climayteGet(id)
     expect(Array.isArray(detail)).toBe(false)
     expect(detail?.events.some((l) => l.startsWith('— attempt 2 on #2 free: done'))).toBe(true)
     expect(typeof detail?.ranS).toBe('number')
@@ -537,7 +537,7 @@ describe('integration: a quota wall hands the session to the next account', () =
 })
 
 describe('integration: a move copies from the account that RAN the session (field note 30)', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-corch-ran-'))
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-ran-'))
   const cwd = join(root, 'work')
   const ranDir = join(root, 'acct-ran')
   const refusedDir = join(root, 'acct-refused')
@@ -548,9 +548,9 @@ describe('integration: a move copies from the account that RAN the session (fiel
   let group: string | null = null
 
   afterAll(() => {
-    if (group) corchCancel({ group })
-    setCorchClaudeCommand(null)
-    setCorchAccountsProvider(null)
+    if (group) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
   })
 
@@ -558,8 +558,8 @@ describe('integration: a move copies from the account that RAN the session (fiel
     // Run 1, 23:19: five sessions ran on #83/#95/#88/#98, were refused on #91 (organization has
     // Claude Code off, its folder gone by the next move), and the move to #84 looked for the
     // transcript on #91 only, so all five failed "not found" with their transcripts intact.
-    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-    setCorchAccountsProvider(() => [
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteAccountsProvider(() => [
       { id: 'ran-a', num: 31, name: 'ran', configDir: ranDir, sessionPct: 0, weekPct: 0 },
       {
         id: 'tried-b',
@@ -571,16 +571,16 @@ describe('integration: a move copies from the account that RAN the session (fiel
       },
       { id: 'next-c', num: 33, name: 'next', configDir: nextDir, sessionPct: 50, weekPct: 50 },
     ])
-    startCorch()
-    const run = corchRun({ tasks: [{ prompt: 'a task that moves', cwd, title: 'ran' }] })
+    startCliMayte()
+    const run = climayteRun({ tasks: [{ prompt: 'a task that moves', cwd, title: 'ran' }] })
     group = run.group
     const id = run.workers[0]?.id as string
 
     const deadline = Date.now() + 30_000
-    let w = corchList({ id })[0]
+    let w = climayteList({ id })[0]
     while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
-      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
-      w = corchList({ id })[0]
+      await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = climayteList({ id })[0]
     }
 
     expect(w?.error ?? null).toBeNull()
@@ -593,15 +593,15 @@ describe('integration: a move copies from the account that RAN the session (fiel
     // The same session went on on C from A's copy: C's transcript starts with A's turn.
     const file = join(nextDir, 'projects', 'fake-proj', `${w?.sessionId}.jsonl`)
     expect(readFileSync(file, 'utf8')).toContain('a task that moves')
-    const moves = corchJournal({ id }).filter((e) => e.event === 'moved')
+    const moves = climayteJournal({ id }).filter((e) => e.event === 'moved')
     expect(moves.at(-1)).toMatchObject({ from: '#31', account: '#33', copied: true })
   }, 35_000)
 })
 
 describe('priority (field note 20)', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'ah-corch-priority-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'ah-climayte-priority-'))
   afterAll(() => {
-    setCorchAccountsProvider(null)
+    setCliMayteAccountsProvider(null)
     rmSync(cwd, { recursive: true, force: true })
   })
 
@@ -610,24 +610,24 @@ describe('priority (field note 20)', () => {
     const order = [at(undefined, 1), at(0, 2), at(5, 3), at(-1, 0), at(5, 4)].sort(dueOrder)
     expect(order.map((w) => w.createdAt)).toEqual([3, 4, 1, 2, 0])
 
-    setCorchAccountsProvider(() => [])
-    expect(() => corchRun({ tasks: [{ prompt: 'x', cwd, priority: 1.5 }] })).toThrow(
+    setCliMayteAccountsProvider(() => [])
+    expect(() => climayteRun({ tasks: [{ prompt: 'x', cwd, priority: 1.5 }] })).toThrow(
       'task 1: priority must be a whole number',
     )
-    const run = corchRun({
+    const run = climayteRun({
       priority: 2,
       tasks: [
         { prompt: 'group default', cwd },
         { prompt: 'its own', cwd, priority: 9 },
       ],
     })
-    corchCancel({ group: run.group })
+    climayteCancel({ group: run.group })
     expect(run.workers.map((w) => w.priority)).toEqual([2, 9])
     const id = run.workers[0]?.id as string
-    expect(corchSetPriority(id, 7)).toMatchObject({ ok: true, priority: 7 })
-    expect(corchSetPriority(id, 'soon').ok).toBe(false)
-    expect(corchList({ id })[0]?.priority).toBe(7)
-    const recorded = corchJournal({ id }).filter((e) => e.priority !== undefined)
+    expect(climayteSetPriority(id, 7)).toMatchObject({ ok: true, priority: 7 })
+    expect(climayteSetPriority(id, 'soon').ok).toBe(false)
+    expect(climayteList({ id })[0]?.priority).toBe(7)
+    const recorded = climayteJournal({ id }).filter((e) => e.priority !== undefined)
     expect(recorded.map((e) => [e.event, e.priority, e.was])).toEqual([
       ['dispatched', 2, undefined],
       ['priority', 7, 2],
@@ -636,7 +636,7 @@ describe('priority (field note 20)', () => {
 })
 
 describe("syncOwnerClaude: the owner's CLAUDE.md and skills in an account folder (field note 5)", () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-corch-owner-'))
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-owner-'))
   const owner = join(root, 'owner')
   const acct = join(root, 'acct')
   afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -690,9 +690,9 @@ describe("syncOwnerClaude: the owner's CLAUDE.md and skills in an account folder
     writeFileSync(join(lean, 'CLAUDE.md'), 'every rule the desktop chat needs')
     expect(syncOwnerClaude(lean, leanAcct).linked).toEqual(['alpha', 'beta'])
 
-    mkdirSync(join(lean, 'corch-worker'))
-    writeFileSync(join(lean, 'corch-worker', 'CLAUDE.md'), 'the few rules a worker needs')
-    writeFileSync(join(lean, 'corch-worker', 'skills.txt'), '# worker skills\nbeta\r\n')
+    mkdirSync(join(lean, 'climayte-worker'))
+    writeFileSync(join(lean, 'climayte-worker', 'CLAUDE.md'), 'the few rules a worker needs')
+    writeFileSync(join(lean, 'climayte-worker', 'skills.txt'), '# worker skills\nbeta\r\n')
     expect(syncOwnerClaude(lean, leanAcct)).toMatchObject({
       claudeMd: 'copied',
       unlinked: ['alpha'],
@@ -704,7 +704,7 @@ describe("syncOwnerClaude: the owner's CLAUDE.md and skills in an account folder
 })
 
 describe('integration: paid extra usage is never spent', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-corch-overage-'))
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-overage-'))
   const cwd = join(root, 'work')
   const overDir = join(root, 'acct-over')
   const freeDir = join(root, 'acct-free')
@@ -713,30 +713,30 @@ describe('integration: paid extra usage is never spent', () => {
   const groups: string[] = []
 
   afterAll(() => {
-    for (const group of groups) corchCancel({ group })
-    setCorchClaudeCommand(null)
-    setCorchAccountsProvider(null)
+    for (const group of groups) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
   })
 
   test('a turn that starts billing overage is stopped at once and the session moves on', async () => {
-    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
     // The overage account scores lower, so it is picked first. Left alone, the fake would go on
     // for 6 s and finish there on overage ('FINISHED ON OVERAGE', no move).
-    setCorchAccountsProvider(() => [
+    setCliMayteAccountsProvider(() => [
       { id: 'over-1', num: 1, name: 'overage', configDir: overDir, sessionPct: 0, weekPct: 0 },
       { id: 'over-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
     ])
-    startCorch()
-    const run = corchRun({ tasks: [{ prompt: 'a long task', cwd, title: 'overage' }] })
+    startCliMayte()
+    const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title: 'overage' }] })
     groups.push(run.group)
     const id = run.workers[0]?.id as string
 
     const deadline = Date.now() + 15_000
-    let w = corchList({ id })[0]
+    let w = climayteList({ id })[0]
     while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
-      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
-      w = corchList({ id })[0]
+      await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = climayteList({ id })[0]
     }
 
     expect(w?.status).toBe('done')
@@ -749,22 +749,22 @@ describe('integration: paid extra usage is never spent', () => {
   test('with allowExtraUsage on, the turn is not stopped and finishes on the overage account', async () => {
     setProviderSettings({ allowExtraUsage: true })
     try {
-      setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+      setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
       // New account ids: the test above walled 'over-1'.
-      setCorchAccountsProvider(() => [
+      setCliMayteAccountsProvider(() => [
         { id: 'allow-1', num: 1, name: 'overage', configDir: overDir, sessionPct: 0, weekPct: 0 },
         { id: 'allow-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
       ])
-      startCorch()
-      const run = corchRun({ tasks: [{ prompt: 'a long task', cwd, title: 'overage allowed' }] })
+      startCliMayte()
+      const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title: 'overage allowed' }] })
       groups.push(run.group)
       const id = run.workers[0]?.id as string
 
       const deadline = Date.now() + 15_000
-      let w = corchList({ id })[0]
+      let w = climayteList({ id })[0]
       while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
-        await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
-        w = corchList({ id })[0]
+        await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+        w = climayteList({ id })[0]
       }
 
       expect(w?.status).toBe('done')
@@ -772,12 +772,12 @@ describe('integration: paid extra usage is never spent', () => {
       expect(w?.moves).toBe(0)
       expect(w?.attempts).toHaveLength(1)
       // A dispatch-to-done run is four journal lines: its turn's text, then done with its turns and cost.
-      const log = corchJournal({ id })
+      const log = climayteJournal({ id })
       expect(log.map((e) => e.event)).toEqual(['dispatched', 'launched', 'turn-end', 'done'])
       expect(log[2]).toMatchObject({ account: '#1', said: 'FINISHED ON OVERAGE' })
       expect(log[3]).toMatchObject({ account: '#1', turns: 1 })
       expect(typeof log[3]?.costUsd).toBe('number')
-      expect(corchJournalLines({ id })[3]).toMatch(
+      expect(climayteJournalLines({ id })[3]).toMatch(
         /'overage allowed' done on #1: \$\d+\.\d\d, 1 turn \(/,
       )
     } finally {
@@ -789,22 +789,22 @@ describe('integration: paid extra usage is never spent', () => {
     const nearDir = join(root, 'acct-near')
     mkdirSync(nearDir, { recursive: true })
     writeFileSync(join(nearDir, 'fake-near-limit'), '')
-    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
     // Left alone, the fake finishes on the near-limit account after 6 s ('FINISHED NEAR LIMIT').
-    setCorchAccountsProvider(() => [
+    setCliMayteAccountsProvider(() => [
       { id: 'near-1', num: 1, name: 'near', configDir: nearDir, sessionPct: 0, weekPct: 0 },
       { id: 'near-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
     ])
-    startCorch()
-    const run = corchRun({ tasks: [{ prompt: 'a long task', cwd, title: 'near the limit' }] })
+    startCliMayte()
+    const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title: 'near the limit' }] })
     groups.push(run.group)
     const id = run.workers[0]?.id as string
 
     const deadline = Date.now() + 15_000
-    let w = corchList({ id })[0]
+    let w = climayteList({ id })[0]
     while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
-      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
-      w = corchList({ id })[0]
+      await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = climayteList({ id })[0]
     }
 
     expect(w?.status).toBe('done')
@@ -816,7 +816,7 @@ describe('integration: paid extra usage is never spent', () => {
 })
 
 describe('integration: near its limit a worker hands off to a fresh session', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-corch-winddown-'))
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-winddown-'))
   const cwd = join(root, 'work')
   const nearDir = join(root, 'acct-near')
   const freeDir = join(root, 'acct-free')
@@ -825,31 +825,31 @@ describe('integration: near its limit a worker hands off to a fresh session', ()
   let group: string | null = null
 
   afterAll(() => {
-    if (group) corchCancel({ group })
-    setCorchClaudeCommand(null)
-    setCorchAccountsProvider(null)
+    if (group) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
   })
 
   test('it writes a handoff and the task goes on from it in a new session elsewhere', async () => {
-    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
     // The near-limit account scores lower, so it is picked first. Left alone it works on and
     // finishes there ('NO WIND-DOWN'); the other account has room.
-    setCorchAccountsProvider(() => [
+    setCliMayteAccountsProvider(() => [
       { id: 'wind-1', num: 1, name: 'near', configDir: nearDir, sessionPct: 0, weekPct: 0 },
       { id: 'wind-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
     ])
-    startCorch()
-    const run = corchRun({ tasks: [{ prompt: 'a long task', cwd, title: 'wind down' }] })
+    startCliMayte()
+    const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title: 'wind down' }] })
     group = run.group
     const id = run.workers[0]?.id as string
     const firstSession = run.workers[0]?.sessionId as string
 
     const deadline = Date.now() + 15_000
-    let w = corchList({ id })[0]
+    let w = climayteList({ id })[0]
     while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
-      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
-      w = corchList({ id })[0]
+      await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = climayteList({ id })[0]
     }
 
     expect(w?.status).toBe('done')
@@ -863,7 +863,7 @@ describe('integration: near its limit a worker hands off to a fresh session', ()
   }, 20_000)
 })
 
-describe('corch_status scope (field notes 1, 4 and 7)', () => {
+describe('climayte_status scope (field notes 1, 4 and 7)', () => {
   const at = (status: string, createdAt: number, updatedAt = createdAt) =>
     ({ status, createdAt, updatedAt }) as { status: 'done'; createdAt: number; updatedAt: number }
 
@@ -904,23 +904,23 @@ describe('corch_status scope (field notes 1, 4 and 7)', () => {
       return t
     }
 
-    test('corch_status {} asks for active plus 20 recent, brief; { id } asks for the detail', async () => {
-      const t = await tool('corch_status')
+    test('climayte_status {} asks for active plus 20 recent, brief; { id } asks for the detail', async () => {
+      const t = await tool('climayte_status')
       await t.run({})
       await t.run({ group: 'g-1' })
       await t.run({ active: true, limit: 5 })
       await t.run({ id: 'w-1', wait_seconds: 5 })
       const paths = urls.map((u) => new URL(u).pathname + new URL(u).search)
       expect(paths).toEqual([
-        '/api/corch/workers?limit=20&brief=1',
-        '/api/corch/workers?group=g-1&brief=1',
-        '/api/corch/workers?active=1&limit=5&brief=1',
-        '/api/corch/workers/w-1?wait=5',
+        '/api/climayte/workers?limit=20&brief=1',
+        '/api/climayte/workers?group=g-1&brief=1',
+        '/api/climayte/workers?active=1&limit=5&brief=1',
+        '/api/climayte/workers/w-1?wait=5',
       ])
     })
 
-    test('corch_run answers the group and, per worker, only id, title, status and account', async () => {
-      const t = await tool('corch_run')
+    test('climayte_run answers the group and, per worker, only id, title, status and account', async () => {
+      const t = await tool('climayte_run')
       answer = {
         group: 'g-1',
         workers: [{ id: 'w-1', title: 'x', status: 'queued', account: null, prompt: 'long' }],
@@ -935,7 +935,7 @@ describe('corch_status scope (field notes 1, 4 and 7)', () => {
 })
 
 describe('integration: steering a running worker (field notes 10 and 11)', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-corch-steer-'))
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-steer-'))
   const cwd = join(root, 'work')
   const slowDir = join(root, 'acct-slow')
   for (const d of [cwd, slowDir]) mkdirSync(d, { recursive: true })
@@ -943,41 +943,41 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
   const groups: string[] = []
 
   afterAll(() => {
-    for (const group of groups) corchCancel({ group })
-    setCorchClaudeCommand(null)
-    setCorchAccountsProvider(null)
+    for (const group of groups) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
   })
 
   const start = async (title: string, account: string) => {
-    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-    setCorchAccountsProvider(() => [
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteAccountsProvider(() => [
       { id: account, num: 7, name: 'slow', configDir: slowDir, sessionPct: 0, weekPct: 0 },
     ])
-    startCorch()
-    const run = corchRun({ tasks: [{ prompt: 'a slow task', cwd, title }] })
+    startCliMayte()
+    const run = climayteRun({ tasks: [{ prompt: 'a slow task', cwd, title }] })
     groups.push(run.group)
     const id = run.workers[0]?.id as string
     const deadline = Date.now() + 10_000
-    while (corchList({ id })[0]?.status !== 'running' && Date.now() < deadline)
-      await corchWait({ id }, 1_000)
+    while (climayteList({ id })[0]?.status !== 'running' && Date.now() < deadline)
+      await climayteWait({ id }, 1_000)
     await Bun.sleep(1_500) // its init line is in the log: the message reached the session
     return id
   }
   const settle = async (id: string, ms: number) => {
     const deadline = Date.now() + ms
-    let w = corchList({ id })[0]
+    let w = climayteList({ id })[0]
     while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
-      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
-      w = corchList({ id })[0]
+      await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = climayteList({ id })[0]
     }
     return w
   }
 
   test('a plain message is held and says so; urgent stops the work and goes first', async () => {
     const id = await start('steer', 'slow-1')
-    expect(corchSend(id, 'queued one').message).toContain('Held until this worker finishes')
-    const urgent = corchSend(id, 'STEER NOW', { urgent: true })
+    expect(climayteSend(id, 'queued one').message).toContain('Held until this worker finishes')
+    const urgent = climayteSend(id, 'STEER NOW', { urgent: true })
     expect(urgent).toMatchObject({ ok: true, urgent: true })
     expect(urgent.message).toContain('then the 1 message(s) queued before it')
 
@@ -986,20 +986,22 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     expect(w?.pending).toEqual([])
     expect(w?.attempts.map((a) => a.outcome)).toEqual(['cancelled', 'done', 'done'])
     expect(w?.attempts[0]?.notice).toContain('urgent message')
-    const events = corchJournal({ id }).map((e) => e.event)
+    const events = climayteJournal({ id }).map((e) => e.event)
     expect(events.filter((e) => e === 'follow-up-delivered')).toHaveLength(2)
-    expect(corchJournal({ id }).find((e) => e.urgent)?.event).toBe('follow-up-queued')
+    expect(climayteJournal({ id }).find((e) => e.urgent)?.event).toBe('follow-up-queued')
   }, 25_000)
 
   test('model and effort: unknown values are refused, aliases become full ids, the group default fills in', () => {
-    expect(() => corchRun({ tasks: [{ prompt: 'x', cwd, model: 'haiku' }] })).toThrow(
+    expect(() => climayteRun({ tasks: [{ prompt: 'x', cwd, model: 'haiku' }] })).toThrow(
       "task 1: unknown model 'haiku': use opus or sonnet",
     )
-    expect(() => corchRun({ tasks: [{ prompt: 'x', cwd, effort: 'ultra' }] })).toThrow(
+    expect(() => climayteRun({ tasks: [{ prompt: 'x', cwd, effort: 'ultra' }] })).toThrow(
       'use low, medium, high, xhigh, max',
     )
-    expect(() => corchRun({ model: 'gpt', tasks: [{ prompt: 'x', cwd }] })).toThrow('unknown model')
-    const run = corchRun({
+    expect(() => climayteRun({ model: 'gpt', tasks: [{ prompt: 'x', cwd }] })).toThrow(
+      'unknown model',
+    )
+    const run = climayteRun({
       model: 'sonnet',
       effort: 'medium',
       tasks: [
@@ -1007,7 +1009,7 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
         { prompt: 'its own', cwd, model: 'Opus', effort: 'xhigh' },
       ],
     })
-    corchCancel({ group: run.group })
+    climayteCancel({ group: run.group })
     expect(run.workers.map((w) => [w.model, w.effort])).toEqual([
       ['claude-sonnet-5-5', 'medium'],
       ['claude-opus-5-5', 'xhigh'],
@@ -1016,9 +1018,9 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
 
   test('a follow-up switches model and effort for its turn on, in the same session', async () => {
     const id = await start('escalate', 'slow-3')
-    const session = corchList({ id })[0]?.sessionId
-    expect(corchSend(id, 'x', { model: 'fable' })).toMatchObject({ ok: false })
-    const sent = corchSend(id, 'try harder', { urgent: true, model: 'opus', effort: 'xhigh' })
+    const session = climayteList({ id })[0]?.sessionId
+    expect(climayteSend(id, 'x', { model: 'fable' })).toMatchObject({ ok: false })
+    const sent = climayteSend(id, 'try harder', { urgent: true, model: 'opus', effort: 'xhigh' })
     expect(sent).toMatchObject({ ok: true, model: 'claude-opus-5-5', effort: 'xhigh' })
     const w = await settle(id, 15_000)
     expect(w?.status).toBe('done')
@@ -1026,50 +1028,50 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     expect(w?.attempts[0]?.requested).toEqual({ model: null, effort: null })
     // The fake CLI reports the --model it was given, as the real one does at init.
     expect(w?.reportedModel).toBe('claude-opus-5-5')
-    expect(corchGet(id)?.sessionId).toBe(session)
-    const delivered = corchJournal({ id }).filter((e) => e.event === 'follow-up-delivered')
+    expect(climayteGet(id)?.sessionId).toBe(session)
+    const delivered = climayteJournal({ id }).filter((e) => e.event === 'follow-up-delivered')
     expect(delivered.at(-1)).toMatchObject({ model: 'claude-opus-5-5', effort: 'xhigh' })
   }, 25_000)
 
   test('a cancel keeps queued messages and delivers them when the worker is continued', async () => {
     const id = await start('cancel keeps', 'slow-2')
-    corchSend(id, 'first')
-    corchSend(id, 'second')
-    const r = corchCancel({ id })
+    climayteSend(id, 'first')
+    climayteSend(id, 'second')
+    const r = climayteCancel({ id })
     expect(r).toEqual({ cancelled: [id], keptMessages: { [id]: 2 } })
-    expect(corchList({ id })[0]?.pending).toEqual(['first', 'second'])
+    expect(climayteList({ id })[0]?.pending).toEqual(['first', 'second'])
 
-    corchSend(id, 'third')
+    climayteSend(id, 'third')
     const w = await settle(id, 15_000)
     expect(w?.status).toBe('done')
     expect(w?.pending).toEqual([])
-    expect(corchJournal({ id }).filter((e) => e.event === 'follow-up-delivered')).toHaveLength(3)
+    expect(climayteJournal({ id }).filter((e) => e.event === 'follow-up-delivered')).toHaveLength(3)
   }, 25_000)
 })
 
 describe('integration: a task with a check is judged by it', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-corch-check-'))
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-check-'))
   const cwd = join(root, 'work')
   const acct = join(root, 'acct')
   for (const d of [cwd, acct]) mkdirSync(d, { recursive: true })
   const groups: string[] = []
 
   afterAll(() => {
-    for (const group of groups) corchCancel({ group })
-    setCorchClaudeCommand(null)
-    setCorchAccountsProvider(null)
+    for (const group of groups) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
   })
 
   test('a failing check sends the task back one rung up; the passing one records the pass', async () => {
-    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-    setCorchAccountsProvider(() => [
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteAccountsProvider(() => [
       { id: 'check-1', num: 1, name: 'check', configDir: acct, sessionPct: 0, weekPct: 0 },
     ])
-    startCorch()
+    startCliMayte()
     // Fails the first time (leaving a marker), passes the second.
     const check = 'test -f proved || { touch proved; echo not yet; exit 1; }'
-    const run = corchRun({
+    const run = climayteRun({
       tasks: [
         {
           prompt: 'prove it',
@@ -1086,15 +1088,15 @@ describe('integration: a task with a check is judged by it', () => {
     const id = run.workers[0]?.id as string
 
     const deadline = Date.now() + 25_000
-    let w = corchList({ id })[0]
+    let w = climayteList({ id })[0]
     while (
       w &&
       !(w.status === 'done' && (w.verdicts?.length ?? 0) >= 2) &&
       w.status !== 'failed' &&
       Date.now() < deadline
     ) {
-      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
-      w = corchList({ id })[0]
+      await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = climayteList({ id })[0]
     }
 
     expect(w?.verdicts?.map((v) => [v.verdict, v.by, v.model, v.effort])).toEqual([

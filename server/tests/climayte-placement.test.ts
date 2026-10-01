@@ -1,7 +1,7 @@
-// Where Corch starts a task so it can finish there (corch-placement.ts).
+// Where CliMayte starts a task so it can finish there (climayte-placement.ts).
 import { describe, expect, test } from 'bun:test'
-import { DEFAULT_TASK_PCT, expectedPct, planFactor, projectedPct } from '../src/corch-placement'
-import { UNITS_PER_PRO_PERCENT } from '../src/corch-scorecard'
+import { DEFAULT_TASK_PCT, expectedPct, planFactor, projectedPct } from '../src/climayte-placement'
+import { UNITS_PER_PRO_PERCENT } from '../src/climayte-scorecard'
 
 describe('projectedPct', () => {
   test('counts what running tasks still owe, once, and scales by the plan', () => {

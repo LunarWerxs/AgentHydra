@@ -1,11 +1,11 @@
-// server/src/corch-journal.ts — Corch's orchestration journal (docs/CORCH.md "Journal"): one short
+// server/src/climayte-journal.ts — CliMayte's orchestration journal (docs/CLIMAYTE.md "Journal"): one short
 // JSON line per state change of every worker, in `<CONFIG_DIR>/corch/journal.jsonl`.
 //
-// WHY (owner, 2026-09-30, the first real corch task): "we probably also need logging in Corch".
+// WHY (owner, 2026-09-30, the first real climayte task): "we probably also need logging in CliMayte".
 // Each worker keeps its own stream-json log and its last 60 events, but nothing told the story of a
 // whole orchestration in one place: what was dispatched, which account each attempt got and why,
-// the moves, handoffs, retries, finishes and their cost. This file is that record. corch.ts writes
-// it; the route, the corch_log MCP tool and the Corch view's Log read it.
+// the moves, handoffs, retries, finishes and their cost. This file is that record. climayte.ts writes
+// it; the route, the climayte_log MCP tool and the CliMayte view's Log read it.
 //
 // Append-only, a few hundred bytes a line, rotated at JOURNAL_MAX_BYTES with one previous file kept
 // (`journal.1.jsonl`). A failed write is logged and dropped: the journal must never stop a worker.
@@ -13,8 +13,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 
-export type CorchJournalEvent =
-  | 'dispatched' // corch_run created it
+export type CliMayteJournalEvent =
+  | 'dispatched' // climayte_run created it
   | 'launched' // an attempt started on an account (the pick's reasons ride along)
   | 'moved' // the session changed account (before the launch on the new one)
   | 'limit' // the account hit its usage limit (or was stopped short of paid extra usage)
@@ -22,26 +22,26 @@ export type CorchJournalEvent =
   | 'handoff-requested' // asked to wrap up and write a handoff (near its limit, or on request)
   | 'handoff-written' // it wrote the handoff; the task goes on in a fresh session
   | 'handoff-resumed' // the fresh session started from the handoff
-  | 'follow-up-queued' // corch_send queued a message
+  | 'follow-up-queued' // climayte_send queued a message
   | 'follow-up-delivered' // an attempt started with that message
   | 'retry' // the API was overloaded, or the next attempt could not start: tried again later
   | 'interrupted' // the CLI was killed from outside (a daemon restart); resumed
   | 'waiting' // no account it may use is free
   | 'turn-done' // a turn finished and a queued follow-up comes next
   | 'turn-end' // a turn ended with this text (a Stop hook can force more turns after the report)
-  | 'check' // the worker reported done; Corch runs the task's check command (`notice`: the command)
-  | 'verdict' // its result was judged pass or fail (corchVerdict); a fail names the next setting
-  | 'priority' // its priority was changed (corchSetPriority)
+  | 'check' // the worker reported done; CliMayte runs the task's check command (`notice`: the command)
+  | 'verdict' // its result was judged pass or fail (climayteVerdict); a fail names the next setting
+  | 'priority' // its priority was changed (climayteSetPriority)
   | 'done'
   | 'failed'
   | 'cancelled'
 
-export interface CorchJournalEntry {
+export interface CliMayteJournalEntry {
   ts: string // ISO time
   id: string
   group: string
   title: string
-  event: CorchJournalEvent
+  event: CliMayteJournalEvent
   account?: string // '#84', or the account's name when it has no number
   from?: string // moved: the account it left
   attempt?: number // 1-based
@@ -66,7 +66,7 @@ export interface CorchJournalEntry {
   effort?: string | null // the same, for the effort level
   cwd?: string // dispatched
   accounts?: number // dispatched: how many accounts it is restricted to (absent: any)
-  kind?: string // dispatched / verdict: the kind of work (corch-scorecard CORCH_KINDS)
+  kind?: string // dispatched / verdict: the kind of work (climayte-scorecard CLIMAYTE_KINDS)
   reason?: string // dispatched with model auto: why the scorecard picked that setting
   verdict?: 'pass' | 'fail' // verdict
   priority?: number // dispatched / priority: higher starts first (0: the default)
@@ -87,7 +87,7 @@ export function firstLine(text: string | null | undefined, max = 300): string {
 /** Append one entry, rotating first when the file has reached `maxBytes`. Never throws. */
 export function appendJournal(
   path: string,
-  entry: CorchJournalEntry,
+  entry: CliMayteJournalEntry,
   maxBytes = JOURNAL_MAX_BYTES,
 ): void {
   try {
@@ -101,7 +101,7 @@ export function appendJournal(
     if (size >= maxBytes) renameSync(path, previousJournal(path))
     appendFileSync(path, `${JSON.stringify(entry)}\n`)
   } catch (err) {
-    console.error('[corch] could not write the journal:', err)
+    console.error('[climayte] could not write the journal:', err)
   }
 }
 
@@ -123,10 +123,10 @@ function sinceMs(since: JournalFilter['since']): number | null {
 
 /** Entries in scope, oldest first, the newest `limit` of them. Reads the previous file only when
  *  the current one does not hold enough. */
-export function readJournal(path: string, filter: JournalFilter = {}): CorchJournalEntry[] {
+export function readJournal(path: string, filter: JournalFilter = {}): CliMayteJournalEntry[] {
   const limit = Math.min(5_000, Math.max(1, Math.floor(filter.limit ?? 100)))
   const after = sinceMs(filter.since)
-  const pick = (file: string): CorchJournalEntry[] => {
+  const pick = (file: string): CliMayteJournalEntry[] => {
     if (!existsSync(file)) return []
     let text = ''
     try {
@@ -134,12 +134,12 @@ export function readJournal(path: string, filter: JournalFilter = {}): CorchJour
     } catch {
       return []
     }
-    const out: CorchJournalEntry[] = []
+    const out: CliMayteJournalEntry[] = []
     for (const line of text.split('\n')) {
       // A cheap text check before the parse: a filtered read of a 5 MB file parses only its lines.
       if (!line || (filter.id && !line.includes(filter.id))) continue
       if (filter.group && !line.includes(filter.group)) continue
-      let e: CorchJournalEntry
+      let e: CliMayteJournalEntry
       try {
         e = JSON.parse(line)
       } catch {
@@ -174,7 +174,7 @@ export function journalTime(ts: string, now: Date = new Date()): string {
 }
 
 /** What happened, in words (the part of a readable line after the worker's id and title). */
-export function describeJournalEntry(e: CorchJournalEntry, now: Date = new Date()): string {
+export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Date()): string {
   const on = e.account ? ` on ${e.account}` : ''
   const pick = `(session ${pct(e.sessionPct)}, week ${pct(e.weekPct)}, ${e.active ?? 0} active)`
   // The model and effort asked for, when either was (the entry records null for the CLI's default).
@@ -234,6 +234,6 @@ export function describeJournalEntry(e: CorchJournalEntry, now: Date = new Date(
 }
 
 /** One readable line: `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`. */
-export function formatJournalLine(e: CorchJournalEntry, now: Date = new Date()): string {
+export function formatJournalLine(e: CliMayteJournalEntry, now: Date = new Date()): string {
   return `${journalTime(e.ts, now)} ${e.id} '${e.title}' ${describeJournalEntry(e, now)}`
 }

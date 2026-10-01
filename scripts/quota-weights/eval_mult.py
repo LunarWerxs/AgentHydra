@@ -27,8 +27,8 @@ def fit_ttl(train, fam):
 
 
 def main():
-    corch = [v for v in A.intervals(4 * 60, ('corch',)) if v['cen'] is None]
-    train_all = corch + [v for v in A.windows() if v['cen'] is None]
+    climayte = [v for v in A.intervals(4 * 60, ('climayte',)) if v['cen'] is None]
+    train_all = climayte + [v for v in A.windows() if v['cen'] is None]
     orgs = sorted({o for (o, _) in A.R})
     full = {}
     for name, fam in MULTS.items():

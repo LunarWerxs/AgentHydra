@@ -13,7 +13,7 @@
 //   --spend [--json] [--period=]   → token/dollar totals from the stored analytics (./analytics.ts)
 //   --instances | --instance-mode → the lightweight instance launcher (./instance-mode.ts)
 //   --mcp                         → the MCP stdio server (./mcp.ts)
-//   --corch-runner <spec>         → one Corch worker's CLI, run outside the daemon (./corch-runner.ts)
+//   --climayte-runner <spec>         → one CliMayte worker's CLI, run outside the daemon (./climayte-runner.ts)
 //
 // `__dispatch_runner` and `__fake_claude` were removed with the unreachable headless-dispatch spawn
 // path they existed to serve (dispatch.ts, headless dispatch is now permanently refused - see
@@ -24,10 +24,10 @@
 
 const [mode, ...rest] = process.argv.slice(2)
 
-if (mode === '--corch-runner') {
+if (mode === '--climayte-runner') {
   // Before anything else: a runner must not open the daemon's database or bind a port.
-  const { runCorchRunner } = await import('./corch-runner')
-  process.exit(await runCorchRunner(rest[0] ?? ''))
+  const { runCliMayteRunner } = await import('./climayte-runner')
+  process.exit(await runCliMayteRunner(rest[0] ?? ''))
 } else if (mode === '--version' || mode === '-v') {
   // --json prints a schema-versioned object instead of the bare version, for scripts and CI. Still
   // no database and still no port: it imports one module that reads a bundled constant, and at most

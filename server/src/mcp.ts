@@ -28,14 +28,15 @@
 // THE PARTS. The daemon HTTP client and the shared schema helpers are mcp-client.ts; the sessions,
 // analytics, queue, incidents and agent-status tools are mcp-session-tools.ts; the fan-out tools
 // are mcp-fan-out.ts. TOOLS below assembles them in the order agents have always seen.
+
+import { RECENT_FINISHED } from './climayte-lib'
 import { VERSION } from './config'
-import { RECENT_FINISHED } from './corch-lib'
 import {
   AUTO_DETACH_MS,
   api,
   apiOrLocal,
   busyRefusal,
-  CORCH_MAX_WAIT_S,
+  CLIMAYTE_MAX_WAIT_S,
   detachedAnswer,
   handleFrom,
   INSTANCE_PARAM,
@@ -639,13 +640,13 @@ export const TOOLS: McpEngineTool[] = [
     },
   },
 
-  // --- Corch: delegate work onto the CLI accounts (docs/CORCH.md) ---------------
-  // Over /api/corch like every other tool: the workers belong to the daemon, and a stdio MCP server
-  // running Corch in its own process would relaunch them as dead and could not cancel them.
+  // --- CliMayte: delegate work onto the CLI accounts (docs/CLIMAYTE.md) ---------------
+  // Over /api/climayte like every other tool: the workers belong to the daemon, and a stdio MCP server
+  // running CliMayte in its own process would relaunch them as dead and could not cancel them.
   {
-    name: 'corch_run',
+    name: 'climayte_run',
     description:
-      'MUTATES: CORCH A TASK. When the owner tells a chat to corch a task or fully delegate it, the chat keeps only the orchestration (split, dispatch, read results, check them) and every piece of real work goes here. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER\'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra\'s Corch view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what "done" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps concurrent workers per account; top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). Returns the group and, per worker, its id, title, status and account; then corch_status {group, wait_seconds} waits for results.',
+      'MUTATES: CLIMAYTE A TASK. When the owner tells a chat to climayte a task or fully delegate it, the chat keeps only the orchestration (split, dispatch, read results, check them) and every piece of real work goes here. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER\'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra\'s CliMayte view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what "done" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps concurrent workers per account; top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). Returns the group and, per worker, its id, title, status and account; then climayte_status {group, wait_seconds} waits for results.',
     inputSchema: S(
       {
         tasks: {
@@ -659,7 +660,7 @@ export const TOOLS: McpEngineTool[] = [
               model: {
                 type: 'string',
                 description:
-                  "Model: opus (Opus 5.5) or sonnet (Sonnet 5.5); the full ids claude-opus-5-5 / claude-sonnet-5-5 work too. `auto`: Corch picks model AND effort for the task's `kind` from the scorecard (the cheapest setting that keeps passing; every 4th pick tries one rung cheaper so it keeps learning). Omit for the CLI default.",
+                  "Model: opus (Opus 5.5) or sonnet (Sonnet 5.5); the full ids claude-opus-5-5 / claude-sonnet-5-5 work too. `auto`: CliMayte picks model AND effort for the task's `kind` from the scorecard (the cheapest setting that keeps passing; every 4th pick tries one rung cheaper so it keeps learning). Omit for the CLI default.",
               },
               effort: {
                 type: 'string',
@@ -674,12 +675,12 @@ export const TOOLS: McpEngineTool[] = [
               priority: {
                 type: 'number',
                 description:
-                  'Whole number, default 0 (or the top-level `priority`): queued and waiting tasks start highest first, then oldest first, so an urgent task takes the next free slot. Change it later with corch_priority.',
+                  'Whole number, default 0 (or the top-level `priority`): queued and waiting tasks start highest first, then oldest first, so an urgent task takes the next free slot. Change it later with climayte_priority.',
               },
               check: {
                 type: 'string',
                 description:
-                  'One bash command that PROVES the task is done (exit 0), e.g. `bun test tests/x.test.ts` or a curl that greps the deployed page; run it through `~/.claude/tools/fairjob.cmd -Weight 3 -Run "..."` when it is heavy. Corch runs it in `cwd` the moment the worker reports done (status `checking`), records the verdict itself, and sends a fail back to the same session one rung up with the end of the command\'s output (3 failed rounds stop the task as failed). Give one whenever a command can tell; your own corch_verdict is for what it cannot.',
+                  'One bash command that PROVES the task is done (exit 0), e.g. `bun test tests/x.test.ts` or a curl that greps the deployed page; run it through `~/.claude/tools/fairjob.cmd -Weight 3 -Run "..."` when it is heavy. CliMayte runs it in `cwd` the moment the worker reports done (status `checking`), records the verdict itself, and sends a fail back to the same session one rung up with the end of the command\'s output (3 failed rounds stop the task as failed). Give one whenever a command can tell; your own climayte_verdict is for what it cannot.',
               },
             },
             required: ['prompt', 'cwd'],
@@ -720,13 +721,13 @@ export const TOOLS: McpEngineTool[] = [
               const row = await resolveRef(ref)
               if (row.kind !== 'cli')
                 throw new Error(
-                  `${instanceLabel(row)} is a ${row.kind} instance; Corch runs only on CLI instances.`,
+                  `${instanceLabel(row)} is a ${row.kind} instance; CliMayte runs only on CLI instances.`,
                 )
               return row.handle
             }),
           )
         : undefined
-      const r = (await api('/api/corch/workers', {
+      const r = (await api('/api/climayte/workers', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
@@ -756,8 +757,8 @@ export const TOOLS: McpEngineTool[] = [
     },
   },
   {
-    name: 'corch_status',
-    description: `Read Corch workers (status, account, lastActivity, result/error, moves, cost). \`id\` answers that ONE worker's full detail, with \`events\` (its last 60 event lines on every account: read these to see why it failed). Otherwise a list, newest first, without prompts and with the last 3 attempts: scoped by \`group\` (all of its workers), else every active worker plus the ${RECENT_FINISHED} most recently finished (\`limit\` changes that number; \`active: true\` lists only queued/running/waiting ones). With \`wait_seconds\` (1..${CORCH_MAX_WAIT_S}) it WAITS up to that long for the next status change in scope and then answers; call it again to keep waiting. Use that instead of polling. Longer waits are cut to ${CORCH_MAX_WAIT_S}: an MCP client drops a call held about 60 s (measured 2026-09-30: 55 s answered, 110 s and 300 s timed out with nothing returned). The story of a run (dispatches, accounts picked and why, moves, retries, finishes) is corch_log.`,
+    name: 'climayte_status',
+    description: `Read CliMayte workers (status, account, lastActivity, result/error, moves, cost). \`id\` answers that ONE worker's full detail, with \`events\` (its last 60 event lines on every account: read these to see why it failed). Otherwise a list, newest first, without prompts and with the last 3 attempts: scoped by \`group\` (all of its workers), else every active worker plus the ${RECENT_FINISHED} most recently finished (\`limit\` changes that number; \`active: true\` lists only queued/running/waiting ones). With \`wait_seconds\` (1..${CLIMAYTE_MAX_WAIT_S}) it WAITS up to that long for the next status change in scope and then answers; call it again to keep waiting. Use that instead of polling. Longer waits are cut to ${CLIMAYTE_MAX_WAIT_S}: an MCP client drops a call held about 60 s (measured 2026-09-30: 55 s answered, 110 s and 300 s timed out with nothing returned). The story of a run (dispatches, accounts picked and why, moves, retries, finishes) is climayte_log.`,
     inputSchema: S({
       group: { type: 'string' },
       id: { type: 'string' },
@@ -769,10 +770,10 @@ export const TOOLS: McpEngineTool[] = [
       wait_seconds: { type: 'number' },
     }),
     run: (a) => {
-      const wait = Math.min(CORCH_MAX_WAIT_S, Math.max(0, Number(a.wait_seconds) || 0))
+      const wait = Math.min(CLIMAYTE_MAX_WAIT_S, Math.max(0, Number(a.wait_seconds) || 0))
       if (a.id != null && str(a.id))
         return api(
-          `/api/corch/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined })}`,
+          `/api/climayte/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined })}`,
         )
       const group = a.group != null && str(a.group) ? str(a.group) : undefined
       const limit =
@@ -782,7 +783,7 @@ export const TOOLS: McpEngineTool[] = [
             ? undefined
             : RECENT_FINISHED
       return api(
-        `/api/corch/workers${qs({
+        `/api/climayte/workers${qs({
           group,
           active: a.active === true ? 1 : undefined,
           limit,
@@ -793,9 +794,9 @@ export const TOOLS: McpEngineTool[] = [
     },
   },
   {
-    name: 'corch_log',
+    name: 'climayte_log',
     description:
-      "Read Corch's orchestration journal: one line per state change of every worker (dispatched; launched on which account and why it was picked: its session/week % and how many workers it already ran; limit hit and when the wall ends; moved; handoff requested/written/resumed; follow-up queued/delivered; retries; done with cost and turns; failed with the error's first line; cancelled; interrupted by a restart). Scope by `group` or `id`; `since` (ISO time or epoch ms) for only newer lines; `limit` (default 100) for the newest that many. Newest last, one readable line each, e.g. `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`.",
+      "Read CliMayte's orchestration journal: one line per state change of every worker (dispatched; launched on which account and why it was picked: its session/week % and how many workers it already ran; limit hit and when the wall ends; moved; handoff requested/written/resumed; follow-up queued/delivered; retries; done with cost and turns; failed with the error's first line; cancelled; interrupted by a restart). Scope by `group` or `id`; `since` (ISO time or epoch ms) for only newer lines; `limit` (default 100) for the newest that many. Newest last, one readable line each, e.g. `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`.",
     inputSchema: S({
       group: { type: 'string' },
       id: { type: 'string' },
@@ -804,7 +805,7 @@ export const TOOLS: McpEngineTool[] = [
     }),
     run: (a) =>
       api(
-        `/api/corch/journal${qs({
+        `/api/climayte/journal${qs({
           group: a.group != null ? str(a.group) : undefined,
           id: a.id != null ? str(a.id) : undefined,
           since: a.since != null ? str(a.since) : undefined,
@@ -814,9 +815,9 @@ export const TOOLS: McpEngineTool[] = [
       ),
   },
   {
-    name: 'corch_send',
+    name: 'climayte_send',
     description:
-      'MUTATES: send a follow-up message to a Corch worker, as the next turn in the SAME session. To a finished, failed or stopped worker it starts at once. To a RUNNING worker it is HELD UNTIL THE WHOLE CURRENT TASK ENDS (a running CLI session takes no input mid-run; that can be many minutes), unless `urgent: true`: then the running work is stopped cleanly (cost recorded, transcript kept) and the same session continues at once with this message first, followed by anything queued before it. Use urgent for steering that cannot wait (stop, change course, fix what you broke). `model` / `effort` switch the worker for this turn and every later one, in the same session (e.g. escalate a struggling worker from sonnet/medium to opus/xhigh in one call). Like the task, the message must be self-contained: the worker sees nothing of this chat.',
+      'MUTATES: send a follow-up message to a CliMayte worker, as the next turn in the SAME session. To a finished, failed or stopped worker it starts at once. To a RUNNING worker it is HELD UNTIL THE WHOLE CURRENT TASK ENDS (a running CLI session takes no input mid-run; that can be many minutes), unless `urgent: true`: then the running work is stopped cleanly (cost recorded, transcript kept) and the same session continues at once with this message first, followed by anything queued before it. Use urgent for steering that cannot wait (stop, change course, fix what you broke). `model` / `effort` switch the worker for this turn and every later one, in the same session (e.g. escalate a struggling worker from sonnet/medium to opus/xhigh in one call). Like the task, the message must be self-contained: the worker sees nothing of this chat.',
     inputSchema: S(
       {
         id: { type: 'string' },
@@ -839,7 +840,7 @@ export const TOOLS: McpEngineTool[] = [
       ['id', 'text'],
     ),
     run: (a) =>
-      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/send`, {
+      api(`/api/climayte/workers/${encodeURIComponent(str(a.id))}/send`, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
@@ -851,9 +852,9 @@ export const TOOLS: McpEngineTool[] = [
       }),
   },
   {
-    name: 'corch_verdict',
+    name: 'climayte_verdict',
     description:
-      "MUTATES: judge a FINISHED Corch worker's result after you checked its proof: `verdict` pass or fail. Every verdict is kept with the model and thinking level that produced the result and what it cost, and corch_scorecard learns from them which setting each kind of task needs (model `auto` in corch_run uses that). A fail needs `note` (what was wrong, self-contained: the worker gets it) and sends the task back to the SAME session one rung up the ladder (Sonnet low, medium, high, then Opus medium, high, xhigh, max); the answer names that `next` setting. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one.",
+      "MUTATES: judge a FINISHED CliMayte worker's result after you checked its proof: `verdict` pass or fail. Every verdict is kept with the model and thinking level that produced the result and what it cost, and climayte_scorecard learns from them which setting each kind of task needs (model `auto` in climayte_run uses that). A fail needs `note` (what was wrong, self-contained: the worker gets it) and sends the task back to the SAME session one rung up the ladder (Sonnet low, medium, high, then Opus medium, high, xhigh, max); the answer names that `next` setting. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one.",
     inputSchema: S(
       {
         id: { type: 'string' },
@@ -865,7 +866,7 @@ export const TOOLS: McpEngineTool[] = [
       ['id', 'verdict'],
     ),
     run: (a) =>
-      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/verdict`, {
+      api(`/api/climayte/workers/${encodeURIComponent(str(a.id))}/verdict`, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
@@ -877,44 +878,44 @@ export const TOOLS: McpEngineTool[] = [
       }),
   },
   {
-    name: 'corch_priority',
+    name: 'climayte_priority',
     description:
-      "MUTATES: change a Corch worker's priority (whole number; corch_run's default is 0). Queued and waiting work starts highest first, then oldest first, so a raised task takes the next free account slot ahead of the rest; a running worker is not stopped. The journal records the change.",
+      "MUTATES: change a CliMayte worker's priority (whole number; climayte_run's default is 0). Queued and waiting work starts highest first, then oldest first, so a raised task takes the next free account slot ahead of the rest; a running worker is not stopped. The journal records the change.",
     inputSchema: S({ id: { type: 'string' }, priority: { type: 'number' } }, ['id', 'priority']),
     run: (a) =>
-      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/priority`, {
+      api(`/api/climayte/workers/${encodeURIComponent(str(a.id))}/priority`, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({ priority: Number(a.priority) }),
       }),
   },
   {
-    name: 'corch_scorecard',
+    name: 'climayte_scorecard',
     description:
-      "What works, per kind of Corch task: every verdict on record summed by model and thinking level (passes, fails, and what a task cost on average as a share of a Pro account's 5-hour window), with `pick` on the setting a model-`auto` task of that kind gets next.",
+      "What works, per kind of CliMayte task: every verdict on record summed by model and thinking level (passes, fails, and what a task cost on average as a share of a Pro account's 5-hour window), with `pick` on the setting a model-`auto` task of that kind gets next.",
     inputSchema: S({}),
-    run: () => api('/api/corch/scorecard'),
+    run: () => api('/api/climayte/scorecard'),
   },
   {
-    name: 'corch_handoff',
+    name: 'climayte_handoff',
     description:
-      'MUTATES: hand a RUNNING Corch worker to a fresh session: after its current step it writes a handoff file, and the task continues in a new, small session (on the account with the most room) that starts from that handoff instead of re-reading the whole conversation. Corch does this by itself when a worker nears its usage limit; call it to free an account or to give a task whose conversation has grown huge a clean start.',
+      'MUTATES: hand a RUNNING CliMayte worker to a fresh session: after its current step it writes a handoff file, and the task continues in a new, small session (on the account with the most room) that starts from that handoff instead of re-reading the whole conversation. CliMayte does this by itself when a worker nears its usage limit; call it to free an account or to give a task whose conversation has grown huge a clean start.',
     inputSchema: S({ id: { type: 'string' } }, ['id']),
     run: (a) =>
-      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/handoff`, {
+      api(`/api/climayte/workers/${encodeURIComponent(str(a.id))}/handoff`, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: '{}',
       }),
   },
   {
-    name: 'corch_cancel',
+    name: 'climayte_cancel',
     description:
-      'MUTATES: stop a Corch worker (`id`) or every worker of a `group`. Messages queued for it are kept (`keptMessages` counts them) and delivered, in order, when it is continued with corch_send.',
+      'MUTATES: stop a CliMayte worker (`id`) or every worker of a `group`. Messages queued for it are kept (`keptMessages` counts them) and delivered, in order, when it is continued with climayte_send.',
     inputSchema: S({ id: { type: 'string' }, group: { type: 'string' } }),
     run: async (a) => {
       if (a.id == null && a.group == null) throw new Error('pass `id` or `group`')
-      return api('/api/corch/cancel', {
+      return api('/api/climayte/cancel', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({

@@ -1,4 +1,4 @@
-// server/tests/mocks/fake-claude.ts — a stand-in for the Claude Code CLI, for corch.test.ts.
+// server/tests/mocks/fake-claude.ts — a stand-in for the Claude Code CLI, for climayte.test.ts.
 //
 // Speaks just enough of `claude -p --output-format stream-json`: reads the prompt on stdin, honours
 // --session-id / --resume and CLAUDE_CONFIG_DIR. An account whose config dir holds a `fake-quota`

@@ -298,7 +298,7 @@ function wallToMs(
  * included); without one, or with a zone this runtime doesn't know, it is the daemon's local time.
  * With a date, the year is inferred from `now` and a result more than a day in the past (a reset
  * across the year boundary) rolls forward a year. Time only means the next such clock time strictly
- * after `now`. Pure + tested so the monitor and Corch schedule against it, not a fuzzy Date.parse.
+ * after `now`. Pure + tested so the monitor and CliMayte schedule against it, not a fuzzy Date.parse.
  */
 export function parseResetTime(resets: string, now = new Date()): string | null {
   if (!resets) return null

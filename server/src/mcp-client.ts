@@ -208,11 +208,11 @@ export const str = (v: unknown): string => String(v ?? '')
  *  110 s and 300 s timed out with nothing returned), so an answer later than that is an answer
  *  lost - and for an act, the caller's only record of what it did. withCallBudget enforces it. */
 export const MCP_CALL_BUDGET_MS = 50_000
-/** The longest a tool WAITS on purpose inside one call: corch_status's watch, an orchestrator
+/** The longest a tool WAITS on purpose inside one call: climayte_status's watch, an orchestrator
  *  run's verdict (runScript). Under MCP_CALL_BUDGET_MS, so the answer that says "still running,
  *  here is the id" is itself never the one the client drops. */
 export const MCP_WAIT_MAX_MS = 45_000
-export const CORCH_MAX_WAIT_S = MCP_WAIT_MAX_MS / 1000
+export const CLIMAYTE_MAX_WAIT_S = MCP_WAIT_MAX_MS / 1000
 // Past this DECLARED run length, orchestrator_run, move_chats and fan_out detach AT ONCE instead
 // of first waiting MCP_WAIT_MAX_MS for a verdict that cannot arrive inside the call (2026-09-11,
 // the lost `sweep --all --yes`; lowered from 120 s on 2026-09-30, the client drops a call at ~60 s).

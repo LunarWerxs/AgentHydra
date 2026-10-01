@@ -62,7 +62,7 @@ const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v)
 // are FITTED TO THE METER, not read off the price list. The price-list ratios (cache read 0.1x
 // input, write 1.25x, output 5x) were the first version and the meter disagrees with them: fitted
 // against the 5-hour utilization Claude Code streams with each request and the desktop accounts'
-// 15-minute usage readings (2026-09-30: 75 Corch intervals and 299 whole 5-hour windows on 47
+// 15-minute usage readings (2026-09-30: 75 CliMayte intervals and 299 whole 5-hour windows on 47
 // accounts, Pro, Max 5x and Max 20x), a 5-minute cache write moves the meter about 32 cache reads' worth
 // and an output token, thinking included, about 310; the price list says 12.5 and 50.
 //

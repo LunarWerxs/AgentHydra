@@ -1,7 +1,7 @@
-// server/src/corch.ts — the RUNTIME half of Corch (docs/CORCH.md): the store, the launch of each
+// server/src/climayte.ts — the RUNTIME half of CliMayte (docs/CLIMAYTE.md): the store, the launch of each
 // attempt, the tick that watches workers, and the API the routes and MCP tools call. The decisions
 // themselves (how an attempt ended, which account is next, how a session moves) live in
-// corch-lib.ts, which is pure and pinned by tests.
+// climayte-lib.ts, which is pure and pinned by tests.
 //
 // WHY (owner, 2026-09-30): "I want this fully delegated ... orchestrating them only to CLI, not
 // desktop instances ... just use all of my CLI accounts." A chat keeps only the orchestration; each
@@ -11,7 +11,7 @@
 // was the cost this removes.
 //
 // VISIBLE, WITHOUT A WINDOW. Workers run with `windowsHide` (no console on his screen, the 2026-08-31
-// ruling) and every one is readable live in the Corch view and through corch_status, and its
+// ruling) and every one is readable live in the CliMayte view and through climayte_status, and its
 // transcript is an ordinary session in that account's folder. headless-policy.ts names this as the
 // one exemption. Nothing here starts on its own: with no worker queued each tick is a no-op.
 
@@ -31,34 +31,33 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { resolveClaudeExe } from './config'
 import {
   appendJournal,
-  type CorchJournalEntry,
-  type CorchJournalEvent,
+  type CliMayteJournalEntry,
+  type CliMayteJournalEvent,
   firstLine,
   formatJournalLine,
   type JournalFilter,
   readJournal,
-} from './corch-journal'
+} from './climayte-journal'
 import {
   aboutToBill,
   addResults,
   addTokens,
   attemptSpend,
-  type CorchAccount,
-  type CorchLiveUsage,
-  type CorchTokens,
-  type CorchWalls,
-  type CorchWorker,
-  type CorchWorkerBrief,
-  type CorchWorkerView,
+  type CliMayteAccount,
+  type CliMayteLiveUsage,
+  type CliMayteTokens,
+  type CliMayteWalls,
+  type CliMayteWorker,
+  type CliMayteWorkerBrief,
+  type CliMayteWorkerView,
   classifyAttempt,
+  climayteEffort,
+  climayteModel,
+  climaytePriority,
   continuationPrompt,
   copySessionTranscript,
-  corchEffort,
-  corchModel,
-  corchPriority,
   dueOrder,
   freshestPct,
   HANDOFF_PROMPT,
@@ -87,23 +86,24 @@ import {
   wallUntil,
   windDownAt,
   windDownMessage,
-} from './corch-lib'
-import { syncOwnerClaude } from './corch-owner-sync'
-import { expectedPct, planFactor, type RunningLoad } from './corch-placement'
-import { launchRunner, readRunnerExit, readRunnerPids } from './corch-runner'
+} from './climayte-lib'
+import { syncOwnerClaude } from './climayte-owner-sync'
+import { expectedPct, planFactor, type RunningLoad } from './climayte-placement'
+import { launchRunner, readRunnerExit, readRunnerPids } from './climayte-runner'
 import {
   attemptUnits,
   bestRung,
-  type CorchKind,
-  type CorchVerdict,
-  corchKind,
+  type CliMayteKind,
+  type CliMayteVerdict,
+  climayteKind,
   ladderIndex,
   ladderModel,
   nextRung,
   pickConfig,
   scoreRows,
   UNITS_PER_PRO_PERCENT,
-} from './corch-scorecard'
+} from './climayte-scorecard'
+import { resolveClaudeExe } from './config'
 import { getCliInstance, listCliInstances, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
@@ -115,8 +115,8 @@ import type { UsageSnapshot } from './types'
 import { parseResetTime } from './usage'
 import { allCachedUsage } from './usage-cache'
 
-export * from './corch-journal'
-export * from './corch-lib'
+export * from './climayte-journal'
+export * from './climayte-lib'
 
 // POINTER_DIR is CONFIG_DIR for the primary install and a side-run's own data dir otherwise, so
 // two daemons never tick and overwrite the same workers.json.
@@ -137,11 +137,11 @@ const JOURNAL_PATH = join(ROOT, 'journal.jsonl')
 const acctLabel = (a: { num: number | null; name: string }): string =>
   a.num === null ? a.name : `#${a.num}`
 
-/** One line in the orchestration journal (corch-journal.ts) for a state change of `w`. */
+/** One line in the orchestration journal (climayte-journal.ts) for a state change of `w`. */
 function journal(
-  w: CorchWorker,
-  event: CorchJournalEvent,
-  details: Omit<Partial<CorchJournalEntry>, 'ts' | 'id' | 'group' | 'title' | 'event'> = {},
+  w: CliMayteWorker,
+  event: CliMayteJournalEvent,
+  details: Omit<Partial<CliMayteJournalEntry>, 'ts' | 'id' | 'group' | 'title' | 'event'> = {},
 ): void {
   appendJournal(JOURNAL_PATH, {
     ts: new Date().toISOString(),
@@ -154,18 +154,18 @@ function journal(
 }
 
 /** The journal in scope, oldest first (the newest `limit`, default 100). */
-export function corchJournal(filter: JournalFilter = {}): CorchJournalEntry[] {
+export function climayteJournal(filter: JournalFilter = {}): CliMayteJournalEntry[] {
   return readJournal(JOURNAL_PATH, filter)
 }
 
 /** The same entries as readable one-line strings (formatJournalLine), newest last. */
-export function corchJournalLines(filter: JournalFilter = {}): string[] {
+export function climayteJournalLines(filter: JournalFilter = {}): string[] {
   const now = new Date()
-  return corchJournal(filter).map((e) => formatJournalLine(e, now))
+  return climayteJournal(filter).map((e) => formatJournalLine(e, now))
 }
 
 interface Store {
-  workers: CorchWorker[]
+  workers: CliMayteWorker[]
   perAccount: Record<string, number>
 }
 const STORE_SPEC: JsonStoreSpec<Store> = {
@@ -173,14 +173,14 @@ const STORE_SPEC: JsonStoreSpec<Store> = {
   decode: (p) => {
     const w = (p as { workers?: unknown })?.workers
     if (!Array.isArray(w)) return null
-    return { workers: w as CorchWorker[], perAccount: (p as Store).perAccount ?? {} }
+    return { workers: w as CliMayteWorker[], perAccount: (p as Store).perAccount ?? {} }
   },
   empty: () => ({ workers: [], perAccount: {} }),
 }
 
-const workers = new Map<string, CorchWorker>()
+const workers = new Map<string, CliMayteWorker>()
 let perAccount: Record<string, number> = {}
-let walls: CorchWalls = {}
+let walls: CliMayteWalls = {}
 let loaded = false
 let started = false
 let timer: ReturnType<typeof setTimeout> | null = null
@@ -198,12 +198,12 @@ interface LogRead {
   /** The CLI said the account ran out and paid extra usage took over (overageStart). */
   overage: { resetsAt: number | null } | null
   /** The newest usage reading the CLI streamed (liveUsage). */
-  live: CorchLiveUsage | null
+  live: CliMayteLiveUsage | null
 }
 const reads = new Map<string, LogRead>()
 /** Each account's newest live usage reading from any of its workers' streams (poll copies it
  *  here). The usage snapshot is refreshed only every 15 minutes; this is seconds old. */
-const liveByAccount = new Map<string, CorchLiveUsage>()
+const liveByAccount = new Map<string, CliMayteLiveUsage>()
 
 /** The live readings are kept on disk too: an account whose workers stopped at its limit has no
  *  stream left to read, and a restart used to drop its last reading, so the tables and the routing
@@ -212,7 +212,7 @@ const liveByAccount = new Map<string, CorchLiveUsage>()
 let liveDirty = false
 function loadLive(): void {
   try {
-    const raw = JSON.parse(readFileSync(LIVE_PATH, 'utf8')) as Record<string, CorchLiveUsage>
+    const raw = JSON.parse(readFileSync(LIVE_PATH, 'utf8')) as Record<string, CliMayteLiveUsage>
     for (const [id, live] of Object.entries(raw)) {
       const prev = liveByAccount.get(id)
       if (live && typeof live.at === 'number' && (!prev || prev.at < live.at))
@@ -231,20 +231,20 @@ function saveLive(): void {
     writeFileSync(tmp, JSON.stringify(Object.fromEntries(liveByAccount)))
     renameSync(tmp, LIVE_PATH)
   } catch (err) {
-    console.error('[corch] could not save live readings:', err)
+    console.error('[climayte] could not save live readings:', err)
   }
 }
 
 /** A copy of each account's newest live reading, for the usage tables (usage-live.ts). */
-export function corchLiveReadings(): Map<string, CorchLiveUsage> {
+export function climayteLiveReadings(): Map<string, CliMayteLiveUsage> {
   load()
   return new Map(liveByAccount)
 }
 
-/** Accounts Corch has walled at a usage limit, with when the wall ends and whether the limit is
+/** Accounts CliMayte has walled at a usage limit, with when the wall ends and whether the limit is
  *  the weekly one: the tables show those as at their limit (usage-live.ts withLimitWall), not the
  *  percentage of a snapshot read before the limit hit (field note 19). */
-export function corchLimitWalls(): Map<string, { until: number; weekly: boolean }> {
+export function climayteLimitWalls(): Map<string, { until: number; weekly: boolean }> {
   load()
   const now = Date.now()
   const out = new Map<string, { until: number; weekly: boolean }>()
@@ -265,7 +265,7 @@ function overageAllowed(): boolean {
     return false
   }
 }
-const listeners = new Set<(w: CorchWorker) => void>()
+const listeners = new Set<(w: CliMayteWorker) => void>()
 
 let claudeCommand: () => string[] = () => [resolveClaudeExe()]
 /** The production pool: every CLI instance with a credential file, with its last usage reading
@@ -273,10 +273,10 @@ let claudeCommand: () => string[] = () => [resolveClaudeExe()]
  *  or revoked login still passes that file check; its first attempt fails `auth` and the account
  *  stays walled until it signs in again (recheckSignedOut), so a dead login costs one quick
  *  failure, once. */
-function signedInAccounts(): CorchAccount[] {
+function signedInAccounts(): CliMayteAccount[] {
   const now = Date.now()
   const cache = allCachedUsage()
-  // A login vetoed by Corch's own signed-out wall stays in the pool, walled, so recheckSignedOut
+  // A login vetoed by CliMayte's own signed-out wall stays in the pool, walled, so recheckSignedOut
   // can find out when it works again.
   return listCliInstances()
     .filter((i) => i.loggedIn || !!i.loginNote)
@@ -317,7 +317,7 @@ function latestUsage(
   manual: UsageSnapshot | null | undefined,
   cache: Record<string, UsageSnapshot> = allCachedUsage(),
 ): UsageSnapshot | null {
-  // The key cliKey (usage-service.ts) builds, spelled out so corch does not load that module and
+  // The key cliKey (usage-service.ts) builds, spelled out so climayte does not load that module and
   // its database for one string.
   const cached = cache[`cli:${id}`] ?? null
   const at = (s: UsageSnapshot | null | undefined): number =>
@@ -342,7 +342,7 @@ const authChecks = new Set<string>()
  *  of a second, no quota. A dead login stays walled, so it never costs another worker a failed
  *  attempt (before this, an expired account took one attempt from some worker every 30 minutes);
  *  a login that works again rejoins the pool at once. */
-function recheckSignedOut(accounts: CorchAccount[], now: number): void {
+function recheckSignedOut(accounts: CliMayteAccount[], now: number): void {
   for (const a of accounts) {
     const wall = walls[a.id]
     // `auth status` passes a login whose organization turned Claude Code off, so only a new login
@@ -355,14 +355,14 @@ function recheckSignedOut(accounts: CorchAccount[], now: number): void {
         try {
           saveWalls()
         } catch (err) {
-          console.error('[corch] could not save walls:', err)
+          console.error('[climayte] could not save walls:', err)
         }
       } else if (wall.cred !== credStamp(a.configDir)) {
         delete walls[a.id]
         try {
           saveWalls()
         } catch (err) {
-          console.error('[corch] could not save walls:', err)
+          console.error('[climayte] could not save walls:', err)
         }
       }
       continue
@@ -383,7 +383,7 @@ function recheckSignedOut(accounts: CorchAccount[], now: number): void {
         try {
           saveWalls()
         } catch (err) {
-          console.error('[corch] could not save walls:', err)
+          console.error('[climayte] could not save walls:', err)
         }
         schedule(0)
       })
@@ -391,27 +391,27 @@ function recheckSignedOut(accounts: CorchAccount[], now: number): void {
 }
 /** Why an account whose credential file exists is nevertheless signed out, or null. Field note 3
  *  (2026-09-30): the CLI instance list said `loggedIn: true` for two accounts whose login was dead,
- *  because it only checks that the file exists. Corch's signed-out wall is the verified answer: set
+ *  because it only checks that the file exists. CliMayte's signed-out wall is the verified answer: set
  *  when an attempt failed to authenticate, and lifted only when `claude auth status` says the login
  *  works (recheckSignedOut, every 30 minutes and whenever the credential file changes). A file
  *  rewritten since the wall (a new sign-in not yet rechecked) is given the benefit of the doubt.
  *  Costs one map lookup and one stat, so the listing stays as fast as it was. */
-export function corchSignedOutReason(id: string, configDir: string): string | null {
+export function climayteSignedOutReason(id: string, configDir: string): string | null {
   load()
   const wall = walls[id]
   if (!isLoginWall(wall?.reason)) return null
   if (wall!.cred !== undefined && wall!.cred !== credStamp(configDir)) return null
   if (wall!.reason === ORG_DISABLED_WALL)
-    return 'Claude Code is turned off for this account\'s organization ("Your organization has disabled Claude subscription access for Claude Code"), so Corch does not use it. Sign it in with a different login to use it again.'
-  return 'Signed out: its credential file is there, but the login failed when Corch used it and has not worked since (checked again every 30 minutes, and as soon as the account signs in again). Sign in again: Quick add, or Log in.'
+    return 'Claude Code is turned off for this account\'s organization ("Your organization has disabled Claude subscription access for Claude Code"), so CliMayte does not use it. Sign it in with a different login to use it again.'
+  return 'Signed out: its credential file is there, but the login failed when CliMayte used it and has not worked since (checked again every 30 minutes, and as soon as the account signs in again). Sign in again: Quick add, or Log in.'
 }
 
-setCliLoginVeto(corchSignedOutReason)
+setCliLoginVeto(climayteSignedOutReason)
 
-let accountsProvider: () => CorchAccount[] = signedInAccounts
+let accountsProvider: () => CliMayteAccount[] = signedInAccounts
 
 /** Tests: run a fake CLI instead of `claude`. null restores the real one. */
-export function setCorchClaudeCommand(argv: string[] | null): void {
+export function setCliMayteClaudeCommand(argv: string[] | null): void {
   claudeCommand = argv ? () => argv : () => [resolveClaudeExe()]
 }
 /** Where the owner's global CLAUDE.md and skills live (`~/.claude`). Off under tests unless a test
@@ -419,15 +419,15 @@ export function setCorchClaudeCommand(argv: string[] | null): void {
 let ownerClaudeDir: string | null =
   process.env.NODE_ENV === 'test' ? null : join(homedir(), '.claude')
 /** Tests: sync the owner's CLAUDE.md and skills from `dir` before each launch. null turns it off. */
-export function setCorchOwnerDir(dir: string | null): void {
+export function setCliMayteOwnerDir(dir: string | null): void {
   ownerClaudeDir = dir
 }
 /** Tests: supply the accounts. null restores the signed-in CLI instances. */
-export function setCorchAccountsProvider(fn: (() => CorchAccount[]) | null): void {
+export function setCliMayteAccountsProvider(fn: (() => CliMayteAccount[]) | null): void {
   accountsProvider = fn ?? signedInAccounts
 }
 
-export function onCorchChange(cb: (w: CorchWorker) => void): () => void {
+export function onCliMayteChange(cb: (w: CliMayteWorker) => void): () => void {
   listeners.add(cb)
   return () => listeners.delete(cb)
 }
@@ -442,7 +442,7 @@ function load(): void {
     if (backfillTokens()) save()
   } else if (read.status !== 'missing') {
     console.error(
-      `[corch] ${STORE_SPEC.path} is ${read.status}; starting with no workers and not overwriting it.`,
+      `[climayte] ${STORE_SPEC.path} is ${read.status}; starting with no workers and not overwriting it.`,
     )
     loaded = false
     return
@@ -456,7 +456,7 @@ function load(): void {
     if (orgWallsFromAttempts()) saveWalls()
   } catch (err) {
     // The conversion holds in memory either way; a failed write must not stop the store loading.
-    console.error('[corch] could not save walls:', err)
+    console.error('[climayte] could not save walls:', err)
   }
   loadLive()
 }
@@ -494,7 +494,7 @@ function saveWalls(): void {
   writeJsonStoreAtomic(WALLS_PATH, walls)
 }
 
-function changed(w: CorchWorker): void {
+function changed(w: CliMayteWorker): void {
   w.updatedAt = Date.now()
   save()
   for (const cb of listeners) {
@@ -506,13 +506,13 @@ function changed(w: CorchWorker): void {
   }
 }
 
-const isActive = (w: CorchWorker): boolean =>
+const isActive = (w: CliMayteWorker): boolean =>
   w.status === 'queued' ||
   w.status === 'running' ||
   w.status === 'waiting' ||
   w.status === 'checking'
 
-/** The task's proof, run by Corch itself (owner, 2026-09-30: "whatever is best for the AI"): an
+/** The task's proof, run by CliMayte itself (owner, 2026-09-30: "whatever is best for the AI"): an
  *  orchestrator that has to remember to judge every result forgets some, and a worker's own "the
  *  tests pass" is a claim. A task with a `check` command is judged by its exit code the moment the
  *  worker reports done; a fail goes back to the same session one rung up the ladder with the end of
@@ -543,7 +543,7 @@ function checkShell(): string {
   return 'bash'
 }
 
-function startCheck(w: CorchWorker): void {
+function startCheck(w: CliMayteWorker): void {
   if (!w.check || checks.has(w.id)) return
   w.status = 'checking'
   w.checkRuns = (w.checkRuns ?? 0) + 1
@@ -588,11 +588,11 @@ function startCheck(w: CorchWorker): void {
   })
 }
 
-function judgeCheck(w: CorchWorker, code: number | null, output: string): void {
+function judgeCheck(w: CliMayteWorker, code: number | null, output: string): void {
   w.status = 'done'
   const cmd = firstLine(w.check, 200)
   if (code === 0) {
-    corchVerdict(w.id, { verdict: 'pass', note: `The check passed: ${cmd}`, by: 'check' })
+    climayteVerdict(w.id, { verdict: 'pass', note: `The check passed: ${cmd}`, by: 'check' })
     return
   }
   const fails =
@@ -600,7 +600,7 @@ function judgeCheck(w: CorchWorker, code: number | null, output: string): void {
   const retry = fails < MAX_CHECK_FAILS
   const note = `The check \`${cmd}\` failed (${code === null ? output : `exit ${code}`}). The end of its output:
 ${code === null ? '' : output.trim()}`
-  corchVerdict(w.id, { verdict: 'fail', note, retry, by: 'check' })
+  climayteVerdict(w.id, { verdict: 'fail', note, retry, by: 'check' })
   if (!retry) {
     w.status = 'failed'
     w.error = `The check still failed after ${MAX_CHECK_FAILS} rounds; it needs the orchestrator. Last: ${firstLine(output)}`
@@ -615,9 +615,9 @@ const isInit = (ev: unknown): boolean =>
 
 /** Workers whose CLI a daemon restart would kill: only attempts the daemon spawned itself (before
  *  runners, 2026-09-30), which sit in its kill-on-close job on Windows. A worker under a runner
- *  (corch-runner.ts) lives outside the daemon and is picked up again after the restart, so it does
+ *  (climayte-runner.ts) lives outside the daemon and is picked up again after the restart, so it does
  *  not hold a restart or an auto-update back. */
-export function corchRunningCount(): number {
+export function climayteRunningCount(): number {
   load()
   let n = 0
   for (const w of workers.values())
@@ -625,10 +625,10 @@ export function corchRunningCount(): number {
   return n
 }
 
-/** The pids of the CLI processes Corch's workers run in now. The extra-usage guard leaves these
- *  to Corch, which stops its own workers at the same line and moves the task on: a kill from
+/** The pids of the CLI processes CliMayte's workers run in now. The extra-usage guard leaves these
+ *  to CliMayte, which stops its own workers at the same line and moves the task on: a kill from
  *  outside would read as 'interrupted' and resume the task on the very account that can bill. */
-export function corchWorkerPids(): Set<number> {
+export function climayteWorkerPids(): Set<number> {
   const pids = new Set<number>()
   for (const w of workers.values()) {
     const at = w.attempts[w.attempts.length - 1]
@@ -644,7 +644,7 @@ export function corchWorkerPids(): Set<number> {
  *  and never killed. Checked once per runner per daemon. */
 const confirmedRunners = new Set<number>()
 
-/** Where a runner attempt's spec goes (corch-runner.ts deletes it once read; its path stays in the
+/** Where a runner attempt's spec goes (climayte-runner.ts deletes it once read; its path stays in the
  *  runner's command line, which is how isOurRunner recognises it). */
 const runnerSpecPath = (log: string): string => `${log}.spec.json`
 
@@ -671,7 +671,7 @@ function isOurRunner(pid: number, log: string): boolean {
  *  then reads it as interrupted); one that wrote no pids within a minute never started. An attempt
  *  the daemon spawned itself is read from its handle, or, with none (the daemon restarted), it
  *  died with that daemon's kill-on-close job on Windows. */
-function attemptExited(w: CorchWorker, at: CorchWorker['attempts'][number]): boolean {
+function attemptExited(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): boolean {
   const runner = at.runner
   if (!runner)
     return (
@@ -692,7 +692,7 @@ function attemptExited(w: CorchWorker, at: CorchWorker['attempts'][number]): boo
 
 /** Kill the attempt's CLI through its runner (the whole tree), if the runner is still this
  *  worker's. Never a bare pid nobody can vouch for. */
-function killAttempt(at: CorchWorker['attempts'][number]): void {
+function killAttempt(at: CliMayteWorker['attempts'][number]): void {
   const pid = at.runner?.pid
   if (!pid || !isOurRunner(pid, at.log)) return
   try {
@@ -710,7 +710,7 @@ function schedule(delay?: number): void {
   const next =
     delay ?? (all.some((w) => w.status === 'running') ? 1_000 : all.some(isActive) ? 3_000 : 15_000)
   timer = setTimeout(
-    () => void tick().catch((err) => console.error('[corch] tick failed:', err)),
+    () => void tick().catch((err) => console.error('[climayte] tick failed:', err)),
     next,
   )
   timer.unref?.()
@@ -722,18 +722,18 @@ async function tick(): Promise<void> {
   try {
     load()
     const now = Date.now()
-    let accounts: CorchAccount[] = []
+    let accounts: CliMayteAccount[] = []
     try {
       accounts = accountsProvider()
     } catch (err) {
-      console.error('[corch] could not list accounts:', err)
+      console.error('[climayte] could not list accounts:', err)
     }
     for (const w of workers.values()) {
       if (w.status !== 'running') continue
       try {
         poll(w, accounts)
       } catch (err) {
-        console.error(`[corch] could not read ${w.id}:`, err)
+        console.error(`[climayte] could not read ${w.id}:`, err)
       }
     }
     saveLive()
@@ -761,7 +761,7 @@ async function tick(): Promise<void> {
         bump(active, w.accountId)
         bump(groupMap(w.group), w.accountId)
       }
-    // Placement (corch-placement.ts): what each task is expected to cost, and what is running where.
+    // Placement (climayte-placement.ts): what each task is expected to cost, and what is running where.
     const rows = scoreRows(workers.values())
     const finished = [...workers.values()]
       .filter((w) => w.status === 'done' && w.tokens)
@@ -773,7 +773,7 @@ async function tick(): Promise<void> {
             0,
           ) / UNITS_PER_PRO_PERCENT,
       }))
-    const expectedOf = (w: CorchWorker): number =>
+    const expectedOf = (w: CliMayteWorker): number =>
       expectedPct({ kind: w.kind, model: ladderModel(w.model), effort: w.effort }, rows, finished)
     const running = new Map<string, RunningLoad[]>()
     const addRunning = (id: string, load: RunningLoad): void => {
@@ -820,7 +820,7 @@ async function tick(): Promise<void> {
           try {
             launch(w, acct, accounts, active.get(acct.id) ?? 0)
           } catch (err) {
-            console.error(`[corch] could not launch ${w.id}:`, err)
+            console.error(`[climayte] could not launch ${w.id}:`, err)
             // A throw after the spawn leaves a live attempt. One before it (a file lock on the
             // transcript copy or the prompt file) is usually passing: retry it, three times per turn.
             if (w.status !== 'running' && w.status !== 'failed') {
@@ -886,7 +886,7 @@ async function tick(): Promise<void> {
           changed(w)
         }
       } catch (err) {
-        console.error(`[corch] could not schedule ${w.id}:`, err)
+        console.error(`[climayte] could not schedule ${w.id}:`, err)
       }
     }
   } finally {
@@ -920,7 +920,7 @@ function peekLog(path: string): LogRead {
   return readInto(path, freshRead())
 }
 
-/** The summary lines of finished attempts, for corchGet: the Corch view asks for the selected
+/** The summary lines of finished attempts, for climayteGet: the CliMayte view asks for the selected
  *  worker every 3 s while any worker runs, and re-parsing a long session's log (megabytes of tool
  *  output) each time would burn the box. Bounded; the oldest entry goes first. */
 const finishedRecent = new Map<string, string[]>()
@@ -1009,8 +1009,8 @@ function tailText(path: string, max: number): string {
  *  turn without being killed (proven live 2026-09-30: the CLI showed the hook's additionalContext
  *  and the model acted on it). */
 function signalWindDown(
-  w: CorchWorker,
-  at: CorchWorker['attempts'][number],
+  w: CliMayteWorker,
+  at: CliMayteWorker['attempts'][number],
   pct: number | null,
 ): void {
   const path = slashed(join(HANDOFFS, `${w.id}-${w.attempts.length - 1}.md`))
@@ -1036,7 +1036,7 @@ function signalWindDown(
  *  limit, where the move (transcript copy) takes over. Run 1: this checked usage but not the worker
  *  caps, so a session wound down "for" #98 (52%, already at its cap) and its continuation went to
  *  the next-best account, at 89-97%, which asked for another handoff at once. */
-function roomElsewhere(w: CorchWorker, from: string, accounts: CorchAccount[]): boolean {
+function roomElsewhere(w: CliMayteWorker, from: string, accounts: CliMayteAccount[]): boolean {
   const active = new Map<string, number>()
   const groupActive = new Map<string, number>()
   for (const o of workers.values()) {
@@ -1048,7 +1048,7 @@ function roomElsewhere(w: CorchWorker, from: string, accounts: CorchAccount[]): 
     accounts: w.accounts,
     accountId: null,
     attempts: [{ account: { id: from, num: null, name: from }, outcome: 'handoff' }],
-  } as Pick<CorchWorker, 'accounts' | 'accountId' | 'attempts'>
+  } as Pick<CliMayteWorker, 'accounts' | 'accountId' | 'attempts'>
   const pick = pickAccount(
     continuation,
     accounts.filter((a) => a.id !== from),
@@ -1065,7 +1065,7 @@ function roomElsewhere(w: CorchWorker, from: string, accounts: CorchAccount[]): 
   )
 }
 
-function poll(w: CorchWorker, accounts?: CorchAccount[]): void {
+function poll(w: CliMayteWorker, accounts?: CliMayteAccount[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (!at) return
   const exited = attemptExited(w, at)
@@ -1107,12 +1107,12 @@ function poll(w: CorchWorker, accounts?: CorchAccount[]): void {
 }
 
 /** The account ran out and started billing paid extra usage. Unless the owner allowed it
- *  (overageAllowed), nobody asked for that spend (Corch exists to use FREE quota across accounts), so the account is walled until its window resets
+ *  (overageAllowed), nobody asked for that spend (CliMayte exists to use FREE quota across accounts), so the account is walled until its window resets
  *  and the running turn is stopped now; finish() then treats it as a limit, and the session moves
  *  to an account with room, or waits for one, without spending another cent of overage. */
 function stopForOverage(
-  w: CorchWorker,
-  at: CorchWorker['attempts'][number],
+  w: CliMayteWorker,
+  at: CliMayteWorker['attempts'][number],
   overage: { resetsAt: number | null; notice?: string },
   running: boolean,
 ): void {
@@ -1124,13 +1124,13 @@ function stopForOverage(
   try {
     saveWalls()
   } catch (err) {
-    console.error('[corch] could not save walls:', err)
+    console.error('[climayte] could not save walls:', err)
   }
   if (running) killAttempt(at)
   changed(w)
 }
 
-function finish(w: CorchWorker, events: unknown[]): void {
+function finish(w: CliMayteWorker, events: unknown[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (at?.outcome !== 'running') return
   if (at.runner) {
@@ -1215,7 +1215,7 @@ function finish(w: CorchWorker, events: unknown[]): void {
       try {
         saveWalls()
       } catch (err) {
-        console.error('[corch] could not save walls:', err)
+        console.error('[climayte] could not save walls:', err)
       }
       w.retries = 0
       w.status = 'queued'
@@ -1232,7 +1232,7 @@ function finish(w: CorchWorker, events: unknown[]): void {
       try {
         saveWalls()
       } catch (err) {
-        console.error('[corch] could not save walls:', err)
+        console.error('[climayte] could not save walls:', err)
       }
       w.status = 'queued'
       break
@@ -1264,7 +1264,7 @@ function finish(w: CorchWorker, events: unknown[]): void {
       w.status = 'failed'
       w.error = v.result || stderr.slice(-1_500) || 'The CLI exited without a result.'
   }
-  // corchSend told the caller a queued message would be delivered; say that it was not.
+  // climayteSend told the caller a queued message would be delivered; say that it was not.
   if (w.status === 'failed' && w.pending.length)
     w.error =
       `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
@@ -1277,10 +1277,10 @@ function finish(w: CorchWorker, events: unknown[]): void {
 /** An attempt refused at sign-in, or stopped at a limit, before it wrote anything to the session
  *  never becomes the session's home (field note 30): the home goes back to the account holding the
  *  newest transcript, which the next launch resumes on or moves from. */
-function keepHome(w: CorchWorker, at: CorchWorker['attempts'][number]): void {
+function keepHome(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): void {
   const sessionId = at.sessionId ?? w.sessionId
   if (!sessionId || w.accountId !== at.account.id) return
-  let accounts: CorchAccount[] = []
+  let accounts: CliMayteAccount[] = []
   try {
     accounts = accountsProvider()
   } catch {
@@ -1301,9 +1301,13 @@ function keepHome(w: CorchWorker, at: CorchWorker['attempts'][number]): void {
 /** The journal line for an attempt that just ended (finish), from its verdict and the worker's
  *  new state. */
 function journalFinish(
-  w: CorchWorker,
-  at: CorchWorker['attempts'][number],
-  v: { outcome: CorchWorker['attempts'][number]['outcome']; notice: string | null; turns: number },
+  w: CliMayteWorker,
+  at: CliMayteWorker['attempts'][number],
+  v: {
+    outcome: CliMayteWorker['attempts'][number]['outcome']
+    notice: string | null
+    turns: number
+  },
   spent: number,
 ): void {
   const account = acctLabel(at.account)
@@ -1351,9 +1355,9 @@ function journalFinish(
 /** An ended attempt's own spend and tokens, from its transcript on the account it ran on
  *  (attemptSpend). */
 function spentOf(
-  w: CorchWorker,
-  at: CorchWorker['attempts'][number],
-): { costUsd: number; tokens: CorchTokens } {
+  w: CliMayteWorker,
+  at: CliMayteWorker['attempts'][number],
+): { costUsd: number; tokens: CliMayteTokens } {
   const dir = getCliInstance(at.account.id)?.configDir
   // null: its log names no session, the CLI never started, so it spent nothing.
   const session = at.sessionId === undefined ? w.sessionId : at.sessionId
@@ -1387,7 +1391,7 @@ function sessionOfLog(log: string): string | null {
 }
 
 /** Charge an ended attempt to its task: its own cost and tokens. Returns the cost. */
-function charge(w: CorchWorker, at: CorchWorker['attempts'][number]): number {
+function charge(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): number {
   const spent = spentOf(w, at)
   at.tokens = spent.tokens
   w.costUsd += spent.costUsd
@@ -1461,16 +1465,16 @@ function hasTranscript(configDir: string, sessionId: string): boolean {
   }
 }
 
-function configDirOf(id: string, accounts: CorchAccount[]): string | null {
+function configDirOf(id: string, accounts: CliMayteAccount[]): string | null {
   return accounts.find((a) => a.id === id)?.configDir ?? getCliInstance(id)?.configDir ?? null
 }
 
 /** Every account that may hold a copy of the task's transcript, for newestTranscript: the ones its
  *  attempts ran on, newest first (an attempt refused at sign-in wrote nothing, so those go last),
- *  then every other account Corch can use. */
+ *  then every other account CliMayte can use. */
 function transcriptCandidates(
-  w: CorchWorker,
-  accounts: CorchAccount[],
+  w: CliMayteWorker,
+  accounts: CliMayteAccount[],
 ): Array<{ id: string; configDir: string }> {
   const ids: string[] = []
   const add = (id: string | null | undefined): void => {
@@ -1489,7 +1493,7 @@ function transcriptCandidates(
 
 /** The session ran somewhere (it holds work a fresh start would lose): an attempt of it got past
  *  sign-in. An attempt recorded before attempts kept their session counts when there was only one. */
-function sessionRan(w: CorchWorker, sessionId: string): boolean {
+function sessionRan(w: CliMayteWorker, sessionId: string): boolean {
   return w.attempts.some(
     (a) =>
       (a.sessionId === sessionId || (a.sessionId === undefined && !w.sessions?.length)) &&
@@ -1499,7 +1503,7 @@ function sessionRan(w: CorchWorker, sessionId: string): boolean {
 }
 
 /** The newest handoff note the task wrote, or null. */
-function lastHandoffNote(w: CorchWorker): string | null {
+function lastHandoffNote(w: CliMayteWorker): string | null {
   for (let i = w.attempts.length - 1; i >= 0; i--) {
     const d = w.attempts[i]!.windDown
     if (d && handoffWritten(d)) return d.path
@@ -1510,9 +1514,9 @@ function lastHandoffNote(w: CorchWorker): string | null {
 /** `activeOnAccount`: workers already running on `acct` (every group) when it was picked; the
  *  journal records it with the account's usage, the two things pickAccount scores on. */
 function launch(
-  w: CorchWorker,
-  acct: CorchAccount,
-  accounts: CorchAccount[],
+  w: CliMayteWorker,
+  acct: CliMayteAccount,
+  accounts: CliMayteAccount[],
   activeOnAccount = 0,
 ): void {
   const n = w.attempts.length
@@ -1539,7 +1543,7 @@ function launch(
       const kept = lastHandoffNote(w)
       w.status = 'failed'
       w.handoffNote = kept
-      w.error = `No account holds this session's transcript (looked on ${transcriptCandidates(w, accounts).length}), so it cannot move to ${label} with its context. ${kept ? `Its last handoff note is ${slashed(kept)}: send it a message (corch_send) and it continues from that note in a fresh session.` : 'It wrote no handoff note: start it again as a new task.'}`
+      w.error = `No account holds this session's transcript (looked on ${transcriptCandidates(w, accounts).length}), so it cannot move to ${label} with its context. ${kept ? `Its last handoff note is ${slashed(kept)}: send it a message (climayte_send) and it continues from that note in a fresh session.` : 'It wrote no handoff note: start it again as a new task.'}`
       journal(w, 'failed', { account: acctLabel(acct), error: firstLine(w.error) })
       changed(w)
       return
@@ -1643,7 +1647,7 @@ function launch(
     '--append-system-prompt',
     WORKER_BRIEF,
   ]
-  // Under a runner (corch-runner.ts), launched outside the daemon: a daemon restart leaves the CLI
+  // Under a runner (climayte-runner.ts), launched outside the daemon: a daemon restart leaves the CLI
   // running and the next daemon reads it on from its files (owner, 2026-09-30). Files, never pipes,
   // so nothing ties the CLI to this process.
   closeSync(openSync(log, 'a'))
@@ -1748,10 +1752,10 @@ function launch(
 const hex = (n: number): string => crypto.randomUUID().replace(/-/g, '').slice(0, n)
 
 /** `model` / `effort` / `kind` at the top level are the group's default: a task that names its
- *  own wins. All are validated (corchModel, corchEffort, corchKind) before anything is created.
+ *  own wins. All are validated (climayteModel, climayteEffort, climayteKind) before anything is created.
  *  Model `auto` lets the scorecard choose model AND effort for the task's kind (default `code`):
  *  the cheapest setting that keeps passing, or one rung cheaper on every 4th pick (pickConfig). */
-export function corchRun(input: {
+export function climayteRun(input: {
   tasks: Array<{
     prompt: string
     cwd: string
@@ -1769,21 +1773,21 @@ export function corchRun(input: {
   effort?: string
   kind?: string
   priority?: number
-}): { group: string; workers: CorchWorkerView[] } {
+}): { group: string; workers: CliMayteWorkerView[] } {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
   const isAuto = (v: unknown): boolean => typeof v === 'string' && v.trim().toLowerCase() === 'auto'
   const groupAuto = isAuto(input.model)
-  const groupModel = groupAuto ? null : corchModel(input.model)
-  const groupEffort = groupAuto || isAuto(input.effort) ? null : corchEffort(input.effort)
-  const groupKind = corchKind(input.kind)
-  const groupPriority = corchPriority(input.priority) ?? 0
+  const groupModel = groupAuto ? null : climayteModel(input.model)
+  const groupEffort = groupAuto || isAuto(input.effort) ? null : climayteEffort(input.effort)
+  const groupKind = climayteKind(input.kind)
+  const groupPriority = climaytePriority(input.priority) ?? 0
   const rows = scoreRows(workers.values())
-  const autoSoFar = new Map<CorchKind, number>()
+  const autoSoFar = new Map<CliMayteKind, number>()
   for (const w of workers.values())
     if (w.auto && w.kind) {
-      const k = w.kind as CorchKind
+      const k = w.kind as CliMayteKind
       autoSoFar.set(k, (autoSoFar.get(k) ?? 0) + 1)
     }
   const settings = input.tasks.map((t, i) => {
@@ -1798,8 +1802,8 @@ export function corchRun(input: {
     )
       throw new Error(`task ${i + 1}: check must be one shell command (at most 2000 characters)`)
     try {
-      const kind = corchKind(t.kind) ?? groupKind
-      const priority = corchPriority(t.priority) ?? groupPriority
+      const kind = climayteKind(t.kind) ?? groupKind
+      const priority = climaytePriority(t.priority) ?? groupPriority
       const own = t.model === undefined || t.model === null || t.model === ''
       if (isAuto(t.model) || (own && groupAuto)) {
         const k = kind ?? 'code'
@@ -1809,8 +1813,8 @@ export function corchRun(input: {
         return { ...pick.config, kind: k, auto: true, reason: pick.reason, priority }
       }
       return {
-        model: corchModel(t.model) ?? groupModel,
-        effort: (isAuto(t.effort) ? null : corchEffort(t.effort)) ?? groupEffort,
+        model: climayteModel(t.model) ?? groupModel,
+        effort: (isAuto(t.effort) ? null : climayteEffort(t.effort)) ?? groupEffort,
         kind,
         auto: false,
         reason: undefined,
@@ -1827,7 +1831,7 @@ export function corchRun(input: {
   if (input.perAccount !== undefined || !(group in perAccount)) perAccount[group] = cap
   const now = Date.now()
   const made = input.tasks.map(
-    (t, i): CorchWorker => ({
+    (t, i): CliMayteWorker => ({
       id: `w-${hex(8)}`,
       group,
       title: t.title?.trim() || t.prompt.replace(/\s+/g, ' ').trim().slice(0, 60),
@@ -1871,18 +1875,18 @@ export function corchRun(input: {
     })
     changed(w)
   }
-  startCorch()
+  startCliMayte()
   schedule(0)
   return { group, workers: made.map((w) => toView(w, now)) }
 }
 
-function matches(w: CorchWorker, f: { group?: string; id?: string; active?: boolean }): boolean {
+function matches(w: CliMayteWorker, f: { group?: string; id?: string; active?: boolean }): boolean {
   return (!f.id || w.id === f.id) && (!f.group || w.group === f.group) && (!f.active || isActive(w))
 }
 
 /** `limit`: keep every active worker and only the `limit` most recently finished ones
  *  (recentWorkers); `brief`: rows without the prompt and with the last 3 attempts (toBrief). */
-export interface CorchListFilter {
+export interface CliMayteListFilter {
   group?: string
   id?: string
   active?: boolean
@@ -1890,9 +1894,11 @@ export interface CorchListFilter {
   brief?: boolean
 }
 
-export function corchList(filter: CorchListFilter & { brief: true }): CorchWorkerBrief[]
-export function corchList(filter?: CorchListFilter): CorchWorkerView[]
-export function corchList(filter: CorchListFilter = {}): CorchWorkerView[] | CorchWorkerBrief[] {
+export function climayteList(filter: CliMayteListFilter & { brief: true }): CliMayteWorkerBrief[]
+export function climayteList(filter?: CliMayteListFilter): CliMayteWorkerView[]
+export function climayteList(
+  filter: CliMayteListFilter = {},
+): CliMayteWorkerView[] | CliMayteWorkerBrief[] {
   load()
   const now = Date.now()
   const views = recentWorkers(
@@ -1902,7 +1908,7 @@ export function corchList(filter: CorchListFilter = {}): CorchWorkerView[] | Cor
   return filter.brief ? views.map(toBrief) : views
 }
 
-export function corchGet(id: string): (CorchWorkerView & { events: string[] }) | null {
+export function climayteGet(id: string): (CliMayteWorkerView & { events: string[] }) | null {
   load()
   const w = workers.get(id)
   if (!w) return null
@@ -1919,15 +1925,15 @@ export function corchGet(id: string): (CorchWorkerView & { events: string[] }) |
   return { ...toView(w, Date.now()), events: events.slice(-60) }
 }
 
-export function corchWait(
-  filter: CorchListFilter,
+export function climayteWait(
+  filter: CliMayteListFilter,
   timeoutMs: number,
-): Promise<CorchWorkerView[] | CorchWorkerBrief[]> {
+): Promise<CliMayteWorkerView[] | CliMayteWorkerBrief[]> {
   load()
   if (![...workers.values()].some((w) => matches(w, filter) && isActive(w)))
-    return Promise.resolve(corchList(filter))
+    return Promise.resolve(climayteList(filter))
   return new Promise((resolve) => {
-    const off = onCorchChange((w) => {
+    const off = onCliMayteChange((w) => {
       if (!matches(w, filter)) return
       done()
     })
@@ -1938,7 +1944,7 @@ export function corchWait(
       settled = true
       clearTimeout(t)
       off()
-      resolve(corchList(filter))
+      resolve(climayteList(filter))
     }
   })
 }
@@ -1947,7 +1953,7 @@ export function corchWait(
  *  finishes the step it is on, writes a handoff, and the task goes on from that handoff in a new
  *  session (on the account with the most room). For freeing an account, or giving a task whose
  *  conversation has grown huge a clean start without losing where it was. */
-export function corchHandoff(id: string): { ok: boolean; message: string } {
+export function climayteHandoff(id: string): { ok: boolean; message: string } {
   load()
   const w = workers.get(id)
   if (!w) return { ok: false, message: 'No such worker.' }
@@ -1965,7 +1971,7 @@ export function corchHandoff(id: string): { ok: boolean; message: string } {
 
 /** Change a task's priority (field note 20): queued and waiting work starts highest first, then
  *  oldest first; a running attempt is not stopped for it. */
-export function corchSetPriority(
+export function climayteSetPriority(
   id: string,
   value: unknown,
 ): { ok: boolean; message: string; priority?: number } {
@@ -1974,7 +1980,7 @@ export function corchSetPriority(
   if (!w) return { ok: false, message: 'No such worker.' }
   let priority: number | null
   try {
-    priority = corchPriority(value)
+    priority = climaytePriority(value)
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) }
   }
@@ -2008,7 +2014,7 @@ const URGENT_PREFIX =
 /** `urgent`: a running worker is stopped cleanly (its attempt recorded with its cost, the transcript
  *  kept) and the same session continues at once with this message first; messages already queued
  *  follow it, in order. Without it, a running worker gets the message when its task ends. */
-export function corchSend(
+export function climayteSend(
   id: string,
   text: string,
   opts: { urgent?: boolean; model?: string; effort?: string } = {},
@@ -2028,8 +2034,8 @@ export function corchSend(
   let model: string | null
   let effort: string | null
   try {
-    model = corchModel(opts.model)
-    effort = corchEffort(opts.effort)
+    model = climayteModel(opts.model)
+    effort = climayteEffort(opts.effort)
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) }
   }
@@ -2099,7 +2105,7 @@ const configLabel = (c: { model: string | null; effort: string | null }): string
  *  setting that produced the result and what that work cost, and the scorecard learns from it. A
  *  fail (with `note`, required: the worker gets it) sends the task back to the same session one
  *  rung up the ladder unless `retry` is false. `kind` tags a task dispatched without one. */
-export function corchVerdict(
+export function climayteVerdict(
   id: string,
   input: { verdict?: unknown; note?: unknown; retry?: unknown; kind?: unknown; by?: unknown },
 ): { ok: boolean; message: string; next?: { model: string; effort: string } | null } {
@@ -2115,7 +2121,7 @@ export function corchVerdict(
   if (input.verdict === 'fail' && !note)
     return { ok: false, message: 'Say what was wrong (note): the worker gets it with the retry.' }
   try {
-    const kind = corchKind(input.kind)
+    const kind = climayteKind(input.kind)
     if (kind) w.kind = kind
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) }
@@ -2124,7 +2130,7 @@ export function corchVerdict(
   const since = w.verdicts?.at(-1)?.at ?? 0
   const ran = w.attempts.filter((a) => a.startedAt >= since)
   const reported = [...ran].reverse().find((a) => a.model)?.model ?? null
-  const verdict: CorchVerdict = {
+  const verdict: CliMayteVerdict = {
     at: Date.now(),
     verdict: input.verdict,
     note,
@@ -2142,7 +2148,7 @@ export function corchVerdict(
       message =
         'Recorded a fail. It already ran on the top setting (Opus 5.5 · max), so it was not sent back.'
     else {
-      const sent = corchSend(
+      const sent = climayteSend(
         id,
         `${SENT_BACK} ${note}\n\nFix it, prove the fix with a command and what it printed, and report again.`,
         next,
@@ -2166,7 +2172,7 @@ export function corchVerdict(
 /** What works, per kind of task: every verdict on record summed by setting, with what a task cost
  *  on average as a share of a Pro 5-hour window, and the setting an `auto` task of that kind gets
  *  next (`pick`; an exploring pick one rung cheaper is not marked). */
-export function corchScorecard(): {
+export function climayteScorecard(): {
   unitsPerPercent: number
   rows: Array<{
     kind: string
@@ -2184,7 +2190,7 @@ export function corchScorecard(): {
   for (const r of rows) {
     if (picks.has(r.kind)) continue
     try {
-      const k = corchKind(r.kind)
+      const k = climayteKind(r.kind)
       if (k) picks.set(r.kind, bestRung(k, rows))
     } catch {
       // a kind no longer on the list: shown, never picked
@@ -2211,7 +2217,7 @@ export function corchScorecard(): {
 /** End a running worker's attempt now: kill its CLI and record the attempt as stopped, with its
  *  spend. False when the CLI had already finished (that turn is recorded instead, by poll) and the
  *  worker is no longer active. */
-function stopRunning(w: CorchWorker, notice: string | null): boolean {
+function stopRunning(w: CliMayteWorker, notice: string | null): boolean {
   const at = w.attempts[w.attempts.length - 1]
   // Stopped just after the CLI finished: record that turn's result, cost and turns first.
   if (w.status === 'running' && at && attemptExited(w, at)) {
@@ -2219,7 +2225,7 @@ function stopRunning(w: CorchWorker, notice: string | null): boolean {
       poll(w)
     } catch (err) {
       // One worker's read error must not stop a group cancel; the kill path below still runs.
-      console.error(`[corch] could not read ${w.id}:`, err)
+      console.error(`[climayte] could not read ${w.id}:`, err)
     }
     if (!isActive(w)) return false
   }
@@ -2237,7 +2243,7 @@ function stopRunning(w: CorchWorker, notice: string | null): boolean {
 
 /** Queued messages survive a cancel (field note 11, 2026-09-30: a cancel dropped three silently):
  *  they are delivered, in order, when the worker is continued, and the answer counts them. */
-export function corchCancel(filter: { id?: string; group?: string }): {
+export function climayteCancel(filter: { id?: string; group?: string }): {
   cancelled: string[]
   keptMessages: Record<string, number>
 } {
@@ -2265,25 +2271,25 @@ export function corchCancel(filter: { id?: string; group?: string }): {
   return { cancelled, keptMessages }
 }
 
-/** What Corch has taken off the chats that handed it work, over every task on record: tasks, the
- *  CLI sessions they ran (attempts), their tokens and cost (the Corch view's counter). */
-export function corchTotals(): {
+/** What CliMayte has taken off the chats that handed it work, over every task on record: tasks, the
+ *  CLI sessions they ran (attempts), their tokens and cost (the CliMayte view's counter). */
+export function climayteTotals(): {
   tasks: number
   /** Attempts ("runs"): every start of the CLI, retries, resumes and handoffs included. */
   sessions: number
   /** Those runs by how they ended (owner, 2026-09-30: "99 CLI sessions" read as 99 sessions when
    *  23 were handoffs, 21 stopped at a limit, 8 resumed after a restart and 7 never signed in). */
-  runsByOutcome: Partial<Record<CorchWorker['attempts'][number]['outcome'], number>>
+  runsByOutcome: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>>
   /** Distinct CLI conversations: a resume, a follow-up or a move continues one; a handoff starts one. */
   cliSessions: number
-  tokens: CorchTokens
+  tokens: CliMayteTokens
   costUsd: number
 } {
   load()
   let sessions = 0
   let costUsd = 0
   let tokens = noTokens()
-  const runsByOutcome: Partial<Record<CorchWorker['attempts'][number]['outcome'], number>> = {}
+  const runsByOutcome: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>> = {}
   const distinct = new Set<string>()
   for (const w of workers.values()) {
     sessions += w.attempts.length
@@ -2321,10 +2327,10 @@ function archiveMove(from: string, to: string): void {
   }
 }
 
-/** Remove finished tasks from Corch's list (owner, 2026-09-30: clear out the test sessions). Their
+/** Remove finished tasks from CliMayte's list (owner, 2026-09-30: clear out the test sessions). Their
  *  records go; their logs and CLI transcripts are MOVED to corch/archive/<stamp>/<task id>/, never
  *  deleted, so a removal can be undone by hand. A task still queued, running or waiting is skipped. */
-export function corchRemove(ids: string[]): {
+export function climayteRemove(ids: string[]): {
   removed: string[]
   skipped: string[]
   archive: string
@@ -2373,7 +2379,7 @@ export function corchRemove(ids: string[]): {
 }
 
 /** Idempotent: load the store and start watching. Called at daemon boot. */
-export function startCorch(): void {
+export function startCliMayte(): void {
   load()
   if (started) return
   started = true

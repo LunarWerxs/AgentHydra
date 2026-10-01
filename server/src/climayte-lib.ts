@@ -1,6 +1,6 @@
-// server/src/corch-lib.ts — the PURE half of Corch (docs/CORCH.md): record types, the worker brief,
+// server/src/climayte-lib.ts — the PURE half of CliMayte (docs/CLIMAYTE.md): record types, the worker brief,
 // and the decisions that must be testable without a process, a timer or the store: how an attempt
-// ended, which account takes the next one, how a session moves between accounts. corch.ts (timers,
+// ended, which account takes the next one, how a session moves between accounts. climayte.ts (timers,
 // store, spawning) imports from here; nothing here starts anything. The one impurity is
 // copySessionTranscript, which copies files with node:fs.
 //
@@ -10,8 +10,8 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { type CorchPlacement, FIT_PCT, projectedPct } from './corch-placement'
-import { type CorchVerdict, UNITS_PER_PRO_PERCENT } from './corch-scorecard'
+import { type CliMaytePlacement, FIT_PCT, projectedPct } from './climayte-placement'
+import { type CliMayteVerdict, UNITS_PER_PRO_PERCENT } from './climayte-scorecard'
 import { priceTokens } from './pricing'
 import {
   classifyLimit,
@@ -22,11 +22,11 @@ import {
 } from './rate-limit-signal'
 import { sumTranscriptTokens } from './usage-tokens'
 
-export type CorchStatus =
+export type CliMayteStatus =
   | 'queued'
   | 'running'
   | 'waiting'
-  | 'checking' // the worker reported done; Corch is running the task's `check` command
+  | 'checking' // the worker reported done; CliMayte is running the task's `check` command
   | 'done'
   | 'failed'
   | 'cancelled'
@@ -42,14 +42,14 @@ export type AttemptOutcome =
   | 'error'
   | 'cancelled'
 
-export interface CorchAccountRef {
+export interface CliMayteAccountRef {
   id: string
   num: number | null
   name: string
 }
 
-export interface CorchAttempt {
-  account: CorchAccountRef
+export interface CliMayteAttempt {
+  account: CliMayteAccountRef
   pid: number | null
   log: string // absolute path of this attempt's stream-json stdout log
   errLog: string // absolute path of its stderr log
@@ -62,7 +62,7 @@ export interface CorchAttempt {
   daemonPid?: number // the daemon that launched it; its handle dies with that daemon
   overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
   windDown?: { at: number; pct: number | null; path: string } // asked to hand off to `path` (pct null: on request)
-  tokens?: CorchTokens // this attempt's own tokens (attemptSpend); absent on attempts before 2026-09-30
+  tokens?: CliMayteTokens // this attempt's own tokens (attemptSpend); absent on attempts before 2026-09-30
   /** The session this attempt ran in. A planned handoff starts a new one, so the worker's current
    *  `sessionId` is not every attempt's. null: the log names none (the CLI never started). */
   sessionId?: string | null
@@ -74,24 +74,24 @@ export interface CorchAttempt {
   requested?: { model: string | null; effort: string | null }
   /** The model the CLI reported in its system/init event: what really ran. */
   model?: string
-  /** Run under a runner outside the daemon (corch-runner.ts), so a daemon restart leaves it running.
+  /** Run under a runner outside the daemon (climayte-runner.ts), so a daemon restart leaves it running.
    *  `pid` is the runner's, filled from `pidFile` once it has started the CLI; the CLI's own is the
    *  attempt's `pid`. Absent on attempts spawned by the daemon directly (before 2026-09-30). */
   runner?: { pid: number | null; pidFile: string; exitFile: string; launchedAt: number }
 }
 
-/** Tokens a Corch session ran, from its transcript: what Corch took off the orchestrating chat
+/** Tokens a CliMayte session ran, from its transcript: what CliMayte took off the orchestrating chat
  *  (owner, 2026-09-30: record each session's tokens, and count the total offloaded). */
-export interface CorchTokens {
+export interface CliMayteTokens {
   input: number
   output: number
   cacheRead: number
   cacheWrite: number
 }
 
-export const noTokens = (): CorchTokens => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
+export const noTokens = (): CliMayteTokens => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 
-export function addTokens(a: CorchTokens | undefined, b: CorchTokens): CorchTokens {
+export function addTokens(a: CliMayteTokens | undefined, b: CliMayteTokens): CliMayteTokens {
   const t = a ?? noTokens()
   return {
     input: t.input + b.input,
@@ -101,7 +101,7 @@ export function addTokens(a: CorchTokens | undefined, b: CorchTokens): CorchToke
   }
 }
 
-export interface CorchWorker {
+export interface CliMayteWorker {
   id: string // short id, e.g. 'w-' + 8 hex chars
   group: string // caller-chosen or generated 'g-' + 6 hex; groups one orchestration
   title: string // short label (caller's or the first 60 chars of the prompt)
@@ -111,10 +111,10 @@ export interface CorchWorker {
   model: string | null
   effort: string | null
   accounts: string[] | null // restrict to these CLI instance ids (null = every signed-in one)
-  status: CorchStatus
-  sessionId: string | null // minted by Corch before the first launch (`--session-id`)
+  status: CliMayteStatus
+  sessionId: string | null // minted by CliMayte before the first launch (`--session-id`)
   accountId: string | null // the account holding the session now
-  attempts: CorchAttempt[]
+  attempts: CliMayteAttempt[]
   result: string | null // the report: `results` joined (joinResults), oldest turn first
   /** Each turn's closing text for the current message, oldest first (addResults caps it). A repo's
    *  Stop hook can force extra turns after the report (field note 13); each one is kept here. Absent
@@ -123,21 +123,21 @@ export interface CorchWorker {
   error: string | null
   lastActivity: string | null // one line: the newest event summarised (summarizeEvent)
   costUsd: number // summed over every attempt's own spend (attemptSpend), from the transcript
-  tokens?: CorchTokens // summed the same way; absent on tasks recorded before 2026-09-30
+  tokens?: CliMayteTokens // summed the same way; absent on tasks recorded before 2026-09-30
   turns: number // summed `result.num_turns`
   moves: number // how many times the session changed account
   retries: number // transient or interrupted retries used in the current turn
   notBefore: number | null // epoch ms; a transient retry waits until then
   revived?: boolean // a message revived it after it stopped: deliver that message next
   sessions?: string[] // earlier sessions of this task, oldest first (each handoff starts a new one)
-  /** The kind of work (corch-scorecard CORCH_KINDS): the scorecard learns what each kind needs. */
+  /** The kind of work (climayte-scorecard CLIMAYTE_KINDS): the scorecard learns what each kind needs. */
   kind?: string | null
-  /** Corch chose `model` and `effort` from the scorecard (dispatched with model `auto`). */
+  /** CliMayte chose `model` and `effort` from the scorecard (dispatched with model `auto`). */
   auto?: boolean
-  /** Each judgement of its result, oldest first (corchVerdict). */
-  verdicts?: CorchVerdict[]
-  /** A shell command that proves the task is done (exit 0). Corch runs it in `cwd` after the worker
-   *  reports, records the verdict itself and sends a fail back one rung up (corch.ts startCheck). */
+  /** Each judgement of its result, oldest first (climayteVerdict). */
+  verdicts?: CliMayteVerdict[]
+  /** A shell command that proves the task is done (exit 0). CliMayte runs it in `cwd` after the worker
+   *  reports, records the verdict itself and sends a fail back one rung up (climayte.ts startCheck). */
   check?: string | null
   /** How many times `check` has run. */
   checkRuns?: number
@@ -150,20 +150,20 @@ export interface CorchWorker {
   updatedAt: number
 }
 
-export interface CorchAccount {
+export interface CliMayteAccount {
   id: string
   num: number | null
   name: string
   configDir: string
   sessionPct: number | null
   weekPct: number | null
-  /** How many Pro windows its 5-hour window holds (corch-placement planFactor): Pro 1, Max 5x 5. */
+  /** How many Pro windows its 5-hour window holds (climayte-placement planFactor): Pro 1, Max 5x 5. */
   planFactor?: number
 }
 
 /** `cred` (signed-out walls only): the mtime of the account's `.credentials.json` when it was
  *  walled, so a sign-in that rewrites the file is noticed before the wall runs out. */
-export type CorchWalls = Record<string, { until: number; reason: string; cred?: number | null }>
+export type CliMayteWalls = Record<string, { until: number; reason: string; cred?: number | null }>
 
 /** A usage reading counts only while its window is open. Once `resetsAt` has passed, the
  *  percentage describes a window that no longer exists, and an old 99% would keep an account
@@ -179,7 +179,7 @@ export function livePct(
 
 /** An account's live usage as a running CLI streamed it (liveUsage): percentages 0..100, resets
  *  and `at` (when it was read) in epoch ms. A window the event did not carry is null. */
-export interface CorchLiveUsage {
+export interface CliMayteLiveUsage {
   sessionPct: number | null
   sessionResetsAt: number | null
   weekPct: number | null
@@ -194,7 +194,7 @@ export interface CorchLiveUsage {
  *  "isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.52,"resetsAt":1790803800},
  *  "seven_day":{"utilization":0.03,"resetsAt":1791356400}}}` (utilization 0..1, resetsAt epoch
  *  seconds). Null for any other event, or one with neither window. */
-export function liveUsage(raw: unknown, at: number): CorchLiveUsage | null {
+export function liveUsage(raw: unknown, at: number): CliMayteLiveUsage | null {
   const ev = raw as any
   if (ev?.type !== 'rate_limit_event' || ev.parent_tool_use_id) return null
   const windows = ev.rate_limit_info?.unifiedWindows
@@ -221,7 +221,7 @@ export function liveUsage(raw: unknown, at: number): CorchLiveUsage | null {
 }
 
 /** The line an account that can bill (paid extra usage switched on) is stopped at: 98% of its
- *  5-hour window or 99% of its week. Corch's workers and the extra-usage guard (extra-usage.ts)
+ *  5-hour window or 99% of its week. CliMayte's workers and the extra-usage guard (extra-usage.ts)
  *  both use it, so every kind of session stops at the same place. */
 export const BILL_GUARD_SESSION_PCT = 98
 export const BILL_GUARD_WEEK_PCT = 99
@@ -231,7 +231,7 @@ export const BILL_GUARD_WEEK_PCT = 99
  *  'rejected' event would already have billed that request. Measured 2026-09-30: of the four CLI
  *  accounts only #90 reports `overageStatus: "allowed"`; the others stop at their limit and cannot
  *  bill. Null when the reading says nothing needs stopping. */
-export function aboutToBill(live: CorchLiveUsage | null): { resetsAt: number | null } | null {
+export function aboutToBill(live: CliMayteLiveUsage | null): { resetsAt: number | null } | null {
   if (!live?.overageAllowed) return null
   if (live.sessionPct !== null && live.sessionPct >= BILL_GUARD_SESSION_PCT)
     return { resetsAt: live.sessionResetsAt }
@@ -255,17 +255,17 @@ export function freshestPct(
 }
 
 /** The worker minus the long prompt and the log paths, plus what a reader wants at a glance. */
-export type CorchWorkerView = Omit<CorchWorker, 'prompt' | 'attempts' | 'verdicts'> & {
+export type CliMayteWorkerView = Omit<CliMayteWorker, 'prompt' | 'attempts' | 'verdicts'> & {
   prompt: string // first 300 chars
   /** Its verdicts, with what each judged stretch of work cost as a share of a Pro 5-hour window. */
-  verdicts?: Array<Omit<CorchVerdict, 'units'> & { pct: number | null }>
+  verdicts?: Array<Omit<CliMayteVerdict, 'units'> & { pct: number | null }>
   account: string | null // `#<num> <name>`
   ranS: number // seconds its CLI sessions actually ran, summed over every attempt
   /** The model the CLI reported at init on its newest attempt that got that far (`model` and
    *  `effort` are what was asked for). */
   reportedModel: string | null
   attempts: Array<{
-    account: CorchAccountRef
+    account: CliMayteAccountRef
     outcome: AttemptOutcome
     notice: string | null
     requested?: { model: string | null; effort: string | null }
@@ -274,9 +274,9 @@ export type CorchWorkerView = Omit<CorchWorker, 'prompt' | 'attempts' | 'verdict
 }
 
 /** The models a worker may run (owner, 2026-09-30: Opus 5.5 or Sonnet 5.5), by the names the CLI
- *  accepts for them (`claude --help`: an alias or the full name). Corch passes the full id, so a
+ *  accepts for them (`claude --help`: an alias or the full name). CliMayte passes the full id, so a
  *  later alias move cannot change what a recorded task asked for. */
-export const CORCH_MODELS: Readonly<Record<string, string>> = {
+export const CLIMAYTE_MODELS: Readonly<Record<string, string>> = {
   opus: 'claude-opus-5-5',
   'opus-5.5': 'claude-opus-5-5',
   'opus-5-5': 'claude-opus-5-5',
@@ -287,15 +287,15 @@ export const CORCH_MODELS: Readonly<Record<string, string>> = {
   'claude-sonnet-5-5': 'claude-sonnet-5-5',
 }
 /** `claude --effort <level>` (2.1.284): how hard the model thinks on every turn. */
-export const CORCH_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+export const CLIMAYTE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
 const blank = (v: unknown): boolean => v === undefined || v === null || v === ''
 
 /** The full model id for `v`, null when none was asked for. Throws on anything else, naming the
  *  valid values: junk must never reach the CLI. */
-export function corchModel(v: unknown): string | null {
+export function climayteModel(v: unknown): string | null {
   if (blank(v)) return null
-  const id = typeof v === 'string' ? CORCH_MODELS[v.trim().toLowerCase()] : undefined
+  const id = typeof v === 'string' ? CLIMAYTE_MODELS[v.trim().toLowerCase()] : undefined
   if (!id)
     throw new Error(
       `unknown model '${String(v)}': use opus or sonnet (or claude-opus-5-5, claude-sonnet-5-5)`,
@@ -304,16 +304,16 @@ export function corchModel(v: unknown): string | null {
 }
 
 /** The effort level for `v`, null when none was asked for. Throws on anything else. */
-export function corchEffort(v: unknown): string | null {
+export function climayteEffort(v: unknown): string | null {
   if (blank(v)) return null
   const level = typeof v === 'string' ? v.trim().toLowerCase() : ''
-  if (!(CORCH_EFFORTS as readonly string[]).includes(level))
-    throw new Error(`unknown effort '${String(v)}': use ${CORCH_EFFORTS.join(', ')}`)
+  if (!(CLIMAYTE_EFFORTS as readonly string[]).includes(level))
+    throw new Error(`unknown effort '${String(v)}': use ${CLIMAYTE_EFFORTS.join(', ')}`)
   return level
 }
 
 export const WORKER_BRIEF =
-  "You are a Corch worker: a Claude Code CLI session that AgentHydra started on one of the owner's accounts, at the owner's request, to do one delegated task for an orchestrating chat. Do the whole task yourself, in this session. Nobody is watching to answer questions, so make the reasonable call and say which call you made. Follow the repository's own rules. Commit only the files you changed, and push if the repository's rules say to. Never read or print a secret value. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
+  "You are a CliMayte worker: a Claude Code CLI session that AgentHydra started on one of the owner's accounts, at the owner's request, to do one delegated task for an orchestrating chat. Do the whole task yourself, in this session. Nobody is watching to answer questions, so make the reasonable call and say which call you made. Follow the repository's own rules. Commit only the files you changed, and push if the repository's rules say to. Never read or print a secret value. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
 
 export const HANDOFF_PROMPT =
   'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.'
@@ -334,7 +334,7 @@ export const WIND_DOWN_SESSION_PCT = 85
 export const WIND_DOWN_WEEK_PCT = 95
 
 /** The percentage that calls for a wind-down now, or null. */
-export function windDownAt(live: CorchLiveUsage | null): number | null {
+export function windDownAt(live: CliMayteLiveUsage | null): number | null {
   if (live?.sessionPct != null && live.sessionPct >= WIND_DOWN_SESSION_PCT) return live.sessionPct
   if (live?.weekPct != null && live.weekPct >= WIND_DOWN_WEEK_PCT) return live.weekPct
   return null
@@ -370,10 +370,10 @@ export function continuationPrompt(
 }
 
 export const PRE_OVERAGE_NOTICE =
-  'The account reached 98% of its limit and has paid extra usage switched on, so Corch stopped the turn before it could bill and moved the session to an account with free quota.'
+  'The account reached 98% of its limit and has paid extra usage switched on, so CliMayte stopped the turn before it could bill and moved the session to an account with free quota.'
 
 export const OVERAGE_NOTICE =
-  "The account's 5-hour limit ran out and it started spending paid extra usage, so Corch stopped the turn and moved the session to an account with free quota."
+  "The account's 5-hour limit ran out and it started spending paid extra usage, so CliMayte stopped the turn and moved the session to an account with free quota."
 
 /** The CLI's own sign that an account ran out and PAID EXTRA USAGE took over: a main-agent
  *  `rate_limit_event` with status 'rejected' whose overage is in use. Measured live on #90,
@@ -422,7 +422,7 @@ export function scrubbedEnv(configDir: string, workerId?: string): Record<string
     if (v !== undefined && !ENV_SCRUB.test(k)) env[k] = v
   }
   env.CLAUDE_CONFIG_DIR = configDir
-  if (workerId) env.AGENTHYDRA_CORCH_WORKER = workerId
+  if (workerId) env.AGENTHYDRA_CLIMAYTE_WORKER = workerId
   return env
 }
 
@@ -619,7 +619,7 @@ export function wallUntil(
 
 /** What one attempt spent: the turns its session transcript recorded on that attempt's account
  *  between its start and its end, priced through the product's one per-turn parser. This is the
- *  only pricing Corch uses. The CLI's `result.total_cost_usd` cannot be: on a resumed session it is
+ *  only pricing CliMayte uses. The CLI's `result.total_cost_usd` cannot be: on a resumed session it is
  *  the WHOLE session's cost so far (measured 2026-09-30: a one-turn follow-up after a $4.67 turn
  *  reported $6.44 = $4.67 + $1.77), so adding it per attempt counted every earlier turn again on
  *  every follow-up, handoff and resume. A killed or stopped attempt writes no result at all, and
@@ -633,7 +633,7 @@ export function attemptSpend(
   sessionId: string,
   startedAt: number,
   endedAt: number,
-): { costUsd: number; tokens: CorchTokens } {
+): { costUsd: number; tokens: CliMayteTokens } {
   const root = join(configDir, 'projects')
   let files: string[] = []
   try {
@@ -735,16 +735,16 @@ export const ACTIVE_WEIGHT = 100
  *  `allowFull` (the owner allowed paid extra usage): accounts at or above the 98% session / 99%
  *  weekly caps stay eligible, but only after every account below them. */
 export function pickAccount(
-  worker: Pick<CorchWorker, 'accounts' | 'accountId' | 'attempts'>,
-  accounts: CorchAccount[],
-  walls: CorchWalls,
+  worker: Pick<CliMayteWorker, 'accounts' | 'accountId' | 'attempts'>,
+  accounts: CliMayteAccount[],
+  walls: CliMayteWalls,
   active: Map<string, number>,
   perAccount: number,
   now: number,
   groupActive: Map<string, number> = active,
   allowFull = false,
-  placement?: CorchPlacement,
-): CorchAccount | null {
+  placement?: CliMaytePlacement,
+): CliMayteAccount | null {
   const lastAttempt = worker.attempts[worker.attempts.length - 1]
   const failedId =
     lastAttempt && (lastAttempt.outcome === 'quota' || lastAttempt.outcome === 'auth')
@@ -753,20 +753,20 @@ export function pickAccount(
   // After a handoff the next session is a fresh one: no home to keep, and the account it left is
   // only nudged back (it may well be the one with the most room: a handoff on request).
   const handedOffFrom = lastAttempt?.outcome === 'handoff' ? lastAttempt.account.id : null
-  const load = (a: CorchAccount): number => active.get(a.id) ?? 0
-  const full = (a: CorchAccount): boolean =>
+  const load = (a: CliMayteAccount): number => active.get(a.id) ?? 0
+  const full = (a: CliMayteAccount): boolean =>
     (a.sessionPct !== null && a.sessionPct >= BILL_GUARD_SESSION_PCT) ||
     (a.weekPct !== null && a.weekPct >= BILL_GUARD_WEEK_PCT)
   // Past the wind-down line, new work there would be asked to hand off again at once (measured
   // live: a continuation placed on #84 at 91% wound down immediately, while #83 sat at 58%).
-  const near = (a: CorchAccount): boolean =>
+  const near = (a: CliMayteAccount): boolean =>
     (a.sessionPct !== null && a.sessionPct >= WIND_DOWN_SESSION_PCT) ||
     (a.weekPct !== null && a.weekPct >= WIND_DOWN_WEEK_PCT)
   // Past the line an account takes no NEW work: a new task, a handoff's continuation or a moved
   // session is told to hand off within a few calls, or hits the limit on its first. Run 1, 19:32
   // to 19:36: twenty such hops at 89-97%, about 290k tokens and $0.75 each, and seven tasks ended up
   // waiting anyway. Only the session already on it carries on there (its home); the rest wait.
-  const keepsHome = (a: CorchAccount): boolean =>
+  const keepsHome = (a: CliMayteAccount): boolean =>
     !handedOffFrom && a.id === worker.accountId && a.id !== failedId
   const eligible = accounts.filter(
     (a) =>
@@ -784,9 +784,9 @@ export function pickAccount(
         (a) => a.id === worker.accountId && a.id !== failedId && (!full(a) || eligible.every(full)),
       )
   if (home) return home
-  // With a placement (corch-placement.ts): where the task is projected to finish under FIT_PCT,
+  // With a placement (climayte-placement.ts): where the task is projected to finish under FIT_PCT,
   // counting what the work already running there still owes; else the flat ACTIVE_WEIGHT spread.
-  const base = (a: CorchAccount): number => {
+  const base = (a: CliMayteAccount): number => {
     if (!placement) return Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) + ACTIVE_WEIGHT * load(a)
     const projected = projectedPct(
       a,
@@ -796,19 +796,19 @@ export function pickAccount(
     )
     return Math.max(projected, a.weekPct ?? 50) + (projected <= FIT_PCT ? 0 : 200)
   }
-  const score = (a: CorchAccount): number =>
+  const score = (a: CliMayteAccount): number =>
     base(a) +
     (full(a) ? 500 : 0) +
     (near(a) ? 300 : 0) +
     (a.id === handedOffFrom ? 100 : 0) +
     (a.id === failedId ? 1000 : 0)
-  const byNum = (a: CorchAccount): number => a.num ?? Number.MAX_SAFE_INTEGER
+  const byNum = (a: CliMayteAccount): number => a.num ?? Number.MAX_SAFE_INTEGER
   eligible.sort((a, b) => score(a) - score(b) || byNum(a) - byNum(b))
   return eligible[0] ?? null
 }
 
 /** A task's priority: a whole number, higher starts first; absent is 0. */
-export function corchPriority(v: unknown): number | null {
+export function climaytePriority(v: unknown): number | null {
   if (v === undefined || v === null || v === '') return null
   const n = typeof v === 'string' ? Number(v) : v
   if (typeof n !== 'number' || !Number.isInteger(n) || Math.abs(n) > 1000)
@@ -820,8 +820,8 @@ export function corchPriority(v: unknown): number | null {
  *  note 20 (run 1, 19:45): with every account full, the owner's ASAP item (the Events deploy) waited
  *  behind sweep follow-ups for the 23:21 reset, because waiting work started strictly oldest-first. */
 export function dueOrder(
-  a: Pick<CorchWorker, 'priority' | 'createdAt'>,
-  b: Pick<CorchWorker, 'priority' | 'createdAt'>,
+  a: Pick<CliMayteWorker, 'priority' | 'createdAt'>,
+  b: Pick<CliMayteWorker, 'priority' | 'createdAt'>,
 ): number {
   return (b.priority ?? 0) - (a.priority ?? 0) || a.createdAt - b.createdAt
 }
@@ -900,7 +900,7 @@ function mergeNewer(from: string, to: string): void {
   }
 }
 
-const isLive = (w: Pick<CorchWorker, 'status'>): boolean =>
+const isLive = (w: Pick<CliMayteWorker, 'status'>): boolean =>
   w.status === 'queued' ||
   w.status === 'running' ||
   w.status === 'waiting' ||
@@ -910,9 +910,9 @@ const isLive = (w: Pick<CorchWorker, 'status'>): boolean =>
 export const RECENT_FINISHED = 20
 
 /** Every active worker plus the `limit` most recently finished ones (by their last change), newest
- *  first by creation. Field note 1 (2026-09-30): an unscoped corch_status answered all 141 workers
+ *  first by creation. Field note 1 (2026-09-30): an unscoped climayte_status answered all 141 workers
  *  ever recorded, 51k characters, and overflowed the tool result. `limit` undefined keeps them all. */
-export function recentWorkers<T extends Pick<CorchWorker, 'status' | 'createdAt' | 'updatedAt'>>(
+export function recentWorkers<T extends Pick<CliMayteWorker, 'status' | 'createdAt' | 'updatedAt'>>(
   ws: T[],
   limit: number | undefined,
 ): T[] {
@@ -931,16 +931,16 @@ export function recentWorkers<T extends Pick<CorchWorker, 'status' | 'createdAt'
 
 /** A list row for an orchestrator: no prompt (it wrote it) and only the last 3 attempts, the bulk
  *  of the stored record after results (measured on 142 real workers: attempts 82k characters,
- *  results 44k, prompts 21k). The full record is corch_status { id }. */
-export type CorchWorkerBrief = Omit<CorchWorkerView, 'prompt' | 'results'> & {
+ *  results 44k, prompts 21k). The full record is climayte_status { id }. */
+export type CliMayteWorkerBrief = Omit<CliMayteWorkerView, 'prompt' | 'results'> & {
   attemptCount: number
 }
-export function toBrief(v: CorchWorkerView): CorchWorkerBrief {
+export function toBrief(v: CliMayteWorkerView): CliMayteWorkerBrief {
   const { prompt: _prompt, results: _results, ...rest } = v
   return { ...rest, attempts: v.attempts.slice(-3), attemptCount: v.attempts.length }
 }
 
-export function toView(w: CorchWorker, now: number): CorchWorkerView {
+export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
   return {

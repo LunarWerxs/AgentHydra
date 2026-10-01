@@ -17,8 +17,8 @@ python scripts/quota-weights/final.py
 
 | Script | What it does |
 | --- | --- |
-| `build.py` | Reads every assistant request (deduplicated by message and request id) from each CLI instance's config dir and from `~/.claude/projects`, attributing desktop chats through each profile's `claude-code-sessions`. Reads meter readings from Corch stream logs (per request), AgentHydra's `usage-history.json` and each desktop profile's `plan-usage-history.json`. Writes `data.pkl` to `QUOTA_WEIGHTS_DATA` (default `~/.agenthydra/quota-weights`), never into the repo. About 3 minutes over 25 GB of transcripts. |
-| `analyze.py` | Library: per-account cumulative spend, Corch intervals, whole 5-hour windows, the scaled non-negative least-squares fit (one free scale per account, so Pro and Max windows pool). |
+| `build.py` | Reads every assistant request (deduplicated by message and request id) from each CLI instance's config dir and from `~/.claude/projects`, attributing desktop chats through each profile's `claude-code-sessions`. Reads meter readings from CliMayte stream logs (per request), AgentHydra's `usage-history.json` and each desktop profile's `plan-usage-history.json`. Writes `data.pkl` to `QUOTA_WEIGHTS_DATA` (default `~/.agenthydra/quota-weights`), never into the repo. About 3 minutes over 25 GB of transcripts. |
+| `analyze.py` | Library: per-account cumulative spend, CliMayte intervals, whole 5-hour windows, the scaled non-negative least-squares fit (one free scale per account, so Pro and Max windows pool). |
 | `fit.py` | Read, write and output ratios per source and per tier, to see whether the sources agree. |
 | `evaluate.py` | The budget replay: calibrate on the last 6 hours, predict the next hour (5-hour meter) or 6 hours (weekly meter); leave-one-account-out and cross-group splits. |
 | `eval_mult.py` | Model multipliers and the cache-write TTL split, compared on the same replay. |
@@ -26,7 +26,7 @@ python scripts/quota-weights/final.py
 
 ## What the 2026-09-30 run found
 
-75 Corch intervals and 299 whole 5-hour windows on 47 accounts (8 Pro, 7 Max 5x, 13 Max 20x and
+75 CliMayte intervals and 299 whole 5-hour windows on 47 accounts (8 Pro, 7 Max 5x, 13 Max 20x and
 19 whose plan AgentHydra has not recorded).
 
 - Relative to a cache read, a 5-minute cache write fills the meter about 32 times as fast and an
@@ -38,11 +38,11 @@ python scripts/quota-weights/final.py
 - Held out (each account scored by weights fitted without it), against the weekly meter the budget
   calibrates on: median miss 3.60 to 2.66 points per 6 hours, mean 13.0 to 9.5 (1,213
   predictions). On the 5-hour meter: median 3.06 to 1.68 points per hour, mean 6.4 to 5.1 (998).
-- Fitting on one group and testing on another (desktop and Corch CLI, Max 5x and Max 20x, Pro and
+- Fitting on one group and testing on another (desktop and CliMayte CLI, Max 5x and Max 20x, Pro and
   Max) improved the median in every split but one: Max to Pro on the 5-hour meter, 30 predictions,
   mean 5.9 to 6.9, median 2.9 to 2.8.
 
 Limits: about 16% of desktop requests belong to chats whose session files are gone, so the
 desktop windows carry usage the scripts cannot attribute (windows where the meter rose with no
-recorded request are dropped). Corch Pro accounts burn a 5-hour window too fast for a 6-hour
+recorded request are dropped). CliMayte Pro accounts burn a 5-hour window too fast for a 6-hour
 calibration, so on the 5-hour meter they only train and never score.

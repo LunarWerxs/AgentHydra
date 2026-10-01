@@ -1,14 +1,14 @@
-// server/src/usage-live.ts — the usage numbers the tables show, kept as fresh as Corch's workers.
+// server/src/usage-live.ts — the usage numbers the tables show, kept as fresh as CliMayte's workers.
 //
 // The usage sweep reads each account every 30 minutes (usage-refresh.ts, an owner ceiling), so a
 // busy account's numbers can lag by most of half an hour. Found 2026-09-30: #84 read 34% in the
-// CLI table while Corch's workers on it were streaming 85-88%, and a worker handing off "at 85%"
-// looked like a bug when it was the table that was behind. Every running Corch worker's CLI streams
-// its account's usage with each request (corch-lib liveUsage), so the routes that feed the tables
+// CLI table while CliMayte's workers on it were streaming 85-88%, and a worker handing off "at 85%"
+// looked like a bug when it was the table that was behind. Every running CliMayte worker's CLI streams
+// its account's usage with each request (climayte-lib liveUsage), so the routes that feed the tables
 // lay those seconds-old readings over the cached snapshot. The cache itself keeps only real
 // usage-endpoint readings.
 
-import type { CorchLiveUsage } from './corch-lib'
+import type { CliMayteLiveUsage } from './climayte-lib'
 import type { UsageLimit, UsageSnapshot } from './types'
 import { formatResetLocal } from './usage-api'
 
@@ -35,7 +35,7 @@ function limitFrom(
  *  unchanged when the live reading is older (or there is none). */
 export function withLiveReading(
   snap: UsageSnapshot | null,
-  live: CorchLiveUsage | undefined,
+  live: CliMayteLiveUsage | undefined,
   account: string | null = null,
   now = Date.now(),
 ): UsageSnapshot | null {
@@ -49,7 +49,7 @@ export function withLiveReading(
   } as UsageSnapshot
 }
 
-/** The snapshot with a Corch limit wall laid over it: an account Corch saw hit its 5-hour (or
+/** The snapshot with a CliMayte limit wall laid over it: an account CliMayte saw hit its 5-hour (or
  *  weekly) limit shows that window at its limit, at least 100%, until the wall ends. Field note 19
  *  (2026-09-30): five accounts walled until 11:20pm-12:10am still read 43-50% from snapshots taken
  *  before they hit the limit, and the owner read "plenty left" next to "no account available". */

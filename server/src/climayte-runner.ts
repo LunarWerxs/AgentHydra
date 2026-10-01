@@ -1,11 +1,11 @@
-// server/src/corch-runner.ts — the process a Corch worker's CLI runs under, OUTSIDE the daemon.
+// server/src/climayte-runner.ts — the process a CliMayte worker's CLI runs under, OUTSIDE the daemon.
 //
-// Owner, 2026-09-30: "I need to be able to restart AgentHydra without breaking Corch runners." A
+// Owner, 2026-09-30: "I need to be able to restart AgentHydra without breaking CliMayte runners." A
 // Bun.spawn child sits in the daemon's kill-on-close job on Windows, so every daemon restart killed
 // every worker, which then resumed as 'interrupted' and redid its current step. `detached` is no
 // escape (DETACHED_PROCESS flashes a console per child, and the job still holds it).
 //
-// So a worker's CLI runs under a RUNNER: this same program in `--corch-runner <spec>` mode,
+// So a worker's CLI runs under a RUNNER: this same program in `--climayte-runner <spec>` mode,
 // launched through the WMI hand-off (detached-spawn.mjs, hidden), which is born outside the
 // daemon's tree. The runner starts the CLI with the attempt's prompt, log and error files as its
 // stdin/stdout/stderr, writes both pids, waits, and writes an exit file. The daemon only ever reads
@@ -49,8 +49,8 @@ export interface RunnerExit {
   error?: string
 }
 
-/** The runner mode itself (main.ts `--corch-runner <spec>`). Returns the process exit code. */
-export async function runCorchRunner(specPath: string): Promise<number> {
+/** The runner mode itself (main.ts `--climayte-runner <spec>`). Returns the process exit code. */
+export async function runCliMayteRunner(specPath: string): Promise<number> {
   const spec = JSON.parse(readFileSync(specPath, 'utf8')) as RunnerSpec
   rmSync(specPath, { force: true })
   const exit = (e: RunnerExit) => writeFileSync(spec.exitFile, JSON.stringify(e))
@@ -78,8 +78,8 @@ export async function runCorchRunner(specPath: string): Promise<number> {
  *  source run goes through main.ts, the entry that dispatches modes. */
 export function runnerArgv(specPath: string): string[] {
   return IS_COMPILED
-    ? [process.execPath, '--corch-runner', specPath]
-    : [process.execPath, join(import.meta.dir, 'main.ts'), '--corch-runner', specPath]
+    ? [process.execPath, '--climayte-runner', specPath]
+    : [process.execPath, join(import.meta.dir, 'main.ts'), '--climayte-runner', specPath]
 }
 
 /** Write the spec and hand the runner to the OS, outside this process's tree and hidden. The pid

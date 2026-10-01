@@ -1,21 +1,21 @@
-# Corch live tests
+# CliMayte live tests
 
-`scripts/corch-live.ts` runs Corch against the owner's real CLI accounts through the running
-daemon's HTTP API. The unit tests (`server/tests/corch.test.ts`) pin the decisions with a fake CLI;
+`scripts/climayte-live.ts` runs CliMayte against the owner's real CLI accounts through the running
+daemon's HTTP API. The unit tests (`server/tests/climayte.test.ts`) pin the decisions with a fake CLI;
 this script is the proof that the real CLI, the real accounts and a real daemon restart behave the
 same way. Each turn is a one-line reply, but it spends real quota: moving a session to another
 account costs one uncached prompt (about $0.50).
 
 ```bash
-bun scripts/corch-live.ts handoff
+bun scripts/climayte-live.ts handoff
 ```
 
 ```bash
-bun scripts/corch-live.ts restart
+bun scripts/climayte-live.ts restart
 ```
 
 ```bash
-bun scripts/corch-live.ts burst 10
+bun scripts/climayte-live.ts burst 10
 ```
 
 `restart` restarts the daemon (other sessions see a short blip). Accounts are found, not named:
@@ -29,7 +29,7 @@ bun scripts/corch-live.ts burst 10
 | queued follow-ups | Two messages sent while the worker runs a command | Both arrive in order in the same session (`STEP3 STEP2 STEP1-…`) |
 | cancel-and-revive | Stop during a command, then send a message | The CLI process is gone; the next turn resumes the session and still knows the codeword |
 | follow-up on a dead login | A turn lands on an account whose login is dead | It fails `auth`, and the session finishes on the live account with the follow-up answered |
-| daemon restart mid-run | Two workers in a command; restart unforced, then forced | Unforced is refused (409, names the Corch workers); forced, each worker is `interrupted`, resumes on the same account and finishes |
+| daemon restart mid-run | Two workers in a command; restart unforced, then forced | Unforced is refused (409, names the CliMayte workers); forced, each worker is `interrupted`, resumes on the same account and finishes |
 | burst | More tasks than the fleet runs at once | Every task finishes with its own output |
 
 ## Results, 2026-09-30 (#83, #84, #88, #90 signed in; #68, #69 expired)
@@ -50,12 +50,12 @@ bun scripts/corch-live.ts burst 10
 - Not yet seen live: a real usage-limit (`quota`) handoff. The same move and resume path is proven
   by the dead-login and busy-account moves above, and the limit notice is pinned by the unit tests.
 
-## Round two, 2026-09-30: Corch reviewed and fixed by Corch
+## Round two, 2026-09-30: CliMayte reviewed and fixed by CliMayte
 
-Two review workers ran through Corch itself on #84 and #90, one on context loss and one on
+Two review workers ran through CliMayte itself on #84 and #90, one on context loss and one on
 scheduling and process lifecycle. A forced daemon restart hit both mid-review; both resumed and
-wrote their reports. Every finding was checked against the code before a fix. Two more Corch workers
-wrote the fixes (the reset-time parser on #84, the 17 Corch items on #90), which were reviewed,
+wrote their reports. Every finding was checked against the code before a fix. Two more CliMayte workers
+wrote the fixes (the reset-time parser on #84, the 17 CliMayte items on #90), which were reviewed,
 tested (server suite 1974 pass, 0 fail) and landed as `c638e59` and `41fb0ff`:
 
 - **Stuck forever:** the account a worker last failed on was excluded for good, even after its wall
@@ -66,12 +66,12 @@ tested (server suite 1974 pass, 0 fail) and landed as `c638e59` and `41fb0ff`:
   dropped the follow-up. A message to a stopped worker re-ran the stopped work first. A failed spawn
   lost the follow-up. A stderr warning turned a restart kill into a lost `error`.
 - **Wrong numbers:** `parseResetTime` could not read any real limit notice ("resets 4am", "9:10am
-  (America/Chicago)"), so every wall was a blind 60 minutes. Corch read the usage field only a
+  (America/Chicago)"), so every wall was a blind 60 minutes. CliMayte read the usage field only a
   manual check writes. A killed or stopped attempt's spend counted $0. Opus 5.5, Sonnet 5.5,
   Fable 5.1 and Mythos 5.1 had no prices at all.
 - **Daemon health:** any fs error in the tick exited the daemon. A side-run daemon shared (and
   overwrote) the primary's store. Finished logs stayed parsed in memory.
-- **Also fixed on the way:** `corch_status` waits at most 50 s (the desktop MCP client drops a call
+- **Also fixed on the way:** `climayte_status` waits at most 50 s (the desktop MCP client drops a call
   at about 60 s: 55 s answered, 110 s and 300 s timed out). "Restart needed" no longer fires for a
   commit of server edits the daemon already runs (`0c21768`).
 
@@ -87,7 +87,7 @@ follow-ups; a stopped attempt now shows its spend ($0.25 for one cut mid-command
   title of the worst one.
 - **Paid extra usage (overage).** #90 never hit a wall: with extra usage switched on, the CLI
   streamed `rate_limit_event {status: "rejected", isUsingOverage: true}` 36 s into the turn and went
-  on, billing credits. $3.82 of that $4.67 turn, plus a $0.24 probe, ran on #90's overage. Corch
+  on, billing credits. $3.82 of that $4.67 turn, plus a $0.24 probe, ran on #90's overage. CliMayte
   now walls such an account until its window resets the moment the event appears, and stops the
   turn, and the session moves to an account with free quota (commit `0dcffa0`). The script skips
   accounts at 98% or more of an open window.
@@ -102,13 +102,13 @@ follow-ups; a stopped attempt now shows its spend ($0.25 for one cut mid-command
   - "Reached your Fable limit" and "out of usage credits" are quota.
   - A dropped connection is transient.
   - The CLI's own `resetsAt` ends the wall, 60 s after the reset.
-- **Also:** the `corch_*` MCP tools now reach Corch only over HTTP (`a63ab65`). The 409 restart
+- **Also:** the `climayte_*` MCP tools now reach CliMayte only over HTTP (`a63ab65`). The 409 restart
   gate held for real when another session tried to restart the daemon under a running worker.
 
 ## Round four, 2026-09-30: never spend overage, faster starts, what a move carries
 
 The owner's rule is to never go into paid extra usage. It is now a setting, **Settings >
-Providers > Allow paid extra usage** (since `d3010f9` it covers all of AgentHydra, not only Corch), off by default and never synced to another machine
+Providers > Allow paid extra usage** (since `d3010f9` it covers all of AgentHydra, not only CliMayte), off by default and never synced to another machine
 (`350a078`). With it off:
 
 - On an account that CAN bill (usage events say `overageStatus: "allowed"`; of the four, only #90
@@ -140,13 +140,13 @@ runs out, and the task goes on in a fresh, small session elsewhere, instead of t
 re-reading the whole conversation (`5de5bbc`, `2965507`).
 
 - **How the worker hears it.** At 85% of the 5-hour window (95% of the week), and only when
-  another account has room, Corch writes a signal that a PostToolUse hook shows the worker after its
+  another account has room, CliMayte writes a signal that a PostToolUse hook shows the worker after its
   next tool call. The hook is installed per worker with `--settings` and costs about 65 ms a call.
   Proven live first: the CLI showed the hook's `additionalContext` mid-turn and the model acted on
   it.
 - **What the continuation gets.** The task, the handoff, the old transcript's path, and any queued
   messages, all in a new session. A hard limit, a sign-out or a restart still moves the whole
-  transcript, as before. `corch_handoff` (MCP) hands a running task off on request.
+  transcript, as before. `climayte_handoff` (MCP) hands a running task off on request.
 - **Live run: a six-step task, handed off after step 2.**
   - The first run had three handoffs. #88 (at 90%) wound down on its own after step 1, the manual
     handoff followed, and the next session was placed on #84 at 91%, which wound down at once. The
@@ -171,7 +171,7 @@ re-reading the whole conversation (`5de5bbc`, `2965507`).
   (`activeRuns: 0`): all 7 workers kept the same attempt count, stayed `running`, and their latest
   activity kept moving. A third restart after `6c34872` did the same.
 - **Test tasks archived.** 121 finished tasks that ran in scratch or temp test folders were removed
-  with `POST /api/corch/remove`; their logs and transcripts are in
+  with `POST /api/climayte/remove`; their logs and transcripts are in
   `~/.agenthydra/corch/archive/2026-10-01T00-05-53-238Z/`. 23 real tasks remained.
 - **Wind-down "at 85%" on an account the table showed at 34%** was right: #84's CLI streamed
   0.85-0.88 of its 5-hour window, and the usage cache read 89% fifteen minutes later. The table

@@ -22,6 +22,7 @@ import {
 import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
+import { climayteRunningCount, startCliMayte } from './climayte'
 import {
   APP_ROOT,
   appEnv,
@@ -52,7 +53,6 @@ import {
   updateAppearance,
 } from './connections'
 import { createChatGptContextPack } from './context-pack'
-import { corchRunningCount, startCorch } from './corch'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
 import { reconcileCodexInstanceDirs } from './core/codex-instances'
 import { createRunningCodeProbe, restartNeededMessage } from './core/running-code'
@@ -483,16 +483,16 @@ app.post('/api/daemon/restart', async (c) => {
   // auto-update loop already refuses (setAutoUpdateHooks.hasActiveRuns below). A person who knows
   // what they are restarting past may say so; the runs are detached and reattached at boot, so
   // this is a courtesy rather than data loss - but it must be a DECISION, never a surprise.
-  // Corch workers count too: a restart kills their CLI (measured 2026-09-30), and each resumes its
+  // CliMayte workers count too: a restart kills their CLI (measured 2026-09-30), and each resumes its
   // session afterwards, but the step it was on starts over.
-  const corch = corchRunningCount()
-  const active = activeCount() + corch
+  const climayte = climayteRunningCount()
+  const active = activeCount() + climayte
   if (active > 0 && body.force !== true)
     return c.json(
       {
         ok: false,
-        error: corch
-          ? `${active} run(s) in flight, ${corch} of them Corch worker(s) - pass force:true to restart past them (each Corch worker resumes its session after the restart, but its current step starts over)`
+        error: climayte
+          ? `${active} run(s) in flight, ${climayte} of them CliMayte worker(s) - pass force:true to restart past them (each CliMayte worker resumes its session after the restart, but its current step starts over)`
           : `${active} dispatch run(s) in flight - pass force:true to restart past them`,
         activeRuns: active,
       },
@@ -773,7 +773,7 @@ await import('./routes/monitor-fleet')
 await import('./routes/desktop-sessions')
 await import('./routes/session-message')
 await import('./routes/versions')
-await import('./routes/corch')
+await import('./routes/climayte')
 
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------
 app.post('/api/portable-window', async (c) => {
@@ -1261,8 +1261,8 @@ function spawnRelaunchSuccessor(): void {
 // (startAutoUpdate below), one interval out, so a fresh launch is never interrupted.
 loadAutoUpdateSettings()
 setAutoUpdateHooks({
-  // Don't auto-update (which relaunches the daemon) while dispatch runs or Corch workers are in flight.
-  hasActiveRuns: () => activeCount() + corchRunningCount() > 0,
+  // Don't auto-update (which relaunches the daemon) while dispatch runs or CliMayte workers are in flight.
+  hasActiveRuns: () => activeCount() + climayteRunningCount() > 0,
   relaunch: () => void relaunchDaemon(),
 })
 
@@ -1359,10 +1359,10 @@ startTitleSweep()
 // See version-drift.ts.
 startVersionDriftWatch()
 
-// --- Corch (see server/src/corch.ts, docs/CORCH.md) ----------------------------------------------
+// --- CliMayte (see server/src/climayte.ts, docs/CLIMAYTE.md) ----------------------------------------------
 // Watches the CLI workers a person delegated, and moves one to another account at a usage limit.
 // Launches nothing on its own: with no worker queued each tick is a no-op.
-startCorch()
+startCliMayte()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading

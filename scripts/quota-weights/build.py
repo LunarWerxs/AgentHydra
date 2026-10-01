@@ -4,7 +4,7 @@ Accounts are keyed by organization uuid (one subscription = one org).
   Requests: every assistant turn, deduplicated by (message id, requestId) keeping the largest output,
             from each CLI instance's own config dir and, for desktop chats, from ~/.claude/projects
             attributed through each desktop profile's claude-code-sessions/<account>/<org>/local_*.json.
-  Readings: (a) Corch stream-json rate_limit_event five_hour utilization, stamped with the newest
+  Readings: (a) CliMayte stream-json rate_limit_event five_hour utilization, stamped with the newest
             assistant timestamp before it; (b) AgentHydra usage-history.json sessionPct with
             sessionResetsAt, org from the profile's plan-usage-history.json sample nearest in time.
 Writes data.pkl to QUOTA_WEIGHTS_DATA (default ~/.agenthydra/quota-weights), never into the repo:
@@ -113,7 +113,7 @@ def main():
     known = json.load(open(os.path.join(AH, 'known-accounts.json'), encoding='utf-8'))
     tier = {a['orgUuid']: f"{a.get('plan')}|{a.get('rateLimitTier')}" for a in known.values() if a.get('orgUuid')}
 
-    # --- CLI instances (current and the ones Corch remembers)
+    # --- CLI instances (current and the ones CliMayte remembers)
     cli_cfg = {}
     for d in glob.glob(os.path.join(AH, 'cli-instances', '*')):
         if os.path.isdir(d):
@@ -187,7 +187,7 @@ def main():
     unattributed.sort()
     print('requests:', stats, flush=True)
 
-    # --- readings (a) Corch logs
+    # --- readings (a) CliMayte logs
     readings = {}  # org -> [(t, pct, resetKey, weekPct, src)]
     worker_files = [os.path.join(AH, 'corch', 'workers.json')] + glob.glob(os.path.join(AH, 'corch', 'archive', '*', 'workers.json'))
     seen_logs = set()
@@ -221,7 +221,7 @@ def main():
                             if isinstance(fh.get('utilization'), (int, float)):
                                 readings.setdefault(org, []).append(
                                     (last_t, fh['utilization'] * 100, round((fh.get('resetsAt') or 0) / 60),
-                                     (sd.get('utilization') or 0) * 100, 'corch'))
+                                     (sd.get('utilization') or 0) * 100, 'climayte'))
                         elif '"timestamp"' in line and '"assistant"' in line:
                             try:
                                 last_t = iso(json.loads(line)['timestamp'])

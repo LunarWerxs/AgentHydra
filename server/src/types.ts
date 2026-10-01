@@ -1348,7 +1348,7 @@ export interface CliInstance {
   associatedDesktopDir: string | null
   /** Display label of the linked desktop instance, cached for rendering. */
   associatedDesktopLabel: string | null
-  /** Why `loggedIn` is false although the credential file exists: a login Corch found dead and
+  /** Why `loggedIn` is false although the credential file exists: a login CliMayte found dead and
    *  `claude auth status` has not passed since (core/cli-instances.ts setCliLoginVeto). */
   loginNote?: string
   loggedIn: boolean
@@ -1356,7 +1356,7 @@ export interface CliInstance {
    *  credentials (cliPlanLabel); null when signed out or not stated. */
   planLabel?: string | null
   lastUsageCheck: UsageSnapshot | null
-  /** Claude sessions running on this account now (its live registry, Corch workers included). Set by
+  /** Claude sessions running on this account now (its live registry, CliMayte workers included). Set by
    *  GET /api/cli-instances only; absent elsewhere. */
   liveSessions?: number
   /** What the CLI said the last time its `/limit-reset` was run from AgentHydra (core/cli-limit-reset.ts).
@@ -1425,7 +1425,7 @@ export interface ProviderSettings {
   /** Weekly-usage percentage at or above which an account is left alone by the keepalive. */
   keepaliveWeeklyFloorPct: number
   /** Let work on this machine's Claude accounts run on paid extra usage (usage credits) past their
-   *  limits. OFF by default — with it off nothing AgentHydra manages bills it: Corch stops a task
+   *  limits. OFF by default — with it off nothing AgentHydra manages bills it: CliMayte stops a task
    *  before its account would bill and moves it, and the extra-usage guard (extra-usage.ts) stops
    *  every Claude session on an account that has extra usage switched on once it nears its limit. */
   allowExtraUsage: boolean

@@ -7,7 +7,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import analyze as A  # noqa: E402
 
-MIN_CORCH = float(os.environ.get('MIN_CORCH_MIN', '4')) * 60
+MIN_CLIMAYTE = float(os.environ.get('MIN_CLIMAYTE_MIN', '4')) * 60
 NAMES = {'rwo': ['read', 'write', 'output'],
          'rwo_ttl': ['read', 'w5m', 'w1h', 'output'],
          'rwo_family': ['O.read', 'O.write', 'O.out', 'S.read', 'S.write', 'S.out']}
@@ -31,24 +31,24 @@ def show(label, iv, scheme='rwo', robust=True):
 
 
 def main():
-    corch = [v for v in A.intervals(MIN_CORCH, ('corch',)) if v['cen'] is None]
+    climayte = [v for v in A.intervals(MIN_CLIMAYTE, ('climayte',)) if v['cen'] is None]
     wins = A.windows()
     from collections import Counter
     print('windows:', Counter((v['src'], v['cen']) for v in wins))
     hist = [v for v in wins if v['src'] == 'hist' and v['cen'] is None]
     plan = [v for v in wins if v['src'] == 'plan' and v['cen'] is None]
-    print(f'corch {len(corch)} intervals, hist {len(hist)} windows, plan {len(plan)} windows; mean rise '
+    print(f'climayte {len(climayte)} intervals, hist {len(hist)} windows, plan {len(plan)} windows; mean rise '
           f'{np.mean([v["dy"] for v in hist]):.1f} / {np.mean([v["dy"] for v in plan]):.1f}')
     for robust in (False, True):
         print(f'--- robust={robust}')
-        show('corch', corch, robust=robust)
+        show('climayte', climayte, robust=robust)
         show('hist ', hist, robust=robust)
         show('plan ', plan, robust=robust)
         show('plan, no moved chats', [v for v in plan if v['moved'] == 0], robust=robust)
         show('desk max5', [v for v in hist + plan if v['tier'] == 'max5'], robust=robust)
         show('desk max20', [v for v in hist + plan if v['tier'] == 'max20'], robust=robust)
         show('desk pro', [v for v in hist + plan if v['tier'] == 'pro'], robust=robust)
-        show('corch ttl', corch, 'rwo_ttl', robust=robust)
+        show('climayte ttl', climayte, 'rwo_ttl', robust=robust)
         show('plan ttl', plan, 'rwo_ttl', robust=robust)
         show('plan family', plan, 'rwo_family', robust=robust)
         show('hist family', hist, 'rwo_family', robust=robust)

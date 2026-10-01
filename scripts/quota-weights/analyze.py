@@ -1,7 +1,7 @@
 """Re-fit the 5-hour meter against token kinds; compare the shipped weights on held-out intervals.
 
 Reads data.pkl from build.py. Readings come from three sources, never mixed inside one interval:
-  corch  per-request five_hour utilization from Corch stream logs (Pro CLI accounts, has resetsAt)
+  climayte  per-request five_hour utilization from CliMayte stream logs (Pro CLI accounts, has resetsAt)
   hist   AgentHydra usage-history sessionPct (integer, has sessionResetsAt)
   plan   each desktop profile's own plan-usage-history.json (integer fh, NO reset time): an interval
          is kept only when it lies inside 5 hours of a reading of 0 or a drop, which bounds the
@@ -86,7 +86,7 @@ for p in profiles:
             prev = (t, fh)
 
 
-def intervals(min_s, srcs=('corch', 'hist', 'plan'), max_s=3 * 3600):
+def intervals(min_s, srcs=('climayte', 'hist', 'plan'), max_s=3 * 3600):
     out = []
     for (org, src), rs in R.items():
         if src not in srcs:
@@ -212,14 +212,14 @@ def fit_scaled(iv, scheme, iters=30, robust=True):
 
 def main():
     min_desk = float(os.environ.get('MIN_DESK_MIN', '60')) * 60
-    min_corch = float(os.environ.get('MIN_CORCH_MIN', '15')) * 60
-    iv = intervals(min_corch, ('corch',)) + intervals(min_desk, ('hist',)) + intervals(min_desk, ('plan',))
+    min_climayte = float(os.environ.get('MIN_CLIMAYTE_MIN', '15')) * 60
+    iv = intervals(min_climayte, ('climayte',)) + intervals(min_desk, ('hist',)) + intervals(min_desk, ('plan',))
     cen = defaultdict(int)
     for v in iv:
         cen[(v['src'], v['cen'])] += 1
     print('intervals:', dict(cen))
     clean = [v for v in iv if v['cen'] is None]
-    for src in ('corch', 'hist', 'plan'):
+    for src in ('climayte', 'hist', 'plan'):
         c = [v for v in clean if v['src'] == src]
         print(f"  {src}: {len(c)} clean on {len({v['org'] for v in c})} accounts; tiers",
               dict(sorted(defaultdict(int, {t: sum(1 for v in c if v['tier'] == t) for t in ('pro', 'max5', 'max20', '?')}).items())))

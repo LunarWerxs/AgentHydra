@@ -1,10 +1,10 @@
-// Corch's scorecard: which model and thinking level each kind of task gets (corch-scorecard.ts).
+// CliMayte's scorecard: which model and thinking level each kind of task gets (climayte-scorecard.ts).
 import { describe, expect, test } from 'bun:test'
-import { type CorchVerdict, nextRung, pickConfig, scoreRows } from '../src/corch-scorecard'
+import { type CliMayteVerdict, nextRung, pickConfig, scoreRows } from '../src/climayte-scorecard'
 
 const SONNET = 'claude-sonnet-5-5'
 const OPUS = 'claude-opus-5-5'
-const v = (verdict: 'pass' | 'fail', model: string, effort: string): CorchVerdict => ({
+const v = (verdict: 'pass' | 'fail', model: string, effort: string): CliMayteVerdict => ({
   at: 0,
   verdict,
   note: null,
@@ -12,7 +12,7 @@ const v = (verdict: 'pass' | 'fail', model: string, effort: string): CorchVerdic
   effort,
   units: 100_000,
 })
-const task = (kind: string, ...verdicts: CorchVerdict[]) => ({ kind, verdicts })
+const task = (kind: string, ...verdicts: CliMayteVerdict[]) => ({ kind, verdicts })
 
 describe('pickConfig', () => {
   test('starts where the kind starts, then follows what passes and what fails', () => {
