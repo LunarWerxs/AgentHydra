@@ -89,7 +89,16 @@ import {
   windDownMessage,
 } from './climayte-lib'
 import { syncOwnerClaude } from './climayte-owner-sync'
-import { expectedPct, planFactor, type RunningLoad } from './climayte-placement'
+import {
+  type CostEstimate,
+  expectedCost,
+  FIT_PCT,
+  planFactor,
+  projectedPct,
+  type RunningLoad,
+  sizeTask,
+  waitsForRoom,
+} from './climayte-placement'
 import { launchRunner, readRunnerExit, readRunnerPids } from './climayte-runner'
 import {
   attemptUnits,
@@ -717,6 +726,55 @@ function schedule(delay?: number): void {
   timer.unref?.()
 }
 
+/** Placement inputs (climayte-placement.ts): what a task is expected to cost, what is running on
+ *  each account and what it is expected to cost, and what attempts that ended since an account's
+ *  first running worker started spent there (part of the meter's rise that is not the running
+ *  work's; projectedPct). */
+function placementState(): {
+  costOf: (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort'>) => CostEstimate
+  running: Map<string, RunningLoad[]>
+  finishedSince: Map<string, number>
+} {
+  const rows = scoreRows(workers.values())
+  const finished = [...workers.values()]
+    .filter((w) => w.status === 'done' && w.tokens)
+    .map((w) => ({
+      model: ladderModel(w.model ?? w.attempts.at(-1)?.model),
+      pct:
+        w.attempts.reduce((s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl), 0) /
+        UNITS_PER_PRO_PERCENT,
+    }))
+  const costOf = (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort'>): CostEstimate =>
+    expectedCost({ kind: w.kind, model: ladderModel(w.model), effort: w.effort }, rows, finished)
+  const running = new Map<string, RunningLoad[]>()
+  const firstStart = new Map<string, number>()
+  for (const w of workers.values())
+    if (w.status === 'running' && w.accountId) {
+      const at = w.attempts.at(-1)
+      running.set(w.accountId, [
+        ...(running.get(w.accountId) ?? []),
+        { expected: costOf(w).pct, startPct: at?.startPct ?? null },
+      ])
+      if (at)
+        firstStart.set(
+          w.accountId,
+          Math.min(firstStart.get(w.accountId) ?? at.startedAt, at.startedAt),
+        )
+    }
+  const finishedSince = new Map<string, number>()
+  for (const w of workers.values())
+    for (const a of w.attempts) {
+      const since = firstStart.get(a.account.id)
+      if (since === undefined || a.endedAt === null || a.endedAt <= since) continue
+      const share =
+        (a.endedAt - Math.max(a.startedAt, since)) / Math.max(1, a.endedAt - a.startedAt)
+      const pct =
+        (attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl) / UNITS_PER_PRO_PERCENT) * share
+      finishedSince.set(a.account.id, (finishedSince.get(a.account.id) ?? 0) + pct)
+    }
+  return { costOf, running, finishedSince }
+}
+
 async function tick(): Promise<void> {
   if (ticking) return
   ticking = true
@@ -762,48 +820,10 @@ async function tick(): Promise<void> {
         bump(active, w.accountId)
         bump(groupMap(w.group), w.accountId)
       }
-    // Placement (climayte-placement.ts): what each task is expected to cost, and what is running where.
-    const rows = scoreRows(workers.values())
-    const finished = [...workers.values()]
-      .filter((w) => w.status === 'done' && w.tokens)
-      .map((w) => ({
-        model: ladderModel(w.model ?? w.attempts.at(-1)?.model),
-        pct:
-          w.attempts.reduce(
-            (s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),
-            0,
-          ) / UNITS_PER_PRO_PERCENT,
-      }))
-    const expectedOf = (w: CliMayteWorker): number =>
-      expectedPct({ kind: w.kind, model: ladderModel(w.model), effort: w.effort }, rows, finished)
-    const running = new Map<string, RunningLoad[]>()
+    const { costOf, running, finishedSince } = placementState()
     const addRunning = (id: string, load: RunningLoad): void => {
       running.set(id, [...(running.get(id) ?? []), load])
     }
-    const firstStart = new Map<string, number>()
-    for (const w of workers.values())
-      if (w.status === 'running' && w.accountId) {
-        const at = w.attempts.at(-1)
-        addRunning(w.accountId, { expected: expectedOf(w), startPct: at?.startPct ?? null })
-        if (at)
-          firstStart.set(
-            w.accountId,
-            Math.min(firstStart.get(w.accountId) ?? at.startedAt, at.startedAt),
-          )
-      }
-    // What attempts that ended since an account's first running worker started spent there: part of
-    // the meter's rise that is not the running work's (projectedPct).
-    const finishedSince = new Map<string, number>()
-    for (const w of workers.values())
-      for (const a of w.attempts) {
-        const since = firstStart.get(a.account.id)
-        if (since === undefined || a.endedAt === null || a.endedAt <= since) continue
-        const share =
-          (a.endedAt - Math.max(a.startedAt, since)) / Math.max(1, a.endedAt - a.startedAt)
-        const pct =
-          (attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl) / UNITS_PER_PRO_PERCENT) * share
-        finishedSince.set(a.account.id, (finishedSince.get(a.account.id) ?? 0) + pct)
-      }
     const due = [...workers.values()]
       .filter((w) => (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now)
       .sort(dueOrder)
@@ -811,12 +831,47 @@ async function tick(): Promise<void> {
       try {
         const cap = perAccount[w.group] ?? 2
         const groupActive = groupMap(w.group)
-        const expected = expectedOf(w)
-        const acct = pickAccount(w, accounts, walls, active, cap, now, groupActive, allowFull, {
-          expected,
-          running,
-          finishedSince,
-        })
+        const expected = costOf(w).pct
+        const placement = { expected, running, finishedSince }
+        const acct = pickAccount(
+          w,
+          accounts,
+          walls,
+          active,
+          cap,
+          now,
+          groupActive,
+          allowFull,
+          placement,
+        )
+        const allowed = accounts.filter((a) => !w.accounts || w.accounts.includes(a.id))
+        if (
+          acct &&
+          waitsForRoom(
+            acct,
+            placement,
+            allowed.map((a) => a.planFactor ?? 1),
+            acct.id === w.accountId &&
+              !['handoff', 'quota', 'auth'].includes(w.attempts.at(-1)?.outcome ?? 'handoff'),
+          )
+        ) {
+          const factor = acct.planFactor ?? 1
+          const room = Math.max(
+            0,
+            (FIT_PCT -
+              projectedPct(acct, running.get(acct.id) ?? [], 0, finishedSince.get(acct.id) ?? 0)) *
+              factor,
+          )
+          const why = `Waiting for room: this task is expected to use about ${Math.round(expected)}% of a Pro 5-hour window, and the best account now (${acctLabel(acct)}) has about ${Math.round(room)}% left. It starts the moment one has room (a reset, or the work there finishing); smaller tasks go meanwhile.`
+          // Said once: the room left moves every tick, and each new figure would be a journal line.
+          if (w.status !== 'waiting' || !w.error?.startsWith('Waiting for room')) {
+            w.status = 'waiting'
+            w.error = why
+            journal(w, 'waiting', { error: firstLine(why) })
+            changed(w)
+          }
+          continue
+        }
         if (acct) {
           try {
             launch(w, acct, accounts, active.get(acct.id) ?? 0)
@@ -863,7 +918,6 @@ async function tick(): Promise<void> {
           }
           continue
         }
-        const allowed = accounts.filter((a) => !w.accounts || w.accounts.includes(a.id))
         // A login wall's `until` is only its next recheck, not a time the account frees up.
         const soonest = allowed
           .map((a) => walls[a.id])
@@ -1359,7 +1413,7 @@ function spentOf(
   w: CliMayteWorker,
   at: CliMayteWorker['attempts'][number],
 ): { costUsd: number; tokens: CliMayteTokens } {
-  const dir = getCliInstance(at.account.id)?.configDir
+  const dir = at.account.configDir ?? getCliInstance(at.account.id)?.configDir
   // null: its log names no session, the CLI never started, so it spent nothing.
   const session = at.sessionId === undefined ? w.sessionId : at.sessionId
   if (!dir || !session) return { costUsd: 0, tokens: noTokens() }
@@ -1696,7 +1750,7 @@ function launch(
     return
   }
   w.attempts.push({
-    account: { id: acct.id, num: acct.num, name: acct.name },
+    account: { id: acct.id, num: acct.num, name: acct.name, configDir: acct.configDir },
     pid: null,
     log,
     errLog,
@@ -1773,6 +1827,7 @@ export function climayteRun(input: {
     kind?: string
     check?: string
     priority?: number
+    size?: string
   }>
   group?: string
   accounts?: string[]
@@ -1781,7 +1836,8 @@ export function climayteRun(input: {
   effort?: string
   kind?: string
   priority?: number
-}): { group: string; workers: CliMayteWorkerView[] } {
+  size?: string
+}): { group: string; workers: CliMayteWorkerView[]; sizing: Record<string, CliMayteSizing> } {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
@@ -1834,6 +1890,7 @@ export function climayteRun(input: {
   })
   const cap = input.perAccount ?? 2
   if (!Number.isInteger(cap) || cap < 1 || cap > 4) throw new Error('perAccount must be 1..4')
+  const sized = sizeTasks(input, settings)
   const group = input.group?.trim() || `g-${hex(6)}`
   // Joining a group keeps its cap unless the caller names a new one.
   if (input.perAccount !== undefined || !(group in perAccount)) perAccount[group] = cap
@@ -1885,7 +1942,124 @@ export function climayteRun(input: {
   }
   startCliMayte()
   schedule(0)
-  return { group, workers: made.map((w) => toView(w, now)) }
+  return {
+    group,
+    workers: made.map((w) => toView(w, now)),
+    sizing: Object.fromEntries(made.map((w, i) => [w.id, sized[i] as CliMayteSizing])),
+  }
+}
+
+/** What climayte_run says about each task's size: its expected cost and what that is based on, the
+ *  biggest 5-hour window it may use and the most any of those accounts has left now, all in % of a
+ *  Pro window (a Max 5x window is 500). `room` counts what the work already running there will
+ *  still use; null with no account to place on. */
+export interface CliMayteSizing {
+  expected: number
+  basis: string
+  window: number
+  room: number | null
+  roomOn: string | null
+}
+
+/** A dispatch with a task too big for one window (sizeTask): nothing was started. */
+export class CliMayteSplitNeeded extends Error {
+  constructor(
+    message: string,
+    readonly tasks: Array<{
+      task: number
+      title: string
+      expected: number
+      window: number
+      pieces: number
+    }>,
+  ) {
+    super(message)
+  }
+}
+
+/** Sizes every task of a dispatch against the accounts it may use (climayte-placement sizeTask), and
+ *  refuses the whole dispatch, starting nothing, when a task is over SPLIT_SHARE of the biggest
+ *  window unless it (or the dispatch) says `size: 'whole'`. */
+function sizeTasks(
+  input: Parameters<typeof climayteRun>[0],
+  settings: Array<{ model: string | null; effort: string | null; kind: string | null }>,
+): CliMayteSizing[] {
+  const sizeOf = (v: unknown, where: string): 'auto' | 'whole' => {
+    if (v === undefined || v === null || v === '') return 'auto'
+    const s = typeof v === 'string' ? v.trim().toLowerCase() : ''
+    if (s === 'auto' || s === 'whole') return s
+    throw new Error(`${where}size must be auto or whole`)
+  }
+  const groupSize = sizeOf(input.size, '')
+  let pool: CliMayteAccount[] = []
+  try {
+    pool = accountsProvider()
+  } catch {
+    // Sized against one Pro window.
+  }
+  const now = Date.now()
+  const allowed = pool.filter((a) => !input.accounts?.length || input.accounts.includes(a.id))
+  const open = allowed.filter((a) => !((walls[a.id]?.until ?? 0) > now))
+  const { costOf, running, finishedSince } = placementState()
+  const best = open
+    .map((a) => ({
+      a,
+      room: Math.max(
+        0,
+        (FIT_PCT - projectedPct(a, running.get(a.id) ?? [], 0, finishedSince.get(a.id) ?? 0)) *
+          (a.planFactor ?? 1),
+      ),
+    }))
+    .sort((x, y) => y.room - x.room)[0]
+  const tooBig: CliMayteSplitNeeded['tasks'] = []
+  const sized = input.tasks.map((t, i): CliMayteSizing => {
+    const s = settings[i] ?? { model: null, effort: null, kind: null }
+    const cost = costOf(s)
+    const fit = sizeTask(
+      cost.pct,
+      allowed.map((a) => a.planFactor ?? 1),
+    )
+    const whole = sizeOf(t.size, `task ${i + 1}: `) === 'whole' || groupSize === 'whole'
+    const title = t.title?.trim() || firstLine(t.prompt, 60)
+    if (fit.split && !whole)
+      tooBig.push({
+        task: i + 1,
+        title,
+        expected: Math.round(cost.pct),
+        window: fit.window,
+        pieces: fit.pieces,
+      })
+    const on =
+      cost.basis === 'setting'
+        ? `${s.kind} on ${ladderModel(s.model)} ${s.effort ?? 'default effort'}`
+        : cost.basis === 'kind'
+          ? `${s.kind} on any setting`
+          : cost.basis === 'model'
+            ? `${ladderModel(s.model)?.includes('sonnet') ? 'Sonnet' : 'Opus'} tasks`
+            : ''
+    return {
+      expected: Math.round(cost.pct * 10) / 10,
+      basis: cost.samples
+        ? `${on}, ${cost.samples} finished`
+        : 'nothing on record yet (the default)',
+      window: fit.window,
+      room: best ? Math.round(best.room) : null,
+      roomOn: best ? acctLabel(best.a) : null,
+    }
+  })
+  if (tooBig.length) {
+    const each = tooBig
+      .map(
+        (t) =>
+          `task ${t.task} "${t.title}" is expected to use about ${t.expected}% of a Pro 5-hour window, and the biggest window it may use holds ${t.window}%: split it into about ${t.pieces} pieces`,
+      )
+      .join('; ')
+    throw new CliMayteSplitNeeded(
+      `Nothing started: split needed. ${each}. A task over half a window often runs out partway and moves accounts, re-writing its whole conversation into a cold cache. Send each piece as its own self-contained task with its own proof of done (keep pieces that touch the same files in order, one after another), or send it again with size: 'whole' to run it as it is.`,
+      tooBig,
+    )
+  }
+  return sized
 }
 
 function matches(w: CliMayteWorker, f: { group?: string; id?: string; active?: boolean }): boolean {

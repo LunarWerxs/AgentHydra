@@ -46,6 +46,9 @@ export interface CliMayteAccountRef {
   id: string
   num: number | null
   name: string
+  /** On an attempt: the config folder it ran in, so its spend is read from the transcript it wrote
+   *  even when the instance store no longer lists that folder (absent on attempts before 2026-10-01). */
+  configDir?: string
 }
 
 export interface CliMayteAttempt {

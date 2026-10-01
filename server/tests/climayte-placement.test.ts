@@ -1,6 +1,12 @@
 // Where CliMayte starts a task so it can finish there (climayte-placement.ts).
 import { describe, expect, test } from 'bun:test'
-import { DEFAULT_TASK_PCT, expectedPct, planFactor, projectedPct } from '../src/climayte-placement'
+import {
+  DEFAULT_TASK_PCT,
+  expectedPct,
+  planFactor,
+  projectedPct,
+  waitsForRoom,
+} from '../src/climayte-placement'
 import { UNITS_PER_PRO_PERCENT } from '../src/climayte-scorecard'
 
 describe('projectedPct', () => {
@@ -45,5 +51,17 @@ describe('expectedPct', () => {
     expect(expectedPct({ kind: null, model: null, effort: null }, rows, finished)).toBe(
       DEFAULT_TASK_PCT,
     )
+  })
+})
+
+describe('waitsForRoom', () => {
+  test('never holds a session going on at home, nor a task no window fits', () => {
+    const chosen = { id: 'a', sessionPct: 80 }
+    const placement = { expected: 40, running: new Map() }
+    expect(waitsForRoom(chosen, placement, [1], false)).toBe(true)
+    // Its own account has its conversation in a warm cache: it carries on there.
+    expect(waitsForRoom(chosen, placement, [1], true)).toBe(false)
+    // 150% fits no Pro window, so waiting would be for ever: it goes where the projection is lowest.
+    expect(waitsForRoom(chosen, { ...placement, expected: 150 }, [1], false)).toBe(false)
   })
 })

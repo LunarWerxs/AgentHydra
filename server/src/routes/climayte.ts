@@ -5,6 +5,7 @@
 // and a second CliMayte there would relaunch the daemon's workers as if they had died.
 
 import {
+  CliMayteSplitNeeded,
   climayteCancel,
   climayteGet,
   climayteHandoff,
@@ -101,9 +102,13 @@ app.post('/api/corch/workers', async (c) => {
         effort: body.effort as string | undefined,
         kind: body.kind as string | undefined,
         priority: body.priority as number | undefined,
+        size: body.size as string | undefined,
       }),
     )
   } catch (err) {
+    // Too big for one window (climayte sizeTasks): nothing started, and the pieces it needs.
+    if (err instanceof CliMayteSplitNeeded)
+      return c.json({ error: err.message, splitNeeded: err.tasks }, 409)
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
   }
 })

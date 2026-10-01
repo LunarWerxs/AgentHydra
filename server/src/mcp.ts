@@ -646,7 +646,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'climayte_run',
     description:
-      'MUTATES: CLIMAYTE A TASK. When the owner tells a chat to climayte a task or fully delegate it, the chat keeps only the orchestration (split, dispatch, read results, check them) and every piece of real work goes here. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER\'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra\'s CliMayte view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what "done" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps concurrent workers per account; top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). Returns the group and, per worker, its id, title, status and account; then climayte_status {group, wait_seconds} waits for results.',
+      'MUTATES: CLIMAYTE A TASK. When the owner tells a chat to climayte a task or fully delegate it, the chat keeps only the orchestration (split, dispatch, read results, check them) and every piece of real work goes here. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER\'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra\'s CliMayte view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what "done" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps concurrent workers per account; top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). SIZE: each task is sized before it starts against the plans of its accounts (a Max 5x window holds five Pro windows): a task expected to use more than half of the biggest window it may use starts NOTHING in this dispatch and comes back `split needed` with the number of pieces (send them as self-contained tasks, or `size: whole` to run it as it is); a task that fits a fresh window but not what any account has left WAITS for room (status waiting) while smaller tasks start. Returns the group and, per worker, its id, title, status, account and `size` (expected % of a Pro window and its basis, the biggest window, the most room any account has now); then climayte_status {group, wait_seconds} waits for results.',
     inputSchema: S(
       {
         tasks: {
@@ -682,6 +682,11 @@ export const TOOLS: McpEngineTool[] = [
                 description:
                   'One bash command that PROVES the task is done (exit 0), e.g. `bun test tests/x.test.ts` or a curl that greps the deployed page; run it through `~/.claude/tools/fairjob.cmd -Weight 3 -Run "..."` when it is heavy. CliMayte runs it in `cwd` the moment the worker reports done (status `checking`), records the verdict itself, and sends a fail back to the same session one rung up with the end of the command\'s output (3 failed rounds stop the task as failed). Give one whenever a command can tell; your own climayte_verdict is for what it cannot.',
               },
+              size: {
+                type: 'string',
+                description:
+                  '`auto` (default): refused with `split needed` when it is expected to use more than half of the biggest window it may use. `whole`: run it as it is anyway.',
+              },
             },
             required: ['prompt', 'cwd'],
           },
@@ -711,6 +716,11 @@ export const TOOLS: McpEngineTool[] = [
           type: 'number',
           description: 'Default priority for every task without its own (see the task `priority`).',
         },
+        size: {
+          type: 'string',
+          description:
+            'Default size for every task without its own: auto or whole (see the task `size`).',
+        },
       },
       ['tasks'],
     ),
@@ -739,8 +749,13 @@ export const TOOLS: McpEngineTool[] = [
           effort: a.effort != null ? str(a.effort) : undefined,
           kind: a.kind != null ? str(a.kind) : undefined,
           priority: a.priority != null ? Number(a.priority) : undefined,
+          size: a.size != null ? str(a.size) : undefined,
         }),
-      })) as { group?: string; workers?: Array<Record<string, unknown>> }
+      })) as {
+        group?: string
+        workers?: Array<Record<string, unknown>>
+        sizing?: Record<string, unknown>
+      }
       // Field note 7 (2026-09-30): the whole view per worker echoed 300 characters of every prompt
       // the orchestrator had just written, about 3k characters per five-task dispatch.
       if (!Array.isArray(r?.workers)) return r
@@ -752,6 +767,7 @@ export const TOOLS: McpEngineTool[] = [
           status: w.status,
           account: w.account,
           ...(w.auto ? { model: w.model, effort: w.effort } : {}),
+          size: r.sizing?.[String(w.id)],
         })),
       }
     },

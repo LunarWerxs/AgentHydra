@@ -20,6 +20,7 @@ import { join } from 'node:path'
 import {
   addResults,
   attemptSpend,
+  CliMayteSplitNeeded,
   classifyAttempt,
   climayteCancel,
   climayteGet,
@@ -29,6 +30,7 @@ import {
   climayteRun,
   climayteSend,
   climayteSetPriority,
+  climayteVerdict,
   climayteWait,
   copySessionTranscript,
   dueOrder,
@@ -1113,4 +1115,121 @@ describe('integration: a task with a check is judged by it', () => {
     expect(w?.verdicts?.[0]?.note).toContain('not yet')
     expect(w?.status).toBe('done')
   }, 30_000)
+})
+
+describe('sizing (owner, 2026-10-01): too big for a window is split, one that fits waits for room', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-size-'))
+  const cwd = join(root, 'work')
+  const proDir = join(root, 'acct-pro')
+  for (const d of [cwd, proDir]) mkdirSync(d, { recursive: true })
+  const groups: string[] = []
+  let sessionPct = 0
+  let factor = 1
+
+  afterAll(() => {
+    for (const group of groups) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  const settle = async (id: string, ms = 20_000) => {
+    const deadline = Date.now() + ms
+    let w = climayteList({ id })[0]
+    while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+      await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = climayteList({ id })[0]
+    }
+    return w
+  }
+  // A finished, passed task of this kind on Sonnet `effort` that billed `tokens` output tokens: the
+  // expected cost of the next one (a Sonnet output token weighs 31 units, a Pro % is 320k units).
+  const onRecord = async (kind: string, effort: string, tokens: number) => {
+    const run = climayteRun({
+      tasks: [{ prompt: `FAKE-SPEND:${tokens} history`, cwd, kind, model: 'sonnet', effort }],
+      group: `size-history-${kind}`,
+      size: 'whole',
+    })
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+    expect((await settle(id))?.status).toBe('done')
+    expect(climayteVerdict(id, { verdict: 'pass', by: 'orchestrator' }).ok).toBe(true)
+  }
+
+  test('a dispatch with a task over half the biggest window starts nothing; whole, or a Max window, runs it', async () => {
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteAccountsProvider(() => [
+      {
+        id: 'size-pro',
+        num: 41,
+        name: 'pro',
+        configDir: proDir,
+        sessionPct,
+        weekPct: 0,
+        planFactor: factor,
+      },
+    ])
+    startCliMayte()
+    await onRecord('debug', 'low', 1_550_000) // about 150% of a Pro window
+
+    const big = { prompt: 'a big debug task', cwd, kind: 'debug', model: 'sonnet', effort: 'low' }
+    const before = climayteList().length
+    let refused: unknown = null
+    try {
+      climayteRun({ tasks: [{ prompt: 'a small one', cwd }, big], group: 'size-big' })
+    } catch (err) {
+      refused = err
+    }
+    expect(refused).toBeInstanceOf(CliMayteSplitNeeded)
+    expect((refused as CliMayteSplitNeeded).message).toContain('split needed')
+    expect((refused as CliMayteSplitNeeded).tasks).toEqual([
+      { task: 2, title: 'a big debug task', expected: 150, window: 95, pieces: 4 },
+    ])
+    expect(climayteList().length).toBe(before)
+
+    // On the owner's say it runs as it is: no window fits it, so it starts rather than wait forever.
+    const whole = climayteRun({ tasks: [{ ...big, size: 'whole' }], group: 'size-whole' })
+    groups.push(whole.group)
+    const wholeId = whole.workers[0]?.id as string
+    expect(whole.sizing[wholeId]).toMatchObject({ window: 95, roomOn: '#41' })
+    expect(Math.round(whole.sizing[wholeId]?.expected ?? 0)).toBe(150)
+    expect(['running', 'done']).toContain((await settle(wholeId))?.status)
+
+    // A Max 20x window holds twenty Pro windows: the same task fits it whole.
+    factor = 20
+    const max = climayteRun({ tasks: [big], group: 'size-max' })
+    groups.push(max.group)
+    expect(max.sizing[max.workers[0]?.id as string]?.window).toBe(1900)
+    climayteCancel({ group: 'size-max' })
+  }, 60_000)
+
+  test('a task that fits a fresh window but not the room left waits, then starts once there is room', async () => {
+    factor = 1
+    await onRecord('review', 'medium', 413_000) // about 40% of a Pro window
+    sessionPct = 70
+    const run = climayteRun({
+      tasks: [
+        {
+          prompt: 'a review that needs room',
+          cwd,
+          kind: 'review',
+          model: 'sonnet',
+          effort: 'medium',
+        },
+      ],
+      group: 'size-room',
+    })
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+    const deadline = Date.now() + 10_000
+    let w = climayteList({ id })[0]
+    while (w?.status === 'queued' && Date.now() < deadline) {
+      await climayteWait({ id }, 1_000)
+      w = climayteList({ id })[0]
+    }
+    expect(w?.status).toBe('waiting')
+    expect(w?.error).toContain('Waiting for room')
+    sessionPct = 10
+    expect((await settle(id))?.status).toBe('done')
+  }, 60_000)
 })

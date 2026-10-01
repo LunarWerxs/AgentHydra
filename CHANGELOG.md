@@ -88,6 +88,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   kind of task usually costs, so tasks no longer pile four to an account and run out halfway
   (the first real run moved tasks between accounts 48 times).
 
+- **CliMayte sizes a task before it sends it** (`server/src/climayte-placement.ts`). From what that
+  kind of task cost before, it estimates how much of a 5-hour window the task will use, and weighs
+  that against each account's plan (a Max 5x window holds five Pro windows, a Max 20x twenty). A
+  task bigger than half the biggest window it may use is sent back as "split needed", with how
+  many pieces, before anything starts; `size: whole` runs it anyway. A task that would fit a fresh
+  window but not what any account has left now waits for room, while smaller tasks take that room,
+  instead of starting where it would run out partway and move.
+
 - **The token budget weighs tokens the way the plan meter does** (`server/src/usage-tokens.ts`,
   `scripts/quota-weights/`). `usage_budget` turned tokens into one unit using list-price ratios,
   but the meter charges output and cache writes far more than that relative to cache reads, and
