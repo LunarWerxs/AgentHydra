@@ -66,6 +66,9 @@ export default {
   offloadedHint:
     'Every task listed here, from every chat. {runs} {sessions} separate CLI conversations: a handoff starts a new one, a resume or a move carries one on. Tokens: {input} input, {output} output, {cacheRead} cache read and {cacheWrite} cache write, about {cost} at list prices. Cache reads are most of it: every request re-reads the conversation so far, at a tenth of the input price.',
   offloadedRuns: 'Runs: {list}.',
+  hideFinished: 'Hide finished',
+  hiddenCount: '{n} hidden',
+  allHidden: 'Nothing is queued or running. {n} finished tasks are hidden.',
   offloadedReread:
     'Re-reading a conversation into an empty cache when a run picks it up again (after a move, a limit, a handoff or a gap) took {share}% of what they used: {pct}% of a Pro 5-hour window.',
   detailCostHint: 'Every attempt on every account, stopped ones included.',

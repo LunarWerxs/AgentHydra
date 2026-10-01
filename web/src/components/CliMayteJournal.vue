@@ -14,7 +14,8 @@ import type { CliMayteJournalEntry } from '@/lib/api'
 import { getCliMayteJournal } from '@/lib/api'
 import { modelName } from '@/lib/climayte-status'
 
-const props = defineProps<{ workerId: string; group: string; updatedAt: number }>()
+/** `fill`: the box takes the height its parent gives it on a wide screen (CliMayteWorkerDetail). */
+const props = defineProps<{ workerId: string; group: string; updatedAt: number; fill?: boolean }>()
 
 const { t } = useI18n()
 const scope = ref<'task' | 'group'>('task')
@@ -171,6 +172,7 @@ const rows = computed(() =>
     <ol
       v-if="rows.length"
       class="scroll-slim flex max-h-72 flex-col gap-1 overflow-auto rounded-md bg-muted p-2.5 text-xs"
+      :class="fill ? 'lg:max-h-none lg:min-h-0 lg:flex-1' : ''"
     >
       <li v-for="r in rows" :key="r.key" class="flex min-w-0 gap-2">
         <time

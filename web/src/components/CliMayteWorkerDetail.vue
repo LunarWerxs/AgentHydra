@@ -461,7 +461,10 @@ async function onStop() {
         </div>
       </header>
 
-      <div class="flex flex-col gap-4 px-4 py-3">
+      <!-- Wide screens: the panel fills the height beside the list, the result, event log and
+           journal share what is left, each scrolling in its own box. Only a window too short for
+           their minimums scrolls this body. -->
+      <div class="flex flex-col gap-4 px-4 py-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
         <div v-if="worker.attempts.length" class="flex flex-col gap-1.5">
           <h4 class="flex items-baseline justify-between gap-2 text-xs font-medium">
             {{ $t('climayte.attempts') }}
@@ -507,13 +510,13 @@ async function onStop() {
           <pre class="mono scroll-slim mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap break-words">{{ r.results.join('\n\n') }}</pre>
         </details>
 
-        <div v-if="worker.result" class="flex flex-col gap-1.5">
+        <div v-if="worker.result" class="flex flex-col gap-1.5 lg:min-h-20 lg:flex-[2]">
           <h4 class="text-xs font-medium">{{ $t('climayte.result') }}</h4>
           <!-- One bounded box for the whole report, every turn in it, so the panel never grows a
                scroll of its own and no box scrolls inside another. -->
           <div
             v-if="turnResults.length > 1"
-            class="scroll-slim flex max-h-96 flex-col gap-3 overflow-auto rounded-md bg-muted p-2.5"
+            class="scroll-slim flex max-h-96 flex-col gap-3 overflow-auto rounded-md bg-muted p-2.5 lg:max-h-none lg:min-h-0 lg:flex-1"
           >
             <div v-for="(text, i) in turnResults" :key="i" class="flex flex-col gap-1">
               <span class="text-[11px] text-muted-foreground">
@@ -522,7 +525,7 @@ async function onStop() {
               <pre class="mono whitespace-pre-wrap break-words text-xs">{{ text }}</pre>
             </div>
           </div>
-          <pre v-else class="mono scroll-slim max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2.5 text-xs">{{ worker.result }}</pre>
+          <pre v-else class="mono scroll-slim max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2.5 text-xs lg:max-h-none lg:min-h-0 lg:flex-1">{{ worker.result }}</pre>
         </div>
 
         <!-- A stopped or waiting task keeps the reason it could not go on in `error`. Only a real
@@ -537,12 +540,12 @@ async function onStop() {
           >{{ worker.error }}</pre>
         </div>
 
-        <div class="flex flex-col gap-1.5">
+        <div class="flex flex-col gap-1.5 lg:min-h-20 lg:flex-1">
           <h4 class="text-xs font-medium">{{ $t('climayte.events') }}</h4>
           <ul
             v-if="worker.events?.length"
             ref="eventsEl"
-            class="mono scroll-slim max-h-72 overflow-auto rounded-md bg-muted p-2.5 text-xs"
+            class="mono scroll-slim max-h-72 overflow-auto rounded-md bg-muted p-2.5 text-xs lg:max-h-none lg:min-h-0 lg:flex-1"
             @scroll.passive="onEventsScroll"
           >
             <li v-for="(e, i) in worker.events" :key="i" class="whitespace-pre-wrap break-words">{{ e }}</li>
@@ -552,7 +555,13 @@ async function onStop() {
           </p>
         </div>
 
-        <CliMayteJournal :worker-id="worker.id" :group="worker.group" :updated-at="worker.updatedAt" />
+        <CliMayteJournal
+          class="lg:min-h-20 lg:flex-1"
+          fill
+          :worker-id="worker.id"
+          :group="worker.group"
+          :updated-at="worker.updatedAt"
+        />
       </div>
 
       <form class="flex flex-col gap-1.5 border-t px-4 py-3" @submit.prevent="onSend()">

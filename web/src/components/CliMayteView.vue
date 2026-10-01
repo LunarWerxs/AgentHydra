@@ -5,10 +5,12 @@
 // and again when the page is shown or the window regains focus.
 //
 // Layout (2026-09-30 review, three lenses agreeing): the header comes first and says what CliMayte is;
-// the list is one bordered panel with the hand-off as a subheader. The list has a fixed height of
-// about 24 rows and scrolls inside itself, so a row low in a long list still opens its detail beside
-// it; the detail lays out at its natural height and only its long parts (event log, result) scroll,
-// each in its own box (owner, 2026-10-01). It sits on the CLI tab under the CLI
+// the list is one bordered panel with the hand-off as a subheader. On a wide screen the list and the
+// task fill the rest of the window and the page does not scroll (owner, 2026-10-01): the list scrolls
+// inside itself, so a row low in a long list still opens its task beside it, and in the task only its
+// long parts (result, event log, journal) scroll, each in its own box, sharing the height that is
+// left. A narrow screen stacks them at their natural height. "Hide finished" leaves only the tasks
+// still queued, running, waiting or being checked (owner, 2026-10-01). It sits on the CLI tab under the CLI
 // accounts table (CliView.vue), whose Quick add is where an account is added, so it has none of its
 // own.
 //
@@ -25,6 +27,7 @@ import {
   ThumbsUp,
   X,
 } from '@lucide/vue'
+import { useStorage } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -34,6 +37,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import type { CliMayteWorkerView } from '@/lib/api'
 import {
   type CliMayteScorecard,
@@ -68,9 +72,16 @@ const now = ref(Date.now())
  *  after, a banner over the last known list, whose spinners would otherwise look alive. */
 const unreachable = ref(false)
 
+/** Show only tasks that can still change (isCliMayteActive), kept in this browser. */
+const hideFinished = useStorage('agenthydra.climayte.hideFinished', false)
+const listed = computed(() =>
+  hideFinished.value ? workers.value.filter(isCliMayteActive) : workers.value,
+)
+const hiddenCount = computed(() => workers.value.length - listed.value.length)
+
 /** Hand-offs ordered by their newest task, tasks inside newest first. */
 const groups = computed(() => {
-  const sorted = [...workers.value].sort((a, b) => b.createdAt - a.createdAt)
+  const sorted = [...listed.value].sort((a, b) => b.createdAt - a.createdAt)
   const map = new Map<string, CliMayteWorkerView[]>()
   for (const w of sorted) {
     const list = map.get(w.group)
@@ -417,9 +428,26 @@ onUnmounted(() => {
       <p class="max-w-md text-xs text-muted-foreground">{{ $t('climayte.empty') }}</p>
     </div>
 
-    <div v-else class="grid items-start gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]">
-      <!-- 24 task rows: a row is 2rem (py-1.5 around a text-sm line) plus its 1px divider. -->
-      <div class="scroll-slim max-h-[49.5rem] divide-y overflow-y-auto rounded-lg border bg-card">
+    <div
+      v-else
+      class="grid items-start gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[20rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:items-stretch"
+    >
+      <div class="flex min-h-0 flex-col gap-1.5">
+        <label class="flex cursor-pointer items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
+          <span>
+            {{ $t('climayte.hideFinished') }}
+            <span v-if="hiddenCount > 0" class="tabular-nums">· {{ $t('climayte.hiddenCount', { n: hiddenCount }) }}</span>
+          </span>
+          <Switch v-model="hideFinished" />
+        </label>
+        <!-- Narrow: 24 task rows (a row is 2rem, py-1.5 around a text-sm line, plus its 1px divider).
+             Wide: the height the window leaves. -->
+        <div
+          class="scroll-slim max-h-[49.5rem] divide-y overflow-y-auto rounded-lg border bg-card lg:max-h-none lg:min-h-0 lg:flex-1"
+        >
+        <p v-if="!groups.length" class="px-3 py-6 text-center text-xs text-muted-foreground">
+          {{ $t('climayte.allHidden', { n: hiddenCount }) }}
+        </p>
         <section v-for="g in groups" :key="g.group" :aria-label="g.group">
           <h3
             class="flex items-center justify-between gap-2 border-b bg-muted/40 px-3 py-1.5 text-2xs font-medium text-muted-foreground"
@@ -473,9 +501,11 @@ onUnmounted(() => {
             </li>
           </ul>
         </section>
+        </div>
       </div>
 
       <CliMayteWorkerDetail
+        class="lg:min-h-0"
         :worker="selected"
         :events-loading="!!selectedId && !detail"
         :now="now"

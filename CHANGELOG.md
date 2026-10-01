@@ -96,6 +96,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   window but not what any account has left now waits for room, while smaller tasks take that room,
   instead of starting where it would run out partway and move.
 
+- **The CLI tab fits the window** (`web/src/components/CliView.vue`). On a wide screen the page no
+  longer scrolls: the accounts table folds away to its add-account row (and, open, scrolls inside
+  itself), and CliMayte's task list and task fill the rest, each scrolling inside itself. The task
+  list has a "Hide finished" switch that leaves only what is still queued, running or waiting.
+
 - **CliMayte stops each account at about 85% and never runs it into its limit**
   (`server/src/climayte.ts`). A task now starts only where it is expected to finish under 85% of
   the 5-hour window, and a running task that reaches 85% writes a handoff even when no other

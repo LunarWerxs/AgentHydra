@@ -25,6 +25,7 @@ import {
   Terminal,
   Trash2,
 } from '@lucide/vue'
+import { useStorage } from '@vueuse/core'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -107,6 +108,8 @@ const { instances: desktopInstances, refreshInstances } = useInstances()
 const { target: quickAddTarget, setQuickAddTarget, clearQuickAddTarget } = useQuickAddTarget()
 
 const { t } = useI18n()
+/** Whether the accounts table is unfolded, kept in this browser (see the header's comment). */
+const accountsOpen = useStorage('agenthydra.cli.accountsOpen', true)
 
 const usageKey = (inst: CliInstance) => `cli:${inst.id}`
 const usageFor = (inst: CliInstance) => snapshotFor(usageKey(inst))
@@ -488,10 +491,11 @@ onUnmounted(() => stopPolling())
   <!-- No border-t: the parent (CliView) separates this table from CliMayte with space instead. -->
   <div>
     <!-- The shared header every instance table uses; the count says "x of y" when rows are
-         elsewhere (see headingCount). Not collapsible: it is the CLI tab's own table, and folding
-         it away would leave the tab's first screen empty. -->
+         elsewhere (see headingCount). It folds the table away to Quick add (owner, 2026-10-01: "the
+         list of accounts should be collapsable, so all I see is the add account section"), which
+         leaves CliMayte below the whole window. -->
     <InstanceSectionHeader
-      :collapsible="false"
+      v-model:open="accountsOpen"
       provider="claude"
       :title="$t('cliInstances.title')"
       :count="headingCount"
@@ -520,6 +524,12 @@ onUnmounted(() => stopPolling())
       @signed-in="refreshCliInstances({ silent: true })"
     />
 
+    <!-- Wide screens: at most about a third of the window, scrolling inside under its sticky header,
+         so the tab never scrolls as a whole (CliView). -->
+    <div
+      v-show="accountsOpen"
+      class="lg:[&>[data-slot=table-container]]:max-h-[35vh] lg:[&>[data-slot=table-container]]:overflow-y-auto"
+    >
     <Table>
       <TableHeader sticky>
         <TableRow>
@@ -803,6 +813,7 @@ onUnmounted(() => stopPolling())
         </TableRow>
       </TableBody>
     </Table>
+    </div>
 
     <CliInstanceNameDialog
       v-model:open="createOpen"
