@@ -26,6 +26,7 @@ import {
   CORCH_OUTCOME,
   corchAccountLabel,
   corchQueuedNote,
+  corchRunLabel,
   formatTokens,
   isCorchActive,
   tokenTotal,
@@ -50,6 +51,8 @@ const stickToBottom = ref(true)
 
 const active = computed(() => (props.worker ? isCorchActive(props.worker) : false))
 const failed = computed(() => props.worker?.status === 'failed')
+// What it asked for (model, effort) and the model the CLI reported at init.
+const run = computed(() => (props.worker ? corchRunLabel(props.worker) : null))
 // Every turn's closing text, when there was more than one (field note 13: a repo's Stop hook can
 // force a turn after the report, whose text would otherwise hide it).
 const turnResults = computed(() => props.worker?.results ?? [])
@@ -201,6 +204,19 @@ async function onStop() {
           </template>
           <dt class="text-muted-foreground">{{ $t('corch.detailTurns') }}</dt>
           <dd class="tabular-nums">{{ worker.turns }}</dd>
+          <dt class="text-muted-foreground">{{ $t('corch.detailModel') }}</dt>
+          <dd
+            :class="run?.differs ? 'text-amber-600 dark:text-amber-400' : ''"
+            :title="[worker.model, worker.reportedModel].filter(Boolean).join(' / ')"
+          >
+            {{
+              run?.differs
+                ? $t('corch.modelAskedRan', { asked: run.model, ran: run.ran })
+                : (run?.ran ?? run?.model ?? $t('corch.runDefault'))
+            }}
+          </dd>
+          <dt class="text-muted-foreground">{{ $t('corch.detailEffort') }}</dt>
+          <dd>{{ worker.effort ?? $t('corch.runDefault') }}</dd>
           <dt class="text-muted-foreground">{{ $t('corch.detailGroup') }}</dt>
           <dd class="mono truncate" :title="worker.group">{{ worker.group }}</dd>
         </dl>

@@ -21,6 +21,7 @@ import type { CorchWorkerView } from '@/lib/api'
 import { type CorchTotals, getCorchTotals, getCorchWorker, listCorchWorkers } from '@/lib/api'
 import {
   corchQueuedNote,
+  corchRunLabel,
   firstLine,
   formatTokens,
   isCorchActive,
@@ -149,9 +150,37 @@ function rowHint(w: CorchWorkerView): string {
         : w.status === 'running'
           ? w.lastActivity
           : null
-  return [w.title, w.account ?? t('corch.noAccount'), line, new Date(w.createdAt).toLocaleString()]
+  const run = corchRunLabel(w)
+  const runs = run
+    ? [
+        t('corch.rowRunHint', {
+          model: run.model ?? t('corch.runDefault'),
+          effort: run.effort ?? t('corch.runDefault'),
+        }),
+        run.ran ? t('corch.rowRanHint', { ran: run.ran }) : null,
+      ]
+    : []
+  return [
+    w.title,
+    w.account ?? t('corch.noAccount'),
+    ...runs,
+    line,
+    new Date(w.createdAt).toLocaleString(),
+  ]
     .filter(Boolean)
     .join('\n')
+}
+
+/** The row's small tag: the model that ran (else the one asked for) and the effort, e.g.
+ *  `Opus 5.5 · max`; amber when the CLI ran a different model than the one asked for. */
+function runTag(w: CorchWorkerView): { text: string; differs: boolean } | null {
+  const run = corchRunLabel(w)
+  if (!run) return null
+  const model = run.ran ?? run.model
+  return {
+    text: [model, run.effort].filter(Boolean).join(' · '),
+    differs: run.differs,
+  }
 }
 
 onMounted(() => {
@@ -277,6 +306,11 @@ onUnmounted(() => {
               >
                 <CorchStatusBadge :status="w.status" icon-only />
                 <span class="min-w-0 flex-1 truncate font-medium">{{ w.title }}</span>
+                <span
+                  v-if="runTag(w)"
+                  class="shrink-0 text-[11px] text-muted-foreground"
+                  :class="runTag(w)?.differs ? 'text-amber-600 dark:text-amber-400' : ''"
+                >{{ runTag(w)?.text }}</span>
                 <time
                   class="shrink-0 text-xs text-muted-foreground tabular-nums"
                   :datetime="new Date(w.createdAt).toISOString()"

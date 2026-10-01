@@ -54,6 +54,10 @@ export interface CorchAttempt {
   overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
   windDown?: { at: number; pct: number | null; path: string } // asked to hand off to `path` (pct null: on request)
   tokens?: CorchTokens // this attempt's own tokens (attemptSpend); absent on attempts before 2026-09-30
+  /** What it was launched with (`--model`, `--effort`; null: the CLI's default). Absent before 2026-10-01. */
+  requested?: { model: string | null; effort: string | null }
+  /** The model the CLI reported in its system/init event: what really ran. */
+  model?: string
   /** Run under a runner outside the daemon (corch-runner.ts), so a daemon restart leaves it running.
    *  `pid` is the runner's, filled from `pidFile` once it has started the CLI; the CLI's own is the
    *  attempt's `pid`. Absent on attempts spawned by the daemon directly (before 2026-09-30). */
@@ -221,7 +225,55 @@ export type CorchWorkerView = Omit<CorchWorker, 'prompt' | 'attempts'> & {
   prompt: string // first 300 chars
   account: string | null // `#<num> <name>`
   ranS: number // seconds its CLI sessions actually ran, summed over every attempt
-  attempts: Array<{ account: CorchAccountRef; outcome: AttemptOutcome; notice: string | null }>
+  /** The model the CLI reported at init on its newest attempt that got that far (`model` and
+   *  `effort` are what was asked for). */
+  reportedModel: string | null
+  attempts: Array<{
+    account: CorchAccountRef
+    outcome: AttemptOutcome
+    notice: string | null
+    requested?: { model: string | null; effort: string | null }
+    model?: string
+  }>
+}
+
+/** The models a worker may run (owner, 2026-09-30: Opus 5.5 or Sonnet 5.5), by the names the CLI
+ *  accepts for them (`claude --help`: an alias or the full name). Corch passes the full id, so a
+ *  later alias move cannot change what a recorded task asked for. */
+export const CORCH_MODELS: Readonly<Record<string, string>> = {
+  opus: 'claude-opus-5-5',
+  'opus-5.5': 'claude-opus-5-5',
+  'opus-5-5': 'claude-opus-5-5',
+  'claude-opus-5-5': 'claude-opus-5-5',
+  sonnet: 'claude-sonnet-5-5',
+  'sonnet-5.5': 'claude-sonnet-5-5',
+  'sonnet-5-5': 'claude-sonnet-5-5',
+  'claude-sonnet-5-5': 'claude-sonnet-5-5',
+}
+/** `claude --effort <level>` (2.1.284): how hard the model thinks on every turn. */
+export const CORCH_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+
+const blank = (v: unknown): boolean => v === undefined || v === null || v === ''
+
+/** The full model id for `v`, null when none was asked for. Throws on anything else, naming the
+ *  valid values: junk must never reach the CLI. */
+export function corchModel(v: unknown): string | null {
+  if (blank(v)) return null
+  const id = typeof v === 'string' ? CORCH_MODELS[v.trim().toLowerCase()] : undefined
+  if (!id)
+    throw new Error(
+      `unknown model '${String(v)}': use opus or sonnet (or claude-opus-5-5, claude-sonnet-5-5)`,
+    )
+  return id
+}
+
+/** The effort level for `v`, null when none was asked for. Throws on anything else. */
+export function corchEffort(v: unknown): string | null {
+  if (blank(v)) return null
+  const level = typeof v === 'string' ? v.trim().toLowerCase() : ''
+  if (!(CORCH_EFFORTS as readonly string[]).includes(level))
+    throw new Error(`unknown effort '${String(v)}': use ${CORCH_EFFORTS.join(', ')}`)
+  return level
 }
 
 export const WORKER_BRIEF =
@@ -751,6 +803,13 @@ export function toView(w: CorchWorker, now: number): CorchWorkerView {
         0,
       ) / 1000,
     ),
-    attempts: w.attempts.map((a) => ({ account: a.account, outcome: a.outcome, notice: a.notice })),
+    reportedModel: [...w.attempts].reverse().find((a) => a.model)?.model ?? null,
+    attempts: w.attempts.map((a) => ({
+      account: a.account,
+      outcome: a.outcome,
+      notice: a.notice,
+      requested: a.requested,
+      model: a.model,
+    })),
   }
 }

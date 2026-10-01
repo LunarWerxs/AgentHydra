@@ -56,6 +56,8 @@ import {
   classifyAttempt,
   continuationPrompt,
   copySessionTranscript,
+  corchEffort,
+  corchModel,
   freshestPct,
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
@@ -170,6 +172,8 @@ interface LogRead {
   events: unknown[]
   recent: string[]
   sawInit: boolean
+  /** The model system/init reported. */
+  model: string | null
   /** The CLI said the account ran out and paid extra usage took over (overageStart). */
   overage: { resetsAt: number | null } | null
   /** The newest usage reading the CLI streamed (liveUsage). */
@@ -623,6 +627,7 @@ const freshRead = (): LogRead => ({
   events: [],
   recent: [],
   sawInit: false,
+  model: null,
   overage: null,
   live: null,
 })
@@ -686,7 +691,11 @@ function readInto(path: string, r: LogRead): LogRead {
         } catch {
           continue
         }
-        if (isInit(ev)) r.sawInit = true
+        if (isInit(ev)) {
+          r.sawInit = true
+          const model = (ev as { model?: unknown }).model
+          if (typeof model === 'string' && model) r.model = model
+        }
         r.overage ??= overageStart(ev)
         r.live = liveUsage(ev, Date.now()) ?? r.live
         r.events.push(ev)
@@ -771,6 +780,7 @@ function poll(w: CorchWorker, accounts?: CorchAccount[]): void {
   const watching = !exited && !!at.runner
   const r = readLog(at.log)
   at.started ||= r.sawInit
+  if (r.model) at.model = r.model
   // Only from a process this daemon is watching now: after a restart an old log is read again from
   // the start, and its readings would be stamped as fresh.
   if (r.live && watching) {
@@ -1275,6 +1285,7 @@ function launch(
     resumed: resume,
     daemonPid: process.pid,
     runner,
+    requested: { model: w.model, effort: w.effort },
   })
   if (fromId) w.moves++
   // The journal: a move first (the account it left), then the start and why this account.
@@ -1292,6 +1303,8 @@ function launch(
     sessionPct: acct.sessionPct,
     weekPct: acct.weekPct,
     active: activeOnAccount,
+    model: w.model,
+    effort: w.effort,
   })
   if (delivers) w.pending.shift()
   if (fresh) {
@@ -1313,21 +1326,35 @@ function launch(
 
 const hex = (n: number): string => crypto.randomUUID().replace(/-/g, '').slice(0, n)
 
+/** `model` / `effort` at the top level are the group's default: a task that names its own wins.
+ *  Both are validated (corchModel, corchEffort) before anything is created. */
 export function corchRun(input: {
   tasks: Array<{ prompt: string; cwd: string; title?: string; model?: string; effort?: string }>
   group?: string
   accounts?: string[]
   perAccount?: number
+  model?: string
+  effort?: string
 }): { group: string; workers: CorchWorkerView[] } {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
-  for (const [i, t] of input.tasks.entries()) {
+  const groupModel = corchModel(input.model)
+  const groupEffort = corchEffort(input.effort)
+  const settings = input.tasks.map((t, i) => {
     if (typeof t?.prompt !== 'string' || !t.prompt.trim())
       throw new Error(`task ${i + 1}: prompt is empty`)
     if (typeof t.cwd !== 'string' || !existsSync(t.cwd) || !statSync(t.cwd).isDirectory())
       throw new Error(`task ${i + 1}: cwd '${t.cwd}' is not an existing folder`)
-  }
+    try {
+      return {
+        model: corchModel(t.model) ?? groupModel,
+        effort: corchEffort(t.effort) ?? groupEffort,
+      }
+    } catch (err) {
+      throw new Error(`task ${i + 1}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })
   const cap = input.perAccount ?? 2
   if (!Number.isInteger(cap) || cap < 1 || cap > 4) throw new Error('perAccount must be 1..4')
   const group = input.group?.trim() || `g-${hex(6)}`
@@ -1335,15 +1362,15 @@ export function corchRun(input: {
   if (input.perAccount !== undefined || !(group in perAccount)) perAccount[group] = cap
   const now = Date.now()
   const made = input.tasks.map(
-    (t): CorchWorker => ({
+    (t, i): CorchWorker => ({
       id: `w-${hex(8)}`,
       group,
       title: t.title?.trim() || t.prompt.replace(/\s+/g, ' ').trim().slice(0, 60),
       cwd: t.cwd,
       prompt: t.prompt,
       pending: [],
-      model: t.model || null,
-      effort: t.effort || null,
+      model: settings[i]?.model ?? null,
+      effort: settings[i]?.effort ?? null,
       accounts: input.accounts?.length ? input.accounts : null,
       status: 'queued',
       sessionId: crypto.randomUUID(),
@@ -1364,7 +1391,12 @@ export function corchRun(input: {
   )
   for (const w of made) {
     workers.set(w.id, w)
-    journal(w, 'dispatched', { cwd: w.cwd, accounts: w.accounts?.length })
+    journal(w, 'dispatched', {
+      cwd: w.cwd,
+      accounts: w.accounts?.length,
+      model: w.model,
+      effort: w.effort,
+    })
     changed(w)
   }
   startCorch()
@@ -1475,15 +1507,38 @@ const URGENT_PREFIX =
 export function corchSend(
   id: string,
   text: string,
-  opts: { urgent?: boolean } = {},
-): { ok: boolean; message: string; urgent?: boolean } {
+  opts: { urgent?: boolean; model?: string; effort?: string } = {},
+): {
+  ok: boolean
+  message: string
+  urgent?: boolean
+  model?: string | null
+  effort?: string | null
+} {
   load()
   const w = workers.get(id)
   if (!w) return { ok: false, message: 'No such worker.' }
   if (!text.trim()) return { ok: false, message: 'The message is empty.' }
+  // A new model or effort applies from the next launch on: the turn that delivers this message
+  // (or one queued before it) and every later one, in the same session (`--resume` takes both).
+  let model: string | null
+  let effort: string | null
+  try {
+    model = corchModel(opts.model)
+    effort = corchEffort(opts.effort)
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+  }
+  if (model) w.model = model
+  if (effort) w.effort = effort
   if (w.status === 'running' && opts.urgent) {
     w.pending.unshift(`${URGENT_PREFIX}\n\n${text}`)
-    journal(w, 'follow-up-queued', { pending: w.pending.length, urgent: true })
+    journal(w, 'follow-up-queued', {
+      pending: w.pending.length,
+      urgent: true,
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
+    })
     if (stopRunning(w, 'Stopped to deliver an urgent message from the orchestrator.')) {
       w.status = 'queued'
       w.retries = 0
@@ -1496,17 +1551,23 @@ export function corchSend(
       return {
         ok: true,
         urgent: true,
+        model: w.model,
+        effort: w.effort,
         message: `Stopped its running work; the same session continues now with this message first${more ? `, then the ${more} message(s) queued before it` : ''}.`,
       }
     }
     // It finished on its own a moment ago: the message leads its next turn like any other.
   } else {
     w.pending.push(text)
-    journal(w, 'follow-up-queued', { pending: w.pending.length })
+    journal(w, 'follow-up-queued', {
+      pending: w.pending.length,
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
+    })
   }
   if (w.status === 'running') {
     changed(w)
-    return { ok: true, message: HELD_MESSAGE }
+    return { ok: true, message: HELD_MESSAGE, model: w.model, effort: w.effort }
   }
   if (!isActive(w)) {
     w.status = 'queued'
@@ -1516,7 +1577,12 @@ export function corchSend(
   }
   changed(w)
   schedule(0)
-  return { ok: true, message: 'Queued as the next turn of the same session.' }
+  return {
+    ok: true,
+    message: 'Queued as the next turn of the same session.',
+    model: w.model,
+    effort: w.effort,
+  }
 }
 
 /** End a running worker's attempt now: kill its CLI and record the attempt as stopped, with its

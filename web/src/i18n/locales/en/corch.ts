@@ -52,6 +52,12 @@ export default {
   detailRan: 'Working time',
   detailCost: 'Cost',
   detailTurns: 'Turns',
+  detailModel: 'Model',
+  detailEffort: 'Thinking',
+  runDefault: 'default',
+  modelAskedRan: 'asked {asked}, ran {ran}',
+  rowRunHint: 'Model {model}, thinking {effort}',
+  rowRanHint: 'The CLI ran {ran}',
   detailTokens: 'Tokens',
   tokensBreakdown:
     '{input} input · {output} output · {cacheRead} cache read · {cacheWrite} cache write',

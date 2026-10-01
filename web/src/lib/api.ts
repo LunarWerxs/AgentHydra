@@ -904,7 +904,18 @@ export interface CorchWorkerView {
   accountId: string | null
   /** `#<num> <name>` or null */
   account: string | null
-  attempts: { account: CorchAccountRef; outcome: CorchAttemptOutcome; notice: string | null }[]
+  attempts: {
+    account: CorchAccountRef
+    outcome: CorchAttemptOutcome
+    notice: string | null
+    /** What the attempt was launched with (absent on attempts recorded earlier). */
+    requested?: { model: string | null; effort: string | null }
+    /** The model the CLI reported at init. */
+    model?: string
+  }[]
+  /** The model the CLI reported at init on the newest attempt that got that far (`model` and
+   *  `effort` are what was asked for; null model or effort: the CLI's default). */
+  reportedModel?: string | null
   result: string | null
   /** Each turn's closing text, oldest first (a repo's Stop hook can force turns after the report);
    *  `result` is them joined. Absent on tasks recorded earlier. */
@@ -1022,6 +1033,8 @@ export interface CorchJournalEntry {
   totalCostUsd?: number
   error?: string
   said?: string
+  model?: string | null
+  effort?: string | null
   cwd?: string
   accounts?: number
 }

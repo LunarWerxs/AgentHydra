@@ -645,7 +645,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'corch_run',
     description:
-      'MUTATES: CORCH A TASK. When the owner tells a chat to corch a task or fully delegate it, the chat keeps only the orchestration (split, dispatch, read results, check them) and every piece of real work goes here. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER\'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra\'s Corch view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what "done" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps concurrent workers per account. Returns the group and, per worker, its id, title, status and account; then corch_status {group, wait_seconds} waits for results.',
+      'MUTATES: CORCH A TASK. When the owner tells a chat to corch a task or fully delegate it, the chat keeps only the orchestration (split, dispatch, read results, check them) and every piece of real work goes here. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER\'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra\'s Corch view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what "done" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps concurrent workers per account; top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). Returns the group and, per worker, its id, title, status and account; then corch_status {group, wait_seconds} waits for results.',
     inputSchema: S(
       {
         tasks: {
@@ -656,8 +656,16 @@ export const TOOLS: McpEngineTool[] = [
               prompt: { type: 'string' },
               cwd: { type: 'string' },
               title: { type: 'string' },
-              model: { type: 'string' },
-              effort: { type: 'string' },
+              model: {
+                type: 'string',
+                description:
+                  'Model: opus (Opus 5.5) or sonnet (Sonnet 5.5); the full ids claude-opus-5-5 / claude-sonnet-5-5 work too. Omit for the CLI default.',
+              },
+              effort: {
+                type: 'string',
+                description:
+                  'Thinking level: low, medium, high, xhigh or max (how hard the model thinks on every turn). Omit for the default.',
+              },
             },
             required: ['prompt', 'cwd'],
           },
@@ -670,6 +678,15 @@ export const TOOLS: McpEngineTool[] = [
             'CLI instances to use: numbers (7, "#7") or ids. Omit for every signed-in one.',
         },
         per_account: { type: 'number' },
+        model: {
+          type: 'string',
+          description: 'Default model for every task without its own: opus or sonnet.',
+        },
+        effort: {
+          type: 'string',
+          description:
+            'Default thinking level for every task without its own: low, medium, high, xhigh or max.',
+        },
       },
       ['tasks'],
     ),
@@ -694,6 +711,8 @@ export const TOOLS: McpEngineTool[] = [
           group: a.group != null ? str(a.group) : undefined,
           accounts,
           perAccount: a.per_account != null ? Number(a.per_account) : undefined,
+          model: a.model != null ? str(a.model) : undefined,
+          effort: a.effort != null ? str(a.effort) : undefined,
         }),
       })) as { group?: string; workers?: Array<Record<string, unknown>> }
       // Field note 7 (2026-09-30): the whole view per worker echoed 300 characters of every prompt
@@ -771,7 +790,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'corch_send',
     description:
-      'MUTATES: send a follow-up message to a Corch worker, as the next turn in the SAME session. To a finished, failed or stopped worker it starts at once. To a RUNNING worker it is HELD UNTIL THE WHOLE CURRENT TASK ENDS (a running CLI session takes no input mid-run; that can be many minutes), unless `urgent: true`: then the running work is stopped cleanly (cost recorded, transcript kept) and the same session continues at once with this message first, followed by anything queued before it. Use urgent for steering that cannot wait (stop, change course, fix what you broke). Like the task, the message must be self-contained: the worker sees nothing of this chat.',
+      'MUTATES: send a follow-up message to a Corch worker, as the next turn in the SAME session. To a finished, failed or stopped worker it starts at once. To a RUNNING worker it is HELD UNTIL THE WHOLE CURRENT TASK ENDS (a running CLI session takes no input mid-run; that can be many minutes), unless `urgent: true`: then the running work is stopped cleanly (cost recorded, transcript kept) and the same session continues at once with this message first, followed by anything queued before it. Use urgent for steering that cannot wait (stop, change course, fix what you broke). `model` / `effort` switch the worker for this turn and every later one, in the same session (e.g. escalate a struggling worker from sonnet/medium to opus/xhigh in one call). Like the task, the message must be self-contained: the worker sees nothing of this chat.',
     inputSchema: S(
       {
         id: { type: 'string' },
@@ -781,6 +800,15 @@ export const TOOLS: McpEngineTool[] = [
           description:
             'Stop a running worker now and deliver this first (default false: held until its task ends).',
         },
+        model: {
+          type: 'string',
+          description: 'Run this turn and the later ones on this model: opus or sonnet.',
+        },
+        effort: {
+          type: 'string',
+          description:
+            'Run this turn and the later ones at this thinking level: low, medium, high, xhigh or max.',
+        },
       },
       ['id', 'text'],
     ),
@@ -788,7 +816,12 @@ export const TOOLS: McpEngineTool[] = [
       api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/send`, {
         method: 'POST',
         headers: JSON_HEADERS,
-        body: JSON.stringify({ text: str(a.text), urgent: a.urgent === true }),
+        body: JSON.stringify({
+          text: str(a.text),
+          urgent: a.urgent === true,
+          model: a.model != null ? str(a.model) : undefined,
+          effort: a.effort != null ? str(a.effort) : undefined,
+        }),
       }),
   },
   {

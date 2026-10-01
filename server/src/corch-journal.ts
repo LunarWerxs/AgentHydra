@@ -59,6 +59,8 @@ export interface CorchJournalEntry {
   totalCostUsd?: number // done / turn-done: the worker's so far
   error?: string // failed / waiting: the first line
   said?: string // turn-end: the first line of the turn's closing text
+  model?: string | null // dispatched / launched / follow-ups: the model asked for (null: the CLI's default)
+  effort?: string | null // the same, for the effort level
   cwd?: string // dispatched
   accounts?: number // dispatched: how many accounts it is restricted to (absent: any)
 }
@@ -167,12 +169,17 @@ export function journalTime(ts: string, now: Date = new Date()): string {
 export function describeJournalEntry(e: CorchJournalEntry, now: Date = new Date()): string {
   const on = e.account ? ` on ${e.account}` : ''
   const pick = `(session ${pct(e.sessionPct)}, week ${pct(e.weekPct)}, ${e.active ?? 0} active)`
+  // The model and effort asked for, when either was (the entry records null for the CLI's default).
+  const runs =
+    e.model || e.effort
+      ? ` with ${e.model ?? 'the default model'}, effort ${e.effort ?? 'default'}`
+      : ''
   const at = (iso: string | undefined): string => (iso ? journalTime(iso, now) : '?')
   switch (e.event) {
     case 'dispatched':
-      return `dispatched in ${e.cwd ?? '?'}${e.accounts ? ` (restricted to ${e.accounts} account${e.accounts === 1 ? '' : 's'})` : ''}`
+      return `dispatched in ${e.cwd ?? '?'}${e.accounts ? ` (restricted to ${e.accounts} account${e.accounts === 1 ? '' : 's'})` : ''}${runs}`
     case 'launched':
-      return `launched${on} ${pick}${e.attempt && e.attempt > 1 ? `, attempt ${e.attempt}` : ''}`
+      return `launched${on} ${pick}${e.attempt && e.attempt > 1 ? `, attempt ${e.attempt}` : ''}${runs}`
     case 'moved':
       return `moved from ${e.from ?? '?'} to ${e.account ?? '?'}${e.copied === false ? ' (no transcript to carry)' : ''}`
     case 'limit':
@@ -184,13 +191,13 @@ export function describeJournalEntry(e: CorchJournalEntry, now: Date = new Date(
     case 'handoff-written':
       return `wrote its handoff${on}`
     case 'handoff-resumed':
-      return `resumed from its handoff${on} ${pick}`
+      return `resumed from its handoff${on} ${pick}${runs}`
     case 'follow-up-queued':
       return e.urgent
-        ? `urgent follow-up: its running work is stopped to deliver it first (${e.pending ?? 1} waiting)`
-        : `follow-up queued (${e.pending ?? 1} waiting)`
+        ? `urgent follow-up: its running work is stopped to deliver it first (${e.pending ?? 1} waiting)${runs}`
+        : `follow-up queued (${e.pending ?? 1} waiting)${runs}`
     case 'follow-up-delivered':
-      return `follow-up delivered${on} ${pick}`
+      return `follow-up delivered${on} ${pick}${runs}`
     case 'retry':
       return `retry ${e.retry ?? '?'}/3${on} in ${e.waitS ?? 0} s${e.notice ? `: ${e.notice}` : ''}`
     case 'interrupted':

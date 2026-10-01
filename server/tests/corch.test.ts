@@ -804,6 +804,46 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     expect(corchJournal({ id }).find((e) => e.urgent)?.event).toBe('follow-up-queued')
   }, 25_000)
 
+  test('model and effort: unknown values are refused, aliases become full ids, the group default fills in', () => {
+    expect(() => corchRun({ tasks: [{ prompt: 'x', cwd, model: 'haiku' }] })).toThrow(
+      "task 1: unknown model 'haiku': use opus or sonnet",
+    )
+    expect(() => corchRun({ tasks: [{ prompt: 'x', cwd, effort: 'ultra' }] })).toThrow(
+      'use low, medium, high, xhigh, max',
+    )
+    expect(() => corchRun({ model: 'gpt', tasks: [{ prompt: 'x', cwd }] })).toThrow('unknown model')
+    const run = corchRun({
+      model: 'sonnet',
+      effort: 'medium',
+      tasks: [
+        { prompt: 'by default', cwd },
+        { prompt: 'its own', cwd, model: 'Opus', effort: 'xhigh' },
+      ],
+    })
+    corchCancel({ group: run.group })
+    expect(run.workers.map((w) => [w.model, w.effort])).toEqual([
+      ['claude-sonnet-5-5', 'medium'],
+      ['claude-opus-5-5', 'xhigh'],
+    ])
+  })
+
+  test('a follow-up switches model and effort for its turn on, in the same session', async () => {
+    const id = await start('escalate', 'slow-3')
+    const session = corchList({ id })[0]?.sessionId
+    expect(corchSend(id, 'x', { model: 'fable' })).toMatchObject({ ok: false })
+    const sent = corchSend(id, 'try harder', { urgent: true, model: 'opus', effort: 'xhigh' })
+    expect(sent).toMatchObject({ ok: true, model: 'claude-opus-5-5', effort: 'xhigh' })
+    const w = await settle(id, 15_000)
+    expect(w?.status).toBe('done')
+    expect(w?.attempts.at(-1)?.requested).toEqual({ model: 'claude-opus-5-5', effort: 'xhigh' })
+    expect(w?.attempts[0]?.requested).toEqual({ model: null, effort: null })
+    // The fake CLI reports the --model it was given, as the real one does at init.
+    expect(w?.reportedModel).toBe('claude-opus-5-5')
+    expect(corchGet(id)?.sessionId).toBe(session)
+    const delivered = corchJournal({ id }).filter((e) => e.event === 'follow-up-delivered')
+    expect(delivered.at(-1)).toMatchObject({ model: 'claude-opus-5-5', effort: 'xhigh' })
+  }, 25_000)
+
   test('a cancel keeps queued messages and delivers them when the worker is continued', async () => {
     const id = await start('cancel keeps', 'slow-2')
     corchSend(id, 'first')

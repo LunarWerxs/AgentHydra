@@ -124,3 +124,26 @@ export const formatTokens = (n: number): string => compact.format(n)
 
 /** The first line of a multi-line message, for a one-line row. */
 export const firstLine = (s: string): string => s.split('\n', 1)[0] ?? s
+
+/** A model id as people say it: `claude-opus-5-5` → `Opus 5.5`. Anything else is shown as given. */
+export function modelName(id: string): string {
+  const m = /^claude-([a-z]+)-(\d+)-(\d+)/.exec(id)
+  if (!m) return id
+  const [, family = '', major, minor] = m
+  return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${major}.${minor}`
+}
+
+/** The model and effort a task asked for and the model that ran, for the row's tag and the detail.
+ *  null when it asked for neither and nothing has reported yet (the CLI's defaults). */
+export function corchRunLabel(
+  w: Pick<CorchWorkerView, 'model' | 'effort' | 'reportedModel'>,
+): { model: string | null; effort: string | null; ran: string | null; differs: boolean } | null {
+  const ran = w.reportedModel ?? null
+  if (!w.model && !w.effort && !ran) return null
+  return {
+    model: w.model ? modelName(w.model) : null,
+    effort: w.effort,
+    ran: ran ? modelName(ran) : null,
+    differs: !!(w.model && ran && w.model !== ran),
+  }
+}

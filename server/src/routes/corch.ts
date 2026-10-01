@@ -93,6 +93,9 @@ app.post('/api/corch/workers', async (c) => {
         group: optStr(body.group),
         accounts,
         perAccount: typeof body.perAccount === 'number' ? body.perAccount : undefined,
+        // Validated by corchRun (unknown values are refused with the valid ones listed).
+        model: body.model as string | undefined,
+        effort: body.effort as string | undefined,
       }),
     )
   } catch (err) {
@@ -103,7 +106,13 @@ app.post('/api/corch/workers/:id/send', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.text !== 'string' || !body.text.trim())
     return c.json({ error: 'text is required' }, 400)
-  return c.json(corchSend(c.req.param('id'), body.text, { urgent: body.urgent === true }))
+  return c.json(
+    corchSend(c.req.param('id'), body.text, {
+      urgent: body.urgent === true,
+      model: body.model as string | undefined,
+      effort: body.effort as string | undefined,
+    }),
+  )
 })
 app.post('/api/corch/workers/:id/handoff', (c) => c.json(corchHandoff(c.req.param('id'))))
 app.post('/api/corch/cancel', async (c) => {

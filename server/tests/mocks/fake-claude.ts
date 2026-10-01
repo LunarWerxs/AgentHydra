@@ -20,7 +20,9 @@ const prompt = await Bun.stdin.text()
 
 const emit = (ev: unknown) => process.stdout.write(`${JSON.stringify(ev)}\n`)
 const line = (ev: unknown) => `${JSON.stringify(ev)}\n`
-const init = () => emit({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model' })
+// Like the real CLI, init reports the model it runs: the one `--model` named, else its default.
+const init = () =>
+  emit({ type: 'system', subtype: 'init', session_id: sessionId, model: flag('--model') ?? 'fake-model' })
 
 function findTranscript(): string | null {
   const projects = join(configDir, 'projects')

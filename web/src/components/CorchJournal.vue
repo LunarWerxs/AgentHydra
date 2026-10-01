@@ -12,6 +12,7 @@ import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import type { CorchJournalEntry } from '@/lib/api'
 import { getCorchJournal } from '@/lib/api'
+import { modelName } from '@/lib/corch-status'
 
 const props = defineProps<{ workerId: string; group: string; updatedAt: number }>()
 
@@ -127,7 +128,12 @@ function line(e: CorchJournalEntry): string {
 }
 
 /** The CLI's own words or the error, shown under the sentence. */
-const detail = (e: CorchJournalEntry) => e.error ?? e.notice ?? e.said ?? null
+const detail = (e: CorchJournalEntry) =>
+  e.error ??
+  e.notice ??
+  e.said ??
+  // The model and effort a launch or follow-up asked for (product names, not prose).
+  ([e.model ? modelName(e.model) : null, e.effort].filter(Boolean).join(' · ') || null)
 
 const rows = computed(() =>
   entries.value.map((e, i) => ({
