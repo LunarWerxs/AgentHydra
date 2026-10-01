@@ -1125,6 +1125,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
   const groups: string[] = []
   let sessionPct = 0
   let factor = 1
+  const resetAt = Date.now() + 2 * 3_600_000
 
   afterAll(() => {
     for (const group of groups) climayteCancel({ group })
@@ -1167,6 +1168,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
         sessionPct,
         weekPct: 0,
         planFactor: factor,
+        sessionResetsAt: resetAt,
       },
     ])
     startCliMayte()
@@ -1232,7 +1234,11 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     expect(w?.error).toContain('Waiting for room')
     // The row a status read returns carries the size, with the room when it started waiting.
     expect(w?.size).toMatchObject({ window: 95, room: 25, roomOn: '#41' })
+    // When it expects room, for a waiter to sleep until: the account's 5-hour reset, in UTC.
+    expect(w?.waitUntil).toBe(new Date(resetAt).toISOString())
     sessionPct = 10
-    expect((await settle(id))?.status).toBe('done')
+    const done = await settle(id)
+    expect(done?.status).toBe('done')
+    expect(done?.waitUntil).toBeUndefined()
   }, 60_000)
 })

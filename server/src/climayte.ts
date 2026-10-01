@@ -296,20 +296,26 @@ function signedInAccounts(): CliMayteAccount[] {
       const u = latestUsage(i.id, i.lastUsageCheck, cache)
       const snapshotAt = u ? Date.parse(u.capturedAt) || 0 : 0
       const live = liveByAccount.get(i.id) ?? null
+      const liveSession =
+        live && live.sessionPct !== null
+          ? { pct: live.sessionPct, resetsAt: live.sessionResetsAt, at: live.at }
+          : null
+      const sessionPct = freshestPct(u?.session, snapshotAt, liveSession, now)
+      // The reset of whichever reading sessionPct came from.
+      const resets =
+        liveSession && liveSession.at > snapshotAt
+          ? liveSession.resetsAt
+          : u?.session?.resetsAt
+            ? Date.parse(u.session.resetsAt) || null
+            : null
       return {
         id: i.id,
         num: i.num ?? null,
         name: i.name,
         configDir: i.configDir,
         planFactor: planFactor(i.planLabel),
-        sessionPct: freshestPct(
-          u?.session,
-          snapshotAt,
-          live && live.sessionPct !== null
-            ? { pct: live.sessionPct, resetsAt: live.sessionResetsAt, at: live.at }
-            : null,
-          now,
-        ),
+        sessionPct,
+        sessionResetsAt: sessionPct !== null && resets !== null && resets > now ? resets : null,
         weekPct: freshestPct(
           u?.weekAll,
           snapshotAt,
@@ -829,6 +835,20 @@ async function tick(): Promise<void> {
     const due = [...workers.values()]
       .filter((w) => (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now)
       .sort(dueOrder)
+    // When an account can next take work: the end of its usage wall, else its 5-hour reset. A login
+    // wall's `until` is only its next recheck, not a time the account frees up.
+    const freesAt = (a: CliMayteAccount): number | null => {
+      const wall = walls[a.id]
+      if (wall && wall.until > now) return isLoginWall(wall.reason) ? null : wall.until
+      return a.sessionResetsAt ?? null
+    }
+    const firstFree = (pool: CliMayteAccount[]): string | null => {
+      const at = pool
+        .map(freesAt)
+        .filter((t): t is number => t !== null && t > now)
+        .sort((a, b) => a - b)[0]
+      return at === undefined ? null : new Date(at).toISOString()
+    }
     for (const w of due) {
       try {
         const cap = perAccount[w.group] ?? 2
@@ -867,9 +887,17 @@ async function tick(): Promise<void> {
           )
           const head = `Waiting for room: this task is expected to use about ${Math.round(expected)}% of a Pro 5-hour window`
           const why = `${head}, and the best account now (${acctLabel(acct)}) has about ${Math.round(room)}% left. It starts the moment one has room (a reset, or the work there finishing); smaller tasks go meanwhile.`
+          // Room for certain at the first reset of an account whose fresh window holds it (the work
+          // running there may finish sooner).
+          const until = firstFree(allowed.filter((a) => expected / (a.planFactor ?? 1) <= FIT_PCT))
+          if (w.waitUntil !== until && w.status === 'waiting') {
+            w.waitUntil = until
+            changed(w)
+          }
           // Said again only when the estimate changes: the room left moves every tick, and each new
           // figure would be a journal line.
           if (w.status !== 'waiting' || !w.error?.startsWith(head)) {
+            w.waitUntil = until
             w.status = 'waiting'
             w.error = why
             w.size = {
@@ -933,12 +961,8 @@ async function tick(): Promise<void> {
           }
           continue
         }
-        // A login wall's `until` is only its next recheck, not a time the account frees up.
-        const soonest = allowed
-          .map((a) => walls[a.id])
-          .filter((x) => x !== undefined && !isLoginWall(x.reason) && x.until > now)
-          .map((x) => x!.until)
-          .sort((a, b) => a - b)[0]
+        const until = firstFree(allowed)
+        const soonest = until ? Date.parse(until) : undefined
         const allSignedOut =
           allowed.length > 0 &&
           allowed.every((a) => isLoginWall(walls[a.id]?.reason) && walls[a.id]!.until > now)
@@ -949,10 +973,12 @@ async function tick(): Promise<void> {
             : allSignedOut
               ? 'Every CLI account is signed out. Sign one in again: CLI instances, Quick add (type its email).'
               : `Every eligible account is at its usage limit or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.`
-        if (w.status !== 'waiting' || w.error !== why) {
+        if (w.status !== 'waiting' || w.error !== why || w.waitUntil !== until) {
+          if (w.status !== 'waiting' || w.error !== why)
+            journal(w, 'waiting', { error: firstLine(why) })
           w.status = 'waiting'
           w.error = why
-          journal(w, 'waiting', { error: firstLine(why) })
+          w.waitUntil = until
           changed(w)
         }
       } catch (err) {

@@ -150,6 +150,9 @@ export interface CliMayteWorker {
   moves: number // how many times the session changed account
   retries: number // transient or interrupted retries used in the current turn
   notBefore: number | null // epoch ms; a transient retry waits until then
+  /** While waiting: when it expects to start (ISO, UTC), the first account's limit or reset that
+   *  lets it; absent or null when not known. A waiter reads this, never the error text's local time. */
+  waitUntil?: string | null
   revived?: boolean // a message revived it after it stopped: deliver that message next
   sessions?: string[] // earlier sessions of this task, oldest first (each handoff starts a new one)
   /** The kind of work (climayte-scorecard CLIMAYTE_KINDS): the scorecard learns what each kind needs. */
@@ -184,6 +187,8 @@ export interface CliMayteAccount {
   weekPct: number | null
   /** How many Pro windows its 5-hour window holds (climayte-placement planFactor): Pro 1, Max 5x 5. */
   planFactor?: number
+  /** When the 5-hour window `sessionPct` was read from resets (epoch ms); null when unknown. */
+  sessionResetsAt?: number | null
 }
 
 /** `cred` (signed-out walls only): the mtime of the account's `.credentials.json` when it was
@@ -983,6 +988,7 @@ export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
   return {
     ...w,
     prompt: w.prompt.slice(0, 300),
+    waitUntil: w.status === 'waiting' ? (w.waitUntil ?? null) : undefined,
     account: ref ? (ref.num === null ? ref.name : `#${ref.num} ${ref.name}`) : null,
     // Working time, not time since it was created: hours spent waiting for an account, or a day
     // between a finished task and its follow-up, are not time it ran.
