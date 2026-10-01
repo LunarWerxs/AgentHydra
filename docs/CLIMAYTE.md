@@ -388,12 +388,14 @@ whole task or smaller ones. Max 5x and 20x accounts join the Pro ones, so every 
 plan: a Max 5x window holds five Pro windows (`planFactor`).
 
 - **At dispatch** (`climayte_run`): each task's expected cost (`expectedCost`: its kind on its model
-  and effort, else its kind, else its model family, else 25%) against the biggest window among the
-  accounts it may use. Over half of it (`SPLIT_SHARE`) the whole dispatch starts nothing and answers
+  and effort, else its kind on its model family, else its kind on other models scaled by the meter's
+  model weight (an Opus token weighs two Sonnet ones), else its model family, else 25%) against the
+  biggest window among the accounts it may use. Over half of it (`SPLIT_SHARE`) the whole dispatch starts nothing and answers
   `split needed` (HTTP 409 with `splitNeeded: [{task, title, expected, window, pieces}]`), with
   pieces that each stay under half; `size: 'whole'` on the task or the dispatch runs it as it is.
-  Every answer carries `sizing` per worker: the expected % and its basis, the biggest window, and the
-  most room any account has now (`room`, `roomOn`), all in % of a Pro window.
+  Every task row carries `size` (stored at dispatch): the expected % and its basis in words, the
+  biggest window, and the most room any account had (`room`, `roomOn`), all in % of a Pro window;
+  `room` is re-recorded when the task starts waiting.
 - **At start** (the tick): when the best account pickAccount finds would not hold the task to the
   end (projected over FIT_PCT) but a fresh window of an account it may use would, the task waits
   ("Waiting for room ...") and smaller tasks take that room; it starts first once an account has
