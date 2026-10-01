@@ -15,7 +15,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   instances can now log out too, and show their plan (Pro, Max 5×, Max 20×). The delete dialog's
   name to type copies itself on click. "Last running" (now, or how long ago) replaces "Last
   launched". Quick add results close by themselves. The Corch list is one line per task: a status
-  icon, the title and the time. Background refreshes only redraw what actually changed.
+  icon, the title and the time, in a list about 24 rows tall that scrolls by itself. A task's
+  header shows its status, account, working time and tokens with cost; the rest is one hover away.
+  Background refreshes only redraw what actually changed.
 
 - **Restarting AgentHydra no longer stops Corch tasks** (`server/src/corch-runner.ts`). Each task's
   Claude CLI now runs under a small runner started outside AgentHydra's own process, so a restart or
@@ -116,6 +118,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Corch's token count is right, and says what it counts** (`server/src/corch.ts`). Work done
+  before a task was handed to a fresh session counted as 0 tokens, so the total showed 289M where
+  the real figure was 337M. Each run now records its own session, and the counter says "runs"
+  (every start of the CLI) with how they ended and how many separate conversations they were.
+- **Corch no longer bounces a task between nearly-full accounts** (`server/src/corch-lib.ts`). An
+  account past 85% of its window takes no new work, so a handed-off task waits for real room
+  instead of hopping onto one account after another that is about to run out (20 such hops in 4
+  minutes in the first real run).
+- **An account whose organization turned Claude Code off is left alone** (`server/src/corch.ts`).
+  Corch retried it every 30 minutes with every waiting task at once; it now stays out until it
+  signs in with another login, and the CLI list says why.
+- **Accounts at their limit read "Limit"** (`server/src/usage-live.ts`, `web/src/lib/usage.ts`).
+  An account Corch saw hit its limit no longer shows the lower number from before (43-50% while it
+  could not run anything), and one past 100% no longer reads "104%".
 - **Usage numbers no longer lag behind busy CLI accounts** (`server/src/usage-live.ts`). The
   usage check runs every 30 minutes, so an account Corch was working hard showed a number up to
   half an hour old (34% on an account really at 88%). Accounts with a Corch task running now show

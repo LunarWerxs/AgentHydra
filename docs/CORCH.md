@@ -145,16 +145,32 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
 ### Tokens, totals and the usage tables
 
 - Every attempt records `tokens { input, output, cacheRead, cacheWrite }` beside its cost
-  (`attemptSpend`: its own transcript turns in [startedAt, endedAt]); the worker sums them
-  (`d79e66c`). `corchTotals()` (`GET /api/corch/totals`) sums tasks, attempts ("CLI sessions"),
-  tokens and cost over every task on record for the view's counter. Cache reads dominate the
-  token total (a turn re-reads its whole context from cache).
+  (`attemptSpend`: its own transcript turns in [startedAt, endedAt], plus its subagents' files
+  under `<session>/subagents/`); the worker sums them (`d79e66c`). Each attempt also records its
+  own `sessionId` (`95a9a76`): a planned handoff starts a new session, and the first backfill read
+  every older attempt against the task's CURRENT session, so the attempts before a handoff counted
+  0 tokens (47M missing in run 1). Those were recounted once from the session id in each
+  attempt's log (`sessionOfLog`); their cost had been charged correctly at the time.
+- `corchTotals()` (`GET /api/corch/totals`) sums tasks, runs (`sessions`: every start of the CLI,
+  retries, resumes and handoffs included), `runsByOutcome`, `cliSessions` (distinct conversations:
+  a handoff starts one, a resume or a move carries one on), tokens and cost over every task on
+  record, from every chat, for the view's counter, which says "runs" and gives the split in its
+  hover. Run 1 measured: 2,105 requests averaging 160k tokens of context, so 324M of 337M tokens
+  were cache reads (35% of the cost); cache writes were 3% of the tokens and 45% of the cost
+  (1-hour writes at 2x input), output 19%.
 - `corchRemove(ids)` (`POST /api/corch/remove`) drops finished tasks; their logs and transcripts
   move to `corch/archive/<stamp>/<id>/`, never deleted. 121 test tasks were archived this way.
 - `corchLiveReadings()` hands each account's newest streamed reading to `usage-live.ts`, which lays
   it over the cached snapshot in `GET /api/usage/cache` and `GET /api/cli-instances`: the usage
   sweep reads each account only every 30 minutes, a running worker's reading is seconds old
-  (`6c34872`; #84 read 34% in the table while its workers streamed 85-88%).
+  (`6c34872`; #84 read 34% in the table while its workers streamed 85-88%). The readings are kept
+  in `corch/live.json` across restarts (a restart used to drop them, and the table fell back to a
+  snapshot from before the limit); a reading whose window has reset is void.
+- `corchLimitWalls()` lays Corch's usage-limit walls over the same tables (`withLimitWall`): a
+  walled account shows that window at its limit (at least 100%, the wall's reset time) until the
+  wall ends (field note 19: five walled accounts read 43-50%). The chips say "Limit" at or past
+  100%: Anthropic reports 101-106% once a window is spent, because requests already running when
+  it hit still count.
 
 ### Model and thinking (field note 16)
 
@@ -196,7 +212,11 @@ flags are honoured; neither is silently ignored.
     now + 60 min when unparsable; status `queued` with the handoff flag (next attempt resumes the
     session on a DIFFERENT account with `HANDOFF_PROMPT`).
   - `auth`: wall the account for 30 min with reason `signed out`; requeue as a handoff (the
-    session may have written nothing yet; that is fine, see below).
+    session may have written nothing yet; that is fine, see below). "Your organization has disabled
+    Claude subscription access" walls it as `organization disabled Claude Code` instead
+    (`ORG_DISABLED_WALL`), lifted only by a new login: `claude auth status` passes such a login, so
+    the 30-minute recheck lifted the old wall every time and every waiting task hit the account at
+    once (run 1: #91, 11 failed runs, 4 in one second).
   - `transient`: `retries < 3` → `notBefore = now + [5, 10, 20]s[retries]`, `retries++`, requeue
     on the same account (resume if the session file exists, else first-attempt again);
     otherwise `failed`.
@@ -235,7 +255,12 @@ Emit a change event (`onCorchChange(cb) → unsubscribe`) whenever a worker's st
   `max(sessionPct ?? 50, weekPct ?? 50) + 100 * active`; lowest wins; ties by `num`. `active` counts
   the workers running on the account from EVERY group (field note 8: at 25, a busy account at 0%
   still beat an idle one at 30%, so two orchestrations piled onto one account); `perAccount` stays
-  a per-group cap, with `MAX_PER_ACCOUNT` above it in total.
+  a per-group cap, with `MAX_PER_ACCOUNT` above it in total. Past the wind-down line (85% session,
+  95% week) an account takes no NEW work: not a new task, a handoff's continuation or a moved
+  session, only the session already on it (its home). Run 1, 19:32-19:36: the one account below
+  the line was at its worker cap, so twenty continuations went to accounts at 89-97% and were told
+  to hand off again within three calls (about 290k tokens and $0.75 each). `roomElsewhere` (should
+  a session near its limit hand off?) asks `pickAccount` itself, so worker caps count there too.
 - `copySessionTranscript(fromConfigDir, toConfigDir, sessionId): boolean`: find
   `<from>/projects/*/<sessionId>.jsonl`, copy it (and a sibling `<sessionId>/` directory when
   present, recursively) into `<to>/projects/<same folder name>/`. Returns false when the source is
@@ -252,7 +277,8 @@ An account Corch walls `signed out` (its last attempt failed `auth`, and its cre
 changed since) lists `loggedIn: false` with a `loginNote` saying why, in `list_cli_instances` and
 the CLI tab alike, without running `claude auth status` per row. The wall is rechecked in the
 background with `cliAuthStatus` every 30 min, and lifts at once when the credential file changes (a
-fresh sign-in).
+fresh sign-in). An `organization disabled Claude Code` wall lists the same way with its own note,
+and only a changed credential file lifts it.
 
 ### The owner's CLAUDE.md and skills (`server/src/corch-owner-sync.ts`)
 
