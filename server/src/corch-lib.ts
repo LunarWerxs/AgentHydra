@@ -95,7 +95,11 @@ export interface CorchWorker {
   sessionId: string | null // minted by Corch before the first launch (`--session-id`)
   accountId: string | null // the account holding the session now
   attempts: CorchAttempt[]
-  result: string | null // the final `result` text of the last completed turn
+  result: string | null // the report: `results` joined (joinResults), oldest turn first
+  /** Each turn's closing text for the current message, oldest first (addResults caps it). A repo's
+   *  Stop hook can force extra turns after the report (field note 13); each one is kept here. Absent
+   *  on tasks recorded before 2026-10-01. */
+  results?: string[]
   error: string | null
   lastActivity: string | null // one line: the newest event summarised (summarizeEvent)
   costUsd: number // summed over every attempt's own spend (attemptSpend), from the transcript
@@ -326,6 +330,9 @@ export interface AttemptVerdict {
   outcome: AttemptOutcome
   notice: string | null
   result: string | null
+  /** The closing text of every turn this attempt ended, oldest first: the text before each Stop
+   *  hook's feedback, then the terminal result's when the attempt finished cleanly. */
+  turnTexts: string[]
   turns: number
   /** A quota wall's end from the CLI's own `rate_limit_event` (epoch ms), else null. */
   resetsAt: number | null
@@ -356,10 +363,22 @@ export function classifyAttempt(
   // The CLI's structured wall ({"type":"rate_limit_event","rate_limit_info":{"status":"rejected",
   // "rateLimitType":"seven_day","resetsAt":<epoch s>}}), until something shows the turn went on.
   let rejected: { resetsAt: number | null; window: 'session' | 'weekly' | null } | null = null
+  // A turn's closing text: the assistant text since the last user event. A Stop hook that refuses
+  // the stop answers with a user message, and the session goes on in a new turn (field note 13).
+  const turnTexts: string[] = []
+  let said: string[] = []
   for (const raw of events) {
     const ev = raw as any
     if (ev?.parent_tool_use_id) continue
     tracker.observe(ev)
+    if (ev?.type === 'assistant') {
+      for (const b of ev.message?.content ?? [])
+        if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim())
+          said.push(b.text.trim())
+    } else if (ev?.type === 'user') {
+      if (said.length && isStopHookFeedback(ev)) turnTexts.push(said.join('\n\n'))
+      said = []
+    }
     if (ev?.type === 'result') {
       last = ev
       if (ev.is_error !== true) rejected = null
@@ -379,6 +398,7 @@ export function classifyAttempt(
   }
   const errored = last?.is_error === true
   const resultText = typeof last?.result === 'string' ? last.result : null
+  if (last && !errored && resultText?.trim()) turnTexts.push(resultText.trim())
   const errText = errored ? (resultText ?? '') : ''
   const stderrLines = last
     ? []
@@ -390,6 +410,7 @@ export function classifyAttempt(
   const trusted = [...apiErrors, errText, ...stderrLines] // the only places a wall can be read from
   const base = {
     result: resultText,
+    turnTexts,
     turns: Number(last?.num_turns) || 0,
     resetsAt: null,
     window: null,
@@ -434,6 +455,36 @@ export function classifyAttempt(
     return out('interrupted', INTERRUPTED_NOTICE)
   return out('error', null)
 }
+
+/** The user message a Stop hook sends when it refuses the stop: `Stop hook feedback:\n[...]`. */
+function isStopHookFeedback(ev: any): boolean {
+  const c = ev?.message?.content
+  const text =
+    typeof c === 'string'
+      ? c
+      : Array.isArray(c)
+        ? c.find((b: any) => b?.type === 'text')?.text
+        : null
+  return typeof text === 'string' && /^\s*Stop hook feedback:/.test(text)
+}
+
+export const MAX_RESULTS = 12 // turns kept per message; the oldest go first
+export const MAX_RESULT_CHARS = 20_000 // per turn; the report's head is kept
+export const RESULT_SEPARATOR = '\n\n---\n\n'
+
+/** `results` with `texts` appended, capped. A text equal to the last one is not repeated. */
+export function addResults(results: string[] | undefined, texts: string[]): string[] {
+  const out = [...(results ?? [])]
+  for (const t of texts) {
+    const text = t.length > MAX_RESULT_CHARS ? `${t.slice(0, MAX_RESULT_CHARS)}…` : t
+    if (out[out.length - 1] !== text) out.push(text)
+  }
+  return out.slice(-MAX_RESULTS)
+}
+
+/** The full report: every turn's text, oldest first, newest last. */
+export const joinResults = (results: string[]): string | null =>
+  results.length ? results.join(RESULT_SEPARATOR) : null
 
 /** A wall ends this long after its reset, not on it: the relaunch must not reach Anthropic before
  *  its window has flipped. */
@@ -677,9 +728,11 @@ export function recentWorkers<T extends Pick<CorchWorker, 'status' | 'createdAt'
 /** A list row for an orchestrator: no prompt (it wrote it) and only the last 3 attempts, the bulk
  *  of the stored record after results (measured on 142 real workers: attempts 82k characters,
  *  results 44k, prompts 21k). The full record is corch_status { id }. */
-export type CorchWorkerBrief = Omit<CorchWorkerView, 'prompt'> & { attemptCount: number }
+export type CorchWorkerBrief = Omit<CorchWorkerView, 'prompt' | 'results'> & {
+  attemptCount: number
+}
 export function toBrief(v: CorchWorkerView): CorchWorkerBrief {
-  const { prompt: _prompt, ...rest } = v
+  const { prompt: _prompt, results: _results, ...rest } = v
   return { ...rest, attempts: v.attempts.slice(-3), attemptCount: v.attempts.length }
 }
 

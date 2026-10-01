@@ -113,6 +113,8 @@ function line(e: CorchJournalEntry): string {
       return t('corch.log.waiting')
     case 'turn-done':
       return t('corch.log.turnDone', { account, cost: usd(e.costUsd), turns: e.turns ?? 0 })
+    case 'turn-end':
+      return t('corch.log.turnEnd', { account })
     case 'done':
       return t('corch.log.done', { account, cost: usd(e.costUsd), total: usd(e.totalCostUsd) })
     case 'failed':
@@ -125,7 +127,7 @@ function line(e: CorchJournalEntry): string {
 }
 
 /** The CLI's own words or the error, shown under the sentence. */
-const detail = (e: CorchJournalEntry) => e.error ?? e.notice ?? null
+const detail = (e: CorchJournalEntry) => e.error ?? e.notice ?? e.said ?? null
 
 const rows = computed(() =>
   entries.value.map((e, i) => ({

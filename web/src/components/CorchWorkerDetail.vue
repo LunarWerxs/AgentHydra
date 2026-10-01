@@ -50,6 +50,9 @@ const stickToBottom = ref(true)
 
 const active = computed(() => (props.worker ? isCorchActive(props.worker) : false))
 const failed = computed(() => props.worker?.status === 'failed')
+// Every turn's closing text, when there was more than one (field note 13: a repo's Stop hook can
+// force a turn after the report, whose text would otherwise hide it).
+const turnResults = computed(() => props.worker?.results ?? [])
 const queuedNote = computed(() => (props.worker ? corchQueuedNote(props.worker, props.now) : null))
 /** Its transcript is only on the account it last ran on, so Continue cannot move it elsewhere. */
 const stuck = computed(
@@ -238,7 +241,15 @@ async function onStop() {
 
         <div v-if="worker.result" class="flex flex-col gap-1.5">
           <h4 class="text-xs font-medium">{{ $t('corch.result') }}</h4>
-          <pre class="mono scroll-slim max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2.5 text-xs">{{ worker.result }}</pre>
+          <template v-if="turnResults.length > 1">
+            <div v-for="(text, i) in turnResults" :key="i" class="flex flex-col gap-1">
+              <span class="text-[11px] text-muted-foreground">
+                {{ $t('corch.resultTurn', { n: i + 1, total: turnResults.length }) }}
+              </span>
+              <pre class="mono scroll-slim max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2.5 text-xs">{{ text }}</pre>
+            </div>
+          </template>
+          <pre v-else class="mono scroll-slim max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2.5 text-xs">{{ worker.result }}</pre>
         </div>
 
         <!-- A stopped or waiting task keeps the reason it could not go on in `error`. Only a real

@@ -43,6 +43,7 @@ import {
 } from './corch-journal'
 import {
   aboutToBill,
+  addResults,
   addTokens,
   attemptSpend,
   type CorchAccount,
@@ -58,6 +59,7 @@ import {
   freshestPct,
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
+  joinResults,
   liveUsage,
   noTokens,
   OVERAGE_NOTICE,
@@ -860,7 +862,18 @@ function finish(w: CorchWorker, events: unknown[]): void {
   at.endedAt = now
   const spent = charge(w, at)
   w.turns += v.turns
-  if (v.outcome === 'done' || v.outcome === 'handoff') w.result = v.result
+  // Every turn's closing text, not just the last: a repo's Stop hook can force a turn after the
+  // report (field note 13), and a limit can cut the session after one. `result` is them joined.
+  if (v.turnTexts.length) {
+    w.results = addResults(w.results, v.turnTexts)
+    w.result = joinResults(w.results)
+    for (const text of v.turnTexts)
+      journal(w, 'turn-end', {
+        account: acctLabel(at.account),
+        attempt: w.attempts.length,
+        said: firstLine(text),
+      })
+  } else if (v.outcome === 'done' || v.outcome === 'handoff') w.result = v.result
   if (w.status === 'cancelled') {
     changed(w)
     return
@@ -1286,7 +1299,10 @@ function launch(
     w.sessionId = sessionId
     w.pending = [] // they went into the continuation prompt
   }
-  if (!last || delivers || fresh) w.result = null // a new turn: the previous answer is not this one's
+  if (!last || delivers || fresh) {
+    w.result = null // a new turn: the previous answer is not this one's
+    w.results = []
+  }
   delete w.revived
   w.accountId = acct.id
   w.status = 'running'
@@ -1334,6 +1350,7 @@ export function corchRun(input: {
       accountId: null,
       attempts: [],
       result: null,
+      results: [],
       error: null,
       lastActivity: null,
       costUsd: 0,

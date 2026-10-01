@@ -28,6 +28,7 @@ export type CorchJournalEvent =
   | 'interrupted' // the CLI was killed from outside (a daemon restart); resumed
   | 'waiting' // no account it may use is free
   | 'turn-done' // a turn finished and a queued follow-up comes next
+  | 'turn-end' // a turn ended with this text (a Stop hook can force more turns after the report)
   | 'done'
   | 'failed'
   | 'cancelled'
@@ -57,6 +58,7 @@ export interface CorchJournalEntry {
   turns?: number // done / turn-done: this attempt's turns
   totalCostUsd?: number // done / turn-done: the worker's so far
   error?: string // failed / waiting: the first line
+  said?: string // turn-end: the first line of the turn's closing text
   cwd?: string // dispatched
   accounts?: number // dispatched: how many accounts it is restricted to (absent: any)
 }
@@ -197,6 +199,8 @@ export function describeJournalEntry(e: CorchJournalEntry, now: Date = new Date(
       return `waiting: ${e.error ?? 'no account is free'}`
     case 'turn-done':
       return `turn done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task so far ${usd(e.totalCostUsd)}); next queued message follows`
+    case 'turn-end':
+      return `turn ended${on}${e.said ? `: ${e.said}` : ''}`
     case 'done':
       return `done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task total ${usd(e.totalCostUsd)})`
     case 'failed':

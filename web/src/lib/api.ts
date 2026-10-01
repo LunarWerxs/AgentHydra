@@ -906,6 +906,9 @@ export interface CorchWorkerView {
   account: string | null
   attempts: { account: CorchAccountRef; outcome: CorchAttemptOutcome; notice: string | null }[]
   result: string | null
+  /** Each turn's closing text, oldest first (a repo's Stop hook can force turns after the report);
+   *  `result` is them joined. Absent on tasks recorded earlier. */
+  results?: string[]
   error: string | null
   lastActivity: string | null
   costUsd: number
@@ -995,6 +998,7 @@ export interface CorchJournalEntry {
     | 'interrupted'
     | 'waiting'
     | 'turn-done'
+    | 'turn-end'
     | 'done'
     | 'failed'
     | 'cancelled'
@@ -1017,6 +1021,7 @@ export interface CorchJournalEntry {
   turns?: number
   totalCostUsd?: number
   error?: string
+  said?: string
   cwd?: string
   accounts?: number
 }

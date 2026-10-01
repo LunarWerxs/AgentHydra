@@ -18,6 +18,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  addResults,
   attemptSpend,
   classifyAttempt,
   copySessionTranscript,
@@ -30,10 +31,13 @@ import {
   corchSend,
   corchWait,
   freshestPct,
+  joinResults,
   livePct,
   MAX_PER_ACCOUNT,
+  MAX_RESULTS,
   pickAccount,
   RECENT_FINISHED,
+  RESULT_SEPARATOR,
   recentWorkers,
   setCorchAccountsProvider,
   setCorchClaudeCommand,
@@ -64,6 +68,30 @@ describe('classifyAttempt', () => {
   test('a clean result is done, with its text and turns', () => {
     const r = classifyAttempt([init, said('ok'), result('all good', false)], '')
     expect(r).toMatchObject({ outcome: 'done', result: 'all good', turns: 3 })
+  })
+
+  test("a Stop hook's forced turn after the report keeps the report (field note 13)", () => {
+    const hook = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'Stop hook feedback:\n[gate]: prove the deploy' }],
+      },
+    }
+    const r = classifyAttempt(
+      [init, said('THE REPORT'), hook, said('checking'), said('PROOF'), result('PROOF', false)],
+      '',
+    )
+    expect(r.outcome).toBe('done')
+    expect(r.turnTexts).toEqual(['THE REPORT', 'PROOF'])
+    const all = addResults(['an earlier turn'], r.turnTexts)
+    expect(joinResults(all)).toBe(['an earlier turn', 'THE REPORT', 'PROOF'].join(RESULT_SEPARATOR))
+    expect(
+      addResults(
+        [],
+        Array.from({ length: MAX_RESULTS + 3 }, (_, i) => `t${i}`),
+      ),
+    ).toHaveLength(MAX_RESULTS)
   })
 
   test('the CLI synthetic limit notice is quota', () => {
@@ -412,8 +440,10 @@ describe('integration: a quota wall hands the session to the next account', () =
       'limit',
       'moved',
       'launched',
+      'turn-end',
       'done',
     ])
+    expect(log[5]).toMatchObject({ account: '#2', said: 'FAKE DONE' })
     expect(log[1]).toMatchObject({ account: '#1', sessionPct: 0, weekPct: 0, active: 0 })
     expect(log[2]?.notice).toContain('session limit')
     expect(Date.parse(log[2]?.until ?? '')).toBeGreaterThan(Date.now())
@@ -554,12 +584,13 @@ describe('integration: paid extra usage is never spent', () => {
       expect(w?.result).toBe('FINISHED ON OVERAGE')
       expect(w?.moves).toBe(0)
       expect(w?.attempts).toHaveLength(1)
-      // A dispatch-to-done run is three journal lines; the last carries its turns and cost.
+      // A dispatch-to-done run is four journal lines: its turn's text, then done with its turns and cost.
       const log = corchJournal({ id })
-      expect(log.map((e) => e.event)).toEqual(['dispatched', 'launched', 'done'])
-      expect(log[2]).toMatchObject({ account: '#1', turns: 1 })
-      expect(typeof log[2]?.costUsd).toBe('number')
-      expect(corchJournalLines({ id })[2]).toMatch(
+      expect(log.map((e) => e.event)).toEqual(['dispatched', 'launched', 'turn-end', 'done'])
+      expect(log[2]).toMatchObject({ account: '#1', said: 'FINISHED ON OVERAGE' })
+      expect(log[3]).toMatchObject({ account: '#1', turns: 1 })
+      expect(typeof log[3]?.costUsd).toBe('number')
+      expect(corchJournalLines({ id })[3]).toMatch(
         /'overage allowed' done on #1: \$\d+\.\d\d, 1 turn \(/,
       )
     } finally {
