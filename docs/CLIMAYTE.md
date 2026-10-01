@@ -702,3 +702,13 @@ stderr and exits 1), appends to it, prints init, an assistant text and a `result
   lower as more workers share an account (for example 85 minus a point or two per extra worker),
   and add a `ceilingStopList` to the totals like `limitHitList` (task, account, pct, workers
   running then).
+- Overnight review (2026-10-01 evening; field notes 45, 46 and 49): since the 85/90 fix, 0 limit
+  hits, 1 ceiling stop, sizing ratio 0.92. The ceiling stop was one worker whose own stream jumped
+  76% -> 87% across a long tool call while its siblings had seen 85% six minutes earlier, so the
+  stop line and the ceiling now go by the account's newest reading from any worker
+  (`sessionReading` in climayte-lib.ts). An account with no reading in its 5-hour window takes one
+  worker until that worker reads it (#88 took four at once and all failed sign-in).
+  `GET /api/corch/totals?since=` now scopes every figure, the re-read share included, and lists
+  `ceilingStopList` (`pct`, `askedPct`, `workers`). The journal shows a ceiling stop whose handoff
+  was written, and a waiting row's `until`. Each worker runs the owner's edit_claims hook (its
+  PreToolUse in the worker's settings), claiming under its task id.
