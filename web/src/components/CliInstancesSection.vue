@@ -9,9 +9,7 @@
 // made the "unified per-account view" not actually unified. Full lifecycle (create / rename /
 // associate / delete) still lives here; the account row carries launch / sign-in / unlink.
 import {
-  ArrowDown,
   ArrowRightLeft,
-  ArrowUp,
   Cloud,
   CreditCard,
   EllipsisVertical,
@@ -47,6 +45,7 @@ import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
 import LinkCliInstanceDialog from '@/components/LinkCliInstanceDialog.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
+import SortIndicator from '@/components/SortIndicator.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
 import { Badge } from '@/components/ui/badge'
@@ -213,6 +212,14 @@ const { dimmed: filterDimmed, visible: filterVisible } = useInstanceFilter()
 const filterFacts = (inst: CliInstance) => ({ usage: usageFor(inst), signedIn: inst.loggedIn })
 
 const visibleRows = computed(() => filterVisible(sortedRows.value, filterFacts))
+/** The Account column names a legacy pasted credential. With none in use (the norm: a login comes
+ *  from signing the instance in) every row would read "No account" beside a name that is an email,
+ *  so the column is left out and the name gets its width (SUE round, 2026-10-01). */
+const showAccountColumn = computed(() =>
+  unlinkedCliInstances.value.some((i) => !!i.associatedAccountLabel),
+)
+/** How much of a name the row shows: the default beside the Account column, more without it. */
+const nameMax = computed(() => (showAccountColumn.value ? undefined : 36))
 /** Rows this table dropped for the filter — said out loud in the heading beside the count. */
 const hiddenByFilter = computed(() => sortedRows.value.length - visibleRows.value.length)
 /** There ARE unlinked CLI instances, the filter just took all of them. */
@@ -601,21 +608,22 @@ onUnmounted(() => {
           <label class="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
             <Timer class="size-3.5" />
             <span class="hidden sm:inline">{{ $t('cliInstances.keepaliveSwitch') }}</span>
+            <!-- Drawn once the setting is known: a switch that starts off and turns itself on a
+                 moment later reads as one that moved by itself (SUE round, 2026-10-01). -->
             <Switch
+              v-if="settingsLoaded"
               :model-value="keepaliveEnabled"
               :aria-label="$t('cliInstances.keepaliveSwitch')"
               @update:model-value="onKeepaliveSwitch"
             />
+            <Skeleton v-else class="h-4 w-7" />
           </label>
         </IconTooltip>
+        <!-- Its name is on it: among bare icons nobody found Login sync without hovering each one
+             (SUE round, 2026-10-01). -->
         <IconTooltip :label="$t('cliInstances.sync')" :description="$t('cliInstances.syncHint')">
-          <Button
-            variant="outline"
-            size="icon"
-            :aria-label="$t('cliInstances.sync')"
-            @click="syncOpen = true"
-          >
-            <Cloud />
+          <Button variant="outline" @click="syncOpen = true">
+            <Cloud /> {{ $t('cliInstances.sync') }}
           </Button>
         </IconTooltip>
         <IconTooltip :label="$t('cliInstances.moveIn')">
@@ -656,22 +664,27 @@ onUnmounted(() => {
         <TableRow>
           <TableHead class="w-10 cursor-pointer select-none" @click="toggleSort('loggedIn')">
             <span class="inline-flex items-center gap-0.5">
-              ● <ArrowUp v-if="indicatorFor('loggedIn') === 'asc'" class="size-3" />
-              <ArrowDown v-else-if="indicatorFor('loggedIn') === 'desc'" class="size-3" />
+              ● <SortIndicator :direction="indicatorFor('loggedIn')" quiet />
             </span>
           </TableHead>
-          <TableHead class="w-44 cursor-pointer select-none" @click="toggleSort('name')">
+          <TableHead
+            class="cursor-pointer select-none"
+            :class="showAccountColumn ? 'w-44' : 'w-72'"
+            @click="toggleSort('name')"
+          >
             <span class="inline-flex items-center gap-0.5">
               {{ $t('cliInstances.colName') }}
-              <ArrowUp v-if="indicatorFor('name') === 'asc'" class="size-3" />
-              <ArrowDown v-else-if="indicatorFor('name') === 'desc'" class="size-3" />
+              <SortIndicator :direction="indicatorFor('name')" />
             </span>
           </TableHead>
-          <TableHead class="w-40 cursor-pointer select-none" @click="toggleSort('account')">
+          <TableHead
+            v-if="showAccountColumn"
+            class="w-40 cursor-pointer select-none"
+            @click="toggleSort('account')"
+          >
             <span class="inline-flex items-center gap-0.5">
               {{ $t('cliInstances.colAccount') }}
-              <ArrowUp v-if="indicatorFor('account') === 'asc'" class="size-3" />
-              <ArrowDown v-else-if="indicatorFor('account') === 'desc'" class="size-3" />
+              <SortIndicator :direction="indicatorFor('account')" />
             </span>
           </TableHead>
           <TableHead
@@ -681,8 +694,7 @@ onUnmounted(() => {
           >
             <span class="inline-flex items-center gap-0.5">
               {{ $t('cliInstances.colConfigDir') }}
-              <ArrowUp v-if="indicatorFor('configDir') === 'asc'" class="size-3" />
-              <ArrowDown v-else-if="indicatorFor('configDir') === 'desc'" class="size-3" />
+              <SortIndicator :direction="indicatorFor('configDir')" />
             </span>
           </TableHead>
           <!-- Fixed widths, matching the Instances table's quota columns, so the same fact has the
@@ -691,15 +703,13 @@ onUnmounted(() => {
             <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colSession') }}
-                <ArrowUp v-if="indicatorFor('session') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('session') === 'desc'" class="size-3" />
+                <SortIndicator :direction="indicatorFor('session')" />
               </span>
             </TableHead>
             <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('weekly')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colWeekly') }}
-                <ArrowUp v-if="indicatorFor('weekly') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('weekly') === 'desc'" class="size-3" />
+                <SortIndicator :direction="indicatorFor('weekly')" />
               </span>
             </TableHead>
           </template>
@@ -710,15 +720,13 @@ onUnmounted(() => {
           >
             <span class="inline-flex items-center gap-0.5">
               {{ $t('instances.colUsageSession') }}
-              <ArrowUp v-if="indicatorFor('usageSession') === 'asc'" class="size-3" />
-              <ArrowDown v-else-if="indicatorFor('usageSession') === 'desc'" class="size-3" />
+              <SortIndicator :direction="indicatorFor('usageSession')" />
             </span>
           </TableHead>
           <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('usage')">
             <span class="inline-flex items-center gap-0.5">
               {{ $t('cliInstances.colUsage') }}
-              <ArrowUp v-if="indicatorFor('usage') === 'asc'" class="size-3" />
-              <ArrowDown v-else-if="indicatorFor('usage') === 'desc'" class="size-3" />
+              <SortIndicator :direction="indicatorFor('usage')" />
             </span>
           </TableHead>
           <!-- The account's plan, the same badge as the Instances table (owner, 2026-09-30). -->
@@ -727,8 +735,7 @@ onUnmounted(() => {
           <TableHead class="w-20 cursor-pointer select-none" @click="toggleSort('tokens')">
             <span class="inline-flex items-center gap-0.5">
               {{ $t('cliInstances.colTokens') }}
-              <ArrowUp v-if="indicatorFor('tokens') === 'asc'" class="size-3" />
-              <ArrowDown v-else-if="indicatorFor('tokens') === 'desc'" class="size-3" />
+              <SortIndicator :direction="indicatorFor('tokens')" />
             </span>
           </TableHead>
           <TableHead class="text-end">{{ $t('cliInstances.colActions') }}</TableHead>
@@ -737,7 +744,7 @@ onUnmounted(() => {
       <!-- visibleRows, not unlinkedCliInstances: with the usage filter set to hide, this table can
            be emptied while it still has rows to show, and a blank tbody explains nothing. -->
       <TableBody v-if="visibleRows.length === 0">
-        <TableEmpty v-if="!loading" :colspan="usageMode ? 10 : 8">
+        <TableEmpty v-if="!loading" :colspan="(usageMode ? 10 : 8) - (showAccountColumn ? 0 : 1)">
           <div class="flex flex-col items-center gap-1 text-center">
             <component :is="allHiddenByFilter ? Funnel : Terminal" class="mb-1 size-6 opacity-40" />
             <p class="font-medium text-foreground">
@@ -763,7 +770,7 @@ onUnmounted(() => {
         <TableRow v-for="i in 2" v-else :key="i">
           <TableCell><Skeleton class="size-2" /></TableCell>
           <TableCell><Skeleton class="h-4 w-28" /></TableCell>
-          <TableCell><Skeleton class="h-5 w-20" /></TableCell>
+          <TableCell v-if="showAccountColumn"><Skeleton class="h-5 w-20" /></TableCell>
           <TableCell v-if="!usageMode"><Skeleton class="h-3 w-32" /></TableCell>
           <template v-else>
             <TableCell><Skeleton class="h-8 w-16" /></TableCell>
@@ -805,7 +812,9 @@ onUnmounted(() => {
                    and table layout is auto — one long name widens this column and the three
                    stacked tables stop lining up. Native title, not IconTooltip: this cell has no
                    other hover to extend, and the row above it already reveals its path this way. -->
-              <span :title="nameOverflowTitle(inst.name)">{{ shortDisplayName(inst.name) }}</span>
+              <span :title="nameOverflowTitle(inst.name, nameMax)">
+                {{ shortDisplayName(inst.name, nameMax) }}
+              </span>
               <!-- How many Claude sessions run on this login right now, CliMayte's workers included.
                    Hidden at 0: an idle account needs no badge saying so. Green, the colour of
                    running (owner, 2026-10-01: "that should be green, not blue"). -->
@@ -864,7 +873,7 @@ onUnmounted(() => {
               </IconTooltip>
             </div>
           </TableCell>
-          <TableCell>
+          <TableCell v-if="showAccountColumn">
             <Badge v-if="inst.associatedAccountLabel" variant="outline">
               {{ inst.associatedAccountLabel }}
             </Badge>
@@ -950,7 +959,11 @@ onUnmounted(() => {
                 <DropdownMenuContent align="end" class="max-w-56">
                   <!-- Which instance this menu belongs to, by number, then its quick actions as
                        icons — the same header on every table's kebab. -->
-                  <InstanceMenuHeader :num="inst.num" :actions="menuActionsFor(inst)" />
+                  <InstanceMenuHeader
+                    :num="inst.num"
+                    :name="inst.name"
+                    :actions="menuActionsFor(inst)"
+                  />
                   <!-- Launch lives here, not on the row (owner, 2026-10-01: "I kinda never need to
                        launch the cli"). -->
                   <DropdownMenuItem :disabled="isBusy(inst)" @click="onLaunch(inst)">

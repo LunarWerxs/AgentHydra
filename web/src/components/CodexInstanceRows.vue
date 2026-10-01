@@ -708,7 +708,11 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" class="max-w-52">
-            <InstanceMenuHeader :num="instance.num" :actions="menuActionsFor(instance)" />
+            <InstanceMenuHeader
+              :num="instance.num"
+              :name="instance.name"
+              :actions="menuActionsFor(instance)"
+            />
             <DropdownMenuSub>
               <DropdownMenuSubTrigger :disabled="moveBusy || isBusy(instance)">
                 <ArrowRightLeft /> {{ $t('instances.moveChats') }}

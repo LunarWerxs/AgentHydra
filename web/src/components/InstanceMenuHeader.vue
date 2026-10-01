@@ -28,7 +28,9 @@ export interface MenuIconAction {
   closes?: boolean
 }
 
-defineProps<{ num: number; actions?: MenuIconAction[] }>()
+/** `name` is the row's own name, shown under the number: "#27" alone left a visitor trusting they
+ *  had opened the right row's menu (SUE round, 2026-10-01). */
+defineProps<{ num: number; name?: string | null; actions?: MenuIconAction[] }>()
 
 const { t } = useI18n()
 
@@ -74,5 +76,8 @@ const ICON_ITEM =
       </MenuIconItem>
     </div>
   </div>
+  <p v-if="name" class="truncate px-2 pb-1 text-xs text-muted-foreground" :title="name">
+    {{ name }}
+  </p>
   <DropdownMenuSeparator />
 </template>

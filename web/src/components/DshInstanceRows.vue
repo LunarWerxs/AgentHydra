@@ -276,7 +276,7 @@ defineExpose({ openCreate, refresh })
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <InstanceMenuHeader :num="inst.num" :actions="menuActionsFor(inst)" />
+            <InstanceMenuHeader :num="inst.num" :name="inst.name" :actions="menuActionsFor(inst)" />
             <DropdownMenuItem
               v-if="inst.running"
               :title="$t('dshInstances.quitHint')"

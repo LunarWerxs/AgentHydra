@@ -7,7 +7,7 @@
 // copy to the other PC. A state's sentence is its hover title, never a paragraph in the row (owner,
 // 2026-10-01: "verbose as FUCK"). CLI and desktop logins are listed together, each tagged with its
 // kind. Nothing here shows a login.
-import { Cloud, Copy, RefreshCw, Unplug } from '@lucide/vue'
+import { Cloud, Copy, LoaderCircle, RefreshCw, Unplug } from '@lucide/vue'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -160,8 +160,16 @@ const syncCount = computed(() => {
   const taking = rows.value
     .map((r) => r.login)
     .filter((l) => !l.excluded && l.note !== 'own' && l.note !== 'fed')
-  return { n: taking.filter((l) => l.inSync).length, total: taking.length }
+  const n = taking.filter((l) => l.inSync).length
+  // Still on their way: taking part, not there yet, and nothing wrong with them. Sync brings them
+  // in by itself, so the dialog says so instead of leaving a half-full count to be read as stuck.
+  const arriving = taking.filter((l) => !l.inSync && !l.problem).length
+  return { n, total: taking.length, arriving }
 })
+/** Sync is on and has logins left to bring in (or has not finished its first pass). */
+const syncing = computed(
+  () => !!status.value?.enabled && (syncCount.value.arriving > 0 || !status.value.lastSyncAt),
+)
 
 const EVENT_KEY: Record<string, string> = {
   pushed: 'cliInstances.syncEventPushed',
@@ -271,11 +279,19 @@ const recent = computed(() => {
             {{
               status.lastSyncAt
                 ? $t('cliInstances.syncLast', { ago: timeAgo(status.lastSyncAt) })
-                : $t('cliInstances.syncNever')
+                : status.enabled
+                  ? $t('cliInstances.syncFirst')
+                  : $t('cliInstances.syncNever')
             }}
           </span>
-          <span class="tabular-nums text-muted-foreground">
-            {{ $t('cliInstances.syncCount', syncCount) }}
+          <!-- The one live region: what a join or a Sync now is doing, without re-reading the list. -->
+          <span role="status" class="flex items-center gap-1.5 tabular-nums text-muted-foreground">
+            <LoaderCircle v-if="syncing" class="size-3 animate-spin" aria-hidden="true" />
+            {{
+              syncing && syncCount.arriving > 0
+                ? $t('cliInstances.syncCountArriving', syncCount)
+                : $t('cliInstances.syncCount', syncCount)
+            }}
           </span>
           <Button
             size="sm"

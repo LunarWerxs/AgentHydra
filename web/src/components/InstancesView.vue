@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import {
   AppWindow,
-  ArrowDown,
   ArrowRightLeft,
-  ArrowUp,
   Boxes,
   Coins,
   Cpu,
@@ -49,6 +47,7 @@ import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
+import SortIndicator from '@/components/SortIndicator.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
 import { Badge } from '@/components/ui/badge'
@@ -1217,8 +1216,7 @@ onUnmounted(() => {
               @click="toggleSort('running')"
             >
               <span class="inline-flex items-center gap-0.5">
-                ● <ArrowUp v-if="indicatorFor('running') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('running') === 'desc'" class="size-3" />
+                ● <SortIndicator :direction="indicatorFor('running')" quiet />
               </span>
             </TableHead>
             <!-- Both header hints exist because these two columns were the source of a real "where
@@ -1233,16 +1231,14 @@ onUnmounted(() => {
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colName') }}
                 <InfoHint :text="$t('instances.colNameHint')" @click.stop />
-                <ArrowUp v-if="indicatorFor('name') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('name') === 'desc'" class="size-3" />
+                <SortIndicator :direction="indicatorFor('name')" />
               </span>
             </TableHead>
             <TableHead class="w-40 cursor-pointer select-none" @click="toggleSort('account')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colAccount') }}
                 <InfoHint :text="$t('instances.colAccountHint')" @click.stop />
-                <ArrowUp v-if="indicatorFor('account') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('account') === 'desc'" class="size-3" />
+                <SortIndicator :direction="indicatorFor('account')" />
               </span>
             </TableHead>
             <!-- Process columns (default mode) … -->
@@ -1250,22 +1246,19 @@ onUnmounted(() => {
               <TableHead class="cursor-pointer select-none" @click="toggleSort('pid')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colPid') }}
-                  <ArrowUp v-if="indicatorFor('pid') === 'asc'" class="size-3" />
-                  <ArrowDown v-else-if="indicatorFor('pid') === 'desc'" class="size-3" />
+                  <SortIndicator :direction="indicatorFor('pid')" />
                 </span>
               </TableHead>
               <TableHead class="cursor-pointer select-none" @click="toggleSort('uptime')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colUptime') }}
-                  <ArrowUp v-if="indicatorFor('uptime') === 'asc'" class="size-3" />
-                  <ArrowDown v-else-if="indicatorFor('uptime') === 'desc'" class="size-3" />
+                  <SortIndicator :direction="indicatorFor('uptime')" />
                 </span>
               </TableHead>
               <TableHead class="cursor-pointer select-none" @click="toggleSort('memory')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colMemory') }}
-                  <ArrowUp v-if="indicatorFor('memory') === 'asc'" class="size-3" />
-                  <ArrowDown v-else-if="indicatorFor('memory') === 'desc'" class="size-3" />
+                  <SortIndicator :direction="indicatorFor('memory')" />
                 </span>
               </TableHead>
             </template>
@@ -1280,15 +1273,13 @@ onUnmounted(() => {
               <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colSession') }}
-                  <ArrowUp v-if="indicatorFor('session') === 'asc'" class="size-3" />
-                  <ArrowDown v-else-if="indicatorFor('session') === 'desc'" class="size-3" />
+                  <SortIndicator :direction="indicatorFor('session')" />
                 </span>
               </TableHead>
               <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('weekly')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colWeekly') }}
-                  <ArrowUp v-if="indicatorFor('weekly') === 'asc'" class="size-3" />
-                  <ArrowDown v-else-if="indicatorFor('weekly') === 'desc'" class="size-3" />
+                  <SortIndicator :direction="indicatorFor('weekly')" />
                 </span>
               </TableHead>
             </template>
@@ -1299,22 +1290,19 @@ onUnmounted(() => {
             >
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colUsageSession') }}
-                <ArrowUp v-if="indicatorFor('usageSession') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('usageSession') === 'desc'" class="size-3" />
+                <SortIndicator :direction="indicatorFor('usageSession')" />
               </span>
             </TableHead>
             <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('usage')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colUsage') }}
-                <ArrowUp v-if="indicatorFor('usage') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('usage') === 'desc'" class="size-3" />
+                <SortIndicator :direction="indicatorFor('usage')" />
               </span>
             </TableHead>
             <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('plan')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colPlan') }}
-                <ArrowUp v-if="indicatorFor('plan') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('plan') === 'desc'" class="size-3" />
+                <SortIndicator :direction="indicatorFor('plan')" />
               </span>
             </TableHead>
             <!-- After Plan, before Actions, in both column modes: when an account was last opened
@@ -1324,8 +1312,7 @@ onUnmounted(() => {
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colLastRunning') }}
                 <InfoHint :text="$t('instances.colLastRunningHint')" @click.stop />
-                <ArrowUp v-if="indicatorFor('lastRunning') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('lastRunning') === 'desc'" class="size-3" />
+                <SortIndicator :direction="indicatorFor('lastRunning')" />
               </span>
             </TableHead>
             <TableHead class="text-end">{{ $t('instances.colActions') }}</TableHead>
@@ -1698,7 +1685,11 @@ onUnmounted(() => {
                          fourteen near-identically named rows, an open kebab menu is otherwise
                          detached from the row it came from — and "Delete" is the wrong item to be
                          unsure about. Copying it here is one click from every row's menu. -->
-                    <InstanceMenuHeader :num="inst.num" :actions="menuActionsFor(inst)" />
+                    <InstanceMenuHeader
+                      :num="inst.num"
+                      :name="inst.name"
+                      :actions="menuActionsFor(inst)"
+                    />
                     <!-- Quit lives here now (the row's primary button is Focus when running);
                          disabled unless running, mirroring the old Focus item's guard -->
                     <DropdownMenuItem

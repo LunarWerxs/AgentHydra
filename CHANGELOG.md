@@ -49,6 +49,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   cannot sync first; Recent groups what one pass did ("18m ago · uploaded #56 #14 #59"); the store,
   the pairing code and Stop syncing sit at the bottom.
 
+- **What simulated visitors tripped on in the CLI tab** (a SUE round on `scripts/sue-demo`, the built
+  app over invented data). Login sync's button carries its name instead of a bare cloud icon. While
+  logins are still arriving the dialog says so ("5 of 10 in sync, 5 on the way", "First sync is
+  running…") instead of a count that read as stuck. The Account column is left out when no instance
+  uses a pasted credential, so rows stop saying "No account" beside a name that is an email, and
+  names get the room. A row's ⋮ menu names the account under its number. The Keep windows running
+  switch is drawn once its setting is known, so it no longer flips by itself after the page loads.
+  Sortable headers in the instance tables show a faint pair of arrows before they are clicked.
+
 - **Login sync says why a login is left as it is in two words** (`server/src/core/cli-login-sync.ts`,
   the `note` field: `own`, `waiting`, `fed`). The sentence that used to fill the state column is the
   hover text now; `problem` carries only real errors.

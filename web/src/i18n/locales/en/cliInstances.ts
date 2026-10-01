@@ -166,7 +166,10 @@ export default {
   // cloud/login-sync-worker/README.md.
   syncIntro:
     'Sign in on one PC and the other gets the login within a minute. The store only holds encrypted copies.',
-  syncDesktopNote: 'Keep a synced desktop account open on one PC at a time.',
+  // Says what goes wrong otherwise: "keep it open on one PC at a time" alone was read twice and
+  // still left "what happens if I do not?" (SUE round, 2026-10-01).
+  syncDesktopNote:
+    'Open a synced desktop account on one PC at a time: its newer login reaches the other PC only while the app is closed there.',
   syncKindDesktop: 'Desktop',
   syncKindCli: 'CLI',
   syncJoinTitle: 'Join from your other PC',
@@ -184,12 +187,14 @@ export default {
   syncStore: 'Store: {host}',
   syncLast: 'Last synced {ago}',
   syncNever: 'Not synced yet',
+  syncFirst: 'First sync is running…',
   syncNow: 'Sync now',
   syncPairing: 'Copy pairing code',
   syncPairingCopied:
     'Pairing code copied. Paste it into Login sync on your other PC; keep it private.',
   syncDisconnect: 'Stop syncing',
   syncCount: '{n} of {total} in sync',
+  syncCountArriving: '{n} of {total} in sync, {arriving} on the way',
   syncLogins: 'Logins',
   // A row's state: the word on the row, and (…Hint) the sentence behind it, shown on hover.
   syncStateInSync: 'In sync',
