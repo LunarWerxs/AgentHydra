@@ -17,6 +17,9 @@ data/
 !.arkitect/arkitect.config.json
 !.arkitect/your-checks/
 tmp/
+# SUE and Dredd records (simulated-visitor runs, rounds, rulings) stay on the machine that ran them.
+/.sue/
+/.dredd/
 PLAN.md
 
 # tray launcher: the .lnk stores absolute paths - regenerate it per machine with
