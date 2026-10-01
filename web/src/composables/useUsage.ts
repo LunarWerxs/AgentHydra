@@ -13,7 +13,7 @@ import { ref } from 'vue'
 import type { UsageSnapshot } from '@/lib/api'
 import * as api from '@/lib/api'
 import { reconcileMap, sameData } from '@/lib/reconcile'
-import type { UsageReason } from '@/lib/usage'
+import { isNoDataSnap, type UsageReason } from '@/lib/usage'
 
 const snapshots = ref<Map<string, UsageSnapshot>>(new Map())
 /** A signed-out account's last reading (server usage-cache.ts lastKnownUsage), shown in its row
@@ -101,7 +101,10 @@ function stopPolling(): void {
 }
 
 function snapshotFor(key: string): UsageSnapshot | undefined {
-  return snapshots.value.get(key) ?? lastKnown.value.get(key)
+  const live = snapshots.value.get(key)
+  // A signed-out check answers an empty snapshot, which must not hide the kept reading.
+  if (live && !isNoDataSnap(live)) return live
+  return lastKnown.value.get(key) ?? live
 }
 
 function reasonFor(key: string): UsageReason | undefined {

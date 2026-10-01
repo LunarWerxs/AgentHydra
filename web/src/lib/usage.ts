@@ -61,7 +61,9 @@ export function usagePctFor(
 ): number | null {
   if (!snap) return null
   const limit = scope === 'session' ? snap.session : snap.weekAll
-  if (isWindowSuperseded(limit, now)) return null
+  // A signed-out account's kept reading shows its last numbers whatever has reset since: it is
+  // shown dimmed as the last reading (owner, 2026-10-01: "don't clear the last usage stats").
+  if (!snap.signedOutAt && isWindowSuperseded(limit, now)) return null
   return scope === 'session' ? (snap.session?.pct ?? null) : bindingWeeklyPct(snap)
 }
 
