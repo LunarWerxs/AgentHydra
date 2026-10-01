@@ -19,7 +19,7 @@
 // ⚠ The CLI refuses a bare `sleep N` in its Bash tool, so the "keep an account busy" steps use
 // python's time.sleep instead.
 
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -29,6 +29,7 @@ const STORE = join(AH, 'corch', 'workers.json')
 const WALLS = join(AH, 'corch', 'walls.json')
 const phase = process.argv[2] ?? 'handoff'
 const ROOT = mkdtempSync(join(tmpdir(), 'climayte-live-'))
+process.on('exit', () => rmSync(ROOT, { recursive: true, force: true }))
 const EFFORT = 'low'
 const rnd = () => Math.floor(1000 + Math.random() * 9000)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

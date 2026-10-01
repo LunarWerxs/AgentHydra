@@ -53,6 +53,7 @@ import {
   updateAppearance,
 } from './connections'
 import { createChatGptContextPack } from './context-pack'
+import { refreshCliInstanceTokens } from './core/cli-instance-tokens'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
 import { startLoginSync } from './core/cli-login-sync'
 import { reconcileCodexInstanceDirs } from './core/codex-instances'
@@ -1392,6 +1393,7 @@ startUsageRefresh()
 // Login sync between the owner's PCs (core/cli-login-sync.ts): idle until set up.
 startLoginSync()
 startDesktopCliFeed()
+void refreshCliInstanceTokens()
 
 // Paid extra usage is never billed unless Settings allows it: on an account that has it switched
 // on, every Claude session is stopped as the account reaches its limit (server/src/extra-usage.ts).

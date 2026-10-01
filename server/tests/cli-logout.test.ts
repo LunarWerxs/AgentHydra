@@ -38,7 +38,7 @@ describe('logoutCliInstance', () => {
     mkdirSync(join(dir, 'sessions'), { recursive: true })
     writeFileSync(
       registry,
-      JSON.stringify({ pid: session.pid, sessionId: crypto.randomUUID(), cwd: process.cwd() }),
+      JSON.stringify({ pid: session.pid, sessionId: crypto.randomUUID(), cwd: import.meta.dir }),
     )
 
     const refused = logoutCliInstance(id)

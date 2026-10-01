@@ -1333,6 +1333,15 @@ export interface UsageCheckResult {
 // --- CLI instances (Feature A) ----------------------------------------------
 
 /** A CLI instance: a `CLAUDE_CONFIG_DIR` associated with an account, logged in once. */
+/** Tokens run through one CLI instance, one usage per reply (core/cli-instance-tokens.ts). */
+export interface CliInstanceTokens {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  total: number
+}
+
 export interface CliInstance {
   /** Permanent short handle (`#7`), shared with desktop + Codex instances in one sequence. See
    *  core/instance-numbers.ts. Re-derived from the registry on every hydrate; the copy that ends
@@ -1363,6 +1372,9 @@ export interface CliInstance {
   /** Claude sessions running on this account now (its live registry, CliMayte workers included). Set by
    *  GET /api/cli-instances only; absent elsewhere. */
   liveSessions?: number
+  /** Tokens this instance's own transcripts on this PC add up to (core/cli-instance-tokens.ts). Set
+   *  by GET /api/cli-instances only; null until the first sweep after a daemon start. */
+  tokens?: CliInstanceTokens | null
   /** What the CLI said the last time its `/limit-reset` was run from AgentHydra (core/cli-limit-reset.ts).
    *  Undefined until then. The only honest reading there is: the usage endpoint will not say. */
   lastLimitReset?: CliLimitResetResult | null
@@ -1414,6 +1426,10 @@ export interface CliLoginSyncStatus {
     inSync: boolean
     /** Why this PC's copy cannot be shared (a credential file with no refresh token), or null. */
     problem: string | null
+    /** Why sync leaves it as it is, when that is by design: signed in separately on this PC
+     *  ('own'), a newer login waiting for its desktop instance to close ('waiting'), or a CLI login
+     *  taken from its desktop instance, which is the one that syncs ('fed'). */
+    note: 'own' | 'waiting' | 'fed' | null
   }>
   /** The newest first: what the passes did. */
   events: Array<{

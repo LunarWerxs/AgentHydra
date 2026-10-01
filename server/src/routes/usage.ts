@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { climayteLimitWalls, climayteLiveReadings } from '../climayte'
+import { cliInstanceTokens } from '../core/cli-instance-tokens'
 import {
   associateCliInstance,
   createCliInstance,
@@ -395,6 +396,7 @@ app.get('/api/cli-instances', (c) => {
       ...i,
       lastNudge: nudges[i.id] ?? null,
       liveSessions: readLiveRegistry(i.configDir).length,
+      tokens: cliInstanceTokens(i.configDir),
       lastUsageCheck: withLimitWall(
         withLiveReading(i.lastUsageCheck, live.get(i.id), i.name),
         limits.get(i.id),

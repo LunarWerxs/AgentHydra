@@ -249,7 +249,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       await runLoginSync()
       expect(await here(solo)).toEqual({ expiry: 100, session: 'sk-mine' })
       expect((await meta(UC)).version).toBe(before)
-      expect(loginSyncStatus().logins.find((l) => l.id === UC)?.problem).toContain('on its own')
+      expect(loginSyncStatus().logins.find((l) => l.id === UC)?.note).toBe('own')
 
       // Left out on this PC: a newer copy in the store does not land.
       setLoginSyncExcluded(UA, true)

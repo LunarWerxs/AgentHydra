@@ -250,7 +250,11 @@ const RESET_TIME_ONLY =
 function zoneFormatter(tz: string | undefined): Intl.DateTimeFormat | null {
   if (!tz?.trim()) return null
   try {
-    return new Intl.DateTimeFormat('en-US', {
+    // Read back as numbers by wallAsUtc, never shown: Latin digits and the Gregorian calendar
+    // whatever the machine's own locale is.
+    return new Intl.DateTimeFormat(undefined, {
+      numberingSystem: 'latn',
+      calendar: 'gregory',
       timeZone: tz.trim(),
       hourCycle: 'h23',
       year: 'numeric',

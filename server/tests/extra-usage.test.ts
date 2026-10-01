@@ -40,7 +40,7 @@ function accountWithSession(name: string, extraUsage: boolean): ReturnType<typeo
   mkdirSync(sessions, { recursive: true })
   writeFileSync(
     join(sessions, `${proc.pid}.json`),
-    JSON.stringify({ pid: proc.pid, sessionId: crypto.randomUUID(), cwd: process.cwd() }),
+    JSON.stringify({ pid: proc.pid, sessionId: crypto.randomUUID(), cwd: import.meta.dir }),
   )
   const snap: UsageSnapshot = {
     account: name,

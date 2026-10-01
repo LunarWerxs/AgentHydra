@@ -134,6 +134,7 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
   let lastSaturatedLog = 0
   // A tick that throws is a tick skipped, never a dead daemon (scripts/checks/
   // timer-callback-can-kill-the-daemon.mjs): the watcher of stalls must not become a crash.
+  // arkitect-allow: side-effect-teardown - the stall watcher runs for the daemon's whole life
   const timer = setInterval(() => {
     try {
       const now = Date.now()

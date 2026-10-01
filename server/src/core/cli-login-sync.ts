@@ -573,7 +573,7 @@ export function loginSyncStatus(): CliLoginSyncStatus {
     const read = file && !remote ? readPortableLogin(i.id, { whileRunning: true }) : null
     // A login it takes from its desktop instance (desktop-cli-feed.ts) has no refresh token by
     // design: the desktop login is the one that syncs.
-    const fed = !!i.associatedDesktopDir && !hasOwnCliLogin(i.configDir)
+    const fed = file && !!i.associatedDesktopDir && !hasOwnCliLogin(i.configDir)
     logins.push({
       id: i.id,
       kind: 'cli',
@@ -583,11 +583,8 @@ export function loginSyncStatus(): CliLoginSyncStatus {
       inStore: !!remote,
       excluded: excluded.has(i.id),
       inSync: !!remote && c.state[i.id]?.version === remote.version,
-      problem: !(read && 'error' in read)
-        ? null
-        : fed
-          ? 'Takes its login from its desktop instance, which is the one that syncs.'
-          : read.error,
+      problem: !fed && read && 'error' in read ? read.error : null,
+      note: fed ? 'fed' : null,
     })
   }
   // Desktop profiles signed in here, by account (desktop-login-sync.ts).
@@ -604,10 +601,11 @@ export function loginSyncStatus(): CliLoginSyncStatus {
       inStore: !!remote,
       excluded: excluded.has(p.uuid),
       inSync: !!remote && c.state[p.uuid]?.version === remote.version,
-      problem: desktopNotes.own.has(p.uuid)
-        ? 'Signed in on its own on this PC: sync leaves it alone, and both stay signed in.'
+      problem: null,
+      note: desktopNotes.own.has(p.uuid)
+        ? 'own'
         : desktopNotes.waiting.has(p.uuid)
-          ? 'A newer login waits until this desktop instance is closed (or opened from AgentHydra).'
+          ? 'waiting'
           : null,
     })
   }
@@ -622,9 +620,8 @@ export function loginSyncStatus(): CliLoginSyncStatus {
         inStore: true,
         excluded: excluded.has(id),
         inSync: false,
-        problem: desktopNotes.waiting.has(id)
-          ? 'Waits until its signed-out desktop instance here is closed.'
-          : null,
+        problem: null,
+        note: desktopNotes.waiting.has(id) ? 'waiting' : null,
       })
   let host: string | null = null
   try {
@@ -658,6 +655,7 @@ let timer: ReturnType<typeof setInterval> | null = null
 export function startLoginSync(): void {
   if (timer) return
   setBeforeLaunchHook(syncBeforeLaunch, 'login-sync')
+  // arkitect-allow: side-effect-teardown - runs for the daemon's whole life, unref'd so it never holds the process open
   timer = setInterval(() => {
     if (readConfig()?.enabled) void runLoginSync().catch(() => {})
   }, SYNC_EVERY_MS)
