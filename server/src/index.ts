@@ -89,10 +89,12 @@ import { initFileLogging, logFilePath } from './log-file.mjs'
 import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
 import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
+  RENAMED_TOOLS as MCP_RENAMED_TOOLS,
   SERVER_INFO as MCP_SERVER_INFO,
   toolsForCaller as mcpToolsForCaller,
   withCallBudget as mcpWithCallBudget,
   withDaemonWarning as mcpWithDaemonWarning,
+  withRenamedTools as mcpWithRenamedTools,
 } from './mcp'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import { withOutputShaping as mcpWithOutputShaping } from './mcp-output'
@@ -369,10 +371,14 @@ app.post('/api/mcp', async (c) => {
   // on stdio, so the two transports shape a result the same way.
   const ctx = {
     serverInfo: MCP_SERVER_INFO,
-    tools: withRestartWarning(
-      mcpWithCallBudget(
-        mcpWithDaemonWarning(mcpWithOutputShaping(mcpToolsForCaller(() => callerPidOf(c)))),
+    // Old tool names (a chat's list is fixed at its start) answer as the renamed tools (mcp.ts).
+    tools: mcpWithRenamedTools(
+      withRestartWarning(
+        mcpWithCallBudget(
+          mcpWithDaemonWarning(mcpWithOutputShaping(mcpToolsForCaller(() => callerPidOf(c)))),
+        ),
       ),
+      MCP_RENAMED_TOOLS,
     ),
     instructions: MCP_INSTRUCTIONS,
   }
