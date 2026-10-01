@@ -57,6 +57,19 @@ describe('moving a CLI login between PCs', () => {
       expect(back.rows.map((r) => [r.id, r.matchedBy])).toEqual([[id, 'id']])
       expect(readFileSync(join(dir, '.credentials.json'), 'utf8')).toBe(credentials)
       expect(getCliInstance(id)!.movedAway).toBeNull()
+
+      // The same file again leaves the login alone, and a file whose scrypt cost was raised is
+      // refused before any derivation (p 400000 would hold the daemon for an hour).
+      const again = await importCliLogins({ bundle, passphrase })
+      expect(again.rows.map((r) => r.message)).toEqual([
+        'Already here: this PC is signed in with this login.',
+      ])
+      const crafted = JSON.parse(bundle)
+      crafted.kdf.p = 400_000
+      const t0 = Date.now()
+      const refused = await importCliLogins({ bundle: crafted, passphrase })
+      expect(refused.ok).toBe(false)
+      expect(Date.now() - t0).toBeLessThan(2_000)
     } finally {
       // The registry and CONFIG_DIR are shared with every later file in a serial run (CI's), and an
       // instance left here reads as an orphan dir to registry-integrity's AH-01 reconcile.

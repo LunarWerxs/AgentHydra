@@ -144,27 +144,44 @@ export function openBundle(raw: unknown, passphrase: string): SealedLogin[] | Er
   }
   if (b?.format !== BUNDLE_FORMAT || b.version !== 1)
     return new Error('That file is not an AgentHydra login bundle, or it is from a newer version.')
-  if (b.kdf?.name !== 'scrypt' || b.cipher !== 'aes-256-gcm')
+  // Only the parameters this version writes. scrypt's cost comes from the file, so a crafted one
+  // (p 400000 fits under maxmem) would hold the daemon's event loop for an hour before any
+  // passphrase is checked (review, 2026-10-01).
+  const bytes = (v: unknown): number =>
+    typeof v === 'string' ? Buffer.from(v, 'base64').length : -1
+  if (
+    b.kdf?.name !== 'scrypt' ||
+    b.cipher !== 'aes-256-gcm' ||
+    b.kdf.N !== SCRYPT.N ||
+    b.kdf.r !== SCRYPT.r ||
+    b.kdf.p !== SCRYPT.p ||
+    bytes(b.kdf.salt) !== 16 ||
+    bytes(b.iv) !== 12 ||
+    bytes(b.tag) !== 16 ||
+    typeof b.data !== 'string'
+  )
     return new Error('That bundle uses an encryption this version cannot read.')
+  let logins: SealedLogin[]
   try {
-    const key = scryptSync(passphrase, Buffer.from(b.kdf.salt, 'base64'), 32, {
-      N: b.kdf.N,
-      r: b.kdf.r,
-      p: b.kdf.p,
-      maxmem: SCRYPT.maxmem,
-    })
+    const key = scryptSync(passphrase, Buffer.from(b.kdf.salt, 'base64'), 32, SCRYPT)
     const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(b.iv, 'base64'))
     decipher.setAuthTag(Buffer.from(b.tag, 'base64'))
     const plain = Buffer.concat([
       decipher.update(Buffer.from(b.data, 'base64')),
       decipher.final(),
     ]).toString('utf8')
-    const logins = JSON.parse(plain) as SealedLogin[]
-    if (!Array.isArray(logins)) return new Error('The bundle opened, but holds no logins.')
-    return logins
+    logins = JSON.parse(plain) as SealedLogin[]
   } catch {
     return new Error('The passphrase is wrong, or the file was changed or cut short.')
   }
+  if (!Array.isArray(logins)) return new Error('The bundle opened, but holds no logins.')
+  // The readable list is what the import dialog showed before the passphrase; it is outside the
+  // seal, so it must say what is inside it, or the person signed in to logins they never saw.
+  const said = JSON.stringify((b.logins ?? []).map((l) => [l?.num ?? null, l?.name ?? null]))
+  const holds = JSON.stringify(logins.map((l) => [l.num ?? null, l.name ?? null]))
+  if (said !== holds)
+    return new Error('The list of logins shown for this file does not match what is inside it.')
+  return logins
 }
 
 /** Where a bundle goes: the Downloads folder, else AgentHydra's own folder. */
@@ -272,9 +289,7 @@ export function exportCliLogins(opts: {
   }
   try {
     mkdirSync(dir, { recursive: true })
-    const tmp = `${file}.tmp`
-    writeFileSync(tmp, JSON.stringify(bundle, null, 2))
-    renameSync(tmp, file)
+    writeAtomic(file, JSON.stringify(bundle, null, 2))
   } catch (err) {
     return fail(
       `Could not write the bundle: ${err instanceof Error ? err.message : String(err)}`,
@@ -293,6 +308,17 @@ export function exportCliLogins(opts: {
   for (const s of sealed) {
     const rec = getCliInstance(s.id)!
     const row = rows.find((r) => r.id === s.id)!
+    // A CLI started outside this daemon since the read (a terminal) may have refreshed the login, and
+    // the bundle's copy is then the stale one: signing out here would lose the only live login.
+    if (
+      readLiveRegistry(rec.configDir).length ||
+      readText(credPath(rec.configDir)) !== s.credentials
+    ) {
+      row.ok = false
+      row.message =
+        'Its login changed while it was being moved (a session refreshed it), so this PC kept it and the copy in the bundle is stale. Move it again.'
+      continue
+    }
     try {
       rmSync(credPath(rec.configDir), { force: true })
       setCliInstanceMovedAway(s.id, { at, file })
@@ -313,11 +339,36 @@ export function exportCliLogins(opts: {
   }
 }
 
-/** Write `text` to `path` through a temp file in the same folder, so a reader never sees half. */
+/** Write `text` to `path` through a temp file in the same folder, so a reader never sees half. A
+ *  failed write or rename takes its temp file with it: for a login that file is the token itself. */
 function writeAtomic(path: string, text: string): void {
   const tmp = `${path}.${process.pid}.tmp`
-  writeFileSync(tmp, text)
-  renameSync(tmp, path)
+  try {
+    writeFileSync(tmp, text)
+    renameSync(tmp, path)
+  } catch (err) {
+    rmSync(tmp, { force: true })
+    throw err
+  }
+}
+
+/** When a credential file's access token expires (ms), or 0. Only that field is read. */
+function credentialExpiry(text: string | null): number {
+  try {
+    const at = (JSON.parse(text ?? '') as { claudeAiOauth?: { expiresAt?: unknown } }).claudeAiOauth
+      ?.expiresAt
+    return typeof at === 'number' && Number.isFinite(at) ? at : 0
+  } catch {
+    return 0
+  }
+}
+
+const readText = (path: string): string | null => {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return null
+  }
 }
 
 /** Put the account block into a config dir's `.claude.json`, keeping everything else in it. */
@@ -374,11 +425,25 @@ export async function importCliLogins(opts: {
         row.message = `${running} Claude session${running === 1 ? ' is' : 's are'} running on #${rec.num} here; let it finish, then import again.`
         continue
       }
-      const here = isLoggedIn(rec.configDir) ? emailIn(oauthAccountOf(rec.configDir)) : null
-      if (here && email && here !== email) {
+      if (isLoggedIn(rec.configDir)) {
         row.num = rec.num ?? null
-        row.message = `#${rec.num} on this PC is signed in to ${here}, not ${email}. Log it out here first.`
-        continue
+        // Fail closed: a login here whose account cannot be matched to the file's is never replaced.
+        const here = emailIn(oauthAccountOf(rec.configDir))
+        if (!here || !email || here !== email) {
+          row.message = `#${rec.num} on this PC is signed in${here ? ` to ${here}` : ''}, and that cannot be matched to ${email ?? 'the login in the file'}. Log it out here first.`
+          continue
+        }
+        // The same account: an older file (or the same one again) must not undo a refresh made here.
+        const current = readText(credPath(rec.configDir))
+        if (current === login.credentials) {
+          row.ok = true
+          row.message = 'Already here: this PC is signed in with this login.'
+          continue
+        }
+        if (credentialExpiry(current) >= credentialExpiry(login.credentials)) {
+          row.message = `#${rec.num} is signed in here with a newer login than the file's, so nothing was changed.`
+          continue
+        }
       }
     } else {
       // A new instance, under the id it had there, and its number when this PC never used it.
