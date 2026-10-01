@@ -393,6 +393,21 @@ describe('pickAccount', () => {
     expect(pickAccount(home, crowded, {}, capped, 2, now)?.id).toBe('a84')
   })
 
+  test('with a placement, a task goes where it can finish, counting the work running there', () => {
+    // Run 1: an idle account at 75% beat one at 10% running one worker (a flat +100 a worker), and a
+    // task that costs a quarter of a Pro window ran out of room there and moved.
+    const accounts = [acct('busy', 1, 10, 10), acct('idle', 2, 75, 10)]
+    const active = new Map([['busy', 1]])
+    expect(pickAccount(worker(), accounts, {}, active, 4, now)?.id).toBe('idle')
+    const running = new Map([['busy', [{ expected: 25, startPct: 10 }]]])
+    // busy: 10 + 25 still owed + 25 = 60 fits; idle: 75 + 25 = 100 does not.
+    const placed = pickAccount(worker(), accounts, {}, active, 4, now, active, false, {
+      expected: 25,
+      running,
+    })
+    expect(placed?.id).toBe('busy')
+  })
+
   test('the per-account cap counts only this group, never above MAX_PER_ACCOUNT in total', () => {
     const accounts = [acct('a', 1)]
     // Another group's worker on the account does not block a group started with per_account 1.

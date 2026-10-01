@@ -10,6 +10,7 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { type CorchPlacement, FIT_PCT, projectedPct } from './corch-placement'
 import { type CorchVerdict, UNITS_PER_PRO_PERCENT } from './corch-scorecard'
 import { priceTokens } from './pricing'
 import {
@@ -67,6 +68,8 @@ export interface CorchAttempt {
   sessionId?: string | null
   /** The prompt cache it ran with ('5m' since 49e6ab1; absent: the 1-hour default). */
   cacheTtl?: '5m'
+  /** The account's 5-hour usage when it started (placement measures what running work spent). */
+  startPct?: number | null
   /** What it was launched with (`--model`, `--effort`; null: the CLI's default). Absent before 2026-10-01. */
   requested?: { model: string | null; effort: string | null }
   /** The model the CLI reported in its system/init event: what really ran. */
@@ -154,6 +157,8 @@ export interface CorchAccount {
   configDir: string
   sessionPct: number | null
   weekPct: number | null
+  /** How many Pro windows its 5-hour window holds (corch-placement planFactor): Pro 1, Max 5x 5. */
+  planFactor?: number
 }
 
 /** `cred` (signed-out walls only): the mtime of the account's `.credentials.json` when it was
@@ -738,6 +743,7 @@ export function pickAccount(
   now: number,
   groupActive: Map<string, number> = active,
   allowFull = false,
+  placement?: CorchPlacement,
 ): CorchAccount | null {
   const lastAttempt = worker.attempts[worker.attempts.length - 1]
   const failedId =
@@ -778,9 +784,20 @@ export function pickAccount(
         (a) => a.id === worker.accountId && a.id !== failedId && (!full(a) || eligible.every(full)),
       )
   if (home) return home
+  // With a placement (corch-placement.ts): where the task is projected to finish under FIT_PCT,
+  // counting what the work already running there still owes; else the flat ACTIVE_WEIGHT spread.
+  const base = (a: CorchAccount): number => {
+    if (!placement) return Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) + ACTIVE_WEIGHT * load(a)
+    const projected = projectedPct(
+      a,
+      placement.running.get(a.id) ?? [],
+      placement.expected,
+      placement.finishedSince?.get(a.id) ?? 0,
+    )
+    return Math.max(projected, a.weekPct ?? 50) + (projected <= FIT_PCT ? 0 : 200)
+  }
   const score = (a: CorchAccount): number =>
-    Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) +
-    ACTIVE_WEIGHT * load(a) +
+    base(a) +
     (full(a) ? 500 : 0) +
     (near(a) ? 300 : 0) +
     (a.id === handedOffFrom ? 100 : 0) +

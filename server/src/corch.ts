@@ -89,6 +89,7 @@ import {
   windDownMessage,
 } from './corch-lib'
 import { syncOwnerClaude } from './corch-owner-sync'
+import { expectedPct, planFactor, type RunningLoad } from './corch-placement'
 import { launchRunner, readRunnerExit, readRunnerPids } from './corch-runner'
 import {
   attemptUnits,
@@ -288,6 +289,7 @@ function signedInAccounts(): CorchAccount[] {
         num: i.num ?? null,
         name: i.name,
         configDir: i.configDir,
+        planFactor: planFactor(i.planLabel),
         sessionPct: freshestPct(
           u?.session,
           snapshotAt,
@@ -759,6 +761,48 @@ async function tick(): Promise<void> {
         bump(active, w.accountId)
         bump(groupMap(w.group), w.accountId)
       }
+    // Placement (corch-placement.ts): what each task is expected to cost, and what is running where.
+    const rows = scoreRows(workers.values())
+    const finished = [...workers.values()]
+      .filter((w) => w.status === 'done' && w.tokens)
+      .map((w) => ({
+        model: ladderModel(w.model ?? w.attempts.at(-1)?.model),
+        pct:
+          w.attempts.reduce(
+            (s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),
+            0,
+          ) / UNITS_PER_PRO_PERCENT,
+      }))
+    const expectedOf = (w: CorchWorker): number =>
+      expectedPct({ kind: w.kind, model: ladderModel(w.model), effort: w.effort }, rows, finished)
+    const running = new Map<string, RunningLoad[]>()
+    const addRunning = (id: string, load: RunningLoad): void => {
+      running.set(id, [...(running.get(id) ?? []), load])
+    }
+    const firstStart = new Map<string, number>()
+    for (const w of workers.values())
+      if (w.status === 'running' && w.accountId) {
+        const at = w.attempts.at(-1)
+        addRunning(w.accountId, { expected: expectedOf(w), startPct: at?.startPct ?? null })
+        if (at)
+          firstStart.set(
+            w.accountId,
+            Math.min(firstStart.get(w.accountId) ?? at.startedAt, at.startedAt),
+          )
+      }
+    // What attempts that ended since an account's first running worker started spent there: part of
+    // the meter's rise that is not the running work's (projectedPct).
+    const finishedSince = new Map<string, number>()
+    for (const w of workers.values())
+      for (const a of w.attempts) {
+        const since = firstStart.get(a.account.id)
+        if (since === undefined || a.endedAt === null || a.endedAt <= since) continue
+        const share =
+          (a.endedAt - Math.max(a.startedAt, since)) / Math.max(1, a.endedAt - a.startedAt)
+        const pct =
+          (attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl) / UNITS_PER_PRO_PERCENT) * share
+        finishedSince.set(a.account.id, (finishedSince.get(a.account.id) ?? 0) + pct)
+      }
     const due = [...workers.values()]
       .filter((w) => (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now)
       .sort(dueOrder)
@@ -766,7 +810,12 @@ async function tick(): Promise<void> {
       try {
         const cap = perAccount[w.group] ?? 2
         const groupActive = groupMap(w.group)
-        const acct = pickAccount(w, accounts, walls, active, cap, now, groupActive, allowFull)
+        const expected = expectedOf(w)
+        const acct = pickAccount(w, accounts, walls, active, cap, now, groupActive, allowFull, {
+          expected,
+          running,
+          finishedSince,
+        })
         if (acct) {
           try {
             launch(w, acct, accounts, active.get(acct.id) ?? 0)
@@ -798,6 +847,7 @@ async function tick(): Promise<void> {
           if (w.status === 'running') {
             bump(active, acct.id)
             bump(groupActive, acct.id)
+            addRunning(acct.id, { expected, startPct: acct.sessionPct })
           }
           continue
         }
@@ -1652,6 +1702,7 @@ function launch(
     resumed: resume,
     sessionId,
     cacheTtl: '5m',
+    startPct: acct.sessionPct,
     daemonPid: process.pid,
     runner,
     requested: { model: w.model, effort: w.effort },
