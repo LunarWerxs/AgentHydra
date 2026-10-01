@@ -143,6 +143,13 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
 - `climayteRunningCount()` counts only pre-runner workers, so `/api/daemon/restart` needs no `force`
   for runner workers. Proven live: two restarts with 6-7 workers running left every attempt count
   unchanged and every worker running.
+- On Windows the runner first puts itself in a kill-on-close job (`server/src/climayte-job.ts`,
+  bun:ffi, `5bc5ba7`), then starts the CLI, so everything the session starts is in it: Bun's and
+  Node's own child job allows silent breakaway, which is how a finished worker left `bun vite` on
+  port 4289 running (field note 43); a breakaway climbs nested jobs only as far as each allows, and
+  this one allows none. When the CLI exits the runner lists what is still in the job (pid, exe,
+  command line) into the exit file and exits, which closes the job and ends them; `finish` journals
+  them as `cleaned`. Per attempt: a follow-up turn starts its own server again.
 
 ### Tokens, totals and the usage tables
 
@@ -180,6 +187,19 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   wall ends (field note 19: five walled accounts read 43-50%). The chips say "Limit" at or past
   100%: Anthropic reports 101-106% once a window is spent, because requests already running when
   it hit still count.
+- Each attempt also keeps `spend { costUsd, turns, reread }` (`29d4c56`, `d3be433`; backfilled once
+  from transcripts, null when its transcript is gone). `reread` is the first request's input and
+  cache writes on an attempt after one that spent tokens: the conversation read again into a cold
+  cache after a move, a limit, a handoff or a gap. Rows show per-attempt `costUsd`, `turns`, `pct`,
+  `rereadPct` and the task's `used { pct, workPct, rereadPct }`; the scorecard and every cost
+  estimate count the work only. Over everything on record on 2026-10-01: 14.2% of usage was
+  re-reading (limit and move 127% of a Pro window, handoffs 60%, follow-ups 19%).
+- The test metrics (owner, 2026-10-01: stop each account at 85-90%, never at its limit) ride on
+  `GET /api/corch/totals?since=<ISO or ms>`: `limitHits` and `limitHitList` (runs that ended at a
+  real limit; target 0), `ceilingStops` (runs the 90% ceiling stopped), `peaks` (each account's
+  highest 5-hour % per window from the CLI's rate_limit_events, `attempt.peak`), `sizing` (finished
+  tasks' expected against used, `ratio` used/expected), plus `usedPct`, `rereadPct`,
+  `rereadShare`, `rereadByCause`. Waiting rows carry `waitUntil` (ISO, UTC) and every row `size`.
 
 ### Model and thinking (field note 16)
 
@@ -599,6 +619,13 @@ boot after the stores are ready.
   that task, or for its whole group (a toggle), one rendered line per entry, reloaded when the task
   changes and every 10 s for a group.
 - Every user-facing string goes through vue-i18n (`web/src/locales`), so `check:i18n` passes.
+- The CLI tab fits the window on a wide screen (owner, 2026-10-01, `c3a3c5b`): the page does not
+  scroll. The accounts table folds to Quick add from its header (kept per browser,
+  `agenthydra.cli.accountsOpen`) and, open, scrolls inside itself (35vh); the task list scrolls
+  inside itself with a "Hide finished" switch (`agenthydra.climayte.hideFinished`); in the task
+  panel the result, event log and journal share the height left, each in its own box, and the
+  message box stays at the bottom. The counter's hover gives the re-read share; an attempt stopped
+  at the ceiling shows "stopped at 90%".
 
 ## Tests (`server/tests/climayte.test.ts`)
 
@@ -654,3 +681,17 @@ stderr and exits 1), appends to it, prints init, an assistant text and a `result
   (`CliMayteWorkerDetail.vue`); status chips carry an icon and plain words (`lib/climayte-status.ts`). The
   message box says what sending does: queued after the current step on a live task, a new turn of
   the same conversation on a finished or stopped one (that is what `climayteSend` does).
+
+## Status (2026-10-01)
+
+- Live on `main`: sizing before dispatch (`split needed` over half the biggest window, plan-aware:
+  Max 5x and 20x hold 5 and 20 Pro windows) and waiting for room; the 85% stop line on the 5-hour
+  and weekly windows with a handoff whether or not another account has room; the 90% ceiling;
+  per-attempt spend and the re-read share; the test metrics above; blended cost estimates from
+  every finished task; leftover processes ended with their run; the CLI tab layout.
+- Measured that night (since 05:00 UTC): 3 limit hits, all before the stop line shipped; 0 ceiling
+  stops; peaks #101 87%, #102 78% (the older accounts had already hit 96-100%); Sonnet medium code
+  estimated at 4.9% from 7 finished tasks (was 13.7, from Opus code scaled).
+- Next run, check: `limitHits` stays 0 and peaks sit at 85-90; how often the ceiling fires
+  (`ceilingStops`: the 85% handoff came late); `sizing.ratio` near 1; the re-read share falls
+  below 14%; `cleaned` events in the journal; waiting tasks' `waitUntil` matches the real reset.
