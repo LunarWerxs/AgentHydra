@@ -9,6 +9,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **How many tokens each CLI account has run** (`server/src/core/cli-instance-tokens.ts`, the
+  `tokens` field of `GET /api/cli-instances`). Added up from the instance's own transcripts on this
+  PC, one usage per reply (a reply is written as several lines that repeat its usage), and re-read
+  only when a transcript changed. Work the same account did in a desktop app or on another PC is not
+  in it. The CLI table shows it as a Tokens column.
+
 - **One sign-in for desktop and CLI** (`server/src/core/desktop-cli-feed.ts`). "Add a CLI login…"
   on a signed-in desktop instance now gives the CLI instance that desktop login straight away: no
   terminal, no second sign-in. A linked CLI instance with no login of its own keeps following the
@@ -31,6 +37,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   orchestrator about eight model requests at its full context.
 
 ### Changed
+
+- **Login sync says why a login is left as it is in two words** (`server/src/core/cli-login-sync.ts`,
+  the `note` field: `own`, `waiting`, `fed`). The sentence that used to fill the state column is the
+  hover text now; `problem` carries only real errors.
+
+- **Wall-clock reset times no longer depend on an English locale** (`server/src/usage.ts`): the zone
+  formatter asks for Latin digits and the Gregorian calendar itself instead of pinning `en-US`.
 
 - **CliMayte paces each account's week instead of draining the biggest one**
   (`server/src/climayte-placement.ts` paceGap, waitsForCooldown). An account that has used more of its

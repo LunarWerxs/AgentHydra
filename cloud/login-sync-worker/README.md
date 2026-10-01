@@ -1,9 +1,12 @@
 # Login sync Worker
 
-The cloud half of AgentHydra's login sync (`server/src/core/cli-login-sync.ts`): a Cloudflare
-Worker that keeps your CLI logins the same on your PCs, so a login can stay signed in on two PCs at
-once. When one PC refreshes a login, it uploads the new one here and the other PC picks it up within
-about a minute.
+The cloud half of AgentHydra's login sync (`server/src/core/cli-login-sync.ts`,
+`server/src/core/desktop-login-sync.ts`): a Cloudflare Worker that keeps your CLI and Claude Desktop
+logins the same on your PCs, so a login can stay signed in on two PCs at once. When one PC refreshes
+a login, it uploads the new one here and the other PC picks it up within about a minute.
+
+The code is public; the store is yours. Each person deploys their own Worker, and nothing reaches it
+without its access token, so two people running AgentHydra never share a store.
 
 It never sees a login. Each PC encrypts every login (AES-256-GCM) with a key that stays on your PCs,
 and this Worker stores the ciphertext with a version number. It knows only the SHA-256 of its access
@@ -26,6 +29,21 @@ token, never the token.
    other PC.
 
 `GET /v1/health` answers `{"ok":true}` without a token, to check the address.
+
+## Using it
+
+- **First PC:** set up the store (step 4 above). Every signed-in CLI instance and desktop profile
+  uploads within a minute.
+- **Each other PC:** update AgentHydra, then CLI tab, the cloud button, paste the pairing code,
+  Join. Its logins arrive within a minute: CLI instances under their own names and numbers, desktop
+  profiles in a profile of the same name and number (written only while that profile is closed).
+- **The pairing code** holds the store address, its token and the encryption key. Move it the way
+  you would move a password, never in a chat or a ticket.
+- **Leave one login out** on one PC with its switch in Login sync. Logging out leaves it out too, so
+  the store does not sign it straight back in.
+- **Keep a synced desktop account open on one PC at a time.** One you signed in separately on both
+  PCs is left alone, and both stay signed in.
+- **Stop syncing on this PC** forgets the store here; the store keeps its copies for the others.
 
 ## What it serves
 
