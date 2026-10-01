@@ -165,7 +165,10 @@ Emit a change event (`onCorchChange(cb) → unsubscribe`) whenever a worker's st
   Eligible: in `worker.accounts` when set; not walled (`walls[id].until > now`); `sessionPct < 98`
   and `weekPct < 99` when known; `active < perAccount`. A handoff (last attempt `quota`/`auth`)
   excludes the account that failed. A follow-up prefers `worker.accountId` when eligible. Score =
-  `max(sessionPct ?? 50, weekPct ?? 50) + 25 * active`; lowest wins; ties by `num`.
+  `max(sessionPct ?? 50, weekPct ?? 50) + 100 * active`; lowest wins; ties by `num`. `active` counts
+  the workers running on the account from EVERY group (field note 8: at 25, a busy account at 0%
+  still beat an idle one at 30%, so two orchestrations piled onto one account); `perAccount` stays
+  a per-group cap, with `MAX_PER_ACCOUNT` above it in total.
 - `copySessionTranscript(fromConfigDir, toConfigDir, sessionId): boolean`: find
   `<from>/projects/*/<sessionId>.jsonl`, copy it (and a sibling `<sessionId>/` directory when
   present, recursively) into `<to>/projects/<same folder name>/`. Returns false when the source is
@@ -176,21 +179,86 @@ Production accounts: `listCliInstances()` filtered to `loggedIn`, each with `ses
 `weekPct` from `lastUsageCheck.session.pct` / `lastUsageCheck.weekAll.pct` (null when absent).
 Tests replace the provider with `setCorchAccountsProvider(fn | null)`.
 
+The login a listing reports is honest (field note 3): `loggedIn` only proves a credential file
+exists, so corch.ts registers `setCliLoginVeto(corchSignedOutReason)` with `core/cli-instances.ts`.
+An account Corch walls `signed out` (its last attempt failed `auth`, and its credential file has not
+changed since) lists `loggedIn: false` with a `loginNote` saying why, in `list_cli_instances` and
+the CLI tab alike, without running `claude auth status` per row. The wall is rechecked in the
+background with `cliAuthStatus` every 30 min, and lifts at once when the credential file changes (a
+fresh sign-in).
+
+### The owner's CLAUDE.md and skills (`server/src/corch-owner-sync.ts`)
+
+A worker runs with `CLAUDE_CONFIG_DIR` = its account's folder, so `~/.claude` (the owner's global
+CLAUDE.md, skills and hooks) is not what it reads (field notes 5 and 9). Before each launch,
+`syncOwnerClaude('~/.claude', account.configDir)` makes the account folder match:
+
+- `CLAUDE.md` is COPIED (a file symlink needs admin rights or developer mode on Windows; a hard
+  link breaks the first time an editor saves by replacing the file), only when the owner's changed,
+  and never over a CLAUDE.md the account holds of its own.
+- Each owner skill folder is a directory JUNCTION in `<account>/skills/` (no admin rights, always
+  current). The account's own entries (its `synced/` folder) stay; a link whose skill the owner
+  removed is removed. Removing an account folder removes the links, never the owner's files.
+- Cheap: a signature (CLAUDE.md's size and mtime, the skill names) is kept in memory and in
+  `<account>/.agenthydra-owner-sync.json`; an unchanged one costs a stat and a readdir.
+- Hooks and `settings.json` are NOT carried: the owner's desktop-only hooks can block a headless
+  worker. Tests turn it on with `setCorchOwnerDir(dir | null)`; under `NODE_ENV=test` it is off.
+
+### Journal (`server/src/corch-journal.ts`)
+
+The owner's ask on the first real run ("we probably also need logging in Corch"): one short JSON
+line per state change of every worker, appended to `<CONFIG_DIR>/corch/journal.jsonl`. At 5 MB it
+rotates to `journal.1.jsonl` (one previous file kept). A failed write is logged and dropped; the
+journal never stops a worker.
+
+```ts
+interface CorchJournalEntry {
+  ts: string; id: string; group: string; title: string; event: CorchJournalEvent
+  account?: string            // '#84', or the name of an account without a number
+  from?: string; copied?: boolean            // moved
+  attempt?: number                           // 1-based
+  sessionPct?: number | null; weekPct?: number | null; active?: number  // launched: why it was picked
+  notice?: string; until?: string            // limit: the CLI's words and the wall's end (ISO)
+  pct?: number | null; path?: string         // handoff-requested / -written
+  pending?: number; urgent?: boolean         // follow-up-queued; cancelled: messages kept
+  retry?: number; waitS?: number             // retry / interrupted
+  costUsd?: number; turns?: number; totalCostUsd?: number  // done / turn-done
+  error?: string                             // failed / waiting: the first line
+  cwd?: string; accounts?: number            // dispatched
+}
+```
+
+Events: `dispatched`, `launched` (with the account's session/week % and how many workers it already
+ran, the two things `pickAccount` scores on), `moved`, `limit`, `signed-out`, `handoff-requested`,
+`handoff-written`, `handoff-resumed`, `follow-up-queued`, `follow-up-delivered`, `retry`,
+`interrupted` (a daemon restart killed its CLI), `waiting`, `turn-done`, `done`, `failed`,
+`cancelled`. Read with `corchJournal(filter)` (entries, oldest first, the newest `limit`, default
+100) or `corchJournalLines(filter)`, one readable line each, e.g.
+`23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`.
+
 ### API (what routes and MCP call)
 
 ```ts
 export function corchRun(input: { tasks: Array<{ prompt: string; cwd: string; title?: string; model?: string; effort?: string }>; group?: string; accounts?: string[]; perAccount?: number }): { group: string; workers: CorchWorkerView[] }
-export function corchList(filter?: { group?: string; id?: string; active?: boolean }): CorchWorkerView[]
+export function corchList(filter?: { group?: string; id?: string; active?: boolean; limit?: number; brief?: boolean }): CorchWorkerView[] | CorchWorkerBrief[]
+   // `limit`: every active worker plus only that many most recently finished ones, newest first
+   // (recentWorkers); `brief`: without the prompt, and only the last 3 attempts (+ attemptCount)
 export function corchGet(id: string): (CorchWorkerView & { events: string[] }) | null  // events = last 60 summarised lines
 export async function corchWait(filter: { group?: string; id?: string }, timeoutMs: number): Promise<CorchWorkerView[]>
    // resolves on the first status change in scope, or at timeout, with corchList(filter)
-export function corchSend(id: string, text: string): { ok: boolean; message: string }
-export function corchCancel(filter: { id?: string; group?: string }): { cancelled: string[] }
+export function corchSend(id: string, text: string, opts?: { urgent?: boolean }): { ok: boolean; message: string }
+   // to a running worker: held until its task ends; `urgent` stops the running work and sends it first
+export function corchHandoff(id: string): { ok: boolean; message: string }
+export function corchCancel(filter: { id?: string; group?: string }): { cancelled: string[]; keptMessages: number }
+   // queued follow-ups are kept and delivered, in order, when the worker is continued
+export function corchJournal(filter?: { group?: string; id?: string; since?: string; limit?: number }): CorchJournalEntry[]
+export function corchJournalLines(filter?: …): string[]
 export function startCorch(): void
 ```
 
 `CorchWorkerView` = the worker minus `prompt` beyond 300 chars and minus attempt log paths, plus
-`account` (`#<num> <name>` or null), `elapsedS`, and `attempts` as `{ account, outcome, notice }`.
+`account` (`#<num> <name>` or null), `ranS` (seconds it ran: the sum of its attempts, not the time
+since it was created), and `attempts` as `{ account, outcome, notice }`.
 Validation: `cwd` must be an existing directory; `prompt` non-empty; `perAccount` 1..4, default 2.
 
 ## Server: quick add, `server/src/core/cli-quick-add.ts`
@@ -232,10 +300,14 @@ file present answered `loggedIn: false`).
 
 ## Routes: `server/src/routes/corch.ts`
 
-- `GET /api/corch/workers?group=&active=1` → `corchList`
-- `GET /api/corch/workers/:id` → `corchGet`
+- `GET /api/corch/workers?group=&id=&active=1&limit=&brief=1&wait=` → `corchList` (`wait`
+  seconds: first wait for the next status change in scope, via `corchWait`)
+- `GET /api/corch/workers/:id?wait=` → `corchGet` (404 when unknown)
+- `GET /api/corch/journal?group=&id=&since=&limit=&format=lines` → `corchJournal`, or
+  `corchJournalLines` with `format=lines`; `since` is an ISO time or epoch ms
 - `POST /api/corch/workers` body `{ tasks, group?, accounts?, perAccount? }` → `corchRun`
-- `POST /api/corch/workers/:id/send` `{ text }` → `corchSend`
+- `POST /api/corch/workers/:id/send` `{ text, urgent? }` → `corchSend`
+- `POST /api/corch/workers/:id/handoff` → `corchHandoff`
 - `POST /api/corch/cancel` `{ id? , group? }` → `corchCancel`
 - `POST /api/cli-instances/quick-add` `{ email }` → `startQuickAdd`
 - `GET /api/cli-instances/quick-add` → `listQuickAdds`
@@ -251,11 +323,22 @@ boot after the stores are ready.
   the chat keeps only the orchestration and every piece of work goes here; each task must be
   self-contained (a CLI worker sees none of this chat), name its folder, and say what "done"
   means and what proof to report; workers run on the owner's CLI accounts, move to another
-  account by themselves at a usage limit, and are visible in AgentHydra's Corch view.
-- `corch_status { group?, id?, wait_seconds? (0..600) }` → views; with `wait_seconds` it waits for
-  the next status change in scope (use this instead of polling).
-- `corch_send { id, text }` MUTATES: a follow-up turn in the same session.
-- `corch_cancel { id?, group? }` MUTATES.
+  account by themselves at a usage limit, and are visible in AgentHydra's Corch view. Answers
+  only `{ group, workers: [{ id, title, status, account }] }` (field note 7: the full view echoed
+  every prompt back).
+- `corch_status { group?, id?, active?, limit?, wait_seconds? }`: `id` → that ONE worker's detail
+  (`corchGet`, with its `events`; field note 4). Otherwise a brief list, newest first: a `group`'s
+  workers, else every active worker plus the 20 (`RECENT_FINISHED`, or `limit`) most recently
+  finished (field note 1: unscoped, it answered all 141 workers ever recorded, 51k characters, and
+  overflowed the MCP result); `active: true` lists only queued/running/waiting ones. With
+  `wait_seconds` it waits for the next status change in scope (use this instead of polling); waits
+  are cut to `CORCH_MAX_WAIT_S` (45 s): an MCP client drops a call held about 60 s.
+- `corch_log { group?, id?, since?, limit? }`: the journal as readable lines, newest last, default
+  100.
+- `corch_send { id, text, urgent? }` MUTATES: a follow-up turn in the same session; `urgent` stops
+  a running worker and delivers this first.
+- `corch_handoff { id }` MUTATES: a running worker writes a handoff and goes on in a fresh session.
+- `corch_cancel { id?, group? }` MUTATES; answers `keptMessages`, the queued follow-ups it kept.
 `accounts` accepts CLI instance numbers or ids (resolve through the existing instance resolver).
 
 ## Web: Quick add and the Corch view
@@ -270,6 +353,9 @@ boot after the stores are ready.
   views are): workers grouped by `group`, newest first; each row: status chip, title, account,
   elapsed, `lastActivity`, moves. Selecting a row shows `events`, `result`/`error`, a follow-up
   box (`/send`) and Stop (`/cancel`). Poll every 3 s while any worker is active.
+- The selected worker's **Log** (`CorchJournal.vue`, in `CorchWorkerDetail.vue`): the journal for
+  that task, or for its whole group (a toggle), one rendered line per entry, reloaded when the task
+  changes and every 10 s for a group.
 - Every user-facing string goes through vue-i18n (`web/src/locales`), so `check:i18n` passes.
 
 ## Tests (`server/tests/corch.test.ts`)
