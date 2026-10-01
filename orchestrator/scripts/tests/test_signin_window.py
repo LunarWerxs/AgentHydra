@@ -11,7 +11,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -22,6 +22,14 @@ from lib.signin_clipboard import ClipboardLinkWatcher  # noqa: E402
 
 
 class SubmitterTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # The relay builds its CDP commands with zendriver, an optional install that CI's runners do
+        # not carry; without it the import fails inside the relay's catch-all and these tests saw
+        # nothing happen. A stand-in keeps them about the relay, on any machine.
+        stand_in = patch.dict(sys.modules, {'zendriver': SimpleNamespace(cdp=MagicMock())})
+        stand_in.start()
+        self.addCleanup(stand_in.stop)
+
     async def test_disabled_without_email_or_on_another_origin(self):
         tab = SimpleNamespace(url="https://other.example/login", evaluate=AsyncMock())
         await EmailSubmitter("https://claude.ai/login", "owner@example.com").poll(tab)
