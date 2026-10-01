@@ -141,7 +141,7 @@ export default {
   moveFileCopied: 'File path copied.',
   moveInTitle: 'Import logins from another PC',
   moveInBody:
-    'Choose the .ahlogins file made by “Move login to another PC” on your other PC, and type its passphrase. Each login lands on the same account here (or a new instance with the same number when this PC has never used it), and AgentHydra checks that it signs in.',
+    'Choose the .ahlogins file made by “Copy login to another PC” on your other PC, and type its passphrase. Each login lands on the same account here (or a new instance with the same number when this PC has never used it), and AgentHydra checks that it signs in.',
   moveInFile: 'Login file',
   moveInFrom: 'From {from}, {date}:',
   moveInBadFile: 'That file is not an AgentHydra login file.',

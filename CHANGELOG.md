@@ -7,21 +7,6 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
-### Added
-
-- **Login sync: keep your CLI logins the same on two PCs** (`server/src/core/cli-login-sync.ts`,
-  `cloud/login-sync-worker/`, the cloud button in the CLI tab). Point AgentHydra at a small
-  Cloudflare Worker of your own and both PCs can stay signed in to the same accounts: when one PC
-  refreshes a login, the other picks up the new one within about a minute, instead of being signed
-  out a few hours later. The Worker only stores logins encrypted with a key that stays on your PCs.
-  The second PC joins by pasting a pairing code from the first. Each login has a switch to leave it
-  out on one PC, and logging out on a PC leaves it out there.
-
-### Changed
-
-- **Copying a login to another PC keeps this PC signed in** (`server/src/core/cli-login-move.ts`).
-  "Copy login to another PC" no longer signs this PC out; tick "Also sign this PC out" for a move.
-
 ## [1.5.0] - 2026-10-01
 
 ### Added
@@ -104,17 +89,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   or whose last nudge failed, and every nudge is listed in the CliMayte journal. A nudge costs about
   two cents at list price. The weekly line it stops at moved from 80% to 85%.
 
-- **Move CLI logins to another PC** (`server/src/core/cli-login-move.ts`,
-  `web/src/components/CliLoginMoveDialog.vue`). A login used on two PCs at once can leave one of
-  them with a session that no longer refreshes. "Move login to another PC" in a CLI row's menu
-  saves the login to a file encrypted with a passphrase the page makes and shows you, and signs this
-  PC out of it in the same step. "Import logins" in the header of the other PC shows which logins the
-  file holds before it opens it, puts each one on the instance with the same number or account, and
-  checks that it is signed in. Moving a login that is running a session is refused. The file only
-  opens with the settings AgentHydra itself writes, and only when the list it shows matches what is
-  inside; this PC is signed out only if nothing refreshed the login while the file was being made;
-  and an account already signed in on the other PC is replaced only by a newer login of the same
-  account, so importing the same file twice, or an older one, changes nothing.
+- **Copy or move CLI logins to another PC** (`server/src/core/cli-login-move.ts`,
+  `web/src/components/CliLoginMoveDialog.vue`). "Copy login to another PC" in a CLI row's menu saves
+  the login to a file encrypted with a passphrase the page makes and shows you; tick "Also sign this
+  PC out" to move it instead, so one login is not refreshed on two PCs. "Import logins" in the
+  header of the other PC shows which logins the file holds before it opens it, puts each one on the
+  instance with the same number or account, and checks that it is signed in. The file only opens
+  with the settings AgentHydra itself writes, and only when the list it shows matches what is
+  inside; a move signs this PC out only if nothing refreshed the login while the file was being
+  made; and an account already signed in on the other PC is replaced only by a newer login of the
+  same account, so importing the same file twice, or an older one, changes nothing.
+
+- **Login sync: keep your CLI logins the same on two PCs** (`server/src/core/cli-login-sync.ts`,
+  `cloud/login-sync-worker/`, the cloud button in the CLI tab). Point AgentHydra at a small
+  Cloudflare Worker of your own and both PCs can stay signed in to the same accounts: when one PC
+  refreshes a login, the other picks up the new one within about a minute, instead of being signed
+  out a few hours later. The Worker only stores logins encrypted with a key that stays on your PCs.
+  The second PC joins by pasting a pairing code from the first. Each login has a switch to leave it
+  out on one PC, and logging out on a PC leaves it out there.
 
 - **Each instance shows every account it has been signed into** (`server/src/core/login-history.ts`,
   `web/src/components/LoginHistoryPopover.vue`). A history button beside the account in the
