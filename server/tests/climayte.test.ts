@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   addResults,
+  atCeiling,
   attemptSpend,
   CliMayteSplitNeeded,
   classifyAttempt,
@@ -51,6 +52,7 @@ import {
   setCliMayteOwnerDir,
   startCliMayte,
   wallUntil,
+  windDownAt,
 } from '../src/climayte'
 import { forgetOwnerSync, syncOwnerClaude } from '../src/climayte-owner-sync'
 import { isPidAlive } from '../src/core/process'
@@ -447,6 +449,32 @@ describe('pickAccount', () => {
     expect(pickAccount(worker(), accounts, {}, new Map([['a', 1]]), 2, now)?.id).toBe('b')
   })
 
+  test('an account with no reading in its window takes one worker until that worker reads it', () => {
+    // 2026-10-01 09:31: #88's last reading was four hours old, so it counted as half full with room,
+    // and one tick sent it four tasks; all four failed sign-in together.
+    const accounts = [acct('a88', 88, null, null), acct('a94', 94, 60, 20)]
+    const placement = (running: Array<[string, number]>) => ({
+      expected: 5,
+      running: new Map(running.map(([id]) => [id, [{ expected: 5, startPct: null }]])),
+    })
+    const pick = (accts: typeof accounts, active: Array<[string, number]>) =>
+      pickAccount(
+        worker(),
+        accts,
+        {},
+        new Map(active),
+        4,
+        now,
+        new Map(active),
+        false,
+        placement(active),
+      )
+    expect(pick(accounts, [])?.id).toBe('a88')
+    expect(pick(accounts, [['a88', 1]])?.id).toBe('a94')
+    // Once a reading is in, it takes work like any other account.
+    expect(pick([acct('a88', 88, 5, 5), acct('a94', 94, 60, 20)], [['a88', 1]])?.id).toBe('a88')
+  })
+
   test("an idle account beats one busy with another group's worker, even at lower usage (note 8)", () => {
     // Measured live: #84 at 5% ran a worker of another group; #83 (week 49%, session unknown) was
     // idle and still lost, 30 to 50. This group has nothing running anywhere.
@@ -827,6 +855,29 @@ describe('integration: paid extra usage is never spent', () => {
       ceiling: true,
     })
   }, 20_000)
+})
+
+describe('the 85% stop line and the 90% ceiling', () => {
+  test("a session goes by its account's newest reading, not only its own stream", () => {
+    // 2026-10-01, #102: three workers' streams read 85% at 08:28 and handed off. The fourth sat in a
+    // long tool call; its own stream said 76%, it was asked only at 87% six minutes later, and it
+    // reached the ceiling writing its handoff.
+    const now = Date.now()
+    const reading = (sessionPct: number, at: number, sessionResetsAt = now + 3_600_000) => ({
+      sessionPct,
+      sessionResetsAt,
+      weekPct: 10,
+      weekResetsAt: null,
+      overageAllowed: false,
+      at,
+    })
+    const own = reading(76, now - 360_000)
+    expect(windDownAt(own, reading(85, now - 5_000), now)).toBe(85)
+    expect(atCeiling(own, reading(90, now - 5_000), now)?.pct).toBe(90)
+    // An account reading older than its own, or from a window that has reset, does not count.
+    expect(windDownAt(own, reading(85, now - 400_000), now)).toBeNull()
+    expect(windDownAt(own, reading(85, now - 5_000, now - 1), now)).toBeNull()
+  })
 })
 
 describe('integration: near its limit a worker hands off to a fresh session', () => {

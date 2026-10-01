@@ -51,8 +51,8 @@ export interface CliMayteJournalEntry {
   active?: number // launched: workers already running on that account (every group)
   copied?: boolean // moved: the transcript was carried over
   notice?: string // limit / signed-out / retry / interrupted: the CLI's words, one line
-  until?: string // limit: the wall's end; signed-out: its next recheck (ISO)
-  pct?: number | null // handoff-requested: how far into its limit (null: on request)
+  until?: string // limit: the wall's end; signed-out: its next recheck; waiting: its waitUntil (ISO)
+  pct?: number | null // handoff-requested: how far into its limit (null: on request); limit at the ceiling: the reading
   path?: string // handoff file
   pending?: number // follow-up-queued: messages waiting now; cancelled: messages kept
   urgent?: boolean // follow-up-queued: the running work is stopped to deliver it first
@@ -193,7 +193,8 @@ export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Da
     case 'moved':
       return `moved from ${e.from ?? '?'} to ${e.account ?? '?'}${e.copied === false ? ' (no transcript to carry)' : ''}`
     case 'limit':
-      if (e.ceiling) return `stopped at CliMayte's ceiling${on}; account rests until ${at(e.until)}`
+      if (e.ceiling)
+        return `stopped at CliMayte's ceiling${typeof e.pct === 'number' ? ` (${Math.round(e.pct)}%)` : ''}${on}; account rests until ${at(e.until)}`
       return `hit its limit${on}; walled until ${at(e.until)}${e.notice ? `: ${e.notice}` : ''}`
     case 'signed-out':
       return `signed out${on}; rechecked at ${at(e.until)}${e.notice ? `: ${e.notice}` : ''}`
@@ -216,7 +217,7 @@ export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Da
     case 'interrupted':
       return `interrupted${on} (AgentHydra restarted or the process was killed); resuming, retry ${e.retry ?? '?'}/3`
     case 'waiting':
-      return `waiting: ${e.error ?? 'no account is free'}`
+      return `waiting${e.until ? ` until about ${at(e.until)}` : ''}: ${e.error ?? 'no account is free'}`
     case 'turn-done':
       return `turn done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task so far ${usd(e.totalCostUsd)}); next queued message follows`
     case 'turn-end':

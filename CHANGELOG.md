@@ -193,6 +193,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **CliMayte stops every worker on an account at the same moment** (`server/src/climayte.ts`). Each
+  worker used to go only by the usage its own session reported, which says nothing while it sits in
+  a long command. The night of 2026-10-01 three workers on one account were asked to hand off at
+  85%; the fourth heard about it six minutes later, at 87%, and hit the 90% ceiling. Now each
+  worker goes by the newest reading for its account from any of its workers.
+- **A new or silent account gets one task first** (`server/src/climayte-lib.ts`). An account with no
+  usage reading since its last reset takes one worker until that worker's first request reads it.
+  One tick had sent four tasks to an account whose sign-in was broken, and all four failed together.
+- **CliMayte's numbers for a night are that night's** (`GET /api/corch/totals?since=`). Every figure
+  (runs, tokens, cost, the re-read share) now covers only the runs since that time, not the whole
+  record; the totals list each ceiling stop (the reading, when it was asked to hand off, and how
+  many workers were on the account); the journal shows a ceiling stop even when its handoff got
+  written, and a waiting task's journal line says until when.
+- **Workers take part in the shared edit warnings.** Each CliMayte worker runs the owner's
+  edit_claims hook before it edits, so a chat about to edit a file a worker touched in the last half
+  hour is told which task did it, and a worker is told when a chat did.
 - **CliMayte's token count is right, and says what it counts** (`server/src/climayte.ts`). Work done
   before a task was handed to a fresh session counted as 0 tokens, so the total showed 289M where
   the real figure was 337M. Each run now records its own session, and the counter says "runs"

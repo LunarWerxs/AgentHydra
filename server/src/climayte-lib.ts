@@ -399,10 +399,29 @@ export const WIND_DOWN_WEEK_PCT = 85
  *  account walled until that window resets (climayte.ts stopAtCeiling). */
 export const CEILING_PCT = 90
 
-/** Where a reading has reached CEILING_PCT, if it has: the 5-hour window first. */
+/** The reading a running session is judged by: its own stream's, or the account's newest from any
+ *  of its workers when that is newer and its 5-hour window has not reset. A session's own stream
+ *  says nothing while it sits in a long tool call. 2026-10-01 on #102: three workers saw 85% at
+ *  08:28 and handed off; the fourth's own stream went from 76% to 87% across one tool call six
+ *  minutes later, was asked then, and reached the 90% ceiling writing its handoff. */
+export function sessionReading(
+  own: CliMayteLiveUsage | null,
+  account: CliMayteLiveUsage | null,
+  now: number,
+): CliMayteLiveUsage | null {
+  if (!account || (own && own.at >= account.at)) return own
+  if (account.sessionResetsAt !== null && account.sessionResetsAt <= now) return own
+  return account
+}
+
+/** Where a reading has reached CEILING_PCT, if it has: the 5-hour window first. `account` and
+ *  `now`: the account's newest reading from any worker (sessionReading). */
 export function atCeiling(
-  live: CliMayteLiveUsage | null,
+  own: CliMayteLiveUsage | null,
+  account: CliMayteLiveUsage | null = null,
+  now = Date.now(),
 ): { pct: number; week: boolean; resetsAt: number | null } | null {
+  const live = sessionReading(own, account, now)
   if (live?.sessionPct != null && live.sessionPct >= CEILING_PCT)
     return { pct: live.sessionPct, week: false, resetsAt: live.sessionResetsAt }
   if (live?.weekPct != null && live.weekPct >= CEILING_PCT)
@@ -414,8 +433,13 @@ export function atCeiling(
 export const ceilingNotice = (c: { pct: number; week: boolean }): string =>
   `Stopped at ${Math.round(c.pct)}% of its ${c.week ? 'weekly' : '5-hour'} usage, CliMayte's ceiling of ${CEILING_PCT}%, well short of the limit. The account rests until that window resets.`
 
-/** The percentage that calls for a wind-down now, or null. */
-export function windDownAt(live: CliMayteLiveUsage | null): number | null {
+/** The percentage that calls for a wind-down now, or null. `account` and `now` as for atCeiling. */
+export function windDownAt(
+  own: CliMayteLiveUsage | null,
+  account: CliMayteLiveUsage | null = null,
+  now = Date.now(),
+): number | null {
+  const live = sessionReading(own, account, now)
   if (live?.sessionPct != null && live.sessionPct >= WIND_DOWN_SESSION_PCT) return live.sessionPct
   if (live?.weekPct != null && live.weekPct >= WIND_DOWN_WEEK_PCT) return live.weekPct
   return null
@@ -904,12 +928,19 @@ export function pickAccount(
   // waiting anyway. Only the session already on it carries on there (its home); the rest wait.
   const keepsHome = (a: CliMayteAccount): boolean =>
     !handedOffFrom && a.id === worker.accountId && a.id !== failedId
+  // An account with no reading in its current 5-hour window (unread since its last reset, or a
+  // login whose usage check keeps failing) takes one worker until that worker's stream reads it:
+  // the first request tells whether the login works, within seconds. 2026-10-01 09:31: #88's last
+  // reading was four hours old, it counted as half full and roomy, and one tick sent it four tasks;
+  // all four failed sign-in together.
+  const unread = (a: CliMayteAccount): boolean => a.sessionPct === null && load(a) > 0
   const eligible = accounts.filter(
     (a) =>
       (!worker.accounts || worker.accounts.includes(a.id)) &&
       !((walls[a.id]?.until ?? 0) > now) &&
       (allowFull || !full(a)) &&
       (allowFull || !near(a) || keepsHome(a)) &&
+      (!unread(a) || keepsHome(a)) &&
       (groupActive.get(a.id) ?? 0) < perAccount &&
       load(a) < MAX_PER_ACCOUNT,
   )

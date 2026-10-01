@@ -918,7 +918,7 @@ async function tick(): Promise<void> {
               room: Math.round(room),
               roomOn: acctLabel(acct),
             }
-            journal(w, 'waiting', { error: firstLine(why) })
+            journal(w, 'waiting', { error: firstLine(why), until: until ?? undefined })
             changed(w)
           }
           continue
@@ -990,7 +990,7 @@ async function tick(): Promise<void> {
               : `Every eligible account is at its usage limit, past the ${WIND_DOWN_SESSION_PCT}% stop line, or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.`
         if (w.status !== 'waiting' || w.error !== why || w.waitUntil !== until) {
           if (w.status !== 'waiting' || w.error !== why)
-            journal(w, 'waiting', { error: firstLine(why) })
+            journal(w, 'waiting', { error: firstLine(why), until: until ?? undefined })
           w.status = 'waiting'
           w.error = why
           w.waitUntil = until
@@ -1166,8 +1166,11 @@ function poll(w: CliMayteWorker): void {
   // The ceiling (CEILING_PCT, 90 on either window): stopped there, whatever it is doing. Not when
   // the owner allowed paid extra usage: that setting says to go past the limit, and lifts the stop
   // line the same way (pickAccount's allowFull).
+  // Both lines go by the account's newest reading from any of its workers (sessionReading).
+  const accountLive = liveByAccount.get(at.account.id) ?? null
+  const now = Date.now()
   if (watching && !at.ceiling && !at.overage && !overageAllowed()) {
-    const c = atCeiling(r.live)
+    const c = atCeiling(r.live, accountLive, now)
     if (c) stopAtCeiling(w, at, c, !exited)
   }
   if (!at.overage && !at.ceiling && !overageAllowed()) {
@@ -1184,7 +1187,7 @@ function poll(w: CliMayteWorker): void {
   // a session with nowhere to go worked on into the wall: w-228dcdcc on #98, 85% to 100% in 15
   // requests, outcome quota.
   if (watching && !at.windDown && !at.overage && !at.ceiling) {
-    const pct = windDownAt(r.live)
+    const pct = windDownAt(r.live, accountLive, now)
     if (pct !== null) signalWindDown(w, at, pct)
   }
   const latest = r.recent[r.recent.length - 1] ?? null
@@ -1469,6 +1472,10 @@ function journalFinish(
       })
       break
     case 'handoff':
+      // A ceiling stop that still got its handoff written is a ceiling stop all the same: without
+      // this line the night's one ceiling stop (w-d7fbb102, #102) was in the totals but not here.
+      if (at.ceiling)
+        journal(w, 'limit', { account, until: until(), ceiling: true, pct: at.ceiling.pct })
       journal(w, 'handoff-written', { account, path: at.windDown?.path })
       break
     case 'quota':
@@ -1476,7 +1483,7 @@ function journalFinish(
         account,
         notice,
         until: until(),
-        ...(at.ceiling ? { ceiling: true } : {}),
+        ...(at.ceiling ? { ceiling: true, pct: at.ceiling.pct } : {}),
       })
       break
     case 'auth':
@@ -1849,11 +1856,32 @@ function launch(
   // desktop chats. A worker does its task; orchestration stays with the chat that asked.
   mkdirSync(HOOKS, { recursive: true })
   const hookFile = join(HOOKS, `${w.id}.json`)
+  // The owner's edit_claims hook, when installed: before an edit it records the file under this
+  // task's id and says when another chat or worker edited it in the last half hour. Workers carry
+  // none of the owner's hooks, so without this a worker's edits were invisible to it, and a worker
+  // editing a chat's files was the collision it was built for (2026-10-01).
+  const claims = ownerClaudeDir ? join(ownerClaudeDir, 'hooks', 'edit_claims.py') : null
+  const preToolUse =
+    claims && existsSync(claims)
+      ? [
+          {
+            matcher: 'Edit|Write|MultiEdit|NotebookEdit',
+            hooks: [
+              {
+                type: 'command',
+                command: `python '${slashed(claims)}' 2>/dev/null || true`,
+                timeout: 10,
+              },
+            ],
+          },
+        ]
+      : []
   writeFileSync(
     hookFile,
     JSON.stringify({
       deniedMcpServers: [{ serverName: MCP_SERVER_KEY }],
       hooks: {
+        ...(preToolUse.length ? { PreToolUse: preToolUse } : {}),
         PostToolUse: [
           {
             matcher: '*',
@@ -2628,8 +2656,9 @@ export function climayteCancel(filter: { id?: string; group?: string }): {
   return { cancelled, keptMessages }
 }
 
-/** What CliMayte has taken off the chats that handed it work, over every task on record: tasks, the
- *  CLI sessions they ran (attempts), their tokens and cost (the CliMayte view's counter). */
+/** What CliMayte has taken off the chats that handed it work: tasks, the CLI sessions they ran
+ *  (attempts), their tokens and cost (the CliMayte view's counter), over every task on record, or
+ *  with `since` over the runs that ended after it (a night's re-read share, not the record's). */
 export function climayteTotals(since = 0): {
   tasks: number
   /** Attempts ("runs"): every start of the CLI, retries, resumes and handoffs included. */
@@ -2661,6 +2690,17 @@ export function climayteTotals(since = 0): {
   limitHits: number
   /** Runs stopped at CliMayte's ceiling (90%) instead: the stop line (85) was not enough. */
   ceilingStops: number
+  /** The newest ceiling stops: the reading that stopped it, the reading it was asked to hand off at
+   *  (null: never asked), and how many runs were on that account at that moment, itself included. */
+  ceilingStopList: Array<{
+    id: string
+    title: string
+    account: string
+    at: string
+    pct: number
+    askedPct: number | null
+    workers: number
+  }>
   limitHitList: Array<{
     id: string
     title: string
@@ -2687,6 +2727,27 @@ export function climayteTotals(since = 0): {
   let unmeasured = 0
   const byCause: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>> = {}
   let ceilingStops = 0
+  const ceilings: Array<{
+    id: string
+    title: string
+    account: string
+    at: string
+    pct: number
+    askedPct: number | null
+    workers: number
+    t: number
+  }> = []
+  const allAttempts = [...workers.values()].flatMap((w) => w.attempts)
+  const runningOn = (accountId: string, t: number): number =>
+    allAttempts.filter(
+      (a) =>
+        a.account.id === accountId &&
+        a.startedAt <= t &&
+        (a.endedAt ?? Number.MAX_SAFE_INTEGER) >= t,
+    ).length
+  // With `since`, every figure covers only runs that ended after it (or are running); without, the
+  // whole record, as the CliMayte view's counter shows it.
+  const tasksInScope = new Set<string>()
   const hits: Array<{
     id: string
     title: string
@@ -2706,13 +2767,36 @@ export function climayteTotals(since = 0): {
   > = {}
   const distinct = new Set<string>()
   for (const w of workers.values()) {
-    sessions += w.attempts.length
-    costUsd += w.costUsd
-    if (w.tokens) tokens = addTokens(tokens, w.tokens)
+    if (!since) {
+      sessions += w.attempts.length
+      costUsd += w.costUsd
+      if (w.tokens) tokens = addTokens(tokens, w.tokens)
+      tasksInScope.add(w.id)
+    } else if (w.createdAt >= since) tasksInScope.add(w.id)
     for (const at of w.attempts) {
       const recent = (at.endedAt ?? Date.now()) >= since
-      if (recent && at.ceiling) ceilingStops++
-      if (recent && at.outcome === 'quota' && !at.ceiling)
+      if (!recent) continue
+      if (since) {
+        sessions++
+        costUsd += at.spend?.costUsd ?? 0
+        if (at.tokens) tokens = addTokens(tokens, at.tokens)
+        tasksInScope.add(w.id)
+      }
+      if (at.ceiling) {
+        ceilingStops++
+        const t = at.endedAt ?? Date.now()
+        ceilings.push({
+          id: w.id,
+          title: w.title,
+          account: acctLabel(at.account),
+          at: new Date(t).toISOString(),
+          pct: at.ceiling.pct,
+          askedPct: at.windDown ? at.windDown.pct : null,
+          workers: runningOn(at.account.id, t),
+          t,
+        })
+      }
+      if (at.outcome === 'quota' && !at.ceiling)
         hits.push({
           id: w.id,
           title: w.title,
@@ -2721,7 +2805,7 @@ export function climayteTotals(since = 0): {
           pct: at.peak?.pct ?? null,
           t: at.endedAt ?? at.startedAt,
         })
-      if (recent && at.peak) {
+      if (at.peak) {
         const key = `${at.account.id}|${at.peak.resetsAt ?? ''}`
         const p = peaks.get(key) ?? {
           account: acctLabel(at.account),
@@ -2771,7 +2855,7 @@ export function climayteTotals(since = 0): {
   const sum = (k: 'expected' | 'used' | 'work'): number =>
     Math.round(sized.reduce((s, x) => s + x[k], 0) * 10) / 10
   return {
-    tasks: workers.size,
+    tasks: tasksInScope.size,
     sessions,
     runsByOutcome,
     cliSessions: distinct.size,
@@ -2787,6 +2871,10 @@ export function climayteTotals(since = 0): {
     since: since ? new Date(since).toISOString() : null,
     limitHits: hits.length,
     ceilingStops,
+    ceilingStopList: ceilings
+      .sort((a, b) => b.t - a.t)
+      .slice(0, 20)
+      .map(({ t: _t, ...c }) => c),
     limitHitList: hits
       .sort((a, b) => b.t - a.t)
       .slice(0, 20)
