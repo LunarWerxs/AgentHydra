@@ -79,6 +79,7 @@ import {
   windDownMessage,
 } from './corch-lib'
 import { syncOwnerClaude } from './corch-owner-sync'
+import { launchRunner, readRunnerExit, readRunnerPids } from './corch-runner'
 import { getCliInstance, listCliInstances, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
@@ -159,9 +160,6 @@ let loaded = false
 let started = false
 let timer: ReturnType<typeof setTimeout> | null = null
 let ticking = false
-const procs = new Map<string, ReturnType<typeof Bun.spawn>>()
-const hasExited = (p: ReturnType<typeof Bun.spawn>): boolean =>
-  p.exitCode !== null || p.signalCode !== null
 /** Per attempt log: bytes read, an unfinished last line, the events kept, the summaries shown,
  *  and whether system/init was ever seen (kept apart: the events list drops old ones). */
 interface LogRead {
@@ -382,13 +380,15 @@ const isInit = (ev: unknown): boolean =>
   (ev as { type?: string; subtype?: string })?.type === 'system' &&
   (ev as { subtype?: string }).subtype === 'init'
 
-/** Workers with a CLI process running now. A daemon restart kills them (on Windows they live in
- *  the daemon's kill-on-close job), so the restart route and auto-update count them as runs in
- *  flight; each resumes by itself afterwards, but its current step starts over. */
+/** Workers whose CLI a daemon restart would kill: only attempts the daemon spawned itself (before
+ *  runners, 2026-09-30), which sit in its kill-on-close job on Windows. A worker under a runner
+ *  (corch-runner.ts) lives outside the daemon and is picked up again after the restart, so it does
+ *  not hold a restart or an auto-update back. */
 export function corchRunningCount(): number {
   load()
   let n = 0
-  for (const w of workers.values()) if (w.status === 'running') n++
+  for (const w of workers.values())
+    if (w.status === 'running' && !w.attempts[w.attempts.length - 1]?.runner) n++
   return n
 }
 
@@ -397,8 +397,76 @@ export function corchRunningCount(): number {
  *  outside would read as 'interrupted' and resume the task on the very account that can bill. */
 export function corchWorkerPids(): Set<number> {
   const pids = new Set<number>()
-  for (const p of procs.values()) if (!hasExited(p)) pids.add(p.pid)
+  for (const w of workers.values()) {
+    const at = w.attempts[w.attempts.length - 1]
+    if (w.status !== 'running' || !at?.runner) continue
+    if (at.pid) pids.add(at.pid)
+    if (at.runner.pid) pids.add(at.runner.pid)
+  }
   return pids
+}
+
+/** Runner pids this daemon has confirmed are really that attempt's runner (its command line names
+ *  the attempt's spec), so a pid Windows reused for a stranger after a crash is never taken for it,
+ *  and never killed. Checked once per runner per daemon. */
+const confirmedRunners = new Set<number>()
+
+/** Where a runner attempt's spec goes (corch-runner.ts deletes it once read; its path stays in the
+ *  runner's command line, which is how isOurRunner recognises it). */
+const runnerSpecPath = (log: string): string => `${log}.spec.json`
+
+function isOurRunner(pid: number, log: string): boolean {
+  if (!isPidAlive(pid)) return false
+  if (confirmedRunners.has(pid) || process.platform !== 'win32') return true
+  const r = Bun.spawnSync(
+    [
+      'powershell',
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`,
+    ],
+    { stdout: 'pipe', stderr: 'ignore', windowsHide: true },
+  )
+  const ok = r.success && r.stdout.toString().includes(runnerSpecPath(log))
+  if (ok) confirmedRunners.add(pid)
+  return ok
+}
+
+/** Whether the attempt's CLI has ended. A runner attempt is read from its files, so the answer
+ *  survives a daemon restart: an exit file means it ended; a runner gone without one died (finish
+ *  then reads it as interrupted); one that wrote no pids within a minute never started. An attempt
+ *  the daemon spawned itself is read from its handle, or, with none (the daemon restarted), it
+ *  died with that daemon's kill-on-close job on Windows. */
+function attemptExited(w: CorchWorker, at: CorchWorker['attempts'][number]): boolean {
+  const runner = at.runner
+  if (!runner)
+    return (
+      (process.platform === 'win32' && at.daemonPid !== process.pid) ||
+      !(at.pid && isPidAlive(at.pid))
+    )
+  if (readRunnerExit(runner.exitFile)) return true
+  if (runner.pid === null) {
+    const pids = readRunnerPids(runner.pidFile)
+    if (!pids) return Date.now() - runner.launchedAt > 60_000
+    runner.pid = pids.runner
+    at.pid = pids.child
+    confirmedRunners.add(pids.runner)
+    changed(w)
+  }
+  return !isOurRunner(runner.pid as number, at.log)
+}
+
+/** Kill the attempt's CLI through its runner (the whole tree), if the runner is still this
+ *  worker's. Never a bare pid nobody can vouch for. */
+function killAttempt(at: CorchWorker['attempts'][number]): void {
+  const pid = at.runner?.pid
+  if (!pid || !isOurRunner(pid, at.log)) return
+  try {
+    killProcessTree(pid)
+  } catch {
+    // already gone
+  }
 }
 
 function schedule(delay?: number): void {
@@ -690,19 +758,15 @@ function roomElsewhere(w: CorchWorker, from: string, accounts: CorchAccount[]): 
 function poll(w: CorchWorker, accounts?: CorchAccount[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (!at) return
-  const proc = procs.get(w.id)
-  // With no handle (the daemon restarted), a live PID proves nothing on Windows, which reuses
-  // them: an attempt another daemon launched died with that daemon's kill-on-close job (measured
-  // 2026-09-30), since workers are never detached.
-  const exited = proc
-    ? hasExited(proc)
-    : (process.platform === 'win32' && at.daemonPid !== process.pid) ||
-      !(at.pid && isPidAlive(at.pid))
+  const exited = attemptExited(w, at)
+  // A process this daemon is watching now: its own child, or a live runner (a restarted daemon
+  // picks those up again). A dead attempt's log, read again after a restart, is not.
+  const watching = !exited && !!at.runner
   const r = readLog(at.log)
   at.started ||= r.sawInit
   // Only from a process this daemon is watching now: after a restart an old log is read again from
   // the start, and its readings would be stamped as fresh.
-  if (r.live && proc) {
+  if (r.live && watching) {
     const prev = liveByAccount.get(at.account.id)
     if (!prev || prev.at <= r.live.at) liveByAccount.set(at.account.id, r.live)
   }
@@ -710,13 +774,13 @@ function poll(w: CorchWorker, accounts?: CorchAccount[]): void {
     if (r.overage) stopForOverage(w, at, r.overage, !exited)
     else {
       // Stop BEFORE the first billed request on an account that can bill (aboutToBill).
-      const soon = proc ? aboutToBill(r.live) : null
+      const soon = watching ? aboutToBill(r.live) : null
       if (soon) stopForOverage(w, at, { ...soon, notice: PRE_OVERAGE_NOTICE }, !exited)
     }
   }
   // Near its limit, with room elsewhere: the session writes a handoff and the task goes on in a
   // fresh, small session on another account instead of re-reading this whole conversation there.
-  if (proc && !exited && accounts && !at.windDown && !at.overage) {
+  if (watching && accounts && !at.windDown && !at.overage) {
     const pct = windDownAt(r.live)
     if (pct !== null && roomElsewhere(w, at.account.id, accounts)) signalWindDown(w, at, pct)
   }
@@ -748,21 +812,17 @@ function stopForOverage(
   } catch (err) {
     console.error('[corch] could not save walls:', err)
   }
-  const proc = procs.get(w.id)
-  if (running && proc && !hasExited(proc) && at.pid) {
-    try {
-      killProcessTree(at.pid)
-    } catch {
-      // already gone
-    }
-  }
+  if (running) killAttempt(at)
   changed(w)
 }
 
 function finish(w: CorchWorker, events: unknown[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (at?.outcome !== 'running') return
-  procs.delete(w.id)
+  if (at.runner) {
+    rmSync(at.runner.pidFile, { force: true })
+    rmSync(at.runner.exitFile, { force: true })
+  }
   const stderr = tailText(at.errLog, 4_000)
   let v = classifyAttempt(events, stderr, at.started === true)
   // Stopped to spare paid extra usage: a limit, whatever the killed process left behind. A turn
@@ -1147,45 +1207,47 @@ function launch(
     '--append-system-prompt',
     WORKER_BRIEF,
   ]
-  const outFd = openSync(log, 'a')
-  let errFd: number
-  try {
-    errFd = openSync(errLog, 'a')
-  } catch (err) {
-    closeSync(outFd)
-    throw err
+  // Under a runner (corch-runner.ts), launched outside the daemon: a daemon restart leaves the CLI
+  // running and the next daemon reads it on from its files (owner, 2026-09-30). Files, never pipes,
+  // so nothing ties the CLI to this process.
+  closeSync(openSync(log, 'a'))
+  closeSync(openSync(errLog, 'a'))
+  const runner = {
+    pid: null,
+    pidFile: `${log}.pid.json`,
+    exitFile: `${log}.exit.json`,
+    launchedAt: Date.now(),
   }
-  let proc: ReturnType<typeof Bun.spawn>
+  rmSync(runner.pidFile, { force: true })
+  rmSync(runner.exitFile, { force: true })
   try {
-    // Files, not pipes: a daemon restart must not kill the worker through a broken pipe. Never
-    // `detached` (DETACHED_PROCESS would flash a console per child); windowsHide hides the tree.
-    proc = Bun.spawn(argv, {
-      cwd: w.cwd,
-      // No claude.ai connectors (Gmail, Calendar, Drive, Notion, ...; several answer needs-auth).
-      // Measured on #83 with the real CLI: with them it took 2.0-3.0 s to its init event and loaded
-      // 158-202 tools (a different number run to run); without, 1.2-1.3 s and a steady 137 tools.
-      // Local MCP servers still load. Here, not in scrubbedEnv: quick add uses that too.
-      env: { ...scrubbedEnv(acct.configDir, w.id), ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
-      stdin: Bun.file(promptFile),
-      stdout: outFd,
-      stderr: errFd,
-      windowsHide: true,
-    })
+    launchRunner(
+      {
+        argv,
+        cwd: w.cwd,
+        // No claude.ai connectors (Gmail, Calendar, Drive, Notion, ...; several answer needs-auth).
+        // Measured on #83 with the real CLI: with them it took 2.0-3.0 s to its init event and
+        // loaded 158-202 tools (a different number run to run); without, 1.2-1.3 s and a steady 137
+        // tools. Local MCP servers still load. Here, not in scrubbedEnv: quick add uses that too.
+        env: { ...scrubbedEnv(acct.configDir, w.id), ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
+        stdin: promptFile,
+        stdout: log,
+        stderr: errLog,
+        pidFile: runner.pidFile,
+        exitFile: runner.exitFile,
+      },
+      runnerSpecPath(log),
+    )
   } catch (err) {
     w.status = 'failed'
     w.error = `Could not start the CLI: ${err instanceof Error ? err.message : String(err)}`
     journal(w, 'failed', { account: acctLabel(acct), error: firstLine(w.error) })
     changed(w)
     return
-  } finally {
-    closeSync(outFd)
-    closeSync(errFd)
   }
-  procs.set(w.id, proc)
-  void proc.exited.then(() => schedule(50))
   w.attempts.push({
     account: { id: acct.id, num: acct.num, name: acct.name },
-    pid: proc.pid,
+    pid: null,
     log,
     errLog,
     startedAt: Date.now(),
@@ -1194,6 +1256,7 @@ function launch(
     notice: null,
     resumed: resume,
     daemonPid: process.pid,
+    runner,
   })
   if (fromId) w.moves++
   // The journal: a move first (the account it left), then the start and why this account.
@@ -1363,8 +1426,7 @@ export function corchHandoff(id: string): { ok: boolean; message: string } {
   const w = workers.get(id)
   if (!w) return { ok: false, message: 'No such worker.' }
   const at = w.attempts[w.attempts.length - 1]
-  const proc = procs.get(w.id)
-  if (w.status !== 'running' || !at || !proc || hasExited(proc))
+  if (w.status !== 'running' || !at || attemptExited(w, at))
     return { ok: false, message: 'Only a running worker can hand off; this one is not running.' }
   if (at.windDown) return { ok: true, message: 'It is already winding down.' }
   signalWindDown(w, at, null)
@@ -1440,9 +1502,8 @@ export function corchSend(
  *  worker is no longer active. */
 function stopRunning(w: CorchWorker, notice: string | null): boolean {
   const at = w.attempts[w.attempts.length - 1]
-  const had = procs.get(w.id)
   // Stopped just after the CLI finished: record that turn's result, cost and turns first.
-  if (w.status === 'running' && had && hasExited(had)) {
+  if (w.status === 'running' && at && attemptExited(w, at)) {
     try {
       poll(w)
     } catch (err) {
@@ -1451,22 +1512,12 @@ function stopRunning(w: CorchWorker, notice: string | null): boolean {
     }
     if (!isActive(w)) return false
   }
-  if (w.status === 'running' && at?.pid) {
-    // Kill only a process known to be this worker's: a PID with no handle (the daemon
-    // restarted) may have been reused by Windows for a stranger.
-    const proc = procs.get(w.id)
-    if (proc ? !hasExited(proc) : process.platform !== 'win32' && isPidAlive(at.pid)) {
-      try {
-        killProcessTree(at.pid)
-      } catch {
-        // already gone
-      }
-    }
+  if (w.status === 'running' && at) {
+    killAttempt(at)
     at.outcome = 'cancelled'
     at.notice = notice
     at.endedAt = Date.now()
     charge(w, at)
-    procs.delete(w.id)
     forgetRead(at.log)
     rmSync(signalPath(w.id), { force: true })
   }

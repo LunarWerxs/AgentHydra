@@ -9,6 +9,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Restarting AgentHydra no longer stops Corch tasks** (`server/src/corch-runner.ts`). Each task's
+  Claude CLI now runs under a small runner started outside AgentHydra's own process, so a restart or
+  an update leaves it working; the restarted AgentHydra picks every running task up again from its
+  files instead of redoing its current step.
+
+- **One Instances table, and a CLI tab** (`web/src/components/InstancesView.vue`,
+  `web/src/components/CliView.vue`). Claude desktop, Codex and DeepSeek instances are listed in one
+  table, each row with its provider's logo, and a Provider filter picks which to show. The new CLI
+  tab holds the Claude CLI instances and Corch together; each CLI row shows how many sessions run
+  on that account, and its Log in signs that same account in again through Quick add. Corch keeps
+  the tokens every session ran and shows the totals it has taken off your chats.
+
 - **Paid extra usage is never billed unless you allow it** (`server/src/extra-usage.ts`). Some
   Claude accounts have claude.ai "extra usage" switched on: past their limits they keep working
   and bill you instead of stopping. The new Settings switch "Allow paid extra usage" is off by

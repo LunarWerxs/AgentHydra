@@ -54,6 +54,10 @@ export interface CorchAttempt {
   overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
   windDown?: { at: number; pct: number | null; path: string } // asked to hand off to `path` (pct null: on request)
   tokens?: CorchTokens // this attempt's own tokens (attemptSpend); absent on attempts before 2026-09-30
+  /** Run under a runner outside the daemon (corch-runner.ts), so a daemon restart leaves it running.
+   *  `pid` is the runner's, filled from `pidFile` once it has started the CLI; the CLI's own is the
+   *  attempt's `pid`. Absent on attempts spawned by the daemon directly (before 2026-09-30). */
+  runner?: { pid: number | null; pidFile: string; exitFile: string; launchedAt: number }
 }
 
 /** Tokens a Corch session ran, from its transcript: what Corch took off the orchestrating chat
