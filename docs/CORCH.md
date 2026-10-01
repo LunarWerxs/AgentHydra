@@ -45,6 +45,8 @@ export interface CorchAttempt {
   outcome: AttemptOutcome
   notice: string | null  // the limit/error notice, compacted (rate-limit-signal.compactNotice)
   resumed: boolean       // true when this attempt ran `--resume` (a follow-up or a handoff)
+  requested?: { model: string | null; effort: string | null }  // what it was launched with
+  model?: string         // the model the CLI reported in its system/init event: what really ran
 }
 
 export interface CorchWorker {
@@ -54,8 +56,8 @@ export interface CorchWorker {
   cwd: string
   prompt: string         // the task as given
   pending: string[]      // follow-up messages not yet delivered (FIFO)
-  model: string | null
-  effort: string | null
+  model: string | null       // full id (claude-opus-5-5 / claude-sonnet-5-5); null = the CLI's default
+  effort: string | null      // low | medium | high | xhigh | max; null = the CLI's default
   accounts: string[] | null  // restrict to these CLI instance ids (null = every signed-in one)
   status: CorchStatus
   sessionId: string | null   // minted by Corch before the first launch (`--session-id`)
@@ -121,6 +123,30 @@ Bun.spawn(argv, { cwd, env, stdin: Bun.file(promptFile), stdout: <fd of log, app
   the files you changed, and push if the repository's rules say to. Never read or print a secret
   value. End with a short report: what you did, the proof you saw (a command and what it
   printed), and anything left undone with the reason."
+
+### Model and thinking (field note 16)
+
+The orchestrating chat picks each worker's model and thinking level (owner, 2026-09-30). The CLI
+(2.1.284) takes `--model <alias or full name>` and `--effort low|medium|high|xhigh|max`.
+`corchModel(v)` maps `opus`, `opus-5.5`, `opus-5-5`, `claude-opus-5-5` (and the same four for
+sonnet) to the full id (`CORCH_MODELS`), so a later alias move cannot change what a recorded task
+asked for; `corchEffort(v)` accepts `CORCH_EFFORTS`. Blank means the CLI's default; anything else
+throws with the valid values listed, so junk never reaches the CLI (`corchRun`: "task N: unknown
+model ..."; `corchSend`: `ok: false`).
+
+- `corchRun`'s top-level `model`/`effort` are the group default for tasks without their own.
+- `corchSend(id, text, { model, effort })` sets them on the worker; they apply from the next
+  launch (the follow-up turn and every later one), in the same session.
+- Each attempt records `requested` at launch and `model` from the CLI's `system/init` event (read
+  by the poll). The stream-json does not report effort (init carries only
+  `per_turn_effort_active: true`); the session transcript's assistant entries do (`"effort"`,
+  `"perTurnEffort"`).
+
+Live proof (2026-09-30, account #83): `sonnet`/`low` → init `claude-sonnet-5-5`, `modelUsage`
+only that model, no thinking block, transcript `"effort":"low"`; `opus`/`max` → init
+`claude-opus-5-5`, one thinking block, transcript `"effort":"max"`; the full id
+`claude-sonnet-5-5`/`medium` → init `claude-sonnet-5-5`, transcript `"effort":"medium"`. Both
+flags are honoured; neither is silently ignored.
 
 ### Watching (the tick)
 
@@ -235,6 +261,7 @@ interface CorchJournalEntry {
   error?: string                             // failed / waiting: the first line
   said?: string                              // turn-end: the turn's closing text, first line
   cwd?: string; accounts?: number            // dispatched
+  model?: string | null; effort?: string | null  // dispatched, launched, follow-up-*, handoff-resumed
 }
 ```
 
@@ -245,19 +272,21 @@ ran, the two things `pickAccount` scores on), `moved`, `limit`, `signed-out`, `h
 text, first line), `turn-done`, `done`, `failed`,
 `cancelled`. Read with `corchJournal(filter)` (entries, oldest first, the newest `limit`, default
 100) or `corchJournalLines(filter)`, one readable line each, e.g.
-`23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`.
+`23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`; when a
+model or effort was asked for, the line ends ` with claude-opus-5-5, effort max`.
 
 ### API (what routes and MCP call)
 
 ```ts
-export function corchRun(input: { tasks: Array<{ prompt: string; cwd: string; title?: string; model?: string; effort?: string }>; group?: string; accounts?: string[]; perAccount?: number }): { group: string; workers: CorchWorkerView[] }
+export function corchRun(input: { tasks: Array<{ prompt: string; cwd: string; title?: string; model?: string; effort?: string }>; group?: string; accounts?: string[]; perAccount?: number; model?: string; effort?: string }): { group: string; workers: CorchWorkerView[] }
+   // top-level model/effort: the group default for tasks without their own
 export function corchList(filter?: { group?: string; id?: string; active?: boolean; limit?: number; brief?: boolean }): CorchWorkerView[] | CorchWorkerBrief[]
    // `limit`: every active worker plus only that many most recently finished ones, newest first
    // (recentWorkers); `brief`: without the prompt, and only the last 3 attempts (+ attemptCount)
 export function corchGet(id: string): (CorchWorkerView & { events: string[] }) | null  // events = last 60 summarised lines
 export async function corchWait(filter: { group?: string; id?: string }, timeoutMs: number): Promise<CorchWorkerView[]>
    // resolves on the first status change in scope, or at timeout, with corchList(filter)
-export function corchSend(id: string, text: string, opts?: { urgent?: boolean }): { ok: boolean; message: string }
+export function corchSend(id: string, text: string, opts?: { urgent?: boolean; model?: string; effort?: string }): { ok: boolean; message: string; model?: string | null; effort?: string | null }
    // to a running worker: held until its task ends; `urgent` stops the running work and sends it first
 export function corchHandoff(id: string): { ok: boolean; message: string }
 export function corchCancel(filter: { id?: string; group?: string }): { cancelled: string[]; keptMessages: number }
@@ -269,7 +298,8 @@ export function startCorch(): void
 
 `CorchWorkerView` = the worker minus `prompt` beyond 300 chars and minus attempt log paths, plus
 `account` (`#<num> <name>` or null), `ranS` (seconds it ran: the sum of its attempts, not the time
-since it was created), and `attempts` as `{ account, outcome, notice }`.
+since it was created), `reportedModel` (the model the CLI reported at init on the newest attempt
+that got that far), and `attempts` as `{ account, outcome, notice, requested?, model? }`.
 Validation: `cwd` must be an existing directory; `prompt` non-empty; `perAccount` 1..4, default 2.
 
 ## Server: quick add, `server/src/core/cli-quick-add.ts`
@@ -316,8 +346,8 @@ file present answered `loggedIn: false`).
 - `GET /api/corch/workers/:id?wait=` → `corchGet` (404 when unknown)
 - `GET /api/corch/journal?group=&id=&since=&limit=&format=lines` → `corchJournal`, or
   `corchJournalLines` with `format=lines`; `since` is an ISO time or epoch ms
-- `POST /api/corch/workers` body `{ tasks, group?, accounts?, perAccount? }` → `corchRun`
-- `POST /api/corch/workers/:id/send` `{ text, urgent? }` → `corchSend`
+- `POST /api/corch/workers` body `{ tasks, group?, accounts?, perAccount?, model?, effort? }` → `corchRun`
+- `POST /api/corch/workers/:id/send` `{ text, urgent?, model?, effort? }` → `corchSend`
 - `POST /api/corch/workers/:id/handoff` → `corchHandoff`
 - `POST /api/corch/cancel` `{ id? , group? }` → `corchCancel`
 - `POST /api/cli-instances/quick-add` `{ email }` → `startQuickAdd`
@@ -329,14 +359,15 @@ boot after the stores are ready.
 
 ## MCP tools (`server/src/mcp.ts`)
 
-- `corch_run { tasks: [{ prompt, cwd, title?, model?, effort? }], group?, accounts?, per_account? }`
+- `corch_run { tasks: [{ prompt, cwd, title?, model?, effort? }], group?, accounts?, per_account?, model?, effort? }`
   MUTATES. Description says: when the owner tells a chat to corch a task or fully delegate it,
   the chat keeps only the orchestration and every piece of work goes here; each task must be
   self-contained (a CLI worker sees none of this chat), name its folder, and say what "done"
   means and what proof to report; workers run on the owner's CLI accounts, move to another
   account by themselves at a usage limit, and are visible in AgentHydra's Corch view. Answers
   only `{ group, workers: [{ id, title, status, account }] }` (field note 7: the full view echoed
-  every prompt back).
+  every prompt back). `model` (opus or sonnet) and `effort` (low..max) get one description line
+  each; the top-level pair is the group default.
 - `corch_status { group?, id?, active?, limit?, wait_seconds? }`: `id` → that ONE worker's detail
   (`corchGet`, with its `events`; field note 4). Otherwise a brief list, newest first: a `group`'s
   workers, else every active worker plus the 20 (`RECENT_FINISHED`, or `limit`) most recently
@@ -346,8 +377,9 @@ boot after the stores are ready.
   are cut to `CORCH_MAX_WAIT_S` (45 s): an MCP client drops a call held about 60 s.
 - `corch_log { group?, id?, since?, limit? }`: the journal as readable lines, newest last, default
   100.
-- `corch_send { id, text, urgent? }` MUTATES: a follow-up turn in the same session; `urgent` stops
-  a running worker and delivers this first.
+- `corch_send { id, text, urgent?, model?, effort? }` MUTATES: a follow-up turn in the same session;
+  `urgent` stops a running worker and delivers this first; `model`/`effort` switch them for that
+  turn and later ones (e.g. escalate a stuck Sonnet worker to Opus at `max`).
 - `corch_handoff { id }` MUTATES: a running worker writes a handoff and goes on in a fresh session.
 - `corch_cancel { id?, group? }` MUTATES; answers `keptMessages`, the queued follow-ups it kept.
 `accounts` accepts CLI instance numbers or ids (resolve through the existing instance resolver).
@@ -362,9 +394,12 @@ boot after the stores are ready.
   any flow is `waiting`; refresh the instance list when one signs in.
 - A **Corch** view (new `web/src/components/CorchView.vue`, reachable the same way the other top
   views are): workers grouped by `group`, newest first; each row: status chip, title, account,
-  elapsed, `lastActivity`, moves. Selecting a row shows `events`, `result` (each turn's text
+  elapsed, `lastActivity`, moves, and a small run tag (`Opus 5.5 · max`: the model that ran, else
+  the one asked for, and the effort; amber when the CLI ran another model than the one asked for;
+  the hover lists both). Selecting a row shows `events`, `result` (each turn's text
   under "Turn n of m" when there was more than one)/`error`, a follow-up
   box (`/send`) and Stop (`/cancel`). Poll every 3 s while any worker is active.
+- The worker detail has **Model** and **Thinking** rows (asked for, and what ran).
 - The selected worker's **Log** (`CorchJournal.vue`, in `CorchWorkerDetail.vue`): the journal for
   that task, or for its whole group (a toggle), one rendered line per entry, reloaded when the task
   changes and every 10 s for a group.
