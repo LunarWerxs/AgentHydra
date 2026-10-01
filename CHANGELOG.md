@@ -85,6 +85,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   transcripts are deleted, are recalculated with the new weights, and the token-sink panel
   rescans once to match.
 
+- **Corch workers use the 5-minute prompt cache** (`server/src/corch.ts`) instead of the 1-hour one,
+  whose writes cost more. Workers almost never pause that long (9 times in 2,105 steps), so
+  this cuts the cost of cache writes by about a quarter.
+
 - **Corch workers carry a short rule set** (`server/src/corch-owner-sync.ts`). When
   `~/.claude/corch-worker/` holds a `CLAUDE.md` and a `skills.txt`, workers get those instead of
   your full instructions and every skill: about 3 KB and 12 skills instead of 44 KB and 84, which

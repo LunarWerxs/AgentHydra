@@ -1422,7 +1422,16 @@ function launch(
         // Measured on #83 with the real CLI: with them it took 2.0-3.0 s to its init event and
         // loaded 158-202 tools (a different number run to run); without, 1.2-1.3 s and a steady 137
         // tools. Local MCP servers still load. Here, not in scrubbedEnv: quick add uses that too.
-        env: { ...scrubbedEnv(acct.configDir, w.id), ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
+        // 5-minute prompt cache, not the subscription default of 1 hour: the CLI says 1-hour
+        // writes bill at a higher rate (2x input against 1.25x), and cache writes were about a third
+        // of what filled the 5-hour meter in run 1. Only 9 of its 2,105 requests came more than 5
+        // minutes after the one before, so the re-writes cost 1.8M tokens against 10.4M written:
+        // about 27% less write cost (owner's go-ahead, 2026-09-30).
+        env: {
+          ...scrubbedEnv(acct.configDir, w.id),
+          ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
+          CLAUDE_CODE_PROMPT_CACHE_TTL: '5m',
+        },
         stdin: promptFile,
         stdout: log,
         stderr: errLog,
