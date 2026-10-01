@@ -52,8 +52,8 @@ export function buildUsageBudget(
 
   const since = new Date(now.getTime() - LOOKBACK_HOURS * 3600_000)
   const spend = tokensSince(since, opts.configDirs)
-  // Budget in WEIGHTED (cost-equivalent) tokens, never the raw sum — a cached prefix is re-read every
-  // turn, so a raw sum measures context size, not cost. See usage-tokens.ts.
+  // Budget in WEIGHTED (meter-fitted) tokens, never the raw sum — a cached prefix is re-read every
+  // turn, so a raw sum measures context size, not what fills the meter. See usage-tokens.ts.
   const weightedPerHour = spend.weighted > 0 ? spend.weighted / LOOKBACK_HOURS : null
 
   // Divide by the burn rate's UPPER bound, not the point estimate. Two reasons, both important:

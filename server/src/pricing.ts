@@ -1,9 +1,11 @@
 // server/src/pricing.ts — what a pile of tokens actually cost, in dollars.
 //
 // WHY. usage-tokens.ts already counts the four token kinds per turn, but only ever converts them
-// into "base-input-token equivalents" — a unit that is PROPORTIONAL to cost and therefore fine for
-// calibrating a quota denominator, and useless for answering "what did this session cost?". This
-// module is the other half: real published per-million prices, per model.
+// into weighted tokens — a unit fitted to how fast each kind fills the subscription meter, and
+// therefore fine for calibrating a quota denominator, and useless for answering "what did this
+// session cost?". The two disagree: the meter weighs output and cache writes far above their list
+// prices relative to a cache read. This module is the other half: real published per-million
+// prices, per model.
 //
 // THREE RULES, each of which the obvious shortcut gets wrong:
 //

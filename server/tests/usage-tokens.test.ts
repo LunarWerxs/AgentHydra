@@ -3,56 +3,46 @@
 // Fixture is a small hand-written JSONL transcript (no secrets, no real session data).
 
 import { describe, expect, test } from 'bun:test'
-import { sumTranscriptTokens, tokensPerPercent, weighTurn } from '../src/usage-tokens'
+import {
+  sumTranscriptTokens,
+  tokensPerPercent,
+  W_CACHE_READ,
+  W_CACHE_WRITE_1H,
+  W_CACHE_WRITE_5M,
+  W_INPUT,
+  W_OUTPUT,
+  weighCounts,
+} from '../src/usage-tokens'
 
-describe('weighTurn', () => {
-  // weight = input*1 + cache_creation*1.25 + cache_read*0.1 + output*5, then * model multiplier.
-  test('sonnet (unrecognized/default multiplier 1): exact arithmetic', () => {
-    const usage = {
-      input_tokens: 100,
-      cache_creation_input_tokens: 40,
-      cache_read_input_tokens: 1000,
-      output_tokens: 20,
-    }
-    const raw = 100 * 1 + 40 * 1.25 + 1000 * 0.1 + 20 * 5
-    expect(raw).toBe(350)
-    expect(weighTurn(usage, 'claude-sonnet-4-20260101')).toBe(350)
+describe('weighCounts', () => {
+  const counts = { input: 100, cacheRead: 1000, cacheWrite5m: 40, cacheWrite1h: 30, output: 20 }
+
+  test('each kind of token at its own weight, a 1-hour cache write at its own', () => {
+    expect(weighCounts('claude-sonnet-5-5', counts)).toBeCloseTo(
+      100 * W_INPUT +
+        1000 * W_CACHE_READ +
+        40 * W_CACHE_WRITE_5M +
+        30 * W_CACHE_WRITE_1H +
+        20 * W_OUTPUT,
+      6,
+    )
   })
 
-  test('opus: multiplier 5', () => {
-    const usage = {
-      input_tokens: 100,
-      cache_creation_input_tokens: 40,
-      cache_read_input_tokens: 1000,
-      output_tokens: 20,
-    }
-    expect(weighTurn(usage, 'claude-opus-4-20260101')).toBe(350 * 5)
-  })
-
-  test('fable: also multiplier 5', () => {
-    const usage = { input_tokens: 10, output_tokens: 0 }
-    expect(weighTurn(usage, 'fable-5-mythos')).toBe(10 * 5)
-  })
-
-  test('haiku: multiplier 0.27', () => {
-    const usage = { input_tokens: 10, output_tokens: 0 }
-    expect(weighTurn(usage, 'claude-haiku-4-20260101')).toBeCloseTo(10 * 0.27, 10)
-  })
-
-  test('unknown model name: multiplier 1 (safe middle)', () => {
-    const usage = { input_tokens: 10, output_tokens: 0 }
-    expect(weighTurn(usage, 'some-mystery-model')).toBe(10)
-  })
-
-  test('case-insensitive model matching', () => {
-    const usage = { input_tokens: 10, output_tokens: 0 }
-    expect(weighTurn(usage, 'CLAUDE-OPUS-4')).toBe(50)
-    expect(weighTurn(usage, 'Claude-Haiku-4')).toBeCloseTo(2.7, 10)
-    expect(weighTurn(usage, 'FABLE')).toBe(50)
-  })
-
-  test('missing/undefined counts are treated as zero', () => {
-    expect(weighTurn({}, 'sonnet')).toBe(0)
+  // The model's list price relative to Sonnet. Fable above Opus is measured: weighing them the same
+  // made the budget's held-out predictions worse.
+  test.each([
+    ['claude-sonnet-5-5', 1],
+    ['claude-opus-5-5', 2],
+    ['CLAUDE-OPUS-4', 2],
+    ['claude-fable-5-1', 5],
+    ['FABLE', 5],
+    ['Claude-Haiku-4-5', 0.5],
+    ['some-mystery-model', 1],
+  ])('%s weighs its multiple of Sonnet', (model, mult) => {
+    expect(weighCounts(model, counts)).toBeCloseTo(
+      weighCounts('claude-sonnet-5-5', counts) * mult,
+      6,
+    )
   })
 })
 
@@ -154,10 +144,10 @@ describe('sumTranscriptTokens', () => {
     const expectedRaw = expectedInput + expectedOutput + expectedCacheRead + expectedCacheCreation
     expect(spend.raw).toBe(expectedRaw)
 
-    // weighted: turn1 (sonnet, x1) = 100*1 + 10*5 = 150
-    // turn2 (opus, x5) = (10*1 + 5*5 + 100000*0.1) * 5 = (10 + 25 + 10000) * 5 = 50175
-    const expectedWeighted = (100 * 1 + 10 * 5) * 1 + (10 * 1 + 5 * 5 + 100000 * 0.1) * 5
-    expect(spend.weighted).toBe(expectedWeighted)
+    // weighted: turn1 is sonnet (x1), turn2 opus (x2) and cache-read heavy
+    const sonnet = 100 * W_INPUT + 10 * W_OUTPUT
+    const opus = (10 * W_INPUT + 5 * W_OUTPUT + 100000 * W_CACHE_READ) * 2
+    expect(spend.weighted).toBeCloseTo(sonnet + opus, 6)
 
     // raw sum is dominated by the giant cache-read count; weighted discounts it 10x. They must differ.
     expect(spend.weighted).not.toBe(spend.raw)
@@ -167,8 +157,8 @@ describe('sumTranscriptTokens', () => {
   test('byModel breaks the counts down per model', () => {
     const spend = sumTranscriptTokens(jsonl, sinceMs)
     expect(Object.keys(spend.byModel).sort()).toEqual(['claude-opus-4', 'claude-sonnet-4'])
-    expect(spend.byModel['claude-sonnet-4']).toEqual({
-      weighted: 100 * 1 + 10 * 5,
+    const { weighted: sonnetWeighted, ...sonnet } = spend.byModel['claude-sonnet-4']!
+    expect(sonnet).toEqual({
       output: 10,
       turns: 1,
       input: 100,
@@ -176,8 +166,9 @@ describe('sumTranscriptTokens', () => {
       cacheCreation5m: 0,
       cacheCreation1h: 0,
     })
-    expect(spend.byModel['claude-opus-4']).toEqual({
-      weighted: (10 * 1 + 5 * 5 + 100000 * 0.1) * 5,
+    expect(sonnetWeighted).toBeCloseTo(100 * W_INPUT + 10 * W_OUTPUT, 6)
+    const { weighted: opusWeighted, ...opus } = spend.byModel['claude-opus-4']!
+    expect(opus).toEqual({
       output: 5,
       turns: 1,
       input: 10,
@@ -185,6 +176,7 @@ describe('sumTranscriptTokens', () => {
       cacheCreation5m: 0,
       cacheCreation1h: 0,
     })
+    expect(opusWeighted).toBeCloseTo((10 * W_INPUT + 5 * W_OUTPUT + 100000 * W_CACHE_READ) * 2, 6)
   })
 
   // The per-TTL split is the whole reason byModel carries raw counts: a 1-hour cache write costs

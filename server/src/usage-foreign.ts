@@ -27,13 +27,7 @@
 // cost carrying such models as a floor, so the honest path was already built.
 
 import type { ModelSpend } from './types'
-
-/** The same weights usage-tokens.ts applies to a Claude turn, so a "weighted token" means one thing
- *  across providers: cache reads are cheap, writes carry a premium, output dominates. */
-const W_INPUT = 1
-const W_CACHE_WRITE = 1.25
-const W_CACHE_READ = 0.1
-const W_OUTPUT = 5
+import { weighCounts } from './usage-tokens'
 
 export function emptyModelSpend(): ModelSpend {
   return {
@@ -47,8 +41,9 @@ export function emptyModelSpend(): ModelSpend {
   }
 }
 
-/** Add one turn's normalised counts into a per-model bucket. Cache writes land in the 5m slot:
- *  neither provider distinguishes a TTL, and inventing one would be a number nobody measured. */
+/** Add one turn's normalised counts into a per-model bucket, weighed exactly as a Claude turn is, so
+ *  a "weighted token" means one thing across providers. Cache writes land in the 5m slot: neither
+ *  provider distinguishes a TTL, and inventing one would be a number nobody measured. */
 export function addTurn(
   byModel: Record<string, ModelSpend>,
   model: string,
@@ -60,12 +55,22 @@ export function addTurn(
   m.cacheCreation5m += t.cacheWrite
   m.output += t.output
   m.turns += 1
-  m.weighted +=
-    t.input * W_INPUT +
-    t.cacheRead * W_CACHE_READ +
-    t.cacheWrite * W_CACHE_WRITE +
-    t.output * W_OUTPUT
+  m.weighted += weighTurnCounts(model, t)
   byModel[model] = m
+}
+
+/** A provider turn's normalised counts in weighted tokens (its cache writes count as 5-minute). */
+export function weighTurnCounts(
+  model: string,
+  t: { input: number; cacheRead: number; cacheWrite: number; output: number },
+): number {
+  return weighCounts(model, {
+    input: t.input,
+    cacheRead: t.cacheRead,
+    cacheWrite5m: t.cacheWrite,
+    cacheWrite1h: 0,
+    output: t.output,
+  })
 }
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)

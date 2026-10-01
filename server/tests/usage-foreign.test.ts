@@ -11,6 +11,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { addTurn, CodexUsageReader, openCodeModelName, openCodeSpend } from '../src/usage-foreign'
+import { weighCounts } from '../src/usage-tokens'
 
 const tokenCount = (
   at: string,
@@ -178,10 +179,18 @@ describe('OpenCode: totals it already computed', () => {
 })
 
 describe('the shared weighting', () => {
-  test('a cache read is worth a tenth of fresh input, output five times it', () => {
+  test('a provider turn is weighed as a Claude turn is, its cache writes as 5-minute ones', () => {
     const byModel = {}
     addTurn(byModel, 'm', { input: 100, cacheRead: 100, cacheWrite: 100, output: 100 })
-    // 100*1 + 100*0.1 + 100*1.25 + 100*5
-    expect((byModel as Record<string, { weighted: number }>).m?.weighted).toBeCloseTo(735, 6)
+    expect((byModel as Record<string, { weighted: number }>).m?.weighted).toBeCloseTo(
+      weighCounts('m', {
+        input: 100,
+        cacheRead: 100,
+        cacheWrite5m: 100,
+        cacheWrite1h: 0,
+        output: 100,
+      }),
+      6,
+    )
   })
 })

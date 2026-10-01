@@ -14,8 +14,9 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { markSessionGone, scanSessionAnalytics } from '../src/analytics'
+import { markSessionGone, scanSessionAnalytics, spendReport } from '../src/analytics'
 import { db } from '../src/db'
+import { weighCounts } from '../src/usage-tokens'
 
 const dir = mkdtempSync(join(tmpdir(), 'ah-permanent-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -128,6 +129,45 @@ describe('the record survives the transcript', () => {
     expect(row?.cost_usd).toBe(5.5)
     expect(row?.input_tokens).toBe(999)
     expect(row?.lines_added).toBe(42)
+  })
+
+  test("a gone chat is reported in today's weights, not the ones it was scanned under", () => {
+    // Its transcript is gone, so no rescan can ever fix a `weighted` stored under older weights.
+    // The counts are stored beside it, so the report re-weighs them.
+    const model = 'claude-test-reweigh'
+    const counts = {
+      input: 10,
+      cacheRead: 1000,
+      cacheCreation5m: 20,
+      cacheCreation1h: 30,
+      output: 40,
+    }
+    db.query(
+      'insert or replace into session_stats (session_key, session_id, source, tokens_json, ' +
+        'first_ts, last_ts, first_seen_at, last_scanned_at, gone_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(
+      'claude:gone-3',
+      'gone-3',
+      'claude',
+      JSON.stringify({ [model]: { ...counts, weighted: 1, turns: 1 } }),
+      1,
+      2,
+      1,
+      2,
+      3,
+    )
+
+    const bucket = spendReport().byModel.find((b) => b.key === model)
+    expect(bucket?.weighted).toBeCloseTo(
+      weighCounts(model, {
+        input: 10,
+        cacheRead: 1000,
+        cacheWrite5m: 20,
+        cacheWrite1h: 30,
+        output: 40,
+      }),
+      6,
+    )
   })
 
   test('stamping twice keeps the FIRST time it went, not the latest sweep', () => {

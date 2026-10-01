@@ -74,6 +74,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **The token budget weighs tokens the way the plan meter does** (`server/src/usage-tokens.ts`,
+  `scripts/quota-weights/`). `usage_budget` turned tokens into one unit using list-price ratios,
+  but the meter charges output and cache writes far more than that relative to cache reads, and
+  Fable 2.5x Opus where the budget charged them the same. The weights are now fitted to the meter
+  on 47 accounts: per cache read, a cache write counts 32 (51 for a 1-hour write) and an output
+  token 310; Opus counts 2x Sonnet, Fable 5x, Haiku 0.5x. Tested on accounts the fit never saw, the
+  budget's typical miss on the weekly meter fell from 3.6 to 2.7 points per 6 hours (on the 5-hour
+  meter from 3.1 to 1.7 points per hour). Analytics totals for old chats, including ones whose
+  transcripts are deleted, are recalculated with the new weights, and the token-sink panel
+  rescans once to match.
+
 - **Corch workers carry a short rule set** (`server/src/corch-owner-sync.ts`). When
   `~/.claude/corch-worker/` holds a `CLAUDE.md` and a `skills.txt`, workers get those instead of
   your full instructions and every skill: about 3 KB and 12 skills instead of 44 KB and 84, which

@@ -61,8 +61,23 @@ import type {
   TokenSink,
   TokenSinkReport,
 } from './types'
-import { addTurn, type CodexTurn, CodexUsageReader, openCodeSpend } from './usage-foreign'
-import { accumulateUsageLine, emptySpend, modelMultiplier, newUsageSeen } from './usage-tokens'
+import {
+  addTurn,
+  type CodexTurn,
+  CodexUsageReader,
+  openCodeSpend,
+  weighTurnCounts,
+} from './usage-foreign'
+import {
+  accumulateUsageLine,
+  emptySpend,
+  modelMultiplier,
+  newUsageSeen,
+  reweighModels,
+  W_CACHE_READ,
+  W_CACHE_WRITE_1H,
+  W_CACHE_WRITE_5M,
+} from './usage-tokens'
 
 /**
  * Bumped when the extracted shape changes, which forces every row to be recomputed.
@@ -97,8 +112,11 @@ import { accumulateUsageLine, emptySpend, modelMultiplier, newUsageSeen } from '
  *    same version: the skill listings and MCP servers a session loaded, what it invoked, calls past
  *    DEEP_CONTEXT_TOKENS, and subagent spend. A row scanned before this has none of it, and nothing
  *    about the file changes to say so.
+ * 9: Token weights fitted to the subscription meter (usage-tokens.ts). Per-model `weighted` is
+ *    re-weighed from its counts on read, but sinks_json holds weighted totals (deep calls, subagent
+ *    spend, dead skill loads) that only a rescan can recompute.
  */
-export const ANALYTICS_VERSION = 8
+export const ANALYTICS_VERSION = 9
 
 /**
  * A prompt past this many tokens is a "deep context" call.
@@ -540,8 +558,7 @@ function scanDshAnalytics(path: string, out: SessionAnalytics): SessionAnalytics
     const ts = row.time_ms
     if (ts === null) continue
     const day = dayKey(ts)
-    out.days[day] =
-      (out.days[day] ?? 0) + t.input + t.cacheRead * 0.1 + t.cacheWrite * 1.25 + t.output * 5
+    out.days[day] = (out.days[day] ?? 0) + weighTurnCounts(model, t)
     const hour = String(hourKey(ts))
     out.hours[hour] = (out.hours[hour] ?? 0) + 1
     if (out.firstTs === null || ts < out.firstTs) out.firstTs = ts
@@ -908,8 +925,7 @@ function applyCodexTurnToAnalytics(
   if (t.ts === null) return prevTs
   const day = dayKey(t.ts)
   // Weighted so the day chart apportions a Codex session the same way it does a Claude one.
-  out.days[day] =
-    (out.days[day] ?? 0) + t.input + t.cacheRead * 0.1 + t.cacheWrite * 1.25 + t.output * 5
+  out.days[day] = (out.days[day] ?? 0) + weighTurnCounts(t.model ?? 'unknown', t)
   const hour = String(hourKey(t.ts))
   out.hours[hour] = (out.hours[hour] ?? 0) + 1
   if (out.firstTs === null || t.ts < out.firstTs) out.firstTs = t.ts
@@ -1472,18 +1488,27 @@ function accountBySession(): Map<string, string> {
   return out
 }
 
-/**
- * Drop the entries that are not models.
- *
- * The CLI attributes its own synthetic notices (an API error, a cancellation) to a pseudo-model
- * `<synthetic>`, which carries turns and no tokens. Left in, it shows up as a zero-dollar row in a
- * chart of models, where a reader has to work out that it is not one. The stored row keeps it,
- * because that is what the transcript said; only the report leaves it out.
- */
 const NON_MODELS = new Set(['<synthetic>', 'unknown'])
-function withoutNonModels(tokens: Record<string, ModelSpend>): Record<string, ModelSpend> {
+
+/**
+ * A stored row's per-model spend, re-weighed under the current weights, without the entries that
+ * are not models.
+ *
+ * RE-WEIGHED because the permanent record keeps chats whose transcripts are gone and can never be
+ * rescanned, so their `weighted` would otherwise stay in whatever unit was current when they were
+ * scanned.
+ *
+ * NOT MODELS: the CLI attributes its own synthetic notices (an API error, a cancellation) to a
+ * pseudo-model `<synthetic>`, which carries turns and no tokens. Left in, it shows up as a
+ * zero-dollar row in a chart of models, where a reader has to work out that it is not one. The
+ * stored row keeps it, because that is what the transcript said; only the report leaves it out.
+ */
+function storedModelSpend(json: string | null): Record<string, ModelSpend> {
   const out: Record<string, ModelSpend> = {}
-  for (const [k, v] of Object.entries(tokens)) if (!NON_MODELS.has(k) || v.weighted > 0) out[k] = v
+  for (const [k, v] of Object.entries(
+    reweighModels(parseJson<Record<string, ModelSpend>>(json, {})),
+  ))
+    if (!NON_MODELS.has(k) || v.weighted > 0) out[k] = v
   return out
 }
 
@@ -1766,10 +1791,7 @@ function foldSpendRow(
     return
   }
   const scale = share ?? 1
-  const tokens = scaleModelSpend(
-    withoutNonModels(parseJson<Record<string, ModelSpend>>(row.tokens_json, {})),
-    scale,
-  )
+  const tokens = scaleModelSpend(storedModelSpend(row.tokens_json), scale)
   const days =
     sinceDay === null
       ? allDays
@@ -2154,10 +2176,7 @@ function sinkRowInWindow(
     if (since !== null && (row.last_ts ?? 0) < since) return null
   } else if (share <= 0) return null
   const scale = share ?? 1
-  const tokens = scaleModelSpend(
-    withoutNonModels(parseJson<Record<string, ModelSpend>>(row.tokens_json, {})),
-    scale,
-  )
+  const tokens = scaleModelSpend(storedModelSpend(row.tokens_json), scale)
   if (Object.keys(tokens).length === 0) return null
   return { scale, tokens }
 }
@@ -2197,7 +2216,7 @@ function foldSinkRow(
 
 /**
  * A session's calls and prefix rate, and its token breakdown. Per model, because a prefix token
- * re-read by Opus costs five times one re-read by Sonnet.
+ * re-read by Opus costs more than one re-read by Sonnet (modelMultiplier).
  */
 function foldSinkModels(
   tokens: Record<string, ModelSpend>,
@@ -2209,8 +2228,9 @@ function foldSinkModels(
   for (const [model, m] of Object.entries(tokens)) {
     const mult = modelMultiplier(model)
     sessionCalls += m.turns
-    prefixRate += m.turns * 0.1 * mult
-    acc.cacheWrites += (m.cacheCreation5m + m.cacheCreation1h) * 1.25 * mult
+    prefixRate += m.turns * W_CACHE_READ * mult
+    acc.cacheWrites +=
+      (m.cacheCreation5m * W_CACHE_WRITE_5M + m.cacheCreation1h * W_CACHE_WRITE_1H) * mult
     acc.totalWeighted += m.weighted
     addTokens(t, m)
   }

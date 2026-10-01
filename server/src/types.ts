@@ -1176,9 +1176,9 @@ export interface TokenSpend {
    *  re-read on every turn, so this mostly measures (context size x turns), not cost. */
   raw: number
   /**
-   * The unit to budget in: base-input-token EQUIVALENTS, i.e. the four counts converted to one scale
-   * by their price ratios (cache read x0.1, cache write x1.25, output x5) and by the model's own
-   * price (Opus ~5x Sonnet, Haiku ~0.27x). This is proportional to what actually burns quota.
+   * The unit to budget in: the four counts converted to one scale by weights fitted to the
+   * subscription meter (cache read 0.1, cache write 3.2 or 5.1 by TTL, output 31) and by the model's
+   * list price relative to Sonnet (Opus 2x, Fable 5x, Haiku 0.5x). See usage-tokens.ts.
    */
   weighted: number
   /** Assistant turns counted. */
@@ -1197,7 +1197,7 @@ export interface ModelSpend {
   input: number
   cacheRead: number
   /** Cache WRITES, split by TTL: a 1-hour write costs 2x base input where a 5-minute write costs
-   *  1.25x, so one combined figure cannot be priced correctly. Transcripts carry the split
+   *  1.25x, so one combined figure cannot be priced (or weighed) correctly. Transcripts carry the split
    *  (`usage.cache_creation`); when they don't, the whole write lands on 5m (the default TTL). */
   cacheCreation5m: number
   cacheCreation1h: number

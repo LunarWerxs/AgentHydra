@@ -28,7 +28,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { TokenSpend } from './types'
+import type { ModelSpend, TokenSpend } from './types'
 
 /** A Claude config dir's transcript root. */
 const projectsDir = (configDir: string): string => join(configDir, 'projects')
@@ -41,9 +41,8 @@ interface RawUsage {
   output_tokens?: number
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
-  /** Per-TTL breakdown of `cache_creation_input_tokens`. Only the dollar cost cares (a 1-hour
-   *  write is 2x base input, a 5-minute write 1.25x); the quota weighting below treats both the
-   *  same, which is why this never enters weighTurn. */
+  /** Per-TTL breakdown of `cache_creation_input_tokens`. A 1-hour write costs more than a
+   *  5-minute one, in dollars and on the meter alike (see the weights below). */
   cache_creation?: {
     ephemeral_5m_input_tokens?: number
     ephemeral_1h_input_tokens?: number
@@ -59,36 +58,89 @@ const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v)
 // over a thousand turns "measures" hundreds of millions of tokens, which is really just
 // (context size x turn count), not work done, and not what burns quota.
 //
-// Quota burn tracks COST, and the four kinds of token do not cost the same. So we convert everything
-// into one unit -- "base-input-token equivalents" -- using the published price ratios. A cache read
-// is a tenth of an input token; an output token is five times one.
+// The kinds of token do not move the subscription meter equally, so each gets a weight. The weights
+// are FITTED TO THE METER, not read off the price list. The price-list ratios (cache read 0.1x
+// input, write 1.25x, output 5x) were the first version and the meter disagrees with them: fitted
+// against the 5-hour utilization Claude Code streams with each request and the desktop accounts'
+// 15-minute usage readings (2026-09-30: 75 Corch intervals and 299 whole 5-hour windows on 47
+// accounts, Pro, Max 5x and Max 20x), a 5-minute cache write moves the meter about 32 cache reads' worth
+// and an output token, thinking included, about 310; the price list says 12.5 and 50.
 //
-// The absolute unit does not actually matter, because tokensPerPercent is CALIBRATED empirically
-// (see usage-budget.ts) and a constant factor cancels out. What matters is that the unit is
-// PROPORTIONAL to real cost, so the calibration stays stable as the mix of cache/output/model shifts.
-// A raw sum is not proportional to cost, which is exactly why it had to go.
-const W_INPUT = 1
-const W_CACHE_CREATION = 1.25 // writing to the cache costs a premium
-const W_CACHE_READ = 0.1 // reading from it is the cheap part
-const W_OUTPUT = 5 // output is the expensive part
+// The check that decided it was usage_budget's own prediction, replayed on accounts the fit never
+// saw: "the last 6 hours spent W weighted tokens and the meter rose D points, so W' more will raise
+// it W' x D / W". Against the weekly meter the budget calibrates on, the median miss fell from 3.6
+// to 2.7 points per 6 hours (mean 13.0 to 9.5, 1,213 predictions); on the 5-hour meter from 3.1 to
+// 1.7 per hour. Weights fitted on Pro accounts alone, Max alone, desktop alone or the CLI alone each
+// improved the others. The fit and the replay: scripts/quota-weights/.
+//
+// The unit is scaled so a cache read stays 0.1, as it was. Its absolute size does not matter for the
+// budget (tokensPerPercent is calibrated, so a constant factor cancels); what matters is that it
+// tracks the meter, so the calibration holds when the mix of reads, writes, output and model shifts.
+export const W_CACHE_READ = 0.1
+export const W_CACHE_WRITE_5M = 3.2
+/** A 1-hour write at its list-price ratio to a 5-minute one (2x input against 1.25x). The two are
+ *  too collinear in the data to fit apart, and pinning the ratio predicted held-out windows better
+ *  than one weight for both. Claude Code's own sessions write almost only 1-hour cache. */
+export const W_CACHE_WRITE_1H = W_CACHE_WRITE_5M * 1.6
+/** An uncached input token: a 5-minute write without the write premium. A request carries a few
+ *  hundred of them, too few for the fit to see on their own. */
+export const W_INPUT = W_CACHE_WRITE_5M / 1.25
+export const W_OUTPUT = 31
 
-/** Price of a model relative to Sonnet (Opus ~5x, Haiku ~0.27x). Quota is shared across models, so a
- *  turn's weight must account for WHICH model spent it, or an Opus-heavy hour reads as cheap. */
+/** A model's weight relative to Sonnet, at current list prices: Opus 5.5 $4 and Fable 5.1 $10 per
+ *  million input against Sonnet 5.5's $2, Haiku 4.5 $1. Quota is shared across models, so a turn's
+ *  weight must account for WHICH model spent it. The meter agrees where the data can tell: weighing
+ *  Fable 2.5x Opus instead of the same cut the held-out error about as much as the token weights
+ *  did. Sonnet was about 4% of the measured weighted traffic, too little to tell half of Opus from
+ *  equal. */
 export function modelMultiplier(model: string): number {
   const m = model.toLowerCase()
-  if (m.includes('opus') || m.includes('fable')) return 5
-  if (m.includes('haiku')) return 0.27
-  return 1 // sonnet + anything unrecognized: the safe middle
+  if (m.includes('fable')) return 5
+  if (m.includes('opus')) return 2
+  if (m.includes('haiku')) return 0.5
+  return 1 // sonnet + anything unrecognized
 }
 
-/** One turn's cost in base-input-token equivalents. Exported for the test. */
-export function weighTurn(usage: RawUsage, model: string): number {
-  const raw =
-    num(usage.input_tokens) * W_INPUT +
-    num(usage.cache_creation_input_tokens) * W_CACHE_CREATION +
-    num(usage.cache_read_input_tokens) * W_CACHE_READ +
-    num(usage.output_tokens) * W_OUTPUT
-  return raw * modelMultiplier(model)
+/** Token counts in weighted tokens. The one place the weights are applied, so a live turn, a stored
+ *  session and another provider's spend are all weighed alike. */
+export function weighCounts(
+  model: string,
+  c: {
+    input: number
+    cacheRead: number
+    cacheWrite5m: number
+    cacheWrite1h: number
+    output: number
+  },
+): number {
+  return (
+    (c.input * W_INPUT +
+      c.cacheRead * W_CACHE_READ +
+      c.cacheWrite5m * W_CACHE_WRITE_5M +
+      c.cacheWrite1h * W_CACHE_WRITE_1H +
+      c.output * W_OUTPUT) *
+    modelMultiplier(model)
+  )
+}
+
+/** Each model's `weighted` recomputed from its counts under the current weights. A stored session
+ *  (analytics' cache and its permanent record) keeps the figure from whichever weights were current
+ *  when it was scanned; re-weighing on read keeps old and new rows in one unit without a rescan. */
+export function reweighModels(tokens: Record<string, ModelSpend>): Record<string, ModelSpend> {
+  const out: Record<string, ModelSpend> = {}
+  for (const [model, m] of Object.entries(tokens)) {
+    out[model] = {
+      ...m,
+      weighted: weighCounts(model, {
+        input: num(m.input),
+        cacheRead: num(m.cacheRead),
+        cacheWrite5m: num(m.cacheCreation5m),
+        cacheWrite1h: num(m.cacheCreation1h),
+        output: num(m.output),
+      }),
+    }
+  }
+  return out
 }
 
 /** A fresh, zeroed spend. A factory rather than a shared constant because callers ACCUMULATE into
@@ -226,12 +278,13 @@ export function accumulateUsageLine(
     }
   }
 
-  const weightedForModel =
-    (input * W_INPUT +
-      cacheCreation * W_CACHE_CREATION +
-      cacheRead * W_CACHE_READ +
-      output * W_OUTPUT) *
-    modelMultiplier(model)
+  const weightedForModel = weighCounts(model, {
+    input,
+    cacheRead,
+    cacheWrite5m: w5m,
+    cacheWrite1h: w1h,
+    output,
+  })
 
   spend.input += input
   spend.output += output
