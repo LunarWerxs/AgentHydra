@@ -76,6 +76,7 @@ export default {
   loadingEvents: 'Loading…',
   result: 'Result',
   resultTurn: 'Turn {n} of {total}',
+  earlierReport: 'Report on: {message}',
   error: 'Error',
   whyStopped: 'Why it stopped',
   whyWaiting: 'Why it is waiting',

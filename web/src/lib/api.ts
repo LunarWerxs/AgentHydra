@@ -927,6 +927,8 @@ export interface CliMayteWorkerView {
   /** Each turn's closing text, oldest first (a repo's Stop hook can force turns after the report);
    *  `result` is them joined. Absent on tasks recorded earlier. */
   results?: string[]
+  /** Earlier messages' reports, oldest first (a delivered follow-up starts a new `results`). */
+  reports?: Array<{ at: number; message: string; results: string[] }>
   error: string | null
   lastActivity: string | null
   costUsd: number

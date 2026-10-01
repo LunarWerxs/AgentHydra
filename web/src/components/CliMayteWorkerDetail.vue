@@ -494,6 +494,19 @@ async function onStop() {
           </ol>
         </div>
 
+        <!-- Earlier messages' reports: a follow-up delivered the moment a turn ended used to wipe
+             the report before anyone read it. Folded, newest last, the current report below. -->
+        <details
+          v-for="(r, i) in worker.reports ?? []"
+          :key="`report-${i}`"
+          class="rounded-md bg-muted/60 px-2.5 py-1.5 text-xs"
+        >
+          <summary class="cursor-pointer truncate text-muted-foreground">
+            {{ $t('climayte.earlierReport', { message: r.message }) }}
+          </summary>
+          <pre class="mono scroll-slim mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap break-words">{{ r.results.join('\n\n') }}</pre>
+        </details>
+
         <div v-if="worker.result" class="flex flex-col gap-1.5">
           <h4 class="text-xs font-medium">{{ $t('climayte.result') }}</h4>
           <!-- One bounded box for the whole report, every turn in it, so the panel never grows a

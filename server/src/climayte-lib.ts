@@ -120,6 +120,13 @@ export interface CliMayteWorker {
    *  Stop hook can force extra turns after the report (field note 13); each one is kept here. Absent
    *  on tasks recorded before 2026-10-01. */
   results?: string[]
+  /** The reports of earlier messages, oldest first (MAX_REPORTS): a delivered follow-up starts a new
+   *  `results`, and the previous one moves here. Field note 13 regression (2026-10-01): a follow-up
+   *  queued while the first turn ran was delivered the second that turn ended, so the task never
+   *  rested at done and its first report (two commits' worth) was wiped before anyone read it. */
+  reports?: Array<{ at: number; message: string; results: string[] }>
+  /** The first line of the message the current `results` answer (the task, or a follow-up). */
+  message?: string
   error: string | null
   lastActivity: string | null // one line: the newest event summarised (summarizeEvent)
   costUsd: number // summed over every attempt's own spend (attemptSpend), from the transcript
@@ -349,7 +356,7 @@ export function windDownMessage(pct: number | null, path: string): string {
     pct === null
       ? 'the orchestrator asked this session to hand the task to a fresh session'
       : `this account is at ${Math.round(pct)}% of its usage limit, so this session must hand the task to a fresh session on another account`
-  return `AgentHydra: ${why}. Wrap up now: finish or safely stop the step you are on and do not start anything new. Then write a handoff with the Write tool to ${path} for the session that continues this task. It sees only the original task, your handoff and your transcript, so include: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state; the next steps in order; the facts, decisions and gotchas you learned; and the commands or checks that prove the work. If the whole task is already complete, do not write a handoff: finish normally with your final report. After writing the handoff, end your turn with one line saying the handoff is written.`
+  return `AgentHydra: ${why}. Wrap up now: finish or safely stop the step you are on and do not start anything new. Then write a handoff with the Write tool to ${path} for the session that continues this task. It sees only the original task, your handoff and your transcript, so include: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message, subject and body verbatim, and the exact paths); the next steps in order; the facts, decisions and gotchas you learned; and the commands or checks that prove the work. If the whole task is already complete, do not write a handoff: finish normally with your final report. After writing the handoff, end your turn with one line saying the handoff is written.`
 }
 
 /** The first prompt of the session that continues a task from a handoff. */
@@ -366,7 +373,7 @@ export function continuationPrompt(
   const where = transcript
     ? ` Its full transcript is at ${transcript} if you need a detail the handoff left out (read it with the Read or Grep tools; it is JSON lines).`
     : ''
-  return `${task}\n\n---\nAn earlier session already worked on this task on another account and wound down before its usage limit. Continue from its handoff below (also saved at ${handoffPath}).${where} Do not redo steps it reports finished; check its claims where a command can.${more}\n\n--- HANDOFF ---\n${handoff}`
+  return `${task}\n\n---\nAn earlier session already worked on this task on another account and wound down before its usage limit. Continue from its handoff below (also saved at ${handoffPath}).${where} Do not redo steps it reports finished; check its claims where a command can. If it gives a commit message for work in progress, commit with that message verbatim.${more}\n\n--- HANDOFF ---\n${handoff}`
 }
 
 export const PRE_OVERAGE_NOTICE =
@@ -570,6 +577,18 @@ function isStopHookFeedback(ev: any): boolean {
 
 export const MAX_RESULTS = 12 // turns kept per message; the oldest go first
 export const MAX_RESULT_CHARS = 20_000 // per turn; the report's head is kept
+export const MAX_REPORTS = 10 // earlier messages' reports kept per task; the oldest go first
+
+/** `reports` with the current message's turns added, when it has any (a delivered follow-up is
+ *  about to start a new `results`). */
+export function keepReport(
+  w: Pick<CliMayteWorker, 'reports' | 'results' | 'message' | 'prompt'>,
+  at: number,
+): CliMayteWorker['reports'] {
+  if (!w.results?.length) return w.reports
+  const message = w.message ?? w.prompt.split(/\r?\n/)[0]!.trim().slice(0, 200)
+  return [...(w.reports ?? []), { at, message, results: w.results }].slice(-MAX_REPORTS)
+}
 export const RESULT_SEPARATOR = '\n\n---\n\n'
 
 /** `results` with `texts` appended, capped. A text equal to the last one is not repeated. */
@@ -932,11 +951,11 @@ export function recentWorkers<T extends Pick<CliMayteWorker, 'status' | 'created
 /** A list row for an orchestrator: no prompt (it wrote it) and only the last 3 attempts, the bulk
  *  of the stored record after results (measured on 142 real workers: attempts 82k characters,
  *  results 44k, prompts 21k). The full record is climayte_status { id }. */
-export type CliMayteWorkerBrief = Omit<CliMayteWorkerView, 'prompt' | 'results'> & {
+export type CliMayteWorkerBrief = Omit<CliMayteWorkerView, 'prompt' | 'results' | 'reports'> & {
   attemptCount: number
 }
 export function toBrief(v: CliMayteWorkerView): CliMayteWorkerBrief {
-  const { prompt: _prompt, results: _results, ...rest } = v
+  const { prompt: _prompt, results: _results, reports: _reports, ...rest } = v
   return { ...rest, attempts: v.attempts.slice(-3), attemptCount: v.attempts.length }
 }
 

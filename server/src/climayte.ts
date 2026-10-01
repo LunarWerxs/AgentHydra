@@ -65,6 +65,7 @@ import {
   isLoginWall,
   isOrgDisabled,
   joinResults,
+  keepReport,
   liveUsage,
   newestTranscript,
   noTokens,
@@ -1737,8 +1738,15 @@ function launch(
     w.pending = [] // they went into the continuation prompt
     delete w.handoffNote
   }
+  // A new message, or a handoff's fresh session, starts a new report; the previous turns are kept
+  // in `reports` (keepReport), because a follow-up queued while a turn ran is delivered the moment
+  // it ends, before anyone reads it. Before a handoff they are labelled so: the continuation answers
+  // the same message, and its report is the one `result` should show.
   if (!last || delivers || fresh) {
-    w.result = null // a new turn: the previous answer is not this one's
+    const label = fresh ? `${w.message ?? firstLine(w.prompt, 200)} (before a handoff)` : w.message
+    w.reports = keepReport({ ...w, message: label }, Date.now())
+    if (!fresh) w.message = firstLine(delivers ? next : w.prompt, 200)
+    w.result = null
     w.results = []
   }
   delete w.revived

@@ -854,6 +854,9 @@ describe('integration: near its limit a worker hands off to a fresh session', ()
 
     expect(w?.status).toBe('done')
     expect(w?.result).toBe('FAKE DONE FROM HANDOFF')
+    // The turns before the handoff are kept, labelled, not mixed into the continuation's report.
+    expect(climayteGet(id)?.reports?.at(-1)).toMatchObject({ results: ['Handoff written.'] })
+    expect(climayteGet(id)?.reports?.at(-1)?.message).toEndWith('(before a handoff)')
     expect(w?.attempts.map((a) => [a.account.id, a.outcome])).toEqual([
       ['wind-1', 'handoff'],
       ['wind-2', 'done'],
@@ -1046,6 +1049,10 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     expect(w?.status).toBe('done')
     expect(w?.pending).toEqual([])
     expect(climayteJournal({ id }).filter((e) => e.event === 'follow-up-delivered')).toHaveLength(3)
+    // Each message delivered on the heels of the last keeps the report before it (field note 13
+    // regression: a queued follow-up wiped the first turn's report before anyone read it).
+    expect(climayteGet(id)?.reports?.map((r) => r.message)).toEqual(['first', 'second'])
+    expect(climayteGet(id)?.reports?.every((r) => r.results.length > 0)).toBe(true)
   }, 25_000)
 })
 
