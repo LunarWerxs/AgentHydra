@@ -588,6 +588,16 @@ there.
   "<email> (<plan>)" name), else a new instance under the same id, with the same number when this PC
   never used it (`claimInstanceNumber`). Refused for an instance with a session running or one
   signed in to another account. Then `claude auth status` on each, and a usage check.
+- Hardened after review (2026-10-01): the bundle opens only with exactly the scrypt cost written
+  (N 2^15, r 8, p 1, a 16-byte salt, 12-byte IV, 16-byte tag; a crafted p fit under maxmem and
+  would have held the event loop for an hour) and only when its readable list matches the sealed
+  one; export signs out only a login whose file is still byte-for-byte what was sealed and that no
+  session holds; import replaces a login signed in here only with the same account's newer one
+  (fail closed when either account is unknown; the same file twice reports "Already here"); a
+  failed temp write is removed.
+- Verified live twice on #84 (2026-10-01): out of this PC, into a separate AgentHydra home standing
+  in for the other PC (created under the same id and number #84, `claude auth status` passed), out
+  again, and back here (matched by id, signed in, usage read normally).
 - How the file travels between PCs is the owner's choice (open question, 2026-10-01).
 
 ## Routes: `server/src/routes/climayte.ts`

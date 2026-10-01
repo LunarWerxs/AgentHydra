@@ -7,6 +7,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Changed
+
+- **A signed-out account keeps its last usage numbers** (`server/src/usage-cache.ts`,
+  `web/src/composables/useUsage.ts`). When an account goes yellow (signed out, or its login was
+  rejected), its row keeps showing the last session and weekly numbers, dimmed, and the usage
+  popover says "Last reading before it signed out". Accounts that were already blank get theirs
+  back from the usage history. Those numbers are for reading only: fan-out, CliMayte and the usage
+  survey still treat a signed-out account as having no room.
+
+### Fixed
+
+- **Moving a login between PCs is safer** (`server/src/core/cli-login-move.ts`). A login file only
+  opens with the settings AgentHydra itself writes (a tampered one could have frozen the app for an
+  hour), and only when the list it shows matches what is inside. This PC is signed out of a login
+  only if nothing refreshed it while the file was being made. An account already signed in on the
+  other PC is replaced only by a newer login of the same account: importing the same file twice,
+  or an older one, changes nothing.
+
 ## [1.5.0] - 2026-10-01
 
 ### Added
