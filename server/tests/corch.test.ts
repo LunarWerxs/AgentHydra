@@ -5,7 +5,16 @@
 // accounts are fakes pointing at temp config dirs, and the CLI is tests/mocks/fake-claude.ts run by
 // the same bun that runs this suite.
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -28,9 +37,11 @@ import {
   recentWorkers,
   setCorchAccountsProvider,
   setCorchClaudeCommand,
+  setCorchOwnerDir,
   startCorch,
   wallUntil,
 } from '../src/corch'
+import { forgetOwnerSync, syncOwnerClaude } from '../src/corch-owner-sync'
 import { setProviderSettings } from '../src/provider-settings'
 import { parseResetTime } from '../src/usage'
 
@@ -354,17 +365,22 @@ describe('integration: a quota wall hands the session to the next account', () =
   const freeDir = join(root, 'acct-2')
   for (const d of [cwd, walledDir, freeDir]) mkdirSync(d, { recursive: true })
   writeFileSync(join(walledDir, 'fake-quota'), '')
+  const ownerDir = join(root, 'owner')
+  mkdirSync(join(ownerDir, 'skills', 'tidy'), { recursive: true })
+  writeFileSync(join(ownerDir, 'CLAUDE.md'), 'owner rules')
   let group: string | null = null
 
   afterAll(() => {
     if (group) corchCancel({ group })
     setCorchClaudeCommand(null)
     setCorchAccountsProvider(null)
+    setCorchOwnerDir(null)
     rmSync(root, { recursive: true, force: true })
   })
 
   test('the worker ends done on the second account after one move', async () => {
     setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCorchOwnerDir(ownerDir)
     // The walled account scores lower, so it is picked first and must hit the wall.
     setCorchAccountsProvider(() => [
       { id: 'fake-1', num: 1, name: 'walled', configDir: walledDir, sessionPct: 0, weekPct: 0 },
@@ -414,7 +430,60 @@ describe('integration: a quota wall hands the session to the next account', () =
     expect(Array.isArray(detail)).toBe(false)
     expect(detail?.events.some((l) => l.startsWith('— attempt 2 on #2 free: done'))).toBe(true)
     expect(typeof detail?.ranS).toBe('number')
+
+    // Each account it launched on got the owner's CLAUDE.md and skills first (field note 5).
+    for (const d of [walledDir, freeDir]) {
+      expect(readFileSync(join(d, 'CLAUDE.md'), 'utf8')).toBe('owner rules')
+      expect(lstatSync(join(d, 'skills', 'tidy')).isSymbolicLink()).toBe(true)
+    }
   }, 45_000)
+})
+
+describe("syncOwnerClaude: the owner's CLAUDE.md and skills in an account folder (field note 5)", () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-corch-owner-'))
+  const owner = join(root, 'owner')
+  const acct = join(root, 'acct')
+  afterAll(() => rmSync(root, { recursive: true, force: true }))
+
+  test('copies and links once, follows changes, keeps what the account wrote itself', () => {
+    for (const s of ['alpha', 'beta']) mkdirSync(join(owner, 'skills', s), { recursive: true })
+    writeFileSync(join(owner, 'skills', 'alpha', 'SKILL.md'), 'alpha skill')
+    writeFileSync(join(owner, 'skills', 'LICENSE'), 'not a skill')
+    writeFileSync(join(owner, 'CLAUDE.md'), 'rules v1')
+    mkdirSync(join(acct, 'skills', 'synced'), { recursive: true })
+
+    const first = syncOwnerClaude(owner, acct)
+    expect(first).toMatchObject({ changed: true, claudeMd: 'copied', linked: ['alpha', 'beta'] })
+    expect(readFileSync(join(acct, 'CLAUDE.md'), 'utf8')).toBe('rules v1')
+    expect(readFileSync(join(acct, 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe('alpha skill')
+    expect(existsSync(join(acct, 'skills', 'LICENSE'))).toBe(false)
+    expect(existsSync(join(acct, 'skills', 'synced'))).toBe(true)
+
+    // Unchanged: nothing to do, in memory or (after a daemon restart) from the stamp on disk.
+    expect(syncOwnerClaude(owner, acct).changed).toBe(false)
+    forgetOwnerSync()
+    expect(syncOwnerClaude(owner, acct).changed).toBe(false)
+
+    // An edited CLAUDE.md is copied again; a removed skill is unlinked, its files left alone.
+    writeFileSync(join(owner, 'CLAUDE.md'), 'rules v2, longer')
+    const edited = syncOwnerClaude(owner, acct)
+    expect(edited).toMatchObject({ claudeMd: 'copied', linked: [], unlinked: [] })
+    expect(readFileSync(join(acct, 'CLAUDE.md'), 'utf8')).toBe('rules v2, longer')
+    rmSync(join(owner, 'skills', 'beta'), { recursive: true })
+    const removed = syncOwnerClaude(owner, acct)
+    expect(removed).toMatchObject({ claudeMd: 'unchanged', unlinked: ['beta'] })
+    expect(existsSync(join(acct, 'skills', 'beta'))).toBe(false)
+
+    // A CLAUDE.md the account holds of its own is never replaced.
+    writeFileSync(join(acct, 'CLAUDE.md'), 'this account keeps its own')
+    writeFileSync(join(owner, 'CLAUDE.md'), 'rules v3, longer still')
+    expect(syncOwnerClaude(owner, acct).claudeMd).toBe('kept-own')
+    expect(readFileSync(join(acct, 'CLAUDE.md'), 'utf8')).toBe('this account keeps its own')
+
+    // Removing the account folder removes the links, never the owner's skill files behind them.
+    rmSync(acct, { recursive: true, force: true })
+    expect(readFileSync(join(owner, 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe('alpha skill')
+  })
 })
 
 describe('integration: paid extra usage is never spent', () => {

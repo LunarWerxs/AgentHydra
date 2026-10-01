@@ -29,6 +29,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { resolveClaudeExe } from './config'
 import {
@@ -77,6 +78,7 @@ import {
   windDownAt,
   windDownMessage,
 } from './corch-lib'
+import { syncOwnerClaude } from './corch-owner-sync'
 import { getCliInstance, listCliInstances, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
@@ -309,6 +311,14 @@ let accountsProvider: () => CorchAccount[] = signedInAccounts
 /** Tests: run a fake CLI instead of `claude`. null restores the real one. */
 export function setCorchClaudeCommand(argv: string[] | null): void {
   claudeCommand = argv ? () => argv : () => [resolveClaudeExe()]
+}
+/** Where the owner's global CLAUDE.md and skills live (`~/.claude`). Off under tests unless a test
+ *  sets it, so a test run never links the real skills into a fixture. */
+let ownerClaudeDir: string | null =
+  process.env.NODE_ENV === 'test' ? null : join(homedir(), '.claude')
+/** Tests: sync the owner's CLAUDE.md and skills from `dir` before each launch. null turns it off. */
+export function setCorchOwnerDir(dir: string | null): void {
+  ownerClaudeDir = dir
 }
 /** Tests: supply the accounts. null restores the signed-in CLI instances. */
 export function setCorchAccountsProvider(fn: (() => CorchAccount[]) | null): void {
@@ -1033,6 +1043,8 @@ function launch(
       return
     }
   }
+  // The owner's global CLAUDE.md and skills, so a worker keeps the owner's rules (field note 5).
+  if (ownerClaudeDir) syncOwnerClaude(ownerClaudeDir, acct.configDir)
   const resume = !fresh && hasTranscript(acct.configDir, sessionId)
   // Stopped after the CLI started (its init event is in the log): the message is already in the
   // session, so ask it to carry on. Stopped before that: the message never arrived, send it again.
