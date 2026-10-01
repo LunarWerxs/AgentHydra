@@ -74,6 +74,8 @@ export interface CliMayteWorker {
   moves: number              // how many times the session changed account
   retries: number            // transient retries used in the current turn
   notBefore: number | null   // epoch ms; a transient retry waits until then
+  priority?: number          // higher starts first among queued/waiting work (dueOrder); absent = 0
+  handoffNote?: string | null // a move found the transcript nowhere: the next message goes on from it
   createdAt: number
   updatedAt: number
 }
@@ -224,11 +226,15 @@ flags are honoured; neither is silently ignored.
     (`ORG_DISABLED_WALL`), lifted only by a new login: `claude auth status` passes such a login, so
     the 30-minute recheck lifted the old wall every time and every waiting task hit the account at
     once (run 1: #91, 11 failed runs, 4 in one second).
+  - `auth` or `quota` before the attempt wrote anything (its account's transcript is missing or
+    older than the attempt): that account does not become the session's home; `accountId` goes
+    back to the account holding the newest transcript (`keepHome`, field note 30).
   - `transient`: `retries < 3` → `notBefore = now + [5, 10, 20]s[retries]`, `retries++`, requeue
     on the same account (resume if the session file exists, else first-attempt again);
     otherwise `failed`.
   - `error`: status `failed`, `error` = the result text or the stderr tail (last 1,500 chars).
-- **queued / waiting**: when `notBefore` has passed, `pickAccount(worker)`; none → `waiting`
+- **queued / waiting**: highest `priority` first, then oldest first (`dueOrder`, field note
+  20); when `notBefore` has passed, `pickAccount(worker)`; none → `waiting`
   with `error` naming why (every account walled / none signed in); else launch.
 
 Emit a change event (`onCliMayteChange(cb) → unsubscribe`) whenever a worker's status changes, so
@@ -270,9 +276,16 @@ Emit a change event (`onCliMayteChange(cb) → unsubscribe`) whenever a worker's
   a session near its limit hand off?) asks `pickAccount` itself, so worker caps count there too.
 - `copySessionTranscript(fromConfigDir, toConfigDir, sessionId): boolean`: find
   `<from>/projects/*/<sessionId>.jsonl`, copy it (and a sibling `<sessionId>/` directory when
-  present, recursively) into `<to>/projects/<same folder name>/`. Returns false when the source is
-  missing (then the next attempt starts fresh with `--session-id` and the ORIGINAL task prompt,
-  because nothing was recorded).
+  present, recursively) into `<to>/projects/<same folder name>/`, keeping the source's mtime.
+  Returns false when the source is missing (then the next attempt starts fresh with `--session-id`
+  and the ORIGINAL task prompt, because nothing was recorded).
+- A move copies from `newestTranscript(candidates, sessionId)`: of every account the task's attempts
+  ran on (a refused login last) and every usable account, the one whose copy was written last, NOT
+  the account last tried (field note 30: five sessions moved off #91, where the organization had
+  Claude Code off and whose folder was gone, failed "not found" while their transcripts sat on #83,
+  #95, #88 and #98). Only when no account holds it, and the session got past sign-in somewhere, does
+  the worker fail; the error says so, and `handoffNote` keeps its newest handoff note, from which a
+  `climayte_send` continues in a fresh session.
 
 Production accounts: `listCliInstances()` filtered to `loggedIn`, each with `sessionPct` /
 `weekPct` from `lastUsageCheck.session.pct` / `lastUsageCheck.weekAll.pct` (null when absent).
@@ -371,6 +384,7 @@ interface CliMayteJournalEntry {
   said?: string                              // turn-end: the turn's closing text, first line
   cwd?: string; accounts?: number            // dispatched
   model?: string | null; effort?: string | null  // dispatched, launched, follow-up-*, handoff-resumed
+  priority?: number; was?: number            // dispatched (its priority) / priority (new and old)
 }
 ```
 
@@ -379,7 +393,7 @@ ran, the two things `pickAccount` scores on), `moved`, `limit`, `signed-out`, `h
 `handoff-written`, `handoff-resumed`, `follow-up-queued`, `follow-up-delivered`, `retry`,
 `interrupted` (its CLI ended with no result: killed from outside, or a pre-runner worker at a
 restart), `waiting`, `turn-end` (each turn's closing
-text, first line), `turn-done`, `done`, `failed`,
+text, first line), `turn-done`, `priority` (changed by `climayte_priority`), `done`, `failed`,
 `cancelled`. Read with `climayteJournal(filter)` (entries, oldest first, the newest `limit`, default
 100) or `climayteJournalLines(filter)`, one readable line each, e.g.
 `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`; when a
@@ -389,7 +403,8 @@ model or effort was asked for, the line ends ` with claude-opus-5-5, effort max`
 
 ```ts
 export function climayteRun(input: { tasks: Array<{ prompt: string; cwd: string; title?: string; model?: string; effort?: string }>; group?: string; accounts?: string[]; perAccount?: number; model?: string; effort?: string }): { group: string; workers: CliMayteWorkerView[] }
-   // top-level model/effort: the group default for tasks without their own
+   // top-level model/effort: the group default for tasks without their own; tasks and the top
+   // level also take `priority` (whole number, default 0, higher starts first)
 export function climayteList(filter?: { group?: string; id?: string; active?: boolean; limit?: number; brief?: boolean }): CliMayteWorkerView[] | CliMayteWorkerBrief[]
    // `limit`: every active worker plus only that many most recently finished ones, newest first
    // (recentWorkers); `brief`: without the prompt, and only the last 3 attempts (+ attemptCount)
@@ -399,6 +414,8 @@ export async function climayteWait(filter: { group?: string; id?: string }, time
 export function climayteSend(id: string, text: string, opts?: { urgent?: boolean; model?: string; effort?: string }): { ok: boolean; message: string; model?: string | null; effort?: string | null }
    // to a running worker: held until its task ends; `urgent` stops the running work and sends it first
 export function climayteHandoff(id: string): { ok: boolean; message: string }
+export function climayteSetPriority(id: string, priority: unknown): { ok: boolean; message: string; priority?: number }
+   // a whole number -1000..1000; reorders queued/waiting work, never stops a running attempt
 export function climayteCancel(filter: { id?: string; group?: string }): { cancelled: string[]; keptMessages: number }
    // queued follow-ups are kept and delivered, in order, when the worker is continued
 export function climayteJournal(filter?: { group?: string; id?: string; since?: string; limit?: number }): CliMayteJournalEntry[]
@@ -459,6 +476,7 @@ file present answered `loggedIn: false`).
 - `POST /api/corch/workers` body `{ tasks, group?, accounts?, perAccount?, model?, effort? }` → `climayteRun`
 - `POST /api/corch/workers/:id/send` `{ text, urgent?, model?, effort? }` → `climayteSend`
 - `POST /api/corch/workers/:id/handoff` → `climayteHandoff`
+- `POST /api/corch/workers/:id/priority` `{ priority }` → `climayteSetPriority` (400 on a bad value)
 - `POST /api/corch/cancel` `{ id? , group? }` → `climayteCancel`
 - `GET /api/corch/totals` → `climayteTotals`; `POST /api/corch/remove` `{ ids }` → `climayteRemove`
 - `POST /api/cli-instances/quick-add` `{ email, instanceId? }` → `startQuickAdd` (`instanceId`
@@ -498,6 +516,10 @@ boot after the stores are ready.
   group default, and `model: "auto"`.
 - `climayte_scorecard {}`: what works per kind (see "Scorecard").
 - `climayte_cancel { id?, group? }` MUTATES; answers `keptMessages`, the queued follow-ups it kept.
+- `climayte_priority { id, priority }` MUTATES: a task's priority (field note 20). `climayte_run` takes
+  `priority` per task and as a group default (0 when omitted); queued and waiting work starts
+  highest first, then oldest first. A separate tool rather than a `climayte_send` option, so changing
+  the order never queues a message.
 `accounts` accepts CLI instance numbers or ids (resolve through the existing instance resolver).
 
 ## Web: Quick add and the CliMayte view
@@ -512,7 +534,8 @@ boot after the stores are ready.
   views are): workers grouped by `group`, newest first; each row: status chip, title, account,
   elapsed, `lastActivity`, moves, and a small run tag (`Opus 5.5 · max`: the model that ran, else
   the one asked for, and the effort; amber when the CLI ran another model than the one asked for;
-  the hover lists both). Selecting a row shows `events`, `result` (each turn's text
+  the hover lists both), and `P<n>` when its priority is not 0 (the hover says what it does).
+  Selecting a row shows `events`, `result` (each turn's text
   under "Turn n of m" when there was more than one)/`error`, a follow-up
   box (`/send`) and Stop (`/cancel`). Poll every 3 s while any worker is active.
 - The worker detail has **Model** and **Thinking** rows (asked for, and what ran).
@@ -533,6 +556,9 @@ One integration test and the pure helpers, per the test-audit bar:
   the fake prints a synthetic limit notice and exits 1; CliMayte walls it, copies the transcript,
   resumes on the second account, and the worker ends `done` with the fake's result text and
   `moves === 1`.
+- Field note 30: the session runs on A (quota), a login is refused on B (`fake-org-disabled`, whose
+  folder loses the copied transcript), and the move to C copies from A and goes on in the same
+  session. On the old code it failed "not found on the account it last ran on".
 
 The fake CLI: parses `--session-id`/`--resume`, reads the prompt from stdin, and uses
 `CLAUDE_CONFIG_DIR`. With `fake-quota` present it writes the session transcript
