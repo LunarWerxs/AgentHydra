@@ -7,14 +7,6 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
-### Fixed
-
-- **The CLI tab no longer scrolls as a page** (`web/src/components/CliMayteStatusBadge.vue`). Every
-  task row in the CliMayte list carries a status label for screen readers, and those labels were
-  placed against the page instead of their row, so a long task list made the whole tab 4,777 px
-  taller at 1920x1080. They stay in their rows now: at 1920x1080 and 3840x2112 the tab is exactly
-  the window's height, the accounts table still folds away, and Hide finished still works.
-
 ## [1.5.0] - 2026-10-01
 
 ### Added
@@ -115,6 +107,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   account filed in the profile, so it already goes back before this release.
 
 ### Changed
+
+- **A signed-out account keeps its last usage numbers** (`server/src/usage-cache.ts`,
+  `web/src/components/UsageBadge.vue`). The tables used to blank an account's usage the moment it
+  signed out. Now they show its last reading, dimmed and marked as the last one before it signed
+  out, until a live reading replaces it; accounts already blanked get theirs back from the usage
+  history. Nothing that picks an account for work (fan_out, CliMayte, the usage survey) counts that
+  old reading as room.
 
 - **CliMayte starts a task where it can finish** (`server/src/climayte-placement.ts`). It counts what
   each account has left, what the tasks already running there will still use, and what this
@@ -225,6 +224,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   read "not measured" until you clicked it.
 
 ### Fixed
+
+- **The CLI tab no longer scrolls as a page** (`web/src/components/CliMayteStatusBadge.vue`). Every
+  task row in the CliMayte list carries a status label for screen readers, and those labels were
+  placed against the page instead of their row, so a long task list made the whole tab 4,777 px
+  taller at 1920x1080. They stay in their rows now: at 1920x1080 and 3840x2112 the tab is exactly
+  the window's height, the accounts table still folds away, and Hide finished still works.
 
 - **CliMayte stops every worker on an account at the same moment** (`server/src/climayte.ts`). Each
   worker used to go only by the usage its own session reported, which says nothing while it sits in
