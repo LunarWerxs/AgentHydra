@@ -833,7 +833,8 @@ async function tick(): Promise<void> {
       try {
         const cap = perAccount[w.group] ?? 2
         const groupActive = groupMap(w.group)
-        const expected = costOf(w).pct
+        const cost = costOf(w)
+        const expected = cost.pct
         const placement = { expected, running, finishedSince }
         const acct = pickAccount(
           w,
@@ -864,18 +865,23 @@ async function tick(): Promise<void> {
               projectedPct(acct, running.get(acct.id) ?? [], 0, finishedSince.get(acct.id) ?? 0)) *
               factor,
           )
-          const why = `Waiting for room: this task is expected to use about ${Math.round(expected)}% of a Pro 5-hour window, and the best account now (${acctLabel(acct)}) has about ${Math.round(room)}% left. It starts the moment one has room (a reset, or the work there finishing); smaller tasks go meanwhile.`
-          // Said once: the room left moves every tick, and each new figure would be a journal line.
-          if (w.status !== 'waiting' || !w.error?.startsWith('Waiting for room')) {
+          const head = `Waiting for room: this task is expected to use about ${Math.round(expected)}% of a Pro 5-hour window`
+          const why = `${head}, and the best account now (${acctLabel(acct)}) has about ${Math.round(room)}% left. It starts the moment one has room (a reset, or the work there finishing); smaller tasks go meanwhile.`
+          // Said again only when the estimate changes: the room left moves every tick, and each new
+          // figure would be a journal line.
+          if (w.status !== 'waiting' || !w.error?.startsWith(head)) {
             w.status = 'waiting'
             w.error = why
-            if (w.size)
-              w.size = {
-                ...w.size,
-                expected: Math.round(expected * 10) / 10,
-                room: Math.round(room),
-                roomOn: acctLabel(acct),
-              }
+            w.size = {
+              expected: Math.round(expected * 10) / 10,
+              basis: basisText(cost, w),
+              window: sizeTask(
+                expected,
+                allowed.map((a) => a.planFactor ?? 1),
+              ).window,
+              room: Math.round(room),
+              roomOn: acctLabel(acct),
+            }
             journal(w, 'waiting', { error: firstLine(why) })
             changed(w)
           }
@@ -1955,6 +1961,23 @@ export function climayteRun(input: {
   return { group, workers: made.map((w) => toView(w, now)) }
 }
 
+/** What an expected cost is based on, in words: 'sweep on other models, scaled to Sonnet, 3 finished'. */
+function basisText(
+  cost: CostEstimate,
+  s: { kind?: string | null; model: string | null; effort: string | null },
+): string {
+  if (!cost.samples) return 'nothing on record yet (the default)'
+  const fam = modelFamily(ladderModel(s.model)) === 'sonnet' ? 'Sonnet' : 'Opus'
+  const on = {
+    setting: `${s.kind} on ${ladderModel(s.model) ?? 'the CLI default'} ${s.effort ?? 'default effort'}`,
+    'kind-model': `${s.kind} on ${fam} at other efforts`,
+    kind: `${s.kind} on other models, scaled to ${fam}`,
+    model: `${fam} tasks of any kind`,
+    default: '',
+  }[cost.basis]
+  return `${on}, ${cost.samples} finished`
+}
+
 /** A dispatch with a task too big for one window (sizeTask): nothing was started. */
 export class CliMayteSplitNeeded extends Error {
   constructor(
@@ -2023,19 +2046,9 @@ function sizeTasks(
         window: fit.window,
         pieces: fit.pieces,
       })
-    const fam = modelFamily(ladderModel(s.model)) === 'sonnet' ? 'Sonnet' : 'Opus'
-    const on = {
-      setting: `${s.kind} on ${ladderModel(s.model) ?? 'the CLI default'} ${s.effort ?? 'default effort'}`,
-      'kind-model': `${s.kind} on ${fam} at other efforts`,
-      kind: `${s.kind} on other models, scaled to ${fam}`,
-      model: `${fam} tasks of any kind`,
-      default: '',
-    }[cost.basis]
     return {
       expected: Math.round(cost.pct * 10) / 10,
-      basis: cost.samples
-        ? `${on}, ${cost.samples} finished`
-        : 'nothing on record yet (the default)',
+      basis: basisText(cost, s),
       window: fit.window,
       room: best ? Math.round(best.room) : null,
       roomOn: best ? acctLabel(best.a) : null,
