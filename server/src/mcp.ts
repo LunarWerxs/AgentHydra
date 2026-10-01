@@ -1869,9 +1869,46 @@ export function runMcp(): Promise<void> {
     // Projection + size guard beneath the side-run warning, so the warning rides on the shaped
     // answer instead of being projected away (mcp-output.ts); the call budget outermost, so it
     // times the whole call.
-    tools: withCallBudget(withDaemonWarning(withOutputShaping(TOOLS))),
+    tools: withRenamedTools(
+      withCallBudget(withDaemonWarning(withOutputShaping(TOOLS))),
+      RENAMED_TOOLS,
+    ),
     instructions: SERVER_INSTRUCTIONS,
   })
+}
+
+/** Old tool names still answered (never listed): a chat keeps the tool list it got at its start,
+ *  but its MCP process restarts onto new code with the daemon, so after a rename every call by the
+ *  old name failed with "Unknown tool" mid-run (2026-10-01, Corch -> CliMayte: the orchestrator of
+ *  a live run lost every corch_* tool and carried on through the HTTP routes). */
+export const RENAMED_TOOLS: Readonly<Record<string, string>> = Object.fromEntries(
+  TOOLS.filter((t) => t.name.startsWith('climayte_')).map((t) => [
+    t.name.replace(/^climayte_/, 'corch_'),
+    t.name,
+  ]),
+)
+
+/** `tools` with old names answered: the stdio engine (shared server-lib mcp-stdio.mjs, synced from
+ *  the kit, so not edited here) lists `tools` with `map` and looks a call up with `find(predicate)`;
+ *  this array's `find` tries each old name against the predicate when no current tool matches, so a
+ *  renamed tool is answered by its old name and listed only once. mcp-renamed-tools.test.ts drives
+ *  it through the engine itself, so a change there that bypasses `find` fails a test. */
+export function withRenamedTools<T extends { name: string }>(
+  tools: T[],
+  renamed: Readonly<Record<string, string>>,
+): T[] {
+  const list = [...tools]
+  const find = (pred: (t: T) => unknown): T | undefined => tools.find((t) => pred(t))
+  Object.defineProperty(list, 'find', {
+    value: (pred: (t: T) => unknown): T | undefined => {
+      const hit = find(pred)
+      if (hit) return hit
+      for (const [old, current] of Object.entries(renamed))
+        if (pred({ name: old } as T)) return find((t) => t.name === current)
+      return undefined
+    },
+  })
+  return list
 }
 
 // Only run the stdio loop when this file is the entry point (`bun run mcp`), not when a test
