@@ -630,34 +630,10 @@ stderr and exits 1), appends to it, prints init, an assistant text and a `result
   result `OK` in 6 s. Quick add then got its sign-in window (`core/signin-window.ts`, driving
   `orchestrator/scripts/lib/signin_window.py`): Add account opens a new private window with
   zendriver (the owner's chosen engine; `python -m pip install zendriver`) on a throwaway profile,
-  the owner completes any Cloudflare check, the window submits the matching prefilled email once,
-  and the owner opens their email's sign-in link in that window. The window relays the copyable
-  six-digit verification code to its waiting email form (restoring the form from browser history
-  if the link replaced that tab), then authorizes only the original OAuth path and state. The page's final
+  the owner does "Continue with email", the email code and Authorize there, and the page's final
   code goes to the CLI by itself before the window closes. The hand-off was checked headless (code
   in 1 s, no browser, Python process or profile left behind); a full sign-in through the window is
   the next account the owner adds.
-  The popup remembers its last normal screen position on close in
-  `<AgentHydra config dir>/signin-window-position.json`, outside the throwaway profile. Manual
-  closure uses the last sampled position; automatic closure samples once more before stopping.
-  Minimized/maximized coordinates and headless checks do not overwrite the saved location.
-  Claude's `claude.com/cai/oauth/authorize` redirects to `claude.ai/login`; both exact HTTPS
-  origins are allowed for email submission and code entry. Authorization remains bound to the
-  original OAuth state and the two known authorization routes. The sign-in helper's
-  `--assist-port` mode can update automation in an existing managed popup while its original
-  controller retains the CLI handoff and browser shutdown.
-  Once the verification code is read back from the waiting input, its separate source tab/window
-  closes automatically. The destination stays open for verification, authorization and CLI handoff;
-  a same-tab email link returns to that destination without closing it.
-  When the matching authorization page appears without focus, the driver brings that page to the
-  front once. This lets Claude enable its Authorize button through its normal focus handling;
-  the driver still waits for the button to be enabled before submitting it.
-  The waiting step checks both open popup tabs for a verification code and, on Windows,
-  the clipboard. A copied six-digit code uses the same fill/confirmation/submission flow.
-  The small clipboard watcher reads text only while the email-code form is waiting.
-  Copying a `https://claude.ai/magic-link#...` link for that account opens it once in a new tab
-  in the same popup and continues the code-transfer/authorization flow. Links and clipboard
-  contents are kept out of logs; headless checks do not read the clipboard.
 - Quick add's Add button stayed disabled on first ship: a lint auto-fix turned `import { Input }`
   into a type-only import, so the tag rendered as a bare `<input>` whose v-model never updated.
   Fixed, with a `biome-ignore` naming why.
