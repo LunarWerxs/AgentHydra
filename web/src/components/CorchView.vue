@@ -451,6 +451,12 @@ onUnmounted(() => {
                     :aria-label="$t('corch.verdictFailed')"
                   />
                 </span>
+                <!-- Only a priority other than the default 0 is shown (field note 20). -->
+                <span
+                  v-if="w.priority"
+                  class="shrink-0 rounded bg-muted px-1 text-[11px] font-medium tabular-nums text-muted-foreground"
+                  :title="$t('corch.rowPriorityHint', { n: w.priority })"
+                >{{ $t('corch.rowPriority', { n: w.priority }) }}</span>
                 <span
                   v-if="runTag(w)"
                   class="shrink-0 text-[11px] text-muted-foreground"

@@ -138,6 +138,11 @@ export interface CorchWorker {
   check?: string | null
   /** How many times `check` has run. */
   checkRuns?: number
+  /** Queued and waiting work starts highest first, then oldest first (dueOrder). Absent: 0. */
+  priority?: number
+  /** A move found the transcript on no account (field note 30): the last handoff note, which the
+   *  next message continues from in a fresh session. */
+  handoffNote?: string | null
   createdAt: number
   updatedAt: number
 }
@@ -785,7 +790,59 @@ export function pickAccount(
   return eligible[0] ?? null
 }
 
+/** A task's priority: a whole number, higher starts first; absent is 0. */
+export function corchPriority(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null
+  const n = typeof v === 'string' ? Number(v) : v
+  if (typeof n !== 'number' || !Number.isInteger(n) || Math.abs(n) > 1000)
+    throw new Error(`priority must be a whole number from -1000 to 1000 (got ${String(v)})`)
+  return n
+}
+
+/** The order queued and waiting work starts in: highest priority first, then oldest first. Field
+ *  note 20 (run 1, 19:45): with every account full, the owner's ASAP item (the Events deploy) waited
+ *  behind sweep follow-ups for the 23:21 reset, because waiting work started strictly oldest-first. */
+export function dueOrder(
+  a: Pick<CorchWorker, 'priority' | 'createdAt'>,
+  b: Pick<CorchWorker, 'priority' | 'createdAt'>,
+): number {
+  return (b.priority ?? 0) - (a.priority ?? 0) || a.createdAt - b.createdAt
+}
+
+/** Of `candidates` (each an account's config dir), the one holding the newest copy of a session's
+ *  transcript (by its file's mtime), or null when none holds it. A tie goes to the earlier one.
+ *  Field note 30: a move copied from the account last TRIED, where a refused login had written
+ *  nothing (and whose folder was later gone), so five sessions that sat intact on #83, #95, #88 and
+ *  #98 failed as "not found". */
+export function newestTranscript<T extends { configDir: string }>(
+  candidates: T[],
+  sessionId: string,
+): (T & { mtimeMs: number }) | null {
+  let best: (T & { mtimeMs: number }) | null = null
+  for (const c of candidates) {
+    const root = join(c.configDir, 'projects')
+    let dirs: string[] = []
+    try {
+      dirs = readdirSync(root)
+    } catch {
+      continue
+    }
+    for (const d of dirs) {
+      let mtimeMs: number
+      try {
+        mtimeMs = statSync(join(root, d, `${sessionId}.jsonl`)).mtimeMs
+      } catch {
+        continue
+      }
+      if (!best || mtimeMs > best.mtimeMs) best = { ...c, mtimeMs }
+      break
+    }
+  }
+  return best
+}
+
 /** Copy a session transcript (and its sibling dir) between config dirs so `--resume` finds it.
+ *  The copy keeps the source's mtime, so newestTranscript still tells which account last wrote it.
  *  False when the source does not exist: nothing was recorded, so start fresh. */
 export function copySessionTranscript(
   fromConfigDir: string,
@@ -799,9 +856,10 @@ export function copySessionTranscript(
     if (!d.isDirectory() || !existsSync(file)) continue
     const dest = join(toConfigDir, 'projects', d.name)
     mkdirSync(dest, { recursive: true })
-    cpSync(file, join(dest, `${sessionId}.jsonl`))
+    cpSync(file, join(dest, `${sessionId}.jsonl`), { preserveTimestamps: true })
     const dir = join(root, d.name, sessionId)
-    if (existsSync(dir)) cpSync(dir, join(dest, sessionId), { recursive: true })
+    if (existsSync(dir))
+      cpSync(dir, join(dest, sessionId), { recursive: true, preserveTimestamps: true })
     // The CLI's auto-memory lives beside the transcripts, per account: `projects/<project>/memory/`.
     // A note the session saved there on the old account would be missing on the new one, so the
     // project's memory comes along too, newer file wins, nothing on the destination is removed.

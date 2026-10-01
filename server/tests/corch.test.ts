@@ -29,7 +29,9 @@ import {
   corchList,
   corchRun,
   corchSend,
+  corchSetPriority,
   corchWait,
+  dueOrder,
   freshestPct,
   joinResults,
   livePct,
@@ -517,6 +519,105 @@ describe('integration: a quota wall hands the session to the next account', () =
       expect(lstatSync(join(d, 'skills', 'tidy')).isSymbolicLink()).toBe(true)
     }
   }, 45_000)
+})
+
+describe('integration: a move copies from the account that RAN the session (field note 30)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-corch-ran-'))
+  const cwd = join(root, 'work')
+  const ranDir = join(root, 'acct-ran')
+  const refusedDir = join(root, 'acct-refused')
+  const nextDir = join(root, 'acct-next')
+  for (const d of [cwd, ranDir, refusedDir, nextDir]) mkdirSync(d, { recursive: true })
+  writeFileSync(join(ranDir, 'fake-quota'), '')
+  writeFileSync(join(refusedDir, 'fake-org-disabled'), '')
+  let group: string | null = null
+
+  afterAll(() => {
+    if (group) corchCancel({ group })
+    setCorchClaudeCommand(null)
+    setCorchAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test('it ran on A, a login was refused on B, and the move to C copies from A', async () => {
+    // Run 1, 23:19: five sessions ran on #83/#95/#88/#98, were refused on #91 (organization has
+    // Claude Code off, its folder gone by the next move), and the move to #84 looked for the
+    // transcript on #91 only, so all five failed "not found" with their transcripts intact.
+    setCorchClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCorchAccountsProvider(() => [
+      { id: 'ran-a', num: 31, name: 'ran', configDir: ranDir, sessionPct: 0, weekPct: 0 },
+      {
+        id: 'tried-b',
+        num: 32,
+        name: 'refused',
+        configDir: refusedDir,
+        sessionPct: 10,
+        weekPct: 10,
+      },
+      { id: 'next-c', num: 33, name: 'next', configDir: nextDir, sessionPct: 50, weekPct: 50 },
+    ])
+    startCorch()
+    const run = corchRun({ tasks: [{ prompt: 'a task that moves', cwd, title: 'ran' }] })
+    group = run.group
+    const id = run.workers[0]?.id as string
+
+    const deadline = Date.now() + 30_000
+    let w = corchList({ id })[0]
+    while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+      await corchWait({ id }, Math.min(5_000, deadline - Date.now()))
+      w = corchList({ id })[0]
+    }
+
+    expect(w?.error ?? null).toBeNull()
+    expect(w?.status).toBe('done')
+    expect(w?.attempts.map((a) => [a.account.id, a.outcome])).toEqual([
+      ['ran-a', 'quota'],
+      ['tried-b', 'auth'],
+      ['next-c', 'done'],
+    ])
+    // The same session went on on C from A's copy: C's transcript starts with A's turn.
+    const file = join(nextDir, 'projects', 'fake-proj', `${w?.sessionId}.jsonl`)
+    expect(readFileSync(file, 'utf8')).toContain('a task that moves')
+    const moves = corchJournal({ id }).filter((e) => e.event === 'moved')
+    expect(moves.at(-1)).toMatchObject({ from: '#31', account: '#33', copied: true })
+  }, 35_000)
+})
+
+describe('priority (field note 20)', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'ah-corch-priority-'))
+  afterAll(() => {
+    setCorchAccountsProvider(null)
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  test('waiting work starts highest priority first, then oldest; set at dispatch, changed later', () => {
+    const at = (priority: number | undefined, createdAt: number) => ({ priority, createdAt })
+    const order = [at(undefined, 1), at(0, 2), at(5, 3), at(-1, 0), at(5, 4)].sort(dueOrder)
+    expect(order.map((w) => w.createdAt)).toEqual([3, 4, 1, 2, 0])
+
+    setCorchAccountsProvider(() => [])
+    expect(() => corchRun({ tasks: [{ prompt: 'x', cwd, priority: 1.5 }] })).toThrow(
+      'task 1: priority must be a whole number',
+    )
+    const run = corchRun({
+      priority: 2,
+      tasks: [
+        { prompt: 'group default', cwd },
+        { prompt: 'its own', cwd, priority: 9 },
+      ],
+    })
+    corchCancel({ group: run.group })
+    expect(run.workers.map((w) => w.priority)).toEqual([2, 9])
+    const id = run.workers[0]?.id as string
+    expect(corchSetPriority(id, 7)).toMatchObject({ ok: true, priority: 7 })
+    expect(corchSetPriority(id, 'soon').ok).toBe(false)
+    expect(corchList({ id })[0]?.priority).toBe(7)
+    const recorded = corchJournal({ id }).filter((e) => e.priority !== undefined)
+    expect(recorded.map((e) => [e.event, e.priority, e.was])).toEqual([
+      ['dispatched', 2, undefined],
+      ['priority', 7, 2],
+    ])
+  })
 })
 
 describe("syncOwnerClaude: the owner's CLAUDE.md and skills in an account folder (field note 5)", () => {

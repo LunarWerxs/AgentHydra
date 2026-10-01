@@ -58,6 +58,8 @@ import {
   copySessionTranscript,
   corchEffort,
   corchModel,
+  corchPriority,
+  dueOrder,
   freshestPct,
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
@@ -65,6 +67,7 @@ import {
   isOrgDisabled,
   joinResults,
   liveUsage,
+  newestTranscript,
   noTokens,
   ORG_DISABLED_WALL,
   OVERAGE_NOTICE,
@@ -758,7 +761,7 @@ async function tick(): Promise<void> {
       }
     const due = [...workers.values()]
       .filter((w) => (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now)
-      .sort((a, b) => a.createdAt - b.createdAt)
+      .sort(dueOrder)
     for (const w of due) {
       try {
         const cap = perAccount[w.group] ?? 2
@@ -1111,6 +1114,7 @@ function finish(w: CorchWorker, events: unknown[]): void {
   rmSync(signalPath(w.id), { force: true })
   forgetRead(at.log)
   const now = Date.now()
+  if (v.outcome === 'auth' || v.outcome === 'quota') keepHome(w, at)
   at.outcome = v.outcome
   at.notice = v.notice
   at.endedAt = now
@@ -1218,6 +1222,30 @@ function finish(w: CorchWorker, events: unknown[]): void {
   if (w.status === 'done' && w.check) startCheck(w)
   changed(w)
   schedule(50)
+}
+
+/** An attempt refused at sign-in, or stopped at a limit, before it wrote anything to the session
+ *  never becomes the session's home (field note 30): the home goes back to the account holding the
+ *  newest transcript, which the next launch resumes on or moves from. */
+function keepHome(w: CorchWorker, at: CorchWorker['attempts'][number]): void {
+  const sessionId = at.sessionId ?? w.sessionId
+  if (!sessionId || w.accountId !== at.account.id) return
+  let accounts: CorchAccount[] = []
+  try {
+    accounts = accountsProvider()
+  } catch {
+    // the attempts' own accounts still resolve through the instance store
+  }
+  const here = configDirOf(at.account.id, accounts)
+  const file = transcriptFile(here, sessionId)
+  try {
+    if (file && statSync(file).mtimeMs >= at.startedAt) return // it wrote: this is the home
+  } catch {
+    // gone since: it wrote nothing that is still there
+  }
+  const others = transcriptCandidates(w, accounts).filter((c) => c.id !== at.account.id)
+  const holder = newestTranscript(others, sessionId)
+  if (holder) w.accountId = holder.id
 }
 
 /** The journal line for an attempt that just ended (finish), from its verdict and the worker's
@@ -1387,6 +1415,48 @@ function configDirOf(id: string, accounts: CorchAccount[]): string | null {
   return accounts.find((a) => a.id === id)?.configDir ?? getCliInstance(id)?.configDir ?? null
 }
 
+/** Every account that may hold a copy of the task's transcript, for newestTranscript: the ones its
+ *  attempts ran on, newest first (an attempt refused at sign-in wrote nothing, so those go last),
+ *  then every other account Corch can use. */
+function transcriptCandidates(
+  w: CorchWorker,
+  accounts: CorchAccount[],
+): Array<{ id: string; configDir: string }> {
+  const ids: string[] = []
+  const add = (id: string | null | undefined): void => {
+    if (id && !ids.includes(id)) ids.push(id)
+  }
+  const tried = [...w.attempts].reverse()
+  for (const a of tried) if (a.outcome !== 'auth') add(a.account.id)
+  add(w.accountId)
+  for (const a of tried) add(a.account.id)
+  for (const a of accounts) add(a.id)
+  return ids.flatMap((id) => {
+    const configDir = configDirOf(id, accounts)
+    return configDir ? [{ id, configDir }] : []
+  })
+}
+
+/** The session ran somewhere (it holds work a fresh start would lose): an attempt of it got past
+ *  sign-in. An attempt recorded before attempts kept their session counts when there was only one. */
+function sessionRan(w: CorchWorker, sessionId: string): boolean {
+  return w.attempts.some(
+    (a) =>
+      (a.sessionId === sessionId || (a.sessionId === undefined && !w.sessions?.length)) &&
+      a.outcome !== 'auth' &&
+      (a.started === true || a.outcome === 'done'),
+  )
+}
+
+/** The newest handoff note the task wrote, or null. */
+function lastHandoffNote(w: CorchWorker): string | null {
+  for (let i = w.attempts.length - 1; i >= 0; i--) {
+    const d = w.attempts[i]!.windDown
+    if (d && handoffWritten(d)) return d.path
+  }
+  return null
+}
+
 /** `activeOnAccount`: workers already running on `acct` (every group) when it was picked; the
  *  journal records it with the account's usage, the two things pickAccount scores on. */
 function launch(
@@ -1397,22 +1467,29 @@ function launch(
 ): void {
   const n = w.attempts.length
   const last = w.attempts[n - 1]
-  // After a planned handoff the task goes on in a NEW session, started from the handoff file.
-  const fresh = last?.outcome === 'handoff' && !!last.windDown
+  // After a planned handoff the task goes on in a NEW session, started from the handoff file; so
+  // does a task whose transcript a move found nowhere, from its last handoff note (field note 30).
+  const note = w.handoffNote ?? (last?.outcome === 'handoff' ? last.windDown?.path : undefined)
+  const fresh = !!note
   const oldSession = w.sessionId
   const sessionId = fresh || !w.sessionId ? crypto.randomUUID() : w.sessionId
   if (!fresh) w.sessionId = sessionId
-  // Moving accounts: carry the transcript over so `--resume` finds it there. A session that holds
-  // work already must not start over empty on the new account.
+  // Moving accounts: carry the transcript over so `--resume` finds it there, from whichever account
+  // holds its newest copy: the last one TRIED may never have run it (field note 30). A session that
+  // holds work already must not start over empty on the new account.
   const fromId = w.accountId !== acct.id ? w.accountId : null
   let copied: boolean | undefined
   if (fromId && !fresh) {
-    const from = configDirOf(fromId, accounts)
-    copied = from ? copySessionTranscript(from, acct.configDir, sessionId) : false
-    if (!copied && w.attempts.some((a) => a.started === true || a.outcome === 'done')) {
+    const holder = newestTranscript(transcriptCandidates(w, accounts), sessionId)
+    copied = holder
+      ? holder.id === acct.id || copySessionTranscript(holder.configDir, acct.configDir, sessionId)
+      : false
+    if (!copied && sessionRan(w, sessionId)) {
       const label = acct.num === null ? acct.name : `#${acct.num} ${acct.name}`
+      const kept = lastHandoffNote(w)
       w.status = 'failed'
-      w.error = `This session's transcript was not found on the account it last ran on, so it cannot move to ${label} without losing its context. Start it again as a new task.`
+      w.handoffNote = kept
+      w.error = `No account holds this session's transcript (looked on ${transcriptCandidates(w, accounts).length}), so it cannot move to ${label} with its context. ${kept ? `Its last handoff note is ${slashed(kept)}: send it a message (corch_send) and it continues from that note in a fresh session.` : 'It wrote no handoff note: start it again as a new task.'}`
       journal(w, 'failed', { account: acctLabel(acct), error: firstLine(w.error) })
       changed(w)
       return
@@ -1435,23 +1512,17 @@ function launch(
   if (!last) text = w.prompt
   // The continuation of a planned handoff: the task, the handoff, where the old transcript is, and
   // any messages that arrived while the old session was winding down.
-  else if (fresh && last.windDown) {
+  else if (note) {
     let handoff = ''
     try {
-      handoff = readFileSync(last.windDown.path, 'utf8')
+      handoff = readFileSync(note, 'utf8')
     } catch {
       handoff = '(The handoff file could not be read; use the earlier transcript.)'
     }
     const old = oldSession
       ? transcriptFile(configDirOf(last.account.id, accounts), oldSession)
       : null
-    text = continuationPrompt(
-      w.prompt,
-      handoff,
-      last.windDown.path,
-      old ? slashed(old) : null,
-      w.pending,
-    )
+    text = continuationPrompt(w.prompt, handoff, note, old ? slashed(old) : null, w.pending)
   }
   // A revived worker gets the message at once, not a continue prompt for the work it stopped. If
   // the stopped attempt never started, its own message never arrived either: send it first.
@@ -1609,6 +1680,7 @@ function launch(
     if (oldSession) w.sessions = [...(w.sessions ?? []), oldSession]
     w.sessionId = sessionId
     w.pending = [] // they went into the continuation prompt
+    delete w.handoffNote
   }
   if (!last || delivers || fresh) {
     w.result = null // a new turn: the previous answer is not this one's
@@ -1637,6 +1709,7 @@ export function corchRun(input: {
     effort?: string
     kind?: string
     check?: string
+    priority?: number
   }>
   group?: string
   accounts?: string[]
@@ -1644,6 +1717,7 @@ export function corchRun(input: {
   model?: string
   effort?: string
   kind?: string
+  priority?: number
 }): { group: string; workers: CorchWorkerView[] } {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
@@ -1653,6 +1727,7 @@ export function corchRun(input: {
   const groupModel = groupAuto ? null : corchModel(input.model)
   const groupEffort = groupAuto || isAuto(input.effort) ? null : corchEffort(input.effort)
   const groupKind = corchKind(input.kind)
+  const groupPriority = corchPriority(input.priority) ?? 0
   const rows = scoreRows(workers.values())
   const autoSoFar = new Map<CorchKind, number>()
   for (const w of workers.values())
@@ -1673,13 +1748,14 @@ export function corchRun(input: {
       throw new Error(`task ${i + 1}: check must be one shell command (at most 2000 characters)`)
     try {
       const kind = corchKind(t.kind) ?? groupKind
+      const priority = corchPriority(t.priority) ?? groupPriority
       const own = t.model === undefined || t.model === null || t.model === ''
       if (isAuto(t.model) || (own && groupAuto)) {
         const k = kind ?? 'code'
         const n = autoSoFar.get(k) ?? 0
         autoSoFar.set(k, n + 1)
         const pick = pickConfig(k, rows, n)
-        return { ...pick.config, kind: k, auto: true, reason: pick.reason }
+        return { ...pick.config, kind: k, auto: true, reason: pick.reason, priority }
       }
       return {
         model: corchModel(t.model) ?? groupModel,
@@ -1687,6 +1763,7 @@ export function corchRun(input: {
         kind,
         auto: false,
         reason: undefined,
+        priority,
       }
     } catch (err) {
       throw new Error(`task ${i + 1}: ${err instanceof Error ? err.message : String(err)}`)
@@ -1711,6 +1788,7 @@ export function corchRun(input: {
       kind: settings[i]?.kind ?? null,
       ...(settings[i]?.auto ? { auto: true } : {}),
       ...(t.check?.trim() ? { check: t.check.trim() } : {}),
+      priority: settings[i]?.priority ?? 0,
       accounts: input.accounts?.length ? input.accounts : null,
       status: 'queued',
       sessionId: crypto.randomUUID(),
@@ -1738,6 +1816,7 @@ export function corchRun(input: {
       effort: w.effort,
       kind: w.kind ?? undefined,
       reason: settings[i]?.reason,
+      priority: w.priority,
     })
     changed(w)
   }
@@ -1830,6 +1909,38 @@ export function corchHandoff(id: string): { ok: boolean; message: string } {
     ok: true,
     message:
       'Asked to wrap up after its current step and write a handoff; the task then continues in a fresh session.',
+  }
+}
+
+/** Change a task's priority (field note 20): queued and waiting work starts highest first, then
+ *  oldest first; a running attempt is not stopped for it. */
+export function corchSetPriority(
+  id: string,
+  value: unknown,
+): { ok: boolean; message: string; priority?: number } {
+  load()
+  const w = workers.get(id)
+  if (!w) return { ok: false, message: 'No such worker.' }
+  let priority: number | null
+  try {
+    priority = corchPriority(value)
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+  }
+  if (priority === null) return { ok: false, message: 'priority is required.' }
+  const was = w.priority ?? 0
+  if (priority !== was) {
+    w.priority = priority
+    journal(w, 'priority', { priority, was })
+    changed(w)
+    schedule(0)
+  }
+  return {
+    ok: true,
+    priority,
+    message: isActive(w)
+      ? `Priority ${priority}: it starts ahead of queued and waiting work with a lower priority.`
+      : `Priority ${priority}, kept for when it is continued.`,
   }
 }
 

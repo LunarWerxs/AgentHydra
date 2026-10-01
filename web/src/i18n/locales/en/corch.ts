@@ -114,6 +114,10 @@ export default {
   verdictSaveFailed: 'Could not save the verdict',
   verdictPassed: 'Passed',
   verdictFailed: 'Failed',
+  // --- priority (corch_priority): queued and waiting work starts highest first ---
+  rowPriority: 'P{n}',
+  rowPriorityHint:
+    'Priority {n}: when it waits for an account, it starts ahead of tasks with a lower priority',
   verdicts: 'Verdicts',
   verdictPct: '{pct}% of a Pro window',
   // --- the scorecard (CorchView.vue): what passed per kind of task, and what it cost ---

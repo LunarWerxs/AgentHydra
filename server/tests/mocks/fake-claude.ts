@@ -5,7 +5,7 @@
 // marker answers with the CLI's own synthetic session-limit notice and exits 1; any other account
 // finishes the turn with result 'FAKE DONE'. A --resume needs the transcript in its OWN config dir,
 // exactly like the real CLI, so a handoff that forgot to copy it fails loudly.
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const args = process.argv.slice(2)
@@ -51,6 +51,19 @@ if (existsSync(join(configDir, 'fake-quota'))) {
   init()
   emit(wall)
   emit({ type: 'result', subtype: 'success', is_error: true, result: notice, session_id: sessionId, total_cost_usd: 0, num_turns: 1 })
+  process.exit(1)
+}
+
+if (existsSync(join(configDir, 'fake-org-disabled'))) {
+  // An account whose organization turned Claude Code off (#91 in run 1): init, then the refusal,
+  // and nothing written. Its folder was gone by the next move, so any transcript copied in before
+  // the attempt goes with it.
+  rmSync(join(configDir, 'projects'), { recursive: true, force: true })
+  const text =
+    'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access'
+  init()
+  emit({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text }] } })
+  emit({ type: 'result', subtype: 'success', is_error: true, result: text, session_id: sessionId, total_cost_usd: 0, num_turns: 1 })
   process.exit(1)
 }
 

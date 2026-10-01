@@ -944,6 +944,8 @@ export interface CorchWorkerView {
   kind?: string | null
   /** Corch picked the model and thinking level itself (from the scorecard). */
   auto?: boolean
+  /** Queued and waiting work starts highest first, then oldest first. Absent: 0. */
+  priority?: number
   /** The thumbs up or down it got, oldest first. */
   verdicts?: CorchVerdict[]
 }

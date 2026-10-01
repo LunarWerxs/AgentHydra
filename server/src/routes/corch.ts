@@ -15,6 +15,7 @@ import {
   corchRun,
   corchScorecard,
   corchSend,
+  corchSetPriority,
   corchTotals,
   corchVerdict,
   corchWait,
@@ -99,6 +100,7 @@ app.post('/api/corch/workers', async (c) => {
         model: body.model as string | undefined,
         effort: body.effort as string | undefined,
         kind: body.kind as string | undefined,
+        priority: body.priority as number | undefined,
       }),
     )
   } catch (err) {
@@ -116,6 +118,12 @@ app.post('/api/corch/workers/:id/send', async (c) => {
       effort: body.effort as string | undefined,
     }),
   )
+})
+// A task's priority: queued and waiting work starts highest first (corch_priority).
+app.post('/api/corch/workers/:id/priority', async (c) => {
+  const body = await jsonBody(c)
+  const r = corchSetPriority(c.req.param('id'), body.priority)
+  return c.json(r, r.ok ? 200 : 400)
 })
 // A thumbs up or down on a finished task's result; a fail goes back to it one rung up the ladder.
 app.post('/api/corch/workers/:id/verdict', async (c) => {

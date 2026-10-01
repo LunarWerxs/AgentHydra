@@ -671,6 +671,11 @@ export const TOOLS: McpEngineTool[] = [
                 description:
                   'What kind of work it is, so the scorecard learns per kind: code, debug, review, sweep (read-only survey or capture), mechanical (an edit a script can check), docs or trivial.',
               },
+              priority: {
+                type: 'number',
+                description:
+                  'Whole number, default 0 (or the top-level `priority`): queued and waiting tasks start highest first, then oldest first, so an urgent task takes the next free slot. Change it later with corch_priority.',
+              },
               check: {
                 type: 'string',
                 description:
@@ -701,6 +706,10 @@ export const TOOLS: McpEngineTool[] = [
           type: 'string',
           description: 'Default kind for every task without its own (see the task `kind`).',
         },
+        priority: {
+          type: 'number',
+          description: 'Default priority for every task without its own (see the task `priority`).',
+        },
       },
       ['tasks'],
     ),
@@ -728,6 +737,7 @@ export const TOOLS: McpEngineTool[] = [
           model: a.model != null ? str(a.model) : undefined,
           effort: a.effort != null ? str(a.effort) : undefined,
           kind: a.kind != null ? str(a.kind) : undefined,
+          priority: a.priority != null ? Number(a.priority) : undefined,
         }),
       })) as { group?: string; workers?: Array<Record<string, unknown>> }
       // Field note 7 (2026-09-30): the whole view per worker echoed 300 characters of every prompt
@@ -864,6 +874,18 @@ export const TOOLS: McpEngineTool[] = [
           retry: a.retry === false ? false : undefined,
           kind: a.kind != null ? str(a.kind) : undefined,
         }),
+      }),
+  },
+  {
+    name: 'corch_priority',
+    description:
+      "MUTATES: change a Corch worker's priority (whole number; corch_run's default is 0). Queued and waiting work starts highest first, then oldest first, so a raised task takes the next free account slot ahead of the rest; a running worker is not stopped. The journal records the change.",
+    inputSchema: S({ id: { type: 'string' }, priority: { type: 'number' } }, ['id', 'priority']),
+    run: (a) =>
+      api(`/api/corch/workers/${encodeURIComponent(str(a.id))}/priority`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ priority: Number(a.priority) }),
       }),
   },
   {
