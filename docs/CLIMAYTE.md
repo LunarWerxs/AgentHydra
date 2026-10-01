@@ -272,8 +272,9 @@ Emit a change event (`onCliMayteChange(cb) → unsubscribe`) whenever a worker's
   95% week) an account takes no NEW work: not a new task, a handoff's continuation or a moved
   session, only the session already on it (its home). Run 1, 19:32-19:36: the one account below
   the line was at its worker cap, so twenty continuations went to accounts at 89-97% and were told
-  to hand off again within three calls (about 290k tokens and $0.75 each). `roomElsewhere` (should
-  a session near its limit hand off?) asks `pickAccount` itself, so worker caps count there too.
+  to hand off again within three calls (about 290k tokens and $0.75 each). A session that reaches
+  the line hands off whether or not another account has room (`fc1ca87`, owner: never the limit,
+  stop at 85-90%); with none, the task waits for the first reset (`waitUntil`).
 - `copySessionTranscript(fromConfigDir, toConfigDir, sessionId): boolean`: find
   `<from>/projects/*/<sessionId>.jsonl`, copy it (and a sibling `<sessionId>/` directory when
   present, recursively) into `<to>/projects/<same folder name>/`, keeping the source's mtime.
@@ -374,9 +375,12 @@ Pro accounts, where tasks costing about a quarter of a window each could never a
   running there still owes (its expected cost less how far the meter rose since the first of it
   started, from each attempt's `startPct`), plus this task's expected cost; costs are in % of a Pro
   window and shrink by `planFactor` (Pro 1, Max 5x 5, Max 20x 20, from the CLI instance's plan).
-- `expectedPct(task)`: the scorecard's average cost for its kind and setting, else its kind, else
-  the average finished task of its model family, else 25% (`DEFAULT_TASK_PCT`).
-- `pickAccount(..., placement)` scores `max(projected, week%) + 200 when projected > FIT_PCT (95)`
+- `expectedCost(task)`: from every finished task's work (re-reads left out), judged or not, blended
+  from the broadest record to the narrowest: 25% (`DEFAULT_TASK_PCT`), its model family, its kind on
+  any model scaled by meter weight, its kind on its family, its exact kind, model and effort. Each
+  pulls the estimate toward its own average by its task count against `PRIOR_WEIGHT` 2 (`5bc5ba7`).
+- `pickAccount(..., placement)` scores `max(projected, week%) + 200 when projected > FIT_PCT (85,
+  the stop line, since `fc1ca87`)`
   instead of `max(session%, week%) + 100 per worker`; the tick passes it for every start, and adds
   each worker it starts to the projection before the next one is placed. When nothing fits, the
   lowest projection still wins: finishing part of the work and handing off beats waiting hours.
@@ -387,10 +391,8 @@ Owner, 2026-10-01: estimate the size of the task, check the accounts' available 
 whole task or smaller ones. Max 5x and 20x accounts join the Pro ones, so every figure weighs the
 plan: a Max 5x window holds five Pro windows (`planFactor`).
 
-- **At dispatch** (`climayte_run`): each task's expected cost (`expectedCost`: its kind on its model
-  and effort, else its kind on its model family, else its kind on other models scaled by the meter's
-  model weight (an Opus token weighs two Sonnet ones), else its model family, else 25%) against the
-  biggest window among the accounts it may use. Over half of it (`SPLIT_SHARE`) the whole dispatch starts nothing and answers
+- **At dispatch** (`climayte_run`): each task's expected cost (`expectedCost`, under Placement)
+  against the biggest window among the accounts it may use. Over half of it (`SPLIT_SHARE`) the whole dispatch starts nothing and answers
   `split needed` (HTTP 409 with `splitNeeded: [{task, title, expected, window, pieces}]`), with
   pieces that each stay under half; `size: 'whole'` on the task or the dispatch runs it as it is.
   Every task row carries `size` (stored at dispatch): the expected % and its basis in words, the
