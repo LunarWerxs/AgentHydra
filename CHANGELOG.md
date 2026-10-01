@@ -101,6 +101,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   itself), and CliMayte's task list and task fill the rest, each scrolling inside itself. The task
   list has a "Hide finished" switch that leaves only what is still queued, running or waiting.
 
+- **A CliMayte task no longer leaves programs running** (`server/src/climayte-job.ts`). On Windows
+  everything a worker's session starts runs in one container that ends with its run, so a dev
+  server or watcher it left behind stops when it finishes; the task's log says what was stopped.
+
+- **CliMayte's cost estimates learn from every finished task** (`server/src/climayte-placement.ts`).
+  They used to count only tasks someone had judged, so Sonnet tasks costing 4-6% were still
+  estimated at 14%. A setting with a few finished tasks now blends in, pulling the estimate
+  toward its own record, instead of being ignored until it has enough.
+
 - **CliMayte stops each account at about 85% and never runs it into its limit**
   (`server/src/climayte.ts`). A task now starts only where it is expected to finish under 85% of
   the 5-hour window, and a running task that reaches 85% writes a handoff even when no other

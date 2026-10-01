@@ -14,10 +14,14 @@
 //
 // The spec carries the CLI's environment (WMI starts the runner with the user's default one, not
 // the daemon's), so the runner deletes it the moment it has read it.
+//
+// On Windows the runner first puts itself in a kill-on-close job (climayte-job.ts), so what the
+// session leaves running (a dev server, a watcher) ends with the runner, and the exit file names it.
 
 import { spawn } from 'node:child_process'
 import { existsSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { containWorker, type Leftover } from './climayte-job'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 
 /** config.ts's own test, repeated so the runner process imports nothing of the daemon's: a source
@@ -47,6 +51,8 @@ export interface RunnerExit {
   signal: string | null
   endedAt: number
   error?: string
+  /** What the CLI left running, ended when the runner's job closed (Windows). */
+  left?: Leftover[]
 }
 
 /** The runner mode itself (main.ts `--climayte-runner <spec>`). Returns the process exit code. */
@@ -54,6 +60,7 @@ export async function runCliMayteRunner(specPath: string): Promise<number> {
   const spec = JSON.parse(readFileSync(specPath, 'utf8')) as RunnerSpec
   rmSync(specPath, { force: true })
   const exit = (e: RunnerExit) => writeFileSync(spec.exitFile, JSON.stringify(e))
+  const job = containWorker()
   let child: ReturnType<typeof Bun.spawn>
   try {
     child = Bun.spawn(spec.argv, {
@@ -70,7 +77,14 @@ export async function runCliMayteRunner(specPath: string): Promise<number> {
   }
   writeFileSync(spec.pidFile, JSON.stringify({ runner: process.pid, child: child.pid }))
   await child.exited
-  exit({ code: child.exitCode, signal: child.signalCode ?? null, endedAt: Date.now() })
+  const left = job?.leftovers(process.pid) ?? []
+  exit({
+    code: child.exitCode,
+    signal: child.signalCode ?? null,
+    endedAt: Date.now(),
+    ...(left.length ? { left } : {}),
+  })
+  // Returning ends this process, which closes the job: everything in `left` ends with it.
   return 0
 }
 

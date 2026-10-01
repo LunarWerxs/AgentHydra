@@ -26,6 +26,7 @@ export type CliMayteJournalEvent =
   | 'follow-up-delivered' // an attempt started with that message
   | 'retry' // the API was overloaded, or the next attempt could not start: tried again later
   | 'interrupted' // the CLI was killed from outside (a daemon restart); resumed
+  | 'cleaned' // its attempt ended and what the session left running was ended (`notice`: which)
   | 'waiting' // no account it may use is free
   | 'turn-done' // a turn finished and a queued follow-up comes next
   | 'turn-end' // a turn ended with this text (a Stop hook can force more turns after the report)
@@ -208,6 +209,8 @@ export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Da
       return `follow-up delivered${on} ${pick}${runs}`
     case 'retry':
       return `retry ${e.retry ?? '?'}/3${on} in ${e.waitS ?? 0} s${e.notice ? `: ${e.notice}` : ''}`
+    case 'cleaned':
+      return `ended what its session left running${on}: ${e.notice ?? '?'}`
     case 'interrupted':
       return `interrupted${on} (AgentHydra restarted or the process was killed); resuming, retry ${e.retry ?? '?'}/3`
     case 'waiting':

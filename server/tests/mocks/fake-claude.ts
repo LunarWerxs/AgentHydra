@@ -206,6 +206,19 @@ if (existsSync(join(configDir, 'fake-slow'))) {
   process.exit(0)
 }
 
+// A `fake-leftover` file on the account: the session starts a background process that outlives it
+// (a dev server left running) and writes its pid beside the marker.
+if (existsSync(join(configDir, 'fake-leftover'))) {
+  const { spawn } = await import('node:child_process')
+  const bg = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000)'], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  bg.unref()
+  writeFileSync(join(configDir, 'leftover.pid'), String(bg.pid))
+}
+
 let transcript = findTranscript()
 if (resume && !transcript) {
   process.stderr.write(`No conversation found with session ID: ${sessionId}\n`)

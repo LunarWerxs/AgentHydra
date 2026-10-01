@@ -53,6 +53,7 @@ import {
   wallUntil,
 } from '../src/climayte'
 import { forgetOwnerSync, syncOwnerClaude } from '../src/climayte-owner-sync'
+import { isPidAlive } from '../src/core/process'
 import { setProviderSettings } from '../src/provider-settings'
 import { parseResetTime } from '../src/usage'
 
@@ -1228,9 +1229,12 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     }
     expect(refused).toBeInstanceOf(CliMayteSplitNeeded)
     expect((refused as CliMayteSplitNeeded).message).toContain('split needed')
-    expect((refused as CliMayteSplitNeeded).tasks).toEqual([
-      { task: 2, title: 'a big debug task', expected: 150, window: 85, pieces: 4 },
-    ])
+    // One task at 150% on record, blended toward the broader record (expectedCost): still far over
+    // half the 85% window, in pieces of at most half.
+    const [split] = (refused as CliMayteSplitNeeded).tasks
+    expect(split).toMatchObject({ task: 2, title: 'a big debug task', window: 85 })
+    expect(split?.expected).toBeGreaterThan(85)
+    expect(split?.pieces).toBe(Math.ceil((split?.expected ?? 0) / 42.5))
     expect(climayteList().length).toBe(before)
 
     // On the owner's say it runs as it is: no window fits it, so it starts rather than wait forever.
@@ -1239,7 +1243,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     const wholeId = whole.workers[0]?.id as string
     expect(whole.workers[0]?.size).toMatchObject({ window: 85, roomOn: '#41' })
     expect(whole.workers[0]?.size?.basis).toBe('debug on claude-sonnet-5-5 low, 1 finished')
-    expect(Math.round(whole.workers[0]?.size?.expected ?? 0)).toBe(150)
+    expect(Math.round(whole.workers[0]?.size?.expected ?? 0)).toBe(split?.expected as number)
     expect(['running', 'done']).toContain((await settle(wholeId))?.status)
 
     // A Max 20x window holds twenty Pro windows: the same task fits it whole.
@@ -1252,7 +1256,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
 
   test('a task that fits a fresh window but not the room left waits, then starts once there is room', async () => {
     factor = 1
-    await onRecord('review', 'medium', 413_000) // about 40% of a Pro window
+    await onRecord('review', 'medium', 310_000) // about 30% of a Pro window
     sessionPct = 70
     const run = climayteRun({
       tasks: [
@@ -1358,3 +1362,49 @@ describe('spend per attempt (field note 41): what each run used, the re-read aft
     expect(row?.pctPerTask).toBeCloseTo(w?.used.workPct ?? -1, 0)
   }, 40_000)
 })
+
+describe.skipIf(process.platform !== 'win32')(
+  'an ended attempt ends what its session left running (field note 43)',
+  () => {
+    const root = mkdtempSync(join(tmpdir(), 'ah-climayte-leftover-'))
+    const cwd = join(root, 'work')
+    const dir = join(root, 'acct')
+    for (const d of [cwd, dir]) mkdirSync(d, { recursive: true })
+    writeFileSync(join(dir, 'fake-leftover'), '')
+    let group: string | null = null
+
+    afterAll(() => {
+      if (group) climayteCancel({ group })
+      setCliMayteClaudeCommand(null)
+      setCliMayteAccountsProvider(null)
+      rmSync(root, { recursive: true, force: true })
+    })
+
+    test('the background process ends with the attempt, and the journal names it', async () => {
+      setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+      setCliMayteAccountsProvider(() => [
+        { id: 'left-1', num: 61, name: 'left', configDir: dir, sessionPct: 0, weekPct: 0 },
+      ])
+      startCliMayte()
+      const run = climayteRun({
+        tasks: [{ prompt: 'start a dev server and finish', cwd }],
+        size: 'whole',
+      })
+      group = run.group
+      const id = run.workers[0]?.id as string
+      const deadline = Date.now() + 20_000
+      let w = climayteList({ id })[0]
+      while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+        await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+        w = climayteList({ id })[0]
+      }
+      expect(w?.status).toBe('done')
+      const pid = Number(readFileSync(join(dir, 'leftover.pid'), 'utf8'))
+      const gone = Date.now() + 10_000
+      while (isPidAlive(pid) && Date.now() < gone) await Bun.sleep(200)
+      expect(isPidAlive(pid)).toBe(false)
+      const cleaned = climayteJournal({ id }).find((e) => e.event === 'cleaned')
+      expect(cleaned?.notice).toContain(String(pid))
+    }, 40_000)
+  },
+)

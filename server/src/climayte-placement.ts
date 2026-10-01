@@ -15,7 +15,6 @@
 // than finishing part of the work and handing off.
 
 import type { CliMayteAccount } from './climayte-lib'
-import { type ScoreRow, UNITS_PER_PRO_PERCENT } from './climayte-scorecard'
 import { modelMultiplier } from './usage-tokens'
 
 /** A task fits on an account when its projected 5-hour usage stays at or under this: the stop line
@@ -90,51 +89,61 @@ export interface CostEstimate {
 export const modelFamily = (m: string | null): 'sonnet' | 'opus' =>
   m?.includes('sonnet') ? 'sonnet' : 'opus'
 
-/** A task's expected cost, in % of a Pro 5-hour window: the scorecard's average for its kind and
- *  setting, else for its kind on its model family, else for its kind on other models scaled to its
- *  own, else the average finished task of its model family, else DEFAULT_TASK_PCT. The scaling is
- *  the meter's own (modelMultiplier: an Opus token weighs twice a Sonnet one). Without it a Sonnet
- *  sweep was sized at 36%, the average of three Opus sweeps (2026-10-01, mobile-w9). */
+/** A finished task's work (its re-reads left out), in % of a Pro 5-hour window, and its setting. */
+export interface FinishedCost {
+  kind: string | null
+  model: string | null
+  effort: string | null
+  pct: number
+}
+
+/** How many tasks' worth of weight the broader estimate keeps against a narrower one's record: one
+ *  finished task moves the estimate a third of the way to it, ten nearly all the way. */
+export const PRIOR_WEIGHT = 2
+
+/** A task's expected cost, in % of a Pro 5-hour window, from finished tasks (judged or not: what a
+ *  task cost needs no verdict). From the broadest record to the narrowest: DEFAULT_TASK_PCT, its
+ *  model family's tasks of any kind, its kind on any model scaled to its own (modelMultiplier: an
+ *  Opus token weighs twice a Sonnet one), its kind on its family, its kind on its exact model and
+ *  effort. Each pulls the estimate toward its own average by how many tasks it has against
+ *  PRIOR_WEIGHT, so a setting with a few tasks blends in instead of taking over at once.
+ *  (2026-10-01: Sonnet medium code ran 3.9-6.1% while its estimate stayed at 13.7, the scaled
+ *  average of Opus code, because those tasks carried no verdict and the estimate read verdicts.) */
 export function expectedCost(
   task: { kind?: string | null; model: string | null; effort: string | null },
-  rows: ScoreRow[],
-  finished: Array<{ model: string | null; pct: number }>,
+  finished: FinishedCost[],
 ): CostEstimate {
   const own = modelMultiplier(task.model ?? 'claude-opus-5-5')
-  const avg = (rs: ScoreRow[], scaled = false): { pct: number; samples: number } | null => {
-    const n = rs.reduce((s, r) => s + r.pass + r.fail, 0)
-    const units = rs.reduce(
-      (s, r) =>
-        s + (scaled ? (r.units * own) / modelMultiplier(r.model ?? 'claude-opus-5-5') : r.units),
-      0,
-    )
-    return n ? { pct: units / n / UNITS_PER_PRO_PERCENT, samples: n } : null
+  const scaled = (f: FinishedCost): number =>
+    (f.pct * own) / modelMultiplier(f.model ?? 'claude-opus-5-5')
+  const family = finished.filter((f) => modelFamily(f.model) === modelFamily(task.model))
+  const kind = task.kind ? finished.filter((f) => f.kind === task.kind) : []
+  const kindFamily = kind.filter((f) => modelFamily(f.model) === modelFamily(task.model))
+  const exact = kindFamily.filter((f) => f.model === task.model && f.effort === task.effort)
+  const levels: Array<[CostEstimate['basis'], number[]]> = [
+    ['model', family.map((f) => f.pct)],
+    ['kind', kind.map(scaled)],
+    ['kind-model', kindFamily.map((f) => f.pct)],
+    ['setting', exact.map((f) => f.pct)],
+  ]
+  let est: CostEstimate = { pct: DEFAULT_TASK_PCT, basis: 'default', samples: 0 }
+  for (const [basis, pcts] of levels) {
+    if (!pcts.length) continue
+    const sum = pcts.reduce((s, p) => s + p, 0)
+    est = {
+      pct: (sum + PRIOR_WEIGHT * est.pct) / (pcts.length + PRIOR_WEIGHT),
+      basis,
+      samples: pcts.length,
+    }
   }
-  if (task.kind) {
-    const mine = rows.filter((r) => r.kind === task.kind)
-    const exact = avg(mine.filter((r) => r.model === task.model && r.effort === task.effort))
-    if (exact) return { ...exact, basis: 'setting' }
-    const family = avg(mine.filter((r) => modelFamily(r.model) === modelFamily(task.model)))
-    if (family) return { ...family, basis: 'kind-model' }
-    const kind = avg(mine, true)
-    if (kind) return { ...kind, basis: 'kind' }
-  }
-  const same = finished.filter((f) => modelFamily(f.model) === modelFamily(task.model))
-  return same.length
-    ? {
-        pct: same.reduce((s, f) => s + f.pct, 0) / same.length,
-        basis: 'model',
-        samples: same.length,
-      }
-    : { pct: DEFAULT_TASK_PCT, basis: 'default', samples: 0 }
+  return est
 }
 
 export function expectedPct(
   task: { kind?: string | null; model: string | null; effort: string | null },
-  rows: ScoreRow[],
-  finished: Array<{ model: string | null; pct: number }>,
+  finished: FinishedCost[],
 ): number {
-  return expectedCost(task, rows, finished).pct
+  return expectedCost(task, finished).pct
 }
 
 /** A task expected to cost more than this share of the biggest 5-hour window it may use is split

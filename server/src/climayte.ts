@@ -84,7 +84,6 @@ import {
   toBrief,
   toView,
   WIND_DOWN_SESSION_PCT,
-  WIND_DOWN_WEEK_PCT,
   WORKER_BRIEF,
   wallUntil,
   windDownAt,
@@ -745,11 +744,12 @@ function placementState(): {
   running: Map<string, RunningLoad[]>
   finishedSince: Map<string, number>
 } {
-  const rows = scoreRows(workers.values())
   const finished = [...workers.values()]
     .filter((w) => w.status === 'done' && w.tokens)
     .map((w) => ({
+      kind: w.kind ?? null,
       model: ladderModel(w.model ?? w.attempts.at(-1)?.model),
+      effort: w.effort,
       // The work only: a move's re-read is what the move cost, not what the task costs.
       pct:
         w.attempts.reduce(
@@ -759,7 +759,7 @@ function placementState(): {
         ) / UNITS_PER_PRO_PERCENT,
     }))
   const costOf = (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort'>): CostEstimate =>
-    expectedCost({ kind: w.kind, model: ladderModel(w.model), effort: w.effort }, rows, finished)
+    expectedCost({ kind: w.kind, model: ladderModel(w.model), effort: w.effort }, finished)
   const running = new Map<string, RunningLoad[]>()
   const firstStart = new Map<string, number>()
   for (const w of workers.values())
@@ -804,7 +804,7 @@ async function tick(): Promise<void> {
     for (const w of workers.values()) {
       if (w.status !== 'running') continue
       try {
-        poll(w, accounts)
+        poll(w)
       } catch (err) {
         console.error(`[climayte] could not read ${w.id}:`, err)
       }
@@ -1139,7 +1139,7 @@ function signalWindDown(
   changed(w)
 }
 
-function poll(w: CliMayteWorker, accounts?: CliMayteAccount[]): void {
+function poll(w: CliMayteWorker): void {
   const at = w.attempts[w.attempts.length - 1]
   if (!at) return
   const exited = attemptExited(w, at)
@@ -1214,6 +1214,15 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (at?.outcome !== 'running') return
   if (at.runner) {
+    // What the session left running, ended with its runner's job (field note 43).
+    const left = readRunnerExit(at.runner.exitFile)?.left
+    if (left?.length)
+      journal(w, 'cleaned', {
+        account: acctLabel(at.account),
+        notice: firstLine(
+          left.map((p) => `${p.name} ${p.pid}${p.command ? `: ${p.command}` : ''}`).join('; '),
+        ),
+      })
     rmSync(at.runner.pidFile, { force: true })
     rmSync(at.runner.exitFile, { force: true })
   }
