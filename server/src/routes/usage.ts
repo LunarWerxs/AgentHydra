@@ -567,7 +567,13 @@ app.post('/api/cli-instances/:id/link-desktop', async (c) => {
     feed
       ? {
           ...result,
-          data: { ...result.data, signedInFromDesktop: feed === 'fed' || feed === 'current' },
+          data: {
+            ...result.data,
+            signedInFromDesktop: feed === 'fed' || feed === 'current',
+            // The desktop login holds no Claude Code grant to share (its Code tab was never used,
+            // or not in the last weeks): the caller signs the CLI in the usual way and says why.
+            desktopHasNoCodeLogin: feed === 'no-desktop-login',
+          },
         }
       : result,
   )

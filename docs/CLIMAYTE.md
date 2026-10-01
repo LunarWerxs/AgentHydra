@@ -723,6 +723,11 @@ desktop? ... to save me from having to do both individually."
   linked (the route answers `signedInFromDesktop` and the menu skips the sign-in terminal), and
   every minute after (`startDesktopCliFeed`), so a renewed desktop grant follows. A credential with
   a refresh token is a CLI sign-in of its own and is never touched.
+- Only the Claude Code grant is used (the path proven with the real CLI). A desktop login whose
+  Code tab was never used, or not within the grant's weeks, has none: the link route answers
+  `desktopHasNoCodeLogin` and the menu opens the usual sign-in, saying why. On 2026-10-01, 9 of the
+  owner's 14 signed-in desktop instances held a live one (0 to 28 days left). A plain inference grant
+  passed `claude auth status` but answered nothing to `/usage`, so it is not used.
 - No refresh token is copied: the desktop app owns it, and a CLI refreshing with it would rotate it
   and sign the desktop out. So the fed login lasts as long as the grant; a desktop instance left
   closed past that leaves its CLI login expired until it is opened once.

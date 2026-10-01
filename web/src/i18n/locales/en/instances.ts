@@ -157,6 +157,8 @@ export default {
   toastCliLaunched: 'Opened a terminal for the linked CLI instance.',
   toastCliLaunchFailed: 'Failed to launch the linked CLI instance.',
   toastCliLoginOpened: 'Opened a terminal. Run /login there to sign this CLI instance in.',
+  toastCliLoginOpenedNoDesktop:
+    'Opened a terminal. Run /login there. This desktop instance has no Claude Code sign-in to share yet; using its Code tab once creates one, and the CLI login then follows it.',
   toastCliSignedInFromDesktop:
     'CLI login added. It uses this desktop instance’s sign-in, so there is nothing more to do.',
   toastCliLoginFailed: 'Failed to open a terminal for the CLI sign-in.',

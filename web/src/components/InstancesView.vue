@@ -626,7 +626,12 @@ async function onSignInCli(inst: CMInstance) {
       return
     }
     const result = await loginCli(id)
-    if (result?.ok) toast.success(t('instances.toastCliLoginOpened'))
+    if (result?.ok)
+      toast.success(
+        linked.data?.desktopHasNoCodeLogin
+          ? t('instances.toastCliLoginOpenedNoDesktop')
+          : t('instances.toastCliLoginOpened'),
+      )
     else toast.error(result?.message ?? t('instances.toastCliLoginFailed'))
   } finally {
     const next = new Set(cliSignInBusy.value)
