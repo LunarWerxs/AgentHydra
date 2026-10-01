@@ -16,6 +16,7 @@
 
 import type { CliMayteAccount } from './climayte-lib'
 import { type ScoreRow, UNITS_PER_PRO_PERCENT } from './climayte-scorecard'
+import { modelMultiplier } from './usage-tokens'
 
 /** A task fits on an account when its projected 5-hour usage stays at or under this. */
 export const FIT_PCT = 95
@@ -74,36 +75,48 @@ export function projectedPct(
 export interface CostEstimate {
   /** % of a Pro 5-hour window. */
   pct: number
-  /** 'setting' (its kind on its model and effort), 'kind', 'model' (finished tasks of its model
-   *  family) or 'default'. */
-  basis: 'setting' | 'kind' | 'model' | 'default'
+  /** 'setting' (its kind on its model and effort), 'kind-model' (its kind on its model family at
+   *  other efforts), 'kind' (its kind on other models, scaled to its model), 'model' (finished tasks
+   *  of its model family) or 'default'. */
+  basis: 'setting' | 'kind-model' | 'kind' | 'model' | 'default'
   /** How many finished tasks the average is over (0 for the default). */
   samples: number
 }
 
+/** A model's family; the CLI default (null) is Opus. */
+export const modelFamily = (m: string | null): 'sonnet' | 'opus' =>
+  m?.includes('sonnet') ? 'sonnet' : 'opus'
+
 /** A task's expected cost, in % of a Pro 5-hour window: the scorecard's average for its kind and
- *  setting, else for its kind on any setting, else the average finished task of its model family,
- *  else DEFAULT_TASK_PCT. */
+ *  setting, else for its kind on its model family, else for its kind on other models scaled to its
+ *  own, else the average finished task of its model family, else DEFAULT_TASK_PCT. The scaling is
+ *  the meter's own (modelMultiplier: an Opus token weighs twice a Sonnet one). Without it a Sonnet
+ *  sweep was sized at 36%, the average of three Opus sweeps (2026-10-01, mobile-w9). */
 export function expectedCost(
   task: { kind?: string | null; model: string | null; effort: string | null },
   rows: ScoreRow[],
   finished: Array<{ model: string | null; pct: number }>,
 ): CostEstimate {
-  const avg = (rs: ScoreRow[]): { pct: number; samples: number } | null => {
+  const own = modelMultiplier(task.model ?? 'claude-opus-5-5')
+  const avg = (rs: ScoreRow[], scaled = false): { pct: number; samples: number } | null => {
     const n = rs.reduce((s, r) => s + r.pass + r.fail, 0)
-    return n
-      ? { pct: rs.reduce((s, r) => s + r.units, 0) / n / UNITS_PER_PRO_PERCENT, samples: n }
-      : null
+    const units = rs.reduce(
+      (s, r) =>
+        s + (scaled ? (r.units * own) / modelMultiplier(r.model ?? 'claude-opus-5-5') : r.units),
+      0,
+    )
+    return n ? { pct: units / n / UNITS_PER_PRO_PERCENT, samples: n } : null
   }
   if (task.kind) {
     const mine = rows.filter((r) => r.kind === task.kind)
     const exact = avg(mine.filter((r) => r.model === task.model && r.effort === task.effort))
     if (exact) return { ...exact, basis: 'setting' }
-    const kind = avg(mine)
+    const family = avg(mine.filter((r) => modelFamily(r.model) === modelFamily(task.model)))
+    if (family) return { ...family, basis: 'kind-model' }
+    const kind = avg(mine, true)
     if (kind) return { ...kind, basis: 'kind' }
   }
-  const family = (m: string | null): string => (m?.includes('sonnet') ? 'sonnet' : 'opus')
-  const same = finished.filter((f) => family(f.model) === family(task.model))
+  const same = finished.filter((f) => modelFamily(f.model) === modelFamily(task.model))
   return same.length
     ? {
         pct: same.reduce((s, f) => s + f.pct, 0) / same.length,

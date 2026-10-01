@@ -751,11 +751,7 @@ export const TOOLS: McpEngineTool[] = [
           priority: a.priority != null ? Number(a.priority) : undefined,
           size: a.size != null ? str(a.size) : undefined,
         }),
-      })) as {
-        group?: string
-        workers?: Array<Record<string, unknown>>
-        sizing?: Record<string, unknown>
-      }
+      })) as { group?: string; workers?: Array<Record<string, unknown>> }
       // Field note 7 (2026-09-30): the whole view per worker echoed 300 characters of every prompt
       // the orchestrator had just written, about 3k characters per five-task dispatch.
       if (!Array.isArray(r?.workers)) return r
@@ -767,7 +763,7 @@ export const TOOLS: McpEngineTool[] = [
           status: w.status,
           account: w.account,
           ...(w.auto ? { model: w.model, effort: w.effort } : {}),
-          size: r.sizing?.[String(w.id)],
+          size: w.size,
         })),
       }
     },

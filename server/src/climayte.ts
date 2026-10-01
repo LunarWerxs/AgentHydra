@@ -47,6 +47,7 @@ import {
   attemptSpend,
   type CliMayteAccount,
   type CliMayteLiveUsage,
+  type CliMayteSizing,
   type CliMayteTokens,
   type CliMayteWalls,
   type CliMayteWorker,
@@ -93,6 +94,7 @@ import {
   type CostEstimate,
   expectedCost,
   FIT_PCT,
+  modelFamily,
   planFactor,
   projectedPct,
   type RunningLoad,
@@ -867,6 +869,13 @@ async function tick(): Promise<void> {
           if (w.status !== 'waiting' || !w.error?.startsWith('Waiting for room')) {
             w.status = 'waiting'
             w.error = why
+            if (w.size)
+              w.size = {
+                ...w.size,
+                expected: Math.round(expected * 10) / 10,
+                room: Math.round(room),
+                roomOn: acctLabel(acct),
+              }
             journal(w, 'waiting', { error: firstLine(why) })
             changed(w)
           }
@@ -1837,7 +1846,7 @@ export function climayteRun(input: {
   kind?: string
   priority?: number
   size?: string
-}): { group: string; workers: CliMayteWorkerView[]; sizing: Record<string, CliMayteSizing> } {
+}): { group: string; workers: CliMayteWorkerView[] } {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
@@ -1908,6 +1917,7 @@ export function climayteRun(input: {
       kind: settings[i]?.kind ?? null,
       ...(settings[i]?.auto ? { auto: true } : {}),
       ...(t.check?.trim() ? { check: t.check.trim() } : {}),
+      ...(sized[i] ? { size: sized[i] } : {}),
       priority: settings[i]?.priority ?? 0,
       accounts: input.accounts?.length ? input.accounts : null,
       status: 'queued',
@@ -1942,23 +1952,7 @@ export function climayteRun(input: {
   }
   startCliMayte()
   schedule(0)
-  return {
-    group,
-    workers: made.map((w) => toView(w, now)),
-    sizing: Object.fromEntries(made.map((w, i) => [w.id, sized[i] as CliMayteSizing])),
-  }
-}
-
-/** What climayte_run says about each task's size: its expected cost and what that is based on, the
- *  biggest 5-hour window it may use and the most any of those accounts has left now, all in % of a
- *  Pro window (a Max 5x window is 500). `room` counts what the work already running there will
- *  still use; null with no account to place on. */
-export interface CliMayteSizing {
-  expected: number
-  basis: string
-  window: number
-  room: number | null
-  roomOn: string | null
+  return { group, workers: made.map((w) => toView(w, now)) }
 }
 
 /** A dispatch with a task too big for one window (sizeTask): nothing was started. */
@@ -2029,14 +2023,14 @@ function sizeTasks(
         window: fit.window,
         pieces: fit.pieces,
       })
-    const on =
-      cost.basis === 'setting'
-        ? `${s.kind} on ${ladderModel(s.model)} ${s.effort ?? 'default effort'}`
-        : cost.basis === 'kind'
-          ? `${s.kind} on any setting`
-          : cost.basis === 'model'
-            ? `${ladderModel(s.model)?.includes('sonnet') ? 'Sonnet' : 'Opus'} tasks`
-            : ''
+    const fam = modelFamily(ladderModel(s.model)) === 'sonnet' ? 'Sonnet' : 'Opus'
+    const on = {
+      setting: `${s.kind} on ${ladderModel(s.model) ?? 'the CLI default'} ${s.effort ?? 'default effort'}`,
+      'kind-model': `${s.kind} on ${fam} at other efforts`,
+      kind: `${s.kind} on other models, scaled to ${fam}`,
+      model: `${fam} tasks of any kind`,
+      default: '',
+    }[cost.basis]
     return {
       expected: Math.round(cost.pct * 10) / 10,
       basis: cost.samples

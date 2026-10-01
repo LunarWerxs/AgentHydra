@@ -104,6 +104,18 @@ export function addTokens(a: CliMayteTokens | undefined, b: CliMayteTokens): Cli
   }
 }
 
+/** A task's size, all in % of a Pro 5-hour window (a Max 5x window is 500): its expected cost and
+ *  what that is based on, the biggest window it may use (FIT_PCT of it), and the most room any of
+ *  those accounts has (`room`, counting what the work running there will still use; null with no
+ *  account to place on) on `roomOn`. */
+export interface CliMayteSizing {
+  expected: number
+  basis: string
+  window: number
+  room: number | null
+  roomOn: string | null
+}
+
 export interface CliMayteWorker {
   id: string // short id, e.g. 'w-' + 8 hex chars
   group: string // caller-chosen or generated 'g-' + 6 hex; groups one orchestration
@@ -151,6 +163,9 @@ export interface CliMayteWorker {
   check?: string | null
   /** How many times `check` has run. */
   checkRuns?: number
+  /** Its size at dispatch (climayte.ts sizeTasks); `room` and `roomOn` are refreshed when it starts
+   *  waiting for room. */
+  size?: CliMayteSizing
   /** Queued and waiting work starts highest first, then oldest first (dueOrder). Absent: 0. */
   priority?: number
   /** A move found the transcript on no account (field note 30): the last handoff note, which the

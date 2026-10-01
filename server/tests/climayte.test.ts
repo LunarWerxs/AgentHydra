@@ -1191,15 +1191,16 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     const whole = climayteRun({ tasks: [{ ...big, size: 'whole' }], group: 'size-whole' })
     groups.push(whole.group)
     const wholeId = whole.workers[0]?.id as string
-    expect(whole.sizing[wholeId]).toMatchObject({ window: 95, roomOn: '#41' })
-    expect(Math.round(whole.sizing[wholeId]?.expected ?? 0)).toBe(150)
+    expect(whole.workers[0]?.size).toMatchObject({ window: 95, roomOn: '#41' })
+    expect(whole.workers[0]?.size?.basis).toBe('debug on claude-sonnet-5-5 low, 1 finished')
+    expect(Math.round(whole.workers[0]?.size?.expected ?? 0)).toBe(150)
     expect(['running', 'done']).toContain((await settle(wholeId))?.status)
 
     // A Max 20x window holds twenty Pro windows: the same task fits it whole.
     factor = 20
     const max = climayteRun({ tasks: [big], group: 'size-max' })
     groups.push(max.group)
-    expect(max.sizing[max.workers[0]?.id as string]?.window).toBe(1900)
+    expect(max.workers[0]?.size?.window).toBe(1900)
     climayteCancel({ group: 'size-max' })
   }, 60_000)
 
@@ -1229,6 +1230,8 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     }
     expect(w?.status).toBe('waiting')
     expect(w?.error).toContain('Waiting for room')
+    // The row a status read returns carries the size, with the room when it started waiting.
+    expect(w?.size).toMatchObject({ window: 95, room: 25, roomOn: '#41' })
     sessionPct = 10
     expect((await settle(id))?.status).toBe('done')
   }, 60_000)

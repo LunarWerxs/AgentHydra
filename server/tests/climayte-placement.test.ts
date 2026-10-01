@@ -28,7 +28,7 @@ describe('projectedPct', () => {
 })
 
 describe('expectedPct', () => {
-  test('the setting on record, else the kind, else the model family, else the default', () => {
+  test('the setting, else its kind on its model, else its kind scaled to its model, else the model family, else the default', () => {
     const row = (kind: string, model: string, effort: string, pct: number, n: number) => ({
       kind,
       model,
@@ -40,14 +40,17 @@ describe('expectedPct', () => {
     const rows = [
       row('code', 'claude-opus-5-5', 'high', 26, 2),
       row('code', 'claude-sonnet-5-5', 'medium', 6, 1),
+      row('sweep', 'claude-opus-5-5', 'high', 36, 3),
     ]
     const opusHigh = { kind: 'code', model: 'claude-opus-5-5', effort: 'high' }
     expect(expectedPct(opusHigh, rows, [])).toBe(26)
-    expect(expectedPct({ ...opusHigh, effort: 'max' }, rows, [])).toBeCloseTo((52 + 6) / 3, 6)
+    expect(expectedPct({ ...opusHigh, effort: 'max' }, rows, [])).toBe(26)
+    // Only Opus sweeps on record: a Sonnet one costs what they did at a Sonnet token's weight, half
+    // (mobile-w9, 2026-10-01: sized at the Opus 36% before).
+    const sonnetSweep = { kind: 'sweep', model: 'claude-sonnet-5-5', effort: 'medium' }
+    expect(expectedPct(sonnetSweep, rows, [])).toBeCloseTo(18, 6)
     const finished = [{ model: 'claude-sonnet-5-5', pct: 4 }]
-    expect(
-      expectedPct({ kind: 'sweep', model: 'claude-sonnet-5-5', effort: 'medium' }, rows, finished),
-    ).toBe(4)
+    expect(expectedPct({ ...sonnetSweep, kind: 'docs' }, rows, finished)).toBe(4)
     expect(expectedPct({ kind: null, model: null, effort: null }, rows, finished)).toBe(
       DEFAULT_TASK_PCT,
     )
