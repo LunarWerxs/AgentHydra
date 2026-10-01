@@ -1271,7 +1271,15 @@ describe('spend per attempt (field note 41): what each run used, the re-read aft
     ])
     startCliMayte()
     const run = climayteRun({
-      tasks: [{ prompt: 'a task that moves', cwd, kind: 'docs', model: 'sonnet', effort: 'high' }],
+      tasks: [
+        {
+          prompt: 'FAKE-SPEND:100000 a task that moves',
+          cwd,
+          kind: 'docs',
+          model: 'sonnet',
+          effort: 'high',
+        },
+      ],
       size: 'whole',
     })
     group = run.group
@@ -1284,8 +1292,9 @@ describe('spend per attempt (field note 41): what each run used, the re-read aft
     }
     expect(w?.attempts.map((a) => a.outcome)).toEqual(['quota', 'done'])
     const [first, moved] = w?.attempts ?? []
-    // The run that hit the limit is measured too, and its first request re-read nothing.
-    expect(first).toMatchObject({ costUsd: 0, turns: 0, rereadPct: 0 })
+    // The run that hit the limit is measured too, and as the task's first it re-read nothing.
+    expect(first).toMatchObject({ turns: 1, rereadPct: 0 })
+    expect(first?.costUsd).toBeGreaterThan(0)
     expect(moved?.turns).toBe(1)
     expect(moved?.costUsd).toBeGreaterThan(0)
     expect(moved?.rereadPct).toBeGreaterThan(0)

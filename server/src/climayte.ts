@@ -1465,19 +1465,34 @@ function spentOf(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): Att
   return attemptSpend(dir, session, at.startedAt, at.endedAt ?? Date.now())
 }
 
-/** An attempt's `spend` from its transcript. The first request is a re-read only when an attempt
- *  before it ran: a task whose first try never started (refused, signed out) starts fresh. */
+/** The last attempt before `at` that made a model request (spent tokens), or undefined. One that
+ *  started but was refused (signed out, Claude Code switched off) wrote no conversation to re-read:
+ *  run 1 had three first attempts like that, and the run after each was fresh. */
+function lastThatRan(
+  w: CliMayteWorker,
+  at: CliMayteWorker['attempts'][number],
+): CliMayteWorker['attempts'][number] | undefined {
+  const i = w.attempts.indexOf(at)
+  return w.attempts
+    .slice(0, Math.max(0, i))
+    .reverse()
+    .find(
+      (a) =>
+        (a.tokens
+          ? a.tokens.input + a.tokens.output + a.tokens.cacheRead + a.tokens.cacheWrite
+          : 0) > 0,
+    )
+}
+
+/** An attempt's `spend` from its transcript; its first request is a re-read only after a run that
+ *  ran (lastThatRan). */
 function spendRecord(
   w: CliMayteWorker,
   at: CliMayteWorker['attempts'][number],
   spent: AttemptSpend,
 ): CliMayteWorker['attempts'][number]['spend'] {
   if (!spent.found) return null
-  const before = w.attempts.slice(0, Math.max(0, w.attempts.indexOf(at)))
-  const ranBefore = before.some(
-    (a) =>
-      a.started || (a.tokens ? a.tokens.input + a.tokens.cacheRead + a.tokens.cacheWrite : 0) > 0,
-  )
+  const ranBefore = lastThatRan(w, at) !== undefined
   return {
     costUsd: Math.round(spent.costUsd * 10_000) / 10_000,
     turns: spent.turns,
@@ -1545,18 +1560,26 @@ function backfillTokens(): boolean {
     // Each ended attempt's cost, requests and re-read, once. Its tokens and the task's cost were
     // recorded when it ended and stay as they are.
     for (const at of w.attempts) {
-      if (at.endedAt === null || at.spend !== undefined) continue
-      at.spend = spendRecord(w, at, spentOf(w, at))
-      any = true
+      if (at.endedAt === null) continue
+      if (at.spend === undefined) {
+        at.spend = spendRecord(w, at, spentOf(w, at))
+        any = true
+      } else if (at.spend?.reread && !lastThatRan(w, at)) {
+        // Recorded by 29d4c56's first rule, which counted a refused first try as a run.
+        at.spend.reread = null
+        any = true
+      }
     }
     // What each verdict's work spent re-reading: the attempts it judged, those started since the
-    // verdict before it.
+    // verdict before it. Worked out again on every load (no file is read), so it follows the
+    // attempts' records.
     for (const [i, v] of (w.verdicts ?? []).entries()) {
-      if (v.reread !== undefined) continue
       const since = w.verdicts?.[i - 1]?.at ?? 0
-      v.reread = w.attempts
+      const reread = w.attempts
         .filter((a) => a.startedAt >= since && a.startedAt < v.at)
         .reduce((sum, a) => sum + rereadUnits(a, w.model), 0)
+      if (v.reread === reread) continue
+      v.reread = reread
       any = true
     }
     if (w.tokens) continue
@@ -2570,20 +2593,13 @@ export function climayteTotals(): {
     sessions += w.attempts.length
     costUsd += w.costUsd
     if (w.tokens) tokens = addTokens(tokens, w.tokens)
-    for (const [i, at] of w.attempts.entries()) {
+    for (const at of w.attempts) {
       runsByOutcome[at.outcome] = (runsByOutcome[at.outcome] ?? 0) + 1
       used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
       if (at.endedAt !== null && !at.spend) unmeasured++
       const r = rereadUnits(at, w.model)
       // What stopped the last run that ran: a refused sign-in in between re-read nothing itself.
-      const cause = w.attempts
-        .slice(0, i)
-        .reverse()
-        .find(
-          (a) =>
-            a.started ||
-            (a.tokens ? a.tokens.input + a.tokens.cacheRead + a.tokens.cacheWrite : 0) > 0,
-        )?.outcome
+      const cause = lastThatRan(w, at)?.outcome
       if (r > 0 && cause) {
         reread += r
         byCause[cause] = (byCause[cause] ?? 0) + r

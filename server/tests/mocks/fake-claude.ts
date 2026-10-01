@@ -44,9 +44,26 @@ if (existsSync(join(configDir, 'fake-quota'))) {
     session_id: sessionId,
     message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: notice }] },
   }
+  // With `FAKE-SPEND:<n>` in the prompt it worked (n output tokens) before the wall, as a real one does.
+  const worked = Number(/FAKE-SPEND:(\d+)/.exec(prompt)?.[1] ?? 0)
+  const work = worked
+    ? line({
+        type: 'assistant',
+        sessionId,
+        timestamp: new Date().toISOString(),
+        requestId: `req-${sessionId}-work`,
+        message: {
+          role: 'assistant',
+          model: 'claude-sonnet-5-5',
+          id: `msg-${sessionId}-work`,
+          usage: { input_tokens: 0, output_tokens: worked, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          content: [{ type: 'text', text: 'Working.' }],
+        },
+      })
+    : ''
   appendFileSync(
     join(dir, `${sessionId}.jsonl`),
-    line({ type: 'user', sessionId, message: { role: 'user', content: prompt } }) + line(wall),
+    line({ type: 'user', sessionId, message: { role: 'user', content: prompt } }) + work + line(wall),
   )
   init()
   emit(wall)
