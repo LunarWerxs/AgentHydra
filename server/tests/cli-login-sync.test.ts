@@ -10,7 +10,8 @@
 import { Database } from 'bun:sqlite'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { createHash, randomBytes } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCliInstance, deleteCliInstance, getCliInstance } from '../src/core/cli-instances'
 import type { PortableLogin } from '../src/core/cli-login-move'
@@ -24,7 +25,29 @@ import {
   setLoginSyncExcluded,
 } from '../src/core/cli-login-sync'
 
-process.env.AGENTHYDRA_CLAUDE_PATH = join(import.meta.dir, 'no-such-claude-for-login-sync.exe')
+/** A stand-in `claude` whose `auth status` refreshes a login landed at expiry 2000 to 2500, as the
+ *  real one may when the access token has run out: landing a login must not hide that refresh. */
+function refreshingClaude(): { path: string; dir: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'ah-fake-claude-'))
+  writeFileSync(
+    join(dir, 'fake.mjs'),
+    `import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+const p = join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json')
+const c = JSON.parse(readFileSync(p, 'utf8'))
+if (c.claudeAiOauth.expiresAt === 2000)
+  writeFileSync(p, JSON.stringify({ claudeAiOauth: { accessToken: 'at-2500', refreshToken: 'rt-2500', expiresAt: 2500 } }))
+console.log(JSON.stringify({ loggedIn: true, email: 'synced@example.com' }))
+`,
+  )
+  if (process.platform === 'win32') {
+    writeFileSync(join(dir, 'claude.cmd'), '@echo off\r\nbun "%~dp0fake.mjs" %*\r\n')
+    return { path: join(dir, 'claude.cmd'), dir }
+  }
+  writeFileSync(join(dir, 'claude'), '#!/bin/sh\nexec bun "$(dirname "$0")/fake.mjs" "$@"\n')
+  chmodSync(join(dir, 'claude'), 0o755)
+  return { path: join(dir, 'claude'), dir }
+}
 
 /** D1's prepare/bind/first/all/run over bun:sqlite: the Worker's storage, nothing more. */
 function d1(db: Database) {
@@ -71,6 +94,9 @@ const creds = (expiresAt: number) =>
 
 describe('login sync between two PCs', () => {
   test('the later expiry wins either way, a stale copy never does, and a left-out login stays put', async () => {
+    const fake = refreshingClaude()
+    const claudeWas = process.env.AGENTHYDRA_CLAUDE_PATH
+    process.env.AGENTHYDRA_CLAUDE_PATH = fake.path
     const made = createCliInstance('synced@example.com (Pro)')
     const id = (made.data as { id: string }).id
     const dir = getCliInstance(id)!.configDir
@@ -112,7 +138,11 @@ describe('login sync between two PCs', () => {
       // The other PC refreshed: its newer login lands here.
       await otherPc(2000)
       await runLoginSync()
-      expect(here()).toBe(creds(2000))
+      // Landed, and its sign-in check refreshed it here (the stand-in claude): that newer login
+      // must go up on the next pass, or the other PC is left holding a rotated-out token.
+      expect(here()).toBe(creds(2500))
+      await runLoginSync()
+      expect((await inStore()).login.credentials).toBe(creds(2500))
       // This PC refreshed: its newer login goes up.
       writeFileSync(join(dir, '.credentials.json'), creds(3000))
       await runLoginSync()
@@ -130,6 +160,8 @@ describe('login sync between two PCs', () => {
     } finally {
       disconnectLoginSync()
       deleteCliInstance(id, getCliInstance(id)?.name)
+      process.env.AGENTHYDRA_CLAUDE_PATH = claudeWas
+      rmSync(fake.dir, { recursive: true, force: true })
     }
   })
 })

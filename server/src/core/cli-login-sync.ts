@@ -33,7 +33,7 @@ import { join } from 'node:path'
 import { CONFIG_DIR } from '../config'
 import { seal, unseal } from '../dpapi-seal.mjs'
 import type { CliLoginSyncStatus } from '../types'
-import { getCliInstance, listCliInstances } from './cli-instances'
+import { listCliInstances } from './cli-instances'
 import {
   credentialExpiry,
   credPath,
@@ -380,9 +380,9 @@ async function pass(): Promise<LoginSyncPassResult> {
     const land = async (login: PortableLogin, version: number): Promise<void> => {
       const row = await landLogin(login)
       if (row.written) {
-        const rec = getCliInstance(row.id)
-        const text = rec ? readText(credPath(rec.configDir)) : null
-        c.state[login.id] = { version, hash: text ? sha256(text) : '' }
+        // The hash of what was landed, not of the file now: `claude auth status` (landLogin's check)
+        // can refresh the login, and that newer file must read as a change here and go up.
+        c.state[login.id] = { version, hash: sha256(login.credentials) }
         out.landed++
         note(
           c,
