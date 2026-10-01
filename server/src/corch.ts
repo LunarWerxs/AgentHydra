@@ -434,7 +434,12 @@ function load(): void {
   } catch {
     walls = {}
   }
-  if (orgWallsFromAttempts()) saveWalls()
+  try {
+    if (orgWallsFromAttempts()) saveWalls()
+  } catch (err) {
+    // The conversion holds in memory either way; a failed write must not stop the store loading.
+    console.error('[corch] could not save walls:', err)
+  }
   loadLive()
 }
 
