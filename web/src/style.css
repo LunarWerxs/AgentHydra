@@ -557,3 +557,15 @@
   --viz-6: #8f8b0e;
   --viz-seq: #5379fd;
 }
+
+/* --- provider marks and the selected task row ---------------------------------------------------
+   App tokens the kit does not carry. The brand colours are their owners' (ProviderLogo.vue) and
+   stay the same in both themes. --shadow-row-selected is the 3px primary bar down the leading edge
+   of the selected CliMayte task (CliMayteView.vue): an inset shadow, so the row's text does not
+   shift when it is picked. */
+@theme inline {
+  --color-brand-claude: #d97757;
+  --color-brand-deepseek: #4d6bfe;
+  --color-brand-codex-tile: #fff;
+  --shadow-row-selected: inset 3px 0 0 var(--color-primary);
+}

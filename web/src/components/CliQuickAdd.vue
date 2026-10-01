@@ -95,15 +95,20 @@ async function onQuickAdd() {
     ;(qaInput.value?.$el as HTMLInputElement | undefined)?.focus()
   }
 }
+/** The flow whose code is on its way to the server: its Send button is busy until the answer. */
+const qaSendingCode = ref<string | null>(null)
 async function onQuickAddCode(flow: QuickAddFlow) {
   const code = qaCodes.value[flow.id]?.trim()
-  if (!code) return
+  if (!code || qaSendingCode.value === flow.id) return
+  qaSendingCode.value = flow.id
   try {
     const r = await submitQuickAddCode(flow.id, code)
     if (!r.ok) toast.error(r.message)
     else qaCodes.value[flow.id] = ''
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    qaSendingCode.value = null
   }
   void qaPoll()
 }
@@ -276,7 +281,11 @@ onUnmounted(() => {
         <Button v-if="flow.url" :variant="flow.window ? 'ghost' : 'outline'" @click="qaCopyLink(flow)">
           <Copy /> {{ $t('climayte.qaCopyLink') }}
         </Button>
-        <form class="flex items-center gap-2" @submit.prevent="onQuickAddCode(flow)">
+        <form
+          class="flex items-center gap-2"
+          :aria-busy="qaSendingCode === flow.id"
+          @submit.prevent="onQuickAddCode(flow)"
+        >
           <label :for="`qa-code-${flow.id}`" class="text-muted-foreground">{{ $t('climayte.qaCodeHint') }}</label>
           <Input
             :id="`qa-code-${flow.id}`"
@@ -285,7 +294,13 @@ onUnmounted(() => {
             autocomplete="one-time-code"
             :placeholder="$t('climayte.qaCodePlaceholder')"
           />
-          <Button type="submit" variant="outline" :disabled="!qaCodes[flow.id]?.trim()">
+          <Button
+            type="submit"
+            variant="outline"
+            :disabled="qaSendingCode === flow.id || !qaCodes[flow.id]?.trim()"
+            :aria-busy="qaSendingCode === flow.id"
+          >
+            <LoaderCircle v-if="qaSendingCode === flow.id" class="animate-spin" />
             {{ $t('climayte.qaSendCode') }}
           </Button>
         </form>

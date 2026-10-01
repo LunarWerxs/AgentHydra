@@ -252,7 +252,7 @@ async function onStop() {
       <header class="flex flex-col gap-3 border-b px-4 py-3">
         <div class="flex items-start justify-between gap-3">
           <div class="flex min-w-0 flex-col items-start gap-1.5">
-            <h3 class="line-clamp-2 break-words text-sm font-semibold" :title="worker.title">
+            <h3 class="line-clamp-2 wrap-break-word text-sm font-semibold" :title="worker.title">
               {{ worker.title }}
             </h3>
             <p v-if="queuedNote" class="text-xs text-muted-foreground">
@@ -261,8 +261,8 @@ async function onStop() {
           </div>
           <Button
             v-if="active"
-            variant="outline"
-            class="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            variant="destructive"
+            class="shrink-0"
             :disabled="stopping"
             :aria-label="`${stopLabel}: ${worker.title}`"
             @click="onStop"
@@ -278,27 +278,28 @@ async function onStop() {
             <Badge
               v-if="latestVerdict"
               :variant="latestVerdict.verdict === 'pass' ? 'success' : 'destructive'"
-              class="h-5 text-2xs"
               :title="latestVerdict.note ?? undefined"
             >
               <ThumbsUp v-if="latestVerdict.verdict === 'pass'" aria-hidden="true" />
               <ThumbsDown v-else aria-hidden="true" />
-              {{ latestVerdict.verdict === 'pass' ? $t('climayte.verdictPassed') : $t('climayte.verdictFailed') }}
+              <span class="text-2xs">
+                {{ latestVerdict.verdict === 'pass' ? $t('climayte.verdictPassed') : $t('climayte.verdictFailed') }}
+              </span>
             </Badge>
             <Badge
               variant="outline"
-              class="h-5 max-w-[14rem] text-2xs"
+              class="max-w-56"
               :title="`${$t('climayte.detailAccount')}: ${worker.account ?? $t('climayte.noAccount')}`"
             >
               <UserRound aria-hidden="true" />
-              <span class="truncate">{{ worker.account ?? $t('climayte.noAccount') }}</span>
+              <span class="truncate text-2xs">{{ worker.account ?? $t('climayte.noAccount') }}</span>
             </Badge>
-            <Badge variant="muted" class="h-5 text-2xs tabular-nums" :title="$t('climayte.detailRan')">
+            <Badge variant="muted" :title="$t('climayte.detailRan')">
               <Timer aria-hidden="true" />
-              {{ duration(worker.ranS) }}
+              <span class="text-2xs tabular-nums">{{ duration(worker.ranS) }}</span>
             </Badge>
-            <Badge v-if="worker.kind" variant="muted" class="h-5 text-2xs" :title="$t('climayte.detailKind')">
-              {{ worker.kind }}
+            <Badge v-if="worker.kind" variant="muted" :title="$t('climayte.detailKind')">
+              <span class="text-2xs">{{ worker.kind }}</span>
             </Badge>
           </div>
           <div class="ms-auto flex items-center gap-1">
@@ -306,25 +307,25 @@ async function onStop() {
               <Button
                 variant="ghost"
                 size="icon-sm"
-                :class="latestVerdict?.verdict === 'pass' ? 'text-success' : 'text-muted-foreground'"
                 :disabled="judging"
                 :aria-label="$t('climayte.verdictUp')"
                 :title="$t('climayte.verdictUp')"
                 @click="onVerdict('pass')"
               >
-                <ThumbsUp />
+                <ThumbsUp :class="latestVerdict?.verdict === 'pass' ? 'text-success' : 'text-muted-foreground'" />
               </Button>
               <Popover v-model:open="failOpen">
                 <PopoverTrigger as-child>
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    :class="latestVerdict?.verdict === 'fail' ? 'text-destructive' : 'text-muted-foreground'"
                     :disabled="judging"
                     :aria-label="$t('climayte.verdictDown')"
                     :title="$t('climayte.verdictDown')"
                   >
-                    <ThumbsDown />
+                    <ThumbsDown
+                      :class="latestVerdict?.verdict === 'fail' ? 'text-destructive' : 'text-muted-foreground'"
+                    />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent align="end" class="w-72">
@@ -362,18 +363,20 @@ async function onStop() {
                   <span v-else class="text-base font-semibold leading-none">${{ worker.costUsd.toFixed(2) }}</span>
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom" align="end" class="flex-col items-start gap-0.5">
-                <span v-if="worker.tokens">
-                  {{
-                    $t('climayte.tokensBreakdown', {
-                      input: formatTokens(worker.tokens.input),
-                      output: formatTokens(worker.tokens.output),
-                      cacheRead: formatTokens(worker.tokens.cacheRead),
-                      cacheWrite: formatTokens(worker.tokens.cacheWrite),
-                    })
-                  }}
-                </span>
-                <span>{{ $t('climayte.detailCost') }} ${{ worker.costUsd.toFixed(2) }}: {{ $t('climayte.detailCostHint') }}</span>
+              <TooltipContent side="bottom" align="end">
+                <div class="flex flex-col items-start gap-0.5">
+                  <span v-if="worker.tokens">
+                    {{
+                      $t('climayte.tokensBreakdown', {
+                        input: formatTokens(worker.tokens.input),
+                        output: formatTokens(worker.tokens.output),
+                        cacheRead: formatTokens(worker.tokens.cacheRead),
+                        cacheWrite: formatTokens(worker.tokens.cacheWrite),
+                      })
+                    }}
+                  </span>
+                  <span>{{ $t('climayte.detailCost') }} ${{ worker.costUsd.toFixed(2) }}: {{ $t('climayte.detailCostHint') }}</span>
+                </div>
               </TooltipContent>
             </Tooltip>
             <Popover :open="moreOpen" @update:open="onMoreOpenChange">
@@ -381,12 +384,11 @@ async function onStop() {
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  :class="run?.differs ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'"
                   :aria-label="$t('climayte.detailMore')"
                   @mouseenter="onMoreEnter"
                   @mouseleave="onMoreLeave"
                 >
-                  <Info />
+                  <Info :class="run?.differs ? 'text-warning' : 'text-muted-foreground'" />
                 </Button>
               </PopoverTrigger>
               <!-- Opens on hover, so it must not take the caret (same as UsageBadge's popover). -->
@@ -410,7 +412,7 @@ async function onStop() {
                   <dd class="tabular-nums">{{ worker.turns }}</dd>
                   <dt class="text-muted-foreground">{{ $t('climayte.detailModel') }}</dt>
                   <dd
-                    :class="run?.differs ? 'text-amber-600 dark:text-amber-400' : ''"
+                    :class="run?.differs ? 'text-warning' : ''"
                     :title="[worker.model, worker.reportedModel].filter(Boolean).join(' / ')"
                   >
                     {{
@@ -451,7 +453,7 @@ async function onStop() {
                           </span>
                         </template>
                       </span>
-                      <span v-if="v.note" class="whitespace-pre-wrap break-words text-muted-foreground">{{ v.note }}</span>
+                      <span v-if="v.note" class="whitespace-pre-wrap wrap-break-word text-muted-foreground">{{ v.note }}</span>
                     </li>
                   </ol>
                 </div>
@@ -473,7 +475,7 @@ async function onStop() {
           <ol class="flex flex-col gap-1 text-xs">
             <li v-for="(a, i) in worker.attempts" :key="i" class="flex min-w-0 items-center gap-2">
               <span class="w-4 shrink-0 text-end tabular-nums text-muted-foreground">{{ i + 1 }}.</span>
-              <span class="max-w-[14rem] shrink-0 truncate font-medium" :title="climayteAccountLabel(a.account)">
+              <span class="max-w-56 shrink-0 truncate font-medium" :title="climayteAccountLabel(a.account)">
                 {{ climayteAccountLabel(a.account) }}
               </span>
               <Badge :variant="CLIMAYTE_OUTCOME[a.ceiling ? 'ceiling' : a.outcome].variant" class="shrink-0">
@@ -492,7 +494,7 @@ async function onStop() {
             <li
               v-for="(m, i) in worker.pending"
               :key="i"
-              class="whitespace-pre-wrap break-words rounded-md bg-muted p-2"
+              class="whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-2"
             >{{ m }}</li>
           </ol>
         </div>
@@ -507,10 +509,10 @@ async function onStop() {
           <summary class="cursor-pointer truncate text-muted-foreground">
             {{ $t('climayte.earlierReport', { message: r.message }) }}
           </summary>
-          <pre class="mono scroll-slim mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap break-words">{{ r.results.join('\n\n') }}</pre>
+          <pre class="mono scroll-slim mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap wrap-break-word">{{ r.results.join('\n\n') }}</pre>
         </details>
 
-        <div v-if="worker.result" class="flex flex-col gap-1.5 lg:min-h-20 lg:flex-[2]">
+        <div v-if="worker.result" class="flex flex-col gap-1.5 lg:min-h-20 lg:flex-2">
           <h4 class="text-xs font-medium">{{ $t('climayte.result') }}</h4>
           <!-- One bounded box for the whole report, every turn in it, so the panel never grows a
                scroll of its own and no box scrolls inside another. -->
@@ -519,13 +521,13 @@ async function onStop() {
             class="scroll-slim flex max-h-96 flex-col gap-3 overflow-auto rounded-md bg-muted p-2.5 lg:max-h-none lg:min-h-0 lg:flex-1"
           >
             <div v-for="(text, i) in turnResults" :key="i" class="flex flex-col gap-1">
-              <span class="text-[11px] text-muted-foreground">
+              <span class="text-2xs text-muted-foreground">
                 {{ $t('climayte.resultTurn', { n: i + 1, total: turnResults.length }) }}
               </span>
-              <pre class="mono whitespace-pre-wrap break-words text-xs">{{ text }}</pre>
+              <pre class="mono whitespace-pre-wrap wrap-break-word text-xs">{{ text }}</pre>
             </div>
           </div>
-          <pre v-else class="mono scroll-slim max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2.5 text-xs lg:max-h-none lg:min-h-0 lg:flex-1">{{ worker.result }}</pre>
+          <pre v-else class="mono scroll-slim max-h-96 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-2.5 text-xs lg:max-h-none lg:min-h-0 lg:flex-1">{{ worker.result }}</pre>
         </div>
 
         <!-- A stopped or waiting task keeps the reason it could not go on in `error`. Only a real
@@ -535,7 +537,7 @@ async function onStop() {
             {{ errorHeading }}
           </h4>
           <pre
-            class="mono scroll-slim max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md p-2.5 text-xs"
+            class="mono scroll-slim max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md p-2.5 text-xs"
             :class="failed ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground'"
           >{{ worker.error }}</pre>
         </div>
@@ -548,7 +550,7 @@ async function onStop() {
             class="mono scroll-slim max-h-72 overflow-auto rounded-md bg-muted p-2.5 text-xs lg:max-h-none lg:min-h-0 lg:flex-1"
             @scroll.passive="onEventsScroll"
           >
-            <li v-for="(e, i) in worker.events" :key="i" class="whitespace-pre-wrap break-words">{{ e }}</li>
+            <li v-for="(e, i) in worker.events" :key="i" class="whitespace-pre-wrap wrap-break-word">{{ e }}</li>
           </ul>
           <p v-else class="text-xs text-muted-foreground">
             {{ eventsLoading ? $t('climayte.loadingEvents') : $t('climayte.noEvents') }}

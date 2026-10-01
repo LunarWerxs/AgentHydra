@@ -185,7 +185,7 @@ const rows = computed(() =>
           :title="r.time.toLocaleString()"
         >{{ r.time.toLocaleTimeString() }}</time>
         <span class="flex min-w-0 flex-col">
-          <span class="break-words" :class="r.bad ? 'text-warning' : ''">
+          <span class="wrap-break-word" :class="r.bad ? 'text-warning' : ''">
             <span v-if="r.who" class="font-medium">{{ r.who }}: </span>{{ r.text }}
           </span>
           <span v-if="r.detail" class="truncate text-muted-foreground" :title="r.detail">{{ r.detail }}</span>

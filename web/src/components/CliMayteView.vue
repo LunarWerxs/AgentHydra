@@ -322,16 +322,20 @@ onUnmounted(() => {
         </p>
         <!-- What works: one line until opened, so it never pushes the task list down. -->
         <Collapsible v-if="scorecard" v-model:open="scoreOpen" class="max-w-2xl">
-          <CollapsibleTrigger
-            class="group flex items-center gap-1.5 rounded-md py-0.5 text-start text-xs transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            :title="$t('climayte.scoreHint')"
-          >
-            <ChevronRight
-              class="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90"
-              aria-hidden="true"
-            />
-            <span class="font-medium">{{ $t('climayte.scoreTitle') }}</span>
-            <span class="text-muted-foreground">{{ scoreSummary }}</span>
+          <!-- as-child: the trigger is this plain button, which carries the look. -->
+          <CollapsibleTrigger as-child>
+            <button
+              type="button"
+              class="group flex items-center gap-1.5 rounded-md py-0.5 text-start text-xs transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              :title="$t('climayte.scoreHint')"
+            >
+              <ChevronRight
+                class="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90"
+                aria-hidden="true"
+              />
+              <span class="font-medium">{{ $t('climayte.scoreTitle') }}</span>
+              <span class="text-muted-foreground">{{ scoreSummary }}</span>
+            </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
             <p
@@ -370,9 +374,9 @@ onUnmounted(() => {
                     <span class="tabular-nums text-muted-foreground">
                       {{ r.pctPerTask === null ? '—' : $t('climayte.scorePerTask', { pct: r.pctPerTask.toFixed(1) }) }}
                     </span>
-                    <Badge v-if="r.pick" variant="success" class="ms-auto h-5 text-2xs" :title="$t('climayte.scoreNextPickHint')">
+                    <Badge v-if="r.pick" variant="success" class="ms-auto" :title="$t('climayte.scoreNextPickHint')">
                       <Star aria-hidden="true" />
-                      {{ $t('climayte.scoreNextPick') }}
+                      <span class="text-2xs">{{ $t('climayte.scoreNextPick') }}</span>
                     </Badge>
                   </li>
                 </ul>
@@ -403,7 +407,7 @@ onUnmounted(() => {
     </p>
 
     <div v-if="!loaded && loading" class="flex flex-col gap-2 lg:max-w-80" aria-busy="true">
-      <Skeleton v-for="i in 3" :key="i" class="h-16 rounded-lg" />
+      <Skeleton v-for="i in 3" :key="i" class="h-16" />
     </div>
 
     <div
@@ -443,7 +447,7 @@ onUnmounted(() => {
         <!-- Narrow: 24 task rows (a row is 2rem, py-1.5 around a text-sm line, plus its 1px divider).
              Wide: the height the window leaves. -->
         <div
-          class="scroll-slim max-h-[49.5rem] divide-y overflow-y-auto rounded-lg border bg-card lg:max-h-none lg:min-h-0 lg:flex-1"
+          class="scroll-slim max-h-198 divide-y overflow-y-auto rounded-lg border bg-card lg:max-h-none lg:min-h-0 lg:flex-1"
         >
         <p v-if="!groups.length" class="px-3 py-6 text-center text-xs text-muted-foreground">
           {{ $t('climayte.allHidden', { n: hiddenCount }) }}
@@ -463,7 +467,7 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-start text-sm transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                :class="w.id === selectedId ? 'bg-accent shadow-[inset_3px_0_0_var(--color-primary)]' : ''"
+                :class="w.id === selectedId ? 'bg-accent shadow-row-selected' : ''"
                 :aria-current="w.id === selectedId ? 'true' : undefined"
                 :title="rowHint(w)"
                 @click="select(w)"
@@ -485,13 +489,13 @@ onUnmounted(() => {
                 <!-- Only a priority other than the default 0 is shown (field note 20). -->
                 <span
                   v-if="w.priority"
-                  class="shrink-0 rounded bg-muted px-1 text-[11px] font-medium tabular-nums text-muted-foreground"
+                  class="shrink-0 rounded bg-muted px-1 text-2xs font-medium tabular-nums text-muted-foreground"
                   :title="$t('climayte.rowPriorityHint', { n: w.priority })"
                 >{{ $t('climayte.rowPriority', { n: w.priority }) }}</span>
                 <span
                   v-if="runTag(w)"
-                  class="shrink-0 text-[11px] text-muted-foreground"
-                  :class="runTag(w)?.differs ? 'text-amber-600 dark:text-amber-400' : ''"
+                  class="shrink-0 text-2xs"
+                  :class="runTag(w)?.differs ? 'text-warning' : 'text-muted-foreground'"
                 >{{ runTag(w)?.text }}</span>
                 <time
                   class="shrink-0 text-xs text-muted-foreground tabular-nums"

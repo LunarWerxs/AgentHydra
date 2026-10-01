@@ -39,8 +39,8 @@ const tone = computed(() => ICON_TONE[meta.value.variant ?? ''] ?? 'text-muted-f
     />
     <span class="sr-only">{{ $t(meta.label) }}</span>
   </span>
-  <Badge v-else :variant="meta.variant" class="h-5 text-2xs" :title="$t(meta.hint)">
+  <Badge v-else :variant="meta.variant" :title="$t(meta.hint)">
     <component :is="meta.icon" :class="meta.spin ? 'animate-spin' : ''" aria-hidden="true" />
-    {{ $t(meta.label) }}
+    <span class="text-2xs">{{ $t(meta.label) }}</span>
   </Badge>
 </template>

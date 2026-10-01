@@ -6,15 +6,15 @@
 // Each icon is a real menu item, so arrow keys reach it. An action that opens a dialog closes the
 // menu (`closes`), so no menu is left floating over its own dialog; the others (Refresh, Copy)
 // keep it open, because they are the ones you want twice in a row.
+//
+// The icons are the bare reka-ui menu item with this file's own square look, not the kit's
+// DropdownMenuItem: that one is a text row and owns its padding and colour.
 import { Copy } from '@lucide/vue'
+import { DropdownMenuItem as MenuIconItem } from 'reka-ui'
 import type { Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import {
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-} from '@/components/ui/dropdown-menu'
+import { DropdownMenuLabel, DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
 
 export interface MenuIconAction {
   key: string
@@ -41,33 +41,37 @@ function copyNumber(num: number) {
   navigator.clipboard?.writeText(String(num)).catch(() => {})
   toast.success(t('instances.toastNumberCopied', { num }))
 }
+
+/** One icon in the row: a 24px square that takes the menu's highlight like any other item. */
+const ICON_ITEM =
+  'flex size-6 cursor-default items-center justify-center rounded-md text-muted-foreground outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none'
 </script>
 
 <template>
   <div class="flex items-center justify-between gap-2 pe-1">
-    <DropdownMenuLabel class="font-mono text-xs">
-      {{ $t('instances.numberMenuLabel', { num }) }}
+    <DropdownMenuLabel>
+      <span class="font-mono text-xs">{{ $t('instances.numberMenuLabel', { num }) }}</span>
     </DropdownMenuLabel>
     <div class="flex items-center gap-0.5">
-      <DropdownMenuItem
+      <MenuIconItem
         v-for="action in actions ?? []"
         :key="action.key"
-        class="size-6 min-h-6 justify-center p-0 text-muted-foreground"
+        :class="ICON_ITEM"
         :disabled="action.disabled"
         :aria-label="action.label"
         :title="action.label"
         @select="select($event, action)"
       >
         <component :is="action.icon" class="size-3.5" :class="action.spin ? 'animate-spin' : ''" />
-      </DropdownMenuItem>
-      <DropdownMenuItem
-        class="size-6 min-h-6 justify-center p-0 text-muted-foreground"
+      </MenuIconItem>
+      <MenuIconItem
+        :class="ICON_ITEM"
         :aria-label="$t('instances.copyNumber')"
         :title="$t('instances.copyNumber')"
         @select="select($event, { run: () => copyNumber(num) })"
       >
         <Copy class="size-3.5" />
-      </DropdownMenuItem>
+      </MenuIconItem>
     </div>
   </div>
   <DropdownMenuSeparator />
