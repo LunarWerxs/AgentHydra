@@ -39,7 +39,8 @@ bun scripts/corch-live.ts burst 10
 - Found and fixed (commit `0e87421`):
   - A daemon restart killed every running worker and each ended `failed` with its turn lost. On
     Windows the workers sit in the daemon's kill-on-close job. They are now resumed as
-    `interrupted`, and a restart under running workers needs `force: true`.
+    `interrupted`, and a restart under running workers needs `force: true`. (Superseded in round
+    six: workers now run under runners outside the daemon and a restart leaves them running.)
   - The expired #68/#69 were handed a worker's attempt every 30 minutes. A signed-out wall now
     lifts only when `claude auth status` says the login works.
   - A usage reading from a window that had already reset still counted.
@@ -107,7 +108,7 @@ follow-ups; a stopped attempt now shows its spend ($0.25 for one cut mid-command
 ## Round four, 2026-09-30: never spend overage, faster starts, what a move carries
 
 The owner's rule is to never go into paid extra usage. It is now a setting, **Settings >
-Providers > Let Corch use paid extra usage**, off by default and never synced to another machine
+Providers > Allow paid extra usage** (since `d3010f9` it covers all of AgentHydra, not only Corch), off by default and never synced to another machine
 (`350a078`). With it off:
 
 - On an account that CAN bill (usage events say `overageStatus: "allowed"`; of the four, only #90
@@ -158,3 +159,21 @@ re-reading the whole conversation (`5de5bbc`, `2965507`).
   the conversation, and every later turn is smaller too.
 - **Workers no longer load AgentHydra's own MCP server** (`5fceb0c`). It supplied 84 of their 138
   tools, enough for a worker to start more workers or move desktop chats.
+
+## Round six, 2026-09-30: restarts no longer touch running workers
+
+- **Runner launch, proven before wiring.** A runner started through the WMI hand-off outlived its
+  launcher (its parent was WmiPrvSE.exe), ran its child to the end and wrote exit code 0. Gotcha: a
+  launcher that exits at once takes the transient powershell with it before WMI creates the runner;
+  the daemon lives on, so only a throwaway test launcher has to wait a few seconds.
+- **Two live restarts with real workers running** (`509c3f7`). The first, forced, moved the 6
+  running pre-runner workers onto runners (each resumed once). The second, NOT forced, was accepted
+  (`activeRuns: 0`): all 7 workers kept the same attempt count, stayed `running`, and their latest
+  activity kept moving. A third restart after `6c34872` did the same.
+- **Test tasks archived.** 121 finished tasks that ran in scratch or temp test folders were removed
+  with `POST /api/corch/remove`; their logs and transcripts are in
+  `~/.agenthydra/corch/archive/2026-10-01T00-05-53-238Z/`. 23 real tasks remained.
+- **Wind-down "at 85%" on an account the table showed at 34%** was right: #84's CLI streamed
+  0.85-0.88 of its 5-hour window, and the usage cache read 89% fifteen minutes later. The table
+  lagged (30-minute sweep); it now shows the workers' live readings (`6c34872`).
+

@@ -9,6 +9,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Tidier, more consistent instance screens** (`web/src/components/InstanceSectionHeader.vue`,
+  `InstanceMenuHeader.vue`, `DeleteInstanceDialog.vue`). Every table's ⋯ menu opens with the
+  instance number and its quick actions as icons (refresh, rename, log out, copy); Claude CLI
+  instances can now log out too, and show their plan (Pro, Max 5×, Max 20×). The delete dialog's
+  name to type copies itself on click. "Last running" (now, or how long ago) replaces "Last
+  launched". Quick add results close by themselves. The Corch list is one line per task: a status
+  icon, the title and the time. Background refreshes only redraw what actually changed.
+
 - **Restarting AgentHydra no longer stops Corch tasks** (`server/src/corch-runner.ts`). Each task's
   Claude CLI now runs under a small runner started outside AgentHydra's own process, so a restart or
   an update leaves it working; the restarted AgentHydra picks every running task up again from its
@@ -107,6 +115,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   read "not measured" until you clicked it.
 
 ### Fixed
+
+- **Usage numbers no longer lag behind busy CLI accounts** (`server/src/usage-live.ts`). The
+  usage check runs every 30 minutes, so an account Corch was working hard showed a number up to
+  half an hour old (34% on an account really at 88%). Accounts with a Corch task running now show
+  the live reading that task receives with every request.
 
 - **Deleting a Codex instance no longer fails with "EBUSY: resource busy or locked"**
   (`server/src/core/codex-instances.ts`). Codex's Windows sandbox service keeps one empty lock file

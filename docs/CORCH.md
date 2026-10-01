@@ -106,11 +106,9 @@ Bun.spawn(argv, { cwd, env, stdin: Bun.file(promptFile), stdout: <fd of log, app
   `/^(ANTHROPIC_(API_KEY|AUTH_TOKEN|BASE_URL)|CLAUDE_CODE_(OAUTH_\w+|ENTRYPOINT|SSE_PORT|SESSION\w*)|CLAUDECODE|CLAUDE_CONFIG_DIR)$/`,
   plus `CLAUDE_CONFIG_DIR = account.configDir` and `AGENTHYDRA_CORCH_WORKER = worker.id`. The
   worker must bill its OWN login, never an inherited key or token.
-- stdout/stderr go straight to files (`openSync(path, 'a')`), not pipes, so a daemon restart does
-  not kill the worker through a broken pipe.
-- Never `detached`: on Windows that is DETACHED_PROCESS and every console child the CLI starts
-  (bash, git, MCP servers) would flash its own window. `windowsHide` gives the whole tree one
-  hidden console.
+- The CLI runs under a RUNNER, never as the daemon's own child (`509c3f7`, see "Runner and
+  restarts" below): stdin/stdout/stderr are the attempt's prompt, log and error FILES, so nothing
+  ties the CLI to the daemon, and a daemon restart leaves it running.
 - The prompt of a first attempt is the task. A follow-up attempt's prompt is the next `pending`
   message. A handoff attempt's prompt is `HANDOFF_PROMPT`:
   "This session was moved to another account because the previous one reached its usage limit.
@@ -123,6 +121,40 @@ Bun.spawn(argv, { cwd, env, stdin: Bun.file(promptFile), stdout: <fd of log, app
   the files you changed, and push if the repository's rules say to. Never read or print a secret
   value. End with a short report: what you did, the proof you saw (a command and what it
   printed), and anything left undone with the reason."
+
+### Runner and restarts (`server/src/corch-runner.ts`)
+
+Owner, 2026-09-30: restarting AgentHydra must not break Corch workers. A `Bun.spawn` child sits in
+the daemon's kill-on-close job on Windows, so a restart used to kill every worker (it then resumed
+as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS flashes a console).
+
+- `launchRunner(spec)` writes `<log>.spec.json` and starts this program in `--corch-runner <spec>`
+  mode (`main.ts`) through the WMI hand-off (`detached-spawn.mjs`, `hideWindow`): it is born
+  outside the daemon's tree (parent WmiPrvSE.exe). The runner reads and deletes the spec (it holds
+  the CLI's env), starts the CLI with the attempt's files, writes `<log>.pid.json`
+  (`{ runner, child }`), waits, and writes `<log>.exit.json`.
+- The attempt records `runner: { pid, pidFile, exitFile, launchedAt }`; `attempt.pid` is the CLI's.
+  `attemptExited()` reads only files: an exit file means ended; a runner gone without one died
+  (`finish` reads it as interrupted); no pid file within a minute means it never started. A runner
+  pid is trusted only once its command line names the attempt's spec (`isOurRunner`), so a pid
+  Windows reused is never followed or killed. `killAttempt` kills the runner's tree.
+- `corchRunningCount()` counts only pre-runner workers, so `/api/daemon/restart` needs no `force`
+  for runner workers. Proven live: two restarts with 6-7 workers running left every attempt count
+  unchanged and every worker running.
+
+### Tokens, totals and the usage tables
+
+- Every attempt records `tokens { input, output, cacheRead, cacheWrite }` beside its cost
+  (`attemptSpend`: its own transcript turns in [startedAt, endedAt]); the worker sums them
+  (`d79e66c`). `corchTotals()` (`GET /api/corch/totals`) sums tasks, attempts ("CLI sessions"),
+  tokens and cost over every task on record for the view's counter. Cache reads dominate the
+  token total (a turn re-reads its whole context from cache).
+- `corchRemove(ids)` (`POST /api/corch/remove`) drops finished tasks; their logs and transcripts
+  move to `corch/archive/<stamp>/<id>/`, never deleted. 121 test tasks were archived this way.
+- `corchLiveReadings()` hands each account's newest streamed reading to `usage-live.ts`, which lays
+  it over the cached snapshot in `GET /api/usage/cache` and `GET /api/cli-instances`: the usage
+  sweep reads each account only every 30 minutes, a running worker's reading is seconds old
+  (`6c34872`; #84 read 34% in the table while its workers streamed 85-88%).
 
 ### Model and thinking (field note 16)
 
@@ -268,7 +300,8 @@ interface CorchJournalEntry {
 Events: `dispatched`, `launched` (with the account's session/week % and how many workers it already
 ran, the two things `pickAccount` scores on), `moved`, `limit`, `signed-out`, `handoff-requested`,
 `handoff-written`, `handoff-resumed`, `follow-up-queued`, `follow-up-delivered`, `retry`,
-`interrupted` (a daemon restart killed its CLI), `waiting`, `turn-end` (each turn's closing
+`interrupted` (its CLI ended with no result: killed from outside, or a pre-runner worker at a
+restart), `waiting`, `turn-end` (each turn's closing
 text, first line), `turn-done`, `done`, `failed`,
 `cancelled`. Read with `corchJournal(filter)` (entries, oldest first, the newest `limit`, default
 100) or `corchJournalLines(filter)`, one readable line each, e.g.
@@ -350,7 +383,9 @@ file present answered `loggedIn: false`).
 - `POST /api/corch/workers/:id/send` `{ text, urgent?, model?, effort? }` → `corchSend`
 - `POST /api/corch/workers/:id/handoff` → `corchHandoff`
 - `POST /api/corch/cancel` `{ id? , group? }` → `corchCancel`
-- `POST /api/cli-instances/quick-add` `{ email }` → `startQuickAdd`
+- `GET /api/corch/totals` → `corchTotals`; `POST /api/corch/remove` `{ ids }` → `corchRemove`
+- `POST /api/cli-instances/quick-add` `{ email, instanceId? }` → `startQuickAdd` (`instanceId`
+  signs that existing instance in again, replacing its login: a CLI row's Log in)
 - `GET /api/cli-instances/quick-add` → `listQuickAdds`
 - `POST /api/cli-instances/quick-add/:id/code` `{ code }` / `POST .../:id/cancel`
 
