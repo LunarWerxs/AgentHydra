@@ -342,7 +342,11 @@ while ($true) {
 
   if ($targets.Count -eq 0) { break }   # nothing of ours from before this run is left: verified.
 
-  if ((Get-Date) -gt $deadline) { $survivors = $targets; break }
+  # Give up only once every target still standing has had a kill attempt. On a loaded machine the
+  # discovery above can outlast the whole timeout, and judging before the first taskkill reported
+  # "COULD NOT KILL" about processes nothing had tried to stop (RēDesign, 2026-10-01).
+  $untried = @($order | Where-Object { -not $killed.ContainsKey($_) })
+  if ((Get-Date) -gt $deadline -and $untried.Count -eq 0) { $survivors = $targets; break }
 
   foreach ($procId in $order) {
     # /T reaps whatever the target actually parented (a tray host's cmd->bun daemon; a daemon's
