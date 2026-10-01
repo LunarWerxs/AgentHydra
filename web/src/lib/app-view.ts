@@ -29,8 +29,9 @@ import { type Ref, ref, watch } from 'vue'
 export type AppView = 'sessions' | 'instances' | 'cli' | 'analytics'
 export const APP_VIEWS: readonly AppView[] = ['sessions', 'instances', 'cli', 'analytics']
 
-/** Tabs that were folded into another one, and where they went. Corch became part of the CLI tab
- *  (2026-09-30); a window that last stood on it opens there rather than falling back to Sessions. */
+/** Tabs that were folded into another one, and where they went. The Corch tab (now CliMayte) became
+ *  part of the CLI tab (2026-09-30); a window that last stood on it opens there rather than falling
+ *  back to Sessions. `corch` is the value such a window stored. */
 const RENAMED_VIEWS: Readonly<Record<string, AppView>> = { corch: 'cli' }
 
 /** The one key, under both storages. Same name deliberately: they hold the same kind of value, for

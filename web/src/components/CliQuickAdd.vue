@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Quick add: one email in, a browser sign-in out (server/src/core/cli-quick-add.ts, docs/CORCH.md).
-// Lives in CliInstancesSection, on the CLI tab right above Corch, which runs on these accounts. Polls
+// Quick add: one email in, a browser sign-in out (server/src/core/cli-quick-add.ts, docs/CLIMAYTE.md).
+// Lives in CliInstancesSection, on the CLI tab right above CliMayte, which runs on these accounts. Polls
 // every 2 s only while a flow is waiting; emits 'signed-in' when a flow turns signed-in so the host
 // can refresh its list.
 //
@@ -79,7 +79,7 @@ async function onQuickAdd() {
   qaStarting.value = true
   try {
     const r = await startQuickAdd(email, target.value?.id)
-    if ('error' in r) toast.error(r.error || t('corch.qaStartFailed'))
+    if ('error' in r) toast.error(r.error || t('climayte.qaStartFailed'))
     else {
       // The flow carries the instance now; the next Add is a new account again.
       clearQuickAddTarget()
@@ -89,7 +89,7 @@ async function onQuickAdd() {
       qaSchedule()
     }
   } catch {
-    toast.error(t('corch.qaStartFailed'))
+    toast.error(t('climayte.qaStartFailed'))
   } finally {
     qaStarting.value = false
     ;(qaInput.value?.$el as HTMLInputElement | undefined)?.focus()
@@ -121,9 +121,9 @@ async function qaCopyLink(flow: QuickAddFlow) {
   if (!flow.url) return
   try {
     await navigator.clipboard.writeText(flow.url)
-    toast.success(t('corch.qaCopied'))
+    toast.success(t('climayte.qaCopied'))
   } catch {
-    toast.error(t('corch.qaCopyFailed'))
+    toast.error(t('climayte.qaCopyFailed'))
   }
 }
 
@@ -213,15 +213,15 @@ onUnmounted(() => {
         type="email"
         autocomplete="email"
         class="max-w-sm"
-        :placeholder="$t('corch.qaPlaceholder')"
-        :aria-label="$t('corch.qaEmailLabel')"
+        :placeholder="$t('climayte.qaPlaceholder')"
+        :aria-label="$t('climayte.qaEmailLabel')"
       />
       <Button type="submit" :disabled="qaStarting || !qaEmail.trim()">
         <LoaderCircle v-if="qaStarting" class="animate-spin" />
         <Plus v-else />
-        {{ $t('corch.qaAdd') }}
+        {{ $t('climayte.qaAdd') }}
       </Button>
-      <InfoHint :text="$t('corch.qaHint')" />
+      <InfoHint :text="$t('climayte.qaHint')" />
     </form>
     <div
       v-for="flow in qaVisible"
@@ -245,23 +245,23 @@ onUnmounted(() => {
           }"
         >
           <template v-if="flow.state === 'waiting'">{{
-            flow.window ? $t('corch.qaWindowOpen') : $t('corch.qaConfirm')
+            flow.window ? $t('climayte.qaWindowOpen') : $t('climayte.qaConfirm')
           }}</template>
           <template v-else-if="flow.state === 'signed-in'">{{
             flow.account?.plan
-              ? $t('corch.qaSignedIn', { email: flow.account?.email ?? flow.email, plan: flow.account.plan })
-              : $t('corch.qaSignedInNoPlan', { email: flow.account?.email ?? flow.email })
+              ? $t('climayte.qaSignedIn', { email: flow.account?.email ?? flow.email, plan: flow.account.plan })
+              : $t('climayte.qaSignedInNoPlan', { email: flow.account?.email ?? flow.email })
           }}</template>
-          <template v-else-if="flow.state === 'failed'">{{ $t('corch.qaFailed', { reason: flow.message }) }}</template>
-          <template v-else>{{ $t('corch.qaCancelled') }}</template>
+          <template v-else-if="flow.state === 'failed'">{{ $t('climayte.qaFailed', { reason: flow.message }) }}</template>
+          <template v-else>{{ $t('climayte.qaCancelled') }}</template>
         </span>
         <Button
           v-if="flow.state !== 'waiting'"
           variant="ghost"
           size="icon-xs"
           class="shrink-0"
-          :aria-label="$t('corch.qaDismiss')"
-          :title="$t('corch.qaDismiss')"
+          :aria-label="$t('climayte.qaDismiss')"
+          :title="$t('climayte.qaDismiss')"
           @click="qaDismiss(flow)"
         >
           <X />
@@ -271,26 +271,26 @@ onUnmounted(() => {
         <!-- Copy, never open: this page may be running in the owner's own browser, which is signed
              in to another Claude account (owner, 2026-09-30; see cli-quick-add.ts). -->
         <Button v-if="flow.url && !flow.window" variant="outline" @click="qaReopen(flow)">
-          <AppWindow /> {{ $t('corch.qaReopen') }}
+          <AppWindow /> {{ $t('climayte.qaReopen') }}
         </Button>
         <Button v-if="flow.url" :variant="flow.window ? 'ghost' : 'outline'" @click="qaCopyLink(flow)">
-          <Copy /> {{ $t('corch.qaCopyLink') }}
+          <Copy /> {{ $t('climayte.qaCopyLink') }}
         </Button>
         <form class="flex items-center gap-2" @submit.prevent="onQuickAddCode(flow)">
-          <label :for="`qa-code-${flow.id}`" class="text-muted-foreground">{{ $t('corch.qaCodeHint') }}</label>
+          <label :for="`qa-code-${flow.id}`" class="text-muted-foreground">{{ $t('climayte.qaCodeHint') }}</label>
           <Input
             :id="`qa-code-${flow.id}`"
             v-model="qaCodes[flow.id]"
             class="w-32"
             autocomplete="one-time-code"
-            :placeholder="$t('corch.qaCodePlaceholder')"
+            :placeholder="$t('climayte.qaCodePlaceholder')"
           />
           <Button type="submit" variant="outline" :disabled="!qaCodes[flow.id]?.trim()">
-            {{ $t('corch.qaSendCode') }}
+            {{ $t('climayte.qaSendCode') }}
           </Button>
         </form>
         <Button variant="ghost" class="ms-auto" @click="onQuickAddCancel(flow)">
-          {{ $t('corch.qaCancel') }}
+          {{ $t('climayte.qaCancel') }}
         </Button>
       </div>
     </div>

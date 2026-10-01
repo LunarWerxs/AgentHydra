@@ -1,4 +1,4 @@
-// CLI Instances section (the CLI tab, above Corch): an isolated CLAUDE_CONFIG_DIR the daemon can
+// CLI Instances section (the CLI tab, above CliMayte): an isolated CLAUDE_CONFIG_DIR the daemon can
 // spawn a real `claude` process against.
 export default {
   title: 'CLI instances',
@@ -25,7 +25,7 @@ export default {
     'Linked ones sit on their desktop instance’s row in the Instances tab, marked with a terminal icon, since they are the same account. Unlink one to bring it back here.',
   // The pill beside a row's name: Claude sessions live on this login now (GET /api/cli-instances).
   liveSessions:
-    '{n} Claude session running on this account, Corch’s included | {n} Claude sessions running on this account, Corch’s included',
+    '{n} Claude session running on this account, CliMayte’s included | {n} Claude sessions running on this account, CliMayte’s included',
   launch: 'Launch',
   moreActions: 'More actions',
   login: 'Log in',

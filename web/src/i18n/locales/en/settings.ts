@@ -125,7 +125,7 @@ export default {
   // ⛔ SPENDS MONEY: paid extra usage is billed. Off by default, and the hint says what off does.
   extraUsageLabel: 'Allow paid extra usage',
   extraUsageHint:
-    'Off by default. Some Claude accounts keep working past their limits on paid extra usage (usage credits) instead of stopping. With this off, nothing AgentHydra manages is allowed to bill it: Corch moves a task to an account with free quota before its account would bill, and any Claude session on an account that has extra usage switched on is stopped as that account nears its limit. The chat itself is kept and can carry on later or on another account. Turn it on only if you want work to spend those credits.',
+    'Off by default. Some Claude accounts keep working past their limits on paid extra usage (usage credits) instead of stopping. With this off, nothing AgentHydra manages is allowed to bill it: CliMayte moves a task to an account with free quota before its account would bill, and any Claude session on an account that has extra usage switched on is stopped as that account nears its limit. The chat itself is kept and can carry on later or on another account. Turn it on only if you want work to spend those credits.',
   chatGptHandoffLabel: 'ChatGPT handoff',
   chatGptHandoffHint:
     'Adds a composer action that downloads a bounded, secret-screened repository context file, copies the task prompt, and opens ChatGPT. You still review and submit everything manually.',

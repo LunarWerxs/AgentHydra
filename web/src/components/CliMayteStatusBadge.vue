@@ -1,15 +1,15 @@
 <script setup lang="ts">
-// One Corch task status: icon + sentence-case label as a chip, with what it means on hover. Shared
-// by the task list and the detail pane so the two always read the same (lib/corch-status.ts).
+// One CliMayte task status: icon + sentence-case label as a chip, with what it means on hover. Shared
+// by the task list and the detail pane so the two always read the same (lib/climayte-status.ts).
 // `iconOnly` is the list's compact form (owner, 2026-09-30: one line per task): the icon in the
 // status colour, its label kept for screen readers and the hover.
 import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
-import type { CorchStatus } from '@/lib/api'
-import { CORCH_STATUS } from '@/lib/corch-status'
+import type { CliMayteStatus } from '@/lib/api'
+import { CLIMAYTE_STATUS } from '@/lib/climayte-status'
 
-const props = defineProps<{ status: CorchStatus; iconOnly?: boolean }>()
-const meta = computed(() => CORCH_STATUS[props.status])
+const props = defineProps<{ status: CliMayteStatus; iconOnly?: boolean }>()
+const meta = computed(() => CLIMAYTE_STATUS[props.status])
 
 /** The chip's colour, for the bare icon. */
 const ICON_TONE: Record<string, string> = {

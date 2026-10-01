@@ -164,7 +164,7 @@ async function patchProvider(value: Partial<ProviderSettings>) {
 
   <!-- ⛔ SPENDS MONEY, NOT JUST QUOTA. Some Claude accounts keep working past their 5-hour limit on
        paid extra usage (usage credits). Off by default: nothing AgentHydra manages may bill it -
-       Corch moves a task first, and the guard stops any session on an account that could bill. -->
+       CliMayte moves a task first, and the guard stops any session on an account that could bill. -->
   <SettingsRow :icon="CreditCard" :label="$t('settings.extraUsageLabel')">
     <template #info>
       <InfoHint :text="$t('settings.extraUsageHint')" />

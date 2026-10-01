@@ -1,20 +1,20 @@
 <script setup lang="ts">
-// The selected Corch task (CorchView.vue's right-hand pane): what it is, where it ran, what it did,
+// The selected CliMayte task (CliMayteView.vue's right-hand pane): what it is, where it ran, what it did,
 // and a box to message or continue it.
 //
 // Three parts at their natural height: a header (title, Stop, then one row of stat chips: status,
 // account, working time, tokens with the cost; the rest of the facts in a hover), a body (accounts
 // tried, result, why it stopped, the event log; the long ones scroll in their own box) and a footer
 // form. The panel itself does not scroll (owner, 2026-10-01: fewer, better). The
-// accounts list is the point of Corch made visible: each account the task tried, in order, and why
+// accounts list is the point of CliMayte made visible: each account the task tried, in order, and why
 // it moved on (limit, signed out, error). The box speaks to what sending actually does
-// (server/src/corch.ts corchSend): on a live task it waits until the task finishes its current work
+// (server/src/climayte.ts climayteSend): on a live task it waits until the task finishes its current work
 // (a CLI turn is the whole piece of work, not one step), and it is shown until then; on a finished,
 // failed or stopped one it continues the SAME conversation as a new turn. "Stop and send now" is
 // the urgent send: it stops the running work and continues the session with the message first.
 // Stopping keeps the waiting messages (field note 11); they go first when the task continues.
 //
-// A finished task gets a thumbs up or down (a verdict), so Corch learns which model and thinking
+// A finished task gets a thumbs up or down (a verdict), so CliMayte learns which model and thinking
 // level each kind of task needs; thumbs down sends it back one rung up the ladder with the note.
 import {
   Info,
@@ -30,29 +30,29 @@ import {
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import CorchJournal from '@/components/CorchJournal.vue'
-import CorchStatusBadge from '@/components/CorchStatusBadge.vue'
+import CliMayteJournal from '@/components/CliMayteJournal.vue'
+import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { CorchWorkerView } from '@/lib/api'
-import { cancelCorch, postCorchVerdict, sendCorchWorker } from '@/lib/api'
+import type { CliMayteWorkerView } from '@/lib/api'
+import { cancelCliMayte, postCliMayteVerdict, sendCliMayteWorker } from '@/lib/api'
 import {
-  CORCH_OUTCOME,
-  corchAccountLabel,
-  corchQueuedNote,
-  corchRunLabel,
+  CLIMAYTE_OUTCOME,
+  climayteAccountLabel,
+  climayteQueuedNote,
+  climayteRunLabel,
   formatTokens,
-  isCorchActive,
+  isCliMayteActive,
   modelName,
   tokenTotal,
-} from '@/lib/corch-status'
+} from '@/lib/climayte-status'
 import { formatAgo } from '@/lib/relativeTime'
 
 const props = defineProps<{
-  worker: (CorchWorkerView & { events?: string[] }) | null
+  worker: (CliMayteWorkerView & { events?: string[] }) | null
   /** True while the selected task's events have not arrived yet. */
   eventsLoading: boolean
   now: number
@@ -71,14 +71,16 @@ const eventsEl = ref<HTMLElement | null>(null)
 /** Follow the log's newest line unless the reader scrolled up to read an older one. */
 const stickToBottom = ref(true)
 
-const active = computed(() => (props.worker ? isCorchActive(props.worker) : false))
+const active = computed(() => (props.worker ? isCliMayteActive(props.worker) : false))
 const failed = computed(() => props.worker?.status === 'failed')
 // What it asked for (model, effort) and the model the CLI reported at init.
-const run = computed(() => (props.worker ? corchRunLabel(props.worker) : null))
+const run = computed(() => (props.worker ? climayteRunLabel(props.worker) : null))
 // Every turn's closing text, when there was more than one (field note 13: a repo's Stop hook can
 // force a turn after the report, whose text would otherwise hide it).
 const turnResults = computed(() => props.worker?.results ?? [])
-const queuedNote = computed(() => (props.worker ? corchQueuedNote(props.worker, props.now) : null))
+const queuedNote = computed(() =>
+  props.worker ? climayteQueuedNote(props.worker, props.now) : null,
+)
 /** Its transcript is only on the account it last ran on, so Continue cannot move it elsewhere. */
 const stuck = computed(
   () =>
@@ -86,14 +88,14 @@ const stuck = computed(
 )
 const errorHeading = computed(() => {
   const status = props.worker?.status
-  if (status === 'failed') return t('corch.error')
-  if (status === 'waiting') return t('corch.whyWaiting')
-  if (status === 'cancelled') return t('corch.beforeStopped')
-  return t('corch.whyStopped')
+  if (status === 'failed') return t('climayte.error')
+  if (status === 'waiting') return t('climayte.whyWaiting')
+  if (status === 'cancelled') return t('climayte.beforeStopped')
+  return t('climayte.whyStopped')
 })
 const stopLabel = computed(() => {
   const n = props.worker?.pending.length ?? 0
-  return n ? t('corch.stopKeeps', { n }, n) : t('corch.stop')
+  return n ? t('climayte.stopKeeps', { n }, n) : t('climayte.stop')
 })
 /** Only a finished task can be judged: done or failed (a stopped one never finished its work). */
 const finished = computed(
@@ -103,13 +105,13 @@ const verdicts = computed(() => props.worker?.verdicts ?? [])
 const latestVerdict = computed(() => verdicts.value[verdicts.value.length - 1] ?? null)
 /** `Opus 5.5 · xhigh` for one verdict's setting; the CLI default where it asked for none. */
 const verdictRun = (v: { model: string | null; effort: string | null }) =>
-  `${v.model ? modelName(v.model) : t('corch.runDefault')} · ${v.effort ?? t('corch.runDefault')}`
+  `${v.model ? modelName(v.model) : t('climayte.runDefault')} · ${v.effort ?? t('climayte.runDefault')}`
 
 function duration(totalS: number): string {
   const s = Math.floor(totalS % 60)
   const m = Math.floor(totalS / 60)
-  if (m >= 60) return t('corch.hours', { h: Math.floor(m / 60), m: m % 60 })
-  return m > 0 ? t('corch.minutes', { m, s }) : t('corch.seconds', { s })
+  if (m >= 60) return t('climayte.hours', { h: Math.floor(m / 60), m: m % 60 })
+  return m > 0 ? t('climayte.minutes', { m, s }) : t('climayte.seconds', { s })
 }
 
 // The details popover (started, turns, model, thinking, group) opens on hover like UsageBadge's,
@@ -180,14 +182,14 @@ async function onSend(urgent = false) {
   if (!w || !text || sending.value) return
   sending.value = true
   try {
-    const r = await sendCorchWorker(w.id, text, urgent)
+    const r = await sendCliMayteWorker(w.id, text, urgent)
     if (r.ok) {
       followUp.value = ''
       toast.success(r.message)
       emit('changed')
-    } else toast.error(r.message || t('corch.sendFailed'))
+    } else toast.error(r.message || t('climayte.sendFailed'))
   } catch {
-    toast.error(t('corch.sendFailed'))
+    toast.error(t('climayte.sendFailed'))
   } finally {
     sending.value = false
   }
@@ -201,7 +203,7 @@ async function onVerdict(verdict: 'pass' | 'fail') {
   judging.value = true
   try {
     const note = failNote.value.trim()
-    const r = await postCorchVerdict(
+    const r = await postCliMayteVerdict(
       w.id,
       verdict === 'pass'
         ? { verdict, by: 'owner' }
@@ -212,13 +214,13 @@ async function onVerdict(verdict: 'pass' | 'fail') {
       failNote.value = ''
       toast.success(
         r.next
-          ? t('corch.verdictSentBack', { model: modelName(r.next.model), effort: r.next.effort })
-          : r.message || t('corch.verdictSaved'),
+          ? t('climayte.verdictSentBack', { model: modelName(r.next.model), effort: r.next.effort })
+          : r.message || t('climayte.verdictSaved'),
       )
       emit('changed')
-    } else toast.error(r.message || t('corch.verdictSaveFailed'))
+    } else toast.error(r.message || t('climayte.verdictSaveFailed'))
   } catch {
-    toast.error(t('corch.verdictSaveFailed'))
+    toast.error(t('climayte.verdictSaveFailed'))
   } finally {
     judging.value = false
   }
@@ -229,12 +231,12 @@ async function onStop() {
   if (!w || stopping.value) return
   stopping.value = true
   try {
-    const r = await cancelCorch({ id: w.id })
+    const r = await cancelCliMayte({ id: w.id })
     const kept = r.keptMessages?.[w.id] ?? 0
-    toast.success(kept ? t('corch.stoppedKept', { n: kept }, kept) : t('corch.stopped'))
+    toast.success(kept ? t('climayte.stoppedKept', { n: kept }, kept) : t('climayte.stopped'))
     emit('changed')
   } catch {
-    toast.error(t('corch.stopFailed'))
+    toast.error(t('climayte.stopFailed'))
   } finally {
     stopping.value = false
   }
@@ -244,7 +246,7 @@ async function onStop() {
 <template>
   <section class="flex min-w-0 flex-col overflow-hidden rounded-lg border bg-card" :aria-label="worker?.title">
     <p v-if="!worker" class="px-4 py-12 text-center text-sm text-muted-foreground">
-      {{ $t('corch.selectHint') }}
+      {{ $t('climayte.selectHint') }}
     </p>
     <template v-else>
       <header class="flex flex-col gap-3 border-b px-4 py-3">
@@ -272,7 +274,7 @@ async function onStop() {
              else is one hover away: the token split on the tokens, the rest behind the info button. -->
         <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div class="flex min-w-0 flex-wrap items-center gap-1.5">
-            <CorchStatusBadge :status="worker.status" />
+            <CliMayteStatusBadge :status="worker.status" />
             <Badge
               v-if="latestVerdict"
               :variant="latestVerdict.verdict === 'pass' ? 'success' : 'destructive'"
@@ -281,21 +283,21 @@ async function onStop() {
             >
               <ThumbsUp v-if="latestVerdict.verdict === 'pass'" aria-hidden="true" />
               <ThumbsDown v-else aria-hidden="true" />
-              {{ latestVerdict.verdict === 'pass' ? $t('corch.verdictPassed') : $t('corch.verdictFailed') }}
+              {{ latestVerdict.verdict === 'pass' ? $t('climayte.verdictPassed') : $t('climayte.verdictFailed') }}
             </Badge>
             <Badge
               variant="outline"
               class="h-5 max-w-[14rem] text-2xs"
-              :title="`${$t('corch.detailAccount')}: ${worker.account ?? $t('corch.noAccount')}`"
+              :title="`${$t('climayte.detailAccount')}: ${worker.account ?? $t('climayte.noAccount')}`"
             >
               <UserRound aria-hidden="true" />
-              <span class="truncate">{{ worker.account ?? $t('corch.noAccount') }}</span>
+              <span class="truncate">{{ worker.account ?? $t('climayte.noAccount') }}</span>
             </Badge>
-            <Badge variant="muted" class="h-5 text-2xs tabular-nums" :title="$t('corch.detailRan')">
+            <Badge variant="muted" class="h-5 text-2xs tabular-nums" :title="$t('climayte.detailRan')">
               <Timer aria-hidden="true" />
               {{ duration(worker.ranS) }}
             </Badge>
-            <Badge v-if="worker.kind" variant="muted" class="h-5 text-2xs" :title="$t('corch.detailKind')">
+            <Badge v-if="worker.kind" variant="muted" class="h-5 text-2xs" :title="$t('climayte.detailKind')">
               {{ worker.kind }}
             </Badge>
           </div>
@@ -306,8 +308,8 @@ async function onStop() {
                 size="icon-sm"
                 :class="latestVerdict?.verdict === 'pass' ? 'text-success' : 'text-muted-foreground'"
                 :disabled="judging"
-                :aria-label="$t('corch.verdictUp')"
-                :title="$t('corch.verdictUp')"
+                :aria-label="$t('climayte.verdictUp')"
+                :title="$t('climayte.verdictUp')"
                 @click="onVerdict('pass')"
               >
                 <ThumbsUp />
@@ -319,19 +321,19 @@ async function onStop() {
                     size="icon-sm"
                     :class="latestVerdict?.verdict === 'fail' ? 'text-destructive' : 'text-muted-foreground'"
                     :disabled="judging"
-                    :aria-label="$t('corch.verdictDown')"
-                    :title="$t('corch.verdictDown')"
+                    :aria-label="$t('climayte.verdictDown')"
+                    :title="$t('climayte.verdictDown')"
                   >
                     <ThumbsDown />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent align="end" class="w-72">
                   <form class="flex flex-col gap-2" @submit.prevent="onVerdict('fail')">
-                    <label for="corch-verdict-note" class="text-xs font-medium">
-                      {{ $t('corch.verdictWhatWrong') }}
+                    <label for="climayte-verdict-note" class="text-xs font-medium">
+                      {{ $t('climayte.verdictWhatWrong') }}
                     </label>
                     <Textarea
-                      id="corch-verdict-note"
+                      id="climayte-verdict-note"
                       v-model="failNote"
                       rows="1"
                       class="min-h-9 resize-y"
@@ -339,7 +341,7 @@ async function onStop() {
                       @keydown.enter.exact.prevent="onVerdict('fail')"
                     />
                     <Button type="submit" size="sm" class="self-end" :disabled="judging">
-                      <RotateCcw /> {{ $t('corch.verdictSendBack') }}
+                      <RotateCcw /> {{ $t('climayte.verdictSendBack') }}
                     </Button>
                   </form>
                 </PopoverContent>
@@ -353,7 +355,7 @@ async function onStop() {
                 >
                   <template v-if="worker.tokens">
                     <span class="text-base font-semibold leading-none">{{ formatTokens(tokenTotal(worker.tokens)) }}</span>
-                    <span class="text-xs text-muted-foreground">{{ $t('corch.offloadedTokens') }}</span>
+                    <span class="text-xs text-muted-foreground">{{ $t('climayte.offloadedTokens') }}</span>
                     <span aria-hidden="true" class="text-xs text-muted-foreground">·</span>
                     <span class="text-xs text-muted-foreground">${{ worker.costUsd.toFixed(2) }}</span>
                   </template>
@@ -363,7 +365,7 @@ async function onStop() {
               <TooltipContent side="bottom" align="end" class="flex-col items-start gap-0.5">
                 <span v-if="worker.tokens">
                   {{
-                    $t('corch.tokensBreakdown', {
+                    $t('climayte.tokensBreakdown', {
                       input: formatTokens(worker.tokens.input),
                       output: formatTokens(worker.tokens.output),
                       cacheRead: formatTokens(worker.tokens.cacheRead),
@@ -371,7 +373,7 @@ async function onStop() {
                     })
                   }}
                 </span>
-                <span>{{ $t('corch.detailCost') }} ${{ worker.costUsd.toFixed(2) }}: {{ $t('corch.detailCostHint') }}</span>
+                <span>{{ $t('climayte.detailCost') }} ${{ worker.costUsd.toFixed(2) }}: {{ $t('climayte.detailCostHint') }}</span>
               </TooltipContent>
             </Tooltip>
             <Popover :open="moreOpen" @update:open="onMoreOpenChange">
@@ -380,7 +382,7 @@ async function onStop() {
                   variant="ghost"
                   size="icon-sm"
                   :class="run?.differs ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'"
-                  :aria-label="$t('corch.detailMore')"
+                  :aria-label="$t('climayte.detailMore')"
                   @mouseenter="onMoreEnter"
                   @mouseleave="onMoreLeave"
                 >
@@ -397,43 +399,43 @@ async function onStop() {
                 @mouseleave="onMoreLeave"
               >
                 <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1">
-                  <dt class="text-muted-foreground">{{ $t('corch.detailStarted') }}</dt>
+                  <dt class="text-muted-foreground">{{ $t('climayte.detailStarted') }}</dt>
                   <dd>
                     <time
                       :datetime="new Date(worker.createdAt).toISOString()"
                       :title="new Date(worker.createdAt).toLocaleString()"
                     >{{ formatAgo(now, worker.createdAt) }}</time>
                   </dd>
-                  <dt class="text-muted-foreground">{{ $t('corch.detailTurns') }}</dt>
+                  <dt class="text-muted-foreground">{{ $t('climayte.detailTurns') }}</dt>
                   <dd class="tabular-nums">{{ worker.turns }}</dd>
-                  <dt class="text-muted-foreground">{{ $t('corch.detailModel') }}</dt>
+                  <dt class="text-muted-foreground">{{ $t('climayte.detailModel') }}</dt>
                   <dd
                     :class="run?.differs ? 'text-amber-600 dark:text-amber-400' : ''"
                     :title="[worker.model, worker.reportedModel].filter(Boolean).join(' / ')"
                   >
                     {{
                       run?.differs
-                        ? $t('corch.modelAskedRan', { asked: run.model, ran: run.ran })
-                        : (run?.ran ?? run?.model ?? $t('corch.runDefault'))
+                        ? $t('climayte.modelAskedRan', { asked: run.model, ran: run.ran })
+                        : (run?.ran ?? run?.model ?? $t('climayte.runDefault'))
                     }}
                   </dd>
-                  <dt class="text-muted-foreground">{{ $t('corch.detailEffort') }}</dt>
+                  <dt class="text-muted-foreground">{{ $t('climayte.detailEffort') }}</dt>
                   <dd>
-                    {{ worker.effort ?? $t('corch.runDefault') }}
-                    <span v-if="worker.auto" class="text-muted-foreground">({{ $t('corch.pickedByCorch') }})</span>
+                    {{ worker.effort ?? $t('climayte.runDefault') }}
+                    <span v-if="worker.auto" class="text-muted-foreground">({{ $t('climayte.pickedByCliMayte') }})</span>
                   </dd>
-                  <dt class="text-muted-foreground">{{ $t('corch.detailGroup') }}</dt>
+                  <dt class="text-muted-foreground">{{ $t('climayte.detailGroup') }}</dt>
                   <dd class="mono break-all">{{ worker.group }}</dd>
                 </dl>
                 <div v-if="verdicts.length" class="mt-3 flex flex-col gap-1.5 border-t pt-2">
-                  <h4 class="text-xs font-medium">{{ $t('corch.verdicts') }}</h4>
+                  <h4 class="text-xs font-medium">{{ $t('climayte.verdicts') }}</h4>
                   <ol class="flex flex-col gap-1.5 text-xs">
                     <li v-for="(v, i) in [...verdicts].reverse()" :key="i" class="flex flex-col gap-0.5">
                       <span class="flex flex-wrap items-center gap-x-1.5">
                         <ThumbsUp v-if="v.verdict === 'pass'" class="size-3 text-success" aria-hidden="true" />
                         <ThumbsDown v-else class="size-3 text-destructive" aria-hidden="true" />
                         <span :class="v.verdict === 'pass' ? 'text-success' : 'text-destructive'">
-                          {{ v.verdict === 'pass' ? $t('corch.verdictPassed') : $t('corch.verdictFailed') }}
+                          {{ v.verdict === 'pass' ? $t('climayte.verdictPassed') : $t('climayte.verdictFailed') }}
                         </span>
                         <time
                           class="text-muted-foreground"
@@ -445,7 +447,7 @@ async function onStop() {
                         <template v-if="v.pct !== null">
                           <span aria-hidden="true" class="text-muted-foreground">·</span>
                           <span class="tabular-nums text-muted-foreground">
-                            {{ $t('corch.verdictPct', { pct: v.pct.toFixed(1) }) }}
+                            {{ $t('climayte.verdictPct', { pct: v.pct.toFixed(1) }) }}
                           </span>
                         </template>
                       </span>
@@ -462,17 +464,17 @@ async function onStop() {
       <div class="flex flex-col gap-4 px-4 py-3">
         <div v-if="worker.attempts.length" class="flex flex-col gap-1.5">
           <h4 class="flex items-baseline justify-between gap-2 text-xs font-medium">
-            {{ $t('corch.attempts') }}
-            <span class="font-normal text-muted-foreground">{{ $t('corch.switchedAccount', worker.moves) }}</span>
+            {{ $t('climayte.attempts') }}
+            <span class="font-normal text-muted-foreground">{{ $t('climayte.switchedAccount', worker.moves) }}</span>
           </h4>
           <ol class="flex flex-col gap-1 text-xs">
             <li v-for="(a, i) in worker.attempts" :key="i" class="flex min-w-0 items-center gap-2">
               <span class="w-4 shrink-0 text-end tabular-nums text-muted-foreground">{{ i + 1 }}.</span>
-              <span class="max-w-[14rem] shrink-0 truncate font-medium" :title="corchAccountLabel(a.account)">
-                {{ corchAccountLabel(a.account) }}
+              <span class="max-w-[14rem] shrink-0 truncate font-medium" :title="climayteAccountLabel(a.account)">
+                {{ climayteAccountLabel(a.account) }}
               </span>
-              <Badge :variant="CORCH_OUTCOME[a.outcome].variant" class="shrink-0">
-                {{ $t(CORCH_OUTCOME[a.outcome].label) }}
+              <Badge :variant="CLIMAYTE_OUTCOME[a.outcome].variant" class="shrink-0">
+                {{ $t(CLIMAYTE_OUTCOME[a.outcome].label) }}
               </Badge>
               <span v-if="a.notice" class="min-w-0 truncate text-muted-foreground" :title="a.notice">
                 {{ a.notice }}
@@ -482,7 +484,7 @@ async function onStop() {
         </div>
 
         <div v-if="worker.pending.length" class="flex flex-col gap-1.5">
-          <h4 class="text-xs font-medium">{{ $t('corch.pending', { n: worker.pending.length }) }}</h4>
+          <h4 class="text-xs font-medium">{{ $t('climayte.pending', { n: worker.pending.length }) }}</h4>
           <ol class="flex flex-col gap-1 text-xs">
             <li
               v-for="(m, i) in worker.pending"
@@ -493,7 +495,7 @@ async function onStop() {
         </div>
 
         <div v-if="worker.result" class="flex flex-col gap-1.5">
-          <h4 class="text-xs font-medium">{{ $t('corch.result') }}</h4>
+          <h4 class="text-xs font-medium">{{ $t('climayte.result') }}</h4>
           <!-- One bounded box for the whole report, every turn in it, so the panel never grows a
                scroll of its own and no box scrolls inside another. -->
           <div
@@ -502,7 +504,7 @@ async function onStop() {
           >
             <div v-for="(text, i) in turnResults" :key="i" class="flex flex-col gap-1">
               <span class="text-[11px] text-muted-foreground">
-                {{ $t('corch.resultTurn', { n: i + 1, total: turnResults.length }) }}
+                {{ $t('climayte.resultTurn', { n: i + 1, total: turnResults.length }) }}
               </span>
               <pre class="mono whitespace-pre-wrap break-words text-xs">{{ text }}</pre>
             </div>
@@ -523,7 +525,7 @@ async function onStop() {
         </div>
 
         <div class="flex flex-col gap-1.5">
-          <h4 class="text-xs font-medium">{{ $t('corch.events') }}</h4>
+          <h4 class="text-xs font-medium">{{ $t('climayte.events') }}</h4>
           <ul
             v-if="worker.events?.length"
             ref="eventsEl"
@@ -533,23 +535,23 @@ async function onStop() {
             <li v-for="(e, i) in worker.events" :key="i" class="whitespace-pre-wrap break-words">{{ e }}</li>
           </ul>
           <p v-else class="text-xs text-muted-foreground">
-            {{ eventsLoading ? $t('corch.loadingEvents') : $t('corch.noEvents') }}
+            {{ eventsLoading ? $t('climayte.loadingEvents') : $t('climayte.noEvents') }}
           </p>
         </div>
 
-        <CorchJournal :worker-id="worker.id" :group="worker.group" :updated-at="worker.updatedAt" />
+        <CliMayteJournal :worker-id="worker.id" :group="worker.group" :updated-at="worker.updatedAt" />
       </div>
 
       <form class="flex flex-col gap-1.5 border-t px-4 py-3" @submit.prevent="onSend()">
-        <label for="corch-follow-up" class="text-xs font-medium">
-          {{ active ? $t('corch.messageLabel') : $t('corch.continueLabel') }}
+        <label for="climayte-follow-up" class="text-xs font-medium">
+          {{ active ? $t('climayte.messageLabel') : $t('climayte.continueLabel') }}
         </label>
         <Textarea
-          id="corch-follow-up"
+          id="climayte-follow-up"
           v-model="followUp"
           rows="2"
           class="min-h-14 resize-y"
-          :placeholder="$t('corch.messagePlaceholder')"
+          :placeholder="$t('climayte.messagePlaceholder')"
           :disabled="sending"
           @keydown.ctrl.enter.prevent="onSend()"
           @keydown.meta.enter.prevent="onSend()"
@@ -557,9 +559,9 @@ async function onStop() {
         <div class="flex items-center justify-between gap-3">
           <span class="text-2xs text-muted-foreground">
             {{
-              active ? $t('corch.messageHint') : stuck ? $t('corch.continueHintStuck') : $t('corch.continueHint')
+              active ? $t('climayte.messageHint') : stuck ? $t('climayte.continueHintStuck') : $t('climayte.continueHint')
             }}
-            <span class="hidden sm:inline">· {{ $t('corch.sendShortcut') }}</span>
+            <span class="hidden sm:inline">· {{ $t('climayte.sendShortcut') }}</span>
           </span>
           <div class="flex shrink-0 items-center gap-1.5">
             <Button
@@ -568,15 +570,15 @@ async function onStop() {
               variant="outline"
               class="shrink-0"
               :disabled="sending || !followUp.trim()"
-              :title="$t('corch.sendNowHint')"
+              :title="$t('climayte.sendNowHint')"
               @click="onSend(true)"
             >
-              <Zap /> {{ $t('corch.sendNow') }}
+              <Zap /> {{ $t('climayte.sendNow') }}
             </Button>
             <Button type="submit" class="shrink-0" :disabled="sending || !followUp.trim()">
               <Send v-if="active" />
               <RotateCcw v-else />
-              {{ active ? $t('corch.send') : $t('corch.continue') }}
+              {{ active ? $t('climayte.send') : $t('climayte.continue') }}
             </Button>
           </div>
         </div>

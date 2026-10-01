@@ -45,7 +45,7 @@ describe('parseAppView', () => {
     expect(parseAppView('instances')).toBe('instances')
     expect(parseAppView('cli')).toBe('cli')
     expect(parseAppView('analytics')).toBe('analytics')
-    // Corch was folded into the CLI tab: a window last on it opens there, not on a dead tab.
+    // The Corch tab was folded into the CLI tab: a window last on it opens there, not on a dead tab.
     expect(parseAppView('corch')).toBe('cli')
     // A downgrade-era or hand-edited value must not render a tab the app does not have.
     expect(parseAppView('quantum')).toBeNull()

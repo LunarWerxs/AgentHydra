@@ -1,4 +1,4 @@
-// Corch view (components/CorchView.vue, CorchWorkerDetail.vue) and the CLI Quick add row
+// CliMayte view (components/CliMayteView.vue, CliMayteWorkerDetail.vue) and the CLI Quick add row
 // (CliQuickAdd.vue, in CliInstancesSection.vue; both sit on the CLI tab). Plain words on purpose:
 // the owner reads this tab, so no "moves", "groups" or "turns" without saying what they mean
 // (2026-09-30 review).
@@ -28,14 +28,14 @@ export default {
   qaCancelled: 'Sign-in cancelled',
   qaStartFailed: 'Could not start the sign-in',
   // --- view ---
-  title: 'Corch',
+  title: 'CliMayte',
   subtitle:
     'Tasks a chat handed to your Claude CLI accounts. When an account hits its usage limit, the task moves to another one by itself.',
   refresh: 'Refresh',
   emptyTitle: 'No tasks yet',
   empty:
-    'Ask any chat to corch a task (run it on your Claude CLI accounts) and each piece shows up here.',
-  loadFailed: 'Could not load the Corch tasks',
+    'Ask any chat to climayte a task (run it on your Claude CLI accounts) and each piece shows up here.',
+  loadFailed: 'Could not load the CliMayte tasks',
   loadFailedTitle: 'Could not reach AgentHydra',
   loadFailedBody:
     'Your tasks are not lost: they are kept on disk. Retrying by itself every 15 seconds.',
@@ -102,38 +102,38 @@ export default {
   sendNowHint:
     'Stops the work it is doing and continues the same conversation with this message first. Anything already waiting follows.',
   stopFailed: 'Could not stop the task',
-  // --- verdicts: a thumbs up or down on a finished task, so Corch learns what each kind needs ---
+  // --- verdicts: a thumbs up or down on a finished task, so CliMayte learns what each kind needs ---
   detailKind: 'Kind of task',
-  pickedByCorch: 'picked by Corch',
+  pickedByCliMayte: 'picked by CliMayte',
   verdictUp: 'Good result',
   verdictDown: 'Not good: send it back',
   verdictWhatWrong: 'What was wrong?',
   verdictSendBack: 'Send back',
   verdictSentBack: 'Sent back on {model} · {effort}',
-  verdictSaved: 'Thanks: Corch will remember that',
+  verdictSaved: 'Thanks: CliMayte will remember that',
   verdictSaveFailed: 'Could not save the verdict',
   verdictPassed: 'Passed',
   verdictFailed: 'Failed',
-  // --- priority (corch_priority): queued and waiting work starts highest first ---
+  // --- priority (climayte_priority): queued and waiting work starts highest first ---
   rowPriority: 'P{n}',
   rowPriorityHint:
     'Priority {n}: when it waits for an account, it starts ahead of tasks with a lower priority',
   verdicts: 'Verdicts',
   verdictPct: '{pct}% of a Pro window',
-  // --- the scorecard (CorchView.vue): what passed per kind of task, and what it cost ---
+  // --- the scorecard (CliMayteView.vue): what passed per kind of task, and what it cost ---
   scoreTitle: 'What works',
   scoreHint:
-    'Per kind of task, every model and thinking level that got a verdict: how often it passed, and what a task cost as a share of a Pro 5-hour window. Corch picks the cheapest setting that keeps passing.',
+    'Per kind of task, every model and thinking level that got a verdict: how often it passed, and what a task cost as a share of a Pro 5-hour window. CliMayte picks the cheapest setting that keeps passing.',
   scoreSummary:
     '{pass} passed, {fail} failed, on {n} kind of task | {pass} passed, {fail} failed, on {n} kinds of task',
   scoreNone: 'no verdicts yet',
   scoreEmpty:
-    'No verdicts yet. Give a finished task a thumbs up or down and Corch starts learning which model and thinking level each kind of task needs.',
+    'No verdicts yet. Give a finished task a thumbs up or down and CliMayte starts learning which model and thinking level each kind of task needs.',
   scorePasses: '{n} passed',
   scoreFails: '{n} failed',
   scorePerTask: 'about {pct}% of a Pro window per task',
   scoreNextPick: 'next pick',
-  scoreNextPickHint: 'What Corch picks next for this kind of task',
+  scoreNextPickHint: 'What CliMayte picks next for this kind of task',
   // --- status chips (sentence case, each with an icon so colour is never the only signal) ---
   statusQueued: 'Queued',
   statusRunning: 'Running',
@@ -147,7 +147,7 @@ export default {
   statusWaitingHint:
     'Every account it may use is at its usage limit or signed out. It resumes by itself when one frees up.',
   statusCheckingHint:
-    'The worker says it is done; Corch is running its check command. A pass is recorded, a fail goes back to it one step up.',
+    'The worker says it is done; CliMayte is running its check command. A pass is recorded, a fail goes back to it one step up.',
   statusDoneHint: 'Finished.',
   statusFailedHint: 'Stopped on an error.',
   statusCancelledHint: 'Stopped by hand. Send a message to continue it.',
@@ -161,13 +161,13 @@ export default {
   outcomeCancelled: 'stopped',
   outcomeInterrupted: 'interrupted by a restart',
   outcomeHandoff: 'handed off',
-  // --- why a queued task that has already run is queued again (corchQueuedNote) ---
+  // --- why a queued task that has already run is queued again (climayteQueuedNote) ---
   queuedLimit: 'Moving to another account: this one reached its limit.',
   queuedSignedOut: 'Moving to another account: this one is signed out.',
   queuedHandoff: 'Continuing in a fresh session on the account with the most room.',
   queuedRetry: 'Retrying in {s}s (try {n} of 3).',
   queuedRestart: 'Resuming after AgentHydra restarted.',
-  // --- the orchestration log (CorchJournal.vue; server/src/corch-journal.ts): one line per change ---
+  // --- the orchestration log (CliMayteJournal.vue; server/src/climayte-journal.ts): one line per change ---
   log: {
     title: 'Log',
     scopeTask: 'This task',

@@ -872,8 +872,8 @@ export const cancelQuickAdd = (id: string) =>
     { method: 'POST' },
   )
 
-// --- Corch workers (server/src/corch.ts, docs/CORCH.md) ----------------------
-export type CorchStatus =
+// --- CliMayte workers (server/src/climayte.ts, docs/CLIMAYTE.md) ----------------------
+export type CliMayteStatus =
   | 'queued'
   | 'running'
   | 'waiting'
@@ -881,7 +881,7 @@ export type CorchStatus =
   | 'done'
   | 'failed'
   | 'cancelled'
-export type CorchAttemptOutcome =
+export type CliMayteAttemptOutcome =
   | 'running'
   | 'done'
   | 'quota'
@@ -891,12 +891,12 @@ export type CorchAttemptOutcome =
   | 'handoff'
   | 'error'
   | 'cancelled'
-export interface CorchAccountRef {
+export interface CliMayteAccountRef {
   id: string
   num: number | null
   name: string
 }
-export interface CorchWorkerView {
+export interface CliMayteWorkerView {
   id: string
   group: string
   title: string
@@ -906,14 +906,14 @@ export interface CorchWorkerView {
   model: string | null
   effort: string | null
   accounts: string[] | null
-  status: CorchStatus
+  status: CliMayteStatus
   sessionId: string | null
   accountId: string | null
   /** `#<num> <name>` or null */
   account: string | null
   attempts: {
-    account: CorchAccountRef
-    outcome: CorchAttemptOutcome
+    account: CliMayteAccountRef
+    outcome: CliMayteAttemptOutcome
     notice: string | null
     /** What the attempt was launched with (absent on attempts recorded earlier). */
     requested?: { model: string | null; effort: string | null }
@@ -931,7 +931,7 @@ export interface CorchWorkerView {
   lastActivity: string | null
   costUsd: number
   /** Tokens its CLI sessions ran, summed over every attempt (absent on tasks recorded earlier). */
-  tokens?: CorchTokens
+  tokens?: CliMayteTokens
   turns: number
   moves: number
   retries: number
@@ -942,15 +942,15 @@ export interface CorchWorkerView {
   updatedAt: number
   /** What kind of task it is: code, debug, review, sweep, mechanical, docs, trivial. */
   kind?: string | null
-  /** Corch picked the model and thinking level itself (from the scorecard). */
+  /** CliMayte picked the model and thinking level itself (from the scorecard). */
   auto?: boolean
   /** Queued and waiting work starts highest first, then oldest first. Absent: 0. */
   priority?: number
   /** The thumbs up or down it got, oldest first. */
-  verdicts?: CorchVerdict[]
+  verdicts?: CliMayteVerdict[]
 }
-/** One thumbs up or down on a finished task (server/src/corch.ts). */
-export interface CorchVerdict {
+/** One thumbs up or down on a finished task (server/src/climayte.ts). */
+export interface CliMayteVerdict {
   at: number
   verdict: 'pass' | 'fail'
   note: string | null
@@ -960,9 +960,9 @@ export interface CorchVerdict {
   pct: number | null
 }
 /** What passed per kind of task, per model and thinking level, and what it cost. */
-export interface CorchScorecard {
+export interface CliMayteScorecard {
   unitsPerPercent: number
-  /** Sorted by kind, then cheapest first; `pick` marks what Corch would choose next for that kind. */
+  /** Sorted by kind, then cheapest first; `pick` marks what CliMayte would choose next for that kind. */
   rows: {
     kind: string
     model: string | null
@@ -973,77 +973,79 @@ export interface CorchScorecard {
     pick: boolean
   }[]
 }
-export interface CorchTask {
+export interface CliMayteTask {
   prompt: string
   cwd: string
   title?: string
   model?: string
   effort?: string
 }
-/** Tokens a Corch session ran (server/src/corch-lib.ts CorchTokens). */
-export interface CorchTokens {
+/** Tokens a CliMayte session ran (server/src/climayte-lib.ts CliMayteTokens). */
+export interface CliMayteTokens {
   input: number
   output: number
   cacheRead: number
   cacheWrite: number
 }
-/** What Corch has offloaded over every task on record: the Corch view's counter. */
-export interface CorchTotals {
+/** What CliMayte has offloaded over every task on record: the CliMayte view's counter. */
+export interface CliMayteTotals {
   tasks: number
   /** Runs: every start of the CLI (retries, resumes, handoffs included). */
   sessions: number
-  runsByOutcome?: Partial<Record<CorchAttemptOutcome, number>>
+  runsByOutcome?: Partial<Record<CliMayteAttemptOutcome, number>>
   /** Distinct CLI conversations (a handoff starts one; a resume or a move continues one). */
   cliSessions?: number
-  tokens: CorchTokens
+  tokens: CliMayteTokens
   costUsd: number
 }
-export const getCorchTotals = () => j<CorchTotals>('/api/corch/totals')
-export const listCorchWorkers = (filter: { group?: string; active?: boolean } = {}) => {
+export const getCliMayteTotals = () => j<CliMayteTotals>('/api/climayte/totals')
+export const listCliMayteWorkers = (filter: { group?: string; active?: boolean } = {}) => {
   const q = new URLSearchParams()
   if (filter.group) q.set('group', filter.group)
   if (filter.active) q.set('active', '1')
   const qs = q.toString()
-  return j<CorchWorkerView[]>(`/api/corch/workers${qs ? `?${qs}` : ''}`)
+  return j<CliMayteWorkerView[]>(`/api/climayte/workers${qs ? `?${qs}` : ''}`)
 }
 /** One worker plus its last 60 summarised event lines. */
-export const getCorchWorker = (id: string) =>
-  j<(CorchWorkerView & { events: string[] }) | null>(`/api/corch/workers/${encodeURIComponent(id)}`)
-export const runCorch = (input: {
-  tasks: CorchTask[]
+export const getCliMayteWorker = (id: string) =>
+  j<(CliMayteWorkerView & { events: string[] }) | null>(
+    `/api/climayte/workers/${encodeURIComponent(id)}`,
+  )
+export const runCliMayte = (input: {
+  tasks: CliMayteTask[]
   group?: string
   accounts?: string[]
   perAccount?: number
 }) =>
-  j<{ group: string; workers: CorchWorkerView[] }>('/api/corch/workers', {
+  j<{ group: string; workers: CliMayteWorkerView[] }>('/api/climayte/workers', {
     method: 'POST',
     body: JSON.stringify(input),
   })
 /** `urgent`: stop a running task's work and continue its session with this message first. */
-export const sendCorchWorker = (id: string, text: string, urgent = false) =>
+export const sendCliMayteWorker = (id: string, text: string, urgent = false) =>
   j<{ ok: boolean; message: string; urgent?: boolean }>(
-    `/api/corch/workers/${encodeURIComponent(id)}/send`,
+    `/api/climayte/workers/${encodeURIComponent(id)}/send`,
     { method: 'POST', body: JSON.stringify({ text, urgent }) },
   )
-export const getCorchScorecard = () => j<CorchScorecard>('/api/corch/scorecard')
+export const getCliMayteScorecard = () => j<CliMayteScorecard>('/api/climayte/scorecard')
 /** A thumbs up or down on a finished task; a fail with `retry` sends it back one rung up the
  *  model/thinking ladder, and `next` says which. */
-export const postCorchVerdict = (
+export const postCliMayteVerdict = (
   id: string,
   body: { verdict: 'pass' | 'fail'; note?: string; retry?: boolean; by?: 'owner' },
 ) =>
   j<{ ok: boolean; message: string; next?: { model: string; effort: string } | null }>(
-    `/api/corch/workers/${encodeURIComponent(id)}/verdict`,
+    `/api/climayte/workers/${encodeURIComponent(id)}/verdict`,
     { method: 'POST', body: JSON.stringify(body) },
   )
 /** `keptMessages`: per stopped task, the waiting messages kept for when it is continued. */
-export const cancelCorch = (filter: { id?: string; group?: string }) =>
-  j<{ cancelled: string[]; keptMessages?: Record<string, number> }>('/api/corch/cancel', {
+export const cancelCliMayte = (filter: { id?: string; group?: string }) =>
+  j<{ cancelled: string[]; keptMessages?: Record<string, number> }>('/api/climayte/cancel', {
     method: 'POST',
     body: JSON.stringify(filter),
   })
-/** One line of Corch's orchestration journal (server/src/corch-journal.ts CorchJournalEntry). */
-export interface CorchJournalEntry {
+/** One line of CliMayte's orchestration journal (server/src/climayte-journal.ts CliMayteJournalEntry). */
+export interface CliMayteJournalEntry {
   ts: string
   id: string
   group: string
@@ -1093,12 +1095,12 @@ export interface CorchJournalEntry {
   accounts?: number
 }
 /** The journal for one task or one hand-off, oldest first (the newest `limit`). */
-export const getCorchJournal = (filter: { id?: string; group?: string; limit?: number }) => {
+export const getCliMayteJournal = (filter: { id?: string; group?: string; limit?: number }) => {
   const q = new URLSearchParams()
   if (filter.id) q.set('id', filter.id)
   if (filter.group) q.set('group', filter.group)
   if (filter.limit) q.set('limit', String(filter.limit))
-  return j<CorchJournalEntry[]>(`/api/corch/journal?${q.toString()}`)
+  return j<CliMayteJournalEntry[]>(`/api/climayte/journal?${q.toString()}`)
 }
 
 // --- Codex CLI + Desktop instances -------------------------------------------

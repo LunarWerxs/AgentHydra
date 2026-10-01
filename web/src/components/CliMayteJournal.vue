@@ -1,24 +1,24 @@
 <script setup lang="ts">
-// The orchestration log of the selected Corch task, or of everything handed off with it
-// (server/src/corch-journal.ts, GET /api/corch/journal). One line per change: where each attempt ran
+// The orchestration log of the selected CliMayte task, or of everything handed off with it
+// (server/src/climayte-journal.ts, GET /api/climayte/journal). One line per change: where each attempt ran
 // and why that account was picked, limits, moves, handoffs, messages, retries, the finish and its
-// cost. The owner asked for it on the first real corch run ("we probably also need logging in
-// Corch", 2026-09-30). The server keeps the facts; the words are rendered here, through vue-i18n.
+// cost. The owner asked for it on the first real climayte run ("we probably also need logging in
+// CliMayte", 2026-09-30). The server keeps the facts; the words are rendered here, through vue-i18n.
 //
 // Reloads when the task changes (its `updatedAt`), and every 10 s for a hand-off's log, whose other
 // tasks change without this one noticing.
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
-import type { CorchJournalEntry } from '@/lib/api'
-import { getCorchJournal } from '@/lib/api'
-import { modelName } from '@/lib/corch-status'
+import type { CliMayteJournalEntry } from '@/lib/api'
+import { getCliMayteJournal } from '@/lib/api'
+import { modelName } from '@/lib/climayte-status'
 
 const props = defineProps<{ workerId: string; group: string; updatedAt: number }>()
 
 const { t } = useI18n()
 const scope = ref<'task' | 'group'>('task')
-const entries = ref<CorchJournalEntry[]>([])
+const entries = ref<CliMayteJournalEntry[]>([])
 const failed = ref(false)
 const loadedOnce = ref(false)
 let timer: number | null = null
@@ -27,7 +27,7 @@ let seq = 0
 async function load() {
   const mine = ++seq
   try {
-    const list = await getCorchJournal(
+    const list = await getCliMayteJournal(
       scope.value === 'task'
         ? { id: props.workerId, limit: 300 }
         : { group: props.group, limit: 300 },
@@ -71,64 +71,66 @@ const usd = (v: number | undefined) => `$${(v ?? 0).toFixed(2)}`
 const clock = (iso: string | undefined) => (iso ? new Date(iso).toLocaleString() : '?')
 
 /** The sentence for one entry. */
-function line(e: CorchJournalEntry): string {
+function line(e: CliMayteJournalEntry): string {
   const account = e.account ?? '?'
   const pick = { account, session: pct(e.sessionPct), week: pct(e.weekPct), active: e.active ?? 0 }
   switch (e.event) {
     case 'dispatched':
       return e.accounts
-        ? t('corch.log.dispatchedLimited', { cwd: e.cwd ?? '?', n: e.accounts })
-        : t('corch.log.dispatched', { cwd: e.cwd ?? '?' })
+        ? t('climayte.log.dispatchedLimited', { cwd: e.cwd ?? '?', n: e.accounts })
+        : t('climayte.log.dispatched', { cwd: e.cwd ?? '?' })
     case 'launched':
       return e.attempt && e.attempt > 1
-        ? t('corch.log.launchedAgain', { ...pick, attempt: e.attempt })
-        : t('corch.log.launched', pick)
+        ? t('climayte.log.launchedAgain', { ...pick, attempt: e.attempt })
+        : t('climayte.log.launched', pick)
     case 'moved':
-      return t(e.copied === false ? 'corch.log.movedEmpty' : 'corch.log.moved', {
+      return t(e.copied === false ? 'climayte.log.movedEmpty' : 'climayte.log.moved', {
         from: e.from ?? '?',
         account,
       })
     case 'limit':
-      return t('corch.log.limit', { account, until: clock(e.until) })
+      return t('climayte.log.limit', { account, until: clock(e.until) })
     case 'signed-out':
-      return t('corch.log.signedOut', { account, until: clock(e.until) })
+      return t('climayte.log.signedOut', { account, until: clock(e.until) })
     case 'handoff-requested':
       return typeof e.pct === 'number'
-        ? t('corch.log.handoffRequested', { account, pct: pct(e.pct) })
-        : t('corch.log.handoffAsked')
+        ? t('climayte.log.handoffRequested', { account, pct: pct(e.pct) })
+        : t('climayte.log.handoffAsked')
     case 'handoff-written':
-      return t('corch.log.handoffWritten', { account })
+      return t('climayte.log.handoffWritten', { account })
     case 'handoff-resumed':
-      return t('corch.log.handoffResumed', pick)
+      return t('climayte.log.handoffResumed', pick)
     case 'follow-up-queued':
       return e.urgent
-        ? t('corch.log.followUpUrgent')
-        : t('corch.log.followUpQueued', { n: e.pending ?? 1 })
+        ? t('climayte.log.followUpUrgent')
+        : t('climayte.log.followUpQueued', { n: e.pending ?? 1 })
     case 'follow-up-delivered':
-      return t('corch.log.followUpDelivered', { account })
+      return t('climayte.log.followUpDelivered', { account })
     case 'retry':
-      return t('corch.log.retry', { account, s: e.waitS ?? 0, n: e.retry ?? '?' })
+      return t('climayte.log.retry', { account, s: e.waitS ?? 0, n: e.retry ?? '?' })
     case 'interrupted':
-      return t('corch.log.interrupted', { account, n: e.retry ?? '?' })
+      return t('climayte.log.interrupted', { account, n: e.retry ?? '?' })
     case 'waiting':
-      return t('corch.log.waiting')
+      return t('climayte.log.waiting')
     case 'turn-done':
-      return t('corch.log.turnDone', { account, cost: usd(e.costUsd), turns: e.turns ?? 0 })
+      return t('climayte.log.turnDone', { account, cost: usd(e.costUsd), turns: e.turns ?? 0 })
     case 'turn-end':
-      return t('corch.log.turnEnd', { account })
+      return t('climayte.log.turnEnd', { account })
     case 'done':
-      return t('corch.log.done', { account, cost: usd(e.costUsd), total: usd(e.totalCostUsd) })
+      return t('climayte.log.done', { account, cost: usd(e.costUsd), total: usd(e.totalCostUsd) })
     case 'failed':
-      return e.account ? t('corch.log.failed', { account }) : t('corch.log.failedNoAccount')
+      return e.account ? t('climayte.log.failed', { account }) : t('climayte.log.failedNoAccount')
     case 'cancelled':
-      return e.pending ? t('corch.log.cancelledKept', { n: e.pending }) : t('corch.log.cancelled')
+      return e.pending
+        ? t('climayte.log.cancelledKept', { n: e.pending })
+        : t('climayte.log.cancelled')
     default:
       return String((e as { event: string }).event)
   }
 }
 
 /** The CLI's own words or the error, shown under the sentence. */
-const detail = (e: CorchJournalEntry) =>
+const detail = (e: CliMayteJournalEntry) =>
   e.error ??
   e.notice ??
   e.said ??
@@ -150,20 +152,20 @@ const rows = computed(() =>
 <template>
   <div class="flex flex-col gap-1.5">
     <div class="flex items-center justify-between gap-2">
-      <h4 class="text-xs font-medium">{{ $t('corch.log.title') }}</h4>
-      <div class="flex items-center gap-1" role="group" :aria-label="$t('corch.log.scopeLabel')">
+      <h4 class="text-xs font-medium">{{ $t('climayte.log.title') }}</h4>
+      <div class="flex items-center gap-1" role="group" :aria-label="$t('climayte.log.scopeLabel')">
         <Button
           size="xs"
           :variant="scope === 'task' ? 'secondary' : 'ghost'"
           :aria-pressed="scope === 'task'"
           @click="scope = 'task'"
-        >{{ $t('corch.log.scopeTask') }}</Button>
+        >{{ $t('climayte.log.scopeTask') }}</Button>
         <Button
           size="xs"
           :variant="scope === 'group' ? 'secondary' : 'ghost'"
           :aria-pressed="scope === 'group'"
           @click="scope = 'group'"
-        >{{ $t('corch.log.scopeGroup') }}</Button>
+        >{{ $t('climayte.log.scopeGroup') }}</Button>
       </div>
     </div>
     <ol
@@ -185,7 +187,7 @@ const rows = computed(() =>
       </li>
     </ol>
     <p v-else class="text-xs text-muted-foreground">
-      {{ failed ? $t('corch.log.loadFailed') : loadedOnce ? $t('corch.log.empty') : $t('corch.loadingEvents') }}
+      {{ failed ? $t('climayte.log.loadFailed') : loadedOnce ? $t('climayte.log.empty') : $t('climayte.loadingEvents') }}
     </p>
   </div>
 </template>

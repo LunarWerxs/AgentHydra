@@ -485,7 +485,7 @@ onUnmounted(() => stopPolling())
 </script>
 
 <template>
-  <!-- No border-t: the parent (CliView) separates this table from Corch with space instead. -->
+  <!-- No border-t: the parent (CliView) separates this table from CliMayte with space instead. -->
   <div>
     <!-- The shared header every instance table uses; the count says "x of y" when rows are
          elsewhere (see headingCount). Not collapsible: it is the CLI tab's own table, and folding
@@ -666,7 +666,7 @@ onUnmounted(() => stopPolling())
                    stacked tables stop lining up. Native title, not IconTooltip: this cell has no
                    other hover to extend, and the row above it already reveals its path this way. -->
               <span :title="nameOverflowTitle(inst.name)">{{ shortDisplayName(inst.name) }}</span>
-              <!-- How many Claude sessions run on this login right now, Corch's workers included.
+              <!-- How many Claude sessions run on this login right now, CliMayte's workers included.
                    Hidden at 0: an idle account needs no badge saying so. -->
               <IconTooltip
                 v-if="(inst.liveSessions ?? 0) > 0"
