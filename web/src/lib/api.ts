@@ -981,6 +981,8 @@ export interface CliMayteWorkerView {
     ceiling?: boolean
     /** Why it started, when the attempt before it ended done (server climayte-lib attemptCause). */
     because?: { cause: 'check' | 'sent-back' | 'follow-up'; detail: string | null }
+    /** What its session left running, ended with it (a background deploy, a server). */
+    left?: string[]
   }[]
   /** The model the CLI reported at init on the newest attempt that got that far (`model` and
    *  `effort` are what was asked for; null model or effort: the CLI's default). */

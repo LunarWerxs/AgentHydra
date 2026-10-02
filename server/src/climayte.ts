@@ -507,61 +507,88 @@ function stopCheck(w: CliMayteWorker): boolean {
  *  stopped at CHECK_TIMEOUT_MS, and run again when it never started or its runner died without an
  *  exit file. A worker no longer checking (cancelled meanwhile) has its check stopped. */
 function pollChecks(): void {
-  for (const w of workers.values()) {
-    // A check started before runners was a daemon child: the restart ended it, so it runs again.
-    if (w.status === 'checking' && !w.checkRunner) {
-      startCheck(w)
-      continue
-    }
-    const r = w.checkRunner
-    if (!r) continue
-    if (w.status !== 'checking') {
-      if (stopCheck(w)) changed(w)
-      continue
-    }
-    const before = r.pid
-    takeCheckPid(r)
-    if (r.pid !== before) changed(w)
-    const exit = readRunnerExit(r.exitFile)
-    if (exit) {
-      w.checkRunner = null
-      judgeCheck(
-        w,
-        exit.error ? null : exit.code,
-        exit.error ? `could not start: ${exit.error}` : tailText(r.log, 1500),
-      )
-      changed(w)
-      // Only once the verdict is saved: a daemon killed before that reads the same exit file again.
-      removeCheckFiles(r)
-      continue
-    }
-    const age = Date.now() - r.launchedAt
-    // A dead runner is told apart before the timeout: after an outage longer than CHECK_TIMEOUT_MS, a
-    // check that died with the machine is run again, not judged 'timed out' (a fail) (review, 2026-10-02).
-    const neverStarted = r.pid === null && age > 60_000 && voidSpec(r.log)
-    // The exit file is read again: the runner may have written it and ended since the read above.
-    const died = r.pid !== null && runnerIdentity(r.pid) === 'gone' && !readRunnerExit(r.exitFile)
-    const lost = r.pid === null && !neverStarted && age > RUNNER_CLAIM_GIVE_UP_MS
-    if (neverStarted || died || lost) {
-      removeCheckFiles(r)
-      w.checkRunner = null
-      const relaunches = (r.relaunches ?? 0) + 1
-      const how = neverStarted ? 'never started' : 'ended without an exit'
-      if (relaunches > CHECK_RELAUNCHES) {
-        judgeCheck(w, null, `its runner ${how} ${relaunches} times in a row`)
-        changed(w)
-        continue
-      }
-      journal(w, 'check', { notice: `the check's runner ${how}; it runs again` })
-      startCheck(w, relaunches) // the same round again, not a new one: it never gave an answer
-      continue
-    }
-    if (age > CHECK_TIMEOUT_MS) {
-      if (!stopCheck(w)) continue
-      judgeCheck(w, null, 'timed out after 20 minutes')
-      changed(w)
-    }
+  for (const w of workers.values()) pollCheck(w)
+}
+
+type CheckRunner = NonNullable<CliMayteWorker['checkRunner']>
+
+/** One worker's check, read from its files (pollChecks; split up so each step reads on its own). */
+function pollCheck(w: CliMayteWorker): void {
+  // A check started before runners was a daemon child: the restart ended it, so it runs again.
+  if (w.status === 'checking' && !w.checkRunner) {
+    startCheck(w)
+    return
   }
+  const r = w.checkRunner
+  if (!r) return
+  if (w.status !== 'checking') {
+    if (stopCheck(w)) changed(w)
+    return
+  }
+  const before = r.pid
+  takeCheckPid(r)
+  if (r.pid !== before) changed(w)
+  const exit = readRunnerExit(r.exitFile)
+  if (exit) {
+    judgeFromExit(w, r, exit)
+    return
+  }
+  const lost = checkLost(r)
+  if (lost) {
+    relaunchCheck(w, r, lost)
+    return
+  }
+  if (Date.now() - r.launchedAt > CHECK_TIMEOUT_MS && stopCheck(w)) {
+    judgeCheck(w, null, 'timed out after 20 minutes')
+    changed(w)
+  }
+}
+
+/** Judge a check from the exit file its runner wrote, then remove its files, only once the verdict is
+ *  saved: a daemon killed before that reads the same exit file again. */
+function judgeFromExit(
+  w: CliMayteWorker,
+  r: CheckRunner,
+  exit: NonNullable<ReturnType<typeof readRunnerExit>>,
+): void {
+  w.checkRunner = null
+  judgeCheck(
+    w,
+    exit.error ? null : exit.code,
+    exit.error ? `could not start: ${exit.error}` : tailText(r.log, 1500),
+  )
+  changed(w)
+  removeCheckFiles(r)
+}
+
+/** How a check's runner was lost, or null while it may still answer. Asked before the timeout: after
+ *  an outage longer than CHECK_TIMEOUT_MS, a check that died with the machine runs again rather than
+ *  being judged 'timed out' (a fail) (review, 2026-10-02). */
+function checkLost(r: CheckRunner): 'never started' | 'ended without an exit' | null {
+  const age = Date.now() - r.launchedAt
+  if (r.pid === null) {
+    if (age > 60_000 && voidSpec(r.log)) return 'never started'
+    return age > RUNNER_CLAIM_GIVE_UP_MS ? 'ended without an exit' : null
+  }
+  // The exit file is read again: the runner may have written it and ended since the first read.
+  return runnerIdentity(r.pid) === 'gone' && !readRunnerExit(r.exitFile)
+    ? 'ended without an exit'
+    : null
+}
+
+/** Start the same round of a lost check again (it never gave an answer), or judge it a broken check
+ *  past CHECK_RELAUNCHES. */
+function relaunchCheck(w: CliMayteWorker, r: CheckRunner, how: string): void {
+  removeCheckFiles(r)
+  w.checkRunner = null
+  const relaunches = (r.relaunches ?? 0) + 1
+  if (relaunches > CHECK_RELAUNCHES) {
+    judgeCheck(w, null, `its runner ${how} ${relaunches} times in a row`)
+    changed(w)
+    return
+  }
+  journal(w, 'check', { notice: `the check's runner ${how}; it runs again` })
+  startCheck(w, relaunches)
 }
 
 function judgeCheck(w: CliMayteWorker, code: number | null, output: string): void {
@@ -573,17 +600,18 @@ function judgeCheck(w: CliMayteWorker, code: number | null, output: string): voi
   }
   // A check that could not start, or whose command is missing or not runnable (126, 127), says
   // nothing about the work: sending it back one rung up only spent more (stress review, 2026-10-02).
+  // A verdict that ends the task sets 'failed' BEFORE the verdict's own save, so one save holds both:
+  // a daemon killed between two saves left it 'done' under a fail (re-review, 2026-10-02).
   if (code === 126 || code === 127 || (code === null && !/^timed out/.test(output))) {
+    w.status = 'failed'
+    w.error = `The check itself is broken (${code === null ? firstLine(output) : `exit ${code}`}): fix the check command, then send the task on.`
+    journal(w, 'failed', { error: firstLine(w.error) })
     climayteVerdict(w.id, {
       verdict: 'fail',
       note: `The check \`${cmd}\` could not run (${code === null ? output : `exit ${code}`}); the work was not judged.`,
       retry: false,
       by: 'check',
     })
-    w.status = 'failed'
-    w.error = `The check itself is broken (${code === null ? firstLine(output) : `exit ${code}`}): fix the check command, then send the task on.`
-    journal(w, 'failed', { error: firstLine(w.error) })
-    changed(w)
     return
   }
   const fails =
@@ -591,13 +619,12 @@ function judgeCheck(w: CliMayteWorker, code: number | null, output: string): voi
   const retry = fails < MAX_CHECK_FAILS
   const note = `The check \`${cmd}\` failed (${code === null ? output : `exit ${code}`}). The end of its output:
 ${code === null ? '' : output.trim()}`
-  climayteVerdict(w.id, { verdict: 'fail', note, retry, by: 'check' })
   if (!retry) {
     w.status = 'failed'
     w.error = `The check still failed after ${MAX_CHECK_FAILS} rounds; it needs the orchestrator. Last: ${firstLine(output)}`
     journal(w, 'failed', { error: firstLine(w.error) })
-    changed(w)
   }
+  climayteVerdict(w.id, { verdict: 'fail', note, retry, by: 'check' })
 }
 
 /** Workers whose CLI a daemon restart would kill: only attempts the daemon spawned itself (before
@@ -696,6 +723,14 @@ function checkRunners(): void {
     const pid = at?.runner?.pid
     if (w.status === 'running' && at && pid && runnerIdentity(pid) === 'unknown')
       runners.push({ pid, log: at.log })
+    // And every runner a stop is still waiting to kill, on any attempt of any worker: a cancelled
+    // worker's or an urgent message's earlier attempt is neither 'running' nor the last (re-review).
+    for (const a of w.attempts) {
+      const late = a.runner?.killOnStart ? a.runner.pid : null
+      const asked = a === at && w.status === 'running' // the line above has it already
+      if (late && !asked && runnerIdentity(late) === 'unknown')
+        runners.push({ pid: late, log: a.log })
+    }
     // A check's runner after a restart: its spec path names the check's log the same way.
     const check = w.checkRunner
     // Any worker's: a cancelled one's check waits on this answer to be stopped (stopCheck).
@@ -791,8 +826,12 @@ function killAttempt(at: Attempt): void {
     takeRunnerPids(at, runner, pids)
   }
   killRunner(runner.pid as number, at.log)
+  const identity = runnerIdentity(runner.pid as number)
   // Killed, or already ended: its pid and exit files would otherwise stay for good (review, 2026-10-02).
-  if (runnerIdentity(runner.pid as number) === 'gone') removeRunnerFiles(at)
+  if (identity === 'gone') removeRunnerFiles(at)
+  // Not confirmed as ours (WMI failed or timed out): killLateStarts tries again once checkRunners
+  // knows, instead of the stop being forgotten while the CLI runs on (re-review, 2026-10-02).
+  else if (identity === 'unknown') runner.killOnStart = true
 }
 
 /** Kill the runners a stop reached after they claimed their spec but before they wrote a pid
@@ -1158,13 +1197,21 @@ function stopAtCeiling(
 function cleanUpRunner(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): void {
   if (!at.runner) return
   const left = readRunnerExit(at.runner.exitFile)?.left
-  if (left?.length)
+  if (left?.length) {
     journal(w, 'cleaned', {
       account: acctLabel(at.account),
       notice: firstLine(
         left.map((p) => `${p.name} ${p.pid}${p.command ? `: ${p.command}` : ''}`).join('; '),
       ),
     })
+    // A background job the session started (a deploy under fairjob, a dev server) ends with it. Said
+    // on the attempt, where the orchestrator's report reads it: w-5fabf96a's ship.py vanished while
+    // its turn ended "still waiting on the deploy" (Odin mega-run, 2026-10-02).
+    at.left = left
+      .slice(0, 5)
+      .map((p) => (p.command ? `${p.name}: ${p.command}` : p.name).slice(0, 200))
+    changed(w)
+  }
   removeRunnerFiles(at)
 }
 

@@ -1787,6 +1787,9 @@ describe.skipIf(process.platform !== 'win32')(
       expect(isPidAlive(pid)).toBe(false)
       const cleaned = climayteJournal({ id }).find((e) => e.event === 'cleaned')
       expect(cleaned?.notice).toContain(String(pid))
+      // ...and the orchestrator's report says so, not just the journal (Odin mega-run, 2026-10-02:
+      // a worker's background deploy vanished while its turn ended "still waiting on the deploy").
+      expect(climayteReports({ ids: [id] })[0]?.leftRunning).toBeTruthy()
     }, 40_000)
   },
 )

@@ -570,6 +570,11 @@ async function onStop() {
                 class="min-w-0 truncate text-muted-foreground"
                 :title="becauseText(a.because)"
               >{{ becauseText(a.because) }}</span>
+              <span
+                v-if="a.left?.length"
+                class="min-w-0 truncate text-warning"
+                :title="a.left.join('\n')"
+              >{{ $t('climayte.attemptLeft', { list: a.left.join('; ') }) }}</span>
             </li>
           </ol>
         </div>

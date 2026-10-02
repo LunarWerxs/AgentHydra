@@ -108,6 +108,9 @@ export interface CliMayteAttempt {
    *  directly (before 2026-09-30). `killOnStart`: a stop came before the runner wrote its pid but
    *  after it claimed the spec, so the tick kills it as soon as its pid file appears (killLateStarts
    *  in climayte.ts); absent otherwise. */
+  /** What the session left running when it ended (a background job, a dev server): ended with it,
+   *  so whatever it was waiting on did not finish (cleanUpRunner). Absent: nothing. */
+  left?: string[]
   runner?: {
     pid: number | null
     pidFile: string
@@ -371,6 +374,8 @@ export type CliMayteWorkerView = Omit<CliMayteWorker, 'prompt' | 'attempts' | 'v
     rereadPct: number | null
     /** Why this attempt started when the one before it ended done (attemptCause). */
     because?: AttemptCause
+    /** What its session left running, ended with it (CliMayteAttempt.left). */
+    left?: string[]
   }>
   /** What the task used over every attempt, in % of a Pro 5-hour window: `rereadPct` re-reading its
    *  conversation into a cold cache after a move, a limit, a handoff or a gap, `workPct` the rest. */
@@ -407,6 +412,9 @@ export interface CliMayteWorkerReport {
   /** How many runs it took, and how each ended (`handoff, done`). */
   attempts: number
   outcomes: string
+  /** What its newest session left running and was ended with it (a background deploy, a server):
+   *  whatever its report says it was waiting on did not finish. Absent: nothing. */
+  leftRunning?: string
   /** The report to judge: the recap of its first turn when it wrote one (from "## What I did"), else
    *  that turn from the top, cut to the asked length. `reportCut` counts the characters of every
    *  turn not shown; the whole text is `climayte_status { id }`. */
@@ -443,6 +451,9 @@ export function toReport(v: CliMayteWorkerView, chars = REPORT_CHARS): CliMayteW
     rereadPct: v.used.rereadPct,
     attempts: v.attempts.length,
     outcomes: v.attempts.map((a) => a.outcome).join(', '),
+    ...(v.attempts.at(-1)?.left?.length
+      ? { leftRunning: v.attempts.at(-1)?.left?.join('; ') }
+      : {}),
     report,
     reportCut: turns.reduce((n, t) => n + t.length, 0) - report.length,
   }
@@ -1604,6 +1615,7 @@ export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
       pct: a.tokens ? pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)) : null,
       rereadPct: a.spend ? pctOf(rereadUnits(a, w.model)) : null,
       ...(attemptCause(w, i) ? { because: attemptCause(w, i) } : {}),
+      ...(a.left?.length ? { left: a.left } : {}),
     })),
     used: (() => {
       const all = w.attempts.reduce(

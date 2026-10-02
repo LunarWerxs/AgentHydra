@@ -74,6 +74,8 @@ export default {
   becauseSentBack: 'Sent back by a verdict',
   becauseSentBackDetail: 'Sent back by a verdict: {detail}',
   becauseFollowUp: 'A follow-up message',
+  // What a session left running (a background deploy, a server), ended with it (cleanUpRunner).
+  attemptLeft: 'Ended with its session: {list}',
   tokensBreakdown:
     '{input} input · {output} output · {cacheRead} cache read · {cacheWrite} cache write',
   offloadedTasks: 'task offloaded | tasks offloaded',
