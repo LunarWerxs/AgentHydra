@@ -1526,13 +1526,27 @@ describe('integration: a task with a check is judged by it', () => {
     expect(again?.checkRunner?.relaunches).toBe(1)
     expect(again?.verdicts ?? []).toEqual([]) // not judged: it never gave an answer
 
+    // Copied before the cancel: `again` is the live record, which the cancel's stop clears.
+    const record = { ...(again?.checkRunner as NonNullable<typeof first>) }
     climayteCancel({ id })
     const stopping = workers.get(id)
-    if (stopping)
-      stopping.checkRunner = { ...(again?.checkRunner as NonNullable<typeof first>), pid: null }
+    if (stopping) stopping.checkRunner = { ...record, pid: null } // a stop still waiting on its runner
     expect(climayteRemove([id]).skipped).toContain(id)
-    if (stopping) stopping.checkRunner = null // the stand-in stop: nothing of it may outlive this test
-  }, 40_000)
+
+    // A new round while that stop is still pending gets its own check; the old one is set aside and
+    // stopped on its own (background review, 2026-10-02: the new round's result was never judged).
+    const pending = stopping?.checkRunner
+    climayteSend(id, 'one more round')
+    const next = Date.now() + 25_000
+    while (workers.get(id)?.status !== 'checking' && Date.now() < next)
+      await climayteWait({ id }, 1_000)
+    const round = workers.get(id)
+    expect(round?.status).toBe('checking')
+    expect(round?.checkRunner).not.toBe(pending)
+    expect(round?.staleChecks).toContain(pending as NonNullable<typeof pending>)
+    climayteCancel({ id })
+    if (round) round.staleChecks = undefined // the stand-in stop: nothing of it may outlive this test
+  }, 60_000)
 })
 
 describe('sizing (owner, 2026-10-01): too big for a window is split, one that fits waits for room', () => {

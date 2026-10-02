@@ -406,8 +406,17 @@ function checkShell(): string {
  *  bun.exe`) would otherwise run again forever and hold the worker in 'checking' (review, 2026-10-02). */
 const CHECK_RELAUNCHES = 3
 
+type CheckRunner = NonNullable<CliMayteWorker['checkRunner']>
+
 function startCheck(w: CliMayteWorker, relaunches = 0): void {
-  if (!w.check || w.checkRunner) return
+  if (!w.check) return
+  // An earlier round's check still being stopped (its runner not yet confirmed or not yet showing a
+  // pid) moves aside and is stopped on its own; this round gets its own check. Returning here left
+  // a new round's result never judged (background review, 2026-10-02).
+  if (w.checkRunner) {
+    w.staleChecks = [...(w.staleChecks ?? []), w.checkRunner]
+    w.checkRunner = null
+  }
   w.status = 'checking'
   if (!relaunches) w.checkRuns = (w.checkRuns ?? 0) + 1
   mkdirSync(LOGS, { recursive: true })
@@ -490,8 +499,13 @@ function removeCheckFiles(r: NonNullable<CliMayteWorker['checkRunner']>): void {
  *  confirmed as ours after a restart): the check stays on record and pollChecks asks again, so a check
  *  never runs on unwatched beside the worker's next turn (review, 2026-10-02). */
 function stopCheck(w: CliMayteWorker): boolean {
-  const r = w.checkRunner
-  if (!r) return true
+  if (w.checkRunner && !stopCheckRunner(w.checkRunner)) return false
+  w.checkRunner = null
+  return true
+}
+
+/** Stop one check runner and remove its files; false while that cannot be done yet (stopCheck). */
+function stopCheckRunner(r: CheckRunner): boolean {
   takeCheckPid(r)
   if (r.pid === null) {
     if (!voidSpec(r.log) && Date.now() - r.launchedAt <= RUNNER_CLAIM_GIVE_UP_MS) return false
@@ -501,18 +515,33 @@ function stopCheck(w: CliMayteWorker): boolean {
     killRunner(r.pid, r.log)
   }
   removeCheckFiles(r)
-  w.checkRunner = null
   return true
+}
+
+/** Stop the earlier rounds' checks set aside by startCheck, dropping each once it is stopped. */
+function stopStaleChecks(w: CliMayteWorker): void {
+  if (!w.staleChecks?.length) return
+  const left = w.staleChecks.filter((r) => !stopCheckRunner(r))
+  if (left.length === w.staleChecks.length) return
+  w.staleChecks = left.length ? left : undefined
+  changed(w)
 }
 
 /** Read every check from its files, whichever daemon started it: judged once its exit file is in,
  *  stopped at CHECK_TIMEOUT_MS, and run again when it never started or its runner died without an
  *  exit file. A worker no longer checking (cancelled meanwhile) has its check stopped. */
 function pollChecks(): void {
-  for (const w of workers.values()) pollCheck(w)
+  for (const w of workers.values()) {
+    // One worker's bad record (a hand edit, a half-written store) is that worker's problem: a throw
+    // here ended the whole tick, so no task anywhere moved on (found by a test, 2026-10-02).
+    try {
+      stopStaleChecks(w)
+      pollCheck(w)
+    } catch (err) {
+      console.error(`[climayte] ${w.id}: its check could not be read:`, err)
+    }
+  }
 }
-
-type CheckRunner = NonNullable<CliMayteWorker['checkRunner']>
 
 /** One worker's check, read from its files (pollChecks; split up so each step reads on its own). */
 function pollCheck(w: CliMayteWorker): void {
@@ -738,6 +767,8 @@ function checkRunners(): void {
     // Any worker's: a cancelled one's check waits on this answer to be stopped (stopCheck).
     if (check?.pid && runnerIdentity(check.pid) === 'unknown')
       runners.push({ pid: check.pid, log: check.log })
+    for (const r of w.staleChecks ?? [])
+      if (r.pid && runnerIdentity(r.pid) === 'unknown') runners.push({ pid: r.pid, log: r.log })
   }
   if (!runners.length) return
   runnerCheckAt = Date.now()
@@ -2343,7 +2374,10 @@ export function climayteRemove(ids: string[]): {
     const w = workers.get(id)
     // A stop still under way (a check or a runner it could not kill yet) is finished by the tick, which
     // only visits workers it still holds: removing one now would leave its runner going for good.
-    const stopping = !!w?.checkRunner || !!w?.attempts.some((a) => a.runner?.killOnStart)
+    const stopping =
+      !!w?.checkRunner ||
+      !!w?.staleChecks?.length ||
+      !!w?.attempts.some((a) => a.runner?.killOnStart)
     if (!w || isActive(w) || stopping) {
       skipped.push(id)
       continue

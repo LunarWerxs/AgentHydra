@@ -215,6 +215,9 @@ export interface CliMayteWorker {
      *  an exit file (pollChecks; CHECK_RELAUNCHES). Absent: none. */
     relaunches?: number
   } | null
+  /** Earlier rounds' checks still being stopped when a new round's check started (startCheck): each
+   *  goes once its runner is killed or its spec voided (stopStaleChecks). Absent: none. */
+  staleChecks?: NonNullable<CliMayteWorker['checkRunner']>[]
   /** Its size at dispatch (climayte.ts sizeTasks); `room` and `roomOn` are refreshed when it starts
    *  waiting for room. */
   size?: CliMayteSizing
