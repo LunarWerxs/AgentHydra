@@ -539,7 +539,10 @@ export function windDownMessage(pct: number | null, path: string): string {
     pct === null
       ? 'the orchestrator asked this session to hand the task to a fresh session'
       : `this account is at ${Math.round(pct)}% of its 5-hour usage, past the line where CliMayte stops work so it never reaches the limit, so this session must hand the task to a fresh session (on another account with room, or on this one once its window resets)`
-  return `AgentHydra: ${why}. Wrap up now: finish or safely stop the step you are on and do not start anything new. Then write a handoff with the Write tool to ${path} for the session that continues this task. It sees only the original task, your handoff and your transcript, so include: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message, subject and body verbatim, and the exact paths); the next steps in order; the facts, decisions and gotchas you learned; and the commands or checks that prove the work. If the whole task is already complete, do not write a handoff: finish normally with your final report. After writing the handoff, end your turn with one line saying the handoff is written.`
+  // The handoff comes FIRST: the hard stop at 90% is a few points away, about 30 seconds of heavy
+  // work, and a session stopped before its note is written moves by re-reading everything cold
+  // (stress review, 2026-10-02). A task two or three calls from done finishes instead.
+  return `AgentHydra: ${why}. If you can finish the whole task in two or three more tool calls, do that and give your final report instead of a handoff. Otherwise write the handoff NOW, before anything else, with the Write tool to ${path}, for the session that continues this task; then finish or safely stop the step you are on, start nothing new, and update the handoff if that changed anything. The next session sees only the original task, your handoff and your transcript, so include, in under 800 words: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message, subject and body verbatim, and the exact paths); the next steps in order; the facts, decisions and gotchas you learned, carrying forward everything still true from any handoff you started from; and the commands or checks that prove the work, with their results. After writing the handoff, end your turn with one line saying the handoff is written.`
 }
 
 /** The first prompt of the session that continues a task from a handoff. */
@@ -556,7 +559,7 @@ export function continuationPrompt(
   const where = transcript
     ? ` Its full transcript is at ${transcript} if you need a detail the handoff left out (read it with the Read or Grep tools; it is JSON lines).`
     : ''
-  return `${task}\n\n---\nAn earlier session already worked on this task on another account and wound down before its usage limit. Continue from its handoff below (also saved at ${handoffPath}).${where} Do not redo steps it reports finished; check its claims where a command can. If it gives a commit message for work in progress, commit with that message verbatim.${more}\n\n--- HANDOFF ---\n${handoff}`
+  return `${task}\n\n---\nAn earlier session already worked on this task on another account and wound down before its usage limit. Continue from its handoff below (also saved at ${handoffPath}).${where} Do not redo steps it reports finished. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers. If it gives a commit message for work in progress, commit with that message verbatim.${more}\n\n--- HANDOFF ---\n${handoff}`
 }
 
 export const PRE_OVERAGE_NOTICE =
@@ -1260,15 +1263,78 @@ export function recentWorkers<T extends Pick<CliMayteWorker, 'status' | 'created
   return [...keep].sort((a, b) => b.createdAt - a.createdAt)
 }
 
-/** A list row for an orchestrator: no prompt (it wrote it) and only the last 3 attempts, the bulk
- *  of the stored record after results (measured on 142 real workers: attempts 82k characters,
- *  results 44k, prompts 21k). The full record is climayte_status { id }. */
-export type CliMayteWorkerBrief = Omit<CliMayteWorkerView, 'prompt' | 'results' | 'reports'> & {
-  attemptCount: number
+/** A list row for an orchestrator deciding what to do next: the report row (toReport) without the
+ *  report text, plus what it may act on. Nothing it wrote itself and nothing climayte_status { id }
+ *  answers in full: the old row carried the whole report, three full attempts, the prompt's first
+ *  line, UUIDs and the size's prose, 96 KB for a default call of 28 workers (stress review,
+ *  2026-10-02). Empty values are left out. */
+export type CliMayteWorkerBrief = Omit<CliMayteWorkerReport, 'report' | 'reportCut'> & {
+  costUsd?: number
+  moves?: number
+  priority?: number
+  pending?: number
+  /** Characters of its report(s); read them with `report: true` or `{ id }`. */
+  resultChars?: number
 }
 export function toBrief(v: CliMayteWorkerView): CliMayteWorkerBrief {
-  const { prompt: _prompt, results: _results, reports: _reports, ...rest } = v
-  return { ...rest, attempts: v.attempts.slice(-3), attemptCount: v.attempts.length }
+  const { report: _report, reportCut: _cut, ...row } = toReport(v, 0)
+  const resultChars = (v.results?.length ? v.results : v.result ? [v.result] : []).reduce(
+    (n, r) => n + r.length,
+    0,
+  )
+  const extra = {
+    costUsd: v.costUsd ? Math.round(v.costUsd * 100) / 100 : undefined,
+    moves: v.moves || undefined,
+    priority: v.priority || undefined,
+    pending: v.pending?.length || undefined,
+    resultChars: resultChars || undefined,
+  }
+  const out: Record<string, unknown> = { ...row, ...extra }
+  for (const k of Object.keys(out))
+    if (out[k] === undefined || out[k] === null || out[k] === '') delete out[k]
+  return out as CliMayteWorkerBrief
+}
+
+/** Caps for one turn (the attempts since its newest finished one): past any of them a task that
+ *  keeps moving, handing off or spending stops and asks its orchestrator instead of going on. The
+ *  worst task on record ran 12 attempts and 6 moves for $18.77 and failed anyway (stress review,
+ *  2026-10-02). Sign-in refusals cost nothing and do not count. */
+export const TURN_CAPS = { attempts: 8, moves: 4, handoffs: 3, overrun: 3, overrunFloorPct: 50 }
+
+/** Why a task should stop and ask, or null while it is converging. Pure: the attempts and the size
+ *  it was dispatched at. */
+export function notConverging(
+  w: Pick<CliMayteWorker, 'attempts' | 'model'> & { size?: { expected: number } | null },
+): string | null {
+  let lastDone = -1
+  w.attempts.forEach((a, i) => {
+    if (a.outcome === 'done') lastDone = i
+  })
+  const turn = w.attempts
+    .slice(lastDone + 1)
+    .filter((a) => a.outcome !== 'auth' && a.outcome !== 'running')
+  if (!turn.length) return null
+  let moves = 0
+  for (let i = 1; i < turn.length; i++) if (turn[i]!.account.id !== turn[i - 1]!.account.id) moves++
+  const handoffs = turn.filter((a) => a.outcome === 'handoff').length
+  const pct = turn.reduce(
+    (s, a) => s + pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)),
+    0,
+  )
+  const cap = Math.max(TURN_CAPS.overrun * (w.size?.expected ?? 0), TURN_CAPS.overrunFloorPct)
+  const why =
+    turn.length >= TURN_CAPS.attempts
+      ? `${turn.length} attempts`
+      : moves >= TURN_CAPS.moves
+        ? `${moves} moves between accounts`
+        : handoffs >= TURN_CAPS.handoffs
+          ? `${handoffs} handoffs`
+          : pct > cap
+            ? `${Math.round(pct)}% of a Pro window spent, over ${Math.round(cap)}% (3 times its estimate)`
+            : null
+  return why
+    ? `Not converging: ${why} in this turn, so CliMayte stopped it to ask. Split the task, or continue it as it is with climayte_send.`
+    : null
 }
 
 export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {

@@ -50,7 +50,7 @@ import { getCliInstance, listCliInstances } from './core/cli-instances'
 import { handsOnAgoMs } from './core/hands-on'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
 import { POINTER_DIR } from './instance'
-import { readLiveRegistry } from './live-registry'
+import { liveSessionIds } from './live-registry'
 import { getProviderSettings } from './provider-settings'
 import type { UsageSnapshot } from './types'
 import { resetTimeIso } from './usage'
@@ -173,14 +173,32 @@ export let claudeCommand: () => string[] = () => [resolveClaudeExe()]
 /** Claude sessions running in an account's folder that are not CliMayte's own: an interactive
  *  CLI session, another agent's, the chat orchestrating this one. Matched by session id, which
  *  CliMayte picks before it starts the CLI (--session-id), so its own new sessions never count. */
-function otherSessionsIn(configDir: string): number {
+function otherSessionsIn(configDir: string, mine: Set<string>): number {
+  return liveSessionIds(configDir).filter((id) => !mine.has(id)).length
+}
+
+/** The sessions CliMayte's own running workers hold, built once per pool. */
+function ownSessions(): Set<string> {
   const mine = new Set<string>()
   for (const w of workers.values()) {
     if (w.status !== 'running') continue
     if (w.sessionId) mine.add(w.sessionId)
     for (const at of w.attempts) if (at.endedAt === null && at.sessionId) mine.add(at.sessionId)
   }
-  return readLiveRegistry(configDir).filter((s) => !mine.has(s.sessionId)).length
+  return mine
+}
+
+/** The pool is read at most every POOL_MS. The tick asked every second while work ran, and each
+ *  build read the instance store, every account's credentials and usage cache, and every live
+ *  session folder: about 15 file reads a second for data that changes every few minutes (stress
+ *  review, 2026-10-02). */
+const POOL_MS = 3_000
+let pool: { at: number; accounts: CliMayteAccount[] } | null = null
+function signedInAccounts(): CliMayteAccount[] {
+  const now = Date.now()
+  if (pool && now - pool.at < POOL_MS) return pool.accounts
+  pool = { at: now, accounts: buildPool(now) }
+  return pool.accounts
 }
 
 /** A CLI `/usage` reading keeps each reset as the CLI printed it ("Oct 4, 1am") and no `resetsAt`.
@@ -201,8 +219,8 @@ function withResetTimes(u: UsageSnapshot): UsageSnapshot {
  *  stays walled until it signs in again (recheckSignedOut), so a dead login costs one quick
  *  failure, once. Each carries who else is on it now (accountInUse), so new work goes around a
  *  person at the keyboard and around sessions that are not CliMayte's. */
-function signedInAccounts(): CliMayteAccount[] {
-  const now = Date.now()
+function buildPool(now: number): CliMayteAccount[] {
+  const mine = ownSessions()
   const cache = allCachedUsage()
   // A login vetoed by CliMayte's own signed-out wall stays in the pool, walled, so recheckSignedOut
   // can find out when it works again.
@@ -248,7 +266,7 @@ function signedInAccounts(): CliMayteAccount[] {
         weekResetsAt:
           weekPct !== null && weekResets !== null && weekResets > now ? weekResets : null,
         handsOnAgoMs: handsOnAgoMs(i.associatedDesktopDir, now),
-        otherSessions: otherSessionsIn(i.configDir),
+        otherSessions: otherSessionsIn(i.configDir, mine),
       }
     })
 }

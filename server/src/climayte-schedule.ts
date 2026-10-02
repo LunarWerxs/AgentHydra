@@ -280,7 +280,7 @@ function noAccountReason(
     .filter(accountInUse)
     .map(
       (a) =>
-        `${acctLabel(a)} (${a.handsOnAgoMs != null ? `its desktop app used ${Math.round(a.handsOnAgoMs / 60_000)} min ago` : `${a.otherSessions} other session${a.otherSessions === 1 ? '' : 's'} running`})`,
+        `${acctLabel(a)} (${a.handsOnAgoMs != null ? 'its desktop app is in use' : 'other sessions running'})`,
     )
   if (inUse.length)
     return `Waiting for an account nobody else is using: ${inUse.join(', ')}; the others are at their limit or signed out. It starts when one frees up.`

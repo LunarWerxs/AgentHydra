@@ -65,6 +65,7 @@ app.get('/api/corch/workers', async (c) => {
     active: flag(c.req.query('active')) ? true : undefined,
     limit: optInt(c.req.query('limit')),
     brief: flag(c.req.query('brief')),
+    all: flag(c.req.query('all')),
   }
   const wait = waitMs(c.req.query('wait'))
   if (flag(c.req.query('report'))) {

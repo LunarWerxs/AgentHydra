@@ -7,6 +7,32 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Changed
+
+- **CliMayte spends less, from a stress run on 2026-10-02** (eight Opus reviews of its own code,
+  dispatched through CliMayte to the idle accounts, $5 in all):
+  - **A task that is not converging stops and asks.** Past 8 attempts, 4 moves between accounts,
+    3 handoffs, or 3 times its size estimate (at least half a Pro window) in one turn, it fails with
+    why and what to do (split it, or continue it with climayte_send). Nothing capped this before;
+    the worst task on record ran 12 attempts and 6 moves for $18.77. Retries no longer reset at a
+    limit or a handoff, which made "3 per turn" into "3 between limits".
+  - **A broken check fails at once** (could not start, exit 126 or 127) instead of sending the task
+    back one rung up, twice, for something the worker cannot fix.
+  - **climayte_status answers in a few KB, not about 96 KB.** Its default rows are the report row
+    without the report text, with empty values left out, and finished work a verdict already
+    covers is left out unless `all: true`. climayte_log prints a worker's title once per answer and
+    returns 30 lines by default instead of 100 (it was 42% repeated titles).
+  - **Workers carry about 5k fewer tokens on every request:** no magnific or connections-local MCP
+    server, no claude.ai-synced skills (docx, pptx, computer-use and the rest), no auto-memory.
+  - **A handoff is written before the step is finished**, since the 90% stop is about 30 seconds
+    of heavy work away; a task two or three calls from done finishes instead; the note carries
+    forward what the earlier handoff knew, and the next session checks it with cheap commands
+    instead of re-running suites it reports passing.
+  - **The engine reads the account pool at most every 3 seconds** (it rebuilt it from disk every
+    second while work ran, about 15 file reads a second), and the live-session scan only counts.
+  - **A wait for a busy account no longer rewrites the store every minute** (its reason carried the
+    minutes since the desktop app was used).
+
 ### Added
 
 - **Every quota check says how much CliMayte room sits idle** (`climayteCapacity`,

@@ -103,6 +103,7 @@ import {
   isOrgDisabled,
   joinResults,
   newestTranscript,
+  notConverging,
   ORG_DISABLED_WALL,
   OVERAGE_NOTICE,
   PRE_OVERAGE_NOTICE,
@@ -432,6 +433,21 @@ function judgeCheck(w: CliMayteWorker, code: number | null, output: string): voi
   const cmd = firstLine(w.check, 200)
   if (code === 0) {
     climayteVerdict(w.id, { verdict: 'pass', note: `The check passed: ${cmd}`, by: 'check' })
+    return
+  }
+  // A check that could not start, or whose command is missing or not runnable (126, 127), says
+  // nothing about the work: sending it back one rung up only spent more (stress review, 2026-10-02).
+  if (code === 126 || code === 127 || (code === null && !/^timed out/.test(output))) {
+    climayteVerdict(w.id, {
+      verdict: 'fail',
+      note: `The check \`${cmd}\` could not run (${code === null ? output : `exit ${code}`}); the work was not judged.`,
+      retry: false,
+      by: 'check',
+    })
+    w.status = 'failed'
+    w.error = `The check itself is broken (${code === null ? firstLine(output) : `exit ${code}`}): fix the check command, then send the task on.`
+    journal(w, 'failed', { error: firstLine(w.error) })
+    changed(w)
     return
   }
   const fails =
@@ -959,13 +975,13 @@ function settleWorker(
       break
     case 'handoff':
       // launch() starts the next session from the handoff; the wound-down account is tried last.
-      w.retries = 0
+      // `retries` is not reset here or at a limit: they happen mid-turn, and resetting made "3 per
+      // turn" into "3 between limits", which never ends (stress review, 2026-10-02).
       w.error = null
       w.status = 'queued'
       break
     case 'quota':
       wallAtLimit(at, v, now)
-      w.retries = 0
       w.status = 'queued'
       break
     case 'auth':
@@ -981,6 +997,14 @@ function settleWorker(
     default:
       w.status = 'failed'
       w.error = v.result || stderr.slice(-1_500) || 'The CLI exited without a result.'
+  }
+  // A requeued task that keeps moving, handing off or spending stops here and asks (notConverging).
+  if (w.status === 'queued' && (v.outcome === 'handoff' || v.outcome === 'quota')) {
+    const stop = notConverging(w)
+    if (stop) {
+      w.status = 'failed'
+      w.error = stop
+    }
   }
 }
 
@@ -1440,6 +1464,8 @@ export interface CliMayteListFilter {
   active?: boolean
   limit?: number
   brief?: boolean
+  /** With `brief`: also list finished work a verdict already covers (left out by default). */
+  all?: boolean
 }
 
 export function climayteList(filter: CliMayteListFilter & { brief: true }): CliMayteWorkerBrief[]
@@ -1453,8 +1479,18 @@ export function climayteList(
     [...workers.values()].filter((w) => matches(w, filter)),
     filter.limit,
   ).map((w) => toView(w, now))
-  return filter.brief ? views.map(toBrief) : views
+  if (!filter.brief) return views
+  // An orchestrator's default list is what it may act on: live work and unjudged results. Judged
+  // finished rows were 80 KB of a 96 KB default answer (stress review, 2026-10-02).
+  const keep =
+    filter.all || filter.id || filter.ids?.length
+      ? views
+      : views.filter((v) => isLiveStatus(v.status) || !v.judged)
+  return keep.map(toBrief)
 }
+
+const isLiveStatus = (s: CliMayteWorker['status']): boolean =>
+  s === 'queued' || s === 'running' || s === 'waiting' || s === 'checking'
 
 /** The report view of the same list (toReport): one compact row per worker, `chars` of its report. */
 export function climayteReports(

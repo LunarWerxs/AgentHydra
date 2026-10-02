@@ -791,6 +791,11 @@ export const TOOLS: McpEngineTool[] = [
           'With `report`: how many characters of each report (default 1500, 0 for none).',
       },
       active: { type: 'boolean', description: 'Only queued, running and waiting workers.' },
+      all: {
+        type: 'boolean',
+        description:
+          'Also list finished work a verdict already covers; the default list leaves it out (it is what you already judged).',
+      },
       limit: {
         type: 'number',
         description: `How many finished workers to list beside the active ones (default ${RECENT_FINISHED} without a group, all of them with one).`,
@@ -821,6 +826,7 @@ export const TOOLS: McpEngineTool[] = [
           active: a.active === true ? 1 : undefined,
           limit: ids.length ? undefined : limit,
           brief: report ? undefined : 1,
+          all: a.all === true ? 1 : undefined,
           report: report ? 1 : undefined,
           chars: report && Number.isFinite(chars) && chars >= 0 ? Math.floor(chars) : undefined,
           wait: wait > 0 ? wait : undefined,

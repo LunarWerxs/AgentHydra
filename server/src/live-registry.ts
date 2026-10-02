@@ -130,6 +130,28 @@ export function findTranscriptById(claudeHome: string, sessionId: string): strin
   return null
 }
 
+/** The ids of the sessions alive in a Claude home, without looking up their transcripts: what a
+ *  caller that only counts needs (CliMayte's pool asks for every account every few seconds). */
+export function liveSessionIds(claudeHome: string): string[] {
+  let files: string[] = []
+  try {
+    files = readdirSync(join(claudeHome, 'sessions')).filter((f) => f.endsWith('.json'))
+  } catch {
+    return []
+  }
+  const ids: string[] = []
+  for (const f of files) {
+    try {
+      const reg = JSON.parse(readFileSync(join(claudeHome, 'sessions', f), 'utf8'))
+      if (typeof reg?.sessionId !== 'string' || typeof reg.pid !== 'number') continue
+      if (sessionAlive(reg)) ids.push(reg.sessionId)
+    } catch {
+      // One unreadable registry entry must not hide the others.
+    }
+  }
+  return ids
+}
+
 export function readLiveRegistry(claudeHome: string): LiveSession[] {
   const dir = join(claudeHome, 'sessions')
   let files: string[] = []

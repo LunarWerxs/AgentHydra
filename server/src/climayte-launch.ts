@@ -198,6 +198,14 @@ function launchText(w: CliMayteWorker, p: LaunchPlan, accounts: CliMayteAccount[
  *  about 65 ms a call. And no AgentHydra MCP server: 84 of a worker's 138 tools were AgentHydra's
  *  own (measured), with which a worker could start more workers, fan out, or move the owner's
  *  desktop chats. A worker does its task; orchestration stays with the chat that asked.
+ *  Nor the two other servers the CLI accounts' .claude.json lists that a worker cannot use:
+ *  magnific only prints a sign-in notice, which a headless worker can never answer, and
+ *  connections-local's instructions are about a memory and to-do list a worker does not keep.
+ *  zswarm stays: a worker hands wide, cheap work to it. And no skills synced from claude.ai
+ *  (docx, pptx, xlsx, computer-use, chrome-browser, ...: 14 of them, each listed with its
+ *  description in every request); `syncClaudeAiSkills: false` given through --settings hides them
+ *  for this run only and moves nothing in the account's folder (the CLI's own settings schema,
+ *  2.1.286). The owner's skills, synced into the account by syncOwnerClaude, still load.
  *  Returns the settings file, with any signal left from an earlier attempt removed. */
 function writeWorkerSettings(w: CliMayteWorker): string {
   mkdirSync(HOOKS, { recursive: true })
@@ -225,7 +233,10 @@ function writeWorkerSettings(w: CliMayteWorker): string {
   writeFileSync(
     hookFile,
     JSON.stringify({
-      deniedMcpServers: [{ serverName: MCP_SERVER_KEY }],
+      deniedMcpServers: [MCP_SERVER_KEY, 'magnific', 'connections-local'].map((serverName) => ({
+        serverName,
+      })),
+      syncClaudeAiSkills: false,
       hooks: {
         ...(preToolUse.length ? { PreToolUse: preToolUse } : {}),
         PostToolUse: [
@@ -304,10 +315,14 @@ function startRunner(
         // of what filled the 5-hour meter in run 1. Only 9 of its 2,105 requests came more than 5
         // minutes after the one before, so the re-writes cost 1.8M tokens against 10.4M written:
         // about 27% less write cost (owner's go-ahead, 2026-09-30).
+        // No auto-memory: a worker does one task and what it should carry over goes in its
+        // report or handoff note, yet the memory instructions rode in every request. The CLI
+        // reads this variable ahead of the autoMemoryEnabled setting (2.1.286).
         env: {
           ...scrubbedEnv(acct.configDir, w.id),
           ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
           CLAUDE_CODE_PROMPT_CACHE_TTL: '5m',
+          CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
         },
         stdin: promptFile,
         stdout: log,

@@ -114,7 +114,7 @@ export interface JournalFilter {
   id?: string
   /** Epoch ms or an ISO time: only entries after it. */
   since?: number | string
-  /** The newest this many (default 100, at most 5000). */
+  /** The newest this many (default 30, at most 5000; `since` reads only the new ones). */
   limit?: number
 }
 
@@ -125,10 +125,17 @@ function sinceMs(since: JournalFilter['since']): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+// Entries of one read whose worker an earlier entry of the same read already named: their readable
+// line prints the id alone. The climayte_log MCP answer is re-sent with the chat's whole context,
+// and the title repeated on every line was 42% of its bytes (review, 2026-10-01). A WeakSet, so the
+// mark lives and dies with the read's own objects and the JSON answer stays as it was.
+const titleShown = new WeakSet<CliMayteJournalEntry>()
+
 /** Entries in scope, oldest first, the newest `limit` of them. Reads the previous file only when
  *  the current one does not hold enough. */
 export function readJournal(path: string, filter: JournalFilter = {}): CliMayteJournalEntry[] {
-  const limit = Math.min(5_000, Math.max(1, Math.floor(filter.limit ?? 100)))
+  // 30, not 100: one wake reads what is new (`since`), and 100 lines was more than any wake used.
+  const limit = Math.min(5_000, Math.max(1, Math.floor(filter.limit ?? 30)))
   const after = sinceMs(filter.since)
   const pick = (file: string): CliMayteJournalEntry[] => {
     if (!existsSync(file)) return []
@@ -158,7 +165,13 @@ export function readJournal(path: string, filter: JournalFilter = {}): CliMayteJ
   }
   let entries = pick(path)
   if (entries.length < limit) entries = [...pick(previousJournal(path)), ...entries]
-  return entries.slice(-limit)
+  const out = entries.slice(-limit)
+  const named = new Set<string>()
+  for (const e of out) {
+    if (named.has(e.id)) titleShown.add(e)
+    else named.add(e.id)
+  }
+  return out
 }
 
 const pct = (v: number | null | undefined): string =>
@@ -334,7 +347,9 @@ export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Da
   }
 }
 
-/** One readable line: `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`. */
+/** One readable line: `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`.
+ *  The title only on a worker's first line of one read (readJournal); its later lines carry the id alone. */
 export function formatJournalLine(e: CliMayteJournalEntry, now: Date = new Date()): string {
-  return `${journalTime(e.ts, now)} ${e.id} '${e.title}' ${describeJournalEntry(e, now)}`
+  const who = titleShown.has(e) ? e.id : `${e.id} '${e.title}'`
+  return `${journalTime(e.ts, now)} ${who} ${describeJournalEntry(e, now)}`
 }

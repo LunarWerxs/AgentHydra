@@ -45,6 +45,7 @@ import {
   livePct,
   MAX_PER_ACCOUNT,
   MAX_RESULTS,
+  notConverging,
   pickAccount,
   RECENT_FINISHED,
   RESULT_SEPARATOR,
@@ -359,6 +360,44 @@ describe('climayteRun refuses what can never run', () => {
   })
 })
 
+describe('notConverging', () => {
+  // A task that keeps moving, handing off or overspending stops and asks instead of spending on:
+  // the worst on record ran 12 attempts and 6 moves for $18.77 (stress review, 2026-10-02).
+  const at = (id: string, outcome: string, tokens?: Record<string, number>) =>
+    ({ account: { id, num: 1, name: id }, outcome, tokens }) as any
+  const w = (attempts: unknown[], expected = 10) =>
+    ({ attempts, model: 'claude-opus-5-5', size: { expected } }) as any
+
+  test.each([
+    ['a few limits on one account', [at('a', 'quota'), at('a', 'quota'), at('a', 'running')], null],
+    [
+      'four moves',
+      [at('a', 'quota'), at('b', 'quota'), at('a', 'quota'), at('b', 'quota'), at('a', 'quota')],
+      /4 moves/,
+    ],
+    ['three handoffs', [at('a', 'handoff'), at('a', 'handoff'), at('a', 'handoff')], /3 handoffs/],
+    [
+      'only the turn since the last finished one counts',
+      [at('a', 'quota'), at('b', 'quota'), at('a', 'quota'), at('b', 'done'), at('a', 'quota')],
+      null,
+    ],
+    [
+      'sign-in refusals cost nothing and do not count',
+      Array.from({ length: 9 }, (_, i) => at(`s${i}`, 'auth')),
+      null,
+    ],
+    [
+      'spending far past its estimate',
+      [at('a', 'quota', { input: 0, output: 50_000_000, cacheRead: 0, cacheWrite: 0 })],
+      /of a Pro window spent/,
+    ],
+  ] as const)('%s', (_name, attempts, expected) => {
+    const why = notConverging(w([...attempts]))
+    if (expected === null) expect(why).toBeNull()
+    else expect(why).toMatch(expected)
+  })
+})
+
 describe('pickAccount', () => {
   const acct = (
     id: string,
@@ -620,9 +659,11 @@ describe('integration: a quota wall hands the session to the next account', () =
     expect(Date.parse(log[2]?.until ?? '')).toBeGreaterThan(Date.now())
     expect(log[3]).toMatchObject({ from: '#1', account: '#2', copied: true })
     expect(log[4]).toMatchObject({ account: '#2', attempt: 2, sessionPct: 50 })
+    // The title only on the worker's first line of the answer; its later lines carry the id alone.
     const lines = climayteJournalLines({ id })
+    expect(lines[0]).toMatch(/^\d\d:\d\d:\d\d w-\w+ 'fake' /)
     expect(lines[1]).toMatch(
-      /^\d\d:\d\d:\d\d w-\w+ 'fake' launched on #1 \(session 0%, week 0%, 0 active\)$/,
+      /^\d\d:\d\d:\d\d w-\w+ launched on #1 \(session 0%, week 0%, 0 active\)$/,
     )
     expect(lines[3]).toContain('moved from #1 to #2')
 
@@ -882,7 +923,7 @@ describe('integration: paid extra usage is never spent', () => {
       expect(log[3]).toMatchObject({ account: '#1', turns: 1 })
       expect(typeof log[3]?.costUsd).toBe('number')
       expect(climayteJournalLines({ id })[3]).toMatch(
-        /'overage allowed' done on #1: \$\d+\.\d\d, 1 turn \(/,
+        /^\d\d:\d\d:\d\d w-\w+ done on #1: \$\d+\.\d\d, 1 turn \(/,
       )
     } finally {
       setProviderSettings({ allowExtraUsage: false })
