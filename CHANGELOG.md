@@ -17,6 +17,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **CliMayte knows every account's reset times** (`withResetTimes` in
+  `server/src/climayte-core.ts`). A reading from the CLI's own `/usage` keeps each reset as the CLI
+  printed it ("Oct 4, 1am"), and CliMayte read only the parsed field, so four of ten accounts,
+  the Max 5x among them, had no weekly reset: the weekly pacing could not judge them, and an old
+  percentage outlived its window. The text is now parsed against when the reading was taken.
+
 - **CliMayte refuses a task that could never run** (`POST /api/corch/workers`, a fuzz pass on
   2026-10-02). An account id that is not a CLI instance made a task that waited forever; a list
   with an entry that was not an id was trimmed to nothing, which means "any account". Both are

@@ -53,6 +53,7 @@ import { POINTER_DIR } from './instance'
 import { readLiveRegistry } from './live-registry'
 import { getProviderSettings } from './provider-settings'
 import type { UsageSnapshot } from './types'
+import { resetTimeIso } from './usage'
 import { allCachedUsage } from './usage-cache'
 
 // POINTER_DIR is CONFIG_DIR for the primary install and a side-run's own data dir otherwise, so
@@ -182,6 +183,18 @@ function otherSessionsIn(configDir: string): number {
   return readLiveRegistry(configDir).filter((s) => !mine.has(s.sessionId)).length
 }
 
+/** A CLI `/usage` reading keeps each reset as the CLI printed it ("Oct 4, 1am") and no `resetsAt`.
+ *  Read as unknown, an old percentage outlived its window (livePct) and the pacing had no weekly
+ *  reset for four of ten accounts (stress run, 2026-10-02). Parsed against when it was read, so an
+ *  old reading's yearless date is not rolled into next year. */
+function withResetTimes(u: UsageSnapshot): UsageSnapshot {
+  const readAt = new Date(Date.parse(u.capturedAt) || Date.now())
+  const fill = <L extends { resets?: string; resetsAt?: string | null } | null | undefined>(
+    l: L,
+  ): L => (l && !l.resetsAt && l.resets ? { ...l, resetsAt: resetTimeIso(l, readAt) } : l)
+  return { ...u, session: fill(u.session), weekAll: fill(u.weekAll) }
+}
+
 /** The production pool: every CLI instance with a credential file, with its last usage reading
  *  (void once its window has reset), or a running worker's live one when that is newer. A hollow
  *  or revoked login still passes that file check; its first attempt fails `auth` and the account
@@ -196,7 +209,8 @@ function signedInAccounts(): CliMayteAccount[] {
   return listCliInstances()
     .filter((i) => i.loggedIn || !!i.loginNote)
     .map((i) => {
-      const u = latestUsage(i.id, i.lastUsageCheck, cache)
+      const read = latestUsage(i.id, i.lastUsageCheck, cache)
+      const u = read && withResetTimes(read)
       const snapshotAt = u ? Date.parse(u.capturedAt) || 0 : 0
       const live = liveByAccount.get(i.id) ?? null
       const liveSession =
