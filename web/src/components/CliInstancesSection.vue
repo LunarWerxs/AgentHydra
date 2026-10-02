@@ -188,7 +188,8 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
       },
     },
     { key: 'usageSession', accessor: (i: CliInstance) => usageFor(i)?.session?.pct ?? undefined },
-    { key: 'tokens', accessor: (i: CliInstance) => i.tokens?.total },
+    // Biggest first: the question asked of this column is which account ran the most.
+    { key: 'tokens', accessor: (i: CliInstance) => i.tokens?.total, first: 'desc' },
   ],
   undefined,
   { rowKey: (i: CliInstance) => i.id },

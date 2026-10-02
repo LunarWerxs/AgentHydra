@@ -11,6 +11,9 @@ export interface SortableColumn<Row> {
   key: string
   /** Extracts the comparable value for a row. Return null/undefined to sort it last. */
   accessor: (row: Row) => string | number | boolean | null | undefined
+  /** The direction the first click sorts in (default 'asc'). 'desc' for a column read from its
+   *  top, like a total: ascending first put the empty rows on top (SUE round, 2026-10-01). */
+  first?: 'asc' | 'desc'
 }
 
 /**
@@ -33,7 +36,8 @@ export interface SortSettleOptions<Row> {
 
 /**
  * Click-to-sort state machine for a table. Cycles a column through
- * asc -> desc -> none (back to the original/unsorted `rows` order) on repeated clicks.
+ * asc -> desc -> none (back to the original/unsorted `rows` order) on repeated clicks; a column
+ * that declares `first: 'desc'` starts descending instead.
  *
  * Pass `persisted` to have the table remember its sort. A remembered key that no longer names a
  * column (one was renamed or removed since it was saved), or a direction that is not asc/desc,
@@ -68,19 +72,22 @@ export function useSortable<Row>(
     : ref<SortDirection>(null)
 
   function toggleSort(key: string) {
-    if (!columnsByKey.has(key)) return
+    const column = columnsByKey.get(key)
+    if (!column) return
+    const first = column.first ?? 'asc'
+    const second = first === 'asc' ? 'desc' : 'asc'
     if (sortKey.value !== key) {
       sortKey.value = key
-      sortDirection.value = 'asc'
+      sortDirection.value = first
       return
     }
-    if (sortDirection.value === 'asc') {
-      sortDirection.value = 'desc'
-    } else if (sortDirection.value === 'desc') {
+    if (sortDirection.value === first) {
+      sortDirection.value = second
+    } else if (sortDirection.value === second) {
       sortKey.value = null
       sortDirection.value = null
     } else {
-      sortDirection.value = 'asc'
+      sortDirection.value = first
     }
   }
 

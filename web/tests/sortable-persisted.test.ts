@@ -50,6 +50,19 @@ test('clicks write through, all the way back to unsorted', () => {
   expect(names(sortedRows.value)).toEqual(['b', 'a', 'c'])
 })
 
+test('a column read biggest-first sorts descending on its first click', () => {
+  // A total (tokens run) is looked at for its top: ascending first put the empty rows on top.
+  const biggestFirst = [{ ...columns[1]!, first: 'desc' as const }]
+  const { toggleSort, sortedRows, indicatorFor } = useSortable(() => rows, biggestFirst)
+  toggleSort('lastLaunched')
+  expect(indicatorFor('lastLaunched')).toBe('desc')
+  expect(names(sortedRows.value)).toEqual(['b', 'c', 'a'])
+  toggleSort('lastLaunched')
+  expect(indicatorFor('lastLaunched')).toBe('asc')
+  toggleSort('lastLaunched')
+  expect(indicatorFor('lastLaunched')).toBe(null)
+})
+
 test('a stale column or a bad direction reads as unsorted and can still be re-sorted', () => {
   const key = ref('columnThatWasRemoved')
   const direction = ref('asc')

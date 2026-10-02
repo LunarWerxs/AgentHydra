@@ -36,6 +36,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   waiter only wakes it for results nobody has judged. On 2026-10-01 each finished worker cost the
   orchestrator about eight model requests at its full context.
 
+- **A demo of the app over invented data** (`scripts/sue-demo`, `bun scripts/sue-demo/serve.ts`). The
+  built web app with every answer made up in the page and no daemon behind it: six invented CLI
+  accounts with token figures, and a Login sync that remembers a join, in two seats (`?seat=main`,
+  `?seat=second-pc`). It is what simulated visitors (SUE) walk, so nothing they press can sign a
+  real account out.
+
 ### Changed
 
 - **The CLI accounts table is as long as its rows** (`web/src/components/CliInstancesSection.vue`).
@@ -56,7 +62,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   uses a pasted credential, so rows stop saying "No account" beside a name that is an email, and
   names get the room. A row's ⋮ menu names the account under its number. The Keep windows running
   switch is drawn once its setting is known, so it no longer flips by itself after the page loads.
-  Sortable headers in the instance tables show a faint pair of arrows before they are clicked.
+  Sortable headers in the instance tables are real buttons (the keyboard reaches them) with a faint
+  pair of arrows before they are clicked, and Tokens sorts biggest first. A login still arriving
+  reads "On the way"; no count shows before the list has loaded; the weekly usage header says so
+  beside the 5-hour one. Four rounds, four visitors each: 4.0, 4.0, 4.25, then 4.5 stars of 5.
+
+- **No function is over the complexity gate** (the Architect's cognitive and cyclomatic limits).
+  Twenty-six functions were split into named steps with the same behaviour and the same order of
+  side effects, CliMayte's `tick`, `launch` and `finish` and Login sync's `pass` among them; the
+  tests that cover them pass unchanged (322).
 
 - **Login sync says why a login is left as it is in two words** (`server/src/core/cli-login-sync.ts`,
   the `note` field: `own`, `waiting`, `fed`). The sentence that used to fill the state column is the
