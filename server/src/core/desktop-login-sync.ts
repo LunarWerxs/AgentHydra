@@ -362,16 +362,22 @@ function replaceAuthCookies(
   const insert = d.prepare(
     `insert or replace into cookies (${names.join(', ')}) values (${names.map(() => '?').join(', ')})`,
   )
-  d.transaction(() => {
-    for (const old of d.query('select rowid, host_key, name from cookies').all() as Array<{
-      rowid: bigint
-      host_key: string
-      name: string
-    }>)
-      if (CLAUDE_HOST.test(old.host_key) && isAuthCookie(old.name))
-        d.run('delete from cookies where rowid = ?', [old.rowid])
-    for (const row of rows) insert.run(...(names.map((n) => row[n]) as any[]))
-  })()
+  try {
+    d.transaction(() => {
+      for (const old of d.query('select rowid, host_key, name from cookies').all() as Array<{
+        rowid: bigint
+        host_key: string
+        name: string
+      }>)
+        if (CLAUDE_HOST.test(old.host_key) && isAuthCookie(old.name))
+          d.run('delete from cookies where rowid = ?', [old.rowid])
+      for (const row of rows) insert.run(...(names.map((n) => row[n]) as any[]))
+    })()
+  } finally {
+    // A prepare()d statement is not finalized by close(): until the collector got to it, the closed
+    // database kept the profile's Cookies file open (EBUSY on Windows, CI run 37043007234).
+    insert.finalize()
+  }
 }
 
 /** Write the sign-in cookies into a closed profile's database under its key, replacing its own
