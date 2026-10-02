@@ -70,7 +70,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **No function is over the complexity gate** (the Architect's cognitive and cyclomatic limits).
   Twenty-six functions were split into named steps with the same behaviour and the same order of
   side effects, CliMayte's `tick`, `launch` and `finish` and Login sync's `pass` among them; the
-  tests that cover them pass unchanged (322).
+  tests that cover them pass unchanged (322). `server/src/climayte.ts` had grown past 3,600 lines
+  and is now five files: the engine, and `climayte-schedule.ts`, `climayte-launch.ts`,
+  `climayte-finish.ts` and `climayte-totals.ts`, each moved as written.
 
 - **Login sync says why a login is left as it is in two words** (`server/src/core/cli-login-sync.ts`,
   the `note` field: `own`, `waiting`, `fed`). The sentence that used to fill the state column is the

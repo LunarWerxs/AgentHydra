@@ -31,6 +31,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { finish } from './climayte-finish'
 import {
   appendJournal,
   type CliMayteJournalEntry,
@@ -43,58 +44,40 @@ import {
 import {
   type AttemptSpend,
   aboutToBill,
-  addResults,
   addTokens,
   atCeiling,
   attemptSpend,
   type CliMayteAccount,
   type CliMayteLiveUsage,
   type CliMayteSizing,
-  type CliMayteTokens,
   type CliMayteWalls,
   type CliMayteWorker,
   type CliMayteWorkerBrief,
   type CliMayteWorkerReport,
   type CliMayteWorkerView,
   ceilingNotice,
-  classifyAttempt,
   climayteEffort,
   climayteModel,
   climaytePriority,
-  continuationPrompt,
-  copySessionTranscript,
   dueOrder,
   freshestPct,
-  HANDOFF_PROMPT,
-  INTERRUPTED_PROMPT,
   isLoginWall,
   isOrgDisabled,
-  joinResults,
-  keepReport,
   liveUsage,
-  newestTranscript,
   noTokens,
   ORG_DISABLED_WALL,
   OVERAGE_NOTICE,
   overageStart,
-  PAUSED_PROMPT,
   PRE_OVERAGE_NOTICE,
-  pickAccount,
   recentWorkers,
-  scrubbedEnv,
   summarizeEvent,
-  TRANSIENT_PROMPT,
   toBrief,
   toReport,
   toView,
-  WIND_DOWN_SESSION_PCT,
-  WIND_DOWN_WEEK_PCT,
-  WORKER_BRIEF,
   wallUntil,
   windDownAt,
   windDownMessage,
 } from './climayte-lib'
-import { syncOwnerClaude } from './climayte-owner-sync'
 import {
   type CostEstimate,
   expectedCost,
@@ -104,11 +87,9 @@ import {
   projectedPct,
   type RunningLoad,
   sizeTask,
-  waitsForCooldown,
-  waitsForRoom,
-  weekPacePct,
 } from './climayte-placement'
-import { launchRunner, readRunnerExit, readRunnerPids } from './climayte-runner'
+import { readRunnerExit, readRunnerPids } from './climayte-runner'
+import { pollRunning, scheduleWorker, tickAccounts, tickState } from './climayte-schedule'
 import {
   attemptUnits,
   bestRung,
@@ -129,7 +110,6 @@ import { cliAuthStatus } from './core/cli-quick-add'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
 import { isPidAlive, killProcessTree } from './core/process'
 import { POINTER_DIR } from './instance'
-import { MCP_SERVER_KEY } from './mcp-register'
 import { getProviderSettings } from './provider-settings'
 import type { UsageSnapshot } from './types'
 import { parseResetTime } from './usage'
@@ -137,28 +117,29 @@ import { allCachedUsage } from './usage-cache'
 
 export * from './climayte-journal'
 export * from './climayte-lib'
+export { climayteTotals } from './climayte-totals'
 
 // POINTER_DIR is CONFIG_DIR for the primary install and a side-run's own data dir otherwise, so
 // two daemons never tick and overwrite the same workers.json.
 const ROOT = join(POINTER_DIR, 'corch')
-const LOGS = join(ROOT, 'logs')
-const PROMPTS = join(ROOT, 'prompts')
-const HOOKS = join(ROOT, 'hooks')
+export const LOGS = join(ROOT, 'logs')
+export const PROMPTS = join(ROOT, 'prompts')
+export const HOOKS = join(ROOT, 'hooks')
 const SIGNALS = join(ROOT, 'signals')
 const HANDOFFS = join(ROOT, 'handoffs')
 /** Forward slashes: the path goes into a bash command (the hook) and into the model's prompt. */
-const slashed = (p: string): string => p.replace(/\\/g, '/')
-const signalPath = (workerId: string): string => join(SIGNALS, `${workerId}.json`)
+export const slashed = (p: string): string => p.replace(/\\/g, '/')
+export const signalPath = (workerId: string): string => join(SIGNALS, `${workerId}.json`)
 const WALLS_PATH = join(ROOT, 'walls.json')
 const LIVE_PATH = join(ROOT, 'live.json')
 const JOURNAL_PATH = join(ROOT, 'journal.jsonl')
 
 /** `#84`, or the account's name when it has no number: the journal's short account label. */
-const acctLabel = (a: { num: number | null; name: string }): string =>
+export const acctLabel = (a: { num: number | null; name: string }): string =>
   a.num === null ? a.name : `#${a.num}`
 
 /** One line in the orchestration journal (climayte-journal.ts) for a state change of `w`. */
-function journal(
+export function journal(
   w: CliMayteWorker,
   event: CliMayteJournalEvent,
   details: Omit<Partial<CliMayteJournalEntry>, 'ts' | 'id' | 'group' | 'title' | 'event'> = {},
@@ -214,9 +195,9 @@ const STORE_SPEC: JsonStoreSpec<Store> = {
   empty: () => ({ workers: [], perAccount: {} }),
 }
 
-const workers = new Map<string, CliMayteWorker>()
-let perAccount: Record<string, number> = {}
-let walls: CliMayteWalls = {}
+export const workers = new Map<string, CliMayteWorker>()
+export let perAccount: Record<string, number> = {}
+export let walls: CliMayteWalls = {}
 let loaded = false
 let started = false
 let timer: ReturnType<typeof setTimeout> | null = null
@@ -294,7 +275,7 @@ export function climayteLimitWalls(): Map<string, { until: number; weekly: boole
 /** The owner's rule is never to spend paid extra usage; the `allowExtraUsage` setting (default
  *  false) lifts it: overage is then neither stopped nor walled, and accounts at their caps stay
  *  in the pool behind every account below them. Unreadable counts as false. */
-function overageAllowed(): boolean {
+export function overageAllowed(): boolean {
   try {
     return getProviderSettings().allowExtraUsage === true
   } catch {
@@ -303,7 +284,7 @@ function overageAllowed(): boolean {
 }
 const listeners = new Set<(w: CliMayteWorker) => void>()
 
-let claudeCommand: () => string[] = () => [resolveClaudeExe()]
+export let claudeCommand: () => string[] = () => [resolveClaudeExe()]
 /** The production pool: every CLI instance with a credential file, with its last usage reading
  *  (void once its window has reset), or a running worker's live one when that is newer. A hollow
  *  or revoked login still passes that file check; its first attempt fails `auth` and the account
@@ -360,7 +341,7 @@ function signedInAccounts(): CliMayteAccount[] {
 
 /** The newer of the background refresh's cached reading and a person's manual check (only the
  *  latter lands in `lastUsageCheck`). */
-function latestUsage(
+export function latestUsage(
   id: string,
   manual: UsageSnapshot | null | undefined,
   cache: Record<string, UsageSnapshot> = allCachedUsage(),
@@ -373,10 +354,10 @@ function latestUsage(
   return at(cached) > at(manual) ? cached : (manual ?? null)
 }
 
-const SIGNED_OUT_MS = 30 * 60_000
+export const SIGNED_OUT_MS = 30 * 60_000
 /** An organization's switch is not on a clock: its wall waits for a new login (recheckSignedOut). */
-const ORG_WALL_MS = 365 * 24 * 3_600_000
-const credStamp = (configDir: string): number | null => {
+export const ORG_WALL_MS = 365 * 24 * 3_600_000
+export const credStamp = (configDir: string): number | null => {
   try {
     return statSync(join(configDir, '.credentials.json')).mtimeMs
   } catch {
@@ -387,7 +368,7 @@ const authChecks = new Set<string>()
 
 /** Walls' write is atomic (saveWalls); a failed one keeps the in-memory change and must not stop
  *  the recheck that made it. */
-function trySaveWalls(): void {
+export function trySaveWalls(): void {
   try {
     saveWalls()
   } catch (err) {
@@ -464,7 +445,7 @@ export function climayteSignedOutReason(id: string, configDir: string): string |
 
 setCliLoginVeto(climayteSignedOutReason)
 
-let accountsProvider: () => CliMayteAccount[] = signedInAccounts
+export let accountsProvider: () => CliMayteAccount[] = signedInAccounts
 
 /** Tests: run a fake CLI instead of `claude`. null restores the real one. */
 export function setCliMayteClaudeCommand(argv: string[] | null): void {
@@ -472,7 +453,7 @@ export function setCliMayteClaudeCommand(argv: string[] | null): void {
 }
 /** Where the owner's global CLAUDE.md and skills live (`~/.claude`). Off under tests unless a test
  *  sets it, so a test run never links the real skills into a fixture. */
-let ownerClaudeDir: string | null =
+export let ownerClaudeDir: string | null =
   process.env.NODE_ENV === 'test' ? null : join(homedir(), '.claude')
 /** Tests: sync the owner's CLAUDE.md and skills from `dir` before each launch. null turns it off. */
 export function setCliMayteOwnerDir(dir: string | null): void {
@@ -488,7 +469,7 @@ export function onCliMayteChange(cb: (w: CliMayteWorker) => void): () => void {
   return () => listeners.delete(cb)
 }
 
-function load(): void {
+export function load(): void {
   if (loaded) return
   loaded = true
   const read = readJsonStore(STORE_SPEC)
@@ -550,7 +531,7 @@ function saveWalls(): void {
   writeJsonStoreAtomic(WALLS_PATH, walls)
 }
 
-function changed(w: CliMayteWorker): void {
+export function changed(w: CliMayteWorker): void {
   w.updatedAt = Date.now()
   save()
   for (const cb of listeners) {
@@ -599,7 +580,7 @@ function checkShell(): string {
   return 'bash'
 }
 
-function startCheck(w: CliMayteWorker): void {
+export function startCheck(w: CliMayteWorker): void {
   if (!w.check || checks.has(w.id)) return
   w.status = 'checking'
   w.checkRuns = (w.checkRuns ?? 0) + 1
@@ -702,7 +683,7 @@ const confirmedRunners = new Set<number>()
 
 /** Where a runner attempt's spec goes (climayte-runner.ts deletes it once read; its path stays in the
  *  runner's command line, which is how isOurRunner recognises it). */
-const runnerSpecPath = (log: string): string => `${log}.spec.json`
+export const runnerSpecPath = (log: string): string => `${log}.spec.json`
 
 function isOurRunner(pid: number, log: string): boolean {
   if (!isPidAlive(pid)) return false
@@ -758,7 +739,7 @@ function killAttempt(at: CliMayteWorker['attempts'][number]): void {
   }
 }
 
-function schedule(delay?: number): void {
+export function schedule(delay?: number): void {
   if (timer) clearTimeout(timer)
   // poll() runs every tick, so the overage stop is only as fast as the tick, and each second of
   // overage bills the owner: 1 s while a worker runs, 3 s while one is queued or waiting.
@@ -776,7 +757,7 @@ function schedule(delay?: number): void {
  *  each account and what it is expected to cost, and what attempts that ended since an account's
  *  first running worker started spent there (part of the meter's rise that is not the running
  *  work's; projectedPct). */
-function placementState(): {
+export function placementState(): {
   costOf: (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort'>) => CostEstimate
   running: Map<string, RunningLoad[]>
   finishedSince: Map<string, number>
@@ -824,330 +805,6 @@ function placementState(): {
       finishedSince.set(a.account.id, (finishedSince.get(a.account.id) ?? 0) + pct)
     }
   return { costOf, running, finishedSince }
-}
-
-/** One tick's view of the fleet: built once, and kept current as the tick starts work. */
-interface TickState {
-  now: number
-  accounts: CliMayteAccount[]
-  allowFull: boolean
-  /** Running workers per account, every group. */
-  active: Map<string, number>
-  /** Each group's running workers per account: `perAccount` caps a group, not the fleet. */
-  byGroup: Map<string, Map<string, number>>
-  costOf: ReturnType<typeof placementState>['costOf']
-  running: Map<string, RunningLoad[]>
-  finishedSince: Map<string, number>
-}
-
-function tickAccounts(): CliMayteAccount[] {
-  try {
-    return accountsProvider()
-  } catch (err) {
-    console.error('[climayte] could not list accounts:', err)
-    return []
-  }
-}
-
-function pollRunning(): void {
-  for (const w of workers.values()) {
-    if (w.status !== 'running') continue
-    try {
-      poll(w)
-    } catch (err) {
-      console.error(`[climayte] could not read ${w.id}:`, err)
-    }
-  }
-}
-
-const bumpCount = (m: Map<string, number>, id: string): void => {
-  m.set(id, (m.get(id) ?? 0) + 1)
-}
-
-function groupCounts(byGroup: Map<string, Map<string, number>>, g: string): Map<string, number> {
-  let m = byGroup.get(g)
-  if (!m) {
-    m = new Map()
-    byGroup.set(g, m)
-  }
-  return m
-}
-
-function tickState(accounts: CliMayteAccount[], now: number): TickState {
-  const allowFull = overageAllowed()
-  const active = new Map<string, number>()
-  const byGroup = new Map<string, Map<string, number>>()
-  for (const w of workers.values())
-    if (w.status === 'running' && w.accountId) {
-      bumpCount(active, w.accountId)
-      bumpCount(groupCounts(byGroup, w.group), w.accountId)
-    }
-  const { costOf, running, finishedSince } = placementState()
-  return { now, accounts, allowFull, active, byGroup, costOf, running, finishedSince }
-}
-
-/** When an account can next take work: the end of its usage wall, else its 5-hour reset. A login
- *  wall's `until` is only its next recheck, not a time the account frees up. */
-function accountFreesAt(a: CliMayteAccount, now: number): number | null {
-  const wall = walls[a.id]
-  if (wall && wall.until > now) return isLoginWall(wall.reason) ? null : wall.until
-  return a.sessionResetsAt ?? null
-}
-
-function firstFreeAt(pool: CliMayteAccount[], now: number): string | null {
-  const at = pool
-    .map((a) => accountFreesAt(a, now))
-    .filter((t): t is number => t !== null && t > now)
-    .sort((a, b) => a - b)[0]
-  return at === undefined ? null : new Date(at).toISOString()
-}
-
-/** The picked account is the session's own, and its last attempt did not end in a way that sends
- *  the session elsewhere anyway. */
-const staysHome = (w: CliMayteWorker, acct: CliMayteAccount): boolean =>
-  acct.id === w.accountId &&
-  !['handoff', 'quota', 'auth'].includes(w.attempts.at(-1)?.outcome ?? 'handoff')
-
-/** The best account has too little room for what this task is expected to use: it waits for room. */
-function holdForRoom(
-  s: TickState,
-  w: CliMayteWorker,
-  acct: CliMayteAccount,
-  cost: CostEstimate,
-  allowed: CliMayteAccount[],
-): void {
-  const expected = cost.pct
-  const factor = acct.planFactor ?? 1
-  const room = Math.max(
-    0,
-    (FIT_PCT -
-      projectedPct(acct, s.running.get(acct.id) ?? [], 0, s.finishedSince.get(acct.id) ?? 0)) *
-      factor,
-  )
-  const head = `Waiting for room: this task is expected to use about ${Math.round(expected)}% of a Pro 5-hour window`
-  const why = `${head}, and the best account now (${acctLabel(acct)}) has about ${Math.round(room)}% left. It starts the moment one has room (a reset, or the work there finishing); smaller tasks go meanwhile.`
-  // Room for certain at the first reset of an account whose fresh window holds it (the work
-  // running there may finish sooner).
-  const until = firstFreeAt(
-    allowed.filter((a) => expected / (a.planFactor ?? 1) <= FIT_PCT),
-    s.now,
-  )
-  if (w.waitUntil !== until && w.status === 'waiting') {
-    w.waitUntil = until
-    changed(w)
-  }
-  // Said again only when the estimate changes: the room left moves every tick, and each new
-  // figure would be a journal line.
-  if (w.status !== 'waiting' || !w.error?.startsWith(head)) {
-    w.waitUntil = until
-    w.status = 'waiting'
-    w.error = why
-    w.size = {
-      expected: Math.round(expected * 10) / 10,
-      basis: basisText(cost, w),
-      window: sizeTask(
-        expected,
-        allowed.map((a) => a.planFactor ?? 1),
-      ).window,
-      room: Math.round(room),
-      roomOn: acctLabel(acct),
-    }
-    journal(w, 'waiting', { error: firstLine(why), until: until ?? undefined })
-    changed(w)
-  }
-}
-
-/** Ahead of its weekly pace while another account refills soon: wait for that one
- *  (waitsForCooldown, owner 2026-10-01: not everything into the 5x because the Pros are low).
- *  When to start instead, or nothing when the task need not wait. */
-function cooldownFor(
-  s: TickState,
-  w: CliMayteWorker,
-  acct: CliMayteAccount,
-  allowed: CliMayteAccount[],
-  groupActive: Map<string, number>,
-  cap: number,
-  expected: number,
-): ReturnType<typeof waitsForCooldown> {
-  return waitsForCooldown(
-    acct,
-    // When each refills: the end of its limit wall, else its 5-hour reset (accountFreesAt).
-    allowed
-      .filter(
-        (a) =>
-          !isLoginWall(walls[a.id]?.reason) &&
-          (a.weekPct ?? 0) < WIND_DOWN_WEEK_PCT &&
-          (groupActive.get(a.id) ?? 0) < cap,
-      )
-      .map((a) => ({ ...a, sessionResetsAt: accountFreesAt(a, s.now) })),
-    expected,
-    s.now,
-    { home: staysHome(w, acct), priority: w.priority ?? 0 },
-  )
-}
-
-function holdForReset(
-  w: CliMayteWorker,
-  acct: CliMayteAccount,
-  cooldown: number,
-  now: number,
-): void {
-  const until = new Date(cooldown).toISOString()
-  const head = `Waiting for a reset: ${acctLabel(acct)} has used ${Math.round(acct.weekPct ?? 0)}% of its week with ${Math.round(weekPacePct(acct, now) ?? 0)}% of the week gone`
-  const why = `${head}, and an account this task fits refills its 5-hour window at ${new Date(cooldown).toLocaleTimeString()}. It starts then (or sooner, where room opens); other tasks keep going meanwhile, and priority work never waits.`
-  if (w.status !== 'waiting' || !w.error?.startsWith(head) || w.waitUntil !== until) {
-    if (w.status !== 'waiting' || !w.error?.startsWith(head))
-      journal(w, 'waiting', { error: firstLine(why), until })
-    w.status = 'waiting'
-    w.error = why
-    w.waitUntil = until
-    changed(w)
-  }
-}
-
-/** A throw after the spawn leaves a live attempt. One before it (a file lock on the
- *  transcript copy or the prompt file) is usually passing: retry it, three times per turn. */
-function retryLaunch(w: CliMayteWorker, acct: CliMayteAccount, err: unknown): void {
-  if (w.status === 'running' || w.status === 'failed') return
-  const msg = err instanceof Error ? err.message : String(err)
-  if (w.retries < 3) {
-    w.status = 'queued'
-    w.notBefore = Date.now() + 10_000
-    w.retries++
-    w.error = `Could not start the next attempt (will retry): ${msg}`
-    journal(w, 'retry', {
-      account: acctLabel(acct),
-      retry: w.retries,
-      waitS: 10,
-      notice: firstLine(`Could not start the next attempt: ${msg}`),
-    })
-  } else {
-    w.status = 'failed'
-    w.error = `Could not start the next attempt: ${msg}`
-    journal(w, 'failed', { account: acctLabel(acct), error: firstLine(w.error) })
-  }
-  changed(w)
-}
-
-/** Start the task on the picked account, and count it there for the rest of this tick. */
-function startOn(
-  s: TickState,
-  w: CliMayteWorker,
-  acct: CliMayteAccount,
-  cost: CostEstimate,
-  groupActive: Map<string, number>,
-): void {
-  const expected = cost.pct
-  // The row's size says what this start was placed on, not the estimate at dispatch.
-  if (w.size)
-    w.size = {
-      ...w.size,
-      expected: Math.round(expected * 10) / 10,
-      basis: basisText(cost, w),
-    }
-  try {
-    launch(w, acct, s.accounts, s.active.get(acct.id) ?? 0)
-  } catch (err) {
-    console.error(`[climayte] could not launch ${w.id}:`, err)
-    retryLaunch(w, acct, err)
-  }
-  if (w.status === 'running') {
-    bumpCount(s.active, acct.id)
-    bumpCount(groupActive, acct.id)
-    s.running.set(acct.id, [
-      ...(s.running.get(acct.id) ?? []),
-      { expected, startPct: acct.sessionPct },
-    ])
-  }
-}
-
-/** Why no account can take the task now, in the words the task's row shows. */
-function noAccountReason(
-  s: TickState,
-  w: CliMayteWorker,
-  allowed: CliMayteAccount[],
-  until: string | null,
-): string {
-  const { now, accounts } = s
-  const soonest = until ? Date.parse(until) : undefined
-  const allSignedOut =
-    allowed.length > 0 &&
-    allowed.every((a) => isLoginWall(walls[a.id]?.reason) && walls[a.id]!.until > now)
-  if (!accounts.length) return 'No signed-in CLI account. Add one: CLI instances, Quick add.'
-  if (w.accounts && !allowed.length)
-    return 'None of the accounts this task may use is signed in. Sign one in: CLI instances, Quick add (type its email).'
-  if (allSignedOut)
-    return 'Every CLI account is signed out. Sign one in again: CLI instances, Quick add (type its email).'
-  return `Every eligible account is at its usage limit, past the ${WIND_DOWN_SESSION_PCT}% stop line, or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.`
-}
-
-/** Busy (every eligible account at its worker cap) stays queued; nothing eligible at all
- *  waits. */
-function holdForAccount(s: TickState, w: CliMayteWorker, allowed: CliMayteAccount[]): void {
-  const { now, accounts } = s
-  const idle = new Map<string, number>()
-  if (pickAccount(w, accounts, walls, idle, Number.MAX_SAFE_INTEGER, now, idle, s.allowFull)) {
-    if (w.status === 'waiting') {
-      w.status = 'queued'
-      w.error = null
-      changed(w)
-    }
-    return
-  }
-  const until = firstFreeAt(allowed, now)
-  const why = noAccountReason(s, w, allowed, until)
-  if (w.status !== 'waiting' || w.error !== why || w.waitUntil !== until) {
-    if (w.status !== 'waiting' || w.error !== why)
-      journal(w, 'waiting', { error: firstLine(why), until: until ?? undefined })
-    w.status = 'waiting'
-    w.error = why
-    w.waitUntil = until
-    changed(w)
-  }
-}
-
-/** One due task: start it on the best account, or say what it waits for. */
-function scheduleWorker(s: TickState, w: CliMayteWorker): void {
-  const { now, accounts } = s
-  const cap = perAccount[w.group] ?? 2
-  const groupActive = groupCounts(s.byGroup, w.group)
-  const cost = s.costOf(w)
-  const expected = cost.pct
-  const placement = { expected, running: s.running, finishedSince: s.finishedSince }
-  const acct = pickAccount(
-    w,
-    accounts,
-    walls,
-    s.active,
-    cap,
-    now,
-    groupActive,
-    s.allowFull,
-    placement,
-  )
-  const allowed = accounts.filter((a) => !w.accounts || w.accounts.includes(a.id))
-  if (
-    acct &&
-    waitsForRoom(
-      acct,
-      placement,
-      allowed.map((a) => a.planFactor ?? 1),
-      staysHome(w, acct),
-    )
-  ) {
-    holdForRoom(s, w, acct, cost, allowed)
-    return
-  }
-  const cooldown = acct && cooldownFor(s, w, acct, allowed, groupActive, cap, expected)
-  if (acct && cooldown) {
-    holdForReset(w, acct, cooldown, now)
-    return
-  }
-  if (acct) {
-    startOn(s, w, acct, cost, groupActive)
-    return
-  }
-  holdForAccount(s, w, allowed)
 }
 
 async function tick(): Promise<void> {
@@ -1201,7 +858,7 @@ function readLog(path: string): LogRead {
 }
 
 /** A finished attempt's log, parsed once without keeping it in `reads`. */
-function peekLog(path: string): LogRead {
+export function peekLog(path: string): LogRead {
   return readInto(path, freshRead())
 }
 
@@ -1221,7 +878,7 @@ function finishedLines(path: string): string[] {
   rememberFinished(path, recent)
   return recent
 }
-function forgetRead(path: string): void {
+export function forgetRead(path: string): void {
   const r = reads.get(path)
   if (r) rememberFinished(path, r.recent)
   reads.delete(path)
@@ -1284,7 +941,7 @@ function readInto(path: string, r: LogRead): LogRead {
   return r
 }
 
-function tailText(path: string, max: number): string {
+export function tailText(path: string, max: number): string {
   try {
     const size = statSync(path).size
     const fd = openSync(path, 'r')
@@ -1404,7 +1061,7 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
   if (exited) finish(w, r.events)
 }
 
-function poll(w: CliMayteWorker): void {
+export function poll(w: CliMayteWorker): void {
   const at = w.attempts[w.attempts.length - 1]
   if (!at) return
   const exited = attemptExited(w, at)
@@ -1468,322 +1125,6 @@ function stopAtCeiling(
   changed(w)
 }
 
-/** What the session left running, ended with its runner's job (field note 43), goes in the
- *  journal; the runner's own files go. */
-function cleanUpRunner(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): void {
-  if (!at.runner) return
-  const left = readRunnerExit(at.runner.exitFile)?.left
-  if (left?.length)
-    journal(w, 'cleaned', {
-      account: acctLabel(at.account),
-      notice: firstLine(
-        left.map((p) => `${p.name} ${p.pid}${p.command ? `: ${p.command}` : ''}`).join('; '),
-      ),
-    })
-  rmSync(at.runner.pidFile, { force: true })
-  rmSync(at.runner.exitFile, { force: true })
-}
-
-/** Stopped at the ceiling: from its handoff when it wrote one, else on like a limit (the wall is up). */
-function ceilingVerdict(
-  at: CliMayteWorker['attempts'][number],
-  ceiling: NonNullable<CliMayteWorker['attempts'][number]['ceiling']>,
-  v: ReturnType<typeof classifyAttempt>,
-): ReturnType<typeof classifyAttempt> {
-  if (at.windDown && handoffWritten(at.windDown))
-    return {
-      ...v,
-      outcome: 'handoff',
-      notice: `${ceilingNotice(ceiling)} Its handoff was written; the task continues in a fresh session.`,
-    }
-  return {
-    ...v,
-    outcome: 'quota',
-    notice: ceilingNotice(ceiling),
-    resetsAt: ceiling.resetsAt,
-    window: ceiling.week ? 'weekly' : 'session',
-    resets: null,
-  }
-}
-
-/** The CLI's verdict as CliMayte's own stops change it: an overage stop and a ceiling stop are
- *  limits (or a handoff), and a wind-down that wrote its handoff is one too. */
-function withStops(
-  at: CliMayteWorker['attempts'][number],
-  verdict: ReturnType<typeof classifyAttempt>,
-): ReturnType<typeof classifyAttempt> {
-  let v = verdict
-  // Stopped to spare paid extra usage: a limit, whatever the killed process left behind. A turn
-  // that still finished cleanly keeps its result; its account is walled either way.
-  if (at.overage && v.outcome !== 'done')
-    v = {
-      ...v,
-      outcome: 'quota',
-      notice: at.overage.notice ?? OVERAGE_NOTICE,
-      resetsAt: at.overage.resetsAt,
-      window: 'session',
-      resets: null,
-    }
-  if (at.ceiling && v.outcome !== 'done') v = ceilingVerdict(at, at.ceiling, v)
-  // Asked to wind down: a handoff written after the signal means the task goes on in a fresh
-  // session elsewhere; none means the session reported the whole task complete instead.
-  if (at.windDown && v.outcome === 'done' && handoffWritten(at.windDown))
-    v = {
-      ...v,
-      outcome: 'handoff',
-      notice:
-        at.windDown.pct === null
-          ? 'Handed off on request: wrote a handoff; the task continues in a fresh session.'
-          : `Wound down at ${Math.round(at.windDown.pct)}% of its usage limit and wrote a handoff; the task continues in a fresh session on another account.`,
-    }
-  return v
-}
-
-/** Every turn's closing text, not just the last: a repo's Stop hook can force a turn after the
- *  report (field note 13), and a limit can cut the session after one. `result` is them joined. */
-function keepResults(
-  w: CliMayteWorker,
-  at: CliMayteWorker['attempts'][number],
-  v: ReturnType<typeof classifyAttempt>,
-): void {
-  if (v.turnTexts.length) {
-    w.results = addResults(w.results, v.turnTexts)
-    w.result = joinResults(w.results)
-    for (const text of v.turnTexts)
-      journal(w, 'turn-end', {
-        account: acctLabel(at.account),
-        attempt: w.attempts.length,
-        said: firstLine(text),
-      })
-  } else if (v.outcome === 'done' || v.outcome === 'handoff') w.result = v.result
-}
-
-/** Wall an account that hit its limit until the limit resets. */
-function wallAtLimit(
-  at: CliMayteWorker['attempts'][number],
-  v: ReturnType<typeof classifyAttempt>,
-  now: number,
-): void {
-  // The CLI's own resetsAt when it streamed one, else the notice's text (wallUntil). A weekly
-  // wall with neither falls back to the account's own weekly reset rather than an hour.
-  let weekly: number | null = null
-  if (v.resetsAt === null && (v.window === 'weekly' || /weekly/i.test(v.notice ?? ''))) {
-    const reading = latestUsage(at.account.id, getCliInstance(at.account.id)?.lastUsageCheck)
-    const week = Date.parse(reading?.weekAll?.resetsAt ?? '')
-    if (Number.isFinite(week)) weekly = week
-  }
-  walls[at.account.id] = {
-    until: wallUntil(now, v, parseResetTime, weekly),
-    reason: v.notice ?? 'usage limit',
-  }
-  // The wall holds in memory either way; a throw here must not leave the worker 'running'.
-  trySaveWalls()
-}
-
-/** Wall an account whose login no longer works, until its recheck (recheckSignedOut). */
-function wallSignedOut(
-  at: CliMayteWorker['attempts'][number],
-  v: ReturnType<typeof classifyAttempt>,
-  now: number,
-): void {
-  const dir = getCliInstance(at.account.id)?.configDir
-  const org = isOrgDisabled(v.notice)
-  walls[at.account.id] = {
-    until: now + (org ? ORG_WALL_MS : SIGNED_OUT_MS),
-    reason: org ? ORG_DISABLED_WALL : 'signed out',
-    cred: dir ? credStamp(dir) : null,
-  }
-  trySaveWalls()
-}
-
-function retryTransient(
-  w: CliMayteWorker,
-  v: ReturnType<typeof classifyAttempt>,
-  now: number,
-): void {
-  if (w.retries < 3) {
-    w.notBefore = now + [5_000, 10_000, 20_000][w.retries]!
-    w.retries++
-    w.status = 'queued'
-  } else {
-    w.status = 'failed'
-    w.error = `Anthropic stayed overloaded through 3 retries: ${v.notice ?? ''}`.trim()
-  }
-}
-
-/** Killed from outside with the transcript intact: resume the same session on the same
- *  account. Three in one turn means something keeps killing it, and that needs a person. No
- *  delay: with one, a resume took 3.1 s every time (6 real cases), all of it waiting. */
-function resumeInterrupted(w: CliMayteWorker, stderr: string): void {
-  if (w.retries < 3) {
-    w.notBefore = null
-    w.retries++
-    w.status = 'queued'
-  } else {
-    w.status = 'failed'
-    w.error = `The CLI was stopped before it finished three times in a row in this turn.${stderr ? ` Its last error output: ${stderr.slice(-1_500)}` : ''}`
-  }
-}
-
-/** The worker's next state from how its attempt ended, with the account's wall where it earned one. */
-function settleWorker(
-  w: CliMayteWorker,
-  at: CliMayteWorker['attempts'][number],
-  v: ReturnType<typeof classifyAttempt>,
-  now: number,
-  stderr: string,
-): void {
-  switch (v.outcome) {
-    case 'done':
-      w.retries = 0
-      w.error = null
-      w.status = w.pending.length ? 'queued' : 'done'
-      break
-    case 'handoff':
-      // launch() starts the next session from the handoff; the wound-down account is tried last.
-      w.retries = 0
-      w.error = null
-      w.status = 'queued'
-      break
-    case 'quota':
-      wallAtLimit(at, v, now)
-      w.retries = 0
-      w.status = 'queued'
-      break
-    case 'auth':
-      wallSignedOut(at, v, now)
-      w.status = 'queued'
-      break
-    case 'transient':
-      retryTransient(w, v, now)
-      break
-    case 'interrupted':
-      resumeInterrupted(w, stderr)
-      break
-    default:
-      w.status = 'failed'
-      w.error = v.result || stderr.slice(-1_500) || 'The CLI exited without a result.'
-  }
-}
-
-function finish(w: CliMayteWorker, events: unknown[]): void {
-  const at = w.attempts[w.attempts.length - 1]
-  if (at?.outcome !== 'running') return
-  cleanUpRunner(w, at)
-  const stderr = tailText(at.errLog, 4_000)
-  const v = withStops(at, classifyAttempt(events, stderr, at.started === true))
-  rmSync(signalPath(w.id), { force: true })
-  forgetRead(at.log)
-  const now = Date.now()
-  if (v.outcome === 'auth' || v.outcome === 'quota') keepHome(w, at)
-  at.outcome = v.outcome
-  at.notice = v.notice
-  at.endedAt = now
-  const spent = charge(w, at)
-  w.turns += v.turns
-  keepResults(w, at, v)
-  if (w.status === 'cancelled') {
-    changed(w)
-    return
-  }
-  settleWorker(w, at, v, now, stderr)
-  // climayteSend told the caller a queued message would be delivered; say that it was not.
-  if (w.status === 'failed' && w.pending.length)
-    w.error =
-      `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
-  journalFinish(w, at, v, spent)
-  if (w.status === 'done' && w.check) startCheck(w)
-  changed(w)
-  schedule(50)
-}
-
-/** An attempt refused at sign-in, or stopped at a limit, before it wrote anything to the session
- *  never becomes the session's home (field note 30): the home goes back to the account holding the
- *  newest transcript, which the next launch resumes on or moves from. */
-function keepHome(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): void {
-  const sessionId = at.sessionId ?? w.sessionId
-  if (!sessionId || w.accountId !== at.account.id) return
-  let accounts: CliMayteAccount[] = []
-  try {
-    accounts = accountsProvider()
-  } catch {
-    // the attempts' own accounts still resolve through the instance store
-  }
-  const here = configDirOf(at.account.id, accounts)
-  const file = transcriptFile(here, sessionId)
-  try {
-    if (file && statSync(file).mtimeMs >= at.startedAt) return // it wrote: this is the home
-  } catch {
-    // gone since: it wrote nothing that is still there
-  }
-  const others = transcriptCandidates(w, accounts).filter((c) => c.id !== at.account.id)
-  const holder = newestTranscript(others, sessionId)
-  if (holder) w.accountId = holder.id
-}
-
-/** The journal line for an attempt that just ended (finish), from its verdict and the worker's
- *  new state. */
-function journalFinish(
-  w: CliMayteWorker,
-  at: CliMayteWorker['attempts'][number],
-  v: {
-    outcome: CliMayteWorker['attempts'][number]['outcome']
-    notice: string | null
-    turns: number
-  },
-  spent: number,
-): void {
-  const account = acctLabel(at.account)
-  const notice = v.notice ? firstLine(v.notice) : undefined
-  const until = (): string | undefined => {
-    const u = walls[at.account.id]?.until
-    return u ? new Date(u).toISOString() : undefined
-  }
-  if (w.status === 'failed') {
-    journal(w, 'failed', { account, error: firstLine(w.error) })
-    return
-  }
-  switch (v.outcome) {
-    case 'done':
-      journal(w, w.status === 'done' ? 'done' : 'turn-done', {
-        account,
-        costUsd: Math.round(spent * 10_000) / 10_000,
-        turns: v.turns,
-        totalCostUsd: Math.round(w.costUsd * 10_000) / 10_000,
-      })
-      break
-    case 'handoff':
-      // A ceiling stop that still got its handoff written is a ceiling stop all the same: without
-      // this line the night's one ceiling stop (w-d7fbb102, #102) was in the totals but not here.
-      if (at.ceiling)
-        journal(w, 'limit', { account, until: until(), ceiling: true, pct: at.ceiling.pct })
-      journal(w, 'handoff-written', { account, path: at.windDown?.path })
-      break
-    case 'quota':
-      journal(w, 'limit', {
-        account,
-        notice,
-        until: until(),
-        ...(at.ceiling ? { ceiling: true, pct: at.ceiling.pct } : {}),
-      })
-      break
-    case 'auth':
-      journal(w, 'signed-out', { account, notice, until: until() })
-      break
-    case 'transient':
-      journal(w, 'retry', {
-        account,
-        notice,
-        retry: w.retries,
-        waitS: w.notBefore ? Math.round((w.notBefore - Date.now()) / 1000) : 0,
-      })
-      break
-    case 'interrupted':
-      journal(w, 'interrupted', { account, retry: w.retries })
-      break
-  }
-}
-
 /** An ended attempt's own spend and tokens, from its transcript on the account it ran on
  *  (attemptSpend). */
 function spentOf(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): AttemptSpend {
@@ -1798,7 +1139,7 @@ function spentOf(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): Att
 /** The last attempt before `at` that made a model request (spent tokens), or undefined. One that
  *  started but was refused (signed out, Claude Code switched off) wrote no conversation to re-read:
  *  run 1 had three first attempts like that, and the run after each was fresh. */
-function lastThatRan(
+export function lastThatRan(
   w: CliMayteWorker,
   at: CliMayteWorker['attempts'][number],
 ): CliMayteWorker['attempts'][number] | undefined {
@@ -1859,7 +1200,7 @@ function sessionOfLog(log: string): string | null {
 }
 
 /** Charge an ended attempt to its task: its own cost and tokens. Returns the cost. */
-function charge(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): number {
+export function charge(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): number {
   const spent = spentOf(w, at)
   at.tokens = spent.tokens
   at.spend = spendRecord(w, at, spent)
@@ -1991,7 +1332,7 @@ function backfillTokens(): boolean {
 
 /** The handoff file exists and was written after the wind-down was asked for (a stale one from an
  *  earlier run with the same name does not count). */
-function handoffWritten(windDown: { at: number; path: string }): boolean {
+export function handoffWritten(windDown: { at: number; path: string }): boolean {
   try {
     return statSync(windDown.path).mtimeMs >= windDown.at - 1_000
   } catch {
@@ -2000,7 +1341,7 @@ function handoffWritten(windDown: { at: number; path: string }): boolean {
 }
 
 /** A session's transcript file on an account, or null. */
-function transcriptFile(configDir: string | null, sessionId: string): string | null {
+export function transcriptFile(configDir: string | null, sessionId: string): string | null {
   if (!configDir) return null
   const root = join(configDir, 'projects')
   try {
@@ -2014,7 +1355,7 @@ function transcriptFile(configDir: string | null, sessionId: string): string | n
   return null
 }
 
-function hasTranscript(configDir: string, sessionId: string): boolean {
+export function hasTranscript(configDir: string, sessionId: string): boolean {
   const root = join(configDir, 'projects')
   try {
     return readdirSync(root).some((d) => existsSync(join(root, d, `${sessionId}.jsonl`)))
@@ -2023,14 +1364,14 @@ function hasTranscript(configDir: string, sessionId: string): boolean {
   }
 }
 
-function configDirOf(id: string, accounts: CliMayteAccount[]): string | null {
+export function configDirOf(id: string, accounts: CliMayteAccount[]): string | null {
   return accounts.find((a) => a.id === id)?.configDir ?? getCliInstance(id)?.configDir ?? null
 }
 
 /** Every account that may hold a copy of the task's transcript, for newestTranscript: the ones its
  *  attempts ran on, newest first (an attempt refused at sign-in wrote nothing, so those go last),
  *  then every other account CliMayte can use. */
-function transcriptCandidates(
+export function transcriptCandidates(
   w: CliMayteWorker,
   accounts: CliMayteAccount[],
 ): Array<{ id: string; configDir: string }> {
@@ -2051,7 +1392,7 @@ function transcriptCandidates(
 
 /** The session ran somewhere (it holds work a fresh start would lose): an attempt of it got past
  *  sign-in. An attempt recorded before attempts kept their session counts when there was only one. */
-function sessionRan(w: CliMayteWorker, sessionId: string): boolean {
+export function sessionRan(w: CliMayteWorker, sessionId: string): boolean {
   return w.attempts.some(
     (a) =>
       (a.sessionId === sessionId || (a.sessionId === undefined && !w.sessions?.length)) &&
@@ -2061,414 +1402,12 @@ function sessionRan(w: CliMayteWorker, sessionId: string): boolean {
 }
 
 /** The newest handoff note the task wrote, or null. */
-function lastHandoffNote(w: CliMayteWorker): string | null {
+export function lastHandoffNote(w: CliMayteWorker): string | null {
   for (let i = w.attempts.length - 1; i >= 0; i--) {
     const d = w.attempts[i]!.windDown
     if (d && handoffWritten(d)) return d.path
   }
   return null
-}
-
-/** What a launch decides before it starts the CLI, and what its bookkeeping needs afterwards. */
-interface LaunchPlan {
-  /** This attempt's index: how many came before it. */
-  n: number
-  last: CliMayteWorker['attempts'][number] | undefined
-  /** The handoff file a fresh session starts from, when this launch starts one. */
-  note: string | null | undefined
-  fresh: boolean
-  oldSession: CliMayteWorker['sessionId']
-  sessionId: string
-  /** The account the session leaves, when this launch moves it. */
-  fromId: string | null
-  copied: boolean | undefined
-  resume: boolean
-  inSession: boolean
-  /** The queued follow-up this launch would deliver. */
-  next: string
-  delivers: boolean
-}
-
-/** Which session this launch runs in. After a planned handoff the task goes on in a NEW session,
- *  started from the handoff file; so does a task whose transcript a move found nowhere, from its
- *  last handoff note (field note 30). */
-function sessionPlan(
-  w: CliMayteWorker,
-  last: CliMayteWorker['attempts'][number] | undefined,
-): Pick<LaunchPlan, 'note' | 'fresh' | 'oldSession' | 'sessionId'> {
-  const note = w.handoffNote ?? (last?.outcome === 'handoff' ? last.windDown?.path : undefined)
-  const fresh = !!note
-  const oldSession = w.sessionId
-  const sessionId = fresh || !w.sessionId ? crypto.randomUUID() : w.sessionId
-  if (!fresh) w.sessionId = sessionId
-  return { note, fresh, oldSession, sessionId }
-}
-
-/** Moving accounts: carry the transcript over so `--resume` finds it there, from whichever account
- *  holds its newest copy: the last one TRIED may never have run it (field note 30). A session that
- *  holds work already must not start over empty on the new account: with no copy to carry, the
- *  task is failed here (`failed`), and the launch stops. */
-function moveTranscript(
-  w: CliMayteWorker,
-  acct: CliMayteAccount,
-  accounts: CliMayteAccount[],
-  sessionId: string,
-): { copied: boolean; failed: boolean } {
-  const holder = newestTranscript(transcriptCandidates(w, accounts), sessionId)
-  const copied = holder
-    ? holder.id === acct.id || copySessionTranscript(holder.configDir, acct.configDir, sessionId)
-    : false
-  if (copied || !sessionRan(w, sessionId)) return { copied, failed: false }
-  const label = acct.num === null ? acct.name : `#${acct.num} ${acct.name}`
-  const kept = lastHandoffNote(w)
-  w.status = 'failed'
-  w.handoffNote = kept
-  w.error = `No account holds this session's transcript (looked on ${transcriptCandidates(w, accounts).length}), so it cannot move to ${label} with its context. ${kept ? `Its last handoff note is ${slashed(kept)}: send it a message (climayte_send) and it continues from that note in a fresh session.` : 'It wrote no handoff note: start it again as a new task.'}`
-  journal(w, 'failed', { account: acctLabel(acct), error: firstLine(w.error) })
-  changed(w)
-  return { copied, failed: true }
-}
-
-/** Whether the stopped attempt's message is in the session, and the follow-up this launch
- *  delivers, if it delivers one. */
-function deliveryPlan(
-  w: CliMayteWorker,
-  last: CliMayteWorker['attempts'][number] | undefined,
-  fresh: boolean,
-): Pick<LaunchPlan, 'inSession' | 'next' | 'delivers'> {
-  // Stopped after the CLI started (its init event is in the log): the message is already in the
-  // session, so ask it to carry on. Stopped before that: the message never arrived, send it again.
-  const inSession = !!last && (last.started ?? peekLog(last.log).sawInit)
-  // A follow-up is shifted out of `pending` only once the spawn succeeded, so a failed spawn
-  // cannot lose it. Without a transcript here the task itself goes first.
-  const next = w.pending[0] ?? ''
-  const stopped = !!last && ['quota', 'auth', 'transient', 'interrupted'].includes(last.outcome)
-  const delivers = !fresh && !!last && w.pending.length > 0 && (w.revived === true || !stopped)
-  return { inSession, next, delivers }
-}
-
-/** The message the attempt before this one was started with (its prompt file), else the task. */
-const prevPromptOf = (w: CliMayteWorker, n: number): string =>
-  tailText(join(PROMPTS, `${w.id}-${n - 1}.txt`), 1_000_000) || w.prompt
-
-/** The continuation of a planned handoff: the task, the handoff, where the old transcript is, and
- *  any messages that arrived while the old session was winding down. */
-function handoffText(
-  w: CliMayteWorker,
-  last: CliMayteWorker['attempts'][number],
-  note: string,
-  oldSession: CliMayteWorker['sessionId'],
-  accounts: CliMayteAccount[],
-): string {
-  let handoff = ''
-  try {
-    handoff = readFileSync(note, 'utf8')
-  } catch {
-    handoff = '(The handoff file could not be read; use the earlier transcript.)'
-  }
-  const old = oldSession ? transcriptFile(configDirOf(last.account.id, accounts), oldSession) : null
-  return continuationPrompt(w.prompt, handoff, note, old ? slashed(old) : null, w.pending)
-}
-
-/** A revived worker gets the message at once, not a continue prompt for the work it stopped. If
- *  the stopped attempt never started, its own message never arrived either: send it first. */
-function followUpText(w: CliMayteWorker, p: LaunchPlan): string {
-  if (w.revived === true && !p.inSession) return `${prevPromptOf(w, p.n)}\n\n${p.next}`
-  return p.resume ? p.next : `${w.prompt}\n\n${p.next}`
-}
-
-/** What a session stopped by a wall, an API error or a kill is told when it goes on, or null
- *  when the attempt before did not end that way. */
-function goOnText(
-  w: CliMayteWorker,
-  last: CliMayteWorker['attempts'][number],
-  p: LaunchPlan,
-): string | null {
-  // Back on the same account once its wall lifted, the session did not move.
-  if (last.outcome === 'quota' || last.outcome === 'auth')
-    return p.resume && p.inSession
-      ? p.fromId
-        ? HANDOFF_PROMPT
-        : PAUSED_PROMPT
-      : prevPromptOf(w, p.n)
-  if (last.outcome === 'transient' || last.outcome === 'interrupted')
-    return p.resume && p.inSession
-      ? last.outcome === 'transient'
-        ? TRANSIENT_PROMPT
-        : INTERRUPTED_PROMPT
-      : prevPromptOf(w, p.n)
-  return null
-}
-
-/** What the CLI is given on stdin for this launch. */
-function launchText(w: CliMayteWorker, p: LaunchPlan, accounts: CliMayteAccount[]): string {
-  const { last, note } = p
-  if (!last) return w.prompt
-  if (note) return handoffText(w, last, note, p.oldSession, accounts)
-  if (p.delivers) return followUpText(w, p)
-  return goOnText(w, last, p) ?? w.prompt
-}
-
-/** The worker's own settings. The wind-down channel: after every tool call the CLI runs this hook,
- *  which prints the worker's signal file when there is one (signalWindDown) and nothing otherwise,
- *  about 65 ms a call. And no AgentHydra MCP server: 84 of a worker's 138 tools were AgentHydra's
- *  own (measured), with which a worker could start more workers, fan out, or move the owner's
- *  desktop chats. A worker does its task; orchestration stays with the chat that asked.
- *  Returns the settings file, with any signal left from an earlier attempt removed. */
-function writeWorkerSettings(w: CliMayteWorker): string {
-  mkdirSync(HOOKS, { recursive: true })
-  const hookFile = join(HOOKS, `${w.id}.json`)
-  // The owner's edit_claims hook, when installed: before an edit it records the file under this
-  // task's id and says when another chat or worker edited it in the last half hour. Workers carry
-  // none of the owner's hooks, so without this a worker's edits were invisible to it, and a worker
-  // editing a chat's files was the collision it was built for (2026-10-01).
-  const claims = ownerClaudeDir ? join(ownerClaudeDir, 'hooks', 'edit_claims.py') : null
-  const preToolUse =
-    claims && existsSync(claims)
-      ? [
-          {
-            matcher: 'Edit|Write|MultiEdit|NotebookEdit',
-            hooks: [
-              {
-                type: 'command',
-                command: `python '${slashed(claims)}' 2>/dev/null || true`,
-                timeout: 10,
-              },
-            ],
-          },
-        ]
-      : []
-  writeFileSync(
-    hookFile,
-    JSON.stringify({
-      deniedMcpServers: [{ serverName: MCP_SERVER_KEY }],
-      hooks: {
-        ...(preToolUse.length ? { PreToolUse: preToolUse } : {}),
-        PostToolUse: [
-          {
-            matcher: '*',
-            hooks: [
-              {
-                type: 'command',
-                command: `cat '${slashed(signalPath(w.id))}' 2>/dev/null || true`,
-              },
-            ],
-          },
-        ],
-      },
-    }),
-  )
-  rmSync(signalPath(w.id), { force: true })
-  return hookFile
-}
-
-function cliArgv(
-  w: CliMayteWorker,
-  sessionId: string,
-  resume: boolean,
-  hookFile: string,
-): string[] {
-  return [
-    ...claudeCommand(),
-    '-p',
-    '--output-format',
-    'stream-json',
-    '--verbose',
-    '--dangerously-skip-permissions',
-    ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
-    ...(w.model ? ['--model', w.model] : []),
-    ...(w.effort ? ['--effort', w.effort] : []),
-    '--settings',
-    hookFile,
-    '--append-system-prompt',
-    WORKER_BRIEF,
-  ]
-}
-
-/** Start the CLI under a runner (climayte-runner.ts), launched outside the daemon: a daemon restart
- *  leaves the CLI running and the next daemon reads it on from its files (owner, 2026-09-30).
- *  Files, never pipes, so nothing ties the CLI to this process. The runner's record, or null after
- *  failing the task when it could not start. */
-function startRunner(
-  w: CliMayteWorker,
-  acct: CliMayteAccount,
-  argv: string[],
-  files: { promptFile: string; log: string; errLog: string },
-): NonNullable<CliMayteWorker['attempts'][number]['runner']> | null {
-  const { promptFile, log, errLog } = files
-  closeSync(openSync(log, 'a'))
-  closeSync(openSync(errLog, 'a'))
-  const runner = {
-    pid: null,
-    pidFile: `${log}.pid.json`,
-    exitFile: `${log}.exit.json`,
-    launchedAt: Date.now(),
-  }
-  rmSync(runner.pidFile, { force: true })
-  rmSync(runner.exitFile, { force: true })
-  try {
-    launchRunner(
-      {
-        argv,
-        cwd: w.cwd,
-        // No claude.ai connectors (Gmail, Calendar, Drive, Notion, ...; several answer needs-auth).
-        // Measured on #83 with the real CLI: with them it took 2.0-3.0 s to its init event and
-        // loaded 158-202 tools (a different number run to run); without, 1.2-1.3 s and a steady 137
-        // tools. Local MCP servers still load. Here, not in scrubbedEnv: quick add uses that too.
-        // 5-minute prompt cache, not the subscription default of 1 hour: the CLI says 1-hour
-        // writes bill at a higher rate (2x input against 1.25x), and cache writes were about a third
-        // of what filled the 5-hour meter in run 1. Only 9 of its 2,105 requests came more than 5
-        // minutes after the one before, so the re-writes cost 1.8M tokens against 10.4M written:
-        // about 27% less write cost (owner's go-ahead, 2026-09-30).
-        env: {
-          ...scrubbedEnv(acct.configDir, w.id),
-          ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
-          CLAUDE_CODE_PROMPT_CACHE_TTL: '5m',
-        },
-        stdin: promptFile,
-        stdout: log,
-        stderr: errLog,
-        pidFile: runner.pidFile,
-        exitFile: runner.exitFile,
-      },
-      runnerSpecPath(log),
-    )
-  } catch (err) {
-    w.status = 'failed'
-    w.error = `Could not start the CLI: ${err instanceof Error ? err.message : String(err)}`
-    journal(w, 'failed', { account: acctLabel(acct), error: firstLine(w.error) })
-    changed(w)
-    return null
-  }
-  return runner
-}
-
-/** The journal: a move first (the account it left), then the start and why this account. */
-function journalLaunch(
-  w: CliMayteWorker,
-  acct: CliMayteAccount,
-  p: LaunchPlan,
-  activeOnAccount: number,
-): void {
-  if (p.fromId) {
-    const left = [...w.attempts].reverse().find((a) => a.account.id === p.fromId)?.account
-    journal(w, 'moved', {
-      from: left ? acctLabel(left) : p.fromId,
-      account: acctLabel(acct),
-      copied: p.fresh ? undefined : p.copied,
-    })
-  }
-  journal(w, p.fresh ? 'handoff-resumed' : p.delivers ? 'follow-up-delivered' : 'launched', {
-    account: acctLabel(acct),
-    attempt: p.n + 1,
-    sessionPct: acct.sessionPct,
-    weekPct: acct.weekPct,
-    active: activeOnAccount,
-    model: w.model,
-    effort: w.effort,
-  })
-}
-
-/** A new message, or a handoff's fresh session, starts a new report; the previous turns are kept
- *  in `reports` (keepReport), because a follow-up queued while a turn ran is delivered the moment
- *  it ends, before anyone reads it. Before a handoff they are labelled so: the continuation answers
- *  the same message, and its report is the one `result` should show. */
-function startReport(w: CliMayteWorker, p: LaunchPlan): void {
-  if (p.last && !p.delivers && !p.fresh) return
-  const label = p.fresh ? `${w.message ?? firstLine(w.prompt, 200)} (before a handoff)` : w.message
-  w.reports = keepReport({ ...w, message: label }, Date.now())
-  if (!p.fresh) w.message = firstLine(p.delivers ? p.next : w.prompt, 200)
-  w.result = null
-  w.results = []
-}
-
-/** The bookkeeping once the CLI has started: the journal, the delivered follow-up, a fresh
- *  session's record, the new report, and the worker's running state. */
-function noteLaunch(
-  w: CliMayteWorker,
-  acct: CliMayteAccount,
-  p: LaunchPlan,
-  activeOnAccount: number,
-): void {
-  if (p.fromId) w.moves++
-  journalLaunch(w, acct, p, activeOnAccount)
-  if (p.delivers) w.pending.shift()
-  if (p.fresh) {
-    if (p.oldSession) w.sessions = [...(w.sessions ?? []), p.oldSession]
-    w.sessionId = p.sessionId
-    w.pending = [] // they went into the continuation prompt
-    delete w.handoffNote
-  }
-  startReport(w, p)
-  delete w.revived
-  w.accountId = acct.id
-  w.status = 'running'
-  w.error = null
-  w.notBefore = null
-  changed(w)
-}
-
-/** `activeOnAccount`: workers already running on `acct` (every group) when it was picked; the
- *  journal records it with the account's usage, the two things pickAccount scores on. */
-function launch(
-  w: CliMayteWorker,
-  acct: CliMayteAccount,
-  accounts: CliMayteAccount[],
-  activeOnAccount = 0,
-): void {
-  const n = w.attempts.length
-  const last = w.attempts[n - 1]
-  const session = sessionPlan(w, last)
-  const { fresh, sessionId } = session
-  const fromId = w.accountId !== acct.id ? w.accountId : null
-  let copied: boolean | undefined
-  if (fromId && !fresh) {
-    const moved = moveTranscript(w, acct, accounts, sessionId)
-    if (moved.failed) return
-    copied = moved.copied
-  }
-  // The owner's global CLAUDE.md and skills, so a worker keeps the owner's rules (field note 5).
-  if (ownerClaudeDir) syncOwnerClaude(ownerClaudeDir, acct.configDir)
-  const resume = !fresh && hasTranscript(acct.configDir, sessionId)
-  const plan: LaunchPlan = {
-    n,
-    last,
-    ...session,
-    fromId,
-    copied,
-    resume,
-    ...deliveryPlan(w, last, fresh),
-  }
-  const text = launchText(w, plan, accounts)
-
-  mkdirSync(LOGS, { recursive: true })
-  mkdirSync(PROMPTS, { recursive: true })
-  const promptFile = join(PROMPTS, `${w.id}-${n}.txt`)
-  writeFileSync(promptFile, text)
-  const log = join(LOGS, `${w.id}-${n}.jsonl`)
-  const errLog = join(LOGS, `${w.id}-${n}.err.log`)
-  const hookFile = writeWorkerSettings(w)
-  const argv = cliArgv(w, sessionId, resume, hookFile)
-  const runner = startRunner(w, acct, argv, { promptFile, log, errLog })
-  if (!runner) return
-  w.attempts.push({
-    account: { id: acct.id, num: acct.num, name: acct.name, configDir: acct.configDir },
-    pid: null,
-    log,
-    errLog,
-    startedAt: Date.now(),
-    endedAt: null,
-    outcome: 'running',
-    notice: null,
-    resumed: resume,
-    sessionId,
-    cacheTtl: '5m',
-    startPct: acct.sessionPct,
-    daemonPid: process.pid,
-    runner,
-    requested: { model: w.model, effort: w.effort },
-  })
-  noteLaunch(w, acct, plan, activeOnAccount)
 }
 
 const hex = (n: number): string => crypto.randomUUID().replace(/-/g, '').slice(0, n)
@@ -2669,7 +1608,7 @@ export function climayteRun(input: {
 }
 
 /** What an expected cost is based on, in words: 'sweep on other models, scaled to Sonnet, 3 finished'. */
-function basisText(
+export function basisText(
   cost: CostEstimate,
   s: { kind?: string | null; model: string | null; effort: string | null },
 ): string {
@@ -3223,316 +2162,8 @@ export function climayteCancel(filter: { id?: string; group?: string }): {
   return { cancelled, keptMessages }
 }
 
-type TotalsAttempt = CliMayteWorker['attempts'][number]
-type CeilingStop = {
-  id: string
-  title: string
-  account: string
-  at: string
-  pct: number
-  askedPct: number | null
-  workers: number
-  t: number
-}
-type LimitHit = {
-  id: string
-  title: string
-  account: string
-  at: string
-  pct: number | null
-  t: number
-}
-type WindowPeak = {
-  account: string
-  resetsAt: number | null
-  peakPct: number
-  runs: number
-  t: number
-}
-type SizedTask = { id: string; title: string; expected: number; used: number; work: number }
-
-/** climayteTotals' running sums. With `since`, every figure covers only runs that ended after it
- *  (or are running); without, the whole record, as the CliMayte view's counter shows it. */
-interface TotalsTally {
-  since: number
-  sessions: number
-  costUsd: number
-  tokens: CliMayteTokens
-  used: number
-  reread: number
-  unmeasured: number
-  byCause: Partial<Record<TotalsAttempt['outcome'], number>>
-  ceilingStops: number
-  ceilings: CeilingStop[]
-  /** Every attempt on record: a ceiling stop says how many runs were on its account then. */
-  allAttempts: TotalsAttempt[]
-  tasksInScope: Set<string>
-  hits: LimitHit[]
-  peaks: Map<string, WindowPeak>
-  runsByOutcome: Partial<Record<TotalsAttempt['outcome'] | 'ceiling', number>>
-  distinct: Set<string>
-}
-
-/** How many runs were on an account at a moment, the one that asks included. */
-const runsOnAccount = (all: TotalsAttempt[], accountId: string, t: number): number =>
-  all.filter(
-    (a) =>
-      a.account.id === accountId && a.startedAt <= t && (a.endedAt ?? Number.MAX_SAFE_INTEGER) >= t,
-  ).length
-
-/** Over the whole record a task counts with its own sums; with `since` it only counts as a task
- *  when it was created after it (its runs are counted one by one, tallyRecentRun). */
-function tallyTask(tally: TotalsTally, w: CliMayteWorker): void {
-  if (!tally.since) {
-    tally.sessions += w.attempts.length
-    tally.costUsd += w.costUsd
-    if (w.tokens) tally.tokens = addTokens(tally.tokens, w.tokens)
-    tally.tasksInScope.add(w.id)
-  } else if (w.createdAt >= tally.since) tally.tasksInScope.add(w.id)
-}
-
-function tallyRecentRun(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
-  if (!tally.since) return
-  tally.sessions++
-  tally.costUsd += at.spend?.costUsd ?? 0
-  if (at.tokens) tally.tokens = addTokens(tally.tokens, at.tokens)
-  tally.tasksInScope.add(w.id)
-}
-
-/** A run stopped at CliMayte's ceiling, or one that ran into the account's own limit. */
-function tallyStops(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
-  if (at.ceiling) {
-    tally.ceilingStops++
-    const t = at.endedAt ?? Date.now()
-    tally.ceilings.push({
-      id: w.id,
-      title: w.title,
-      account: acctLabel(at.account),
-      at: new Date(t).toISOString(),
-      pct: at.ceiling.pct,
-      askedPct: at.windDown ? at.windDown.pct : null,
-      workers: runsOnAccount(tally.allAttempts, at.account.id, t),
-      t,
-    })
-  }
-  if (at.outcome === 'quota' && !at.ceiling)
-    tally.hits.push({
-      id: w.id,
-      title: w.title,
-      account: acctLabel(at.account),
-      at: new Date(at.endedAt ?? at.startedAt).toISOString(),
-      pct: at.peak?.pct ?? null,
-      t: at.endedAt ?? at.startedAt,
-    })
-}
-
-/** An account's highest 5-hour reading per window, over the runs CliMayte had on it. */
-function tallyPeak(tally: TotalsTally, at: TotalsAttempt): void {
-  if (!at.peak) return
-  const key = `${at.account.id}|${at.peak.resetsAt ?? ''}`
-  const p = tally.peaks.get(key) ?? {
-    account: acctLabel(at.account),
-    resetsAt: at.peak.resetsAt,
-    peakPct: 0,
-    runs: 0,
-    t: 0,
-  }
-  p.peakPct = Math.max(p.peakPct, at.peak.pct)
-  p.runs++
-  p.t = Math.max(p.t, at.endedAt ?? Date.now())
-  tally.peaks.set(key, p)
-}
-
-function tallyUsage(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
-  const shown = at.ceiling && at.outcome === 'quota' ? 'ceiling' : at.outcome
-  tally.runsByOutcome[shown] = (tally.runsByOutcome[shown] ?? 0) + 1
-  tally.used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
-  if (at.endedAt !== null && !at.spend) tally.unmeasured++
-  const r = rereadUnits(at, w.model)
-  // What stopped the last run that ran: a refused sign-in in between re-read nothing itself.
-  const cause = lastThatRan(w, at)?.outcome
-  if (r > 0 && cause) {
-    tally.reread += r
-    tally.byCause[cause] = (tally.byCause[cause] ?? 0) + r
-  }
-}
-
-function tallyConversation(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
-  // A run the account refused before the CLI started holds no conversation.
-  const spent = at.tokens ? at.tokens.cacheRead + at.tokens.cacheWrite + at.tokens.input : 0
-  if (!at.started && spent === 0) return
-  const sid = at.sessionId ?? w.sessionId
-  if (sid) tally.distinct.add(sid)
-}
-
-function tallyAttempt(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
-  const recent = (at.endedAt ?? Date.now()) >= tally.since
-  if (!recent) return
-  tallyRecentRun(tally, w, at)
-  tallyStops(tally, w, at)
-  tallyPeak(tally, at)
-  tallyUsage(tally, w, at)
-  tallyConversation(tally, w, at)
-}
-
-/** Finished tasks that were sized, since `since`: what each was expected to cost against what it
- *  used, with and without its re-reads. */
-function sizedTasks(since: number): SizedTask[] {
-  const sized: SizedTask[] = []
-  for (const w of workers.values()) {
-    if (w.status !== 'done' || !w.size || w.createdAt < since) continue
-    const all = w.attempts.reduce(
-      (s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),
-      0,
-    )
-    const rr = w.attempts.reduce((s, a) => s + rereadUnits(a, w.model), 0)
-    sized.push({
-      id: w.id,
-      title: w.title,
-      expected: w.size.expected,
-      used: pct1(all),
-      work: pct1(all - rr),
-    })
-  }
-  return sized
-}
-
-function sizingOf(sized: SizedTask[]): ReturnType<typeof climayteTotals>['sizing'] {
-  const sum = (k: 'expected' | 'used' | 'work'): number =>
-    Math.round(sized.reduce((s, x) => s + x[k], 0) * 10) / 10
-  return {
-    tasks: sized.length,
-    expectedPct: sum('expected'),
-    usedPct: sum('used'),
-    workPct: sum('work'),
-    ratio: sum('expected') > 0 ? Math.round((sum('used') / sum('expected')) * 100) / 100 : null,
-    list: sized.slice(-50),
-  }
-}
-
-/** What CliMayte has taken off the chats that handed it work: tasks, the CLI sessions they ran
- *  (attempts), their tokens and cost (the CliMayte view's counter), over every task on record, or
- *  with `since` over the runs that ended after it (a night's re-read share, not the record's). */
-export function climayteTotals(since = 0): {
-  tasks: number
-  /** Attempts ("runs"): every start of the CLI, retries, resumes and handoffs included. */
-  sessions: number
-  /** Those runs by how they ended (owner, 2026-09-30: "99 CLI sessions" read as 99 sessions when
-   *  23 were handoffs, 21 stopped at a limit, 8 resumed after a restart and 7 never signed in). */
-  runsByOutcome: Partial<Record<CliMayteWorker['attempts'][number]['outcome'] | 'ceiling', number>>
-  /** Distinct CLI conversations: a resume, a follow-up or a move continues one; a handoff starts one. */
-  cliSessions: number
-  tokens: CliMayteTokens
-  costUsd: number
-  /** Usage over every attempt in % of a Pro 5-hour window, the part of it that re-read a
-   *  conversation into a cold cache at the start of an attempt after one that ran (restart
-   *  overhead), that part as a share of the whole (%), and by what ended the attempt before it
-   *  (`done`: a follow-up after the task had finished). `unmeasured`: ended attempts whose
-   *  transcript could not be read, so their re-read is not in these figures. */
-  usedPct: number
-  rereadPct: number
-  rereadShare: number
-  rereadByCause: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>>
-  unmeasured: number
-  /** The test metrics (owner, 2026-10-01: the goal is to stop each account at 85-90% of its
-   *  5-hour window, never at its limit), over attempts and tasks since `since` (epoch ms; 0 = all):
-   *  `limitHits` runs that ended at a usage limit (target 0), with the newest ones listed; `peaks`
-   *  each account's highest 5-hour usage per window while CliMayte ran on it (target 85-90, never
-   *  100), newest first; `sizing` finished tasks' expected cost against what they used, both in %
-   *  of a Pro window (`ratio` above 1: estimates run low). */
-  since: string | null
-  limitHits: number
-  /** Runs stopped at CliMayte's ceiling (90%) instead: the stop line (85) was not enough. */
-  ceilingStops: number
-  /** The newest ceiling stops: the reading that stopped it, the reading it was asked to hand off at
-   *  (null: never asked), and how many runs were on that account at that moment, itself included. */
-  ceilingStopList: Array<{
-    id: string
-    title: string
-    account: string
-    at: string
-    pct: number
-    askedPct: number | null
-    workers: number
-  }>
-  limitHitList: Array<{
-    id: string
-    title: string
-    account: string
-    at: string
-    pct: number | null
-  }>
-  peaks: Array<{ account: string; resetsAt: string | null; peakPct: number; runs: number }>
-  sizing: {
-    tasks: number
-    expectedPct: number
-    usedPct: number
-    workPct: number
-    ratio: number | null
-    list: Array<{ id: string; title: string; expected: number; used: number; work: number }>
-  }
-} {
-  load()
-  const tally: TotalsTally = {
-    since,
-    sessions: 0,
-    costUsd: 0,
-    tokens: noTokens(),
-    used: 0,
-    reread: 0,
-    unmeasured: 0,
-    byCause: {},
-    ceilingStops: 0,
-    ceilings: [],
-    allAttempts: [...workers.values()].flatMap((w) => w.attempts),
-    tasksInScope: new Set<string>(),
-    hits: [],
-    peaks: new Map<string, WindowPeak>(),
-    runsByOutcome: {},
-    distinct: new Set<string>(),
-  }
-  for (const w of workers.values()) {
-    tallyTask(tally, w)
-    for (const at of w.attempts) tallyAttempt(tally, w, at)
-  }
-  const sized = sizedTasks(since)
-  return {
-    tasks: tally.tasksInScope.size,
-    sessions: tally.sessions,
-    runsByOutcome: tally.runsByOutcome,
-    cliSessions: tally.distinct.size,
-    tokens: tally.tokens,
-    costUsd: tally.costUsd,
-    usedPct: pct1(tally.used),
-    rereadPct: pct1(tally.reread),
-    rereadShare: tally.used > 0 ? Math.round((tally.reread / tally.used) * 1000) / 10 : 0,
-    rereadByCause: Object.fromEntries(
-      Object.entries(tally.byCause).map(([k, v]) => [k, pct1(v ?? 0)]),
-    ) as Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>>,
-    unmeasured: tally.unmeasured,
-    since: since ? new Date(since).toISOString() : null,
-    limitHits: tally.hits.length,
-    ceilingStops: tally.ceilingStops,
-    ceilingStopList: tally.ceilings
-      .sort((a, b) => b.t - a.t)
-      .slice(0, 20)
-      .map(({ t: _t, ...c }) => c),
-    limitHitList: tally.hits
-      .sort((a, b) => b.t - a.t)
-      .slice(0, 20)
-      .map(({ t: _t, ...h }) => h),
-    peaks: [...tally.peaks.values()]
-      .sort((a, b) => b.t - a.t)
-      .map(({ t: _t, resetsAt, ...p }) => ({
-        ...p,
-        resetsAt: resetsAt ? new Date(resetsAt).toISOString() : null,
-      })),
-    sizing: sizingOf(sized),
-  }
-}
-
 /** Weighted units as % of a Pro 5-hour window, to one decimal. */
-const pct1 = (units: number): number => Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10
+export const pct1 = (units: number): number => Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10
 
 /** Move a file or folder into the archive, keeping it (a rename, or a copy then remove across
  *  drives). A missing source is not an error. */

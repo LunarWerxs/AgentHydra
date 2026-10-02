@@ -62,6 +62,8 @@ const creds = (expiresAt: number) =>
   })
 
 describe('login sync between two PCs', () => {
+  // It starts the stand-in CLI several times, and that alone takes 4.6-5.0 s on this box (measured
+  // 2026-10-02, the same before and after the sync refactor): past bun's 5 s default under load.
   test('the later expiry wins either way, a stale copy never does, and a left-out login stays put', async () => {
     const fake = refreshingClaude()
     const claudeWas = process.env.AGENTHYDRA_CLAUDE_PATH
@@ -132,5 +134,5 @@ describe('login sync between two PCs', () => {
       process.env.AGENTHYDRA_CLAUDE_PATH = claudeWas
       rmSync(fake.dir, { recursive: true, force: true })
     }
-  })
+  }, 20_000)
 })
