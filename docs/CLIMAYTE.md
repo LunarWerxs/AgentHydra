@@ -147,10 +147,16 @@ seeded once, when the account is made, and drifts: one of 33 accounts listed no 
 an entry with no credential is carried: a URL and at most its `headersHelper`, the command that signs
 in at connect time through this machine's own session (connections-local's `node <loader.mjs>
 --connect`, zswarm's `python <zswarm.py> connect`); never static headers, oauth, env, a query
-string or user info, so no credential is written to a worker's file. Any other entry loads from the
-account's own copy. connections-local
-was denied for a day to save tokens (`8486a2d`); a worker asked to use connections_execute then
-had no such tool and drove the local MCP through a script.
+string, user info or a fragment, a token-shaped path segment or host label (`/s/<key>/mcp`), or a
+helper that holds a header literal (`Bearer `, `Authorization`, an API key) or a token-shaped
+word, so no credential is written to a worker's file. A server left out for that is logged by its
+name only, and an owner config that does not parse is logged without the parser's message (it
+quotes the text). AgentHydra's own server is denied by name and by its endpoint (`/api/mcp`), so a
+second PC's daemon under another name is left out too. Any other entry loads from the account's
+own copy. A worker's settings and MCP files are removed when its CLI ends or the worker is removed,
+and a daemon start removes those of every worker that is gone or finished, never a live one's.
+connections-local was denied for a day to save tokens (`8486a2d`); a worker asked to use
+connections_execute then had no such tool and drove the local MCP through a script.
 
 ### Runner and restarts (`server/src/climayte-runner.ts`)
 

@@ -75,9 +75,12 @@ export interface McpHttpEntry {
   url: string
 }
 
+/** The path this daemon serves MCP on (index.ts), whichever host and port. */
+export const MCP_PATH = '/api/mcp'
+
 /** The entry this daemon wants to see, for the URL it is actually serving on. */
 export function desiredEntry(daemonUrl: string): McpHttpEntry {
-  return { type: 'http', url: `${daemonUrl.replace(/\/+$/, '')}/api/mcp` }
+  return { type: 'http', url: `${daemonUrl.replace(/\/+$/, '')}${MCP_PATH}` }
 }
 
 export type McpRegisterAction =

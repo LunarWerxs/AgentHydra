@@ -56,12 +56,13 @@ import {
   setCliMayteClaudeCommand,
   setCliMayteOwnerDir,
   startCliMayte,
+  sweepWorkerFiles,
   wallUntil,
   windDownAt,
 } from '../src/climayte'
-import { workers } from '../src/climayte-core'
-import { attemptCause } from '../src/climayte-lib'
-import { forgetOwnerSync, syncOwnerClaude } from '../src/climayte-owner-sync'
+import { HOOKS, load, workers } from '../src/climayte-core'
+import { attemptCause, type CliMayteWorker } from '../src/climayte-lib'
+import { forgetOwnerSync, ownerMcpServers, syncOwnerClaude } from '../src/climayte-owner-sync'
 import { waitsForHome } from '../src/climayte-placement'
 import { isPidAlive, killProcessTree } from '../src/core/process'
 import { setProviderSettings } from '../src/provider-settings'
@@ -799,7 +800,9 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
     rmSync(root, { recursive: true, force: true })
   })
 
-  test('connections-local and zswarm on either account; never agenthydra, magnific or a credential', async () => {
+  // What the --mcp-config file may carry is the filter's test below; fake-claude drops denied names
+  // itself, as the real CLI does, so this one cannot tell whether the file left them out.
+  test('connections-local and zswarm on either account, and its files go when it is done', async () => {
     setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
     setCliMayteOwnerDir(ownerDir)
     for (const [id, configDir] of [
@@ -829,8 +832,131 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
         id,
         ['connections-local', 'zswarm'],
       ])
+      // 440 settings files and 18 MCP files were left behind on the owner's machine (2026-10-02).
+      expect([
+        existsSync(join(HOOKS, `${wid}.json`)),
+        existsSync(join(HOOKS, `${wid}.mcp.json`)),
+      ]).toEqual([false, false])
     }
   }, 60_000)
+})
+
+describe("the owner's MCP servers a worker is given (ownerMcpServers)", () => {
+  // Every value here is fake. The refused entries carry SECRET, so a test can say that no part of
+  // one reached the file's servers or the log.
+  const SECRET = 'fake0secret0value0for0tests0only'
+  const root = mkdtempSync(join(tmpdir(), 'ah-owner-mcp-'))
+  const ownerDir = join(root, '.claude')
+  mkdirSync(ownerDir)
+  afterAll(() => rmSync(root, { recursive: true, force: true }))
+  const deny = { names: ['agenthydra', 'magnific'], paths: ['/api/mcp'] }
+  const http = (url: string, more: Record<string, unknown> = {}) => ({ type: 'http', url, ...more })
+
+  /** The servers carried from an owner config of `text`, and what was logged meanwhile. */
+  function carry(text: string): { names: string[]; file: string; logged: string } {
+    writeFileSync(join(root, '.claude.json'), text)
+    forgetOwnerSync()
+    const logged: string[] = []
+    const was = console.error
+    console.error = (...args: unknown[]) => logged.push(args.map(String).join(' '))
+    try {
+      const out = ownerMcpServers(ownerDir, deny)
+      return {
+        names: Object.keys(out).sort(),
+        file: JSON.stringify(out),
+        logged: logged.join('\n'),
+      }
+    } finally {
+      console.error = was
+    }
+  }
+
+  test('a URL and a sign-in command; never a denied server, AgentHydra under any name, or a credential', () => {
+    const refused = {
+      headers: http('https://h.example.com/mcp', {
+        headers: { Authorization: `Bearer ${SECRET}` },
+      }),
+      oauth: http('https://o.example.com/mcp', { oauth: { clientId: 'x', clientSecret: SECRET } }),
+      env: http('https://e.example.com/mcp', { env: { KEY: SECRET } }),
+      query: http(`https://q.example.com/mcp?key=${SECRET}`),
+      userinfo: http(`https://me:${SECRET}@u.example.com/mcp`),
+      path: http(`https://p.example.com/s/${SECRET}/mcp`),
+      fragment: http('https://f.example.com/mcp#key=shortfake'),
+      'helper-bearer': http('https://b.example.com/mcp', {
+        headersHelper: `echo '{"X": "Bearer shortfake"}'`,
+      }),
+      'helper-header': http('https://a.example.com/mcp', {
+        headersHelper: `echo '{"authorization": "shortfake"}'`,
+      }),
+      'helper-token': http('https://t.example.com/mcp', {
+        headersHelper: `node sign.mjs --key ${SECRET}`,
+      }),
+    }
+    const { names, file, logged } = carry(
+      JSON.stringify({
+        mcpServers: {
+          zswarm: http('http://127.0.0.1:7790/mcp', {
+            headersHelper: 'python C:/Users/someone/.claude/tools/zswarm/zswarm.py connect',
+          }),
+          'connections-local': http('http://127.0.0.1:7791/mcp', {
+            headersHelper:
+              'node "C:\\Users\\someone\\.claude\\tools\\connections-local\\loader.mjs" --connect',
+          }),
+          remote: { type: 'sse', url: 'https://mcp.example.com/v1/sse' },
+          agenthydra: http('http://127.0.0.1:7787/api/mcp'),
+          magnific: http('https://mcp.magnific.com'),
+          // AgentHydra's own endpoint under another name: a second PC's daemon, or a renamed entry.
+          'second-pc': http('http://192.168.1.20:7787/api/mcp/'),
+          'hydra-renamed': http('http://laptop.local:7787/API/MCP'),
+          ...refused,
+        },
+      }),
+    )
+    expect(names).toEqual(['connections-local', 'remote', 'zswarm'])
+    expect(file).not.toContain(SECRET)
+    // A server left out for what it carries is named, and only named.
+    for (const name of Object.keys(refused)) expect(logged).toContain(`"${name}"`)
+    expect(logged).not.toContain(SECRET)
+    expect(logged).not.toContain('shortfake')
+  })
+
+  test("an owner config that does not parse is said without the parser's quote of it", () => {
+    const { names, logged } = carry(
+      `{"mcpServers": {"x": {"headers": {"Authorization": ${SECRET}}}}}`,
+    )
+    expect(names).toEqual([])
+    expect(logged).toContain('could not')
+    expect(logged).not.toContain(SECRET)
+  })
+})
+
+describe("a gone worker's files (sweepWorkerFiles)", () => {
+  test("a daemon start removes the settings and MCP files of a worker that is gone or done, never a live one's", () => {
+    mkdirSync(HOOKS, { recursive: true })
+    const live = { id: 'w-0000a11e', status: 'running', attempts: [] } as unknown as CliMayteWorker
+    const done = { id: 'w-0000d0e5', status: 'done', attempts: [] } as unknown as CliMayteWorker
+    const files = (id: string) => [join(HOOKS, `${id}.json`), join(HOOKS, `${id}.mcp.json`)]
+    const other = join(HOOKS, 'not-a-worker.json')
+    for (const f of [...files(live.id), ...files(done.id), ...files('w-0000903e'), other])
+      writeFileSync(f, '{}')
+    load()
+    workers.set(live.id, live)
+    workers.set(done.id, done)
+    try {
+      sweepWorkerFiles()
+    } finally {
+      workers.delete(live.id)
+      workers.delete(done.id)
+    }
+    const left = (id: string) => files(id).map((f) => existsSync(f))
+    expect([left(live.id), left(done.id), left('w-0000903e'), existsSync(other)]).toEqual([
+      [true, true],
+      [false, false],
+      [false, false],
+      true,
+    ])
+    for (const f of [...files(live.id), other]) rmSync(f, { force: true })
+  })
 })
 
 describe('priority (field note 20)', () => {

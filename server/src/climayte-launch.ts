@@ -8,6 +8,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -50,7 +51,7 @@ import {
 } from './climayte-lib'
 import { ownerMcpServers, syncOwnerClaude } from './climayte-owner-sync'
 import { launchRunner } from './climayte-runner'
-import { MCP_SERVER_KEY } from './mcp-register'
+import { MCP_PATH, MCP_SERVER_KEY } from './mcp-register'
 
 /** What a launch decides before it starts the CLI, and what its bookkeeping needs afterwards. */
 interface LaunchPlan {
@@ -240,13 +241,46 @@ function launchText(
  *  zswarm stays too: a worker hands wide, cheap work to it. */
 const WORKER_DENIED_MCP: readonly string[] = [MCP_SERVER_KEY, 'magnific']
 
+/** A worker's files here: its settings (writeWorkerSettings) and its MCP servers (writeWorkerMcp). */
+const workerFiles = (id: string): [settings: string, mcp: string] => [
+  join(HOOKS, `${id}.json`),
+  join(HOOKS, `${id}.mcp.json`),
+]
+
+/** Remove a worker's settings and MCP files: once its CLI has ended (the next launch writes them
+ *  again), or when the worker is removed. They were never removed before 2026-10-02, and 440
+ *  settings and 18 MCP files had piled up on the owner's machine. */
+export function removeWorkerFiles(id: string): void {
+  for (const file of workerFiles(id)) rmSync(file, { force: true })
+}
+
+/** The ids of the workers that have a settings or MCP file here. */
+export function workerFileIds(): string[] {
+  let names: string[] = []
+  try {
+    names = readdirSync(HOOKS)
+  } catch {
+    return []
+  }
+  const ids = new Set<string>()
+  for (const name of names) {
+    const id = /^(w-[0-9a-f]+)(?:\.mcp)?\.json$/.exec(name)?.[1]
+    if (id) ids.add(id)
+  }
+  return [...ids]
+}
+
 /** The owner's MCP servers for `--mcp-config` (ownerMcpServers: entries with no credential),
  *  so a worker has what a desktop session on this machine has whatever its account's `.claude.json`
- *  says; the account's own servers still load beside them, and a name in both is one server. The
- *  file, or null when there is nothing to give (no owner dir, as under tests). */
+ *  says; the account's own servers still load beside them, and a name in both is one server.
+ *  AgentHydra's own server is left out by name and by its endpoint, so a second PC's daemon under
+ *  another name is left out too. The file, or null when there is nothing to give (no owner dir, as
+ *  under tests). */
 function writeWorkerMcp(w: CliMayteWorker): string | null {
-  const file = join(HOOKS, `${w.id}.mcp.json`)
-  const servers = ownerClaudeDir ? ownerMcpServers(ownerClaudeDir, WORKER_DENIED_MCP) : {}
+  const file = workerFiles(w.id)[1]
+  const servers = ownerClaudeDir
+    ? ownerMcpServers(ownerClaudeDir, { names: WORKER_DENIED_MCP, paths: [MCP_PATH] })
+    : {}
   if (Object.keys(servers).length === 0) {
     rmSync(file, { force: true })
     return null
@@ -267,7 +301,7 @@ function writeWorkerMcp(w: CliMayteWorker): string | null {
  *  Returns the settings file, with any signal left from an earlier attempt removed. */
 function writeWorkerSettings(w: CliMayteWorker): string {
   mkdirSync(HOOKS, { recursive: true })
-  const hookFile = join(HOOKS, `${w.id}.json`)
+  const hookFile = workerFiles(w.id)[0]
   // The owner's edit_claims hook, when installed: before an edit it records the file under this
   // task's id and says when another chat or worker edited it in the last half hour. Workers carry
   // none of the owner's hooks, so without this a worker's edits were invisible to it, and a worker

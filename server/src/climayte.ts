@@ -68,6 +68,7 @@ import {
   slashed,
   spendRecord,
   spentOf,
+  storeLoaded,
   tailText,
   transcriptCandidates,
   transcriptFile,
@@ -83,6 +84,7 @@ import {
   type JournalFilter,
   readJournal,
 } from './climayte-journal'
+import { removeWorkerFiles, workerFileIds } from './climayte-launch'
 import {
   aboutToBill,
   addResults,
@@ -1464,6 +1466,7 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   const stderr = tailText(at.errLog, 4_000)
   const v = withStops(at, classifyAttempt(events, stderr, at.started === true))
   rmSync(signalPath(w.id), { force: true })
+  removeWorkerFiles(w.id)
   forgetRead(at.log)
   const now = Date.now()
   if (v.outcome === 'auth' || v.outcome === 'quota') keepHome(w, at)
@@ -2319,6 +2322,7 @@ function stopRunning(w: CliMayteWorker, notice: string | null): boolean {
     charge(w, at)
     forgetRead(at.log)
     rmSync(signalPath(w.id), { force: true })
+    removeWorkerFiles(w.id)
   }
   return true
 }
@@ -2416,6 +2420,7 @@ export function climayteRemove(ids: string[]): {
           archiveMove(join(projects, key, sid), join(base, sid))
         }
     }
+    removeWorkerFiles(w.id)
     workers.delete(w.id)
     removed.push(w.id)
   }
@@ -2423,10 +2428,32 @@ export function climayteRemove(ids: string[]): {
   return { removed, skipped, archive }
 }
 
+/** The settings and MCP files of every worker that is gone or finished, removed at daemon start:
+ *  finish and stopRunning remove a worker's own, but a daemon that stopped first left them, and
+ *  before 2026-10-02 nothing did. Never a live worker's: one queued, running, waiting or checking,
+ *  or with a runner still to be stopped, keeps its files. Nothing when the store could not be read,
+ *  which leaves no worker to tell a live one by. How many workers' files went. */
+export function sweepWorkerFiles(): number {
+  load()
+  if (!storeLoaded()) return 0
+  let swept = 0
+  for (const id of workerFileIds()) {
+    const w = workers.get(id)
+    const live =
+      !!w &&
+      (isActive(w) || w.attempts.some((a) => a.outcome === 'running' || a.runner?.killOnStart))
+    if (live) continue
+    removeWorkerFiles(id)
+    swept++
+  }
+  return swept
+}
+
 /** Idempotent: load the store and start watching. Called at daemon boot. */
 export function startCliMayte(): void {
   load()
   if (started) return
   started = true
+  sweepWorkerFiles()
   schedule(0)
 }

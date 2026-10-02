@@ -145,6 +145,9 @@ export let walls: CliMayteWalls = {}
 
 let loaded = false
 
+/** Whether the store was read: an unread one holds no workers, which is not the same as none. */
+export const storeLoaded = (): boolean => loaded
+
 /** Per attempt log: bytes read, an unfinished last line, the events kept, the summaries shown,
  *  and whether system/init was ever seen (kept apart: the events list drops old ones). */
 export interface LogRead {

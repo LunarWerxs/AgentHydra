@@ -260,36 +260,85 @@ export interface McpUrlEntry {
   headersHelper?: string
 }
 
-/** An entry that carries no credential, or null: a URL, and at most a `headersHelper`, the command
- *  the CLI runs at connect time to sign in through this machine's session (the owner's
+/** A word shaped like a key or token: 24 or more characters of a token's alphabet with letters and
+ *  digits both. Path segments, flags and file names (`connections-local`, `loader.mjs`) are not. */
+const TOKEN_LIKE = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_\-+.~]{24,}$/
+
+/** Text that may hold a credential: a scheme or header name that announces one (`Bearer `,
+ *  `Authorization`, an API key header), or a token-like word once quotes, separators and path
+ *  slashes are split off. */
+function holdsCredential(text: string): boolean {
+  if (/\b(bearer|basic)\s|authorization|api[-_]?key|x-auth/i.test(text)) return true
+  return text.split(/[\s"'`=:,;/\\]+/).some((word) => TOKEN_LIKE.test(word))
+}
+
+/** A URL with no credential in it: no user info, query or fragment, and no token-like host label
+ *  or path segment (a key in the path, `/s/<key>/mcp`, is as much a key as one in the query). */
+function credentialFreeUrl(u: URL): boolean {
+  if (u.username || u.password || u.search || u.hash) return false
+  const segments = u.pathname.split('/').map((s) => {
+    try {
+      return decodeURIComponent(s)
+    } catch {
+      return s
+    }
+  })
+  return ![...u.hostname.split('.'), ...segments].some((part) => holdsCredential(part))
+}
+
+/** What an owner entry is to a worker: the entry to carry, `credential` when it holds or may hold
+ *  one, or `other` (a stdio server, or not an MCP entry at all), which the account's own copy
+ *  serves. */
+type Carry = { entry: McpUrlEntry } | 'credential' | 'other'
+
+/** An entry is carried only when it holds no credential: a URL, and at most a `headersHelper`, the
+ *  command the CLI runs at connect time to sign in through this machine's session (the owner's
  *  connections-local is `node <loader.mjs> --connect`, zswarm `python <zswarm.py> connect`), which
- *  holds no secret itself. Static `headers`, `oauth`, `env`, a query string or user info in the URL
- *  can each hold one, and what this returns is written to a file. */
-function credentialFreeEntry(entry: unknown): McpUrlEntry | null {
-  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+ *  holds no secret itself. Static `headers`, `oauth` and `env` can each hold one, and so can the URL
+ *  or a helper that echoes a literal header (holdsCredential); what is carried is written to a
+ *  file. */
+function carryEntry(entry: unknown): Carry {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return 'other'
   const { type, url, headersHelper, ...rest } = entry as Record<string, unknown>
-  if ((type !== 'http' && type !== 'sse') || typeof url !== 'string') return null
-  if (Object.keys(rest).length > 0) return null
-  if (headersHelper !== undefined && typeof headersHelper !== 'string') return null
+  if ((type !== 'http' && type !== 'sse') || typeof url !== 'string') return 'other'
+  if (Object.keys(rest).length > 0) return 'credential'
+  if (headersHelper !== undefined && typeof headersHelper !== 'string') return 'other'
+  if (headersHelper !== undefined && holdsCredential(headersHelper)) return 'credential'
+  let u: URL
   try {
-    const u = new URL(url)
-    if (u.username || u.password || u.search) return null
+    u = new URL(url)
+  } catch {
+    return 'other'
+  }
+  if (!credentialFreeUrl(u)) return 'credential'
+  return { entry: headersHelper === undefined ? { type, url } : { type, url, headersHelper } }
+}
+
+/** The path of an http(s) URL, lower case and without a trailing slash, or null. */
+function urlPath(url: string): string | null {
+  try {
+    return new URL(url).pathname.replace(/\/+$/, '').toLowerCase()
   } catch {
     return null
   }
-  return headersHelper === undefined ? { type, url } : { type, url, headersHelper }
 }
+
+/** Names already said to be left out, so a launch every minute does not say it every minute. */
+const saidLeftOut = new Set<string>()
 
 /** The owner's MCP servers a worker is given (`--mcp-config`, climayte-launch.ts): those in the
  *  owner's user scope, the `.claude.json` beside `ownerDir` (`~/.claude` -> `~/.claude.json`), less
- *  the `denied` names. Only an entry that carries no credential is carried (credentialFreeEntry):
- *  the owner's local servers (connections-local, zswarm) sign in through this machine's own
- *  session, and no credential is ever copied into a worker's file. Any other entry is left to the
- *  account's own `.claude.json`, which still loads beside these. No owner config is no servers; one
- *  that cannot be read is said, and also no servers: the launch goes on with the account's own. */
+ *  the `deny.names` and any server whose URL path is one of `deny.paths`, whatever its name (a
+ *  second PC's AgentHydra is the same server under another name). Only an entry that holds no
+ *  credential is carried (carryEntry): the owner's local servers (connections-local, zswarm) sign
+ *  in through this machine's own session, and no credential is ever copied into a worker's file;
+ *  one left out for that is said by its name only. Any other entry is left to the account's own
+ *  `.claude.json`, which still loads beside these. No owner config is no servers; one that cannot
+ *  be read is said, never with the parser's message (it quotes the text, which can be a token), and
+ *  also no servers: the launch goes on with the account's own. */
 export function ownerMcpServers(
   ownerDir: string,
-  denied: readonly string[],
+  deny: { names: readonly string[]; paths: readonly string[] },
 ): Record<string, McpUrlEntry> {
   const file = join(dirname(resolve(ownerDir)), '.claude.json')
   if (!existsSync(file)) return {}
@@ -297,19 +346,34 @@ export function ownerMcpServers(
   try {
     servers = (JSON.parse(readFileSync(file, 'utf8')) as { mcpServers?: unknown }).mcpServers
   } catch (err) {
-    console.error(`[climayte] could not read the owner's MCP servers from ${file}:`, err)
+    const why = (err as NodeJS.ErrnoException)?.code ?? 'it is not valid JSON'
+    console.error(`[climayte] could not read the owner's MCP servers from ${file}: ${why}`)
     return {}
   }
   const out: Record<string, McpUrlEntry> = {}
   if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return out
+  const deniedPaths = deny.paths.map((p) => p.replace(/\/+$/, '').toLowerCase())
   for (const [name, entry] of Object.entries(servers)) {
-    const carried = denied.includes(name) ? null : credentialFreeEntry(entry)
-    if (carried) out[name] = carried
+    const url = (entry as { url?: unknown } | null)?.url
+    if (deny.names.includes(name)) continue
+    if (typeof url === 'string' && deniedPaths.includes(urlPath(url) ?? '')) continue
+    const carry = carryEntry(entry)
+    if (carry === 'other') continue
+    if (carry === 'credential') {
+      if (!saidLeftOut.has(name))
+        console.error(
+          `[climayte] the owner's MCP server ${JSON.stringify(name)} holds or may hold a credential; workers get only their account's copy of it`,
+        )
+      saidLeftOut.add(name)
+      continue
+    }
+    out[name] = carry.entry
   }
   return out
 }
 
-/** Tests: forget what was synced, so the next call looks at the disk again. */
+/** Tests: forget what was synced and said, so the next call looks at the disk again. */
 export function forgetOwnerSync(): void {
   seen.clear()
+  saidLeftOut.clear()
 }

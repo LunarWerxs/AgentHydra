@@ -16,6 +16,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   whatever its account's `.claude.json` was seeded with when the account was made; one of 33
   accounts listed none. 1.7.0 denied connections-local to save tokens, and a worker asked to use
   connections_execute (memory tools, the fourman board) had no such tool.
+- **A worker's `--mcp-config` file never carries a credential, and its files no longer pile up.**
+  A server is left out (and logged by name only) when its URL holds a key in a path segment, host
+  label or fragment, or its headersHelper holds a header literal or a token-shaped word; a
+  `~/.claude.json` that does not parse is logged without the parser's quote of it; AgentHydra's
+  own server is left out under any name (by its `/api/mcp` endpoint). A worker's settings and MCP
+  files are removed when its CLI ends or it is removed, and a daemon start sweeps those of workers
+  that are gone or finished.
 
 ## [1.7.0] - 2026-10-02
 
