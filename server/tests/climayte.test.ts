@@ -32,6 +32,7 @@ import {
   climayteLiveReadings,
   climayteReports,
   climayteRun,
+  climayteRunningCount,
   climayteScorecard,
   climayteSend,
   climayteSetPriority,
@@ -57,6 +58,7 @@ import {
   wallUntil,
   windDownAt,
 } from '../src/climayte'
+import { workers } from '../src/climayte-core'
 import { forgetOwnerSync, syncOwnerClaude } from '../src/climayte-owner-sync'
 import { waitsForHome } from '../src/climayte-placement'
 import { isPidAlive } from '../src/core/process'
@@ -990,6 +992,37 @@ describe('the 85% stop line and the 90% ceiling', () => {
     expect(windDownAt(own, reading(85, now - 400_000), now)).toBeNull()
     expect(windDownAt(own, reading(85, now - 5_000, now - 1), now)).toBeNull()
   })
+
+  test("in a week's last five hours the weekly line is 89, so the rest of the week is used", () => {
+    // Owner, 2026-10-02: "Up to 90% near reset". At 85 an account took no new work even with its
+    // week resetting in an hour, and up to 5 points of every account-week expired unused.
+    const now = Date.now()
+    const week = (weekPct: number, weekResetsAt: number) => ({
+      sessionPct: 10,
+      sessionResetsAt: now + 3_600_000,
+      weekPct,
+      weekResetsAt,
+      overageAllowed: false,
+      at: now - 5_000,
+    })
+    const soon = now + 4 * 3_600_000
+    const later = now + 22 * 3_600_000
+    expect(windDownAt(week(87, soon), null, now)).toBeNull()
+    expect(windDownAt(week(89, soon), null, now)).toMatchObject({ pct: 89, week: true })
+    expect(windDownAt(week(87, later), null, now)).toMatchObject({ pct: 87, week: true })
+    const acct = (weekResetsAt: number) => ({
+      id: 'a',
+      num: 1,
+      name: 'a',
+      configDir: 'a',
+      sessionPct: 10,
+      weekPct: 87,
+      weekResetsAt,
+    })
+    const fresh = { accounts: null, accountId: null, attempts: [] } as any
+    expect(pickAccount(fresh, [acct(soon)] as any, {}, new Map(), 2, now)?.id).toBe('a')
+    expect(pickAccount(fresh, [acct(later)] as any, {}, new Map(), 2, now)).toBeNull()
+  })
 })
 
 describe('integration: near its limit a worker hands off to a fresh session', () => {
@@ -1182,7 +1215,14 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     const deadline = Date.now() + 10_000
     while (climayteList({ id })[0]?.status !== 'running' && Date.now() < deadline)
       await climayteWait({ id }, 1_000)
-    await Bun.sleep(1_500) // its init line is in the log: the message reached the session
+    // Its init line is in the log: the CLI started and the session exists. A fixed 1.5 s was short
+    // under the gate's load, and a stop before the CLI starts now stops it (2026-10-02), so the
+    // next turn was a fresh session, which fake-slow runs for 30 s, not a resume.
+    const started = () => {
+      const log = workers.get(id)?.attempts.at(-1)?.log
+      return !!log && existsSync(log) && readFileSync(log, 'utf8').includes('"subtype":"init"')
+    }
+    while (!started() && Date.now() < deadline) await Bun.sleep(50)
     return id
   }
   const settle = async (id: string, ms: number) => {
@@ -1280,6 +1320,32 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     expect(climayteGet(id)?.reports?.map((r) => r.message)).toEqual(['first', 'second'])
     expect(climayteGet(id)?.reports?.every((r) => r.results.length > 0)).toBe(true)
   }, 25_000)
+
+  // 2026-10-02: three cancels 87-209 ms after launch found no pid file yet, marked the attempt
+  // stopped, and the runner still started the CLI and ran the task to completion ($0.145-0.150
+  // each, charged to nothing), leaving its pid and exit files behind.
+  test('a cancel before the runner claims its spec starts no CLI and leaves no runner files', async () => {
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteAccountsProvider(() => [
+      { id: 'slow-early', num: 7, name: 'slow', configDir: slowDir, sessionPct: 0, weekPct: 0 },
+    ])
+    startCliMayte()
+    const run = climayteRun({ tasks: [{ prompt: 'a slow task', cwd, title: 'early cancel' }] })
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+    // Cancel the moment it is dispatched: the runner takes 0.4-2.2 s to reach its spec.
+    const deadline = Date.now() + 10_000
+    while (climayteList({ id })[0]?.status !== 'running' && Date.now() < deadline)
+      await Bun.sleep(5)
+    expect(climayteCancel({ id }).cancelled).toEqual([id])
+
+    await Bun.sleep(5_000) // past any hand-off: a runner that was going to start the CLI has
+    const log = workers.get(id)?.attempts[0]?.log as string
+    expect(log).toBeString()
+    expect(readFileSync(log, 'utf8')).toBe('')
+    for (const suffix of ['.spec.json', '.spec.json.taken', '.pid.json', '.exit.json'])
+      expect(existsSync(`${log}${suffix}`)).toBe(false)
+  }, 20_000)
 })
 
 describe('integration: a task with a check is judged by it', () => {
@@ -1345,6 +1411,49 @@ describe('integration: a task with a check is judged by it', () => {
       by: 'check',
       attempts: 2,
     })
+  }, 30_000)
+
+  test('a running check holds no restart back and is still judged from its files', async () => {
+    // Owner, 2026-10-02: "I thought we were supposed to have decoupling from tasks running and my
+    // ability to restart". A check was a daemon child, so the Restart button stayed refused while two
+    // megarun checks of up to 20 minutes ran; it runs under a runner now, like a worker's CLI.
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteAccountsProvider(() => [
+      { id: 'check-1', num: 1, name: 'check', configDir: acct, sessionPct: 0, weekPct: 0 },
+    ])
+    startCliMayte()
+    const run = climayteRun({
+      tasks: [
+        {
+          prompt: 'prove it slowly',
+          cwd,
+          title: 'slow check',
+          kind: 'code',
+          // Opus: a Sonnet task finished here would feed the Sonnet estimate the sizing tests below pin.
+          model: 'opus',
+          effort: 'high',
+          check: 'sleep 4; echo proved',
+        },
+      ],
+    })
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+    const until = async (
+      ok: (w: ReturnType<typeof climayteList>[number] | undefined) => boolean,
+    ) => {
+      const deadline = Date.now() + 25_000
+      let w = climayteList({ id })[0]
+      while (!ok(w) && w?.status !== 'failed' && Date.now() < deadline) {
+        await climayteWait({ id }, Math.min(2_000, deadline - Date.now()))
+        w = climayteList({ id })[0]
+      }
+      return w
+    }
+
+    expect((await until((w) => w?.status === 'checking'))?.status).toBe('checking')
+    expect(climayteRunningCount()).toBe(0)
+    const w = await until((w) => w?.status === 'done' && (w.verdicts?.length ?? 0) >= 1)
+    expect(w?.verdicts?.map((v) => [v.verdict, v.by])).toEqual([['pass', 'check']])
   }, 30_000)
 })
 

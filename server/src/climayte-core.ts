@@ -480,9 +480,27 @@ const isInit = (ev: unknown): boolean =>
   (ev as { type?: string; subtype?: string })?.type === 'system' &&
   (ev as { subtype?: string }).subtype === 'init'
 
-/** Where a runner attempt's spec goes (climayte-runner.ts deletes it once read; its path stays in the
- *  runner's command line, which is how isOurRunner recognises it). */
+/** Where a runner attempt's spec goes (climayte-runner.ts claims it by renaming it to `.taken` and
+ *  deletes it once read; its path stays in the runner's command line, which is how isOurRunner
+ *  recognises it). */
 export const runnerSpecPath = (log: string): string => `${log}.spec.json`
+
+/** Void an attempt's spec before its runner claims it: true when this rename won, so the runner
+ *  will find nothing and start nothing. False when the runner took it first (or it is gone): the
+ *  CLI is starting or started. A cancel 87-209 ms after launch used to stop at "no pid file yet"
+ *  while the runner went on to run the whole task, unbilled (measured 2026-10-02, three workers).
+ *  The voided copy goes at once: it carries the CLI's environment. */
+export function voidSpec(log: string): boolean {
+  const spec = runnerSpecPath(log)
+  const voided = `${spec}.void`
+  try {
+    renameSync(spec, voided)
+  } catch {
+    return false
+  }
+  rmSync(voided, { force: true })
+  return true
+}
 
 /** Placement inputs (climayte-placement.ts): what a task is expected to cost, what is running on
  *  each account and what it is expected to cost, and what attempts that ended since an account's

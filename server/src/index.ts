@@ -493,21 +493,19 @@ app.post('/api/update/apply', async (c) => {
 // acts, and only one of them had a door.
 app.post('/api/daemon/restart', async (c) => {
   const body = await jsonBody(c)
-  // ⛔ IN-FLIGHT DISPATCH RUNS ARE THE ONE REASON TO SAY NO, and it is the same reason the
-  // auto-update loop already refuses (setAutoUpdateHooks.hasActiveRuns below). A person who knows
-  // what they are restarting past may say so; the runs are detached and reattached at boot, so
-  // this is a courtesy rather than data loss - but it must be a DECISION, never a surprise.
-  // CliMayte workers count too: a restart kills their CLI (measured 2026-09-30), and each resumes its
-  // session afterwards, but the step it was on starts over.
+  // Only work a restart would LOSE says no here (owner, 2026-10-02: "I thought we were supposed to
+  // have decoupling from tasks running and my ability to restart"). Dispatch runs, CliMayte workers
+  // and their checks all run under detached runners and are read on by the next daemon, so a person's
+  // click restarts past them; the unattended auto-update loop still waits for them
+  // (setAutoUpdateHooks.hasActiveRuns below), because there nobody decided. What is left: a CliMayte
+  // worker the daemon spawned itself (before runners, 2026-09-30), whose CLI the restart kills.
   const climayte = climayteRunningCount()
   const active = activeCount() + climayte
-  if (active > 0 && body.force !== true)
+  if (climayte > 0 && body.force !== true)
     return c.json(
       {
         ok: false,
-        error: climayte
-          ? `${active} run(s) in flight, ${climayte} of them CliMayte worker(s) - pass force:true to restart past them (each CliMayte worker resumes its session after the restart, but its current step starts over)`
-          : `${active} dispatch run(s) in flight - pass force:true to restart past them`,
+        error: `${climayte} CliMayte worker(s) run inside this daemon - pass force:true to restart past them (each resumes its session after the restart, but its current step starts over)`,
         activeRuns: active,
       },
       409,

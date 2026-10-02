@@ -103,9 +103,18 @@ export interface CliMayteAttempt {
   /** The model the CLI reported in its system/init event: what really ran. */
   model?: string
   /** Run under a runner outside the daemon (climayte-runner.ts), so a daemon restart leaves it running.
-   *  `pid` is the runner's, filled from `pidFile` once it has started the CLI; the CLI's own is the
-   *  attempt's `pid`. Absent on attempts spawned by the daemon directly (before 2026-09-30). */
-  runner?: { pid: number | null; pidFile: string; exitFile: string; launchedAt: number }
+   *  `pid` is the runner's, filled from `pidFile` once it has claimed the spec; the CLI's own is the
+   *  attempt's `pid`, filled once the CLI has started. Absent on attempts spawned by the daemon
+   *  directly (before 2026-09-30). `killOnStart`: a stop came before the runner wrote its pid but
+   *  after it claimed the spec, so the tick kills it as soon as its pid file appears (killLateStarts
+   *  in climayte.ts); absent otherwise. */
+  runner?: {
+    pid: number | null
+    pidFile: string
+    exitFile: string
+    launchedAt: number
+    killOnStart?: boolean
+  }
 }
 
 /** Tokens a CliMayte session ran, from its transcript: what CliMayte took off the orchestrating chat
@@ -191,6 +200,15 @@ export interface CliMayteWorker {
   check?: string | null
   /** How many times `check` has run. */
   checkRuns?: number
+  /** The check running now, under a runner outside the daemon like an attempt's CLI (climayte.ts
+   *  startCheck): its output `log`, and the runner's pid and files. Absent when none runs. */
+  checkRunner?: {
+    log: string
+    pid: number | null
+    pidFile: string
+    exitFile: string
+    launchedAt: number
+  } | null
   /** Its size at dispatch (climayte.ts sizeTasks); `room` and `roomOn` are refreshed when it starts
    *  waiting for room. */
   size?: CliMayteSizing
@@ -492,6 +510,22 @@ export const WIND_DOWN_WEEK_PCT = 85
  *  account walled until that window resets (climayte.ts stopAtCeiling). */
 export const CEILING_PCT = 90
 
+/** How close to its weekly reset an account may work past WIND_DOWN_WEEK_PCT. */
+export const WEEK_END_MS = 5 * 3_600_000
+
+/** The weekly stop line in a week's last WEEK_END_MS: one point under the ceiling, so a session
+ *  still has about a minute and a half of heavy Pro work to write its handoff (a Pro 5-hour window
+ *  is about 7.7 weekly points). At 85 there, up to 5 points of the week expired unused at a reset
+ *  that was already due (owner, 2026-10-02: "Up to 90% near reset"). */
+export const WEEK_END_STOP_PCT = CEILING_PCT - 1
+
+/** The weekly stop line for an account whose week resets at `weekResetsAt`, as of `now`. */
+export function weekStopPct(weekResetsAt: number | null | undefined, now: number): number {
+  return weekResetsAt != null && weekResetsAt > now && weekResetsAt - now <= WEEK_END_MS
+    ? WEEK_END_STOP_PCT
+    : WIND_DOWN_WEEK_PCT
+}
+
 /** The reading a running session is judged by: its own stream's, or the account's newest from any
  *  of its workers when that is newer and its 5-hour window has not reset. A session's own stream
  *  says nothing while it sits in a long tool call. 2026-10-01 on #102: three workers saw 85% at
@@ -566,7 +600,7 @@ export function windDownAt(
   const live = sessionReading(own, account, now)
   if (live?.sessionPct != null && live.sessionPct >= WIND_DOWN_SESSION_PCT)
     return { reason: 'usage', pct: live.sessionPct, week: false }
-  if (live?.weekPct != null && live.weekPct >= WIND_DOWN_WEEK_PCT)
+  if (live?.weekPct != null && live.weekPct >= weekStopPct(live.weekResetsAt, now))
     return { reason: 'usage', pct: live.weekPct, week: true }
   if (ctx !== null && ctx >= CONTEXT_HANDOFF_TOKENS) return { reason: 'context', tokens: ctx }
   return null
@@ -1180,11 +1214,11 @@ function accountIsFull(a: CliMayteAccount): boolean {
   )
 }
 
-/** An account past the wind-down line. */
+/** An account past the wind-down line (WIND_DOWN_SESSION_PCT, weekStopPct). */
 function accountIsNear(a: CliMayteAccount, now: number): boolean {
   return (
     (a.sessionPct !== null && a.sessionPct >= WIND_DOWN_SESSION_PCT) ||
-    (a.weekPct !== null && a.weekPct >= WIND_DOWN_WEEK_PCT)
+    (a.weekPct !== null && a.weekPct >= weekStopPct(a.weekResetsAt, now))
   )
 }
 

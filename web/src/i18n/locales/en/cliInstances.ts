@@ -3,7 +3,8 @@
 export default {
   title: 'CLI instances',
   refresh: 'Refresh',
-  createInstance: 'New CLI instance',
+  // The header's plus: it opens the email Add account row (the create-by-name dialog is gone).
+  createInstance: 'Add account',
   empty: 'No CLI instances found.',
   emptyHint: 'Add your first account by its email to get started.',
   // The folded table's two gauges (PooledUsageGauges.vue, lib/usage-pool.ts): what is left of each

@@ -71,6 +71,7 @@ import {
   tailText,
   transcriptCandidates,
   transcriptFile,
+  voidSpec,
   walls,
   workers,
 } from './climayte-core'
@@ -120,7 +121,7 @@ import {
   windDownMessage,
 } from './climayte-lib'
 import { FIT_PCT, projectedPct, sizeTask } from './climayte-placement'
-import { readRunnerExit, readRunnerPids } from './climayte-runner'
+import { launchRunner, type RunnerPids, readRunnerExit, readRunnerPids } from './climayte-runner'
 import { roomNow, scheduleWorker, tickAccounts, tickState } from './climayte-schedule'
 import {
   attemptUnits,
@@ -368,9 +369,14 @@ const isActive = (w: CliMayteWorker): boolean =>
  *  orchestrator that has to remember to judge every result forgets some, and a worker's own "the
  *  tests pass" is a claim. A task with a `check` command is judged by its exit code the moment the
  *  worker reports done; a fail goes back to the same session one rung up the ladder with the end of
- *  the command's output, so nobody has to read it first. It runs under the daemon, so a restart
- *  ends it and the next daemon runs it again (tick). */
-const checks = new Map<string, { kill: () => void }>()
+ *  the command's output, so nobody has to read it first.
+ *
+ *  It runs under a runner outside the daemon, like an attempt's CLI (climayte-runner.ts), and its
+ *  record is on the worker (`checkRunner`), so a restart neither kills it nor waits for it: the next
+ *  daemon reads it on from its files (pollChecks). As a plain daemon child it held every restart and
+ *  auto-update back while any check ran (owner, 2026-10-02: "I thought we were supposed to have
+ *  decoupling from tasks running and my ability to restart"; two megarun checks of up to 20 minutes
+ *  each kept the Restart button refused). */
 /** A check that still fails after this many rounds stops the task for the orchestrator. */
 const MAX_CHECK_FAILS = 3
 const CHECK_TIMEOUT_MS = 20 * 60_000
@@ -396,48 +402,133 @@ function checkShell(): string {
 }
 
 function startCheck(w: CliMayteWorker): void {
-  if (!w.check || checks.has(w.id)) return
+  if (!w.check || w.checkRunner) return
   w.status = 'checking'
   w.checkRuns = (w.checkRuns ?? 0) + 1
   mkdirSync(LOGS, { recursive: true })
-  const out = join(LOGS, `${w.id}-check-${w.checkRuns}.log`)
-  const fd = openSync(out, 'w')
+  const log = join(LOGS, `${w.id}-check-${w.checkRuns}.log`)
+  // Files, never pipes, so nothing ties the check to this process. It reads nothing: an empty stdin.
+  closeSync(openSync(log, 'w'))
+  const stdin = `${log}.stdin`
+  closeSync(openSync(stdin, 'w'))
+  const runner = {
+    log,
+    pid: null,
+    pidFile: `${log}.pid.json`,
+    exitFile: `${log}.exit.json`,
+    launchedAt: Date.now(),
+  }
+  rmSync(runner.pidFile, { force: true })
+  rmSync(runner.exitFile, { force: true })
   journal(w, 'check', { notice: firstLine(w.check) })
-  let timedOut = false
-  let proc: ReturnType<typeof Bun.spawn>
   try {
-    proc = Bun.spawn([checkShell(), '-c', w.check], {
-      cwd: w.cwd,
-      stdin: 'ignore',
-      stdout: fd,
-      stderr: fd,
-      windowsHide: true,
-    })
+    launchRunner(
+      {
+        argv: [checkShell(), '-c', w.check],
+        cwd: w.cwd,
+        // The daemon's own environment, as when the check was its child (WMI would start the runner
+        // with the user's default one).
+        env: Object.fromEntries(
+          Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined),
+        ),
+        stdin,
+        stdout: log,
+        stderr: log,
+        pidFile: runner.pidFile,
+        exitFile: runner.exitFile,
+        fresh: true,
+      },
+      runnerSpecPath(log),
+    )
   } catch (err) {
-    closeSync(fd)
     judgeCheck(w, null, `could not start: ${err instanceof Error ? err.message : String(err)}`)
     return
   }
-  const timer = setTimeout(() => {
-    timedOut = true
-    killProcessTree(proc.pid)
-  }, CHECK_TIMEOUT_MS)
-  checks.set(w.id, { kill: () => killProcessTree(proc.pid) })
+  w.checkRunner = runner
   changed(w)
-  void proc.exited.then((code) => {
-    clearTimeout(timer)
-    try {
-      closeSync(fd)
-    } catch {
-      // already closed
+}
+
+/** Take the runner pid a check's runner wrote itself (no WMI check needed, like takeRunnerPids). */
+function takeCheckPid(r: NonNullable<CliMayteWorker['checkRunner']>): void {
+  if (r.pid !== null) return
+  const pids = readRunnerPids(r.pidFile)
+  if (!pids) return
+  r.pid = pids.runner
+  confirmedRunners.add(pids.runner)
+}
+
+/** A check's runner files; its output log is the record and stays. */
+function removeCheckFiles(r: NonNullable<CliMayteWorker['checkRunner']>): void {
+  for (const f of [r.pidFile, r.exitFile, `${r.log}.stdin`, `${runnerSpecPath(r.log)}.taken`])
+    rmSync(f, { force: true })
+}
+
+/** Stop a worker's check: kill its runner's tree, or void its spec before the runner claims it.
+ *  False while a runner that claimed the spec has not written its pid yet; pollChecks asks again. */
+function stopCheck(w: CliMayteWorker): boolean {
+  const r = w.checkRunner
+  if (!r) return true
+  takeCheckPid(r)
+  if (r.pid === null && !voidSpec(r.log) && Date.now() - r.launchedAt <= RUNNER_CLAIM_GIVE_UP_MS)
+    return false
+  if (r.pid !== null) killRunner(r.pid, r.log)
+  removeCheckFiles(r)
+  w.checkRunner = null
+  return true
+}
+
+/** Read every check from its files, whichever daemon started it: judged once its exit file is in,
+ *  stopped at CHECK_TIMEOUT_MS, and run again when it never started or its runner died without an
+ *  exit file. A worker no longer checking (cancelled meanwhile) has its check stopped. */
+function pollChecks(): void {
+  for (const w of workers.values()) {
+    // A check started before runners was a daemon child: the restart ended it, so it runs again.
+    if (w.status === 'checking' && !w.checkRunner) {
+      startCheck(w)
+      continue
     }
-    if (!checks.delete(w.id) || w.status !== 'checking') return // cancelled meanwhile
-    judgeCheck(
-      w,
-      timedOut ? null : code,
-      timedOut ? 'timed out after 20 minutes' : tailText(out, 1500),
-    )
-  })
+    const r = w.checkRunner
+    if (!r) continue
+    if (w.status !== 'checking') {
+      if (stopCheck(w)) changed(w)
+      continue
+    }
+    const before = r.pid
+    takeCheckPid(r)
+    if (r.pid !== before) changed(w)
+    const exit = readRunnerExit(r.exitFile)
+    if (exit) {
+      removeCheckFiles(r)
+      w.checkRunner = null
+      judgeCheck(
+        w,
+        exit.error ? null : exit.code,
+        exit.error ? `could not start: ${exit.error}` : tailText(r.log, 1500),
+      )
+      changed(w)
+      continue
+    }
+    const age = Date.now() - r.launchedAt
+    if (age > CHECK_TIMEOUT_MS) {
+      if (!stopCheck(w)) continue
+      judgeCheck(w, null, 'timed out after 20 minutes')
+      changed(w)
+      continue
+    }
+    const neverStarted = r.pid === null && age > 60_000 && voidSpec(r.log)
+    const died = r.pid !== null && runnerIdentity(r.pid) === 'gone'
+    const lost = r.pid === null && age > RUNNER_CLAIM_GIVE_UP_MS
+    if (neverStarted || died || lost) {
+      removeCheckFiles(r)
+      w.checkRunner = null
+      journal(w, 'check', {
+        notice: `the check's runner ${neverStarted ? 'never started' : 'ended without an exit'}; it runs again`,
+      })
+      // The same round again, not a new one: it never gave an answer.
+      w.checkRuns = Math.max(0, (w.checkRuns ?? 1) - 1)
+      startCheck(w)
+    }
+  }
 }
 
 function judgeCheck(w: CliMayteWorker, code: number | null, output: string): void {
@@ -479,15 +570,13 @@ ${code === null ? '' : output.trim()}`
 /** Workers whose CLI a daemon restart would kill: only attempts the daemon spawned itself (before
  *  runners, 2026-09-30), which sit in its kill-on-close job on Windows. A worker under a runner
  *  (climayte-runner.ts) lives outside the daemon and is picked up again after the restart, so it does
- *  not hold a restart or an auto-update back.A worker whose check is running does hold one back. */
+ *  not hold a restart or an auto-update back. Neither does a running check (startCheck). */
 export function climayteRunningCount(): number {
   load()
   let n = 0
   for (const w of workers.values()) {
+    // A check runs under a runner too since 2026-10-02 (startCheck), so it no longer counts here.
     if (w.status === 'running' && !w.attempts[w.attempts.length - 1]?.runner) n++
-    // A check is a plain child of the daemon, not a runner: a restart kills it and it runs again
-    // from scratch, up to 20 minutes each (stress review, 2026-10-02).
-    else if (w.status === 'checking') n++
   }
   return n
 }
@@ -574,6 +663,10 @@ function checkRunners(): void {
     const pid = at?.runner?.pid
     if (w.status === 'running' && at && pid && runnerIdentity(pid) === 'unknown')
       runners.push({ pid, log: at.log })
+    // A check's runner after a restart: its spec path names the check's log the same way.
+    const check = w.checkRunner
+    if (w.status === 'checking' && check?.pid && runnerIdentity(check.pid) === 'unknown')
+      runners.push({ pid: check.pid, log: check.log })
   }
   if (!runners.length) return
   runnerCheckAt = Date.now()
@@ -593,13 +686,35 @@ function checkRunners(): void {
     })
 }
 
+/** A runner writes its pid the moment it has claimed its spec (climayte-runner.ts), so one that
+ *  claimed it and wrote nothing for this long died in between. Minutes, not the minute an unclaimed
+ *  spec gets: reading a runner still starting on a busy box as ended would resume beside it. */
+const RUNNER_CLAIM_GIVE_UP_MS = 5 * 60_000
+
+type Attempt = CliMayteWorker['attempts'][number]
+
+/** Take the pids a runner wrote (its own once it claimed the spec, the CLI's once that started).
+ *  The runner wrote them itself, so they need no WMI check. True when something new came in. */
+function takeRunnerPids(
+  at: Attempt,
+  runner: NonNullable<Attempt['runner']>,
+  pids: RunnerPids,
+): boolean {
+  if (runner.pid === pids.runner && (pids.child ?? null) === (at.pid ?? null)) return false
+  runner.pid = pids.runner
+  if (pids.child) at.pid = pids.child
+  confirmedRunners.add(pids.runner)
+  return true
+}
+
 /** Whether the attempt's CLI has ended. A runner attempt is read from its files, so the answer
  *  survives a daemon restart: an exit file means it ended; a runner gone without one died (finish
- *  then reads it as interrupted), while one not yet vouched for still runs; one that wrote no pids
- *  within a minute never started. An attempt
- *  the daemon spawned itself is read from its handle, or, with none (the daemon restarted), it
- *  died with that daemon's kill-on-close job on Windows. */
-function attemptExited(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): boolean {
+ *  then reads it as interrupted), while one not yet vouched for still runs. A spec nobody claimed
+ *  within a minute is voided, so it never starts late (2026-10-02: reading a pid-less minute as
+ *  ended could not tell "never started" from "started late"); a claimed one waits for its runner
+ *  up to RUNNER_CLAIM_GIVE_UP_MS. An attempt the daemon spawned itself is read from its handle, or,
+ *  with none (the daemon restarted), it died with that daemon's kill-on-close job on Windows. */
+function attemptExited(w: CliMayteWorker, at: Attempt): boolean {
   const runner = at.runner
   if (!runner)
     return (
@@ -607,22 +722,70 @@ function attemptExited(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]
       !(at.pid && isPidAlive(at.pid))
     )
   if (readRunnerExit(runner.exitFile)) return true
-  if (runner.pid === null) {
+  // Read on until the CLI's pid is in: the runner's own comes first, alone.
+  if (at.pid == null) {
     const pids = readRunnerPids(runner.pidFile)
-    if (!pids) return Date.now() - runner.launchedAt > 60_000
-    runner.pid = pids.runner
-    at.pid = pids.child
-    confirmedRunners.add(pids.runner)
-    changed(w)
+    if (pids) {
+      if (takeRunnerPids(at, runner, pids)) changed(w)
+    } else if (runner.pid === null) {
+      const age = Date.now() - runner.launchedAt
+      if (age <= 60_000) return false
+      if (voidSpec(at.log)) return true
+      return age > RUNNER_CLAIM_GIVE_UP_MS
+    }
   }
   return runnerIdentity(runner.pid as number) === 'gone'
 }
 
 /** Kill the attempt's CLI through its runner (the whole tree), if the runner is still this
- *  worker's. Never a bare pid nobody can vouch for. */
-function killAttempt(at: CliMayteWorker['attempts'][number]): void {
-  const pid = at.runner?.pid
-  if (!pid) return
+ *  worker's. Never a bare pid nobody can vouch for. Before the runner has written its pid the spec
+ *  decides (measured 2026-10-02: three cancels 87-209 ms after launch stopped here at "no pid yet"
+ *  and the runner ran each task to completion, $0.145-0.150 each charged to nothing; an urgent
+ *  message even relaunched beside it on the same session). Voided first: nothing ever starts.
+ *  Claimed first: the runner is marked killOnStart and killLateStarts kills it once its pid file
+ *  appears. Every caller saves the worker right after (changed), which keeps the mark. */
+function killAttempt(at: Attempt): void {
+  const runner = at.runner
+  if (!runner) return
+  if (runner.pid === null) {
+    const pids = readRunnerPids(runner.pidFile)
+    if (!pids) {
+      if (voidSpec(at.log)) removeRunnerFiles(at)
+      else runner.killOnStart = true
+      return
+    }
+    takeRunnerPids(at, runner, pids)
+  }
+  killRunner(runner.pid as number, at.log)
+}
+
+/** Kill the runners a stop reached after they claimed their spec but before they wrote a pid
+ *  (killAttempt marks them killOnStart). Every attempt of every worker, whatever its status: after a
+ *  cancel the worker is no longer 'running', so pollRunning never visits it, and after an urgent
+ *  message a new attempt is already the worker's last. */
+function killLateStarts(): void {
+  for (const w of workers.values())
+    for (const at of w.attempts) {
+      const runner = at.runner
+      if (!runner?.killOnStart) continue
+      const pids = readRunnerPids(runner.pidFile)
+      if (pids) {
+        takeRunnerPids(at, runner, pids)
+        killRunner(pids.runner, at.log)
+      } else if (
+        !readRunnerExit(runner.exitFile) &&
+        Date.now() - runner.launchedAt <= RUNNER_CLAIM_GIVE_UP_MS
+      )
+        continue
+      // Killed, ended on its own, or a runner that claimed its spec and died before writing a pid.
+      cleanUpRunner(w, at)
+      delete runner.killOnStart
+      changed(w)
+    }
+}
+
+/** Kill a runner's whole tree, if it is still this attempt's runner. */
+function killRunner(pid: number, log: string): void {
   if (runnerIdentity(pid) === 'unknown') {
     // A stop cannot wait for the next tick's check: ask about this one now, under the same timeout.
     const r = Bun.spawnSync(runnerQueryArgv([pid]), {
@@ -631,11 +794,11 @@ function killAttempt(at: CliMayteWorker['attempts'][number]): void {
       windowsHide: true,
       timeout: RUNNER_QUERY_TIMEOUT_MS,
     })
-    judgeRunners([{ pid, log: at.log }], r.success, r.stdout?.toString() ?? '')
+    judgeRunners([{ pid, log }], r.success, r.stdout?.toString() ?? '')
   }
   const identity = runnerIdentity(pid)
   if (identity === 'unknown')
-    console.error(`[climayte] runner ${pid} could not be confirmed as ${at.log}'s; not killed`)
+    console.error(`[climayte] runner ${pid} could not be confirmed as ${log}'s; not killed`)
   if (identity !== 'ours') return
   try {
     killProcessTree(pid)
@@ -678,10 +841,9 @@ async function tick(): Promise<void> {
     const accounts = tickAccounts()
     checkRunners()
     pollRunning()
+    killLateStarts()
     saveLive()
-    // A check a restart ended (it ran under the old daemon) runs again.
-    for (const w of workers.values())
-      if (w.status === 'checking' && !checks.has(w.id)) startCheck(w)
+    pollChecks()
     recheckSignedOut(accounts, now)
     const state = tickState(accounts, now)
     const due = [...workers.values()]
@@ -964,8 +1126,16 @@ function cleanUpRunner(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]
         left.map((p) => `${p.name} ${p.pid}${p.command ? `: ${p.command}` : ''}`).join('; '),
       ),
     })
+  removeRunnerFiles(at)
+}
+
+/** An attempt's runner files: pids, exit, and the claimed spec of a runner that died mid-read (it
+ *  carries the CLI's environment). The log is the attempt's record and stays. */
+function removeRunnerFiles(at: Attempt): void {
+  if (!at.runner) return
   rmSync(at.runner.pidFile, { force: true })
   rmSync(at.runner.exitFile, { force: true })
+  rmSync(`${runnerSpecPath(at.log)}.taken`, { force: true })
 }
 
 /** Stopped at the ceiling: from its handoff when it wrote one, else on like a limit (the wall is up). */
@@ -2039,8 +2209,7 @@ export function climayteCancel(filter: { id?: string; group?: string }): {
   if (!filter.id && !filter.group) return { cancelled, keptMessages }
   for (const w of workers.values()) {
     if (!matches(w, filter) || !isActive(w)) continue
-    checks.get(w.id)?.kill()
-    checks.delete(w.id)
+    stopCheck(w)
     if (!stopRunning(w, null)) continue
     const at = w.attempts[w.attempts.length - 1]
     w.status = 'cancelled'

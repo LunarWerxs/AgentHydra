@@ -58,6 +58,12 @@ export default {
   modelAskedRan: 'asked {asked}, ran {ran}',
   rowRunHint: 'Model {model}, thinking {effort}',
   rowRanHint: 'The CLI ran {ran}',
+  // The row's time: how long the task has been active, not since it was queued (CliMayteView activeS).
+  activeSeconds: '{s}s',
+  activeMinutes: '{m}m',
+  activeHours: '{h}h {m}m',
+  activeDays: '{d}d {h}h',
+  rowActiveHint: 'Active {d} (time waiting for an account is not counted)',
   tokensBreakdown:
     '{input} input · {output} output · {cacheRead} cache read · {cacheWrite} cache write',
   offloadedTasks: 'task offloaded | tasks offloaded',

@@ -60,7 +60,6 @@ import {
   tokenTotal,
 } from '@/lib/climayte-status'
 import { reconcileList, sameData } from '@/lib/reconcile'
-import { formatAgo } from '@/lib/relativeTime'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
@@ -71,6 +70,8 @@ const loaded = ref(false)
 const selectedId = ref<string | null>(null)
 const detail = ref<(CliMayteWorkerView & { events: string[] }) | null>(null)
 const now = ref(Date.now())
+// When the list was last read: a running task's `ranS` keeps growing from there until the next poll.
+const listedAt = ref(Date.now())
 /** The last load failed. Before anything loaded that is an error state (never "No tasks yet");
  *  after, a banner over the last known list, whose spinners would otherwise look alive. */
 const unreachable = ref(false)
@@ -191,6 +192,7 @@ async function load(opts: { silent?: boolean } = {}) {
     if (score && !sameData(scorecard.value, score)) scorecard.value = score
     unreachable.value = false
     now.value = Date.now()
+    listedAt.value = now.value
     if (!loaded.value) {
       loaded.value = true
       // First paint: open the newest live task, else the newest one.
@@ -229,7 +231,20 @@ function select(w: CliMayteWorkerView) {
   void loadDetail()
 }
 
-const startedAgo = (w: CliMayteWorkerView) => formatAgo(now.value, w.createdAt)
+/** How long the task has been active: its sessions' running time over every attempt, not the time
+ *  since it was queued (owner, 2026-10-02: "if it sat for two hours, but it only worked for one,
+ *  then it should show one hour, not three"). Waiting for an account or a reset does not count. */
+const activeS = (w: CliMayteWorkerView): number =>
+  w.ranS + (w.status === 'running' ? Math.max(0, (now.value - listedAt.value) / 1000) : 0)
+
+function activeLabel(totalS: number): string {
+  const m = Math.floor(totalS / 60)
+  if (m < 1) return t('climayte.activeSeconds', { s: Math.floor(totalS) })
+  if (m < 60) return t('climayte.activeMinutes', { m })
+  const h = Math.floor(m / 60)
+  if (h < 24) return t('climayte.activeHours', { h, m: m % 60 })
+  return t('climayte.activeDays', { d: Math.floor(h / 24), h: h % 24 })
+}
 
 /** The row's hover: the title in full, its account, and the one line that needs attention (a
  *  failure's reason, what a waiting or re-queued task waits for, what a running one is doing). */
@@ -258,6 +273,7 @@ function rowHint(w: CliMayteWorkerView): string {
     w.account ?? t('climayte.noAccount'),
     ...runs,
     line,
+    t('climayte.rowActiveHint', { d: activeLabel(activeS(w)) }),
     new Date(w.createdAt).toLocaleString(),
   ]
     .filter(Boolean)
@@ -278,7 +294,7 @@ function runTag(w: CliMayteWorkerView): { text: string; differs: boolean } | nul
 
 onMounted(() => {
   void load()
-  // Keeps "Started 3m ago" honest between the slow idle polls.
+  // Keeps a running task's active time honest between the slow idle polls.
   clock = window.setInterval(() => {
     now.value = Date.now()
   }, 30_000)
@@ -518,10 +534,9 @@ onUnmounted(() => {
                   class="shrink-0 text-2xs"
                   :class="runTag(w)?.differs ? 'text-warning' : 'text-muted-foreground'"
                 >{{ runTag(w)?.text }}</span>
-                <time
-                  class="shrink-0 text-xs text-muted-foreground tabular-nums"
-                  :datetime="new Date(w.createdAt).toISOString()"
-                >{{ startedAgo(w) }}</time>
+                <span class="shrink-0 text-xs text-muted-foreground tabular-nums">{{
+                  activeLabel(activeS(w))
+                }}</span>
               </button>
             </li>
           </ul>

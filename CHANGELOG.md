@@ -9,6 +9,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **Restart is no longer held back by work that survives it** (owner, 2026-10-02: "I thought we were supposed to have decoupling from tasks running and my ability to restart"). CliMayte checks now run under a detached runner like the workers' own CLI, so a restart neither kills nor waits for them and the next daemon reads them on; the header's Restart refuses only for a pre-runner CliMayte worker inside the daemon. Dispatch runs, which reattach at boot, no longer refuse a manual restart; the unattended auto-update still waits for them. Two megarun checks of up to 20 minutes each had kept the button refused.
+- **The CliMayte list shows how long each task has been active**, not how long ago it was queued: time waiting for an account or a reset no longer counts (owner, 2026-10-02).
+- **In a week's last five hours an account works up to 89% of its week**, not 85%, one point under the 90% ceiling so a session can still write its handoff; up to 5 points of every account-week expired unused (owner, 2026-10-02: "Up to 90% near reset").
+- The CLI tab's plus button says "Add account", what it does since the create-by-name dialog went.
+
 - **CliMayte starts work on accounts that have room** (measured live 2026-10-02: 31 tasks waited 776 task-minutes while the capacity hint said 9 accounts sat idle):
   - CliMayte no longer holds a task for the 5-hour reset of an account that already has room for it: on 2026-10-02, 31 tasks waited 776 task-minutes that way and only 5 started at dispatch; a replay of that 04:36 tick now starts 21 of 31 (19 for a group dispatched with per_account 2).
   - When an account refuses a task (no room, or a reset worth waiting for), CliMayte tries the task's next account and waits only when every account refuses; before, 8 tasks waited on #90 while #95 and #94 ran no worker.
@@ -83,6 +88,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A cancel in a task's first second stops its CLI** (`voidSpec` in `server/src/climayte-core.ts`). Until the runner had written its pid, a cancel or urgent message only marked the attempt stopped and the runner started the CLI anyway; three such cancels each ran a whole task, $0.145-0.150 charged to nothing. The spec is now a single-owner claim: a stop voids it before the runner takes it, or marks the runner to be killed the moment its pid appears.
+- **A check written for Git Bash runs under the runner**: an append-only output handle swallowed everything Git Bash wrote and failed `sleep`, so a check's log is opened for writing.
 - **CliMayte knows every account's reset times** (`withResetTimes` in
   `server/src/climayte-core.ts`). A reading from the CLI's own `/usage` keeps each reset as the CLI
   printed it ("Oct 4, 1am"), and CliMayte read only the parsed field, so four of ten accounts,

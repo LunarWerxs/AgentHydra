@@ -24,7 +24,7 @@ import {
   pickAccount,
   rankAccounts,
   WIND_DOWN_SESSION_PCT,
-  WIND_DOWN_WEEK_PCT,
+  weekStopPct,
 } from './climayte-lib'
 import {
   type CliMaytePlacement,
@@ -129,7 +129,8 @@ function homeFreesAt(home: CliMayteAccount, now: number): number | null {
   const at = accountFreesAt(home, now)
   if (at === null) return null
   const weekStops =
-    (home.weekPct ?? 0) >= WIND_DOWN_WEEK_PCT && !(home.weekResetsAt && home.weekResetsAt <= at)
+    (home.weekPct ?? 0) >= weekStopPct(home.weekResetsAt, at) &&
+    !(home.weekResetsAt && home.weekResetsAt <= at)
   return weekStops ? null : at
 }
 
@@ -220,7 +221,7 @@ function cooldownFor(
         (a) =>
           !isLoginWall(walls[a.id]?.reason) &&
           (!accountInUse(a) || !!w.accounts?.includes(a.id)) &&
-          (a.weekPct ?? 0) < WIND_DOWN_WEEK_PCT &&
+          (a.weekPct ?? 0) < weekStopPct(a.weekResetsAt, s.now) &&
           (groupActive.get(a.id) ?? 0) < groupCap(a, cap, s.now),
       )
       .map((a) => ({
