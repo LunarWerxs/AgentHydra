@@ -213,7 +213,10 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   re-reading (limit and move 127% of a Pro window, handoffs 60%, follow-ups 19%).
 - The test metrics (owner, 2026-10-01: stop each account at 85-90%, never at its limit) ride on
   `GET /api/corch/totals?since=<ISO or ms>`: `limitHits` and `limitHitList` (runs that ended at a
-  real limit; target 0), `ceilingStops` (runs the 90% ceiling stopped), `peaks` (each account's
+  real limit; target 0), `ceilingStops` (runs the 90% ceiling stopped), `placedPast` and
+  `placedPastList` (runs placed on an account already past the ceiling, stopped at their first
+  reading, each with the reading it found and the `placedPct` it was placed on; counted in neither
+  `ceilingStops` nor `peaks`), `peaks` (each account's
   highest 5-hour % per window from the CLI's rate_limit_events, `attempt.peak`), `sizing` (finished
   tasks' expected against used, `ratio` used/expected), plus `usedPct`, `rereadPct`,
   `rereadShare`, `rereadByCause`. Waiting rows carry `waitUntil` (ISO, UTC) and every row `size`.
@@ -332,8 +335,19 @@ the transcript lookups.
   (no +100) when the next session is placed. At `CEILING_PCT`
   (90, either window; `df4bb96`) a turn still running is stopped on the spot and the account walled
   until that window resets: it goes on from its handoff if it wrote one, else moves or waits. Those
-  are ceiling stops (`ceiling` on the attempt, `ceilingStops` in the totals), never limit hits. An
-  owner who allows paid extra usage lifts both lines.
+  are ceiling stops (`ceiling` on the attempt, `ceilingStops` in the totals), never limit hits. A
+  stop at the run's first reading, already past the ceiling (`pastOnArrival`), is
+  `ceiling.onArrival`: the account was full when the run arrived, the reading it was placed on was
+  stale or missing, and it counts in `placedPast` instead (2026-10-02: #120 had no reading and its
+  first request was refused at 129%; #118 was placed at 82% and read 95%, #119 at 79% and read
+  100%). An owner who allows paid extra usage lifts both lines.
+- Placement goes by readings at most `READING_STALE_MS` (10 minutes) old: the background usage
+  check reads every account only every 30 minutes, and an account can be used outside CliMayte
+  meanwhile. While a task waits to be placed, an account whose reading is missing or older is read
+  again (`refreshReading` in climayte-core.ts: the usage check, no quota, at most once per account
+  per 10 minutes) and takes no new work while that read runs (`refreshing`, up to 30 s). A reading
+  still stale after it, like a missing one, lets the account take one worker until that worker's
+  stream reads it.
 - `copySessionTranscript(fromConfigDir, toConfigDir, sessionId): boolean`: find
   `<from>/projects/*/<sessionId>.jsonl`, copy it (and a sibling `<sessionId>/` directory when
   present, recursively) into `<to>/projects/<same folder name>/`, keeping the source's mtime.

@@ -111,6 +111,7 @@ import {
   ORG_DISABLED_WALL,
   OVERAGE_NOTICE,
   PRE_OVERAGE_NOTICE,
+  pastOnArrival,
   recentWorkers,
   toBrief,
   toReport,
@@ -1116,7 +1117,7 @@ function stopAtCeilingOrOverage(
   // Both lines go by the account's newest reading from any of its workers (sessionReading).
   if (watching && !at.ceiling && !at.overage && !overageAllowed()) {
     const c = atCeiling(r.live, accountLive, now)
-    if (c) stopAtCeiling(w, at, c, running)
+    if (c) stopAtCeiling(w, at, { ...c, onArrival: pastOnArrival(r.firstLive, c) }, running)
   }
   if (at.overage || at.ceiling || overageAllowed()) return
   if (r.overage) {
@@ -1201,6 +1202,13 @@ function stopForOverage(
   changed(w)
 }
 
+/** A ceiling stop's fields on its journal `limit` line. */
+const ceilingFields = (c: NonNullable<CliMayteWorker['attempts'][number]['ceiling']>) => ({
+  ceiling: true,
+  pct: c.pct,
+  ...(c.onArrival ? { onArrival: true } : {}),
+})
+
 /** At the ceiling the turn is stopped where it is and the account walled until that window
  *  resets. finish() goes on from the handoff when the session wrote one after the stop line asked,
  *  else the session moves to an account with room or waits for one, like a limit, but journalled
@@ -1208,7 +1216,7 @@ function stopForOverage(
 function stopAtCeiling(
   w: CliMayteWorker,
   at: CliMayteWorker['attempts'][number],
-  c: { pct: number; week: boolean; resetsAt: number | null },
+  c: NonNullable<CliMayteWorker['attempts'][number]['ceiling']>,
   running: boolean,
 ): void {
   at.ceiling = c
@@ -1538,8 +1546,7 @@ function journalFinish(
     case 'handoff':
       // A ceiling stop that still got its handoff written is a ceiling stop all the same: without
       // this line the night's one ceiling stop (w-d7fbb102, #102) was in the totals but not here.
-      if (at.ceiling)
-        journal(w, 'limit', { account, until: until(), ceiling: true, pct: at.ceiling.pct })
+      if (at.ceiling) journal(w, 'limit', { account, until: until(), ...ceilingFields(at.ceiling) })
       journal(w, 'handoff-written', { account, path: at.windDown?.path })
       break
     case 'quota':
@@ -1547,7 +1554,7 @@ function journalFinish(
         account,
         notice,
         until: until(),
-        ...(at.ceiling ? { ceiling: true, pct: at.ceiling.pct } : {}),
+        ...(at.ceiling ? ceilingFields(at.ceiling) : {}),
       })
       break
     case 'auth':

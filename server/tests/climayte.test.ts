@@ -587,6 +587,18 @@ describe('pickAccount', () => {
     expect(pick(accounts, [['a88', 1]])?.id).toBe('a94')
     // Once a reading is in, it takes work like any other account.
     expect(pick([acct('a88', 88, 5, 5), acct('a94', 94, 60, 20)], [['a88', 1]])?.id).toBe('a88')
+    // A reading past READING_STALE_MS counts as none (2026-10-02: #118 read 82% at 07:59 and 95% at
+    // 08:29, used outside CliMayte in between); a fresh one is trusted.
+    const readAt = (minutesAgo: number) => [
+      { ...acct('a88', 88, 5, 5), readAt: now - minutesAgo * 60_000 },
+      acct('a94', 94, 60, 20),
+    ]
+    expect(pick(readAt(11), [])?.id).toBe('a88')
+    expect(pick(readAt(11), [['a88', 1]])?.id).toBe('a94')
+    expect(pick(readAt(2), [['a88', 1]])?.id).toBe('a88')
+    // While its reading is being refreshed it takes nothing; the read is seconds away.
+    const refreshing = [{ ...acct('a88', 88, 5, 5), refreshing: true }, acct('a94', 94, 60, 20)]
+    expect(pick(refreshing, [])?.id).toBe('a94')
   })
 
   test("an idle account beats one busy with another group's worker, even at lower usage (note 8)", () => {
@@ -935,42 +947,106 @@ describe('integration: paid extra usage is never spent', () => {
     }
   }, 20_000)
 
-  test('at the 90% ceiling the turn is stopped, short of billing and of the limit, and goes on elsewhere', async () => {
-    const nearDir = join(root, 'acct-near')
+  /** A task on an account that reads 98.5% (and could bill), run until it ends; 'rising': the
+   *  account reads 50% first and climbs to 98.5% (fake-claude's fake-near-limit). */
+  const nearLimitRun = async (title: string, rising: boolean) => {
+    const nearDir = join(root, `acct-near-${rising ? 'rising' : 'full'}`)
     mkdirSync(nearDir, { recursive: true })
-    writeFileSync(join(nearDir, 'fake-near-limit'), '')
+    writeFileSync(join(nearDir, 'fake-near-limit'), rising ? 'rising' : '')
     setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-    // Left alone, the fake finishes on the near-limit account after 6 s ('FINISHED NEAR LIMIT').
+    const near = rising ? 'rise-1' : 'near-1'
     setCliMayteAccountsProvider(() => [
-      { id: 'near-1', num: 1, name: 'near', configDir: nearDir, sessionPct: 0, weekPct: 0 },
-      { id: 'near-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
+      { id: near, num: 1, name: 'near', configDir: nearDir, sessionPct: 0, weekPct: 0 },
+      { id: `${near}-free`, num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
     ])
     startCliMayte()
-    const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title: 'near the limit' }] })
+    const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title }] })
     groups.push(run.group)
     const id = run.workers[0]?.id as string
-
     const deadline = Date.now() + 15_000
     let w = climayteList({ id })[0]
     while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
       await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
       w = climayteList({ id })[0]
     }
+    return { id, w }
+  }
 
+  test('a run that climbs into the 90% ceiling is stopped there, short of billing, and goes on elsewhere', async () => {
+    const { id, w } = await nearLimitRun('climbs to the ceiling', true)
+    expect(w?.status).toBe('done')
+    expect(w?.moves).toBe(1)
+    expect(w?.attempts[0]).toMatchObject({ outcome: 'quota', ceiling: true })
+    expect(w?.attempts[0]?.notice).toContain("CliMayte's ceiling of 90%, well short of the limit")
+    const totals = climayteTotals()
+    expect(totals.ceilingStopList.some((c) => c.id === id)).toBe(true)
+    expect(totals.placedPastList.some((p) => p.id === id)).toBe(false)
+  }, 20_000)
+
+  test('at the 90% ceiling the turn is stopped, short of billing and of the limit, and goes on elsewhere', async () => {
+    // Left alone, the fake finishes on the near-limit account after 6 s ('FINISHED NEAR LIMIT').
+    const { id, w } = await nearLimitRun('near the limit', false)
     expect(w?.status).toBe('done')
     expect(w?.result).toBe('FAKE DONE')
     expect(w?.moves).toBe(1)
     // Owner, 2026-10-01: "85 with a max of 90". The account reads 98.5% (and could bill): the
-    // ceiling stops it first, and that is a ceiling stop, not a limit hit.
+    // ceiling stops it first, and that is a ceiling stop, not a limit hit. Placed at 0% and found
+    // at 98.5% on its first request, it is a placement on a stale reading (pastOnArrival), not a
+    // stop line that came too late: listed apart from the ceiling stops.
     expect(w?.attempts[0]).toMatchObject({ outcome: 'quota', ceiling: true })
-    expect(w?.attempts[0]?.notice).toContain("CliMayte's ceiling of 90%")
+    expect(w?.attempts[0]?.notice).toContain(
+      "Found at 99% of its 5-hour usage on its first request, past CliMayte's ceiling of 90%",
+    )
     const totals = climayteTotals()
     expect(totals.limitHitList.some((h) => h.id === id)).toBe(false)
-    expect(totals.ceilingStops).toBeGreaterThan(0)
+    expect(totals.ceilingStopList.some((c) => c.id === id)).toBe(false)
+    expect(totals.placedPastList.find((p) => p.id === id)).toMatchObject({
+      pct: 98.5,
+      placedPct: 0,
+    })
     expect(climayteJournal({ id }).find((e) => e.event === 'limit')).toMatchObject({
       ceiling: true,
+      onArrival: true,
     })
   }, 20_000)
+
+  test("a run that found its account past the ceiling is not counted as CliMayte's peak", () => {
+    // 2026-10-02: #120 had no reading; its first request was refused at 129%, and the totals showed
+    // a 129% peak and a ceiling stop the stop line could never have prevented. Stamped an hour
+    // ahead, so `since` holds these two and none of the runs above.
+    const t = Date.now() + 3_600_000
+    const stop = (id: string, pct: number, onArrival: boolean) =>
+      ({
+        id,
+        title: id,
+        status: 'done',
+        createdAt: t,
+        attempts: [
+          {
+            account: { id: `acct-${id}`, num: 99, name: 'x' },
+            startedAt: t - 1_000,
+            endedAt: t,
+            outcome: 'quota',
+            startPct: onArrival ? null : 40,
+            peak: { pct, resetsAt: t + 3_600_000 },
+            ceiling: { pct, week: false, resetsAt: t + 3_600_000, onArrival },
+          },
+        ],
+      }) as any
+    workers.set('w-arrived', stop('w-arrived', 129, true))
+    workers.set('w-climbed', stop('w-climbed', 91, false))
+    try {
+      const totals = climayteTotals(t - 1_000)
+      expect(totals.placedPastList.map((p) => [p.id, p.pct, p.placedPct])).toEqual([
+        ['w-arrived', 129, null],
+      ])
+      expect(totals.ceilingStopList.map((c) => c.id)).toEqual(['w-climbed'])
+      expect(totals.peaks.map((p) => p.peakPct)).toEqual([91])
+    } finally {
+      workers.delete('w-arrived')
+      workers.delete('w-climbed')
+    }
+  })
 })
 
 describe('each round of a task says why it started', () => {

@@ -39,6 +39,8 @@ import {
   noTokens,
   ORG_DISABLED_WALL,
   overageStart,
+  pastOnArrival,
+  READING_STALE_MS,
   summarizeEvent,
 } from './climayte-lib'
 import {
@@ -156,6 +158,8 @@ export interface LogRead {
   overage: { resetsAt: number | null } | null
   /** The newest usage reading the CLI streamed (liveUsage). */
   live: CliMayteLiveUsage | null
+  /** The first one (pastOnArrival). */
+  firstLive: CliMayteLiveUsage | null
   /** The newest `timestamp` an event carried (assistant and user events do, epoch ms): when a
    *  replayed reading was really taken (readInto). */
   lastAt: number | null
@@ -224,6 +228,38 @@ function signedInAccounts(): CliMayteAccount[] {
   return pool.accounts
 }
 
+/** When each account's usage was last read again for placement (refreshReading), and the reads
+ *  still running (epoch ms they started). */
+const refreshAsked = new Map<string, number>()
+const refreshRunning = new Map<string, number>()
+
+/** How long an account sits out placement while its usage is read again: the read is one API call
+ *  (about 300 ms), or a `claude -p /usage` spawn (about 9 s) when the API refuses the token. */
+const REFRESH_HOLD_MS = 30_000
+
+/** Read an account's usage again, at most once per READING_STALE_MS, while there is work to place
+ *  and its reading is missing or older than that (buildPool). The background sweep reads every
+ *  account only every 30 minutes, and an account can be used outside CliMayte in between:
+ *  2026-10-02, #118 was placed at 82% and read 95%, #119 at 79% and read 100%. The read is the
+ *  usage check (no quota); its result lands in the usage cache the next pool build reads. */
+function refreshReading(id: string, now: number): void {
+  if (refreshRunning.has(id) || now - (refreshAsked.get(id) ?? 0) < READING_STALE_MS) return
+  refreshAsked.set(id, now)
+  refreshRunning.set(id, now)
+  // Loaded only when a reading is due, so a daemon (or a test) that never places loads none of it.
+  void import('./usage-service')
+    .then((m) => m.checkUsageForCliInstance(id))
+    .catch((err) => console.error(`[climayte] could not read usage of ${id}:`, err))
+    .finally(() => {
+      refreshRunning.delete(id)
+      pool = null
+    })
+}
+
+/** Some task is waiting to be placed. */
+const placing = (): boolean =>
+  [...workers.values()].some((w) => w.status === 'queued' || w.status === 'waiting')
+
 /** A CLI `/usage` reading keeps each reset as the CLI printed it ("Oct 4, 1am") and no `resetsAt`.
  *  Read as unknown, an old percentage outlived its window (livePct) and the pacing had no weekly
  *  reset for four of ten accounts (stress run, 2026-10-02). Parsed against when it was read, so an
@@ -245,6 +281,7 @@ function withResetTimes(u: UsageSnapshot): UsageSnapshot {
 function buildPool(now: number): CliMayteAccount[] {
   const mine = ownSessions()
   const cache = allCachedUsage()
+  const toPlace = placing()
   // A login vetoed by CliMayte's own signed-out wall stays in the pool, walled, so recheckSignedOut
   // can find out when it works again.
   return listCliInstances()
@@ -271,6 +308,16 @@ function buildPool(now: number): CliMayteAccount[] {
           ? { pct: live.weekPct, resetsAt: live.weekResetsAt, at: live.at }
           : null
       const weekPct = freshestPct(u?.weekAll, snapshotAt, liveWeek, now)
+      const readAt =
+        sessionPct === null
+          ? null
+          : liveSession && liveSession.at > snapshotAt
+            ? liveSession.at
+            : snapshotAt || null
+      // A walled account takes no work until its wall ends, so its reading waits too.
+      const due = readAt === null || now - readAt > READING_STALE_MS
+      if (toPlace && due && !((walls[i.id]?.until ?? 0) > now)) refreshReading(i.id, now)
+      const refreshStarted = refreshRunning.get(i.id)
       const weekResets =
         liveWeek && liveWeek.at > snapshotAt
           ? liveWeek.resetsAt
@@ -288,6 +335,8 @@ function buildPool(now: number): CliMayteAccount[] {
         weekPct,
         weekResetsAt:
           weekPct !== null && weekResets !== null && weekResets > now ? weekResets : null,
+        readAt,
+        refreshing: refreshStarted !== undefined && now - refreshStarted < REFRESH_HOLD_MS,
         handsOnAgoMs: handsOnAgoMs(i.associatedDesktopDir, now),
         otherSessions: otherSessionsIn(i.configDir, mine),
       }
@@ -565,6 +614,7 @@ export const freshRead = (): LogRead => ({
   model: null,
   overage: null,
   live: null,
+  firstLive: null,
   lastAt: null,
 })
 
@@ -642,6 +692,7 @@ function applyLogEvent(ev: unknown, r: LogRead, replayAt: number | null): void {
   r.overage ??= overageStart(ev)
   r.lastAt = eventTime(ev) ?? r.lastAt
   r.live = liveUsage(ev, replayAt === null ? Date.now() : (r.lastAt ?? replayAt)) ?? r.live
+  r.firstLive ??= r.live
   r.events.push(ev)
   if (r.events.length > 400) r.events.splice(0, r.events.length - 400)
   const s = summarizeEvent(ev)
@@ -851,6 +902,19 @@ function backfillAttemptPeaks(w: CliMayteWorker): boolean {
   return any
 }
 
+/** Each ended ceiling stop's onArrival (pastOnArrival), once, from its log's first reading: stops
+ *  recorded before it was kept would otherwise count as stop lines that came too late. True when
+ *  any attempt's record changed. */
+function backfillCeilingArrival(w: CliMayteWorker): boolean {
+  let any = false
+  for (const at of w.attempts) {
+    if (at.endedAt === null || !at.ceiling || at.ceiling.onArrival !== undefined) continue
+    at.ceiling.onArrival = pastOnArrival(peekLog(at.log).firstLive, at.ceiling)
+    any = true
+  }
+  return any
+}
+
 /** Each ended attempt's cost, requests and re-read, once. Its tokens and the task's cost were
  *  recorded when it ended and stay as they are. True when any attempt's record changed. */
 function backfillAttemptSpend(w: CliMayteWorker): boolean {
@@ -908,6 +972,7 @@ function backfillTokens(): boolean {
     let mine = false
     if (backfillAttemptTokens(w)) mine = true
     if (backfillAttemptPeaks(w)) mine = true
+    if (backfillCeilingArrival(w)) mine = true
     if (backfillAttemptSpend(w)) mine = true
     if (backfillVerdictRereads(w)) mine = true
     if (backfillWorkerTokens(w)) mine = true

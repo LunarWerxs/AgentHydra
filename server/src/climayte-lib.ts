@@ -76,8 +76,10 @@ export interface CliMayteAttempt {
   daemonPid?: number // the daemon that launched it; its handle dies with that daemon
   overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
   /** Stopped at CEILING_PCT of that window (`week`), the account walled until it resets. Its outcome
-   *  is 'quota' or 'handoff' for what follows; it is not a limit hit. */
-  ceiling?: { pct: number; week: boolean; resetsAt: number | null }
+   *  is 'quota' or 'handoff' for what follows; it is not a limit hit. `onArrival`: its first reading
+   *  was already past the ceiling (pastOnArrival), so it was placed on a stale or missing reading
+   *  and did no work; absent on stops recorded before 2026-10-02 until the load backfills it. */
+  ceiling?: { pct: number; week: boolean; resetsAt: number | null; onArrival?: boolean }
   /** Asked to hand off to `path`. `pct`: the usage reading that called for it; null on request, and
    *  null with `reason: 'context'` when its conversation's size did (CONTEXT_HANDOFF_TOKENS). */
   windDown?: { at: number; pct: number | null; path: string; reason?: 'context' }
@@ -243,6 +245,12 @@ export interface CliMayteAccount {
   sessionResetsAt?: number | null
   /** When the 7-day window `weekPct` was read from resets (epoch ms); null when unknown. */
   weekResetsAt?: number | null
+  /** When `sessionPct` was read (epoch ms): the usage check's capture, or a worker's stream. Past
+   *  READING_STALE_MS the account takes one worker at a time (rankAccounts). Absent: not known. */
+  readAt?: number | null
+  /** Its usage is being read again now (climayte-core refreshReading): it takes no new work until
+   *  that reading is in, so a task is not placed on a number half an hour old. */
+  refreshing?: boolean
   /** Someone else is on this account now (climayte-core.ts signedInAccounts): how long ago a hand
    *  used its desktop app (core/hands-on.ts; null: not in the last ten minutes), and how many Claude
    *  sessions that are not CliMayte's run in its folder. */
@@ -575,17 +583,47 @@ export function atCeiling(
   return null
 }
 
+/** Whether a ceiling stop came at the run's first reading, already past CEILING_PCT in the window
+ *  that stopped it (`first`: the first reading its stream carried). Then the account was full when
+ *  the run arrived and the reading it was placed on was stale or missing; the stop line did not come
+ *  too late. 2026-10-02: #120 had no reading and its first request was refused at 129%; #118 was
+ *  placed at 82%, a reading half an hour old, and read 95%; #119 at 79% read 100%. All three were
+ *  counted as ceiling stops and as CliMayte's peaks. */
+export function pastOnArrival(first: CliMayteLiveUsage | null, c: { week: boolean }): boolean {
+  const pct = c.week ? first?.weekPct : first?.sessionPct
+  return pct != null && pct >= CEILING_PCT
+}
+
 /** What a turn stopped at the ceiling says (its attempt's notice, the account's wall). */
-export const ceilingNotice = (c: { pct: number; week: boolean }): string =>
-  `Stopped at ${Math.round(c.pct)}% of its ${c.week ? 'weekly' : '5-hour'} usage, CliMayte's ceiling of ${CEILING_PCT}%, well short of the limit. The account rests until that window resets.`
+export const ceilingNotice = (c: { pct: number; week: boolean; onArrival?: boolean }): string => {
+  const window = `${Math.round(c.pct)}% of its ${c.week ? 'weekly' : '5-hour'} usage`
+  if (c.onArrival)
+    return `Found at ${window} on its first request, past CliMayte's ceiling of ${CEILING_PCT}%: the reading it was placed on was old or missing. The account rests until that window resets.`
+  return `Stopped at ${window}, CliMayte's ceiling of ${CEILING_PCT}%${c.pct < 100 ? ', well short of the limit' : ''}. The account rests until that window resets.`
+}
+
+/** A usage reading older than this may be far behind the account: it can be in use outside
+ *  CliMayte (a person's chats, the orchestrating chats), and the background usage check runs only
+ *  every 30 minutes. 2026-10-02: #118 read 82% at 07:59 and 95% at 08:29, #119 78% at 08:40 and
+ *  100% at 09:04, with no CliMayte run on either in between. */
+export const READING_STALE_MS = 10 * 60_000
+
+/** The account's reading is older than READING_STALE_MS (readAt). */
+export const readingStale = (a: Pick<CliMayteAccount, 'readAt'>, now: number): boolean =>
+  a.readAt != null && now - a.readAt > READING_STALE_MS
 
 /** The conversation size at which a session is asked to hand off to a fresh one: every request
  *  re-reads the whole conversation. Measured over all logs, 2026-10-02: 3,135 of 8,370 requests ran
  *  with more than 150k of context and carried 61% of all cache-read tokens (the largest: 442k). The
  *  saving is small and not proven: since 2026-10-01 15:00Z, 27.6% of a Pro window when the fresh
  *  session (40.6k to start, the median of only 2) re-reads nothing, about 7% when it re-reads 30k,
- *  and close to break-even over all logs. Measure the re-read on the first context handoffs (the
- *  journal's handoff-requested notice names them) before trusting this line. */
+ *  and close to break-even over all logs. Measured on the first 91 such handoffs (2026-10-02,
+ *  06:24-17:00Z, 40 tasks): 15 tasks handed off on size twice or more (8 five or more); their 47
+ *  fresh continuations started at 26-45k, and 37% of what each read with Read, Grep or Glob the
+ *  session before had read too, the rest of their growth was new test and log output. Code tasks
+ *  in such chains failed their verdict 4 of 12, against 53 of 183 code verdicts that day, so the
+ *  line stays; a task that does not converge is stopped by notConverging (w-6ba9a4ea, a CI debug:
+ *  8 handoffs, 82% of a Pro window). */
 export const CONTEXT_HANDOFF_TOKENS = 150_000
 
 /** The conversation's size in tokens: what the newest main-agent request in `events` read (input,
@@ -1302,11 +1340,13 @@ export function rankAccounts(
   const keepsHome = (a: CliMayteAccount): boolean =>
     !handedOffFrom && a.id === worker.accountId && a.id !== failedId
   // An account with no reading in its current 5-hour window (unread since its last reset, or a
-  // login whose usage check keeps failing) takes one worker until that worker's stream reads it:
-  // the first request tells whether the login works, within seconds. 2026-10-01 09:31: #88's last
-  // reading was four hours old, it counted as half full and roomy, and one tick sent it four tasks;
-  // all four failed sign-in together.
-  const unread = (a: CliMayteAccount): boolean => a.sessionPct === null && load(a) > 0
+  // login whose usage check keeps failing), or only a stale one (readingStale), takes one worker
+  // until that worker's stream reads it: the first request tells whether the login works and how
+  // full the account really is, within seconds. 2026-10-01 09:31: #88's last reading was four hours
+  // old, it counted as half full and roomy, and one tick sent it four tasks; all four failed
+  // sign-in together.
+  const unread = (a: CliMayteAccount): boolean =>
+    (a.sessionPct === null || readingStale(a, now)) && load(a) > 0
   // New work goes around an account someone else is using; a session already living there carries
   // on (its home), and a task that names the account is a person's word.
   const named = (a: CliMayteAccount): boolean => !!worker.accounts?.includes(a.id)
@@ -1317,6 +1357,7 @@ export function rankAccounts(
       (allowFull || !full(a)) &&
       (allowFull || !near(a) || keepsHome(a)) &&
       (!unread(a) || keepsHome(a)) &&
+      (!a.refreshing || keepsHome(a)) &&
       (!accountInUse(a) || keepsHome(a) || named(a)) &&
       ((groupActive.get(a.id) ?? 0) < groupCap(a, perAccount, now) || keepsHome(a)) &&
       load(a) < MAX_PER_ACCOUNT,

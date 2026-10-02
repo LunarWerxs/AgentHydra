@@ -74,6 +74,7 @@ export interface CliMayteJournalEntry {
   priority?: number // dispatched / priority: higher starts first (0: the default)
   was?: number // priority: the one it replaced
   ceiling?: boolean // limit: CliMayte stopped it at its ceiling (90%), not the account's limit
+  onArrival?: boolean // limit at the ceiling: already past it at the run's first reading (pastOnArrival)
   ok?: boolean // nudged: the window was seen running after it
 }
 
@@ -216,6 +217,8 @@ function describeLimitLine(
   on: string,
   at: (iso: string | undefined) => string,
 ): string {
+  if (e.ceiling && e.onArrival)
+    return `found past CliMayte's ceiling${typeof e.pct === 'number' ? ` (${Math.round(e.pct)}%)` : ''} on its first request${on}, placed on an old or missing reading; account rests until ${at(e.until)}`
   if (e.ceiling)
     return `stopped at CliMayte's ceiling${typeof e.pct === 'number' ? ` (${Math.round(e.pct)}%)` : ''}${on}; account rests until ${at(e.until)}`
   return `hit its limit${on}; walled until ${at(e.until)}${e.notice ? `: ${e.notice}` : ''}`

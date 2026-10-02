@@ -18,6 +18,19 @@ type CeilingStop = {
   t: number
 }
 
+/** A run placed on an account already past the ceiling (pastOnArrival). */
+type PlacedPast = {
+  id: string
+  title: string
+  account: string
+  at: string
+  pct: number
+  /** The 5-hour reading it was placed on (null: none). */
+  placedPct: number | null
+  week: boolean
+  t: number
+}
+
 type LimitHit = {
   id: string
   title: string
@@ -50,6 +63,7 @@ interface TotalsTally {
   byCause: Partial<Record<TotalsAttempt['outcome'], number>>
   ceilingStops: number
   ceilings: CeilingStop[]
+  placedPast: PlacedPast[]
   /** Every attempt on record: a ceiling stop says how many runs were on its account then. */
   allAttempts: TotalsAttempt[]
   tasksInScope: Set<string>
@@ -87,7 +101,19 @@ function tallyRecentRun(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt
 
 /** A run stopped at CliMayte's ceiling, or one that ran into the account's own limit. */
 function tallyStops(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
-  if (at.ceiling) {
+  if (at.ceiling?.onArrival) {
+    const t = at.endedAt ?? Date.now()
+    tally.placedPast.push({
+      id: w.id,
+      title: w.title,
+      account: acctLabel(at.account),
+      at: new Date(t).toISOString(),
+      pct: at.ceiling.pct,
+      placedPct: at.startPct ?? null,
+      week: at.ceiling.week,
+      t,
+    })
+  } else if (at.ceiling) {
     tally.ceilingStops++
     const t = at.endedAt ?? Date.now()
     tally.ceilings.push({
@@ -112,9 +138,11 @@ function tallyStops(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): v
     })
 }
 
-/** An account's highest 5-hour reading per window, over the runs CliMayte had on it. */
+/** An account's highest 5-hour reading per window, over the runs CliMayte had on it. A run that
+ *  found the account already past the ceiling (placedPast) ran nothing there: its reading is the
+ *  account's, not how far CliMayte took it. */
 function tallyPeak(tally: TotalsTally, at: TotalsAttempt): void {
-  if (!at.peak) return
+  if (!at.peak || at.ceiling?.onArrival) return
   const key = `${at.account.id}|${at.peak.resetsAt ?? ''}`
   const p = tally.peaks.get(key) ?? {
     account: acctLabel(at.account),
@@ -230,6 +258,19 @@ export function climayteTotals(since = 0): {
   limitHits: number
   /** Runs stopped at CliMayte's ceiling (90%) instead: the stop line (85) was not enough. */
   ceilingStops: number
+  /** Runs placed on an account already past the ceiling, stopped at their first reading (its
+   *  reading was stale or missing): not in ceilingStops or peaks. The newest are listed, each with
+   *  the reading it found and the 5-hour reading it was placed on. */
+  placedPast: number
+  placedPastList: Array<{
+    id: string
+    title: string
+    account: string
+    at: string
+    pct: number
+    placedPct: number | null
+    week: boolean
+  }>
   /** The newest ceiling stops: the reading that stopped it, the reading it was asked to hand off at
    *  (null: never asked), and how many runs were on that account at that moment, itself included. */
   ceilingStopList: Array<{
@@ -270,6 +311,7 @@ export function climayteTotals(since = 0): {
     byCause: {},
     ceilingStops: 0,
     ceilings: [],
+    placedPast: [],
     allAttempts: [...workers.values()].flatMap((w) => w.attempts),
     tasksInScope: new Set<string>(),
     hits: [],
@@ -303,6 +345,11 @@ export function climayteTotals(since = 0): {
       .sort((a, b) => b.t - a.t)
       .slice(0, 20)
       .map(({ t: _t, ...c }) => c),
+    placedPast: tally.placedPast.length,
+    placedPastList: tally.placedPast
+      .sort((a, b) => b.t - a.t)
+      .slice(0, 20)
+      .map(({ t: _t, ...p }) => p),
     limitHitList: tally.hits
       .sort((a, b) => b.t - a.t)
       .slice(0, 20)

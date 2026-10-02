@@ -9,6 +9,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **CliMayte reads an account's usage again before placing work on a reading over 10 minutes old**, and an account so placed takes one worker until that worker reads it. The background check reads accounts only every 30 minutes: on 2026-10-02 #118 was placed at 82% and read 95%, and #119 at 79% and read 100%, both used outside CliMayte in between.
+- **A run placed on an account already past CliMayte's 90% ceiling is reported apart** (`placedPast` in the totals), not as a ceiling stop or as CliMayte's peak: the 129% peak on #120 was an account with no reading whose first request was refused, not a stop line that failed. Its notice and journal line say it was found past the ceiling on its first request. Stops recorded before this are sorted the same way at the next start.
+
 - **Restart is no longer held back by work that survives it** (owner, 2026-10-02: "I thought we were supposed to have decoupling from tasks running and my ability to restart"). CliMayte checks now run under a detached runner like the workers' own CLI, so a restart neither kills nor waits for them and the next daemon reads them on; the header's Restart refuses only for a pre-runner CliMayte worker inside the daemon. Dispatch runs, which reattach at boot, no longer refuse a manual restart; the unattended auto-update still waits for them. Two megarun checks of up to 20 minutes each had kept the button refused.
 - **The CliMayte list shows how long each task has been active**, not how long ago it was queued: time waiting for an account or a reset no longer counts (owner, 2026-10-02).
 - **In a week's last five hours an account works up to 89% of its week**, not 85%, one point under the 90% ceiling so a session can still write its handoff; up to 5 points of every account-week expired unused (owner, 2026-10-02: "Up to 90% near reset").
