@@ -242,7 +242,7 @@ app.post('/api/usage/clear', async (c) => {
     !keys.every((k): k is string => typeof k === 'string' && USAGE_KEY.test(k))
   )
     return c.json(
-      { error: 'keys: a list of usage keys (desktop:<dir>, cli:<id>, codex:<id>)' },
+      { error: 'keys: a list of usage keys (desktop:<dir>, cli:<id>, codex:<id>, acct:<id>)' },
       400,
     )
   return c.json({ ok: true, clearedAt: clearUsageFromTables(keys) })
