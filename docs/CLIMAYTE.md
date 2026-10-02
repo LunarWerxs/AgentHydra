@@ -344,8 +344,8 @@ the transcript lookups.
 - Placement goes by readings at most `READING_STALE_MS` (10 minutes) old: the background usage
   check reads every account only every 30 minutes, and an account can be used outside CliMayte
   meanwhile. While a task waits to be placed, an account whose reading is missing or older is read
-  again (`refreshReading` in climayte-core.ts: the usage check, no quota, at most once per account
-  per 10 minutes) and takes no new work while that read runs (`refreshing`, up to 30 s). A reading
+  again (`refreshReading` in climayte-core.ts: the usage check, no quota, one account at a time like
+  the background sweep, at most once per account per 10 minutes) and takes no new work while that read runs (`refreshing`, up to 30 s). A reading
   still stale after it, like a missing one, lets the account take one worker until that worker's
   stream reads it.
 - `copySessionTranscript(fromConfigDir, toConfigDir, sessionId): boolean`: find
@@ -850,6 +850,9 @@ desktop? ... to save me from having to do both individually."
 - `POST /api/corch/workers/:id/priority` `{ priority }` → `climayteSetPriority` (400 on a bad value)
 - `POST /api/corch/cancel` `{ id? , group? }` → `climayteCancel`
 - `GET /api/corch/totals` → `climayteTotals`; `POST /api/corch/remove` `{ ids }` → `climayteRemove`
+- `GET /api/corch/remote` → the other PCs' shared queues `{ enabled, pcs: [{ pc, name, at, stale,
+  workers }] }` (climayte-remote.ts; "Two PCs" above); `POST /api/cli-instances/sync/queue
+  { enabled }` turns the sharing on or off on this PC
 - `POST /api/cli-instances/quick-add` `{ email, instanceId? }` → `startQuickAdd` (`instanceId`
   signs that existing instance in again, replacing its login: a CLI row's Log in)
 - `GET /api/cli-instances/quick-add` → `listQuickAdds`

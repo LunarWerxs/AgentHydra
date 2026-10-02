@@ -111,6 +111,15 @@ CliMayte can use, with its usage loaded.
 **Limit reset**: a CLI row's menu has "Use limit reset" (with "Check only"), which runs the CLI's own
 `/limit-reset`; see [docs/CLI-LIMIT-RESET.md](docs/CLI-LIMIT-RESET.md).
 
+**Two PCs**: with Login sync set up (the cloud button on the CLI tab), the switch "Share the CliMayte
+queue with my other PCs" shows each PC's CliMayte tasks on the other, read-only and marked with a
+cloud, and each PC counts the other's running work when it picks an account, so the two never crowd
+one. The queue travels encrypted through your own Login sync store, whose Worker needs the queue
+routes of the current `cloud/login-sync-worker/worker.js`.
+
+CLI accounts never raise a quota-reset notification: CliMayte runs them around the clock, so only
+desktop accounts announce their resets.
+
 Over MCP:
 
 - `climayte_run` starts workers for a list of self-contained tasks.

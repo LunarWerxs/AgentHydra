@@ -18,7 +18,7 @@ export default {
   // --- settings ---
   enabled: 'Reset notifications',
   enabledHint:
-    'Tell me when a quota window rolls over. Only windows you actually used have a reset to announce, so an idle machine stays quiet.',
+    'Tell me when a quota window rolls over. Only windows you actually used have a reset to announce, so an idle machine stays quiet. CLI accounts are left out: CliMayte runs them around the clock.',
   sessionReset: 'Notify on 5-hour reset',
   weeklyReset: 'Notify on weekly reset',
   minPct: 'Only if usage was at least',

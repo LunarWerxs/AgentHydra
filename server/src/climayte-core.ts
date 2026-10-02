@@ -244,7 +244,10 @@ const REFRESH_HOLD_MS = 30_000
  *  2026-10-02, #118 was placed at 82% and read 95%, #119 at 79% and read 100%. The read is the
  *  usage check (no quota); its result lands in the usage cache the next pool build reads. */
 function refreshReading(id: string, now: number): void {
-  if (refreshRunning.has(id) || now - (refreshAsked.get(id) ?? 0) < READING_STALE_MS) return
+  // One read at a time, like the background sweep: `/api/oauth/usage` rate-limits per user agent,
+  // and a burst over every stale account at once could earn a 429 that silences all of them for
+  // tens of minutes (usage.ts apiBackoffUntil). The next pool build, seconds later, asks the next.
+  if (refreshRunning.size > 0 || now - (refreshAsked.get(id) ?? 0) < READING_STALE_MS) return
   refreshAsked.set(id, now)
   refreshRunning.set(id, now)
   // Loaded only when a reading is due, so a daemon (or a test) that never places loads none of it.
