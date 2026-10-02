@@ -750,11 +750,10 @@ function deriveAccountFields(
   // Max family into 5×/20×, so a generic `default_claude_ai` here is harmless.
   const rawTier = profile.organization?.rate_limit_tier ?? bestGrant?.rateLimitTier ?? null
 
-  // arkitect-allow: no-bandaids the grant's subscriptionType is the only field available when
-  // profile.organization is absent (offline/stale reads); it's the necessary fallback path, not
-  // dead legacy code, and stays permanent alongside the org-derived fields above.
-  // arkitect-allow: no-bandaids (reason in the comment above)
-  // Plan: the GRANT's subscriptionType. Kept as the offline/legacy fallback and as a DTO field,
+  // the grant's subscriptionType is the only field available when
+  // profile.organization is absent (offline/stale reads), so it stays permanently alongside the
+  // org-derived fields above.
+  // Plan: the GRANT's subscriptionType. Kept as the offline-read source and as a DTO field,
   // but it no longer decides the label whenever orgType is known. has_claude_max/pro are
   // entitlement HISTORY — they stay true for an account that lapsed back to free (owner-confirmed
   // 2026-07-22) — so they are consulted only when there is no grant to ask.

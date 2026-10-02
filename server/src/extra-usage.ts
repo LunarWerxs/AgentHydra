@@ -239,7 +239,6 @@ let guarding = false
 /** Start the guard (daemon boot). Every 30 s; a pass never overlaps the last one. */
 export function startExtraUsageGuard(): void {
   if (timer) return
-  // arkitect-allow: side-effect-teardown - runs for the daemon's whole life, unref'd so it never holds the process open
   timer = setInterval(() => {
     if (guarding) return
     guarding = true
@@ -250,6 +249,12 @@ export function startExtraUsageGuard(): void {
       })
   }, TICK_MS)
   timer.unref?.()
+}
+
+/** Stop the guard (daemon shutdown). */
+export function stopExtraUsageGuard(): void {
+  if (timer) clearInterval(timer)
+  timer = null
 }
 
 /** The org an OAuth login belongs to, from a CLI config dir's `.claude.json`. */

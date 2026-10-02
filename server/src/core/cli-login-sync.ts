@@ -719,10 +719,15 @@ let timer: ReturnType<typeof setInterval> | null = null
 export function startLoginSync(): void {
   if (timer) return
   setBeforeLaunchHook(syncBeforeLaunch, 'login-sync')
-  // arkitect-allow: side-effect-teardown - runs for the daemon's whole life, unref'd so it never holds the process open
   timer = setInterval(() => {
     if (readConfig()?.enabled) void runLoginSync().catch(() => {})
   }, SYNC_EVERY_MS)
   timer.unref?.()
   if (readConfig()?.enabled) setTimeout(() => void runLoginSync().catch(() => {}), 15_000).unref?.()
+}
+
+/** Stop the sync loop (daemon shutdown). */
+export function stopLoginSync(): void {
+  if (timer) clearInterval(timer)
+  timer = null
 }

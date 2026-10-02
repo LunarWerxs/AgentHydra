@@ -55,7 +55,7 @@ const latestVersion = computed(() => availability.value?.latestVersion ?? null)
  * newer release arriving mid-session would otherwise have to fight a flag set for the previous one;
  * on the next launch the dot returns for whatever is current, which is the simpler promise.
  */
-// arkitect-allow: no-bandaids session-scoped by design, not a stopgap — restarting the app is the
+// session-scoped by design, not a stopgap — restarting the app is the
 // intended and only reset point for the dismissal (see doc comment above).
 const updateDotDismissed = ref(false)
 

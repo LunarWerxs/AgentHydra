@@ -1019,10 +1019,9 @@ export interface UsageSnapshot {
    *  reading did not say (the CLI text fallback, Codex). */
   extraUsage?: boolean | null
   capturedAt: string
-  /** arkitect-allow: no-bandaids permanent — cached snapshots persist across app upgrades, so a
-   *  pre-existing cache entry from before this field existed must still deserialize.
-   // arkitect-allow: no-bandaids (reason in the comment above)
-   *  Optional for back-compat with snapshots cached before the API path existed. */
+  /** Cached snapshots persist across app upgrades, so a
+   *  cache entry from before this field existed must still deserialize.
+   *  Optional because snapshots cached before the API path existed carry no source. */
   source?: UsageSource
   /** Banked usage-limit resets still unused. Codex: `rate_limit_reset_credits.available_count` on
    *  the usage payload. Claude Desktop: the claude.ai reset grants, read from the running app (see
@@ -1138,9 +1137,8 @@ export interface UsageSample {
   sessionPct: number | null
   weekAllPct: number
   weekResetsAt: string | null
-  /** arkitect-allow: no-bandaids permanent - usage-history.json persists across upgrades, and a
+  /** permanent - usage-history.json persists across upgrades, and a
    *  sample written before this field existed must still deserialize.
-   // arkitect-allow: no-bandaids (reason in the comment above)
    *  The 5-hour window's reset instant: what keys a session window for the dollar calibration
    *  (quota-calibration.ts). Absent on older samples, which then feed only the weekly one. */
   sessionResetsAt?: string | null
@@ -1314,10 +1312,9 @@ export interface UsageCheckResult {
   snapshot: UsageSnapshot
   cached: boolean
   key: string
-  /** arkitect-allow: no-bandaids permanent — same reasoning as UsageSnapshot.source above: cached
+  /** Same reasoning as UsageSnapshot.source above: cached
    *  results from before this field existed must still deserialize.
-   // arkitect-allow: no-bandaids (reason in the comment above)
-   *  Why the result is what it is (esp. for a no-data snapshot). Optional for back-compat. */
+   *  Why the result is what it is (esp. for a no-data snapshot). Optional for the same reason. */
   reason?: UsageReason
   /** What to do about these numbers. Attached by the routes so an MCP caller never re-derives it. */
   advice?: UsageAdvice

@@ -55,9 +55,9 @@ import {
 import { createChatGptContextPack } from './context-pack'
 import { refreshCliInstanceTokens } from './core/cli-instance-tokens'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
-import { startLoginSync } from './core/cli-login-sync'
+import { startLoginSync, stopLoginSync } from './core/cli-login-sync'
 import { reconcileCodexInstanceDirs } from './core/codex-instances'
-import { startDesktopCliFeed } from './core/desktop-cli-feed'
+import { startDesktopCliFeed, stopDesktopCliFeed } from './core/desktop-cli-feed'
 import { createRunningCodeProbe, restartNeededMessage } from './core/running-code'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { crashRecordLine, exitRecordLine } from './crash-record'
@@ -70,7 +70,7 @@ import {
   startImportSweep,
   startRetrySweep,
 } from './dispatch'
-import { startExtraUsageGuard } from './extra-usage'
+import { startExtraUsageGuard, stopExtraUsageGuard } from './extra-usage'
 import { findFreePort } from './find-free-port.mjs'
 import { cleanupStaleUpdateArtifacts, missingComponents } from './github-updater'
 import { app } from './http-app'
@@ -133,7 +133,7 @@ import { jsonBody } from './route-helpers'
 import { warmSessionScanCache } from './sessions'
 import { sideRunHeader, sideRunHealthFields } from './side-run'
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
-import { startStallSentinel } from './stall-sentinel'
+import { startStallSentinel, stopStallSentinel } from './stall-sentinel'
 import { syncStatusHooks } from './status-hooks'
 import { startTitleSweep } from './title-sweep'
 import { resolveEditor } from './transcript-open'
@@ -1059,6 +1059,15 @@ const pointerReassertTimer = setInterval(() => {
   if (mcpRegisterEnabled()) mcpReasserter.run()
 }, POINTER_REASSERT_MS)
 pointerReassertTimer.unref()
+
+/** Clear the interval timers started at boot, so none ticks while the daemon is going away. */
+function stopBackgroundTimers(): void {
+  stopLoginSync()
+  stopDesktopCliFeed()
+  stopExtraUsageGuard()
+  stopStallSentinel()
+}
+
 // Every toolbox child this daemon spawns is told THIS daemon's URL (audit AH-04): the bound
 // port, not the configured one, so a hop off a busy 7787 does not leave the Python side talking
 // to whatever answers there. See orchestratorChildEnv.
@@ -1160,6 +1169,7 @@ startTrayInvariant({
   graceMs: 5_000,
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
   shutdown: () => {
+    stopBackgroundTimers()
     clearInstanceInfo()
     stopAutoUpdate()
     process.exit(0)
@@ -1176,6 +1186,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
     // Stop the pointer ticker first: the re-assert it performs is worth nothing once we are going
     // away, and a tick landing after clearInstanceInfo() would write the pointer back.
     clearInterval(pointerReassertTimer)
+    stopBackgroundTimers()
     await flushConnectionsBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()

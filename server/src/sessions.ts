@@ -1312,11 +1312,11 @@ function toolIdOf(tf: TranscriptFile): string {
  * storeKey is the database path. Passing no `tf` (the caller has only a source, not a resolved row)
  * falls back to the old `source:id` key unchanged, exactly the pre-locator behavior.
  *
- * arkitect-allow: no-bandaids marks written before storeKey existed must stay readable forever; nothing writes the old key, so this is a permanent read fallback
- * BACKWARD COMPAT: a mark written under the pre-storeKey key (tool-only, no path) for a db-backed
- * session is not silently orphaned — see {@link legacyMarkKey}, checked as a fallback at both read
+ * Marks written before storeKey existed must stay readable forever. A mark written under the
+ * pre-storeKey key (tool-only, no path) for a db-backed
+ * session is not silently orphaned — see {@link legacyMarkKey}, read second at both read
  * sites in this file (the `done` field in toSummary and getSession). Nothing ever writes under the
- * old key again; the fallback exists only so a mark set before this change stays findable until it
+ * pre-storeKey key again; the second read exists only so a mark set before this change stays findable until it
  * is next toggled, which rewrites it under the new key.
  */
 export function sessionMarkKey(

@@ -28,10 +28,8 @@
 //      words rather than arbitrary substrings. Both are real limits, so every answer says which
 //      path produced it and the caller can force the exhaustive scan.
 //   3. NEVER IN THE WAY. Building it costs ~20 s the first time. That happens in the background,
-// arkitect-allow: no-bandaids the pre-warm read path is the lazy-index design: a search before the index is ready must still answer
-//      never inside a request, and a search issued before it is ready simply takes the old path.
-//      arkitect-allow: no-bandaids "old path" here is the permanent non-indexed streaming-scan
-//      fallback described in property 1 above, not deprecated code slated for removal.
+//      never inside a request, and a search issued before it is ready simply takes the
+//      non-indexed streaming scan described in property 1 above, which is permanent.
 //
 // One file, `search-index.db`, in the app's data dir, with journalling set to `delete` so it stays
 // exactly one file: "you can delete it whenever you like" has to survive someone actually doing it.

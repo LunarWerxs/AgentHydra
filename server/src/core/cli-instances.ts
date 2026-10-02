@@ -191,19 +191,13 @@ export function isLoggedIn(configDir: string): boolean {
 // A record's `configDir` is written ONCE, at create time, as `<CONFIG_DIR>/cli-instances/<id>` and
 // never edited afterwards. When CONFIG_DIR itself moved (`~/.ccmanagerui` → `~/.agenthydra`, see
 // resolveConfigDir in ../config), the folder came with it but the ABSOLUTE PATH STRING baked into
-// every existing record did not. Nothing rewrote it, so a carried-over install ended up with a
-// record pointing at a directory that no longer exists: `loggedIn` is recomputed from
-// `<configDir>/.credentials.json`, so it went permanently false, and a re-login would have written
-// fresh credentials back under the dead brand folder.
+// every existing record did not: `loggedIn` (recomputed from `<configDir>/.credentials.json`) went
+// permanently false, and a re-login would have written credentials under the dead brand folder.
 //
-// The fix is to treat "`<CLI_INSTANCES_ROOT>/<id>`" as what it always was — a derivation, not
-// user data. `canonicalConfigDir` re-derives it on read (so every process, including the separate
-// quick-instances window, agrees without needing a write), and migrateCliInstanceConfigDirs
-// arkitect-allow: no-bandaids carrying credentials from the pre-canonical path is the canonicalisation's own migration step, run on every start by design
-// persists the rewrite and carries any credentials still sitting at the old path across.
-// arkitect-allow: no-bandaids permanent path-derivation fix for the ccmanagerui->agenthydra
-// rebrand, not a temporary shim — any carried-over install can surface a pre-rebrand configDir at
-// any future migration, so re-derivation on read has to keep running indefinitely.
+// So `<CLI_INSTANCES_ROOT>/<id>` is treated as a derivation, not user data. `canonicalConfigDir`
+// re-derives it on read (every process agrees without a write), and migrateCliInstanceConfigDirs
+// persists the rewrite and carries credentials left at the pre-canonical path across. Both run on
+// every start, permanently: any carried-over install can surface a pre-rebrand configDir.
 
 /**
  * Where this record's config dir MUST be, if it is one we manage.
@@ -264,14 +258,14 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
 }
 
 /**
- * arkitect-allow: no-bandaids same migration step as above - the old path is read only to move what is still there
- * Persist the canonicalisation above, moving any credentials left behind at the old path.
+ * Persist the canonicalisation above, moving any credentials left behind at the pre-canonical path
+ * (that path is read only to move what is still there).
  *
  * Called once at daemon boot. Copy-then-leave rather than move: the old directory is under a config
  * root we no longer own, and deleting a user's credentials to tidy up a path string is not a trade
  * worth making. Returns the ids it rewrote (empty = nothing to do, and nothing was written).
  *
- * arkitect-allow: no-bandaids runs on every boot for the lifetime of any pre-rebrand install;
+ * runs on every boot for the lifetime of any pre-rebrand install;
  * copy-then-leave is the permanent, deliberately conservative behavior (never delete a user's
  * credentials), not a stopgap awaiting a real fix.
  */

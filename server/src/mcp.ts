@@ -1395,11 +1395,9 @@ export const TOOLS: McpEngineTool[] = [
         args.push('--from', String(src.num))
       }
       if (a.force === true) args.push('--force')
-      // arkitect-allow: no-bandaids "stopgap" names the mechanism's cautious design (refuse a
-      // mismatched count), not a temporary state — this replaced the old bare boolean permanently
-      // (landed 6be90fd, no compatibility shim, an old caller fails the schema loudly by design).
-      // arkitect-allow: no-bandaids (reason in the comment above)
-      // The archive stopgap's caller half: a COUNT, never a bare boolean, and the count travels
+      // The cautious design is to refuse a mismatched count. This replaced the earlier bare boolean
+      // permanently (landed 6be90fd; a caller still sending a boolean fails the schema loudly by design).
+      // The archive override's caller half: a COUNT, never a bare boolean, and the count travels
       // with the override so the engine can refuse a number that does not match what it sees.
       // `all_unarchived` is unarchived by definition, so a count against it is meaningless and
       // is dropped rather than forwarded as a contradiction.

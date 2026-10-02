@@ -237,16 +237,8 @@ const STORY_VERDICT = {
   },
 }
 
-/** A failed task's story, from the task and the loaded task list; null for any other status. The
- *  list's hover and the detail pane both print it (owner, 2026-10-02: "a little clearer to the human
- *  what failed, and also what the next result was. Try again, use a smarter model, what happened,
- *  what was the end result"). */
-export function climayteFailedStory(
-  w: CliMayteStoryTask,
-  tasks: readonly CliMayteStoryTask[],
-): CliMayteFailedStory | null {
-  if (w.status !== 'failed') return null
-
+/** The lines saying how a failed task got there: its attempts, and what it ran on. */
+function failedHow(w: CliMayteStoryTask): CliMayteStoryLine[] {
   const tally = new Map<CliMayteAttemptOutcome, number>()
   for (const a of w.attempts) {
     const outcome: CliMayteAttemptOutcome = a.ceiling ? 'ceiling' : a.outcome
@@ -273,7 +265,35 @@ export function climayteFailedStory(
     })
   } else if (w.auto)
     how.push({ key: 'climayte.failedRanAuto', ...storyRun(w.reportedModel ?? w.model, w.effort) })
+  return how
+}
 
+/** The key for a failed task's end result: accepted, still failed, or what the redo became. */
+function failedEnd(accepted: boolean, redo: CliMayteStoryTask | undefined): string {
+  return accepted
+    ? 'climayte.failedEndAccepted'
+    : !redo
+      ? 'climayte.failedEndStill'
+      : redo.status === 'done'
+        ? 'climayte.failedEndRedoDone'
+        : redo.status === 'failed'
+          ? 'climayte.failedEndRedoFailed'
+          : redo.status === 'cancelled'
+            ? 'climayte.failedEndRedoStopped'
+            : 'climayte.failedEndRedoActive'
+}
+
+/** A failed task's story, from the task and the loaded task list; null for any other status. The
+ *  list's hover and the detail pane both print it (owner, 2026-10-02: "a little clearer to the human
+ *  what failed, and also what the next result was. Try again, use a smarter model, what happened,
+ *  what was the end result"). */
+export function climayteFailedStory(
+  w: CliMayteStoryTask,
+  tasks: readonly CliMayteStoryTask[],
+): CliMayteFailedStory | null {
+  if (w.status !== 'failed') return null
+
+  const how = failedHow(w)
   const next: CliMayteStoryLine[] = []
   // The check's own verdicts are part of how it failed; only a person's or the orchestrator's
   // newest one is something that happened to the failure. And only when nothing ran since
@@ -309,17 +329,7 @@ export function climayteFailedStory(
     next.push({ key: 'climayte.failedFollowUp', values: { n: w.pending.length } })
   if (!next.length) next.push({ key: 'climayte.failedNothingNext' })
 
-  const end = accepted
-    ? 'climayte.failedEndAccepted'
-    : !redo
-      ? 'climayte.failedEndStill'
-      : redo.status === 'done'
-        ? 'climayte.failedEndRedoDone'
-        : redo.status === 'failed'
-          ? 'climayte.failedEndRedoFailed'
-          : redo.status === 'cancelled'
-            ? 'climayte.failedEndRedoStopped'
-            : 'climayte.failedEndRedoActive'
+  const end = failedEnd(accepted, redo)
 
   return {
     what: w.error

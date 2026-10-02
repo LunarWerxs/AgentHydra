@@ -63,9 +63,58 @@ function runtimeValueExports(file) {
   return new Set(exports);
 }
 
-/** Strip block and line comments so `// export foo` in prose is never matched. */
+/** A `/` after one of these (or at the start of the text) opens a regex literal, not a division. */
+const REGEX_MAY_START = /^$|[=(,:;[!&|?{}+\-*%<>~^]/;
+
+/** Index just past the string or template literal that opens at `start`. */
+function quotedEnd(text, start) {
+  const quote = text[start];
+  let j = start + 1;
+  while (j < text.length && text[j] !== quote) j += text[j] === "\\" ? 2 : 1;
+  return j + 1;
+}
+
+/** Index just past the regex literal that opens at `start`: a `/` inside a `[...]` class or after a
+ *  backslash does not close it, and a newline ends it so a stray `/` cannot swallow later lines. */
+function regexEnd(text, start) {
+  let j = start + 1;
+  let inClass = false;
+  while (j < text.length && text[j] !== "\n" && (inClass || text[j] !== "/")) {
+    if (text[j] === "\\") j++;
+    else if (text[j] === "[") inClass = true;
+    else if (text[j] === "]") inClass = false;
+    j++;
+  }
+  return j + 1;
+}
+
+/** Strip block and line comments so `// export foo` in prose is never matched. Walks the text so a
+ *  double slash inside a string, template or regex literal (a URL, a glob) is kept, not read as a comment. */
 function stripComments(text) {
-  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    const next = text[i + 1];
+    let end = i + 1;
+    if (c === "/" && next === "/") {
+      end = text.indexOf("\n", i);
+      if (end === -1) end = text.length;
+    } else if (c === "/" && next === "*") {
+      end = text.indexOf("*/", i + 2);
+      end = end === -1 ? text.length : end + 2;
+    } else if (c === '"' || c === "'" || c === "`") {
+      end = quotedEnd(text, i);
+      out += text.slice(i, end);
+    } else if (c === "/" && REGEX_MAY_START.test(out.trimEnd().slice(-1))) {
+      end = regexEnd(text, i);
+      out += text.slice(i, end);
+    } else {
+      out += c;
+    }
+    i = end;
+  }
+  return out;
 }
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*/;

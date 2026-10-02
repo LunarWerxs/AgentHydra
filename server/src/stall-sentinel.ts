@@ -99,6 +99,14 @@ interface Late {
   blame: string[]
 }
 
+const timers = new Set<ReturnType<typeof setInterval>>()
+
+/** Stop the main-thread heartbeat timers (daemon shutdown). */
+export function stopStallSentinel(): void {
+  for (const t of timers) clearInterval(t)
+  timers.clear()
+}
+
 /**
  * Start both detectors. Returns the middleware that feeds them what is in flight; register it
  * before every route. `logPath` null (file logging failed to open) still runs the main-thread
@@ -134,7 +142,6 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
   let lastSaturatedLog = 0
   // A tick that throws is a tick skipped, never a dead daemon (scripts/checks/
   // timer-callback-can-kill-the-daemon.mjs): the watcher of stalls must not become a crash.
-  // arkitect-allow: side-effect-teardown - the stall watcher runs for the daemon's whole life
   const timer = setInterval(() => {
     try {
       const now = Date.now()
@@ -156,6 +163,7 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
     }
   }, BEAT_MS)
   timer.unref()
+  timers.add(timer)
 
   let nextId = 0
   return async (c, next) => {

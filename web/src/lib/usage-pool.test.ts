@@ -5,7 +5,7 @@ import { expect, test } from 'bun:test'
 import type { UsageLimit } from './api'
 import { pooledRemaining } from './usage-pool'
 
-const NOW = new Date('2026-10-02T12:00:00Z')
+const NOW = new Date(Date.now())
 const HOUR = 3_600_000
 /** A window `pct` used that resets `inHours` from NOW (negative: it already has). */
 const limit = (pct: number, inHours: number): UsageLimit => ({

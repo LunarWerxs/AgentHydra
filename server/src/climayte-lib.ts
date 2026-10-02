@@ -1172,6 +1172,38 @@ export function pickAccount(
   return ranked[0] ?? null
 }
 
+/** An account at or above the paid-usage caps (BILL_GUARD_*). */
+function accountIsFull(a: CliMayteAccount): boolean {
+  return (
+    (a.sessionPct !== null && a.sessionPct >= BILL_GUARD_SESSION_PCT) ||
+    (a.weekPct !== null && a.weekPct >= BILL_GUARD_WEEK_PCT)
+  )
+}
+
+/** An account past the wind-down line. */
+function accountIsNear(a: CliMayteAccount, now: number): boolean {
+  return (
+    (a.sessionPct !== null && a.sessionPct >= WIND_DOWN_SESSION_PCT) ||
+    (a.weekPct !== null && a.weekPct >= WIND_DOWN_WEEK_PCT)
+  )
+}
+
+/** What rankAccounts adds to an account's score for being full, near the line, the one a handoff
+ *  left, or the one a last attempt failed on. */
+function rankPenalty(
+  a: CliMayteAccount,
+  nudgedFrom: string | null,
+  failedId: string | null,
+  now: number,
+): number {
+  return (
+    (accountIsFull(a) ? 500 : 0) +
+    (accountIsNear(a, now) ? 300 : 0) +
+    (a.id === nudgedFrom ? 100 : 0) +
+    (a.id === failedId ? 1000 : 0)
+  )
+}
+
 /** Every account that takes the worker now, best first; the session's own account alone when it
  *  is one of them. `perAccount` caps this group's workers (`groupActive`, default `active`) on an
  *  account (groupCap; null: the default); a session going back to its own account is not held to
@@ -1206,14 +1238,10 @@ export function rankAccounts(
   // long task's handoffs would change account and run it into the moves cap (notConverging).
   const nudgedFrom = lastAttempt?.windDown?.reason === 'context' ? null : handedOffFrom
   const load = (a: CliMayteAccount): number => active.get(a.id) ?? 0
-  const full = (a: CliMayteAccount): boolean =>
-    (a.sessionPct !== null && a.sessionPct >= BILL_GUARD_SESSION_PCT) ||
-    (a.weekPct !== null && a.weekPct >= BILL_GUARD_WEEK_PCT)
+  const full = accountIsFull
   // Past the wind-down line, new work there would be asked to hand off again at once (measured
   // live: a continuation placed on #84 at 91% wound down immediately, while #83 sat at 58%).
-  const near = (a: CliMayteAccount): boolean =>
-    (a.sessionPct !== null && a.sessionPct >= WIND_DOWN_SESSION_PCT) ||
-    (a.weekPct !== null && a.weekPct >= WIND_DOWN_WEEK_PCT)
+  const near = (a: CliMayteAccount): boolean => accountIsNear(a, now)
   // Past the line an account takes no NEW work: a new task, a handoff's continuation or a moved
   // session is told to hand off within a few calls, or hits the limit on its first. Run 1, 19:32
   // to 19:36: twenty such hops at 89-97%, about 290k tokens and $0.75 each, and seven tasks ended up
@@ -1255,12 +1283,7 @@ export function rankAccounts(
   const byNum = (a: CliMayteAccount): number => a.num ?? Number.MAX_SAFE_INTEGER
   const scored = eligible.map((a) => {
     const [base, tie] = placement ? placedRank(a, placement, now) : flat(a)
-    const score =
-      base +
-      (full(a) ? 500 : 0) +
-      (near(a) ? 300 : 0) +
-      (a.id === nudgedFrom ? 100 : 0) +
-      (a.id === failedId ? 1000 : 0)
+    const score = base + rankPenalty(a, nudgedFrom, failedId, now)
     return { a, score, tie }
   })
   scored.sort((x, y) => x.score - y.score || x.tie - y.tie || byNum(x.a) - byNum(y.a))

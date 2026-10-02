@@ -40,10 +40,9 @@ export function noAutoOpen(): boolean {
  *
  * Deliberately non-destructive: the move only happens when the new dir does NOT exist yet, and any
  * failure (a pre-rename daemon still holding runtime.json open, a cross-device home, a permission
- * problem) falls back to using the legacy dir where it stands. Losing this directory would lose the
- * arkitect-allow: no-bandaids keeping the legacy data dir on any failed move is the data-safety rule (queue, settings, labels, accounts cache live there); it is not a shim to retire
- * run queue, settings, instance labels and the accounts cache, so "keep working from the old path"
- * always beats "start clean at the new one".
+ * problem) falls back to using the pre-rename dir where it stands, permanently. Losing it would lose
+ * the run queue, settings, instance labels and the accounts cache, so working from the pre-rename
+ * path always beats starting clean at the new one.
  *
  * `home` is a parameter purely so the test can drive it against a scratch dir; production always
  * takes the default.

@@ -579,11 +579,10 @@ async function listWindowsProcessesViaCim(): Promise<WinProcRecord[] | null> {
 }
 
 /** Fallback Windows strategy: `wmic process get ProcessId,CommandLine /format:list`. Used
- *  only if PowerShell itself is unavailable (rare on modern Windows, but `wmic` is
- * arkitect-allow: no-bandaids wmic is absent on newer Windows builds; this probe is best-effort by design, not a fallback awaiting removal
- *  deprecated/removed on newer builds too — this is genuinely best-effort).
- *  arkitect-allow: no-bandaids permanent second-choice fallback for the older Windows builds
- *  this app still supports where PowerShell itself is missing; not a stopgap awaiting removal. */
+ *  only if PowerShell itself is unavailable (rare on modern Windows, and `wmic` is
+ *  absent on newer Windows builds too, so this probe is best-effort by design).
+ *  It is the permanent second choice for the older Windows builds
+ *  this app still supports where PowerShell itself is missing. */
 async function listWindowsProcessesViaWmic(): Promise<WinProcRecord[] | null> {
   const stdout = await runCaptureStdout([
     'wmic',
@@ -621,7 +620,7 @@ async function listWindowsProcessesViaWmic(): Promise<WinProcRecord[] | null> {
     }
 
     if (pid !== null && Number.isFinite(pid)) {
-      // arkitect-allow: no-bandaids permanent property of the wmic path, not a stopgap — wmic's
+      // permanent property of the wmic path, not a stopgap — wmic's
       // own CreationDate/WorkingSetSize columns are DMTF-formatted and column-truncated; this
       // fallback stays memory/uptime-less (best-effort) rather than mis-parse them.
       records.push({ pid, commandLine, workingSetSize: null, creationDate: null })

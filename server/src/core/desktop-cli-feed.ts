@@ -132,7 +132,6 @@ export function startDesktopCliFeed(): void {
   if (timer || process.platform !== 'win32') return
   // A pass that throws is logged, never left to reject: an unhandled rejection from a timer can
   // take the daemon down (scripts/checks/timer-callback-can-kill-the-daemon.mjs).
-  // arkitect-allow: side-effect-teardown - runs for the daemon's whole life, unref'd so it never holds the process open
   timer = setInterval(
     () =>
       void feedLinkedCliLogins().catch((err) =>
@@ -148,4 +147,10 @@ export function startDesktopCliFeed(): void {
       ),
     20_000,
   ).unref?.()
+}
+
+/** Stop the feed (daemon shutdown). */
+export function stopDesktopCliFeed(): void {
+  if (timer) clearInterval(timer)
+  timer = null
 }

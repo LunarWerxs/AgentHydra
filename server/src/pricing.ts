@@ -89,12 +89,10 @@ const PRICES: Record<string, ModelPrice> = {
   'claude-sonnet-4-6': { input: 3, output: 15 },
   'claude-sonnet-4-5': { input: 3, output: 15 },
   'claude-haiku-4-5': { input: 1, output: 5 },
-  // arkitect-allow: no-bandaids permanent as long as old transcripts exist — retired model ids
+  // Kept for as long as past transcripts exist: retired model ids
   // still appear in historical sessions/transcripts, and dropping them would price those turns as
-  // arkitect-allow: no-bandaids (reason in the comment above)
-  // unknown rather than deprecated.
-  // arkitect-allow: no-bandaids (reason in the comment above)
-  // --- retired / deprecated, kept so an old session still prices ---
+  // unknown.
+  // Retired model ids, kept so an earlier session still prices.
   'claude-opus-4-1': { input: 15, output: 75 },
   'claude-opus-4-0': { input: 15, output: 75 },
   'claude-opus-4': { input: 15, output: 75 },

@@ -9,9 +9,9 @@ export default {
   // The folded table's two gauges (PooledUsageGauges.vue, lib/usage-pool.ts): what is left of each
   // window across the accounts, weighted by plan size. The bar's own text, then its tooltip.
   poolSessionLabel: '5h {pct}% left',
-  poolSessionEmpty: '5h —',
+  poolSessionEmpty: '5h n/a',
   poolWeekLabel: 'Week {pct}% left',
-  poolWeekEmpty: 'Week —',
+  poolWeekEmpty: 'Week n/a',
   poolSessionTip: '5-hour limit: {pct}% left across your CLI accounts',
   poolSessionNone: '5-hour limit: no usage reading yet',
   poolWeekTip: 'Weekly limit: {pct}% left across your CLI accounts',

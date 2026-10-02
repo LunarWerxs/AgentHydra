@@ -478,8 +478,7 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
           note: `REFUSED busy: another fan_out (or send/delete) holds the route, so nothing was spawned and no group ${groupId} exists. Wait for operation ${str(refusal.operationId) || '(unknown)'} to finish (orchestrator_operation), then fire this call again.`,
         }
       } finally {
-        // arkitect-allow: no-bandaids permanent finally-block cleanup, not scheduled for removal —
-        // a spec that travelled as a temp file is ours to remove once the script has read it
+        // a spec that travelled as a temp file is ours to delete after the script has read it
         // (review 2026-09-05: nothing else ever deleted it)
         const specPath = args[1]
         if (specPath !== spec) {

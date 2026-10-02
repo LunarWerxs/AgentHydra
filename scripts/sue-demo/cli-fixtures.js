@@ -292,6 +292,35 @@
     return { ok: true, message: 'Joined. This PC now syncs its logins with the store.' }
   }
 
+  /** The CorchMayte tab's answers; undefined = not ours. */
+  function answerCorch(path, method) {
+    if (path === '/api/corch/workers' && method === 'GET') return corchTasks()
+    if (path.startsWith('/api/corch/workers/') && method === 'GET') {
+      const id = decodeURIComponent(path.split('/')[4] ?? '')
+      const hit = corchTasks().find((w) => w.id === id)
+      return hit ? { ...hit, events: [] } : null
+    }
+    if (path === '/api/corch/journal') return []
+    if (path === '/api/corch/scorecard') return { unitsPerPercent: 0, rows: [] }
+    if (path === '/api/corch/totals')
+      return {
+        tasks: 0,
+        sessions: 0,
+        runsByOutcome: {},
+        cliSessions: 0,
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        costUsd: 0,
+        unmeasured: 0,
+        since: null,
+        limitHits: 0,
+        ceilingStops: 0,
+        ceilingStopList: [],
+        limitHitList: [],
+        peaks: [],
+      }
+    return undefined
+  }
+
   /** The CLI tab's answers. undefined = not ours, the fixtures under this one answer it. */
   function answer(url, method, body) {
     const path = new URL(url, location.origin).pathname
@@ -342,31 +371,7 @@
     // Launch, rename, log out, delete and the rest: answered, and nothing changes.
     if (path.startsWith('/api/cli-instances'))
       return { ok: true, message: 'Done (a demo: nothing real was changed).' }
-    if (path === '/api/corch/workers' && method === 'GET') return corchTasks()
-    if (path.startsWith('/api/corch/workers/') && method === 'GET') {
-      const id = decodeURIComponent(path.split('/')[4] ?? '')
-      const hit = corchTasks().find((w) => w.id === id)
-      return hit ? { ...hit, events: [] } : null
-    }
-    if (path === '/api/corch/journal') return []
-    if (path === '/api/corch/scorecard') return { unitsPerPercent: 0, rows: [] }
-    if (path === '/api/corch/totals')
-      return {
-        tasks: 0,
-        sessions: 0,
-        runsByOutcome: {},
-        cliSessions: 0,
-        tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        costUsd: 0,
-        unmeasured: 0,
-        since: null,
-        limitHits: 0,
-        ceilingStops: 0,
-        ceilingStopList: [],
-        limitHitList: [],
-        peaks: [],
-      }
-    return undefined
+    return answerCorch(path, method)
   }
 
   const json = (value) =>
