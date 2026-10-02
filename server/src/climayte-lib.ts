@@ -208,6 +208,9 @@ export interface CliMayteWorker {
     pidFile: string
     exitFile: string
     launchedAt: number
+    /** The times this round's runner was started again after it never started or ended without
+     *  an exit file (pollChecks; CHECK_RELAUNCHES). Absent: none. */
+    relaunches?: number
   } | null
   /** Its size at dispatch (climayte.ts sizeTasks); `room` and `roomOn` are refreshed when it starts
    *  waiting for room. */
@@ -366,6 +369,8 @@ export type CliMayteWorkerView = Omit<CliMayteWorker, 'prompt' | 'attempts' | 'v
     /** What it used, and of that its re-read (restart overhead), in % of a Pro 5-hour window. */
     pct: number | null
     rereadPct: number | null
+    /** Why this attempt started when the one before it ended done (attemptCause). */
+    because?: AttemptCause
   }>
   /** What the task used over every attempt, in % of a Pro 5-hour window: `rereadPct` re-reading its
    *  conversation into a cold cache after a move, a limit, a handoff or a gap, `workPct` the rest. */
@@ -1533,6 +1538,38 @@ export function notConverging(
     : null
 }
 
+/** Why an attempt started: the task's check failed (`detail`: how, and the last line it printed), a
+ *  verdict sent it back (`detail`: its note's first line), or a follow-up message reached it.
+ *  Owner, 2026-10-02, on a task listed as #94, #103, #103, #103, #103: "Why? Is that some sort of
+ *  previously broken one that's stuck?" Each was the same session, sent back for another round. */
+export interface AttemptCause {
+  cause: 'check' | 'sent-back' | 'follow-up'
+  detail: string | null
+}
+
+/** Why attempt `i` started, when the one before it ended done (a handoff or a limit says why in that
+ *  attempt's own notice): the newest fail verdict between the two starts, else a follow-up. */
+export function attemptCause(w: CliMayteWorker, i: number): AttemptCause | undefined {
+  const prev = w.attempts[i - 1]
+  const at = w.attempts[i]
+  if (!prev || !at || prev.outcome !== 'done') return undefined
+  const fail = [...(w.verdicts ?? [])]
+    .reverse()
+    .find((v) => v.verdict === 'fail' && v.at >= prev.startedAt && v.at <= at.startedAt)
+  if (!fail) return { cause: 'follow-up', detail: null }
+  const lines = (fail.note ?? '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+  if (fail.by === 'check') {
+    const how = /failed \(([^)]*)\)/.exec(lines[0] ?? '')?.[1] ?? null
+    const last = lines.length > 1 ? lines[lines.length - 1] : null
+    const tail = last && !last.endsWith('output:') ? last.slice(0, 200) : null
+    return { cause: 'check', detail: [how, tail].filter(Boolean).join(': ') || null }
+  }
+  return { cause: 'sent-back', detail: lines[0]?.slice(0, 200) ?? null }
+}
+
 export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
@@ -1554,7 +1591,7 @@ export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
       ...v,
       pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
     })),
-    attempts: w.attempts.map((a) => ({
+    attempts: w.attempts.map((a, i) => ({
       account: { id: a.account.id, num: a.account.num, name: a.account.name },
       outcome: a.outcome,
       notice: a.notice,
@@ -1566,6 +1603,7 @@ export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
       turns: a.spend ? a.spend.turns : null,
       pct: a.tokens ? pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)) : null,
       rereadPct: a.spend ? pctOf(rereadUnits(a, w.model)) : null,
+      ...(attemptCause(w, i) ? { because: attemptCause(w, i) } : {}),
     })),
     used: (() => {
       const all = w.attempts.reduce(

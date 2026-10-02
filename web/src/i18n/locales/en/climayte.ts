@@ -64,6 +64,16 @@ export default {
   activeHours: '{h}h {m}m',
   activeDays: '{d}d {h}h',
   rowActiveHint: 'Active {d} (time waiting for an account is not counted)',
+  rowIdHint: 'Task {id}',
+  // The detail header's id chip (CliMayteWorkerDetail copyId): name a task in chat by it.
+  copyId: "Copy this task's id, to name it in chat",
+  idCopied: 'Copied',
+  // Why a round in "Accounts tried" started, when the one before it ended done (attemptCause).
+  becauseCheck: 'Sent back: its check failed',
+  becauseCheckDetail: 'Sent back: its check failed ({detail})',
+  becauseSentBack: 'Sent back by a verdict',
+  becauseSentBackDetail: 'Sent back by a verdict: {detail}',
+  becauseFollowUp: 'A follow-up message',
   tokensBreakdown:
     '{input} input · {output} output · {cacheRead} cache read · {cacheWrite} cache write',
   offloadedTasks: 'task offloaded | tasks offloaded',

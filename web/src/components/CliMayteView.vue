@@ -270,6 +270,7 @@ function rowHint(w: CliMayteWorkerView): string {
     : []
   return [
     w.title,
+    t('climayte.rowIdHint', { id: w.id }),
     w.account ?? t('climayte.noAccount'),
     ...runs,
     line,

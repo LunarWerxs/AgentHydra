@@ -401,10 +401,15 @@ function checkShell(): string {
   return 'bash'
 }
 
-function startCheck(w: CliMayteWorker): void {
+/** How often one round of a check may lose its runner (never started, or ended without an exit file)
+ *  before the round is judged a broken check: a command that kills the runner itself (`taskkill /IM
+ *  bun.exe`) would otherwise run again forever and hold the worker in 'checking' (review, 2026-10-02). */
+const CHECK_RELAUNCHES = 3
+
+function startCheck(w: CliMayteWorker, relaunches = 0): void {
   if (!w.check || w.checkRunner) return
   w.status = 'checking'
-  w.checkRuns = (w.checkRuns ?? 0) + 1
+  if (!relaunches) w.checkRuns = (w.checkRuns ?? 0) + 1
   mkdirSync(LOGS, { recursive: true })
   const log = join(LOGS, `${w.id}-check-${w.checkRuns}.log`)
   // Files, never pipes, so nothing ties the check to this process. It reads nothing: an empty stdin.
@@ -417,10 +422,15 @@ function startCheck(w: CliMayteWorker): void {
     pidFile: `${log}.pid.json`,
     exitFile: `${log}.exit.json`,
     launchedAt: Date.now(),
+    ...(relaunches ? { relaunches } : {}),
   }
   rmSync(runner.pidFile, { force: true })
   rmSync(runner.exitFile, { force: true })
   journal(w, 'check', { notice: firstLine(w.check) })
+  // Saved BEFORE the runner exists: a daemon killed in between leaves a record the next one reads (a
+  // spec nobody claimed is voided and the check runs again), never a runner nobody knows of (review).
+  w.checkRunner = runner
+  changed(w)
   try {
     launchRunner(
       {
@@ -441,20 +451,30 @@ function startCheck(w: CliMayteWorker): void {
       runnerSpecPath(log),
     )
   } catch (err) {
+    w.checkRunner = null
     judgeCheck(w, null, `could not start: ${err instanceof Error ? err.message : String(err)}`)
-    return
+    changed(w)
   }
-  w.checkRunner = runner
-  changed(w)
 }
 
-/** Take the runner pid a check's runner wrote itself (no WMI check needed, like takeRunnerPids). */
+/** A pid file a runner wrote within RUNNER_CLAIM_GIVE_UP_MS vouches for that runner; an older one may
+ *  name a pid Windows has handed to a stranger since (a long outage), so that runner is left to the WMI
+ *  check (checkRunners) like any other after a restart (review, 2026-10-02). */
+function pidFileFresh(path: string): boolean {
+  try {
+    return Date.now() - statSync(path).mtimeMs <= RUNNER_CLAIM_GIVE_UP_MS
+  } catch {
+    return false
+  }
+}
+
+/** Take the runner pid a check's runner wrote itself (like takeRunnerPids). */
 function takeCheckPid(r: NonNullable<CliMayteWorker['checkRunner']>): void {
   if (r.pid !== null) return
   const pids = readRunnerPids(r.pidFile)
   if (!pids) return
   r.pid = pids.runner
-  confirmedRunners.add(pids.runner)
+  if (pidFileFresh(r.pidFile)) confirmedRunners.add(pids.runner)
 }
 
 /** A check's runner files; its output log is the record and stays. */
@@ -464,14 +484,20 @@ function removeCheckFiles(r: NonNullable<CliMayteWorker['checkRunner']>): void {
 }
 
 /** Stop a worker's check: kill its runner's tree, or void its spec before the runner claims it.
- *  False while a runner that claimed the spec has not written its pid yet; pollChecks asks again. */
+ *  False while that cannot be done yet (a runner that claimed the spec and wrote no pid, or one not yet
+ *  confirmed as ours after a restart): the check stays on record and pollChecks asks again, so a check
+ *  never runs on unwatched beside the worker's next turn (review, 2026-10-02). */
 function stopCheck(w: CliMayteWorker): boolean {
   const r = w.checkRunner
   if (!r) return true
   takeCheckPid(r)
-  if (r.pid === null && !voidSpec(r.log) && Date.now() - r.launchedAt <= RUNNER_CLAIM_GIVE_UP_MS)
-    return false
-  if (r.pid !== null) killRunner(r.pid, r.log)
+  if (r.pid === null) {
+    if (!voidSpec(r.log) && Date.now() - r.launchedAt <= RUNNER_CLAIM_GIVE_UP_MS) return false
+  } else if (!readRunnerExit(r.exitFile)) {
+    // Unconfirmed: checkRunners asks WMI on its own beat; a synchronous ask here would stall every tick.
+    if (runnerIdentity(r.pid) === 'unknown') return false
+    killRunner(r.pid, r.log)
+  }
   removeCheckFiles(r)
   w.checkRunner = null
   return true
@@ -498,7 +524,6 @@ function pollChecks(): void {
     if (r.pid !== before) changed(w)
     const exit = readRunnerExit(r.exitFile)
     if (exit) {
-      removeCheckFiles(r)
       w.checkRunner = null
       judgeCheck(
         w,
@@ -506,27 +531,35 @@ function pollChecks(): void {
         exit.error ? `could not start: ${exit.error}` : tailText(r.log, 1500),
       )
       changed(w)
+      // Only once the verdict is saved: a daemon killed before that reads the same exit file again.
+      removeCheckFiles(r)
       continue
     }
     const age = Date.now() - r.launchedAt
+    // A dead runner is told apart before the timeout: after an outage longer than CHECK_TIMEOUT_MS, a
+    // check that died with the machine is run again, not judged 'timed out' (a fail) (review, 2026-10-02).
+    const neverStarted = r.pid === null && age > 60_000 && voidSpec(r.log)
+    // The exit file is read again: the runner may have written it and ended since the read above.
+    const died = r.pid !== null && runnerIdentity(r.pid) === 'gone' && !readRunnerExit(r.exitFile)
+    const lost = r.pid === null && !neverStarted && age > RUNNER_CLAIM_GIVE_UP_MS
+    if (neverStarted || died || lost) {
+      removeCheckFiles(r)
+      w.checkRunner = null
+      const relaunches = (r.relaunches ?? 0) + 1
+      const how = neverStarted ? 'never started' : 'ended without an exit'
+      if (relaunches > CHECK_RELAUNCHES) {
+        judgeCheck(w, null, `its runner ${how} ${relaunches} times in a row`)
+        changed(w)
+        continue
+      }
+      journal(w, 'check', { notice: `the check's runner ${how}; it runs again` })
+      startCheck(w, relaunches) // the same round again, not a new one: it never gave an answer
+      continue
+    }
     if (age > CHECK_TIMEOUT_MS) {
       if (!stopCheck(w)) continue
       judgeCheck(w, null, 'timed out after 20 minutes')
       changed(w)
-      continue
-    }
-    const neverStarted = r.pid === null && age > 60_000 && voidSpec(r.log)
-    const died = r.pid !== null && runnerIdentity(r.pid) === 'gone'
-    const lost = r.pid === null && age > RUNNER_CLAIM_GIVE_UP_MS
-    if (neverStarted || died || lost) {
-      removeCheckFiles(r)
-      w.checkRunner = null
-      journal(w, 'check', {
-        notice: `the check's runner ${neverStarted ? 'never started' : 'ended without an exit'}; it runs again`,
-      })
-      // The same round again, not a new one: it never gave an answer.
-      w.checkRuns = Math.max(0, (w.checkRuns ?? 1) - 1)
-      startCheck(w)
     }
   }
 }
@@ -665,7 +698,8 @@ function checkRunners(): void {
       runners.push({ pid, log: at.log })
     // A check's runner after a restart: its spec path names the check's log the same way.
     const check = w.checkRunner
-    if (w.status === 'checking' && check?.pid && runnerIdentity(check.pid) === 'unknown')
+    // Any worker's: a cancelled one's check waits on this answer to be stopped (stopCheck).
+    if (check?.pid && runnerIdentity(check.pid) === 'unknown')
       runners.push({ pid: check.pid, log: check.log })
   }
   if (!runners.length) return
@@ -703,7 +737,7 @@ function takeRunnerPids(
   if (runner.pid === pids.runner && (pids.child ?? null) === (at.pid ?? null)) return false
   runner.pid = pids.runner
   if (pids.child) at.pid = pids.child
-  confirmedRunners.add(pids.runner)
+  if (pidFileFresh(runner.pidFile)) confirmedRunners.add(pids.runner)
   return true
 }
 
@@ -757,6 +791,8 @@ function killAttempt(at: Attempt): void {
     takeRunnerPids(at, runner, pids)
   }
   killRunner(runner.pid as number, at.log)
+  // Killed, or already ended: its pid and exit files would otherwise stay for good (review, 2026-10-02).
+  if (runnerIdentity(runner.pid as number) === 'gone') removeRunnerFiles(at)
 }
 
 /** Kill the runners a stop reached after they claimed their spec but before they wrote a pid
@@ -769,10 +805,13 @@ function killLateStarts(): void {
       const runner = at.runner
       if (!runner?.killOnStart) continue
       const pids = readRunnerPids(runner.pidFile)
-      if (pids) {
+      // A runner that already wrote its exit file has ended: its pid may be a stranger's by now.
+      if (pids && !readRunnerExit(runner.exitFile)) {
         takeRunnerPids(at, runner, pids)
+        if (runnerIdentity(pids.runner) === 'unknown') continue // checkRunners confirms it first
         killRunner(pids.runner, at.log)
       } else if (
+        !pids &&
         !readRunnerExit(runner.exitFile) &&
         Date.now() - runner.launchedAt <= RUNNER_CLAIM_GIVE_UP_MS
       )
@@ -2253,7 +2292,10 @@ export function climayteRemove(ids: string[]): {
   const skipped: string[] = []
   for (const id of ids) {
     const w = workers.get(id)
-    if (!w || isActive(w)) {
+    // A stop still under way (a check or a runner it could not kill yet) is finished by the tick, which
+    // only visits workers it still holds: removing one now would leave its runner going for good.
+    const stopping = !!w?.checkRunner || !!w?.attempts.some((a) => a.runner?.killOnStart)
+    if (!w || isActive(w) || stopping) {
       skipped.push(id)
       continue
     }

@@ -126,6 +126,37 @@ const verdictMark = computed(() => {
 const verdictRun = (v: { model: string | null; effort: string | null }) =>
   `${v.model ? modelName(v.model) : t('climayte.runDefault')} · ${v.effort ?? t('climayte.runDefault')}`
 
+/** Why a round started, in words: each one after the first was the same session sent back (server
+ *  climayte-lib attemptCause), which a bare list of the same account read as a stuck task. */
+function becauseText(b: {
+  cause: 'check' | 'sent-back' | 'follow-up'
+  detail: string | null
+}): string {
+  if (b.cause === 'check')
+    return b.detail
+      ? t('climayte.becauseCheckDetail', { detail: b.detail })
+      : t('climayte.becauseCheck')
+  if (b.cause === 'sent-back')
+    return b.detail
+      ? t('climayte.becauseSentBackDetail', { detail: b.detail })
+      : t('climayte.becauseSentBack')
+  return t('climayte.becauseFollowUp')
+}
+
+const copied = ref(false)
+async function copyId(): Promise<void> {
+  if (!props.worker) return
+  try {
+    await navigator.clipboard.writeText(props.worker.id)
+    copied.value = true
+    setTimeout(() => {
+      copied.value = false
+    }, 1500)
+  } catch {
+    // No clipboard (an insecure origin): the id is on screen to read.
+  }
+}
+
 function duration(totalS: number): string {
   const s = Math.floor(totalS % 60)
   const m = Math.floor(totalS / 60)
@@ -274,6 +305,14 @@ async function onStop() {
             <h3 class="line-clamp-2 wrap-break-word text-sm font-semibold" :title="worker.title">
               {{ worker.title }}
             </h3>
+            <!-- Its id, to name it in chat (owner, 2026-10-02: "should have an ID ... so I can refer to
+                 it"); a click copies it. -->
+            <button
+              type="button"
+              class="mono rounded px-1 text-2xs text-muted-foreground transition-colors hover:bg-muted"
+              :title="$t('climayte.copyId')"
+              @click="copyId"
+            >{{ copied ? $t('climayte.idCopied') : worker.id }}</button>
             <p v-if="queuedNote" class="text-xs text-muted-foreground">
               {{ $t(queuedNote.key, queuedNote.values ?? {}) }}
             </p>
@@ -526,6 +565,11 @@ async function onStop() {
               <span v-if="a.notice" class="min-w-0 truncate text-muted-foreground" :title="a.notice">
                 {{ a.notice }}
               </span>
+              <span
+                v-else-if="a.because"
+                class="min-w-0 truncate text-muted-foreground"
+                :title="becauseText(a.because)"
+              >{{ becauseText(a.because) }}</span>
             </li>
           </ol>
         </div>

@@ -30,6 +30,7 @@ import {
   climayteJournalLines,
   climayteList,
   climayteLiveReadings,
+  climayteRemove,
   climayteReports,
   climayteRun,
   climayteRunningCount,
@@ -59,9 +60,10 @@ import {
   windDownAt,
 } from '../src/climayte'
 import { workers } from '../src/climayte-core'
+import { attemptCause } from '../src/climayte-lib'
 import { forgetOwnerSync, syncOwnerClaude } from '../src/climayte-owner-sync'
 import { waitsForHome } from '../src/climayte-placement'
-import { isPidAlive } from '../src/core/process'
+import { isPidAlive, killProcessTree } from '../src/core/process'
 import { setProviderSettings } from '../src/provider-settings'
 import { parseResetTime } from '../src/usage'
 
@@ -971,6 +973,35 @@ describe('integration: paid extra usage is never spent', () => {
   }, 20_000)
 })
 
+describe('each round of a task says why it started', () => {
+  test('a check fail, a verdict and a follow-up each name themselves; a handoff speaks for itself', () => {
+    // Owner, 2026-10-02, on w-3ace43c8 listed as #94, #103, #103, #103, #103: "Why? Is that some sort of
+    // previously broken one that's stuck?" Each #103 was the same session, sent back for another round.
+    const at = (startedAt: number, outcome: string) => ({ startedAt, outcome }) as any
+    const w = {
+      attempts: [at(0, 'handoff'), at(10, 'done'), at(20, 'done'), at(30, 'done'), at(40, 'done')],
+      verdicts: [
+        {
+          at: 15,
+          verdict: 'fail',
+          by: 'check',
+          note: 'The check `x` failed (exit 1). The end of its output:\nconnections: 5 gating error(s)',
+        },
+        { at: 25, verdict: 'fail', by: 'orchestrator', note: 'Wrong file.\nMore.' },
+        { at: 33, verdict: 'pass', by: 'orchestrator', note: null },
+      ],
+    } as any
+    expect(attemptCause(w, 0)).toBeUndefined()
+    expect(attemptCause(w, 1)).toBeUndefined() // after a handoff: that attempt's own notice says why
+    expect(attemptCause(w, 2)).toEqual({
+      cause: 'check',
+      detail: 'exit 1: connections: 5 gating error(s)',
+    })
+    expect(attemptCause(w, 3)).toEqual({ cause: 'sent-back', detail: 'Wrong file.' })
+    expect(attemptCause(w, 4)).toEqual({ cause: 'follow-up', detail: null }) // a pass then a message
+  })
+})
+
 describe('the 85% stop line and the 90% ceiling', () => {
   test("a session goes by its account's newest reading, not only its own stream", () => {
     // 2026-10-01, #102: three workers' streams read 85% at 08:28 and handed off. The fourth sat in a
@@ -1455,6 +1486,53 @@ describe('integration: a task with a check is judged by it', () => {
     const w = await until((w) => w?.status === 'done' && (w.verdicts?.length ?? 0) >= 1)
     expect(w?.verdicts?.map((v) => [v.verdict, v.by])).toEqual([['pass', 'check']])
   }, 30_000)
+
+  test('a check whose runner dies runs again, even past the timeout, and a stop under way is never removed', async () => {
+    // Review, 2026-10-02: after an outage longer than 20 minutes a check that died with the machine was judged
+    // 'timed out' (a fail sent one rung up) instead of run again; and Remove dropped a cancelled task whose check
+    // was still being stopped, leaving its runner going for good.
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteAccountsProvider(() => [
+      { id: 'check-1', num: 1, name: 'check', configDir: acct, sessionPct: 0, weekPct: 0 },
+    ])
+    startCliMayte()
+    const run = climayteRun({
+      tasks: [
+        {
+          prompt: 'prove it at length',
+          cwd,
+          title: 'long check',
+          kind: 'code',
+          model: 'opus',
+          effort: 'high',
+          check: 'sleep 60',
+        },
+      ],
+    })
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+    const deadline = Date.now() + 25_000
+    while (!workers.get(id)?.checkRunner?.pid && Date.now() < deadline)
+      await climayteWait({ id }, 1_000)
+    const first = workers.get(id)?.checkRunner
+    expect(first?.pid).toBeGreaterThan(0)
+    if (!first?.pid) return
+    first.launchedAt = Date.now() - 25 * 60_000 // as if the daemon was down past CHECK_TIMEOUT_MS
+    killProcessTree(first.pid)
+    while (workers.get(id)?.checkRunner === first && Date.now() < deadline) await Bun.sleep(250)
+
+    const again = workers.get(id)
+    expect(again?.status).toBe('checking')
+    expect(again?.checkRunner?.relaunches).toBe(1)
+    expect(again?.verdicts ?? []).toEqual([]) // not judged: it never gave an answer
+
+    climayteCancel({ id })
+    const stopping = workers.get(id)
+    if (stopping)
+      stopping.checkRunner = { ...(again?.checkRunner as NonNullable<typeof first>), pid: null }
+    expect(climayteRemove([id]).skipped).toContain(id)
+    if (stopping) stopping.checkRunner = null // the stand-in stop: nothing of it may outlive this test
+  }, 40_000)
 })
 
 describe('sizing (owner, 2026-10-01): too big for a window is split, one that fits waits for room', () => {
