@@ -67,7 +67,15 @@ import {
   usageAdvice,
 } from '../usage'
 import { budgetSummary, buildUsageBudget } from '../usage-budget'
-import { dropCachedUsage, keepLastKnownIfMissing, lastKnownUsage } from '../usage-cache'
+import {
+  clearUsageFromTables,
+  dropCachedUsage,
+  keepLastKnownIfMissing,
+  lastKnownUsage,
+  shownUsage,
+  shownUsageMap,
+  usageClearedAt,
+} from '../usage-cache'
 import { lastSampleSnapshot, usageHistoryKeys } from '../usage-history'
 import { withLimitWall, withLiveReading } from '../usage-live'
 import { lastAutoRefreshAt, sweepUsage } from '../usage-refresh'
@@ -213,11 +221,31 @@ app.get('/api/usage/cache', (c) => {
     const walled = withLimitWall(cache[cliKey(id)] ?? null, wall)
     if (walled) cache[cliKey(id)] = walled
   }
+  // A row whose usage was cleared shows only what was read after (the tables; nothing is deleted).
+  const cleared = usageClearedAt()
   return c.json({
-    cache,
-    lastKnown: lastKnownWithHistory(),
+    cache: shownUsageMap(cache, cleared),
+    lastKnown: shownUsageMap(lastKnownWithHistory(), cleared),
     lastAutoRefreshAt: lastAutoRefreshAt(),
   })
+})
+
+// Clear rows' usage from the tables: a dash until each row's next reading, with every number kept
+// (usage-cache.ts clearUsageFromTables). Keys as the tables use them: desktop:<dir>, cli:<id>,
+// codex:<id>, acct:<id>.
+const USAGE_KEY = /^(desktop|cli|codex|acct):./
+app.post('/api/usage/clear', async (c) => {
+  const body = await jsonBody(c)
+  const keys = Array.isArray(body.keys) ? body.keys : []
+  if (
+    keys.length === 0 ||
+    !keys.every((k): k is string => typeof k === 'string' && USAGE_KEY.test(k))
+  )
+    return c.json(
+      { error: 'keys: a list of usage keys (desktop:<dir>, cli:<id>, codex:<id>)' },
+      400,
+    )
+  return c.json({ ok: true, clearedAt: clearUsageFromTables(keys) })
 })
 
 /** Accounts that signed out before readings were kept had theirs deleted; the usage history still
@@ -392,16 +420,21 @@ app.get('/api/cli-instances', (c) => {
   const limits = climayteLimitWalls()
   // The keepalive's last nudge per account (session-keepalive.ts), for the row's note.
   const nudges = fileNudgeStore.read()
+  const cleared = usageClearedAt()
   return c.json(
     listCliInstances().map((i) => ({
       ...i,
       lastNudge: nudges[i.id] ?? null,
       liveSessions: readLiveRegistry(i.configDir).length,
       tokens: cliInstanceTokens(i.configDir),
-      lastUsageCheck: withLimitWall(
-        withLiveReading(i.lastUsageCheck, live.get(i.id), i.name),
-        limits.get(i.id),
-        i.name,
+      lastUsageCheck: shownUsage(
+        cliKey(i.id),
+        withLimitWall(
+          withLiveReading(i.lastUsageCheck, live.get(i.id), i.name),
+          limits.get(i.id),
+          i.name,
+        ),
+        cleared,
       ),
     })),
   )

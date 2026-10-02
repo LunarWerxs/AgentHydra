@@ -7,6 +7,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Clear usage stats, on every account row's ⋯ menu** (Instances, CLI and Codex; owner, 2026-10-02:
+  "clear the like old 5hour and usage stats in the ui", "not like delete the stats"). A signed-out
+  account keeps its last reading on its row, dimmed, and until now nothing took it off. The item
+  blanks the row's 5-hour and weekly numbers until its next reading: a signed-in account fills in
+  again at its next check, a signed-out one stays blank. Nothing is deleted: the stored readings and
+  the usage history keep every number, and CliMayte, fan_out and the account survey read them as
+  before (`POST /api/usage/clear`; the tables' routes serve no reading taken before a row's clear).
+
 ### Fixed
 
 - **CliMayte workers have the Connections MCP (connections-local) again, on every account.** A

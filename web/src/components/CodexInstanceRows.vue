@@ -7,6 +7,7 @@ import {
   AppWindow,
   ArrowRightLeft,
   EllipsisVertical,
+  Eraser,
   LogIn,
   LogOut,
   Pencil,
@@ -105,7 +106,7 @@ const isBusy = (instance: CodexInstance) => busyIds.value.has(instance.id)
 
 // Quota shares the app-wide usage store, keyed `codex:<id>` — so the Codex rows reuse the same
 // chip, the same cache, the same superseded-window rule as every other provider's rows.
-const { snapshotFor, isChecking, checkCodex, setSnapshot, hydrated } = useUsage()
+const { snapshotFor, clearUsage, isChecking, checkCodex, setSnapshot, hydrated } = useUsage()
 const usageKey = (instance: CodexInstance) => `codex:${instance.id}`
 const usageFor = (instance: CodexInstance) => {
   const snap = snapshotFor(usageKey(instance))
@@ -116,6 +117,11 @@ const usageFor = (instance: CodexInstance) => {
 }
 const isCheckingUsage = (instance: CodexInstance) => isChecking(usageKey(instance))
 const onCheckUsage = (instance: CodexInstance) => checkCodex(instance.id)
+/** Blank this row's old 5-hour and weekly numbers until its next reading; nothing is deleted. */
+async function onClearUsage(instance: CodexInstance) {
+  if (await clearUsage([usageKey(instance)])) toast.success(t('codexInstances.toastUsageCleared'))
+  else toast.error(t('codexInstances.toastUsageClearFailed'))
+}
 const catchupSignal = { aborted: false }
 let didInitialUsage = false
 watch(
@@ -780,6 +786,10 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
               @click="onRedeemResetCredit(instance)"
             >
               <RotateCcw /> {{ $t('codexInstances.redeemResetCredit') }}
+            </DropdownMenuItem>
+            <!-- Blanks the row's old numbers until its next reading (owner, 2026-10-02). -->
+            <DropdownMenuItem :disabled="!usageFor(instance)" @click="onClearUsage(instance)">
+              <Eraser /> {{ $t('codexInstances.clearUsage') }}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem

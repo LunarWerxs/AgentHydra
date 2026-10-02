@@ -7,6 +7,7 @@ import {
   Cpu,
   CreditCard,
   EllipsisVertical,
+  Eraser,
   FolderOpen,
   Funnel,
   Gauge,
@@ -158,6 +159,7 @@ const { t } = useI18n()
 const { enabled: tooltipsEnabled } = useTooltipConfig()
 const {
   snapshotFor,
+  clearUsage,
   isChecking,
   checkDesktop,
   checkCodex,
@@ -452,6 +454,12 @@ async function onCheckUsage(inst: CMInstance) {
   // never go silent, so surface the reason; a real result just updates the cell.
   const reasonKey = usageReasonMessageKey(reasonFor(usageKeyFor(inst)))
   if (reasonKey) toast.error(t(reasonKey))
+}
+
+/** Blank this row's old 5-hour and weekly numbers until its next reading; nothing is deleted. */
+async function onClearUsage(inst: CMInstance) {
+  if (await clearUsage([usageKeyFor(inst)])) toast.success(t('instances.toastUsageCleared'))
+  else toast.error(t('instances.toastUsageClearFailed'))
 }
 
 // Which providers to show, and the CLI instances (so "refresh all" covers them too, not just
@@ -1806,6 +1814,12 @@ onUnmounted(() => {
                       <LogIn /> {{ $t('instances.addCli') }}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
+                    <!-- Old numbers stay on a row by design (a signed-out account keeps its last
+                         reading, dimmed); this blanks them on request until the next reading
+                         (owner, 2026-10-02: "clear the old 5hour and usage stats in the ui"). -->
+                    <DropdownMenuItem :disabled="!usageFor(inst)" @click="onClearUsage(inst)">
+                      <Eraser /> {{ $t('instances.clearUsage') }}
+                    </DropdownMenuItem>
                     <!-- Edit (name + icon + color) is pure UI metadata, so it stays enabled even
                          while the instance runs (unlike Delete, which touches the folder) -->
                     <!-- Drop the typed name and let the row be called after the account again.

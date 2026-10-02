@@ -288,6 +288,11 @@ export default {
   usageChecking: 'Checking…',
   usageCheckNow: 'Check now',
   toastUsageCheckFailed: 'Failed to check usage.',
+  // The row menu's Clear usage stats: blanks a row's old numbers until its next reading, deleting
+  // nothing (owner, 2026-10-02: "clear the old 5hour and usage stats in the ui").
+  clearUsage: 'Clear usage stats',
+  toastUsageCleared: 'Usage stats cleared. The next check shows new numbers; nothing was deleted.',
+  toastUsageClearFailed: 'Could not clear the usage stats.',
   deleteDialogTitle: 'Delete instance',
   deleteDialogDescription:
     'This permanently removes the instance profile and all its local data. This cannot be undone.',

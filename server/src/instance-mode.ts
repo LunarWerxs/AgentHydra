@@ -181,9 +181,17 @@ app.get('/api/instances/:dir/account', async (c) => {
 app.get('/api/usage/cache', async (c) => {
   // Cached readings only: the quick daemon never starts a live quota sweep. Keeping cache access
   // dynamically imported also keeps it off the first-render path until the browser asks for it.
-  const { allCachedUsage, lastKnownUsage } = await import('./usage-cache')
-  // A signed-out account's kept reading, for its row to show dimmed (the full daemon's route).
-  return c.json({ cache: allCachedUsage(), lastKnown: lastKnownUsage(), lastAutoRefreshAt: null })
+  const { allCachedUsage, lastKnownUsage, shownUsageMap, usageClearedAt } = await import(
+    './usage-cache'
+  )
+  // A signed-out account's kept reading, for its row to show dimmed, and none a row's clear hid
+  // (the full daemon's route).
+  const cleared = usageClearedAt()
+  return c.json({
+    cache: shownUsageMap(allCachedUsage(), cleared),
+    lastKnown: shownUsageMap(lastKnownUsage(), cleared),
+    lastAutoRefreshAt: null,
+  })
 })
 
 // The SAME cross-window preferences the full daemon serves, backed by the same file (see
@@ -212,7 +220,16 @@ app.post('/api/instances/:dir/quit', async (c) => {
   return c.json(await quitInstance(dir, { confirmExternal: body.confirmExternal === true }))
 })
 
-app.get('/api/cli-instances', (c) => c.json(listCliInstances()))
+app.get('/api/cli-instances', async (c) => {
+  const { shownUsage, usageClearedAt } = await import('./usage-cache')
+  const cleared = usageClearedAt()
+  return c.json(
+    listCliInstances().map((i) => ({
+      ...i,
+      lastUsageCheck: shownUsage(`cli:${i.id}`, i.lastUsageCheck, cleared),
+    })),
+  )
+})
 app.post('/api/cli-instances/:id/launch', (c) => c.json(launchCliInstance(c.req.param('id'))))
 
 app.get('/api/codex-instances', async (c) => c.json(await listCodexInstances()))

@@ -119,6 +119,11 @@ export default {
   logoutDialogDescription:
     'Removes the saved Claude login (.credentials.json) from this CLI instance. Its chats, settings and folder stay, and Claude asks for a sign-in the next time it starts. Quit any Claude session running on it first.',
   toastUsageCheckFailed: 'Failed to check usage.',
+  // The row menu's Clear usage stats: blanks a row's old numbers until its next reading, deleting
+  // nothing (owner, 2026-10-02: "clear the old 5hour and usage stats in the ui").
+  clearUsage: 'Clear usage stats',
+  toastUsageCleared: 'Usage stats cleared. The next check shows new numbers; nothing was deleted.',
+  toastUsageClearFailed: 'Could not clear the usage stats.',
   // The table's gear, and the keepalive's switch inside it (server/src/session-keepalive.ts; also
   // in Settings).
   tableSettings: 'CLI settings',

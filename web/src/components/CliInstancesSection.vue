@@ -13,6 +13,7 @@ import {
   Cloud,
   CreditCard,
   EllipsisVertical,
+  Eraser,
   FileDown,
   Funnel,
   Link2,
@@ -115,6 +116,7 @@ const {
 } = useCliInstances()
 const {
   snapshotFor,
+  clearUsage,
   isChecking,
   checkCli,
   reasonFor,
@@ -467,6 +469,11 @@ async function onCheckUsage(inst: CliInstance) {
   // never go silent; a real result just updates the cell instead.
   const reasonKey = usageReasonMessageKey(reasonFor(usageKey(inst)))
   if (reasonKey) toast.error(t(reasonKey))
+}
+/** Blank this row's old 5-hour and weekly numbers until its next reading; nothing is deleted. */
+async function onClearUsage(inst: CliInstance) {
+  if (await clearUsage([usageKey(inst)])) toast.success(t('cliInstances.toastUsageCleared'))
+  else toast.error(t('cliInstances.toastUsageClearFailed'))
 }
 // The popover's inline "Check now" fires the same underlying probe as the kebab action, via
 // useUsage.checkCli directly. checkUsage() above additionally refreshes the list (so
@@ -1062,6 +1069,11 @@ onUnmounted(() => {
                     @click="openMoveOut(inst)"
                   >
                     <ArrowRightLeft /> {{ $t('cliInstances.moveOut') }}
+                  </DropdownMenuItem>
+                  <!-- A signed-out account keeps its last reading, dimmed; this blanks it until
+                       the next reading (owner, 2026-10-02). -->
+                  <DropdownMenuItem :disabled="!usageFor(inst)" @click="onClearUsage(inst)">
+                    <Eraser /> {{ $t('cliInstances.clearUsage') }}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem

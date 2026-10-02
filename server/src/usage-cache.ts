@@ -13,6 +13,8 @@ const USAGE_CACHE_PATH = join(DATA_DIR, 'usage-cache.json')
  *  of its own so nothing that ranks accounts by room (fan_out's balance, CliMayte, the survey, all
  *  reading usage-cache.json) can mistake one for a live reading. */
 const LAST_KNOWN_PATH = join(DATA_DIR, 'usage-last-known.json')
+/** When each row's usage was last cleared from the tables (key -> ISO time; see clearUsageFromTables). */
+const CLEARED_PATH = join(DATA_DIR, 'usage-cleared.json')
 type UsageCache = Record<string, UsageSnapshot>
 
 function readUsageCache(): UsageCache {
@@ -91,6 +93,54 @@ export function keepLastKnownIfMissing(key: string, snap: UsageSnapshot): void {
   } catch {
     // Best-effort: the row just keeps its dash.
   }
+}
+
+/** Every row whose usage was cleared from the tables, with when. */
+export function usageClearedAt(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(readFileSync(CLEARED_PATH, 'utf8'))
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Clear `keys`' usage from the tables (owner, 2026-10-02: "clear the like old 5hour and usage stats
+ * in the ui", "not like delete the stats"). Nothing is deleted: the cache, the kept readings and the
+ * history keep every number, and everything that ranks accounts (CliMayte, fan_out, the survey)
+ * still reads them. The tables are served only readings taken after the clear, so the row shows a
+ * dash until its next check. Returns the time the clear took effect.
+ */
+export function clearUsageFromTables(keys: readonly string[], at: Date = new Date()): string {
+  const iso = at.toISOString()
+  const cleared = usageClearedAt()
+  for (const key of keys) cleared[key] = iso
+  mkdirSync(DATA_DIR, { recursive: true })
+  writeFileSync(CLEARED_PATH, JSON.stringify(cleared, null, 2))
+  return iso
+}
+
+/** `snap`, unless its row's usage was cleared from the tables after it was taken. */
+export function shownUsage(
+  key: string,
+  snap: UsageSnapshot | null,
+  cleared: Record<string, string> = usageClearedAt(),
+): UsageSnapshot | null {
+  const at = cleared[key]
+  if (!snap || !at) return snap
+  return Date.parse(snap.capturedAt) > Date.parse(at) ? snap : null
+}
+
+/** The readings of `all` the tables may show (see shownUsage). */
+export function shownUsageMap(
+  all: UsageCache,
+  cleared: Record<string, string> = usageClearedAt(),
+): UsageCache {
+  const shown: UsageCache = {}
+  for (const [key, snap] of Object.entries(all))
+    if (shownUsage(key, snap, cleared)) shown[key] = snap
+  return shown
 }
 
 /** Store the latest snapshot for `key` (best-effort; a cache write must never fail a live check).

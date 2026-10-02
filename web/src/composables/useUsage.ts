@@ -20,6 +20,10 @@ const snapshots = ref<Map<string, UsageSnapshot>>(new Map())
  *  dimmed until it signs in again (owner, 2026-10-01: "don't clear the last usage stats when they
  *  go yellow"). A live reading for the key always wins. */
 const lastKnown = ref<Map<string, UsageSnapshot>>(new Map())
+/** When each row's usage was cleared in this window (ms; see clearUsage). The server already stops
+ *  serving those readings, but the maps above only ever merge: a poll in flight at the click, or a
+ *  CLI list carrying the reading, would put it back until a reload. */
+const clearedAt = ref<Map<string, number>>(new Map())
 /** ISO time of the server's last background auto-refresh sweep, or null. */
 const lastAutoRefreshAt = ref<string | null>(null)
 // Why each cached snapshot has the value it does (esp. why a no-data one is empty), keyed the
@@ -100,11 +104,29 @@ function stopPolling(): void {
   pollTimer = null
 }
 
+/** `snap`, unless its row's usage was cleared after it was taken. */
+function shown(key: string, snap: UsageSnapshot | undefined): UsageSnapshot | undefined {
+  const at = clearedAt.value.get(key)
+  return snap && at !== undefined && Date.parse(snap.capturedAt) <= at ? undefined : snap
+}
+
 function snapshotFor(key: string): UsageSnapshot | undefined {
-  const live = snapshots.value.get(key)
+  const live = shown(key, snapshots.value.get(key))
   // A signed-out check answers an empty snapshot, which must not hide the kept reading.
   if (live && !isNoDataSnap(live)) return live
-  return lastKnown.value.get(key) ?? live
+  return shown(key, lastKnown.value.get(key)) ?? live
+}
+
+/** Clear rows' usage from the tables (owner, 2026-10-02): each shows a dash until its next reading.
+ *  Nothing is deleted; the server keeps every number for whatever ranks accounts. */
+async function clearUsage(keys: string[]): Promise<boolean> {
+  const res = await guard(api.clearUsage(keys))
+  if (!res?.ok) return false
+  const at = Date.parse(res.clearedAt)
+  const next = new Map(clearedAt.value)
+  for (const key of keys) next.set(key, at)
+  clearedAt.value = next
+  return true
 }
 
 function reasonFor(key: string): UsageReason | undefined {
@@ -194,6 +216,7 @@ export function useUsage() {
     startPolling,
     stopPolling,
     snapshotFor,
+    clearUsage,
     reasonFor,
     isChecking,
     setSnapshot,

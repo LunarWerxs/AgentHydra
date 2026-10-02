@@ -35,6 +35,11 @@ export default {
   logoutDialogDescription:
     'Removes the saved OpenAI login (auth.json) from this instance. Its chats, settings and folder stay, and Codex asks for a sign-in the next time it starts.',
   redeemResetCredit: 'Redeem reset credit',
+  // The row menu's Clear usage stats: blanks a row's old numbers until its next reading, deleting
+  // nothing (owner, 2026-10-02: "clear the old 5hour and usage stats in the ui").
+  clearUsage: 'Clear usage stats',
+  toastUsageCleared: 'Usage stats cleared. The next check shows new numbers; nothing was deleted.',
+  toastUsageClearFailed: 'Could not clear the usage stats.',
   /** Disabled-button tooltip: the cached usage already shows no banked credits. */
   redeemNoCredits: 'No banked reset credits. Nothing to redeem.',
   /** Disabled-button tooltip: a reset would be wasted while a window still has headroom. `pct` is

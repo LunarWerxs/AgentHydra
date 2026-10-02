@@ -757,6 +757,13 @@ export const getUsageCache = () =>
     lastKnown?: Record<string, UsageSnapshot>
     lastAutoRefreshAt: string | null
   }>('/api/usage/cache')
+/** Clear rows' usage from the tables until their next reading (keys as getUsageCache's). Deletes
+ *  nothing: the server just stops serving readings taken up to `clearedAt`. */
+export const clearUsage = (keys: string[]) =>
+  j<{ ok: boolean; clearedAt: string }>('/api/usage/clear', {
+    method: 'POST',
+    body: JSON.stringify({ keys }),
+  })
 /** Force one background refresh sweep now (the same pass the auto-refresh timer runs). */
 export const refreshAllUsage = () =>
   j<{ ok: boolean; checked: number }>('/api/usage/refresh', { method: 'POST' })
