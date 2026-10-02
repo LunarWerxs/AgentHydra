@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-02
+
 ### Added
 
 - **CliMayte goes around accounts someone else is using** (`server/src/core/hands-on.ts`,
