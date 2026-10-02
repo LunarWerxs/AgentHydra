@@ -59,7 +59,7 @@ import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/
 import { POINTER_DIR } from './instance'
 import { liveSessionIds } from './live-registry'
 import { getProviderSettings } from './provider-settings'
-import type { UsageSnapshot } from './types'
+import type { CliInstance, UsageSnapshot } from './types'
 import { resetTimeIso } from './usage'
 import { allCachedUsage } from './usage-cache'
 
@@ -285,6 +285,90 @@ function withResetTimes(u: UsageSnapshot): UsageSnapshot {
   return { ...u, session: fill(u.session), weekAll: fill(u.weekAll) }
 }
 
+/** One limit (session or week) of a live reading, shaped as freshestPct takes it; null when the
+ *  live reading carries no percentage for it. */
+type LiveLimit = { pct: number; resetsAt: number | null; at: number } | null
+
+function liveLimits(live: CliMayteLiveUsage | null): { session: LiveLimit; week: LiveLimit } {
+  if (!live) return { session: null, week: null }
+  return {
+    session:
+      live.sessionPct !== null
+        ? { pct: live.sessionPct, resetsAt: live.sessionResetsAt, at: live.at }
+        : null,
+    week:
+      live.weekPct !== null
+        ? { pct: live.weekPct, resetsAt: live.weekResetsAt, at: live.at }
+        : null,
+  }
+}
+
+/** The reset of whichever reading a percentage came from: the live one when it is newer than the
+ *  snapshot, else the snapshot's. */
+function limitReset(
+  live: LiveLimit,
+  snapshotAt: number,
+  limit: { resetsAt?: string | null } | null | undefined,
+): number | null {
+  if (live && live.at > snapshotAt) return live.resetsAt
+  return limit?.resetsAt ? Date.parse(limit.resetsAt) || null : null
+}
+
+/** A reset still ahead, for a limit that has a percentage. */
+function upcomingReset(pct: number | null, resets: number | null, now: number): number | null {
+  return pct !== null && resets !== null && resets > now ? resets : null
+}
+
+/** When the session percentage was read: the live reading's time when it is the newer one. */
+function sessionReadAt(pct: number | null, live: LiveLimit, snapshotAt: number): number | null {
+  if (pct === null) return null
+  return live && live.at > snapshotAt ? live.at : snapshotAt || null
+}
+
+/** What every account in one pool build shares. */
+interface PoolBuild {
+  now: number
+  mine: Set<string>
+  cache: Record<string, UsageSnapshot>
+  toPlace: boolean
+}
+
+/** One CLI instance as a pool account (buildPool). */
+function poolAccount(i: CliInstance, b: PoolBuild): CliMayteAccount {
+  const { now } = b
+  const read = latestUsage(i.id, i.lastUsageCheck, b.cache)
+  const u = read && withResetTimes(read)
+  const snapshotAt = u ? Date.parse(u.capturedAt) || 0 : 0
+  // The other PC's reading counts when it is newer than this PC's own (climayte-remote).
+  const live = liveLimits(newestLive(i.id, liveByAccount.get(i.id) ?? null, now))
+  const sessionPct = freshestPct(u?.session, snapshotAt, live.session, now)
+  const weekPct = freshestPct(u?.weekAll, snapshotAt, live.week, now)
+  const readAt = sessionReadAt(sessionPct, live.session, snapshotAt)
+  // A walled account takes no work until its wall ends, so its reading waits too.
+  const due = readAt === null || now - readAt > READING_STALE_MS
+  if (b.toPlace && due && !((walls[i.id]?.until ?? 0) > now)) refreshReading(i.id, now)
+  const refreshStarted = refreshRunning.get(i.id)
+  return {
+    id: i.id,
+    num: i.num ?? null,
+    name: i.name,
+    configDir: i.configDir,
+    planFactor: planFactor(i.planLabel),
+    sessionPct,
+    sessionResetsAt: upcomingReset(
+      sessionPct,
+      limitReset(live.session, snapshotAt, u?.session),
+      now,
+    ),
+    weekPct,
+    weekResetsAt: upcomingReset(weekPct, limitReset(live.week, snapshotAt, u?.weekAll), now),
+    readAt,
+    refreshing: refreshStarted !== undefined && now - refreshStarted < REFRESH_HOLD_MS,
+    handsOnAgoMs: handsOnAgoMs(i.associatedDesktopDir, now),
+    otherSessions: otherSessionsIn(i.configDir, b.mine),
+  }
+}
+
 /** The production pool: every CLI instance with a credential file, with its last usage reading
  *  (void once its window has reset), or a running worker's live one when that is newer. A hollow
  *  or revoked login still passes that file check; its first attempt fails `auth` and the account
@@ -292,69 +376,12 @@ function withResetTimes(u: UsageSnapshot): UsageSnapshot {
  *  failure, once. Each carries who else is on it now (accountInUse), so new work goes around a
  *  person at the keyboard and around sessions that are not CliMayte's. */
 function buildPool(now: number): CliMayteAccount[] {
-  const mine = ownSessions()
-  const cache = allCachedUsage()
-  const toPlace = placing()
+  const b: PoolBuild = { now, mine: ownSessions(), cache: allCachedUsage(), toPlace: placing() }
   // A login vetoed by CliMayte's own signed-out wall stays in the pool, walled, so recheckSignedOut
   // can find out when it works again.
   return listCliInstances()
     .filter((i) => i.loggedIn || !!i.loginNote)
-    .map((i) => {
-      const read = latestUsage(i.id, i.lastUsageCheck, cache)
-      const u = read && withResetTimes(read)
-      const snapshotAt = u ? Date.parse(u.capturedAt) || 0 : 0
-      // The other PC's reading counts when it is newer than this PC's own (climayte-remote).
-      const live = newestLive(i.id, liveByAccount.get(i.id) ?? null, now)
-      const liveSession =
-        live && live.sessionPct !== null
-          ? { pct: live.sessionPct, resetsAt: live.sessionResetsAt, at: live.at }
-          : null
-      const sessionPct = freshestPct(u?.session, snapshotAt, liveSession, now)
-      // The reset of whichever reading sessionPct came from.
-      const resets =
-        liveSession && liveSession.at > snapshotAt
-          ? liveSession.resetsAt
-          : u?.session?.resetsAt
-            ? Date.parse(u.session.resetsAt) || null
-            : null
-      const liveWeek =
-        live && live.weekPct !== null
-          ? { pct: live.weekPct, resetsAt: live.weekResetsAt, at: live.at }
-          : null
-      const weekPct = freshestPct(u?.weekAll, snapshotAt, liveWeek, now)
-      const readAt =
-        sessionPct === null
-          ? null
-          : liveSession && liveSession.at > snapshotAt
-            ? liveSession.at
-            : snapshotAt || null
-      // A walled account takes no work until its wall ends, so its reading waits too.
-      const due = readAt === null || now - readAt > READING_STALE_MS
-      if (toPlace && due && !((walls[i.id]?.until ?? 0) > now)) refreshReading(i.id, now)
-      const refreshStarted = refreshRunning.get(i.id)
-      const weekResets =
-        liveWeek && liveWeek.at > snapshotAt
-          ? liveWeek.resetsAt
-          : u?.weekAll?.resetsAt
-            ? Date.parse(u.weekAll.resetsAt) || null
-            : null
-      return {
-        id: i.id,
-        num: i.num ?? null,
-        name: i.name,
-        configDir: i.configDir,
-        planFactor: planFactor(i.planLabel),
-        sessionPct,
-        sessionResetsAt: sessionPct !== null && resets !== null && resets > now ? resets : null,
-        weekPct,
-        weekResetsAt:
-          weekPct !== null && weekResets !== null && weekResets > now ? weekResets : null,
-        readAt,
-        refreshing: refreshStarted !== undefined && now - refreshStarted < REFRESH_HOLD_MS,
-        handsOnAgoMs: handsOnAgoMs(i.associatedDesktopDir, now),
-        otherSessions: otherSessionsIn(i.configDir, mine),
-      }
-    })
+    .map((i) => poolAccount(i, b))
 }
 
 /** The newer of the background refresh's cached reading and a person's manual check (only the

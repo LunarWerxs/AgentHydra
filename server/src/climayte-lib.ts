@@ -1295,6 +1295,84 @@ function rankPenalty(
   )
 }
 
+/** What a worker's last attempt says about where it goes next (rankAccounts). */
+interface LastAttemptIds {
+  /** The account of a last quota/auth attempt: tried last. */
+  failedId: string | null
+  /** The account a handoff left: no home to keep. */
+  handedOffFrom: string | null
+  /** The account a handoff left, unless it handed off on conversation size: nudged away. */
+  nudgedFrom: string | null
+}
+
+function lastAttemptIds(worker: Pick<CliMayteWorker, 'attempts'>): LastAttemptIds {
+  const lastAttempt = worker.attempts[worker.attempts.length - 1]
+  const failedId =
+    lastAttempt && (lastAttempt.outcome === 'quota' || lastAttempt.outcome === 'auth')
+      ? lastAttempt.account.id
+      : null
+  // After a handoff the next session is a fresh one: no home to keep, and the account it left is
+  // only nudged back (it may well be the one with the most room: a handoff on request).
+  const handedOffFrom = lastAttempt?.outcome === 'handoff' ? lastAttempt.account.id : null
+  // A handoff on conversation size says nothing against its account: nudged away, every one of a
+  // long task's handoffs would change account and run it into the moves cap (notConverging).
+  const nudgedFrom = lastAttempt?.windDown?.reason === 'context' ? null : handedOffFrom
+  return { failedId, handedOffFrom, nudgedFrom }
+}
+
+/** What rankAccounts' eligibility test reads for every account. */
+interface RankInputs {
+  worker: Pick<CliMayteWorker, 'accounts' | 'accountId'>
+  walls: CliMayteWalls
+  active: Map<string, number>
+  groupActive: Map<string, number>
+  perAccount: number | null
+  now: number
+  allowFull: boolean
+  ids: LastAttemptIds
+}
+
+/** The worker's session already lives on this account and may carry on there (its home). */
+function keepsHome(a: CliMayteAccount, r: RankInputs): boolean {
+  return !r.ids.handedOffFrom && a.id === r.worker.accountId && a.id !== r.ids.failedId
+}
+
+/** The account may take the worker at all: one it may use, not walled, not full (unless
+ *  allowFull), and under MAX_PER_ACCOUNT. */
+function accountAdmits(a: CliMayteAccount, r: RankInputs): boolean {
+  return (
+    (!r.worker.accounts || r.worker.accounts.includes(a.id)) &&
+    !((r.walls[a.id]?.until ?? 0) > r.now) &&
+    (r.allowFull || !accountIsFull(a)) &&
+    (r.active.get(a.id) ?? 0) < MAX_PER_ACCOUNT
+  )
+}
+
+/** The account takes NEW work: everything here is waived for the session already on it
+ *  (keepsHome). */
+function takesNewWork(a: CliMayteAccount, r: RankInputs): boolean {
+  const load = r.active.get(a.id) ?? 0
+  // Past the wind-down line, new work there would be asked to hand off again at once (measured
+  // live: a continuation placed on #84 at 91% wound down immediately, while #83 sat at 58%).
+  // Past the line an account takes no NEW work: a new task, a handoff's continuation or a moved
+  // session is told to hand off within a few calls, or hits the limit on its first. Run 1, 19:32
+  // to 19:36: twenty such hops at 89-97%, about 290k tokens and $0.75 each, and seven tasks ended up
+  // waiting anyway. Only the session already on it carries on there (its home); the rest wait.
+  if (!r.allowFull && accountIsNear(a, r.now)) return false
+  // An account with no reading in its current 5-hour window (unread since its last reset, or a
+  // login whose usage check keeps failing), or only a stale one (readingStale), takes one worker
+  // until that worker's stream reads it: the first request tells whether the login works and how
+  // full the account really is, within seconds. 2026-10-01 09:31: #88's last reading was four hours
+  // old, it counted as half full and roomy, and one tick sent it four tasks; all four failed
+  // sign-in together.
+  if ((a.sessionPct === null || readingStale(a, r.now)) && load > 0) return false
+  if (a.refreshing) return false
+  // New work goes around an account someone else is using; a task that names the account is a
+  // person's word.
+  if (accountInUse(a) && !r.worker.accounts?.includes(a.id)) return false
+  return (r.groupActive.get(a.id) ?? 0) < groupCap(a, r.perAccount, r.now)
+}
+
 /** Every account that takes the worker now, best first; the session's own account alone when it
  *  is one of them. `perAccount` caps this group's workers (`groupActive`, default `active`) on an
  *  account (groupCap; null: the default); a session going back to its own account is not held to
@@ -1317,50 +1395,13 @@ export function rankAccounts(
   allowFull = false,
   placement?: CliMaytePlacement,
 ): CliMayteAccount[] {
-  const lastAttempt = worker.attempts[worker.attempts.length - 1]
-  const failedId =
-    lastAttempt && (lastAttempt.outcome === 'quota' || lastAttempt.outcome === 'auth')
-      ? lastAttempt.account.id
-      : null
-  // After a handoff the next session is a fresh one: no home to keep, and the account it left is
-  // only nudged back (it may well be the one with the most room: a handoff on request).
-  const handedOffFrom = lastAttempt?.outcome === 'handoff' ? lastAttempt.account.id : null
-  // A handoff on conversation size says nothing against its account: nudged away, every one of a
-  // long task's handoffs would change account and run it into the moves cap (notConverging).
-  const nudgedFrom = lastAttempt?.windDown?.reason === 'context' ? null : handedOffFrom
+  const ids = lastAttemptIds(worker)
+  const { failedId, handedOffFrom, nudgedFrom } = ids
+  const r: RankInputs = { worker, walls, active, groupActive, perAccount, now, allowFull, ids }
   const load = (a: CliMayteAccount): number => active.get(a.id) ?? 0
   const full = accountIsFull
-  // Past the wind-down line, new work there would be asked to hand off again at once (measured
-  // live: a continuation placed on #84 at 91% wound down immediately, while #83 sat at 58%).
-  const near = (a: CliMayteAccount): boolean => accountIsNear(a, now)
-  // Past the line an account takes no NEW work: a new task, a handoff's continuation or a moved
-  // session is told to hand off within a few calls, or hits the limit on its first. Run 1, 19:32
-  // to 19:36: twenty such hops at 89-97%, about 290k tokens and $0.75 each, and seven tasks ended up
-  // waiting anyway. Only the session already on it carries on there (its home); the rest wait.
-  const keepsHome = (a: CliMayteAccount): boolean =>
-    !handedOffFrom && a.id === worker.accountId && a.id !== failedId
-  // An account with no reading in its current 5-hour window (unread since its last reset, or a
-  // login whose usage check keeps failing), or only a stale one (readingStale), takes one worker
-  // until that worker's stream reads it: the first request tells whether the login works and how
-  // full the account really is, within seconds. 2026-10-01 09:31: #88's last reading was four hours
-  // old, it counted as half full and roomy, and one tick sent it four tasks; all four failed
-  // sign-in together.
-  const unread = (a: CliMayteAccount): boolean =>
-    (a.sessionPct === null || readingStale(a, now)) && load(a) > 0
-  // New work goes around an account someone else is using; a session already living there carries
-  // on (its home), and a task that names the account is a person's word.
-  const named = (a: CliMayteAccount): boolean => !!worker.accounts?.includes(a.id)
   const eligible = accounts.filter(
-    (a) =>
-      (!worker.accounts || worker.accounts.includes(a.id)) &&
-      !((walls[a.id]?.until ?? 0) > now) &&
-      (allowFull || !full(a)) &&
-      (allowFull || !near(a) || keepsHome(a)) &&
-      (!unread(a) || keepsHome(a)) &&
-      (!a.refreshing || keepsHome(a)) &&
-      (!accountInUse(a) || keepsHome(a) || named(a)) &&
-      ((groupActive.get(a.id) ?? 0) < groupCap(a, perAccount, now) || keepsHome(a)) &&
-      load(a) < MAX_PER_ACCOUNT,
+    (a) => accountAdmits(a, r) && (keepsHome(a, r) || takesNewWork(a, r)),
   )
   // A full home is kept only when every other choice is full too.
   const home = handedOffFrom
