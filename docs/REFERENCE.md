@@ -423,7 +423,7 @@ read those manually supplied credentials.
 
 ## ChatGPT handoff
 
-Enable **Settings → Providers → ChatGPT handoff** to add a ChatGPT action to the single-session
+Enable **Sessions list → ⋯ → Session settings → ChatGPT handoff** to add a ChatGPT action to the single-session
 composer. It uses the composer task and effective working directory to create a Markdown
 attachment, downloads it in the browser, copies a matching prompt, and opens
 <https://chatgpt.com/>. AgentHydra never signs in, submits the prompt, uploads the attachment, or

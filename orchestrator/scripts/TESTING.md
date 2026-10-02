@@ -109,7 +109,7 @@ debugger startup, exact-profile requests and result verification. The mechanics:
   `test_nativearchivelib.py` and `test_native_archive_paths.py`. Live evidence is recorded
   separately in [the proof results](../../docs/CLAUDE-DESKTOP-POC-RESULTS.md).
 - **Automatic connection startup is per profile**: set `launchDebugger:true` through
-  `/api/claude-native/settings` or Settings → General → Claude native control, then use the
+  `/api/claude-native/settings` or Instances tab → gear (Instances settings) → Claude native control, then use the
   next authorized AgentHydra Open. Do not restart an active desktop to test this. Setting
   `developer_settings.json` / `allowDevTools` alone only exposes a menu; it does not start
   the debugger. New profiles need explicit configuration.

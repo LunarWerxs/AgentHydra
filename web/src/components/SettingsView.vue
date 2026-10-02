@@ -3,17 +3,13 @@ import {
   AppWindow,
   BellRing,
   CalendarClock,
-  ChevronDown,
-  ClipboardCopy,
   Cloud,
   CloudCheck,
   CloudCog,
   CloudDownload,
   CloudOff,
-  DatabaseZap,
   ExternalLink,
   EyeOff,
-  FilePenLine,
   Gauge,
   LogOut,
   Mail,
@@ -21,36 +17,23 @@ import {
   Monitor,
   MonitorDown,
   Plug,
-  Power,
   RefreshCw,
   Repeat,
-  RotateCcw,
-  SlidersHorizontal,
   Timer,
   User,
 } from '@lucide/vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import ClaudeNativeSettings from '@/components/ClaudeNativeSettings.vue'
-import ProviderRows from '@/components/ProviderRows.vue'
-import UsageRefreshRows from '@/components/UsageRefreshRows.vue'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useAppSettings } from '@/composables/useAppSettings'
-import { useData } from '@/composables/useData'
-import { useMonitor } from '@/composables/useMonitor'
 import { usePanels } from '@/composables/usePanels'
-import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import type { MonitorStateName, SearchIndexStatus, SyncStatus } from '@/lib/api'
 import * as api from '@/lib/api'
-import { type BadgeVariant, baseName, formatBytes } from '@/lib/format'
-import { HEADLESS_QUEUEING_ENABLED } from '@/lib/headless'
-import { composeSessionPathClipboard } from '@/lib/session-clipboard'
 import { bindSignInNudgeStatus, nudgeOnSettingsChange } from '@/lib/sign-in-nudge'
 import { useTheme } from '@/lib/theme'
 import { useTooltipConfig } from '@/lib/tooltip-config'
@@ -58,35 +41,20 @@ import ExpandTransition from '@/shell/ExpandTransition.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 import SettingsGroup from '@/shell/SettingsGroup.vue'
 import SettingsRow from '@/shell/SettingsRow.vue'
-import SettingsTabs from '@/shell/SettingsTabs.vue'
 
 const { t } = useI18n()
 
-// Settings is one scrolling page (the old General/Scheduler/Accounts tabs were merged —
-// owner request: Accounts didn't warrant a tab, and Scheduler folded into the rest). A
-// deep link (e.g. the composer's tomorrow-preset gear) now scrolls to a section instead of
-// switching a tab. Section anchors are keyed by the old tab ids so callers didn't change.
-// `accounts` is still read here — the auto-resume monitor's per-account overrides list them.
-// Populated by useData's startPolling; nothing in this panel mutates them any more.
-const { accounts, scheduler, refreshScheduler } = useData()
+// Settings holds what belongs to the whole app: appearance, the MCP server, notifications, updates
+// and cloud sync. A setting that belongs to one page lives on that page (owner, 2026-10-01: "move
+// all the settings that make sense to their pages"): the Instances tab's gear, the Sessions list's
+// ⋯ menu, the CLI table's gear, and the queue drawer's scheduler button. A deep link (the header's
+// update dot) scrolls to a section and pulses it.
 const { enabled: showTooltips } = useTooltipConfig()
 
 const sectionEls = ref<Record<string, HTMLElement | null>>({})
 function setSectionEl(id: string, el: unknown) {
   sectionEls.value[id] = el as { $el?: HTMLElement } | HTMLElement | null as HTMLElement | null
 }
-
-// General vs Automation (owner request 2026-08-25: the page got long and confusing, and the
-// automation machinery — scheduler and auto-resume monitor — is a coherent chunk).
-// Sections stay MOUNTED behind v-show per SettingsTabs' consumer rule, so open-watchers and
-// deep-link section refs keep working on the hidden tab.
-const settingsTab = ref<'general' | 'automation'>('general')
-const settingsTabs = computed(() => [
-  { id: 'general' as const, label: t('settings.tabGeneral') },
-  { id: 'automation' as const, label: t('settings.tabAutomation') },
-])
-/** Section ids that live on the Automation tab — a deep link to one flips the tab first. */
-const AUTOMATION_SECTIONS = new Set(['scheduler'])
 
 // Which section is currently flashing after a deep link. A scroll alone lands you somewhere without
 // saying WHERE — on a page of near-identical cards the arrival is ambiguous, so the target pulses
@@ -99,9 +67,6 @@ const { settingsRequestedTab } = usePanels()
 function consumeRequestedTab() {
   const req = settingsRequestedTab.value
   if (req) {
-    // The target may live on the other tab — flip first, or scrollIntoView lands on a
-    // display:none node and does nothing.
-    settingsTab.value = AUTOMATION_SECTIONS.has(req) ? 'automation' : 'general'
     // Wait a tick so the section is laid out (view may be mounting fresh), then scroll to it.
     nextTick(() => {
       const el = sectionEls.value[req]
@@ -328,13 +293,8 @@ async function toggleMcpRegister(enabled: boolean) {
 }
 
 // --- app settings this panel still owns ---------------------------------------------------------
-// The usage auto-refresh rows and the provider/table switches moved into components of their own
-// (UsageRefreshRows / ProviderRows) so the Instances toolbar can render the SAME controls where
-// they apply; they read this composable directly. What is left here is everything with no better
-// home than the settings panel.
+// The notification settings: the rest of the composable belongs to the pages that use it.
 const {
-  transcriptEditor,
-  transcriptEditorResolved,
   notifyEnabled,
   notifySessionReset,
   notifyWeeklyReset,
@@ -400,78 +360,6 @@ async function onTestNotification() {
     testingNotification.value = false
   }
 }
-
-// --- transcript editor (server/src/transcript-open.ts): which editor "Open the session file"
-// hands the .jsonl to, so it never hits Windows' unassociated-extension "Pick an app" dialog ---
-// Collapsed by default: auto-detect is right for nearly everyone, so the path field is a
-// destination you go looking for, not something the panel puts in front of you.
-const editorOpen = ref(false)
-
-// Appearance "Advanced" disclosure (mirrors the Scheduler group): tucks the tooltips toggle and
-// the transcript-editor override away by default (owner request) so the section leads with the
-// everyday choices.
-const appearanceAdvancedOpen = ref(false)
-
-// --- the search index, the one file we put on disk that nobody asked for ---------------------
-// Shown with its real size and a delete button, because an index the user cannot see or remove is
-// a very different promise from one they can. It rebuilds itself from the transcripts on the next
-// search, so removing it costs time and nothing else.
-const searchIndex = ref<SearchIndexStatus | null>(null)
-const deletingSearchIndex = ref(false)
-
-async function refreshSearchIndex() {
-  try {
-    searchIndex.value = await api.getSearchIndex()
-  } catch {
-    searchIndex.value = null // an unreachable daemon simply hides the row's detail
-  }
-}
-onMounted(refreshSearchIndex)
-
-async function removeSearchIndex() {
-  deletingSearchIndex.value = true
-  try {
-    searchIndex.value = await api.deleteSearchIndex()
-    toast.success(t('settings.searchIndexDeleted'))
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : t('settings.searchIndexDeleteFailed'))
-  } finally {
-    deletingSearchIndex.value = false
-  }
-}
-
-// "Copy session file location" used to put a bare path on the clipboard. These decide what else
-// goes with it; both default on, and with both off the result is byte-for-byte what it always was.
-const { copyPathIncludeName, copyPathIncludePrompt, copyPathPrompt } = useUiPrefs()
-const copyPathOpen = ref(false)
-/** Shown live in the settings row, because the only honest way to describe a clipboard format is
- *  to display it. */
-const copyPathPreview = computed(() =>
-  composeSessionPathClipboard({
-    path: 'C:\\Users\\you\\.claude\\projects\\my-repo\\a1b2c3d4.jsonl',
-    title: 'Postal server connection setup',
-    includeName: copyPathIncludeName.value,
-    includePrompt: copyPathIncludePrompt.value,
-    prompt: copyPathPrompt.value,
-  }),
-)
-
-async function saveTranscriptEditor() {
-  if (!(await updateAppSettings({ transcriptEditor: transcriptEditor.value.trim() })))
-    toast.error(t('settings.transcriptEditorToastFailed'))
-}
-/** Back to auto-detect. Clearing the box by hand works too, but an explicit "unset this" is the
- *  only affordance that reads as reversible once a path is in there. */
-async function resetTranscriptEditor() {
-  transcriptEditor.value = ''
-  await saveTranscriptEditor()
-}
-/** The typed override exists but is not what will run, i.e. the server discarded it as a dead path
- *  and fell back to auto-detect. Worth a warning: the field looks honoured but isn't. */
-const editorOverrideIgnored = computed(() => {
-  const typed = transcriptEditor.value.trim()
-  return !!typed && !!transcriptEditorResolved.value && typed !== transcriptEditorResolved.value
-})
 
 // --- theme + cloud sync -----------------------
 // The theme PICKER now lives as an icon in the settings panel header (App.vue); this composable
@@ -655,153 +543,14 @@ async function toggleAutoUpdate(enabled: boolean) {
     toast.error(t('settings.autoUpdateToastFailed'))
   }
 }
-
-// --- scheduler ---
-const sched = reactive({
-  spacing_seconds: 60,
-  poll_seconds: 5,
-  max_concurrent: 3,
-  tomorrow_time: '09:00',
-})
-watch(
-  scheduler,
-  (s) => {
-    if (s) {
-      sched.spacing_seconds = s.spacing_seconds
-      sched.poll_seconds = s.poll_seconds
-      sched.max_concurrent = s.max_concurrent
-      sched.tomorrow_time = s.tomorrow_time
-    }
-  },
-  { immediate: true },
-)
-
-// Both writes apply locally first (the switch and the numbers reflect the change instantly), roll
-// back if the server refuses, and still reload afterwards so counts the server owns reconcile.
-async function toggleScheduler(enabled: boolean) {
-  const prev = scheduler.value
-  if (prev) scheduler.value = { ...prev, enabled }
-  try {
-    await api.updateScheduler({ enabled })
-  } catch {
-    scheduler.value = prev
-    toast.error(t('settings.toastSchedulerFailed'))
-  }
-  await refreshScheduler()
-}
-async function saveScheduler() {
-  const patch = {
-    spacing_seconds: Number(sched.spacing_seconds),
-    poll_seconds: Number(sched.poll_seconds),
-    max_concurrent: Number(sched.max_concurrent),
-    tomorrow_time: sched.tomorrow_time,
-  }
-  const prev = scheduler.value
-  if (prev) scheduler.value = { ...prev, ...patch }
-  try {
-    await api.updateScheduler(patch)
-  } catch {
-    scheduler.value = prev
-    toast.error(t('settings.toastSchedulerFailed'))
-  }
-  await refreshScheduler()
-}
-
-// progressive disclosure state
-const schedAdvancedOpen = ref(false)
-const monitorAdvancedOpen = ref(false)
-
-// --- auto-resume monitor ---
-const {
-  settings: monitorSettings,
-  status: monitorStatus,
-  accounts: monitorAccountOverrides,
-  refreshMonitor,
-  updateMonitor,
-  setMonitorAccount,
-} = useMonitor()
-onMounted(refreshMonitor)
-
-const monitorMaxAttempts = ref(3)
-const monitorResumeBufferMin = ref(10)
-watch(
-  monitorSettings,
-  (s) => {
-    if (s) {
-      monitorMaxAttempts.value = s.maxAttempts
-      monitorResumeBufferMin.value = s.resumeBufferMin
-    }
-  },
-  { immediate: true },
-)
-
-async function toggleMonitorEnabled(enabled: boolean) {
-  const ok = await updateMonitor({ enabled })
-  if (ok) {
-    toast.success(enabled ? t('settings.monitorToastEnabled') : t('settings.monitorToastDisabled'))
-  } else {
-    toast.error(t('settings.monitorToastFailed'))
-  }
-}
-async function saveMonitorSettings() {
-  const ok = await updateMonitor({
-    maxAttempts: Number(monitorMaxAttempts.value),
-    resumeBufferMin: Number(monitorResumeBufferMin.value),
-  })
-  if (!ok) toast.error(t('settings.monitorToastFailed'))
-}
-async function toggleMonitorAccount(accountId: string, enabled: boolean) {
-  const ok = await setMonitorAccount(accountId, enabled)
-  if (!ok) toast.error(t('settings.monitorToastFailed'))
-}
-function monitorAccountEnabled(accountId: string): boolean {
-  return monitorAccountOverrides.value[accountId] ?? true
-}
-
-const MONITOR_STATE_VARIANT: Record<MonitorStateName, BadgeVariant> = {
-  scheduled: 'info',
-  blocked_weekly: 'warning',
-  needs_human: 'destructive',
-  done: 'secondary',
-}
-const MONITOR_STATE_LABEL_KEY: Record<MonitorStateName, string> = {
-  scheduled: 'settings.monitorStateScheduled',
-  blocked_weekly: 'settings.monitorStateBlockedWeekly',
-  needs_human: 'settings.monitorStateNeedsHuman',
-  done: 'settings.monitorStateDone',
-}
-function monitorStateVariant(state: MonitorStateName): BadgeVariant {
-  return MONITOR_STATE_VARIANT[state] ?? 'secondary'
-}
-function monitorStateLabelKey(state: MonitorStateName): string {
-  return MONITOR_STATE_LABEL_KEY[state] ?? 'settings.monitorStateScheduled'
-}
-
-// The panel's footer Save button. Everything auto-saves as it changes; this flushes
-// the buffered forms (scheduler numbers, monitor numbers) and confirms the whole panel.
-async function save() {
-  await saveScheduler()
-  await saveMonitorSettings()
-  toast.success(t('settings.toastSaved'))
-}
-defineExpose({ save })
 </script>
 
 <template>
   <div class="mx-auto max-w-3xl space-y-6 overflow-y-auto p-6">
-    <!-- Two tabs: General, and Automation (scheduler + auto-resume monitor).
-         Sections carry a ref so a deep link (composer's tomorrow gear → 'scheduler') can flip
-         the tab and scroll straight to them. Both tabs stay MOUNTED (v-show) so watchers and
-         deep-link refs keep working on the hidden one. -->
-    <SettingsTabs v-model="settingsTab" :tabs="settingsTabs" />
-
-    <div v-show="settingsTab === 'general'" class="space-y-6">
-
     <!-- appearance -->
     <SettingsGroup :label="$t('settings.appearance')">
-      <!-- Theme + Shut down moved to icons in the settings panel header (App.vue). Show tooltips
-           and the transcript-editor override moved into the "Advanced" disclosure at the bottom of
-           this group (owner request), so Appearance leads with the everyday choices. -->
+      <!-- Theme + Shut down moved to icons in the settings panel header (App.vue). The transcript
+           editor, the copy-path format and the search index moved to the Sessions list's settings. -->
       <SettingsRow :icon="AppWindow" :label="$t('settings.portableModeLabel')">
         <template #info>
           <InfoHint :text="$t('settings.portableModeHint')" />
@@ -840,193 +589,14 @@ defineExpose({ save })
           <Switch :model-value="hideTrayIcon" @update:model-value="toggleHideTrayIcon" />
         </template>
       </SettingsRow>
-      <!-- Advanced disclosure (mirrors the Scheduler group): tooltips toggle + transcript-editor
-           override live here so the section leads with the everyday choices. -->
-      <SettingsRow
-        :icon="SlidersHorizontal"
-        :label="$t('settings.advanced')"
-        clickable
-        @click="appearanceAdvancedOpen = !appearanceAdvancedOpen"
-      >
+      <SettingsRow :icon="MessageCircleQuestion" :label="$t('settings.showTooltipsLabel')">
+        <template #info>
+          <InfoHint :text="$t('settings.showTooltipsHint')" />
+        </template>
         <template #control>
-          <ChevronDown
-            class="size-4 transition-transform duration-200"
-            :class="appearanceAdvancedOpen ? 'rotate-180' : ''"
-          />
+          <Switch v-model="showTooltips" />
         </template>
       </SettingsRow>
-      <ExpandTransition :open="appearanceAdvancedOpen">
-        <!-- divide-y restated on the direct wrapper: SettingsGroup draws its hairlines on the one
-             div wrapping its slot, and ExpandTransition inserts wrappers of its own, so without
-             this the rows inside render back-to-back with no separator. -->
-        <div class="divide-y divide-border/60">
-          <SettingsRow :icon="MessageCircleQuestion" :label="$t('settings.showTooltipsLabel')">
-            <template #info>
-              <InfoHint :text="$t('settings.showTooltipsHint')" />
-            </template>
-            <template #control>
-              <Switch v-model="showTooltips" />
-            </template>
-          </SettingsRow>
-          <!-- Transcript editor: auto-detect is right for nearly everyone (VS Code / Cursor /
-               Notepad++ / Sublime), so the path field is a nested disclosure the row states the
-               resolved editor and reveals the input only if you go looking for it. -->
-          <SettingsRow
-            :icon="FilePenLine"
-            :label="$t('settings.transcriptEditorLabel')"
-            clickable
-            @click="editorOpen = !editorOpen"
-          >
-            <template #info>
-              <InfoHint :text="$t('settings.transcriptEditorHint')" />
-            </template>
-            <template #control>
-              <span
-                class="max-w-44 truncate"
-                :class="editorOverrideIgnored ? 'text-warning' : ''"
-                :title="transcriptEditorResolved || undefined"
-              >
-                {{
-                  transcriptEditorResolved
-                    ? baseName(transcriptEditorResolved)
-                    : $t('settings.transcriptEditorPlaceholder')
-                }}
-              </span>
-              <Badge v-if="transcriptEditor.trim()" variant="secondary">
-                {{ $t('settings.transcriptEditorCustomBadge') }}
-              </Badge>
-              <ChevronDown
-                class="size-4 transition-transform duration-200"
-                :class="editorOpen ? 'rotate-180' : ''"
-              />
-            </template>
-          </SettingsRow>
-          <ExpandTransition :open="editorOpen">
-            <div class="space-y-1.5 px-3.5 pb-3.5 pt-1">
-              <Input
-                v-model="transcriptEditor"
-                type="text"
-                :placeholder="$t('settings.transcriptEditorPlaceholder')"
-                variant="mono"
-                class="w-full"
-                @change="saveTranscriptEditor"
-              />
-              <p
-                class="text-2xs"
-                :class="editorOverrideIgnored ? 'text-warning' : 'text-muted-foreground'"
-              >
-                {{
-                  editorOverrideIgnored
-                    ? $t('settings.transcriptEditorNotFound', { editor: baseName(transcriptEditorResolved) })
-                    : $t('settings.transcriptEditorResolved', { editor: baseName(transcriptEditorResolved) })
-                }}
-              </p>
-              <Button
-                v-if="transcriptEditor.trim()"
-                variant="ghost"
-                size="xs"
-                @click="resetTranscriptEditor"
-              >
-                <RotateCcw /> {{ $t('settings.transcriptEditorReset') }}
-              </Button>
-            </div>
-          </ExpandTransition>
-          <!-- Copying a session's file location. The preview is the control that matters: a
-               clipboard format described in prose is a format nobody can picture. -->
-          <SettingsRow
-            :icon="ClipboardCopy"
-            :label="$t('settings.copyPathLabel')"
-            clickable
-            @click="copyPathOpen = !copyPathOpen"
-          >
-            <template #info>
-              <InfoHint :text="$t('settings.copyPathHint')" />
-            </template>
-            <template #control>
-              <ChevronDown
-                class="size-4 transition-transform duration-200"
-                :class="copyPathOpen ? 'rotate-180' : ''"
-              />
-            </template>
-          </SettingsRow>
-          <ExpandTransition :open="copyPathOpen">
-            <div class="space-y-3 px-3.5 pb-3.5 pt-1">
-              <label class="flex items-center justify-between gap-3 text-sm">
-                {{ $t('settings.copyPathIncludeNameLabel') }}
-                <Switch v-model="copyPathIncludeName" />
-              </label>
-              <label class="flex items-center justify-between gap-3 text-sm">
-                {{ $t('settings.copyPathIncludePromptLabel') }}
-                <Switch v-model="copyPathIncludePrompt" />
-              </label>
-              <Input
-                v-model="copyPathPrompt"
-                type="text"
-                :disabled="!copyPathIncludePrompt"
-                :placeholder="$t('settings.copyPathPromptPlaceholder')"
-                :aria-label="$t('settings.copyPathPromptLabel')"
-                class="w-full"
-              />
-              <div>
-                <p class="mb-1 text-2xs text-muted-foreground">
-                  {{ $t('settings.copyPathPreviewLabel') }}
-                </p>
-                <pre class="overflow-x-auto rounded border border-border bg-muted/40 p-2 font-mono text-2xs leading-relaxed text-muted-foreground">{{ copyPathPreview }}</pre>
-              </div>
-            </div>
-          </ExpandTransition>
-
-          <!-- The search index is the one file AgentHydra puts on disk that the user did not ask
-               for, so it says how big it is and offers to remove it. It rebuilds itself from the
-               transcripts, which is why deleting is a plain button and not a confirmation dance. -->
-          <SettingsRow :icon="DatabaseZap" :label="$t('settings.searchIndexLabel')">
-            <template #info>
-              <InfoHint :text="$t('settings.searchIndexHint')" />
-            </template>
-            <template #description>
-              {{
-                searchIndex && searchIndex.exists
-                  ? $t('settings.searchIndexBuilt', {
-                      size: formatBytes(searchIndex.sizeBytes),
-                      n: searchIndex.sessions,
-                    })
-                  : $t('settings.searchIndexAbsent')
-              }}
-            </template>
-            <template #control>
-              <Button
-                v-if="searchIndex?.exists"
-                variant="outline"
-                size="xs"
-                :disabled="deletingSearchIndex"
-                @click="removeSearchIndex"
-              >
-                {{ $t('settings.searchIndexDelete') }}
-              </Button>
-            </template>
-          </SettingsRow>
-        </div>
-      </ExpandTransition>
-    </SettingsGroup>
-
-    <!-- provider surfaces: decide which installed tools and optional handoffs AgentHydra exposes -->
-    <SettingsGroup
-      :ref="(el: unknown) => setSectionEl('providers', el)"
-      :class="flashSection === 'providers' ? 'settings-flash' : ''"
-      :label="$t('settings.providersTitle')"
-      :description="$t('settings.providersHint')"
-    >
-      <!-- The rows themselves live in components/ProviderRows.vue. -->
-      <ProviderRows />
-    </SettingsGroup>
-
-    <SettingsGroup
-      :ref="(el: unknown) => setSectionEl('claude-native', el)"
-      :class="flashSection === 'claude-native' ? 'settings-flash' : ''"
-      :label="$t('settings.claudeNativeTitle')"
-      :description="$t('settings.claudeNativeHint')"
-    >
-      <ClaudeNativeSettings />
     </SettingsGroup>
 
     <!-- MCP: the agent-facing half of the app. On by default, because the alternative was a
@@ -1068,13 +638,6 @@ defineExpose({ save })
           {{ $t(updateApplying ? 'settings.mcpRepairing' : 'settings.mcpRepair') }}
         </Button>
       </div>
-    </SettingsGroup>
-
-    <!-- usage: keep the quota numbers warm.
-         Shared with the Instances tab's usage flyout for the same reason as Providers above — see
-         components/UsageRefreshRows.vue. -->
-    <SettingsGroup :label="$t('settings.usage')">
-      <UsageRefreshRows />
     </SettingsGroup>
 
     <!-- notifications: the quota EDGE, not the number. See server/src/reset-watch.ts.
@@ -1463,186 +1026,13 @@ defineExpose({ save })
       <p v-if="syncError" class="px-3.5 pb-2.5 text-xs text-destructive">{{ syncError }}</p>
     </SettingsGroup>
 
-    </div>
-
-    <div v-show="settingsTab === 'automation'" class="space-y-6">
-
-    <!-- scheduler (deep-link target: the queue drawer's indicator, the header chip and the
-         composer's tomorrow gear all scroll here).
-         The ref sits on the GROUP, not on a wrapper div — within this tab's own space-y-6
-         wrapper, groups must stay DIRECT children or they lose the margin between them, and
-         the landing flash must scope to the one section asked for. -->
-    <SettingsGroup
-      :ref="(el) => setSectionEl('scheduler', el)"
-      :label="$t('settings.scheduler')"
-      :description="$t('settings.schedulerHint')"
-      class="scroll-mt-4"
-      :class="flashSection === 'scheduler' ? 'settings-flash' : ''"
-    >
-      <!-- AH-12: AgentHydra never runs a chat nobody can see (headless-policy.ts) — the scheduler
-           exists solely to spawn those runs automatically, so it can never dispatch anything in
-           this build. Say so up front and disable the controls below with that reason, rather than
-           offer a toggle that would only fail moments after being flipped on. Mirrors QueueView /
-           QueueBuilder's AH-12 fix, both reading the same HEADLESS_QUEUEING_ENABLED flag. -->
-      <div v-if="!HEADLESS_QUEUEING_ENABLED" class="px-3.5 py-2.5 text-2xs text-warning">
-        {{ $t('settings.schedulerUnavailableHint') }}
-      </div>
-      <SettingsRow :icon="Power" :label="$t('settings.schedulerEnabledLabel')">
-        <template #control>
-          <span>
-            {{ scheduler?.running_count ?? 0 }} {{ $t('settings.running') }} ·
-            {{ scheduler?.queued_count ?? 0 }} {{ $t('settings.queued') }}
-          </span>
-          <Switch
-            :model-value="scheduler?.enabled ?? false"
-            :disabled="!HEADLESS_QUEUEING_ENABLED"
-            :title="!HEADLESS_QUEUEING_ENABLED ? $t('settings.schedulerUnavailableHint') : undefined"
-            @update:model-value="toggleScheduler"
-          />
-        </template>
-      </SettingsRow>
-      <!-- the composer's "Tomorrow …" quick option reads this time (its tiny gear lands here) -->
-      <SettingsRow :icon="CalendarClock" :label="$t('settings.tomorrowTimeLabel')">
-        <template #info>
-          <InfoHint :text="$t('settings.tomorrowTimeHint')" />
-        </template>
-        <template #control>
-          <Input
-            v-model="sched.tomorrow_time"
-            type="time"
-            class="w-28"
-            :disabled="!HEADLESS_QUEUEING_ENABLED"
-            :title="!HEADLESS_QUEUEING_ENABLED ? $t('settings.schedulerUnavailableHint') : undefined"
-            @change="saveScheduler"
-          />
-        </template>
-      </SettingsRow>
-      <SettingsRow
-        :icon="SlidersHorizontal"
-        :label="$t('settings.advanced')"
-        clickable
-        @click="schedAdvancedOpen = !schedAdvancedOpen"
-      >
-        <template #control>
-          <ChevronDown
-            class="size-4 transition-transform duration-200"
-            :class="schedAdvancedOpen ? 'rotate-180' : ''"
-          />
-        </template>
-      </SettingsRow>
-      <ExpandTransition :open="schedAdvancedOpen">
-        <div class="grid grid-cols-3 gap-3 px-3.5 pb-3.5 pt-2.5">
-          <div class="space-y-1.5">
-            <label class="text-xs font-medium text-muted-foreground">{{ $t('settings.spacingLabel') }}</label>
-            <Input v-model="sched.spacing_seconds" type="number" :disabled="!HEADLESS_QUEUEING_ENABLED" />
-          </div>
-          <div class="space-y-1.5">
-            <label class="text-xs font-medium text-muted-foreground">{{ $t('settings.pollLabel') }}</label>
-            <Input v-model="sched.poll_seconds" type="number" :disabled="!HEADLESS_QUEUEING_ENABLED" />
-          </div>
-          <div class="space-y-1.5">
-            <label class="text-xs font-medium text-muted-foreground">{{ $t('settings.maxConcurrentLabel') }}</label>
-            <Input v-model="sched.max_concurrent" type="number" :disabled="!HEADLESS_QUEUEING_ENABLED" />
-          </div>
-        </div>
-      </ExpandTransition>
-    </SettingsGroup>
-
-
-    <!-- auto-resume monitor -->
-    <SettingsGroup :label="$t('settings.monitorTitle')" :description="$t('settings.monitorHint')">
-      <SettingsRow :icon="RefreshCw" :label="$t('settings.monitorEnabledLabel')">
-        <template #control>
-          <Switch
-            :model-value="monitorSettings?.enabled ?? false"
-            @update:model-value="toggleMonitorEnabled"
-          />
-        </template>
-      </SettingsRow>
-
-      <!-- everything below only applies while the monitor is on: collapse it away when
-           it's off instead of leaving dead knobs on screen (owner request) -->
-      <ExpandTransition :open="monitorSettings?.enabled ?? false">
-        <!-- divide-y is restated here for the same reason the scheduler deep link avoids a wrapper
-             div: SettingsGroup draws its hairlines with divide-y on the one div that directly wraps
-             its slot, and ExpandTransition inserts two divs of its own. Everything in this
-             disclosure is therefore a single child to that container, so the per-account rows below
-             rendered back-to-back with no separator while structurally identical rows got one. -->
-        <div class="divide-y divide-border/60">
-          <!-- the tuning numbers are advanced, mirroring the Scheduler group's disclosure -->
-          <SettingsRow
-            :icon="SlidersHorizontal"
-            :label="$t('settings.advanced')"
-            clickable
-            @click="monitorAdvancedOpen = !monitorAdvancedOpen"
-          >
-            <template #control>
-              <ChevronDown
-                class="size-4 transition-transform duration-200"
-                :class="monitorAdvancedOpen ? 'rotate-180' : ''"
-              />
-            </template>
-          </SettingsRow>
-          <ExpandTransition :open="monitorAdvancedOpen">
-            <div class="grid grid-cols-2 gap-3 px-3.5 pb-3.5 pt-2.5">
-              <div class="space-y-1.5">
-                <label class="text-xs font-medium text-muted-foreground">{{ $t('settings.monitorMaxAttemptsLabel') }}</label>
-                <Input v-model="monitorMaxAttempts" type="number" min="1" />
-              </div>
-              <div class="space-y-1.5">
-                <label class="text-xs font-medium text-muted-foreground">{{ $t('settings.monitorBufferLabel') }}</label>
-                <Input v-model="monitorResumeBufferMin" type="number" min="0" />
-              </div>
-            </div>
-          </ExpandTransition>
-
-          <div
-            v-if="monitorStatus.length === 0"
-            class="flex items-center gap-1.5 px-3.5 py-2.5 text-xs italic text-muted-foreground"
-          >
-            {{ $t('settings.monitorEmpty') }}
-            <InfoHint :text="$t('settings.monitorEmptyHint')" />
-          </div>
-          <div v-else class="flex flex-col gap-2 px-3.5 py-2.5">
-            <div v-for="row in monitorStatus" :key="row.itemId" class="flex items-center gap-2 text-xs">
-              <Badge :variant="monitorStateVariant(row.state)">{{ $t(monitorStateLabelKey(row.state)) }}</Badge>
-              <!-- a stop we went and found on disk, vs one of our own runs we watched stop -->
-              <Badge v-if="row.discovered" variant="outline" :title="$t('settings.monitorDiscoveredHint')">
-                {{ $t('settings.monitorDiscovered') }}
-              </Badge>
-              <span class="min-w-0 flex-1 truncate text-foreground">{{ row.title ?? row.sessionId }}</span>
-              <span v-if="row.message" class="max-w-56 truncate text-muted-foreground">{{ row.message }}</span>
-              <span class="shrink-0 text-muted-foreground">
-                {{ $t('settings.monitorAttempts', { n: row.resumeAttempts }) }}
-              </span>
-            </div>
-          </div>
-
-          <template v-if="accounts.length > 0">
-            <p class="px-3.5 pt-2 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
-              {{ $t('settings.monitorAccountOverridesLabel') }}
-            </p>
-            <SettingsRow v-for="a in accounts" :key="a.id" :label="a.label">
-              <template #control>
-                <Switch
-                  :model-value="monitorAccountEnabled(a.id)"
-                  @update:model-value="(v: boolean) => toggleMonitorAccount(a.id, v)"
-                />
-              </template>
-            </SettingsRow>
-          </template>
-        </div>
-      </ExpandTransition>
-    </SettingsGroup>
-
-    </div>
-
     <!-- No Accounts group here anymore. It listed only LEGACY pasted credentials, which are
          nobody's normal path since accounts arrived by signing an instance in, so for almost
          everyone it rendered as a section whose entire content was "no accounts yet" above a
          note telling you to go to the Instances tab. A settings section that exists to redirect
          you elsewhere is a dead end, not a setting (owner request). The per-account monitor
-         overrides above still list accounts where they actually mean something, and DELETE
-         /api/accounts stays for the rare leftover credential. -->
+         overrides list accounts where they actually mean something, and DELETE
+         /api/accounts stays for the rare leftover credential. The monitor's per-account
+         switches moved with it to the queue drawer's scheduler settings. -->
   </div>
 </template>

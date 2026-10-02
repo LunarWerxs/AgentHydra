@@ -65,11 +65,20 @@ function isTyping(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
 }
 
+/** An open dialog, popover or menu: while one is up, the keyboard is its own. The settings and queue
+ *  side panels (data-slot=sidebar) are dialogs too, but they sit beside the page, not over it. */
+const OVERLAY_OPEN =
+  '[role=dialog][data-state=open]:not([data-slot=sidebar]), [role=alertdialog][data-state=open], [role=menu][data-state=open]'
+
 let installed = false
 function install(): void {
   if (installed || typeof window === 'undefined') return
   installed = true
   window.addEventListener('keydown', (e) => {
+    // The page's shortcuts stand down under an overlay. Escape is the one that bit: the Sessions
+    // page's Escape ran first and called preventDefault, and reka closes a dialog on Escape only
+    // when nothing prevented it, so no dialog on that page closed on Escape (2026-10-02).
+    if (document.querySelector(OVERLAY_OPEN)) return
     const chord = chordOf(e)
     const hit = registry.value.find((s) => s.keys === chord)
     if (!hit) return

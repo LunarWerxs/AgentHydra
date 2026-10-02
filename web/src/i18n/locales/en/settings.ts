@@ -1,8 +1,5 @@
 // SettingsView strings: scheduler controls and account credential management.
 export default {
-  // top-level tabs
-  tabGeneral: 'General',
-  tabAutomation: 'Automation',
   // appearance section
   appearance: 'Appearance',
   themeLabel: 'Theme',
@@ -64,7 +61,6 @@ export default {
   transcriptEditorReset: 'Back to auto-detect',
 
   // usage section
-  usage: 'Usage',
   usageAutoRefreshLabel: 'Auto-refresh usage',
   usageAutoRefreshHint:
     "Keep every instance's quota numbers up to date in the background, so the Instances table is never stale. Checking your quota does not use any of it, and each check takes about a third of a second, so this costs you nothing. Turn it off to only ever check when you click Refresh.",
@@ -116,9 +112,6 @@ export default {
   dshProviderHint: 'Show the DeepSeek Harness instances table.',
   // ⛔ THE ONLY SETTING ON THIS SCREEN THAT SPENDS QUOTA. Say so plainly: a toggle whose cost you
   // discover later is a toggle that should not have existed.
-  keepaliveLabel: 'Keep the 5-hour window running',
-  keepaliveHint:
-    'The 5-hour quota window only starts when an account is used, so an idle account makes you wait the full five hours from the moment you need it. This sends ONE throwaway prompt to any account whose window is not running, which costs a small amount of real quota each time. Off by default. It never touches an account whose window is already running.',
   keepaliveFloorLabel: 'Leave alone above (weekly %)',
   keepaliveFloorHint:
     'Accounts at or above this share of their WEEKLY cap are skipped. The weekly window is the one that matters. A 5-hour window refills the same day, so spending the last of a weekly allowance to start one is a bad trade. Set 0 to stop the keepalive spending on anything.',
@@ -186,6 +179,7 @@ export default {
   // actually dispatch anything in this build. Read alongside web/src/lib/headless.ts's
   // HEADLESS_QUEUEING_ENABLED, which is what the panel below branches on to disable these controls
   // rather than leave them offering a toggle that would only fail moments after flipping.
+  schedulerUnavailable: 'Can’t dispatch in this build.',
   schedulerUnavailableHint:
     'Disabled: the scheduler exists to automatically spawn real claude runs for queued items, but AgentHydra never runs a chat nobody can see, so it can never dispatch one in this build. Reply straight into the session’s own desktop chat, use fan_out from an MCP client, or import the session into a desktop app to get work done instead.',
   schedulerEnabledLabel: 'Enabled',
@@ -198,8 +192,6 @@ export default {
   spacingLabel: 'Spacing (s)',
   pollLabel: 'Poll (s)',
   maxConcurrentLabel: 'Max concurrent',
-  saveSettings: 'Save settings',
-  toastSaved: 'Settings saved.',
 
   // auto-resume monitor section
   monitorTitle: 'Auto-resume monitor',

@@ -1,7 +1,7 @@
 // server/src/extra-usage.ts - never let work on this machine's Claude accounts bill paid extra usage.
 //
-// The owner's rule (2026-09-30): paid extra usage is never spent unless Settings -> "Allow paid extra
-// usage" says so, and that is off by default. Some accounts have claude.ai "extra usage" switched on:
+// The owner's rule (2026-09-30): paid extra usage is never spent unless "Allow paid extra usage"
+// (the Instances tab's settings) says so, and that is off by default. Some accounts have claude.ai "extra usage" switched on:
 // past their 5-hour or weekly limit they keep answering and BILL, where every other account stops.
 // His words on the fix: "just don't allow it to go over... I would forcibly terminate it."
 //

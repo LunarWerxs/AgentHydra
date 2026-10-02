@@ -64,8 +64,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   warning before a destructive action stay visible.
 
 - **The CLI table's header is icons.** Login sync is a cloud; Keep windows running is a setting
-  behind the table's gear, on the page it affects; the "+ N on a desktop row" sentence beside the
-  title is now the hover text of the count.
+  behind the table's gear, on the page it affects, with its weekly floor beside it; the "+ N on a
+  desktop row" sentence beside the title is now the hover text of the count.
+
+- **Each page's settings live on that page.** The Instances tab has a gear for which tables it
+  shows, Allow paid extra usage and Claude native control. The Sessions list's ⋯ menu opens
+  Session settings: the transcript editor, what Copy session file location copies, the search
+  index and the ChatGPT handoff. The queue drawer's scheduler button (and the header's scheduler
+  chip) opens the scheduler and auto-resume settings, which were Settings' Automation tab; their
+  numbers save as soon as they lose focus. Usage auto-refresh stays in the Instances filter menu
+  only. The Settings panel keeps what belongs to the whole app (appearance, the MCP server,
+  notifications, updates, cloud sync), has no tabs, and lost its Save button: everything in it
+  saved as it changed already.
 
 - **What simulated visitors tripped on in the CLI tab** (a SUE round on `scripts/sue-demo`, the built
   app over invented data). While
@@ -74,8 +84,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   uses a pasted credential, so rows stop saying "No account" beside a name that is an email, and
   names get the room. A row's ⋮ menu names the account under its number. The Keep windows running
   switch is drawn once its setting is known, so it no longer flips by itself after the page loads.
-  Sortable headers in the instance tables are real buttons (the keyboard reaches them) with a faint
-  pair of arrows before they are clicked, and Tokens sorts biggest first. A login still arriving
+  Sortable headers in the instance tables are real buttons (the keyboard reaches them) that show a
+  faint pair of arrows on hover, and Tokens sorts biggest first. A login still arriving
   reads "On the way"; no count shows before the list has loaded; the weekly usage header says so
   beside the 5-hour one. Four rounds, four visitors each: 4.0, 4.0, 4.25, then 4.5 stars of 5.
 
@@ -117,7 +127,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The create button on an instance table no longer flickers under the pointer.** It widened on
   hover to show its label; in a full header that wrapped it onto the next line, out from under the
   pointer, so it shrank, came back and widened again many times a second. It is an icon with a
-  tooltip now, like the buttons beside it, on all four instance tables.
+  tooltip now, like the buttons beside it: on the CLI, Codex and DeepSeek tables, and on the
+  Instances tab's create menu, which had the same flicker.
+
+- **The Instances table no longer scrolls sideways at the normal window width.** The sort arrows
+  shown on every header, and the longer "Usage week" heading, made the narrow number columns wider
+  than their numbers, and the table overflowed its frame by 19 px. The idle arrows now sit in the
+  gap after the heading and take no width; the table fits in both column modes.
+
+- **Escape closes a dialog on the Sessions page again.** The page's own Escape shortcut (close
+  Find, clear the selection) ran first and marked the key as handled, and a dialog only closes on
+  an Escape nothing has handled, so the keyboard-shortcuts sheet and every other dialog there
+  stayed open and the session behind it was deselected. Page shortcuts now stand down while a
+  dialog, popover or menu is open.
 
 ## [1.5.0] - 2026-10-01
 

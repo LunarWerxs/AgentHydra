@@ -1,14 +1,9 @@
 <script setup lang="ts">
 // The "keep the quota numbers warm" rows — auto-refresh plus its interval.
 //
-// Extracted from SettingsView so the SAME markup can render in two places: the Settings panel
-// (where you go looking for it) and the Instances tab's usage flyout (where it actually applies).
-// A copy-paste of the rows would have been two things to keep in step; the underlying state is
-// already a singleton (useAppSettings), so the markup being shared is what makes the two surfaces
-// genuinely the same control rather than two controls that happen to agree.
-//
-// Renders bare SettingsRows with no wrapper, so the caller decides the container: a SettingsGroup
-// card in the panel, a divided block in the popover.
+// Lives in the Instances tab's filter menu, the page whose numbers it keeps fresh; it left the
+// Settings panel on 2026-10-01 (owner: a setting lives on the page it belongs to). Renders bare
+// SettingsRows with no wrapper, so the caller decides the container.
 import { Gauge, Timer } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'

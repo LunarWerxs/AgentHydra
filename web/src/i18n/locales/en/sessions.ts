@@ -1,5 +1,6 @@
 // Sessions view — session list, search/filter, and transcript detail pane.
 export default {
+  settingsTitle: 'Session settings',
   searchPlaceholder: 'Search sessions…',
   refresh: 'Refresh',
   noSessionsFound: 'No sessions found.',

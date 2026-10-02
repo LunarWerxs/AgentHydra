@@ -1,6 +1,7 @@
 // Instances view — sortable instance table, toolbar, row actions, create dialog.
 export default {
   title: 'Instances',
+  settingsTitle: 'Instances settings',
   refresh: 'Refresh',
   refreshHint: 'Reload every instance list and re-check the Claude Desktop install',
   createInstance: 'Create instance',

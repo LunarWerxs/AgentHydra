@@ -679,7 +679,13 @@ app.post('/api/notifications/test', async (c) => c.json(await sendTestNotificati
 // this API.
 app.post('/api/chatgpt/context-pack', async (c) => {
   if (!getProviderSettings().chatGptHandoffEnabled)
-    return c.json({ error: 'ChatGPT handoff is disabled in Settings → Providers.' }, 403)
+    return c.json(
+      {
+        error:
+          'ChatGPT handoff is off. Turn it on in Session settings (the ⋯ menu above the Sessions list).',
+      },
+      403,
+    )
   const body = await jsonBody(c)
   if (typeof body.cwd !== 'string' || !body.cwd.trim())
     return c.json({ error: 'cwd is required' }, 400)
@@ -1388,7 +1394,7 @@ startCliMayte()
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading
 // your quota does not consume it — so keeping the numbers warm costs essentially nothing. Toggle in
-// Settings → Usage.
+// the Instances tab's filter menu.
 startUsageRefresh()
 // Login sync between the owner's PCs (core/cli-login-sync.ts): idle until set up.
 startLoginSync()

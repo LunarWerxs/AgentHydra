@@ -22,7 +22,7 @@ const { queue, scheduler, refreshScheduler, schedulerStatus } = useData()
 // for a single boolean: you left the screen you were on, a settings page scrolled and flashed a
 // row at you, and the thing you actually wanted was one switch. The switch is here now; only the
 // advanced tuning (spacing / poll / concurrency) still lives in Settings, and this links to it.
-const { openSettingsTab } = usePanels()
+const { openAutomation } = usePanels()
 const open = ref(false)
 const toggling = ref(false)
 
@@ -38,7 +38,7 @@ async function setEnabled(next: boolean) {
 
 function openAdvanced() {
   open.value = false
-  openSettingsTab('scheduler')
+  openAutomation()
 }
 
 // Local clock so the "next in 4m 12s" text ticks every second, not only on the 2s queue poll.
@@ -179,7 +179,7 @@ const tone = computed(() => {
               @update:model-value="setEnabled"
             />
           </div>
-          <!-- Only the rarely-touched numeric knobs still justify the trip to Settings. -->
+          <!-- The numbers, and auto-resume, are in the queue's automation settings. -->
           <Button variant="ghost" size="xs" class="mt-2 w-full justify-start" @click="openAdvanced()">
             <SlidersHorizontal class="size-3.5" /> {{ $t('scheduler.advancedLink') }}
           </Button>

@@ -38,6 +38,7 @@ import {
   PanelLeftOpen,
   RefreshCw,
   Search,
+  Settings2,
   SlidersHorizontal,
   SquareTerminal,
   UserRound,
@@ -46,7 +47,9 @@ import {
 } from '@lucide/vue'
 import { useMediaQuery } from '@vueuse/core'
 import { type ComponentPublicInstance, computed, ref, watch } from 'vue'
+import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
 import SessionComposer, { type ComposerTarget } from '@/components/SessionComposer.vue'
+import SessionSettings from '@/components/SessionSettings.vue'
 import SessionTranscriptTurns from '@/components/SessionTranscriptTurns.vue'
 import SourceBadge from '@/components/SourceBadge.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -222,6 +225,20 @@ watch(selectedId, () => {
 })
 
 /** The sidebar's own filter box, so Ctrl/Cmd+K can put the caret in it. */
+/** The ⋯ menu's Session settings dialog (SessionSettings.vue). It opens once the menu has closed
+ *  and handed focus back: opened in the same tick, it came up while the menu's layer was still the
+ *  top one, and Escape never reached it. */
+const sessionSettingsOpen = ref(false)
+let settingsAfterMenu = false
+function openSettingsAfterMenu() {
+  settingsAfterMenu = true
+}
+function onListMenuClosed(event: Event) {
+  if (!settingsAfterMenu) return
+  settingsAfterMenu = false
+  event.preventDefault()
+  sessionSettingsOpen.value = true
+}
 const searchInput = ref<ComponentPublicInstance | null>(null)
 
 // This view's own bindings, registered through the shared layer (composables/useShortcuts.ts) so
@@ -623,7 +640,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <MoreHorizontal />
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" class="max-w-56">
+                <DropdownMenuContent align="end" class="max-w-56" @close-auto-focus="onListMenuClosed">
                   <DropdownMenuItem @select="refreshSessions">
                     <RefreshCw :class="sessionsLoading ? 'animate-spin' : ''" />
                     {{ $t('sessions.refresh') }}
@@ -815,10 +832,20 @@ function onComposerSent(mode: 'now' | 'queued') {
                       </span>
                     </DropdownMenuItem>
                   </template>
+                  <!-- This list's own settings (SessionSettings.vue): an item here rather than a gear
+                       beside the menu, which would take the search field's width again. -->
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem @select="openSettingsAfterMenu">
+                    <Settings2 />
+                    {{ $t('sessions.settingsTitle') }}
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </span>
           </IconTooltip>
+          <PageSettingsDialog v-model:open="sessionSettingsOpen" :title="$t('sessions.settingsTitle')">
+            <SessionSettings />
+          </PageSettingsDialog>
         </div>
 
         <div

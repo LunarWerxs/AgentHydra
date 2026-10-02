@@ -1,4 +1,5 @@
 export default {
+  automationTitle: 'Scheduler and auto-resume',
   title: 'Run queue',
   // AH-12: dispatching (Run, Run Due, the scheduler) is disabled by policy — AgentHydra never
   // runs a chat nobody can see — so this now describes the queue as a history/editing view rather
@@ -11,9 +12,8 @@ export default {
     'it into a desktop app.',
   schedulerOnLabel: 'Scheduler on',
   schedulerOffLabel: 'Scheduler off',
-  schedulerOnHint: 'Queued items dispatch automatically. Toggle it in Settings → Scheduler.',
-  schedulerOffHint:
-    'Nothing runs by itself. Press Run on an item, or enable the scheduler in Settings.',
+  schedulerOnHint: 'Queued items dispatch automatically.',
+  schedulerOffHint: 'Nothing runs by itself. Press Run on an item, or turn the scheduler on.',
   schedulerClickHint: 'Click to open the scheduler settings',
   newRun: 'New run',
   itemsCount: '{n} item(s)',

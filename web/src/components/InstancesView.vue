@@ -43,8 +43,10 @@ import InstanceGlyph from '@/components/InstanceGlyph.vue'
 import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
+import InstanceSettings from '@/components/InstanceSettings.vue'
 import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
+import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
 import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
 import SortButton from '@/components/SortButton.vue'
@@ -495,6 +497,8 @@ interface ProviderRowsHandle {
   refresh?: () => unknown
   visibleCount?: number
 }
+/** The gear's dialog: this tab's own settings (InstanceSettings.vue). */
+const instanceSettingsOpen = ref(false)
 const codexRows = ref<ProviderRowsHandle | null>(null)
 const dshRows = ref<ProviderRowsHandle | null>(null)
 
@@ -1141,35 +1145,39 @@ onUnmounted(() => {
             <Gauge :class="refreshingAllUsage ? 'animate-pulse' : ''" />
           </Button>
         </IconTooltip>
-        <!-- Create: the header's plus pill, now a menu with one item per provider switched on in
-             Settings. Same look (Plus at rest, label on hover), but no tooltip wrapper: nesting a
-             TooltipTrigger around a DropdownMenuTrigger swallows the click (see the row kebab). -->
-        <DropdownMenu v-if="createProviders.length > 0">
-          <DropdownMenuTrigger as-child>
-            <Button
-              size="sm"
-              class="group/create overflow-hidden"
-              :aria-label="$t('instances.createInstance')"
-            >
-              <span class="inline-flex items-center">
-                <Plus class="shrink-0" />
-                <span
-                  class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-36 group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-36 group-focus-visible/create:opacity-100"
-                >{{ $t('instances.createInstance') }}</span>
-              </span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              v-for="provider in createProviders"
-              :key="provider"
-              @click="onCreateFor(provider)"
-            >
-              <ProviderLogo :provider="provider" class="size-3.5" />
-              {{ $t(CREATE_LABEL[provider]) }}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <PageSettingsDialog
+          v-model:open="instanceSettingsOpen"
+          trigger
+          :title="$t('instances.settingsTitle')"
+        >
+          <InstanceSettings />
+        </PageSettingsDialog>
+        <!-- Create: a menu with one item per provider switched on. An icon with a tooltip like its
+             neighbours: it used to widen on hover to show its label, which in a full row wrapped
+             it out from under the pointer, so it flickered (owner, 2026-10-01). The DropdownMenu
+             root sits INSIDE the tooltip's slot, wrapped in a span: see
+             scripts/checks/reka-popper-root-inside-tooltip.mjs. -->
+        <IconTooltip v-if="createProviders.length > 0" :label="$t('instances.createInstance')">
+          <span class="inline-flex">
+            <DropdownMenu>
+              <DropdownMenuTrigger as-child>
+                <Button size="icon" :aria-label="$t('instances.createInstance')">
+                  <Plus />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  v-for="provider in createProviders"
+                  :key="provider"
+                  @click="onCreateFor(provider)"
+                >
+                  <ProviderLogo :provider="provider" class="size-3.5" />
+                  {{ $t(CREATE_LABEL[provider]) }}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        </IconTooltip>
       </template>
     </InstanceSectionHeader>
 

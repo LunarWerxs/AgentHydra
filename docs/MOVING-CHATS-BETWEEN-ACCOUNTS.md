@@ -1,7 +1,7 @@
 # Moving chats between accounts
 
 Claude Desktop archive and migration-source cleanup now prefer the production native
-connection. Enable **Settings → General → Claude native control → Start debugger automatically**
+connection. Enable **Instances tab → gear (Instances settings) → Claude native control → Start debugger automatically**
 per profile, then use AgentHydra **Open** when that closed account is needed. The debugger starts
 on that launch without menus; saving settings does not restart an active desktop. New profiles
 need their own setting. See the [native-control operating guide](CLAUDE-DESKTOP-NATIVE-CONTROL.md)

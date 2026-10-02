@@ -58,6 +58,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
@@ -502,6 +503,10 @@ async function onKeepaliveSwitch(value: boolean) {
       void refreshCliInstances({ silent: true })
     }, 15_000)
 }
+async function onKeepaliveFloor(value: string | number) {
+  if (!(await updateSettings({ keepaliveWeeklyFloorPct: Number(value) })))
+    toast.error(t('cliInstances.keepaliveSaveFailed'))
+}
 /** A row's nudge note: shown while the window a nudge started still runs, or for six hours after a
  *  nudge that did not start one (it is tried again after an hour; the note says why it failed). */
 function nudgeNote(inst: CliInstance): { ok: boolean; label: string; description: string } | null {
@@ -649,6 +654,21 @@ onUnmounted(() => {
                   <InfoHint
                     :text="$t('cliInstances.keepaliveSwitchHint', { floor: keepaliveWeeklyFloorPct })"
                   />
+                </div>
+                <!-- Its one number, here with it (it was in the Settings panel's Providers section). -->
+                <div v-if="settingsLoaded && keepaliveEnabled" class="mt-2 flex items-center gap-1.5 text-xs">
+                  <label class="flex min-w-0 flex-1 items-center justify-between gap-3">
+                    {{ $t('settings.keepaliveFloorLabel') }}
+                    <Input
+                      class="w-16"
+                      type="number"
+                      min="0"
+                      max="100"
+                      :model-value="keepaliveWeeklyFloorPct"
+                      @update:model-value="onKeepaliveFloor"
+                    />
+                  </label>
+                  <InfoHint :text="$t('settings.keepaliveFloorHint')" />
                 </div>
               </PopoverContent>
             </Popover>

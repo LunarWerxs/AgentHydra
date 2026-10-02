@@ -95,8 +95,8 @@ From an agent, the same three are `orchestrator_menu`, `orchestrator_loop` and
 orchestrator <script>` from the repo root is the shell equivalent.
 
 For Claude Desktop archive and migration-source cleanup, use the production scripts: they
-attempt the exact-profile native route before the legacy actuator. Enable **Settings → General
-→ Claude native control → Start debugger automatically** for each profile, or configure
+attempt the exact-profile native route before the legacy actuator. Enable **Instances tab → gear
+(Instances settings) → Claude native control → Start debugger automatically** for each profile, or configure
 `launchDebugger:true` through `/api/claude-native/settings`. The next AgentHydra **Open** starts
 the connection without a Developer-menu click; saving settings does not restart active apps.
 Use `native-only` when UI fallback is unwanted. Refused or uncertain native mutations never

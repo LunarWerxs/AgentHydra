@@ -6,10 +6,14 @@ import { ref, watch } from 'vue'
 const settingsOpen = ref(false)
 const queueOpen = ref(false)
 
-// One-shot deep link into the settings panel: set by openSettingsTab(), consumed (and
-// cleared) by SettingsView so the panel lands on the requested tab whether it was
-// already open or is mounting fresh.
+// One-shot deep link into the settings panel (the header's update dot): set by openSettingsTab(),
+// consumed (and cleared) by SettingsView so the panel lands on the requested section whether it
+// was already open or is mounting fresh.
 const settingsRequestedTab = ref<string | null>(null)
+
+// The run queue's automation settings (AutomationSettings.vue, in the one dialog App.vue mounts):
+// the scheduler and the auto-resume monitor, opened from the queue drawer and the header chip.
+const automationOpen = ref(false)
 
 watch(settingsOpen, (open) => {
   if (open) queueOpen.value = false
@@ -23,6 +27,17 @@ function openSettingsTab(tab: string) {
   settingsOpen.value = true
 }
 
+function openAutomation() {
+  automationOpen.value = true
+}
+
 export function usePanels() {
-  return { settingsOpen, queueOpen, settingsRequestedTab, openSettingsTab }
+  return {
+    settingsOpen,
+    queueOpen,
+    settingsRequestedTab,
+    openSettingsTab,
+    automationOpen,
+    openAutomation,
+  }
 }

@@ -2,7 +2,7 @@
 
 For everyday operations, use the production archive/migration scripts or AgentHydra's
 `desktop-archive` route. Native archive and migration-source cleanup are integrated there.
-Enable **Settings → General → Claude native control → Start debugger automatically** per
+Enable **Instances tab → gear (Instances settings) → Claude native control → Start debugger automatically** per
 profile (API: `launchDebugger:true` in `/api/claude-native/settings`), then use AgentHydra
 Open when that closed account is needed. No Developer-menu activation is required. See the
 [operating guide](../../docs/CLAUDE-DESKTOP-NATIVE-CONTROL.md) for exact-profile requests,

@@ -22,7 +22,7 @@ import InfoHint from '@/shell/InfoHint.vue'
 const { t } = useI18n()
 const { queue, queueLoaded, queueStatus, accounts, scheduler, refreshQueue } = useData()
 const { openBuilder, openEditor } = useBuilder()
-const { openSettingsTab } = usePanels()
+const { openAutomation } = usePanels()
 // Run-as resolution mirrors QueueBuilder's accountOptions: an item pinned to a signed-in
 // instance ('desktop:<dir>' / 'cli:<id>') resolves through these live lists; a bare uuid is the
 // legacy sqlite accounts fallback. Refresh here too (silent) — these singletons only
@@ -176,8 +176,8 @@ async function clearFinished() {
       <div class="flex items-center gap-2">
         <!-- scheduler state at a glance: an icon (not a text pill), state + meaning on hover.
              A button, not a span: this indicator is where people NOTICE the scheduler is off, so
-             it should also be the way to go fix it. Deep-links to Settings → Scheduler, which
-             pulses on arrival so the landing spot is obvious. -->
+             it should also be the way to go fix it. Opens the scheduler and auto-resume
+             settings (AutomationSettings.vue). -->
         <IconTooltip
           :label="scheduler?.enabled ? $t('queue.schedulerOnLabel') : $t('queue.schedulerOffLabel')"
           :description="schedulerTooltip"
@@ -187,7 +187,7 @@ async function clearFinished() {
             class="inline-flex size-6 items-center justify-center rounded-md transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
             :class="scheduler?.enabled ? 'text-success' : 'text-muted-foreground'"
             :aria-label="scheduler?.enabled ? $t('queue.schedulerOnLabel') : $t('queue.schedulerOffLabel')"
-            @click="openSettingsTab('scheduler')"
+            @click="openAutomation()"
           >
             <Power v-if="scheduler?.enabled" class="size-3.5" />
             <PowerOff v-else class="size-3.5" />

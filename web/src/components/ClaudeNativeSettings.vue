@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ChevronDown, Info, Monitor, Plug, RefreshCw } from '@lucide/vue'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -13,7 +13,6 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { useInstances } from '@/composables/useInstances'
-import { usePanels } from '@/composables/usePanels'
 import {
   type ClaudeNativeSettings,
   getClaudeNativeSettings,
@@ -30,7 +29,6 @@ import SettingsRow from '@/shell/SettingsRow.vue'
 
 const { t } = useI18n()
 const { instances, refreshInstances } = useInstances()
-const { settingsOpen } = usePanels()
 const settings = ref<ClaudeNativeSettings>({})
 const selectedProfile = ref('')
 const loading = ref(false)
@@ -122,10 +120,8 @@ async function save(automatic: boolean | null) {
   }
 }
 
+// Mounted each time the Instances settings dialog opens, so this reads fresh settings every time.
 onMounted(load)
-watch(settingsOpen, (open) => {
-  if (open) void load()
-})
 </script>
 
 <template>

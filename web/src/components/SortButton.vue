@@ -12,7 +12,7 @@ const emit = defineEmits<{ sort: [] }>()
 <template>
   <button
     type="button"
-    class="inline-flex cursor-pointer select-none items-center gap-0.5 rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:opacity-70"
+    class="group/sort relative inline-flex cursor-pointer select-none items-center gap-0.5 rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:opacity-70"
     @click="emit('sort')"
   >
     <slot />

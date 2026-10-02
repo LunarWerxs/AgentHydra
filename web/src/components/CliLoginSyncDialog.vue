@@ -158,31 +158,32 @@ async function copyPairing() {
 }
 
 type Login = CliLoginSyncStatus['logins'][number]
-const NOTE_KEY: Record<NonNullable<Login['note']>, string> = {
-  own: 'cliInstances.syncStateOwn',
-  waiting: 'cliInstances.syncStateWaiting',
-  fed: 'cliInstances.syncStateFed',
+const NOTE_KEY: Record<NonNullable<Login['note']>, [string, string]> = {
+  own: ['cliInstances.syncStateOwn', 'cliInstances.syncStateOwnHint'],
+  waiting: ['cliInstances.syncStateWaiting', 'cliInstances.syncStateWaitingHint'],
+  fed: ['cliInstances.syncStateFed', 'cliInstances.syncStateFedHint'],
 }
 /** A row's state: a word or two on the row, the sentence behind it on hover. Left out first (it is
  *  what the row's switch says), then what sync leaves alone by design, then a real error. */
 function stateOf(l: Login): { label: string; title: string; bad: boolean } {
-  const plain = (key: string) => ({ label: t(key), title: t(`${key}Hint`), bad: false })
-  if (l.excluded) return plain('cliInstances.syncStateOut')
-  if (l.note) return plain(NOTE_KEY[l.note])
+  // The hint key is spelled out, not built from the label's, so the i18n check sees it used.
+  const plain = (key: string, hint: string) => ({ label: t(key), title: t(hint), bad: false })
+  if (l.excluded) return plain('cliInstances.syncStateOut', 'cliInstances.syncStateOutHint')
+  if (l.note) return plain(...NOTE_KEY[l.note])
   if (l.problem) return { label: t('cliInstances.syncStateProblem'), title: l.problem, bad: true }
-  if (l.inSync) return plain('cliInstances.syncStateInSync')
+  if (l.inSync) return plain('cliInstances.syncStateInSync', 'cliInstances.syncStateInSyncHint')
   // While sync runs, a login that is not there yet is on its way; the row says which way on hover.
   // "Only in the store" on every row right after a join read as "did it work or not?".
   const coming = status.value?.enabled ? 'cliInstances.syncStateOnTheWay' : null
   if (l.inStore && !l.here)
     return coming
       ? { label: t(coming), title: t('cliInstances.syncStateStoreOnlyHint'), bad: false }
-      : plain('cliInstances.syncStateStoreOnly')
+      : plain('cliInstances.syncStateStoreOnly', 'cliInstances.syncStateStoreOnlyHint')
   if (l.here && !l.inStore)
     return coming
       ? { label: t(coming), title: t('cliInstances.syncStateHereOnlyHint'), bad: false }
-      : plain('cliInstances.syncStateHereOnly')
-  return plain('cliInstances.syncStatePending')
+      : plain('cliInstances.syncStateHereOnly', 'cliInstances.syncStateHereOnlyHint')
+  return plain('cliInstances.syncStatePending', 'cliInstances.syncStatePendingHint')
 }
 /** The desktop sentence is only for someone who has a desktop login in the list. */
 const hasDesktop = computed(() => rows.value.some((r) => r.login.kind === 'desktop'))

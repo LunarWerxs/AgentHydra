@@ -16,8 +16,10 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AnalyticsView from '@/components/AnalyticsView.vue'
+import AutomationSettings from '@/components/AutomationSettings.vue'
 import CliView from '@/components/CliView.vue'
 import InstancesView from '@/components/InstancesView.vue'
+import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
 import QueueBuilder from '@/components/QueueBuilder.vue'
 import QueueView from '@/components/QueueView.vue'
 import SchedulerStatus from '@/components/SchedulerStatus.vue'
@@ -122,7 +124,7 @@ useShortcuts([
 ])
 
 // settings + queue share the right edge; usePanels keeps them mutually exclusive
-const { settingsOpen, queueOpen, openSettingsTab } = usePanels()
+const { settingsOpen, queueOpen, openSettingsTab, automationOpen } = usePanels()
 // The passive "a newer version exists" signal — see the dot on the Settings button below.
 const {
   updateAvailable,
@@ -171,15 +173,6 @@ const { side, shiftPx, widthPx } = usePushPanel(anyPanelOpen, {
   widthPx: 480,
   shellMaxWidth: () => (wide.value ? SHELL_WIDE_MAX : SHELL_BASE_MAX),
 })
-
-// Everything in Settings auto-saves; the footer button flushes the one buffered
-// form (scheduler numbers) and gives the reassuring "saved" moment people expect.
-// (Typed structurally, not via InstanceType<typeof SettingsView>: a type-position-only
-// reference makes biome demote the import to type-only, unmounting the component.)
-const settingsView = ref<{ save: () => Promise<void> } | null>(null)
-function saveSettings() {
-  settingsView.value?.save()
-}
 
 // --- settings-panel header controls: theme picker + shut down (moved out of the Appearance
 // section into icons beside the panel's ✕, owner request) ---------------------------------------
@@ -466,13 +459,16 @@ onUnmounted(stopAvailabilityPolling)
           </Button>
         </div>
       </template>
-      <SettingsView ref="settingsView" />
-      <template #footer>
-        <div class="flex justify-end">
-          <Button size="sm" @click="saveSettings">{{ $t('settings.saveSettings') }}</Button>
-        </div>
-      </template>
+      <!-- No Save button: every setting saves as it changes. The footer's button only flushed the
+           scheduler's numbers, which moved to the queue's automation settings and save on blur. -->
+      <SettingsView />
     </Sidebar>
+
+    <!-- The queue's scheduler and auto-resume settings, opened from the queue drawer and the
+         header's scheduler chip (usePanels.openAutomation). -->
+    <PageSettingsDialog v-model:open="automationOpen" :title="$t('queue.automationTitle')">
+      <AutomationSettings />
+    </PageSettingsDialog>
 
     <!-- close-button: vue-sonner defaults it OFF, which left every toast in the app dismissable
          only by waiting it out or clicking its body. The plain ones showed it worst — an

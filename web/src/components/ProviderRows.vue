@@ -1,33 +1,16 @@
 <script setup lang="ts">
-// Provider surfaces: which installed tools AgentHydra exposes, and the one optional handoff.
-//
-// Extracted from SettingsView for the same reason as UsageRefreshRows: five of these switches
-// decide which TABLES the Instances tab draws, so they belong on that tab's toolbar as much as they
-// belong in Settings. Shared markup over the shared useAppSettings singleton means both surfaces
-// are the same control, not two that have to be kept in step.
-//
-// `showHandoff` is off in the toolbar flyout: the ChatGPT handoff is a button in the session
-// composer, not a section of the instances tab, and listing it beside five table toggles would say
-// it hides a table too.
-import {
-  AppWindow,
-  CreditCard,
-  Gauge,
-  MessageCircleQuestion,
-  Monitor,
-  Terminal,
-  Timer,
-} from '@lucide/vue'
+// Which tables the Instances tab draws: Claude desktop and CLI, Codex desktop and CLI, DeepSeek.
+// Rendered in the Instances tab's own settings (InstanceSettings.vue), the page these switches
+// change. The ChatGPT handoff moved to the Sessions list's settings, Keep windows running to the
+// CLI table's gear, and paid extra usage beside these in InstanceSettings.
+import { AppWindow, Monitor, Terminal } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useAppSettings } from '@/composables/useAppSettings'
 import type { ProviderSettings, UsageSettings } from '@/lib/api'
 import InfoHint from '@/shell/InfoHint.vue'
 import SettingsRow from '@/shell/SettingsRow.vue'
-
-withDefaults(defineProps<{ showHandoff?: boolean }>(), { showHandoff: true })
 
 const { t } = useI18n()
 const {
@@ -36,10 +19,6 @@ const {
   codexDesktopEnabled,
   codexCliEnabled,
   dshEnabled,
-  chatGptHandoffEnabled,
-  keepaliveEnabled,
-  keepaliveWeeklyFloorPct,
-  allowExtraUsage,
   update: updateAppSettings,
 } = useAppSettings()
 
@@ -106,73 +85,6 @@ async function patchProvider(value: Partial<ProviderSettings>) {
       <Switch
         :model-value="dshEnabled"
         @update:model-value="(v: boolean) => patchProvider({ dshEnabled: v })"
-      />
-    </template>
-  </SettingsRow>
-  <SettingsRow
-    v-if="showHandoff"
-    :icon="MessageCircleQuestion"
-    :label="$t('settings.chatGptHandoffLabel')"
-  >
-    <template #info>
-      <InfoHint :text="$t('settings.chatGptHandoffHint')" />
-    </template>
-    <template #control>
-      <Switch
-        :model-value="chatGptHandoffEnabled"
-        @update:model-value="(v: boolean) => patchProvider({ chatGptHandoffEnabled: v })"
-      />
-    </template>
-  </SettingsRow>
-
-  <!-- ⛔ THE ONE SWITCH ON THIS SCREEN THAT SPENDS MONEY. Everything else here shows or hides
-       something; this sends a real turn to an idle account to get its 5-hour clock running. The
-       hint says so in as many words, because a toggle that quietly costs quota is the kind of
-       thing you should never discover from a bill. -->
-  <SettingsRow :icon="Timer" :label="$t('settings.keepaliveLabel')">
-    <template #info>
-      <InfoHint :text="$t('settings.keepaliveHint')" />
-    </template>
-    <template #control>
-      <Switch
-        :model-value="keepaliveEnabled"
-        @update:model-value="(v: boolean) => patchProvider({ keepaliveEnabled: v })"
-      />
-    </template>
-  </SettingsRow>
-  <SettingsRow
-    v-if="keepaliveEnabled"
-    :icon="Gauge"
-    :label="$t('settings.keepaliveFloorLabel')"
-  >
-    <template #info>
-      <InfoHint :text="$t('settings.keepaliveFloorHint')" />
-    </template>
-    <template #control>
-      <Input
-        class="w-20"
-        type="number"
-        min="0"
-        max="100"
-        :model-value="keepaliveWeeklyFloorPct"
-        @update:model-value="
-          (v: string | number) => patchProvider({ keepaliveWeeklyFloorPct: Number(v) })
-        "
-      />
-    </template>
-  </SettingsRow>
-
-  <!-- ⛔ SPENDS MONEY, NOT JUST QUOTA. Some Claude accounts keep working past their 5-hour limit on
-       paid extra usage (usage credits). Off by default: nothing AgentHydra manages may bill it -
-       CliMayte moves a task first, and the guard stops any session on an account that could bill. -->
-  <SettingsRow :icon="CreditCard" :label="$t('settings.extraUsageLabel')">
-    <template #info>
-      <InfoHint :text="$t('settings.extraUsageHint')" />
-    </template>
-    <template #control>
-      <Switch
-        :model-value="allowExtraUsage"
-        @update:model-value="(v: boolean) => patchProvider({ allowExtraUsage: v })"
       />
     </template>
   </SettingsRow>
