@@ -16,6 +16,7 @@ import {
 import { firstLine } from './climayte-journal'
 import { launch } from './climayte-launch'
 import {
+  accountInUse,
   type CliMayteAccount,
   type CliMayteWorker,
   isLoginWall,
@@ -275,6 +276,14 @@ function noAccountReason(
     return 'None of the accounts this task may use is signed in. Sign one in: CLI instances, Quick add (type its email).'
   if (allSignedOut)
     return 'Every CLI account is signed out. Sign one in again: CLI instances, Quick add (type its email).'
+  const inUse = allowed
+    .filter(accountInUse)
+    .map(
+      (a) =>
+        `${acctLabel(a)} (${a.handsOnAgoMs != null ? `its desktop app used ${Math.round(a.handsOnAgoMs / 60_000)} min ago` : `${a.otherSessions} other session${a.otherSessions === 1 ? '' : 's'} running`})`,
+    )
+  if (inUse.length)
+    return `Waiting for an account nobody else is using: ${inUse.join(', ')}; the others are at their limit or signed out. It starts when one frees up.`
   return `Every eligible account is at its usage limit, past the ${WIND_DOWN_SESSION_PCT}% stop line, or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.`
 }
 

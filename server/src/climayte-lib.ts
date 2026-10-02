@@ -208,6 +208,18 @@ export interface CliMayteAccount {
   sessionResetsAt?: number | null
   /** When the 7-day window `weekPct` was read from resets (epoch ms); null when unknown. */
   weekResetsAt?: number | null
+  /** Someone else is on this account now (climayte-core.ts signedInAccounts): how long ago a hand
+   *  used its desktop app (core/hands-on.ts; null: not in the last ten minutes), and how many Claude
+   *  sessions that are not CliMayte's run in its folder. */
+  handsOnAgoMs?: number | null
+  otherSessions?: number
+}
+
+/** Someone else's account right now (owner, 2026-10-02: CliMayte must not "step on the toes of
+ *  other accounts running"): a person used its desktop app in the last ten minutes, or Claude
+ *  sessions that are not CliMayte's run in its folder, the calling chat's own among them. */
+export function accountInUse(a: CliMayteAccount): boolean {
+  return a.handsOnAgoMs != null || (a.otherSessions ?? 0) > 0
 }
 
 /** `cred` (signed-out walls only): the mtime of the account's `.credentials.json` when it was
@@ -1076,6 +1088,9 @@ export function pickAccount(
   // reading was four hours old, it counted as half full and roomy, and one tick sent it four tasks;
   // all four failed sign-in together.
   const unread = (a: CliMayteAccount): boolean => a.sessionPct === null && load(a) > 0
+  // New work goes around an account someone else is using; a session already living there carries
+  // on (its home), and a task that names the account is a person's word.
+  const named = (a: CliMayteAccount): boolean => !!worker.accounts?.includes(a.id)
   const eligible = accounts.filter(
     (a) =>
       (!worker.accounts || worker.accounts.includes(a.id)) &&
@@ -1083,6 +1098,7 @@ export function pickAccount(
       (allowFull || !full(a)) &&
       (allowFull || !near(a) || keepsHome(a)) &&
       (!unread(a) || keepsHome(a)) &&
+      (!accountInUse(a) || keepsHome(a) || named(a)) &&
       (groupActive.get(a.id) ?? 0) < perAccount &&
       load(a) < MAX_PER_ACCOUNT,
   )

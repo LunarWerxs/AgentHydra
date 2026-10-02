@@ -335,6 +335,24 @@ describe('pickAccount', () => {
     expect(pickAccount(worker(), accounts, walls, new Map([['ok', 2]]), 2, now)).toBeNull()
   })
 
+  test('new work goes around an account someone else is using', () => {
+    const accounts = [
+      { ...acct('typing', 1, 0), handsOnAgoMs: 120_000 },
+      { ...acct('chatting', 2, 0), otherSessions: 1 },
+      acct('free', 3, 60),
+    ]
+    expect(pickAccount(worker(), accounts, {}, new Map(), 2, now)?.id).toBe('free')
+    // A task that names the account is a person's word; a session living there carries on.
+    expect(pickAccount(worker({ accounts: ['typing'] }), accounts, {}, new Map(), 2, now)?.id).toBe(
+      'typing',
+    )
+    expect(
+      pickAccount(worker({ accountId: 'chatting' }), accounts, {}, new Map(), 2, now)?.id,
+    ).toBe('chatting')
+    // Nobody free: it waits rather than take someone's account.
+    expect(pickAccount(worker(), accounts.slice(0, 2), {}, new Map(), 2, now)).toBeNull()
+  })
+
   test('a handoff never goes back to the account that hit its limit', () => {
     const accounts = [acct('a', 1, 0), acct('b', 2, 70)]
     const w = worker({

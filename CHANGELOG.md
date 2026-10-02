@@ -9,6 +9,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **CliMayte goes around accounts someone else is using** (`server/src/core/hands-on.ts`,
+  `accountInUse` in `server/src/climayte-lib.ts`). Before it places new work it checks every
+  account: one whose desktop app a hand used in the last ten minutes (that app's own log, the check
+  fan_out already makes), or one with Claude sessions running that are not CliMayte's (the chat
+  that sent the work among them), takes no new work. A session already living there carries on,
+  and a task that names the account still goes there. When only such accounts have room, the task
+  waits and its row says which accounts are in use and why.
+
+- **Every AI connected to AgentHydra knows CliMayte is there.** Its instructions name climayte_run
+  as the Claude-quality tier beside the zswarm, for work the zswarm cannot do well, and the "you
+  are about to run out" advice hands what is left to it; choosing the account stays AgentHydra's
+  job. The instructions block got shorter while gaining it (1,991 characters against a 2,200 cap),
+  which every request pays for.
+
 - **How many tokens each CLI account has run** (`server/src/core/cli-instance-tokens.ts`, the
   `tokens` field of `GET /api/cli-instances`). Added up from the instance's own transcripts on this
   PC, one usage per reply (a reply is written as several lines that repeat its usage), and re-read

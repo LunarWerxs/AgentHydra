@@ -646,7 +646,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'climayte_run',
     description:
-      'MUTATES: CLIMAYTE A TASK. When the owner tells a chat to climayte a task or fully delegate it, the chat keeps only the orchestration (split, dispatch, read results, check them) and every piece of real work goes here. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER\'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra\'s CliMayte view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what "done" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps the concurrent workers of THIS GROUP per account (other groups count separately; an account runs at most 4 across all groups, and only as many as its projected 5-hour usage holds under the 85% stop line); top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). SIZE: each task is sized before it starts against the plans of its accounts (a Max 5x window holds five Pro windows): a task expected to use more than half of the biggest window it may use starts NOTHING in this dispatch and comes back `split needed` with the number of pieces (send them as self-contained tasks, or `size: whole` to run it as it is); a task that fits a fresh window but not what any account has left WAITS for room (status waiting) while smaller tasks start. Returns the group and, per worker, its id, title, status, account and `size` (expected % of a Pro window and its basis, the biggest window, the most room any account has now); then climayte_status {group, wait_seconds} waits for results.',
+      "MUTATES: CLIMAYTE A TASK. When the owner tells a chat to climayte a task or fully delegate it, and for any work that needs Claude quality the zswarm could not deliver, the chat keeps only the orchestration (split, dispatch, read results, check them) and the real work goes here. AgentHydra chooses the account: new work goes around an account a person is using (its desktop app used in the last ten minutes) or another Claude session runs on, the calling chat's own included. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra's CliMayte view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what \"done\" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps the concurrent workers of THIS GROUP per account (other groups count separately; an account runs at most 4 across all groups, and only as many as its projected 5-hour usage holds under the 85% stop line); top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). SIZE: each task is sized before it starts against the plans of its accounts (a Max 5x window holds five Pro windows): a task expected to use more than half of the biggest window it may use starts NOTHING in this dispatch and comes back `split needed` with the number of pieces (send them as self-contained tasks, or `size: whole` to run it as it is); a task that fits a fresh window but not what any account has left WAITS for room (status waiting) while smaller tasks start. Returns the group and, per worker, its id, title, status, account and `size` (expected % of a Pro window and its basis, the biggest window, the most room any account has now); then climayte_status {group, wait_seconds} waits for results.",
     inputSchema: S(
       {
         tasks: {
@@ -1877,34 +1877,32 @@ export function toolsForCaller(getCallerPid: () => Promise<number | null>): McpE
  */
 export const SERVER_INSTRUCTIONS = `AgentHydra manages every Claude/Codex account here and knows what each has left.
 
-CHECK YOUR OWN QUOTA BEFORE HEAVY WORK, unprompted: check_my_usage {} works out which account
-you are and reads it (~300ms, no quota, works with the app closed). Then act on the answer:
-- advice.shouldOffload true -> WRITE YOUR CONTEXT, FINDINGS AND NEXT STEPS TO A FILE NOW. An
-  agent that runs out mid-task dies holding everything it had not saved.
-- advice.safeToFanOut false -> shrink or postpone the fan-out. Gate on CURRENT + PROJECTED cost:
-  a fan-out cannot be recalled once launched, solo work can be stopped at any tool call.
-- A percentage decides nothing alone; usage_budget {} gives exhaustsBeforeReset - branch on it.
-- Weekly (all-models) % is the binding cap; on Pro the 5-hour window usually binds first.
-  Switching model does not dodge the shared weekly bucket.
-- severity 'unknown' or a failed read is NOT "plenty left". Never fan out on an unverified one.
+CHECK YOUR OWN QUOTA BEFORE HEAVY WORK, unprompted: check_my_usage {} (~300ms, no quota). Then:
+- advice.shouldOffload true -> WRITE YOUR CONTEXT, FINDINGS AND NEXT STEPS TO A FILE NOW, and
+  hand what is left to climayte_run. An agent cut off mid-task loses all it had not saved.
+- advice.safeToFanOut false -> shrink or postpone. Gate on CURRENT + PROJECTED cost: a fan-out
+  cannot be recalled; solo work stops at any tool call.
+- usage_budget {} gives exhaustsBeforeReset: branch on that, not a bare percentage. Weekly is
+  the binding cap; on Pro the 5-hour window binds first; switching model shares the week.
+- severity 'unknown' or a failed read is NOT plenty left. Never fan out on one.
 
-NEVER QUOTE AN UNATTRIBUTED PERCENTAGE: name the instance, and say so when identity.warning is
-present. A human who tells you your instance number OVERRULES the detection - the config files
-are the thing that lies.
+NEVER QUOTE AN UNATTRIBUTED PERCENTAGE: name the instance; say so when identity.warning is set.
+A human who tells you your instance number OVERRULES the detection.
 
-list_usage {} surveys every account (\`deepseek\` = zswarm balance); route heavy work by instance
-number. With every account at/above 90% weekly, fan_out just spreads it over the same saturated
-accounts: send mechanical, checkable batches to the zswarm (zswarm_run). Mutating tools say
-MUTATES:; never /login for a human.
+list_usage {} surveys every account (\`deepseek\` = zswarm balance). Mechanical, checkable work
+goes to the zswarm (zswarm_run). Mutating tools say MUTATES:; never /login for a human.
 
-THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); nothing there acts
-unless the tray icon is up: orchestrator_switch {action:"armed"} first. No icon needed for
-move_chat {chat, from, to}, or fan_out {tasks:[{cwd, prompt}]}, which spreads a task list over
-OTHER accounts as VISIBLE desktop chats (never one a person is working in); fan_out_status {}
-then reads every member's verdict and fan_out_send {group, text} steers them all.
+CLIMAYTE IS THE CLAUDE-QUALITY TIER: climayte_run {tasks:[{prompt, cwd}]} runs self-contained
+work the zswarm cannot do well on his CLI accounts, moving it when one runs out. AgentHydra picks
+the account (skips one a person or another session is using, weighs quota); see climayte_status.
+
+THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); it acts only with the
+tray icon up: orchestrator_switch {action:"armed"} first. No icon needed for move_chat {chat,
+from, to}, or fan_out {tasks:[{cwd, prompt}]} (VISIBLE desktop chats on OTHER accounts, never
+one a person is in); fan_out_status {} reads verdicts, fan_out_send {group, text} steers.
 add_queue_item and launch_terminal_session are REFUSED (no chat nobody can see).
-ANY PROBE CHAT YOU CREATE (a ping, a drill) MUST BE DELETED AFTERWARDS, never left in the
-account: fan_out_delete {group}, or orchestrator_run delete_chat <chat>.`
+ANY PROBE CHAT YOU CREATE MUST BE DELETED AFTERWARDS: fan_out_delete {group}, or
+orchestrator_run delete_chat <chat>.`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {

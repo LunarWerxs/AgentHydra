@@ -47,8 +47,10 @@ import {
 import { attemptUnits, ladderModel, rereadUnits, UNITS_PER_PRO_PERCENT } from './climayte-scorecard'
 import { resolveClaudeExe } from './config'
 import { getCliInstance, listCliInstances } from './core/cli-instances'
+import { handsOnAgoMs } from './core/hands-on'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
 import { POINTER_DIR } from './instance'
+import { readLiveRegistry } from './live-registry'
 import { getProviderSettings } from './provider-settings'
 import type { UsageSnapshot } from './types'
 import { allCachedUsage } from './usage-cache'
@@ -167,11 +169,25 @@ export const listeners = new Set<(w: CliMayteWorker) => void>()
 
 export let claudeCommand: () => string[] = () => [resolveClaudeExe()]
 
+/** Claude sessions running in an account's folder that are not CliMayte's own: an interactive
+ *  CLI session, another agent's, the chat orchestrating this one. Matched by session id, which
+ *  CliMayte picks before it starts the CLI (--session-id), so its own new sessions never count. */
+function otherSessionsIn(configDir: string): number {
+  const mine = new Set<string>()
+  for (const w of workers.values()) {
+    if (w.status !== 'running') continue
+    if (w.sessionId) mine.add(w.sessionId)
+    for (const at of w.attempts) if (at.endedAt === null && at.sessionId) mine.add(at.sessionId)
+  }
+  return readLiveRegistry(configDir).filter((s) => !mine.has(s.sessionId)).length
+}
+
 /** The production pool: every CLI instance with a credential file, with its last usage reading
  *  (void once its window has reset), or a running worker's live one when that is newer. A hollow
  *  or revoked login still passes that file check; its first attempt fails `auth` and the account
  *  stays walled until it signs in again (recheckSignedOut), so a dead login costs one quick
- *  failure, once. */
+ *  failure, once. Each carries who else is on it now (accountInUse), so new work goes around a
+ *  person at the keyboard and around sessions that are not CliMayte's. */
 function signedInAccounts(): CliMayteAccount[] {
   const now = Date.now()
   const cache = allCachedUsage()
@@ -217,6 +233,8 @@ function signedInAccounts(): CliMayteAccount[] {
         weekPct,
         weekResetsAt:
           weekPct !== null && weekResets !== null && weekResets > now ? weekResets : null,
+        handsOnAgoMs: handsOnAgoMs(i.associatedDesktopDir, now),
+        otherSessions: otherSessionsIn(i.configDir),
       }
     })
 }

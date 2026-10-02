@@ -21,8 +21,12 @@ instance CliMayte can use. No naming, no terminal, no `/login`.
   worker is readable live and steerable in AgentHydra (the CliMayte view, `climayte_status`), and its
   transcript is an ordinary Claude Code session in that account's folder that a person can resume
   by hand. CliMayte is the one named exemption from the headless ban; queue dispatch stays refused.
-- CliMayte runs only when a person started it (a chat he told to climayte a task, or the CliMayte view).
-  It is his per-task grant to use the CLI accounts; it is not standing permission for anything else.
+- **2026-10-02, Michael:** "the AI in general should know about CliMayte, being a viable option ...
+  like how it knows Z Swarm is available ... it doesn't step on the toes of other accounts running
+  ... the Agent Hydra client manager should handle all that stuff." CliMayte is a standing option
+  for work that needs Claude quality the zswarm cannot give (AgentHydra's MCP instructions say so),
+  and placement is AgentHydra's job: new work goes around an account someone else is using (see
+  Placement). It runs nothing by itself: a chat or the CliMayte view still sends every task.
 
 ## Server: `server/src/climayte.ts`
 
@@ -424,6 +428,15 @@ Pro accounts, where tasks costing about a quarter of a window each could never a
   The row waits ("Waiting for a reset: ...", `waitUntil` that reset). A held task starts no session,
   so it loses nothing; the other tasks keep starting and finishing. Never held: a session going on
   at home, priority work (`priority` above 0), and anything when the weekly reset is unknown.
+- **Someone else's account takes no new work** (`accountInUse`, 2026-10-02). Each account in the
+  pool carries `handsOnAgoMs`, how long ago a hand used its linked desktop app (that app's
+  `logs/main.log`, a message sent or a chat clicked in the last ten minutes; `core/hands-on.ts`, the
+  twin of fan_out's check), and `otherSessions`, the Claude sessions running in its folder that are
+  not CliMayte's (its live registry, matched by session id; the chat that sent the work counts).
+  Either one takes the account off the list for new work. A session already living there carries
+  on, and a task whose `accounts` names it still goes there. With only such accounts left, the
+  task waits and its row names them: "Waiting for an account nobody else is using: #14 (its
+  desktop app used 3 min ago) ...".
 
 ### Sizing (`server/src/climayte-placement.ts` sizeTask and waitsForRoom, `0c2c13b`)
 
