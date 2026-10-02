@@ -1478,7 +1478,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
 })
 
 test("a session stopped at its own account's limit waits for a reset soon instead of moving", () => {
-  const now = Date.parse('2026-10-01T12:00:00Z')
+  const now = Date.now()
   // A move re-writes the whole conversation into a cold cache (median 219k cache-write tokens
   // against 49k for a resume at home): ten minutes' wait is cheaper, two hours' is not.
   expect(waitsForHome(now + 10 * 60_000, now, 0)).toBe(now + 10 * 60_000)
