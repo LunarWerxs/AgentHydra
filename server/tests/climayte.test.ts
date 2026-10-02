@@ -774,11 +774,13 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
     type: 'http',
     url: `http://127.0.0.1:${port}${path}`,
   })
+  // Shaped like the owner's real entries: the two local servers sign in through a headersHelper
+  // command run at connect time; a static Authorization header is a credential.
   const seeded = {
     agenthydra: local(7787, '/api/mcp'),
     magnific: { type: 'http', url: 'https://mcp.magnific.com' },
-    zswarm: local(7790),
-    'connections-local': local(7791),
+    zswarm: { ...local(7790), headersHelper: 'python zswarm.py connect' },
+    'connections-local': { ...local(7791), headersHelper: 'node loader.mjs --connect' },
   }
   const keyed = { ...local(7792), headers: { Authorization: 'Bearer not-a-real-token' } }
   writeFileSync(

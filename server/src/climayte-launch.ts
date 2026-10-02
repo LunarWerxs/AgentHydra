@@ -240,7 +240,7 @@ function launchText(
  *  zswarm stays too: a worker hands wide, cheap work to it. */
 const WORKER_DENIED_MCP: readonly string[] = [MCP_SERVER_KEY, 'magnific']
 
-/** The owner's MCP servers for `--mcp-config` (ownerMcpServers: URL-only entries, no credential),
+/** The owner's MCP servers for `--mcp-config` (ownerMcpServers: entries with no credential),
  *  so a worker has what a desktop session on this machine has whatever its account's `.claude.json`
  *  says; the account's own servers still load beside them, and a name in both is one server. The
  *  file, or null when there is nothing to give (no owner dir, as under tests). */

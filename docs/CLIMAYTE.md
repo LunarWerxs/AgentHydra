@@ -144,9 +144,11 @@ computer-use and the rest) for that run only; its environment sets
 gives it the servers in the owner's own user scope (`~/.claude.json`), less the two denied, so
 connections-local and zswarm are there whatever its account's `.claude.json` says. That copy is
 seeded once, when the account is made, and drifts: one of 33 accounts listed no server at all. Only
-an entry that is a URL and nothing else is carried (no headers, oauth, env, query string or user
-info): the owner's local servers sign in through this machine's own session, and no credential is
-written to a worker's file. Any other entry loads from the account's own copy. connections-local
+an entry with no credential is carried: a URL and at most its `headersHelper`, the command that signs
+in at connect time through this machine's own session (connections-local's `node <loader.mjs>
+--connect`, zswarm's `python <zswarm.py> connect`); never static headers, oauth, env, a query
+string or user info, so no credential is written to a worker's file. Any other entry loads from the
+account's own copy. connections-local
 was denied for a day to save tokens (`8486a2d`); a worker asked to use connections_execute then
 had no such tool and drove the local MCP through a script.
 

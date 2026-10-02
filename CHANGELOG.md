@@ -10,8 +10,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ### Fixed
 
 - **CliMayte workers have the Connections MCP (connections-local) again, on every account.** A
-  worker is given the owner's own MCP servers on its command line (`--mcp-config`, URL-only
-  entries, so no credential is written to a file), less agenthydra and magnific, instead of
+  worker is given the owner's own MCP servers on its command line (`--mcp-config`: a URL and at
+  most the headersHelper command that signs in at connect time, so no credential is written to a
+  file), less agenthydra and magnific, instead of
   whatever its account's `.claude.json` was seeded with when the account was made; one of 33
   accounts listed none. 1.7.0 denied connections-local to save tokens, and a worker asked to use
   connections_execute (memory tools, the fourman board) had no such tool.

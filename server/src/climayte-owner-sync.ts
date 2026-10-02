@@ -257,31 +257,36 @@ function removeLink(path: string): void {
 export interface McpUrlEntry {
   type: 'http' | 'sse'
   url: string
+  headersHelper?: string
 }
 
-/** An entry that is a URL and nothing else, or null. Headers, oauth, env, a query string or user
- *  info in the URL can each carry a credential, and what this returns is written to a file. */
-function bareUrlEntry(entry: unknown): McpUrlEntry | null {
+/** An entry that carries no credential, or null: a URL, and at most a `headersHelper`, the command
+ *  the CLI runs at connect time to sign in through this machine's session (the owner's
+ *  connections-local is `node <loader.mjs> --connect`, zswarm `python <zswarm.py> connect`), which
+ *  holds no secret itself. Static `headers`, `oauth`, `env`, a query string or user info in the URL
+ *  can each hold one, and what this returns is written to a file. */
+function credentialFreeEntry(entry: unknown): McpUrlEntry | null {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
-  const { type, url, ...rest } = entry as Record<string, unknown>
+  const { type, url, headersHelper, ...rest } = entry as Record<string, unknown>
   if ((type !== 'http' && type !== 'sse') || typeof url !== 'string') return null
   if (Object.keys(rest).length > 0) return null
+  if (headersHelper !== undefined && typeof headersHelper !== 'string') return null
   try {
     const u = new URL(url)
     if (u.username || u.password || u.search) return null
   } catch {
     return null
   }
-  return { type, url }
+  return headersHelper === undefined ? { type, url } : { type, url, headersHelper }
 }
 
 /** The owner's MCP servers a worker is given (`--mcp-config`, climayte-launch.ts): those in the
  *  owner's user scope, the `.claude.json` beside `ownerDir` (`~/.claude` -> `~/.claude.json`), less
- *  the `denied` names. Only an entry that is a URL and nothing else is carried: the owner's local
- *  servers (connections-local, zswarm) sign in through this machine's own session, and no
- *  credential is ever copied into a worker's file. Any other entry is left to the account's own
- *  `.claude.json`, which still loads beside these. No owner config is no servers; one that cannot
- *  be read is said, and also no servers: the launch goes on with the account's own. */
+ *  the `denied` names. Only an entry that carries no credential is carried (credentialFreeEntry):
+ *  the owner's local servers (connections-local, zswarm) sign in through this machine's own
+ *  session, and no credential is ever copied into a worker's file. Any other entry is left to the
+ *  account's own `.claude.json`, which still loads beside these. No owner config is no servers; one
+ *  that cannot be read is said, and also no servers: the launch goes on with the account's own. */
 export function ownerMcpServers(
   ownerDir: string,
   denied: readonly string[],
@@ -298,8 +303,8 @@ export function ownerMcpServers(
   const out: Record<string, McpUrlEntry> = {}
   if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return out
   for (const [name, entry] of Object.entries(servers)) {
-    const bare = denied.includes(name) ? null : bareUrlEntry(entry)
-    if (bare) out[name] = bare
+    const carried = denied.includes(name) ? null : credentialFreeEntry(entry)
+    if (carried) out[name] = carried
   }
   return out
 }
