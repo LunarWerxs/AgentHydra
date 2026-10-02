@@ -1289,7 +1289,7 @@ onUnmounted(() => {
             </TableHead>
             <TableHead class="w-24">
               <SortButton :direction="indicatorFor('usage')" @sort="toggleSort('usage')">
-                {{ $t('instances.colUsage') }}
+                {{ usageMode ? $t('instances.colUsageWeek') : $t('instances.colUsage') }}
               </SortButton>
             </TableHead>
             <TableHead class="w-24">

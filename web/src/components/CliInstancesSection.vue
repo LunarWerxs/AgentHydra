@@ -234,12 +234,16 @@ const allHiddenByFilter = computed(
  * plainly see one elsewhere, which is the whole reason this says the total.
  */
 const headingCount = computed(() =>
-  visibleRows.value.length === cliInstances.value.length
-    ? String(cliInstances.value.length)
-    : t('cliInstances.countOfTotal', {
-        shown: visibleRows.value.length,
-        total: cliInstances.value.length,
-      }),
+  // No count before the first answer: a "(0)" over loading bars read as "my accounts are gone"
+  // (SUE round, 2026-10-01).
+  loading.value && cliInstances.value.length === 0
+    ? '…'
+    : visibleRows.value.length === cliInstances.value.length
+      ? String(cliInstances.value.length)
+      : t('cliInstances.countOfTotal', {
+          shown: visibleRows.value.length,
+          total: cliInstances.value.length,
+        }),
 )
 
 function isBusy(inst: CliInstance): boolean {
@@ -713,7 +717,7 @@ onUnmounted(() => {
           </TableHead>
           <TableHead class="w-24">
             <SortButton :direction="indicatorFor('usage')" @sort="toggleSort('usage')">
-              {{ $t('cliInstances.colUsage') }}
+              {{ usageMode ? $t('instances.colUsageWeek') : $t('cliInstances.colUsage') }}
             </SortButton>
           </TableHead>
           <!-- The account's plan, the same badge as the Instances table (owner, 2026-09-30). -->

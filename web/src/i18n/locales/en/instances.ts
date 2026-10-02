@@ -27,6 +27,8 @@ export default {
   colMemory: 'Memory',
   colUsage: 'Usage',
   colUsageSession: 'Usage 5h',
+  // The weekly figure's header when the 5-hour one stands beside it (usage mode).
+  colUsageWeek: 'Usage week',
   // Usage-mode columns — they replace PID/Uptime/Memory, they don't add to them.
   colSession: 'Session (5h)',
   colWeekly: 'Weekly',

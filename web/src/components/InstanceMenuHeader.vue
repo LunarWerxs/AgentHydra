@@ -76,7 +76,7 @@ const ICON_ITEM =
       </MenuIconItem>
     </div>
   </div>
-  <p v-if="name" class="truncate px-2 pb-1 text-xs text-muted-foreground" :title="name">
+  <p v-if="name" class="wrap-break-word px-2 pb-1 text-xs text-muted-foreground">
     {{ name }}
   </p>
   <DropdownMenuSeparator />

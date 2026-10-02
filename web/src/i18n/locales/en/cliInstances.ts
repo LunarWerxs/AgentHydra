@@ -169,7 +169,7 @@ export default {
   // Says what goes wrong otherwise: "keep it open on one PC at a time" alone was read twice and
   // still left "what happens if I do not?" (SUE round, 2026-10-01).
   syncDesktopNote:
-    'Desktop accounts: use each one on one PC at a time. A PC gets a desktop account’s newer login only while Claude Desktop is closed on that PC.',
+    'Desktop accounts are on the Instances tab. Don’t run the same one on both PCs at once: its login only syncs to a PC while Claude Desktop is closed there.',
   syncKindDesktop: 'Desktop',
   syncKindCli: 'CLI',
   syncJoinTitle: 'Join from your other PC',
