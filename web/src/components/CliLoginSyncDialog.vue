@@ -142,10 +142,21 @@ function stateOf(l: Login): { label: string; title: string; bad: boolean } {
   if (l.note) return plain(NOTE_KEY[l.note])
   if (l.problem) return { label: t('cliInstances.syncStateProblem'), title: l.problem, bad: true }
   if (l.inSync) return plain('cliInstances.syncStateInSync')
-  if (l.inStore && !l.here) return plain('cliInstances.syncStateStoreOnly')
-  if (l.here && !l.inStore) return plain('cliInstances.syncStateHereOnly')
+  // While sync runs, a login that is not there yet is on its way; the row says which way on hover.
+  // "Only in the store" on every row right after a join read as "did it work or not?".
+  const coming = status.value?.enabled ? 'cliInstances.syncStateOnTheWay' : null
+  if (l.inStore && !l.here)
+    return coming
+      ? { label: t(coming), title: t('cliInstances.syncStateStoreOnlyHint'), bad: false }
+      : plain('cliInstances.syncStateStoreOnly')
+  if (l.here && !l.inStore)
+    return coming
+      ? { label: t(coming), title: t('cliInstances.syncStateHereOnlyHint'), bad: false }
+      : plain('cliInstances.syncStateHereOnly')
   return plain('cliInstances.syncStatePending')
 }
+/** The desktop sentence is only for someone who has a desktop login in the list. */
+const hasDesktop = computed(() => rows.value.some((r) => r.login.kind === 'desktop'))
 const failing = (l: Login) => !l.excluded && !l.note && !!l.problem
 /** Every login this PC or the store knows, the ones that cannot sync first. */
 const rows = computed(() =>
@@ -304,7 +315,9 @@ const recent = computed(() => {
           </Button>
         </div>
         <p v-if="status.lastError" class="text-destructive">{{ status.lastError }}</p>
-        <p class="text-muted-foreground">{{ $t('cliInstances.syncDesktopNote') }}</p>
+        <p v-if="hasDesktop" class="text-muted-foreground">
+          {{ $t('cliInstances.syncDesktopNote') }}
+        </p>
 
         <ul
           v-if="rows.length"
@@ -322,7 +335,7 @@ const recent = computed(() => {
               }}
             </Badge>
             <span
-              class="w-24 shrink-0 truncate text-end"
+              class="min-w-24 shrink-0 whitespace-nowrap text-end"
               :class="state.bad ? 'text-destructive' : 'text-muted-foreground'"
               :title="state.title"
             >

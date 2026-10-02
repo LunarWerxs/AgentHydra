@@ -169,7 +169,7 @@ export default {
   // Says what goes wrong otherwise: "keep it open on one PC at a time" alone was read twice and
   // still left "what happens if I do not?" (SUE round, 2026-10-01).
   syncDesktopNote:
-    'Open a synced desktop account on one PC at a time: its newer login reaches the other PC only while the app is closed there.',
+    'Desktop accounts: use each one on one PC at a time. A PC gets a desktop account’s newer login only while Claude Desktop is closed on that PC.',
   syncKindDesktop: 'Desktop',
   syncKindCli: 'CLI',
   syncJoinTitle: 'Join from your other PC',
@@ -199,10 +199,12 @@ export default {
   // A row's state: the word on the row, and (…Hint) the sentence behind it, shown on hover.
   syncStateInSync: 'In sync',
   syncStateInSyncHint: 'This PC and the store hold the same login.',
+  // Shown instead of the two below while sync is on: either way the next pass settles it.
+  syncStateOnTheWay: 'On the way',
   syncStateHereOnly: 'Not uploaded yet',
   syncStateHereOnlyHint: 'Signed in here; the next sync uploads it to the store.',
-  syncStateStoreOnly: 'Only in the store',
-  syncStateStoreOnlyHint: 'The store holds it; this PC is not signed in to it yet.',
+  syncStateStoreOnly: 'Not on this PC yet',
+  syncStateStoreOnlyHint: 'The store holds it; the next sync signs this PC in to it.',
   syncStatePending: 'Pending',
   syncStatePendingHint: 'Waiting for the next sync.',
   syncStateOut: 'Left out',

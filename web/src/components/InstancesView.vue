@@ -47,7 +47,7 @@ import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
-import SortIndicator from '@/components/SortIndicator.vue'
+import SortButton from '@/components/SortButton.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
 import { Badge } from '@/components/ui/badge'
@@ -1211,13 +1211,12 @@ onUnmounted(() => {
         <TableHeader sticky>
           <TableRow>
             <TableHead
-              class="w-10 cursor-pointer select-none"
+              class="w-10"
               :title="tooltipsEnabled ? $t('instances.sortByStatus') : undefined"
-              @click="toggleSort('running')"
             >
-              <span class="inline-flex items-center gap-0.5">
-                ● <SortIndicator :direction="indicatorFor('running')" quiet />
-              </span>
+              <SortButton :direction="indicatorFor('running')" quiet @sort="toggleSort('running')">
+                ●
+              </SortButton>
             </TableHead>
             <!-- Both header hints exist because these two columns were the source of a real "where
                  do these names even come from?" — one row's Name can be a label you typed, the
@@ -1227,39 +1226,38 @@ onUnmounted(() => {
                  988px frame, so the table scrolled sideways (owner, 2026-09-26); now this column
                  takes whatever the others leave (w-full, and max-w-0 on its cells so their content
                  cannot force the table wider), never below min-w-36, and the name elides. -->
-            <TableHead class="w-full min-w-36 cursor-pointer select-none" @click="toggleSort('name')">
+            <TableHead class="w-full min-w-36">
               <span class="inline-flex items-center gap-0.5">
-                {{ $t('instances.colName') }}
-                <InfoHint :text="$t('instances.colNameHint')" @click.stop />
-                <SortIndicator :direction="indicatorFor('name')" />
+                <SortButton :direction="indicatorFor('name')" @sort="toggleSort('name')">
+                  {{ $t('instances.colName') }}
+                </SortButton>
+                <InfoHint :text="$t('instances.colNameHint')" />
               </span>
             </TableHead>
-            <TableHead class="w-40 cursor-pointer select-none" @click="toggleSort('account')">
+            <TableHead class="w-40">
               <span class="inline-flex items-center gap-0.5">
-                {{ $t('instances.colAccount') }}
-                <InfoHint :text="$t('instances.colAccountHint')" @click.stop />
-                <SortIndicator :direction="indicatorFor('account')" />
+                <SortButton :direction="indicatorFor('account')" @sort="toggleSort('account')">
+                  {{ $t('instances.colAccount') }}
+                </SortButton>
+                <InfoHint :text="$t('instances.colAccountHint')" />
               </span>
             </TableHead>
             <!-- Process columns (default mode) … -->
             <template v-if="!usageMode">
-              <TableHead class="cursor-pointer select-none" @click="toggleSort('pid')">
-                <span class="inline-flex items-center gap-0.5">
+              <TableHead>
+                <SortButton :direction="indicatorFor('pid')" @sort="toggleSort('pid')">
                   {{ $t('instances.colPid') }}
-                  <SortIndicator :direction="indicatorFor('pid')" />
-                </span>
+                </SortButton>
               </TableHead>
-              <TableHead class="cursor-pointer select-none" @click="toggleSort('uptime')">
-                <span class="inline-flex items-center gap-0.5">
+              <TableHead>
+                <SortButton :direction="indicatorFor('uptime')" @sort="toggleSort('uptime')">
                   {{ $t('instances.colUptime') }}
-                  <SortIndicator :direction="indicatorFor('uptime')" />
-                </span>
+                </SortButton>
               </TableHead>
-              <TableHead class="cursor-pointer select-none" @click="toggleSort('memory')">
-                <span class="inline-flex items-center gap-0.5">
+              <TableHead>
+                <SortButton :direction="indicatorFor('memory')" @sort="toggleSort('memory')">
                   {{ $t('instances.colMemory') }}
-                  <SortIndicator :direction="indicatorFor('memory')" />
-                </span>
+                </SortButton>
               </TableHead>
             </template>
             <!-- … swapped one-for-one for the quota columns in usage mode, so the table keeps its
@@ -1270,49 +1268,44 @@ onUnmounted(() => {
                  columns would shift as one provider's rows came and went. The Codex and DeepSeek
                  rows render into these same columns, so their cells follow this header. -->
             <template v-else>
-              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
-                <span class="inline-flex items-center gap-0.5">
+              <TableHead class="w-28">
+                <SortButton :direction="indicatorFor('session')" @sort="toggleSort('session')">
                   {{ $t('instances.colSession') }}
-                  <SortIndicator :direction="indicatorFor('session')" />
-                </span>
+                </SortButton>
               </TableHead>
-              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('weekly')">
-                <span class="inline-flex items-center gap-0.5">
+              <TableHead class="w-28">
+                <SortButton :direction="indicatorFor('weekly')" @sort="toggleSort('weekly')">
                   {{ $t('instances.colWeekly') }}
-                  <SortIndicator :direction="indicatorFor('weekly')" />
-                </span>
+                </SortButton>
               </TableHead>
             </template>
             <TableHead
               v-if="usageMode"
-              class="w-24 cursor-pointer select-none"
-              @click="toggleSort('usageSession')"
+              class="w-24"
             >
-              <span class="inline-flex items-center gap-0.5">
+              <SortButton :direction="indicatorFor('usageSession')" @sort="toggleSort('usageSession')">
                 {{ $t('instances.colUsageSession') }}
-                <SortIndicator :direction="indicatorFor('usageSession')" />
-              </span>
+              </SortButton>
             </TableHead>
-            <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('usage')">
-              <span class="inline-flex items-center gap-0.5">
+            <TableHead class="w-24">
+              <SortButton :direction="indicatorFor('usage')" @sort="toggleSort('usage')">
                 {{ $t('instances.colUsage') }}
-                <SortIndicator :direction="indicatorFor('usage')" />
-              </span>
+              </SortButton>
             </TableHead>
-            <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('plan')">
-              <span class="inline-flex items-center gap-0.5">
+            <TableHead class="w-24">
+              <SortButton :direction="indicatorFor('plan')" @sort="toggleSort('plan')">
                 {{ $t('instances.colPlan') }}
-                <SortIndicator :direction="indicatorFor('plan')" />
-              </span>
+              </SortButton>
             </TableHead>
             <!-- After Plan, before Actions, in both column modes: when an account was last opened
                  is as true in usage mode as in process mode, and placing it right of every other
                  column keeps the fixed-width quota columns aligned with the tables below. -->
-            <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('lastRunning')">
+            <TableHead class="w-28">
               <span class="inline-flex items-center gap-0.5">
-                {{ $t('instances.colLastRunning') }}
-                <InfoHint :text="$t('instances.colLastRunningHint')" @click.stop />
-                <SortIndicator :direction="indicatorFor('lastRunning')" />
+                <SortButton :direction="indicatorFor('lastRunning')" @sort="toggleSort('lastRunning')">
+                  {{ $t('instances.colLastRunning') }}
+                </SortButton>
+                <InfoHint :text="$t('instances.colLastRunningHint')" />
               </span>
             </TableHead>
             <TableHead class="text-end">{{ $t('instances.colActions') }}</TableHead>

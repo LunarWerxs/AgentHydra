@@ -45,7 +45,7 @@ import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
 import LinkCliInstanceDialog from '@/components/LinkCliInstanceDialog.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
-import SortIndicator from '@/components/SortIndicator.vue'
+import SortButton from '@/components/SortButton.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
 import { Badge } from '@/components/ui/badge'
@@ -662,81 +662,67 @@ onUnmounted(() => {
     <Table>
       <TableHeader sticky>
         <TableRow>
-          <TableHead class="w-10 cursor-pointer select-none" @click="toggleSort('loggedIn')">
-            <span class="inline-flex items-center gap-0.5">
-              ● <SortIndicator :direction="indicatorFor('loggedIn')" quiet />
-            </span>
+          <TableHead class="w-10">
+            <SortButton :direction="indicatorFor('loggedIn')" quiet @sort="toggleSort('loggedIn')">
+              ●
+            </SortButton>
           </TableHead>
           <TableHead
-            class="cursor-pointer select-none"
             :class="showAccountColumn ? 'w-44' : 'w-72'"
-            @click="toggleSort('name')"
           >
-            <span class="inline-flex items-center gap-0.5">
+            <SortButton :direction="indicatorFor('name')" @sort="toggleSort('name')">
               {{ $t('cliInstances.colName') }}
-              <SortIndicator :direction="indicatorFor('name')" />
-            </span>
+            </SortButton>
           </TableHead>
           <TableHead
             v-if="showAccountColumn"
-            class="w-40 cursor-pointer select-none"
-            @click="toggleSort('account')"
+            class="w-40"
           >
-            <span class="inline-flex items-center gap-0.5">
+            <SortButton :direction="indicatorFor('account')" @sort="toggleSort('account')">
               {{ $t('cliInstances.colAccount') }}
-              <SortIndicator :direction="indicatorFor('account')" />
-            </span>
+            </SortButton>
           </TableHead>
           <TableHead
             v-if="!usageMode"
-            class="cursor-pointer select-none"
-            @click="toggleSort('configDir')"
           >
-            <span class="inline-flex items-center gap-0.5">
+            <SortButton :direction="indicatorFor('configDir')" @sort="toggleSort('configDir')">
               {{ $t('cliInstances.colConfigDir') }}
-              <SortIndicator :direction="indicatorFor('configDir')" />
-            </span>
+            </SortButton>
           </TableHead>
           <!-- Fixed widths, matching the Instances table's quota columns, so the same fact has the
                same bar length on both tabs. -->
           <template v-else>
-            <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
-              <span class="inline-flex items-center gap-0.5">
+            <TableHead class="w-28">
+              <SortButton :direction="indicatorFor('session')" @sort="toggleSort('session')">
                 {{ $t('instances.colSession') }}
-                <SortIndicator :direction="indicatorFor('session')" />
-              </span>
+              </SortButton>
             </TableHead>
-            <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('weekly')">
-              <span class="inline-flex items-center gap-0.5">
+            <TableHead class="w-28">
+              <SortButton :direction="indicatorFor('weekly')" @sort="toggleSort('weekly')">
                 {{ $t('instances.colWeekly') }}
-                <SortIndicator :direction="indicatorFor('weekly')" />
-              </span>
+              </SortButton>
             </TableHead>
           </template>
           <TableHead
             v-if="usageMode"
-            class="w-24 cursor-pointer select-none"
-            @click="toggleSort('usageSession')"
+            class="w-24"
           >
-            <span class="inline-flex items-center gap-0.5">
+            <SortButton :direction="indicatorFor('usageSession')" @sort="toggleSort('usageSession')">
               {{ $t('instances.colUsageSession') }}
-              <SortIndicator :direction="indicatorFor('usageSession')" />
-            </span>
+            </SortButton>
           </TableHead>
-          <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('usage')">
-            <span class="inline-flex items-center gap-0.5">
+          <TableHead class="w-24">
+            <SortButton :direction="indicatorFor('usage')" @sort="toggleSort('usage')">
               {{ $t('cliInstances.colUsage') }}
-              <SortIndicator :direction="indicatorFor('usage')" />
-            </span>
+            </SortButton>
           </TableHead>
           <!-- The account's plan, the same badge as the Instances table (owner, 2026-09-30). -->
           <TableHead class="w-24">{{ $t('instances.colPlan') }}</TableHead>
           <!-- What the account has run, from its own transcripts on this PC (cli-instance-tokens.ts). -->
-          <TableHead class="w-20 cursor-pointer select-none" @click="toggleSort('tokens')">
-            <span class="inline-flex items-center gap-0.5">
+          <TableHead class="w-20">
+            <SortButton :direction="indicatorFor('tokens')" @sort="toggleSort('tokens')">
               {{ $t('cliInstances.colTokens') }}
-              <SortIndicator :direction="indicatorFor('tokens')" />
-            </span>
+            </SortButton>
           </TableHead>
           <TableHead class="text-end">{{ $t('cliInstances.colActions') }}</TableHead>
         </TableRow>
@@ -940,7 +926,7 @@ onUnmounted(() => {
               "
               :detail="$t('cliInstances.tokensSource')"
             >
-              <span class="text-xs tabular-nums">{{ formatTokens(inst.tokens.total) }}</span>
+              <span class="font-medium tabular-nums">{{ formatTokens(inst.tokens.total) }}</span>
             </IconTooltip>
             <span v-else class="text-xs text-muted-foreground">—</span>
           </TableCell>
@@ -950,8 +936,9 @@ onUnmounted(() => {
                 <DropdownMenuTrigger as-child>
                   <Button
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                     :aria-label="$t('cliInstances.moreActions')"
+                    :title="$t('cliInstances.moreActions')"
                   >
                     <EllipsisVertical />
                   </Button>
