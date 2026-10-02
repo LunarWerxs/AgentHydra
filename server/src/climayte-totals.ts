@@ -1,7 +1,7 @@
 // climayteTotals: what CliMayte has taken off the chats that handed it work, summed over the
 // record (or since a moment). Split out of climayte.ts so each file can be read whole; it reads
-// that module's workers, which it imports. Nothing here runs at import time.
-import { acctLabel, lastThatRan, load, pct1, workers } from './climayte'
+// climayte-core.ts's workers.
+import { acctLabel, lastThatRan, load, pct1, workers } from './climayte-core'
 import { addTokens, type CliMayteTokens, type CliMayteWorker, noTokens } from './climayte-lib'
 import { attemptUnits, rereadUnits } from './climayte-scorecard'
 

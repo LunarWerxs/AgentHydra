@@ -1,7 +1,7 @@
 // Starting one CliMayte attempt on an account: which session it runs in, the transcript carried
 // over on a move, what the CLI is told, its settings file and runner, and the bookkeeping once
-// it is up. Split out of climayte.ts so each file can be read whole; it works on that module's
-// state (workers, journal), which it imports. Nothing here runs at import time.
+// it is up. Split out of climayte.ts so each file can be read whole; the state it works on
+// (workers, journal) is climayte-core.ts's.
 
 import {
   closeSync,
@@ -33,7 +33,7 @@ import {
   tailText,
   transcriptCandidates,
   transcriptFile,
-} from './climayte'
+} from './climayte-core'
 import { firstLine } from './climayte-journal'
 import {
   type CliMayteAccount,

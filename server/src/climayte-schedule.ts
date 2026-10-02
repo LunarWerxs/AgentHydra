@@ -1,7 +1,6 @@
 // CliMayte's scheduling pass (climayte.ts tick): for each due task, pick an account and start it
 // there, or say what it waits for (room, a reset, an account). Split out of climayte.ts so each
-// file can be read whole; it works on that module's state (workers, walls, journal), which it
-// imports. Nothing here runs at import time, so the two modules may import each other.
+// file can be read whole; the state it works on (workers, walls, journal) is climayte-core.ts's.
 import {
   accountsProvider,
   acctLabel,
@@ -11,10 +10,9 @@ import {
   overageAllowed,
   perAccount,
   placementState,
-  poll,
   walls,
   workers,
-} from './climayte'
+} from './climayte-core'
 import { firstLine } from './climayte-journal'
 import { launch } from './climayte-launch'
 import {
@@ -56,17 +54,6 @@ export function tickAccounts(): CliMayteAccount[] {
   } catch (err) {
     console.error('[climayte] could not list accounts:', err)
     return []
-  }
-}
-
-export function pollRunning(): void {
-  for (const w of workers.values()) {
-    if (w.status !== 'running') continue
-    try {
-      poll(w)
-    } catch (err) {
-      console.error(`[climayte] could not read ${w.id}:`, err)
-    }
   }
 }
 
