@@ -233,6 +233,16 @@ export function waitsForCooldown(
   return resets.length ? Math.min(...resets) : null
 }
 
+/** A session stopped at its own account's limit or ceiling (not a handoff) resumes there, warm, if
+ *  that account frees up (`freesAt`: the end of its wall, else its 5-hour reset) within
+ *  COOLDOWN_WAIT_MS: a move re-writes the whole conversation into a cold cache, a measured median of
+ *  219k cache-write tokens against 49k for a resume on the same account. Answers when to start, or
+ *  null to move now. Priority work never waits. */
+export function waitsForHome(freesAt: number | null, now: number, priority: number): number | null {
+  if (priority > 0 || freesAt === null || freesAt <= now) return null
+  return freesAt - now <= COOLDOWN_WAIT_MS ? freesAt : null
+}
+
 /** Hold a task rather than start it on `chosen` (the best account pickAccount found) when it is not
  *  projected to finish there but would fit a fresh window of an account it may use: it would run
  *  out partway and move, re-writing its whole conversation into a cold cache. Smaller tasks take the

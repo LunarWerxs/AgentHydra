@@ -32,6 +32,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
     second while work ran, about 15 file reads a second), and the live-session scan only counts.
   - **A wait for a busy account no longer rewrites the store every minute** (its reason carried the
     minutes since the desktop app was used).
+  - **A session stopped at its own account's limit waits for that account** when it resets within
+    30 minutes ("Waiting for its own account #N to reset at HH:MM: cheaper than moving"), and
+    resumes there once it has room, instead of moving: a move re-writes the whole conversation
+    into a cold cache (median 219k tokens against 49k for a resume at home). Priority work never
+    waits.
+  - **A restart cannot start a duplicate attempt.** After a restart the daemon asks Windows which
+    runners are still CliMayte's; a failed or empty answer used to count as "gone", and the
+    attempt was resumed while its first CLI still ran. It now means "unknown, still running" and
+    is asked again; all unconfirmed runners go in one query with a 10-second timeout instead of
+    one untimed query each, which could freeze a freshly started daemon.
+  - These two were written by CliMayte workers in the same stress run and reviewed before landing.
 
 ### Added
 

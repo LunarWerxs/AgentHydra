@@ -31,6 +31,7 @@ import {
   type RunningLoad,
   sizeTask,
   waitsForCooldown,
+  waitsForHome,
   waitsForRoom,
   weekPacePct,
 } from './climayte-placement'
@@ -106,6 +107,43 @@ const staysHome = (w: CliMayteWorker, acct: CliMayteAccount): boolean =>
   acct.id === w.accountId &&
   !['handoff', 'quota', 'auth'].includes(w.attempts.at(-1)?.outcome ?? 'handoff')
 
+/** The account the session was stopped on at its limit or ceiling (its last attempt ended 'quota'
+ *  there, not a handoff), when the task may use it: the session lives there and resumes there warm. */
+function quotaHome(w: CliMayteWorker, allowed: CliMayteAccount[]): CliMayteAccount | null {
+  const last = w.attempts.at(-1)
+  if (!w.sessionId || last?.outcome !== 'quota' || last.account.id !== w.accountId) return null
+  return allowed.find((a) => a.id === w.accountId) ?? null
+}
+
+/** When the session's own account takes work again: the end of its limit wall, or the 5-hour reset
+ *  of one past the stop line. Null when neither is what keeps it out (a login wall, a desktop in
+ *  use), or when the reset would still leave it past the weekly stop line. */
+function homeFreesAt(home: CliMayteAccount, now: number): number | null {
+  const wall = walls[home.id]
+  const walled = !!wall && wall.until > now && !isLoginWall(wall.reason)
+  if (!walled && (home.sessionPct ?? 0) < WIND_DOWN_SESSION_PCT) return null
+  const at = accountFreesAt(home, now)
+  if (at === null) return null
+  const weekStops =
+    (home.weekPct ?? 0) >= WIND_DOWN_WEEK_PCT && !(home.weekResetsAt && home.weekResetsAt <= at)
+  return weekStops ? null : at
+}
+
+/** Its own account frees up soon: wait for it rather than move (waitsForHome). */
+function holdForHome(w: CliMayteWorker, home: CliMayteAccount, at: number): void {
+  const until = new Date(at).toISOString()
+  const time = new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const why = `Waiting for its own account ${acctLabel(home)} to reset at ${time}: cheaper than moving.`
+  if (w.status !== 'waiting' || w.error !== why || w.waitUntil !== until) {
+    if (w.status !== 'waiting' || w.error !== why)
+      journal(w, 'waiting', { error: firstLine(why), until })
+    w.status = 'waiting'
+    w.error = why
+    w.waitUntil = until
+    changed(w)
+  }
+}
+
 /** The best account has too little room for what this task is expected to use: it waits for room. */
 function holdForRoom(
   s: TickState,
@@ -166,6 +204,7 @@ function cooldownFor(
   groupActive: Map<string, number>,
   cap: number,
   expected: number,
+  atHome: boolean,
 ): ReturnType<typeof waitsForCooldown> {
   return waitsForCooldown(
     acct,
@@ -180,7 +219,7 @@ function cooldownFor(
       .map((a) => ({ ...a, sessionResetsAt: accountFreesAt(a, s.now) })),
     expected,
     s.now,
-    { home: staysHome(w, acct), priority: w.priority ?? 0 },
+    { home: atHome, priority: w.priority ?? 0 },
   )
 }
 
@@ -320,7 +359,7 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
   const cost = s.costOf(w)
   const expected = cost.pct
   const placement = { expected, running: s.running, finishedSince: s.finishedSince }
-  const acct = pickAccount(
+  let acct = pickAccount(
     w,
     accounts,
     walls,
@@ -332,19 +371,34 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
     placement,
   )
   const allowed = accounts.filter((a) => !w.accounts || w.accounts.includes(a.id))
+  // A session stopped at its own account's limit or ceiling resumes there rather than move:
+  // pickAccount tries that account last, so it goes back the moment it takes work again, and waits
+  // for it when it frees up soon (waitsForHome).
+  const home = quotaHome(w, allowed)
+  if (acct && home && acct.id !== home.id) {
+    if (pickAccount(w, [home], walls, s.active, cap, now, groupActive)) acct = home
+    else {
+      const back = waitsForHome(homeFreesAt(home, now), now, w.priority ?? 0)
+      if (back) {
+        holdForHome(w, home, back)
+        return
+      }
+    }
+  }
+  const atHome = !!acct && (staysHome(w, acct) || acct.id === home?.id)
   if (
     acct &&
     waitsForRoom(
       acct,
       placement,
       allowed.map((a) => a.planFactor ?? 1),
-      staysHome(w, acct),
+      atHome,
     )
   ) {
     holdForRoom(s, w, acct, cost, allowed)
     return
   }
-  const cooldown = acct && cooldownFor(s, w, acct, allowed, groupActive, cap, expected)
+  const cooldown = acct && cooldownFor(s, w, acct, allowed, groupActive, cap, expected, atHome)
   if (acct && cooldown) {
     holdForReset(w, acct, cooldown, now)
     return

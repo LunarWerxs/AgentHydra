@@ -494,28 +494,93 @@ export function climayteWorkerPids(): Set<number> {
  *  the attempt's spec), so a pid Windows reused for a stranger after a crash is never taken for it,
  *  and never killed. Checked once per runner per daemon. */
 const confirmedRunners = new Set<number>()
+/** Runner pids whose command line came back naming something else: a stranger holds the pid, so
+ *  that runner died. */
+const foreignRunners = new Set<number>()
+/** WMI can hang; a query past this is read as no answer. */
+const RUNNER_QUERY_TIMEOUT_MS = 10_000
+/** A query that failed is asked again on a later tick, but not every 1-second tick. */
+const RUNNER_RECHECK_MS = 5_000
+let runnerCheck: Promise<void> | null = null
+let runnerCheckAt = 0
 
-function isOurRunner(pid: number, log: string): boolean {
-  if (!isPidAlive(pid)) return false
-  if (confirmedRunners.has(pid) || process.platform !== 'win32') return true
-  const r = Bun.spawnSync(
-    [
-      'powershell',
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`,
-    ],
-    { stdout: 'pipe', stderr: 'ignore', windowsHide: true },
-  )
-  const ok = r.success && r.stdout.toString().includes(runnerSpecPath(log))
-  if (ok) confirmedRunners.add(pid)
-  return ok
+/** 'unknown' is read as still running: taking a failed or blank query for "ended" classed the
+ *  attempt interrupted and relaunched it with --resume beside a CLI that may still have been
+ *  running the same session, paying for the same work twice (review, 2026-10-01). */
+type RunnerIdentity = 'ours' | 'gone' | 'unknown'
+
+function runnerIdentity(pid: number): RunnerIdentity {
+  if (!isPidAlive(pid)) return 'gone'
+  if (confirmedRunners.has(pid) || process.platform !== 'win32') return 'ours'
+  return foreignRunners.has(pid) ? 'gone' : 'unknown'
+}
+
+function runnerQueryArgv(pids: number[]): string[] {
+  const filter = pids.map((p) => `ProcessId=${p}`).join(' or ')
+  return [
+    'powershell',
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    `Get-CimInstance Win32_Process -Filter '${filter}' | ForEach-Object { "$($_.ProcessId)\`t$($_.CommandLine)" }`,
+  ]
+}
+
+/** Only a command line that came back and does not name the attempt's spec makes a runner a
+ *  stranger. A failed or timed-out query, or a pid with no line or a blank one (it ended meanwhile,
+ *  or WMI would not show it), leaves the runner unknown, to be asked again. */
+function judgeRunners(runners: { pid: number; log: string }[], ok: boolean, stdout: string): void {
+  if (!ok) return
+  const lines = new Map<number, string>()
+  for (const line of stdout.split(/\r?\n/)) {
+    const [pid, ...rest] = line.split('\t')
+    const command = rest.join('\t').trim()
+    if (pid && command) lines.set(Number(pid), command)
+  }
+  for (const { pid, log } of runners) {
+    const command = lines.get(pid)
+    if (!command) continue
+    if (command.includes(runnerSpecPath(log))) confirmedRunners.add(pid)
+    else foreignRunners.add(pid)
+  }
+}
+
+/** Ask about every running attempt's unconfirmed runner in ONE PowerShell call under a timeout:
+ *  one unbounded call per runner, one after another, held the first tick after a restart for as
+ *  long as WMI took. The tick does not wait for the answer, so a slow WMI never holds back the
+ *  1-second overage stop; meanwhile those runners read as running. */
+function checkRunners(): void {
+  if (runnerCheck || process.platform !== 'win32') return
+  if (Date.now() - runnerCheckAt < RUNNER_RECHECK_MS) return
+  const runners: { pid: number; log: string }[] = []
+  for (const w of workers.values()) {
+    const at = w.attempts[w.attempts.length - 1]
+    const pid = at?.runner?.pid
+    if (w.status === 'running' && at && pid && runnerIdentity(pid) === 'unknown')
+      runners.push({ pid, log: at.log })
+  }
+  if (!runners.length) return
+  runnerCheckAt = Date.now()
+  runnerCheck = (async () => {
+    const proc = Bun.spawn(runnerQueryArgv(runners.map((r) => r.pid)), {
+      stdout: 'pipe',
+      stderr: 'ignore',
+      windowsHide: true,
+      timeout: RUNNER_QUERY_TIMEOUT_MS,
+    })
+    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+    judgeRunners(runners, code === 0, stdout)
+  })()
+    .catch((err) => console.error('[climayte] runner identity query failed:', err))
+    .finally(() => {
+      runnerCheck = null
+    })
 }
 
 /** Whether the attempt's CLI has ended. A runner attempt is read from its files, so the answer
  *  survives a daemon restart: an exit file means it ended; a runner gone without one died (finish
- *  then reads it as interrupted); one that wrote no pids within a minute never started. An attempt
+ *  then reads it as interrupted), while one not yet vouched for still runs; one that wrote no pids
+ *  within a minute never started. An attempt
  *  the daemon spawned itself is read from its handle, or, with none (the daemon restarted), it
  *  died with that daemon's kill-on-close job on Windows. */
 function attemptExited(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): boolean {
@@ -534,14 +599,28 @@ function attemptExited(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]
     confirmedRunners.add(pids.runner)
     changed(w)
   }
-  return !isOurRunner(runner.pid as number, at.log)
+  return runnerIdentity(runner.pid as number) === 'gone'
 }
 
 /** Kill the attempt's CLI through its runner (the whole tree), if the runner is still this
  *  worker's. Never a bare pid nobody can vouch for. */
 function killAttempt(at: CliMayteWorker['attempts'][number]): void {
   const pid = at.runner?.pid
-  if (!pid || !isOurRunner(pid, at.log)) return
+  if (!pid) return
+  if (runnerIdentity(pid) === 'unknown') {
+    // A stop cannot wait for the next tick's check: ask about this one now, under the same timeout.
+    const r = Bun.spawnSync(runnerQueryArgv([pid]), {
+      stdout: 'pipe',
+      stderr: 'ignore',
+      windowsHide: true,
+      timeout: RUNNER_QUERY_TIMEOUT_MS,
+    })
+    judgeRunners([{ pid, log: at.log }], r.success, r.stdout?.toString() ?? '')
+  }
+  const identity = runnerIdentity(pid)
+  if (identity === 'unknown')
+    console.error(`[climayte] runner ${pid} could not be confirmed as ${at.log}'s; not killed`)
+  if (identity !== 'ours') return
   try {
     killProcessTree(pid)
   } catch {
@@ -581,6 +660,7 @@ async function tick(): Promise<void> {
     load()
     const now = Date.now()
     const accounts = tickAccounts()
+    checkRunners()
     pollRunning()
     saveLive()
     // A check a restart ended (it ran under the old daemon) runs again.
