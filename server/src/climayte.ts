@@ -479,7 +479,9 @@ function takeCheckPid(r: NonNullable<CliMayteWorker['checkRunner']>): void {
 
 /** A check's runner files; its output log is the record and stays. */
 function removeCheckFiles(r: NonNullable<CliMayteWorker['checkRunner']>): void {
-  for (const f of [r.pidFile, r.exitFile, `${r.log}.stdin`, `${runnerSpecPath(r.log)}.taken`])
+  // The spec too, claimed or not: it carries the daemon's environment (background review, 2026-10-02).
+  const spec = runnerSpecPath(r.log)
+  for (const f of [r.pidFile, r.exitFile, `${r.log}.stdin`, spec, `${spec}.taken`])
     rmSync(f, { force: true })
 }
 
