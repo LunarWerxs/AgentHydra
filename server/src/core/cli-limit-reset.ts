@@ -138,152 +138,226 @@ export async function runCliLimitReset(
   }
 }
 
-async function runOnce(configDir: string, confirm: boolean): Promise<LimitResetResult> {
-  const at = Date.now()
-  const fail = (message: string): LimitResetResult => ({
-    ok: false,
-    outcome: 'error',
-    message,
-    nextAvailable: null,
-    at,
-  })
-  try {
-    prepareConfig(configDir)
-  } catch (err) {
-    return fail(`Could not prepare the CLI settings: ${err instanceof Error ? err.message : err}`)
-  }
+/** What one `/limit-reset` run keeps while it drives the CLI's terminal. */
+interface ResetRun {
+  /** When the run started: every result carries it. */
+  at: number
+  /** The overall deadline. It bounds getting TO the command; the answer has its own wait. */
+  deadline: number
+  proc: ReturnType<typeof Bun.spawn>
+  /** What the terminal has written since it was last cleared. */
+  out: { raw: string }
+}
 
+const failedAt = (at: number, message: string): LimitResetResult => ({
+  ok: false,
+  outcome: 'error',
+  message,
+  nextAvailable: null,
+  at,
+})
+
+/** This process's environment without what would point the CLI at another account, for `configDir`. */
+function resetEnv(configDir: string): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env))
     if (v !== undefined && !ENV_SCRUB.test(k)) env[k] = v
   env.CLAUDE_CONFIG_DIR = configDir
+  return env
+}
 
-  let raw = ''
+/** Start the CLI on a pseudo-terminal whose output lands in `out`. Throws when it cannot start. */
+function spawnResetCli(
+  env: Record<string, string>,
+  out: { raw: string },
+): ReturnType<typeof Bun.spawn> {
   const decoder = new TextDecoder()
+  return Bun.spawn([resolveClaudeExe()], {
+    cwd: WORK_DIR,
+    env,
+    windowsHide: true,
+    terminal: {
+      cols: 120,
+      rows: 40,
+      data(_t: unknown, d: Uint8Array) {
+        out.raw += decoder.decode(d, { stream: true })
+      },
+    },
+  } as unknown as Parameters<typeof Bun.spawn>[1])
+}
+
+function typeInto(run: ResetRun, s: string): void {
+  const term = (run.proc as unknown as { terminal?: { write(s: string): void } }).terminal
+  try {
+    term?.write(s)
+  } catch {
+    // The CLI already exited; the screen says why.
+  }
+}
+
+const screenOf = (run: ResetRun): string => plain(run.out.raw)
+
+/** Poll `test` every quarter second for up to `ms`, bounded by the run's deadline unless
+ *  `capped` is false, and stop early when the CLI exits. The test's last word is the answer. */
+async function waitUntil(
+  run: ResetRun,
+  test: () => boolean,
+  ms: number,
+  capped = true,
+): Promise<boolean> {
+  const end = capped ? Math.min(Date.now() + ms, run.deadline) : Date.now() + ms
+  while (Date.now() < end) {
+    if (test() || run.proc.exitCode !== null) return test()
+    await Bun.sleep(250)
+  }
+  return test()
+}
+
+/** Wait for the CLI's prompt. The reason it never came, or null when it is there. */
+async function awaitPrompt(run: ResetRun): Promise<string | null> {
+  if (await waitUntil(run, () => /Try "/.test(screenOf(run)), 30_000)) return null
+  const s = screenOf(run)
+  if (/Select login method|Not logged in|\/login/i.test(s))
+    return 'This account is signed out of the CLI. Sign it in again, then retry.'
+  return 'The Claude CLI did not reach its prompt.'
+}
+
+/** Type `/limit-reset` and press Enter. The reason the CLI did not take it, or null. */
+async function sendResetCommand(run: ResetRun): Promise<string | null> {
+  // Its start screen keeps drawing for a few seconds; keys typed before that are lost.
+  await Bun.sleep(6000)
+  run.out.raw = ''
+  for (const ch of '/limit-reset') {
+    typeInto(run, ch)
+    await Bun.sleep(50)
+  }
+  if (!(await waitUntil(run, () => /limit-reset/.test(screenOf(run)), 5000)))
+    return 'The Claude CLI did not take the command.'
+  await Bun.sleep(700)
+  run.out.raw = ''
+  typeInto(run, '\r')
+  return null
+}
+
+interface ResetAnswer {
+  outcome: LimitResetOutcome
+  say: string
+  screen: string
+}
+
+/** What reading the CLI's answer has seen so far. */
+interface AnswerState {
+  /** "Yes, use my reset" was pressed: from here a missing answer may still be a spent reset. */
+  confirmed: boolean
+  answer: ResetAnswer | null
+}
+
+/** Checking only: back out of the question ("No, keep it") and report what it offered. */
+function declineOffer(run: ResetRun, s: string): ResetAnswer {
+  typeInto(run, '\x1b')
+  const left = /(\d+)\s*left/i.exec(s)?.[1]
+  const by = /use\s*by\s*([A-Za-z]{3,9}\s*\d{1,2})/i
+    .exec(s)?.[1]
+    ?.replace(/([A-Za-z])(\d)/, '$1 $2')
+  const detail = [left ? `${left} left` : '', by ? `use by ${by}` : ''].filter(Boolean).join(', ')
+  return {
+    outcome: 'available',
+    say: `A reset is available${detail ? ` (${detail})` : ''}. It was not used.`,
+    screen: s,
+  }
+}
+
+/** One look at the screen after the command: answer the banked reset's question (once), or read
+ *  the outcome. True when an answer is in. */
+function readAnswerStep(run: ResetRun, confirm: boolean, state: AnswerState): boolean {
+  const s = screenOf(run)
+  if (!state.confirmed && /Use your reset\?|Yes,\s*use\s*my\s*reset/i.test(s)) {
+    if (!confirm) {
+      state.answer = declineOffer(run, s)
+      return true
+    }
+    // The person asked for this reset by clicking; the first choice is "Yes, use my reset".
+    state.confirmed = true
+    typeInto(run, '\r')
+    return false
+  }
+  const hit = classifyLimitResetScreen(s)
+  if (hit) state.answer = { ...hit, screen: s }
+  return hit !== null
+}
+
+/** The CLI's answer as a result, with the date it gives for the next reset when it gives one. */
+async function resultOf(run: ResetRun, answer: ResetAnswer): Promise<LimitResetResult> {
+  const { outcome, say, screen: shown } = answer
+  // Give a date a moment to finish drawing when the answer carries one.
+  await Bun.sleep(outcome === 'reset' || outcome === 'used' ? 800 : 0)
+  const nextAvailable = dateAfter(screenOf(run)) ?? dateAfter(shown)
+  return {
+    ok: outcome === 'reset',
+    outcome,
+    message: nextAvailable ? `${say} Next one available ${nextAvailable}.` : say,
+    nextAvailable,
+    at: run.at,
+  }
+}
+
+/** Drive the started CLI from its prompt to the answer to `/limit-reset`. */
+async function driveReset(run: ResetRun, confirm: boolean): Promise<LimitResetResult> {
+  const noPrompt = await awaitPrompt(run)
+  if (noPrompt) return failedAt(run.at, noPrompt)
+  const notTaken = await sendResetCommand(run)
+  if (notTaken) return failedAt(run.at, notTaken)
+
+  const state: AnswerState = { confirmed: false, answer: null }
+  await waitUntil(run, () => readAnswerStep(run, confirm, state), 40_000, false)
+  if (!state.answer)
+    return failedAt(
+      run.at,
+      state.confirmed
+        ? "The reset was confirmed, but the CLI's answer never arrived. It may have been used: check this account's usage before trying again."
+        : 'The Claude CLI gave no answer to /limit-reset.',
+    )
+  return resultOf(run, state.answer)
+}
+
+/** Leave the CLI: Ctrl+C twice, then end whatever is still there. */
+async function closeResetCli(run: ResetRun): Promise<void> {
+  typeInto(run, '\x03')
+  await Bun.sleep(300)
+  typeInto(run, '\x03')
+  await Bun.sleep(500)
+  if (run.proc.exitCode === null) killProcessTree(run.proc.pid)
+}
+
+async function runOnce(configDir: string, confirm: boolean): Promise<LimitResetResult> {
+  const at = Date.now()
+  try {
+    prepareConfig(configDir)
+  } catch (err) {
+    return failedAt(
+      at,
+      `Could not prepare the CLI settings: ${err instanceof Error ? err.message : err}`,
+    )
+  }
+
+  const env = resetEnv(configDir)
+  const out = { raw: '' }
   let proc: ReturnType<typeof Bun.spawn>
   try {
-    proc = Bun.spawn([resolveClaudeExe()], {
-      cwd: WORK_DIR,
-      env,
-      windowsHide: true,
-      terminal: {
-        cols: 120,
-        rows: 40,
-        data(_t: unknown, d: Uint8Array) {
-          raw += decoder.decode(d, { stream: true })
-        },
-      },
-    } as unknown as Parameters<typeof Bun.spawn>[1])
+    proc = spawnResetCli(env, out)
   } catch (err) {
-    return fail(`Could not start the Claude CLI: ${err instanceof Error ? err.message : err}`)
-  }
-  const term = (proc as unknown as { terminal?: { write(s: string): void } }).terminal
-  const send = (s: string) => {
-    try {
-      term?.write(s)
-    } catch {
-      // The CLI already exited; the screen says why.
-    }
+    return failedAt(
+      at,
+      `Could not start the Claude CLI: ${err instanceof Error ? err.message : err}`,
+    )
   }
   // The overall deadline bounds getting TO the command; the answer, once the command is sent, gets
   // its own full wait. Cutting that short after a confirmed reset would report "no answer" for a
   // reset that may already be spent, and invite a second one.
-  const deadline = at + TOTAL_MS
-  const until = async (test: () => boolean, ms: number, capped = true) => {
-    const end = capped ? Math.min(Date.now() + ms, deadline) : Date.now() + ms
-    while (Date.now() < end) {
-      if (test() || proc.exitCode !== null) return test()
-      await Bun.sleep(250)
-    }
-    return test()
-  }
-  const screen = () => plain(raw)
-
+  const run: ResetRun = { at, deadline: at + TOTAL_MS, proc, out }
   try {
-    if (!(await until(() => /Try "/.test(screen()), 30_000))) {
-      const s = screen()
-      if (/Select login method|Not logged in|\/login/i.test(s))
-        return fail('This account is signed out of the CLI. Sign it in again, then retry.')
-      return fail('The Claude CLI did not reach its prompt.')
-    }
-    // Its start screen keeps drawing for a few seconds; keys typed before that are lost.
-    await Bun.sleep(6000)
-    raw = ''
-    for (const ch of '/limit-reset') {
-      send(ch)
-      await Bun.sleep(50)
-    }
-    if (!(await until(() => /limit-reset/.test(screen()), 5000)))
-      return fail('The Claude CLI did not take the command.')
-    await Bun.sleep(700)
-    raw = ''
-    send('\r')
-
-    let confirmed = false
-    let answer: { outcome: LimitResetOutcome; say: string; screen: string } | null = null
-    await until(
-      () => {
-        const s = screen()
-        if (!confirmed && /Use your reset\?|Yes,\s*use\s*my\s*reset/i.test(s)) {
-          if (!confirm) {
-            // Checking only: back out of the question ("No, keep it") and report what it offered.
-            send('\x1b')
-            const left = /(\d+)\s*left/i.exec(s)?.[1]
-            const by = /use\s*by\s*([A-Za-z]{3,9}\s*\d{1,2})/i
-              .exec(s)?.[1]
-              ?.replace(/([A-Za-z])(\d)/, '$1 $2')
-            const detail = [left ? `${left} left` : '', by ? `use by ${by}` : '']
-              .filter(Boolean)
-              .join(', ')
-            answer = {
-              outcome: 'available',
-              say: `A reset is available${detail ? ` (${detail})` : ''}. It was not used.`,
-              screen: s,
-            }
-            return true
-          }
-          // The person asked for this reset by clicking; the first choice is "Yes, use my reset".
-          confirmed = true
-          send('\r')
-          return false
-        }
-        const hit = classifyLimitResetScreen(s)
-        if (hit) answer = { ...hit, screen: s }
-        return hit !== null
-      },
-      40_000,
-      false,
-    )
-    if (!answer)
-      return fail(
-        confirmed
-          ? "The reset was confirmed, but the CLI's answer never arrived. It may have been used: check this account's usage before trying again."
-          : 'The Claude CLI gave no answer to /limit-reset.',
-      )
-    const {
-      outcome,
-      say,
-      screen: shown,
-    } = answer as {
-      outcome: LimitResetOutcome
-      say: string
-      screen: string
-    }
-    // Give a date a moment to finish drawing when the answer carries one.
-    await Bun.sleep(outcome === 'reset' || outcome === 'used' ? 800 : 0)
-    const nextAvailable = dateAfter(screen()) ?? dateAfter(shown)
-    return {
-      ok: outcome === 'reset',
-      outcome,
-      message: nextAvailable ? `${say} Next one available ${nextAvailable}.` : say,
-      nextAvailable,
-      at,
-    }
+    return await driveReset(run, confirm)
   } finally {
-    send('\x03')
-    await Bun.sleep(300)
-    send('\x03')
-    await Bun.sleep(500)
-    if (proc.exitCode === null) killProcessTree(proc.pid)
+    await closeResetCli(run)
   }
 }

@@ -620,6 +620,144 @@ export interface AttemptVerdict {
   resets: string | null
 }
 
+type RejectedWall = { resetsAt: number | null; window: 'session' | 'weekly' | null }
+
+/** What the main agent's events say, read once in order (classifyAttempt). */
+interface AttemptScan {
+  tracker: ReturnType<typeof createLimitStopTracker>
+  /** CLI-reported API-error events of the main agent. */
+  apiErrors: string[]
+  /** The terminal `result` event. */
+  last: any
+  /** The CLI's structured wall ({"type":"rate_limit_event","rate_limit_info":{"status":"rejected",
+   *  "rateLimitType":"seven_day","resetsAt":<epoch s>}}), until something shows the turn went on. */
+  rejected: RejectedWall | null
+  /** A turn's closing text: the assistant text since the last user event. A Stop hook that refuses
+   *  the stop answers with a user message, and the session goes on in a new turn (field note 13). */
+  turnTexts: string[]
+  /** The assistant text of the turn being read. */
+  said: string[]
+}
+
+function noteTurnText(scan: AttemptScan, ev: any): void {
+  if (ev?.type === 'assistant') {
+    for (const b of ev.message?.content ?? [])
+      if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim())
+        scan.said.push(b.text.trim())
+  } else if (ev?.type === 'user') {
+    if (scan.said.length && isStopHookFeedback(ev)) scan.turnTexts.push(scan.said.join('\n\n'))
+    scan.said = []
+  }
+}
+
+/** The wall a rejected `rate_limit_event` names: when it ends and which window it is. */
+function rejectedWall(info: any): RejectedWall {
+  const secs = Number(info.resetsAt)
+  const type = String(info.rateLimitType ?? '')
+  return {
+    resetsAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : null,
+    window: type.startsWith('seven_day') ? 'weekly' : type === 'five_hour' ? 'session' : null,
+  }
+}
+
+/** The events that decide how the turn ended: its result, the CLI's wall, an API error, or
+ *  output that shows the turn went on after a wall. */
+function noteOutcomeEvent(scan: AttemptScan, ev: any): void {
+  if (ev?.type === 'result') {
+    scan.last = ev
+    if (ev.is_error !== true) scan.rejected = null
+  } else if (ev?.type === 'rate_limit_event') {
+    const info = ev.rate_limit_info
+    scan.rejected = info?.status !== 'rejected' ? null : rejectedWall(info)
+  } else if (isApiErrorEvent(ev)) scan.apiErrors.push(limitEventText(ev))
+  else if (ev?.type === 'assistant') scan.rejected = null // real output after it: the turn went on
+}
+
+function scanAttempt(events: unknown[]): AttemptScan {
+  const scan: AttemptScan = {
+    tracker: createLimitStopTracker(),
+    apiErrors: [],
+    last: null,
+    rejected: null,
+    turnTexts: [],
+    said: [],
+  }
+  for (const raw of events) {
+    const ev = raw as any
+    if (ev?.parent_tool_use_id) continue
+    scan.tracker.observe(ev)
+    noteTurnText(scan, ev)
+    noteOutcomeEvent(scan, ev)
+  }
+  return scan
+}
+
+type VerdictBase = Pick<
+  AttemptVerdict,
+  'result' | 'turnTexts' | 'turns' | 'resetsAt' | 'window' | 'resets'
+>
+
+const verdictOf = (
+  base: VerdictBase,
+  outcome: AttemptOutcome,
+  notice: string | null,
+): AttemptVerdict => ({
+  ...base,
+  outcome,
+  notice: notice ? compactNotice(notice) : null,
+})
+
+/** A quota verdict: the wall's end and window from the CLI's own event, and the notice's
+ *  "resets …" phrase, read before the notice is compacted. */
+const quotaVerdict = (
+  base: VerdictBase,
+  rejected: RejectedWall | null,
+  notice: string | null,
+): AttemptVerdict => ({
+  ...verdictOf(base, 'quota', notice),
+  resetsAt: rejected?.resetsAt ?? null,
+  window: rejected?.window ?? null,
+  resets:
+    notice
+      ?.replace(/\s+/g, ' ')
+      .trim()
+      .match(/\bresets\s+(.+?)\s*$/i)?.[1] ?? null,
+})
+
+/** The verdict for a turn that did not finish cleanly: a limit first, then a dead login, a
+ *  passing error, a kill from outside, and last a plain error. */
+function unfinishedVerdict(
+  base: VerdictBase,
+  scan: AttemptScan,
+  stop: ReturnType<AttemptScan['tracker']['verdict']>,
+  texts: { errText: string; stderrLines: string[]; trusted: string[] },
+  stderr: string,
+  started: boolean,
+): AttemptVerdict {
+  const { rejected, apiErrors, last } = scan
+  const { errText, stderrLines, trusted } = texts
+  // The errored result carries the same notice uncut; the tracker's copy is already compacted.
+  if (stop?.pending)
+    return quotaVerdict(base, rejected, classifyLimit(errText) === 'quota' ? errText : stop.notice)
+  const quotaText = [errText, ...stderrLines].find((t) => t && classifyLimit(t) === 'quota')
+  if (quotaText !== undefined) return quotaVerdict(base, rejected, quotaText)
+  if (rejected)
+    return quotaVerdict(base, rejected, errText || apiErrors[apiErrors.length - 1] || null)
+  const auth = trusted.find((t) => AUTH_RE.test(t))
+  if (auth !== undefined) return verdictOf(base, 'auth', auth)
+  const transient = trusted.find((t) => classifyLimit(t) === 'transient')
+  if (transient !== undefined) return verdictOf(base, 'transient', transient)
+  // No result and no API error: the process was killed from outside. On Windows a daemon restart
+  // does exactly this to every worker (they sit in the daemon's kill-on-close job), and the
+  // transcript on disk is intact, so the session is resumed rather than failed. Stderr need not be
+  // empty once the CLI started: a normal run can print a harmless warning there (measured: an MCP
+  // OAuth 'issuer' stamp notice). One that wrote to stderr before system/init failed to start (an
+  // unknown option, a missing session), and that is an error, not a restart.
+  if (!last && !apiErrors.length && (started || !stderr.trim()))
+    return verdictOf(base, 'interrupted', INTERRUPTED_NOTICE)
+  return verdictOf(base, 'error', null)
+}
+
 /** `started`: the CLI logged system/init (the caller may know it when the events list was cut).
  *
  *  A clean terminal `result` is the CLI saying the turn completed, so it is 'done' before anything
@@ -635,45 +773,8 @@ export function classifyAttempt(
     (ev) => (ev as any)?.type === 'system' && (ev as any)?.subtype === 'init',
   ),
 ): AttemptVerdict {
-  const tracker = createLimitStopTracker()
-  const apiErrors: string[] = [] // CLI-reported API-error events of the main agent
-  let last: any = null // the terminal `result` event
-  // The CLI's structured wall ({"type":"rate_limit_event","rate_limit_info":{"status":"rejected",
-  // "rateLimitType":"seven_day","resetsAt":<epoch s>}}), until something shows the turn went on.
-  let rejected: { resetsAt: number | null; window: 'session' | 'weekly' | null } | null = null
-  // A turn's closing text: the assistant text since the last user event. A Stop hook that refuses
-  // the stop answers with a user message, and the session goes on in a new turn (field note 13).
-  const turnTexts: string[] = []
-  let said: string[] = []
-  for (const raw of events) {
-    const ev = raw as any
-    if (ev?.parent_tool_use_id) continue
-    tracker.observe(ev)
-    if (ev?.type === 'assistant') {
-      for (const b of ev.message?.content ?? [])
-        if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim())
-          said.push(b.text.trim())
-    } else if (ev?.type === 'user') {
-      if (said.length && isStopHookFeedback(ev)) turnTexts.push(said.join('\n\n'))
-      said = []
-    }
-    if (ev?.type === 'result') {
-      last = ev
-      if (ev.is_error !== true) rejected = null
-    } else if (ev?.type === 'rate_limit_event') {
-      const info = ev.rate_limit_info
-      if (info?.status !== 'rejected') rejected = null
-      else {
-        const secs = Number(info.resetsAt)
-        const type = String(info.rateLimitType ?? '')
-        rejected = {
-          resetsAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : null,
-          window: type.startsWith('seven_day') ? 'weekly' : type === 'five_hour' ? 'session' : null,
-        }
-      }
-    } else if (isApiErrorEvent(ev)) apiErrors.push(limitEventText(ev))
-    else if (ev?.type === 'assistant') rejected = null // real output after it: the turn went on
-  }
+  const scan = scanAttempt(events)
+  const { last, rejected, apiErrors, turnTexts } = scan
   const errored = last?.is_error === true
   const resultText = typeof last?.result === 'string' ? last.result : null
   if (last && !errored && resultText?.trim()) turnTexts.push(resultText.trim())
@@ -686,7 +787,7 @@ export function classifyAttempt(
         .filter(Boolean)
         .reverse() // the last line that says it wins
   const trusted = [...apiErrors, errText, ...stderrLines] // the only places a wall can be read from
-  const base = {
+  const base: VerdictBase = {
     result: resultText,
     turnTexts,
     turns: Number(last?.num_turns) || 0,
@@ -694,44 +795,12 @@ export function classifyAttempt(
     window: null,
     resets: null,
   }
-  const out = (outcome: AttemptOutcome, notice: string | null): AttemptVerdict => ({
-    ...base,
-    outcome,
-    notice: notice ? compactNotice(notice) : null,
-  })
-  const quota = (notice: string | null): AttemptVerdict => ({
-    ...out('quota', notice),
-    resetsAt: rejected?.resetsAt ?? null,
-    window: rejected?.window ?? null,
-    resets:
-      notice
-        ?.replace(/\s+/g, ' ')
-        .trim()
-        .match(/\bresets\s+(.+?)\s*$/i)?.[1] ?? null,
-  })
 
-  const stop = tracker.verdict()
+  const stop = scan.tracker.verdict()
   // A clean result clears both the tracker's stop and `rejected`, so either one still set here
   // came after the last clean result: the turn did not finish.
-  if (last && !errored && !stop?.pending && !rejected) return out('done', null)
-  // The errored result carries the same notice uncut; the tracker's copy is already compacted.
-  if (stop?.pending) return quota(classifyLimit(errText) === 'quota' ? errText : stop.notice)
-  const quotaText = [errText, ...stderrLines].find((t) => t && classifyLimit(t) === 'quota')
-  if (quotaText !== undefined) return quota(quotaText)
-  if (rejected) return quota(errText || apiErrors[apiErrors.length - 1] || null)
-  const auth = trusted.find((t) => AUTH_RE.test(t))
-  if (auth !== undefined) return out('auth', auth)
-  const transient = trusted.find((t) => classifyLimit(t) === 'transient')
-  if (transient !== undefined) return out('transient', transient)
-  // No result and no API error: the process was killed from outside. On Windows a daemon restart
-  // does exactly this to every worker (they sit in the daemon's kill-on-close job), and the
-  // transcript on disk is intact, so the session is resumed rather than failed. Stderr need not be
-  // empty once the CLI started: a normal run can print a harmless warning there (measured: an MCP
-  // OAuth 'issuer' stamp notice). One that wrote to stderr before system/init failed to start (an
-  // unknown option, a missing session), and that is an error, not a restart.
-  if (!last && !apiErrors.length && (started || !stderr.trim()))
-    return out('interrupted', INTERRUPTED_NOTICE)
-  return out('error', null)
+  if (last && !errored && !stop?.pending && !rejected) return verdictOf(base, 'done', null)
+  return unfinishedVerdict(base, scan, stop, { errText, stderrLines, trusted }, stderr, started)
 }
 
 /** The user message a Stop hook sends when it refuses the stop: `Stop hook feedback:\n[...]`. */

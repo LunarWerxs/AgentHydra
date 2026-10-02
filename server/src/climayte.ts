@@ -2177,6 +2177,127 @@ function launch(
 
 const hex = (n: number): string => crypto.randomUUID().replace(/-/g, '').slice(0, n)
 
+const isAutoSetting = (v: unknown): boolean =>
+  typeof v === 'string' && v.trim().toLowerCase() === 'auto'
+
+type RunTask = Parameters<typeof climayteRun>[0]['tasks'][number]
+
+/** A run's defaults: what a task takes when it names none of its own. */
+interface RunDefaults {
+  /** The run's model is `auto`: the scorecard picks for every task that names no model. */
+  auto: boolean
+  model: string | null
+  effort: string | null
+  kind: CliMayteKind | null
+  priority: number
+}
+
+/** One task's setting, and for an `auto` task why the scorecard picked it. */
+interface RunSetting {
+  model: string | null
+  effort: string | null
+  kind: CliMayteKind | null
+  auto: boolean
+  reason: string | undefined
+  priority: number
+}
+
+/** How many `auto` tasks of each kind are on record: pickConfig's every-4th exploring pick counts
+ *  from here. */
+function autoPicksSoFar(): Map<CliMayteKind, number> {
+  const autoSoFar = new Map<CliMayteKind, number>()
+  for (const w of workers.values())
+    if (w.auto && w.kind) {
+      const k = w.kind as CliMayteKind
+      autoSoFar.set(k, (autoSoFar.get(k) ?? 0) + 1)
+    }
+  return autoSoFar
+}
+
+/** Refuse a task that could not run: no prompt, no such folder, a check that is not one command. */
+function assertRunnable(t: RunTask, i: number): void {
+  if (typeof t?.prompt !== 'string' || !t.prompt.trim())
+    throw new Error(`task ${i + 1}: prompt is empty`)
+  if (typeof t.cwd !== 'string' || !existsSync(t.cwd) || !statSync(t.cwd).isDirectory())
+    throw new Error(`task ${i + 1}: cwd '${t.cwd}' is not an existing folder`)
+  if (
+    t.check !== undefined &&
+    t.check !== null &&
+    (typeof t.check !== 'string' || t.check.length > 2000)
+  )
+    throw new Error(`task ${i + 1}: check must be one shell command (at most 2000 characters)`)
+}
+
+/** One task's model, effort, kind and priority: its own, else the run's; for an `auto` task the
+ *  scorecard's pick for its kind (and `autoSoFar` counts it). Throws on a value that is not one. */
+function runSetting(
+  t: RunTask,
+  defaults: RunDefaults,
+  rows: ReturnType<typeof scoreRows>,
+  autoSoFar: Map<CliMayteKind, number>,
+): RunSetting {
+  const kind = climayteKind(t.kind) ?? defaults.kind
+  const priority = climaytePriority(t.priority) ?? defaults.priority
+  const own = t.model === undefined || t.model === null || t.model === ''
+  if (isAutoSetting(t.model) || (own && defaults.auto)) {
+    const k = kind ?? 'code'
+    const n = autoSoFar.get(k) ?? 0
+    autoSoFar.set(k, n + 1)
+    const pick = pickConfig(k, rows, n)
+    return { ...pick.config, kind: k, auto: true, reason: pick.reason, priority }
+  }
+  return {
+    model: climayteModel(t.model) ?? defaults.model,
+    effort: (isAutoSetting(t.effort) ? null : climayteEffort(t.effort)) ?? defaults.effort,
+    kind,
+    auto: false,
+    reason: undefined,
+    priority,
+  }
+}
+
+/** A queued worker for one task of a run. */
+function newWorker(
+  t: RunTask,
+  setting: RunSetting | undefined,
+  size: CliMayteSizing | undefined,
+  group: string,
+  accounts: string[] | undefined,
+  now: number,
+): CliMayteWorker {
+  return {
+    id: `w-${hex(8)}`,
+    group,
+    title: t.title?.trim() || t.prompt.replace(/\s+/g, ' ').trim().slice(0, 60),
+    cwd: t.cwd,
+    prompt: t.prompt,
+    pending: [],
+    model: setting?.model ?? null,
+    effort: setting?.effort ?? null,
+    kind: setting?.kind ?? null,
+    ...(setting?.auto ? { auto: true } : {}),
+    ...(t.check?.trim() ? { check: t.check.trim() } : {}),
+    ...(size ? { size } : {}),
+    priority: setting?.priority ?? 0,
+    accounts: accounts?.length ? accounts : null,
+    status: 'queued',
+    sessionId: crypto.randomUUID(),
+    accountId: null,
+    attempts: [],
+    result: null,
+    results: [],
+    error: null,
+    lastActivity: null,
+    costUsd: 0,
+    turns: 0,
+    moves: 0,
+    retries: 0,
+    notBefore: null,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
 /** `model` / `effort` / `kind` at the top level are the group's default: a task that names its
  *  own wins. All are validated (climayteModel, climayteEffort, climayteKind) before anything is created.
  *  Model `auto` lets the scorecard choose model AND effort for the task's kind (default `code`):
@@ -2205,49 +2326,20 @@ export function climayteRun(input: {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
-  const isAuto = (v: unknown): boolean => typeof v === 'string' && v.trim().toLowerCase() === 'auto'
-  const groupAuto = isAuto(input.model)
-  const groupModel = groupAuto ? null : climayteModel(input.model)
-  const groupEffort = groupAuto || isAuto(input.effort) ? null : climayteEffort(input.effort)
-  const groupKind = climayteKind(input.kind)
-  const groupPriority = climaytePriority(input.priority) ?? 0
+  const groupAuto = isAutoSetting(input.model)
+  const defaults: RunDefaults = {
+    auto: groupAuto,
+    model: groupAuto ? null : climayteModel(input.model),
+    effort: groupAuto || isAutoSetting(input.effort) ? null : climayteEffort(input.effort),
+    kind: climayteKind(input.kind),
+    priority: climaytePriority(input.priority) ?? 0,
+  }
   const rows = scoreRows(workers.values())
-  const autoSoFar = new Map<CliMayteKind, number>()
-  for (const w of workers.values())
-    if (w.auto && w.kind) {
-      const k = w.kind as CliMayteKind
-      autoSoFar.set(k, (autoSoFar.get(k) ?? 0) + 1)
-    }
+  const autoSoFar = autoPicksSoFar()
   const settings = input.tasks.map((t, i) => {
-    if (typeof t?.prompt !== 'string' || !t.prompt.trim())
-      throw new Error(`task ${i + 1}: prompt is empty`)
-    if (typeof t.cwd !== 'string' || !existsSync(t.cwd) || !statSync(t.cwd).isDirectory())
-      throw new Error(`task ${i + 1}: cwd '${t.cwd}' is not an existing folder`)
-    if (
-      t.check !== undefined &&
-      t.check !== null &&
-      (typeof t.check !== 'string' || t.check.length > 2000)
-    )
-      throw new Error(`task ${i + 1}: check must be one shell command (at most 2000 characters)`)
+    assertRunnable(t, i)
     try {
-      const kind = climayteKind(t.kind) ?? groupKind
-      const priority = climaytePriority(t.priority) ?? groupPriority
-      const own = t.model === undefined || t.model === null || t.model === ''
-      if (isAuto(t.model) || (own && groupAuto)) {
-        const k = kind ?? 'code'
-        const n = autoSoFar.get(k) ?? 0
-        autoSoFar.set(k, n + 1)
-        const pick = pickConfig(k, rows, n)
-        return { ...pick.config, kind: k, auto: true, reason: pick.reason, priority }
-      }
-      return {
-        model: climayteModel(t.model) ?? groupModel,
-        effort: (isAuto(t.effort) ? null : climayteEffort(t.effort)) ?? groupEffort,
-        kind,
-        auto: false,
-        reason: undefined,
-        priority,
-      }
+      return runSetting(t, defaults, rows, autoSoFar)
     } catch (err) {
       throw new Error(`task ${i + 1}: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -2259,38 +2351,8 @@ export function climayteRun(input: {
   // Joining a group keeps its cap unless the caller names a new one.
   if (input.perAccount !== undefined || !(group in perAccount)) perAccount[group] = cap
   const now = Date.now()
-  const made = input.tasks.map(
-    (t, i): CliMayteWorker => ({
-      id: `w-${hex(8)}`,
-      group,
-      title: t.title?.trim() || t.prompt.replace(/\s+/g, ' ').trim().slice(0, 60),
-      cwd: t.cwd,
-      prompt: t.prompt,
-      pending: [],
-      model: settings[i]?.model ?? null,
-      effort: settings[i]?.effort ?? null,
-      kind: settings[i]?.kind ?? null,
-      ...(settings[i]?.auto ? { auto: true } : {}),
-      ...(t.check?.trim() ? { check: t.check.trim() } : {}),
-      ...(sized[i] ? { size: sized[i] } : {}),
-      priority: settings[i]?.priority ?? 0,
-      accounts: input.accounts?.length ? input.accounts : null,
-      status: 'queued',
-      sessionId: crypto.randomUUID(),
-      accountId: null,
-      attempts: [],
-      result: null,
-      results: [],
-      error: null,
-      lastActivity: null,
-      costUsd: 0,
-      turns: 0,
-      moves: 0,
-      retries: 0,
-      notBefore: null,
-      createdAt: now,
-      updatedAt: now,
-    }),
+  const made = input.tasks.map((t, i) =>
+    newWorker(t, settings[i], sized[i], group, input.accounts, now),
   )
   for (const [i, w] of made.entries()) {
     workers.set(w.id, w)
@@ -2665,6 +2727,64 @@ const SENT_BACK = 'The orchestrator checked your result and it did not pass. Wha
 const configLabel = (c: { model: string | null; effort: string | null }): string =>
   `${c.model?.includes('sonnet') ? 'Sonnet 5.5' : c.model?.includes('opus') ? 'Opus 5.5' : (c.model ?? 'the default model')} · ${c.effort ?? 'default effort'}`
 
+/** Tag an untagged task's kind from the verdict. The reason it is not a kind, or null. */
+function tagKind(w: CliMayteWorker, kind: unknown): string | null {
+  try {
+    const k = climayteKind(kind)
+    if (k) w.kind = k
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+/** A verdict's record: the setting that produced the result, and what that work cost. */
+function verdictRecord(
+  w: CliMayteWorker,
+  passed: 'pass' | 'fail',
+  note: string | null,
+  by: unknown,
+): CliMayteVerdict {
+  // The work this verdict judges: every attempt since the previous verdict.
+  const since = w.verdicts?.at(-1)?.at ?? 0
+  const ran = w.attempts.filter((a) => a.startedAt >= since)
+  const reported = [...ran].reverse().find((a) => a.model)?.model ?? null
+  return {
+    at: Date.now(),
+    verdict: passed,
+    note,
+    model: ladderModel(w.model ?? reported),
+    effort: w.effort,
+    units: ran.reduce((sum, a) => sum + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl), 0),
+    reread: ran.reduce((sum, a) => sum + rereadUnits(a, w.model), 0),
+    by: by === 'check' || by === 'owner' ? by : 'orchestrator',
+  }
+}
+
+/** Send a failed result back to its session one rung up the ladder. What it was sent back on
+ *  (null when it was not: already on the top setting, or the send was refused) and what to say. */
+function sendBack(
+  id: string,
+  verdict: CliMayteVerdict,
+  note: string | null,
+): { next: { model: string; effort: string } | null; message: string } {
+  const next = nextRung(verdict)
+  if (!next)
+    return {
+      next: null,
+      message:
+        'Recorded a fail. It already ran on the top setting (Opus 5.5 · max), so it was not sent back.',
+    }
+  const sent = climayteSend(
+    id,
+    `${SENT_BACK} ${note}\n\nFix it, prove the fix with a command and what it printed, and report again.`,
+    next,
+  )
+  return sent.ok
+    ? { next, message: `Recorded a fail. Sent back on ${configLabel(next)}.` }
+    : { next: null, message: sent.message }
+}
+
 /** Judge a finished task's result (owner, 2026-09-30: "if it works, it gives it a thumbs up ... if
  *  it does not, it reports the failure, and what model it tries next"). The verdict is kept with the
  *  setting that produced the result and what that work cost, and the scorecard learns from it. A
@@ -2685,44 +2805,14 @@ export function climayteVerdict(
     typeof input.note === 'string' && input.note.trim() ? input.note.trim().slice(0, 1000) : null
   if (input.verdict === 'fail' && !note)
     return { ok: false, message: 'Say what was wrong (note): the worker gets it with the retry.' }
-  try {
-    const kind = climayteKind(input.kind)
-    if (kind) w.kind = kind
-  } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : String(err) }
-  }
-  // The work this verdict judges: every attempt since the previous verdict.
-  const since = w.verdicts?.at(-1)?.at ?? 0
-  const ran = w.attempts.filter((a) => a.startedAt >= since)
-  const reported = [...ran].reverse().find((a) => a.model)?.model ?? null
-  const verdict: CliMayteVerdict = {
-    at: Date.now(),
-    verdict: input.verdict,
-    note,
-    model: ladderModel(w.model ?? reported),
-    effort: w.effort,
-    units: ran.reduce((sum, a) => sum + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl), 0),
-    reread: ran.reduce((sum, a) => sum + rereadUnits(a, w.model), 0),
-    by: input.by === 'check' || input.by === 'owner' ? input.by : 'orchestrator',
-  }
+  const badKind = tagKind(w, input.kind)
+  if (badKind !== null) return { ok: false, message: badKind }
+  const verdict = verdictRecord(w, input.verdict, note, input.by)
   w.verdicts = [...(w.verdicts ?? []), verdict]
   let next: { model: string; effort: string } | null = null
   let message = verdict.verdict === 'pass' ? 'Recorded a pass.' : 'Recorded a fail; not sent back.'
-  if (verdict.verdict === 'fail' && input.retry !== false) {
-    next = nextRung(verdict)
-    if (!next)
-      message =
-        'Recorded a fail. It already ran on the top setting (Opus 5.5 · max), so it was not sent back.'
-    else {
-      const sent = climayteSend(
-        id,
-        `${SENT_BACK} ${note}\n\nFix it, prove the fix with a command and what it printed, and report again.`,
-        next,
-      )
-      message = sent.ok ? `Recorded a fail. Sent back on ${configLabel(next)}.` : sent.message
-      if (!sent.ok) next = null
-    }
-  }
+  if (verdict.verdict === 'fail' && input.retry !== false)
+    ({ next, message } = sendBack(id, verdict, note))
   journal(w, 'verdict', {
     verdict: verdict.verdict,
     notice: note ? firstLine(note) : undefined,
@@ -2837,6 +2927,193 @@ export function climayteCancel(filter: { id?: string; group?: string }): {
   return { cancelled, keptMessages }
 }
 
+type TotalsAttempt = CliMayteWorker['attempts'][number]
+type CeilingStop = {
+  id: string
+  title: string
+  account: string
+  at: string
+  pct: number
+  askedPct: number | null
+  workers: number
+  t: number
+}
+type LimitHit = {
+  id: string
+  title: string
+  account: string
+  at: string
+  pct: number | null
+  t: number
+}
+type WindowPeak = {
+  account: string
+  resetsAt: number | null
+  peakPct: number
+  runs: number
+  t: number
+}
+type SizedTask = { id: string; title: string; expected: number; used: number; work: number }
+
+/** climayteTotals' running sums. With `since`, every figure covers only runs that ended after it
+ *  (or are running); without, the whole record, as the CliMayte view's counter shows it. */
+interface TotalsTally {
+  since: number
+  sessions: number
+  costUsd: number
+  tokens: CliMayteTokens
+  used: number
+  reread: number
+  unmeasured: number
+  byCause: Partial<Record<TotalsAttempt['outcome'], number>>
+  ceilingStops: number
+  ceilings: CeilingStop[]
+  /** Every attempt on record: a ceiling stop says how many runs were on its account then. */
+  allAttempts: TotalsAttempt[]
+  tasksInScope: Set<string>
+  hits: LimitHit[]
+  peaks: Map<string, WindowPeak>
+  runsByOutcome: Partial<Record<TotalsAttempt['outcome'] | 'ceiling', number>>
+  distinct: Set<string>
+}
+
+/** How many runs were on an account at a moment, the one that asks included. */
+const runsOnAccount = (all: TotalsAttempt[], accountId: string, t: number): number =>
+  all.filter(
+    (a) =>
+      a.account.id === accountId && a.startedAt <= t && (a.endedAt ?? Number.MAX_SAFE_INTEGER) >= t,
+  ).length
+
+/** Over the whole record a task counts with its own sums; with `since` it only counts as a task
+ *  when it was created after it (its runs are counted one by one, tallyRecentRun). */
+function tallyTask(tally: TotalsTally, w: CliMayteWorker): void {
+  if (!tally.since) {
+    tally.sessions += w.attempts.length
+    tally.costUsd += w.costUsd
+    if (w.tokens) tally.tokens = addTokens(tally.tokens, w.tokens)
+    tally.tasksInScope.add(w.id)
+  } else if (w.createdAt >= tally.since) tally.tasksInScope.add(w.id)
+}
+
+function tallyRecentRun(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
+  if (!tally.since) return
+  tally.sessions++
+  tally.costUsd += at.spend?.costUsd ?? 0
+  if (at.tokens) tally.tokens = addTokens(tally.tokens, at.tokens)
+  tally.tasksInScope.add(w.id)
+}
+
+/** A run stopped at CliMayte's ceiling, or one that ran into the account's own limit. */
+function tallyStops(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
+  if (at.ceiling) {
+    tally.ceilingStops++
+    const t = at.endedAt ?? Date.now()
+    tally.ceilings.push({
+      id: w.id,
+      title: w.title,
+      account: acctLabel(at.account),
+      at: new Date(t).toISOString(),
+      pct: at.ceiling.pct,
+      askedPct: at.windDown ? at.windDown.pct : null,
+      workers: runsOnAccount(tally.allAttempts, at.account.id, t),
+      t,
+    })
+  }
+  if (at.outcome === 'quota' && !at.ceiling)
+    tally.hits.push({
+      id: w.id,
+      title: w.title,
+      account: acctLabel(at.account),
+      at: new Date(at.endedAt ?? at.startedAt).toISOString(),
+      pct: at.peak?.pct ?? null,
+      t: at.endedAt ?? at.startedAt,
+    })
+}
+
+/** An account's highest 5-hour reading per window, over the runs CliMayte had on it. */
+function tallyPeak(tally: TotalsTally, at: TotalsAttempt): void {
+  if (!at.peak) return
+  const key = `${at.account.id}|${at.peak.resetsAt ?? ''}`
+  const p = tally.peaks.get(key) ?? {
+    account: acctLabel(at.account),
+    resetsAt: at.peak.resetsAt,
+    peakPct: 0,
+    runs: 0,
+    t: 0,
+  }
+  p.peakPct = Math.max(p.peakPct, at.peak.pct)
+  p.runs++
+  p.t = Math.max(p.t, at.endedAt ?? Date.now())
+  tally.peaks.set(key, p)
+}
+
+function tallyUsage(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
+  const shown = at.ceiling && at.outcome === 'quota' ? 'ceiling' : at.outcome
+  tally.runsByOutcome[shown] = (tally.runsByOutcome[shown] ?? 0) + 1
+  tally.used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
+  if (at.endedAt !== null && !at.spend) tally.unmeasured++
+  const r = rereadUnits(at, w.model)
+  // What stopped the last run that ran: a refused sign-in in between re-read nothing itself.
+  const cause = lastThatRan(w, at)?.outcome
+  if (r > 0 && cause) {
+    tally.reread += r
+    tally.byCause[cause] = (tally.byCause[cause] ?? 0) + r
+  }
+}
+
+function tallyConversation(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
+  // A run the account refused before the CLI started holds no conversation.
+  const spent = at.tokens ? at.tokens.cacheRead + at.tokens.cacheWrite + at.tokens.input : 0
+  if (!at.started && spent === 0) return
+  const sid = at.sessionId ?? w.sessionId
+  if (sid) tally.distinct.add(sid)
+}
+
+function tallyAttempt(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
+  const recent = (at.endedAt ?? Date.now()) >= tally.since
+  if (!recent) return
+  tallyRecentRun(tally, w, at)
+  tallyStops(tally, w, at)
+  tallyPeak(tally, at)
+  tallyUsage(tally, w, at)
+  tallyConversation(tally, w, at)
+}
+
+/** Finished tasks that were sized, since `since`: what each was expected to cost against what it
+ *  used, with and without its re-reads. */
+function sizedTasks(since: number): SizedTask[] {
+  const sized: SizedTask[] = []
+  for (const w of workers.values()) {
+    if (w.status !== 'done' || !w.size || w.createdAt < since) continue
+    const all = w.attempts.reduce(
+      (s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),
+      0,
+    )
+    const rr = w.attempts.reduce((s, a) => s + rereadUnits(a, w.model), 0)
+    sized.push({
+      id: w.id,
+      title: w.title,
+      expected: w.size.expected,
+      used: pct1(all),
+      work: pct1(all - rr),
+    })
+  }
+  return sized
+}
+
+function sizingOf(sized: SizedTask[]): ReturnType<typeof climayteTotals>['sizing'] {
+  const sum = (k: 'expected' | 'used' | 'work'): number =>
+    Math.round(sized.reduce((s, x) => s + x[k], 0) * 10) / 10
+  return {
+    tasks: sized.length,
+    expectedPct: sum('expected'),
+    usedPct: sum('used'),
+    workPct: sum('work'),
+    ratio: sum('expected') > 0 ? Math.round((sum('used') / sum('expected')) * 100) / 100 : null,
+    list: sized.slice(-50),
+  }
+}
+
 /** What CliMayte has taken off the chats that handed it work: tasks, the CLI sessions they ran
  *  (attempts), their tokens and cost (the CliMayte view's counter), over every task on record, or
  *  with `since` over the runs that ended after it (a night's re-read share, not the record's). */
@@ -2900,180 +3177,61 @@ export function climayteTotals(since = 0): {
   }
 } {
   load()
-  let sessions = 0
-  let costUsd = 0
-  let tokens = noTokens()
-  let used = 0
-  let reread = 0
-  let unmeasured = 0
-  const byCause: Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>> = {}
-  let ceilingStops = 0
-  const ceilings: Array<{
-    id: string
-    title: string
-    account: string
-    at: string
-    pct: number
-    askedPct: number | null
-    workers: number
-    t: number
-  }> = []
-  const allAttempts = [...workers.values()].flatMap((w) => w.attempts)
-  const runningOn = (accountId: string, t: number): number =>
-    allAttempts.filter(
-      (a) =>
-        a.account.id === accountId &&
-        a.startedAt <= t &&
-        (a.endedAt ?? Number.MAX_SAFE_INTEGER) >= t,
-    ).length
-  // With `since`, every figure covers only runs that ended after it (or are running); without, the
-  // whole record, as the CliMayte view's counter shows it.
-  const tasksInScope = new Set<string>()
-  const hits: Array<{
-    id: string
-    title: string
-    account: string
-    at: string
-    pct: number | null
-    t: number
-  }> = []
-  const peaks = new Map<
-    string,
-    { account: string; resetsAt: number | null; peakPct: number; runs: number; t: number }
-  >()
-  const sized: Array<{ id: string; title: string; expected: number; used: number; work: number }> =
-    []
-  const runsByOutcome: Partial<
-    Record<CliMayteWorker['attempts'][number]['outcome'] | 'ceiling', number>
-  > = {}
-  const distinct = new Set<string>()
-  for (const w of workers.values()) {
-    if (!since) {
-      sessions += w.attempts.length
-      costUsd += w.costUsd
-      if (w.tokens) tokens = addTokens(tokens, w.tokens)
-      tasksInScope.add(w.id)
-    } else if (w.createdAt >= since) tasksInScope.add(w.id)
-    for (const at of w.attempts) {
-      const recent = (at.endedAt ?? Date.now()) >= since
-      if (!recent) continue
-      if (since) {
-        sessions++
-        costUsd += at.spend?.costUsd ?? 0
-        if (at.tokens) tokens = addTokens(tokens, at.tokens)
-        tasksInScope.add(w.id)
-      }
-      if (at.ceiling) {
-        ceilingStops++
-        const t = at.endedAt ?? Date.now()
-        ceilings.push({
-          id: w.id,
-          title: w.title,
-          account: acctLabel(at.account),
-          at: new Date(t).toISOString(),
-          pct: at.ceiling.pct,
-          askedPct: at.windDown ? at.windDown.pct : null,
-          workers: runningOn(at.account.id, t),
-          t,
-        })
-      }
-      if (at.outcome === 'quota' && !at.ceiling)
-        hits.push({
-          id: w.id,
-          title: w.title,
-          account: acctLabel(at.account),
-          at: new Date(at.endedAt ?? at.startedAt).toISOString(),
-          pct: at.peak?.pct ?? null,
-          t: at.endedAt ?? at.startedAt,
-        })
-      if (at.peak) {
-        const key = `${at.account.id}|${at.peak.resetsAt ?? ''}`
-        const p = peaks.get(key) ?? {
-          account: acctLabel(at.account),
-          resetsAt: at.peak.resetsAt,
-          peakPct: 0,
-          runs: 0,
-          t: 0,
-        }
-        p.peakPct = Math.max(p.peakPct, at.peak.pct)
-        p.runs++
-        p.t = Math.max(p.t, at.endedAt ?? Date.now())
-        peaks.set(key, p)
-      }
-      const shown = at.ceiling && at.outcome === 'quota' ? 'ceiling' : at.outcome
-      runsByOutcome[shown] = (runsByOutcome[shown] ?? 0) + 1
-      used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
-      if (at.endedAt !== null && !at.spend) unmeasured++
-      const r = rereadUnits(at, w.model)
-      // What stopped the last run that ran: a refused sign-in in between re-read nothing itself.
-      const cause = lastThatRan(w, at)?.outcome
-      if (r > 0 && cause) {
-        reread += r
-        byCause[cause] = (byCause[cause] ?? 0) + r
-      }
-      // A run the account refused before the CLI started holds no conversation.
-      const spent = at.tokens ? at.tokens.cacheRead + at.tokens.cacheWrite + at.tokens.input : 0
-      if (!at.started && spent === 0) continue
-      const sid = at.sessionId ?? w.sessionId
-      if (sid) distinct.add(sid)
-    }
+  const tally: TotalsTally = {
+    since,
+    sessions: 0,
+    costUsd: 0,
+    tokens: noTokens(),
+    used: 0,
+    reread: 0,
+    unmeasured: 0,
+    byCause: {},
+    ceilingStops: 0,
+    ceilings: [],
+    allAttempts: [...workers.values()].flatMap((w) => w.attempts),
+    tasksInScope: new Set<string>(),
+    hits: [],
+    peaks: new Map<string, WindowPeak>(),
+    runsByOutcome: {},
+    distinct: new Set<string>(),
   }
   for (const w of workers.values()) {
-    if (w.status !== 'done' || !w.size || w.createdAt < since) continue
-    const all = w.attempts.reduce(
-      (s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),
-      0,
-    )
-    const rr = w.attempts.reduce((s, a) => s + rereadUnits(a, w.model), 0)
-    sized.push({
-      id: w.id,
-      title: w.title,
-      expected: w.size.expected,
-      used: pct1(all),
-      work: pct1(all - rr),
-    })
+    tallyTask(tally, w)
+    for (const at of w.attempts) tallyAttempt(tally, w, at)
   }
-  const sum = (k: 'expected' | 'used' | 'work'): number =>
-    Math.round(sized.reduce((s, x) => s + x[k], 0) * 10) / 10
+  const sized = sizedTasks(since)
   return {
-    tasks: tasksInScope.size,
-    sessions,
-    runsByOutcome,
-    cliSessions: distinct.size,
-    tokens,
-    costUsd,
-    usedPct: pct1(used),
-    rereadPct: pct1(reread),
-    rereadShare: used > 0 ? Math.round((reread / used) * 1000) / 10 : 0,
+    tasks: tally.tasksInScope.size,
+    sessions: tally.sessions,
+    runsByOutcome: tally.runsByOutcome,
+    cliSessions: tally.distinct.size,
+    tokens: tally.tokens,
+    costUsd: tally.costUsd,
+    usedPct: pct1(tally.used),
+    rereadPct: pct1(tally.reread),
+    rereadShare: tally.used > 0 ? Math.round((tally.reread / tally.used) * 1000) / 10 : 0,
     rereadByCause: Object.fromEntries(
-      Object.entries(byCause).map(([k, v]) => [k, pct1(v ?? 0)]),
+      Object.entries(tally.byCause).map(([k, v]) => [k, pct1(v ?? 0)]),
     ) as Partial<Record<CliMayteWorker['attempts'][number]['outcome'], number>>,
-    unmeasured,
+    unmeasured: tally.unmeasured,
     since: since ? new Date(since).toISOString() : null,
-    limitHits: hits.length,
-    ceilingStops,
-    ceilingStopList: ceilings
+    limitHits: tally.hits.length,
+    ceilingStops: tally.ceilingStops,
+    ceilingStopList: tally.ceilings
       .sort((a, b) => b.t - a.t)
       .slice(0, 20)
       .map(({ t: _t, ...c }) => c),
-    limitHitList: hits
+    limitHitList: tally.hits
       .sort((a, b) => b.t - a.t)
       .slice(0, 20)
       .map(({ t: _t, ...h }) => h),
-    peaks: [...peaks.values()]
+    peaks: [...tally.peaks.values()]
       .sort((a, b) => b.t - a.t)
       .map(({ t: _t, resetsAt, ...p }) => ({
         ...p,
         resetsAt: resetsAt ? new Date(resetsAt).toISOString() : null,
       })),
-    sizing: {
-      tasks: sized.length,
-      expectedPct: sum('expected'),
-      usedPct: sum('used'),
-      workPct: sum('work'),
-      ratio: sum('expected') > 0 ? Math.round((sum('used') / sum('expected')) * 100) / 100 : null,
-      list: sized.slice(-50),
-    },
+    sizing: sizingOf(sized),
   }
 }
 
