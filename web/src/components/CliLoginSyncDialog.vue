@@ -1,13 +1,15 @@
 <script setup lang="ts">
 // Login sync (server/src/core/cli-login-sync.ts; owner, 2026-10-01: "point the login manager at my
 // cloud thingy, and it manages and syncs my logins between the 2 PCs"). Not set up: join with the
-// other PC's pairing code, or point at a new store (its address and access token). Set up: one row
-// of controls (on/off, last sync, how many are in sync, Sync now), every login as one line with a
-// short state and a switch to leave it out here, what the last passes did, and the pairing code to
-// copy to the other PC. A state's sentence is its hover title, never a paragraph in the row (owner,
-// 2026-10-01: "verbose as FUCK"). CLI and desktop logins are listed together, each tagged with its
-// kind. Nothing here shows a login.
-import { Cloud, Copy, LoaderCircle, RefreshCw, Unplug } from '@lucide/vue'
+// other PC's pairing code, or point at a new store (its address and access token). Set up: ONE
+// switch, "Sync all", on by default, beside how many logins are in sync and Sync now (owner,
+// 2026-10-01: "there just needs to be a check button that says Sync All, and if I turn that off,
+// then it can show me the giant list"). While it is on the list stays away, except for a login that
+// cannot sync; turned off, every login is one line with a short state and a switch to leave it out
+// here, and what the last passes did. Every explanation is behind an info bubble, never a paragraph
+// (owner, 2026-10-01: "verbose as FUCK", then "give it one of those little info bubbles"). CLI and
+// desktop logins are listed together, each tagged with its kind. Nothing here shows a login.
+import { Cloud, Copy, LoaderCircle, Pause, Play, RefreshCw, Unplug } from '@lucide/vue'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -35,12 +37,15 @@ import {
   setupLoginSync,
 } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const open = defineModel<boolean>('open', { default: false })
 const emit = defineEmits<{ changed: [] }>()
 
 const { t } = useI18n()
 const status = ref<CliLoginSyncStatus | null>(null)
+/** The owner turned "Sync all" off to choose logins; the list is open until it is turned back on. */
+const choosing = ref(false)
 const working = ref(false)
 const code = ref('')
 const url = ref('')
@@ -62,6 +67,7 @@ watch(
     if (timer !== null) window.clearInterval(timer)
     timer = null
     if (!isOpen) return
+    choosing.value = false
     code.value = ''
     url.value = ''
     token.value = ''
@@ -100,6 +106,29 @@ async function syncNow() {
     const r = await runLoginSyncNow()
     status.value = r.status
     if (r.result.problems.length) toast.error(r.result.problems[0])
+    emit('changed')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : String(err))
+  } finally {
+    working.value = false
+  }
+}
+
+/** On while nothing is left out and the list is not open: the default, and what a fresh join is. */
+const syncAll = computed(
+  () => !choosing.value && !(status.value?.logins ?? []).some((l) => l.excluded),
+)
+/** Off opens the list. On takes every left-out login back in, then closes it. */
+async function setSyncAll(on: boolean) {
+  if (!on) {
+    choosing.value = true
+    return
+  }
+  working.value = true
+  try {
+    for (const l of (status.value?.logins ?? []).filter((x) => x.excluded))
+      status.value = await setLoginSyncExcluded(l.id, false)
+    choosing.value = false
     emit('changed')
   } catch (err) {
     toast.error(err instanceof Error ? err.message : String(err))
@@ -165,6 +194,10 @@ const rows = computed(() =>
     .map((l) => ({ login: l, state: stateOf(l) }))
     .sort((a, b) => Number(failing(b.login)) - Number(failing(a.login))),
 )
+/** What the dialog lists: every login once the owner chooses, else only the ones that cannot sync. */
+const shown = computed(() =>
+  syncAll.value ? rows.value.filter((r) => failing(r.login)) : rows.value,
+)
 /** "X of Y in sync": Y is the logins that take part, so not the left-out ones, nor the ones sync
  *  leaves alone for good (signed in separately here, or fed by a desktop login that syncs itself). */
 const syncCount = computed(() => {
@@ -180,6 +213,27 @@ const syncCount = computed(() => {
 /** Sync is on and has logins left to bring in (or has not finished its first pass). */
 const syncing = computed(
   () => !!status.value?.enabled && (syncCount.value.arriving > 0 || !status.value.lastSyncAt),
+)
+
+/** The one status line: paused, or how many are in sync and when the last pass ran. */
+const statusLine = computed(() => {
+  const s = status.value
+  if (!s) return ''
+  if (!s.enabled) return t('cliInstances.syncPaused')
+  const count =
+    syncing.value && syncCount.value.arriving > 0
+      ? t('cliInstances.syncCountArriving', syncCount.value)
+      : t('cliInstances.syncCount', syncCount.value)
+  const last = s.lastSyncAt
+    ? t('cliInstances.syncLast', { ago: timeAgo(s.lastSyncAt) })
+    : t('cliInstances.syncFirst')
+  return `${count} · ${last}`
+})
+/** What "Sync all" means; with a desktop login in the list, also the one thing not to do with it. */
+const syncAllHint = computed(() =>
+  [t('cliInstances.syncAllHint'), hasDesktop.value ? t('cliInstances.syncDesktopNote') : '']
+    .filter(Boolean)
+    .join(' '),
 )
 
 const EVENT_KEY: Record<string, string> = {
@@ -219,16 +273,19 @@ const recent = computed(() => {
           <span class="flex items-center gap-2">
             <Cloud class="size-4" />
             {{ $t('cliInstances.syncTitle') }}
+            <InfoHint :text="$t('cliInstances.syncIntro')" />
           </span>
         </DialogTitle>
-        <DialogDescription>{{ $t('cliInstances.syncIntro') }}</DialogDescription>
+        <DialogDescription class="sr-only">{{ $t('cliInstances.syncIntro') }}</DialogDescription>
       </DialogHeader>
 
       <!-- Not set up on this PC: join the other PC's store, or point at a new one. -->
       <div v-if="status && !status.configured" class="flex flex-col gap-4">
         <section class="flex flex-col gap-1.5">
-          <h4 class="font-medium">{{ $t('cliInstances.syncJoinTitle') }}</h4>
-          <p class="text-muted-foreground">{{ $t('cliInstances.syncJoinHint') }}</p>
+          <h4 class="flex items-center gap-1.5 font-medium">
+            {{ $t('cliInstances.syncJoinTitle') }}
+            <InfoHint :text="$t('cliInstances.syncJoinHint')" />
+          </h4>
           <div class="flex items-center gap-1">
             <div class="mono min-w-0 flex-1">
               <Input
@@ -245,8 +302,10 @@ const recent = computed(() => {
           </div>
         </section>
         <section class="flex flex-col gap-1.5 border-t pt-3">
-          <h4 class="font-medium">{{ $t('cliInstances.syncSetupTitle') }}</h4>
-          <p class="text-muted-foreground">{{ $t('cliInstances.syncSetupHint') }}</p>
+          <h4 class="flex items-center gap-1.5 font-medium">
+            {{ $t('cliInstances.syncSetupTitle') }}
+            <InfoHint :text="$t('cliInstances.syncSetupHint')" />
+          </h4>
           <Input
             v-model="url"
             autocomplete="off"
@@ -273,58 +332,49 @@ const recent = computed(() => {
         </section>
       </div>
 
-      <!-- Set up: the controls, the logins, what happened, and the way to the other PC. No height
-           cap in here: the dialog itself scrolls when the list is long. -->
+      <!-- Set up: Sync all and the status on one row, the list only when it is wanted or needed, and
+           the way to the other PC. No height cap in here: the dialog itself scrolls on a long list. -->
       <div v-else-if="status" class="flex min-w-0 flex-col gap-3">
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <label class="flex cursor-pointer items-center gap-2 font-medium">
-            <Switch
-              :model-value="status.enabled"
-              :disabled="working"
-              :aria-label="$t('cliInstances.syncOn')"
-              @update:model-value="toggle"
-            />
-            {{ $t('cliInstances.syncOn') }}
-          </label>
-          <span class="text-muted-foreground">
-            {{
-              status.lastSyncAt
-                ? $t('cliInstances.syncLast', { ago: timeAgo(status.lastSyncAt) })
-                : status.enabled
-                  ? $t('cliInstances.syncFirst')
-                  : $t('cliInstances.syncNever')
-            }}
+          <span class="flex items-center gap-1.5">
+            <label class="flex cursor-pointer items-center gap-2 font-medium">
+              <Switch
+                :model-value="syncAll"
+                :disabled="working"
+                :aria-label="$t('cliInstances.syncAll')"
+                @update:model-value="setSyncAll"
+              />
+              {{ $t('cliInstances.syncAll') }}
+            </label>
+            <InfoHint :text="syncAllHint" />
           </span>
           <!-- The one live region: what a join or a Sync now is doing, without re-reading the list. -->
           <span role="status" class="flex items-center gap-1.5 tabular-nums text-muted-foreground">
             <LoaderCircle v-if="syncing" class="size-3 animate-spin" aria-hidden="true" />
-            {{
-              syncing && syncCount.arriving > 0
-                ? $t('cliInstances.syncCountArriving', syncCount)
-                : $t('cliInstances.syncCount', syncCount)
-            }}
+            {{ statusLine }}
           </span>
           <Button
+            v-if="status.enabled"
             size="sm"
             class="ms-auto"
-            :disabled="working || !status.enabled"
+            :disabled="working"
             :aria-busy="working"
             @click="syncNow"
           >
             <RefreshCw :class="working ? 'animate-spin' : ''" /> {{ $t('cliInstances.syncNow') }}
           </Button>
+          <Button v-else size="sm" class="ms-auto" :disabled="working" @click="toggle(true)">
+            <Play /> {{ $t('cliInstances.syncResume') }}
+          </Button>
         </div>
         <p v-if="status.lastError" class="text-destructive">{{ status.lastError }}</p>
-        <p v-if="hasDesktop" class="text-muted-foreground">
-          {{ $t('cliInstances.syncDesktopNote') }}
-        </p>
 
         <ul
-          v-if="rows.length"
+          v-if="shown.length"
           class="flex flex-col divide-y rounded-md border"
           :aria-label="$t('cliInstances.syncLogins')"
         >
-          <li v-for="{ login: l, state } in rows" :key="l.id" class="flex items-center gap-2 px-2 py-1.5">
+          <li v-for="{ login: l, state } in shown" :key="l.id" class="flex items-center gap-2 px-2 py-1.5">
             <InstanceNumber :num="l.num ?? 0" />
             <span class="min-w-0 flex-1 truncate" :title="l.name">{{ l.name }}</span>
             <Badge variant="outline">
@@ -349,7 +399,7 @@ const recent = computed(() => {
           </li>
         </ul>
 
-        <div v-if="recent.length" class="flex min-w-0 flex-col gap-0.5">
+        <div v-if="!syncAll && recent.length" class="flex min-w-0 flex-col gap-0.5">
           <span class="font-medium">{{ $t('cliInstances.syncRecent') }}</span>
           <span
             v-for="(g, i) in recent"
@@ -366,8 +416,20 @@ const recent = computed(() => {
           <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="status.url ?? undefined">
             {{ $t('cliInstances.syncStore', { host: status.url ?? '?' }) }}
           </span>
-          <Button variant="outline" size="sm" :disabled="working" @click="copyPairing">
-            <Copy /> {{ $t('cliInstances.syncPairing') }}
+          <span class="flex items-center gap-1.5">
+            <Button variant="outline" size="sm" :disabled="working" @click="copyPairing">
+              <Copy /> {{ $t('cliInstances.syncPairing') }}
+            </Button>
+            <InfoHint :text="$t('cliInstances.syncPairingHint')" />
+          </span>
+          <Button
+            v-if="status.enabled"
+            variant="ghost"
+            size="sm"
+            :disabled="working"
+            @click="toggle(false)"
+          >
+            <Pause /> {{ $t('cliInstances.syncPause') }}
           </Button>
           <Button variant="ghost" size="sm" :disabled="working" @click="disconnect">
             <Unplug /> {{ $t('cliInstances.syncDisconnect') }}

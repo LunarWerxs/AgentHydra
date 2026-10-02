@@ -74,6 +74,7 @@ import {
   windowRemainingPct,
 } from '@/lib/usage-reset'
 import IconTooltip from '@/shell/IconTooltip.vue'
+import InfoHint from '@/shell/InfoHint.vue'
 
 // Usage mode is TAB-WIDE (composables/useUsageMode.ts); the combined table passes it down so its
 // header and these rows can never disagree about which three columns sit in slots 4-6.
@@ -802,15 +803,18 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
     <DialogContent class="sm:max-w-lg">
       <DialogHeader>
         <DialogTitle>
-          {{
-            $t('instances.moveChatsConfirmTitle', {
-              n: moveJob?.plan.chats.length ?? 0,
-              from: moveJob ? moveLabel(moveJob.from) : '',
-              to: moveJob ? moveLabel(moveJob.to) : '',
-            })
-          }}
+          <span class="flex items-center gap-1.5">
+            {{
+              $t('instances.moveChatsConfirmTitle', {
+                n: moveJob?.plan.chats.length ?? 0,
+                from: moveJob ? moveLabel(moveJob.from) : '',
+                to: moveJob ? moveLabel(moveJob.to) : '',
+              })
+            }}
+            <InfoHint :text="$t('codexInstances.moveDescription')" />
+          </span>
         </DialogTitle>
-        <DialogDescription>{{ $t('codexInstances.moveDescription') }}</DialogDescription>
+        <DialogDescription class="sr-only">{{ $t('codexInstances.moveDescription') }}</DialogDescription>
       </DialogHeader>
       <p class="text-sm text-muted-foreground">{{ $t('codexInstances.moveCloseSource') }}</p>
       <ul class="max-h-64 space-y-2 overflow-auto text-sm">

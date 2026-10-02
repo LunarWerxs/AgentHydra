@@ -14,6 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { type CMLoginHistory, type CMLoginHistoryEntry, getInstanceLoginHistory } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 import IconTooltip from '@/shell/IconTooltip.vue'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const props = defineProps<{ dir: string; num: number }>()
 const { t } = useI18n()
@@ -75,8 +76,9 @@ function isLastSignedIn(index: number): boolean {
         </PopoverTrigger>
         <PopoverContent align="start" flush class="w-80">
           <div class="space-y-2 p-3">
-            <h2 class="text-sm font-semibold text-foreground">
+            <h2 class="flex items-center gap-1.5 text-sm font-semibold text-foreground">
               {{ $t('instances.loginHistoryTitle', { num }) }}
+              <InfoHint :text="$t('instances.loginHistoryFootnote')" />
             </h2>
             <p v-if="failed" class="text-xs text-destructive">
               {{ $t('instances.loginHistoryFailed') }}
@@ -122,7 +124,6 @@ function isLastSignedIn(index: number): boolean {
                   </div>
                 </li>
               </ol>
-              <p class="text-xs text-muted-foreground">{{ $t('instances.loginHistoryFootnote') }}</p>
             </template>
           </div>
         </PopoverContent>

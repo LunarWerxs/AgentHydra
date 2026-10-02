@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { CommandErrorKind, CorrectionReport } from '@/lib/api'
 import * as api from '@/lib/api'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
 const report = ref<CorrectionReport | null>(null)
@@ -56,6 +57,7 @@ async function copyRules() {
   <section class="rounded-lg border border-border p-3">
     <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
       <TriangleAlert class="size-3.5" />{{ $t('analytics.mistakes') }}
+      <InfoHint :text="$t('analytics.mistakesNote')" />
       <span class="ms-auto flex gap-1">
         <Button
           v-if="report?.groups.length"
@@ -76,7 +78,6 @@ async function copyRules() {
         </Button>
       </span>
     </h3>
-    <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.mistakesNote') }}</p>
     <template v-if="report">
       <p class="mb-2 text-2xs text-muted-foreground">
         {{

@@ -59,6 +59,7 @@ import {
 } from '@/lib/climayte-status'
 import { reconcileList, sameData } from '@/lib/reconcile'
 import { formatAgo } from '@/lib/relativeTime'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
 
@@ -296,8 +297,10 @@ onUnmounted(() => {
           <Network class="size-4.5" />
           {{ $t('climayte.title') }}
           <span v-if="workers.length" class="font-normal text-muted-foreground">({{ workers.length }})</span>
+          <!-- What CliMayte is, behind an info bubble (owner, 2026-10-01: a description is never a
+               paragraph over the UI). -->
+          <InfoHint :text="$t('climayte.subtitle')" />
         </h2>
-        <p class="max-w-2xl text-xs text-muted-foreground">{{ $t('climayte.subtitle') }}</p>
         <!-- The running count of what CliMayte has taken off the chats that handed it work. -->
         <p
           v-if="totals && totals.tasks > 0"

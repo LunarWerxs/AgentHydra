@@ -356,8 +356,7 @@ async function submit() {
         >
           <Sparkles class="size-4 text-primary" />
           <div class="flex-1">
-            <div class="text-sm font-medium">{{ $t('builder.newChatTitle') }}</div>
-            <div class="text-xs text-muted-foreground">{{ $t('builder.newChatHelper') }}</div>
+            <div class="flex items-center gap-1.5 text-sm font-medium">{{ $t('builder.newChatTitle') }}<InfoHint :text="$t('builder.newChatHelper')" /></div>
           </div>
           <Switch v-model="form.new_chat" />
         </div>

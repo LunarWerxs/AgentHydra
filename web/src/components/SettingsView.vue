@@ -1596,8 +1596,12 @@ defineExpose({ save })
             </div>
           </ExpandTransition>
 
-          <div v-if="monitorStatus.length === 0" class="px-3.5 py-2.5 text-xs italic text-muted-foreground">
+          <div
+            v-if="monitorStatus.length === 0"
+            class="flex items-center gap-1.5 px-3.5 py-2.5 text-xs italic text-muted-foreground"
+          >
             {{ $t('settings.monitorEmpty') }}
+            <InfoHint :text="$t('settings.monitorEmptyHint')" />
           </div>
           <div v-else class="flex flex-col gap-2 px-3.5 py-2.5">
             <div v-for="row in monitorStatus" :key="row.itemId" class="flex items-center gap-2 text-xs">

@@ -23,6 +23,7 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  Settings2,
   Terminal,
   Timer,
   Trash2,
@@ -57,6 +58,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -91,6 +93,7 @@ import {
   windowRemainingPct,
 } from '@/lib/usage-reset'
 import IconTooltip from '@/shell/IconTooltip.vue'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const {
   cliInstances,
@@ -471,7 +474,8 @@ async function onCheckUsageFromPopover(inst: CliInstance) {
   void refreshCliInstances({ silent: true })
 }
 
-// The keepalive's switch (server/src/session-keepalive.ts): the same setting as in Settings.
+// The keepalive's switch (server/src/session-keepalive.ts): the same setting as in Settings, here
+// behind the table's gear.
 const {
   keepaliveEnabled,
   keepaliveWeeklyFloorPct,
@@ -589,7 +593,9 @@ onUnmounted(() => {
   <!-- No border-t: the parent (CliView) separates this table from CliMayte with space instead. -->
   <div>
     <!-- The shared header every instance table uses; the count says "x of y" when rows are
-         elsewhere (see headingCount). It folds the table away to Quick add (owner, 2026-10-01: "the
+         elsewhere (see headingCount), and hovering it says where: linked ones have moved onto their
+         account's row in the Instances tab (a sentence beside the title before; owner, 2026-10-01:
+         "I don't think that text is necessary"). It folds the table away to Quick add (owner, 2026-10-01: "the
          list of accounts should be collapsable, so all I see is the add account section"), which
          leaves CliMayte below the whole window. -->
     <InstanceSectionHeader
@@ -597,6 +603,9 @@ onUnmounted(() => {
       provider="claude"
       :title="$t('cliInstances.title')"
       :count="headingCount"
+      :count-hint="
+        linkedCount > 0 ? $t('cliInstances.linkedElsewhere', { count: linkedCount }) : undefined
+      "
       :refresh-label="$t('cliInstances.refresh')"
       :refreshing="loading"
       :create-label="$t('cliInstances.createInstance')"
@@ -604,31 +613,57 @@ onUnmounted(() => {
       @create="openCreateDialog"
     >
       <template #tools>
-        <!-- The keepalive's switch, here as well as in Settings (owner, 2026-10-01: "a fleet switch
-             in the CLI tab"), and the way in for logins moved from the other PC. -->
-        <IconTooltip
-          :label="$t('cliInstances.keepaliveSwitch')"
-          :description="$t('cliInstances.keepaliveSwitchHint', { floor: keepaliveWeeklyFloorPct })"
-        >
-          <label class="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-            <Timer class="size-3.5" />
-            <span class="hidden sm:inline">{{ $t('cliInstances.keepaliveSwitch') }}</span>
-            <!-- Drawn once the setting is known: a switch that starts off and turns itself on a
-                 moment later reads as one that moved by itself (SUE round, 2026-10-01). -->
-            <Switch
-              v-if="settingsLoaded"
-              :model-value="keepaliveEnabled"
-              :aria-label="$t('cliInstances.keepaliveSwitch')"
-              @update:model-value="onKeepaliveSwitch"
-            />
-            <Skeleton v-else class="h-4 w-7" />
-          </label>
+        <!-- This table's own settings, behind a gear on the table (owner, 2026-10-01: a setting
+             lives on the page where he would look for it, and "Keep windows running" is a setting,
+             not a labelled switch across the header). The Popover root sits INSIDE the tooltip's
+             slot: see scripts/checks/reka-popper-root-inside-tooltip.mjs. -->
+        <IconTooltip :label="$t('cliInstances.tableSettings')">
+          <span class="inline-flex">
+            <Popover>
+              <PopoverTrigger as-child>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  :aria-label="$t('cliInstances.tableSettings')"
+                >
+                  <Settings2 />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" class="w-64">
+                <div class="flex items-center gap-1.5 text-xs">
+                  <label class="flex min-w-0 flex-1 cursor-pointer items-center justify-between gap-3">
+                    <span class="flex items-center gap-1.5">
+                      <Timer class="size-3.5 text-muted-foreground" />
+                      {{ $t('cliInstances.keepaliveSwitch') }}
+                    </span>
+                    <!-- Drawn once the setting is known: a switch that starts off and turns itself
+                         on a moment later reads as one that moved by itself (SUE round, 2026-10-01). -->
+                    <Switch
+                      v-if="settingsLoaded"
+                      :model-value="keepaliveEnabled"
+                      :aria-label="$t('cliInstances.keepaliveSwitch')"
+                      @update:model-value="onKeepaliveSwitch"
+                    />
+                    <Skeleton v-else class="h-4 w-7" />
+                  </label>
+                  <InfoHint
+                    :text="$t('cliInstances.keepaliveSwitchHint', { floor: keepaliveWeeklyFloorPct })"
+                  />
+                </div>
+              </PopoverContent>
+            </Popover>
+          </span>
         </IconTooltip>
-        <!-- Its name is on it: among bare icons nobody found Login sync without hovering each one
-             (SUE round, 2026-10-01). -->
+        <!-- A cloud and nothing else (owner, 2026-10-01: "The login sync should just be the icon of
+             a cloud"); its name is the tooltip. -->
         <IconTooltip :label="$t('cliInstances.sync')" :description="$t('cliInstances.syncHint')">
-          <Button variant="outline" @click="syncOpen = true">
-            <Cloud /> {{ $t('cliInstances.sync') }}
+          <Button
+            variant="outline"
+            size="icon"
+            :aria-label="$t('cliInstances.sync')"
+            @click="syncOpen = true"
+          >
+            <Cloud />
           </Button>
         </IconTooltip>
         <IconTooltip :label="$t('cliInstances.moveIn')">
@@ -643,11 +678,6 @@ onUnmounted(() => {
         </IconTooltip>
       </template>
       <template #meta>
-        <!-- Linked ones aren't missing, they've moved onto their account's row in the Instances
-             tab. Say so, or their absence from this count reads as a bug. -->
-        <span v-if="linkedCount > 0" class="text-xs font-normal text-muted-foreground">
-          {{ $t('cliInstances.linkedElsewhere', { count: linkedCount }) }}
-        </span>
         <span v-if="hiddenByFilter > 0" class="text-xs font-normal text-muted-foreground">
           {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
         </span>

@@ -60,6 +60,7 @@ import * as api from '@/lib/api'
 import { modelVendor, shortUsd, vendorLabel } from '@/lib/chart'
 import { baseName, formatCompact, formatUsd } from '@/lib/format'
 import IconTooltip from '@/shell/IconTooltip.vue'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
 const { analyticsPeriod, analyticsTokenMode, toggleTokenMode } = useAnalyticsPrefs()
@@ -577,22 +578,24 @@ const survivalAverage = computed(() => {
             <p class="text-xl font-semibold tabular-nums">{{ formatCompact(agentHours) }}</p>
           </div>
           <div class="rounded-lg border border-border p-3">
-            <!-- Says what "weighted" MEANS, in the tile rather than in a doc nobody opens. This
-                 number sits beside a raw token total four times its size, and without the line
-                 below the only honest reaction is to assume one of them is broken. -->
-            <p class="text-2xs text-muted-foreground">{{ $t('analytics.tokens') }}</p>
+            <!-- Says what "weighted" MEANS, on the tile (its info bubble) rather than in a doc
+                 nobody opens. This number sits beside a raw token total four times its size, and
+                 without it the only honest reaction is to assume one of them is broken. -->
+            <p class="flex items-center gap-1.5 text-2xs text-muted-foreground">
+              {{ $t('analytics.tokens') }}
+              <InfoHint :text="$t('analytics.tokensNote')" />
+            </p>
             <p class="text-xl font-semibold tabular-nums">
               {{ formatCompact(spend.totalWeighted) }}
             </p>
-            <p class="mt-0.5 text-3xs text-muted-foreground">{{ $t('analytics.tokensNote') }}</p>
           </div>
         </div>
 
         <section class="rounded-lg border border-border p-3">
-          <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
+          <h3 class="mb-2 flex items-center gap-1.5 text-xs font-medium">
             <Layers class="size-3.5" />{{ $t('analytics.tokenSplit') }}
+            <InfoHint :text="$t('analytics.tokenSplitNote')" />
           </h3>
-          <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.tokenSplitNote') }}</p>
           <TokenSplit v-if="spend" :tokens="spend.tokens" />
         </section>
 
@@ -657,8 +660,9 @@ const survivalAverage = computed(() => {
             />
             <!-- Named, not drawn at zero: a model with no published price did not cost nothing. -->
             <div v-if="unpricedTokenRows.length" class="mt-3 border-t border-border pt-2">
-              <p class="mb-1.5 text-2xs text-muted-foreground">
-                {{ $t('analytics.unpricedNote') }}
+              <p class="mb-1.5 flex items-center gap-1.5 text-2xs text-muted-foreground">
+                {{ $t('analytics.unpricedTitle') }}
+                <InfoHint :text="$t('analytics.unpricedNote')" />
               </p>
               <BarRows
                 :rows="unpricedTokenRows"
@@ -689,10 +693,10 @@ const survivalAverage = computed(() => {
         </div>
 
         <section v-if="accountRows.length" class="rounded-lg border border-border p-3">
-          <h3 class="mb-1 text-xs font-medium">
+          <h3 class="mb-2 flex items-center gap-1.5 text-xs font-medium">
             {{ tokenMode ? $t('analytics.tokensByAccount') : $t('analytics.costByAccount') }}
+            <InfoHint :text="$t('analytics.accountNote')" />
           </h3>
-          <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.accountNote') }}</p>
           <p
             v-if="accountTokensMissing"
             class="py-6 text-center text-2xs text-muted-foreground"
@@ -706,8 +710,8 @@ const survivalAverage = computed(() => {
         <section v-if="sinks && sinks.sessions" class="rounded-lg border border-border p-3">
           <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
             <Gauge class="size-3.5" />{{ $t('analytics.sinks') }}
+            <InfoHint :text="$t('analytics.sinksNote')" />
           </h3>
-          <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.sinksNote') }}</p>
           <ul class="mb-3 space-y-1.5">
             <li v-for="s in sinks.sinks" :key="s.id" class="text-2xs">
               <div class="flex items-center gap-2">
@@ -841,8 +845,10 @@ const survivalAverage = computed(() => {
           </section>
 
           <section class="rounded-lg border border-border p-3">
-            <h3 class="mb-1 text-xs font-medium">{{ $t('analytics.health') }}</h3>
-            <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.healthNote') }}</p>
+            <h3 class="mb-2 flex items-center gap-1.5 text-xs font-medium">
+              {{ $t('analytics.health') }}
+              <InfoHint :text="$t('analytics.healthNote')" />
+            </h3>
             <!-- edit survival: the share of written code still on disk hours later (server/src/edit-survival.ts) -->
             <p v-if="survivalAverage" class="mb-2 text-2xs text-muted-foreground">
               {{ $t('analytics.survivalAverage', survivalAverage) }}
@@ -908,8 +914,8 @@ const survivalAverage = computed(() => {
         <section v-if="agentTools.length" class="rounded-lg border border-border p-3">
           <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
             <Boxes class="size-3.5" />{{ $t('analytics.toolsFound') }}
+            <InfoHint :text="$t('analytics.toolsFoundNote')" />
           </h3>
-          <p class="mb-2 text-2xs text-muted-foreground">{{ $t('analytics.toolsFoundNote') }}</p>
           <ul class="grid gap-1 sm:grid-cols-2">
             <li
               v-for="tool in agentTools"

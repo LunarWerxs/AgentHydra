@@ -61,6 +61,7 @@ export default {
   tokensByModel: 'Tokens by model',
   tokensByProject: 'Tokens by project',
   tokensByAccount: 'Tokens by account',
+  unpricedTitle: 'No published price',
   unpricedNote:
     'No published price for these, so their tokens are counted but their cost is not. Showing tokens instead of a dollar figure, because zero would be a claim that they were free.',
   toolsFound: 'Coding tools on this machine',

@@ -49,14 +49,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   column sorts, and hovering a figure gives the exact total and the split (output, input, cache
   read, cache write). Launch moved from a button on every row into the row's ⋮ menu.
 
-- **The Login sync dialog is a short list** (`web/src/components/CliLoginSyncDialog.vue`). One line
-  says what it does; one row holds the switch, the last sync, how many logins are in sync and Sync
-  now; each login is one line with a state of a word or two (hover for the sentence), the ones that
-  cannot sync first; Recent groups what one pass did ("18m ago · uploaded #56 #14 #59"); the store,
-  the pairing code and Stop syncing sit at the bottom.
+- **The Login sync dialog is one switch** (`web/src/components/CliLoginSyncDialog.vue`). "Sync
+  all" is on by default, beside how many logins are in sync, when the last sync ran and Sync now;
+  the list of logins stays away. Turn it off and every login is one line with a state of a word or
+  two (hover for the sentence) and its own switch, with what the last passes did under it; turn it
+  back on and every login syncs again. A login that cannot sync is listed either way. The store,
+  Copy pairing code, Pause and Stop syncing sit at the bottom, and every explanation (what Login
+  sync is, what a pairing code is) is behind an info bubble.
+
+- **Descriptions are behind info bubbles, not paragraphs on the page.** The sentence under the
+  CliMayte heading, the notes under the Analytics sections, the hints in the instance filter, the
+  bodies of the link, associate, limit-reset, move-chats and secrets dialogs and the login history
+  footnote each moved behind the circle-i beside their heading. Empty states, errors and the
+  warning before a destructive action stay visible.
+
+- **The CLI table's header is icons.** Login sync is a cloud; Keep windows running is a setting
+  behind the table's gear, on the page it affects; the "+ N on a desktop row" sentence beside the
+  title is now the hover text of the count.
 
 - **What simulated visitors tripped on in the CLI tab** (a SUE round on `scripts/sue-demo`, the built
-  app over invented data). Login sync's button carries its name instead of a bare cloud icon. While
+  app over invented data). While
   logins are still arriving the dialog says so ("5 of 10 in sync, 5 on the way", "First sync is
   running…") instead of a count that read as stuck. The Account column is left out when no instance
   uses a pasted credential, so rows stop saying "No account" beside a name that is an email, and
@@ -101,6 +113,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   logins, limit reset, an instance's chats, moving all chats, the queue builder, the bulk-move and
   secrets dialogs in Sessions, the Codex move, the shortcut sheet) were all 384 px wide on any
   window from 640 px up: the width they passed did not replace the dialog's own.
+
+- **The create button on an instance table no longer flickers under the pointer.** It widened on
+  hover to show its label; in a full header that wrapped it onto the next line, out from under the
+  pointer, so it shrank, came back and widened again many times a second. It is an icon with a
+  tooltip now, like the buttons beside it, on all four instance tables.
 
 ## [1.5.0] - 2026-10-01
 

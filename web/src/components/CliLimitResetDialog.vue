@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { type CliInstance, cliLimitReset } from '@/lib/api'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const open = defineModel<boolean>('open', { default: false })
 const props = defineProps<{ instance: CliInstance | null }>()
@@ -52,9 +53,10 @@ async function onConfirm(check: boolean) {
           <span class="flex items-center gap-2">
             <RotateCcw class="size-4" />
             {{ $t('cliInstances.limitResetTitle', { name: instance?.name ?? '' }) }}
+            <InfoHint :text="$t('cliInstances.limitResetBody')" />
           </span>
         </DialogTitle>
-        <DialogDescription>{{ $t('cliInstances.limitResetBody') }}</DialogDescription>
+        <DialogDescription class="sr-only">{{ $t('cliInstances.limitResetBody') }}</DialogDescription>
       </DialogHeader>
       <DialogFooter class="mt-2">
         <Button variant="ghost" :disabled="!!running" @click="open = false">

@@ -116,6 +116,7 @@ import { groupByProject } from '@/lib/session-groups'
 import { sessionShape } from '@/lib/session-shape'
 import { cn } from '@/lib/utils'
 import IconTooltip from '@/shell/IconTooltip.vue'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const {
   sessions,
@@ -1867,8 +1868,13 @@ function onComposerSent(mode: 'now' | 'queued') {
     <Dialog v-model:open="secretsOpen">
       <DialogContent class="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{{ $t('sessions.secretsTitle') }}</DialogTitle>
-          <DialogDescription>{{ $t('sessions.secretsCaveat') }}</DialogDescription>
+          <DialogTitle>
+            <span class="flex items-center gap-1.5">
+              {{ $t('sessions.secretsTitle') }}
+              <InfoHint :text="$t('sessions.secretsCaveat')" />
+            </span>
+          </DialogTitle>
+          <DialogDescription class="sr-only">{{ $t('sessions.secretsCaveat') }}</DialogDescription>
         </DialogHeader>
         <ul class="scroll-slim max-h-80 space-y-1 overflow-y-auto text-xs">
           <li

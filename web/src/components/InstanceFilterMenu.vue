@@ -183,11 +183,11 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
                  last one ticked cannot be cleared (useInstanceFilter.toggleProvider), so it is
                  greyed rather than left as a dead click. -->
             <section class="space-y-1.5">
-              <h3 :class="CAPTION">{{ $t('instances.filterProvider') }}</h3>
+              <h3 :class="cn(CAPTION, 'flex items-center gap-1.5')">
+                {{ $t('instances.filterProvider') }}
+                <InfoHint :text="$t('instances.filterProviderHint')" />
+              </h3>
               <div :class="cn(CARD, 'space-y-1.5 px-2.5 py-2')">
-                <p class="text-xs text-muted-foreground">
-                  {{ $t('instances.filterProviderHint') }}
-                </p>
                 <div class="grid grid-cols-3 gap-1">
                   <button
                     v-for="provider in INSTANCE_PROVIDERS"
@@ -235,11 +235,11 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
                      have to encode "either" as off, which is the ambiguity that made the old quota
                      scope toggle unreadable. -->
                 <section class="space-y-1.5">
-                  <h3 :class="CAPTION">{{ $t('instances.filterStatusSection') }}</h3>
+                  <h3 :class="cn(CAPTION, 'flex items-center gap-1.5')">
+                    {{ $t('instances.filterStatusSection') }}
+                    <InfoHint :text="$t('instances.filterStatusHint')" />
+                  </h3>
                   <div :class="cn(CARD, 'space-y-1.5 px-2.5 py-2')">
-                    <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      {{ $t('instances.filterStatusHint') }}
-                    </div>
                     <div class="grid grid-cols-3 gap-1">
                       <Button
                         v-for="value in STATUS_FILTERS"
@@ -259,11 +259,11 @@ const presetLabel = (pct: number) => t('instances.filterThresholdValue', { pct }
                      implied empty state: clearing a selection one chip at a time is how a filter
                      you cannot get back out of feels, even when you technically can. -->
                 <section class="space-y-1.5">
-                  <h3 :class="CAPTION">{{ $t('instances.filterPlanSection') }}</h3>
+                  <h3 :class="cn(CAPTION, 'flex items-center gap-1.5')">
+                    {{ $t('instances.filterPlanSection') }}
+                    <InfoHint :text="$t('instances.filterPlanHint')" />
+                  </h3>
                   <div :class="cn(CARD, 'space-y-1.5 px-2.5 py-2')">
-                    <span class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                      {{ $t('instances.filterPlanHint') }}
-                    </span>
                     <div v-if="options.length > 0" class="flex flex-wrap gap-1">
                       <Button
                         :variant="plans.length === 0 ? 'default' : 'outline'"

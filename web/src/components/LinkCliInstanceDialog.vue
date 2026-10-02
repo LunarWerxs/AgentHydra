@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/select'
 import type { CMInstance } from '@/lib/api'
 import { displayName } from '@/lib/instance-appearance'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const open = defineModel<boolean>('open', { default: false })
 
@@ -61,8 +62,13 @@ function handleSubmit() {
     <DialogContent>
       <form @submit.prevent="handleSubmit">
         <DialogHeader>
-          <DialogTitle>{{ $t('cliInstances.linkDialogTitle') }}</DialogTitle>
-          <DialogDescription>{{ $t('cliInstances.linkDialogDescription') }}</DialogDescription>
+          <DialogTitle>
+            <span class="flex items-center gap-1.5">
+              {{ $t('cliInstances.linkDialogTitle') }}
+              <InfoHint :text="$t('cliInstances.linkDialogDescription')" />
+            </span>
+          </DialogTitle>
+          <DialogDescription class="sr-only">{{ $t('cliInstances.linkDialogDescription') }}</DialogDescription>
         </DialogHeader>
 
         <div class="mt-3 flex flex-col gap-1.5">

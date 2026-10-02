@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import type { Account } from '@/lib/api'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const open = defineModel<boolean>('open', { default: false })
 
@@ -56,8 +57,13 @@ function handleSubmit() {
     <DialogContent>
       <form @submit.prevent="handleSubmit">
         <DialogHeader>
-          <DialogTitle>{{ $t('cliInstances.associateDialogTitle') }}</DialogTitle>
-          <DialogDescription>{{ $t('cliInstances.associateDialogDescription') }}</DialogDescription>
+          <DialogTitle>
+            <span class="flex items-center gap-1.5">
+              {{ $t('cliInstances.associateDialogTitle') }}
+              <InfoHint :text="$t('cliInstances.associateDialogDescription')" />
+            </span>
+          </DialogTitle>
+          <DialogDescription class="sr-only">{{ $t('cliInstances.associateDialogDescription') }}</DialogDescription>
         </DialogHeader>
 
         <div class="mt-3 flex flex-col gap-1.5">

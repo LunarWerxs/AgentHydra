@@ -111,7 +111,9 @@ export default {
   logoutDialogDescription:
     'Removes the saved Claude login (.credentials.json) from this CLI instance. Its chats, settings and folder stay, and Claude asks for a sign-in the next time it starts. Quit any Claude session running on it first.',
   toastUsageCheckFailed: 'Failed to check usage.',
-  // The keepalive's switch on this tab (server/src/session-keepalive.ts; also in Settings).
+  // The table's gear, and the keepalive's switch inside it (server/src/session-keepalive.ts; also
+  // in Settings).
+  tableSettings: 'CLI settings',
   keepaliveSwitch: 'Keep windows running',
   keepaliveSwitchHint:
     'When a signed-in account has no 5-hour window running, AgentHydra sends it one tiny prompt (Haiku, one word back, about two cents at API prices) so its window starts now and resets sooner. Skips accounts at their limit, signed out, busy, or at {floor}% or more of their weekly limit. A timer icon on the row marks a window it started.',
@@ -173,8 +175,9 @@ export default {
   syncKindDesktop: 'Desktop',
   syncKindCli: 'CLI',
   syncJoinTitle: 'Join from your other PC',
-  syncJoinHint: 'Paste the pairing code from the other PC’s Login sync.',
-  syncJoinPlaceholder: 'ahsync1:…',
+  syncJoinHint:
+    'On the PC that already syncs, open Login sync and press Copy pairing code, then paste it here. The code is one line of text that holds the store’s address, its access token and the key that encrypts your logins.',
+  syncJoinPlaceholder: 'Pairing code from your other PC',
   syncJoin: 'Join',
   syncSetupTitle: 'Or set up a new store',
   syncSetupHint:
@@ -183,10 +186,17 @@ export default {
   syncToken: 'Access token',
   syncSetup: 'Set up',
   syncWorking: 'Checking the store…',
-  syncOn: 'Sync on',
+  // The one switch (owner, 2026-10-01): on means every login syncs and the list stays away.
+  syncAll: 'Sync all',
+  syncAllHint:
+    'Every login on this PC and in the store is kept the same on both PCs. Turn this off to choose which logins sync here.',
+  syncPause: 'Pause',
+  syncResume: 'Resume',
+  syncPaused: 'Paused: nothing syncs until you resume',
+  syncPairingHint:
+    'One line of text for your other PC: paste it into Login sync there and that PC joins this store. It holds the store’s address, its access token and the key that encrypts your logins, so treat it like a password.',
   syncStore: 'Store: {host}',
   syncLast: 'Last synced {ago}',
-  syncNever: 'Not synced yet',
   syncFirst: 'First sync is running…',
   syncNow: 'Sync now',
   syncPairing: 'Copy pairing code',

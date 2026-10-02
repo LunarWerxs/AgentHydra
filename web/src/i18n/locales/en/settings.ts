@@ -208,8 +208,9 @@ export default {
   monitorEnabledLabel: 'Enabled',
   monitorMaxAttemptsLabel: 'Max resume attempts',
   monitorBufferLabel: 'Resume buffer (min)',
-  monitorEmpty:
-    'Nothing to resume right now. A session appears here once it stops on a rate limit, whether the app ran it or you started it yourself in a terminal, which the monitor finds by checking recent transcripts. The monitor then tracks it until the window resets and resumes it. An empty list means nothing is currently waiting on a limit, not that monitoring is off.',
+  monitorEmpty: 'Nothing to resume right now.',
+  monitorEmptyHint:
+    'A session appears here once it stops on a rate limit, whether the app ran it or you started it yourself in a terminal, which the monitor finds by checking recent transcripts. The monitor then tracks it until the window resets and resumes it. An empty list means nothing is currently waiting on a limit, not that monitoring is off.',
   monitorAttempts: '{n} attempts',
   monitorDiscovered: 'Found',
   monitorDiscoveredHint:

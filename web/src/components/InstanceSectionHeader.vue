@@ -1,11 +1,11 @@
 <script setup lang="ts">
 // The one header every instance table on the Instances tab uses (Claude desktop, Claude CLI, Codex,
 // DeepSeek): the provider's logo, title and count as the collapse toggle, then the table's own
-// tools, Refresh and the create pill. Four hand-built copies of this had drifted apart (owner,
+// tools, Refresh and the create button. Four hand-built copies of this had drifted apart (owner,
 // 2026-09-30: DeepSeek's create button was a full-width label, and its collapse was not kept).
 //
-// `meta` sits inside the toggle after the count (a "linked elsewhere" or "hidden by filter" note);
-// `tools` sits before Refresh (the desktop table's usage-mode switch and filter menus).
+// `meta` sits inside the toggle after the count (a "hidden by filter" note); `tools` sits before
+// Refresh (the desktop table's usage-mode switch and filter menus).
 import { ChevronDown, Plus, RefreshCw } from '@lucide/vue'
 import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
 import { Button } from '@/components/ui/button'
@@ -20,12 +20,14 @@ withDefaults(
     title: string
     /** In brackets after the title ("4", "4 of 6"); null or omitted shows none. */
     count?: string | number | null
+    /** Hover text on the count, for why it says "x of y" (rows that live in another table). */
+    countHint?: string
     refreshLabel: string
     /** A second tooltip line for Refresh, when what it re-reads is not obvious. */
     refreshHint?: string
     refreshing?: boolean
     refreshDisabled?: boolean
-    /** The create pill's label, shown on hover; omitted means no create button. */
+    /** The create button's label, its tooltip; omitted means no create button. */
     createLabel?: string
     /** False hides the chevron (a table switched off in Settings has nothing to fold). */
     collapsible?: boolean
@@ -33,6 +35,7 @@ withDefaults(
   {
     provider: undefined,
     count: null,
+    countHint: undefined,
     refreshHint: undefined,
     createLabel: undefined,
     collapsible: true,
@@ -52,7 +55,9 @@ defineEmits<{ refresh: []; create: [] }>()
     >
       <ProviderLogo v-if="provider" :provider="provider" class="size-4" />
       {{ title }}
-      <span v-if="count !== null && count !== ''" class="text-muted-foreground">({{ count }})</span>
+      <span v-if="count !== null && count !== ''" class="text-muted-foreground" :title="countHint">
+        ({{ count }})
+      </span>
       <slot name="meta" />
       <ChevronDown
         v-if="collapsible"
@@ -73,22 +78,15 @@ defineEmits<{ refresh: []; create: [] }>()
           <RefreshCw :class="refreshing ? 'animate-spin' : ''" />
         </Button>
       </IconTooltip>
-      <!-- Plus at rest, label on hover/focus: every other control here is an icon, and a
-           permanently labelled button set the row's width for a phrase read once. -->
-      <Button
-        v-if="createLabel"
-        size="sm"
-        class="group/create overflow-hidden"
-        :aria-label="createLabel"
-        @click="$emit('create')"
-      >
-        <span class="inline-flex items-center">
-          <Plus class="shrink-0" />
-          <span
-            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-36 group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-36 group-focus-visible/create:opacity-100"
-          >{{ createLabel }}</span>
-        </span>
-      </Button>
+      <!-- An icon with a tooltip, like its neighbours. It used to widen on hover to show its label:
+           in a full row that wrapped it onto the next line, out from under the pointer, so it
+           shrank, came back and widened again, many times a second (owner, 2026-10-01). Nothing in
+           this row changes size on hover. -->
+      <IconTooltip v-if="createLabel" :label="createLabel">
+        <Button size="icon" :aria-label="createLabel" @click="$emit('create')">
+          <Plus />
+        </Button>
+      </IconTooltip>
     </div>
   </div>
 </template>
