@@ -200,23 +200,24 @@ describe('classifyAttempt', () => {
 })
 
 describe('wallUntil', () => {
-  // 4:30pm America/Chicago on 2026-09-30 (CDT, UTC-5) is 21:30Z.
-  const now = Date.parse('2026-09-30T21:30:04Z')
+  // 4:30pm America/Chicago on 2024-10-02 (CDT, UTC-5) is 21:30Z. A fixed day far from today: the
+  // clock is handed in, so only the gaps between these times matter.
+  const now = Date.parse('2024-10-02T21:30:04Z')
   const wall = (resetsAt: number | null, resets: string | null) =>
     wallUntil(now, { resetsAt, resets }, parseResetTime)
 
   test('a reset that has just passed is a 2-minute wall, not tomorrow', () => {
-    expect(wall(null, '4:30pm (America/Chicago)')).toBe(Date.parse('2026-09-30T21:32:04Z'))
+    expect(wall(null, '4:30pm (America/Chicago)')).toBe(Date.parse('2024-10-02T21:32:04Z'))
   })
 
   test('a known resetsAt ends the wall 60 s after it, ahead of the text', () => {
-    const resetsAt = Date.parse('2026-10-01T02:00:00Z')
-    expect(wall(resetsAt, '4:30pm (America/Chicago)')).toBe(Date.parse('2026-10-01T02:01:00Z'))
+    const resetsAt = Date.parse('2024-10-03T02:00:00Z')
+    expect(wall(resetsAt, '4:30pm (America/Chicago)')).toBe(Date.parse('2024-10-03T02:01:00Z'))
   })
 
   test('a future text reset ends 60 s after it; nothing parsed is an hour', () => {
-    expect(wall(null, '9:10pm (America/Chicago)')).toBe(Date.parse('2026-10-01T02:11:00Z'))
-    expect(wall(null, null)).toBe(Date.parse('2026-09-30T22:30:04Z'))
+    expect(wall(null, '9:10pm (America/Chicago)')).toBe(Date.parse('2024-10-03T02:11:00Z'))
+    expect(wall(null, null)).toBe(Date.parse('2024-10-02T22:30:04Z'))
   })
 })
 
@@ -266,9 +267,9 @@ describe('attemptSpend', () => {
   }
 
   test("an attempt is charged for its own turns only, never the session's earlier or later ones", () => {
-    const start = Date.parse('2026-09-30T12:00:00Z')
-    const end = Date.parse('2026-09-30T12:10:00Z')
-    write([turn('2026-09-30T12:05:00Z', 'b')])
+    const start = Date.parse('2024-10-02T12:00:00Z')
+    const end = Date.parse('2024-10-02T12:10:00Z')
+    write([turn('2024-10-02T12:05:00Z', 'b')])
     const own = attemptSpend(dir, 'S', start, end)
     expect(own.costUsd).toBeGreaterThan(0)
     // Its tokens are the one turn's, counted once (owner, 2026-09-30: each session's tokens kept).
@@ -276,10 +277,10 @@ describe('attemptSpend', () => {
     // The same turn (logged twice, one record per content block), a turn copied in from before the
     // attempt started, and one from a later attempt on the same account.
     write([
-      turn('2026-09-30T11:00:00Z', 'a'),
-      turn('2026-09-30T12:05:00Z', 'b'),
-      turn('2026-09-30T12:05:00Z', 'b'),
-      turn('2026-09-30T13:00:00Z', 'c'),
+      turn('2024-10-02T11:00:00Z', 'a'),
+      turn('2024-10-02T12:05:00Z', 'b'),
+      turn('2024-10-02T12:05:00Z', 'b'),
+      turn('2024-10-02T13:00:00Z', 'c'),
     ])
     const again = attemptSpend(dir, 'S', start, end)
     expect(again.costUsd).toBeCloseTo(own.costUsd, 10)
@@ -288,15 +289,15 @@ describe('attemptSpend', () => {
   })
 
   test("a subagent's requests in the attempt's window are the attempt's too", () => {
-    const start = Date.parse('2026-09-30T12:00:00Z')
-    const end = Date.parse('2026-09-30T12:10:00Z')
-    write([turn('2026-09-30T12:05:00Z', 'b')])
+    const start = Date.parse('2024-10-02T12:00:00Z')
+    const end = Date.parse('2024-10-02T12:10:00Z')
+    write([turn('2024-10-02T12:05:00Z', 'b')])
     const subs = join(dir, 'projects', 'p', 'S', 'subagents')
     mkdirSync(subs, { recursive: true })
     // One request inside the window, one copied in with the session from before it started.
     writeFileSync(
       join(subs, 'agent-x.jsonl'),
-      [turn('2026-09-30T12:06:00Z', 's'), turn('2026-09-30T11:00:00Z', 'old')].join('\n'),
+      [turn('2024-10-02T12:06:00Z', 's'), turn('2024-10-02T11:00:00Z', 'old')].join('\n'),
     )
     expect(attemptSpend(dir, 'S', start, end).tokens).toEqual({
       input: 20,
