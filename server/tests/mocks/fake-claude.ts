@@ -27,19 +27,46 @@ const readJson = (path: string | null): Record<string, unknown> | null => {
     return null
   }
 }
+// The CLI's deniedMcpServers `serverUrl` match (2.1.286, read from its binary): a `*` scheme is any
+// scheme, a `*` in the host matches within the host and then any port, and in the path and query
+// `*` is any run of characters; a pattern with no path matches any path.
+function urlMatches(url: string, pattern: string): boolean {
+  let u: URL
+  try {
+    u = new URL(url)
+  } catch {
+    return false
+  }
+  const p = /^([^:/]+):\/\/([^/?#]*)(.*)$/.exec(pattern)
+  if (!p) return false
+  const [, scheme, authority, rest] = p as unknown as [string, string, string, string]
+  const glob = (s: string, any: string) =>
+    new RegExp(`^${s.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replaceAll('*', any)}$`)
+  const [host = '', port] = authority.split(':')
+  if (scheme !== '*' && `${scheme}:` !== u.protocol) return false
+  if (!glob(host.toLowerCase(), '[^/]*').test(u.hostname.toLowerCase())) return false
+  if (port !== undefined ? port !== '*' && port !== u.port : !host.includes('*') && u.port !== '')
+    return false
+  return rest === '' || glob(rest, '.*').test(u.pathname + u.search)
+}
 // Like the real CLI, init lists the session's MCP servers: the account's user scope
 // (CLAUDE_CONFIG_DIR's .claude.json) and --mcp-config's, a name in both being one server, less any
-// the --settings file's deniedMcpServers names.
+// the --settings file's deniedMcpServers deny by name or by URL.
 function mcpServers(): { name: string; status: string }[] {
-  const servers = {
+  const servers: Record<string, { url?: string }> = {
     ...((readJson(join(configDir, '.claude.json'))?.mcpServers as object) ?? {}),
     ...((readJson(flag('--mcp-config'))?.mcpServers as object) ?? {}),
   }
-  const denied = ((readJson(flag('--settings'))?.deniedMcpServers as { serverName: string }[]) ?? []).map(
-    (d) => d.serverName,
-  )
+  const denied =
+    (readJson(flag('--settings'))?.deniedMcpServers as { serverName?: string; serverUrl?: string }[]) ?? []
+  const isDenied = (name: string) =>
+    denied.some(
+      (d) =>
+        d.serverName === name ||
+        (d.serverUrl !== undefined && urlMatches(servers[name]?.url ?? '', d.serverUrl)),
+    )
   return Object.keys(servers)
-    .filter((name) => !denied.includes(name))
+    .filter((name) => !isDenied(name))
     .sort()
     .map((name) => ({ name, status: 'connected' }))
 }

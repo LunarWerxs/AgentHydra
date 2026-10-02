@@ -23,6 +23,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   own server is left out under any name (by its `/api/mcp` endpoint). A worker's settings and MCP
   files are removed when its CLI ends or it is removed, and a daemon start sweeps those of workers
   that are gone or finished.
+- **A worker never loads AgentHydra's own MCP server from its account under another name.** Its
+  settings now also deny the endpoint by URL (`*://*/api/mcp*`, any host and port) beside the name
+  denies, so an account's `.claude.json` listing a second PC's daemon as, say, `hydra-elsewhere` no
+  longer gives the worker AgentHydra's tools.
 
 ## [1.7.0] - 2026-10-02
 

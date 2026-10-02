@@ -152,7 +152,11 @@ helper that holds a header literal (`Bearer `, `Authorization`, an API key) or a
 word, so no credential is written to a worker's file. A server left out for that is logged by its
 name only, and an owner config that does not parse is logged without the parser's message (it
 quotes the text). AgentHydra's own server is denied by name and by its endpoint (`/api/mcp`), so a
-second PC's daemon under another name is left out too. Any other entry loads from the account's
+second PC's daemon under another name is left out too; the worker settings also deny the endpoint
+by URL (`deniedMcpServers: [{ "serverUrl": "*://*/api/mcp*" }]`, any scheme, host and port), so
+the account's own `.claude.json` listing it under another name does not load it either (measured
+on the CLI 2.1.286: such an entry loads under name denies only and is gone with the URL deny, while
+another server in the same file still loads). Any other entry loads from the account's
 own copy. A worker's settings and MCP files are removed when its CLI ends or the worker is removed,
 and a daemon start removes those of every worker that is gone or finished, never a live one's.
 connections-local was denied for a day to save tokens (`8486a2d`); a worker asked to use

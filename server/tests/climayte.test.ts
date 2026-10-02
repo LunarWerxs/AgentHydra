@@ -788,7 +788,12 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
     join(root, 'home', '.claude.json'),
     JSON.stringify({ mcpServers: { ...seeded, keyed } }),
   )
-  writeFileSync(join(seededDir, '.claude.json'), JSON.stringify({ mcpServers: seeded }))
+  // The account itself lists AgentHydra's endpoint under another name (a second PC's daemon): a
+  // name deny cannot reach it, the settings' URL deny does.
+  writeFileSync(
+    join(seededDir, '.claude.json'),
+    JSON.stringify({ mcpServers: { ...seeded, 'hydra-elsewhere': local(7787, '/api/mcp') } }),
+  )
   writeFileSync(join(bareDir, '.claude.json'), JSON.stringify({ numStartups: 3 }))
   const groups: string[] = []
 
@@ -800,8 +805,9 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
     rmSync(root, { recursive: true, force: true })
   })
 
-  // What the --mcp-config file may carry is the filter's test below; fake-claude drops denied names
-  // itself, as the real CLI does, so this one cannot tell whether the file left them out.
+  // What the --mcp-config file may carry is the filter's test below; fake-claude drops what the
+  // settings deny (by name or URL) itself, as the real CLI does, so this one cannot tell whether
+  // the file left them out.
   test('connections-local and zswarm on either account, and its files go when it is done', async () => {
     setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
     setCliMayteOwnerDir(ownerDir)

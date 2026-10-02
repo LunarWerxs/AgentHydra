@@ -241,6 +241,13 @@ function launchText(
  *  zswarm stays too: a worker hands wide, cheap work to it. */
 const WORKER_DENIED_MCP: readonly string[] = [MCP_SERVER_KEY, 'magnific']
 
+/** AgentHydra's own endpoint on any host, port and scheme, as a `deniedMcpServers` URL pattern:
+ *  the CLI (2.1.286, its settings schema and matcher) takes `*` as any scheme and, in the host, any
+ *  host and port; in the path `*` is any run of characters, so `/api/mcp/` and a query match too.
+ *  A name deny cannot reach the account's own `.claude.json` listing a second PC's daemon under
+ *  another name (2026-10-02). */
+const WORKER_DENIED_MCP_URL = `*://*${MCP_PATH}*`
+
 /** A worker's files here: its settings (writeWorkerSettings) and its MCP servers (writeWorkerMcp). */
 const workerFiles = (id: string): [settings: string, mcp: string] => [
   join(HOOKS, `${id}.json`),
@@ -292,7 +299,8 @@ function writeWorkerMcp(w: CliMayteWorker): string | null {
 
 /** The worker's own settings. The wind-down channel: after every tool call the CLI runs this hook,
  *  which prints the worker's signal file when there is one (signalWindDown) and nothing otherwise,
- *  about 65 ms a call. The denied MCP servers (WORKER_DENIED_MCP), whichever scope lists them.
+ *  about 65 ms a call. The denied MCP servers (WORKER_DENIED_MCP) and AgentHydra's endpoint under
+ *  any name (WORKER_DENIED_MCP_URL), whichever scope lists them.
  *  And no skills synced from claude.ai (docx, pptx, xlsx, computer-use, chrome-browser, ...: 14 of
  *  them, each listed with its description in every request); `syncClaudeAiSkills: false` given
  *  through --settings hides them
@@ -325,7 +333,10 @@ function writeWorkerSettings(w: CliMayteWorker): string {
   writeFileSync(
     hookFile,
     JSON.stringify({
-      deniedMcpServers: WORKER_DENIED_MCP.map((serverName) => ({ serverName })),
+      deniedMcpServers: [
+        ...WORKER_DENIED_MCP.map((serverName) => ({ serverName })),
+        { serverUrl: WORKER_DENIED_MCP_URL },
+      ],
       syncClaudeAiSkills: false,
       // One account's claude.ai-synced humanizer plugin still listed `humanizer:humanizer` in every
       // request after the line above (3 of 14 starts, 2026-10-02); no worker ever invoked it.
