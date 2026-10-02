@@ -1,0 +1,243 @@
+// server/src/core/climayte-queue-sync.ts — share the CliMayte queue between the owner's PCs through
+// the login sync's store (cloud/login-sync-worker), so two PCs both running CliMayte see each other's
+// work and do not override each other (owner, 2026-10-02: "if I have my two computers running they can
+// see the CliMayte queue and not override each other ... it just shows ones from my other computer
+// with a little cloud icon").
+//
+// Each PC uploads ONE snapshot of its own queue under its own id and downloads the others'. They sit
+// in the store's `queues` table, never in `logins`: every AgentHydra lands a `logins` row it does not
+// know as a CLI login, so a queue there would become a junk login on a PC running an older version.
+//
+// WHAT A SNAPSHOT HOLDS: the workers that are queued, running, waiting or checking, and the ones
+// finished in the last 24 hours, each cut down to what a reader of the list needs (RemoteWorker:
+// never the prompt, results, logs or paths), and this PC's newest live usage reading per account. It
+// is gzipped, then AES-256-GCM encrypted under the sync's own key with `climayte-queue:<pc>` as
+// associated data, so a blob cannot be passed off as another PC's. Over the store's 256 KB cap the
+// oldest finished workers go first; the active ones never do.
+//
+// HOW IT IS USED: climayte-remote.ts keeps what the other PCs shared, in memory. Placement counts their
+// running workers toward each account's cap and takes their newer usage readings; the CliMayte view
+// lists them apart (GET /api/corch/remote). Nothing of theirs is written to this PC's workers.json.
+//
+// Failures here (a Worker without the queue routes, a conflict, the network) are the queue's own: the
+// caller keeps them in `queueError` and never in the logins' status.
+
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { gunzipSync, gzipSync } from 'node:zlib'
+import { liveByAccount, workers } from '../climayte-core'
+import { type CliMayteWorker, ranSeconds } from '../climayte-lib'
+import {
+  keepRemote,
+  type QueueSnapshot,
+  type RemoteLive,
+  type RemoteWorker,
+  remoteVersion,
+  setRemote,
+} from '../climayte-remote'
+
+/** The store's cap on a queue blob (cloud/login-sync-worker/worker.js). */
+export const QUEUE_MAX_BLOB = 256 * 1024
+/** Workers finished longer ago than this are not shared. */
+export const FINISHED_KEEP_MS = 24 * 60 * 60_000
+/** An unchanged queue is uploaded at least this often, so the other PC can tell this one is alive. */
+export const HEARTBEAT_MS = 60_000
+
+const PC_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const aad = (pc: string): Buffer => Buffer.from(`climayte-queue:${pc}`, 'utf8')
+
+const isFinished = (s: string): boolean => s === 'done' || s === 'failed' || s === 'cancelled'
+
+function reduce(w: CliMayteWorker, now: number): RemoteWorker {
+  const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
+  const v = w.verdicts?.at(-1)?.verdict
+  return {
+    id: w.id,
+    title: w.title,
+    group: w.group,
+    status: w.status,
+    kind: w.kind ?? null,
+    model: w.model,
+    effort: w.effort,
+    account: ref ? { id: ref.id, num: ref.num, name: ref.name } : null,
+    createdAt: w.createdAt,
+    updatedAt: w.updatedAt,
+    activeS: ranSeconds(w, now),
+    costUsd: w.costUsd,
+    lastActivity: w.lastActivity,
+    error: w.error,
+    verdict: v === 'pass' || v === 'fail' ? v : null,
+  }
+}
+
+/** This PC's queue as it is shared now: active workers and the last day's finished ones, newest
+ *  first, and the newest live reading per account. */
+export function buildSnapshot(pc: string, name: string, now = Date.now()): QueueSnapshot {
+  const list = [...workers.values()]
+    .filter((w) => !isFinished(w.status) || now - w.updatedAt <= FINISHED_KEEP_MS)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .map((w) => reduce(w, now))
+  const live: Record<string, RemoteLive> = {}
+  for (const [id, r] of liveByAccount)
+    live[id] = { sessionPct: r.sessionPct, weekPct: r.weekPct, at: r.at }
+  return { pc, name, at: now, workers: list, live }
+}
+
+/** The encrypted blob for a snapshot: base64 of {v, iv, tag, data}, `data` the gzipped JSON. */
+export function sealQueue(key: Buffer, snap: QueueSnapshot): string {
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  cipher.setAAD(aad(snap.pc))
+  const data = Buffer.concat([cipher.update(gzipSync(JSON.stringify(snap))), cipher.final()])
+  return Buffer.from(
+    JSON.stringify({
+      v: 1,
+      iv: iv.toString('base64'),
+      tag: cipher.getAuthTag().toString('base64'),
+      data: data.toString('base64'),
+    }),
+  ).toString('base64')
+}
+
+/** A snapshot from the store's blob for PC `pc`, or null (wrong key, another PC's blob, damage). */
+export function openQueue(key: Buffer, pc: string, blob: string): QueueSnapshot | null {
+  try {
+    const b = JSON.parse(Buffer.from(blob, 'base64').toString('utf8')) as {
+      v: number
+      iv: string
+      tag: string
+      data: string
+    }
+    if (b.v !== 1) return null
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(b.iv, 'base64'))
+    decipher.setAAD(aad(pc))
+    decipher.setAuthTag(Buffer.from(b.tag, 'base64'))
+    const plain = gunzipSync(
+      Buffer.concat([decipher.update(Buffer.from(b.data, 'base64')), decipher.final()]),
+    )
+    const snap = JSON.parse(plain.toString('utf8')) as QueueSnapshot
+    return snap?.pc === pc &&
+      Array.isArray(snap.workers) &&
+      snap.live &&
+      typeof snap.at === 'number'
+      ? snap
+      : null
+  } catch {
+    return null
+  }
+}
+
+/** Seal the snapshot, dropping the oldest finished workers until the blob fits `max`. Every active
+ *  worker stays: if they alone do not fit, the blob is still returned (the store will refuse it). */
+export function fitSnapshot(
+  key: Buffer,
+  snap: QueueSnapshot,
+  max = QUEUE_MAX_BLOB,
+): { blob: string; snap: QueueSnapshot } {
+  const active = snap.workers.filter((w) => !isFinished(w.status))
+  const finished = snap.workers.filter((w) => isFinished(w.status)) // newest first
+  const make = (keep: number): QueueSnapshot => ({
+    ...snap,
+    workers: [...active, ...finished.slice(0, keep)].sort((a, b) => b.updatedAt - a.updatedAt),
+  })
+  let blob = sealQueue(key, snap)
+  if (blob.length <= max) return { blob, snap }
+  // The most finished workers that still fit (the size only grows with the count).
+  let lo = 0
+  let hi = finished.length - 1
+  let best = 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (sealQueue(key, make(mid)).length <= max) {
+      best = mid
+      lo = mid + 1
+    } else hi = mid - 1
+  }
+  const fitted = make(best)
+  blob = sealQueue(key, fitted)
+  return { blob, snap: fitted }
+}
+
+export interface QueueIo {
+  call: (method: string, path: string, body?: unknown) => Promise<{ status: number; json: any }>
+  key: Buffer
+  /** This PC's id and name. */
+  pc: string
+  name: string
+}
+
+const NO_ROUTES =
+  'this store’s Worker has no queue routes yet: redeploy cloud/login-sync-worker/worker.js'
+
+function queueFailure(what: string, r: { status: number; json: any }): Error {
+  if (r.status === 404 && !r.json?.pc) return new Error(NO_ROUTES)
+  if (r.status === 409)
+    return new Error(`${what}: changed in the store meanwhile; next pass retries.`)
+  return new Error(
+    `${what}: the store answered ${r.status}${r.json?.error ? ` (${r.json.error})` : ''}.`,
+  )
+}
+
+/** What this PC last uploaded: a fingerprint of the queue (not the clock or running time) and when. */
+let sent: { fingerprint: string; at: number } | null = null
+
+export function resetQueueSync(): void {
+  sent = null
+}
+
+const fingerprint = (snap: QueueSnapshot): string =>
+  createHash('sha256')
+    .update(
+      JSON.stringify({
+        w: snap.workers.map(({ activeS, ...rest }) => rest),
+        l: snap.live,
+      }),
+    )
+    .digest('hex')
+
+async function upload(io: QueueIo, own: number, now: number): Promise<void> {
+  const { blob, snap } = fitSnapshot(io.key, buildSnapshot(io.pc, io.name, now))
+  const print = fingerprint(snap)
+  if (sent && sent.fingerprint === print && now - sent.at < HEARTBEAT_MS) return
+  const body = (version: number) => ({
+    version,
+    blob,
+    meta: { name: io.name, at: now, count: snap.workers.length },
+  })
+  let r = await io.call('PUT', `/v1/queues/${io.pc}`, body(own))
+  if (r.status === 409 && typeof r.json?.current?.version === 'number')
+    r = await io.call('PUT', `/v1/queues/${io.pc}`, body(r.json.current.version))
+  if (r.status !== 200) throw queueFailure('Uploading this PC’s queue', r)
+  sent = { fingerprint: print, at: now }
+}
+
+/** One queue pass: upload this PC's snapshot when it changed (or the heartbeat is due), download
+ *  every other PC's that changed. Throws the first problem after doing all it can. */
+export async function syncQueue(io: QueueIo, now = Date.now()): Promise<void> {
+  const list = await io.call('GET', '/v1/queues')
+  if (list.status !== 200 || !Array.isArray(list.json?.queues))
+    throw queueFailure('Reading the queues', list)
+  const rows = list.json.queues as Array<{ pc: string; version: number }>
+  const own = rows.find((r) => r.pc === io.pc)?.version ?? 0
+  let problem: Error | null = null
+  try {
+    await upload(io, own, now)
+  } catch (err) {
+    problem = err instanceof Error ? err : new Error(String(err))
+  }
+  const others = rows.filter((r) => r.pc !== io.pc && PC_RE.test(r.pc))
+  keepRemote(new Set(others.map((r) => r.pc)))
+  for (const row of others) {
+    if (remoteVersion(row.pc) === row.version) continue
+    try {
+      const r = await io.call('GET', `/v1/queues/${row.pc}`)
+      if (r.status !== 200 || typeof r.json?.blob !== 'string')
+        throw queueFailure('Downloading the other PC’s queue', r)
+      const snap = openQueue(io.key, row.pc, r.json.blob)
+      if (!snap) throw new Error('The other PC’s queue does not open with this PC’s key.')
+      setRemote(snap, r.json.version ?? row.version)
+    } catch (err) {
+      problem ??= err instanceof Error ? err : new Error(String(err))
+    }
+  }
+  if (problem) throw problem
+}

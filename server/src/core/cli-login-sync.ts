@@ -27,13 +27,19 @@
 // with meta.kind 'desktop', landed only into closed profiles, never over a login a PC signed in on
 // its own. The CLI half leaves those rows alone.
 //
+// THE CLIMAYTE QUEUE rides the same pass when its toggle is on (`shareQueue`, off by default): each PC
+// uploads a snapshot of its queue under its own `pcId` and reads the others' (core/climayte-queue-sync.ts,
+// the store's own `queues` table). It fails apart from the logins: its error is `queueError`, and a
+// queue that cannot sync never stops a login pass.
+//
 // ⛔ SECRETS: the token and key are read only to make requests and encrypt; status answers never
 // carry them. The pairing code is the one answer that does, for the owner's copy button.
 
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
+import { clearRemote } from '../climayte-remote'
 import { CONFIG_DIR } from '../config'
 import { seal, unseal } from '../dpapi-seal.mjs'
 import type { CliLoginSyncStatus } from '../types'
@@ -46,6 +52,7 @@ import {
   readPortableLogin,
   readText,
 } from './cli-login-move'
+import { syncQueue } from './climayte-queue-sync'
 import { hasOwnCliLogin } from './desktop-cli-feed'
 import {
   asDesktopLogin,
@@ -78,6 +85,10 @@ interface SyncConfig {
   /** Sealed base64 of the 32-byte encryption key. */
   key: string
   enabled: boolean
+  /** This PC's id in the store's queue table: a random UUID, made once. */
+  pcId?: string
+  /** Share this PC's CliMayte queue and read the other PCs'. Absent: off. */
+  shareQueue?: boolean
   excluded: string[]
   state: Record<string, SyncState>
   lastSyncAt: number | null
@@ -217,6 +228,9 @@ function freshConfig(url: string, token: string, key: Buffer): SyncConfig {
     token: seal(token),
     key: seal(key.toString('base64')),
     enabled: true,
+    // Setting up again keeps this PC's id and its queue choice.
+    pcId: readConfig()?.pcId ?? randomUUID(),
+    shareQueue: readConfig()?.shareQueue ?? false,
     excluded: [],
     state: {},
     lastSyncAt: null,
@@ -289,6 +303,32 @@ export function setLoginSyncEnabled(enabled: boolean): { ok: boolean; message: s
   return { ok: true, message: enabled ? 'Login sync is on.' : 'Login sync is paused on this PC.' }
 }
 
+/** Turn the CliMayte queue sharing on or off on this PC (needs login sync set up). */
+export function setQueueSharing(on: boolean): { ok: boolean; message: string } {
+  const c = readConfig()
+  if (!c) return { ok: false, message: 'Login sync is not set up on this PC.' }
+  c.shareQueue = on
+  c.pcId ??= randomUUID()
+  writeConfig(c)
+  if (on) void runLoginSync()
+  else {
+    clearRemote()
+    queueError = null
+  }
+  return {
+    ok: true,
+    message: on
+      ? 'This PC shares its CliMayte queue.'
+      : 'This PC no longer shares its CliMayte queue.',
+  }
+}
+
+/** Login sync is set up, on, and this PC shares its CliMayte queue (so reads the others'). */
+export function queueSharingOn(): boolean {
+  const c = readConfig()
+  return !!c?.enabled && c.shareQueue === true
+}
+
 /** Leave one login out of sync on this PC (or put it back). A Log out here and a move away leave it
  *  out, so the store does not sign it straight back in. */
 export function setLoginSyncExcluded(id: string, excluded: boolean): void {
@@ -306,6 +346,8 @@ export function setLoginSyncExcluded(id: string, excluded: boolean): void {
 /** Forget the store on this PC. The store and the other PC keep their copies. */
 export function disconnectLoginSync(): { ok: boolean; message: string } {
   rmSync(CONFIG_PATH, { force: true })
+  clearRemote()
+  queueError = null
   return { ok: true, message: 'This PC no longer syncs logins. The store still holds them.' }
 }
 
@@ -588,6 +630,33 @@ async function executeSyncPass(
   }
 }
 
+/** Why the queue could not sync at the last pass; null when it did or is off. Kept apart from the
+ *  logins' lastError. */
+let queueError: string | null = null
+
+/** The queue half of a pass (climayte-queue-sync.ts). Its failures are its own: kept in queueError and
+ *  noted once per message, never in lastError and never stopping what the pass already did. */
+async function queuePass(l: Live, c: SyncConfig, by: string): Promise<void> {
+  if (!c.shareQueue) {
+    queueError = null
+    return
+  }
+  c.pcId ??= randomUUID()
+  try {
+    await syncQueue({
+      call: (method, path, body) => call(l, method, path, body),
+      key: l.key,
+      pc: c.pcId,
+      name: by,
+    })
+    queueError = null
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg !== queueError) note(c, null, 'error', `CliMayte queue: ${msg}`)
+    queueError = msg
+  }
+}
+
 async function pass(): Promise<LoginSyncPassResult> {
   const out: LoginSyncPassResult = { ok: true, pushed: 0, landed: 0, unchanged: 0, problems: [] }
   const c = readConfig()
@@ -602,11 +671,13 @@ async function pass(): Promise<LoginSyncPassResult> {
   const excluded = new Set(c.excluded)
   const by = hostname()
   await executeSyncPass(l, c, out, excluded, by)
+  await queuePass(l, c, by)
   c.lastSyncAt = Date.now()
   // Re-read what another call changed meanwhile (an exclusion, a pause) and keep it.
   const now = readConfig()
   if (now) {
     c.enabled = now.enabled
+    c.shareQueue = now.shareQueue
     c.excluded = now.excluded
   }
   writeConfig(c)
@@ -623,6 +694,8 @@ export function loginSyncStatus(): CliLoginSyncStatus {
       url: null,
       lastSyncAt: null,
       lastError: null,
+      shareQueue: false,
+      queueError: null,
       logins: [],
       events: [],
     }
@@ -699,6 +772,8 @@ export function loginSyncStatus(): CliLoginSyncStatus {
     url: host,
     lastSyncAt: c.lastSyncAt,
     lastError: c.lastError,
+    shareQueue: c.shareQueue === true,
+    queueError,
     logins,
     events: c.events,
   }

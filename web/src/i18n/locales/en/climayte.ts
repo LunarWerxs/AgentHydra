@@ -65,6 +65,10 @@ export default {
   activeDays: '{d}d {h}h',
   rowActiveHint: 'Active {d} (time waiting for an account is not counted)',
   rowIdHint: 'Task {id}',
+  // A task from another PC that shares the queue (CliMayteView remote rows): read-only.
+  remoteOn: 'On {name}',
+  remoteOnStale: 'On {name}, last seen {n} min ago',
+  remoteNote: 'Running on another PC: it can only be viewed here.',
   // The detail header's id chip (CliMayteWorkerDetail copyId): name a task in chat by it.
   copyId: "Copy this task's id, to name it in chat",
   idCopied: 'Copied',

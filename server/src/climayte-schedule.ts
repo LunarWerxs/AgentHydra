@@ -39,6 +39,7 @@ import {
   waitsForRoom,
   weekPacePct,
 } from './climayte-placement'
+import { remoteActiveCounts } from './climayte-remote'
 
 /** One tick's view of the fleet: built once, and kept current as the tick starts work. */
 interface TickState {
@@ -85,6 +86,8 @@ export function tickState(accounts: CliMayteAccount[], now: number): TickState {
       bumpCount(active, w.accountId)
       bumpCount(groupCounts(byGroup, w.group), w.accountId)
     }
+  // What the other PC has running on an account counts here too (climayte-remote): not its groups.
+  for (const [id, n] of remoteActiveCounts(now)) active.set(id, (active.get(id) ?? 0) + n)
   const { costOf, running, finishedSince } = placementState()
   return { now, accounts, allowFull, active, byGroup, costOf, running, finishedSince }
 }

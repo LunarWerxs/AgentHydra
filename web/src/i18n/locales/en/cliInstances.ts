@@ -198,6 +198,9 @@ export default {
   syncAll: 'Sync all',
   syncAllHint:
     'Every login on this PC and in the store is kept the same on both PCs. Turn this off to choose which logins sync here.',
+  syncQueue: 'Share the CliMayte queue with my other PCs',
+  syncQueueHint:
+    "Each PC shows the other's CliMayte tasks, and work placed on one PC counts on the other, so they do not crowd the same account.",
   syncPause: 'Pause',
   syncResume: 'Resume',
   syncPaused: 'Paused: nothing syncs until you resume',

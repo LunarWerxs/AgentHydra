@@ -26,7 +26,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import {
-  type CliLoginSyncStatus,
+  type CliLoginSyncStatusQueue,
   disconnectLoginSync,
   getLoginSync,
   getLoginSyncPairingCode,
@@ -34,6 +34,7 @@ import {
   runLoginSyncNow,
   setLoginSyncEnabled,
   setLoginSyncExcluded,
+  setLoginSyncQueue,
   setupLoginSync,
 } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
@@ -43,7 +44,7 @@ const open = defineModel<boolean>('open', { default: false })
 const emit = defineEmits<{ changed: [] }>()
 
 const { t } = useI18n()
-const status = ref<CliLoginSyncStatus | null>(null)
+const status = ref<CliLoginSyncStatusQueue | null>(null)
 /** The owner turned "Sync all" off to choose logins; the list is open until it is turned back on. */
 const choosing = ref(false)
 const working = ref(false)
@@ -137,6 +138,18 @@ async function setSyncAll(on: boolean) {
   }
 }
 
+async function setShareQueue(on: boolean) {
+  working.value = true
+  try {
+    status.value = await setLoginSyncQueue(on)
+    emit('changed')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : String(err))
+  } finally {
+    working.value = false
+  }
+}
+
 async function include(id: string, value: boolean) {
   try {
     status.value = await setLoginSyncExcluded(id, !value)
@@ -157,7 +170,7 @@ async function copyPairing() {
   }
 }
 
-type Login = CliLoginSyncStatus['logins'][number]
+type Login = CliLoginSyncStatusQueue['logins'][number]
 const NOTE_KEY: Record<NonNullable<Login['note']>, [string, string]> = {
   own: ['cliInstances.syncStateOwn', 'cliInstances.syncStateOwnHint'],
   waiting: ['cliInstances.syncStateWaiting', 'cliInstances.syncStateWaitingHint'],
@@ -369,6 +382,22 @@ const recent = computed(() => {
           </Button>
         </div>
         <p v-if="status.lastError" class="text-destructive">{{ status.lastError }}</p>
+
+        <div class="flex min-w-0 flex-col gap-1">
+          <span class="flex items-center gap-1.5">
+            <label class="flex cursor-pointer items-center gap-2 font-medium">
+              <Switch
+                :model-value="!!status.shareQueue"
+                :disabled="working"
+                :aria-label="$t('cliInstances.syncQueue')"
+                @update:model-value="setShareQueue"
+              />
+              {{ $t('cliInstances.syncQueue') }}
+            </label>
+            <InfoHint :text="$t('cliInstances.syncQueueHint')" />
+          </span>
+          <p v-if="status.queueError" class="text-destructive">{{ status.queueError }}</p>
+        </div>
 
         <ul
           v-if="shown.length"

@@ -1625,6 +1625,19 @@ export function attemptCause(w: CliMayteWorker, i: number): AttemptCause | undef
   return { cause: 'sent-back', detail: lines[0]?.slice(0, 200) ?? null }
 }
 
+/** Seconds the worker's CLI sessions actually ran, summed over every attempt: working time, not
+ *  time since it was created (hours waiting for an account, or a day between a finished task and its
+ *  follow-up, are not time it ran). */
+export function ranSeconds(w: CliMayteWorker, now: number): number {
+  const live = isLive(w)
+  return Math.round(
+    w.attempts.reduce(
+      (sum, a) => sum + Math.max(0, (a.endedAt ?? (live ? now : a.startedAt)) - a.startedAt),
+      0,
+    ) / 1000,
+  )
+}
+
 export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
@@ -1635,12 +1648,7 @@ export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
     account: ref ? (ref.num === null ? ref.name : `#${ref.num} ${ref.name}`) : null,
     // Working time, not time since it was created: hours spent waiting for an account, or a day
     // between a finished task and its follow-up, are not time it ran.
-    ranS: Math.round(
-      w.attempts.reduce(
-        (sum, a) => sum + Math.max(0, (a.endedAt ?? (live ? now : a.startedAt)) - a.startedAt),
-        0,
-      ) / 1000,
-    ),
+    ranS: ranSeconds(w, now),
     reportedModel: [...w.attempts].reverse().find((a) => a.model)?.model ?? null,
     verdicts: w.verdicts?.map(({ units, ...v }) => ({
       ...v,

@@ -53,5 +53,13 @@ token, never the token.
 | `GET /v1/logins/:id` | one login's encrypted blob |
 | `PUT /v1/logins/:id` | `{version, blob, meta}`: stored as version+1 when `version` is the current one (0 for new); else 409 with the current version |
 | `DELETE /v1/logins/:id?version=n` | removes it at that version |
+| `GET /v1/queues` | each PC's CliMayte queue snapshot: pc id, version, meta (name, time, count) |
+| `GET /v1/queues/:pc` | one PC's encrypted queue blob (up to 256 KB) |
+| `PUT /v1/queues/:pc` | `{version, blob, meta}`, written like a login (compare-and-swap on the version) |
+
+The queue routes (the "Share CliMayte queue" toggle in AgentHydra) need this Worker **redeployed
+once**: paste the new `worker.js` over the old one. Queues live in their own `queues` table, never in
+`logins`. An older AgentHydra never calls the queue routes, and a Worker without them only makes the
+toggle report that it has no queue routes yet; logins sync as before.
 
 Every route but `/v1/health` needs `Authorization: Bearer <token>`.

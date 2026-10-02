@@ -25,6 +25,7 @@ import {
   runLoginSync,
   setLoginSyncEnabled,
   setLoginSyncExcluded,
+  setQueueSharing,
 } from '../core/cli-login-sync'
 import { logoutCliInstance } from '../core/cli-logout'
 import { redeemCodexResetCredit, resolveCodexAccount } from '../core/codex-account'
@@ -487,6 +488,11 @@ app.post('/api/cli-instances/sync/run', async (c) => {
 app.post('/api/cli-instances/sync/enabled', async (c) => {
   const body = await jsonBody(c)
   return c.json(setLoginSyncEnabled(body.enabled === true))
+})
+app.post('/api/cli-instances/sync/queue', async (c) => {
+  const body = await jsonBody(c)
+  setQueueSharing(body.enabled === true)
+  return c.json(loginSyncStatus())
 })
 app.post('/api/cli-instances/sync/exclude', async (c) => {
   const body = await jsonBody(c)

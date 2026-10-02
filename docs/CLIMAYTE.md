@@ -728,6 +728,30 @@ same logins signed in; a refresh on one reaches the other within a pass.
   API and plays the other PC through the store: a refresh there lands here, one here goes up, one
   made by the sign-in check goes up, an older copy never wins, a left-out login stays put.
 
+### Two PCs: the shared queue, `server/src/core/climayte-queue-sync.ts` (owner, 2026-10-02)
+
+"Sync the CliMayte queue in the login sync as an additional toggle, so that if I have my two computers
+running they can see the CliMayte queue and not override each other." With login sync set up and the
+toggle on (`POST /api/cli-instances/sync/queue {enabled}`; `shareQueue`, off by default, in
+`login-sync.json` beside this PC's `pcId`), each login-sync pass also uploads a snapshot of this PC's
+queue under its `pcId` and reads the other PCs'. The snapshot is the queued, running, waiting and
+checking workers plus those finished in the last 24 hours (id, title, group, status, kind, model,
+effort, account, times, active time, cost, last activity, error, verdict: never the prompt, results,
+logs or paths) and this PC's newest live usage reading per account, gzipped and AES-256-GCM encrypted
+under the sync's key with `climayte-queue:<pcId>` as associated data. Over 256 KB the oldest finished
+workers go first. It is uploaded when it changed and at least every 60 s; a snapshot over 3 minutes old
+is stale (that PC is off or not syncing). The rows live in the store's own `queues` table, never in
+`logins`: an older AgentHydra would land a `logins` row it does not know as a junk CLI login.
+
+Placement here counts the other PC's running and checking workers toward each account's per-account
+cap, and uses its live reading of an account when it is newer than this PC's own; a stale snapshot
+counts for nothing. Nothing of the other PC is written to this PC's `workers.json`, and this PC never
+cancels, sends to or judges its workers. `GET /api/corch/remote` answers `{enabled, pcs: [{pc, name,
+at, stale, workers}]}` for the view's cloud-icon rows (empty when off); `/api/corch/workers` and the
+MCP tools are unchanged. A queue that cannot sync (a Worker without the queue routes, a conflict, the
+network) is `queueError` in the sync status and one line in its events, never the logins' `lastError`.
+The Worker needs redeploying once for the queue routes. Test: `server/tests/climayte-queue-sync.test.ts`.
+
 ### Desktop logins: `server/src/core/desktop-login-sync.ts` (owner, 2026-10-01)
 
 "Yes, build the desktop login sync." The same pass, store and key carry desktop logins, so a Claude

@@ -19,6 +19,7 @@
 import {
   Check,
   ChevronRight,
+  Cloud,
   CloudOff,
   Network,
   RefreshCw,
@@ -26,6 +27,7 @@ import {
   Star,
   ThumbsDown,
   ThumbsUp,
+  UserRound,
   X,
 } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
@@ -39,10 +41,11 @@ import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import type { CliMayteWorkerView } from '@/lib/api'
+import type { CliMayteRemotePc, CliMayteRemoteWorker, CliMayteWorkerView } from '@/lib/api'
 import {
   type CliMayteScorecard,
   type CliMayteTotals,
+  getCliMayteRemote,
   getCliMayteScorecard,
   getCliMayteTotals,
   getCliMayteWorker,
@@ -64,7 +67,18 @@ import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
 
+/** A row of the list: a local worker, or (with `remote`) one another PC sharing the queue shows,
+ *  read-only. `remote` is the one flag that tells them apart; it is never set on a local worker. */
+type ListRow = CliMayteWorkerView & {
+  remote?: { pc: string; name: string; at: number; stale: boolean }
+}
 const workers = ref<CliMayteWorkerView[]>([])
+/** The other PCs' workers (GET /api/corch/remote), shaped as rows; empty when sharing is off. */
+const remoteRows = ref<ListRow[]>([])
+/** Every row the list shows: this PC's workers, then the other PCs'. */
+const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value])
+/** Local and remote ids may match, so a row is selected by this key, never its bare id. */
+const rowKey = (w: ListRow) => (w.remote ? `${w.remote.pc}/${w.id}` : w.id)
 const loading = ref(false)
 const loaded = ref(false)
 const selectedId = ref<string | null>(null)
@@ -79,14 +93,14 @@ const unreachable = ref(false)
 /** Show only tasks that can still change (isCliMayteActive), kept in this browser. */
 const hideFinished = useStorage('agenthydra.climayte.hideFinished', false)
 const listed = computed(() =>
-  hideFinished.value ? workers.value.filter(isCliMayteActive) : workers.value,
+  hideFinished.value ? rows.value.filter(isCliMayteActive) : rows.value,
 )
-const hiddenCount = computed(() => workers.value.length - listed.value.length)
+const hiddenCount = computed(() => rows.value.length - listed.value.length)
 
 /** Hand-offs ordered by their newest task, tasks inside newest first. */
 const groups = computed(() => {
   const sorted = [...listed.value].sort((a, b) => b.createdAt - a.createdAt)
-  const map = new Map<string, CliMayteWorkerView[]>()
+  const map = new Map<string, ListRow[]>()
   for (const w of sorted) {
     const list = map.get(w.group)
     if (list) list.push(w)
@@ -95,9 +109,58 @@ const groups = computed(() => {
   return [...map.entries()].map(([group, items]) => ({ group, items }))
 })
 
-const selected = computed(
-  () => detail.value ?? workers.value.find((w) => w.id === selectedId.value) ?? null,
+const selectedRow = computed(() => rows.value.find((w) => rowKey(w) === selectedId.value) ?? null)
+/** The remote row that is open, shown read-only from what the row has. */
+const selectedRemote = computed(() => (selectedRow.value?.remote ? selectedRow.value : null))
+const selected = computed(() =>
+  selectedRemote.value ? null : (detail.value ?? selectedRow.value ?? null),
 )
+
+/** A remote worker as a row: only the fields the other PC sends, the rest empty. */
+function remoteRow(pc: CliMayteRemotePc, r: CliMayteRemoteWorker): ListRow {
+  return {
+    id: r.id,
+    group: r.group,
+    title: r.title,
+    cwd: '',
+    prompt: '',
+    pending: [],
+    model: r.model,
+    effort: r.effort,
+    accounts: null,
+    status: r.status,
+    sessionId: null,
+    accountId: r.account?.id ?? null,
+    account: r.account ? `#${r.account.num ?? '?'} ${r.account.name}` : null,
+    attempts: [],
+    result: null,
+    error: r.error,
+    lastActivity: r.lastActivity,
+    costUsd: r.costUsd,
+    turns: 0,
+    moves: 0,
+    retries: 0,
+    notBefore: null,
+    ranS: r.activeS,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    kind: r.kind,
+    verdicts: r.verdict
+      ? [{ at: r.updatedAt, verdict: r.verdict, note: null, model: null, effort: null, pct: null }]
+      : [],
+    remote: { pc: pc.pc, name: pc.name, at: pc.at, stale: pc.stale },
+  }
+}
+/** "On <name>", or with how long ago it was last seen when that PC has gone quiet. */
+function remoteLabel(w: ListRow): string {
+  const r = w.remote
+  if (!r) return ''
+  if (!r.stale) return t('climayte.remoteOn', { name: r.name })
+  return t('climayte.remoteOnStale', {
+    name: r.name,
+    n: Math.max(1, Math.round((now.value - r.at) / 60_000)),
+  })
+}
 
 let timer: number | null = null
 let clock: number | null = null
@@ -105,7 +168,7 @@ let alive = true
 
 async function loadDetail() {
   const id = selectedId.value
-  if (!id) return
+  if (!id || selectedRemote.value) return
   try {
     const d = await getCliMayteWorker(id)
     // An unchanged detail keeps the old reference, so a poll with nothing new redraws nothing.
@@ -182,12 +245,20 @@ async function load(opts: { silent?: boolean } = {}) {
   if (!opts.silent) loading.value = true
   try {
     // The scorecard is extra: a failed read keeps the last one and never marks CliMayte unreachable.
-    const [list, sums, score] = await Promise.all([
+    // The other PCs' queue is extra too: a failed read keeps the last one.
+    const [list, sums, score, remote] = await Promise.all([
       listCliMayteWorkers(),
       getCliMayteTotals(),
       getCliMayteScorecard().catch(() => null),
+      getCliMayteRemote().catch(() => null),
     ])
     workers.value = reconcileList(workers.value, list, (w) => w.id)
+    if (remote) {
+      const next = remote.enabled
+        ? remote.pcs.flatMap((pc) => pc.workers.map((r) => remoteRow(pc, r)))
+        : []
+      remoteRows.value = reconcileList(remoteRows.value, next, rowKey)
+    }
     if (!sameData(totals.value, sums)) totals.value = sums
     if (score && !sameData(scorecard.value, score)) scorecard.value = score
     unreachable.value = false
@@ -216,7 +287,7 @@ async function load(opts: { silent?: boolean } = {}) {
   if (alive)
     timer = window.setTimeout(
       () => load({ silent: true }),
-      workers.value.some(isCliMayteActive) ? 3000 : 15_000,
+      rows.value.some(isCliMayteActive) ? 3000 : 15_000,
     )
 }
 
@@ -224,11 +295,13 @@ function onVisible() {
   if (document.visibilityState === 'visible') void load({ silent: true })
 }
 
-function select(w: CliMayteWorkerView) {
-  if (selectedId.value === w.id) return
-  selectedId.value = w.id
+function select(w: ListRow) {
+  const key = rowKey(w)
+  if (selectedId.value === key) return
+  selectedId.value = key
   detail.value = null
-  void loadDetail()
+  // A remote row has no local worker to ask about: it shows what the row has.
+  if (!w.remote) void loadDetail()
 }
 
 /** How long the task has been active: its sessions' running time over every attempt, not the time
@@ -248,7 +321,7 @@ function activeLabel(totalS: number): string {
 
 /** The row's hover: the title in full, its account, and the one line that needs attention (a
  *  failure's reason, what a waiting or re-queued task waits for, what a running one is doing). */
-function rowHint(w: CliMayteWorkerView): string {
+function rowHint(w: ListRow): string {
   const note = climayteQueuedNote(w, now.value)
   const line =
     (w.status === 'failed' || w.status === 'waiting') && w.error
@@ -270,6 +343,7 @@ function rowHint(w: CliMayteWorkerView): string {
     : []
   return [
     w.title,
+    w.remote ? remoteLabel(w) : null,
     t('climayte.rowIdHint', { id: w.id }),
     w.account ?? t('climayte.noAccount'),
     ...runs,
@@ -320,7 +394,7 @@ onUnmounted(() => {
         <h2 class="flex items-center gap-2 text-base font-semibold">
           <Network class="size-4.5" />
           {{ $t('climayte.title') }}
-          <span v-if="workers.length" class="font-normal text-muted-foreground">({{ workers.length }})</span>
+          <span v-if="rows.length" class="font-normal text-muted-foreground">({{ rows.length }})</span>
           <!-- What CliMayte is, behind an info bubble (owner, 2026-10-01: a description is never a
                paragraph over the UI). -->
           <InfoHint :text="$t('climayte.subtitle')" />
@@ -451,7 +525,7 @@ onUnmounted(() => {
     </div>
 
     <div
-      v-else-if="workers.length === 0"
+      v-else-if="rows.length === 0"
       class="flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
     >
       <Network class="size-7 text-muted-foreground" />
@@ -487,20 +561,30 @@ onUnmounted(() => {
             <span class="shrink-0 tabular-nums">{{ g.items.length }}</span>
           </h3>
           <ul class="divide-y">
-            <li v-for="w in g.items" :key="w.id">
+            <li v-for="w in g.items" :key="rowKey(w)">
               <!-- One line per task (owner, 2026-09-30): the status as an icon, the title, when it
                    started. The account and what it is doing or why it stopped ride on the hover;
                    the detail pane has all of it. -->
               <button
                 type="button"
                 class="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-start text-sm transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                :class="w.id === selectedId ? 'bg-accent shadow-row-selected' : ''"
-                :aria-current="w.id === selectedId ? 'true' : undefined"
+                :class="[
+                  rowKey(w) === selectedId ? 'bg-accent shadow-row-selected' : '',
+                  w.remote?.stale ? 'opacity-60' : '',
+                ]"
+                :aria-current="rowKey(w) === selectedId ? 'true' : undefined"
                 :title="rowHint(w)"
                 @click="select(w)"
               >
                 <CliMayteStatusBadge :status="w.status" icon-only :task="w" :tasks="workers" />
                 <span class="flex min-w-0 flex-1 items-center gap-1">
+                  <!-- Another PC's task: a small cloud, the PC on hover (the row's hover says it too). -->
+                  <Cloud
+                    v-if="w.remote"
+                    class="size-3.5 shrink-0 text-muted-foreground"
+                    :aria-label="remoteLabel(w)"
+                    :title="remoteLabel(w)"
+                  />
                   <span class="min-w-0 truncate font-medium">{{ w.title }}</span>
                   <!-- Its own hover (the span's title wins over the row's): who judged it and what
                        they said. A failed check on a task still working is amber and a retry
@@ -545,7 +629,49 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- Another PC's task is read-only: what its row has, no controls, no call for it here. -->
+      <section
+        v-if="selectedRemote"
+        class="flex min-w-0 flex-col gap-3 overflow-hidden rounded-lg border bg-card px-4 py-3 lg:min-h-0 lg:overflow-y-auto"
+        :aria-label="selectedRemote.title"
+      >
+        <div class="flex min-w-0 flex-col items-start gap-1.5">
+          <h3 class="line-clamp-2 wrap-break-word text-sm font-semibold" :title="selectedRemote.title">
+            {{ selectedRemote.title }}
+          </h3>
+          <span class="mono rounded px-1 text-2xs text-muted-foreground">{{ selectedRemote.id }}</span>
+        </div>
+        <p class="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Cloud class="size-3.5 shrink-0" aria-hidden="true" />
+          {{ remoteLabel(selectedRemote) }}
+        </p>
+        <div class="flex flex-wrap items-center gap-1.5">
+          <CliMayteStatusBadge :status="selectedRemote.status" />
+          <Badge variant="outline" class="max-w-56" :title="$t('climayte.detailAccount')">
+            <UserRound aria-hidden="true" />
+            <span class="truncate text-2xs">{{ selectedRemote.account ?? $t('climayte.noAccount') }}</span>
+          </Badge>
+          <Badge variant="muted" :title="$t('climayte.detailRan')">
+            <span class="text-2xs tabular-nums">{{ activeLabel(selectedRemote.ranS) }}</span>
+          </Badge>
+          <Badge variant="muted" :title="$t('climayte.detailCost')">
+            <span class="text-2xs tabular-nums">${{ selectedRemote.costUsd.toFixed(2) }}</span>
+          </Badge>
+          <Badge v-if="selectedRemote.kind" variant="muted" :title="$t('climayte.detailKind')">
+            <span class="text-2xs">{{ selectedRemote.kind }}</span>
+          </Badge>
+        </div>
+        <p v-if="selectedRemote.lastActivity" class="wrap-break-word text-xs text-muted-foreground">
+          {{ selectedRemote.lastActivity }}
+        </p>
+        <pre
+          v-if="selectedRemote.error"
+          class="mono scroll-slim max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-2.5 text-xs text-muted-foreground"
+        >{{ selectedRemote.error }}</pre>
+        <p class="text-2xs text-muted-foreground">{{ $t('climayte.remoteNote') }}</p>
+      </section>
       <CliMayteWorkerDetail
+        v-else
         class="lg:min-h-0"
         :worker="selected"
         :tasks="workers"

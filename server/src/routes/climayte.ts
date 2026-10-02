@@ -24,6 +24,8 @@ import {
   climayteVerdicts,
   climayteWait,
 } from '../climayte'
+import { remoteSnapshots } from '../climayte-remote'
+import { queueSharingOn } from '../core/cli-login-sync'
 import {
   cancelQuickAdd,
   listQuickAdds,
@@ -74,6 +76,21 @@ app.get('/api/corch/workers', async (c) => {
   }
   if (wait > 0) return c.json(await climayteWait(filter, wait))
   return c.json(climayteList(filter))
+})
+// The other PC's CliMayte queue, as it last shared it through the login sync (core/climayte-queue-sync.ts):
+// shown apart, never part of /api/corch/workers. `stale`: its snapshot is over 3 minutes old.
+app.get('/api/corch/remote', (c) => {
+  const enabled = queueSharingOn()
+  const pcs = enabled
+    ? remoteSnapshots().map(({ pc, name, at, stale, workers }) => ({
+        pc,
+        name,
+        at,
+        stale,
+        workers,
+      }))
+    : []
+  return c.json({ enabled, pcs })
 })
 // One worker's detail with its last 60 event lines; `wait` first waits for its next status change.
 app.get('/api/corch/workers/:id', async (c) => {

@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Two PCs can share their CliMayte queue** (owner, 2026-10-02: "so that if I have my two computers running they can see the CliMayte queue and not override each other"). A new toggle beside login sync (off by default; `POST /api/cli-instances/sync/queue`) shares this PC's queue, encrypted, through the same store; `GET /api/corch/remote` lists the other PC's workers for the view's cloud-icon rows. This PC counts the other PC's running work toward each account's cap and takes its newer usage readings, and never changes or judges its workers. **Redeploy the login-sync Worker once** (paste the new `cloud/login-sync-worker/worker.js`): until then the toggle reports that the Worker has no queue routes, and logins sync as before.
+
 ### Changed
 
 - **CliMayte reads an account's usage again before placing work on a reading over 10 minutes old**, and an account so placed takes one worker until that worker reads it. The background check reads accounts only every 30 minutes: on 2026-10-02 #118 was placed at 82% and read 95%, and #119 at 79% and read 100%, both used outside CliMayte in between.

@@ -848,7 +848,19 @@ export const moveCliLoginsOut = (ids: string[], passphrase: string, signOut = fa
     body: JSON.stringify({ ids, passphrase, signOut }),
   })
 /** Login sync through the owner's own store (server/src/core/cli-login-sync.ts). */
-export const getLoginSync = () => j<CliLoginSyncStatus>('/api/cli-instances/sync')
+/** The status plus the queue switch (the server half adds both fields to CliLoginSyncStatus; the
+ *  intersection keeps this file compiling whichever side lands first). */
+export type CliLoginSyncStatusQueue = CliLoginSyncStatus & {
+  shareQueue: boolean
+  queueError: string | null
+}
+export const getLoginSync = () => j<CliLoginSyncStatusQueue>('/api/cli-instances/sync')
+/** Share the CliMayte queue with the other PCs on the same store; answers the status. */
+export const setLoginSyncQueue = (enabled: boolean) =>
+  j<CliLoginSyncStatusQueue>('/api/cli-instances/sync/queue', {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  })
 export const setupLoginSync = (url: string, token: string) =>
   j<{ ok: boolean; message: string }>('/api/cli-instances/sync/setup', {
     method: 'POST',
@@ -860,7 +872,7 @@ export const joinLoginSync = (code: string) =>
     body: JSON.stringify({ code }),
   })
 export const runLoginSyncNow = () =>
-  j<{ result: { ok: boolean; problems: string[] }; status: CliLoginSyncStatus }>(
+  j<{ result: { ok: boolean; problems: string[] }; status: CliLoginSyncStatusQueue }>(
     '/api/cli-instances/sync/run',
     { method: 'POST' },
   )
@@ -870,7 +882,7 @@ export const setLoginSyncEnabled = (enabled: boolean) =>
     body: JSON.stringify({ enabled }),
   })
 export const setLoginSyncExcluded = (id: string, excluded: boolean) =>
-  j<CliLoginSyncStatus>('/api/cli-instances/sync/exclude', {
+  j<CliLoginSyncStatusQueue>('/api/cli-instances/sync/exclude', {
     method: 'POST',
     body: JSON.stringify({ id, excluded }),
   })
@@ -1082,6 +1094,35 @@ export const listCliMayteWorkers = (filter: { group?: string; active?: boolean }
   const qs = q.toString()
   return j<CliMayteWorkerView[]>(`/api/corch/workers${qs ? `?${qs}` : ''}`)
 }
+/** A worker from another PC that shares the queue (GET /api/corch/remote): the row's fields only. */
+export interface CliMayteRemoteWorker {
+  id: string
+  title: string
+  group: string
+  status: CliMayteStatus
+  kind: string | null
+  model: string | null
+  effort: string | null
+  account: CliMayteAccountRef | null
+  createdAt: number
+  updatedAt: number
+  /** Seconds its sessions actually ran. */
+  activeS: number
+  costUsd: number
+  lastActivity: string | null
+  error: string | null
+  verdict: 'pass' | 'fail' | null
+}
+export interface CliMayteRemotePc {
+  pc: string
+  name: string
+  /** Epoch ms of the PC's last write. */
+  at: number
+  stale: boolean
+  workers: CliMayteRemoteWorker[]
+}
+export const getCliMayteRemote = () =>
+  j<{ enabled: boolean; pcs: CliMayteRemotePc[] }>('/api/corch/remote')
 /** One worker plus its last 60 summarised event lines. */
 export const getCliMayteWorker = (id: string) =>
   j<(CliMayteWorkerView & { events: string[] }) | null>(

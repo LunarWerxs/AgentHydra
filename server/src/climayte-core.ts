@@ -50,6 +50,7 @@ import {
   planFactor,
   type RunningLoad,
 } from './climayte-placement'
+import { newestLive } from './climayte-remote'
 import { attemptUnits, ladderModel, rereadUnits, UNITS_PER_PRO_PERCENT } from './climayte-scorecard'
 import { resolveClaudeExe } from './config'
 import { getCliInstance, listCliInstances } from './core/cli-instances'
@@ -290,7 +291,8 @@ function buildPool(now: number): CliMayteAccount[] {
       const read = latestUsage(i.id, i.lastUsageCheck, cache)
       const u = read && withResetTimes(read)
       const snapshotAt = u ? Date.parse(u.capturedAt) || 0 : 0
-      const live = liveByAccount.get(i.id) ?? null
+      // The other PC's reading counts when it is newer than this PC's own (climayte-remote).
+      const live = newestLive(i.id, liveByAccount.get(i.id) ?? null, now)
       const liveSession =
         live && live.sessionPct !== null
           ? { pct: live.sessionPct, resetsAt: live.sessionResetsAt, at: live.at }

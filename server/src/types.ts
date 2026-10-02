@@ -1406,6 +1406,10 @@ export interface CliLoginSyncStatus {
   url: string | null
   lastSyncAt: number | null
   lastError: string | null
+  /** This PC shares its CliMayte queue through the store and reads the other PCs' (climayte-queue-sync). */
+  shareQueue: boolean
+  /** Why the queue could not sync at the last pass, apart from `lastError` (the logins'); null when it did. */
+  queueError: string | null
   logins: Array<{
     /** A CLI instance's id, or a desktop account's uuid. */
     id: string
