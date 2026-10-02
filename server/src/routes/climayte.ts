@@ -101,16 +101,23 @@ app.post('/api/corch/workers', async (c) => {
   const body = await jsonBody(c)
   if (!Array.isArray(body.tasks) || !body.tasks.length)
     return c.json({ error: 'tasks must be a non-empty array' }, 400)
-  const accounts = Array.isArray(body.accounts)
-    ? body.accounts.filter((a): a is string => typeof a === 'string')
-    : undefined
+  // A malformed list is refused, never trimmed: dropping the refs it cannot read used to leave an
+  // empty list, which means "any account" (fuzz, 2026-10-02).
+  if (
+    body.accounts !== undefined &&
+    (!Array.isArray(body.accounts) || body.accounts.some((a) => typeof a !== 'string'))
+  )
+    return c.json({ error: 'accounts must be a list of CLI instance ids' }, 400)
+  const accounts = body.accounts as string[] | undefined
+  // The MCP tool's spelling is per_account; either reaches the 1..4 check.
+  const cap = body.perAccount ?? body.per_account
   try {
     return c.json(
       climayteRun({
         tasks: body.tasks as Parameters<typeof climayteRun>[0]['tasks'],
         group: optStr(body.group),
         accounts,
-        perAccount: typeof body.perAccount === 'number' ? body.perAccount : undefined,
+        perAccount: cap === undefined ? undefined : Number(cap),
         // Validated by climayteRun (unknown values are refused with the valid ones listed).
         model: body.model as string | undefined,
         effort: body.effort as string | undefined,

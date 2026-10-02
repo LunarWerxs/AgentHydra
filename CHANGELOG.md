@@ -17,6 +17,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **CliMayte refuses a task that could never run** (`POST /api/corch/workers`, a fuzz pass on
+  2026-10-02). An account id that is not a CLI instance made a task that waited forever; a list
+  with an entry that was not an id was trimmed to nothing, which means "any account". Both are
+  refused now with what to give instead, and the route takes the cap as `per_account` too, the
+  MCP tool's spelling, instead of ignoring it.
+
 - **The CLI tab keeps its usage current by itself.** It only read the usage a row carried from a
   manual check, never the server's usage cache, so a 5-hour window Keep windows running had just
   started showed blank until something else on the page asked. It now reads the cache every few

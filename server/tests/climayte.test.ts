@@ -345,6 +345,20 @@ describe('climayteCapacity', () => {
   })
 })
 
+describe('climayteRun refuses what can never run', () => {
+  // An unknown account made a task that waited forever (fuzz, 2026-10-02).
+  afterAll(() => setCliMayteAccountsProvider(null))
+
+  test('an account that is not a CLI instance', () => {
+    setCliMayteAccountsProvider(() => [
+      { id: 'run-known', num: 1, name: 'known', configDir: tmpdir(), sessionPct: 0, weekPct: 0 },
+    ])
+    expect(() =>
+      climayteRun({ tasks: [{ prompt: 'x', cwd: tmpdir() }], accounts: ['no-such-account'] }),
+    ).toThrow(/not a CLI instance/)
+  })
+})
+
 describe('pickAccount', () => {
   const acct = (
     id: string,

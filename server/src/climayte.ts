@@ -1283,6 +1283,24 @@ export function climayteRun(input: {
   })
   const cap = input.perAccount ?? 2
   if (!Number.isInteger(cap) || cap < 1 || cap > 4) throw new Error('perAccount must be 1..4')
+  // An account the task may use must exist: an unknown one used to make a task that waited
+  // forever for an account that will never sign in (fuzz, 2026-10-02). A signed-out instance is
+  // known, and its task waits for the sign-in as before.
+  if (input.accounts?.length) {
+    let pool: CliMayteAccount[] = []
+    try {
+      pool = accountsProvider()
+    } catch {
+      // the instance store below still knows every account
+    }
+    const unknown = input.accounts.filter(
+      (id) => !pool.some((a) => a.id === id) && !getCliInstance(id),
+    )
+    if (unknown.length)
+      throw new Error(
+        `accounts: ${unknown.join(', ')} ${unknown.length === 1 ? 'is not a CLI instance' : 'are not CLI instances'} (give CLI instance ids; climayte_run also takes numbers)`,
+      )
+  }
   const sized = sizeTasks(input, settings)
   const group = input.group?.trim() || `g-${hex(6)}`
   // Joining a group keeps its cap unless the caller names a new one.
