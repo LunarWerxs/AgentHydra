@@ -1905,7 +1905,7 @@ async function climayteRoom(): Promise<{ climayte?: { idleAccounts: number; hint
       return {
         climayte: {
           idleAccounts: idle,
-          hint: `${idle} CLI account${idle === 1 ? '' : 's'} sit idle with room; climayte_run can take self-contained Claude-quality work (AgentHydra picks the account).${also}`,
+          hint: `${idle} CLI account${idle === 1 ? ' sits' : 's sit'} idle with room; climayte_run can take self-contained Claude-quality work (AgentHydra picks the account).${also}`,
         },
       }
     }
