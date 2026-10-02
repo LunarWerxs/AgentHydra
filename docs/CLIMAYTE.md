@@ -128,6 +128,12 @@ Bun.spawn(argv, { cwd, env, stdin: Bun.file(promptFile), stdout: <fd of log, app
   value. End with a short report: what you did, the proof you saw (a command and what it
   printed), and anything left undone with the reason."
 
+**What a worker starts with** (2026-10-02): its settings deny the agenthydra, magnific and
+connections-local MCP servers (zswarm stays, for wide cheap work) and set `syncClaudeAiSkills:
+false`, which hides the claude.ai-synced skills (docx, pptx, computer-use and the rest) for that run
+only; its environment sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. About 5k tokens fewer on every
+request; both keys are in the CLI binary (2.1.286).
+
 ### Runner and restarts (`server/src/climayte-runner.ts`)
 
 Owner, 2026-09-30: restarting AgentHydra must not break CliMayte workers. A `Bun.spawn` child sits in
@@ -263,6 +269,18 @@ flags are honoured; neither is silently ignored.
 
 Emit a change event (`onCliMayteChange(cb) → unsubscribe`) whenever a worker's status changes, so
 `climayte_status` can wait without polling.
+
+**Turn caps** (`notConverging`, `TURN_CAPS`, 2026-10-02). After a handoff or a limit, before the
+task is queued again: past 8 attempts, 4 moves between accounts, 3 handoffs, or 3 times its size
+estimate (at least half a Pro window) since its newest finished attempt, it fails with why and
+what to do (split it, or continue with `climayte_send`). Sign-in refusals cost nothing and do not
+count. `retries` (transient errors, interrupted resumes, launch retries) resets only when a turn
+finishes, not at a limit or a handoff. A check that cannot run (no start, exit 126 or 127) fails
+the task at once as a broken check instead of sending it back.
+
+**The pool is read at most every 3 seconds** (`signedInAccounts`, `POOL_MS`); it rebuilt from disk
+every second while work ran. The live-session count per account is `liveSessionIds`, which skips
+the transcript lookups.
 
 ### Pure helpers (exported; the tests pin these)
 
@@ -797,7 +815,10 @@ boot after the stores are ready.
   (`climayteGet`, with its `events`; field note 4). Otherwise a brief list, newest first: a `group`'s
   workers, else every active worker plus the 20 (`RECENT_FINISHED`, or `limit`) most recently
   finished (field note 1: unscoped, it answered all 141 workers ever recorded, 51k characters, and
-  overflowed the MCP result); `active: true` lists only queued/running/waiting ones. With
+  overflowed the MCP result); `active: true` lists only queued/running/waiting ones. A brief row
+  is the report row without the report text (`toBrief`), empty values left out, and finished work
+  a verdict covers is left out unless `all: true` (2026-10-02: the default answer was 96 KB, 80 KB
+  of it already-judged work). With
   `wait_seconds` it waits for the next status change in scope (use this instead of polling); waits
   are cut to `CLIMAYTE_MAX_WAIT_S` (45 s): an MCP client drops a call held about 60 s.
 - `climayte_log { group?, id?, since?, limit? }`: the journal as readable lines, newest last, default
