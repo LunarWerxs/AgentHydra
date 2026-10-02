@@ -984,7 +984,7 @@ describe('the 85% stop line and the 90% ceiling', () => {
       at,
     })
     const own = reading(76, now - 360_000)
-    expect(windDownAt(own, reading(85, now - 5_000), now)).toBe(85)
+    expect(windDownAt(own, reading(85, now - 5_000), now)).toMatchObject({ pct: 85, week: false })
     expect(atCeiling(own, reading(90, now - 5_000), now)?.pct).toBe(90)
     // An account reading older than its own, or from a window that has reset, does not count.
     expect(windDownAt(own, reading(85, now - 400_000), now)).toBeNull()

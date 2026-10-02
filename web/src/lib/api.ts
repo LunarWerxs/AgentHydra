@@ -1010,6 +1010,8 @@ export interface CliMayteWorkerView {
   priority?: number
   /** The thumbs up or down it got, oldest first. */
   verdicts?: CliMayteVerdict[]
+  /** Finished, and nothing ran since its newest verdict (server/src/climayte-lib.ts toView). */
+  judged?: boolean
 }
 /** One thumbs up or down on a finished task (server/src/climayte.ts). */
 export interface CliMayteVerdict {
@@ -1020,6 +1022,9 @@ export interface CliMayteVerdict {
   effort: string | null
   /** Share of a Pro 5-hour window the work it judges cost: 2.4 means 2.4%. */
   pct: number | null
+  /** Who judged: the task's own check command, the orchestrating chat, or the owner in the view.
+   *  Absent on verdicts recorded before the server kept it. */
+  by?: 'check' | 'orchestrator' | 'owner'
 }
 /** What passed per kind of task, per model and thinking level, and what it cost. */
 export interface CliMayteScorecard {

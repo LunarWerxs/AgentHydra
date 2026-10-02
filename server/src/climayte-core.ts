@@ -12,10 +12,14 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  renameSync,
+  rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import {
   appendJournal,
   type CliMayteJournalEntry,
@@ -114,6 +118,22 @@ const STORE_SPEC: JsonStoreSpec<Store> = {
   empty: () => ({ workers: [], perAccount: {} }),
 }
 
+/** Finished work, one file per worker. workers.json was rewritten whole on every change: 2.8 MB
+ *  about every 40 s, some 4.7 GB of disk writes a day, with 2.5 MB of it 222 finished workers that
+ *  no longer change (measured 2026-10-02). Now workers.json holds the work still in flight (75 KB
+ *  for 17 workers) and a finished worker's file is written when that worker changes. */
+const DONE = join(ROOT, 'done')
+
+const donePath = (id: string): string => join(DONE, `${id}.json`)
+
+/** No tick touches it again until a message revives it (climayteSend). */
+const isFinished = (w: CliMayteWorker): boolean =>
+  w.status === 'done' || w.status === 'failed' || w.status === 'cancelled'
+
+/** Finished workers that have a file under done/, and the workers changed since the last save. */
+const filed = new Set<string>()
+const dirty = new Set<string>()
+
 export const workers = new Map<string, CliMayteWorker>()
 
 export let perAccount: Record<string, number> = {}
@@ -136,6 +156,9 @@ export interface LogRead {
   overage: { resetsAt: number | null } | null
   /** The newest usage reading the CLI streamed (liveUsage). */
   live: CliMayteLiveUsage | null
+  /** The newest `timestamp` an event carried (assistant and user events do, epoch ms): when a
+   *  replayed reading was really taken (readInto). */
+  lastAt: number | null
 }
 
 /** Each account's newest live usage reading from any of its workers' streams (poll copies it
@@ -311,15 +334,59 @@ export function setCliMayteAccountsProvider(fn: (() => CliMayteAccount[]) | null
   accountsProvider = fn ?? signedInAccounts
 }
 
+/** Every readable worker file under done/. One that cannot be read, or that names another worker
+ *  than its file, is left as found and said: an unreadable record is not an absent one. */
+function readDone(): CliMayteWorker[] {
+  let names: string[] = []
+  try {
+    names = readdirSync(DONE)
+  } catch {
+    return []
+  }
+  const found: CliMayteWorker[] = []
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    try {
+      const w = JSON.parse(readFileSync(join(DONE, name), 'utf8')) as CliMayteWorker
+      if (name !== `${w?.id}.json` || !Array.isArray(w.attempts)) throw new Error('not a worker')
+      found.push(w)
+    } catch (err) {
+      console.error(`[climayte] ${join(DONE, name)} could not be read; left as it is:`, err)
+    }
+  }
+  return found
+}
+
+/** Both halves of the store into `workers`, oldest first as the single file kept them. The copy in
+ *  workers.json wins: climayteSend revives a finished worker, and a daemon that died between
+ *  writing workers.json and removing the worker's file left both. A finished worker still in
+ *  workers.json is marked to be filed: every one of them on the first start after the single-file
+ *  layout, which load's save then carries over. */
+function loadWorkers(hot: CliMayteWorker[]): void {
+  const all = new Map<string, CliMayteWorker>()
+  for (const w of readDone()) {
+    all.set(w.id, w)
+    filed.add(w.id)
+  }
+  for (const w of hot) {
+    all.set(w.id, w)
+    if (isFinished(w)) dirty.add(w.id)
+  }
+  for (const w of [...all.values()].sort((a, b) => a.createdAt - b.createdAt)) workers.set(w.id, w)
+}
+
 export function load(): void {
   if (loaded) return
   loaded = true
   const read = readJsonStore(STORE_SPEC)
   if (read.status === 'ok') {
-    for (const w of read.value.workers) workers.set(w.id, w)
+    loadWorkers(read.value.workers)
     perAccount = read.value.perAccount
-    if (backfillTokens()) save()
-  } else if (read.status !== 'missing') {
+    if (backfillTokens() || dirty.size) save()
+  } else if (read.status === 'missing') {
+    // Finished work is still on record when only workers.json is gone.
+    loadWorkers([])
+  } else {
     console.error(
       `[climayte] ${STORE_SPEC.path} is ${read.status}; starting with no workers and not overwriting it.`,
     )
@@ -365,7 +432,25 @@ function orgWallsFromAttempts(): boolean {
 export function save(): void {
   if (!loaded) return
   mkdirSync(ROOT, { recursive: true })
-  writeJsonStoreAtomic(STORE_SPEC.path, { workers: [...workers.values()], perAccount })
+  const hot: CliMayteWorker[] = []
+  for (const w of workers.values()) {
+    if (!isFinished(w)) hot.push(w)
+    else if (dirty.has(w.id) || !filed.has(w.id)) {
+      writeJsonStoreAtomic(donePath(w.id), w)
+      filed.add(w.id)
+    }
+  }
+  dirty.clear()
+  writeJsonStoreAtomic(STORE_SPEC.path, { workers: hot, perAccount })
+  // A revived worker's file (and a removed one's) goes only now that workers.json is written: a
+  // finished worker is filed before it leaves workers.json and unfiled after it is back there, so
+  // a crash at any point leaves it in at least one of them.
+  for (const id of filed) {
+    const w = workers.get(id)
+    if (w && isFinished(w)) continue
+    rmSync(donePath(id), { force: true })
+    filed.delete(id)
+  }
 }
 
 export function saveWalls(): void {
@@ -373,9 +458,8 @@ export function saveWalls(): void {
   writeJsonStoreAtomic(WALLS_PATH, walls)
 }
 
-export function changed(w: CliMayteWorker): void {
-  w.updatedAt = Date.now()
-  save()
+/** Tell the listeners `w` changed. Apart from the save, so a dispatch of many saves once. */
+export function notify(w: CliMayteWorker): void {
   for (const cb of listeners) {
     try {
       cb(w)
@@ -383,6 +467,13 @@ export function changed(w: CliMayteWorker): void {
       // a listener's failure is its own
     }
   }
+}
+
+export function changed(w: CliMayteWorker): void {
+  w.updatedAt = Date.now()
+  dirty.add(w.id)
+  save()
+  notify(w)
 }
 
 const isInit = (ev: unknown): boolean =>
@@ -456,11 +547,57 @@ export const freshRead = (): LogRead => ({
   model: null,
   overage: null,
   live: null,
+  lastAt: null,
 })
 
 /** A finished attempt's log, parsed once without keeping it in `reads`. */
 export function peekLog(path: string): LogRead {
   return readInto(path, freshRead())
+}
+
+/** Where a packed attempt log is (packLog): beside the plain one it replaces. */
+export const packedPath = (log: string): string => `${log}.zst`
+
+/** Pack a finished attempt's log to `<log>.zst` and remove the plain file: nothing packed them, and
+ *  corch/logs grew 170 MiB a day (429 MiB in 813 files, 2026-10-02). Only a log last written
+ *  before `olderThan`, and only when it did not grow while it was read: a CLI that still has it
+ *  open would lose what it appends after the remove. The packed file has its own name, so nothing
+ *  is renamed over a file a process holds open (Windows refuses that); a plain file that cannot be
+ *  removed stays, and the readers take the plain one first. The bytes packed; 0 when none were. */
+export function packLog(path: string, olderThan: number): number {
+  const tmp = `${packedPath(path)}.tmp`
+  try {
+    if (statSync(path).mtimeMs >= olderThan) return 0
+    const raw = readFileSync(path)
+    writeFileSync(tmp, zstdCompressSync(raw))
+    if (statSync(path).size !== raw.length) {
+      rmSync(tmp, { force: true })
+      return 0
+    }
+    renameSync(tmp, packedPath(path))
+    rmSync(path)
+    return raw.length
+  } catch {
+    // no such log (packed already, or archived), or one that could not be packed this time
+    rmSync(tmp, { force: true })
+    return 0
+  }
+}
+
+/** A packed log's text, or null with none. */
+function packedText(path: string): string | null {
+  try {
+    return zstdDecompressSync(readFileSync(packedPath(path))).toString('utf8')
+  } catch {
+    return null
+  }
+}
+
+/** An event's own `timestamp` in epoch ms, or null (a rate_limit_event carries none). */
+function eventTime(ev: unknown): number | null {
+  const t = (ev as { timestamp?: unknown } | null)?.timestamp
+  const ms = typeof t === 'string' ? Date.parse(t) : Number.NaN
+  return Number.isFinite(ms) ? ms : null
 }
 
 /** One raw line as a parsed event, or null when it is blank or not JSON (both skipped by the loop).
@@ -475,15 +612,18 @@ function parseLogLine(line: string): { ev: unknown } | null {
 }
 
 /** Fold one parsed event into the read: init/model, the overage and live readings, and the bounded
- *  events and recent-summaries lists. */
-function applyLogEvent(ev: unknown, r: LogRead): void {
+ *  events and recent-summaries lists. `replayAt` is null for a log being tailed (a reading is from
+ *  now); on a replay it is the file's last write, the time of a reading no stamped event came
+ *  before. */
+function applyLogEvent(ev: unknown, r: LogRead, replayAt: number | null): void {
   if (isInit(ev)) {
     r.sawInit = true
     const model = (ev as { model?: unknown }).model
     if (typeof model === 'string' && model) r.model = model
   }
   r.overage ??= overageStart(ev)
-  r.live = liveUsage(ev, Date.now()) ?? r.live
+  r.lastAt = eventTime(ev) ?? r.lastAt
+  r.live = liveUsage(ev, replayAt === null ? Date.now() : (r.lastAt ?? replayAt)) ?? r.live
   r.events.push(ev)
   if (r.events.length > 400) r.events.splice(0, r.events.length - 400)
   const s = summarizeEvent(ev)
@@ -493,11 +633,35 @@ function applyLogEvent(ev: unknown, r: LogRead): void {
   }
 }
 
-export function readInto(path: string, r: LogRead): LogRead {
+/** The next stretch of a log's text into the read: whole lines, the rest waits in `partial`. */
+function feedLog(text: string, r: LogRead, replayAt: number | null): void {
+  const lines = (r.partial + text).split(/\r?\n/)
+  r.partial = lines.pop() ?? ''
+  for (const line of lines) {
+    const parsed = parseLogLine(line)
+    if (parsed === null) continue
+    applyLogEvent(parsed.ev, r, replayAt)
+  }
+}
+
+/** `replay`: this read starts a log an earlier daemon was already tailing, so its usage readings
+ *  keep their own time (the event before them, else the file's last write). Stamped 'now', a
+ *  reading minutes old outranked newer ones from the account's other workers and the usage
+ *  snapshot: 18 of 27 restarts with runner workers had two or more on one account (2026-10-02). */
+export function readInto(path: string, r: LogRead, replay = false): LogRead {
   let size = 0
+  let writtenAt = 0
   try {
-    size = statSync(path).size
+    const stat = statSync(path)
+    size = stat.size
+    writtenAt = stat.mtimeMs
   } catch {
+    // No plain file: a finished attempt's log may be packed (packLog), and is then read whole, once.
+    const packed = r.offset === 0 ? packedText(path) : null
+    if (packed) {
+      r.offset = packed.length
+      feedLog(packed, r, null)
+    }
     return r
   }
   if (size > r.offset) {
@@ -506,13 +670,7 @@ export function readInto(path: string, r: LogRead): LogRead {
       const buf = Buffer.alloc(size - r.offset)
       readSync(fd, buf, 0, buf.length, r.offset)
       r.offset = size
-      const lines = (r.partial + buf.toString('utf8')).split(/\r?\n/)
-      r.partial = lines.pop() ?? ''
-      for (const line of lines) {
-        const parsed = parseLogLine(line)
-        if (parsed === null) continue
-        applyLogEvent(parsed.ev, r)
-      }
+      feedLog(buf.toString('utf8'), r, replay ? writtenAt : null)
     } finally {
       closeSync(fd)
     }
@@ -588,38 +746,44 @@ export function spendRecord(
 
 /** The session id the CLI reported in an attempt's log (its system/init event), or null. */
 function sessionOfLog(log: string): string | null {
+  for (const line of logHead(log).split('\n')) {
+    if (!line.includes('"init"')) continue
+    try {
+      const ev = JSON.parse(line)
+      if (ev?.type === 'system' && ev.subtype === 'init' && typeof ev.session_id === 'string')
+        return ev.session_id
+    } catch {
+      // a partial last line
+    }
+  }
+  return null
+}
+
+/** The first 256 KB of an attempt's log (the packed one's when it is packed), '' with no log. */
+function logHead(log: string): string {
   let fd: number | null = null
   try {
     fd = openSync(log, 'r')
     const buf = Buffer.alloc(256 * 1024)
     const n = readSync(fd, buf, 0, buf.length, 0)
-    for (const line of buf.subarray(0, n).toString('utf8').split('\n')) {
-      if (!line.includes('"init"')) continue
-      try {
-        const ev = JSON.parse(line)
-        if (ev?.type === 'system' && ev.subtype === 'init' && typeof ev.session_id === 'string')
-          return ev.session_id
-      } catch {
-        // a partial last line
-      }
-    }
+    return buf.subarray(0, n).toString('utf8')
   } catch {
-    // no log
+    return packedText(log)?.slice(0, 256 * 1024) ?? ''
   } finally {
     if (fd !== null) closeSync(fd)
   }
-  return null
 }
 
 /** The highest 5-hour usage a log's main-agent rate_limit_events reported, with that window's
  *  reset; null with none (or no log). */
 function peakOfLog(log: string): { pct: number; resetsAt: number | null } | null {
-  let text = ''
+  let text: string | null = null
   try {
     text = readFileSync(log, 'utf8')
   } catch {
-    return null
+    text = packedText(log)
   }
+  if (text === null) return null
   let peak: { pct: number; resetsAt: number | null } | null = null
   for (const line of text.split('\n')) {
     if (!line.includes('"rate_limit_event"')) continue
@@ -723,11 +887,16 @@ function backfillWorkerTokens(w: CliMayteWorker): boolean {
 function backfillTokens(): boolean {
   let any = false
   for (const w of workers.values()) {
-    if (backfillAttemptTokens(w)) any = true
-    if (backfillAttemptPeaks(w)) any = true
-    if (backfillAttemptSpend(w)) any = true
-    if (backfillVerdictRereads(w)) any = true
-    if (backfillWorkerTokens(w)) any = true
+    let mine = false
+    if (backfillAttemptTokens(w)) mine = true
+    if (backfillAttemptPeaks(w)) mine = true
+    if (backfillAttemptSpend(w)) mine = true
+    if (backfillVerdictRereads(w)) mine = true
+    if (backfillWorkerTokens(w)) mine = true
+    if (!mine) continue
+    // A finished worker's own file is rewritten only when that worker is marked (save).
+    dirty.add(w.id)
+    any = true
   }
   return any
 }

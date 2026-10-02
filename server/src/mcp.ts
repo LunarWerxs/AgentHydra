@@ -1891,13 +1891,31 @@ async function climayteRoom(): Promise<{ climayte?: { idleAccounts: number; hint
   try {
     const cap = (await apiOrLocal('/api/corch/capacity', async () => null)) as {
       idle?: number
+      waiting?: number
+      waitUntil?: string | null
     } | null
     const idle = cap?.idle ?? 0
-    if (idle < 1) return {}
+    const waiting = cap?.waiting ?? 0
+    const many = waiting !== 1
+    // `idle` is already the accounts a new task would start on now (roomNow), so a waiting row
+    // does not take that room: it may wait for its own account's reset or sit in a 10 s retry.
+    if (idle >= 1) {
+      const also =
+        waiting > 0 ? ` ${waiting} task${many ? 's' : ''} already wait${many ? '' : 's'}.` : ''
+      return {
+        climayte: {
+          idleAccounts: idle,
+          hint: `${idle} CLI account${idle === 1 ? '' : 's'} sit idle with room; climayte_run can take self-contained Claude-quality work (AgentHydra picks the account).${also}`,
+        },
+      }
+    }
+    if (waiting < 1) return {}
+    // No room and work already waits: more would queue behind it (2026-10-02 04:58, 24 waiting).
+    const at = cap?.waitUntil ? new Date(cap.waitUntil).toLocaleTimeString() : null
     return {
       climayte: {
         idleAccounts: idle,
-        hint: `${idle} CLI account${idle === 1 ? '' : 's'} sit idle with room; climayte_run can take self-contained Claude-quality work (AgentHydra picks the account).`,
+        hint: `${waiting} CliMayte task${many ? 's' : ''} already wait${many ? '' : 's'}${at ? ` until ${at}` : ''}; new work queues behind ${many ? 'them' : 'it'}.`,
       },
     }
   } catch {

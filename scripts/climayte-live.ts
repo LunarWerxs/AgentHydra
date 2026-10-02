@@ -127,8 +127,14 @@ const settled = (id: string, s = 400) =>
 const running = (id: string) => until(id, (v) => v.status === 'running', 90, 'running')
 const inBash = (id: string) =>
   until(id, (v) => /^Bash/.test(v.lastActivity ?? ''), 90, 'a Bash step')
-const rawWorker = (id: string) =>
-  JSON.parse(readFileSync(STORE, 'utf8')).workers.find((w: { id: string }) => w.id === id)
+// A finished worker is its own file under corch/done; workers.json holds the work in flight.
+const rawWorker = (id: string) => {
+  const done = join(AH, 'corch', 'done', `${id}.json`)
+  return (
+    JSON.parse(readFileSync(STORE, 'utf8')).workers.find((w: { id: string }) => w.id === id) ??
+    (existsSync(done) ? JSON.parse(readFileSync(done, 'utf8')) : undefined)
+  )
+}
 const path = (v: View) => v.attempts.map((a) => `#${a.account.num}:${a.outcome}`).join(' > ')
 const pidAlive = (pid: number) => {
   try {

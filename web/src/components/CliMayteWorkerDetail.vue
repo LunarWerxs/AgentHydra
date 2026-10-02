@@ -42,8 +42,11 @@ import { cancelCliMayte, postCliMayteVerdict, sendCliMayteWorker } from '@/lib/a
 import {
   CLIMAYTE_OUTCOME,
   climayteAccountLabel,
+  climayteFailedStory,
   climayteQueuedNote,
   climayteRunLabel,
+  climayteStoryLines,
+  climayteVerdictMark,
   formatTokens,
   isCliMayteActive,
   modelName,
@@ -53,6 +56,8 @@ import { formatAgo } from '@/lib/relativeTime'
 
 const props = defineProps<{
   worker: (CliMayteWorkerView & { events?: string[] }) | null
+  /** Every loaded task: a failed task's story looks for the one that was started again after it. */
+  tasks: CliMayteWorkerView[]
   /** True while the selected task's events have not arrived yet. */
   eventsLoading: boolean
   now: number
@@ -81,6 +86,12 @@ const turnResults = computed(() => props.worker?.results ?? [])
 const queuedNote = computed(() =>
   props.worker ? climayteQueuedNote(props.worker, props.now) : null,
 )
+/** A failed task's story, the same four lines its icon shows on hover in the list (owner,
+ *  2026-10-02: what failed, what happened next, the end result). */
+const failedStory = computed(() => {
+  const s = props.worker ? climayteFailedStory(props.worker, props.tasks) : null
+  return s ? climayteStoryLines(s, (key, values) => t(key, values)) : null
+})
 /** Its transcript is only on the account it last ran on, so Continue cannot move it elsewhere. */
 const stuck = computed(
   () =>
@@ -103,6 +114,14 @@ const finished = computed(
 )
 const verdicts = computed(() => props.worker?.verdicts ?? [])
 const latestVerdict = computed(() => verdicts.value[verdicts.value.length - 1] ?? null)
+/** The same mark the task list shows (lib/climayte-status.ts): a failed verdict on a task still
+ *  working reads as another round, never as Failed beside Running. */
+const verdictMark = computed(() => {
+  const m = props.worker ? climayteVerdictMark(props.worker) : null
+  if (!m) return null
+  const said = t(m.key, m.values)
+  return { kind: m.kind, hint: m.note ? `${said}: ${m.note}` : said }
+})
 /** `Opus 5.5 · xhigh` for one verdict's setting; the CLI default where it asked for none. */
 const verdictRun = (v: { model: string | null; effort: string | null }) =>
   `${v.model ? modelName(v.model) : t('climayte.runDefault')} · ${v.effort ?? t('climayte.runDefault')}`
@@ -258,6 +277,16 @@ async function onStop() {
             <p v-if="queuedNote" class="text-xs text-muted-foreground">
               {{ $t(queuedNote.key, queuedNote.values ?? {}) }}
             </p>
+            <ul v-if="failedStory" class="flex flex-col gap-0.5 text-xs text-muted-foreground">
+              <li
+                v-for="(line, i) in failedStory"
+                :key="i"
+                class="wrap-break-word"
+                :class="i === failedStory.length - 1 ? 'font-medium text-foreground' : ''"
+              >
+                {{ line }}
+              </li>
+            </ul>
           </div>
           <Button
             v-if="active"
@@ -276,14 +305,27 @@ async function onStop() {
           <div class="flex min-w-0 flex-wrap items-center gap-1.5">
             <CliMayteStatusBadge :status="worker.status" />
             <Badge
-              v-if="latestVerdict"
-              :variant="latestVerdict.verdict === 'pass' ? 'success' : 'destructive'"
-              :title="latestVerdict.note ?? undefined"
+              v-if="verdictMark"
+              :variant="
+                verdictMark.kind === 'pass'
+                  ? 'success'
+                  : verdictMark.kind === 'retry'
+                    ? 'warning'
+                    : 'destructive'
+              "
+              :title="verdictMark.hint"
             >
-              <ThumbsUp v-if="latestVerdict.verdict === 'pass'" aria-hidden="true" />
+              <ThumbsUp v-if="verdictMark.kind === 'pass'" aria-hidden="true" />
+              <RotateCcw v-else-if="verdictMark.kind === 'retry'" aria-hidden="true" />
               <ThumbsDown v-else aria-hidden="true" />
               <span class="text-2xs">
-                {{ latestVerdict.verdict === 'pass' ? $t('climayte.verdictPassed') : $t('climayte.verdictFailed') }}
+                {{
+                  verdictMark.kind === 'pass'
+                    ? $t('climayte.verdictPassed')
+                    : verdictMark.kind === 'retry'
+                      ? $t('climayte.verdictRetryShort')
+                      : $t('climayte.verdictFailed')
+                }}
               </span>
             </Badge>
             <Badge

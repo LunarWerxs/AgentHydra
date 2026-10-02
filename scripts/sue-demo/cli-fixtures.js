@@ -98,6 +98,91 @@
     state.joinedAt === null ? 0 : Math.floor((Date.now() - state.joinedAt) / 4_000)
   const landedCount = () => Math.min(arriving.length, passes() * 2)
 
+  // Four CliMayte tasks, one per mark a visitor may meet in the task list: on another round after
+  // its check said no, failed and accepted anyway, failed and started again on a stronger model,
+  // and that redo, done.
+  function corchTasks() {
+    const at = (minutesAgo) => BOOT - minutesAgo * 60_000
+    const on = (name, outcome) => ({
+      account: { id: name, num: null, name },
+      outcome,
+      notice: null,
+    })
+    const verdict = (minutesAgo, pass, by, note) => ({
+      at: at(minutesAgo),
+      verdict: pass ? 'pass' : 'fail',
+      by,
+      note,
+      model: null,
+      effort: null,
+      pct: null,
+    })
+    const task = (id, title, minutesAgo, over) => ({
+      id,
+      group: 'demo',
+      title,
+      cwd: 'D:/Projects/northwind-shop',
+      prompt: title,
+      pending: [],
+      model: 'claude-sonnet-5-5',
+      effort: 'medium',
+      accounts: null,
+      status: 'done',
+      sessionId: null,
+      accountId: null,
+      account: null,
+      attempts: [],
+      result: null,
+      error: null,
+      lastActivity: null,
+      costUsd: 0.42,
+      turns: 14,
+      moves: 0,
+      retries: 0,
+      notBefore: null,
+      ranS: 310,
+      createdAt: at(minutesAgo),
+      updatedAt: at(minutesAgo - 5),
+      kind: 'code',
+      verdicts: [],
+      ...over,
+    })
+    const checkSaidNo = 'The check `bun run check` failed (exit 1).'
+    return [
+      task('w-demo-1', 'Docs: links and claims to zero', 20, {
+        status: 'running',
+        attempts: [on('maya', 'done'), on('maya', 'running')],
+        verdicts: [verdict(6, false, 'check', checkSaidNo)],
+      }),
+      task('w-demo-2', 'Checkout: totals on a phone', 95, {
+        status: 'failed',
+        judged: true,
+        error:
+          'The check still failed after 3 rounds; it needs the orchestrator. Last: 1 gating error.',
+        attempts: [on('theo', 'done'), on('theo', 'done'), on('theo', 'done')],
+        verdicts: [
+          verdict(80, false, 'check', checkSaidNo),
+          verdict(70, false, 'check', checkSaidNo),
+          verdict(60, false, 'check', checkSaidNo),
+          verdict(50, true, 'orchestrator', 'The one finding left is in another team’s file.'),
+        ],
+      }),
+      task('w-demo-3', 'Search: the empty results state', 180, {
+        status: 'failed',
+        error:
+          'This session’s transcript was not found on the account it last ran on, so it cannot move without losing its context. Start it again as a new task.',
+        attempts: [on('ines', 'handoff'), on('ines', 'quota'), on('lena', 'auth')],
+      }),
+      task('w-demo-4', 'Search: the empty results state', 150, {
+        model: 'claude-opus-5-5',
+        effort: 'high',
+        attempts: [on('omar', 'done')],
+        verdicts: [verdict(140, true, 'check', null)],
+        result: 'Done: an empty search now shows three tips and a link to all products.',
+      }),
+    ]
+  }
+
   function cliInstances() {
     if (seat === 'main') return OTHER_PC.map((p) => instance(p, false))
     const landed = arriving
@@ -257,7 +342,13 @@
     // Launch, rename, log out, delete and the rest: answered, and nothing changes.
     if (path.startsWith('/api/cli-instances'))
       return { ok: true, message: 'Done (a demo: nothing real was changed).' }
-    if (path === '/api/corch/workers' && method === 'GET') return []
+    if (path === '/api/corch/workers' && method === 'GET') return corchTasks()
+    if (path.startsWith('/api/corch/workers/') && method === 'GET') {
+      const id = decodeURIComponent(path.split('/')[4] ?? '')
+      const hit = corchTasks().find((w) => w.id === id)
+      return hit ? { ...hit, events: [] } : null
+    }
+    if (path === '/api/corch/journal') return []
     if (path === '/api/corch/scorecard') return { unitsPerPercent: 0, rows: [] }
     if (path === '/api/corch/totals')
       return {

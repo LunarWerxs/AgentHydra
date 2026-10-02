@@ -50,8 +50,11 @@ import {
   listeners,
   liveByAccount,
   load,
+  notify,
   ORG_WALL_MS,
   overageAllowed,
+  packedPath,
+  packLog,
   peekLog,
   perAccount,
   placementState,
@@ -81,7 +84,6 @@ import {
 } from './climayte-journal'
 import {
   aboutToBill,
-  accountInUse,
   addResults,
   addTokens,
   atCeiling,
@@ -98,6 +100,7 @@ import {
   climayteEffort,
   climayteModel,
   climaytePriority,
+  contextTokens,
   dueOrder,
   isLoginWall,
   isOrgDisabled,
@@ -111,15 +114,14 @@ import {
   toBrief,
   toReport,
   toView,
-  WIND_DOWN_SESSION_PCT,
-  WIND_DOWN_WEEK_PCT,
+  type WindDownWhy,
   wallUntil,
   windDownAt,
   windDownMessage,
 } from './climayte-lib'
 import { FIT_PCT, projectedPct, sizeTask } from './climayte-placement'
 import { readRunnerExit, readRunnerPids } from './climayte-runner'
-import { scheduleWorker, tickAccounts, tickState } from './climayte-schedule'
+import { roomNow, scheduleWorker, tickAccounts, tickState } from './climayte-schedule'
 import {
   attemptUnits,
   bestRung,
@@ -149,13 +151,18 @@ export * from './climayte-lib'
 export { climayteTotals } from './climayte-totals'
 
 /** The room CliMayte has right now, for an agent deciding whether to hand work over (check_my_usage
- *  and list_usage say it): signed-in accounts that are not walled, not in use by someone else,
- *  under the wind-down line, and running no CliMayte worker. Owner, 2026-10-02: ten accounts sat
- *  idle for six hours while every chat did its own work. */
+ *  and list_usage say it): `idle`, the accounts running no CliMayte worker that placement would
+ *  start an ordinary new task on right now (roomNow), and `waiting`, the tasks already queued or
+ *  waiting, with the earliest time one of them is due to start. Owner, 2026-10-02: ten accounts sat
+ *  idle for six hours while every chat did its own work. The same day at 04:58 it answered idle 9
+ *  with 24 tasks waiting: it counted every account under the stop lines, and placement held them
+ *  all. */
 export function climayteCapacity(now = Date.now()): {
   idle: number
   accounts: number
   running: number
+  waiting: number
+  waitUntil: string | null
 } {
   load()
   let accounts: CliMayteAccount[] = []
@@ -165,21 +172,26 @@ export function climayteCapacity(now = Date.now()): {
     // no readable pool: no room to report
   }
   const busy = new Set<string>()
+  const until: string[] = []
   let running = 0
+  let waiting = 0
   for (const w of workers.values()) {
+    if (w.status === 'queued' || w.status === 'waiting') {
+      waiting++
+      if (w.status === 'waiting' && w.waitUntil) until.push(w.waitUntil)
+    }
     if (w.status !== 'running') continue
     running++
     if (w.accountId) busy.add(w.accountId)
   }
-  const idle = accounts.filter(
-    (a) =>
-      !((walls[a.id]?.until ?? 0) > now) &&
-      !accountInUse(a) &&
-      !busy.has(a.id) &&
-      (a.sessionPct === null || a.sessionPct < WIND_DOWN_SESSION_PCT) &&
-      (a.weekPct === null || a.weekPct < WIND_DOWN_WEEK_PCT),
-  ).length
-  return { idle, accounts: accounts.length, running }
+  const idle = roomNow(tickState(accounts, now)).filter((a) => !busy.has(a.id)).length
+  return {
+    idle,
+    accounts: accounts.length,
+    running,
+    waiting,
+    waitUntil: until.sort()[0] ?? null,
+  }
 }
 
 const HANDOFFS = join(ROOT, 'handoffs')
@@ -682,19 +694,59 @@ async function tick(): Promise<void> {
         console.error(`[climayte] could not schedule ${w.id}:`, err)
       }
     }
+    // Last, so packing never stands between a running worker and its overage stop.
+    packOldLogs(now)
   } finally {
     ticking = false
     schedule()
   }
 }
 
-function readLog(path: string): LogRead {
-  let r = reads.get(path)
+/** When this daemon loaded: an attempt started before then was started by an earlier daemon. */
+const BOOTED_AT = Date.now()
+
+function readLog(at: CliMayteWorker['attempts'][number]): LogRead {
+  let r = reads.get(at.log)
+  // This daemon's first read of a log an earlier daemon was tailing replays it from the start: its
+  // readings keep their own time (readInto).
+  const replay = !r && at.startedAt < BOOTED_AT
   if (!r) {
     r = freshRead()
-    reads.set(path, r)
+    reads.set(at.log, r)
   }
-  return readInto(path, r)
+  return readInto(at.log, r, replay)
+}
+
+/** A finished attempt's log is packed once it is this old (packOldLogs). */
+const PACK_AFTER_MS = 24 * 3_600_000
+/** One pass packs at most this much: it compresses on the daemon's own loop, and the first pass
+ *  finds every log written so far (429 MiB on 2026-10-02). The rest follows a minute later. */
+const PACK_PASS_BYTES = 32 * 1024 * 1024
+let nextPackAt = 0
+
+/** The attempt's CLI can no longer append to its log. finish() ends an attempt only once its CLI
+ *  has exited. A cancel does not wait: the kill is not confirmed, and killAttempt leaves a runner
+ *  it cannot vouch for alone, so a cancelled attempt's log is settled only when its runner wrote
+ *  its exit file or is gone. */
+function logSettled(at: CliMayteWorker['attempts'][number]): boolean {
+  if (at.endedAt === null) return false
+  if (at.outcome !== 'cancelled') return true
+  if (!at.runner) return !(at.pid && isPidAlive(at.pid))
+  if (readRunnerExit(at.runner.exitFile)) return true
+  const pid = at.runner.pid ?? readRunnerPids(at.runner.pidFile)?.runner ?? null
+  return pid === null || runnerIdentity(pid) === 'gone'
+}
+
+/** Pack the logs of attempts that ended a day ago or more (packLog), hourly. */
+function packOldLogs(now: number): void {
+  if (now < nextPackAt) return
+  let room = PACK_PASS_BYTES
+  for (const w of workers.values())
+    for (const at of w.attempts) {
+      if (room <= 0 || !logSettled(at) || now - (at.endedAt as number) < PACK_AFTER_MS) continue
+      room -= packLog(at.log, now - PACK_AFTER_MS)
+    }
+  nextPackAt = now + (room <= 0 ? 60_000 : 3_600_000)
 }
 
 /** The summary lines of finished attempts, for climayteGet: the CliMayte view asks for the selected
@@ -726,9 +778,10 @@ function forgetRead(path: string): void {
 function signalWindDown(
   w: CliMayteWorker,
   at: CliMayteWorker['attempts'][number],
-  pct: number | null,
+  why: WindDownWhy,
 ): void {
   const path = slashed(join(HANDOFFS, `${w.id}-${w.attempts.length - 1}.md`))
+  const pct = why.reason === 'usage' ? why.pct : null
   mkdirSync(HANDOFFS, { recursive: true })
   mkdirSync(SIGNALS, { recursive: true })
   writeFileSync(
@@ -736,12 +789,23 @@ function signalWindDown(
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PostToolUse',
-        additionalContext: windDownMessage(pct, path),
+        additionalContext: windDownMessage(why, path),
       },
     }),
   )
   at.windDown = { at: Date.now(), pct, path }
-  journal(w, 'handoff-requested', { account: acctLabel(at.account), pct, path })
+  // The reason is kept for a handoff on conversation size: it is no sign of a task going in
+  // circles (notConverging), and its continuation is told so (continuationPrompt).
+  if (why.reason === 'context') at.windDown.reason = 'context'
+  journal(w, 'handoff-requested', {
+    account: acctLabel(at.account),
+    pct,
+    path,
+    notice:
+      why.reason === 'context'
+        ? `conversation at ${Math.round(why.tokens / 1000)}k tokens`
+        : undefined,
+  })
   changed(w)
 }
 
@@ -792,7 +856,9 @@ function stopAtCeilingOrOverage(
 }
 
 /** One wind-down ask per attempt (poll): the stop line a watched attempt is at (windDownAt),
- *  going by the account's newest reading from any of its workers (sessionReading). */
+ *  going by the account's newest reading from any of its workers (sessionReading), or its
+ *  conversation's size (CONTEXT_HANDOFF_TOKENS). The ask reaches the session after its next tool
+ *  call only, so one writing its final report is never handed off. */
 function stopWindDown(
   w: CliMayteWorker,
   at: CliMayteWorker['attempts'][number],
@@ -807,8 +873,8 @@ function stopWindDown(
   // a session with nowhere to go worked on into the wall: w-228dcdcc on #98, 85% to 100% in 15
   // requests, outcome quota.
   if (!watching || at.windDown || at.overage || at.ceiling) return
-  const pct = windDownAt(r.live, accountLive, now)
-  if (pct !== null) signalWindDown(w, at, pct)
+  const why = windDownAt(r.live, accountLive, now, contextTokens(r.events))
+  if (why) signalWindDown(w, at, why)
 }
 
 /** What changed for the worker in this read: its newest summary line (lastActivity), or, an ended
@@ -829,7 +895,7 @@ function poll(w: CliMayteWorker): void {
   // A process this daemon is watching now: its own child, or a live runner (a restarted daemon
   // picks those up again). A dead attempt's log, read again after a restart, is not.
   const watching = !exited && !!at.runner
-  const r = readLog(at.log)
+  const r = readLog(at)
   noteReading(at, r, watching)
   const accountLive = liveByAccount.get(at.account.id) ?? null
   const now = Date.now()
@@ -950,9 +1016,11 @@ function withStops(
       ...v,
       outcome: 'handoff',
       notice:
-        at.windDown.pct === null
-          ? 'Handed off on request: wrote a handoff; the task continues in a fresh session.'
-          : `Wound down at ${Math.round(at.windDown.pct)}% of its usage limit and wrote a handoff; the task continues in a fresh session on another account.`,
+        at.windDown.reason === 'context'
+          ? 'Its conversation had grown large: wrote a handoff; the task continues in a fresh session.'
+          : at.windDown.pct === null
+            ? 'Handed off on request: wrote a handoff; the task continues in a fresh session.'
+            : `Wound down at ${Math.round(at.windDown.pct)}% of its usage limit and wrote a handoff; the task continues in a fresh session on another account.`,
     }
   return v
 }
@@ -1411,8 +1479,9 @@ export function climayteRun(input: {
   }
   const sized = sizeTasks(input, settings)
   const group = input.group?.trim() || `g-${hex(6)}`
-  // Joining a group keeps its cap unless the caller names a new one.
-  if (input.perAccount !== undefined || !(group in perAccount)) perAccount[group] = cap
+  // Joining a group keeps its cap unless the caller names a new one. A group nobody gave a cap
+  // has none on record and takes the default, which scales with each account's plan (groupCap).
+  if (input.perAccount !== undefined) perAccount[group] = cap
   const now = Date.now()
   const made = input.tasks.map((t, i) =>
     newWorker(t, settings[i], sized[i], group, input.accounts, now),
@@ -1428,8 +1497,11 @@ export function climayteRun(input: {
       reason: settings[i]?.reason,
       priority: w.priority,
     })
-    changed(w)
   }
+  // One save for the whole dispatch: a save per task wrote the store 21 times for 21 tasks, 0.3 s
+  // of the daemon's loop (71 dispatches carried 215 tasks, 2026-10-02).
+  save()
+  for (const w of made) notify(w)
   startCliMayte()
   schedule(0)
   return { group, workers: made.map((w) => toView(w, now)) }
@@ -1604,7 +1676,7 @@ export function climayteGet(id: string): (CliMayteWorkerView & { events: string[
   for (let i = w.attempts.length - 1; i >= 0 && events.length < 60; i--) {
     const a = w.attempts[i]!
     const who = a.account.num === null ? a.account.name : `#${a.account.num} ${a.account.name}`
-    const lines = a.outcome === 'running' ? readLog(a.log).recent : finishedLines(a.log)
+    const lines = a.outcome === 'running' ? readLog(a).recent : finishedLines(a.log)
     events.unshift(`— attempt ${i + 1} on ${who}: ${a.outcome} —`, ...lines)
   }
   return { ...toView(w, Date.now()), events: events.slice(-60) }
@@ -1646,7 +1718,7 @@ export function climayteHandoff(id: string): { ok: boolean; message: string } {
   if (w.status !== 'running' || !at || attemptExited(w, at))
     return { ok: false, message: 'Only a running worker can hand off; this one is not running.' }
   if (at.windDown) return { ok: true, message: 'It is already winding down.' }
-  signalWindDown(w, at, null)
+  signalWindDown(w, at, { reason: 'request' })
   return {
     ok: true,
     message:
@@ -2019,6 +2091,7 @@ export function climayteRemove(ids: string[]): {
     const dest = join(archive, w.id)
     for (const [i, at] of w.attempts.entries()) {
       archiveMove(at.log, join(dest, 'logs', `${i}-out.jsonl`))
+      archiveMove(packedPath(at.log), join(dest, 'logs', `${i}-out.jsonl.zst`))
       archiveMove(at.errLog, join(dest, 'logs', `${i}-err.log`))
     }
     const sessionIds = [

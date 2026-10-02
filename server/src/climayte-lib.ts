@@ -10,7 +10,13 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { type CliMaytePlacement, FIT_PCT, paceGap, projectedPct } from './climayte-placement'
+import {
+  type CliMaytePlacement,
+  FIT_PCT,
+  PACE_BAND,
+  paceGap,
+  projectedPct,
+} from './climayte-placement'
 import {
   attemptUnits,
   type CliMayteVerdict,
@@ -72,7 +78,9 @@ export interface CliMayteAttempt {
   /** Stopped at CEILING_PCT of that window (`week`), the account walled until it resets. Its outcome
    *  is 'quota' or 'handoff' for what follows; it is not a limit hit. */
   ceiling?: { pct: number; week: boolean; resetsAt: number | null }
-  windDown?: { at: number; pct: number | null; path: string } // asked to hand off to `path` (pct null: on request)
+  /** Asked to hand off to `path`. `pct`: the usage reading that called for it; null on request, and
+   *  null with `reason: 'context'` when its conversation's size did (CONTEXT_HANDOFF_TOKENS). */
+  windDown?: { at: number; pct: number | null; path: string; reason?: 'context' }
   tokens?: CliMayteTokens // this attempt's own tokens (attemptSpend); absent on attempts before 2026-09-30
   /** Its cost at API prices and its model requests, from its transcript when it ended, and `reread`:
    *  on an attempt after one that ran, its first request's input and cache writes, the conversation
@@ -518,48 +526,100 @@ export function atCeiling(
 export const ceilingNotice = (c: { pct: number; week: boolean }): string =>
   `Stopped at ${Math.round(c.pct)}% of its ${c.week ? 'weekly' : '5-hour'} usage, CliMayte's ceiling of ${CEILING_PCT}%, well short of the limit. The account rests until that window resets.`
 
-/** The percentage that calls for a wind-down now, or null. `account` and `now` as for atCeiling. */
+/** The conversation size at which a session is asked to hand off to a fresh one: every request
+ *  re-reads the whole conversation. Measured over all logs, 2026-10-02: 3,135 of 8,370 requests ran
+ *  with more than 150k of context and carried 61% of all cache-read tokens (the largest: 442k). The
+ *  saving is small and not proven: since 2026-10-01 15:00Z, 27.6% of a Pro window when the fresh
+ *  session (40.6k to start, the median of only 2) re-reads nothing, about 7% when it re-reads 30k,
+ *  and close to break-even over all logs. Measure the re-read on the first context handoffs (the
+ *  journal's handoff-requested notice names them) before trusting this line. */
+export const CONTEXT_HANDOFF_TOKENS = 150_000
+
+/** The conversation's size in tokens: what the newest main-agent request in `events` read (input,
+ *  cache reads and cache writes). Null when they hold no such request. */
+export function contextTokens(events: unknown[]): number | null {
+  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i] as any
+    const u = ev?.type === 'assistant' && !ev.parent_tool_use_id ? ev.message?.usage : null
+    if (!u || typeof u !== 'object') continue
+    return n(u.input_tokens) + n(u.cache_read_input_tokens) + n(u.cache_creation_input_tokens)
+  }
+  return null
+}
+
+/** Why a session is asked to hand off: a usage window at its stop line (`week`: which one), its
+ *  conversation's size, or the orchestrator's request. */
+export type WindDownWhy =
+  | { reason: 'usage'; pct: number; week: boolean }
+  | { reason: 'context'; tokens: number }
+  | { reason: 'request' }
+
+/** What calls for a wind-down now, or null: a usage window at its stop line first, then the
+ *  conversation's size (`ctx`: contextTokens). `account` and `now` as for atCeiling. */
 export function windDownAt(
   own: CliMayteLiveUsage | null,
   account: CliMayteLiveUsage | null = null,
   now = Date.now(),
-): number | null {
+  ctx: number | null = null,
+): WindDownWhy | null {
   const live = sessionReading(own, account, now)
-  if (live?.sessionPct != null && live.sessionPct >= WIND_DOWN_SESSION_PCT) return live.sessionPct
-  if (live?.weekPct != null && live.weekPct >= WIND_DOWN_WEEK_PCT) return live.weekPct
+  if (live?.sessionPct != null && live.sessionPct >= WIND_DOWN_SESSION_PCT)
+    return { reason: 'usage', pct: live.sessionPct, week: false }
+  if (live?.weekPct != null && live.weekPct >= WIND_DOWN_WEEK_PCT)
+    return { reason: 'usage', pct: live.weekPct, week: true }
+  if (ctx !== null && ctx >= CONTEXT_HANDOFF_TOKENS) return { reason: 'context', tokens: ctx }
   return null
+}
+
+/** The first words of windDownMessage: why this session hands off. */
+function windDownCause(why: WindDownWhy): string {
+  if (why.reason === 'request')
+    return 'the orchestrator asked this session to hand the task to a fresh session'
+  if (why.reason === 'context')
+    return `this session's conversation has grown to about ${Math.round(why.tokens / 1000)}k tokens and every further request reads all of it again, so the rest of the task goes to a fresh session that starts small from a handoff`
+  return `this account is at ${Math.round(why.pct)}% of its ${why.week ? 'weekly' : '5-hour'} usage, past the line where CliMayte stops work so it never reaches the limit, so this session must hand the task to a fresh session (on another account with room, or on this one once that window resets)`
 }
 
 /** What a winding-down worker is told after its next tool call (a PostToolUse hook shows it). The
  *  session that has the whole context writes the handoff, while its own cache is warm; the next
  *  account then starts a small fresh session from it instead of re-reading the whole conversation
  *  (a move re-reads it all uncached: 219k tokens cost $1.77 on one live move, 2026-09-30). */
-export function windDownMessage(pct: number | null, path: string): string {
-  const why =
-    pct === null
-      ? 'the orchestrator asked this session to hand the task to a fresh session'
-      : `this account is at ${Math.round(pct)}% of its 5-hour usage, past the line where CliMayte stops work so it never reaches the limit, so this session must hand the task to a fresh session (on another account with room, or on this one once its window resets)`
+export function windDownMessage(why: WindDownWhy, path: string): string {
   // The handoff comes FIRST: the hard stop at 90% is a few points away, about 30 seconds of heavy
   // work, and a session stopped before its note is written moves by re-reading everything cold
   // (stress review, 2026-10-02). A task two or three calls from done finishes instead.
-  return `AgentHydra: ${why}. If you can finish the whole task in two or three more tool calls, do that and give your final report instead of a handoff. Otherwise write the handoff NOW, before anything else, with the Write tool to ${path}, for the session that continues this task; then finish or safely stop the step you are on, start nothing new, and update the handoff if that changed anything. The next session sees only the original task, your handoff and your transcript, so include, in under 800 words: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message, subject and body verbatim, and the exact paths); the next steps in order; the facts, decisions and gotchas you learned, carrying forward everything still true from any handoff you started from; and the commands or checks that prove the work, with their results. After writing the handoff, end your turn with one line saying the handoff is written.`
+  return `AgentHydra: ${windDownCause(why)}. If you can finish the whole task in two or three more tool calls, do that and give your final report instead of a handoff. Otherwise write the handoff NOW, before anything else, with the Write tool to ${path}, for the session that continues this task; then finish or safely stop the step you are on, start nothing new, and update the handoff if that changed anything. The next session sees only the original task, your handoff and your transcript, so include, in under 800 words: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message, subject and body verbatim, and the exact paths); the next steps in order; the facts, decisions and gotchas you learned, carrying forward everything still true from any handoff you started from; and the commands or checks that prove the work, with their results. After writing the handoff, end your turn with one line saying the handoff is written.`
 }
 
-/** The first prompt of the session that continues a task from a handoff. */
+/** The first prompt of the session that continues a task from a handoff. `transcripts`: the earlier
+ *  sessions', newest first. `from`: whether that session ran on the account this one starts on, and
+ *  why it handed off (2 of 36 continuations on record ran on the same account and were told
+ *  "another account"). */
 export function continuationPrompt(
   task: string,
   handoff: string,
   handoffPath: string,
-  transcript: string | null,
+  transcripts: string[],
   messages: string[],
+  from: { sameAccount: boolean; why: WindDownWhy['reason'] },
 ): string {
   const more = messages.length
     ? `\n\nThe orchestrator also sent these messages, which the earlier session did not get to:\n${messages.map((m) => `- ${m}`).join('\n')}`
     : ''
-  const where = transcript
-    ? ` Its full transcript is at ${transcript} if you need a detail the handoff left out (read it with the Read or Grep tools; it is JSON lines).`
+  const [newest, ...older] = transcripts
+  const before = older.length ? ` (the sessions before it, newest first: ${older.join(', ')})` : ''
+  const where = newest
+    ? ` Its full transcript is at ${newest}${before} if you need a detail the handoff left out (read it with the Read or Grep tools; it is JSON lines).`
     : ''
-  return `${task}\n\n---\nAn earlier session already worked on this task on another account and wound down before its usage limit. Continue from its handoff below (also saved at ${handoffPath}).${where} Do not redo steps it reports finished. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers. If it gives a commit message for work in progress, commit with that message verbatim.${more}\n\n--- HANDOFF ---\n${handoff}`
+  const account = from.sameAccount ? 'on this account' : 'on another account'
+  const ended =
+    from.why === 'context'
+      ? 'handed off because its conversation had grown large'
+      : from.why === 'request'
+        ? 'handed off when the orchestrator asked it to'
+        : 'wound down before its usage limit'
+  return `${task}\n\n---\nAn earlier session already worked on this task ${account} and ${ended}. Continue from its handoff below (also saved at ${handoffPath}).${where} Do not redo steps it reports finished. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers. If it gives a commit message for work in progress, commit with that message verbatim.${more}\n\n--- HANDOFF ---\n${handoff}`
 }
 
 export const PRE_OVERAGE_NOTICE =
@@ -1044,24 +1104,96 @@ export const MAX_PER_ACCOUNT = 4
  *  and #91 sat idle, draining four accounts together instead of spreading over six. */
 export const ACTIVE_WEIGHT = 100
 
-/** `perAccount` caps this group's workers (`groupActive`, default `active`) on an account;
- *  `active` counts every group's, is held under MAX_PER_ACCOUNT, and is what the score spreads by
- *  (ACTIVE_WEIGHT). The account of a last
- *  quota/auth attempt is not excluded (its wall keeps it out while the wall is real), only tried
- *  last, so a worker restricted to it resumes once the limit resets or the login works again.
- *  `allowFull` (the owner allowed paid extra usage): accounts at or above the 98% session / 99%
- *  weekly caps stay eligible, but only after every account below them. */
+/** A group's workers on one Pro account when its dispatcher named no cap. */
+export const DEFAULT_PER_ACCOUNT = 2
+
+/** How many of one group's workers an account takes at once. A cap the dispatcher set
+ *  (`perAccount`) holds as given. The default counts Pro windows, not workers: 2 for each Pro
+ *  window the account's 5-hour window holds (planFactor), unless the account is ahead of its weekly
+ *  pace (owner, 2026-10-01: not everything into the 5x). 2026-10-02 04:36: the Max 5x #103 sat at
+ *  0-12% with room for 425 Pro-points and ran 2 tasks at a time, like each Pro, while 24 waited.
+ *  MAX_PER_ACCOUNT still holds above it. */
+export function groupCap(
+  a: Pick<CliMayteAccount, 'planFactor' | 'weekPct' | 'weekResetsAt'>,
+  perAccount: number | null,
+  now: number,
+): number {
+  if (perAccount !== null) return perAccount
+  const ahead = (paceGap(a, now) ?? 0) > PACE_BAND
+  return DEFAULT_PER_ACCOUNT * (ahead ? 1 : (a.planFactor ?? 1))
+}
+
+/** An account's rank with a placement (climayte-placement.ts), lowest first, and the projection
+ *  that breaks a tie. Where the task is projected to finish under FIT_PCT comes first: accounts at
+ *  or behind their weekly pace (within PACE_BAND), most behind first, since that is room lost at
+ *  the weekly reset; then accounts ahead of it (usage is usage, wherever it runs). Where it does
+ *  not fit comes last, lowest projection first. 2026-10-02 05:09: the score added only a POSITIVE
+ *  gap, so #90 (+7.5) beat #95 (-20.6) on a lower 5-hour projection, and #95 sat without a worker
+ *  for 14 minutes while 8 tasks waited. */
+function placedRank(
+  a: CliMayteAccount,
+  placement: CliMaytePlacement,
+  now: number,
+): [number, number] {
+  const projected = projectedPct(
+    a,
+    placement.running.get(a.id) ?? [],
+    placement.expected,
+    placement.finishedSince?.get(a.id) ?? 0,
+  )
+  if (projected > FIT_PCT) return [300 + projected, projected]
+  const gap = paceGap(a, now) ?? 0
+  return [gap > PACE_BAND ? 100 + gap : gap, projected]
+}
+
+/** The best account for the worker (rankAccounts' first), or null when none takes it now. */
 export function pickAccount(
   worker: Pick<CliMayteWorker, 'accounts' | 'accountId' | 'attempts'>,
   accounts: CliMayteAccount[],
   walls: CliMayteWalls,
   active: Map<string, number>,
-  perAccount: number,
+  perAccount: number | null,
   now: number,
   groupActive: Map<string, number> = active,
   allowFull = false,
   placement?: CliMaytePlacement,
 ): CliMayteAccount | null {
+  const ranked = rankAccounts(
+    worker,
+    accounts,
+    walls,
+    active,
+    perAccount,
+    now,
+    groupActive,
+    allowFull,
+    placement,
+  )
+  return ranked[0] ?? null
+}
+
+/** Every account that takes the worker now, best first; the session's own account alone when it
+ *  is one of them. `perAccount` caps this group's workers (`groupActive`, default `active`) on an
+ *  account (groupCap; null: the default); a session going back to its own account is not held to
+ *  it (2026-10-02 05:13: a new task took #102's slot while a finished task's check ran, the check
+ *  failed, and the 33-turn session moved to #94, about 170k cache-write tokens more than resuming
+ *  at home). `active` counts every group's, is held under MAX_PER_ACCOUNT, and is what the score
+ *  spreads by (ACTIVE_WEIGHT). The account of a last
+ *  quota/auth attempt is not excluded (its wall keeps it out while the wall is real), only tried
+ *  last, so a worker restricted to it resumes once the limit resets or the login works again.
+ *  `allowFull` (the owner allowed paid extra usage): accounts at or above the 98% session / 99%
+ *  weekly caps stay eligible, but only after every account below them. */
+export function rankAccounts(
+  worker: Pick<CliMayteWorker, 'accounts' | 'accountId' | 'attempts'>,
+  accounts: CliMayteAccount[],
+  walls: CliMayteWalls,
+  active: Map<string, number>,
+  perAccount: number | null,
+  now: number,
+  groupActive: Map<string, number> = active,
+  allowFull = false,
+  placement?: CliMaytePlacement,
+): CliMayteAccount[] {
   const lastAttempt = worker.attempts[worker.attempts.length - 1]
   const failedId =
     lastAttempt && (lastAttempt.outcome === 'quota' || lastAttempt.outcome === 'auth')
@@ -1070,6 +1202,9 @@ export function pickAccount(
   // After a handoff the next session is a fresh one: no home to keep, and the account it left is
   // only nudged back (it may well be the one with the most room: a handoff on request).
   const handedOffFrom = lastAttempt?.outcome === 'handoff' ? lastAttempt.account.id : null
+  // A handoff on conversation size says nothing against its account: nudged away, every one of a
+  // long task's handoffs would change account and run it into the moves cap (notConverging).
+  const nudgedFrom = lastAttempt?.windDown?.reason === 'context' ? null : handedOffFrom
   const load = (a: CliMayteAccount): number => active.get(a.id) ?? 0
   const full = (a: CliMayteAccount): boolean =>
     (a.sessionPct !== null && a.sessionPct >= BILL_GUARD_SESSION_PCT) ||
@@ -1102,7 +1237,7 @@ export function pickAccount(
       (allowFull || !near(a) || keepsHome(a)) &&
       (!unread(a) || keepsHome(a)) &&
       (!accountInUse(a) || keepsHome(a) || named(a)) &&
-      (groupActive.get(a.id) ?? 0) < perAccount &&
+      ((groupActive.get(a.id) ?? 0) < groupCap(a, perAccount, now) || keepsHome(a)) &&
       load(a) < MAX_PER_ACCOUNT,
   )
   // A full home is kept only when every other choice is full too.
@@ -1111,34 +1246,25 @@ export function pickAccount(
     : eligible.find(
         (a) => a.id === worker.accountId && a.id !== failedId && (!full(a) || eligible.every(full)),
       )
-  if (home) return home
-  // With a placement (climayte-placement.ts): where the task is projected to finish under FIT_PCT,
-  // counting what the work already running there still owes, and behind an account that has spent
-  // its week faster than the week has gone (paceGap: usage is usage, wherever it runs); else the
-  // flat ACTIVE_WEIGHT spread.
-  const base = (a: CliMayteAccount): number => {
-    if (!placement) return Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) + ACTIVE_WEIGHT * load(a)
-    const projected = projectedPct(
-      a,
-      placement.running.get(a.id) ?? [],
-      placement.expected,
-      placement.finishedSince?.get(a.id) ?? 0,
-    )
-    return (
-      Math.max(projected, a.weekPct ?? 50) +
-      (projected <= FIT_PCT ? 0 : 200) +
-      Math.max(0, paceGap(a, now) ?? 0)
-    )
-  }
-  const score = (a: CliMayteAccount): number =>
-    base(a) +
-    (full(a) ? 500 : 0) +
-    (near(a) ? 300 : 0) +
-    (a.id === handedOffFrom ? 100 : 0) +
-    (a.id === failedId ? 1000 : 0)
+  if (home) return [home]
+  // With a placement: placedRank; else the flat ACTIVE_WEIGHT spread.
+  const flat = (a: CliMayteAccount): [number, number] => [
+    Math.max(a.sessionPct ?? 50, a.weekPct ?? 50) + ACTIVE_WEIGHT * load(a),
+    0,
+  ]
   const byNum = (a: CliMayteAccount): number => a.num ?? Number.MAX_SAFE_INTEGER
-  eligible.sort((a, b) => score(a) - score(b) || byNum(a) - byNum(b))
-  return eligible[0] ?? null
+  const scored = eligible.map((a) => {
+    const [base, tie] = placement ? placedRank(a, placement, now) : flat(a)
+    const score =
+      base +
+      (full(a) ? 500 : 0) +
+      (near(a) ? 300 : 0) +
+      (a.id === nudgedFrom ? 100 : 0) +
+      (a.id === failedId ? 1000 : 0)
+    return { a, score, tie }
+  })
+  scored.sort((x, y) => x.score - y.score || x.tie - y.tie || byNum(x.a) - byNum(y.a))
+  return scored.map((s) => s.a)
 }
 
 /** A task's priority: a whole number, higher starts first; absent is 0. */
@@ -1152,12 +1278,18 @@ export function climaytePriority(v: unknown): number | null {
 
 /** The order queued and waiting work starts in: highest priority first, then oldest first. Field
  *  note 20 (run 1, 19:45): with every account full, the owner's ASAP item (the Events deploy) waited
- *  behind sweep follow-ups for the 23:21 reset, because waiting work started strictly oldest-first. */
+ *  behind sweep follow-ups for the 23:21 reset, because waiting work started strictly oldest-first.
+ *  One dispatch's tasks share a createdAt (all 31 of odin-w1, 2026-10-02): among those the largest
+ *  expected cost goes first, so a task only a fresh window holds is placed before small ones fill it. */
 export function dueOrder(
-  a: Pick<CliMayteWorker, 'priority' | 'createdAt'>,
-  b: Pick<CliMayteWorker, 'priority' | 'createdAt'>,
+  a: Pick<CliMayteWorker, 'priority' | 'createdAt' | 'size'>,
+  b: Pick<CliMayteWorker, 'priority' | 'createdAt' | 'size'>,
 ): number {
-  return (b.priority ?? 0) - (a.priority ?? 0) || a.createdAt - b.createdAt
+  return (
+    (b.priority ?? 0) - (a.priority ?? 0) ||
+    a.createdAt - b.createdAt ||
+    (b.size?.expected ?? 0) - (a.size?.expected ?? 0)
+  )
 }
 
 /** Of `candidates` (each an account's config dir), the one holding the newest copy of a session's
@@ -1314,9 +1446,16 @@ export function notConverging(
     .slice(lastDone + 1)
     .filter((a) => a.outcome !== 'auth' && a.outcome !== 'running')
   if (!turn.length) return null
+  // A handoff on conversation size is the plan working, not a task going in circles: a long task
+  // makes one every CONTEXT_HANDOFF_TOKENS, and its fresh session starts wherever there is most
+  // room, so neither it nor the account change after it counts. The attempts and spend caps still
+  // bound it.
+  const planned = (a: CliMayteAttempt): boolean =>
+    a.outcome === 'handoff' && a.windDown?.reason === 'context'
   let moves = 0
-  for (let i = 1; i < turn.length; i++) if (turn[i]!.account.id !== turn[i - 1]!.account.id) moves++
-  const handoffs = turn.filter((a) => a.outcome === 'handoff').length
+  for (let i = 1; i < turn.length; i++)
+    if (turn[i]!.account.id !== turn[i - 1]!.account.id && !planned(turn[i - 1]!)) moves++
+  const handoffs = turn.filter((a) => a.outcome === 'handoff' && !planned(a)).length
   const pct = turn.reduce(
     (s, a) => s + pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)),
     0,

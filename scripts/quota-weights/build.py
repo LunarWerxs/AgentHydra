@@ -230,10 +230,25 @@ def climayte_reading(line, last_t):
             (sd.get('utilization') or 0) * 100, 'climayte')
 
 
+def open_log(log):
+    """A CliMayte attempt log's lines: the plain file, or `<log>.zst`, which CliMayte packs a finished
+    attempt's log to a day after it ended (zstd: Python 3.14's own module, else `pip install zstandard`)."""
+    if os.path.exists(log) or not os.path.exists(log + '.zst'):
+        return open(log, encoding='utf-8', errors='replace')
+    try:
+        from compression import zstd
+    except ImportError:
+        try:
+            import zstandard as zstd
+        except ImportError:
+            sys.exit(f'{log}.zst is packed with zstd: use Python 3.14 or `pip install zstandard`')
+    return zstd.open(log + '.zst', 'rt', encoding='utf-8', errors='replace')
+
+
 def read_log(log, last_t, org, readings):
     """One CliMayte stream log's meter readings into readings[org], each stamped with the assistant line before it."""
     try:
-        for line in open(log, encoding='utf-8', errors='replace'):
+        for line in open_log(log):
             if '"rate_limit_event"' in line:
                 reading = climayte_reading(line, last_t)
                 if reading is not None:
@@ -262,10 +277,13 @@ def read_attempt(a, cli_org, tier, seen_logs, readings):
 def read_climayte(cli_org, tier, readings):
     """Readings (a): CliMayte logs, the live record and every archived one."""
     worker_files = [os.path.join(AH, 'corch', 'workers.json')] + glob.glob(os.path.join(AH, 'corch', 'archive', '*', 'workers.json'))
+    # Finished work is one file per worker (corch/done/<id>.json); workers.json holds the rest.
+    worker_files += glob.glob(os.path.join(AH, 'corch', 'done', '*.json'))
     seen_logs = set()
     for wf in worker_files:
         try:
-            W = json.load(open(wf, encoding='utf-8'))['workers']
+            W = json.load(open(wf, encoding='utf-8'))
+            W = W['workers'] if 'workers' in W else [W]
         except Exception:
             continue
         for w in W:

@@ -17,7 +17,6 @@ import {
   acctLabel,
   changed,
   claudeCommand,
-  configDirOf,
   HOOKS,
   hasTranscript,
   journal,
@@ -135,14 +134,37 @@ function deliveryPlan(
 const prevPromptOf = (w: CliMayteWorker, n: number): string =>
   tailText(join(PROMPTS, `${w.id}-${n - 1}.txt`), 1_000_000) || w.prompt
 
-/** The continuation of a planned handoff: the task, the handoff, where the old transcript is, and
- *  any messages that arrived while the old session was winding down. */
+/** The transcripts of the task's sessions so far, newest first: the one that wrote the handoff,
+ *  then the ones before it in the chain (18 of 36 continuations on record were second or later in
+ *  one). Each from the first account that holds it, the newest attempt's account first. */
+function chainTranscripts(
+  w: CliMayteWorker,
+  oldSession: CliMayteWorker['sessionId'],
+  accounts: CliMayteAccount[],
+): string[] {
+  const dirs = transcriptCandidates(w, accounts).map((c) => c.configDir)
+  const found: string[] = []
+  for (const id of [...(w.sessions ?? []), oldSession].reverse()) {
+    if (!id) continue
+    for (const dir of dirs) {
+      const file = transcriptFile(dir, id)
+      if (!file) continue
+      found.push(slashed(file))
+      break
+    }
+  }
+  return found
+}
+
+/** The continuation of a planned handoff: the task, the handoff, where the old transcripts are,
+ *  and any messages that arrived while the old session was winding down. */
 function handoffText(
   w: CliMayteWorker,
   last: CliMayteWorker['attempts'][number],
   note: string,
   oldSession: CliMayteWorker['sessionId'],
   accounts: CliMayteAccount[],
+  acct: CliMayteAccount,
 ): string {
   let handoff = ''
   try {
@@ -150,8 +172,18 @@ function handoffText(
   } catch {
     handoff = '(The handoff file could not be read; use the earlier transcript.)'
   }
-  const old = oldSession ? transcriptFile(configDirOf(last.account.id, accounts), oldSession) : null
-  return continuationPrompt(w.prompt, handoff, note, old ? slashed(old) : null, w.pending)
+  const asked = last.windDown
+  return continuationPrompt(
+    w.prompt,
+    handoff,
+    note,
+    chainTranscripts(w, oldSession, accounts),
+    w.pending,
+    {
+      sameAccount: acct.id === last.account.id,
+      why: asked?.reason ?? (asked?.pct === null ? 'request' : 'usage'),
+    },
+  )
 }
 
 /** A revived worker gets the message at once, not a continue prompt for the work it stopped. If
@@ -185,10 +217,15 @@ function goOnText(
 }
 
 /** What the CLI is given on stdin for this launch. */
-function launchText(w: CliMayteWorker, p: LaunchPlan, accounts: CliMayteAccount[]): string {
+function launchText(
+  w: CliMayteWorker,
+  p: LaunchPlan,
+  accounts: CliMayteAccount[],
+  acct: CliMayteAccount,
+): string {
   const { last, note } = p
   if (!last) return w.prompt
-  if (note) return handoffText(w, last, note, p.oldSession, accounts)
+  if (note) return handoffText(w, last, note, p.oldSession, accounts, acct)
   if (p.delivers) return followUpText(w, p)
   return goOnText(w, last, p) ?? w.prompt
 }
@@ -237,6 +274,9 @@ function writeWorkerSettings(w: CliMayteWorker): string {
         serverName,
       })),
       syncClaudeAiSkills: false,
+      // One account's claude.ai-synced humanizer plugin still listed `humanizer:humanizer` in every
+      // request after the line above (3 of 14 starts, 2026-10-02); no worker ever invoked it.
+      enabledPlugins: { 'humanizer@synced': false },
       hooks: {
         ...(preToolUse.length ? { PreToolUse: preToolUse } : {}),
         PostToolUse: [
@@ -438,7 +478,7 @@ export function launch(
     resume,
     ...deliveryPlan(w, last, fresh),
   }
-  const text = launchText(w, plan, accounts)
+  const text = launchText(w, plan, accounts, acct)
 
   mkdirSync(LOGS, { recursive: true })
   mkdirSync(PROMPTS, { recursive: true })

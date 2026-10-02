@@ -1,7 +1,8 @@
-"""Where CliMayte's time and tokens went, from its own record (~/.agenthydra/corch: workers.json and
-journal.jsonl). Read-only. Prints the numbers an inefficiency hunt needs: how long work waited
+"""Where CliMayte's time and tokens went, from its own record (~/.agenthydra/corch: workers.json,
+done/<id>.json and journal.jsonl). Read-only. Prints the numbers an inefficiency hunt needs: how long work waited
 before starting and between attempts, what each attempt outcome cost, how much a move re-read,
 which waits recurred, and which tasks were the most expensive for what they did."""
+import glob
 import json
 import os
 import statistics as st
@@ -12,6 +13,13 @@ sys.stdout.reconfigure(encoding='utf8')
 ROOT = os.path.expanduser('~/.agenthydra/corch')
 ws = json.load(open(os.path.join(ROOT, 'workers.json'), encoding='utf8'))['workers']
 ws = list(ws.values()) if isinstance(ws, dict) else ws
+# Finished work is one file per worker under done/; a worker in both is read from workers.json.
+hot = {w['id'] for w in ws}
+for f in glob.glob(os.path.join(ROOT, 'done', '*.json')):
+    w = json.load(open(f, encoding='utf8'))
+    if w['id'] not in hot:
+        ws.append(w)
+ws.sort(key=lambda w: w['createdAt'])
 journal = [json.loads(l) for l in open(os.path.join(ROOT, 'journal.jsonl'), encoding='utf8') if l.strip()]
 
 

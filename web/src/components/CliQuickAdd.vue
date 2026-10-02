@@ -7,8 +7,13 @@
 // With a target set (a CLI row's "Log in", composables/useQuickAddTarget.ts) the next sign-in goes
 // into THAT instance instead of a new one: a note says whose login it replaces, and the id rides along
 // as startQuickAdd's second argument. Without one it adds a new instance, as it always did.
+//
+// The email row is not always on the page (owner, 2026-10-02: the header's plus shows it, an X
+// closes it). The flow cards under it are not part of that row: a sign-in still waiting on the
+// browser keeps its card, its code box and its Cancel when the row is closed, so closing never
+// orphans a pending login.
 import { AppWindow, Copy, LoaderCircle, LogIn, Plus, X } from '@lucide/vue'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -24,15 +29,29 @@ import {
   startQuickAdd,
   submitQuickAddCode,
 } from '@/lib/api'
+import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const emit = defineEmits<{ 'signed-in': [] }>()
 
 const { t } = useI18n()
-const { refreshCliInstances, checkUsage: checkCliUsage } = useCliInstances()
+const { cliInstances, loading, refreshCliInstances, checkUsage: checkCliUsage } = useCliInstances()
 const { target, clearQuickAddTarget } = useQuickAddTarget()
 
 const rootEl = ref<HTMLElement | null>(null)
+/** Whether the email row shows. focusEmail() opens it; the X, or an account added, closes it. */
+const open = ref(false)
+// An empty table gives no other way in, so the row opens when the list answers with no accounts.
+watch(loading, (isLoading, wasLoading) => {
+  if (wasLoading && !isLoading && cliInstances.value.length === 0) open.value = true
+})
+/** Close the row and drop what it held: a half-typed email and a "Log in" target must not come
+ *  back, unasked, the next time it opens. */
+function closeRow() {
+  open.value = false
+  qaEmail.value = ''
+  clearQuickAddTarget()
+}
 const qaEmail = ref('')
 const qaInput = ref<InstanceType<typeof Input> | null>(null)
 const qaStarting = ref(false)
@@ -70,6 +89,10 @@ async function qaPoll() {
     // One check per account, right after it signs in; the list refreshes with it.
     await refreshCliInstances({ silent: true })
     for (const f of justAdded) void checkCliUsage(f.instanceId)
+    // The account is in: the row leaves, unless another sign-in is still waiting, the next email
+    // is already being typed, or a row's "Log in" has pointed it at an instance since.
+    if (!qaEmail.value.trim() && !target.value && !qaFlows.value.some((f) => f.state === 'waiting'))
+      closeRow()
   }
   qaSchedule()
 }
@@ -149,8 +172,11 @@ function qaDismiss(flow: QuickAddFlow) {
   qaMine.value = next
 }
 
-/** Bring the box into view and put the cursor in the email field (a CLI row's "Log in" asks). */
-function focusEmail() {
+/** Show the email row, bring it into view and put the cursor in its field (the header's plus and a
+ *  CLI row's "Log in" ask). Already open, it only takes the focus. */
+async function focusEmail() {
+  open.value = true
+  await nextTick()
   rootEl.value?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   ;(qaInput.value?.$el as HTMLInputElement | undefined)?.focus({ preventScroll: true })
 }
@@ -196,8 +222,8 @@ onUnmounted(() => {
        of its own: each host places it (a class on the tag falls through to this root). Input and
        buttons share one height (h-7), and each flow's state text is the only live region, so a
        poll does not re-announce the whole row. -->
-  <div ref="rootEl" class="flex flex-col gap-2">
-    <p v-if="target" class="flex items-center gap-1.5 text-xs text-muted-foreground">
+  <div v-if="open || qaVisible.length > 0" ref="rootEl" class="flex flex-col gap-2">
+    <p v-if="open && target" class="flex items-center gap-1.5 text-xs text-muted-foreground">
       <LogIn class="size-3.5 shrink-0" aria-hidden="true" />
       <span class="min-w-0">{{ $t('cliInstances.quickAddTarget', { num: target.num, name: target.name }) }}</span>
       <Button
@@ -211,7 +237,7 @@ onUnmounted(() => {
         <X />
       </Button>
     </p>
-    <form class="flex items-center gap-2" @submit.prevent="onQuickAdd">
+    <form v-if="open" class="flex items-center gap-2" @submit.prevent="onQuickAdd">
       <Input
         ref="qaInput"
         v-model="qaEmail"
@@ -227,6 +253,17 @@ onUnmounted(() => {
         {{ $t('climayte.qaAdd') }}
       </Button>
       <InfoHint :text="$t('climayte.qaHint')" />
+      <IconTooltip :label="$t('cliInstances.quickAddClose')">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          :aria-label="$t('cliInstances.quickAddClose')"
+          @click="closeRow"
+        >
+          <X />
+        </Button>
+      </IconTooltip>
     </form>
     <div
       v-for="flow in qaVisible"

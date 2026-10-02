@@ -4,8 +4,10 @@
 // tools, Refresh and the create button. Four hand-built copies of this had drifted apart (owner,
 // 2026-09-30: DeepSeek's create button was a full-width label, and its collapse was not kept).
 //
-// `meta` sits inside the toggle after the count (a "hidden by filter" note); `tools` sits before
-// Refresh (the desktop table's usage-mode switch and filter menus).
+// `meta` sits inside the toggle after the count (a "hidden by filter" note); `summary` sits beside
+// the toggle, outside its button, so it may hold a tooltip trigger (the CLI table's pooled gauges
+// while it is folded); `tools` sits before Refresh (the desktop table's usage-mode switch and filter
+// menus).
 import { ChevronDown, Plus, RefreshCw } from '@lucide/vue'
 import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
 import { Button } from '@/components/ui/button'
@@ -47,6 +49,7 @@ defineEmits<{ refresh: []; create: [] }>()
 
 <template>
   <div class="flex flex-wrap items-center justify-between gap-2 p-3">
+    <div class="flex flex-wrap items-center gap-3">
     <button
       type="button"
       class="flex items-center gap-2 rounded-md text-sm font-semibold transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
@@ -65,6 +68,8 @@ defineEmits<{ refresh: []; create: [] }>()
         :class="open ? '' : '-rotate-90'"
       />
     </button>
+    <slot name="summary" />
+    </div>
     <div class="flex flex-wrap items-center gap-1.5">
       <slot name="tools" />
       <IconTooltip :label="refreshLabel" :description="refreshHint">

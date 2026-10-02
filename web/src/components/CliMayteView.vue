@@ -22,6 +22,7 @@ import {
   CloudOff,
   Network,
   RefreshCw,
+  RotateCcw,
   Star,
   ThumbsDown,
   ThumbsUp,
@@ -51,6 +52,7 @@ import {
   CLIMAYTE_OUTCOME,
   climayteQueuedNote,
   climayteRunLabel,
+  climayteVerdictMark,
   firstLine,
   formatTokens,
   isCliMayteActive,
@@ -165,8 +167,13 @@ const scoreSummary = computed(() => {
   return t('climayte.scoreSummary', { pass, fail, n }, n)
 })
 const scoreModel = (m: string | null) => (m ? modelName(m) : t('climayte.runDefault'))
-/** The task's newest verdict, for the row's check or cross. */
-const lastVerdict = (w: CliMayteWorkerView) => w.verdicts?.[w.verdicts.length - 1]?.verdict ?? null
+/** The row's verdict mark (lib/climayte-status.ts) with its hover: who judged it, and what they said. */
+function verdictMark(w: CliMayteWorkerView) {
+  const m = climayteVerdictMark(w)
+  if (!m) return null
+  const said = t(m.key, m.values)
+  return { kind: m.kind, label: said, hint: m.note ? `${said}: ${m.note}` : said }
+}
 
 async function load(opts: { silent?: boolean } = {}) {
   if (timer !== null) window.clearTimeout(timer)
@@ -475,19 +482,30 @@ onUnmounted(() => {
                 :title="rowHint(w)"
                 @click="select(w)"
               >
-                <CliMayteStatusBadge :status="w.status" icon-only />
+                <CliMayteStatusBadge :status="w.status" icon-only :task="w" :tasks="workers" />
                 <span class="flex min-w-0 flex-1 items-center gap-1">
                   <span class="min-w-0 truncate font-medium">{{ w.title }}</span>
-                  <Check
-                    v-if="lastVerdict(w) === 'pass'"
-                    class="size-3.5 shrink-0 text-success"
-                    :aria-label="$t('climayte.verdictPassed')"
-                  />
-                  <X
-                    v-else-if="lastVerdict(w) === 'fail'"
-                    class="size-3.5 shrink-0 text-destructive"
-                    :aria-label="$t('climayte.verdictFailed')"
-                  />
+                  <!-- Its own hover (the span's title wins over the row's): who judged it and what
+                       they said. A failed check on a task still working is amber and a retry
+                       arrow, never the red cross: ten running rows with a red cross read as "lots
+                       of chats failed" (owner, 2026-10-02). -->
+                  <span
+                    v-if="verdictMark(w)"
+                    class="inline-flex shrink-0"
+                    :title="verdictMark(w)?.hint"
+                  >
+                    <Check
+                      v-if="verdictMark(w)?.kind === 'pass'"
+                      class="size-3.5 text-success"
+                      :aria-label="verdictMark(w)?.label"
+                    />
+                    <RotateCcw
+                      v-else-if="verdictMark(w)?.kind === 'retry'"
+                      class="size-3.5 text-warning"
+                      :aria-label="verdictMark(w)?.label"
+                    />
+                    <X v-else class="size-3.5 text-destructive" :aria-label="verdictMark(w)?.label" />
+                  </span>
                 </span>
                 <!-- Only a priority other than the default 0 is shown (field note 20). -->
                 <span
@@ -514,6 +532,7 @@ onUnmounted(() => {
       <CliMayteWorkerDetail
         class="lg:min-h-0"
         :worker="selected"
+        :tasks="workers"
         :events-loading="!!selectedId && !detail"
         :now="now"
         @changed="load({ silent: true })"

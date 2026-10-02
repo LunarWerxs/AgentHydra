@@ -1,5 +1,14 @@
 // Where CliMayte starts a task so it can finish there (climayte-placement.ts).
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  climayteCancel,
+  climayteCapacity,
+  climayteRun,
+  setCliMayteAccountsProvider,
+} from '../src/climayte'
+import { type CliMayteAccount, dueOrder, pickAccount, rankAccounts } from '../src/climayte-lib'
 import {
   DEFAULT_TASK_PCT,
   expectedCost,
@@ -63,17 +72,31 @@ describe('waitsForCooldown', () => {
     const now = 1_000_000_000_000
     const halfWeek = now + WEEK_MS / 2 // half the week gone: pace is 50%
     const max5 = { id: 'max5', weekPct: 70, weekResetsAt: halfWeek, planFactor: 5 }
-    const pro = (resetInMin: number, weekPct = 30) => ({
+    // A Pro that has run low: at 80% of its 5-hour window, a 20% task does not fit until it refills.
+    const pro = (resetInMin: number, weekPct = 30, sessionPct = 80) => ({
       id: `pro-${resetInMin}`,
+      sessionPct,
       weekPct,
       weekResetsAt: halfWeek,
       planFactor: 1,
       sessionResetsAt: now + resetInMin * 60_000,
     })
     const go = { home: false, priority: 0 }
-    // The owner's case: the Max 5x has spent 70% of its week at the half-week mark, and a Pro that
-    // refills in 12 minutes can take the 20% task: wait for that reset.
+    // The owner's case: the Max 5x has spent 70% of its week at the half-week mark, and a low Pro
+    // that refills in 12 minutes can then take the 20% task: wait for that reset.
     expect(waitsForCooldown(max5, [pro(12), pro(45)], 20, now, go)).toBe(now + 12 * 60_000)
+    // That Pro already has room (2026-10-02: tasks waited for the reset of #98, at 0%): a reset
+    // gains nothing, and neither does one of a Pro whose running work leaves the task room.
+    expect(waitsForCooldown(max5, [pro(12, 30, 0)], 20, now, go)).toBeNull()
+    const busy = { ...pro(12, 30, 40), running: [{ expected: 30, startPct: 40 }] }
+    expect(waitsForCooldown(max5, [busy], 20, now, go)).toBe(now + 12 * 60_000)
+    expect(waitsForCooldown(max5, [{ ...busy, running: [] }], 20, now, go)).toBeNull()
+    // Whole-percent readings: 3% used with 2.74% of the week gone (#94) is not ahead of pace.
+    const noise = { id: 'a94', weekPct: 3, weekResetsAt: now + WEEK_MS * 0.9726 }
+    const fresh = { ...pro(12, 0), weekResetsAt: noise.weekResetsAt }
+    expect(waitsForCooldown(noise, [fresh], 5, now, go)).toBeNull()
+    // The Pro is within the band of the 5x's pace (66% used against 70%): not worth a wait.
+    expect(waitsForCooldown(max5, [pro(12, 66)], 20, now, go)).toBeNull()
     // Nothing refills within half an hour: start on the 5x now.
     expect(waitsForCooldown(max5, [pro(45)], 20, now, go)).toBeNull()
     // The 5x behind its pace (its week is room it loses at the reset): use it.
@@ -85,6 +108,102 @@ describe('waitsForCooldown', () => {
     // Priority work and a session at home never wait.
     expect(waitsForCooldown(max5, [pro(12)], 20, now, { home: false, priority: 1 })).toBeNull()
     expect(waitsForCooldown(max5, [pro(12)], 20, now, { home: true, priority: 0 })).toBeNull()
+  })
+})
+
+describe('which account a task starts on', () => {
+  const now = 1_000_000_000_000
+  const acct = (
+    id: string,
+    num: number,
+    sessionPct = 10,
+    weekPct = 10,
+    over: Partial<CliMayteAccount> = {},
+  ): CliMayteAccount => ({
+    id,
+    num,
+    name: id,
+    configDir: join(tmpdir(), id),
+    sessionPct,
+    weekPct,
+    ...over,
+  })
+  const worker = (over: Record<string, unknown> = {}) =>
+    ({ accounts: null, accountId: null, attempts: [], ...over }) as any
+  /** The account's weekly reset, placed so that `pace` % of its week has gone. */
+  const weekAt = (pace: number) => ({ weekResetsAt: now + WEEK_MS * (1 - pace / 100) })
+
+  test('behind its weekly pace comes first, ahead of it after; the next account is on the list', () => {
+    // 2026-10-02 05:09: #90 (+7.5) beat #95 (-20.6) on its lower 5-hour projection, and the task was
+    // then held on #90 alone. Ahead: 30% used with 20% of the week gone. Behind: 10% with 60% gone.
+    const ahead = acct('ahead', 1, 0, 30, weekAt(20))
+    const behind = acct('behind', 2, 40, 10, weekAt(60))
+    const placement = { expected: 4.6, running: new Map() }
+    const none = new Map<string, number>()
+    const rank = (accounts: CliMayteAccount[]) =>
+      rankAccounts(worker(), accounts, {}, none, 2, now, none, false, placement).map((a) => a.id)
+    expect(rank([ahead, behind])).toEqual(['behind', 'ahead'])
+    // Where the task does not fit comes after both, however far behind its pace.
+    const fullBehind = acct('full-behind', 3, 84, 0, weekAt(90))
+    expect(rank([fullBehind, ahead, behind])).toEqual(['behind', 'ahead', 'full-behind'])
+  })
+
+  test('with no cap from the dispatcher, a group gets 2 workers per Pro window of the account', () => {
+    // 2026-10-02 04:36: the Max 5x #103 ran 2 tasks at a time, like each Pro, while 24 waited.
+    const two = (id: string) => new Map([[id, 2]])
+    const max5 = acct('max5', 1, 10, 10, { planFactor: 5, ...weekAt(50) })
+    expect(pickAccount(worker(), [max5], {}, two('max5'), null, now)?.id).toBe('max5')
+    // A cap the dispatcher set holds as given, and a Pro stays at 2.
+    expect(pickAccount(worker(), [max5], {}, two('max5'), 2, now)).toBeNull()
+    expect(pickAccount(worker(), [acct('pro', 2)], {}, two('pro'), null, now)).toBeNull()
+    // Ahead of its weekly pace (70% used at the half-week mark), the 5x takes no more than a Pro.
+    const spent = acct('spent', 3, 10, 70, { planFactor: 5, ...weekAt(50) })
+    expect(pickAccount(worker(), [spent], {}, two('spent'), null, now)).toBeNull()
+  })
+
+  test("a session's follow-up goes back to its own account though the group's slots there are taken", () => {
+    // 2026-10-02 05:13: a new task took #102's slot while a finished task's check ran; the check
+    // failed and the 33-turn session moved to #94 (about 170k cache-write tokens over resuming).
+    const w = worker({
+      accountId: 'home',
+      attempts: [{ account: { id: 'home', num: 1, name: 'home' }, outcome: 'done' }],
+    })
+    const taken = new Map([['home', 2]])
+    const accounts = [acct('home', 1), acct('other', 2)]
+    expect(pickAccount(w, accounts, {}, taken, 2, now, taken)?.id).toBe('home')
+    // New work is still held to the cap.
+    expect(pickAccount(worker(), accounts, {}, taken, 2, now, taken)?.id).toBe('other')
+  })
+
+  test('among tasks of one dispatch, the largest expected cost is placed first', () => {
+    // All 31 tasks of odin-w1 shared one createdAt, so insertion order decided who went first.
+    const at = (id: string, expected: number, createdAt = 5) =>
+      ({ id, priority: 0, createdAt, size: { expected } }) as any
+    const order = [at('small', 4.6), at('big', 52.4), at('older', 1, 4)].sort(dueOrder)
+    expect(order.map((w) => w.id)).toEqual(['older', 'big', 'small'])
+  })
+})
+
+describe('climayteCapacity', () => {
+  // check_my_usage quotes this to every chat. 2026-10-02 04:58: it said 9 accounts sat idle while
+  // 24 tasks waited, because it counted every account under the stop lines.
+  afterAll(() => setCliMayteAccountsProvider(null))
+
+  test('says how many tasks already wait, and counts as idle only where a task would start now', () => {
+    setCliMayteAccountsProvider(() => [])
+    const before = climayteCapacity().waiting
+    const run = climayteRun({ tasks: [{ prompt: 'x', cwd: tmpdir() }] })
+    expect(climayteCapacity().waiting).toBe(before + 1)
+    climayteCancel({ group: run.group })
+    expect(climayteCapacity().waiting).toBe(before)
+    // At 70% an account is under the 85% stop line, but an ordinary task (25%) would wait for room
+    // there rather than start.
+    const dir = join(tmpdir(), 'climayte-placement-capacity')
+    setCliMayteAccountsProvider(() => [
+      { id: 'room-roomy', num: 1, name: 'roomy', configDir: dir, sessionPct: 10, weekPct: 10 },
+      { id: 'room-tight', num: 2, name: 'tight', configDir: dir, sessionPct: 70, weekPct: 10 },
+    ])
+    expect(climayteCapacity()).toMatchObject({ accounts: 2, idle: 1 })
   })
 })
 

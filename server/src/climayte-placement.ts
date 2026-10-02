@@ -181,7 +181,8 @@ export function weekPacePct(acct: { weekResetsAt?: number | null }, now: number)
 }
 
 /** How many points the account's weekly usage runs ahead of that pace: above 0 it is spending days
- *  it has not reached yet, below 0 it has room it loses at the reset unless used. Null when unknown. */
+ *  it has not reached yet, below 0 it has room it loses at the reset unless used. Null when unknown.
+ *  It counts as ahead only past PACE_BAND. */
 export function paceGap(
   acct: { weekPct?: number | null; weekResetsAt?: number | null },
   now: number,
@@ -196,29 +197,51 @@ export function paceGap(
  *  ahead of its weekly pace. */
 export const COOLDOWN_WAIT_MS = 30 * 60_000
 
+/** An account counts as ahead of its weekly pace only past this many points (paceGap), and a reset
+ *  is worth waiting for only on an account at least this much less ahead. Weekly readings are whole
+ *  percents and the pace is continuous: on 2026-10-02 #94 read 3% with 2.74% of its week gone
+ *  (+0.26) and 19 tasks were held about 23.5 minutes each for it. 5 is about two-thirds of the 7.7
+ *  weekly points one full Pro window costs (median of 26 windows). */
+export const PACE_BAND = 5
+
+/** An account a task might wait for (waitsForCooldown): when it refills (`sessionResetsAt`: its
+ *  5-hour reset, or the end of its limit wall when `walled`) and the work running there now. */
+export type CooldownTarget = Pick<
+  CliMayteAccount,
+  'id' | 'sessionPct' | 'sessionResetsAt' | 'planFactor' | 'weekPct' | 'weekResetsAt'
+> & {
+  running?: RunningLoad[]
+  finishedSince?: number
+  walled?: boolean
+}
+
 /** Owner, 2026-10-01: with several Pro accounts and a Max 5x one, "just because the pro accounts have
  *  run low on usage does not mean you should begin immediately dumping everything into the 5X ...
  *  usage is usage, but it should smartly take into account the cool-down rate of up-and-coming
  *  accounts, the overhead it will take to do the work, what other things it can start or finish in
  *  the meantime while it's waiting". The 5-hour windows refill every five hours; the week is what
- *  runs out. So a task is held off `chosen` (pickAccount's best) when `chosen` has spent more of its
- *  week than the week has run, and an account it may use (`others`: allowed, signed in, under the
- *  weekly stop line) refills its 5-hour window within COOLDOWN_WAIT_MS with room for the task and is
- *  less ahead of its own pace. Answers that reset (epoch ms), or null to start now. Held, it costs
- *  nothing: no session starts, so there is no overhead to lose, and other tasks keep starting and
- *  finishing meanwhile. Never held: a session going on at home (warm cache) and priority work. */
+ *  runs out. So a task is held off `chosen` when `chosen` has spent more of its week than the week
+ *  has run (by over PACE_BAND), and an account it may use (`others`: allowed, signed in, nobody
+ *  else's, under the weekly stop line) has no room for it NOW, refills its 5-hour window within
+ *  COOLDOWN_WAIT_MS with room for it, and is at least PACE_BAND less ahead of its own pace.
+ *  Answers that reset (epoch ms), or null to start now. An account the task already fits on is
+ *  never waited for: a reset gains nothing there (2026-10-02: 31 tasks waited 776 task-minutes for
+ *  the resets of #101, #102, #98 and #103, which sat at 0-44% with free slots, then started at the
+ *  same readings they had while held). The caller tries the task's next account before it holds
+ *  (climayte-schedule scheduleWorker). Never held: a session going on at home (warm cache) and
+ *  priority work. */
 export function waitsForCooldown(
   chosen: Pick<CliMayteAccount, 'id' | 'weekPct' | 'weekResetsAt'>,
-  others: Array<
-    Pick<CliMayteAccount, 'id' | 'sessionResetsAt' | 'planFactor' | 'weekPct' | 'weekResetsAt'>
-  >,
+  others: CooldownTarget[],
   expected: number,
   now: number,
   opts: { home: boolean; priority: number },
 ): number | null {
   if (opts.home || opts.priority > 0) return null
   const gap = paceGap(chosen, now)
-  if (gap === null || gap <= 0) return null
+  if (gap === null || gap <= PACE_BAND) return null
+  const fitsNow = (a: CooldownTarget): boolean =>
+    !a.walled && projectedPct(a, a.running ?? [], expected, a.finishedSince ?? 0) <= FIT_PCT
   const resets = others
     .filter(
       (a) =>
@@ -227,7 +250,8 @@ export function waitsForCooldown(
         a.sessionResetsAt > now &&
         a.sessionResetsAt - now <= COOLDOWN_WAIT_MS &&
         expected / (a.planFactor ?? 1) <= FIT_PCT &&
-        (paceGap(a, now) ?? 0) < gap,
+        !fitsNow(a) &&
+        (paceGap(a, now) ?? 0) <= gap - PACE_BAND,
     )
     .map((a) => a.sessionResetsAt as number)
   return resets.length ? Math.min(...resets) : null

@@ -6,10 +6,6 @@ export const CLI_INSTANCE_DIALOG_KEYS = {
   cliInstances: {
     nameLabel: 'cliInstances.nameLabel',
     namePlaceholder: 'cliInstances.namePlaceholder',
-    createDialogTitle: 'cliInstances.createDialogTitle',
-    createDialogDescription: 'cliInstances.createDialogDescription',
-    createDialogSubmit: 'cliInstances.createDialogSubmit',
-    createDialogCreating: 'cliInstances.createDialogCreating',
     renameDialogTitle: 'cliInstances.renameDialogTitle',
     renameDialogDescription: 'cliInstances.renameDialogDescription',
     renameDialogSubmit: 'cliInstances.renameDialogSubmit',

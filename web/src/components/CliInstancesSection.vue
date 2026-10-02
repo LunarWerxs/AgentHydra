@@ -46,6 +46,7 @@ import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
 import LinkCliInstanceDialog from '@/components/LinkCliInstanceDialog.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
+import PooledUsageGauges from '@/components/PooledUsageGauges.vue'
 import SortButton from '@/components/SortButton.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
@@ -85,6 +86,7 @@ import { formatTokens } from '@/lib/climayte-status'
 import { formatUsd, timeAgo } from '@/lib/format'
 import { nameOverflowTitle, shortDisplayName } from '@/lib/instance-appearance'
 import { billsPastLimit, bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
+import { pooledRemaining } from '@/lib/usage-pool'
 import {
   msUntilReset,
   resetLabel,
@@ -103,7 +105,6 @@ const {
   startPolling,
   stopPolling,
   refreshCliInstances,
-  create,
   launch,
   logout,
   rename,
@@ -148,6 +149,20 @@ const sessionRemaining = (inst: CliInstance) =>
 const weeklyRemaining = (inst: CliInstance) =>
   windowRemainingPct(usageFor(inst)?.weekAll, WEEK_WINDOW_MS, now.value) ?? 0
 const weeklyWait = (inst: CliInstance) => waitSeverity(weeklyRemaining(inst))
+
+// The folded table's two gauges (PooledUsageGauges.vue): what is left of each window across EVERY
+// CLI account, the ones linked to a desktop row included, since CliMayte runs on those too.
+const poolOf = (which: 'session' | 'weekAll') =>
+  pooledRemaining(
+    cliInstances.value.map((inst) => ({
+      signedIn: inst.loggedIn,
+      planLabel: inst.planLabel,
+      limit: usageFor(inst)?.[which],
+    })),
+    now.value,
+  )
+const sessionPool = computed(() => poolOf('session'))
+const weekPool = computed(() => poolOf('weekAll'))
 
 /**
  * ONLY the UNLINKED CLI instances live in this table.
@@ -267,30 +282,6 @@ const headingCount = computed(() =>
 
 function isBusy(inst: CliInstance): boolean {
   return busyIds.value.has(inst.id)
-}
-
-// --- create ---
-const createOpen = ref(false)
-const creating = ref(false)
-const createError = ref<string | null>(null)
-function openCreateDialog() {
-  createError.value = null
-  createOpen.value = true
-}
-async function onCreateSubmit(name: string) {
-  creating.value = true
-  createError.value = null
-  try {
-    const result = await create(name)
-    if (result?.ok) {
-      toast.success(t('cliInstances.toastCreated'))
-      createOpen.value = false
-    } else {
-      createError.value = result?.message ?? t('cliInstances.toastCreateFailed')
-    }
-  } finally {
-    creating.value = false
-  }
 }
 
 // --- rename ---
@@ -457,6 +448,8 @@ async function onLaunch(inst: CliInstance) {
 }
 // "Log in" signs this instance in again through Quick add, not a terminal running /login (owner,
 // 2026-09-30): point the box at it, bring it into view and put the cursor in its email field.
+// The header's plus asks the same of it with no target: Quick add shows its email row on request
+// (owner, 2026-10-02), and it replaced the dialog that created an instance by name.
 const quickAdd = ref<{ focusEmail: () => void } | null>(null)
 async function onLogin(inst: CliInstance) {
   setQuickAddTarget({ id: inst.id, num: inst.num, name: inst.name })
@@ -619,9 +612,9 @@ onUnmounted(() => {
     <!-- The shared header every instance table uses; the count says "x of y" when rows are
          elsewhere (see headingCount), and hovering it says where: linked ones have moved onto their
          account's row in the Instances tab (a sentence beside the title before; owner, 2026-10-01:
-         "I don't think that text is necessary"). It folds the table away to Quick add (owner, 2026-10-01: "the
-         list of accounts should be collapsable, so all I see is the add account section"), which
-         leaves CliMayte below the whole window. -->
+         "I don't think that text is necessary"). It folds the table away (owner, 2026-10-01: "the
+         list of accounts should be collapsable"), which leaves CliMayte below the whole window;
+         folded, the header carries the two pooled gauges. Its plus shows Quick add's email row. -->
     <InstanceSectionHeader
       v-model:open="accountsOpen"
       provider="claude"
@@ -634,8 +627,16 @@ onUnmounted(() => {
       :refreshing="loading"
       :create-label="$t('cliInstances.createInstance')"
       @refresh="refreshCliInstances()"
-      @create="openCreateDialog"
+      @create="quickAdd?.focusEmail()"
     >
+      <!-- Only while folded: open, the rows say it per account. -->
+      <template #summary>
+        <PooledUsageGauges
+          v-if="!accountsOpen && cliInstances.length > 0"
+          :session="sessionPool"
+          :week="weekPool"
+        />
+      </template>
       <template #tools>
         <!-- This table's own settings, behind a gear on the table (owner, 2026-10-01: a setting
              lives on the page where he would look for it, and "Keep windows running" is a setting,
@@ -723,7 +724,8 @@ onUnmounted(() => {
       </template>
     </InstanceSectionHeader>
 
-    <!-- Quick add: type an email, confirm in the browser, the new CLI instance lands in the table. -->
+    <!-- Quick add: type an email, confirm in the browser, the new CLI instance lands in the table.
+         It draws nothing until the header's plus (or a row's "Log in") asks for its email row. -->
     <CliQuickAdd
       ref="quickAdd"
       class="px-3 pb-3"
@@ -1078,13 +1080,6 @@ onUnmounted(() => {
     </Table>
     </div>
 
-    <CliInstanceNameDialog
-      v-model:open="createOpen"
-      mode="create"
-      :submitting="creating"
-      :error-message="createError"
-      @submit="onCreateSubmit"
-    />
     <CliInstanceNameDialog
       v-model:open="renameOpen"
       mode="rename"

@@ -9,6 +9,33 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **CliMayte starts work on accounts that have room** (measured live 2026-10-02: 31 tasks waited 776 task-minutes while the capacity hint said 9 accounts sat idle):
+  - CliMayte no longer holds a task for the 5-hour reset of an account that already has room for it: on 2026-10-02, 31 tasks waited 776 task-minutes that way and only 5 started at dispatch; a replay of that 04:36 tick now starts 21 of 31 (19 for a group dispatched with per_account 2).
+  - When an account refuses a task (no room, or a reset worth waiting for), CliMayte tries the task's next account and waits only when every account refuses; before, 8 tasks waited on #90 while #95 and #94 ran no worker.
+  - Accounts behind their weekly pace are used first, most behind first; an account counts as ahead only past 5 points, so '3% used with 3% of the week gone' no longer holds work (19 holds of about 23.5 minutes each).
+  - The owner's ruling stays: a Max 5x ahead of its weekly pace still waits for a low Pro that refills within 30 minutes instead of taking everything.
+  - A group with no per_account now runs 2 workers per Pro window of the account (up to 4 on a Max 5x that is not ahead of pace) instead of a flat 2; a per_account the dispatcher set is kept as given.
+  - A failed check's follow-up goes back to its own account even when the group's slots there were taken meanwhile (one such move cost about 170k extra cache-write tokens).
+  - Tasks of one dispatch start largest expected cost first, so a big task gets a fresh window before small ones fill it.
+- **CliMayte handoffs say what really happened, and a long conversation hands off before it gets expensive:**
+  - a session whose conversation reaches 150k tokens is asked to hand off to a fresh session, whatever its account's usage (37% of requests, 3,135 of 8,370, ran over 150k and carried 61% of cache-read tokens; expected saving is small, about 7% of a Pro window since 2026-10-01 15:00Z with a 30k re-read allowance). These handoffs do not count towards the 3-handoff cap.
+  - the wind-down message names the window that is at its line (weekly or 5-hour) instead of always saying 5-hour, and a continuation is told whether the earlier session ran on this account or another and why it handed off (2 of 36 continuations ran on the same account and were told 'another account').
+  - a continuation after a chain of handoffs is given every earlier session's transcript, newest first, not only the last (18 of 36 continuations were second or later in a chain).
+  - a handoff on conversation size (150k) counts towards neither the handoff cap nor the moves cap, and its next session is no longer pushed off the account it left; a long task is bounded by 8 attempts and the spend cap.
+- **CliMayte writes less to disk:**
+  - CliMayte no longer rewrites every finished task on each change: workers.json holds only work in flight (about 75 KB for 17 workers, was 2.8 MB about every 40 s, roughly 4.7 GB of disk writes a day) and each finished task is its own file under corch/done. The first start carries every task of the old single file over.
+  - A CliMayte dispatch of N tasks saves the store once instead of N times (21 tasks blocked the daemon for about 0.3 s).
+  - CliMayte packs a finished attempt's log with zstd a day after it ended (corch/logs was 429 MiB in 813 files, growing 170 MiB a day); climayte_status reads packed logs the same as plain ones. A cancelled attempt whose runner may still be alive is left unpacked.
+  - After a daemon restart, a usage reading replayed from a running worker's log keeps the time it was taken instead of being stamped as fresh, so it no longer outranks newer readings for the same account (18 of 27 restarts with runner workers had two or more on one account).
+  - CliMayte workers no longer load the claude.ai-synced humanizer plugin (one account listed it in every request, 3 of 14 starts, and no worker ever invoked it).
+- **CLI tab: pooled usage gauges on the folded table, and Add account on request:**
+  - the folded accounts table now shows two gauges in its header, 5-hour and Week, each the share left across all signed-in CLI accounts weighted by plan size (a Max 5x counts as five Pros); hover gives how many accounts are counted and how many are signed out or unread.
+  - the Add account email row is no longer always on the page. The header's plus shows it with the email field focused, an X closes it, it closes itself once the account is added, and it starts open on an empty table. A sign-in still waiting on the browser keeps its card when the row is closed.
+  - the 'New CLI instance' name dialog is gone; the plus adds an account by email instead. Rename is unchanged, and the create_cli_instance route and MCP tool stay.
+- **CliMayte: a failed task says what failed and what happened next:**
+  - hovering a failed task's red cross now says what failed, how its attempts ended, what happened next (accepted or rejected and by whom, started again and on which model, follow-up messages waiting) and the end result.
+  - the same four lines show under the title when a failed task is open.
+  - In the task list, a failed verdict on a task that is still working shows as an amber 'on another round' arrow instead of a red cross, and the mark's hover says who judged it and what they said (on 2026-10-02 ten running rows each showed a red cross after their own check said no, and read as failed work).
 - **CliMayte spends less, from a stress run on 2026-10-02** (eight Opus reviews of its own code,
   dispatched through CliMayte to the idle accounts, $5 in all):
   - **A task that is not converging stops and asks.** Past 8 attempts, 4 moves between accounts,

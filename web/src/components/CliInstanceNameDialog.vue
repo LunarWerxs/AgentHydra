@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// A single small text-input dialog reused for both "New CLI instance" (create) and "Rename",
+// A single small text-input dialog reused for both "New instance" (create) and "Rename",
 // the same shape as CreateInstanceDialog.vue, just parameterized on `mode` so both actions
-// don't need near-duplicate components.
+// don't need near-duplicate components. The Codex and DeepSeek tables use both modes; the Claude
+// CLI table only renames (its plus opens Quick add), so its namespace has no create wording.
 import { computed, ref, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,17 +37,20 @@ watch(open, (isOpen) => {
 })
 
 const keys = computed(() => CLI_INSTANCE_DIALOG_KEYS[props.namespace ?? 'cliInstances'])
-const titleKey = computed(() =>
-  props.mode === 'rename' ? keys.value.renameDialogTitle : keys.value.createDialogTitle,
+/** The create wording, in create mode under a namespace that has one. */
+const createKeys = computed(() => {
+  const k = keys.value
+  return props.mode === 'create' && 'createDialogTitle' in k ? k : null
+})
+const titleKey = computed(() => createKeys.value?.createDialogTitle ?? keys.value.renameDialogTitle)
+const descriptionKey = computed(
+  () => createKeys.value?.createDialogDescription ?? keys.value.renameDialogDescription,
 )
-const descriptionKey = computed(() =>
-  props.mode === 'rename' ? keys.value.renameDialogDescription : keys.value.createDialogDescription,
+const submitKey = computed(
+  () => createKeys.value?.createDialogSubmit ?? keys.value.renameDialogSubmit,
 )
-const submitKey = computed(() =>
-  props.mode === 'rename' ? keys.value.renameDialogSubmit : keys.value.createDialogSubmit,
-)
-const submittingKey = computed(() =>
-  props.mode === 'rename' ? keys.value.renameDialogRenaming : keys.value.createDialogCreating,
+const submittingKey = computed(
+  () => createKeys.value?.createDialogCreating ?? keys.value.renameDialogRenaming,
 )
 
 function handleSubmit() {

@@ -85,9 +85,16 @@ export interface CliMayteWorker {
 }
 ```
 
-Persisted with `core/json-store.ts` at `<CONFIG_DIR>/corch/workers.json` (`{ workers: CliMayteWorker[] }`,
-same read/mutate discipline as `core/cli-instances.ts`). Logs live in `<CONFIG_DIR>/corch/logs/`
-as `<workerId>-<attemptIndex>.jsonl` and `.err.log`. The prompt of each attempt is written to
+Persisted with `core/json-store.ts` in two places (same read/mutate discipline as
+`core/cli-instances.ts`): `<CONFIG_DIR>/corch/workers.json` (`{ workers: CliMayteWorker[] }`) holds
+the work still in flight (queued, running, waiting, checking), and each finished worker (done,
+failed, cancelled) is one file, `<CONFIG_DIR>/corch/done/<workerId>.json`, written when that worker
+changes. A worker found in both is read from `workers.json` (a message revives a finished worker,
+and its file goes once `workers.json` holds it). The first start on this layout files every
+finished worker of the old single `workers.json`. Logs live in `<CONFIG_DIR>/corch/logs/`
+as `<workerId>-<attemptIndex>.jsonl` and `.err.log`; a finished attempt's `.jsonl` is packed to
+`.jsonl.zst` (zstd) a day after it ended, and every reader takes the plain file first, else the
+packed one. The prompt of each attempt is written to
 `<CONFIG_DIR>/corch/prompts/<workerId>-<attemptIndex>.txt` and fed to the CLI on **stdin**
 (never argv: Windows' 32k command-line limit and quoting).
 
@@ -263,15 +270,16 @@ flags are honoured; neither is silently ignored.
     on the same account (resume if the session file exists, else first-attempt again);
     otherwise `failed`.
   - `error`: status `failed`, `error` = the result text or the stderr tail (last 1,500 chars).
-- **queued / waiting**: highest `priority` first, then oldest first (`dueOrder`, field note
-  20); when `notBefore` has passed, `pickAccount(worker)`; none → `waiting`
+- **queued / waiting**: highest `priority` first, then oldest first, then the largest expected
+  cost (`dueOrder`, field note 20); when `notBefore` has passed, `pickAccount(worker)`; none → `waiting`
   with `error` naming why (every account walled / none signed in); else launch.
 
 Emit a change event (`onCliMayteChange(cb) → unsubscribe`) whenever a worker's status changes, so
 `climayte_status` can wait without polling.
 
 **Turn caps** (`notConverging`, `TURN_CAPS`, 2026-10-02). After a handoff or a limit, before the
-task is queued again: past 8 attempts, 4 moves between accounts, 3 handoffs, or 3 times its size
+task is queued again: past 8 attempts, 4 moves between accounts, 3 handoffs (not counting those
+on conversation size, nor the account change after one), or 3 times its size
 estimate (at least half a Pro window) since its newest finished attempt, it fails with why and
 what to do (split it, or continue with `climayte_send`). Sign-in refusals cost nothing and do not
 count. `retries` (transient errors, interrupted resumes, launch retries) resets only when a turn
@@ -305,7 +313,8 @@ the transcript lookups.
 - `pickAccount(worker, accounts: CliMayteAccount[], walls, active: Map<accountId, number>, perAccount: number, now): CliMayteAccount | null`
   where `CliMayteAccount = { id, num, name, configDir, sessionPct: number | null, weekPct: number | null }`.
   Eligible: in `worker.accounts` when set; not walled (`walls[id].until > now`); `sessionPct < 98`
-  and `weekPct < 99` when known; `active < perAccount`. A handoff (last attempt `quota`/`auth`)
+  and `weekPct < 99` when known; `active < perAccount` (a session going back to its own account
+  is not held to it). A handoff (last attempt `quota`/`auth`)
   excludes the account that failed. A follow-up prefers `worker.accountId` when eligible. Score =
   `max(sessionPct ?? 50, weekPct ?? 50) + 100 * active`; lowest wins; ties by `num`. `active` counts
   the workers running on the account from EVERY group (field note 8: at 25, a busy account at 0%
@@ -316,7 +325,11 @@ the transcript lookups.
   the line was at its worker cap, so twenty continuations went to accounts at 89-97% and were told
   to hand off again within three calls (about 290k tokens and $0.75 each). A session that reaches
   the line hands off whether or not another account has room (`fc1ca87`, owner: never the limit,
-  stop at 85-90%); with none, the task waits for the first reset (`waitUntil`). At `CEILING_PCT`
+  stop at 85-90%); with none, the task waits for the first reset (`waitUntil`). A session whose
+  conversation reaches `CONTEXT_HANDOFF_TOKENS` (150k: the newest main-agent request's input, cache
+  reads and cache writes, `contextTokens`) is asked the same way, whatever its account's usage;
+  its attempt's `windDown.reason` is `'context'`, and the account it left is not nudged against
+  (no +100) when the next session is placed. At `CEILING_PCT`
   (90, either window; `df4bb96`) a turn still running is stopped on the spot and the account walled
   until that window resets: it goes on from its handoff if it wrote one, else moves or waits. Those
   are ceiling stops (`ceiling` on the attempt, `ceilingStops` in the totals), never limit hits. An
@@ -426,25 +439,34 @@ Pro accounts, where tasks costing about a quarter of a window each could never a
   from the broadest record to the narrowest: 25% (`DEFAULT_TASK_PCT`), its model family, its kind on
   any model scaled by meter weight, its kind on its family, its exact kind, model and effort. Each
   pulls the estimate toward its own average by its task count against `PRIOR_WEIGHT` 2 (`5bc5ba7`).
-- `pickAccount(..., placement)` scores `max(projected, week%) + 200 when projected > FIT_PCT (85,
-  the stop line, since `fc1ca87`)`
-  instead of `max(session%, week%) + 100 per worker`; the tick passes it for every start, and adds
-  each worker it starts to the projection before the next one is placed. When nothing fits, the
+- `rankAccounts(..., placement)` (`pickAccount` is its first) ranks where `projected <= FIT_PCT`
+  (85, the stop line, since `fc1ca87`) first: accounts at or behind their weekly pace, most behind
+  first, then accounts ahead of it; where the task does not fit comes last, lowest projection first
+  (it was `max(projected, week%)` plus only a positive pace gap, so a lower 5-hour projection won
+  even on an account ahead of its pace). The tick passes it for every start, tries each account in
+  that order until one takes the task (`scheduleWorker`), and adds each worker it starts to the
+  projection before the next one is placed. When nothing fits, the
   lowest projection still wins: finishing part of the work and handing off beats waiting hours.
+  A group with no `perAccount` from its dispatcher runs 2 workers per Pro window of the account
+  (`groupCap`: 2 on a Pro, up to `MAX_PER_ACCOUNT` on a Max 5x that is not ahead of its pace).
 - Weekly pace (owner, 2026-10-01, with several Pro accounts and a Max 5x: "just because the pro
   accounts have run low on usage does not mean you should begin immediately dumping everything into
   the 5X ... usage is usage, but it should smartly take into account the cool-down rate of
   up-and-coming accounts, the overhead it will take to do the work, what other things it can start
   or finish in the meantime"). The 5-hour windows refill every five hours; the week is what runs
   out. `paceGap(account)` is how many points its weekly usage runs ahead of the share of its 7-day
-  window already gone (`weekPacePct`, from the reading's `weekResetsAt`); the score adds it when
-  above 0, so an account spending its week faster than the week passes ranks behind one that is
-  not. `waitsForCooldown` holds a task off its best account when that account is ahead of its pace
-  and another account the task may use (signed in, under the weekly stop line, under the group's
-  cap) refills its 5-hour window (its reset, or the end of its limit wall) within 30 minutes
-  (`COOLDOWN_WAIT_MS`), has room for the task in a fresh window and is less ahead of its own pace.
-  The row waits ("Waiting for a reset: ...", `waitUntil` that reset). A held task starts no session,
-  so it loses nothing; the other tasks keep starting and finishing. Never held: a session going on
+  window already gone (`weekPacePct`, from the reading's `weekResetsAt`); an account counts as ahead
+  only past `PACE_BAND` (5 points: readings are whole percents, and 3% used with 2.74% of the week
+  gone held 19 tasks), and ranks behind every account that is not. `waitsForCooldown` refuses an
+  account that is ahead of its pace when another account the task may use (signed in, nobody
+  else's, under the weekly stop line, under the group's cap) has no room for the task now, refills
+  its 5-hour window (its reset, or the end of its limit wall) within 30 minutes
+  (`COOLDOWN_WAIT_MS`), has room for the task in a fresh window and is at least `PACE_BAND` less
+  ahead of its own pace. An account the task already fits on is never waited for, and a refusal
+  passes the task to its next account: the row waits ("Waiting for a reset: ...", `waitUntil` the
+  earliest such reset) only when every account refuses it. A held task starts no session, but the
+  wait is not free: 2026-10-02, 31 tasks waited 776 task-minutes for resets of accounts that had
+  room all along. Never held: a session going on
   at home, priority work (`priority` above 0), and anything when the weekly reset is unknown.
 - **Someone else's account takes no new work** (`accountInUse`, 2026-10-02). Each account in the
   pool carries `handsOnAgoMs`, how long ago a hand used its linked desktop app (that app's
@@ -550,7 +572,7 @@ export function startCliMayte(): void
 `account` (`#<num> <name>` or null), `ranS` (seconds it ran: the sum of its attempts, not the time
 since it was created), `reportedModel` (the model the CLI reported at init on the newest attempt
 that got that far), and `attempts` as `{ account, outcome, notice, requested?, model? }`.
-Validation: `cwd` must be an existing directory; `prompt` non-empty; `perAccount` 1..4, default 2.
+Validation: `cwd` must be an existing directory; `prompt` non-empty; `perAccount` 1..4, default 2 per Pro window of the account (`groupCap`).
 
 ## Server: quick add, `server/src/core/cli-quick-add.ts`
 
@@ -841,9 +863,10 @@ boot after the stores are ready.
 
 ## Web: Quick add and the CliMayte view
 
-- `web/src/components/CliInstancesSection.vue`: a Quick add row at the top: one email input and
-  an Add button (Enter submits). After a submit the input clears and keeps focus, ready for the
-  next account. Each flow shows one line: "Confirm in your browser" with Open page again (the
+- `web/src/components/CliInstancesSection.vue`: a Quick add row at the top, shown by the header's
+  plus (and open by itself on an empty table) and closed by its X or by an account being added: one
+  email input and an Add button (Enter submits). After a submit the input clears and keeps focus,
+  ready for the next account. Each flow shows one line: "Confirm in your browser" with Open page again (the
   `url`), Paste code (a small input that posts to `/code`) and Cancel; then "Signed in as
   <email> (<plan>)" or the failure reason. Poll `GET /api/cli-instances/quick-add` every 2 s while
   any flow is `waiting`; refresh the instance list when one signs in.
@@ -861,7 +884,8 @@ boot after the stores are ready.
   changes and every 10 s for a group.
 - Every user-facing string goes through vue-i18n (`web/src/locales`), so `check:i18n` passes.
 - The CLI tab fits the window on a wide screen (owner, 2026-10-01, `c3a3c5b`): the page does not
-  scroll. The accounts table folds to Quick add from its header (kept per browser,
+  scroll. The accounts table folds from its header to two pooled gauges, what is left
+  of the 5-hour and weekly windows across the accounts (kept per browser,
   `agenthydra.cli.accountsOpen`) and, open, scrolls inside itself (35vh); the task list scrolls
   inside itself with a "Hide finished" switch (`agenthydra.climayte.hideFinished`); in the task
   panel the result, event log and journal share the height left, each in its own box, and the
