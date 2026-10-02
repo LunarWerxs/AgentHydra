@@ -135,11 +135,20 @@ Bun.spawn(argv, { cwd, env, stdin: Bun.file(promptFile), stdout: <fd of log, app
   value. End with a short report: what you did, the proof you saw (a command and what it
   printed), and anything left undone with the reason."
 
-**What a worker starts with** (2026-10-02): its settings deny the agenthydra, magnific and
-connections-local MCP servers (zswarm stays, for wide cheap work) and set `syncClaudeAiSkills:
-false`, which hides the claude.ai-synced skills (docx, pptx, computer-use and the rest) for that run
-only; its environment sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. About 5k tokens fewer on every
-request; both keys are in the CLI binary (2.1.286).
+**What a worker starts with** (2026-10-02): its settings deny the agenthydra and magnific MCP
+servers and set `syncClaudeAiSkills: false`, which hides the claude.ai-synced skills (docx, pptx,
+computer-use and the rest) for that run only; its environment sets
+`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. Both keys are in the CLI binary (2.1.286).
+
+**A worker's MCP servers are the owner's** (2026-10-02): `--mcp-config <hooks>/<id>.mcp.json`
+gives it the servers in the owner's own user scope (`~/.claude.json`), less the two denied, so
+connections-local and zswarm are there whatever its account's `.claude.json` says. That copy is
+seeded once, when the account is made, and drifts: one of 33 accounts listed no server at all. Only
+an entry that is a URL and nothing else is carried (no headers, oauth, env, query string or user
+info): the owner's local servers sign in through this machine's own session, and no credential is
+written to a worker's file. Any other entry loads from the account's own copy. connections-local
+was denied for a day to save tokens (`8486a2d`); a worker asked to use connections_execute then
+had no such tool and drove the local MCP through a script.
 
 ### Runner and restarts (`server/src/climayte-runner.ts`)
 

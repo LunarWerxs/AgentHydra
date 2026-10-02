@@ -760,6 +760,77 @@ describe('integration: a move copies from the account that RAN the session (fiel
   }, 35_000)
 })
 
+describe("integration: a worker has the owner's MCP servers, whatever its account lists", () => {
+  // 2026-10-02: a worker asked to use connections_execute had no such tool. Worker settings denied
+  // connections-local, and one of 33 accounts listed no MCP server at all: an account's
+  // .claude.json is seeded once, when the account is made.
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-mcp-'))
+  const cwd = join(root, 'work')
+  const ownerDir = join(root, 'home', '.claude')
+  const seededDir = join(root, 'acct-seeded')
+  const bareDir = join(root, 'acct-bare')
+  for (const d of [cwd, ownerDir, seededDir, bareDir]) mkdirSync(d, { recursive: true })
+  const local = (port: number, path = '/mcp') => ({
+    type: 'http',
+    url: `http://127.0.0.1:${port}${path}`,
+  })
+  const seeded = {
+    agenthydra: local(7787, '/api/mcp'),
+    magnific: { type: 'http', url: 'https://mcp.magnific.com' },
+    zswarm: local(7790),
+    'connections-local': local(7791),
+  }
+  const keyed = { ...local(7792), headers: { Authorization: 'Bearer not-a-real-token' } }
+  writeFileSync(
+    join(root, 'home', '.claude.json'),
+    JSON.stringify({ mcpServers: { ...seeded, keyed } }),
+  )
+  writeFileSync(join(seededDir, '.claude.json'), JSON.stringify({ mcpServers: seeded }))
+  writeFileSync(join(bareDir, '.claude.json'), JSON.stringify({ numStartups: 3 }))
+  const groups: string[] = []
+
+  afterAll(() => {
+    for (const group of groups) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    setCliMayteOwnerDir(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test('connections-local and zswarm on either account; never agenthydra, magnific or a credential', async () => {
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteOwnerDir(ownerDir)
+    for (const [id, configDir] of [
+      ['seeded', seededDir],
+      ['bare', bareDir],
+    ] as const) {
+      setCliMayteAccountsProvider(() => [
+        { id, num: 1, name: id, configDir, sessionPct: 0, weekPct: 0 },
+      ])
+      startCliMayte()
+      const run = climayteRun({ tasks: [{ prompt: 'call connections_execute', cwd, title: id }] })
+      groups.push(run.group)
+      const wid = run.workers[0]?.id as string
+      const deadline = Date.now() + 25_000
+      let w = climayteList({ id: wid })[0]
+      while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+        await climayteWait({ id: wid }, Math.min(5_000, deadline - Date.now()))
+        w = climayteList({ id: wid })[0]
+      }
+      expect(w?.status).toBe('done')
+      const events = readFileSync(workers.get(wid)?.attempts[0]?.log as string, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as { subtype?: string; mcp_servers?: { name: string }[] })
+      const init = events.find((e) => e.subtype === 'init')
+      expect([id, init?.mcp_servers?.map((s) => s.name)]).toEqual([
+        id,
+        ['connections-local', 'zswarm'],
+      ])
+    }
+  }, 60_000)
+})
+
 describe('priority (field note 20)', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'ah-climayte-priority-'))
   afterAll(() => {

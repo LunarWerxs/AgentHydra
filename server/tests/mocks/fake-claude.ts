@@ -20,9 +20,38 @@ const prompt = await Bun.stdin.text()
 
 const emit = (ev: unknown) => process.stdout.write(`${JSON.stringify(ev)}\n`)
 const line = (ev: unknown) => `${JSON.stringify(ev)}\n`
+const readJson = (path: string | null): Record<string, unknown> | null => {
+  try {
+    return path ? JSON.parse(readFileSync(path, 'utf8')) : null
+  } catch {
+    return null
+  }
+}
+// Like the real CLI, init lists the session's MCP servers: the account's user scope
+// (CLAUDE_CONFIG_DIR's .claude.json) and --mcp-config's, a name in both being one server, less any
+// the --settings file's deniedMcpServers names.
+function mcpServers(): { name: string; status: string }[] {
+  const servers = {
+    ...((readJson(join(configDir, '.claude.json'))?.mcpServers as object) ?? {}),
+    ...((readJson(flag('--mcp-config'))?.mcpServers as object) ?? {}),
+  }
+  const denied = ((readJson(flag('--settings'))?.deniedMcpServers as { serverName: string }[]) ?? []).map(
+    (d) => d.serverName,
+  )
+  return Object.keys(servers)
+    .filter((name) => !denied.includes(name))
+    .sort()
+    .map((name) => ({ name, status: 'connected' }))
+}
 // Like the real CLI, init reports the model it runs: the one `--model` named, else its default.
 const init = () =>
-  emit({ type: 'system', subtype: 'init', session_id: sessionId, model: flag('--model') ?? 'fake-model' })
+  emit({
+    type: 'system',
+    subtype: 'init',
+    session_id: sessionId,
+    model: flag('--model') ?? 'fake-model',
+    mcp_servers: mcpServers(),
+  })
 
 function findTranscript(): string | null {
   const projects = join(configDir, 'projects')

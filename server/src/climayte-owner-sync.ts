@@ -26,6 +26,12 @@
 //
 // Cheap: a signature (CLAUDE.md's size and mtime, the skill names) is kept in memory per account
 // and in `<account>/.agenthydra-owner-sync.json`; an unchanged one costs a stat and a readdir.
+//
+// THE OWNER'S MCP SERVERS (2026-10-02, ownerMcpServers): a worker is given them on its command
+// line, read from the owner's own user scope, never from the account's `.claude.json`. That copy
+// was seeded once, when the account was made (core/cli-instances.ts), and drifts: measured
+// 2026-10-02, one of 33 accounts listed no MCP server at all, so its workers had no zswarm and no
+// connections-local, and a server the owner adds later never reaches an account made before it.
 
 import {
   copyFileSync,
@@ -41,7 +47,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 
 const STAMP = '.agenthydra-owner-sync.json'
 
@@ -246,6 +252,56 @@ function removeLink(path: string): void {
     // `recursive` removes only the link.
     rmSync(path, { force: true })
   }
+}
+
+export interface McpUrlEntry {
+  type: 'http' | 'sse'
+  url: string
+}
+
+/** An entry that is a URL and nothing else, or null. Headers, oauth, env, a query string or user
+ *  info in the URL can each carry a credential, and what this returns is written to a file. */
+function bareUrlEntry(entry: unknown): McpUrlEntry | null {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+  const { type, url, ...rest } = entry as Record<string, unknown>
+  if ((type !== 'http' && type !== 'sse') || typeof url !== 'string') return null
+  if (Object.keys(rest).length > 0) return null
+  try {
+    const u = new URL(url)
+    if (u.username || u.password || u.search) return null
+  } catch {
+    return null
+  }
+  return { type, url }
+}
+
+/** The owner's MCP servers a worker is given (`--mcp-config`, climayte-launch.ts): those in the
+ *  owner's user scope, the `.claude.json` beside `ownerDir` (`~/.claude` -> `~/.claude.json`), less
+ *  the `denied` names. Only an entry that is a URL and nothing else is carried: the owner's local
+ *  servers (connections-local, zswarm) sign in through this machine's own session, and no
+ *  credential is ever copied into a worker's file. Any other entry is left to the account's own
+ *  `.claude.json`, which still loads beside these. No owner config is no servers; one that cannot
+ *  be read is said, and also no servers: the launch goes on with the account's own. */
+export function ownerMcpServers(
+  ownerDir: string,
+  denied: readonly string[],
+): Record<string, McpUrlEntry> {
+  const file = join(dirname(resolve(ownerDir)), '.claude.json')
+  if (!existsSync(file)) return {}
+  let servers: unknown
+  try {
+    servers = (JSON.parse(readFileSync(file, 'utf8')) as { mcpServers?: unknown }).mcpServers
+  } catch (err) {
+    console.error(`[climayte] could not read the owner's MCP servers from ${file}:`, err)
+    return {}
+  }
+  const out: Record<string, McpUrlEntry> = {}
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return out
+  for (const [name, entry] of Object.entries(servers)) {
+    const bare = denied.includes(name) ? null : bareUrlEntry(entry)
+    if (bare) out[name] = bare
+  }
+  return out
 }
 
 /** Tests: forget what was synced, so the next call looks at the disk again. */

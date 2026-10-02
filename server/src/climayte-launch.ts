@@ -48,7 +48,7 @@ import {
   TRANSIENT_PROMPT,
   WORKER_BRIEF,
 } from './climayte-lib'
-import { syncOwnerClaude } from './climayte-owner-sync'
+import { ownerMcpServers, syncOwnerClaude } from './climayte-owner-sync'
 import { launchRunner } from './climayte-runner'
 import { MCP_SERVER_KEY } from './mcp-register'
 
@@ -230,17 +230,38 @@ function launchText(
   return goOnText(w, last, p) ?? w.prompt
 }
 
+/** The MCP servers a worker never gets. AgentHydra's own: 84 of a worker's 138 tools were
+ *  AgentHydra's (measured), with which a worker could start more workers, fan out, or move the
+ *  owner's desktop chats; a worker does its task, orchestration stays with the chat that asked.
+ *  And magnific, which only prints a sign-in notice a headless worker can never answer.
+ *  connections-local is NOT here (2026-10-02): workers are given tasks that use connections_execute
+ *  (the memory tools, the fourman board), and a worker without it reported "the Connections MCP
+ *  tools were not exposed in this session" and drove the local MCP by hand through a script.
+ *  zswarm stays too: a worker hands wide, cheap work to it. */
+const WORKER_DENIED_MCP: readonly string[] = [MCP_SERVER_KEY, 'magnific']
+
+/** The owner's MCP servers for `--mcp-config` (ownerMcpServers: URL-only entries, no credential),
+ *  so a worker has what a desktop session on this machine has whatever its account's `.claude.json`
+ *  says; the account's own servers still load beside them, and a name in both is one server. The
+ *  file, or null when there is nothing to give (no owner dir, as under tests). */
+function writeWorkerMcp(w: CliMayteWorker): string | null {
+  const file = join(HOOKS, `${w.id}.mcp.json`)
+  const servers = ownerClaudeDir ? ownerMcpServers(ownerClaudeDir, WORKER_DENIED_MCP) : {}
+  if (Object.keys(servers).length === 0) {
+    rmSync(file, { force: true })
+    return null
+  }
+  mkdirSync(HOOKS, { recursive: true })
+  writeFileSync(file, JSON.stringify({ mcpServers: servers }))
+  return file
+}
+
 /** The worker's own settings. The wind-down channel: after every tool call the CLI runs this hook,
  *  which prints the worker's signal file when there is one (signalWindDown) and nothing otherwise,
- *  about 65 ms a call. And no AgentHydra MCP server: 84 of a worker's 138 tools were AgentHydra's
- *  own (measured), with which a worker could start more workers, fan out, or move the owner's
- *  desktop chats. A worker does its task; orchestration stays with the chat that asked.
- *  Nor the two other servers the CLI accounts' .claude.json lists that a worker cannot use:
- *  magnific only prints a sign-in notice, which a headless worker can never answer, and
- *  connections-local's instructions are about a memory and to-do list a worker does not keep.
- *  zswarm stays: a worker hands wide, cheap work to it. And no skills synced from claude.ai
- *  (docx, pptx, xlsx, computer-use, chrome-browser, ...: 14 of them, each listed with its
- *  description in every request); `syncClaudeAiSkills: false` given through --settings hides them
+ *  about 65 ms a call. The denied MCP servers (WORKER_DENIED_MCP), whichever scope lists them.
+ *  And no skills synced from claude.ai (docx, pptx, xlsx, computer-use, chrome-browser, ...: 14 of
+ *  them, each listed with its description in every request); `syncClaudeAiSkills: false` given
+ *  through --settings hides them
  *  for this run only and moves nothing in the account's folder (the CLI's own settings schema,
  *  2.1.286). The owner's skills, synced into the account by syncOwnerClaude, still load.
  *  Returns the settings file, with any signal left from an earlier attempt removed. */
@@ -270,9 +291,7 @@ function writeWorkerSettings(w: CliMayteWorker): string {
   writeFileSync(
     hookFile,
     JSON.stringify({
-      deniedMcpServers: [MCP_SERVER_KEY, 'magnific', 'connections-local'].map((serverName) => ({
-        serverName,
-      })),
+      deniedMcpServers: WORKER_DENIED_MCP.map((serverName) => ({ serverName })),
       syncClaudeAiSkills: false,
       // One account's claude.ai-synced humanizer plugin still listed `humanizer:humanizer` in every
       // request after the line above (3 of 14 starts, 2026-10-02); no worker ever invoked it.
@@ -302,6 +321,7 @@ function cliArgv(
   sessionId: string,
   resume: boolean,
   hookFile: string,
+  mcpFile: string | null,
 ): string[] {
   return [
     ...claudeCommand(),
@@ -313,6 +333,8 @@ function cliArgv(
     ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
     ...(w.model ? ['--model', w.model] : []),
     ...(w.effort ? ['--effort', w.effort] : []),
+    // Variadic in the CLI: an option must follow it, never a bare argument.
+    ...(mcpFile ? ['--mcp-config', mcpFile] : []),
     '--settings',
     hookFile,
     '--append-system-prompt',
@@ -487,7 +509,7 @@ export function launch(
   const log = join(LOGS, `${w.id}-${n}.jsonl`)
   const errLog = join(LOGS, `${w.id}-${n}.err.log`)
   const hookFile = writeWorkerSettings(w)
-  const argv = cliArgv(w, sessionId, resume, hookFile)
+  const argv = cliArgv(w, sessionId, resume, hookFile, writeWorkerMcp(w))
   const runner = startRunner(w, acct, argv, { promptFile, log, errLog })
   if (!runner) return
   w.attempts.push({
