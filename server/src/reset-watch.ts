@@ -255,6 +255,13 @@ export function sessionResetIsMoot(
   return weekly >= maxWeeklyPct
 }
 
+/** Whether a rollover on this usage key is announced at all. A CLI login's is not (owner,
+ *  2026-10-02: "don't show the five-hour reset notification on the UI for CLI accounts"): CliMayte
+ *  runs dozens of them around the clock, so their resets were a stream of toasts ("100 quota windows
+ *  reset") about accounts nobody watches by hand. Their windows are still tracked: the armed re-check
+ *  and the keepalive read them. */
+export const announcesResets = (key: string): boolean => !key.startsWith('cli:')
+
 /**
  * Record a fresh reading and raise events for any window that rolled over since the last one.
  *
@@ -285,6 +292,7 @@ export async function noteUsageSnapshot(
       notifiedFor = dueAt
       const prevPct = prev?.pct ?? null
       const loud =
+        announcesResets(key) &&
         settings.notifyEnabled &&
         enabled &&
         (prevPct === null || prevPct >= settings.notifyMinPct) &&
@@ -411,9 +419,11 @@ export function dueForRepeat(
   })
 }
 
-/** Drop events that have outlived their usefulness, acknowledged or not. */
+/** Drop events that have outlived their usefulness, acknowledged or not, and any a CLI login raised
+ *  before those stopped being announced (announcesResets). */
 export function pruneEvents(events: ResetEvent[], now = new Date()): ResetEvent[] {
   return events.filter((ev) => {
+    if (!announcesResets(ev.key)) return false
     const at = new Date(ev.detectedAt).getTime()
     if (!Number.isFinite(at)) return false
     if (now.getTime() - at > EVENT_EXPIRY_MS) return false

@@ -13,6 +13,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **No more reset notifications for CLI accounts** (owner, 2026-10-02): a CLI login's 5-hour or weekly rollover no longer raises a toast in the app or a Windows notification, and the ones already waiting are cleared. CliMayte runs dozens of those accounts around the clock, so they were a stream of "100 quota windows reset". Desktop accounts announce their resets as before.
 - **CliMayte reads an account's usage again before placing work on a reading over 10 minutes old**, and an account so placed takes one worker until that worker reads it. The background check reads accounts only every 30 minutes: on 2026-10-02 #118 was placed at 82% and read 95%, and #119 at 79% and read 100%, both used outside CliMayte in between.
 - **A run placed on an account already past CliMayte's 90% ceiling is reported apart** (`placedPast` in the totals), not as a ceiling stop or as CliMayte's peak: the 129% peak on #120 was an account with no reading whose first request was refused, not a stop line that failed. Its notice and journal line say it was found past the ceiling on its first request. Stops recorded before this are sorted the same way at the next start.
 

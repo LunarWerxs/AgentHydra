@@ -219,6 +219,12 @@ test('pruneEvents drops an event that has outlived its usefulness', () => {
   expect(kept.map((e) => e.id)).toEqual(['fresh'])
 })
 
+test("a CLI login's reset is never shown: its stored events are dropped (owner, 2026-10-02)", () => {
+  const desktop = ev({ id: 'desktop', key: 'desktop:C:/profiles/3' })
+  const cli = ev({ id: 'cli', key: 'cli:0f2c9b7e-1111-2222-3333-444455556666' })
+  expect(pruneEvents([desktop, cli], new Date(T0)).map((e) => e.id)).toEqual(['desktop'])
+})
+
 // --- copy ---------------------------------------------------------------------
 
 test('eventMessage names the instance, the window, and where you were', () => {
