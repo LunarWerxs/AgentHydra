@@ -135,6 +135,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A failed pass of the desktop-to-CLI login feed can no longer stop the daemon.** Its timer left
+  a failure unhandled; it is now caught and logged, like every other repeating timer in the server.
+
 - **Dialogs are as wide as they ask to be.** Ten dialogs that set their own width (Login sync, moving
   logins, limit reset, an instance's chats, moving all chats, the queue builder, the bulk-move and
   secrets dialogs in Sessions, the Codex move, the shortcut sheet) were all 384 px wide on any
