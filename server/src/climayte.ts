@@ -467,12 +467,16 @@ ${code === null ? '' : output.trim()}`
 /** Workers whose CLI a daemon restart would kill: only attempts the daemon spawned itself (before
  *  runners, 2026-09-30), which sit in its kill-on-close job on Windows. A worker under a runner
  *  (climayte-runner.ts) lives outside the daemon and is picked up again after the restart, so it does
- *  not hold a restart or an auto-update back. */
+ *  not hold a restart or an auto-update back.A worker whose check is running does hold one back. */
 export function climayteRunningCount(): number {
   load()
   let n = 0
-  for (const w of workers.values())
+  for (const w of workers.values()) {
     if (w.status === 'running' && !w.attempts[w.attempts.length - 1]?.runner) n++
+    // A check is a plain child of the daemon, not a runner: a restart kills it and it runs again
+    // from scratch, up to 20 minutes each (stress review, 2026-10-02).
+    else if (w.status === 'checking') n++
+  }
   return n
 }
 

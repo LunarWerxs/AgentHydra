@@ -42,6 +42,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
     attempt was resumed while its first CLI still ran. It now means "unknown, still running" and
     is asked again; all unconfirmed runners go in one query with a 10-second timeout instead of
     one untimed query each, which could freeze a freshly started daemon.
+  - **A restart or an auto-update waits for a running check.** A check is a plain child of the
+    daemon, so a restart killed it and it ran again from scratch, up to 20 minutes each.
   - These two were written by CliMayte workers in the same stress run and reviewed before landing.
 
 ### Added
