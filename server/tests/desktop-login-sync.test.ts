@@ -258,7 +258,10 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       expect(await here(a)).toEqual({ expiry: 2000, session: 'sk-a3' })
     } finally {
       disconnectLoginSync()
-      for (const dir of made) rmSync(dir, { recursive: true, force: true })
+      // Retried: on the Windows runner a handle the sync just closed can still hold the folder a moment
+      // (EBUSY failed CI run 36986153843 after every assertion had passed).
+      for (const dir of made)
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
   }, 120_000)
 
@@ -324,7 +327,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       expect(login().accessToken).toBe('own')
     } finally {
       deleteCliInstance(id, getCliInstance(id)?.name)
-      rmSync(dir, { recursive: true, force: true })
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
   })
 })
