@@ -133,19 +133,22 @@ test('a sign-out keeps the reading for the table, never in the cache rankings re
   // cache as room (2026-09-15: a task sent to an account revoked the day before), so the kept
   // reading must live outside it, marked, until a live reading replaces it.
   const key = 'cli:logout-keeps-last-known'
+  // Scenario dates are pinned far from any check window: only the gaps matter (session reset +2h
+  // on the same day, weekly reset +6d4h, superseding capture +1h).
+  const capture = '2011-10-06T18:00:00.000Z'
   const reading: UsageSnapshot = {
     account: 'kept@example.com',
-    session: { pct: 41, resets: '', resetsAt: '2026-10-01T20:00:00.000Z' },
-    weekAll: { pct: 63, resets: '', resetsAt: '2026-10-07T22:00:00.000Z' },
+    session: { pct: 41, resets: '', resetsAt: '2011-10-06T20:00:00.000Z' },
+    weekAll: { pct: 63, resets: '', resetsAt: '2011-10-12T22:00:00.000Z' },
     weekModel: null,
-    capturedAt: '2026-10-01T18:00:00.000Z',
+    capturedAt: capture,
   }
   setCachedUsage(key, reading)
   dropCachedUsage(key, { keepLastKnown: true })
   expect(allCachedUsage()[key]).toBeUndefined()
   expect(lastKnownUsage()[key]?.weekAll?.pct).toBe(63)
   expect(typeof lastKnownUsage()[key]?.signedOutAt).toBe('string')
-  setCachedUsage(key, { ...reading, capturedAt: '2026-10-01T19:00:00.000Z' })
+  setCachedUsage(key, { ...reading, capturedAt: '2011-10-06T19:00:00.000Z' })
   expect(lastKnownUsage()[key]).toBeUndefined()
   dropCachedUsage(key)
 })

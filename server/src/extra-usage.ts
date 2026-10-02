@@ -152,6 +152,41 @@ async function reread(store: Store): Promise<UsageSnapshot | null> {
 /** When each store was last read by the guard, so a failing read is not retried every tick. */
 const lastRead = new Map<string, number>()
 
+/** A stale reading re-read straight from the source, so a billing account near the line is not
+ *  judged on an old number. Returns the snap to judge (the fresh one when the re-read gave one). */
+async function rereadIfStale(
+  store: Store,
+  snap: UsageSnapshot,
+  now: number,
+): Promise<UsageSnapshot | null> {
+  const age = now - (Date.parse(snap.capturedAt) || 0)
+  const wait = recheckAfterMs(snap, now)
+  if (age <= wait || now - (lastRead.get(store.key) ?? 0) <= wait) return snap
+  lastRead.set(store.key, now)
+  const fresh = (await reread(store)) ?? snap
+  return billsPastLimit(fresh) ? fresh : null
+}
+
+/** Where one store stands on this pass: null when there is nothing to kill there. */
+async function guardStore(
+  store: Store,
+  now: number,
+  climayte: Set<number>,
+): Promise<{ snap: UsageSnapshot; pids: number[] } | null> {
+  let snap = getCachedUsage(store.key)
+  if (!snap || !billsPastLimit(snap) || !store.running) return null
+  const pids = await sessionsOn(store, climayte)
+  if (!pids?.length) return null
+  const fresh = await rereadIfStale(store, snap, now)
+  if (!fresh) return null
+  snap = fresh
+  if (!atBillingLine(snap, Date.now())) return null
+  // Listed again right before the kill: the reading may have taken a while.
+  const sessions = await sessionsOn(store, climayteWorkerPids())
+  if (!sessions?.length) return null
+  return { snap, pids: sessions }
+}
+
 /** One pass: stop every session on an account that can bill and is at its line. Returns what it
  *  stopped. Cheap when nothing can bill: cached readings and no network. */
 export async function guardExtraUsage(
@@ -162,25 +197,11 @@ export async function guardExtraUsage(
   const climayte = climayteWorkerPids()
   for (const store of await stores()) {
     try {
-      let snap = getCachedUsage(store.key)
-      if (!snap || !billsPastLimit(snap) || !store.running) continue
-      let pids = await sessionsOn(store, climayte)
-      if (!pids?.length) continue
-      const age = now - (Date.parse(snap.capturedAt) || 0)
-      const wait = recheckAfterMs(snap, now)
-      if (age > wait && now - (lastRead.get(store.key) ?? 0) > wait) {
-        lastRead.set(store.key, now)
-        const fresh = await reread(store)
-        if (fresh) snap = fresh
-        if (!billsPastLimit(snap)) continue
-      }
-      if (!atBillingLine(snap, Date.now())) continue
-      // Listed again right before the kill: the reading may have taken a while.
-      pids = await sessionsOn(store, climayteWorkerPids())
-      if (!pids?.length) continue
-      for (const pid of pids) killProcessTree(pid)
-      stopped.push({ store: store.label, pids })
-      report(store, snap, pids.length)
+      const hit = await guardStore(store, now, climayte)
+      if (!hit) continue
+      for (const pid of hit.pids) killProcessTree(pid)
+      stopped.push({ store: store.label, pids: hit.pids })
+      report(store, hit.snap, hit.pids.length)
     } catch (err) {
       console.error(`[extra-usage] guard failed on ${store.label}:`, err)
     }

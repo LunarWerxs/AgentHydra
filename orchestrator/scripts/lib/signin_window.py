@@ -327,6 +327,50 @@ class InboxCodeRelay:
             await source.close()
         self.source_closed = True
 
+    async def _detect_waiting_marker(self, tab, parsed, origin, state) -> None:
+        # A corrected controller can join after verification already advanced. These
+        # markers belong to the exact original OAuth request, never an unrelated tab.
+        if not self.waiting_id and self.state and state == self.state and (origin, parsed.path) in self.authorize_routes:
+            if await tab.evaluate('window.__agentHydraInboxCodeFilled === true && window.__agentHydraInboxCodeSubmitted === true'):
+                self.waiting_id = tab.target_id
+                self.filled = self.submitted = self.confirmed = True
+
+    async def _recover_code(self, tab, value) -> bool:
+        if isinstance(value, str) and len(value) == 6 and value.isdecimal():
+            self.code = value
+            self.source_id = tab.target_id
+            if tab.target_id == self.waiting_id and self.history_entry is not None:
+                from zendriver import cdp
+                # Restore the exact waiting history entry, including redirect chains.
+                await tab.send(cdp.page.navigate_to_history_entry(self.history_entry))
+                return True
+        return False
+
+    async def _fill_and_submit_from_source(self, tab, tabs, origin) -> None:
+        if tab.target_id == self.waiting_id and origin in self.form_origins and self.code:
+            if not self.filled:
+                self.filled = await self.evaluate_form(tab, 'fill') is True
+            elif not self.submitted:
+                self.confirmed = await self.evaluate_form(tab, 'confirm') is True
+                if self.confirmed:
+                    await self.close_source(tabs)
+                    self.submitted = await self.evaluate_form(tab, 'submit') is True
+
+    async def _authorize_if_advanced(self, tab, parsed, origin) -> bool:
+        # An email link may sign in directly in the same browser. The exact original OAuth
+        # path and state on an Authorize page confirm that authentication advanced.
+        if self.waiting_id and self.state and (origin, parsed.path) in self.authorize_routes:
+            state = (parse_qs(parsed.query).get('state') or [None])[0]
+            if state == self.state and not await self.evaluate_form(tab, 'inspect'):
+                readiness = await tab.evaluate(AUTHORIZE_READINESS_SCRIPT)
+                if readiness and not readiness['focused'] and tab.target_id not in self.activated_authorization:
+                    from zendriver import cdp
+                    await tab.send(cdp.page.bring_to_front())
+                    self.activated_authorization.add(tab.target_id)
+                    return True
+                await tab.evaluate(AUTHORIZE_SCRIPT)
+        return False
+
     async def poll(self, tabs) -> None:
         if not self.email:
             return
@@ -337,49 +381,22 @@ class InboxCodeRelay:
             if origin not in self.origins:
                 continue
             try:
-                # A corrected controller can join after verification already advanced. These
-                # markers belong to the exact original OAuth request, never an unrelated tab.
                 state = (parse_qs(parsed.query).get('state') or [None])[0]
-                if not self.waiting_id and self.state and state == self.state and (origin, parsed.path) in self.authorize_routes:
-                    if await tab.evaluate('window.__agentHydraInboxCodeFilled === true && window.__agentHydraInboxCodeSubmitted === true'):
-                        self.waiting_id = tab.target_id
-                        self.filled = self.submitted = self.confirmed = True
+                await self._detect_waiting_marker(tab, parsed, origin, state)
                 if origin in self.form_origins and not self.waiting_id and await self.evaluate_form(tab, 'inspect'):
                     from zendriver import cdp
                     index, entries = await tab.send(cdp.page.get_navigation_history())
                     self.history_entry = entries[index].id_
                     self.waiting_id = tab.target_id
+                value = None
                 if self.waiting_id and not self.code:
                     value = await tab.evaluate(f"{READ_EMAIL_CODE_SCRIPT}({json.dumps(self.email)})")
-                    if isinstance(value, str) and len(value) == 6 and value.isdecimal():
-                        self.code = value
-                        self.source_id = tab.target_id
-                        if tab.target_id == self.waiting_id and self.history_entry is not None:
-                            from zendriver import cdp
-                            # Restore the exact waiting history entry, including redirect chains.
-                            await tab.send(cdp.page.navigate_to_history_entry(self.history_entry))
-                            continue
-                if tab.target_id == self.waiting_id and origin in self.form_origins and self.code:
-                    if not self.filled:
-                        self.filled = await self.evaluate_form(tab, 'fill') is True
-                    elif not self.submitted:
-                        self.confirmed = await self.evaluate_form(tab, 'confirm') is True
-                        if self.confirmed:
-                            await self.close_source(tabs)
-                            self.submitted = await self.evaluate_form(tab, 'submit') is True
+                if await self._recover_code(tab, value):
+                    continue
+                await self._fill_and_submit_from_source(tab, tabs, origin)
                 await self.close_source(tabs)
-                # An email link may sign in directly in the same browser. The exact original OAuth
-                # path and state on an Authorize page confirm that authentication advanced.
-                if self.waiting_id and self.state and (origin, parsed.path) in self.authorize_routes:
-                    state = (parse_qs(parsed.query).get('state') or [None])[0]
-                    if state == self.state and not await self.evaluate_form(tab, 'inspect'):
-                        readiness = await tab.evaluate(AUTHORIZE_READINESS_SCRIPT)
-                        if readiness and not readiness['focused'] and tab.target_id not in self.activated_authorization:
-                            from zendriver import cdp
-                            await tab.send(cdp.page.bring_to_front())
-                            self.activated_authorization.add(tab.target_id)
-                            continue  # The page enables its own button on focus; inspect it next poll.
-                        await tab.evaluate(AUTHORIZE_SCRIPT)
+                if await self._authorize_if_advanced(tab, parsed, origin):
+                    continue  # The page enables its own button on focus; inspect it next poll.
             except Exception:  # noqa: BLE001 - closed tab, redirect or changed page
                 continue
 

@@ -7,7 +7,7 @@
 // this pins. The store is the real Worker, run here on bun:sqlite behind D1's prepare/bind API; the
 // other PC is played by writing to the store with the key from this PC's pairing code.
 
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,10 +24,18 @@ import {
 } from '../src/core/cli-login-sync'
 import { base, store, token } from './login-sync-store'
 
+// Scratch dirs from this file, reaped whatever the outcome, even on a throw before or past a test's
+// own try/finally.
+const scratchDirs: string[] = []
+afterAll(() => {
+  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true })
+})
+
 /** A stand-in `claude` whose `auth status` refreshes a login landed at expiry 2000 to 2500, as the
  *  real one may when the access token has run out: landing a login must not hide that refresh. */
 function refreshingClaude(): { path: string; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'ah-fake-claude-'))
+  scratchDirs.push(dir)
   writeFileSync(
     join(dir, 'fake.mjs'),
     `import { readFileSync, writeFileSync } from 'node:fs'

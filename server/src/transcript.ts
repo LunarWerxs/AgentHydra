@@ -1176,22 +1176,21 @@ function buildTranscriptIndex(): TranscriptFile[] {
  *
  * Correctness is identical: same globs, same records, same dedupe, same cache slot.
  */
-async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
-  const files: TranscriptFile[] = []
-  const continuations: ContinuationLink[] = []
-
-  const extra = extraStoreRecords()
-  const claudeChildren = new Map<string, string[]>()
-  const pendingChildren: Array<{
+async function buildClaudeRecordsAsync(
+  files: TranscriptFile[],
+  continuations: ContinuationLink[],
+  claudeChildren: Map<string, string[]>,
+  pendingChildren: Array<{
     parentId: string
     rel: string
     store: ClaudeStore
     mtimeMs: number
     size: number
-  }> = []
-  const statNow = Date.now()
-  const restatCold = statNow - lastFullClaudeStatAt >= COLD_RESTAT_MS
-  const statSeen = new Set<string>()
+  }>,
+  statNow: number,
+  restatCold: boolean,
+  statSeen: Set<string>,
+): Promise<void> {
   for (const store of claudeStores()) {
     const claudeRels = await scanRootAsync(new Bun.Glob(store.glob), store.root)
     const scanned = await mapPool(claudeRels, INDEX_SCAN_WIDTH, async (rel) => {
@@ -1242,7 +1241,9 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   if (restatCold) lastFullClaudeStatAt = statNow
   // A transcript the glob no longer lists is gone; its remembered stat goes with it.
   for (const path of claudeStatCache.keys()) if (!statSeen.has(path)) claudeStatCache.delete(path)
+}
 
+async function buildCodexRecordsAsync(files: TranscriptFile[]): Promise<void> {
   for (const store of codexStoreRoots()) {
     // Same per-store sidebar read as the sync builder.
     const codexSessionIndex = readCodexSessionIndex(store.indexPath)
@@ -1268,7 +1269,16 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
     })
     for (const record of records) if (record) files.push(record)
   }
+}
 
+async function appendExtraAndForeignRecordsAsync(
+  files: TranscriptFile[],
+  extra: {
+    openCodeFiles: TranscriptFile[]
+    hermesFiles: TranscriptFile[]
+    dshFiles: TranscriptFile[]
+  },
+): Promise<void> {
   files.push(...openCodeRecords())
   files.push(...extra.openCodeFiles)
   files.push(...extra.hermesFiles)
@@ -1278,6 +1288,51 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   files.push(...(await zswarmRecordsAsync()))
   // The async listing, which yields while it parses.
   files.push(...(await foreignRecordsAsync()))
+}
+
+/**
+ * The same index, built WITHOUT holding the event loop.
+ *
+ * This exists because the sync builder is not merely slow, it is *blocking*: globbing the store,
+ * statting every transcript and reading the head of every Codex rollout measured 1,288 ms for 1,405
+ * files on the author's machine. The daemon binds its port ~250 ms after launch, so a startup warm
+ * that used the sync builder left the socket accepting connections while nothing could be answered
+ * — the browser's very first GET sat in the queue for over a second, and moving the warm call after
+ * `Bun.serve` (which it already was) could not help, because the block is inside the same turn.
+ *
+ * Correctness is identical: same globs, same records, same dedupe, same cache slot.
+ */
+async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
+  const files: TranscriptFile[] = []
+  const continuations: ContinuationLink[] = []
+
+  const extra = extraStoreRecords()
+  const claudeChildren = new Map<string, string[]>()
+  const pendingChildren: Array<{
+    parentId: string
+    rel: string
+    store: ClaudeStore
+    mtimeMs: number
+    size: number
+  }> = []
+  const statNow = Date.now()
+  const restatCold = statNow - lastFullClaudeStatAt >= COLD_RESTAT_MS
+  const statSeen = new Set<string>()
+
+  await buildClaudeRecordsAsync(
+    files,
+    continuations,
+    claudeChildren,
+    pendingChildren,
+    statNow,
+    restatCold,
+    statSeen,
+  )
+
+  await buildCodexRecordsAsync(files)
+
+  await appendExtraAndForeignRecordsAsync(files, extra)
+
   const built = finishIndex(files, claudeChildren)
   // The head cache tracks the store, not everything ever seen: a deleted transcript should not keep
   // its slot for the life of the daemon.

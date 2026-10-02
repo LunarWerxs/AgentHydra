@@ -78,11 +78,11 @@ afterEach(() => {
 describe('login history', () => {
   test('names the account a profile was on before it signed into another', async () => {
     const dir = profile(NEW)
-    chat(dir, OLD, 'a', new Date('2026-09-28T04:57:00Z'))
-    chat(dir, NEW, 'b', new Date('2026-09-28T06:34:00Z'))
+    chat(dir, OLD, 'a', new Date('2024-10-01T04:57:00Z'))
+    chat(dir, NEW, 'b', new Date('2024-10-01T06:34:00Z'))
     cached(dir, OLD, 'before@example.com')
     const movedToDir = profile(OLD)
-    chat(movedToDir, OLD, 'c', new Date('2026-09-28T07:00:00Z'))
+    chat(movedToDir, OLD, 'c', new Date('2024-10-01T07:00:00Z'))
     const movedTo = instanceNumberFor('desktop', movedToDir)
 
     // The stale-login guard drops OLD's identity from this profile's cache...
@@ -97,7 +97,7 @@ describe('login history', () => {
         [OLD, false, 'before@example.com', [movedTo], [movedTo]],
       ],
     )
-    expect(entries[1].lastSeenAt).toBe('2026-09-28T04:57:00.000Z')
+    expect(entries[1].lastSeenAt).toBe('2024-10-01T04:57:00.000Z')
     expect(entries[1].chats).toBe(1)
   })
 

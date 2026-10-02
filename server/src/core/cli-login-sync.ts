@@ -347,19 +347,217 @@ export function runLoginSync(): Promise<LoginSyncPassResult> {
   return running
 }
 
-async function pass(): Promise<LoginSyncPassResult> {
-  const out: LoginSyncPassResult = { ok: true, pushed: 0, landed: 0, unchanged: 0, problems: [] }
-  const c = readConfig()
-  if (!c?.enabled) return out
-  const l = live(c)
-  if (!l) {
-    c.lastError =
-      'The sync settings on this PC cannot be read (moved from another Windows user?). Set it up again.'
-    writeConfig(c)
-    return { ...out, ok: false, problems: [c.lastError] }
+async function uploadLogin(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  out: LoginSyncPassResult,
+  by: string,
+  login: PortableLogin,
+  expect: number,
+): Promise<void> {
+  const r = await call(l, 'PUT', `/v1/logins/${login.id}`, {
+    version: expect,
+    blob: sealLogin(l.key, login),
+    meta: {
+      num: login.num,
+      expiresAt: credentialExpiry(login.credentials),
+      by,
+      at: Date.now(),
+    },
+  })
+  if (r.status === 200 && typeof r.json?.version === 'number') {
+    c.state[login.id] = { version: r.json.version, hash: sha256(login.credentials) }
+    store.set(login.id, { version: r.json.version, num: login.num, kind: 'cli', name: null })
+    out.pushed++
+    note(c, login.num, 'pushed', 'Uploaded this PC’s newer login.')
+  } else if (r.status === 409) {
+    out.problems.push(`#${login.num}: changed in the store meanwhile; next pass decides.`)
+  } else throw httpError(`Uploading #${login.num}`, r)
+}
+
+async function downloadLogin(
+  l: Live,
+  store: Map<string, StoreRow>,
+  c: SyncConfig,
+  out: LoginSyncPassResult,
+  id: string,
+): Promise<PortableLogin | null> {
+  const r = await call(l, 'GET', `/v1/logins/${id}`)
+  if (r.status !== 200 || typeof r.json?.blob !== 'string') throw httpError('Downloading', r)
+  const login = openLogin(l.key, id, r.json.blob)
+  if (!login) {
+    out.problems.push(`${id}: the store's copy does not open with this PC's key.`)
+    note(
+      c,
+      store.get(id)?.num ?? null,
+      'error',
+      'The store’s copy does not open with this PC’s key.',
+    )
   }
-  const excluded = new Set(c.excluded)
-  const by = hostname()
+  return login
+}
+
+async function landPortableLogin(
+  c: SyncConfig,
+  out: LoginSyncPassResult,
+  login: PortableLogin,
+  version: number,
+): Promise<void> {
+  const row = await landLogin(login)
+  if (row.written) {
+    // The hash of what was landed, not of the file now: `claude auth status` (landLogin's check)
+    // can refresh the login, and that newer file must read as a change here and go up.
+    c.state[login.id] = { version, hash: sha256(login.credentials) }
+    out.landed++
+    note(
+      c,
+      row.num,
+      row.matchedBy === 'created' ? 'created' : 'pulled',
+      row.ok ? row.message : `Landed; ${row.message}`,
+    )
+  } else {
+    out.problems.push(`#${row.num ?? '?'}: ${row.message}`)
+    note(c, row.num, 'skipped', row.message)
+  }
+}
+
+async function syncCliInstance(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  out: LoginSyncPassResult,
+  by: string,
+  excluded: Set<string>,
+  inst: ReturnType<typeof listCliInstances>[number],
+): Promise<void> {
+  if (excluded.has(inst.id)) return
+  const remote = store.get(inst.id)
+  const text = readText(credPath(inst.configDir))
+  if (!text) {
+    // Signed out here and not left out: the store's copy signs it in.
+    if (remote) {
+      const login = await downloadLogin(l, store, c, out, inst.id)
+      if (login) await landPortableLogin(c, out, login, remote.version)
+    }
+    return
+  }
+  const hash = sha256(text)
+  const st = c.state[inst.id]
+  if (remote && st && st.version === remote.version) {
+    if (st.hash === hash) {
+      out.unchanged++
+      return
+    }
+    const read = readPortableLogin(inst.id, { whileRunning: true })
+    if ('login' in read) await uploadLogin(l, c, store, out, by, read.login, remote.version)
+    else out.problems.push(`#${inst.num}: ${read.error}`)
+    return
+  }
+  if (!remote) {
+    const read = readPortableLogin(inst.id, { whileRunning: true })
+    if ('login' in read) await uploadLogin(l, c, store, out, by, read.login, 0)
+    // A hollow login is not worth sharing; nothing to report until it is signed in properly.
+    return
+  }
+  // The store moved on since this PC last agreed with it (or never has): the newer copy wins.
+  const theirs = await downloadLogin(l, store, c, out, inst.id)
+  if (!theirs) return
+  if (theirs.credentials === text) {
+    c.state[inst.id] = { version: remote.version, hash }
+    out.unchanged++
+    return
+  }
+  if (credentialExpiry(text) > credentialExpiry(theirs.credentials)) {
+    const read = readPortableLogin(inst.id, { whileRunning: true })
+    if ('login' in read) await uploadLogin(l, c, store, out, by, read.login, remote.version)
+    else out.problems.push(`#${inst.num}: ${read.error}`)
+  } else await landPortableLogin(c, out, theirs, remote.version)
+}
+
+async function syncStoreOnlyLogins(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  out: LoginSyncPassResult,
+  here: Set<string>,
+  excluded: Set<string>,
+): Promise<void> {
+  // Logins only the store holds: an instance for each here, same id and number.
+  for (const [id, remote] of store) {
+    if (here.has(id) || excluded.has(id) || remote.kind === 'desktop') continue
+    const login = await downloadLogin(l, store, c, out, id)
+    if (login) await landPortableLogin(c, out, login, remote.version)
+  }
+}
+
+async function syncDesktopLoginsPass(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  excluded: Set<string>,
+  out: LoginSyncPassResult,
+  by: string,
+): Promise<void> {
+  try {
+    await syncDesktopLogins({
+      store,
+      state: c.state,
+      excluded,
+      out,
+      note: (num, action, text) => note(c, num, action, text),
+      upload: async (login: PortableDesktopLogin, expect: number) => {
+        const r = await call(l, 'PUT', `/v1/logins/${login.id}`, {
+          version: expect,
+          blob: sealLogin(l.key, login),
+          meta: {
+            kind: 'desktop',
+            num: login.num,
+            name: login.name,
+            expiresAt: login.expiresAt,
+            by,
+            at: Date.now(),
+          },
+        })
+        if (r.status === 200 && typeof r.json?.version === 'number') {
+          store.set(login.id, {
+            version: r.json.version,
+            num: login.num,
+            kind: 'desktop',
+            name: login.name,
+          })
+          out.pushed++
+          note(c, login.num, 'pushed', 'Uploaded this PC’s newer desktop login.')
+          return r.json.version as number
+        }
+        if (r.status === 409) {
+          out.problems.push(`#${login.num}: changed in the store meanwhile; next pass decides.`)
+          return null
+        }
+        throw httpError(`Uploading #${login.num}`, r)
+      },
+      download: async (id: string) => {
+        const r = await call(l, 'GET', `/v1/logins/${id}`)
+        if (r.status !== 200 || typeof r.json?.blob !== 'string') throw httpError('Downloading', r)
+        const login = asDesktopLogin(openBlob(l.key, id, r.json.blob), id)
+        if (!login) out.problems.push(`${id}: the store's copy does not open with this PC's key.`)
+        return login
+      },
+    })
+  } catch (err) {
+    const msg = `Desktop logins: ${err instanceof Error ? err.message : String(err)}`
+    out.problems.push(msg)
+    note(c, null, 'error', msg)
+  }
+}
+
+async function executeSyncPass(
+  l: Live,
+  c: SyncConfig,
+  out: LoginSyncPassResult,
+  excluded: Set<string>,
+  by: string,
+): Promise<void> {
   try {
     const list = await call(l, 'GET', '/v1/logins')
     if (list.status !== 200 || !Array.isArray(list.json?.logins))
@@ -374,163 +572,13 @@ async function pass(): Promise<LoginSyncPassResult> {
       })
     lastStore = store
 
-    const upload = async (login: PortableLogin, expect: number): Promise<void> => {
-      const r = await call(l, 'PUT', `/v1/logins/${login.id}`, {
-        version: expect,
-        blob: sealLogin(l.key, login),
-        meta: {
-          num: login.num,
-          expiresAt: credentialExpiry(login.credentials),
-          by,
-          at: Date.now(),
-        },
-      })
-      if (r.status === 200 && typeof r.json?.version === 'number') {
-        c.state[login.id] = { version: r.json.version, hash: sha256(login.credentials) }
-        store.set(login.id, { version: r.json.version, num: login.num, kind: 'cli', name: null })
-        out.pushed++
-        note(c, login.num, 'pushed', 'Uploaded this PC’s newer login.')
-      } else if (r.status === 409) {
-        out.problems.push(`#${login.num}: changed in the store meanwhile; next pass decides.`)
-      } else throw httpError(`Uploading #${login.num}`, r)
-    }
-    const download = async (id: string): Promise<PortableLogin | null> => {
-      const r = await call(l, 'GET', `/v1/logins/${id}`)
-      if (r.status !== 200 || typeof r.json?.blob !== 'string') throw httpError('Downloading', r)
-      const login = openLogin(l.key, id, r.json.blob)
-      if (!login) {
-        out.problems.push(`${id}: the store's copy does not open with this PC's key.`)
-        note(
-          c,
-          store.get(id)?.num ?? null,
-          'error',
-          'The store’s copy does not open with this PC’s key.',
-        )
-      }
-      return login
-    }
-    const land = async (login: PortableLogin, version: number): Promise<void> => {
-      const row = await landLogin(login)
-      if (row.written) {
-        // The hash of what was landed, not of the file now: `claude auth status` (landLogin's check)
-        // can refresh the login, and that newer file must read as a change here and go up.
-        c.state[login.id] = { version, hash: sha256(login.credentials) }
-        out.landed++
-        note(
-          c,
-          row.num,
-          row.matchedBy === 'created' ? 'created' : 'pulled',
-          row.ok ? row.message : `Landed; ${row.message}`,
-        )
-      } else {
-        out.problems.push(`#${row.num ?? '?'}: ${row.message}`)
-        note(c, row.num, 'skipped', row.message)
-      }
-    }
-
     const here = new Set<string>()
     for (const inst of listCliInstances()) {
       here.add(inst.id)
-      if (excluded.has(inst.id)) continue
-      const remote = store.get(inst.id)
-      const text = readText(credPath(inst.configDir))
-      if (!text) {
-        // Signed out here and not left out: the store's copy signs it in.
-        if (remote) {
-          const login = await download(inst.id)
-          if (login) await land(login, remote.version)
-        }
-        continue
-      }
-      const hash = sha256(text)
-      const st = c.state[inst.id]
-      if (remote && st && st.version === remote.version) {
-        if (st.hash === hash) {
-          out.unchanged++
-          continue
-        }
-        const read = readPortableLogin(inst.id, { whileRunning: true })
-        if ('login' in read) await upload(read.login, remote.version)
-        else out.problems.push(`#${inst.num}: ${read.error}`)
-        continue
-      }
-      if (!remote) {
-        const read = readPortableLogin(inst.id, { whileRunning: true })
-        if ('login' in read) await upload(read.login, 0)
-        // A hollow login is not worth sharing; nothing to report until it is signed in properly.
-        continue
-      }
-      // The store moved on since this PC last agreed with it (or never has): the newer copy wins.
-      const theirs = await download(inst.id)
-      if (!theirs) continue
-      if (theirs.credentials === text) {
-        c.state[inst.id] = { version: remote.version, hash }
-        out.unchanged++
-        continue
-      }
-      if (credentialExpiry(text) > credentialExpiry(theirs.credentials)) {
-        const read = readPortableLogin(inst.id, { whileRunning: true })
-        if ('login' in read) await upload(read.login, remote.version)
-        else out.problems.push(`#${inst.num}: ${read.error}`)
-      } else await land(theirs, remote.version)
+      await syncCliInstance(l, c, store, out, by, excluded, inst)
     }
-    // Logins only the store holds: an instance for each here, same id and number.
-    for (const [id, remote] of store) {
-      if (here.has(id) || excluded.has(id) || remote.kind === 'desktop') continue
-      const login = await download(id)
-      if (login) await land(login, remote.version)
-    }
-    try {
-      await syncDesktopLogins({
-        store,
-        state: c.state,
-        excluded,
-        out,
-        note: (num, action, text) => note(c, num, action, text),
-        upload: async (login: PortableDesktopLogin, expect: number) => {
-          const r = await call(l, 'PUT', `/v1/logins/${login.id}`, {
-            version: expect,
-            blob: sealLogin(l.key, login),
-            meta: {
-              kind: 'desktop',
-              num: login.num,
-              name: login.name,
-              expiresAt: login.expiresAt,
-              by,
-              at: Date.now(),
-            },
-          })
-          if (r.status === 200 && typeof r.json?.version === 'number') {
-            store.set(login.id, {
-              version: r.json.version,
-              num: login.num,
-              kind: 'desktop',
-              name: login.name,
-            })
-            out.pushed++
-            note(c, login.num, 'pushed', 'Uploaded this PC’s newer desktop login.')
-            return r.json.version as number
-          }
-          if (r.status === 409) {
-            out.problems.push(`#${login.num}: changed in the store meanwhile; next pass decides.`)
-            return null
-          }
-          throw httpError(`Uploading #${login.num}`, r)
-        },
-        download: async (id: string) => {
-          const r = await call(l, 'GET', `/v1/logins/${id}`)
-          if (r.status !== 200 || typeof r.json?.blob !== 'string')
-            throw httpError('Downloading', r)
-          const login = asDesktopLogin(openBlob(l.key, id, r.json.blob), id)
-          if (!login) out.problems.push(`${id}: the store's copy does not open with this PC's key.`)
-          return login
-        },
-      })
-    } catch (err) {
-      const msg = `Desktop logins: ${err instanceof Error ? err.message : String(err)}`
-      out.problems.push(msg)
-      note(c, null, 'error', msg)
-    }
+    await syncStoreOnlyLogins(l, c, store, out, here, excluded)
+    await syncDesktopLoginsPass(l, c, store, excluded, out, by)
     c.lastError = out.problems.length ? out.problems[0]! : null
   } catch (err) {
     out.ok = false
@@ -538,6 +586,22 @@ async function pass(): Promise<LoginSyncPassResult> {
     out.problems.push(c.lastError)
     note(c, null, 'error', c.lastError)
   }
+}
+
+async function pass(): Promise<LoginSyncPassResult> {
+  const out: LoginSyncPassResult = { ok: true, pushed: 0, landed: 0, unchanged: 0, problems: [] }
+  const c = readConfig()
+  if (!c?.enabled) return out
+  const l = live(c)
+  if (!l) {
+    c.lastError =
+      'The sync settings on this PC cannot be read (moved from another Windows user?). Set it up again.'
+    writeConfig(c)
+    return { ...out, ok: false, problems: [c.lastError] }
+  }
+  const excluded = new Set(c.excluded)
+  const by = hostname()
+  await executeSyncPass(l, c, out, excluded, by)
   c.lastSyncAt = Date.now()
   // Re-read what another call changed meanwhile (an exclusion, a pause) and keep it.
   const now = readConfig()

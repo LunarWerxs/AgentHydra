@@ -129,6 +129,61 @@ export interface OwnerSyncResult {
   shadowed: string[]
 }
 
+/** The sync signature: which CLAUDE.md a worker gets, its stamp, and the skill names the lean
+ *  profile allows. */
+function syncSignature(ownerDir: string): { srcMd: string; skills: string[]; sig: string } {
+  const srcMd = workerClaudeMd(ownerDir)
+  const allowed = workerSkillList(ownerDir)
+  const skills = ownerSkills(ownerDir).filter((name) => !allowed || allowed.has(name))
+  return { srcMd, skills, sig: `${srcMd}|${stampOf(srcMd) ?? '-'}|${skills.join('/')}` }
+}
+
+/** CLAUDE.md: copy over our own earlier copy or into an empty place, never over the account's own.
+ *  Says what happened, with the two stamps the account's record keeps (the earlier ones unless it
+ *  copied). */
+function syncClaudeMdFile(
+  srcMd: string,
+  dstMd: string,
+  stamp: Stamp | null,
+): { claudeMd: string | null; src: string | null; status: OwnerSyncResult['claudeMd'] } {
+  const kept = { claudeMd: stamp?.claudeMd ?? null, src: stamp?.src ?? null }
+  const srcNow = stampOf(srcMd)
+  const dstNow = stampOf(dstMd)
+  if (srcNow === null) return { ...kept, status: 'no-source' }
+  if (dstNow !== null && dstNow !== stamp?.claudeMd) return { ...kept, status: 'kept-own' }
+  if (dstNow !== null && srcNow === stamp?.src) return { ...kept, status: 'unchanged' }
+  copyFileSync(srcMd, dstMd)
+  return { claudeMd: stampOf(dstMd), src: srcNow, status: 'copied' }
+}
+
+/** Link one owner skill, unless it is already our link or the account has its own of that name. */
+function linkSkill(srcRoot: string, dstRoot: string, name: string, result: OwnerSyncResult): void {
+  const dst = join(dstRoot, name)
+  if (isOurLink(dst, srcRoot)) return
+  if (existsSync(dst) || lstatExists(dst)) {
+    result.shadowed.push(name)
+    return
+  }
+  symlinkSync(join(srcRoot, name), dst, process.platform === 'win32' ? 'junction' : 'dir')
+  result.linked.push(name)
+}
+
+/** Remove links this code made whose skills are no longer wanted. */
+function unlinkStaleLinks(
+  srcRoot: string,
+  dstRoot: string,
+  want: Set<string>,
+  result: OwnerSyncResult,
+): void {
+  for (const name of readdirSync(dstRoot)) {
+    const dst = join(dstRoot, name)
+    if (!want.has(name) && isOurLink(dst, srcRoot)) {
+      removeLink(dst)
+      result.unlinked.push(name)
+    }
+  }
+}
+
 /** Make `accountDir`'s CLAUDE.md and skills match `ownerDir` (`~/.claude`). Never throws: a worker
  *  without the owner's rules is worse, but not a reason to refuse the launch. */
 export function syncOwnerClaude(ownerDir: string, accountDir: string): OwnerSyncResult {
@@ -140,10 +195,7 @@ export function syncOwnerClaude(ownerDir: string, accountDir: string): OwnerSync
     shadowed: [],
   }
   try {
-    const srcMd = workerClaudeMd(ownerDir)
-    const allowed = workerSkillList(ownerDir)
-    const skills = ownerSkills(ownerDir).filter((name) => !allowed || allowed.has(name))
-    const sig = `${srcMd}|${stampOf(srcMd) ?? '-'}|${skills.join('/')}`
+    const { srcMd, skills, sig } = syncSignature(ownerDir)
     if (seen.get(accountDir) === sig) return result
     const stamp = readStamp(accountDir)
     const dstMd = join(accountDir, 'CLAUDE.md')
@@ -152,44 +204,21 @@ export function syncOwnerClaude(ownerDir: string, accountDir: string): OwnerSync
       return result
     }
 
-    // CLAUDE.md: copy over our own earlier copy or into an empty place, never over the account's own.
-    let claudeMd = stamp?.claudeMd ?? null
-    let src = stamp?.src ?? null
-    const srcNow = stampOf(srcMd)
-    const dstNow = stampOf(dstMd)
-    if (srcNow === null) result.claudeMd = 'no-source'
-    else if (dstNow !== null && dstNow !== stamp?.claudeMd) result.claudeMd = 'kept-own'
-    else if (dstNow === null || srcNow !== stamp?.src) {
-      copyFileSync(srcMd, dstMd)
-      claudeMd = stampOf(dstMd)
-      src = srcNow
-      result.claudeMd = 'copied'
-    }
+    const md = syncClaudeMdFile(srcMd, dstMd, stamp)
+    result.claudeMd = md.status
 
     // Skills: one junction per owner skill; the account's own folders stay.
     const srcRoot = join(ownerDir, 'skills')
     const dstRoot = join(accountDir, 'skills')
     mkdirSync(dstRoot, { recursive: true })
     const want = new Set(skills)
-    for (const name of skills) {
-      const dst = join(dstRoot, name)
-      if (isOurLink(dst, srcRoot)) continue
-      if (existsSync(dst) || lstatExists(dst)) {
-        result.shadowed.push(name)
-        continue
-      }
-      symlinkSync(join(srcRoot, name), dst, process.platform === 'win32' ? 'junction' : 'dir')
-      result.linked.push(name)
-    }
-    for (const name of readdirSync(dstRoot)) {
-      const dst = join(dstRoot, name)
-      if (!want.has(name) && isOurLink(dst, srcRoot)) {
-        removeLink(dst)
-        result.unlinked.push(name)
-      }
-    }
+    for (const name of skills) linkSkill(srcRoot, dstRoot, name, result)
+    unlinkStaleLinks(srcRoot, dstRoot, want, result)
 
-    writeFileSync(join(accountDir, STAMP), JSON.stringify({ sig, claudeMd, src } satisfies Stamp))
+    writeFileSync(
+      join(accountDir, STAMP),
+      JSON.stringify({ sig, claudeMd: md.claudeMd, src: md.src } satisfies Stamp),
+    )
     seen.set(accountDir, sig)
     result.changed =
       result.claudeMd === 'copied' || result.linked.length + result.unlinked.length > 0

@@ -385,6 +385,48 @@ const credStamp = (configDir: string): number | null => {
 }
 const authChecks = new Set<string>()
 
+/** Walls' write is atomic (saveWalls); a failed one keeps the in-memory change and must not stop
+ *  the recheck that made it. */
+function trySaveWalls(): void {
+  try {
+    saveWalls()
+  } catch (err) {
+    console.error('[climayte] could not save walls:', err)
+  }
+}
+
+/** `auth status` passes a login whose organization turned Claude Code off, so only a new login
+ *  (the credential file changing) lifts that wall; the next attempt then tells. True when `a`'s
+ *  wall is that wall and the signed-out recheck must skip it. */
+function recheckOrgWall(a: CliMayteAccount, wall: CliMayteWalls[string] | undefined): boolean {
+  if (wall?.reason !== ORG_DISABLED_WALL) return false
+  // A wall from before walls kept the credential's stamp takes today's, so a new login can
+  // still lift it.
+  if (wall.cred === undefined) {
+    wall.cred = credStamp(a.configDir)
+    trySaveWalls()
+  } else if (wall.cred !== credStamp(a.configDir)) {
+    delete walls[a.id]
+    trySaveWalls()
+  }
+  return true
+}
+
+/** Ask the CLI whether `a`'s login works again; a yes lifts its wall. Any answer saves the wall
+ *  (its new `until`, or its removal) and schedules the next tick at once. */
+function checkAuth(a: CliMayteAccount): void {
+  void cliAuthStatus(a.configDir)
+    .then((s) => {
+      if (s.loggedIn) delete walls[a.id]
+    })
+    .catch(() => {})
+    .finally(() => {
+      authChecks.delete(a.id)
+      trySaveWalls()
+      schedule(0)
+    })
+}
+
 /** A signed-out wall is never lifted by the clock alone. When it runs out, or the account's
  *  credential file changes (a new sign-in), the CLI's own `auth status` decides: about a quarter
  *  of a second, no quota. A dead login stays walled, so it never costs another worker a failed
@@ -393,48 +435,14 @@ const authChecks = new Set<string>()
 function recheckSignedOut(accounts: CliMayteAccount[], now: number): void {
   for (const a of accounts) {
     const wall = walls[a.id]
-    // `auth status` passes a login whose organization turned Claude Code off, so only a new login
-    // (the credential file changing) lifts that wall; the next attempt then tells.
-    if (wall?.reason === ORG_DISABLED_WALL) {
-      // A wall from before walls kept the credential's stamp takes today's, so a new login can
-      // still lift it.
-      if (wall.cred === undefined) {
-        wall.cred = credStamp(a.configDir)
-        try {
-          saveWalls()
-        } catch (err) {
-          console.error('[climayte] could not save walls:', err)
-        }
-      } else if (wall.cred !== credStamp(a.configDir)) {
-        delete walls[a.id]
-        try {
-          saveWalls()
-        } catch (err) {
-          console.error('[climayte] could not save walls:', err)
-        }
-      }
-      continue
-    }
+    if (recheckOrgWall(a, wall)) continue
     if (wall?.reason !== 'signed out' || authChecks.has(a.id)) continue
     const cred = credStamp(a.configDir)
     if (wall.until > now && (wall.cred === undefined || wall.cred === cred)) continue
     wall.until = now + SIGNED_OUT_MS
     wall.cred = cred
     authChecks.add(a.id)
-    void cliAuthStatus(a.configDir)
-      .then((s) => {
-        if (s.loggedIn) delete walls[a.id]
-      })
-      .catch(() => {})
-      .finally(() => {
-        authChecks.delete(a.id)
-        try {
-          saveWalls()
-        } catch (err) {
-          console.error('[climayte] could not save walls:', err)
-        }
-        schedule(0)
-      })
+    checkAuth(a)
   }
 }
 /** Why an account whose credential file exists is nevertheless signed out, or null. Field note 3
@@ -1118,6 +1126,36 @@ function forgetRead(path: string): void {
   reads.delete(path)
 }
 
+/** One raw line as a parsed event, or null when it is blank or not JSON (both skipped by the loop).
+ *  Wrapped, so a line that parses to `null` is still an event and not a skip. */
+function parseLogLine(line: string): { ev: unknown } | null {
+  if (!line.trim()) return null
+  try {
+    return { ev: JSON.parse(line) }
+  } catch {
+    return null
+  }
+}
+
+/** Fold one parsed event into the read: init/model, the overage and live readings, and the bounded
+ *  events and recent-summaries lists. */
+function applyLogEvent(ev: unknown, r: LogRead): void {
+  if (isInit(ev)) {
+    r.sawInit = true
+    const model = (ev as { model?: unknown }).model
+    if (typeof model === 'string' && model) r.model = model
+  }
+  r.overage ??= overageStart(ev)
+  r.live = liveUsage(ev, Date.now()) ?? r.live
+  r.events.push(ev)
+  if (r.events.length > 400) r.events.splice(0, r.events.length - 400)
+  const s = summarizeEvent(ev)
+  if (s) {
+    r.recent.push(s)
+    if (r.recent.length > 60) r.recent.splice(0, r.recent.length - 60)
+  }
+}
+
 function readInto(path: string, r: LogRead): LogRead {
   let size = 0
   try {
@@ -1134,27 +1172,9 @@ function readInto(path: string, r: LogRead): LogRead {
       const lines = (r.partial + buf.toString('utf8')).split(/\r?\n/)
       r.partial = lines.pop() ?? ''
       for (const line of lines) {
-        if (!line.trim()) continue
-        let ev: unknown
-        try {
-          ev = JSON.parse(line)
-        } catch {
-          continue
-        }
-        if (isInit(ev)) {
-          r.sawInit = true
-          const model = (ev as { model?: unknown }).model
-          if (typeof model === 'string' && model) r.model = model
-        }
-        r.overage ??= overageStart(ev)
-        r.live = liveUsage(ev, Date.now()) ?? r.live
-        r.events.push(ev)
-        if (r.events.length > 400) r.events.splice(0, r.events.length - 400)
-        const s = summarizeEvent(ev)
-        if (s) {
-          r.recent.push(s)
-          if (r.recent.length > 60) r.recent.splice(0, r.recent.length - 60)
-        }
+        const parsed = parseLogLine(line)
+        if (parsed === null) continue
+        applyLogEvent(parsed.ev, r)
       }
     } finally {
       closeSync(fd)
@@ -1206,6 +1226,83 @@ function signalWindDown(
   changed(w)
 }
 
+/** What poll noted from the read: the init mark and the model on the attempt, its 5-hour peak,
+ *  and the newest reading in the account's live table (liveByAccount). */
+function noteReading(at: CliMayteWorker['attempts'][number], r: LogRead, watching: boolean): void {
+  at.started ||= r.sawInit
+  if (r.model) at.model = r.model
+  // Only from a process this daemon is watching now: after a restart an old log is read again from
+  // the start, and its readings would be stamped as fresh.
+  const reading = r.live?.sessionPct
+  if (r.live && reading != null && (!at.peak || reading > at.peak.pct))
+    at.peak = { pct: reading, resetsAt: r.live.sessionResetsAt }
+  if (!r.live || !watching) return
+  const prev = liveByAccount.get(at.account.id)
+  if (prev && prev.at >= r.live.at) return
+  liveByAccount.set(at.account.id, r.live)
+  liveDirty = true
+}
+
+/** The ceiling stop, or the overage stops: the log's overage notice first, then aboutToBill
+ *  before the first billed request (poll). */
+function stopAtCeilingOrOverage(
+  w: CliMayteWorker,
+  at: CliMayteWorker['attempts'][number],
+  r: LogRead,
+  accountLive: CliMayteLiveUsage | null,
+  now: number,
+  watching: boolean,
+  running: boolean,
+): void {
+  // The ceiling (CEILING_PCT, 90 on either window): stopped there, whatever it is doing. Not when
+  // the owner allowed paid extra usage: that setting says to go past the limit, and lifts the stop
+  // line the same way (pickAccount's allowFull).
+  // Both lines go by the account's newest reading from any of its workers (sessionReading).
+  if (watching && !at.ceiling && !at.overage && !overageAllowed()) {
+    const c = atCeiling(r.live, accountLive, now)
+    if (c) stopAtCeiling(w, at, c, running)
+  }
+  if (at.overage || at.ceiling || overageAllowed()) return
+  if (r.overage) {
+    stopForOverage(w, at, r.overage, running)
+    return
+  }
+  // Stop BEFORE the first billed request on an account that can bill (aboutToBill).
+  const soon = watching ? aboutToBill(r.live) : null
+  if (soon) stopForOverage(w, at, { ...soon, notice: PRE_OVERAGE_NOTICE }, running)
+}
+
+/** One wind-down ask per attempt (poll): the stop line a watched attempt is at (windDownAt),
+ *  going by the account's newest reading from any of its workers (sessionReading). */
+function stopWindDown(
+  w: CliMayteWorker,
+  at: CliMayteWorker['attempts'][number],
+  r: LogRead,
+  accountLive: CliMayteLiveUsage | null,
+  now: number,
+  watching: boolean,
+): void {
+  // At the stop line the session writes a handoff, room elsewhere or not (owner, 2026-10-01: "The
+  // goal is to NOT hit 'limit' ... at 85/90%"). With room elsewhere the task goes on in a fresh,
+  // small session there; without, it waits for the first account with room (waitUntil). Until then
+  // a session with nowhere to go worked on into the wall: w-228dcdcc on #98, 85% to 100% in 15
+  // requests, outcome quota.
+  if (!watching || at.windDown || at.overage || at.ceiling) return
+  const pct = windDownAt(r.live, accountLive, now)
+  if (pct !== null) signalWindDown(w, at, pct)
+}
+
+/** What changed for the worker in this read: its newest summary line (lastActivity), or, an ended
+ *  attempt, the finish of it (finish). */
+function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
+  const latest = r.recent[r.recent.length - 1] ?? null
+  if (latest && latest !== w.lastActivity) {
+    w.lastActivity = latest
+    w.updatedAt = Date.now()
+  }
+  if (exited) finish(w, r.events)
+}
+
 function poll(w: CliMayteWorker): void {
   const at = w.attempts[w.attempts.length - 1]
   if (!at) return
@@ -1214,53 +1311,12 @@ function poll(w: CliMayteWorker): void {
   // picks those up again). A dead attempt's log, read again after a restart, is not.
   const watching = !exited && !!at.runner
   const r = readLog(at.log)
-  at.started ||= r.sawInit
-  if (r.model) at.model = r.model
-  // Only from a process this daemon is watching now: after a restart an old log is read again from
-  // the start, and its readings would be stamped as fresh.
-  const reading = r.live?.sessionPct
-  if (r.live && reading != null && (!at.peak || reading > at.peak.pct))
-    at.peak = { pct: reading, resetsAt: r.live.sessionResetsAt }
-  if (r.live && watching) {
-    const prev = liveByAccount.get(at.account.id)
-    if (!prev || prev.at < r.live.at) {
-      liveByAccount.set(at.account.id, r.live)
-      liveDirty = true
-    }
-  }
-  // The ceiling (CEILING_PCT, 90 on either window): stopped there, whatever it is doing. Not when
-  // the owner allowed paid extra usage: that setting says to go past the limit, and lifts the stop
-  // line the same way (pickAccount's allowFull).
-  // Both lines go by the account's newest reading from any of its workers (sessionReading).
+  noteReading(at, r, watching)
   const accountLive = liveByAccount.get(at.account.id) ?? null
   const now = Date.now()
-  if (watching && !at.ceiling && !at.overage && !overageAllowed()) {
-    const c = atCeiling(r.live, accountLive, now)
-    if (c) stopAtCeiling(w, at, c, !exited)
-  }
-  if (!at.overage && !at.ceiling && !overageAllowed()) {
-    if (r.overage) stopForOverage(w, at, r.overage, !exited)
-    else {
-      // Stop BEFORE the first billed request on an account that can bill (aboutToBill).
-      const soon = watching ? aboutToBill(r.live) : null
-      if (soon) stopForOverage(w, at, { ...soon, notice: PRE_OVERAGE_NOTICE }, !exited)
-    }
-  }
-  // At the stop line the session writes a handoff, room elsewhere or not (owner, 2026-10-01: "The
-  // goal is to NOT hit 'limit' ... at 85/90%"). With room elsewhere the task goes on in a fresh,
-  // small session there; without, it waits for the first account with room (waitUntil). Until then
-  // a session with nowhere to go worked on into the wall: w-228dcdcc on #98, 85% to 100% in 15
-  // requests, outcome quota.
-  if (watching && !at.windDown && !at.overage && !at.ceiling) {
-    const pct = windDownAt(r.live, accountLive, now)
-    if (pct !== null) signalWindDown(w, at, pct)
-  }
-  const latest = r.recent[r.recent.length - 1] ?? null
-  if (latest && latest !== w.lastActivity) {
-    w.lastActivity = latest
-    w.updatedAt = Date.now()
-  }
-  if (exited) finish(w, r.events)
+  stopAtCeilingOrOverage(w, at, r, accountLive, now, watching, !exited)
+  stopWindDown(w, at, r, accountLive, now, watching)
+  noteActivity(w, r, exited)
 }
 
 /** The account ran out and started billing paid extra usage. Unless the owner allowed it
@@ -1677,65 +1733,98 @@ function peakOfLog(log: string): { pct: number; resetsAt: number | null } | null
   return peak
 }
 
+/** A task's attempts recorded before they kept their session: the session is the one their log
+ *  names, and the tokens of any attempt that got none, from its transcript, added to the task's.
+ *  The first backfill read every attempt against the task's CURRENT session, so the attempts
+ *  before a planned handoff (a new session) got 0 tokens: 47M uncounted in run 1. Recounted
+ *  once here; their cost was charged at the time, from the right session, and stays.
+ *  True when any attempt's record changed. */
+function backfillAttemptTokens(w: CliMayteWorker): boolean {
+  let any = false
+  for (const at of w.attempts) {
+    if (at.endedAt === null || at.sessionId !== undefined) continue
+    at.sessionId = sessionOfLog(at.log)
+    any = true
+    if (!w.tokens || !at.tokens || at.sessionId === null) continue
+    const had = at.tokens
+    if (had.input + had.output + had.cacheRead + had.cacheWrite > 0) continue
+    at.tokens = spentOf(w, at).tokens
+    w.tokens = addTokens(w.tokens, at.tokens)
+  }
+  return any
+}
+
+/** Each ended attempt's peak 5-hour usage, once, from its log's rate_limit_events.
+ *  True when any attempt's record changed. */
+function backfillAttemptPeaks(w: CliMayteWorker): boolean {
+  let any = false
+  for (const at of w.attempts) {
+    if (at.endedAt === null || at.peak !== undefined) continue
+    at.peak = peakOfLog(at.log)
+    any = true
+  }
+  return any
+}
+
+/** Each ended attempt's cost, requests and re-read, once. Its tokens and the task's cost were
+ *  recorded when it ended and stay as they are. True when any attempt's record changed. */
+function backfillAttemptSpend(w: CliMayteWorker): boolean {
+  let any = false
+  for (const at of w.attempts) {
+    if (at.endedAt === null) continue
+    if (at.spend === undefined) {
+      at.spend = spendRecord(w, at, spentOf(w, at))
+      any = true
+    } else if (at.spend?.reread && !lastThatRan(w, at)) {
+      // Recorded by 29d4c56's first rule, which counted a refused first try as a run.
+      at.spend.reread = null
+      any = true
+    }
+  }
+  return any
+}
+
+/** What each verdict's work spent re-reading: the attempts it judged, those started since the
+ *  verdict before it. Worked out again on every load (no file is read), so it follows the
+ *  attempts' records. True when any verdict's record changed. */
+function backfillVerdictRereads(w: CliMayteWorker): boolean {
+  let any = false
+  for (const [i, v] of (w.verdicts ?? []).entries()) {
+    const since = w.verdicts?.[i - 1]?.at ?? 0
+    const reread = w.attempts
+      .filter((a) => a.startedAt >= since && a.startedAt < v.at)
+      .reduce((sum, a) => sum + rereadUnits(a, w.model), 0)
+    if (v.reread === reread) continue
+    v.reread = reread
+    any = true
+  }
+  return any
+}
+
+/** The task's total tokens, once, summed from its ended attempts' transcripts; only a task that
+ *  keeps none yet. True when the total was recorded. */
+function backfillWorkerTokens(w: CliMayteWorker): boolean {
+  if (w.tokens) return false
+  let total = noTokens()
+  for (const at of w.attempts) {
+    if (at.endedAt === null) continue
+    at.tokens ??= spentOf(w, at).tokens
+    total = addTokens(total, at.tokens)
+  }
+  w.tokens = total
+  return true
+}
+
 /** Tasks recorded before attempts kept their tokens get them once, from their transcripts, so the
  *  view's totals cover them too. Their cost was already charged and is left alone. */
 function backfillTokens(): boolean {
   let any = false
   for (const w of workers.values()) {
-    // Attempts recorded before they kept their session: the session is the one their log names.
-    // The first backfill read every attempt against the task's CURRENT session, so the attempts
-    // before a planned handoff (a new session) got 0 tokens: 47M uncounted in run 1. Recounted
-    // once here; their cost was charged at the time, from the right session, and stays.
-    for (const at of w.attempts) {
-      if (at.endedAt === null || at.sessionId !== undefined) continue
-      at.sessionId = sessionOfLog(at.log)
-      any = true
-      if (!w.tokens || !at.tokens || at.sessionId === null) continue
-      const had = at.tokens
-      if (had.input + had.output + had.cacheRead + had.cacheWrite > 0) continue
-      at.tokens = spentOf(w, at).tokens
-      w.tokens = addTokens(w.tokens, at.tokens)
-    }
-    // Each ended attempt's peak 5-hour usage, once, from its log's rate_limit_events.
-    for (const at of w.attempts) {
-      if (at.endedAt === null || at.peak !== undefined) continue
-      at.peak = peakOfLog(at.log)
-      any = true
-    }
-    // Each ended attempt's cost, requests and re-read, once. Its tokens and the task's cost were
-    // recorded when it ended and stay as they are.
-    for (const at of w.attempts) {
-      if (at.endedAt === null) continue
-      if (at.spend === undefined) {
-        at.spend = spendRecord(w, at, spentOf(w, at))
-        any = true
-      } else if (at.spend?.reread && !lastThatRan(w, at)) {
-        // Recorded by 29d4c56's first rule, which counted a refused first try as a run.
-        at.spend.reread = null
-        any = true
-      }
-    }
-    // What each verdict's work spent re-reading: the attempts it judged, those started since the
-    // verdict before it. Worked out again on every load (no file is read), so it follows the
-    // attempts' records.
-    for (const [i, v] of (w.verdicts ?? []).entries()) {
-      const since = w.verdicts?.[i - 1]?.at ?? 0
-      const reread = w.attempts
-        .filter((a) => a.startedAt >= since && a.startedAt < v.at)
-        .reduce((sum, a) => sum + rereadUnits(a, w.model), 0)
-      if (v.reread === reread) continue
-      v.reread = reread
-      any = true
-    }
-    if (w.tokens) continue
-    let total = noTokens()
-    for (const at of w.attempts) {
-      if (at.endedAt === null) continue
-      at.tokens ??= spentOf(w, at).tokens
-      total = addTokens(total, at.tokens)
-    }
-    w.tokens = total
-    any = true
+    if (backfillAttemptTokens(w)) any = true
+    if (backfillAttemptPeaks(w)) any = true
+    if (backfillAttemptSpend(w)) any = true
+    if (backfillVerdictRereads(w)) any = true
+    if (backfillWorkerTokens(w)) any = true
   }
   return any
 }

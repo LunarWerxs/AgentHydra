@@ -35,11 +35,12 @@ function writeJob(home: string, jobId: string, job: unknown): string {
 
 const JOB_TWO_TASKS = {
   summary: {
-    job_id: '20260915-051622-08a3',
+    job_id: '20240715-051622-08a3',
     label: 'mcp-smoke',
     state: 'done',
-    created: '2026-09-15T05:16:22+00:00',
-    finished: '2026-09-15T05:16:25+00:00',
+    // 2024-07-15T05:16:22Z (a Monday, 104 weeks back) so this fixture never drifts near "today".
+    created: '2024-07-15T05:16:22+00:00',
+    finished: '2024-07-15T05:16:25+00:00',
   },
   tasks: [
     { id: 'lines', prompt: 'How many lines are in a.txt?', cwd: 'C:\\Users\\blogi\\scratch' },
@@ -50,15 +51,15 @@ const JOB_TWO_TASKS = {
       id: 'lines',
       status: 'ok',
       answer: '3',
-      started: '2026-09-15T05:16:22+00:00',
-      finished: '2026-09-15T05:16:24+00:00',
+      started: '2024-07-15T05:16:22+00:00',
+      finished: '2024-07-15T05:16:24+00:00',
     },
     broken: {
       id: 'broken',
       status: 'error',
       error: 'sandbox timeout',
-      started: '2026-09-15T05:16:24+00:00',
-      finished: '2026-09-15T05:16:25+00:00',
+      started: '2024-07-15T05:16:24+00:00',
+      finished: '2024-07-15T05:16:25+00:00',
     },
   },
 }
@@ -69,7 +70,7 @@ describe('listZswarmSessions', () => {
     writeJob(home, JOB_TWO_TASKS.summary.job_id, JOB_TWO_TASKS)
     const rows = listZswarmSessions(home)
     expect(rows).toHaveLength(1)
-    expect(rows[0]?.session_id).toBe('20260915-051622-08a3')
+    expect(rows[0]?.session_id).toBe('20240715-051622-08a3')
     expect(rows[0]?.title).toBe('mcp-smoke')
     expect(rows[0]?.cwd).toBe('C:\\Users\\blogi\\scratch')
     expect(rows[0]?.archived).toBe(false)
@@ -128,7 +129,7 @@ describe('listZswarmSessions', () => {
   test('falls back to the job id when the job carries no label', () => {
     const home = newHome()
     writeJob(home, 'unlabeled-job', {
-      summary: { job_id: 'unlabeled-job', created: '2026-09-15T00:00:00+00:00' },
+      summary: { job_id: 'unlabeled-job', created: '2024-07-15T00:00:00+00:00' },
       tasks: [],
       results: {},
     })

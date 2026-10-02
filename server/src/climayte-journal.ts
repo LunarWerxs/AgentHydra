@@ -177,6 +177,101 @@ export function journalTime(ts: string, now: Date = new Date()): string {
     : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`
 }
 
+/** `dispatched in <cwd>`, with its kind, the accounts it may use, its model, why, its priority. */
+function describeDispatchLine(e: CliMayteJournalEntry, runs: string): string {
+  return `dispatched in ${e.cwd ?? '?'}${e.kind ? ` as ${e.kind}` : ''}${e.accounts ? ` (restricted to ${e.accounts} account${e.accounts === 1 ? '' : 's'})` : ''}${runs}${e.reason ? ` (${e.reason})` : ''}${e.priority ? `, priority ${e.priority}` : ''}`
+}
+
+/** `launched on <account> (pick's session, week, active); second and later attempts say which.` */
+function describeLaunchLine(
+  e: CliMayteJournalEntry,
+  on: string,
+  pick: string,
+  runs: string,
+): string {
+  return `launched${on} ${pick}${e.attempt && e.attempt > 1 ? `, attempt ${e.attempt}` : ''}${runs}`
+}
+
+/** `moved from <old> to <new>`; says so when the transcript was not carried over. */
+function describeMovedLine(e: CliMayteJournalEntry): string {
+  return `moved from ${e.from ?? '?'} to ${e.account ?? '?'}${e.copied === false ? ' (no transcript to carry)' : ''}`
+}
+
+/** `limit`: the CliMayte ceiling (when it stopped the account) or the account's own wall; both rest until. */
+function describeLimitLine(
+  e: CliMayteJournalEntry,
+  on: string,
+  at: (iso: string | undefined) => string,
+): string {
+  if (e.ceiling)
+    return `stopped at CliMayte's ceiling${typeof e.pct === 'number' ? ` (${Math.round(e.pct)}%)` : ''}${on}; account rests until ${at(e.until)}`
+  return `hit its limit${on}; walled until ${at(e.until)}${e.notice ? `: ${e.notice}` : ''}`
+}
+
+/** `signed out`; the time it will be rechecked and the CLI's words, when it gave them. */
+function describeSignedOutLine(
+  e: CliMayteJournalEntry,
+  on: string,
+  at: (iso: string | undefined) => string,
+): string {
+  return `signed out${on}; rechecked at ${at(e.until)}${e.notice ? `: ${e.notice}` : ''}`
+}
+
+/** `asked to hand off`: how far into its limit it was, or on request. */
+function describeHandoffRequestedLine(e: CliMayteJournalEntry, on: string): string {
+  return `asked to hand off${on} ${typeof e.pct === 'number' ? `(at ${Math.round(e.pct)}% of its limit)` : '(on request)'}`
+}
+
+/** The short events: `wrote its handoff`, `ended what its session left running`, `checking its result`. */
+function describeShortLine(e: CliMayteJournalEntry, on: string, event: string): string {
+  if (event === 'handoff-written') return `wrote its handoff${on}`
+  if (event === 'cleaned') return `ended what its session left running${on}: ${e.notice ?? '?'}`
+  return `checking its result: ${e.notice ?? '?'}`
+}
+
+/** `follow-up queued` (urgent: its running work is stopped) and how many messages wait. */
+function describeFollowUpQueuedLine(e: CliMayteJournalEntry, runs: string): string {
+  return e.urgent
+    ? `urgent follow-up: its running work is stopped to deliver it first (${e.pending ?? 1} waiting)${runs}`
+    : `follow-up queued (${e.pending ?? 1} waiting)${runs}`
+}
+
+/** `retry <n>/3` in so many seconds; the CLI's words, when it gave them. */
+function describeRetryLine(e: CliMayteJournalEntry, on: string): string {
+  return `retry ${e.retry ?? '?'}/3${on} in ${e.waitS ?? 0} s${e.notice ? `: ${e.notice}` : ''}`
+}
+
+/** `waiting`, until about a wall or until an account is free; the first line of the error. */
+function describeWaitingLine(
+  e: CliMayteJournalEntry,
+  at: (iso: string | undefined) => string,
+): string {
+  return `waiting${e.until ? ` until about ${at(e.until)}` : ''}: ${e.error ?? 'no account is free'}`
+}
+
+/** The attempt's spend and turns, then how the turn ended: `turn done` or `done`. */
+function describeDoneTurnLine(e: CliMayteJournalEntry, on: string, event: string): string {
+  if (event === 'turn-done')
+    return `turn done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task so far ${usd(e.totalCostUsd)}); next queued message follows`
+  return `done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task total ${usd(e.totalCostUsd)})`
+}
+
+/** `judged`: its verdict, with the next setting (on a fail) and the words that came with it. */
+function describeVerdictLine(e: CliMayteJournalEntry, runs: string): string {
+  return `judged ${e.verdict === 'pass' ? 'a pass' : 'a fail'}${runs}${e.notice ? `: ${e.notice}` : ''}${e.verdict === 'fail' && e.reason ? `; ${e.reason}` : ''}`
+}
+
+/** `nudged`: the 5-hour window started (when it resets, the model and its cost) or not. */
+function describeNudgedLine(
+  e: CliMayteJournalEntry,
+  on: string,
+  at: (iso: string | undefined) => string,
+): string {
+  return e.ok
+    ? `started the 5-hour window${on}${e.until ? `; it resets ${at(e.until)}` : ''}${e.model ? ` (${e.model}, ${usd(e.costUsd)})` : ''}`
+    : `nudge${on} did not start the window: ${e.notice ?? '?'}`
+}
+
 /** What happened, in words (the part of a readable line after the worker's id and title). */
 export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Date()): string {
   const on = e.account ? ` on ${e.account}` : ''
@@ -189,53 +284,47 @@ export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Da
   const at = (iso: string | undefined): string => (iso ? journalTime(iso, now) : '?')
   switch (e.event) {
     case 'dispatched':
-      return `dispatched in ${e.cwd ?? '?'}${e.kind ? ` as ${e.kind}` : ''}${e.accounts ? ` (restricted to ${e.accounts} account${e.accounts === 1 ? '' : 's'})` : ''}${runs}${e.reason ? ` (${e.reason})` : ''}${e.priority ? `, priority ${e.priority}` : ''}`
+      return describeDispatchLine(e, runs)
     case 'launched':
-      return `launched${on} ${pick}${e.attempt && e.attempt > 1 ? `, attempt ${e.attempt}` : ''}${runs}`
+      return describeLaunchLine(e, on, pick, runs)
     case 'moved':
-      return `moved from ${e.from ?? '?'} to ${e.account ?? '?'}${e.copied === false ? ' (no transcript to carry)' : ''}`
+      return describeMovedLine(e)
     case 'limit':
-      if (e.ceiling)
-        return `stopped at CliMayte's ceiling${typeof e.pct === 'number' ? ` (${Math.round(e.pct)}%)` : ''}${on}; account rests until ${at(e.until)}`
-      return `hit its limit${on}; walled until ${at(e.until)}${e.notice ? `: ${e.notice}` : ''}`
+      return describeLimitLine(e, on, at)
     case 'signed-out':
-      return `signed out${on}; rechecked at ${at(e.until)}${e.notice ? `: ${e.notice}` : ''}`
+      return describeSignedOutLine(e, on, at)
     case 'handoff-requested':
-      return `asked to hand off${on} ${typeof e.pct === 'number' ? `(at ${Math.round(e.pct)}% of its limit)` : '(on request)'}`
+      return describeHandoffRequestedLine(e, on)
     case 'handoff-written':
-      return `wrote its handoff${on}`
+      return describeShortLine(e, on, 'handoff-written')
     case 'handoff-resumed':
       return `resumed from its handoff${on} ${pick}${runs}`
     case 'follow-up-queued':
-      return e.urgent
-        ? `urgent follow-up: its running work is stopped to deliver it first (${e.pending ?? 1} waiting)${runs}`
-        : `follow-up queued (${e.pending ?? 1} waiting)${runs}`
+      return describeFollowUpQueuedLine(e, runs)
     case 'follow-up-delivered':
       return `follow-up delivered${on} ${pick}${runs}`
     case 'retry':
-      return `retry ${e.retry ?? '?'}/3${on} in ${e.waitS ?? 0} s${e.notice ? `: ${e.notice}` : ''}`
+      return describeRetryLine(e, on)
     case 'cleaned':
-      return `ended what its session left running${on}: ${e.notice ?? '?'}`
+      return describeShortLine(e, on, 'cleaned')
     case 'interrupted':
       return `interrupted${on} (AgentHydra restarted or the process was killed); resuming, retry ${e.retry ?? '?'}/3`
     case 'waiting':
-      return `waiting${e.until ? ` until about ${at(e.until)}` : ''}: ${e.error ?? 'no account is free'}`
+      return describeWaitingLine(e, at)
     case 'turn-done':
-      return `turn done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task so far ${usd(e.totalCostUsd)}); next queued message follows`
+      return describeDoneTurnLine(e, on, 'turn-done')
     case 'turn-end':
       return `turn ended${on}${e.said ? `: ${e.said}` : ''}`
     case 'check':
-      return `checking its result: ${e.notice ?? '?'}`
+      return describeShortLine(e, on, 'check')
     case 'verdict':
-      return `judged ${e.verdict === 'pass' ? 'a pass' : 'a fail'}${runs}${e.notice ? `: ${e.notice}` : ''}${e.verdict === 'fail' && e.reason ? `; ${e.reason}` : ''}`
+      return describeVerdictLine(e, runs)
     case 'priority':
       return `priority set to ${e.priority ?? 0} (was ${e.was ?? 0})`
     case 'nudged':
-      return e.ok
-        ? `started the 5-hour window${on}${e.until ? `; it resets ${at(e.until)}` : ''}${e.model ? ` (${e.model}, ${usd(e.costUsd)})` : ''}`
-        : `nudge${on} did not start the window: ${e.notice ?? '?'}`
+      return describeNudgedLine(e, on, at)
     case 'done':
-      return `done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task total ${usd(e.totalCostUsd)})`
+      return describeDoneTurnLine(e, on, 'done')
     case 'failed':
       return `failed${on}: ${e.error ?? '?'}`
     case 'cancelled':

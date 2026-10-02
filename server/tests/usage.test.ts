@@ -131,26 +131,26 @@ describe('parseResetTime', () => {
     // (America/Chicago is UTC-5 in summer, UTC-6 in winter), so the table is timezone-independent.
     const cases: [string, Date, string][] = [
       // Time only: the next such local time after now (tomorrow when it has passed, else today).
-      ['4am', new Date(2026, 6, 14, 5, 0), new Date(2026, 6, 15, 4, 0).toISOString()],
-      ['resets 4:10pm', new Date(2026, 6, 14, 5, 0), new Date(2026, 6, 14, 16, 10).toISOString()],
+      ['4am', new Date(2020, 6, 14, 5, 0), new Date(2020, 6, 15, 4, 0).toISOString()],
+      ['resets 4:10pm', new Date(2020, 6, 14, 5, 0), new Date(2020, 6, 14, 16, 10).toISOString()],
       // An unknown zone falls back to local time.
-      ['4am (Not/AZone)', new Date(2026, 6, 14, 5, 0), new Date(2026, 6, 15, 4, 0).toISOString()],
-      ['9:10am (America/Chicago)', new Date('2026-07-14T12:00:00Z'), '2026-07-14T14:10:00.000Z'],
-      ['9:10am (America/Chicago)', new Date('2026-07-14T15:00:00Z'), '2026-07-15T14:10:00.000Z'],
+      ['4am (Not/AZone)', new Date(2020, 6, 14, 5, 0), new Date(2020, 6, 15, 4, 0).toISOString()],
+      ['9:10am (America/Chicago)', new Date('2020-07-14T12:00:00Z'), '2020-07-14T14:10:00.000Z'],
+      ['9:10am (America/Chicago)', new Date('2020-07-14T15:00:00Z'), '2020-07-15T14:10:00.000Z'],
       // 01:30 CDT on the Nov 1 fall-back day: the next 3am is already CST.
-      ['3am (America/Chicago)', new Date('2026-11-01T06:30:00Z'), '2026-11-01T09:00:00.000Z'],
+      ['3am (America/Chicago)', new Date('2020-11-01T06:30:00Z'), '2020-11-01T09:00:00.000Z'],
       [
         'Jul 14, 3am (America/Chicago)',
-        new Date('2026-07-13T12:00:00Z'),
-        '2026-07-14T08:00:00.000Z',
+        new Date('2020-07-13T12:00:00Z'),
+        '2020-07-14T08:00:00.000Z',
       ],
       [
         'Jan 5, 3am  (America/Chicago)',
-        new Date('2026-01-04T12:00:00Z'),
-        '2026-01-05T09:00:00.000Z',
+        new Date('2020-01-04T12:00:00Z'),
+        '2020-01-05T09:00:00.000Z',
       ],
       // The existing shape is unchanged.
-      ['Oct 3, 3:00am', new Date(2026, 8, 30, 12, 0), new Date(2026, 9, 3, 3, 0).toISOString()],
+      ['Oct 3, 3:00am', new Date(2020, 8, 30, 12, 0), new Date(2020, 9, 3, 3, 0).toISOString()],
     ]
     for (const [input, now, expected] of cases)
       expect([input, parseResetTime(input, now)]).toEqual([input, expected])

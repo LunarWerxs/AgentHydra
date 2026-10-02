@@ -855,52 +855,64 @@ export function desktopEngineDir(exePath: string | null | undefined): string | n
   return m?.[1] ? m[1] : null
 }
 
+/** The pid + executable path of every `claude.exe` on Windows, from one CIM query. Null when the
+ *  query failed or its JSON could not be parsed (never folded into "none running"). */
+async function windowsClaudeRows(): Promise<{ pid: number; exe: string | null }[] | null> {
+  const stdout = await runCaptureStdout([
+    'powershell',
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    [
+      "$ErrorActionPreference = 'Stop'",
+      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+      'Get-CimInstance -ClassName Win32_Process -Filter "Name=\'claude.exe\'" | ' +
+        'Select-Object ProcessId, ExecutablePath | ConvertTo-Json -Compress',
+    ].join('; '),
+  ])
+  if (stdout === null) return null
+  const trimmed = sanitizeCimJson(stdout).trim()
+  if (!trimmed) return []
+  const rows: { pid: number; exe: string | null }[] = []
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    for (const r of Array.isArray(parsed) ? parsed : [parsed]) {
+      const rec = r as { ProcessId?: unknown; ExecutablePath?: unknown }
+      const pid = Number(rec?.ProcessId)
+      if (Number.isFinite(pid))
+        rows.push({
+          pid,
+          exe: typeof rec.ExecutablePath === 'string' ? rec.ExecutablePath : null,
+        })
+    }
+  } catch {
+    return null
+  }
+  return rows
+}
+
+/** The pid + executable path of every process on macOS/Linux, from one `ps`. `comm` is the
+ *  executable's full path on macOS (the only other OS Claude Desktop ships on). Null when the
+ *  query failed (never folded into "none running"). */
+async function unixClaudeRows(): Promise<{ pid: number; exe: string | null }[] | null> {
+  const stdout = await runCaptureStdout(['ps', '-eo', 'pid=,comm='])
+  if (stdout === null) return null
+  const rows: { pid: number; exe: string | null }[] = []
+  for (const line of stdout.split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(.+)$/.exec(line)
+    if (m) rows.push({ pid: Number(m[1]), exe: m[2] ?? null })
+  }
+  return rows
+}
+
 /**
  * Every Code engine a Claude Desktop profile is running, from ONE process query. The engine's own
  * executable path names its profile, so this needs neither the chat stores nor an ancestry walk.
  * Null when the OS could not be asked (never folded into "none running").
  */
 export async function listDesktopEngines(): Promise<DesktopEngine[] | null> {
-  const rows: { pid: number; exe: string | null }[] = []
-  if (process.platform === 'win32') {
-    const stdout = await runCaptureStdout([
-      'powershell',
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      [
-        "$ErrorActionPreference = 'Stop'",
-        '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-        'Get-CimInstance -ClassName Win32_Process -Filter "Name=\'claude.exe\'" | ' +
-          'Select-Object ProcessId, ExecutablePath | ConvertTo-Json -Compress',
-      ].join('; '),
-    ])
-    if (stdout === null) return null
-    const trimmed = sanitizeCimJson(stdout).trim()
-    if (!trimmed) return []
-    try {
-      const parsed: unknown = JSON.parse(trimmed)
-      for (const r of Array.isArray(parsed) ? parsed : [parsed]) {
-        const rec = r as { ProcessId?: unknown; ExecutablePath?: unknown }
-        const pid = Number(rec?.ProcessId)
-        if (Number.isFinite(pid))
-          rows.push({
-            pid,
-            exe: typeof rec.ExecutablePath === 'string' ? rec.ExecutablePath : null,
-          })
-      }
-    } catch {
-      return null
-    }
-  } else {
-    // `comm` is the executable's full path on macOS (the only other OS Claude Desktop ships on).
-    const stdout = await runCaptureStdout(['ps', '-eo', 'pid=,comm='])
-    if (stdout === null) return null
-    for (const line of stdout.split(/\r?\n/)) {
-      const m = /^\s*(\d+)\s+(.+)$/.exec(line)
-      if (m) rows.push({ pid: Number(m[1]), exe: m[2] ?? null })
-    }
-  }
+  const rows = process.platform === 'win32' ? await windowsClaudeRows() : await unixClaudeRows()
+  if (rows === null) return null
   const engines: DesktopEngine[] = []
   for (const r of rows) {
     const instanceDir = desktopEngineDir(r.exe)

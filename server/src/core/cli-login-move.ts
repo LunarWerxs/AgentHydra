@@ -44,6 +44,7 @@ import { join } from 'node:path'
 import { CONFIG_DIR } from '../config'
 import { readLiveRegistry } from '../live-registry'
 import type {
+  CliInstance,
   CliLoginMoveResult as LoginMoveResult,
   CliLoginMoveRow as LoginMoveRow,
 } from '../types'
@@ -415,6 +416,50 @@ function mergeOauthAccount(configDir: string, account: unknown): void {
   writeAtomic(path, JSON.stringify(j, null, 2))
 }
 
+/** The instance this login belongs to (its id first, then its account), or null to make a new one.
+ *  `matchedBy` says how it was found; the land still says 'created' when it makes the instance. */
+function findLandingInstance(
+  login: PortableLogin,
+  email: string | null,
+): { rec: CliInstance | null; matchedBy: 'id' | 'account' } {
+  let rec = getCliInstance(login.id)
+  if (rec || !email) return { rec, matchedBy: 'id' }
+  rec =
+    listCliInstances().find(
+      (i) => emailIn(oauthAccountOf(i.configDir)) === email || emailOfName(i.name) === email,
+    ) ?? null
+  return { rec, matchedBy: 'account' }
+}
+
+/** A found instance's row fields plus the running-session and fail-closed account checks. A refusal
+ *  message means nothing may be written; `null` means the login may land on this instance. */
+function landingBlockReason(
+  row: LoginMoveRow & { written: boolean },
+  rec: CliInstance,
+  login: PortableLogin,
+  email: string | null,
+): string | null {
+  row.num = rec.num ?? null
+  const running = readLiveRegistry(rec.configDir).length
+  if (running)
+    return `${running} Claude session${running === 1 ? ' is' : 's are'} running on #${rec.num} here; let it finish, then try again.`
+  if (!isLoggedIn(rec.configDir)) return null
+  // Fail closed: a login here whose account cannot be matched to this one is never replaced.
+  const here = emailIn(oauthAccountOf(rec.configDir))
+  if (!here || !email || here !== email)
+    return `#${rec.num} on this PC is signed in${here ? ` to ${here}` : ''}, and that cannot be matched to ${email ?? 'this login'}. Log it out here first.`
+  // The same account: an older copy (or the same one again) must not undo a refresh made here.
+  const current = readText(credPath(rec.configDir))
+  if (current === login.credentials) {
+    row.ok = true
+    row.written = true
+    return 'Already here: this PC is signed in with this login.'
+  }
+  if (credentialExpiry(current) >= credentialExpiry(login.credentials))
+    return `#${rec.num} is signed in here with a newer copy of this login, so nothing was changed.`
+  return null
+}
+
 /**
  * Sign one carried login in on this PC (see the header for how it finds its instance), then ask
  * `claude auth status` whether it works here. Refused, with the reason, when a session runs on its
@@ -434,41 +479,14 @@ export async function landLogin(
     written: false,
   }
   const email = login.email ?? emailIn(login.oauthAccount) ?? emailOfName(login.name)
-  let rec = getCliInstance(login.id)
-  row.matchedBy = 'id'
-  if (!rec && email) {
-    rec =
-      listCliInstances().find(
-        (i) => emailIn(oauthAccountOf(i.configDir)) === email || emailOfName(i.name) === email,
-      ) ?? null
-    row.matchedBy = 'account'
-  }
+  const found = findLandingInstance(login, email)
+  row.matchedBy = found.matchedBy
+  let rec = found.rec
   if (rec) {
-    row.num = rec.num ?? null
-    const running = readLiveRegistry(rec.configDir).length
-    if (running) {
-      row.message = `${running} Claude session${running === 1 ? ' is' : 's are'} running on #${rec.num} here; let it finish, then try again.`
+    const reason = landingBlockReason(row, rec, login, email)
+    if (reason !== null) {
+      row.message = reason
       return row
-    }
-    if (isLoggedIn(rec.configDir)) {
-      // Fail closed: a login here whose account cannot be matched to this one is never replaced.
-      const here = emailIn(oauthAccountOf(rec.configDir))
-      if (!here || !email || here !== email) {
-        row.message = `#${rec.num} on this PC is signed in${here ? ` to ${here}` : ''}, and that cannot be matched to ${email ?? 'this login'}. Log it out here first.`
-        return row
-      }
-      // The same account: an older copy (or the same one again) must not undo a refresh made here.
-      const current = readText(credPath(rec.configDir))
-      if (current === login.credentials) {
-        row.ok = true
-        row.written = true
-        row.message = 'Already here: this PC is signed in with this login.'
-        return row
-      }
-      if (credentialExpiry(current) >= credentialExpiry(login.credentials)) {
-        row.message = `#${rec.num} is signed in here with a newer copy of this login, so nothing was changed.`
-        return row
-      }
     }
   } else {
     // A new instance, under the id it had there, and its number when this PC never used it.

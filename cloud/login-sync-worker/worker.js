@@ -71,6 +71,68 @@ const row = (r) =>
     ...(r.blob !== undefined ? { blob: r.blob } : {}),
   }
 
+// GET /v1/logins — the shared list, without the encrypted blobs.
+async function listLogins(db) {
+  const { results } = await db
+    .prepare('SELECT id, version, meta, updated_at FROM logins ORDER BY id')
+    .all()
+  return json({ logins: (results || []).map(row) })
+}
+
+// GET /v1/logins/:id — one stored login, blob included.
+async function fetchLogin(db, id) {
+  const r = await db
+    .prepare('SELECT id, version, blob, meta, updated_at FROM logins WHERE id = ?')
+    .bind(id)
+    .first()
+  return r ? json(row(r)) : json({ error: 'not found' }, 404)
+}
+
+// parse the PUT body and run the compare-and-swap write: version 0 inserts (losing a
+// concurrent insert), a matching version updates atomically, anything else returns 409
+// with the current version so the PCs can retry.
+async function storeLogin(db, id, body) {
+  const version = Number(body?.version)
+  const blob = body?.blob
+  const meta = JSON.stringify(body?.meta ?? {})
+  if (!Number.isInteger(version) || version < 0) return json({ error: 'bad version' }, 400)
+  if (typeof blob !== 'string' || !blob || blob.length > MAX_BLOB)
+    return json({ error: 'bad blob' }, 400)
+  if (meta.length > MAX_META) return json({ error: 'meta too large' }, 400)
+  const now = Date.now()
+  const result =
+    version === 0
+      ? await db
+          .prepare(
+            'INSERT INTO logins (id, version, blob, meta, updated_at) VALUES (?, 1, ?, ?, ?) ON CONFLICT(id) DO NOTHING',
+          )
+          .bind(id, blob, meta, now)
+          .run()
+      : await db
+          .prepare(
+            'UPDATE logins SET version = version + 1, blob = ?, meta = ?, updated_at = ? WHERE id = ? AND version = ?',
+          )
+          .bind(blob, meta, now, id, version)
+          .run()
+  if ((result?.meta?.changes ?? 0) === 1) return json({ version: version + 1 })
+  const current = await db
+    .prepare('SELECT id, version, meta, updated_at FROM logins WHERE id = ?')
+    .bind(id)
+    .first()
+  return json({ error: 'version conflict', current: row(current) ?? null }, 409)
+}
+
+// DELETE /v1/logins/:id — remove only when `version` is the current one.
+async function deleteLogin(db, id, version) {
+  if (!Number.isInteger(version) || version < 1) return json({ error: 'bad version' }, 400)
+  const result = await db
+    .prepare('DELETE FROM logins WHERE id = ? AND version = ?')
+    .bind(id, version)
+    .run()
+  if ((result?.meta?.changes ?? 0) === 1) return json({ ok: true })
+  return json({ error: 'version conflict' }, 409)
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
@@ -78,28 +140,17 @@ export default {
     if (path === '/v1/health') return json({ ok: true })
     if (!env.DB) return json({ error: 'no DB binding' }, 500)
     if (!(await authorized(request, env))) return json({ error: 'unauthorized' }, 401)
-    await ensureSchema(env.DB)
+    const db = env.DB
+    await ensureSchema(db)
 
-    if (path === '/v1/logins' && request.method === 'GET') {
-      const { results } = await env.DB.prepare(
-        'SELECT id, version, meta, updated_at FROM logins ORDER BY id',
-      ).all()
-      return json({ logins: (results || []).map(row) })
-    }
+    if (path === '/v1/logins' && request.method === 'GET') return listLogins(db)
 
     const m = /^\/v1\/logins\/([^/]+)$/.exec(path)
     if (!m) return json({ error: 'not found' }, 404)
     const id = m[1]
     if (!ID_RE.test(id)) return json({ error: 'bad id' }, 400)
 
-    if (request.method === 'GET') {
-      const r = await env.DB.prepare(
-        'SELECT id, version, blob, meta, updated_at FROM logins WHERE id = ?',
-      )
-        .bind(id)
-        .first()
-      return r ? json(row(r)) : json({ error: 'not found' }, 404)
-    }
+    if (request.method === 'GET') return fetchLogin(db, id)
 
     if (request.method === 'PUT') {
       let body
@@ -108,45 +159,11 @@ export default {
       } catch {
         return json({ error: 'body must be JSON' }, 400)
       }
-      const version = Number(body?.version)
-      const blob = body?.blob
-      const meta = JSON.stringify(body?.meta ?? {})
-      if (!Number.isInteger(version) || version < 0) return json({ error: 'bad version' }, 400)
-      if (typeof blob !== 'string' || !blob || blob.length > MAX_BLOB)
-        return json({ error: 'bad blob' }, 400)
-      if (meta.length > MAX_META) return json({ error: 'meta too large' }, 400)
-      const now = Date.now()
-      const result =
-        version === 0
-          ? await env.DB.prepare(
-              'INSERT INTO logins (id, version, blob, meta, updated_at) VALUES (?, 1, ?, ?, ?) ON CONFLICT(id) DO NOTHING',
-            )
-              .bind(id, blob, meta, now)
-              .run()
-          : await env.DB.prepare(
-              'UPDATE logins SET version = version + 1, blob = ?, meta = ?, updated_at = ? WHERE id = ? AND version = ?',
-            )
-              .bind(blob, meta, now, id, version)
-              .run()
-      if ((result?.meta?.changes ?? 0) === 1) return json({ version: version + 1 })
-      const current = await env.DB.prepare(
-        'SELECT id, version, meta, updated_at FROM logins WHERE id = ?',
-      )
-        .bind(id)
-        .first()
-      return json({ error: 'version conflict', current: row(current) ?? null }, 409)
+      return storeLogin(db, id, body)
     }
 
-    if (request.method === 'DELETE') {
-      const version = Number(url.searchParams.get('version'))
-      if (!Number.isInteger(version) || version < 1) return json({ error: 'bad version' }, 400)
-      const result = await env.DB.prepare('DELETE FROM logins WHERE id = ? AND version = ?')
-        .bind(id, version)
-        .run()
-      return (result?.meta?.changes ?? 0) === 1
-        ? json({ ok: true })
-        : json({ error: 'version conflict' }, 409)
-    }
+    if (request.method === 'DELETE')
+      return deleteLogin(db, id, Number(url.searchParams.get('version')))
 
     return json({ error: 'method not allowed' }, 405)
   },

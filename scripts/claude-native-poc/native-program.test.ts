@@ -553,7 +553,10 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
   test('ultracode lands on a manager without the archive-only busy bookkeeping', async () => {
     const h = harness()
     delete h.manager.startingSessionIds
-    h.manager.applyFlagSettings = async (id: string, flags: any) => {
+    h.manager.applyFlagSettings = async (
+      id: string,
+      flags: { ultracode: boolean; effortLevel: NativeRequest['effort'] },
+    ) => {
       const s = h.manager.sessions.get(id)
       s.sessionSettings = { ...s.sessionSettings, ultracode: flags.ultracode }
       s.effort = flags.effortLevel

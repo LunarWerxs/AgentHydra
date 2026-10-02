@@ -122,19 +122,21 @@ async function readLines(stream: ReadableStream<Uint8Array>, onLine: (line: stri
   if (buf) onLine(buf)
 }
 
-/** `instanceId` signs that existing instance in again with whatever account the person completes
- *  (a row's Log in, owner 2026-09-30): its login is replaced, its folder and history kept. Without
- *  it, the email finds or creates the instance. */
-export function startQuickAdd(
-  email: string,
-  instanceId?: string,
-): QuickAddFlow | { error: string } {
+/** Validate the quick add email and check for existing waiting sign-ins. */
+function validateQuickAddEmail(email: string): string | { error: string } {
   const trimmed = (email ?? '').trim()
   if (!EMAIL_RE.test(trimmed)) return { error: 'Enter a valid email address.' }
   for (const f of flows.values())
     if (f.state === 'waiting' && f.email.toLowerCase() === trimmed.toLowerCase())
       return { error: `A sign-in for ${trimmed} is already waiting.` }
+  return trimmed
+}
 
+/** Resolve an existing CLI instance or create a new one for the quick add flow. */
+function resolveOrCreateCliInstance(
+  trimmed: string,
+  instanceId?: string,
+): { rec: NonNullable<ReturnType<typeof getCliInstance>>; created: boolean } | { error: string } {
   // A signed-in flow renames the instance to "<email> (<plan>)", so match that shape too: adding the
   // same email again re-signs its instance instead of minting a duplicate.
   const lower = trimmed.toLowerCase()
@@ -154,8 +156,16 @@ export function startQuickAdd(
     rec = getCliInstance(newId)
     if (!rec) return { error: 'The new CLI instance could not be read back.' }
   }
+  return { rec, created }
+}
 
-  const id = `qa-${crypto.randomUUID().slice(0, 8)}`
+/** Spawn the login process, set up timeouts, line reading, and completion handling. */
+function setupQuickAddProcess(
+  id: string,
+  trimmed: string,
+  rec: NonNullable<ReturnType<typeof getCliInstance>>,
+  created: boolean,
+): QuickAddFlow {
   const flow: QuickAddFlow = {
     id,
     email: trimmed,
@@ -232,6 +242,25 @@ export function startQuickAdd(
   })
 
   return flow
+}
+
+/** `instanceId` signs that existing instance in again with whatever account the person completes
+ *  (a row's Log in, owner 2026-09-30): its login is replaced, its folder and history kept. Without
+ *  it, the email finds or creates the instance. */
+export function startQuickAdd(
+  email: string,
+  instanceId?: string,
+): QuickAddFlow | { error: string } {
+  const trimmedOrError = validateQuickAddEmail(email)
+  if (typeof trimmedOrError === 'object') return trimmedOrError
+  const trimmed = trimmedOrError
+
+  const res = resolveOrCreateCliInstance(trimmed, instanceId)
+  if ('error' in res) return { error: res.error }
+  const { rec, created } = res
+
+  const id = `qa-${crypto.randomUUID().slice(0, 8)}`
+  return setupQuickAddProcess(id, trimmed, rec, created)
 }
 
 export function getQuickAdd(id: string): QuickAddFlow | null {

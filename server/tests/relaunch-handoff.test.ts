@@ -10,12 +10,17 @@ import { relaunchWithHandoff, writeRelaunchAck } from '../src/relaunch-handoff'
 // reports in, and stay up for good when none does.
 describe('relaunchWithHandoff', () => {
   const cleanups: (() => void)[] = []
+  const dirs: string[] = []
+  // The rmSync is spelled out in the afterEach body itself so the hook that owns the directory
+  // is the hook that reaps it; a closure pushed onto `cleanups` is not visible as the reaper.
   afterEach(() => {
     for (const c of cleanups.splice(0)) c()
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   })
 
   function daemon() {
     const dir = mkdtempSync(join(tmpdir(), 'ah-relaunch-'))
+    dirs.push(dir)
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('up') })
     let shutdowns = 0
     const shutdown = () => {
@@ -24,7 +29,6 @@ describe('relaunchWithHandoff', () => {
     }
     cleanups.push(() => {
       if (shutdowns === 0) server.stop(true)
-      rmSync(dir, { recursive: true, force: true })
     })
     return { dir, server, shutdown, shutdowns: () => shutdowns }
   }

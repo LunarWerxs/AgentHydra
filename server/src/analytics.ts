@@ -979,6 +979,67 @@ function recordCodexToolCall(
   }
 }
 
+/**
+ * Attribute unattributed token totals to a model.
+ */
+function attributeUnattributed(
+  tokens: Record<string, ModelSpend>,
+  unattributed: Array<{
+    input: number
+    cacheRead: number
+    cacheWrite: number
+    output: number
+  }>,
+  model: string,
+): void {
+  for (const t of unattributed) addTurn(tokens, model, t)
+  unattributed.length = 0
+}
+
+/**
+ * Process one parsed Codex event line, updating usage, turns, timestamps, and tool calls.
+ */
+function processCodexEvent(
+  ev: {
+    type?: string
+    timestamp?: string
+    payload?: { type?: string; name?: string; arguments?: unknown; call_id?: string }
+  },
+  reader: CodexUsageReader,
+  out: SessionAnalytics,
+  unattributed: Array<{
+    input: number
+    cacheRead: number
+    cacheWrite: number
+    output: number
+  }>,
+  turn: number,
+  prevTs: number | null,
+): { turn: number; prevTs: number | null } {
+  const t = reader.push(ev)
+  if (t) {
+    // The day/hour/activity work below is model-independent, so an unnamed turn still lands
+    // on the charts at full weight — only its per-model row waits.
+    if (t.model === null) unattributed.push(t)
+    else {
+      attributeUnattributed(out.tokens, unattributed, t.model)
+      addTurn(out.tokens, t.model, t)
+    }
+    prevTs = applyCodexTurnToAnalytics(t, out, prevTs)
+  }
+
+  const payload = ev.payload
+  if (payload) {
+    // Codex logs a compaction as its own top-level event type rather than a flag on a turn.
+    if (ev.type === 'compacted') out.compactions++
+    if (ev.type === 'response_item') {
+      turn++
+      recordCodexToolCall(payload, turn, out.lastTs, out)
+    }
+  }
+  return { turn, prevTs }
+}
+
 async function scanOneCodexRollout(path: string, out: SessionAnalytics): Promise<SessionAnalytics> {
   const paths = [path]
   let turn = -1
@@ -987,16 +1048,12 @@ async function scanOneCodexRollout(path: string, out: SessionAnalytics): Promise
   // later, at which point they are attributed to it retroactively. Anything still unattributed
   // when the conversation ends falls back to the model the REST of the conversation used, which is
   // a fact about this conversation rather than an invented id.
-  let unattributed: Array<{
+  const unattributed: Array<{
     input: number
     cacheRead: number
     cacheWrite: number
     output: number
   }> = []
-  const attribute = (model: string) => {
-    for (const t of unattributed) addTurn(out.tokens, model, t)
-    unattributed = []
-  }
 
   const slice = timeSlice()
   for (const path of paths) {
@@ -1016,32 +1073,16 @@ async function scanOneCodexRollout(path: string, out: SessionAnalytics): Promise
       } catch {
         continue
       }
-
-      const t = reader.push(ev)
-      if (t) {
-        // The day/hour/activity work below is model-independent, so an unnamed turn still lands
-        // on the charts at full weight — only its per-model row waits.
-        if (t.model === null) unattributed.push(t)
-        else {
-          attribute(t.model)
-          addTurn(out.tokens, t.model, t)
-        }
-        prevTs = applyCodexTurnToAnalytics(t, out, prevTs)
-      }
-
-      const payload = ev.payload
-      if (!payload) continue
-      // Codex logs a compaction as its own top-level event type rather than a flag on a turn.
-      if (ev.type === 'compacted') out.compactions++
-      if (ev.type !== 'response_item') continue
-      turn++
-      recordCodexToolCall(payload, turn, out.lastTs, out)
+      const res = processCodexEvent(ev, reader, out, unattributed, turn, prevTs)
+      turn = res.turn
+      prevTs = res.prevTs
     }
   }
   // Whatever else this rollout established, applied to the turns that named no model themselves.
   // `codex` only when NOTHING in the file ever did — a genuinely unknown model, reported as
   // unpriced rather than dressed up as one we could bill.
-  if (unattributed.length) attribute(dominantModel(out.tokens) ?? 'codex')
+  if (unattributed.length)
+    attributeUnattributed(out.tokens, unattributed, dominantModel(out.tokens) ?? 'codex')
   return out
 }
 
