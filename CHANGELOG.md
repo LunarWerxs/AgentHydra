@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-02
+
 ### Added
 
 - **Two PCs can share their CliMayte queue** (owner, 2026-10-02: "so that if I have my two computers running they can see the CliMayte queue and not override each other"). A new toggle beside login sync (off by default; `POST /api/cli-instances/sync/queue`) shares this PC's queue, encrypted, through the same store; `GET /api/corch/remote` lists the other PC's workers for the view's cloud-icon rows. This PC counts the other PC's running work toward each account's cap and takes its newer usage readings, and never changes or judges its workers. **Redeploy the login-sync Worker once** (paste the new `cloud/login-sync-worker/worker.js`): until then the toggle reports that the Worker has no queue routes, and logins sync as before.
@@ -14,7 +16,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ### Changed
 
 - **No more reset notifications for CLI accounts** (owner, 2026-10-02): a CLI login's 5-hour or weekly rollover no longer raises a toast in the app or a Windows notification, and the ones already waiting are cleared. CliMayte runs dozens of those accounts around the clock, so they were a stream of "100 quota windows reset". Desktop accounts announce their resets as before.
-- **CliMayte reads an account's usage again before placing work on a reading over 10 minutes old**, and an account so placed takes one worker until that worker reads it. The background check reads accounts only every 30 minutes: on 2026-10-02 #118 was placed at 82% and read 95%, and #119 at 79% and read 100%, both used outside CliMayte in between.
+- **CliMayte reads an account's usage again before placing work on a reading over 10 minutes old**, and an account so placed takes one worker until that worker reads it. The background check reads accounts only every 30 minutes: on 2026-10-02 #118 was placed at 82% and read 95%, and #119 at 79% and read 100%, both used outside CliMayte in between. These reads go one account at a time, like the background check (`/api/oauth/usage` answers a burst with a 429 that silences every account for tens of minutes), and a read hung for over two minutes no longer holds the others.
 - **A run placed on an account already past CliMayte's 90% ceiling is reported apart** (`placedPast` in the totals), not as a ceiling stop or as CliMayte's peak: the 129% peak on #120 was an account with no reading whose first request was refused, not a stop line that failed. Its notice and journal line say it was found past the ceiling on its first request. Stops recorded before this are sorted the same way at the next start.
 
 - **Restart is no longer held back by work that survives it** (owner, 2026-10-02: "I thought we were supposed to have decoupling from tasks running and my ability to restart"). CliMayte checks now run under a detached runner like the workers' own CLI, so a restart neither kills nor waits for them and the next daemon reads them on; the header's Restart refuses only for a pre-runner CliMayte worker inside the daemon. Dispatch runs, which reattach at boot, no longer refuse a manual restart; the unattended auto-update still waits for them. Two megarun checks of up to 20 minutes each had kept the button refused.

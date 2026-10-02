@@ -238,6 +238,10 @@ const refreshRunning = new Map<string, number>()
  *  (about 300 ms), or a `claude -p /usage` spawn (about 9 s) when the API refuses the token. */
 const REFRESH_HOLD_MS = 30_000
 
+/** A read older than this has hung (the CLI spawn's own timeout is 60 s): it no longer holds the
+ *  one-at-a-time line, or one stuck read would stop every later refresh until a restart. */
+const REFRESH_LOCK_MS = 120_000
+
 /** Read an account's usage again, at most once per READING_STALE_MS, while there is work to place
  *  and its reading is missing or older than that (buildPool). The background sweep reads every
  *  account only every 30 minutes, and an account can be used outside CliMayte in between:
@@ -247,6 +251,8 @@ function refreshReading(id: string, now: number): void {
   // One read at a time, like the background sweep: `/api/oauth/usage` rate-limits per user agent,
   // and a burst over every stale account at once could earn a 429 that silences all of them for
   // tens of minutes (usage.ts apiBackoffUntil). The next pool build, seconds later, asks the next.
+  for (const [k, started] of refreshRunning)
+    if (now - started > REFRESH_LOCK_MS) refreshRunning.delete(k)
   if (refreshRunning.size > 0 || now - (refreshAsked.get(id) ?? 0) < READING_STALE_MS) return
   refreshAsked.set(id, now)
   refreshRunning.set(id, now)
