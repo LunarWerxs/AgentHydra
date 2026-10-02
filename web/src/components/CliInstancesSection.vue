@@ -112,7 +112,14 @@ const {
   remove,
   checkUsage,
 } = useCliInstances()
-const { snapshotFor, isChecking, checkCli, reasonFor } = useUsage()
+const {
+  snapshotFor,
+  isChecking,
+  checkCli,
+  reasonFor,
+  startPolling: startUsagePolling,
+  stopPolling: stopUsagePolling,
+} = useUsage()
 const { accounts, refreshAccounts } = useData()
 // The desktop instances are the link targets. useInstances is a module singleton that the Instances
 // tab keeps loaded; this table lives on the CLI tab, so a window opened straight onto it reads the
@@ -240,14 +247,21 @@ const allHiddenByFilter = computed(
  */
 const headingCount = computed(() =>
   // No count before the first answer: a "(0)" over loading bars read as "my accounts are gone"
-  // (SUE round, 2026-10-01).
+  // (SUE round, 2026-10-01). A linked instance is not missing from this count: it lives on its
+  // desktop row (the count's hover says so). "10 of 11" with no filter on read as a lost account
+  // (owner, 2026-10-02), so "x of y" is only for rows the filter set aside, or for a table whose
+  // every instance is linked.
   loading.value && cliInstances.value.length === 0
     ? '…'
-    : visibleRows.value.length === cliInstances.value.length
-      ? String(cliInstances.value.length)
+    : visibleRows.value.length === unlinkedCliInstances.value.length &&
+        unlinkedCliInstances.value.length > 0
+      ? String(visibleRows.value.length)
       : t('cliInstances.countOfTotal', {
           shown: visibleRows.value.length,
-          total: cliInstances.value.length,
+          total:
+            unlinkedCliInstances.value.length > 0
+              ? unlinkedCliInstances.value.length
+              : cliInstances.value.length,
         }),
 )
 
@@ -585,11 +599,16 @@ const associateAccountOptions = computed(() => accounts.value)
 
 onMounted(() => {
   startPolling()
+  // The server's usage cache, every few seconds, as the Instances tab reads it: a window the
+  // keepalive started (or the background sweep re-read) lands there and nowhere else, so without
+  // this a row stayed blank until something on the page asked again (owner, 2026-10-02).
+  startUsagePolling()
   if (!settingsLoaded.value) void loadSettings()
   if (desktopInstances.value.length === 0) void refreshInstances({ silent: true })
 })
 onUnmounted(() => {
   stopPolling()
+  stopUsagePolling()
   clearKeepaliveRefresh()
 })
 </script>

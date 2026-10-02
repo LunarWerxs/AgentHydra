@@ -381,6 +381,7 @@ export const TOOLS: McpEngineTool[] = [
       return await withNextStep(
         {
           ...(usage as Record<string, unknown>),
+          ...(await climayteRoom()),
           dollars,
           identity: self,
           // Kept at the top level for every existing caller written against the old shape.
@@ -415,6 +416,7 @@ export const TOOLS: McpEngineTool[] = [
       const allSaturated = rows.length > 0 && rows.every((r) => (r.advice?.bindingPct ?? -1) >= 90)
       return {
         ...survey,
+        ...(await climayteRoom()),
         // A survey has no single advice to branch on, so the instruction is about what to DO with
         // a list: pick by the binding cap, and quote the number so the human can check the choice.
         nextStep:
@@ -1875,6 +1877,28 @@ export function toolsForCaller(getCallerPid: () => Promise<number | null>): McpE
  * is rent. Rules only, no explanation, no API shapes (docs/AI_USAGE_SELFCHECK.md holds the
  * reasoning). If a line would not change what an agent DOES, it does not belong here.
  */
+/** CliMayte's idle room for a quota check's answer: an agent reading its own quota is deciding how
+ *  to do its work, and idle CLI accounts are the cheapest place for a self-contained piece of it
+ *  (owner, 2026-10-02: ten sat idle for six hours). Nothing when the daemon is down (CliMayte runs
+ *  only there) or nothing is idle. */
+async function climayteRoom(): Promise<{ climayte?: { idleAccounts: number; hint: string } }> {
+  try {
+    const cap = (await apiOrLocal('/api/corch/capacity', async () => null)) as {
+      idle?: number
+    } | null
+    const idle = cap?.idle ?? 0
+    if (idle < 1) return {}
+    return {
+      climayte: {
+        idleAccounts: idle,
+        hint: `${idle} CLI account${idle === 1 ? '' : 's'} sit idle with room: send self-contained Claude-quality work to climayte_run instead of doing it in this chat (AgentHydra picks the account).`,
+      },
+    }
+  } catch {
+    return {}
+  }
+}
+
 export const SERVER_INSTRUCTIONS = `AgentHydra manages every Claude/Codex account here and knows what each has left.
 
 CHECK YOUR OWN QUOTA BEFORE HEAVY WORK, unprompted: check_my_usage {} (~300ms, no quota). Then:
@@ -1893,8 +1917,9 @@ list_usage {} surveys every account (\`deepseek\` = zswarm balance). Mechanical,
 goes to the zswarm (zswarm_run). Mutating tools say MUTATES:; never /login for a human.
 
 CLIMAYTE IS THE CLAUDE-QUALITY TIER: climayte_run {tasks:[{prompt, cwd}]} runs self-contained
-work the zswarm cannot do well on his CLI accounts, moving it when one runs out. AgentHydra picks
-the account (skips one a person or another session is using, weighs quota); see climayte_status.
+work on his CLI accounts, moving it when one runs out. Use it for Claude-quality pieces, above all
+while accounts sit idle (check_my_usage says how many). AgentHydra picks the account (skips one a
+person or another session is using, weighs quota); see climayte_status.
 
 THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); it acts only with the
 tray icon up: orchestrator_switch {action:"armed"} first. No icon needed for move_chat {chat,

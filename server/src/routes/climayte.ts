@@ -7,6 +7,7 @@
 import {
   CliMayteSplitNeeded,
   climayteCancel,
+  climayteCapacity,
   climayteGet,
   climayteHandoff,
   climayteJournal,
@@ -186,6 +187,9 @@ app.post('/api/corch/cancel', async (c) => {
 
 // What CliMayte has offloaded, over every task on record: the CliMayte view's counter.
 // `since` (ISO or epoch ms) scopes the test metrics (limit hits, peaks, sizing) to a run.
+// How many CLI accounts sit idle with room (climayteCapacity); the MCP quota checks quote it.
+app.get('/api/corch/capacity', (c) => c.json(climayteCapacity()))
+
 app.get('/api/corch/totals', (c) => {
   const raw = c.req.query('since')
   const since = raw ? (/^\d+$/.test(raw) ? Number(raw) : Date.parse(raw)) : 0

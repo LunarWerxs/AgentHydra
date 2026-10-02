@@ -81,6 +81,7 @@ import {
 } from './climayte-journal'
 import {
   aboutToBill,
+  accountInUse,
   addResults,
   addTokens,
   atCeiling,
@@ -109,6 +110,8 @@ import {
   toBrief,
   toReport,
   toView,
+  WIND_DOWN_SESSION_PCT,
+  WIND_DOWN_WEEK_PCT,
   wallUntil,
   windDownAt,
   windDownMessage,
@@ -143,6 +146,40 @@ export {
 export * from './climayte-journal'
 export * from './climayte-lib'
 export { climayteTotals } from './climayte-totals'
+
+/** The room CliMayte has right now, for an agent deciding whether to hand work over (check_my_usage
+ *  and list_usage say it): signed-in accounts that are not walled, not in use by someone else,
+ *  under the wind-down line, and running no CliMayte worker. Owner, 2026-10-02: ten accounts sat
+ *  idle for six hours while every chat did its own work. */
+export function climayteCapacity(now = Date.now()): {
+  idle: number
+  accounts: number
+  running: number
+} {
+  load()
+  let accounts: CliMayteAccount[] = []
+  try {
+    accounts = accountsProvider()
+  } catch {
+    // no readable pool: no room to report
+  }
+  const busy = new Set<string>()
+  let running = 0
+  for (const w of workers.values()) {
+    if (w.status !== 'running') continue
+    running++
+    if (w.accountId) busy.add(w.accountId)
+  }
+  const idle = accounts.filter(
+    (a) =>
+      !((walls[a.id]?.until ?? 0) > now) &&
+      !accountInUse(a) &&
+      !busy.has(a.id) &&
+      (a.sessionPct === null || a.sessionPct < WIND_DOWN_SESSION_PCT) &&
+      (a.weekPct === null || a.weekPct < WIND_DOWN_WEEK_PCT),
+  ).length
+  return { idle, accounts: accounts.length, running }
+}
 
 const HANDOFFS = join(ROOT, 'handoffs')
 /** The journal in scope, oldest first (the newest `limit`, default 100). */

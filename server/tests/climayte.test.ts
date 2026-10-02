@@ -24,6 +24,7 @@ import {
   CliMayteSplitNeeded,
   classifyAttempt,
   climayteCancel,
+  climayteCapacity,
   climayteGet,
   climayteJournal,
   climayteJournalLines,
@@ -306,6 +307,41 @@ describe('attemptSpend', () => {
       cacheWrite: 0,
     })
     rmSync(join(dir, 'projects', 'p', 'S'), { recursive: true, force: true })
+  })
+})
+
+describe('climayteCapacity', () => {
+  // check_my_usage and list_usage quote this to every agent as room to hand work to: an account
+  // someone is using, or one past the wind-down line, is not room.
+  afterAll(() => setCliMayteAccountsProvider(null))
+
+  test('counts only accounts free for new work', () => {
+    const dir = join(tmpdir(), 'climayte-capacity')
+    setCliMayteAccountsProvider(() => [
+      { id: 'cap-free', num: 1, name: 'free', configDir: dir, sessionPct: 10, weekPct: 10 },
+      {
+        id: 'cap-typing',
+        num: 2,
+        name: 'typing',
+        configDir: dir,
+        sessionPct: 0,
+        weekPct: 0,
+        handsOnAgoMs: 60_000,
+      },
+      {
+        id: 'cap-other',
+        num: 3,
+        name: 'other',
+        configDir: dir,
+        sessionPct: 0,
+        weekPct: 0,
+        otherSessions: 2,
+      },
+      { id: 'cap-near', num: 4, name: 'near', configDir: dir, sessionPct: 95, weekPct: 10 },
+    ])
+    const cap = climayteCapacity()
+    expect(cap.accounts).toBe(4)
+    expect(cap.idle).toBe(1)
   })
 })
 

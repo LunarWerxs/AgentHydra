@@ -7,6 +7,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Every quota check says how much CliMayte room sits idle** (`climayteCapacity`,
+  `GET /api/corch/capacity`). check_my_usage and list_usage add `climayte: {idleAccounts, hint}`
+  when CLI accounts are signed in, free (not walled, not in use by someone else, under the
+  wind-down line) and running nothing, so an agent deciding how to do its work sees the room. Ten
+  accounts had sat idle for six hours while every chat did its own work (owner, 2026-10-02).
+
+### Fixed
+
+- **The CLI tab keeps its usage current by itself.** It only read the usage a row carried from a
+  manual check, never the server's usage cache, so a 5-hour window Keep windows running had just
+  started showed blank until something else on the page asked. It now reads the cache every few
+  seconds, as the Instances tab does.
+
+- **The CLI table's count counts the CLI table.** A CLI instance linked to a desktop account lives
+  on that account's row, and the heading said "10 of 11" for it with no filter on, which read as a
+  lost account. It says "10" now; the count's hover still names the linked one, and "x of y" means
+  the filter set some rows aside.
+
 ## [1.6.0] - 2026-10-02
 
 ### Added
