@@ -130,8 +130,22 @@ let timer: ReturnType<typeof setInterval> | null = null
 /** Start the feed (daemon boot): now-ish, then every FEED_EVERY_MS. */
 export function startDesktopCliFeed(): void {
   if (timer || process.platform !== 'win32') return
+  // A pass that throws is logged, never left to reject: an unhandled rejection from a timer can
+  // take the daemon down (scripts/checks/timer-callback-can-kill-the-daemon.mjs).
   // arkitect-allow: side-effect-teardown - runs for the daemon's whole life, unref'd so it never holds the process open
-  timer = setInterval(() => void feedLinkedCliLogins(), FEED_EVERY_MS)
+  timer = setInterval(
+    () =>
+      void feedLinkedCliLogins().catch((err) =>
+        console.error('[desktop-cli-feed] pass failed:', err),
+      ),
+    FEED_EVERY_MS,
+  )
   timer.unref?.()
-  setTimeout(() => void feedLinkedCliLogins(), 20_000).unref?.()
+  setTimeout(
+    () =>
+      void feedLinkedCliLogins().catch((err) =>
+        console.error('[desktop-cli-feed] pass failed:', err),
+      ),
+    20_000,
+  ).unref?.()
 }
