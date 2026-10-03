@@ -1581,6 +1581,11 @@ def _drop_confirmed(session_id: str) -> None:
         pass
 
 
+# Waits between picker attempts when the target's sidebar has not rendered the landed rows yet.
+# Module scope so a test can set it to () or to zero delays.
+BYPASS_EMPTY_SIDEBAR_RETRY_SECS = (10, 20)
+
+
 def _adjudicate_bypass(session_id: str, chat_title, target: dict, meta_path: str,
                        fleet: dict, watched: dict) -> tuple[str, str, str]:
     """WHAT A MOVE MAY CLAIM ABOUT THE PERMISSION MODE, AND ON WHAT EVIDENCE.
@@ -1624,13 +1629,21 @@ def _adjudicate_bypass(session_id: str, chat_title, target: dict, meta_path: str
     # which app holds the record, so every prior confirmation about it is void: drop it first
     # and let the only entry that can exist be the one THIS run's actuator wrote (exit 0).
     _drop_confirmed(session_id)
-    said = confirm_bypass_in_app(
-        {"sessionId": session_id, "title": chat_title,
-         # dir-first (2026-09-06): target is already the unique fleet row; hand its dir
-         # rather than re-resolving a bare name that a same-named-leaf sibling could match.
-         "instance": target.get("dir") or target.get("name") or "", "metaPath": meta_path},
-        fleet,
-    )
+    row = {"sessionId": session_id, "title": chat_title,
+           # dir-first (2026-09-06): target is already the unique fleet row; hand its dir
+           # rather than re-resolving a bare name that a same-named-leaf sibling could match.
+           "instance": target.get("dir") or target.get("name") or "", "metaPath": meta_path}
+    said = confirm_bypass_in_app(row, fleet)
+    # ⛔ AN EMPTY SIDEBAR RIGHT AFTER AN IMPORT IS A TIMING MISS, NOT A VERDICT (2026-10-03: five
+    # chats moved #37 -> #55 all came back disk-only with "rendered NO chat rows at all in 6s",
+    # and the same picker confirmed every one of them later. Two had really landed on Accept
+    # edits, and the overnight watch reached for the ccd permission tool instead, whose approval
+    # card froze it 7.5 hours). Give the sidebar time to render the landed rows, then ask again.
+    for delay in BYPASS_EMPTY_SIDEBAR_RETRY_SECS:
+        if _app_confirmed(session_id) or "rendered NO chat rows" not in str(said):
+            break
+        time.sleep(delay)
+        said = confirm_bypass_in_app(row, fleet)
     if _app_confirmed(session_id):
         return "app-confirmed", f"the app's own picker: {said}", ""
     return "disk-only", f"the app's picker did not confirm ({said})", remedy
