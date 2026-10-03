@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { pickCarriedSettings } from '../chat-settings-carry'
-import { resolveRequiredTitle } from '../chat-title'
+import { isGenericChatTitle, resolveRequiredTitle } from '../chat-title'
 import { tryNativeArchiveChat } from '../claude-native-archive'
 import {
   getClaudeNativeSettings,
@@ -911,6 +911,27 @@ app.post('/api/sessions/:id/keep-here', async (c) => {
     return c.json({ ok: false, error: "instance_ref ('desktop:<dir>') is required" }, 400)
   keepChatOn(ref.slice('desktop:'.length), c.req.param('id'))
   return c.json({ ok: true })
+})
+
+// The title half of a move that landed through /import-desktop (migrate_chat): the same bounded
+// reassertChatTitle watch /migrate fires after its own hot landing, aimed at `instance_ref` and
+// keyed by the session id - never by a rendered title, which after the blanking bug is the same
+// generic name for a whole fleet. It writes only over a non-name, so an owner's later rename wins.
+// Refuses unless the target store holds the chat: there is no record there to defend.
+app.post('/api/sessions/:id/reassert-title', async (c) => {
+  const sessionId = c.req.param('id')
+  const body = await jsonBody(c)
+  const ref = typeof body.instance_ref === 'string' ? body.instance_ref.trim() : ''
+  if (!ref.startsWith('desktop:'))
+    return c.json({ ok: false, error: "instance_ref ('desktop:<dir>') is required" }, 400)
+  const title = typeof body.title === 'string' ? body.title.trim() : ''
+  if (isGenericChatTitle(title))
+    return c.json({ ok: false, error: 'title must be a real name, not a generic one' }, 400)
+  const targetDir = ref.slice('desktop:'.length)
+  if (!renderedInStore(targetDir, sessionId))
+    return c.json({ ok: false, error: 'not-landed: the target store does not hold this chat' }, 409)
+  void reassertChatTitle(targetDir, sessionId, title).catch(() => {})
+  return c.json({ ok: true, watching: true })
 })
 
 // The second pass of a batch move (see `defer_settle` on /migrate): retire the old copies of a chat

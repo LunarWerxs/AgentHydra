@@ -38,6 +38,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A chat moved by `migrate_chat.py` keeps its name on a running target too** (2026-10-03). The `/migrate` route fired `reassertChatTitle` after a hot landing; the Python mover lands through `/import-desktop` and stopped at verifying the instance, so the running app's re-save could blank the title to "General coding session" until the title sweep caught it. After a verified landing whose title is not durable it now calls the new `POST /api/sessions/:id/reassert-title`, which starts the same bounded watch keyed by the session id (never the rendered title) and refuses a generic title or a chat the target does not hold. Best effort: a refusal never unlands the chat.
 - **A per-instance route only acts on an instance it can list.** Every `/api/instances/:dir/...`
   route (account, login-history, open, quit, logout, focus, reveal, shortcut, delete, meta, usage,
   and the quick daemon's account/open/focus/quit) used `:dir` as a path as given, so

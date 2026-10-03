@@ -807,6 +807,27 @@ def _keep_here(session_id: str, target: dict) -> None:
         pass
 
 
+def _reassert_title(session_id: str, target: dict, body: dict, result: dict) -> dict | None:
+    """THE TITLE HALF OF A LANDING (2026-10-03): the daemon's /migrate route fires its bounded
+    reassertChatTitle watch after a hot landing, and this path used to stop at verifying the
+    INSTANCE. A running target re-saves the record from memory, where the import left the title
+    unset, and the sidebar then shows the generic name. Ask the daemon for the same watch, keyed by
+    the session id - never the rendered title, which after that bug is one name for a whole fleet.
+    The watch writes only over a non-name, so a rename made in the app afterwards wins.
+
+    Skipped when the import says the title is durable (a closed target: nothing to re-save over
+    it). Best effort: an older daemon without the route, or a refusal, never unlands the chat."""
+    title = body.get("title") or body.get("confirm_title")
+    if not title or result.get("titleDurable") is True:
+        return None
+    ref = target.get("ref") or f"desktop:{target.get('dir')}"
+    try:
+        return hydralib.api_post(f"/api/sessions/{session_id}/reassert-title",
+                                 {"instance_ref": ref, "title": title})
+    except Exception as err:  # noqa: BLE001 - the landing stands whatever the watch says
+        return {"ok": False, "watching": False, "error": str(err)}
+
+
 def _same_instance(m: dict, target: dict) -> bool:
     return str(m.get("instance", "")).lower() == str((target or {}).get("name", "")).lower()
 
@@ -1976,6 +1997,9 @@ def move_only(argv: list[str]) -> _MoveOutcome:
         after = _verify_landing_or_raise(session_id, target, chat_title, result,
                                          src_instance=str(match.get("instance") or ""))
         sw.lap("verify")
+        watch = _reassert_title(session_id, target, body, result)
+        if watch is not None:
+            notes["titleReassert"] = watch
     except _MigrateRefusal as refusal:
         refusal.payload["secs"] = sw.total()
         refusal.payload["timings"] = sw.phases

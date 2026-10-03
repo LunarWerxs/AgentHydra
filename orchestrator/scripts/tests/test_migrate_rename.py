@@ -97,6 +97,37 @@ class MigrateTest(ActTestBase):
         self.assertEqual(posts, [{"instance_ref": "desktop:c:\\i\\2claude", "confirm_title": "T"}])
         self.assertEqual(len(ledgerlib._load()), 0)
 
+    def test_hot_landing_reasserts_the_title_by_id(self):
+        # The /migrate route fires reassertChatTitle after a hot landing; this path used to
+        # verify the INSTANCE and never look at the title again (2026-10-03). The running target
+        # re-saves the record from memory and blanks the title, so the move asks the daemon to
+        # watch it - keyed by the session id, never by the rendered title.
+        import json
+
+        import migrate_chat
+        from util import run_cli
+
+        self.dossier_static(after_instance="2claude")
+        self.stub.routes[f"/api/sessions/{SID}/import-desktop"] = {
+            "ok": True, "titled": True, "titleDurable": False}
+        self.stub.routes[f"/api/sessions/{SID}/reassert-title"] = {"ok": True, "watching": True}
+        code, out, _ = run_cli(migrate_chat.main, [SID, "--to", "2", "--json"])
+        self.assertEqual(code, 0)
+        asks = [b for p, b in self.stub.posts if p == f"/api/sessions/{SID}/reassert-title"]
+        self.assertEqual(asks, [{"instance_ref": "desktop:c:\\i\\2claude", "title": "T"}])
+        self.assertTrue(json.loads(out)["titleReassert"]["watching"])
+
+    def test_durable_landing_asks_for_no_title_watch(self):
+        # A cold landing wrote the title into a store nothing is holding, so there is nothing to
+        # re-save over it - the same reason the route watches hot landings only.
+        import migrate_chat
+
+        self.dossier_static(after_instance="2claude")
+        self.stub.routes[f"/api/sessions/{SID}/import-desktop"] = {
+            "ok": True, "titled": True, "titleDurable": True}
+        self.assertEqual(migrate_chat.main([SID, "--to", "2"]), 0)
+        self.assertEqual([p for p, _ in self.stub.posts if p.endswith("/reassert-title")], [])
+
     def test_unknown_instance_is_deterministic(self):
         from lib import ledgerlib
         import migrate_chat
