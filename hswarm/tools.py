@@ -320,7 +320,7 @@ class Sandbox:
     def redacted(self, name: str, out: str) -> str:
         """`out` with every detected span rewritten, or the block strategy's refusal. Runs BEFORE the cap, so a
         span the cap cuts in half cannot slip through as an unmatched fragment, and the spill file holds no originals.
-        Also scrubs exact-value API keys that may have been read from .secrets/ or ~/.hswarm/providers/."""
+        Also scrubs exact-value API keys that may have been read from ~/.hswarm/secrets/ or ~/.hswarm/providers/."""
         if self.redactor is None:
             result = out
         else:

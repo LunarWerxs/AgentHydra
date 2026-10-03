@@ -236,7 +236,7 @@ def route_health(model: str) -> dict:
     return {"serves": "ok" in states or "dead" not in states, "legs": [note for _, note in legs]}
 
 
-# Owner, Michael, 2026-09-25: "HydraSwarm should deal with fucking everything. It should deal with which agent to send it
+# Owner, Michael, 2026-09-25: "ZSwarm should deal with fucking everything. It should deal with which agent to send it
 # to, which keys are working ... and then rerun them if they're dead." A pinned model is the caller's PREFERENCE, not
 # a reason to fail: a job pinned to a route whose every key was disabled was refused whole (NoCreditLeft), and 15 of
 # 67 pinned builders died PoolSaturated after 120 s with "no other leg", while the same work on the code profile ran
@@ -1092,7 +1092,7 @@ class JobManager:
             if doc.get("state") != "running" or summary.get("finished") or runner.get("port") != self.port:
                 continue
             # The port stamp alone does not prove the runner dead: a server that lost its listening socket (shared.py,
-            # three on 7793 on 2026-09-27) lives on, running and checkpointing its jobs, and adopting them here would
+            # three on ZSwarm's 7790 on 2026-09-27) lives on, running and checkpointing its jobs, and adopting them here would
             # pay for every unfinished task twice. The runner is this record's own process only while its pid is alive
             # AND was created when the stamp says; a pid the system handed to a later process is a dead runner.
             pid, started = runner.get("pid"), runner.get("started")
@@ -1492,8 +1492,8 @@ class JobManager:
 
     @staticmethod
     def cancel_on_disk(job_id: str, reason: str = "cancelled") -> dict:
-        """Cancel a job this process does not run. Jobs 20260923-080914-3444 and others (their `hswarm.py run` killed)
-        read `running` forever, and hswarm_cancel answered KeyError, because only the submitting process knew them.
+        """Cancel a job this process does not run. Jobs 20260923-080914-3444 and others (their `zswarm.py run` killed)
+        read `running` forever, and zswarm_cancel answered KeyError, because only the submitting process knew them.
         A live owner (a running record with a checkpoint, or a budget-cancelled one still checkpointing the tasks
         that cancel spared) is ASKED through the job folder and stops within config.CHECKPOINT_S; an orphaned record,
         or one from before checkpoints, has nothing left to ask, so its unfinished tasks are marked cancelled on

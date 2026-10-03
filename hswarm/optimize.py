@@ -10,7 +10,7 @@ keeps a deletion that holds the metric and discards a tiny gain that adds code.
 The worker never runs git (the shared-tree refusal in tools.py still applies); this loop owns every
 commit, and only ever in the worktree it created under ~/.hswarm/optimize/<run>/tree.
 
-    python hswarm.py optimize --repo D:/proj --target src/fast.py --metric "python bench.py" \\
+    python -m hswarm optimize --repo D:/proj --target src/fast.py --metric "python bench.py" \\
         --direction min --budget-s 300 --attempts 20 --goal "Make the parser in src/fast.py faster."
 """
 from __future__ import annotations

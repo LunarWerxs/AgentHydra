@@ -262,7 +262,7 @@ class Task:
             raise ValueError(f"task {index}: 'prompt' is required")
         if "envelope" in merged:
             raise ValueError(f"task {index}: 'envelope' is set at dispatch from the job's envelope, not per task; "
-                             "pass it to the job (hswarm_run envelope / hswarm.py run --envelope)")
+                             "pass it to the job (hswarm_run envelope / python -m hswarm run --envelope)")
         unknown = set(merged) - {f.name for f in dataclasses.fields(Task)}
         if unknown:
             known = sorted(f.name for f in dataclasses.fields(Task))

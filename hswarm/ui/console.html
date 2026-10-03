@@ -509,7 +509,7 @@ const disc = (k, title, inner) => `<details class="more" data-k="d:${esc(k)}"${O
 // A model AUTO does not rank never meets its bar, so a star would do nothing: it gets none (a number it already has can still be cleared).
 let STARM = null;
 const NOAUTO = "not tested, so HydraSwarm never picks it by itself: reach it by name or by a role";
-const HELP_URL = "https://github.com/Lunarwerx/HydraSwarm#readme", ISSUES_URL = "https://github.com/Lunarwerx/HydraSwarm/issues";
+const HELP_URL = "https://github.com/LunarWerxs/AgentHydra#readme", ISSUES_URL = "https://github.com/LunarWerxs/AgentHydra/issues";
 // Only http(s) becomes a link: esc() stops markup, not a javascript: URL.
 const xlink = (label, url) => /^https?:\/\//i.test(url || "") ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${label} ${ic("external", "s")}<span class="sr"> (opens in a new tab)</span></a>` : "";
 // What each role is for, in the words of someone who never read the code.

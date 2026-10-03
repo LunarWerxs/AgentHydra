@@ -5,7 +5,7 @@ Why they exist: `hswarm savings` reads every Claude Code transcript on the machi
 here, 2026-09-15) and the pure-Python scan is the one hot loop in this repo. bench/native_ab.py runs
 the same window through Python, Rust and Go, checks the three agree on every number, and writes the
 winner (language and thread count) to native/winner.json. `choose()` runs that winner when its binary
-is built (`python hswarm.py native build`) and falls back to Python otherwise, so a clone with no
+is built (`python -m hswarm native build`) and falls back to Python otherwise, so a clone with no
 cargo or go works unchanged. HSWARM_SCANNER=python|rust|go forces an arm; HSWARM_SCAN_THREADS a count.
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ def choose(requested: str | None = None) -> str:
         return "python"
     if want in LANGS:
         if binary(want) is None:
-            raise RuntimeError(f"scanner {want!r} requested but {BIN_DIR / ('zscan-' + want + EXE)} is not built; run: python hswarm.py native build")
+            raise RuntimeError(f"scanner {want!r} requested but {BIN_DIR / ('zscan-' + want + EXE)} is not built; run: python -m hswarm native build")
         return want
     w = winner().get("lang")
     if w in LANGS and binary(w):
@@ -72,7 +72,7 @@ def prices_json() -> str:
 def command(lang: str, root: Path, since: dt.date, until: dt.date, n_threads: int = 1) -> list[str]:
     exe = binary(lang)
     if exe is None:
-        raise RuntimeError(f"{lang} scanner not built; run: python hswarm.py native build")
+        raise RuntimeError(f"{lang} scanner not built; run: python -m hswarm native build")
     return [str(exe), "--root", str(root), "--since", since.isoformat(), "--until", until.isoformat(), "--threads", str(n_threads)]
 
 
@@ -99,7 +99,7 @@ def log_stale(lang: str) -> None:
     and carry on with Python (claude_usage.collect does the falling back)."""
     from . import savings
 
-    savings.log(f"{lang} scanner is older than this checkout (no token counts in its output); scanning with Python. Rebuild: python hswarm.py native build")
+    savings.log(f"{lang} scanner is older than this checkout (no token counts in its output); scanning with Python. Rebuild: python -m hswarm native build")
 
 
 def scan(lang: str, root: Path, since: dt.date, until: dt.date, n_threads: int | None = None) -> dict:

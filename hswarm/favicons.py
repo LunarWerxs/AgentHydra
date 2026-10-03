@@ -22,7 +22,7 @@ MAX_PAGE = 512 * 1024
 MAX_ICON = 256 * 1024
 RETRY_S = 24 * 3600  # a site that gave no icon is asked again a day later, not on every page view
 TYPES = {"image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/svg+xml", "image/jpeg", "image/gif", "image/webp"}
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; hswarm-console; +https://github.com/Lunarwerx/HydraSwarm)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; hswarm-console; +https://github.com/LunarWerxs/AgentHydra)"}
 
 
 def folder() -> Path:

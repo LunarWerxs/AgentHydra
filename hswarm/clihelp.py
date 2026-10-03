@@ -31,7 +31,7 @@ META: dict[str, dict] = {
     "help": {"effect": READ, "guide": "This sitemap. `help <command> --json` gives one command's args, flags, effect and guide."},
     "skill": {"effect": WRITE, "guide": "Prints the agent SKILL.md; only --install writes it. --check exits 1 when the installed copy is missing or stale.",
               "examples": ["hswarm skill --check", "hswarm skill --install"]},
-    "import-keys": {"effect": WRITE, "guide": "Copies key files from another clone's .secrets into HSWARM_HOME/secrets; prints only counts, never a key or prefix.",
+    "import-keys": {"effect": WRITE, "guide": "Copies key files from a ZSwarm clone's .secrets into HSWARM_HOME/secrets; prints only counts, never a key or prefix.",
                     "examples": ["hswarm import-keys --from <clone>"]},
     "doctor": {"effect": READ, "guide": "Free GETs only (balance, /models); prints key fingerprints, never key values. Run it first when anything fails."},
     "keys": {"effect": WRITE, "guide": "`keys` (list) is offline and read-only; `probe` makes one free GET per key and may return a topped-up key to the pool; "
@@ -162,7 +162,7 @@ def skill_text(parser: argparse.ArgumentParser) -> str:
     lines = [
         "---",
         f"name: {SKILL_NAME}",
-        "description: Use before running any `hswarm` / `python hswarm.py` CLI command. Discover commands and flags "
+        "description: Use before running any `hswarm` / `python -m hswarm` CLI command. Discover commands and flags "
         "from the CLI's own JSON help and honour each command's effect instead of guessing from docs.",
         "---",
         f"<!-- {STAMP_MARK} {stamp(parser)} (regenerate: `hswarm skill --install`; check: `hswarm skill --check`) -->",
@@ -171,8 +171,8 @@ def skill_text(parser: argparse.ArgumentParser) -> str:
         "",
         "Never guess a hswarm command or flag from memory or prose. Ask the CLI:",
         "",
-        "- `python hswarm.py help --json --compact` - every command with its description and effect.",
-        "- `python hswarm.py help <command> --json` - its args, flags, defaults, examples, effect and agent_guide.",
+        "- `python -m hswarm help --json --compact` - every command with its description and effect.",
+        "- `python -m hswarm help <command> --json` - its args, flags, defaults, examples, effect and agent_guide.",
         "",
         "Every command has an `effect`. Before running one, act on it:",
         "",

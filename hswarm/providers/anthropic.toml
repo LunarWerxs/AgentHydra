@@ -1,4 +1,4 @@
-# Anthropic, direct. The keys are in `.secrets/anthropic_api_keys` and were never wired to a provider, so
+# Anthropic, direct. The keys are in `~/.hswarm/secrets/anthropic_api_keys` and were never wired to a provider, so
 # until 2026-09-29 hswarm's only Claude route was OpenRouter - whose 4287 keys are all dead (4060 revoked,
 # 227 out of credit), which read as "no Claude route exists at all". Probed 2026-09-29: of 356 keys in the
 # pool 144 authenticate, and of those about 37% (3 of 8 sampled) have credit, serving both

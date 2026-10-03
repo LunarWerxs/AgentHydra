@@ -9,8 +9,8 @@ The number reported is the MEASURED cost of re-deriving the procedure (output to
 issuing the steps plus the tool-result tokens it read back, at chars/4), never a claimed saving.
 Nothing leaves the machine; the default only prints the ranking, --apply writes the staging files.
 
-    python hswarm.py procedures --since 30            # print the ranked candidates
-    python hswarm.py procedures --since 30 --apply    # also stage them beside distill's facts
+    python -m hswarm procedures --since 30            # print the ranked candidates
+    python -m hswarm procedures --since 30 --apply    # also stage them beside distill's facts
 
 Idea from JuliusBrussee/caveman (proxy/internal/store/detect_procedures.go); no code copied, written fresh.
 """

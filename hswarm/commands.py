@@ -671,7 +671,7 @@ def _print_keys(out: dict) -> None:
 
 
 async def cmd_import_keys(a) -> int:
-    """Import API keys from a hswarm clone's .secrets/ directory into HSWARM_HOME/secrets/."""
+    """Import API keys from a ZSwarm clone's .secrets/ directory into HSWARM_HOME/secrets/."""
     import shutil
 
     source_dir = Path(a.source_dir)

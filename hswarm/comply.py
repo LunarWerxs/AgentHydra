@@ -21,8 +21,8 @@ A cc worker runs shell commands with permissions bypassed: point --out at scratc
 (Claude Code also loads the CLAUDE.md files of the folders above it, which would confound the measurement),
 and pass --tools edit (no shell) for a rule whose scenarios need none.
 
-    python hswarm.py comply path/to/rule.md --out /tmp/comply-out
-    python hswarm.py comply path/to/rule.md --spec /tmp/comply-out/spec.json --repeats 3
+    python -m hswarm comply path/to/rule.md --out /tmp/comply-out
+    python -m hswarm comply path/to/rule.md --spec /tmp/comply-out/spec.json --repeats 3
 """
 from __future__ import annotations
 

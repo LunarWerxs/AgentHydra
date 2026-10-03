@@ -265,7 +265,7 @@ def for_task(redact: object, free_tier: bool) -> Redactor | None:
         raise ValueError(f"HSWARM_REDACT_FREE_TIER: {e}") from None
 
 
-# A worker in a checkout could read and send the live keys (.secrets/, ~/.hswarm/providers). Whatever the bytes
+# A worker in a checkout could read and send the live keys (~/.hswarm/secrets, ~/.hswarm/providers). Whatever the bytes
 # were reached by, a token equal to a key this process holds never reaches the model. The set is built lazily,
 # once, dropped by forget_keys() when config reloads, never logged and never leaves the process.
 # Idea from CopilotKit/OpenBot .github/workflows/ci.yml:556-570 and CopilotKit/OpenTag agent/coding/sandbox.py:114 (MIT), 2026-10-03.

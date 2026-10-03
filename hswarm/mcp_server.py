@@ -63,8 +63,8 @@ def _parse_tasks(tasks: list[dict], defaults: dict) -> list[Task]:
 
 def _returns_errors(fn):
     """⛔ A TOOL THAT FAILS MUST SAY WHY (2026-09-21). An exception escaping a tool reaches the caller as the bare
-    "Error executing tool <name>". Measured on Jacob's PC: hswarm_ask failed that way three times in a row while
-    `hswarm.py ask` answered the same question in 0.24 s, and the caller sent its fact-check to a Sonnet agent
+    "Error executing tool <name>". Measured on Jacob's PC: zswarm_ask failed that way three times in a row while
+    `zswarm.py ask` answered the same question in 0.24 s, and the caller sent its fact-check to a Sonnet agent
     instead. Return the exception as data - its type, message and the frames that raised it - so the next
     failure names its own cause. (Only on tools that return a dict: a list-typed tool must keep its shape.)"""
 
@@ -321,7 +321,7 @@ async def hswarm_apply_proposals(job_id: str, ids: list[str] | None = None, appl
 @_returns_errors
 async def hswarm_cancel(job_id: str) -> dict:
     """Cancel every pending/running task of a job, whichever process runs it: another live process is asked and stops
-    within ~10 s; a job nothing runs any more (a killed `hswarm.py run`) is marked cancelled on disk.
+    within ~10 s; a job nothing runs any more (a killed `python -m hswarm run`) is marked cancelled on disk.
     Answers like hswarm_status: state, counts, cost and what needs a look."""
     try:
         return brief_summary(manager().cancel(job_id).summary())

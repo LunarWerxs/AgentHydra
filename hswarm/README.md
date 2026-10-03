@@ -43,7 +43,7 @@ Or import them from a ZSwarm clone:
 python -m hswarm import-keys --from /path/to/zswarm
 ```
 
-This copies key files from `<clone>/.secrets/` into `$HSWARM_HOME/secrets/` and prints only counts (never a key).
+This copies key files from a ZSwarm clone's `<clone>/.secrets/` into `$HSWARM_HOME/secrets/` and prints only counts (never a key).
 
 ### Key vault
 

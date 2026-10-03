@@ -6,7 +6,7 @@ first and anything it is unsure of goes to a generative model. Measured 2026-09-
 API: POST https://api.typesafe.ai/v1/systemone with a Bearer key and {state, model, questions: {id: question}};
 one answer comes back per question id. Price $0.042 per million INPUT tokens, output free. Limits (2026-09-21,
 "adjusting dynamically"): 1,200 requests/min, 250k tokens/s, 64k tokens per request of which the state plus the
-longest question may use 32k. Keys: TYPESAFE_API_KEYS / TYPESAFE_API_KEY, or `.secrets/typesafe_api_keys` (one
+longest question may use 32k. Keys: TYPESAFE_API_KEYS / TYPESAFE_API_KEY, or `~/.hswarm/secrets/typesafe_api_keys` (one
 per line), or `keys = [...]` in ~/.hswarm/providers/typesafe.toml: the provider file (hswarm/providers/typesafe.toml)
 owns the address and the key sources, like every other provider's. A key is never printed or logged.
 
@@ -19,7 +19,7 @@ caller; every client of that host shares one pacer so several bench arms stay un
 It also reaches Cloudflare's Clef decision models (blog.cloudflare.com/clef-decision-models, 2026-10-01): `clef` and
 `clef-flash` on Workers AI take TypeSafe's request and answer in TypeSafe's shape, inside Workers AI's
 {"result": ..., "success": ...} envelope; up to 64 questions a call, 64k context. They need a Cloudflare token with
-Workers AI access (CLOUDFLARE_API_TOKEN, or a clone's .secrets/cloudflare_api_keys) and CLOUDFLARE_ACCOUNT_ID.
+Workers AI access (CLOUDFLARE_API_TOKEN, or ~/.hswarm/secrets/cloudflare_api_keys) and CLOUDFLARE_ACCOUNT_ID.
 """
 from __future__ import annotations
 
@@ -49,8 +49,8 @@ _NEXT_SLOT: dict[str, float] = {}  # url -> earliest monotonic time the next req
 # $ per million input tokens, output free (developers.cloudflare.com/workers-ai/models/clef and /clef-flash, 2026-10-02).
 CLEF_PRICES = {"clef": 0.24, "clef-flash": 0.09}
 CLEF_URL = "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/@cf/cloudflare/{model}"
-NO_KEY = {"typesafe": "no usable TypeSafe key (TYPESAFE_API_KEY or .secrets/typesafe_api_keys)",
-          "cloudflare": "no usable Cloudflare token (CLOUDFLARE_API_TOKEN or .secrets/cloudflare_api_keys, plus CLOUDFLARE_ACCOUNT_ID)"}
+NO_KEY = {"typesafe": f"no usable TypeSafe key (TYPESAFE_API_KEY or {config.SECRETS_DIR / 'typesafe_api_keys'})",
+          "cloudflare": f"no usable Cloudflare token (CLOUDFLARE_API_TOKEN or {config.SECRETS_DIR / 'cloudflare_api_keys'}, plus CLOUDFLARE_ACCOUNT_ID)"}
 
 
 def is_typed_model(model: str) -> bool:
@@ -59,13 +59,13 @@ def is_typed_model(model: str) -> bool:
 
 
 def load_keys() -> list[str]:
-    """Every TypeSafe key the provider file's sources hold: the environment, the user's file, a clone's .secrets/."""
+    """Every TypeSafe key the provider file's sources hold: the environment, the user's file, ~/.hswarm/secrets/."""
     return config.load_api_keys("typesafe")
 
 
 def clef_keys() -> list[str]:
-    """Cloudflare tokens with Workers AI access: CLOUDFLARE_API_TOKEN (comma-separated for several), then a clone's
-    .secrets/cloudflare_api_keys."""
+    """Cloudflare tokens with Workers AI access: CLOUDFLARE_API_TOKEN (comma-separated for several), then
+    ~/.hswarm/secrets/cloudflare_api_keys."""
     env = config._split_keys(os.environ.get("CLOUDFLARE_API_TOKEN"))
     return list(dict.fromkeys(env + config._read_key_lines(config.SECRETS_DIR / "cloudflare_api_keys")))
 

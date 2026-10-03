@@ -1,7 +1,7 @@
 """hswarm skillbench: run a skill library's dormant evals as a with/without benchmark, graded from the trace.
 
-    python hswarm.py skillbench <skill-dir> [<skill-dir> ...]              # dry run: the plan, nothing sent
-    python hswarm.py skillbench <skill-dir> --repeats 3 --pressure --run   # spend: workers, then graders
+    python -m hswarm skillbench <skill-dir> [<skill-dir> ...]              # dry run: the plan, nothing sent
+    python -m hswarm skillbench <skill-dir> --repeats 3 --pressure --run   # spend: workers, then graders
 
 Why: a skill's evals/evals.json (skill-creator's schema: skill_name, evals[id, prompt, expected_output,
 assertions]) says what the skill should change, and nothing ran it, so nobody knew which skills earn their

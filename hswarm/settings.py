@@ -3,8 +3,8 @@ custom providers and models, roles and the routing knobs. The console (`hswarm u
 add|remove`) and the HTTP API all call these, so every fact has one owner:
 
 - a provider's settings, its models, their switches and the keys a user adds live in that provider's file,
-  <home>/providers/<name>.toml (config.user_file), layered over the shipped one. Keys from the environment or a
-  clone's .secrets/ are listed read-only: they are changed where they live.
+  <home>/providers/<name>.toml (config.user_file), layered over the shipped one. Keys from the environment or
+  ~/.hswarm/secrets/ are listed read-only: they are changed where they live.
 - roles, the review panel and the routing knobs live in <home>/settings.toml (config.SETTINGS_FILE).
 
 Each change is one read-change-write of one file under a lock file beside it, through tomlkit, so a person's own
@@ -200,7 +200,7 @@ def _key_rank(doc, fingerprint: str, rank: int | None) -> None:
 def remove_key(provider: str, fingerprint: str) -> dict:
     key = _find(provider, fingerprint)
     mine = config.user_source(provider)
-    # The same key may also sit in the environment or a clone's .secrets/: its number stays while it is still used.
+    # The same key may also sit in the environment or ~/.hswarm/secrets/: its number stays while it is still used.
     elsewhere = any(k == key for source, read in config.key_sources(provider) if source != mine for k in read())
 
     def change(doc):

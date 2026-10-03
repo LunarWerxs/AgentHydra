@@ -13,8 +13,8 @@ are reported under separate headings with their own verdicts, never merged.
 routed reviewer, plus an independent verifier per important-or-worse finding). Every worker prompt starts
 with the same scope block, and a worker that does not echo it is discarded as mis-scoped.
 
-    python hswarm.py review --cwd D:/repo --base master --depth high --spec issue.md --out review/
-    python hswarm.py review --cwd D:/repo --diff change.patch --dry-run      # the plan only, no model call
+    python -m hswarm review --cwd D:/repo --base master --depth high --spec issue.md --out review/
+    python -m hswarm review --cwd D:/repo --diff change.patch --dry-run      # the plan only, no model call
 
 Exit code: 0 approve / approve_with_comments, 1 request_changes, 2 no reviewer came back, 3 incomplete (a worker
 was discarded, so the verdict is at least approve_with_comments and the gate does not pass on it).

@@ -2,7 +2,7 @@
 # a probability for each answer, in about 0.15 s. It cannot write text or use tools, so it never runs a task: its
 # models are `kind = "typed"`, and hswarm reaches them only through hswarm_decide, which asks Jev first and sends what
 # it is unsure of to a chat model (docs/BENCH-2026-09-21-jev.md). Keys: TYPESAFE_API_KEYS / TYPESAFE_API_KEY, your
-# own file's keys = [...], or a clone's .secrets/typesafe_api_keys.
+# own file's keys = [...], or ~/.hswarm/secrets/typesafe_api_keys.
 
 base_url = "https://api.typesafe.ai/v1"
 about = "A helper, not a chat model: it answers quick multiple-choice and yes/no questions for HydraSwarm's own checks. Most people never need it."

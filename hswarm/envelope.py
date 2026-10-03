@@ -1,11 +1,11 @@
 """The spawn envelope: what a whole spawn TREE may do, narrowed at every hop, and the per-tree ledger that admits it.
 
 WHY: max_cost_usd caps one worker and budget_usd caps one job, but a cc worker runs full Claude Code and can start
-a job of its own (through a project's hswarm MCP entry or `hswarm.py run`), whose workers can do the same. Nothing
+a job of its own (through a project's hswarm MCP entry or `python -m hswarm run`), whose workers can do the same. Nothing
 capped that TREE, and nothing stopped a worker from handing its children wider tools or a bigger budget than it was
 given. Idea adapted from AutoGPT's copilot spawn tree (autogpt_platform/backend/backend/copilot/tree.py, ideas only).
 
-- An envelope is set at a root job (hswarm_run `envelope`, `hswarm.py run --envelope`) and every task of that job
+- An envelope is set at a root job (hswarm_run `envelope`, `python -m hswarm run --envelope`) and every task of that job
   carries it. A cc worker gets it in HSWARM_ENVELOPE (claude_env.cc_env), so any hswarm the worker starts inherits
   it; the shared HTTP server reads the X-Hswarm-Envelope header instead, never its own environment.
 - A child envelope is derived from its parent ONLY by narrowing: depth + 1 toward max_depth, tools intersected,

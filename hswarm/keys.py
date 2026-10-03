@@ -34,7 +34,7 @@ def pool_for(provider: str) -> "KeyPool | None":
     The cache RE-READS the key list every POOL_RECHECK_S and rebuilds when it changed. That is not
     belt-and-braces: the MCP server holds one process for a whole Claude session, and a cache that
     read the keys once meant a provider with no key file at startup was cached as None and stayed
-    unusable for the rest of the session - so dropping in `.secrets/openrouter_api_keys` while a
+    unusable for the rest of the session - so dropping in `~/.hswarm/secrets/openrouter_api_keys` while a
     session was running did nothing until a restart (found in review, 2026-09-17, the same day that
     file was created mid-session). Key DISABLES were already picked up, because the pool re-reads the
     shared state file itself; only the key list was frozen. The cache is keyed by the state-file path

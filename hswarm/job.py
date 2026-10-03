@@ -213,7 +213,7 @@ class Job:
 
         Every save leaves out the results already appended to results.jsonl: every reader folds that file over the
         record (_overlay_live_results while it runs, fold_journal once it is finished, adopt's _journaled), and writing
-        them again every checkpoint rewrote a 37 MB record six times a minute on the loop (HydraSwarm, 2026-09-29).
+        them again every checkpoint rewrote a 37 MB record six times a minute on the loop (ZergSwarm, 2026-09-29).
         The last save wrote them all a second time: job 20261001-073621-cf71's job.json was 40.4 MB, 23.75 MB of it
         the results its 24.7 MB journal already held, and 27% of it the indent, so the record is compact too."""
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -251,7 +251,7 @@ class Job:
             return doc
         if summary.get("state") == "running" and (silent := Job._silent_for(summary)) is not None:
             # The process running the job checkpoints every config.CHECKPOINT_S; a record this quiet is one nothing is
-            # running (a killed `hswarm.py run`, a closed session), so its pending tasks will never start.
+            # running (a killed `python -m hswarm run`, a closed session), so its pending tasks will never start.
             summary = {**summary, "state": "orphaned", "orphaned": Job._orphaned_why(doc, silent)}
             doc = {**doc, "state": "orphaned", "summary": summary}
         path = config.JOBS_DIR / job_id / "results.jsonl"
@@ -313,7 +313,7 @@ class Job:
         out = []
         for job_id in archive.job_ids(max(1, limit)):
             # A finished record is parsed once per process, not on every poll: the console lists jobs every 3 s,
-            # and one 37 MB job.json among the newest was parsed whole each time for its summary alone (HydraSwarm,
+            # and one 37 MB job.json among the newest was parsed whole each time for its summary alone (ZergSwarm,
             # 2026-09-29). A rewrite or an archiving changes the stamp, so it is read again then.
             stamp = _record_stamp(job_id)
             if stamp is not None and (hit := _FINISHED_SUMMARIES.get(job_id)) and hit[0] == stamp:

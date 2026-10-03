@@ -42,7 +42,7 @@ def compute() -> dict:
     why = "" if usable else (
         "no key with credit on any leg of the auto routes (tools: " + ", ".join(chains["tools"]["legs"])
         + "; tool-free: " + ", ".join(chains["tool_free"]["legs"]) + "). Put a key where the runner looks "
-        "(.secrets/<provider>_api_keys in the hswarm checkout, or the provider's env var), then `python hswarm.py doctor`")
+        f"({config.SECRETS_DIR / '<provider>_api_keys'}, or the provider's env var), then `python -m hswarm doctor`")
     return {"ts": now_iso(), "usable": usable, "why": why, "chains": chains, "selection_policy": "published-benchmarks"}
 
 
