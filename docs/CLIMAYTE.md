@@ -1291,8 +1291,9 @@ alone. Checks run through the owner's `fairjob` wrapper (weight 3) from `app/`, 
    `server/tests/climayte-placement.test.ts`. Check: `bun test server/tests/climayte-placement.test.ts
    server/tests/climayte-scorecard.test.ts` (a 20-task wave's manager never answers `split needed`;
    `pickConfig('manage', [], 0)` is Sonnet low).
-7. **The orchestrator's entry and exit.** `climayte_manage` and `climayte_wave_verify` MCP tools,
-   `POST /api/corch/waves` and `POST /api/corch/waves/:id/verify`, the under-3-tasks refusal, the
+7. **The orchestrator's entry and exit. BUILT (2026-10-03).** `climayte_manage` and `climayte_wave_verify` MCP tools,
+   `POST /api/corch/waves`, `POST /api/corch/waves/:id/verify`, `GET /api/corch/waves` (`{ waves }`,
+   newest first, each exactly the stored record) and `GET /api/corch/waves/:id` (404 if unknown), the under-3-tasks refusal, the
    answer carrying the waiter command, and `climayte_status { wave }`. Files: `server/src/mcp.ts`,
    `server/src/routes/climayte.ts`, `server/src/climayte.ts`, `server/tests/climayte-wave.test.ts`.
    Check: `bun test server/tests/climayte-wave.test.ts server/tests/climayte.test.ts`

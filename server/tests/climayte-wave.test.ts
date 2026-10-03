@@ -12,6 +12,8 @@ import {
   climayteTotals,
   climayteVerdict,
   climayteWait,
+  climayteWaveStart,
+  climayteWaveVerify,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   startCliMayte,
@@ -1007,4 +1009,130 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
     expect(mine?.wakes).toBe(2)
     expect(mine?.pct).toBeGreaterThan(0)
   }, 90_000)
+})
+
+describe('the orchestrator starts and verifies a wave (piece 7)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-entry-'))
+  const repo = join(root, 'repo')
+  const acct = join(root, 'acct')
+  const groups: string[] = []
+  const fake = [process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')]
+  const task = (key: string, extra: Record<string, unknown> = {}) => ({
+    key,
+    prompt: `do ${key}`,
+    kind: 'code',
+    paths: ['src/**'],
+    ...extra,
+  })
+  const three = [task('a'), task('b'), task('c', { after: ['a'] })]
+  const until = async (ok: () => boolean, ms = 25_000) => {
+    const deadline = Date.now() + ms
+    while (!ok() && Date.now() < deadline) await climayteWait({}, 1_000)
+    return ok()
+  }
+
+  beforeAll(() => {
+    mkdirSync(repo, { recursive: true })
+    mkdirSync(acct, { recursive: true })
+    execFileSync('git', ['init', '-q'], { cwd: repo, windowsHide: true })
+    setCliMayteClaudeCommand(fake)
+    setCliMayteAccountsProvider(() => [
+      { id: 'entry-1', num: 1, name: 'entry', configDir: acct, sessionPct: 0, weekPct: 0 },
+    ])
+    startCliMayte()
+  })
+  afterAll(() => {
+    for (const group of groups) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  const start = (tasks: unknown[] = three) => {
+    const r = climayteWaveStart({ plan: join(root, 'plan.md'), cwd: repo, tasks, branch: 'main' })
+    groups.push(`mgr-${r.wave}`)
+    return r
+  }
+
+  test('a wave under 3 tasks, a manage task, a repeated key or an unknown `after` is refused and starts nothing', () => {
+    const before = climayteList({}).length
+    const run = (tasks: unknown[]) => () =>
+      climayteWaveStart({ plan: 'p.md', cwd: repo, tasks, branch: 'main' })
+    expect(run([task('a'), task('b')])).toThrow('use climayte_run')
+    expect(run([...three, task('m', { kind: 'manage' })])).toThrow('manage')
+    expect(run([...three, task('a')])).toThrow('used twice')
+    expect(run([task('a', { after: ['zz'] }), task('b'), task('c')])).toThrow('unknown key')
+    expect(climayteList({}).length).toBe(before)
+  })
+
+  test('a started wave is running with pending tasks and only its manager exists', () => {
+    const r = start()
+    const wave = readWave(acct, r.wave)
+    expect(wave).toMatchObject({ status: 'running', managerId: r.managerId, maxRounds: 3 })
+    expect(wave?.tasks.map((t) => t.state)).toEqual(['pending', 'pending', 'pending'])
+    expect(climayteList({ group: `mgr-${r.wave}` }).map((w) => w.kind)).toEqual(['manage'])
+    expect(climayteList({ group: wave?.group })).toHaveLength(0)
+    expect(r.waiter).toBe(
+      `python ~/.claude/tools/climayte_wait.py --group 'mgr-${r.wave}' --unjudged --wake-on done,failed,cancelled`,
+    )
+  })
+
+  /** A reported wave whose one task passed provisionally (the daemon's judgement, by: 'wave'). */
+  const reportedWave = async () => {
+    const r = start()
+    const run = climayteRun({
+      tasks: [
+        {
+          prompt: 'x',
+          cwd: repo,
+          title: 'x',
+          kind: 'code',
+          model: 'opus',
+          effort: 'high',
+          modelWhy: 'the rung this test judges',
+        },
+      ],
+      group: `entry-tasks-${r.wave}`,
+    })
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+    await until(() => climayteList({ id })[0]?.status === 'done')
+    climayteVerdict(id, { verdict: 'pass', note: 'proof', by: 'wave', provisional: true })
+    const wave = readWave(acct, r.wave) as CliMayteWave
+    const t = wave.tasks[0] as CliMayteWave['tasks'][0]
+    t.workerId = id
+    t.state = 'passed'
+    wave.status = 'reported'
+    writeWave(acct, wave)
+    return { ...r, id }
+  }
+  const code = () => climayteScorecard().rows.find((r) => r.kind === 'code' && r.effort === 'high')
+
+  test('verify ok confirms the provisional passes and passes the manager; an unreported wave is refused', async () => {
+    const { wave, managerId, id } = await reportedWave()
+    const pending = start()
+    expect(climayteWaveVerify(pending.wave, { ok: true })).toMatchObject({ ok: false, status: 409 })
+
+    const passes = code()?.pass ?? 0
+    expect(climayteWaveVerify(wave, { ok: true })).toMatchObject({ ok: true, status: 200 })
+    expect(readWave(acct, wave)?.status).toBe('verified')
+    expect(climayteList({ id })[0]?.verdicts?.[0]?.provisional).toBeUndefined()
+    expect(code()?.pass).toBe(passes + 1)
+    expect(climayteList({ id: managerId })[0]?.verdicts?.at(-1)).toMatchObject({ verdict: 'pass' })
+    // Once decided it is no longer reported: a second verify is refused.
+    expect(climayteWaveVerify(wave, { ok: false, note: 'again' }).status).toBe(409)
+  }, 60_000)
+
+  test('verify not ok confirms none and fails the manager with the note', async () => {
+    const { wave, managerId, id } = await reportedWave()
+    const passes = code()?.pass ?? 0
+    expect(climayteWaveVerify(wave, { ok: false, note: 'CI red' })).toMatchObject({ ok: true })
+    expect(readWave(acct, wave)?.status).toBe('rejected')
+    expect(climayteList({ id })[0]?.verdicts?.[0]?.provisional).toBe(true)
+    expect(code()?.pass ?? 0).toBe(passes)
+    expect(climayteList({ id: managerId })[0]?.verdicts?.at(-1)).toMatchObject({
+      verdict: 'fail',
+      note: 'CI red',
+    })
+  }, 60_000)
 })

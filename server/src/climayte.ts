@@ -2524,6 +2524,225 @@ export function climayteVerdict(
   return { ok: true, message, next }
 }
 
+/** Every directory a wave record may sit in: each account's config dir (readWave's `configDir`). */
+function waveDirs(): string[] {
+  const dirs: string[] = []
+  try {
+    for (const a of accountsProvider()) if (!dirs.includes(a.configDir)) dirs.push(a.configDir)
+  } catch {
+    // no accounts: no waves
+  }
+  return dirs
+}
+
+/** A wave by id, with the directory it is stored in, or null. */
+function findWave(id: string): { wave: CliMayteWave; configDir: string } | null {
+  for (const configDir of waveDirs()) {
+    const wave = readWave(configDir, id)
+    if (wave) return { wave, configDir }
+  }
+  return null
+}
+
+/** Every wave on record, newest first, exactly as stored (GET /api/corch/waves). */
+export function climayteWaves(): CliMayteWave[] {
+  const out = new Map<string, CliMayteWave>()
+  for (const dir of waveDirs()) {
+    let names: string[] = []
+    try {
+      names = readdirSync(join(dir, 'corch', 'waves'))
+    } catch {
+      continue
+    }
+    for (const n of names) {
+      if (!n.endsWith('.json') || out.has(n.slice(0, -5))) continue
+      const wave = readWave(dir, n.slice(0, -5))
+      if (wave) out.set(wave.id, wave)
+    }
+  }
+  return [...out.values()].sort((a, b) => b.createdAt - a.createdAt)
+}
+
+export function climayteWave(id: string): CliMayteWave | null {
+  return findWave(id)?.wave ?? null
+}
+
+/** The wave's own tasks are no `manage` kind, and a wave needs at least this many tasks: smaller jobs
+ *  keep climayte_run. */
+const WAVE_MIN_TASKS = 3
+
+/** Piece 7: write a wave and start its manager; nothing else starts (the manager dispatches).
+ *  Throws an Error with the reason when the dispatch is refused. */
+export function climayteWaveStart(input: {
+  plan: unknown
+  cwd: unknown
+  tasks: unknown
+  verify?: unknown
+  branch?: unknown
+  maxRounds?: unknown
+}): { wave: string; managerId: string; waiter: string } {
+  load()
+  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+  const plan = str(input.plan)
+  const cwd = str(input.cwd)
+  if (!plan) throw new Error('plan (the plan file path) is required')
+  if (!cwd || !existsSync(cwd)) throw new Error(`cwd does not exist: ${cwd || '(none)'}`)
+  const raw = Array.isArray(input.tasks) ? (input.tasks as Array<Record<string, unknown>>) : []
+  if (raw.length < WAVE_MIN_TASKS)
+    throw new Error(
+      `A wave needs at least ${WAVE_MIN_TASKS} tasks (got ${raw.length}): use climayte_run for small jobs.`,
+    )
+  const keys = new Set<string>()
+  const tasks: CliMayteWave['tasks'] = raw.map((t, i) => {
+    const key = str(t?.key)
+    const prompt = str(t?.prompt)
+    if (!key) throw new Error(`task ${i + 1}: key is required`)
+    if (keys.has(key)) throw new Error(`task key "${key}" is used twice`)
+    keys.add(key)
+    if (!prompt) throw new Error(`task "${key}": prompt is required`)
+    if (str(t.kind) === 'manage')
+      throw new Error(
+        `task "${key}": a wave's tasks cannot be of kind manage (no manager of managers)`,
+      )
+    if (t.kind !== undefined) climayteKind(t.kind)
+    if (!Array.isArray(t.paths) || t.paths.some((p) => typeof p !== 'string'))
+      throw new Error(`task "${key}": paths must be a list of globs ([] = must not commit)`)
+    return {
+      key,
+      prompt,
+      title: str(t.title) || firstLine(prompt, 60),
+      kind: str(t.kind) || 'code',
+      check: str(t.check) || null,
+      paths: t.paths as string[],
+      after: Array.isArray(t.after)
+        ? t.after.filter((a): a is string => typeof a === 'string')
+        : [],
+      workerId: null,
+      state: 'pending',
+      proof: null,
+    }
+  })
+  for (const t of tasks)
+    for (const a of t.after)
+      if (!keys.has(a)) throw new Error(`task "${t.key}": after names an unknown key "${a}"`)
+  const rounds = Number(input.maxRounds)
+  const maxRounds = Number.isInteger(rounds) && rounds >= 1 ? rounds : 3
+  let branch = str(input.branch)
+  if (!branch) {
+    const r = Bun.spawnSync(['git', 'branch', '--show-current'], { cwd, windowsHide: true })
+    branch = r.stdout.toString().trim() || 'main'
+  }
+  const dir = waveDirs()[0]
+  if (!dir) throw new Error('No CLI account is signed in to run a wave on.')
+  const id = `wv-${hex(6)}`
+  const now = Date.now()
+  const manager = climayteRun({
+    tasks: [
+      {
+        prompt: `You are the manager of wave ${id}. Plan: ${plan}. Start with the tasks whose "after" is met.`,
+        cwd,
+        title: `manager ${id}`,
+        kind: 'manage',
+      },
+    ],
+    group: `mgr-${id}`,
+  })
+  const managerId = manager.workers[0]?.id as string
+  const mw = workers.get(managerId)
+  if (mw) {
+    mw.wave = id
+    save()
+  }
+  writeWave(dir, {
+    id,
+    group: `wave-${id}`,
+    managerId,
+    plan,
+    cwd,
+    branch,
+    verify: str(input.verify) || null,
+    tasks,
+    escalations: [],
+    notes: '',
+    rounds: 0,
+    maxRounds,
+    batch: { size: Math.max(1, Math.min(tasks.length, 3)), settleS: 600, held: [], since: null },
+    status: 'running',
+    report: null,
+    createdAt: now,
+    updatedAt: now,
+  })
+  return {
+    wave: id,
+    managerId,
+    waiter: `python ~/.claude/tools/climayte_wait.py --group 'mgr-${id}' --unjudged --wake-on done,failed,cancelled`,
+  }
+}
+
+/** Piece 7: the orchestrator's one verification of a reported wave. `ok` confirms every provisional
+ *  pass of its tasks (they count in the scorecard from then on) and records a pass on the manager;
+ *  not `ok` confirms none and records a fail on the manager, `retry: false` (the wave is over). */
+export function climayteWaveVerify(
+  id: string,
+  input: { ok: unknown; note?: unknown },
+): { ok: boolean; status: number; message: string } {
+  load()
+  const found = findWave(id)
+  if (!found) return { ok: false, status: 404, message: `No such wave: ${id}` }
+  const { wave, configDir } = found
+  if (wave.status !== 'reported')
+    return {
+      ok: false,
+      status: 409,
+      message: `Wave ${id} is ${wave.status}: only a reported wave can be verified.`,
+    }
+  const accepted = input.ok === true
+  const note =
+    typeof input.note === 'string' && input.note.trim()
+      ? input.note.trim().slice(0, 1000)
+      : accepted
+        ? null
+        : 'The orchestrator rejected the wave.'
+  let confirmed = 0
+  if (accepted) {
+    for (const t of wave.tasks) {
+      const w = t.workerId ? workers.get(t.workerId) : undefined
+      if (!w) continue
+      for (const v of w.verdicts ?? []) {
+        if (v.by === 'wave' && v.provisional) {
+          delete v.provisional
+          confirmed++
+        }
+      }
+      changed(w)
+    }
+  }
+  const manager = workers.get(wave.managerId)
+  if (manager) {
+    // Recorded directly: the manager may still be ending its turn, which climayteVerdict refuses.
+    manager.verdicts = [
+      ...(manager.verdicts ?? []),
+      verdictRecord(manager, accepted ? 'pass' : 'fail', note, 'orchestrator'),
+    ]
+    journal(manager, 'verdict', {
+      verdict: accepted ? 'pass' : 'fail',
+      notice: note ? firstLine(note) : undefined,
+      kind: 'manage',
+    })
+    changed(manager)
+  }
+  wave.status = accepted ? 'verified' : 'rejected'
+  wave.updatedAt = Date.now()
+  writeWave(configDir, wave)
+  return {
+    ok: true,
+    status: 200,
+    message: accepted
+      ? `Wave ${id} verified: ${confirmed} provisional pass(es) confirmed.`
+      : `Wave ${id} rejected: no provisional pass confirmed.`,
+  }
+}
+
 /** What works, per kind of task: every verdict on record summed by setting, with what a task cost
  *  on average as a share of a Pro 5-hour window, and the setting an `auto` task of that kind gets
  *  next (`pick`; an exploring pick one rung cheaper is not marked). */

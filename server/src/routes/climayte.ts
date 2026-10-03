@@ -23,6 +23,10 @@ import {
   climayteVerdict,
   climayteVerdicts,
   climayteWait,
+  climayteWave,
+  climayteWaveStart,
+  climayteWaves,
+  climayteWaveVerify,
 } from '../climayte'
 import { remoteSnapshots } from '../climayte-remote'
 import { queueSharingOn } from '../core/cli-login-sync'
@@ -203,6 +207,37 @@ app.post('/api/corch/verdicts', async (c) => {
       by: body.by === 'owner' ? 'owner' : 'orchestrator',
     }),
   )
+})
+// --- waves (the CLIManager, docs/CLIMAYTE.md "Manager") --------------------------------
+// A refused wave (under 3 tasks, a manage task, a repeated key, an unknown `after`) is the caller's
+// mistake: 400 with the reason, nothing started.
+app.post('/api/corch/waves', async (c) => {
+  const body = await jsonBody(c)
+  try {
+    return c.json(
+      climayteWaveStart({
+        plan: body.plan,
+        cwd: body.cwd,
+        tasks: body.tasks,
+        verify: body.verify,
+        branch: body.branch,
+        maxRounds: body.max_rounds ?? body.maxRounds,
+      }),
+    )
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
+  }
+})
+app.get('/api/corch/waves', (c) => c.json({ waves: climayteWaves() }))
+app.get('/api/corch/waves/:id', (c) => {
+  const wave = climayteWave(c.req.param('id'))
+  return wave ? c.json(wave) : c.json({ error: 'wave not found' }, 404)
+})
+app.post('/api/corch/waves/:id/verify', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.ok !== 'boolean') return c.json({ error: 'ok (true or false) is required' }, 400)
+  const r = climayteWaveVerify(c.req.param('id'), { ok: body.ok, note: body.note })
+  return c.json({ ok: r.ok, message: r.message }, r.status as 200 | 404 | 409)
 })
 // What works per kind of task, from every verdict (climayte-scorecard.ts).
 app.get('/api/corch/scorecard', (c) => c.json(climayteScorecard()))

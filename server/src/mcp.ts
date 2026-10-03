@@ -797,6 +797,69 @@ export const TOOLS: McpEngineTool[] = [
     },
   },
   {
+    name: 'climayte_manage',
+    description:
+      "MUTATES: hand a big job to a CliMayte MANAGER (the CLIManager): you write the plan to a file and give the task list; the manager dispatches the workers, waits, has the daemon judge each one by command (its check, its commits on the branch, its diff inside the brief's paths), re-dispatches, and wakes you ONCE with a short report. Choose it from about 5 workers or several rounds (`after` orders them); small jobs (under 3 tasks is refused) use climayte_run. Each task: { key, prompt, kind, title?, check?, paths (globs the diff may touch; [] = must not commit), after? (keys that must pass first) }; no task may be kind `manage`. `verify` is the command you run on the merged result. The answer carries `wave`, `managerId` and `waiter`: run that waiter command (it waits on the manager alone), read its report, run `verify`, then call climayte_wave_verify. A wave's passes stay provisional and out of the scorecard until you verify it.",
+    inputSchema: S(
+      {
+        plan: { type: 'string', description: 'Absolute path of the plan file.' },
+        cwd: { type: 'string', description: 'The repository the wave works in.' },
+        tasks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              key: { type: 'string', description: 'A stable name from the plan.' },
+              prompt: { type: 'string' },
+              kind: { type: 'string' },
+              title: { type: 'string' },
+              check: { type: 'string', description: 'A command that proves it is done.' },
+              paths: { type: 'array', items: { type: 'string' } },
+              after: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['key', 'prompt', 'kind', 'paths'],
+          },
+        },
+        verify: { type: 'string' },
+        branch: { type: 'string', description: "Default: cwd's current branch." },
+        max_rounds: { type: 'number', description: 'Re-dispatches per key (default 3).' },
+      },
+      ['plan', 'cwd', 'tasks'],
+    ),
+    run: (a) =>
+      api('/api/corch/waves', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          plan: a.plan != null ? str(a.plan) : undefined,
+          cwd: a.cwd != null ? str(a.cwd) : undefined,
+          tasks: Array.isArray(a.tasks) ? a.tasks : [],
+          verify: a.verify != null ? str(a.verify) : undefined,
+          branch: a.branch != null ? str(a.branch) : undefined,
+          max_rounds: a.max_rounds != null ? Number(a.max_rounds) : undefined,
+        }),
+      }),
+  },
+  {
+    name: 'climayte_wave_verify',
+    description:
+      'MUTATES: your one verification of a REPORTED wave (climayte_manage), after you ran its `verify` command on the branch head. ok: true confirms every provisional pass so it counts in the scorecard, and records a pass on the manager. ok: false confirms none and fails the manager with `note` (nothing is sent back; record your own fails on the tasks you blame with climayte_verdict). Refused unless the wave is reported.',
+    inputSchema: S(
+      {
+        wave: { type: 'string' },
+        ok: { type: 'boolean' },
+        note: { type: 'string' },
+      },
+      ['wave', 'ok'],
+    ),
+    run: (a) =>
+      api(`/api/corch/waves/${encodeURIComponent(str(a.wave))}/verify`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ ok: a.ok === true, note: a.note != null ? str(a.note) : undefined }),
+      }),
+  },
+  {
     name: 'climayte_status',
     description: `Read CliMayte workers (status, account, lastActivity, result/error, moves, cost). \`id\` answers that ONE worker's full detail, with \`events\` (its last 60 event lines on every account: read these to see why it failed). Otherwise a list, newest first, without prompts and with the last 3 attempts: scoped by \`group\` (all of its workers), else every active worker plus the ${RECENT_FINISHED} most recently finished (\`limit\` changes that number; \`active: true\` lists only queued/running/waiting ones). With \`wait_seconds\` (1..${CLIMAYTE_MAX_WAIT_S}) it WAITS up to that long for the next status change in scope and then answers; call it again to keep waiting. Use that instead of polling. Longer waits are cut to ${CLIMAYTE_MAX_WAIT_S}: an MCP client drops a call held about 60 s (measured 2026-09-30: 55 s answered, 110 s and 300 s timed out with nothing returned). The story of a run (dispatches, accounts picked and why, moves, retries, finishes) is climayte_log. \`report: true\` answers the REPORT VIEW instead: one compact row per worker with its status, \`judged\` (a verdict already covers its newest work), its newest \`verdict\` and who gave it (\`by\`: check, orchestrator, owner), \`usedPct\` of a Pro 5-hour window, \`attempts\` and how each ended, and \`report\` (the recap its first turn ends with, else that turn from the top, cut to \`chars\`). Read finished work with it, several workers in one call (\`ids\`), then judge them with one climayte_verdict { ids }.`,
     inputSchema: S({
@@ -827,10 +890,23 @@ export const TOOLS: McpEngineTool[] = [
         description: `How many finished workers to list beside the active ones (default ${RECENT_FINISHED} without a group, all of them with one).`,
       },
       wait_seconds: { type: 'number' },
+      wave: {
+        type: 'string',
+        description:
+          "A wave id (from climayte_manage): lists that wave's workers plus its manager, newest first.",
+      },
     }),
-    run: (a) => {
+    run: async (a) => {
       const wait = Math.min(CLIMAYTE_MAX_WAIT_S, Math.max(0, Number(a.wait_seconds) || 0))
       const ids = Array.isArray(a.ids) ? a.ids.map((x) => str(x)).filter(Boolean) : []
+      if (a.wave != null && str(a.wave)) {
+        const w = str(a.wave)
+        const wave = (await api(`/api/corch/waves/${encodeURIComponent(w)}`)) as { group?: string }
+        const part = (group: string) =>
+          api(`/api/corch/workers${qs({ group, brief: 1, all: a.all === true ? 1 : undefined })}`)
+        const [manager, tasks] = await Promise.all([part(`mgr-${w}`), part(wave?.group ?? '')])
+        return [...(manager as unknown[]), ...(tasks as unknown[])]
+      }
       if (a.id != null && str(a.id) && a.report !== true)
         return api(
           `/api/corch/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined })}`,
