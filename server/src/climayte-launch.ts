@@ -53,7 +53,9 @@ import {
 import { ownerMcpServers, syncOwnerClaude } from './climayte-owner-sync'
 import { launchRunner } from './climayte-runner'
 import { readWave, waveStateText } from './climayte-wave'
+import { PORT } from './config'
 import { MCP_PATH, MCP_SERVER_KEY } from './mcp-register'
+import { getOrchestratorDaemonUrl } from './orchestrator'
 
 /** Piece 6: when a manager's conversation exceeds this (the newest request's input, cache reads and
  *  cache writes), the next wake starts a fresh session from waveStateText instead of a handoff note. */
@@ -340,13 +342,12 @@ function writeWorkerMcp(w: CliMayteWorker): string | null {
   // The daemon listens on 127.0.0.1; the id is not a secret (piece 4, docs/CLIMAYTE.md).
   if (w.kind === 'manage') {
     // The manager's MCP config lists the manager endpoint with only a URL (no header, no token).
-    // The URL is constructed with localhost:7787 (the default daemon port); if the daemon
-    // hopped to a different port, this will be resolved at runtime through MCP connection
-    // mechanics. The manager connects back to the daemon on localhost, where it is always
-    // accessible.
+    // The port this daemon actually bound (index.ts tells the orchestrator module at boot); PORT
+    // is only the preferred one and the daemon hops off it when it is busy.
+    const base = getOrchestratorDaemonUrl() ?? `http://127.0.0.1:${PORT}`
     servers['climayte-manager'] = {
       type: 'http',
-      url: `http://127.0.0.1:7787/api/corch/mcp/${w.id}`,
+      url: `${base}/api/corch/mcp/${w.id}`,
     }
   }
 

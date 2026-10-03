@@ -259,6 +259,7 @@ export interface CliMayteWave {
     paths: string[] // globs the diff may touch; [] = must not commit
     after: string[] // keys that must pass first (rounds)
     workerId: string | null // the current worker for this key
+    dispatches?: number // workers started for this key (wave_dispatch); absent on older records = 0
     state: 'pending' | 'running' | 'passed' | 'failed' | 'escalated'
     proof: { check: boolean | null; commits: string[]; paths: boolean | null; note: string } | null
   }>

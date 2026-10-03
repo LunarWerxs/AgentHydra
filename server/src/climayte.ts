@@ -1946,6 +1946,8 @@ export function climayteRun(input: {
   size?: string
   /** Make new workers even for tasks an earlier dispatch of this group already made. */
   copies?: boolean
+  /** The wave these workers are tasks of (set by the manager's wave_dispatch). */
+  wave?: string
 }): RunReply {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
@@ -1995,6 +1997,7 @@ export function climayteRun(input: {
     newWorker(input.tasks[i] as RunTask, settings[i], sized[k], group, input.accounts, now),
   )
   for (const [k, w] of made.entries()) {
+    if (input.wave) w.wave = input.wave
     workers.set(w.id, w)
     journal(w, 'dispatched', {
       cwd: w.cwd,
@@ -2565,6 +2568,20 @@ export function climayteWaves(): CliMayteWave[] {
 
 export function climayteWave(id: string): CliMayteWave | null {
   return findWave(id)?.wave ?? null
+}
+
+/** Change a wave record and write it: `fn` gets the copy the tick may be holding (modifiedWaves) or
+ *  the one on disk, so a write here is not overwritten by a stale copy at the end of the tick.
+ *  Null when no such wave exists. */
+export function climayteWaveEdit<T>(id: string, fn: (wave: CliMayteWave) => T): T | null {
+  load()
+  const held = modifiedWaves.get(id)
+  const found = held ?? findWave(id)
+  if (!found) return null
+  const out = fn(found.wave)
+  found.wave.updatedAt = Date.now()
+  writeWave(found.configDir, found.wave)
+  return out
 }
 
 /** The wave's own tasks are no `manage` kind, and a wave needs at least this many tasks: smaller jobs

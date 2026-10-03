@@ -23,7 +23,7 @@ import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
 import { climayteRunningCount, startCliMayte } from './climayte'
-import { MANAGER_MCP_TOOLS } from './climayte-manager-mcp'
+import { registerManagerMcpRoute } from './climayte-manager-mcp'
 import {
   APP_ROOT,
   appEnv,
@@ -406,63 +406,8 @@ app.get('/api/mcp', (c) =>
 )
 
 // --- manager MCP endpoint: `/api/corch/mcp/:managerId` gives a manager its wave's tools
-// Refused unless that worker is the live manager of a running wave and the calling process is
-// that worker's CLI (see docs/CLIMAYTE.md, "Scope and identity of the manager endpoint").
-app.post('/api/corch/mcp/:managerId', async (c) => {
-  const managerId = c.req.param('managerId')
-  if (!managerId) return c.json({ error: 'Manager ID required' }, 400)
-
-  // Parse the MCP request body.
-  let body: unknown
-  try {
-    body = await c.req.json()
-  } catch {
-    body = PARSE_ERROR
-  }
-
-  // Verify the caller is the live manager's CLI process.
-  // The check: manager exists, manager's worker has a wave (piece 1), wave is running,
-  // and manager's latest attempt.pid matches callerPidOf(c).
-  const callerPid = await callerPidOf(c)
-
-  // Access the worker directly from climayte's internal store to get the full attempt details.
-  // This is intentional: we need the pid field which the public view omits.
-  let managerWorker: any = null
-  try {
-    const { load, workers } = await import('./climayte-core')
-    load()
-    managerWorker = workers.get(managerId)
-  } catch {
-    // If climayte-core is not available, refuse the request.
-  }
-
-  // Refuse if manager doesn't exist, has no wave, or caller's pid doesn't match.
-  if (!managerWorker || !managerWorker.wave) {
-    return c.json({ error: 'Not a valid manager of a running wave' }, 403)
-  }
-
-  if (!managerWorker.attempts.length) {
-    return c.json({ error: 'Not a valid manager of a running wave' }, 403)
-  }
-
-  const latestAttempt = managerWorker.attempts[managerWorker.attempts.length - 1]
-  if (latestAttempt.pid !== callerPid) {
-    return c.json({ error: "Caller is not the manager's CLI process" }, 403)
-  }
-
-  // Handler context with manager tools and a scope check for wave access.
-  const ctx = {
-    serverInfo: {
-      name: 'climayte-manager',
-      version: VERSION,
-    },
-    tools: MANAGER_MCP_TOOLS,
-    instructions:
-      'You are the manager of a wave. These tools let you read the wave state, dispatch tasks, handle escalations, and report when done. You never deploy, publish or release. End with a line `Commits: <sha>...` or `Commits: none` in every brief.',
-  }
-  const { status, json } = await handleMcpHttp(body, ctx, handleMcpRpc)
-  return json === null ? c.body(null, status as 202) : c.json(json, status as 200)
-})
+// (climayte-manager-mcp.ts; docs/CLIMAYTE.md, "Scope and identity of the manager endpoint").
+registerManagerMcpRoute(app, callerPidOf)
 
 // --- self-update (source: git engine; compiled: GitHub Releases — see server/src/updater.ts) --
 app.get('/api/update', async (c) => {
