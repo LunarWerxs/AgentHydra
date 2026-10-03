@@ -82,3 +82,12 @@ first: `cmd /c rmdir <workspace>\live\orchestrator\state`, then `git worktree re
 Delete a junction only with `cmd /c rmdir`. `Remove-Item -Recurse` in Windows PowerShell 5.1 follows
 the junction and deletes the state it points to. Run `orch.py schedule_jobs --apply` from `live/` so
 the wrappers it writes name the live checkout.
+
+## Keeping the state where it is
+
+`-StateDir <path>` naming the working checkout's own real `orchestrator\state` folder (compared
+case-insensitively, after junctions and trailing separators are resolved) moves nothing: no copy, no
+rename, no junction of `app\`'s folder. The script only links `live\orchestrator\state` to that folder,
+sets `ORCHESTRATOR_STATE_DIR` to it and re-points the wrappers' code paths to `live\`. Processes that
+hold state files are not blockers, since nothing is renamed. `-Undo` for this case removes the live
+junction and the variable (the link only) and never touches the folder.

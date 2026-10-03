@@ -270,11 +270,41 @@ $canonHas = (Test-Path -LiteralPath $Canonical) -and @(Get-ChildItem -LiteralPat
 $canonOurs = Test-Path -LiteralPath (Join-Path $Canonical $Marker)
 $leftovers = @(if (Test-Path -LiteralPath $MovingRoot) { Get-ChildItem -LiteralPath $MovingRoot -Directory -Filter 'state-moving-*' })
 
-if ($Direction -eq 'back') {
+# The state already lives in the working checkout's own real folder and -StateDir (or the env var)
+# names that very folder: nothing moves. Compared after junctions on the path are resolved.
+function Resolve-RealPath([string]$path) {
+  $full = [IO.Path]::GetFullPath($path).TrimEnd('\')
+  $tail = ''
+  $cur = $full
+  while ($cur -and -not (Test-Path -LiteralPath $cur)) {
+    $parent = Split-Path $cur -Parent
+    if (-not $parent -or $parent -eq $cur) { return $full }
+    $tail = '\' + (Split-Path $cur -Leaf) + $tail
+    $cur = $parent
+  }
+  for ($i = 0; $i -lt 16; $i++) {
+    $t = Get-JunctionTarget $cur
+    if ($t -and $t -ne '?') { $cur = [IO.Path]::GetFullPath($t).TrimEnd('\') } else { break }
+  }
+  return $cur + $tail
+}
+$InPlace = $srcIsDir -and ((Resolve-RealPath $Canonical) -ieq (Resolve-RealPath $SrcState))
+
+if ($InPlace -and $Direction -eq 'back') {
+  Info "state stays in place: $Canonical (nothing moves; the folder is never touched)"
+  $liveTarget = Get-JunctionTarget $LiveState
+  if ($liveTarget) {
+    if (Test-SamePath $liveTarget $Canonical) { Step "remove the junction $LiveState (the link only, not the folder it points to)" }
+    else { Warn "$LiveState is a junction to $liveTarget, not to $Canonical; left alone." }
+  } else { Info "no junction at $LiveState." }
+  if (-not $DryRun -and $liveTarget -and (Test-SamePath $liveTarget $Canonical)) { [IO.Directory]::Delete($LiveState, $false) }
+} elseif ($Direction -eq 'back') {
   Info "stays in $Canonical. $SrcState stays a junction to it and ORCHESTRATOR_STATE_DIR stays set:"
   Info 'moving it back would split it again. Nothing to undo.'
 } else {
-  if ($srcTarget) {
+  if ($InPlace) {
+    Info "state stays in place: $Canonical (nothing moves)"
+  } elseif ($srcTarget) {
     if (Test-SamePath $srcTarget $Canonical) { Info "already moved: $SrcState -> $Canonical (junction)" }
     else { Problem "$SrcState is a junction to $srcTarget, not to $Canonical." }
   } elseif ($srcIsDir) {
@@ -293,6 +323,7 @@ if ($Direction -eq 'back') {
   } else {
     Step "junction $SrcState -> $Canonical   (no state folder there yet)"
   }
+  if ($InPlace) { $leftovers = @() }
   foreach ($l in $leftovers) { Step "finish an earlier cut: catch-up, verify and delete $($l.FullName)" }
 
   $liveTarget = Get-JunctionTarget $LiveState
@@ -308,7 +339,7 @@ if ($Direction -eq 'back') {
 
 if (-not $DryRun -and $Direction -eq 'forward' -and $script:Problems.Count -eq 0) {
   New-Item -ItemType Directory -Force -Path $Canonical | Out-Null
-  if ($srcIsDir) {
+  if ($srcIsDir -and -not $InPlace) {
     Set-Content -LiteralPath (Join-Path $Canonical $Marker) -Value "copy from $SrcState in progress" -Encoding ASCII
     Invoke-Robocopy $SrcState $Canonical @()
     New-Item -ItemType Directory -Force -Path $MovingRoot | Out-Null
@@ -323,7 +354,7 @@ if (-not $DryRun -and $Direction -eq 'forward' -and $script:Problems.Count -eq 0
     }
     $leftovers = @($leftovers) + @(Get-Item -LiteralPath $moving)
   }
-  if (-not (Get-JunctionTarget $SrcState)) {
+  if (-not $InPlace -and -not (Get-JunctionTarget $SrcState)) {
     if (Test-Path -LiteralPath $SrcState) {
       # Something wrote between the rename and the junction: fold it in, then link.
       Invoke-Robocopy $SrcState $Canonical @('/XO')
@@ -338,7 +369,7 @@ if (-not $DryRun -and $Direction -eq 'forward' -and $script:Problems.Count -eq 0
     if ($bad.Count) { Warn ("kept $($l.FullName): " + $bad.Count + ' file(s) not verified in the state dir: ' + (($bad | Select-Object -First 5) -join ', ')) }
     else { Remove-Item -LiteralPath $l.FullName -Recurse -Force; Info "verified and removed $($l.FullName)" }
   }
-  Remove-Item -LiteralPath (Join-Path $Canonical $Marker) -ErrorAction SilentlyContinue
+  if (-not $InPlace) { Remove-Item -LiteralPath (Join-Path $Canonical $Marker) -ErrorAction SilentlyContinue }
   if (-not (Get-JunctionTarget $LiveState)) {
     if (Test-Path -LiteralPath $LiveState) { Remove-Item -LiteralPath $LiveState -Force }   # empty, checked above
     New-Item -ItemType Junction -Path $LiveState -Target $Canonical | Out-Null
@@ -357,6 +388,11 @@ if ($Direction -eq 'forward') {
     Step "ORCHESTRATOR_STATE_DIR: $old -> $Canonical"
     if (-not $DryRun -and $script:Problems.Count -eq 0) { [Environment]::SetEnvironmentVariable('ORCHESTRATOR_STATE_DIR', $Canonical, 'User') }
   }
+} elseif ($InPlace) {
+  if ($userStateVar -and (Test-SamePath $userStateVar $Canonical)) {
+    Step "remove ORCHESTRATOR_STATE_DIR (was $Canonical; the folder itself is not touched)"
+    if (-not $DryRun) { [Environment]::SetEnvironmentVariable('ORCHESTRATOR_STATE_DIR', $null, 'User') }
+  } else { Info 'ORCHESTRATOR_STATE_DIR is not set to this folder; left alone.' }
 } else { Info 'ORCHESTRATOR_STATE_DIR stays (the state stays in one place).' }
 
 # =============================================================================================
