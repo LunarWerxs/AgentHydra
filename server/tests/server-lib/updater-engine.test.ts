@@ -108,6 +108,15 @@ function failsOnCallsCmd(
   return [process.execPath, "-e", script];
 }
 
+// The budget of every test below: each one is a dozen-plus real git and bun spawns (init, commit,
+// clone, fetch, pull, install, build, reset, stash). 30s was a race, not a bound: run 1 of five
+// back-to-back runs under the fair-job wrapper (BelowNormal priority, other suites beside it) spent
+// 109.55s on this file and the stash test timed out at 30536ms (2026-10-03), while the same test
+// passes in a few seconds on an idle machine. 120s is the engine's own per-step bound
+// (APPLY_TIMEOUT_MS), so a slow machine reaches the engine's error before bun's, and a real hang
+// still fails in bounded time.
+const REAL_GIT_TEST_MS = 120_000;
+
 function updaterFor(appRoot: string, installCmd: string[], buildCmd: string[]) {
   return createUpdater({
     appRoot,
@@ -146,10 +155,10 @@ test("checkForUpdate + applyUpdate happy path: pulls, installs, builds, HEAD adv
   const after = await updater.checkForUpdate();
   expect(after.updateAvailable).toBe(false);
   expect(after.dirty).toBe(false);
-  // 30s: this exercises REAL git pull + install + build in a scratch repo, which runs ~5s locally
-  // and repeatedly hit the 5s default timeout on a cold Windows CI runner (2026-07-16). Widen the
-  // allowance rather than let a timing flake gate the suite. (Push upstream to the kit source.)
-}, 30_000);
+  // REAL git pull + install + build in a scratch repo: ~5s locally, and it repeatedly hit the 5s
+  // default on a cold Windows CI runner (2026-07-16), then the 30s that replaced it under load
+  // (2026-10-03). See REAL_GIT_TEST_MS. (Push upstream to the kit source.)
+}, REAL_GIT_TEST_MS);
 
 test("applyUpdate rolls back the checkout when build fails after the code swap", async () => {
   const remote = await remoteRepo();
@@ -188,7 +197,7 @@ test("applyUpdate rolls back the checkout when build fails after the code swap",
   const status = await updater.checkForUpdate();
   expect(status.currentCommit).toBe(preUpdateCommit);
   expect(status.dirty).toBe(false);
-}, 30_000); // real git+install+build — see the happy-path test's note on the widened timeout.
+}, REAL_GIT_TEST_MS); // real git+install+build — see the happy-path test's note on the widened timeout.
 
 test("a failed build reports the underlying error, not the command line the runner echoed", async () => {
   const remote = await remoteRepo();
@@ -223,7 +232,7 @@ test("a failed build reports the underlying error, not the command line the runn
   expect(message).toContain('Failed to resolve import "./button-variants"');
   expect(message).not.toContain("node scripts/i18n-check.mjs");
   expect(message).toContain("rolled back to the previous version");
-}, 30_000); // real git+install+build — see the happy-path test's note on the widened timeout.
+}, REAL_GIT_TEST_MS); // real git+install+build — see the happy-path test's note on the widened timeout.
 
 test("rollback message distinguishes a clean revert from a revert whose reinstall also fails", async () => {
   const remote = await remoteRepo();
@@ -252,7 +261,7 @@ test("rollback message distinguishes a clean revert from a revert whose reinstal
   const head = (await $`git -C ${local} rev-parse HEAD`.text()).trim();
   expect(head).toBe(preUpdateCommit);
   expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["install", "build", "install"]);
-}, 30_000); // real git+install+build — see the happy-path test's note on the widened timeout.
+}, REAL_GIT_TEST_MS); // real git+install+build — see the happy-path test's note on the widened timeout.
 
 /** A `bun -e` build step whose FIRST call edits a tracked file in the checkout and writes an
  *  untracked one beside it, then fails - the developer who typed into the tree while
@@ -319,7 +328,7 @@ test("an edit made during install/build survives the rollback, in a named stash,
   // one). The tracked edit is the stash commit's tree; untracked files ride on its third parent.
   expect((await $`git -C ${local} show stash@{0}:marker.txt`.text()).trim()).toBe("my edit, typed during the build");
   expect((await $`git -C ${local} show stash@{0}^3:notes.txt`.text()).trim()).toBe("an untracked file I was writing");
-}, 30_000);
+}, REAL_GIT_TEST_MS);
 
 test("a rollback of a tree nobody touched creates no stash", async () => {
   const remote = await remoteRepo();
@@ -337,7 +346,7 @@ test("a rollback of a tree nobody touched creates no stash", async () => {
   }
   expect(message).toBe("boom; rolled back to the previous version");
   expect((await $`git -C ${local} stash list`.text()).trim()).toBe("");
-}, 30_000);
+}, REAL_GIT_TEST_MS);
 
 // ── "newer" is not "applicable" ─────────────────────────────────────────────────────────────
 // check used to advertise any non-ancestor remote commit as an applicable update. Two shapes
@@ -373,7 +382,7 @@ test("a diverged checkout is reported as an update that cannot fast-forward, and
   // omission was invisible here and turned DevWebUI's "subprocess tests must set an explicit
   // timeout" guardrail red the moment a sync carried them downstream. The kit is less strict than
   // its consumers, and that asymmetry is exactly what sync.mjs warns about.
-}, 30_000);
+}, REAL_GIT_TEST_MS);
 
 test("a local branch with no remote counterpart follows the remote's HEAD branch, and apply pulls THAT branch", async () => {
   const remote = await remoteRepo();
@@ -394,7 +403,7 @@ test("a local branch with no remote counterpart follows the remote's HEAD branch
   expect((await $`git -C ${local} rev-parse HEAD`.text()).trim()).toBe(remoteHead);
   // Line endings normalised: a Windows clone with core.autocrlf checks the marker out as CRLF.
   expect(readFileSync(join(local, "marker.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("0.3.0\n");
-}, 30_000); // real git+install+build - see the note on the test above.
+}, REAL_GIT_TEST_MS); // real git+install+build - see the note on the test above.
 
 // Update cooldown: a commit younger than cooldownDays must never be adopted, even when it is the
 // tip; the update lands on the newest first-parent commit that is old enough, and once there the
@@ -435,4 +444,4 @@ test("cooldownDays adopts the newest aged commit and holds back a younger tip", 
   const after = await updater.checkForUpdate();
   expect(after.updateAvailable).toBe(false);
   expect(after.reason).toContain("7-day update cooldown");
-}, 30_000); // real git+install+build - see the note on the tests above.
+}, REAL_GIT_TEST_MS); // real git+install+build - see the note on the tests above.
