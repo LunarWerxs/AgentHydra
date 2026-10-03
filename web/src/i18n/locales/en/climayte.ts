@@ -87,6 +87,9 @@ export default {
   offloadedTasks: 'task offloaded | tasks offloaded',
   offloadedSessions: 'run | runs',
   offloadedTokens: 'tokens',
+  offloadedCost: 'spent',
+  offloadedNone: 'Nothing offloaded yet',
+  scoreMoreModels: '{n} more',
   offloadedHint:
     'Every task listed here, from every chat. {runs} {sessions} separate CLI conversations: a handoff starts a new one, a resume or a move carries one on. Tokens: {input} input, {output} output, {cacheRead} cache read and {cacheWrite} cache write, about {cost} at list prices. Cache reads are most of it: every request re-reads the conversation so far, at a tenth of the input price.',
   offloadedRuns: 'Runs: {list}.',
@@ -170,8 +173,6 @@ export default {
   scoreTitle: 'What works',
   scoreHint:
     'Per kind of task, every model and thinking level that got a verdict: how often it passed, and what a task cost as a share of a Pro 5-hour window. CliMayte picks the cheapest setting that keeps passing.',
-  scoreSummary:
-    '{pass} passed, {fail} failed, on {n} kind of task | {pass} passed, {fail} failed, on {n} kinds of task',
   scoreNone: 'no verdicts yet',
   scoreEmpty:
     'No verdicts yet. Give a finished task a thumbs up or down and CliMayte starts learning which model and thinking level each kind of task needs.',
@@ -202,6 +203,8 @@ export default {
   statusCancelledHint: 'Stopped by hand. Send a message to continue it.',
   // --- waves (a manager and the keyed tasks it follows; components/CliMayteWaves.vue) ---
   waves: 'Waves',
+  wavesInfo:
+    'A wave is one batch of tasks run by a manager worker: it sends the tasks out, checks each one’s proof, and reports back.',
   waveHint: 'Round {rounds}; at most {max} re-dispatches per task.',
   waveManager: 'Manager',
   waveReport: 'Report',

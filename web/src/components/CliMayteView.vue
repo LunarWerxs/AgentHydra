@@ -14,20 +14,17 @@
 // accounts table (CliView.vue), whose Quick add is where an account is added, so it has none of its
 // own.
 //
-// "What works" (the scorecard: per kind of task, which model and thinking level passed and what it
-// cost) is a collapsed one-line section under the counter, so it never pushes the list down.
+// The totals and "What works" (the scorecard) live in the one stats card above the task
+// (OffloadStatsCard.vue), shared with HSwarm, so the sidebar header is only the title, the filter
+// and the waves.
 import {
   Check,
-  ChevronRight,
   Cloud,
   CloudOff,
   Network,
   PictureInPicture2,
   RefreshCw,
   RotateCcw,
-  Star,
-  ThumbsDown,
-  ThumbsUp,
   UserRound,
   X,
 } from '@lucide/vue'
@@ -48,12 +45,11 @@ import CliMayteFloat from '@/components/CliMayteFloat.vue'
 import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
+import OffloadStatsCard from '@/components/OffloadStatsCard.vue'
 import SideList from '@/components/side-list/SideList.vue'
 import SideListRow from '@/components/side-list/SideListRow.vue'
-import SwarmStatsCard from '@/components/swarm-stats/SwarmStatsCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useCliMayteFloat } from '@/composables/useCliMayteFloat'
@@ -75,15 +71,11 @@ import {
 } from '@/lib/api'
 import { OPEN_VIEW } from '@/lib/app-view'
 import {
-  CLIMAYTE_OUTCOME,
   climayteQueuedNote,
   climayteRunLabel,
   climayteVerdictMark,
   firstLine,
-  formatTokens,
   isCliMayteActive,
-  modelName,
-  tokenTotal,
 } from '@/lib/climayte-status'
 import { reconcileList, sameData } from '@/lib/reconcile'
 import type { SideListGroup } from '@/lib/side-list'
@@ -221,57 +213,9 @@ async function loadDetail() {
 
 /** What CliMayte has offloaded so far (owner, 2026-09-30: a running count of sessions and tokens). */
 const totals = ref<CliMayteTotals | null>(null)
-/** "39 done, 23 handed off, ...": a run is any start of the CLI, so the count alone read as that
- *  many sessions (owner, 2026-09-30, about "99 CLI sessions"). */
-const runsLine = computed(() => {
-  const by = totals.value?.runsByOutcome
-  if (!by) return ''
-  const list = (Object.keys(CLIMAYTE_OUTCOME) as (keyof typeof CLIMAYTE_OUTCOME)[])
-    .filter((k) => (by[k] ?? 0) > 0)
-    .sort((a, b) => (by[b] ?? 0) - (by[a] ?? 0))
-    .map((k) => `${by[k]} ${t(CLIMAYTE_OUTCOME[k].label).toLowerCase()}`)
-    .join(', ')
-  return t('climayte.offloadedRuns', { list })
-})
-const totalsHint = computed(() =>
-  totals.value
-    ? t('climayte.offloadedHint', {
-        runs: runsLine.value,
-        sessions: totals.value.cliSessions ?? totals.value.sessions,
-        input: formatTokens(totals.value.tokens.input),
-        output: formatTokens(totals.value.tokens.output),
-        cacheRead: formatTokens(totals.value.tokens.cacheRead),
-        cacheWrite: formatTokens(totals.value.tokens.cacheWrite),
-        cost: `$${totals.value.costUsd.toFixed(2)}`,
-      }) +
-      (totals.value.rereadShare
-        ? ` ${t('climayte.offloadedReread', { share: totals.value.rereadShare, pct: totals.value.rereadPct })}`
-        : '')
-    : '',
-)
-
-/** What passed per kind of task (GET /api/corch/scorecard); collapsed under the counter. */
+/** What passed per kind of task (GET /api/corch/scorecard); shown in the stats card. */
 const scorecard = ref<CliMayteScorecard | null>(null)
-const scoreOpen = ref(false)
-/** The rows by kind, in the server's order (kind, then cheapest first). */
-const scoreKinds = computed(() => {
-  const map = new Map<string, CliMayteScorecard['rows']>()
-  for (const r of scorecard.value?.rows ?? []) {
-    const list = map.get(r.kind)
-    if (list) list.push(r)
-    else map.set(r.kind, [r])
-  }
-  return [...map.entries()].map(([kind, rows]) => ({ kind, rows }))
-})
-const scoreSummary = computed(() => {
-  const rows = scorecard.value?.rows ?? []
-  if (!rows.length) return t('climayte.scoreNone')
-  const pass = rows.reduce((n, r) => n + r.pass, 0)
-  const fail = rows.reduce((n, r) => n + r.fail, 0)
-  const n = scoreKinds.value.length
-  return t('climayte.scoreSummary', { pass, fail, n }, n)
-})
-const scoreModel = (m: string | null) => (m ? modelName(m) : t('climayte.runDefault'))
+
 /** The row's verdict mark (lib/climayte-status.ts) with its hover: who judged it, and what they said. */
 function verdictMark(w: CliMayteWorkerView) {
   const m = climayteVerdictMark(w)
@@ -521,7 +465,7 @@ onUnmounted(() => {
 <template>
   <div class="flex h-full min-h-0">
     <!-- The same sidebar as the Sessions tab (SideList / SideListRow): a header that never scrolls
-         (title, counter, what works, hide finished, waves) over the task list. -->
+         (title, counter, hide finished, waves) over the task list. -->
     <aside class="min-h-0 w-88 shrink-0 overflow-hidden border-e border-border bg-sidebar">
       <SideList :groups="sideGroups" :empty="!groups.length">
         <template #header>
@@ -535,92 +479,6 @@ onUnmounted(() => {
                paragraph over the UI). -->
           <InfoHint :text="$t('climayte.subtitle')" />
         </h2>
-        <!-- The running count of what CliMayte has taken off the chats that handed it work. -->
-        <p
-          v-if="totals && totals.tasks > 0"
-          class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"
-          :title="totalsHint"
-        >
-          <span>
-            <span class="font-semibold tabular-nums">{{ totals.tasks }}</span>
-            {{ $t('climayte.offloadedTasks', totals.tasks) }}
-          </span>
-          <span aria-hidden="true" class="text-muted-foreground">·</span>
-          <span>
-            <span class="font-semibold tabular-nums">{{ totals.sessions }}</span>
-            {{ $t('climayte.offloadedSessions', totals.sessions) }}
-          </span>
-          <span aria-hidden="true" class="text-muted-foreground">·</span>
-          <span>
-            <span class="font-semibold tabular-nums">{{ formatTokens(tokenTotal(totals.tokens)) }}</span>
-            {{ $t('climayte.offloadedTokens') }}
-            <span class="tabular-nums text-muted-foreground">(${{ totals.costUsd.toFixed(2) }})</span>
-          </span>
-        </p>
-        <!-- What works: one line until opened, so it never pushes the task list down. -->
-        <Collapsible v-if="scorecard" v-model:open="scoreOpen" class="max-w-2xl">
-          <!-- as-child: the trigger is this plain button, which carries the look. -->
-          <CollapsibleTrigger as-child>
-            <button
-              type="button"
-              class="group flex items-center gap-1.5 rounded-md py-0.5 text-start text-xs transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              :title="$t('climayte.scoreHint')"
-            >
-              <ChevronRight
-                class="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90"
-                aria-hidden="true"
-              />
-              <span class="font-medium">{{ $t('climayte.scoreTitle') }}</span>
-              <span class="text-muted-foreground">{{ scoreSummary }}</span>
-            </button>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <p
-              v-if="!scorecard.rows.length"
-              class="mt-1.5 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground"
-            >
-              {{ $t('climayte.scoreEmpty') }}
-            </p>
-            <div v-else class="scroll-slim mt-1.5 max-h-64 overflow-y-auto rounded-lg border bg-card text-xs">
-              <section v-for="k in scoreKinds" :key="k.kind" :aria-label="k.kind">
-                <h3 class="border-b bg-muted/40 px-3 py-1 text-2xs font-medium text-muted-foreground">
-                  {{ k.kind }}
-                </h3>
-                <ul class="divide-y">
-                  <li
-                    v-for="(r, i) in k.rows"
-                    :key="i"
-                    class="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1"
-                  >
-                    <span class="min-w-24 font-medium">
-                      {{ scoreModel(r.model) }}
-                      <span class="font-normal text-muted-foreground">· {{ r.effort ?? $t('climayte.runDefault') }}</span>
-                    </span>
-                    <span
-                      class="flex items-center gap-1 tabular-nums text-success"
-                      :title="$t('climayte.scorePasses', { n: r.pass })"
-                    >
-                      <ThumbsUp class="size-3" aria-hidden="true" />{{ r.pass }}
-                    </span>
-                    <span
-                      class="flex items-center gap-1 tabular-nums text-destructive"
-                      :title="$t('climayte.scoreFails', { n: r.fail })"
-                    >
-                      <ThumbsDown class="size-3" aria-hidden="true" />{{ r.fail }}
-                    </span>
-                    <span class="tabular-nums text-muted-foreground">
-                      {{ r.pctPerTask === null ? '—' : $t('climayte.scorePerTask', { pct: r.pctPerTask.toFixed(1) }) }}
-                    </span>
-                    <Badge v-if="r.pick" variant="success" class="ms-auto" :title="$t('climayte.scoreNextPickHint')">
-                      <Star aria-hidden="true" />
-                      <span class="text-2xs">{{ $t('climayte.scoreNextPick') }}</span>
-                    </Badge>
-                  </li>
-                </ul>
-              </section>
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
       </div>
       <div class="flex gap-1">
         <Button
@@ -753,7 +611,12 @@ onUnmounted(() => {
     </aside>
 
     <section class="flex min-h-0 min-w-0 flex-1 flex-col p-4">
-      <SwarmStatsCard compact class="mb-2 shrink-0 !py-1" @open="openView('hswarm')" />
+      <OffloadStatsCard
+        class="mb-2 shrink-0"
+        :totals="totals"
+        :scorecard="scorecard"
+        @open="openView('hswarm')"
+      />
       <div
         v-if="!loaded && unreachable"
         role="alert"

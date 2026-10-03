@@ -6,8 +6,8 @@ import { CloudOff } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Badge } from '@/components/ui/badge'
-import { formatCompact, formatUsd } from '@/lib/format'
-import { lastDaysSaved, sparklineSeries, useSwarmStats } from '@/lib/swarm-stats'
+import { sparklineSeries, useSwarmStats } from '@/lib/swarm-stats'
+import { money, useSwarmTiles } from '@/lib/swarm-tiles'
 
 const props = withDefaults(defineProps<{ compact?: boolean; days?: number }>(), {
   compact: false,
@@ -18,29 +18,10 @@ defineEmits<{ open: [] }>()
 const { t } = useI18n()
 const { stats, loading, offline } = useSwarmStats(props.days)
 
-const week = computed(() => lastDaysSaved(stats.value?.days ?? [], 7))
 const series = computed(() => sparklineSeries(stats.value?.days ?? []))
 const peak = computed(() => Math.max(1, ...series.value.map((p) => p.value ?? 0)))
 const fromHistory = computed(() => stats.value?.source === 'zswarm')
-
-const money = (n: number | null | undefined) => (n == null ? '—' : formatUsd(n))
-const count = (n: number | null | undefined) => (n == null ? '—' : formatCompact(n))
-
-const tiles = computed(() => [
-  { key: 'today', label: t('swarmStats.savedToday'), value: money(stats.value?.today.saved_usd) },
-  {
-    key: 'week',
-    label: t('swarmStats.saved7d'),
-    value: money(week.value.sum),
-    hint:
-      week.value.sum !== null && week.value.measured < week.value.total
-        ? t('swarmStats.measuredDays', { n: week.value.measured, total: week.value.total })
-        : undefined,
-  },
-  { key: 'all', label: t('swarmStats.savedAllTime'), value: money(stats.value?.total.saved_usd) },
-  { key: 'tasks', label: t('swarmStats.tasksToday'), value: count(stats.value?.today.tasks) },
-  { key: 'tokens', label: t('swarmStats.tokensKept'), value: count(stats.value?.today.est_tokens) },
-])
+const { tiles } = useSwarmTiles(stats)
 </script>
 
 <template>

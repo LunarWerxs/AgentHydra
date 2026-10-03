@@ -7,6 +7,8 @@ export default {
   tasksToday: 'Tasks today',
   tokensKept: 'Tokens kept off today',
   fromZswarm: 'from ZSwarm history',
+  fromHswarm: 'from HSwarm',
+  hswarmTitle: 'HSwarm',
   measuredDays: 'Measured on {n} of the last {total} days; the rest are not counted.',
   loading: 'Loading…',
   offline: 'HSwarm is not running',
