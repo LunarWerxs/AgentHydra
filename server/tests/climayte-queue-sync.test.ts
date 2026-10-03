@@ -194,6 +194,8 @@ describe('a pass through the store', () => {
     workers.delete('w-mine')
   })
 
+  // Each runs two full login-sync passes (logins, desktop logins, queue), like cli-login-sync.test.ts:
+  // on a busy PC that takes more than the default 5 s.
   test('uploads this PC’s queue and reads the other PC’s', async () => {
     clearRemote()
     resetQueueSync()
@@ -279,7 +281,7 @@ describe('a pass through the store', () => {
     const off = await (await http.request('/api/corch/remote')).json()
     expect(off).toEqual({ enabled: false, pcs: [] })
     disconnectLoginSync()
-  })
+  }, 20_000)
 
   test('a Worker without the queue routes sets queueError and leaves the logins alone', async () => {
     clearRemote()
@@ -307,7 +309,7 @@ describe('a pass through the store', () => {
       await old.stop(true)
       disconnectLoginSync()
     }
-  })
+  }, 20_000)
 })
 
 describe('when this PC uploads', () => {
