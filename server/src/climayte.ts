@@ -40,6 +40,7 @@ import {
   changed,
   configDirOf,
   freshRead,
+  HOOKS,
   handoffWritten,
   JOURNAL_PATH,
   journal,
@@ -53,6 +54,7 @@ import {
   notify,
   ORG_WALL_MS,
   overageAllowed,
+  PROMPTS,
   packedPath,
   packLog,
   peekLog,
@@ -1015,11 +1017,14 @@ function readLog(at: CliMayteWorker['attempts'][number]): LogRead {
   return readInto(at.log, r, replay)
 }
 
-/** A finished attempt's log is packed once it is this old (packOldLogs). */
-const PACK_AFTER_MS = 24 * 3_600_000
-/** One pass packs at most this much: it compresses on the daemon's own loop, and the first pass
- *  finds every log written so far (429 MiB on 2026-10-02). The rest follows a minute later. */
-const PACK_PASS_BYTES = 32 * 1024 * 1024
+/** A settled attempt's log is packed once it is this old (packOldLogs). Measured 2026-10-03: zstd
+ *  packs these 7-7.7x in ~21 ms per 9.7 MB, and 641 MB sat plain for a day. */
+const PACK_AFTER_MS = 10 * 60_000
+/** One pass packs at most this much (~0.3 s of compression on the daemon's own loop); the first
+ *  pass finds every log written so far. The rest follows a minute later. */
+const PACK_PASS_BYTES = 128 * 1024 * 1024
+/** The pass runs this often once nothing is left over. */
+const PACK_EVERY_MS = 10 * 60_000
 let nextPackAt = 0
 
 /** The attempt's CLI can no longer append to its log. finish() ends an attempt only once its CLI
@@ -1035,7 +1040,8 @@ function logSettled(at: CliMayteWorker['attempts'][number]): boolean {
   return pid === null || runnerIdentity(pid) === 'gone'
 }
 
-/** Pack the logs of attempts that ended a day ago or more (packLog), hourly. */
+/** Pack the logs of settled attempts (packLog) once they are PACK_AFTER_MS old, then clear what
+ *  finished workers left behind (retention), every PACK_EVERY_MS. */
 function packOldLogs(now: number): void {
   if (now < nextPackAt) return
   let room = PACK_PASS_BYTES
@@ -1044,7 +1050,102 @@ function packOldLogs(now: number): void {
       if (room <= 0 || !logSettled(at) || now - (at.endedAt as number) < PACK_AFTER_MS) continue
       room -= packLog(at.log, now - PACK_AFTER_MS)
     }
-  nextPackAt = now + (room <= 0 ? 60_000 : 3_600_000)
+  if (room > 0) storagePass(now, false)
+  nextPackAt = now + (room <= 0 ? 60_000 : PACK_EVERY_MS)
+}
+
+/** A finished worker's prompts, handoffs, signals and hook files are removed this long after its
+ *  last attempt ended (the plan's piece 6: they had no cleanup, 35 MB on 2026-10-03). */
+const FILES_KEEP_MS = 14 * 86_400_000
+/** A removed task's archive folder (climayteRemove) is deleted this long after it was made. */
+const ARCHIVE_KEEP_MS = 30 * 86_400_000
+
+export interface StoragePlan {
+  /** Plain logs the pass would pack (raw bytes). */
+  pack: { path: string; bytes: number }[]
+  /** Files and folders the pass would remove. */
+  remove: { path: string; bytes: number }[]
+}
+
+function sizeOf(path: string): number {
+  try {
+    const st = statSync(path)
+    if (!st.isDirectory()) return st.size
+    return readdirSync(path).reduce((sum, n) => sum + sizeOf(join(path, n)), 0)
+  } catch {
+    return 0
+  }
+}
+
+/** What the storage pass would pack and remove for these workers at `now`; touches nothing. A
+ *  worker that is active, being stopped, or has an attempt whose log is not settled keeps every
+ *  file; a file named for no known worker goes by its own age. */
+export function planStorage(list: Iterable<CliMayteWorker>, now: number): StoragePlan {
+  const plan: StoragePlan = { pack: [], remove: [] }
+  const byId = new Map<string, CliMayteWorker>()
+  for (const w of list) {
+    byId.set(w.id, w)
+    for (const at of w.attempts) {
+      if (!logSettled(at) || now - (at.endedAt as number) < PACK_AFTER_MS) continue
+      try {
+        const st = statSync(at.log)
+        if (st.mtimeMs < now - PACK_AFTER_MS) plan.pack.push({ path: at.log, bytes: st.size })
+      } catch {
+        // packed already, or archived
+      }
+    }
+  }
+  const expired = (id: string, mtimeMs: number): boolean => {
+    const w = byId.get(id)
+    if (!w) return now - mtimeMs > FILES_KEEP_MS
+    if (isActive(w) || w.checkRunner || w.staleChecks?.length) return false
+    if (w.attempts.some((a) => !logSettled(a) || a.runner?.killOnStart)) return false
+    const last = Math.max(0, ...w.attempts.map((a) => a.endedAt ?? 0))
+    return now - Math.max(last, mtimeMs) > FILES_KEEP_MS
+  }
+  for (const dir of [PROMPTS, HANDOFFS, SIGNALS, HOOKS]) {
+    let names: string[] = []
+    try {
+      names = readdirSync(dir)
+    } catch {
+      continue
+    }
+    for (const name of names) {
+      const id = /^(w-[0-9a-f]+)/.exec(name)?.[1]
+      if (!id) continue
+      const path = join(dir, name)
+      try {
+        if (expired(id, statSync(path).mtimeMs)) plan.remove.push({ path, bytes: sizeOf(path) })
+      } catch {
+        // gone meanwhile
+      }
+    }
+  }
+  const archive = join(ROOT, 'archive')
+  try {
+    for (const name of readdirSync(archive)) {
+      const path = join(archive, name)
+      if (now - statSync(path).mtimeMs > ARCHIVE_KEEP_MS)
+        plan.remove.push({ path, bytes: sizeOf(path) })
+    }
+  } catch {
+    // no archive folder
+  }
+  return plan
+}
+
+/** Remove what planStorage lists (packing is packOldLogs's own loop). `dryRun` returns the plan
+ *  and deletes nothing. */
+function storagePass(now: number, dryRun: boolean): StoragePlan {
+  const plan = planStorage(workers.values(), now)
+  if (!dryRun)
+    for (const f of plan.remove)
+      try {
+        rmSync(f.path, { recursive: true, force: true })
+      } catch (err) {
+        console.error(`[climayte] could not remove ${f.path}:`, err)
+      }
+  return plan
 }
 
 /** The summary lines of finished attempts, for climayteGet: the CliMayte view asks for the selected
