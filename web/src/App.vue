@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   BarChart3,
+  Bot,
   Boxes,
   ListChecks,
   Maximize2,
@@ -19,7 +20,9 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AnalyticsView from '@/components/AnalyticsView.vue'
 import AutomationSettings from '@/components/AutomationSettings.vue'
+import CliMayteView from '@/components/CliMayteView.vue'
 import CliView from '@/components/CliView.vue'
+import InstancesHomeView from '@/components/InstancesHomeView.vue'
 import InstancesView from '@/components/InstancesView.vue'
 import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
 import QueueBuilder from '@/components/QueueBuilder.vue'
@@ -42,11 +45,12 @@ import { useData } from '@/composables/useData'
 import { useNotifications } from '@/composables/useNotifications'
 import { usePanels } from '@/composables/usePanels'
 import { useRunningCode } from '@/composables/useRunningCode'
-import { SHELL_BASE_MAX, SHELL_WIDE_MAX, useShellWidth } from '@/composables/useShellWidth'
+import { SHELL_BASE_MAX, useShellWidth } from '@/composables/useShellWidth'
 import { openShortcutSheet, useShortcuts } from '@/composables/useShortcuts'
 import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
+import { INSTANCES_VIEWS } from '@/lib/app-view'
 import { pendingSessionJump } from '@/lib/session-jump'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
@@ -101,14 +105,22 @@ useShortcuts([
   },
   {
     keys: 'mod+2',
-    labelKey: 'app.shortcutInstances',
+    labelKey: 'app.shortcutClimayte',
     groupKey: 'app.shortcutGroupApp',
     run: () => {
-      view.value = 'instances'
+      view.value = 'climayte'
     },
   },
   {
     keys: 'mod+3',
+    labelKey: 'app.shortcutInstances',
+    groupKey: 'app.shortcutGroupApp',
+    run: () => {
+      view.value = 'instances-home'
+    },
+  },
+  {
+    keys: 'mod+4',
     labelKey: 'app.shortcutAnalytics',
     groupKey: 'app.shortcutGroupApp',
     run: () => {
@@ -116,11 +128,19 @@ useShortcuts([
     },
   },
   {
-    keys: 'mod+4',
+    keys: 'mod+5',
     labelKey: 'app.shortcutCli',
     groupKey: 'app.shortcutGroupApp',
     run: () => {
       view.value = 'cli'
+    },
+  },
+  {
+    keys: 'mod+6',
+    labelKey: 'app.shortcutDesktop',
+    groupKey: 'app.shortcutGroupApp',
+    run: () => {
+      view.value = 'desktop'
     },
   },
 ])
@@ -164,7 +184,7 @@ function onSettingsButton() {
   settingsOpen.value = true
 }
 const anyPanelOpen = computed(() => settingsOpen.value || queueOpen.value)
-const { wide, fullWidth } = useShellWidth()
+const { fullWidth } = useShellWidth()
 // widthPx drives the content shift, the --content-inset-right var, and both panels'
 // rendered width below — one value so they can never disagree. shellMaxWidth makes the
 // shift the panel's actual overlap with the centered shell (0 on a wide monitor); in
@@ -174,7 +194,7 @@ const { wide, fullWidth } = useShellWidth()
 // (--header-pe), or its buttons would sit flush against the panel edge.
 const { side, shiftPx, widthPx } = usePushPanel(anyPanelOpen, {
   widthPx: 480,
-  shellMaxWidth: () => (fullWidth.value ? null : wide.value ? SHELL_WIDE_MAX : SHELL_BASE_MAX),
+  shellMaxWidth: () => (fullWidth.value ? null : SHELL_BASE_MAX),
 })
 
 // --- settings-panel header controls: theme picker + shut down (moved out of the Appearance
@@ -205,12 +225,27 @@ async function onShutdown() {
   }
 }
 
+// Top-level tabs. Instances is a group: clicking it opens the landing page, and its two sub-pages
+// sit in a small list right below it. The group reads as active on any of its three views.
 const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
   { id: 'sessions', labelKey: 'app.tabSessions', icon: MessagesSquare },
-  { id: 'instances', labelKey: 'app.tabInstances', icon: Boxes },
-  { id: 'cli', labelKey: 'app.tabCli', icon: Terminal },
+  { id: 'climayte', labelKey: 'app.tabClimayte', icon: Bot },
+  { id: 'instances-home', labelKey: 'app.tabInstances', icon: Boxes },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
 ]
+const instancesSub: { id: AppView; labelKey: string; icon: typeof Terminal }[] = [
+  { id: 'cli', labelKey: 'app.tabCli', icon: Terminal },
+  { id: 'desktop', labelKey: 'app.tabDesktop', icon: Monitor },
+]
+const inInstances = computed(() => INSTANCES_VIEWS.includes(view.value))
+function tabActive(id: AppView) {
+  return id === 'instances-home' ? inInstances.value : view.value === id
+}
+
+// The landing page names the page a tile opens in its own words: its `instances` is the desktop page.
+function onHomeNavigate(to: 'cli' | 'instances' | 'climayte' | 'sessions' | 'analytics') {
+  view.value = to === 'instances' ? 'desktop' : to
+}
 
 const runningCount = computed(() => queue.value.filter((q) => q.status === 'running').length)
 
@@ -289,14 +324,12 @@ onUnmounted(stopAvailabilityPolling)
   <!-- TooltipProvider: required ancestor for every kit Tooltip/InfoHint (mounted once, like ReDesign) -->
   <TooltipProvider :delay-duration="120">
   <!-- fixed-viewport shell, centered at a comfortable reading width: each view scrolls
-       its own columns internally; the page itself never scrolls. Views that benefit from
-       room (an open transcript) request the wide cap via useShellWidth and the whole
-       shell — header included — animates out to meet them. The header's full-width toggle
-       lifts the cap altogether; 100vw rather than `none` so max-width still animates. -->
+       its own columns internally; the page itself never scrolls. The header's full-width
+       toggle lifts the cap altogether; 100vw rather than `none` so max-width still animates. -->
   <div
     class="mx-auto flex h-dvh w-full max-w-(--shell-max) flex-col overflow-hidden border-x border-border transition-max-width duration-300 ease-in-out"
     :style="{
-      '--shell-max': fullWidth ? '100vw' : `${wide ? SHELL_WIDE_MAX : SHELL_BASE_MAX}px`,
+      '--shell-max': fullWidth ? '100vw' : `${SHELL_BASE_MAX}px`,
       '--push-shift': `${shiftPx}px`,
       '--header-pe': `calc(${shiftPx}px + 1rem)`,
     }"
@@ -314,18 +347,35 @@ onUnmounted(stopAvailabilityPolling)
       </div>
 
       <!-- view tabs -->
-      <nav class="ms-2 flex items-center gap-1">
-        <Button
-          v-for="n in nav"
-          :key="n.id"
-          :variant="view === n.id ? 'secondary' : 'ghost'"
-          size="sm"
-          :title="$t(n.labelKey)"
-          @click="view = n.id"
-        >
-          <component :is="n.icon" />
-          <span class="hidden sm:inline">{{ $t(n.labelKey) }}</span>
-        </Button>
+      <nav class="ms-2 flex items-start gap-1" :aria-label="$t('app.navLabel')">
+        <div v-for="n in nav" :key="n.id" class="flex flex-col items-stretch">
+          <Button
+            :variant="tabActive(n.id) ? 'secondary' : 'ghost'"
+            size="sm"
+            :title="$t(n.labelKey)"
+            :aria-current="view === n.id ? 'page' : tabActive(n.id) ? 'true' : undefined"
+            @click="view = n.id"
+          >
+            <component :is="n.icon" />
+            <span class="hidden sm:inline">{{ $t(n.labelKey) }}</span>
+          </Button>
+          <!-- the Instances group's sub-list: CLI and Desktop, directly under it -->
+          <ul v-if="n.id === 'instances-home'" class="mt-0.5 flex items-center justify-center gap-0.5">
+            <li v-for="sub in instancesSub" :key="sub.id">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs font-medium outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                :class="view === sub.id ? 'bg-secondary text-foreground' : 'text-muted-foreground'"
+                :title="$t(sub.labelKey)"
+                :aria-current="view === sub.id ? 'page' : undefined"
+                @click="view = sub.id"
+              >
+                <component :is="sub.icon" class="size-3" />
+                <span class="hidden sm:inline">{{ $t(sub.labelKey) }}</span>
+              </button>
+            </li>
+          </ul>
+        </div>
       </nav>
 
       <div class="ms-auto flex items-center gap-2">
@@ -368,7 +418,7 @@ onUnmounted(stopAvailabilityPolling)
           <span class="hidden sm:inline">{{ $t(restarting ? 'app.restarting' : 'app.restartNeeded') }}</span>
         </Button>
         <!-- Full window width and back (owner, 2026-10-03). Remembered across reloads; off is the
-             centered shell exactly as before, wide cap for a transcript included. The tooltip names
+             centered shell exactly as before. The tooltip names
              the click's effect; the label stays constant and aria-pressed carries the state. -->
         <Button
           variant="ghost"
@@ -415,11 +465,13 @@ onUnmounted(stopAvailabilityPolling)
     <div class="min-h-0 flex-1 pe-(--push-shift) transition-padding duration-300 ease-in-out">
       <main
         class="h-full min-h-0"
-        :class="view === 'instances' || view === 'cli' ? 'overflow-y-auto scroll-slim' : ''"
+        :class="inInstances ? 'overflow-y-auto scroll-slim' : ''"
       >
         <Transition name="view-fade" mode="out-in">
           <SessionsView v-if="view === 'sessions'" />
           <AnalyticsView v-else-if="view === 'analytics'" />
+          <CliMayteView v-else-if="view === 'climayte'" class="h-full" />
+          <InstancesHomeView v-else-if="view === 'instances-home'" @navigate="onHomeNavigate" />
           <CliView v-else-if="view === 'cli'" />
           <InstancesView v-else />
         </Transition>

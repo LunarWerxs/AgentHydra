@@ -42,8 +42,12 @@ function stubStorage(
 describe('parseAppView', () => {
   test('accepts the tabs that exist and refuses everything else', () => {
     expect(parseAppView('sessions')).toBe('sessions')
-    expect(parseAppView('instances')).toBe('instances')
+    expect(parseAppView('climayte')).toBe('climayte')
+    expect(parseAppView('instances-home')).toBe('instances-home')
+    expect(parseAppView('desktop')).toBe('desktop')
     expect(parseAppView('cli')).toBe('cli')
+    // `instances` was the desktop page before the landing page took the name: it must stay there.
+    expect(parseAppView('instances')).toBe('desktop')
     expect(parseAppView('analytics')).toBe('analytics')
     // The Corch tab was folded into the CLI tab: a window last on it opens there, not on a dead tab.
     expect(parseAppView('corch')).toBe('cli')
@@ -59,9 +63,9 @@ describe('createTabView', () => {
   test('a brand-new window opens where the app was left off', () => {
     // Nothing in this window's own session yet, so the durable memory is all there is — the case a
     // fresh launch, or a launch on a port this browser has never seen, actually hits.
-    const stored = ref<AppView>('instances')
+    const stored = ref<AppView>('desktop')
     const view = createTabView(stored, stubStorage())
-    expect(view.value).toBe('instances')
+    expect(view.value).toBe('desktop')
   })
 
   test('a window that has been somewhere keeps its own tab, whatever the durable value says', () => {
@@ -78,10 +82,10 @@ describe('createTabView', () => {
     const session = stubStorage()
     const view = createTabView(stored, session)
 
-    view.value = 'instances'
+    view.value = 'desktop'
 
-    expect(session.getItem(APP_VIEW_KEY)).toBe('instances')
-    expect(stored.value).toBe('instances')
+    expect(session.getItem(APP_VIEW_KEY)).toBe('desktop')
+    expect(stored.value).toBe('desktop')
   })
 
   test('TWO WINDOWS ARE INDEPENDENT — the whole point', () => {
@@ -92,15 +96,15 @@ describe('createTabView', () => {
     const left = createTabView(stored, stubStorage({ [APP_VIEW_KEY]: 'sessions' }))
     const right = createTabView(stored, stubStorage({ [APP_VIEW_KEY]: 'sessions' }))
 
-    left.value = 'instances'
+    left.value = 'desktop'
 
-    expect(left.value).toBe('instances')
+    expect(left.value).toBe('desktop')
     expect(right.value).toBe('sessions')
 
     // ...and the other direction, so this is not passing by watcher-registration order.
     right.value = 'analytics'
     expect(right.value).toBe('analytics')
-    expect(left.value).toBe('instances')
+    expect(left.value).toBe('desktop')
   })
 
   test('a fresh window still takes the daemon correction that lands after first paint', () => {
@@ -120,22 +124,22 @@ describe('createTabView', () => {
     const stored = ref<AppView>('sessions')
     const view = createTabView(stored, stubStorage())
 
-    view.value = 'instances'
+    view.value = 'desktop'
     // The correction the in-flight read was already carrying when the click happened.
     stored.value = 'analytics'
 
-    expect(view.value).toBe('instances')
+    expect(view.value).toBe('desktop')
   })
 
   test('a duplicated tab is not moved by a correction either', () => {
     // It has been somewhere by definition, so nothing external gets to relocate it — not the
     // sibling window, not the store.
     const stored = ref<AppView>('sessions')
-    const view = createTabView(stored, stubStorage({ [APP_VIEW_KEY]: 'instances' }))
+    const view = createTabView(stored, stubStorage({ [APP_VIEW_KEY]: 'desktop' }))
 
     stored.value = 'analytics'
 
-    expect(view.value).toBe('instances')
+    expect(view.value).toBe('desktop')
   })
 
   test('a nonsense value in this window falls back to the durable one', () => {
@@ -153,9 +157,9 @@ describe('createTabView', () => {
     ]) {
       const stored = ref<AppView>('sessions')
       const view = createTabView(stored, session)
-      view.value = 'instances'
-      expect(view.value).toBe('instances')
-      expect(stored.value).toBe('instances')
+      view.value = 'desktop'
+      expect(view.value).toBe('desktop')
+      expect(stored.value).toBe('desktop')
     }
   })
 })

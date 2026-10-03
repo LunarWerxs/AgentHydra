@@ -26,7 +26,12 @@ export default {
   shortcutSessions: 'Go to Sessions',
   shortcutInstances: 'Go to Instances',
   shortcutAnalytics: 'Go to Analytics',
-  shortcutCli: 'Go to CLI',
+  shortcutCli: 'Go to Instances: CLI',
+  shortcutDesktop: 'Go to Instances: Desktop',
+  shortcutClimayte: 'Go to CliMayte',
+  navLabel: 'Main',
+  tabClimayte: 'CliMayte',
+  tabDesktop: 'Desktop',
   tabAnalytics: 'Analytics',
   tabCli: 'CLI',
 }

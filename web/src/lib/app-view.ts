@@ -26,13 +26,28 @@
 
 import { type Ref, ref, watch } from 'vue'
 
-export type AppView = 'sessions' | 'instances' | 'cli' | 'analytics'
-export const APP_VIEWS: readonly AppView[] = ['sessions', 'instances', 'cli', 'analytics']
+export type AppView = 'sessions' | 'climayte' | 'instances-home' | 'cli' | 'desktop' | 'analytics'
+export const APP_VIEWS: readonly AppView[] = [
+  'sessions',
+  'climayte',
+  'instances-home',
+  'cli',
+  'desktop',
+  'analytics',
+]
+
+/** The views under the Instances group: the landing page and its two sub-pages. */
+export const INSTANCES_VIEWS: readonly AppView[] = ['instances-home', 'cli', 'desktop']
 
 /** Tabs that were folded into another one, and where they went. The Corch tab (now CliMayte) became
  *  part of the CLI tab (2026-09-30); a window that last stood on it opens there rather than falling
  *  back to Sessions. `corch` is the value such a window stored. */
-const RENAMED_VIEWS: Readonly<Record<string, AppView>> = { corch: 'cli' }
+const RENAMED_VIEWS: Readonly<Record<string, AppView>> = {
+  corch: 'cli',
+  // `instances` was the desktop accounts page; the id now belongs to the group's landing page
+  // (`instances-home`), so a stored `instances` keeps meaning the desktop page it always meant.
+  instances: 'desktop',
+}
 
 /** The one key, under both storages. Same name deliberately: they hold the same kind of value, for
  *  different lifetimes, and a reader looking at either one should not have to learn two names. */

@@ -1,5 +1,5 @@
 // useOpenSession — which session is open, its tail (the live, polled window onto the transcript),
-// and the shell-wide layout that follows having one open at all. Split out of SessionsView.vue
+// Split out of SessionsView.vue
 // because this is the one piece of state nearly everything else in the view reads from or writes
 // through (body search, the composer, multi-select, the jump-to-session flow), so it earns being
 // named and owned on its own rather than living as a dozen loose refs in the view.
@@ -7,7 +7,6 @@
 import type { Ref } from 'vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useChatScroller } from '@/composables/useChatScroller'
-import { useShellWidth } from '@/composables/useShellWidth'
 import type { QueueItem, SessionSource, SessionSummary, TailEvent, TailResult } from '@/lib/api'
 import * as api from '@/lib/api'
 
@@ -107,19 +106,6 @@ export function useOpenSession(deps: {
     },
     { immediate: true },
   )
-
-  // an open transcript benefits from room; widen the whole shell while one is selected
-  const { wide: shellWide } = useShellWidth()
-  watch(
-    () => !!selected.value,
-    (hasSelection) => {
-      shellWide.value = hasSelection
-    },
-    { immediate: true },
-  )
-  onBeforeUnmount(() => {
-    shellWide.value = false
-  })
 
   // How many /tail reads are outstanding. The poll below fires every 4 s whether or not the last
   // one came back, and on a big store a read can take longer than that — so without this the polls
