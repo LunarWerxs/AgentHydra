@@ -120,14 +120,16 @@ export function injectPeerMessage(
 
 /** Deliver `text` to a live session AND confirm it landed by watching the transcript grow.
  *  Returns {ok, reason}. ok=false with reason 'not-live' means there is no pipe (dormant/
- *  crashed) - the caller should fall back to the composer, which can boot it. */
+ *  crashed) - the caller should fall back to the composer, which can boot it. `claudeHome`: the
+ *  Claude home whose registry lists the session (a CLI instance keeps its own); absent, ~/.claude. */
 export async function deliverPeerMessage(
   sessionId: string,
   transcriptPath: string | null,
   text: string,
   confirmMs = 45000,
+  claudeHome?: string,
 ): Promise<{ ok: boolean; reason: string }> {
-  const target = peerTargetFor(sessionId)
+  const target = peerTargetFor(sessionId, claudeHome)
   if (!target) return { ok: false, reason: 'not-live' }
   const sizeOf = () => {
     try {
