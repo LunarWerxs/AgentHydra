@@ -107,6 +107,7 @@ import {
   dueOrder,
   isLoginWall,
   isOrgDisabled,
+  isWalledNow,
   joinResults,
   newestTranscript,
   notConverging,
@@ -132,6 +133,7 @@ import {
   type CliMayteKind,
   type CliMayteVerdict,
   climayteKind,
+  HAIKU,
   ladderIndex,
   ladderModel,
   nextRung,
@@ -1600,6 +1602,8 @@ interface RunDefaults {
   auto: boolean
   model: string | null
   effort: string | null
+  /** Why the run names its model or effort (runSetting); null: it gave no reason. */
+  why: string | null
   kind: CliMayteKind | null
   priority: number
 }
@@ -1640,8 +1644,12 @@ function assertRunnable(t: RunTask, i: number): void {
     throw new Error(`task ${i + 1}: check must be one shell command (at most 2000 characters)`)
 }
 
-/** One task's model, effort, kind and priority: its own, else the run's; for an `auto` task the
- *  scorecard's pick for its kind (and `autoSoFar` counts it). Throws on a value that is not one. */
+/** One task's model, effort, kind and priority. Auto unless the task (or its run) names a model or
+ *  effort AND says why (`modelWhy`): the scorecard's pick for its kind, and `autoSoFar` counts it.
+ *  Owner, 2026-10-02: tasks are to go to "the cheapest/fastest model capable of reliably completing"
+ *  them, yet in a day 194 of about 440 arrived pinned to Opus high or above by the chats that sent
+ *  them, and a task naming nothing ran on the CLI's default, Opus high. A named setting with no
+ *  reason is validated, then left to the scorecard. Throws on a value that is not one. */
 function runSetting(
   t: RunTask,
   defaults: RunDefaults,
@@ -1650,23 +1658,28 @@ function runSetting(
 ): RunSetting {
   const kind = climayteKind(t.kind) ?? defaults.kind
   const priority = climaytePriority(t.priority) ?? defaults.priority
-  const own = t.model === undefined || t.model === null || t.model === ''
-  if (isAutoSetting(t.model) || (own && defaults.auto)) {
-    const k = kind ?? 'code'
-    const n = autoSoFar.get(k) ?? 0
-    autoSoFar.set(k, n + 1)
-    const pick = pickConfig(k, rows, n)
-    return { ...pick.config, kind: k, auto: true, reason: pick.reason, priority }
-  }
-  return {
-    model: climayteModel(t.model) ?? defaults.model,
-    effort: (isAutoSetting(t.effort) ? null : climayteEffort(t.effort)) ?? defaults.effort,
-    kind,
-    auto: false,
-    reason: undefined,
-    priority,
-  }
+  const autoAsked = isAutoSetting(t.model) || (isBlank(t.model) && defaults.auto)
+  const model = autoAsked ? null : (climayteModel(t.model) ?? defaults.model)
+  // Haiku runs with no effort level, as on the ladder, whatever the run's default says.
+  const effort =
+    autoAsked || model === HAIKU
+      ? null
+      : ((isAutoSetting(t.effort) ? null : climayteEffort(t.effort)) ?? defaults.effort)
+  const why = (typeof t.modelWhy === 'string' && t.modelWhy.trim()) || defaults.why
+  if ((model || effort) && why)
+    return { model, effort, kind, auto: false, reason: `named by the sender: ${why}`, priority }
+  const k = kind ?? 'code'
+  const n = autoSoFar.get(k) ?? 0
+  autoSoFar.set(k, n + 1)
+  const pick = pickConfig(k, rows, n)
+  const unexplained =
+    model || effort
+      ? ` (${[model, effort].filter(Boolean).join(' ')} was named without a modelWhy)`
+      : ''
+  return { ...pick.config, kind: k, auto: true, reason: pick.reason + unexplained, priority }
 }
+
+const isBlank = (v: unknown): boolean => v === undefined || v === null || v === ''
 
 /** A queued worker for one task of a run. */
 function newWorker(
@@ -1755,8 +1768,9 @@ function assertKnownAccounts(accounts: string[] | undefined): void {
 
 /** `model` / `effort` / `kind` at the top level are the group's default: a task that names its
  *  own wins. All are validated (climayteModel, climayteEffort, climayteKind) before anything is created.
- *  Model `auto` lets the scorecard choose model AND effort for the task's kind (default `code`):
- *  the cheapest setting that keeps passing, or one rung cheaper on every 4th pick (pickConfig).
+ *  The scorecard chooses model AND effort for the task's kind (default `code`): of the settings that
+ *  pass it reliably the one whose passed task costs least, or a cheaper one still learning on every
+ *  4th pick (pickConfig). A named model or effort holds only with a `modelWhy` (runSetting).
  *  A task an earlier dispatch of the same group already made (repeatOf) answers with that worker,
  *  marked `repeat`, and makes nothing, unless `copies` asks for new ones. */
 export function climayteRun(input: {
@@ -1766,6 +1780,7 @@ export function climayteRun(input: {
     title?: string
     model?: string
     effort?: string
+    modelWhy?: string
     kind?: string
     check?: string
     priority?: number
@@ -1776,6 +1791,7 @@ export function climayteRun(input: {
   perAccount?: number
   model?: string
   effort?: string
+  modelWhy?: string
   kind?: string
   priority?: number
   size?: string
@@ -1788,6 +1804,7 @@ export function climayteRun(input: {
   const groupAuto = isAutoSetting(input.model)
   const defaults: RunDefaults = {
     auto: groupAuto,
+    why: (typeof input.modelWhy === 'string' && input.modelWhy.trim()) || null,
     model: groupAuto ? null : climayteModel(input.model),
     effort: groupAuto || isAutoSetting(input.effort) ? null : climayteEffort(input.effort),
     kind: climayteKind(input.kind),
@@ -1924,7 +1941,7 @@ function sizeTasks(
   }
   const now = Date.now()
   const allowed = pool.filter((a) => !input.accounts?.length || input.accounts.includes(a.id))
-  const open = allowed.filter((a) => !((walls[a.id]?.until ?? 0) > now))
+  const open = allowed.filter((a) => !isWalledNow(walls[a.id], now))
   const { costOf, running, finishedSince } = placementState()
   const best = open
     .map((a) => ({
@@ -2235,7 +2252,9 @@ export function climayteSend(
 const SENT_BACK = 'The orchestrator checked your result and it did not pass. What was wrong:'
 
 const configLabel = (c: { model: string | null; effort: string | null }): string =>
-  `${c.model?.includes('sonnet') ? 'Sonnet 5.5' : c.model?.includes('opus') ? 'Opus 5.5' : (c.model ?? 'the default model')} · ${c.effort ?? 'default effort'}`
+  c.model?.includes('haiku')
+    ? 'Haiku 4.5'
+    : `${c.model?.includes('sonnet') ? 'Sonnet 5.5' : c.model?.includes('opus') ? 'Opus 5.5' : (c.model ?? 'the default model')} · ${c.effort ?? 'default effort'}`
 
 /** Tag an untagged task's kind from the verdict. The reason it is not a kind, or null. */
 function tagKind(w: CliMayteWorker, kind: unknown): string | null {
@@ -2277,7 +2296,7 @@ function sendBack(
   id: string,
   verdict: CliMayteVerdict,
   note: string | null,
-): { next: { model: string; effort: string } | null; message: string } {
+): { next: { model: string; effort: string | null } | null; message: string } {
   const next = nextRung(verdict)
   if (!next)
     return {
@@ -2288,7 +2307,7 @@ function sendBack(
   const sent = climayteSend(
     id,
     `${SENT_BACK} ${note}\n\nFix it, prove the fix with a command and what it printed, and report again.`,
-    next,
+    { model: next.model, ...(next.effort ? { effort: next.effort } : {}) },
   )
   return sent.ok
     ? { next, message: `Recorded a fail. Sent back on ${configLabel(next)}.` }
@@ -2303,7 +2322,7 @@ function sendBack(
 export function climayteVerdict(
   id: string,
   input: { verdict?: unknown; note?: unknown; retry?: unknown; kind?: unknown; by?: unknown },
-): { ok: boolean; message: string; next?: { model: string; effort: string } | null } {
+): { ok: boolean; message: string; next?: { model: string; effort: string | null } | null } {
   load()
   const w = workers.get(id)
   if (!w) return { ok: false, message: 'No such worker.' }
@@ -2319,7 +2338,7 @@ export function climayteVerdict(
   if (badKind !== null) return { ok: false, message: badKind }
   const verdict = verdictRecord(w, input.verdict, note, input.by)
   w.verdicts = [...(w.verdicts ?? []), verdict]
-  let next: { model: string; effort: string } | null = null
+  let next: { model: string; effort: string | null } | null = null
   let message = verdict.verdict === 'pass' ? 'Recorded a pass.' : 'Recorded a fail; not sent back.'
   if (verdict.verdict === 'fail' && input.retry !== false)
     ({ next, message } = sendBack(id, verdict, note))
@@ -2374,7 +2393,9 @@ export function climayteScorecard(): {
         pass: r.pass,
         fail: r.fail,
         pctPerTask: n ? Math.round((r.units / n / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
-        pick: best !== undefined && ladderIndex(r) === best,
+        pick:
+          best !== undefined &&
+          ladderIndex({ model: ladderModel(r.model), effort: r.effort }) === best,
       }
     }),
   }

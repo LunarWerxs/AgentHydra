@@ -443,15 +443,25 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   task as `failed` for the orchestrator. The check runs under the daemon, so a restart ends it and
   the next tick runs it again. An orchestrator that must remember to judge every result forgets
   some, and a worker's own "the tests pass" is a claim; a command is neither.
-- **The ladder**, cheapest first: Sonnet 5.5 low, medium, high, then Opus 5.5 medium, high, xhigh,
-  max. A CLI-default setting counts as Opus high.
-- **Kinds**: code, debug, review, sweep, mechanical, docs, trivial (`climayte_run` `kind`). Each starts
-  where the climayte skill's table puts it (sweep, mechanical and docs on Sonnet medium, trivial on
-  Sonnet low, code and review on Opus high, debug on Opus xhigh).
-- **`model: "auto"`** (`pickConfig`): the cheapest rung with at least 3 verdicts at 80% or more
-  passes, else the kind's start moved up past any rung with two or more verdicts under half; every
-  4th auto pick of a kind tries the rung below that, unless it keeps failing. The pick and its reason
-  go in the `dispatched` journal line.
+- **The ladder**, cheapest first: Haiku 4.5 (run with no `--effort`), Sonnet 5.5 low, medium, high,
+  then Opus 5.5 medium, high, xhigh, max. A CLI-default setting counts as Opus high.
+- **Kinds**: code, debug, review, sweep, mechanical, docs, trivial (`climayte_run` `kind`). Before a
+  rung has earned its trust a kind starts frugal (`START`): trivial on Haiku; sweep, mechanical, docs,
+  code and review on Sonnet medium; debug on Opus medium.
+- **`model: "auto"`** (`pickConfig`), the default (owner, 2026-10-02: "the cheapest/fastest model
+  capable of reliably completing your offloaded task"): of the rungs trusted for the kind (at least 3
+  verdicts, 70% or more passes), the one whose passed task costs least (`perPass`: all its work over
+  its passes, so a cheap rung's failures are priced in); else the kind's start moved up past any rung
+  with two or more verdicts under half. Every 4th auto pick of a kind tries the cheapest rung below
+  that is neither trusted nor written off, Haiku first. The first version took the cheapest rung at
+  80%, and code's Sonnet medium sat at 78% (93 of 119) at a quarter of the quota of Opus high, so
+  every code task went to Opus high. The pick and its reason go in the `dispatched` journal line.
+- **A named model or effort holds only with `modelWhy`** (`runSetting`; `climayte_run` top level or
+  per task): without a reason the task goes to auto, and its reason says what was named. Callers had
+  named `opus` on everything, which no scorecard can lower.
+- **Haiku** is back on the ladder on the owner's word of 2026-10-02 ("don't forget Haiku exists"),
+  which supersedes the 2026-09-06 "never Haiku" for CliMayte work: the scorecard writes it off for a
+  kind after two fails, so a kind it cannot do costs two small tries, not a habit.
 - **`climayteScorecard()`** (`GET /api/corch/scorecard`, `climayte_scorecard`): passes, fails and cost per
   task as a share of a Pro 5-hour window (`UNITS_PER_PRO_PERCENT` = 320,000 weighted units per 1%,
   fitted on run 1, R^2 0.48) per kind and setting, `pick` on the next auto setting. The CliMayte view

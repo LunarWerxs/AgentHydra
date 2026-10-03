@@ -663,12 +663,17 @@ export const TOOLS: McpEngineTool[] = [
               model: {
                 type: 'string',
                 description:
-                  "Model: opus (Opus 5.5) or sonnet (Sonnet 5.5); the full ids claude-opus-5-5 / claude-sonnet-5-5 work too. `auto`: CliMayte picks model AND effort for the task's `kind` from the scorecard (the cheapest setting that keeps passing; every 4th pick tries one rung cheaper so it keeps learning). Omit for the CLI default.",
+                  "Leave it out (or `auto`): CliMayte picks model AND effort for the task's `kind` from the scorecard, the setting that passes that kind reliably for the least quota per passed task (Haiku 4.5 up to Opus 5.5 max; every 4th pick tries a cheaper one still learning). Name haiku, sonnet or opus only with `modelWhy`; a model or effort named without one is left to the scorecard. A task that fails on a cheap setting is usually too big: split it and send the parts on auto.",
               },
               effort: {
                 type: 'string',
                 description:
-                  'Thinking level: low, medium, high, xhigh or max (how hard the model thinks on every turn). Omit for the default.',
+                  'Thinking level: low, medium, high, xhigh or max (how hard the model thinks on every turn). Held only with `modelWhy`, like `model`.',
+              },
+              modelWhy: {
+                type: 'string',
+                description:
+                  'Why this task needs the `model`/`effort` you named instead of the scorecard pick, in a few words (e.g. "failed twice on Sonnet medium", "cross-repo architecture call"). Without it the named setting is ignored.',
               },
               kind: {
                 type: 'string',
@@ -704,12 +709,18 @@ export const TOOLS: McpEngineTool[] = [
         per_account: { type: 'number' },
         model: {
           type: 'string',
-          description: 'Default model for every task without its own: opus or sonnet.',
+          description:
+            'Default model for every task without its own: leave it out (auto, the scorecard picks), or haiku, sonnet or opus with `modelWhy`.',
         },
         effort: {
           type: 'string',
           description:
-            'Default thinking level for every task without its own: low, medium, high, xhigh or max.',
+            'Default thinking level for every task without its own: low, medium, high, xhigh or max. Held only with `modelWhy`.',
+        },
+        modelWhy: {
+          type: 'string',
+          description:
+            'Why every task without its own needs the `model`/`effort` named here (see the task `modelWhy`).',
         },
         kind: {
           type: 'string',
@@ -755,6 +766,7 @@ export const TOOLS: McpEngineTool[] = [
           perAccount: a.per_account != null ? Number(a.per_account) : undefined,
           model: a.model != null ? str(a.model) : undefined,
           effort: a.effort != null ? str(a.effort) : undefined,
+          modelWhy: a.modelWhy != null ? str(a.modelWhy) : undefined,
           kind: a.kind != null ? str(a.kind) : undefined,
           priority: a.priority != null ? Number(a.priority) : undefined,
           size: a.size != null ? str(a.size) : undefined,
@@ -909,7 +921,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'climayte_verdict',
     description:
-      "MUTATES: judge a FINISHED CliMayte worker's result after you checked its proof: `verdict` pass or fail. Every verdict is kept with the model and thinking level that produced the result and what it cost, and climayte_scorecard learns from them which setting each kind of task needs (model `auto` in climayte_run uses that). A fail needs `note` (what was wrong, self-contained: the worker gets it) and sends the task back to the SAME session one rung up the ladder (Sonnet low, medium, high, then Opus medium, high, xhigh, max); the answer names that `next` setting. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one. `ids` gives several workers the same verdict in one call (a batch you checked together); each id answers on its own.",
+      "MUTATES: judge a FINISHED CliMayte worker's result after you checked its proof: `verdict` pass or fail. Every verdict is kept with the model and thinking level that produced the result and what it cost, and climayte_scorecard learns from them which setting each kind of task needs (model `auto` in climayte_run uses that). A fail needs `note` (what was wrong, self-contained: the worker gets it) and sends the task back to the SAME session one rung up the ladder (Haiku 4.5, Sonnet low, medium, high, then Opus medium, high, xhigh, max); the answer names that `next` setting. A fail on a cheap setting usually means the task was too big: often the better move is `retry: false` and the task split into smaller parts sent on auto. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one. `ids` gives several workers the same verdict in one call (a batch you checked together); each id answers on its own.",
     inputSchema: S(
       {
         id: { type: 'string' },

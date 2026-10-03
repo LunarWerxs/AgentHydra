@@ -86,8 +86,8 @@ export interface CostEstimate {
 }
 
 /** A model's family; the CLI default (null) is Opus. */
-export const modelFamily = (m: string | null): 'sonnet' | 'opus' =>
-  m?.includes('sonnet') ? 'sonnet' : 'opus'
+export const modelFamily = (m: string | null): 'haiku' | 'sonnet' | 'opus' =>
+  m?.includes('haiku') ? 'haiku' : m?.includes('sonnet') ? 'sonnet' : 'opus'
 
 /** A finished task's work (its re-reads left out), in % of a Pro 5-hour window, and its setting. */
 export interface FinishedCost {

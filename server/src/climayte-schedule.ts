@@ -96,7 +96,8 @@ export function tickState(accounts: CliMayteAccount[], now: number): TickState {
  *  wall's `until` is only its next recheck, not a time the account frees up. */
 function accountFreesAt(a: CliMayteAccount, now: number): number | null {
   const wall = walls[a.id]
-  if (wall && wall.until > now) return isLoginWall(wall.reason) ? null : wall.until
+  if (isLoginWall(wall?.reason)) return null
+  if (wall && wall.until > now) return wall.until
   return a.sessionResetsAt ?? null
 }
 
@@ -359,11 +360,9 @@ function noAccountReason(
   allowed: CliMayteAccount[],
   until: string | null,
 ): string {
-  const { now, accounts } = s
+  const { accounts } = s
   const soonest = until ? Date.parse(until) : undefined
-  const allSignedOut =
-    allowed.length > 0 &&
-    allowed.every((a) => isLoginWall(walls[a.id]?.reason) && walls[a.id]!.until > now)
+  const allSignedOut = allowed.length > 0 && allowed.every((a) => isLoginWall(walls[a.id]?.reason))
   if (!accounts.length) return 'No signed-in CLI account. Add one: CLI instances, Quick add.'
   if (w.accounts && !allowed.length)
     return 'None of the accounts this task may use is signed in. Sign one in: CLI instances, Quick add (type its email).'

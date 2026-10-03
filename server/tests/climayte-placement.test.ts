@@ -175,6 +175,18 @@ describe('which account a task starts on', () => {
     expect(pickAccount(worker(), accounts, {}, taken, 2, now, taken)?.id).toBe('other')
   })
 
+  test('a signed-out account takes no work once its recheck time passes, only once it signs in', () => {
+    // 2026-10-03 00:53Z: #135's wall ran out while no tick ran, and a handoff placed before the
+    // tick's recheck sent a worker to the dead login (no readings, so it looked emptiest).
+    const dead = acct('dead', 1, 0, 0)
+    const busy = acct('busy', 2, 60, 60)
+    const lapsed = { dead: { reason: 'signed out', until: now - 60_000 } }
+    expect(pickAccount(worker(), [dead, busy], lapsed, new Map(), 2, now)?.id).toBe('busy')
+    // A usage wall that ran out frees the account, as before.
+    const limit = { dead: { reason: 'usage limit', until: now - 60_000 } }
+    expect(pickAccount(worker(), [dead, busy], limit, new Map(), 2, now)?.id).toBe('dead')
+  })
+
   test('among tasks of one dispatch, the largest expected cost is placed first', () => {
     // All 31 tasks of odin-w1 shared one createdAt, so insertion order decided who went first.
     const at = (id: string, expected: number, createdAt = 5) =>

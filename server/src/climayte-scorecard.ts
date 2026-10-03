@@ -10,9 +10,16 @@
 //
 // The loop: the orchestrator (or the owner in the CliMayte view) gives each finished task a verdict. A
 // fail sends the task back to the same worker one rung up the ladder. A task dispatched with model
-// `auto` gets the cheapest rung that keeps passing for its kind, and every EXPLORE_EVERY-th auto pick
-// tries one rung cheaper, so the table keeps learning instead of settling on the first thing that
+// `auto` gets, of the rungs that pass its kind reliably (MIN_SAMPLES verdicts at PASS_BAR), the one
+// whose passed task costs least, and every EXPLORE_EVERY-th auto pick tries the cheapest rung not yet
+// trusted nor written off, so the table keeps learning instead of settling on the first thing that
 // worked.
+//
+// WHY COST DECIDES (owner, 2026-10-02: "you are supposed to be sending the task to the cheapest/fastest
+// model capable of reliably completing your offloaded task", and "don't forget Haiku exists"). The
+// first version took the cheapest rung at 80%: code's Sonnet medium sat at 78% (93 of 119) while each
+// of its tasks cost a quarter of an Opus high one, so every code task went to Opus high at about four
+// times the quota per passed task.
 
 import type { CliMayteTokens } from './climayte-lib'
 import { weighCounts } from './usage-tokens'
@@ -30,39 +37,48 @@ export type CliMayteKind = (typeof CLIMAYTE_KINDS)[number]
 
 export interface CliMayteConfig {
   model: string
-  effort: string
+  /** `--effort`; null for a model run without one (Haiku: no effort level is asked of it). */
+  effort: string | null
 }
 
-/** Cheapest first. Price: Opus 5.5 is twice Sonnet 5.5 per token (usage-tokens modelMultiplier),
- *  and a higher effort writes more thinking, which is output, the dearest token on the meter. */
-export const CLIMAYTE_LADDER: readonly CliMayteConfig[] = [
-  { model: 'claude-sonnet-5-5', effort: 'low' },
-  { model: 'claude-sonnet-5-5', effort: 'medium' },
-  { model: 'claude-sonnet-5-5', effort: 'high' },
-  { model: 'claude-opus-5-5', effort: 'medium' },
-  { model: 'claude-opus-5-5', effort: 'high' },
-  { model: 'claude-opus-5-5', effort: 'xhigh' },
-  { model: 'claude-opus-5-5', effort: 'max' },
-]
+export const HAIKU = 'claude-haiku-4-5'
+export const SONNET = 'claude-sonnet-5-5'
+export const OPUS = 'claude-opus-5-5'
 
-/** Where a kind starts before it has verdicts: the climayte skill's table (high for code was measured:
- *  it matched xhigh on ten real fixes at 2.3x fewer tokens). */
+/** Cheapest first. Price: Haiku 4.5 is half Sonnet 5.5 per token and Opus 5.5 twice it
+ *  (usage-tokens modelMultiplier), and a higher effort writes more thinking, which is output, the
+ *  dearest token on the meter. */
+export const CLIMAYTE_LADDER: readonly CliMayteConfig[] = [
+  { model: HAIKU, effort: null },
+  { model: SONNET, effort: 'low' },
+  { model: SONNET, effort: 'medium' },
+  { model: SONNET, effort: 'high' },
+  { model: OPUS, effort: 'medium' },
+  { model: OPUS, effort: 'high' },
+  { model: OPUS, effort: 'xhigh' },
+  { model: OPUS, effort: 'max' },
+]
+/** What the CLI runs when asked for no model or effort: Opus high. */
+const CLI_DEFAULT_RUNG = 5
+
+/** Where a kind starts before any rung has earned its trust: frugal (the climayte skill), and the
+ *  every-4th exploring pick tries cheaper still. */
 const START: Record<CliMayteKind, number> = {
   trivial: 0,
-  sweep: 1,
-  mechanical: 1,
-  docs: 1,
-  code: 4,
-  review: 4,
-  debug: 5,
+  sweep: 2,
+  mechanical: 2,
+  docs: 2,
+  code: 2,
+  review: 2,
+  debug: 4,
 }
 
-/** A rung is trusted after this many verdicts at or above PASS_BAR... */
+/** A rung is trusted after this many verdicts at or above PASS_BAR, the floor for "reliably"... */
 export const MIN_SAMPLES = 3
-export const PASS_BAR = 0.8
+export const PASS_BAR = 0.7
 /** ...and written off after two or more verdicts below half. */
 const BAD_BAR = 0.5
-/** One auto pick in this many tries the rung below the best. */
+/** One auto pick in this many tries a cheaper rung, to keep learning. */
 export const EXPLORE_EVERY = 4
 
 /** Weighted units (usage-tokens.ts weights, Opus x2) per 1% of a Pro account's 5-hour window,
@@ -167,30 +183,62 @@ export function scoreRows(
 export function ladderModel(model: string | null | undefined): string | null {
   if (!model) return null
   const m = model.toLowerCase()
-  if (m.includes('opus-5-5') || m === 'opus') return 'claude-opus-5-5'
-  if (m.includes('sonnet-5-5') || m === 'sonnet') return 'claude-sonnet-5-5'
+  if (m.includes('opus-5-5') || m === 'opus') return OPUS
+  if (m.includes('sonnet-5-5') || m === 'sonnet') return SONNET
+  if (m.includes('haiku-4-5') || m === 'haiku') return HAIKU
   return model
 }
 
+/** A rung's place on the ladder; -1 off it. Haiku is one rung whatever effort a verdict names. */
 export function ladderIndex(c: { model: string | null; effort: string | null }): number {
+  if (c.model === HAIKU) return 0
   return CLIMAYTE_LADDER.findIndex((r) => r.model === c.model && r.effort === c.effort)
 }
 
-function statAt(rows: ScoreRow[], kind: string, i: number): { n: number; rate: number } {
+/** "Sonnet medium", "Haiku". */
+export function rungLabel(i: number): string {
   const c = CLIMAYTE_LADDER[i]!
-  const r = rows.find((x) => x.kind === kind && x.model === c.model && x.effort === c.effort)
-  const n = r ? r.pass + r.fail : 0
-  return { n, rate: n ? r!.pass / n : 0 }
+  const family = c.model === HAIKU ? 'Haiku' : c.model === SONNET ? 'Sonnet' : 'Opus'
+  return c.effort ? `${family} ${c.effort}` : family
 }
 
-/** The rung CliMayte trusts for `kind`: the cheapest with MIN_SAMPLES verdicts at PASS_BAR, else the
- *  kind's start, moved up past any rung that keeps failing. */
+interface RungStat {
+  n: number
+  pass: number
+  rate: number
+  /** Weighted units per PASSED task (all its attempts' work over its passes); Infinity with none. */
+  perPass: number
+}
+
+function statAt(rows: ScoreRow[], kind: string, i: number): RungStat {
+  let pass = 0
+  let fail = 0
+  let units = 0
+  for (const x of rows)
+    if (x.kind === kind && ladderIndex({ model: ladderModel(x.model), effort: x.effort }) === i) {
+      pass += x.pass
+      fail += x.fail
+      units += x.units
+    }
+  const n = pass + fail
+  return { n, pass, rate: n ? pass / n : 0, perPass: pass ? units / pass : Infinity }
+}
+
+const trusted = (s: RungStat): boolean => s.n >= MIN_SAMPLES && s.rate >= PASS_BAR
+
+/** The rung CliMayte uses for `kind`: of the trusted rungs, the one whose passed task costs least
+ *  (cheaper rung on a tie); else the kind's start, moved up past any rung that keeps failing. */
 export function bestRung(kind: CliMayteKind, rows: ScoreRow[]): number {
-  const good = CLIMAYTE_LADDER.findIndex((_, i) => {
+  let best = -1
+  let bestCost = Infinity
+  for (let i = 0; i < CLIMAYTE_LADDER.length; i++) {
     const s = statAt(rows, kind, i)
-    return s.n >= MIN_SAMPLES && s.rate >= PASS_BAR
-  })
-  if (good !== -1) return good
+    if (trusted(s) && s.perPass < bestCost) {
+      best = i
+      bestCost = s.perPass
+    }
+  }
+  if (best !== -1) return best
   let i = START[kind]
   while (i < CLIMAYTE_LADDER.length - 1 && isBad(kind, rows, i)) i++
   return i
@@ -201,30 +249,36 @@ function isBad(kind: string, rows: ScoreRow[], i: number): boolean {
   return s.n >= 2 && s.rate < BAD_BAR
 }
 
-/** The setting for an auto task: the best rung, or one cheaper on every EXPLORE_EVERY-th auto pick
- *  of the kind (`autoIndex` counts them from 0) unless that rung keeps failing. */
+/** The rung an exploring pick tries: the cheapest below `best` neither trusted nor written off (one
+ *  still learning, Haiku first), or none. */
+function exploreRung(kind: CliMayteKind, rows: ScoreRow[], best: number): number | null {
+  for (let i = 0; i < best; i++) {
+    if (!trusted(statAt(rows, kind, i)) && !isBad(kind, rows, i)) return i
+  }
+  return null
+}
+
+/** The setting for an auto task: the best rung, or on every EXPLORE_EVERY-th auto pick of the kind
+ *  (`autoIndex` counts them from 0) a cheaper one still learning (exploreRung). */
 export function pickConfig(
   kind: CliMayteKind,
   rows: ScoreRow[],
   autoIndex: number,
 ): { config: CliMayteConfig; reason: string } {
   const best = bestRung(kind, rows)
-  const label = (i: number): string => {
-    const c = CLIMAYTE_LADDER[i]!
-    return `${c.model.includes('sonnet') ? 'Sonnet' : 'Opus'} ${c.effort}`
-  }
-  if (autoIndex % EXPLORE_EVERY === EXPLORE_EVERY - 1 && best > 0 && !isBad(kind, rows, best - 1))
+  const explore =
+    autoIndex % EXPLORE_EVERY === EXPLORE_EVERY - 1 ? exploreRung(kind, rows, best) : null
+  if (explore !== null)
     return {
-      config: CLIMAYTE_LADDER[best - 1]!,
-      reason: `trying one rung cheaper than ${label(best)} (${label(best - 1)}) for ${kind}`,
+      config: CLIMAYTE_LADDER[explore]!,
+      reason: `trying ${rungLabel(explore)}, cheaper than ${rungLabel(best)}, for ${kind}`,
     }
   const s = statAt(rows, kind, best)
   return {
     config: CLIMAYTE_LADDER[best]!,
-    reason:
-      s.n >= MIN_SAMPLES && s.rate >= PASS_BAR
-        ? `${label(best)} passed ${Math.round(s.rate * s.n)} of ${s.n} ${kind} tasks`
-        : `${label(best)}, the starting point for ${kind} until it has ${MIN_SAMPLES} verdicts`,
+    reason: trusted(s)
+      ? `${rungLabel(best)} passed ${s.pass} of ${s.n} ${kind} tasks, the least quota per passed task`
+      : `${rungLabel(best)}, the starting point for ${kind} until a setting passes ${MIN_SAMPLES} reliably`,
   }
 }
 
@@ -235,6 +289,6 @@ export function nextRung(c: {
   effort: string | null
 }): CliMayteConfig | null {
   let i = ladderIndex(c)
-  if (i === -1) i = 4
+  if (i === -1) i = CLI_DEFAULT_RUNG
   return CLIMAYTE_LADDER[i + 1] ?? null
 }

@@ -35,6 +35,7 @@ import {
   type CliMayteWorker,
   freshestPct,
   isOrgDisabled,
+  isWalledNow,
   liveUsage,
   noTokens,
   ORG_DISABLED_WALL,
@@ -346,7 +347,7 @@ function poolAccount(i: CliInstance, b: PoolBuild): CliMayteAccount {
   const readAt = sessionReadAt(sessionPct, live.session, snapshotAt)
   // A walled account takes no work until its wall ends, so its reading waits too.
   const due = readAt === null || now - readAt > READING_STALE_MS
-  if (b.toPlace && due && !((walls[i.id]?.until ?? 0) > now)) refreshReading(i.id, now)
+  if (b.toPlace && due && !isWalledNow(walls[i.id], now)) refreshReading(i.id, now)
   const refreshStarted = refreshRunning.get(i.id)
   return {
     id: i.id,
@@ -1111,7 +1112,7 @@ export function basisText(
   s: { kind?: string | null; model: string | null; effort: string | null },
 ): string {
   if (!cost.samples) return 'nothing on record yet (the default)'
-  const fam = modelFamily(ladderModel(s.model)) === 'sonnet' ? 'Sonnet' : 'Opus'
+  const fam = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus' }[modelFamily(ladderModel(s.model))]
   const on = {
     setting: `${s.kind} on ${ladderModel(s.model) ?? 'the CLI default'} ${s.effort ?? 'default effort'}`,
     'kind-model': `${s.kind} on ${fam} at other efforts`,

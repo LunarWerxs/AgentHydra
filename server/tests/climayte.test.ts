@@ -681,7 +681,7 @@ describe('integration: a quota wall hands the session to the next account', () =
     const lines = climayteJournalLines({ id })
     expect(lines[0]).toMatch(/^\d\d:\d\d:\d\d w-\w+ 'fake' /)
     expect(lines[1]).toMatch(
-      /^\d\d:\d\d:\d\d w-\w+ launched on #1 \(session 0%, week 0%, 0 active\)$/,
+      /^\d\d:\d\d:\d\d w-\w+ launched on #1 \(session 0%, week 0%, 0 active\) with claude-sonnet-5-5, effort medium$/,
     )
     expect(lines[3]).toContain('moved from #1 to #2')
 
@@ -1569,7 +1569,19 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
       { id: account, num: 7, name: 'slow', configDir: slowDir, sessionPct: 0, weekPct: 0 },
     ])
     startCliMayte()
-    const run = climayteRun({ tasks: [{ prompt: 'a slow task', cwd, title }] })
+    // One known setting, so a follow-up's switch shows against it (auto may explore Haiku).
+    const run = climayteRun({
+      tasks: [
+        {
+          prompt: 'a slow task',
+          cwd,
+          title,
+          model: 'sonnet',
+          effort: 'medium',
+          modelWhy: 'steering starts from one known setting',
+        },
+      ],
+    })
     groups.push(run.group)
     const id = run.workers[0]?.id as string
     const deadline = Date.now() + 10_000
@@ -1613,8 +1625,8 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
   }, 25_000)
 
   test('model and effort: unknown values are refused, aliases become full ids, the group default fills in', () => {
-    expect(() => climayteRun({ tasks: [{ prompt: 'x', cwd, model: 'haiku' }] })).toThrow(
-      "task 1: unknown model 'haiku': use opus or sonnet",
+    expect(() => climayteRun({ tasks: [{ prompt: 'x', cwd, model: 'gpt-5' }] })).toThrow(
+      "task 1: unknown model 'gpt-5': use auto, haiku, sonnet or opus",
     )
     expect(() => climayteRun({ tasks: [{ prompt: 'x', cwd, effort: 'ultra' }] })).toThrow(
       'use low, medium, high, xhigh, max',
@@ -1625,16 +1637,24 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     const run = climayteRun({
       model: 'sonnet',
       effort: 'medium',
+      modelWhy: 'the setting under test',
       tasks: [
         { prompt: 'by default', cwd },
         { prompt: 'its own', cwd, model: 'Opus', effort: 'xhigh' },
+        { prompt: 'haiku', cwd, model: 'haiku' },
       ],
     })
     climayteCancel({ group: run.group })
     expect(run.workers.map((w) => [w.model, w.effort])).toEqual([
       ['claude-sonnet-5-5', 'medium'],
       ['claude-opus-5-5', 'xhigh'],
+      ['claude-haiku-4-5', null],
     ])
+    // Owner, 2026-10-02: the cheapest model that reliably does the task. A model named with no
+    // reason is left to the scorecard: a sweep pinned to Opus starts where sweeps start.
+    const bare = climayteRun({ tasks: [{ prompt: 'x', cwd, kind: 'sweep', model: 'opus' }] })
+    climayteCancel({ group: bare.group })
+    expect(bare.workers.map((w) => [w.model, w.effort])).toEqual([['claude-sonnet-5-5', 'medium']])
   })
 
   test('a follow-up switches model and effort for its turn on, in the same session', async () => {
@@ -1646,7 +1666,7 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     const w = await settle(id, 15_000)
     expect(w?.status).toBe('done')
     expect(w?.attempts.at(-1)?.requested).toEqual({ model: 'claude-opus-5-5', effort: 'xhigh' })
-    expect(w?.attempts[0]?.requested).toEqual({ model: null, effort: null })
+    expect(w?.attempts[0]?.requested).toEqual({ model: 'claude-sonnet-5-5', effort: 'medium' })
     // The fake CLI reports the --model it was given, as the real one does at init.
     expect(w?.reportedModel).toBe('claude-opus-5-5')
     expect(climayteGet(id)?.sessionId).toBe(session)
@@ -1739,6 +1759,7 @@ describe('integration: a task with a check is judged by it', () => {
           kind: 'code',
           model: 'sonnet',
           effort: 'high',
+          modelWhy: 'the rung this test climbs from',
           check,
         },
       ],
@@ -1908,7 +1929,16 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
   // expected cost of the next one (a Sonnet output token weighs 31 units, a Pro % is 320k units).
   const onRecord = async (kind: string, effort: string, tokens: number) => {
     const run = climayteRun({
-      tasks: [{ prompt: `FAKE-SPEND:${tokens} history`, cwd, kind, model: 'sonnet', effort }],
+      tasks: [
+        {
+          prompt: `FAKE-SPEND:${tokens} history`,
+          cwd,
+          kind,
+          model: 'sonnet',
+          effort,
+          modelWhy: 'the record under test',
+        },
+      ],
       group: `size-history-${kind}`,
       size: 'whole',
     })
@@ -1935,7 +1965,14 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     startCliMayte()
     await onRecord('debug', 'low', 1_550_000) // about 150% of a Pro window
 
-    const big = { prompt: 'a big debug task', cwd, kind: 'debug', model: 'sonnet', effort: 'low' }
+    const big = {
+      prompt: 'a big debug task',
+      cwd,
+      kind: 'debug',
+      model: 'sonnet',
+      effort: 'low',
+      modelWhy: 'sized on its own record',
+    }
     const before = climayteList().length
     let refused: unknown = null
     try {
@@ -2049,6 +2086,7 @@ describe('spend per attempt (field note 41): what each run used, the re-read aft
           kind: 'docs',
           model: 'sonnet',
           effort: 'high',
+          modelWhy: 'the scorecard row under test',
         },
       ],
       size: 'whole',

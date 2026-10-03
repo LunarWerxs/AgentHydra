@@ -139,6 +139,8 @@ app.post('/api/corch/workers', async (c) => {
         // Validated by climayteRun (unknown values are refused with the valid ones listed).
         model: body.model as string | undefined,
         effort: body.effort as string | undefined,
+        // Holds a named model or effort; without it the pick is auto (runSetting).
+        modelWhy: optStr(body.modelWhy),
         kind: body.kind as string | undefined,
         priority: body.priority as number | undefined,
         size: body.size as string | undefined,

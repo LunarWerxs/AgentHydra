@@ -482,6 +482,10 @@ export const CLIMAYTE_MODELS: Readonly<Record<string, string>> = {
   'sonnet-5.5': 'claude-sonnet-5-5',
   'sonnet-5-5': 'claude-sonnet-5-5',
   'claude-sonnet-5-5': 'claude-sonnet-5-5',
+  haiku: 'claude-haiku-4-5',
+  'haiku-4.5': 'claude-haiku-4-5',
+  'haiku-4-5': 'claude-haiku-4-5',
+  'claude-haiku-4-5': 'claude-haiku-4-5',
 }
 /** `claude --effort <level>` (2.1.284): how hard the model thinks on every turn. */
 export const CLIMAYTE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
@@ -495,7 +499,7 @@ export function climayteModel(v: unknown): string | null {
   const id = typeof v === 'string' ? CLIMAYTE_MODELS[v.trim().toLowerCase()] : undefined
   if (!id)
     throw new Error(
-      `unknown model '${String(v)}': use opus or sonnet (or claude-opus-5-5, claude-sonnet-5-5)`,
+      `unknown model '${String(v)}': use auto, haiku, sonnet or opus (or claude-haiku-4-5, claude-sonnet-5-5, claude-opus-5-5)`,
     )
   return id
 }
@@ -759,6 +763,14 @@ export const isOrgDisabled = (notice: string | null): boolean =>
 /** A wall about the login, not the usage: its `until` is a recheck time, never when it frees up. */
 export const isLoginWall = (reason: string | undefined): boolean =>
   reason === 'signed out' || reason === ORG_DISABLED_WALL
+/** The account takes no work now: a usage wall until it ends, a login wall until its recheck lifts
+ *  it (climayte.ts recheckSignedOut; a lapsed `until` only means that recheck is due). 2026-10-03
+ *  00:53Z: #135's wall lapsed while no tick ran, and a handoff placed before the tick's recheck sent
+ *  a worker to the dead login. */
+export const isWalledNow = (
+  wall: { reason: string; until: number } | undefined,
+  now: number,
+): boolean => !!wall && (isLoginWall(wall.reason) || wall.until > now)
 
 export function scrubbedEnv(configDir: string, workerId?: string): Record<string, string> {
   const env: Record<string, string> = {}
@@ -1342,7 +1354,7 @@ function keepsHome(a: CliMayteAccount, r: RankInputs): boolean {
 function accountAdmits(a: CliMayteAccount, r: RankInputs): boolean {
   return (
     (!r.worker.accounts || r.worker.accounts.includes(a.id)) &&
-    !((r.walls[a.id]?.until ?? 0) > r.now) &&
+    !isWalledNow(r.walls[a.id], r.now) &&
     (r.allowFull || !accountIsFull(a)) &&
     (r.active.get(a.id) ?? 0) < MAX_PER_ACCOUNT
   )
