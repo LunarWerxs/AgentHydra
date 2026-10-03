@@ -3,7 +3,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { relaunchWithHandoff, writeRelaunchAck } from '../src/relaunch-handoff'
-import { applyRelaunchIdentity, planRelaunchSuccessor } from '../src/relaunch-identity'
+import {
+  applyRelaunchIdentity,
+  planRelaunchSuccessor,
+  relaunchRefusal,
+} from '../src/relaunch-identity'
 
 // Regression for 2026-09-25: the daemon exited 0.8s after a relaunch whose successor never
 // started (on Windows the spawn is a transient powershell that exits 0 whatever WMI does), and
@@ -131,5 +135,53 @@ describe('relaunch successor identity', () => {
     expect(at(['[1]']).ok).toBe(false)
     expect(at(['"str"']).ok).toBe(false)
     expect(at([]).ok).toBe(false)
+  })
+})
+
+// 2026-10-03 12:47 (note 74): a side-run's successor lost its environment, opened the LIVE store and
+// ran as a second supervisor beside the live daemon. A successor whose store is held by a live
+// daemon other than its predecessor must refuse before it reports in; a real upgrade must not.
+describe('relaunch successor refuses a store another daemon owns', () => {
+  const live = { pid: 4242, port: 7787 }
+  const self = 999
+
+  it('without --handoff-env or --from-pid, a pointer naming a daemon on another port refuses', () => {
+    const line = relaunchRefusal({
+      argv: ['bun', 'src/index.ts', '--port', '7801', '--relaunch'],
+      selfPid: self,
+      owner: live,
+    })
+    expect(line).toContain('relaunch refused')
+    expect(line).toContain('7787')
+    expect(line).toContain('pid 4242')
+    expect(line).toContain('7801')
+  })
+
+  it('an upgrade relaunch from an older daemon (pointer names the predecessor port) starts', () => {
+    expect(
+      relaunchRefusal({
+        argv: ['bun', 'src/index.ts', '--port', '7787', '--relaunch'],
+        selfPid: self,
+        owner: live,
+      }),
+    ).toBeNull()
+  })
+
+  it('--from-pid matching the pointer pid starts; a different pid refuses', () => {
+    const argv = (pid: number) => ['bun', 'x', '--port', '7801', '--relaunch', '--from-pid', `${pid}`]
+    expect(relaunchRefusal({ argv: argv(4242), selfPid: self, owner: live })).toBeNull()
+    expect(relaunchRefusal({ argv: argv(555), selfPid: self, owner: live })).toContain(
+      'pid 555',
+    )
+  })
+
+  it('no live owner starts, and the successor passes its own pid without accumulating it', () => {
+    expect(relaunchRefusal({ argv: ['bun', 'x', '--relaunch'], selfPid: self, owner: null })).toBeNull()
+    const plan = (argv: string[]) =>
+      planRelaunchSuccessor({ argv, execPath: 'bun', isCompiled: false, boundPort: 7810, env: {}, selfPid: 77 })
+    const first = plan(['bun', 'src/index.ts'])
+    expect(first).toContain('--from-pid')
+    expect(first[first.indexOf('--from-pid') + 1]).toBe('77')
+    expect(plan(['bun', ...first.slice(1)])).toEqual(first)
   })
 })

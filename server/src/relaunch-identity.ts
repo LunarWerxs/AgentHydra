@@ -28,6 +28,9 @@ import { isRelaunchSuccessor, RELAUNCH_FLAG } from './single-instance'
 /** `--handoff-env <json>`: the identity variables of the predecessor, a JSON object of strings. */
 export const HANDOFF_FLAG = '--handoff-env'
 
+/** `--from-pid <pid>`: the pid of the daemon that spawned this successor (its predecessor). */
+export const FROM_PID_FLAG = '--from-pid'
+
 /** Suffixes of the variables that say where state lives or how this daemon is wired to the
  *  machine. An allowlist, not "every AGENTHYDRA_*": a command line is readable by any local
  *  process, and AGENTHYDRA_SHUTDOWN_TOKEN is a secret. Each is read as AGENTHYDRA_* and as its
@@ -67,7 +70,7 @@ export function relaunchIdentity(env: NodeJS.ProcessEnv = process.env): Record<s
 export function withoutHandoff(argv: readonly string[]): string[] {
   const out: string[] = []
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === HANDOFF_FLAG) {
+    if (argv[i] === HANDOFF_FLAG || argv[i] === FROM_PID_FLAG) {
       i++
       continue
     }
@@ -127,6 +130,8 @@ export function planRelaunchSuccessor(opts: {
   isCompiled: boolean
   boundPort: number
   env?: NodeJS.ProcessEnv
+  /** This daemon's pid; the successor checks the store's owner against it. */
+  selfPid?: number
 }): string[] {
   const relaunchArgv = buildRelaunchArgv(withoutHandoff(opts.argv), {
     execPath: opts.execPath,
@@ -134,5 +139,47 @@ export function planRelaunchSuccessor(opts: {
     boundPort: opts.boundPort,
     relaunchFlag: RELAUNCH_FLAG,
   }) as string[]
-  return [...relaunchArgv, ...handoffArgs(opts.env)]
+  return [
+    ...relaunchArgv,
+    FROM_PID_FLAG,
+    String(opts.selfPid ?? process.pid),
+    ...handoffArgs(opts.env),
+  ]
+}
+
+/** The value of a numeric flag in `argv`, or undefined when absent or not a positive integer. */
+export function numericFlag(argv: readonly string[], flag: string): number | undefined {
+  const at = argv.indexOf(flag)
+  const n = at === -1 ? Number.NaN : Number(argv[at + 1])
+  return Number.isInteger(n) && n > 0 ? n : undefined
+}
+
+/**
+ * Successor side, before it reports in, binds a port or writes anything: is the store it opened
+ * owned by a live daemon that is NOT its predecessor? 2026-10-03 12:47: a side-run's successor lost
+ * its environment (WMI), opened the machine's live store and ran 30 minutes as a second supervisor
+ * of the live daemon's CliMayte workers (docs/CLIMAYTE-FIELD-NOTES.md note 74).
+ *
+ * `owner` is what the pointer names and /api/health confirmed (null: no pointer, or nothing answers
+ * as this service, so nobody owns the store and the start goes on). The predecessor is known by
+ * `--from-pid`; an older predecessor does not pass it, so the port it was told to serve (`--port`)
+ * stands in: an upgrade relaunch keeps the pointer's port, a stray from another daemon does not.
+ * Returns the refusal line, or null to start.
+ */
+export function relaunchRefusal(opts: {
+  argv: readonly string[]
+  selfPid: number
+  owner: { pid: number; port: number } | null
+}): string | null {
+  const { argv, owner } = opts
+  if (!owner || owner.pid === opts.selfPid) return null
+  const fromPid = numericFlag(argv, FROM_PID_FLAG)
+  const ownPort = numericFlag(argv, '--port')
+  if (fromPid !== undefined ? owner.pid === fromPid : ownPort === undefined || owner.port === ownPort)
+    return null
+  const from =
+    fromPid !== undefined
+      ? `a relaunch from pid ${fromPid}`
+      : `a relaunch from the daemon on ${ownPort}`
+  return `relaunch refused: this store belongs to the daemon on ${owner.port} (pid ${owner.pid}); ${from} would run a second supervisor`
 }

@@ -59,7 +59,7 @@ interface HealthBody {
 }
 
 /** /api/health of `url` as OUR service, or null: not answering, not ok, or someone else's server. */
-async function ourHealthAt(url: string, timeoutMs: number): Promise<HealthBody | null> {
+export async function ourHealthAt(url: string, timeoutMs: number): Promise<HealthBody | null> {
   try {
     const res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(timeoutMs) })
     if (!res.ok) return null
@@ -240,4 +240,18 @@ export async function findPeerDaemon(
       return { url, pid: body.pid }
   }
   return null
+}
+
+/**
+ * The live daemon the pointer names, as /api/health confirms it, or null (no pointer, it is this
+ * process, or nothing answers as our service). Read by a relaunch successor before it reports in.
+ */
+export async function findPointerOwner(
+  timeoutMs = 1500,
+): Promise<{ pid: number; port: number } | null> {
+  const info = readInstanceInfo()
+  if (!info?.url || info.pid === process.pid) return null
+  const body = await ourHealthAt(info.url, timeoutMs)
+  if (!body || typeof body.pid !== 'number') return null
+  return { pid: body.pid, port: info.port }
 }

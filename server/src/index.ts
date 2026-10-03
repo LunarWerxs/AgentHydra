@@ -82,6 +82,7 @@ import {
   findLiveInstance,
   findLiveOnDefaultPort,
   findPeerDaemon,
+  findPointerOwner,
   findStalledOwner,
   IS_PRIMARY_INSTALL,
   instanceFilePath,
@@ -128,7 +129,7 @@ import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { relaunchWithHandoff, writeRelaunchAck } from './relaunch-handoff'
-import { planRelaunchSuccessor } from './relaunch-identity'
+import { planRelaunchSuccessor, relaunchRefusal } from './relaunch-identity'
 import {
   acknowledgeResetEvents,
   listResetEvents,
@@ -1038,6 +1039,17 @@ if (!skipSingleInstanceGuard()) {
 // never does (relaunch-handoff.ts). Written here, after every import has loaded and the state is
 // open, so an ack means this build can actually boot.
 if (isRelaunchSuccessor()) {
+  // Before the ack, the port wait, the pointer or the MCP entry: a successor whose store is held by
+  // a live daemon other than its predecessor is a stray (note 74) and leaves everything as it was.
+  const refusal = relaunchRefusal({
+    argv: process.argv,
+    selfPid: process.pid,
+    owner: await findPointerOwner(),
+  })
+  if (refusal) {
+    console.error(`[agenthydra] ${refusal}`)
+    process.exit(1)
+  }
   writeRelaunchAck(POINTER_DIR)
   console.log(
     `[agenthydra] relaunch successor pid ${process.pid} reported in; waiting for port ${PORT}`,
