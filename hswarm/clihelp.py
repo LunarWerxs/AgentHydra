@@ -40,6 +40,9 @@ META: dict[str, dict] = {
     "vault": {"effect": WRITE, "guide": "The shared key vault: HSWARM_HOME/secrets lists, encrypted, in step with the other paired machines. `status`, `list` and `sync --dry-run` only read; "
               "`sync`, `add`, `remove`, `init`, `join` and `adopt` change secrets/ and the vault. `adopt` copies this machine's paired ZSwarm vault setup into HSWARM_HOME. "
               "`pair` prints the vault key's pairing code and refuses unless stdout is a terminal: never run it for a chat, the person runs it in their own terminal. "
+              "Sealed pairing hands the code over through the backend instead: `request <backend>` on the new machine prints a fingerprint, "
+              "`grant [machine]` on a vault machine seals the code to it once a person confirms that fingerprint (typed at a terminal, or `--yes <full fingerprint>`), "
+              "`accept` on the new machine opens it and joins (exit 3: not granted yet); none of them prints the code. "
               "Keys come from stdin or a hidden prompt, never argv; every output is counts and 8-character fingerprints.",
               "examples": ["hswarm vault status", "hswarm vault sync --dry-run", "hswarm vault list openrouter"]},
     "models": {"effect": WRITE, "guide": "Listing is read-only; --refresh rewrites ~/.hswarm/openrouter-models.json from the provider's catalogue.",

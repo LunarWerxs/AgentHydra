@@ -67,17 +67,20 @@ def build_parser() -> argparse.ArgumentParser:
     ik.add_argument("--from", dest="source_dir", required=True, help="path to a ZSwarm clone with .secrets/")
 
     vt = sub.add_parser("vault", help="the shared key vault: HSWARM_HOME/secrets key lists, encrypted on a server only you can reach, kept in step on every paired machine")
-    vt.add_argument("action", nargs="?", default="status", choices=["status", "init", "join", "adopt", "pair", "sync", "list", "add", "remove"],
+    vt.add_argument("action", nargs="?", default="status", choices=["status", "init", "join", "adopt", "pair", "request", "grant", "accept", "sync", "list", "add", "remove"],
                     help="status (default) | init <backend> (make the vault from this machine's keys) | join (reads the pairing code from a hidden prompt) "
-                         "| adopt (use the vault this machine's ZSwarm is paired with) | pair (prints the code, only to a terminal) | sync | list [list] "
+                         "| adopt (use the vault this machine's ZSwarm is paired with) | pair (prints the code, only to a terminal) "
+                         "| request <backend> (new machine: ask the vault for its code, sealed to this machine) | grant [machine] (vault machine: "
+                         "seal the code to a request once you confirm its fingerprint) | accept (new machine: open the grant and join) | sync | list [list] "
                          "| add <list> (reads the keys from stdin or a hidden prompt) | remove <list> <fingerprint>")
-    vt.add_argument("target", nargs="?", help="init: ssh://[user@]host[:port]/<dir> or dir:<folder>; list/add/remove: a provider (openrouter) or a list file (cohere_api_keys.dead)")
+    vt.add_argument("target", nargs="?", help="init/request: ssh://[user@]host[:port]/<dir> or dir:<folder>; grant: the requesting machine; list/add/remove: a provider (openrouter) or a list file (cohere_api_keys.dead)")
     vt.add_argument("fingerprint", nargs="?", help="remove: the 8-character fingerprint `hswarm vault list` prints")
     vt.add_argument("--backend", help="join: use this backend instead of the one in the code (an ssh alias this machine has)")
     vt.add_argument("--rebase", action="store_true", help="sync: treat this machine as new: keep its keys, add everyone else's, remove nothing")
     vt.add_argument("--allow-removals", dest="allow_removals", action="store_true", help="sync: allow a sync that removes a quarter of the keys or empties a list")
     vt.add_argument("--dry-run", dest="dry_run", action="store_true", help="sync: say what would change and change nothing")
-    vt.add_argument("--force", action="store_true", help="join: replace this machine's existing vault")
+    vt.add_argument("--force", action="store_true", help="join/request/accept: replace this machine's existing vault")
+    vt.add_argument("--yes", metavar="FINGERPRINT", help="grant without a terminal: the FULL fingerprint the requesting machine printed (e.g. 3F2A-91C0-77BE-0D14)")
     vt.add_argument("--json", action="store_true")
 
     md = sub.add_parser("models", help="every model this machine can address; --refresh pulls a provider's live catalogue and prices")

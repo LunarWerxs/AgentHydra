@@ -501,3 +501,162 @@ def test_the_servers_sync_tick_does_nothing_without_a_vault(fleet, monkeypatch, 
     monkeypatch.setattr(vault, "sync", must_not_run)
     assert vault.autosync_tick() is None and vault.autosync_tick("earlier failure") is None
     assert capsys.readouterr().err == ""
+
+
+# Sealed pairing (wire format v1, shared with ZSwarm): request on the new machine, grant on a vault machine, accept.
+
+def _server(fleet) -> Path:
+    return Path(fleet.url[4:])
+
+
+def _request_files(fleet) -> list[str]:
+    folder = _server(fleet) / "requests"
+    return sorted(p.name for p in folder.iterdir()) if folder.is_dir() else []
+
+
+def _alias(fleet) -> str:
+    """The same server under another spelling: what box-b reaches it as (an ssh alias, in real life)."""
+    return f"{fleet.url}/."
+
+
+def _vault_and_request(fleet, capsys) -> str:
+    """box-a holds a vault, box-b asked to join it through its own alias; returns box-b's fingerprint (box-b is current)."""
+    fleet.on("box-a")
+    fleet.write("groq_api_keys", "gsk-test-from-a-0001")
+    vault.init(fleet.url)
+    fleet.on("box-b")
+    assert cli.main(["vault", "request", _alias(fleet), "--json"]) == 0
+    return json.loads(capsys.readouterr().out)["fingerprint"]
+
+
+def test_sealed_pairing_round_trip_joins_b_without_the_code_ever_printing(fleet, capsys):
+    fp = _vault_and_request(fleet, capsys)
+    assert vault.request(_alias(fleet))["fingerprint"] == fp  # a repeat re-uses the saved key
+    assert _request_files(fleet) == ["box-b.json"]
+    fleet.write("groq_api_keys", "gsk-test-from-b-0002")
+    assert vault.status()["request"] == {"machine": "box-b", "fingerprint": fp, "granted": "no"}
+
+    fleet.on("box-a")
+    assert vault.status()["pending_requests"] == 1
+    a_key = vault.key_file().read_bytes()
+    code = vault.pair_code()
+    assert cli.main(["vault", "grant", "--yes", fp]) == 0
+    granted = capsys.readouterr().out
+    assert granted.splitlines()[-1] == f"granted box-b ({fp})"
+    sealed = (_server(fleet) / "requests" / "box-b.sealed").read_text(encoding="utf-8")
+    assert code not in sealed and code not in granted
+    assert vault.status()["pending_requests"] == 0
+
+    fleet.on("box-b")
+    assert vault.status()["request"]["granted"] == "yes"
+    assert cli.main(["vault", "accept"]) == 0
+    seen = capsys.readouterr()
+    assert code not in seen.out + seen.err and a_key.decode().strip() not in seen.out + seen.err
+    assert "joined:" in seen.out and "added_here: 1" in seen.out
+    assert vault.key_file().read_bytes() == a_key
+    assert json.loads(vault.config_file().read_text(encoding="utf-8"))["backend"] == _alias(fleet)  # the URL box-b asked on
+    assert set(keys_of("groq_api_keys")) == {"gsk-test-from-a-0001", "gsk-test-from-b-0002"}
+    assert _request_files(fleet) == []
+    assert not vault.request_key_file().exists() and not vault.request_file().exists()
+    st = vault.status()
+    assert "request" not in st and "adopt` has nothing to do" in st["paired_by"]
+
+    fleet.on("box-a")
+    fleet.tick()
+    vault.sync()
+    assert set(keys_of("groq_api_keys")) == {"gsk-test-from-a-0001", "gsk-test-from-b-0002"}
+
+
+def test_grant_refuses_without_a_person_or_with_a_wrong_fingerprint_and_writes_nothing(fleet, capsys, monkeypatch):
+    fp = _vault_and_request(fleet, capsys)
+    fleet.on("box-a")
+    before = (_server(fleet) / "vault.bin").read_bytes()
+    for argv in (["vault", "grant"], ["vault", "grant", "box-b", "--yes", fp[:4]], ["vault", "grant", "--yes", "0000-0000-0000-0000"],
+                 ["vault", "grant", "--yes", fp.lower()]):
+        assert cli.main(argv) == 2, argv
+    assert "nothing was granted" in capsys.readouterr().err
+
+    class Tty:
+        @staticmethod
+        def isatty():
+            return True
+
+    monkeypatch.setattr(sys, "stdin", Tty())
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1111" if fp[:4] == "0000" else "0000")
+    assert cli.main(["vault", "grant"]) == 2
+    with pytest.raises(vault.VaultError, match="does not match"):
+        vault.grant(ask=lambda row: fp[:3])
+    assert _request_files(fleet) == ["box-b.json"] and (_server(fleet) / "vault.bin").read_bytes() == before
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: fp[:4].lower())  # the person typed it at the terminal
+    assert cli.main(["vault", "grant"]) == 0
+    assert _request_files(fleet) == ["box-b.json", "box-b.sealed"]
+
+
+def test_accept_before_a_grant_says_not_granted_yet_and_changes_nothing(fleet, capsys):
+    _vault_and_request(fleet, capsys)
+    local = (vault.request_key_file().read_bytes(), vault.request_file().read_bytes())
+    assert cli.main(["vault", "accept"]) == 3
+    assert "not granted yet" in capsys.readouterr().err
+    assert not vault.configured() and _request_files(fleet) == ["box-b.json"]
+    assert (vault.request_key_file().read_bytes(), vault.request_file().read_bytes()) == local
+
+
+def test_a_tampered_or_foreign_grant_does_not_open_and_nothing_is_saved(fleet, capsys):
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+    fp = _vault_and_request(fleet, capsys)
+    fleet.on("box-a")
+    vault.grant("box-b", yes=fp)
+    code = vault.pair_code()
+    path = _server(fleet) / "requests" / "box-b.sealed"
+    good = json.loads(path.read_text(encoding="utf-8"))
+    ct = bytearray(base64.b64decode(good["ct"]))
+    ct[0] ^= 1
+    stranger = vault._raw_pub(X25519PrivateKey.generate())
+    bad = [{**good, "ct": base64.b64encode(bytes(ct)).decode()},     # one flipped bit
+           {**good, "machine": "box-c"},                             # someone else's grant renamed
+           vault.seal_grant(code, stranger, "box-b"),                # sealed to another request's key
+           {**good, "nonce": base64.b64encode(bytes(12)).decode()}]  # another nonce
+    fleet.on("box-b")
+    for doc in bad:
+        path.write_text(json.dumps(doc), encoding="utf-8")
+        with pytest.raises(vault.VaultError, match="does not open") as err:
+            vault.accept()
+        assert code not in str(err.value)
+        assert not vault.configured() and vault.request_key_file().exists()
+        assert _request_files(fleet) == ["box-b.json", "box-b.sealed"]
+    path.write_text(json.dumps(good), encoding="utf-8")
+    assert vault.accept()["joined"] == f"dir:{_server(fleet)}"
+
+
+def test_a_bad_request_name_is_refused_before_any_file_access(fleet):
+    fleet.on("box-a")
+    server = _server(fleet)
+    (server / "requests").mkdir(parents=True)
+    (server / "vault.bin").write_bytes(b"ZSV1-not-a-request")
+    bad = ["../vault.bin", "Box.json", "-box.json", "box.txt", "a/b.json", "box.json\n", "x" * 64 + ".json", ""]
+    calls = []
+    backends = (vault.DirBackend(server),
+                vault.SshBackend("ssh://host.example.invalid/hswarm-vault", run=lambda script, stdin: calls.append(script) or (0, b"", "")))
+    for name in bad:
+        for be in backends:
+            for op in (lambda: be.read_request(name), lambda: be.write_request(name, b"{}"), lambda: be.delete_request(name)):
+                with pytest.raises(vault.VaultError, match="not a pairing request name"):
+                    op()
+    assert calls == [] and (server / "vault.bin").read_bytes() == b"ZSV1-not-a-request"
+    assert sorted(p.name for p in server.iterdir()) == ["requests", "vault.bin"] and not any((server / "requests").iterdir())
+    backends[1].write_request("box-b.json", b"{}")
+    assert calls[-1].endswith("mv -f $d/.box-b.json.tmp $d/box-b.json") and "chmod 700 $d" in calls[-1]
+
+
+def test_golden_vector_matches_the_spec_shared_with_zswarm():
+    """Fixed inputs from the wire-format v1 spec; ZSwarm's tests hold the same literals, so a drift fails on one side."""
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+    req_pub = vault._raw_pub(X25519PrivateKey.from_private_bytes(bytes(range(32))))
+    assert vault.request_fingerprint(req_pub) == "EEDD-883D-A0A9-4515"
+    doc = vault.seal_grant("zsv1-test", req_pub, "box-b", eph_priv=bytes(range(32, 64)), nonce=bytes(12))
+    assert doc == {"v": 1, "machine": "box-b", "eph": "NYBy1jZYgNGu6jKa35EhODhR7SGijjt16WXQ0s0WYlQ=",
+                   "nonce": "AAAAAAAAAAAAAAAA", "ct": "ISQHMsZigh6EfC1+EgXfB4lseEmuazCE8g=="}
+    assert vault.open_grant(doc, bytes(range(32)), "box-b") == "zsv1-test"

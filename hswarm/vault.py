@@ -27,6 +27,12 @@ HOW, in four rules:
 Backends (a URL in HSWARM_HOME/vault.json, chosen at `hswarm vault init`): ssh://[user@]host[:port]/<dir> (the directory
 is under the remote home; ssh://host//srv/x is absolute; needs ssh, flock and sha256sum there) and dir:<folder> (a
 shared folder, and what the tests use). A new backend is a class with get() and put(); see open_backend.
+
+SEALED PAIRING (wire format v1, shared with ZSwarm byte for byte): `vault request <backend>` on a new machine makes an
+X25519 key (HSWARM_HOME/vault-request.key) and leaves requests/<machine>.json beside the vault file; `vault grant` on a
+vault machine seals the pairing code to that public key once a person confirmed its fingerprint (requests/<machine>.sealed);
+`vault accept` on the new machine opens it and joins. The backend only ever holds the public key and ciphertext, and the
+code never reaches a screen, a pipe or a log.
 """
 from __future__ import annotations
 
@@ -69,8 +75,26 @@ class Conflict(Exception):
     """put() lost the race: the backend's file is no longer the one the caller read."""
 
 
+class NotGranted(VaultError):
+    """`accept` found no sealed grant for this machine's request yet."""
+
+
+# Sealed pairing, wire format v1: the names, the HKDF info and the AAD prefix are ZSwarm's too, so either side's grant
+# opens on the other.
+REQUEST_NAME_RX = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}\.(json|sealed)$")
+GRANT_INFO = b"zsv1-grant"
+
+
 def config_file() -> Path:
     return config.HOME / "vault.json"
+
+
+def request_key_file() -> Path:
+    return config.HOME / "vault-request.key"
+
+
+def request_file() -> Path:
+    return config.HOME / "vault-request.json"
 
 
 def key_file() -> Path:
@@ -281,6 +305,31 @@ class DirBackend:
                     time.sleep(0.05 * (attempt + 1))
         return _etag(blob)
 
+    def _request_path(self, name: str) -> Path:
+        return self.dir / "requests" / request_name(name)
+
+    def list_requests(self) -> list[str]:
+        try:
+            return sorted(p.name for p in (self.dir / "requests").iterdir() if p.is_file() and REQUEST_NAME_RX.fullmatch(p.name))
+        except FileNotFoundError:
+            return []
+
+    def read_request(self, name: str) -> bytes | None:
+        try:
+            return self._request_path(name).read_bytes()
+        except FileNotFoundError:
+            return None
+
+    def write_request(self, name: str, data: bytes) -> None:
+        path = self._request_path(name)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")  # a dot name never matches the request names, so no reader lists it
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+
+    def delete_request(self, name: str) -> None:
+        self._request_path(name).unlink(missing_ok=True)
+
 
 # The remote half of the ssh backend: plain sh, one ssh call each. No double quotes, so the command crosses a Windows
 # command line unchanged; every value spliced in is checked first (a directory name, a hex digest).
@@ -295,6 +344,12 @@ _SSH_PUT = (
     "mv -f $d/in.tmp $d/vault.bin; "
     "ls -1t $d/history | tail -n +{keep} | while read f; do rm -f $d/history/$f; done; exit 0"
 )
+# The requests/ folder beside the vault file. {name} is always checked against REQUEST_NAME_RX first.
+_SSH_REQ_LIST = "d={dir}/requests; test -d $d || exit 0; ls -1 $d"
+_SSH_REQ_READ = "f={dir}/requests/{name}; test -f $f || exit 3; cat $f"
+_SSH_REQ_WRITE = ("d={dir}/requests; umask 077; mkdir -p $d && chmod 700 $d && cat > $d/.{name}.tmp && "
+                  "mv -f $d/.{name}.tmp $d/{name}")
+_SSH_REQ_DELETE = "rm -f {dir}/requests/{name}"
 _NAME_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$")
 _DIR_RX = re.compile(r"^/?[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
 
@@ -349,10 +404,40 @@ class SshBackend:
         raise VaultError({4: "the vault is locked by another writer for over 30 s", 6: "the server received an empty upload"}
                          .get(rc) or f"could not write the vault over ssh ({self.dest}): {err.strip()[:300] or f'exit {rc}'}")
 
+    def _req(self, template: str, what: str, name: str | None = None, stdin: bytes = b"") -> tuple[int, bytes]:
+        script = template.format(dir=self.dir, name=request_name(name) if name is not None else "")
+        rc, out, err = self._run(script, stdin)
+        if rc not in (0, 3):
+            raise VaultError(f"could not {what} over ssh ({self.dest}): {err.strip()[:300] or f'exit {rc}'}")
+        return rc, out
+
+    def list_requests(self) -> list[str]:
+        _rc, out = self._req(_SSH_REQ_LIST, "list the pairing requests")
+        return sorted(n for n in out.decode("utf-8", "replace").split() if REQUEST_NAME_RX.fullmatch(n))
+
+    def read_request(self, name: str) -> bytes | None:
+        rc, out = self._req(_SSH_REQ_READ, "read a pairing request", name)
+        return None if rc == 3 else out
+
+    def write_request(self, name: str, data: bytes) -> None:
+        if self._req(_SSH_REQ_WRITE, "write a pairing request", name, data)[0] != 0:
+            raise VaultError(f"could not write a pairing request over ssh ({self.dest})")
+
+    def delete_request(self, name: str) -> None:
+        self._req(_SSH_REQ_DELETE, "remove a pairing request", name)
+
+
+def request_name(name: str) -> str:
+    """A file name in requests/: checked before it becomes a path or reaches a remote shell."""
+    if not isinstance(name, str) or not REQUEST_NAME_RX.fullmatch(name):
+        raise VaultError(f"{name!r} is not a pairing request name (<machine>.json or <machine>.sealed)")
+    return name
+
 
 def open_backend(url: str):
     """The backend a URL names. Add one by writing a class with `label`, get() -> (bytes | None, etag | None) and
-    put(blob, expect_etag) -> etag (raising Conflict when expect_etag is stale), and naming its scheme here."""
+    put(blob, expect_etag) -> etag (raising Conflict when expect_etag is stale), plus the requests/ quartet
+    list_requests(), read_request(name), write_request(name, bytes) and delete_request(name), and naming its scheme here."""
     if url.startswith("dir:"):
         return DirBackend(Path(url[4:]))
     if url.startswith("ssh://"):
@@ -470,11 +555,11 @@ def init(backend: str) -> dict:
     return {"set_up": be.label, **sync()}
 
 
-def _save_setup(key: bytes, backend: str) -> None:
+def _save_setup(key: bytes, backend: str, via: str | None = None) -> None:
     from .shared import atomic_write
 
     atomic_write(key_file(), base64.b64encode(key).decode("ascii") + "\n", private=True)
-    _write_json(config_file(), {"backend": backend, "machine": socket.gethostname().lower()})
+    _write_json(config_file(), {"backend": backend, "machine": socket.gethostname().lower(), **({"via": via} if via else {})})
     base_file().unlink(missing_ok=True)
 
 
@@ -503,7 +588,7 @@ def parse_code(code: str) -> tuple[bytes, str]:
     return key, backend
 
 
-def join(code: str, backend: str | None = None, force: bool = False) -> dict:
+def join(code: str, backend: str | None = None, force: bool = False, *, _via: str | None = None) -> dict:
     """Join the vault a pairing code names: keep this machine's own keys, add everyone else's, remove nothing."""
     if configured() and not force:
         raise VaultError("this machine already has a vault (`hswarm vault status`); `hswarm vault join --force` replaces it")
@@ -517,7 +602,7 @@ def join(code: str, backend: str | None = None, force: bool = False) -> dict:
         raise VaultError(f"{e}{hint}") from e
     if blob:
         unseal(key, blob)  # a code that does not open the stored vault stops here, before anything is saved
-    _save_setup(key, url)
+    _save_setup(key, url, _via)
     return {"joined": be.label, **sync()}
 
 
@@ -550,6 +635,214 @@ def adopt() -> dict:
     _write_json(config_file(), cfg)
     base_file().unlink(missing_ok=True)
     return {"adopted_from": str(src), **sync()}
+
+
+def machine_name() -> str:
+    """This machine's name in requests/: the host name, lower case, every character outside [a-z0-9-] made '-', 63 at most."""
+    name = re.sub(r"[^a-z0-9-]", "-", socket.gethostname().lower())[:63]
+    request_name(f"{name}.json")
+    return name
+
+
+def request_fingerprint(pub: bytes) -> str:
+    """sha256 of the raw public key, the first 16 hex characters in groups of 4: what a person compares on both machines."""
+    h = hashlib.sha256(pub).hexdigest()[:16].upper()
+    return "-".join(h[i:i + 4] for i in range(0, 16, 4))
+
+
+def _raw_pub(priv) -> bytes:
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    return priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+
+def _grant_key(shared: bytes, eph_pub: bytes, req_pub: bytes) -> bytes:
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=eph_pub + req_pub, info=GRANT_INFO).derive(shared)
+
+
+def _b64(raw: bytes) -> str:
+    return base64.b64encode(raw).decode("ascii")
+
+
+def _unb64(text, size: int | None = None) -> bytes:
+    raw = base64.b64decode(str(text), validate=True)
+    if size is not None and len(raw) != size:
+        raise ValueError("length")
+    return raw
+
+
+def seal_grant(code: str, req_pub: bytes, machine: str, *, eph_priv: bytes | None = None, nonce: bytes | None = None) -> dict:
+    """The pairing code sealed to one request's public key (X25519 + HKDF-SHA256 + AES-256-GCM, the machine name in the AAD).
+    eph_priv and nonce are fixed only by the golden-vector test; a real grant draws both fresh."""
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    request_name(f"{machine}.sealed")
+    eph = X25519PrivateKey.from_private_bytes(eph_priv) if eph_priv is not None else X25519PrivateKey.generate()
+    eph_pub = _raw_pub(eph)
+    k = _grant_key(eph.exchange(X25519PublicKey.from_public_bytes(req_pub)), eph_pub, req_pub)
+    nonce = os.urandom(12) if nonce is None else nonce
+    ct = AESGCM(k).encrypt(nonce, code.encode("utf-8"), b"zsv1-grant:" + machine.encode("ascii"))
+    return {"v": 1, "machine": machine, "eph": _b64(eph_pub), "nonce": _b64(nonce), "ct": _b64(ct)}
+
+
+def open_grant(doc, req_priv: bytes, machine: str) -> str:
+    """The pairing code inside a sealed grant, or a VaultError (made for another key or machine, or altered): never the code."""
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    try:
+        if not isinstance(doc, dict) or doc.get("v") != 1 or doc.get("machine") != machine:
+            raise ValueError("shape")
+        eph_pub, nonce, ct = _unb64(doc["eph"], 32), _unb64(doc["nonce"], 12), _unb64(doc["ct"])
+        priv = X25519PrivateKey.from_private_bytes(req_priv)
+        k = _grant_key(priv.exchange(X25519PublicKey.from_public_bytes(eph_pub)), eph_pub, _raw_pub(priv))
+        return AESGCM(k).decrypt(nonce, ct, b"zsv1-grant:" + machine.encode("ascii")).decode("utf-8")
+    except (InvalidTag, ValueError, KeyError, TypeError, UnicodeDecodeError) as e:
+        raise VaultError(f"the grant for {machine} does not open with this machine's request key (made for another request, "
+                         "or altered): nothing was saved; ask the vault machine to grant again") from e
+
+
+def _load_request() -> tuple[dict, bytes]:
+    """This machine's open request: its vault-request.json and the private key bytes."""
+    req = _read_json(request_file())
+    if not isinstance(req, dict) or not req.get("backend") or not request_key_file().exists():
+        raise VaultError("no pairing request on this machine: `hswarm vault request <backend>` makes one")
+    priv = _read_request_key()
+    request_name(f"{req.get('machine')}.json")
+    return req, priv
+
+
+def _read_request_key() -> bytes:
+    try:
+        return _unb64(request_key_file().read_text(encoding="utf-8").strip(), 32)
+    except (OSError, ValueError) as e:
+        raise VaultError(f"{request_key_file()} could not be read as a request key ({type(e).__name__}); "
+                         "delete it and vault-request.json, then `hswarm vault request <backend>` again") from e
+
+
+def request(backend: str, force: bool = False) -> dict:
+    """Ask the vault at `backend` for its pairing code: publish this machine's request public key there. A repeat re-uses
+    the saved key, so the fingerprint stays the one the person already compared."""
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
+    from .shared import atomic_write
+
+    if configured() and not force:
+        raise VaultError("this machine already has a vault (`hswarm vault status`); `hswarm vault request --force` asks to replace it")
+    be = open_backend(backend)
+    machine = machine_name()
+    if request_key_file().exists():
+        priv = X25519PrivateKey.from_private_bytes(_read_request_key())
+    else:
+        priv = X25519PrivateKey.generate()
+        raw = priv.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+        atomic_write(request_key_file(), _b64(raw) + "\n", private=True)
+    _write_json(request_file(), {"backend": backend, "machine": machine, **({"replace": True} if force else {})})
+    pub = _raw_pub(priv)
+    doc = {"v": 1, "machine": machine, "pub": _b64(pub), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    be.write_request(f"{machine}.json", json.dumps(doc, sort_keys=True).encode("utf-8"))
+    return {"machine": machine, "fingerprint": request_fingerprint(pub), "backend": be.label}
+
+
+def requests_waiting(be=None) -> list[dict]:
+    """The requests on this vault's backend: machine, at, fingerprint and whether a grant is already there. A request file
+    that does not parse is listed with an error and is never granted."""
+    be = be or open_backend(_load_config()["backend"])
+    names = set(be.list_requests())
+    out = []
+    for name in sorted(n for n in names if n.endswith(".json")):
+        machine = name[:-5]
+        row = {"machine": machine, "granted": f"{machine}.sealed" in names}
+        try:
+            doc = json.loads(be.read_request(name) or b"")
+            if doc.get("v") != 1 or doc.get("machine") != machine:
+                raise ValueError("shape")
+            row.update(at=str(doc.get("at") or ""), fingerprint=request_fingerprint(_unb64(doc["pub"], 32)), pub=doc["pub"])
+        except (ValueError, KeyError, TypeError, AttributeError):
+            row["error"] = "not a v1 pairing request"
+        out.append(row)
+    return out
+
+
+def grant(machine: str | None = None, yes: str | None = None, ask=None) -> dict:
+    """Seal this vault's pairing code to one request, once a person confirmed it: `yes` is the FULL fingerprint, or `ask(row)`
+    (a terminal only) returns what the person typed, which must be the fingerprint's first 4 characters. Anything else
+    refuses and writes nothing. Returns the machine and the fingerprint, never the code."""
+    cfg = _load_config()
+    be = open_backend(cfg["backend"])
+    rows = [r for r in requests_waiting(be) if "error" not in r]
+    if machine is not None:
+        request_name(f"{machine}.json")
+        chosen = [r for r in rows if r["machine"] == machine]
+        if not chosen:
+            raise VaultError(f"no pairing request from {machine} on {be.label} (`hswarm vault grant` lists them)")
+    else:
+        chosen = [r for r in rows if not r["granted"]]
+        if len(chosen) != 1:
+            raise VaultError("no pairing request is waiting" if not chosen else
+                             f"{len(chosen)} requests are waiting ({', '.join(r['machine'] for r in chosen)}): name one, `hswarm vault grant <machine>`")
+    row = chosen[0]
+    fp = row["fingerprint"]
+    if yes is not None:
+        ok = yes == fp
+    elif ask is not None:
+        ok = str(ask(row) or "").strip().upper() == fp[:4]
+    else:
+        raise VaultError("a grant needs a person: run it in a terminal and type the fingerprint's first 4 characters, "
+                         "or pass --yes <the full fingerprint the new machine printed>; nothing was granted")
+    if not ok:
+        raise VaultError(f"that does not match {row['machine']}'s fingerprint {fp}; nothing was granted")
+    sealed = seal_grant(pair_code(), _unb64(row["pub"], 32), row["machine"])
+    be.write_request(f"{row['machine']}.sealed", json.dumps(sealed, sort_keys=True).encode("utf-8"))
+    return {"granted": row["machine"], "fingerprint": fp}
+
+
+def accept(force: bool = False) -> dict:
+    """Open this machine's grant and join with it, through the backend URL this machine asked on (the one it reaches).
+    Then the request is removed here and on the backend. Returns join's counts, never the code or a key."""
+    req, priv = _load_request()
+    machine = req["machine"]
+    be = open_backend(req["backend"])
+    blob = be.read_request(f"{machine}.sealed")
+    if blob is None:
+        raise NotGranted(f"not granted yet: on the vault machine run `hswarm vault grant {machine}` (or `zswarm vault grant {machine}`)")
+    try:
+        doc = json.loads(blob)
+    except ValueError:
+        doc = None
+    code = open_grant(doc, priv, machine)
+    out = join(code, backend=req["backend"], force=force or bool(req.get("replace")), _via="accept")
+    try:
+        be.delete_request(f"{machine}.json")
+        be.delete_request(f"{machine}.sealed")
+    except (VaultError, OSError) as e:
+        out["cleanup"] = f"joined, but requests/{machine}.json and .sealed are still on the backend ({type(e).__name__}): remove them by hand"
+    request_key_file().unlink(missing_ok=True)
+    request_file().unlink(missing_ok=True)
+    return out
+
+
+def _request_status() -> dict | None:
+    """This machine's open request, for `status`: machine, fingerprint and whether the grant is there."""
+    if not request_file().exists():
+        return None
+    try:
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+        req, priv = _load_request()
+        row = {"machine": req["machine"], "fingerprint": request_fingerprint(_raw_pub(X25519PrivateKey.from_private_bytes(priv)))}
+    except VaultError as e:
+        return {"error": str(e)}
+    try:
+        row["granted"] = "yes" if open_backend(req["backend"]).read_request(f"{req['machine']}.sealed") is not None else "no"
+    except (VaultError, OSError) as e:
+        row["granted"] = f"unknown ({e})"
+    return row
 
 
 def fetch_state() -> dict:
@@ -606,6 +899,9 @@ def remove_key(target: str, fingerprint: str) -> dict:
 
 def status() -> dict:
     out = {"configured": configured(), "local": {n: len(k) for n, k in scan().items()}}
+    pending = _request_status()
+    if pending is not None:
+        out["request"] = pending
     if not out["configured"]:
         if zswarm_paired():
             out["adopt"] = f"this machine's ZSwarm has a vault ({zswarm_home()}): `hswarm vault adopt` pairs HSwarm with it"
@@ -613,11 +909,18 @@ def status() -> dict:
     cfg = _load_config()
     base = _read_json(base_file()) or {}
     out.update(backend=cfg["backend"], machine=cfg.get("machine"), last_sync=base.get("at"), last_rev=base.get("rev"))
+    if cfg.get("via") == "accept":
+        out["paired_by"] = "vault accept: HSwarm joined the vault directly, so `vault adopt` has nothing to do"
     try:
         remote = fetch_state()
         out["vault"] = {"rev": remote["rev"], "keys": live_count(remote), "lists": len({n for (n, _k), v in present(remote).items() if v})}
     except VaultError as e:
         out["vault_error"] = str(e)
+    try:
+        names = set(open_backend(cfg["backend"]).list_requests())  # one listing, no reads: status stays one round trip more
+        out["pending_requests"] = sum(1 for n in names if n.endswith(".json") and f"{n[:-5]}.sealed" not in names)
+    except (VaultError, OSError):
+        pass
     return out
 
 

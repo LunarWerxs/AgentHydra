@@ -583,6 +583,39 @@ async def cmd_vault(a) -> int:
             out = await asyncio.to_thread(vault.join, _read_secret_text("vault pairing code (hidden): "), a.backend, a.force)
         elif action == "adopt":
             out = await asyncio.to_thread(vault.adopt)
+        elif action == "request":
+            if not a.target:
+                raise vault.VaultError("hswarm vault request <backend>: the vault's backend as this machine reaches it, e.g. ssh://user@host/hswarm-vault")
+            r = await asyncio.to_thread(vault.request, a.target, a.force)
+            if a.json:
+                _print(r)
+            else:
+                print(f"request {r['machine']}  fingerprint {r['fingerprint']}  on {r['backend']}")
+                print(f"next: on the vault machine run `hswarm vault grant {r['machine']}` and check it shows {r['fingerprint']}; "
+                      "then here: `hswarm vault accept`")
+            return 0
+        elif action == "grant":
+            rows = await asyncio.to_thread(vault.requests_waiting)
+            if not a.json:
+                for r in rows:
+                    print(f"{r['machine']:24} {r.get('at') or '-':21} {r.get('fingerprint') or r.get('error')}"
+                          f"{'  (granted, not accepted yet)' if r['granted'] else ''}")
+            ask = None
+            if a.yes is None and sys.stdin.isatty():
+                def ask(row):
+                    return input(f"grant {row['machine']} ({row['fingerprint']})? type the fingerprint's first 4 characters: ")
+            r = await asyncio.to_thread(vault.grant, a.target, a.yes, ask)
+            if a.json:
+                _print(r)
+            else:
+                print(f"granted {r['granted']} ({r['fingerprint']})")
+            return 0
+        elif action == "accept":
+            try:
+                out = await asyncio.to_thread(vault.accept, a.force)
+            except vault.NotGranted as e:
+                print(f"hswarm vault accept: {e}", file=sys.stderr)
+                return 3
         elif action == "sync":
             out = await asyncio.to_thread(lambda: vault.sync(rebase=a.rebase, allow_removals=a.allow_removals, dry_run=a.dry_run))
         elif action == "list":
