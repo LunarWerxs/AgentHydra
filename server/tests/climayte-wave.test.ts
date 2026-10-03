@@ -1081,7 +1081,7 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
     expect(climayteList({ group: `mgr-${r.wave}` }).map((w) => w.kind)).toEqual(['manage'])
     expect(climayteList({ group: wave?.group })).toHaveLength(0)
     expect(r.waiter).toBe(
-      `python ~/.claude/tools/climayte_wait.py --group 'mgr-${r.wave}' --unjudged --wake-on done,failed,cancelled`,
+      `python ~/.claude/tools/climayte_wait.py --group 'mgr-${r.wave}' --unjudged --wake-on done,failed,cancelled --timeout-s 7200`,
     )
   })
 
