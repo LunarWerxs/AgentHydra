@@ -100,9 +100,28 @@ export interface CodexTurn {
  * Stateful because a `token_count` event carries a RUNNING total and the model is announced
  * separately in a `turn_context` event; a per-line pure function would have neither.
  */
+export interface CodexReaderState {
+  model: string | null
+  prev: { input: number; cacheRead: number; cacheWrite: number; output: number }
+}
+
 export class CodexUsageReader {
   private model: string | null = null
   private prev = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }
+
+  /** Resume a reader part-way through a rollout: an incremental ingest feeds only the new lines, so
+   *  it must carry the running total and the model from where the last pass stopped. */
+  constructor(resume?: CodexReaderState) {
+    if (resume) {
+      this.model = resume.model
+      this.prev = { ...resume.prev }
+    }
+  }
+
+  /** What a later reader needs to carry on from the lines pushed so far. */
+  state(): CodexReaderState {
+    return { model: this.model, prev: { ...this.prev } }
+  }
 
   /** Feed one parsed JSONL event. Returns this turn's delta, or null when the line carries none. */
   push(ev: unknown): CodexTurn | null {
