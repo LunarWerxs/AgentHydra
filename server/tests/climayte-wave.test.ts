@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CliMayteWave, CliMayteWorker } from '../src/climayte-lib'
-import { readWave, waveDone, waveStateText, writeWave } from '../src/climayte-wave'
+import { readWave, waveBatch, waveDone, waveStateText, writeWave } from '../src/climayte-wave'
 
 describe('wave store', () => {
   let tempDir: string
@@ -420,5 +420,336 @@ describe('waveStateText', () => {
     expect(text).toContain('## Tasks')
     expect(text).not.toContain('## Escalations')
     expect(text).not.toContain('## Notes')
+  })
+})
+
+describe('waveBatch', () => {
+  test('returns null when holding (batch not full, not settled, work running)', () => {
+    const now = Date.now()
+    const wave: CliMayteWave = {
+      id: 'wv-test',
+      group: 'g-test',
+      managerId: 'w-mgr',
+      plan: '/plan',
+      cwd: '/cwd',
+      branch: 'main',
+      verify: null,
+      tasks: [
+        {
+          key: 't1',
+          prompt: '',
+          title: '',
+          kind: 'code',
+          check: null,
+          paths: [],
+          after: [],
+          workerId: 'w-task1',
+          state: 'running',
+          proof: null,
+        },
+      ],
+      escalations: [],
+      notes: '',
+      rounds: 1,
+      maxRounds: 3,
+      batch: { size: 3, settleS: 600, held: ['t1'], since: now },
+      status: 'running',
+      report: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    const workers = new Map<string, CliMayteWorker>()
+    workers.set('w-task1', {
+      id: 'w-task1',
+      group: 'g-test',
+      title: 'Task 1',
+      cwd: '/cwd',
+      prompt: 'Do task',
+      pending: [],
+      model: null,
+      effort: null,
+      accounts: null,
+      status: 'running',
+      sessionId: 'session1',
+      accountId: 'acct1',
+      attempts: [],
+      result: null,
+      error: null,
+      lastActivity: null,
+      costUsd: 0,
+      turns: 0,
+      moves: 0,
+      retries: 0,
+      notBefore: null,
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    const result = waveBatch(wave, workers, now)
+    expect(result).toBeNull()
+  })
+
+  test('returns ids when batch size is reached', () => {
+    const now = Date.now()
+    const wave: CliMayteWave = {
+      id: 'wv-test',
+      group: 'g-test',
+      managerId: 'w-mgr',
+      plan: '/plan',
+      cwd: '/cwd',
+      branch: 'main',
+      verify: null,
+      tasks: [
+        {
+          key: 't1',
+          prompt: '',
+          title: '',
+          kind: 'code',
+          check: null,
+          paths: [],
+          after: [],
+          workerId: 'w-task1',
+          state: 'running',
+          proof: null,
+        },
+        {
+          key: 't2',
+          prompt: '',
+          title: '',
+          kind: 'code',
+          check: null,
+          paths: [],
+          after: [],
+          workerId: 'w-task2',
+          state: 'pending',
+          proof: null,
+        },
+        {
+          key: 't3',
+          prompt: '',
+          title: '',
+          kind: 'code',
+          check: null,
+          paths: [],
+          after: [],
+          workerId: null,
+          state: 'pending',
+          proof: null,
+        },
+      ],
+      escalations: [],
+      notes: '',
+      rounds: 1,
+      maxRounds: 3,
+      batch: { size: 3, settleS: 600, held: ['t1', 't2', 't3'], since: now },
+      status: 'running',
+      report: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    const workers = new Map<string, CliMayteWorker>()
+
+    const result = waveBatch(wave, workers, now)
+    expect(result).not.toBeNull()
+    expect(result).toHaveLength(3)
+    expect(result).toContain('t1')
+    expect(result).toContain('t2')
+    expect(result).toContain('t3')
+  })
+
+  test('returns ids when settle time has run out', () => {
+    const now = Date.now()
+    const settleStart = now - 601_000 // More than 601 seconds ago
+    const wave: CliMayteWave = {
+      id: 'wv-test',
+      group: 'g-test',
+      managerId: 'w-mgr',
+      plan: '/plan',
+      cwd: '/cwd',
+      branch: 'main',
+      verify: null,
+      tasks: [
+        {
+          key: 't1',
+          prompt: '',
+          title: '',
+          kind: 'code',
+          check: null,
+          paths: [],
+          after: [],
+          workerId: 'w-task1',
+          state: 'running',
+          proof: null,
+        },
+      ],
+      escalations: [],
+      notes: '',
+      rounds: 1,
+      maxRounds: 3,
+      batch: { size: 5, settleS: 600, held: ['t1'], since: settleStart },
+      status: 'running',
+      report: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    const workers = new Map<string, CliMayteWorker>()
+
+    const result = waveBatch(wave, workers, now)
+    expect(result).not.toBeNull()
+    expect(result).toContain('t1')
+  })
+
+  test('returns ids when nothing is running', () => {
+    const now = Date.now()
+    const wave: CliMayteWave = {
+      id: 'wv-test',
+      group: 'g-test',
+      managerId: 'w-mgr',
+      plan: '/plan',
+      cwd: '/cwd',
+      branch: 'main',
+      verify: null,
+      tasks: [
+        {
+          key: 't1',
+          prompt: '',
+          title: '',
+          kind: 'code',
+          check: null,
+          paths: [],
+          after: [],
+          workerId: 'w-task1',
+          state: 'passed',
+          proof: null,
+        },
+      ],
+      escalations: [],
+      notes: '',
+      rounds: 1,
+      maxRounds: 3,
+      batch: { size: 5, settleS: 600, held: ['t1'], since: now },
+      status: 'running',
+      report: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    const workers = new Map<string, CliMayteWorker>()
+
+    const result = waveBatch(wave, workers, now)
+    expect(result).not.toBeNull()
+    expect(result).toContain('t1')
+  })
+
+  test('returns null if wave is done', () => {
+    const now = Date.now()
+    const wave: CliMayteWave = {
+      id: 'wv-test',
+      group: 'g-test',
+      managerId: 'w-mgr',
+      plan: '/plan',
+      cwd: '/cwd',
+      branch: 'main',
+      verify: null,
+      tasks: [
+        {
+          key: 't1',
+          prompt: '',
+          title: '',
+          kind: 'code',
+          check: null,
+          paths: [],
+          after: [],
+          workerId: 'w-task1',
+          state: 'passed',
+          proof: null,
+        },
+        {
+          key: 't2',
+          prompt: '',
+          title: '',
+          kind: 'code',
+          check: null,
+          paths: [],
+          after: [],
+          workerId: 'w-task2',
+          state: 'failed',
+          proof: null,
+        },
+      ],
+      escalations: [],
+      notes: '',
+      rounds: 1,
+      maxRounds: 3,
+      batch: { size: 5, settleS: 600, held: ['t1', 't2'], since: now },
+      status: 'running',
+      report: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    const workers = new Map<string, CliMayteWorker>()
+
+    // waveDone returns true, so waveBatch should return the ids (not null)
+    const result = waveBatch(wave, workers, now)
+    expect(waveDone(wave)).toBe(true)
+    expect(result).not.toBeNull()
+  })
+
+  test('returns ids immediately on failure', () => {
+    const now = Date.now()
+    const wave: CliMayteWave = {
+      id: 'wv-test',
+      group: 'g-test',
+      managerId: 'w-mgr',
+      plan: '/plan',
+      cwd: '/cwd',
+      branch: 'main',
+      verify: null,
+      tasks: [
+        {
+          key: 't1',
+          prompt: '',
+          title: '',
+          kind: 'code',
+          check: null,
+          paths: [],
+          after: [],
+          workerId: 'w-task1',
+          state: 'failed',
+          proof: null,
+        },
+        {
+          key: 't2',
+          prompt: '',
+          title: '',
+          kind: 'code',
+          check: null,
+          paths: [],
+          after: [],
+          workerId: 'w-task2',
+          state: 'pending',
+          proof: null,
+        },
+      ],
+      escalations: [],
+      notes: '',
+      rounds: 1,
+      maxRounds: 3,
+      batch: { size: 5, settleS: 600, held: ['t1'], since: now },
+      status: 'running',
+      report: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    const workers = new Map<string, CliMayteWorker>()
+
+    const result = waveBatch(wave, workers, now)
+    expect(result).not.toBeNull()
+    expect(result).toContain('t1')
   })
 })

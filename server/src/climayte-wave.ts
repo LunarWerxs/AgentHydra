@@ -6,8 +6,10 @@
 
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CliMayteTask, CliMayteWave, CliMayteWorker } from './climayte-lib'
+import type { CliMayteWave, CliMayteWorker } from './climayte-lib'
 import { type JsonStoreSpec, mutateJsonStore, readJsonStore } from './core/json-store'
+
+type CliMayteTask = CliMayteWave['tasks'][0]
 
 // The store path for a wave record.
 export function waveStorePath(configDir: string, waveId: string): string {
@@ -125,7 +127,7 @@ export function waveStateText(wave: CliMayteWave, workers: Map<string, CliMayteW
   ]
 
   for (const task of wave.tasks) {
-    const worker = task.workerId ? workers.get(task.workerId) : null
+    const worker = task.workerId ? (workers.get(task.workerId) ?? null) : null
     lines.push(formatTaskLine(task, worker))
   }
 
@@ -151,4 +153,55 @@ export function waveDone(wave: CliMayteWave): boolean {
   return wave.tasks.every(
     (t) => t.state === 'passed' || t.state === 'failed' || t.state === 'escalated',
   )
+}
+
+// Pure: the changed task ids since the last batch wake, or null to keep holding.
+// The daemon calls this when wave tasks change (their state, or a task's workerId) to decide whether
+// to wake the manager. Rules from climayte_wait.py:
+// - Wake at once if a failure or the wave is done.
+// - Otherwise, hold until batch.size tasks have changed, batch.settleS has run since the first
+//   change, or nothing is live (no running tasks in the wave's group).
+// This function is pure; the caller updates wave.batch.held and wave.batch.since.
+export function waveBatch(
+  wave: CliMayteWave,
+  workers: Map<string, CliMayteWorker>,
+  now: number,
+): string[] | null {
+  const { batch } = wave
+  const taskIds = new Set<string>(batch.held)
+
+  // Wake at once on failure or done.
+  if (wave.tasks.some((t) => t.state === 'failed')) {
+    return Array.from(taskIds)
+  }
+  if (waveDone(wave)) {
+    return Array.from(taskIds)
+  }
+
+  // Otherwise, check batch limits.
+  const size = taskIds.size
+  if (size >= batch.size) {
+    return Array.from(taskIds)
+  }
+
+  if (batch.since !== null) {
+    const settleElapsed = (now - batch.since) / 1000
+    if (settleElapsed >= batch.settleS) {
+      return Array.from(taskIds)
+    }
+  }
+
+  // Check if anything in the wave is running or queued (living).
+  for (const task of wave.tasks) {
+    if (task.state === 'running' || task.state === 'pending') {
+      const worker = task.workerId ? workers.get(task.workerId) : null
+      if (worker && (worker.status === 'running' || worker.status === 'queued')) {
+        // Something is still running, hold the batch.
+        return null
+      }
+    }
+  }
+
+  // Nothing is running and we have changes; wake with what we have.
+  return size > 0 ? Array.from(taskIds) : null
 }

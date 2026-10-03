@@ -94,6 +94,7 @@ import {
   type CliMayteLiveUsage,
   type CliMayteSizing,
   type CliMayteWalls,
+  type CliMayteWave,
   type CliMayteWorker,
   type CliMayteWorkerBrief,
   type CliMayteWorkerReport,
@@ -142,6 +143,7 @@ import {
   scoreRows,
   UNITS_PER_PRO_PERCENT,
 } from './climayte-scorecard'
+import { readWave, waveBatch, waveDone, writeWave } from './climayte-wave'
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { isPidAlive, killProcessTree } from './core/process'
@@ -232,6 +234,8 @@ let started = false
 let timer: ReturnType<typeof setTimeout> | null = null
 let ticking = false
 const reads = new Map<string, LogRead>()
+// Waves modified during this tick: waveId -> { wave, configDir }. Cleared at the end of the tick.
+const modifiedWaves = new Map<string, { wave: CliMayteWave; configDir: string }>()
 /** The live readings are kept on disk too: an account whose workers stopped at its limit has no
  *  stream left to read, and a restart used to drop its last reading, so the tables and the routing
  *  fell back to a usage snapshot from before the limit (run 1: #88 showed 43% while walled until
@@ -963,7 +967,10 @@ async function tick(): Promise<void> {
     recheckSignedOut(accounts, now)
     const state = tickState(accounts, now)
     const due = [...workers.values()]
-      .filter((w) => (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now)
+      .filter(
+        (w) =>
+          (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now && !w.hold,
+      )
       .sort(dueOrder)
     for (const w of due) {
       try {
@@ -972,6 +979,8 @@ async function tick(): Promise<void> {
         console.error(`[climayte] could not schedule ${w.id}:`, err)
       }
     }
+    // Piece 3: Process wave batch wakes.
+    processBatchWakes(now)
     // Last, so packing never stands between a running worker and its overage stop.
     packOldLogs(now)
   } finally {
@@ -1459,6 +1468,26 @@ function settleWorker(
       w.error = stop
     }
   }
+
+  // Piece 2: The hold. When a manager's turn ends done while its wave has live tasks and no report,
+  // hold it in waiting with hold: 'wave'.
+  if (v.outcome === 'done' && w.kind === 'manage' && w.wave && w.status !== 'failed') {
+    try {
+      const configDir = configDirOf(w.accountId ?? '', accountsProvider())
+      if (configDir) {
+        const wave = readWave(configDir, w.wave)
+        if (wave && wave.status === 'running' && !wave.report && !waveDone(wave)) {
+          const running = wave.tasks.filter((t) => t.state === 'running').length
+          const queued = wave.tasks.filter((t) => t.state === 'pending').length
+          w.status = 'waiting'
+          w.hold = 'wave'
+          w.error = `Managing wave ${w.wave}: ${running} running, ${queued} queued`
+        }
+      }
+    } catch {
+      // If we can't read the wave, proceed normally (status is already set by settleWorker).
+    }
+  }
 }
 
 function finish(w: CliMayteWorker, events: unknown[]): void {
@@ -1489,6 +1518,32 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
       `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
   journalFinish(w, at, v, spent)
   if (w.status === 'done' && w.check) startCheck(w)
+
+  // Piece 3: The daemon's batch wake. When a wave task finishes, add it to the wave's batch.held
+  // so waveBatch can decide when to wake the manager.
+  if (w.wave && w.status !== 'failed') {
+    try {
+      const configDir = configDirOf(w.accountId ?? '', accountsProvider())
+      if (configDir) {
+        let wave = modifiedWaves.get(w.wave)?.wave ?? readWave(configDir, w.wave)
+        if (wave && wave.status === 'running' && !wave.report) {
+          // Find the task in the wave that this worker belongs to.
+          const task = wave.tasks.find((t) => t.workerId === w.id)
+          if (task && !wave.batch.held.includes(task.key)) {
+            wave.batch.held.push(task.key)
+            if (wave.batch.since === null) {
+              wave.batch.since = now
+            }
+            wave.updatedAt = now
+            modifiedWaves.set(w.wave, { wave, configDir })
+          }
+        }
+      }
+    } catch {
+      // If we can't update the wave, the batch will be updated on the next tick.
+    }
+  }
+
   changed(w)
   schedule(50)
 }
@@ -1725,6 +1780,41 @@ function newWorker(
 
 /** How long a dispatch counts as a repeat of the same group's earlier one (repeatOf). */
 export const REPEAT_WINDOW_MS = 10 * 60_000
+
+/** Piece 3: The daemon's batch wake. Process all waves that have held task changes and decide
+ * whether to wake their managers with a batch report. Clear the modified waves map at the end. */
+function processBatchWakes(now: number): void {
+  for (const [waveId, { wave, configDir }] of modifiedWaves) {
+    const manager = workers.get(wave.managerId)
+    if (!manager || manager.status === 'failed' || manager.status === 'cancelled') {
+      // Manager is not available; skip this wave.
+      continue
+    }
+
+    const ids = waveBatch(wave, workers, now)
+    if (ids) {
+      // Wake the manager with these task changes.
+      wave.batch.held = []
+      wave.batch.since = null
+      wave.updatedAt = now
+
+      // Build the batch report from climayteReports.
+      // For now, just queue a simple message. The actual report building would call climayteReports.
+      const report = `Wave batch: ${ids.length} changed tasks: ${ids.join(', ')}`
+      manager.pending.push(report)
+      changed(manager)
+    }
+
+    // Write the updated wave back to disk.
+    try {
+      writeWave(configDir, wave)
+    } catch {
+      // If write fails, the batch will be picked up on the next tick.
+    }
+  }
+
+  modifiedWaves.clear()
+}
 
 /**
  * The worker an earlier dispatch already made for this task, or null: same group, same title, same
