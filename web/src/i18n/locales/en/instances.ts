@@ -442,4 +442,30 @@ export default {
   // row, so the button is absent rather than present and broken.
   chatsOpen: 'Open in Sessions',
   chatsClose: 'Close',
+  // The landing page's stat tiles (InstancesHomeView): the quick look; Analytics is the advanced page.
+  home: {
+    title: 'At a glance',
+    refresh: 'Refresh',
+    refreshHint:
+      'Numbers refresh on their own every 20 seconds while this page is showing. The 5-hour and week figures are what is left, pooled across the signed-in accounts by plan size.',
+    sessionsLocalOnly:
+      'Sessions are the ones on this PC. The daemon has no cloud-session source, so there is no cloud split.',
+    open: 'Open {name}',
+    desktopTitle: 'Desktop accounts',
+    desktopSignedIn: '{n} signed in',
+    cliTitle: 'CLI accounts',
+    cliSignedIn: '{n} signed in',
+    poolLine: '5h {session} · week {week}',
+    poolNone: 'n/a',
+    climayteTokens: 'Tokens through CliMayte',
+    climayteTokensSub: '{tasks} tasks so far',
+    climayteRunning: 'CliMayte tasks running',
+    climayteDone: 'Finished in the last hour',
+    climayteSessions: 'CliMayte sessions, last hour',
+    sessionsNow: 'Sessions active now',
+    sessionsNowSub: 'touched in the last 5 minutes',
+    sessionsHour: 'Sessions, last hour',
+    sessionsDay: 'Sessions, last 24 hours',
+    loadFailed: 'Some numbers could not be read; showing the last good ones.',
+  },
 }
