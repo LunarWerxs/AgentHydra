@@ -53,8 +53,8 @@ function child<T>(body: string): T {
 
 const NOTICE = "You've hit your weekly limit · resets 3am (America/Chicago)"
 
-const turn = (role: 'user' | 'assistant', text: string, ts: string) =>
-  `${JSON.stringify({ type: role, message: { role, content: text }, cwd: 'D:\\demo', timestamp: ts })}\n`
+const turn = (role: 'user' | 'assistant', text: string, ts: string, model?: string) =>
+  `${JSON.stringify({ type: role, message: { role, content: text, model }, cwd: 'D:\\demo', timestamp: ts })}\n`
 
 /** The record Claude Code writes when the CLI itself reports the wall. */
 const wallTurn = (ts: string) =>
@@ -76,7 +76,7 @@ function write(sessionId: string, body: string): string {
 function list(scope: 'all' | 'only' | 'pending'): Array<Record<string, unknown>> {
   return child(`const { listSessions } = await import(${SESSIONS});
     const rows = await listSessions({ limit: 50, sinceMs: null, rateLimited: ${JSON.stringify(scope)} });
-    console.log(JSON.stringify(rows.map((r) => ({ id: r.session_id, stop: r.limit_stop, src: r.title_source }))));`)
+    console.log(JSON.stringify(rows.map((r) => ({ id: r.session_id, stop: r.limit_stop, src: r.title_source, model: r.model, effort: r.effort }))));`)
 }
 
 // Three sessions, one of each kind, written once and shared by every test below.
@@ -100,7 +100,12 @@ write(
   // Quotes the notice in ORDINARY prose. This is the false-positive class the detector is shaped
   // around: a conversation that merely talks about limits must not be listed as stopped by one.
   turn('user', `what does "${NOTICE}" mean?`, '2026-08-19T06:00:00.000Z') +
-    turn('assistant', 'It means your weekly quota is spent.', '2026-08-19T06:00:05.000Z'),
+    turn(
+      'assistant',
+      'It means your weekly quota is spent.',
+      '2026-08-19T06:00:05.000Z',
+      'claude-sonnet-5-5',
+    ),
 )
 
 test(
@@ -189,6 +194,16 @@ test(
     // The interesting one (an envelope name) is unit-tested in tests/session-title.test.ts; what
     // matters here is that the provenance survives the scan cache round trip at all.
     for (const r of list('all')) expect(r.src).toBe('message')
+  },
+  SPAWNS_A_CHILD_BUN,
+)
+
+test(
+  'a row carries the model of its newest assistant turn',
+  () => {
+    const by = Object.fromEntries(list('all').map((r) => [r.id as string, r]))
+    expect(by[CLEAN]?.model).toBe('claude-sonnet-5-5')
+    expect(by[CLEAN]?.effort).toBeNull()
   },
   SPAWNS_A_CHILD_BUN,
 )

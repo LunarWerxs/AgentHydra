@@ -280,6 +280,10 @@ export interface SessionSummary {
    * Claude only, for the same reason limit_stop is: the markers are the Claude CLI's own.
    */
   ended_because: SessionEnding | null
+  /** The model of the session's newest assistant turn, as the transcript records it. */
+  model: string | null
+  /** The thinking/effort level when the transcript records one, else null. */
+  effort: string | null
 }
 
 /**

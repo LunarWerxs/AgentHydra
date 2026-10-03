@@ -52,8 +52,9 @@ import { readZswarmSession } from './zswarm-sessions'
  * 1 → the original scan. 2 → adds limit_stop (usage-wall detection) and title provenance.
  * 3 → adds thread_key, the first message's uuid, which identifies the CONVERSATION.
  * 4 → adds ended_because, why the transcript stopped.
+ * 5 → adds model and effort, the newest assistant turn's model and the recorded effort level.
  */
-const SCAN_VERSION = 4
+const SCAN_VERSION = 5
 
 function toEpoch(ts: unknown): number | null {
   if (typeof ts !== 'string') return null
@@ -92,6 +93,10 @@ interface ScannedMeta {
   /** What ended this transcript. See session-ending.ts. Null for the stores whose records carry no
    *  such markers, and for a transcript with nothing meaningful in it. */
   ended_because: SessionEnding | null
+  /** The model of the newest assistant turn as the transcript records it, or null. */
+  model: string | null
+  /** The thinking/effort level when the transcript records one, else null. */
+  effort: string | null
 }
 
 // One entry per transcript. Keeping mtime in the value (instead of in the Map key) makes an active
@@ -110,7 +115,13 @@ const metaCache = new Map<string, { mtimeMs: number; sizeBytes: number; meta: Sc
 interface ScanCacheRow
   extends Omit<
     ScannedMeta,
-    'limit_stop' | 'title_source' | 'title_tag' | 'thread_key' | 'ended_because'
+    | 'limit_stop'
+    | 'title_source'
+    | 'title_tag'
+    | 'thread_key'
+    | 'ended_because'
+    | 'model'
+    | 'effort'
   > {
   mtime_ms: number
   size_bytes: number
@@ -121,21 +132,23 @@ interface ScanCacheRow
   title_tag: string | null
   thread_key: string | null
   ended_because: string | null
+  model: string | null
+  effort: string | null
   scan_version: number | null
 }
 const selectScan = db.query<ScanCacheRow, [string]>(
   'select mtime_ms, size_bytes, title, cwd, git_branch, message_count, created_at, ' +
     'last_activity_at, last_role, last_text_preview, substantive_turns, ' +
     'limit_notice, limit_pending, limit_at, title_source, title_tag, thread_key, ' +
-    'ended_because, scan_version ' +
+    'ended_because, model, effort, scan_version ' +
     'from session_scan_cache where cache_key = ?',
 )
 const upsertScan = db.query(
   'insert into session_scan_cache (cache_key, path, mtime_ms, size_bytes, title, cwd, git_branch, ' +
     'message_count, created_at, last_activity_at, last_role, last_text_preview, ' +
     'substantive_turns, limit_notice, limit_pending, limit_at, title_source, title_tag, ' +
-    'thread_key, ended_because, scan_version, scanned_at) ' +
-    'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'thread_key, ended_because, model, effort, scan_version, scanned_at) ' +
+    'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
     'on conflict(cache_key) do update set path = excluded.path, mtime_ms = excluded.mtime_ms, ' +
     'size_bytes = excluded.size_bytes, title = excluded.title, cwd = excluded.cwd, ' +
     'git_branch = excluded.git_branch, message_count = excluded.message_count, ' +
@@ -145,7 +158,7 @@ const upsertScan = db.query(
     'limit_pending = excluded.limit_pending, limit_at = excluded.limit_at, ' +
     'title_source = excluded.title_source, title_tag = excluded.title_tag, ' +
     'thread_key = excluded.thread_key, ended_because = excluded.ended_because, ' +
-    'scan_version = excluded.scan_version, scanned_at = excluded.scanned_at',
+    'model = excluded.model, effort = excluded.effort, scan_version = excluded.scan_version, scanned_at = excluded.scanned_at',
 )
 
 /**
@@ -210,6 +223,8 @@ function readScanCache(tf: TranscriptFile, key: string): ScannedMeta | null {
     title_tag: row.title_tag ?? null,
     thread_key: row.thread_key ?? null,
     ended_because: (row.ended_because as SessionEnding | null) ?? null,
+    model: row.model ?? null,
+    effort: row.effort ?? null,
   }
 }
 
@@ -237,6 +252,8 @@ function rememberScan(tf: TranscriptFile, key: string, meta: ScannedMeta): Scann
       meta.title_tag,
       meta.thread_key,
       meta.ended_because,
+      meta.model,
+      meta.effort,
       SCAN_VERSION,
       Date.now(),
     )
@@ -348,6 +365,8 @@ function parseSharedStoreMeta(tf: TranscriptFile, key: string): ScannedMeta {
     thread_key: tf.session_id,
     // None of these stores records how a session stopped in a form worth trusting.
     ended_because: null,
+    model: null,
+    effort: null,
   }
   return rememberScan(tf, key, meta)
 }
@@ -384,6 +403,8 @@ interface MetaAccumulator {
   substantive: number
   threadKey: string | null
   ending: SessionEnding | null
+  model: string | null
+  effort: string | null
 }
 
 // One JSONL record's worth of parseMeta's scan. Pulled out so this branching scores against
@@ -419,7 +440,17 @@ function applyMetaLine(
   if (!acc.threadKey && typeof ev.uuid === 'string' && ev.uuid) acc.threadKey = ev.uuid
   if (tf.source === 'claude') acc.ending = classifyEnding(ev, endingEventText(ev)) ?? acc.ending
 
+  applyRunSettings(acc, ev)
   applyMetaMessage(acc, tf, ev)
+}
+
+// The model and effort the transcript records: Claude stamps the model on each assistant message
+// (`<synthetic>` is the CLI's own notice, not a model), Codex writes both on every turn_context.
+function applyRunSettings(acc: MetaAccumulator, ev: any): void {
+  const m = ev.message?.role === 'assistant' ? ev.message.model : ev.payload?.model
+  if (typeof m === 'string' && m && m !== '<synthetic>') acc.model = m
+  const e = ev.effortLevel ?? ev.payload?.effort
+  if (typeof e === 'string' && e) acc.effort = e
 }
 
 // The message-shaped half of applyMetaLine: message count, first/last timestamps, and the
@@ -544,6 +575,8 @@ function newAccumulator(): MetaAccumulator {
     substantive: 0,
     threadKey: null,
     ending: null,
+    model: null,
+    effort: null,
   }
 }
 
@@ -690,6 +723,8 @@ function metaFromState(tf: TranscriptFile, { acc, limits }: ParseState): Scanned
     title_tag: titleSource === 'envelope' ? turn.tag : null,
     thread_key: acc.threadKey,
     ended_because: acc.ending,
+    model: acc.model,
+    effort: acc.effort,
   }
   return meta
 }
@@ -1106,6 +1141,8 @@ function buildSessionSummary(
     copy_index: 1,
     copy_count: 1,
     ended_because: m.ended_because,
+    model: m.model,
+    effort: m.effort,
   }
 }
 
@@ -1558,5 +1595,7 @@ export async function getSession(
     copy_index: 1,
     copy_count: 1,
     ended_because: m.ended_because,
+    model: m.model,
+    effort: m.effort,
   }
 }

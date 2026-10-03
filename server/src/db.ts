@@ -329,6 +329,9 @@ create index if not exists idx_agent_status_at on agent_status(at);
   add('thread_key', 'text')
   // Why the transcript stopped: interrupted / usage-limit / overload / refused / error / complete.
   add('ended_because', 'text')
+  // The newest assistant turn's model and the recorded effort level, for the Sessions sidebar tag.
+  add('model', 'text')
+  add('effort', 'text')
   // THE REASON THE THREE COLUMNS ABOVE ARE SAFE TO ADD. A cached row is trusted on mtime+size
   // alone, so every row written before a scanner learns a new field would answer that field with
   // NULL forever — and a NULL limit_notice is indistinguishable from "this session never hit a

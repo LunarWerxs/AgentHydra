@@ -111,6 +111,7 @@ import type * as api from '@/lib/api'
 // Values, not types: the export menu builds its links with these at runtime. Importing the
 // module as `import type` (2026-09-26 cleanup) left the template calling an undefined `api`.
 import { sessionExportUrl, sessionFileUrl } from '@/lib/api'
+import { modelName } from '@/lib/climayte-status'
 import { baseName, queueStatusMeta, shortId, timeAgo } from '@/lib/format'
 import { highlightRuns, rankByQuery, sessionSearchFields, type TextRun } from '@/lib/fuzzy'
 import { groupByProject } from '@/lib/session-groups'
@@ -347,11 +348,10 @@ const agentStatusOf = (s: api.SessionSummary) => liveStatusBySession.value.get(s
 const isLive = (s: api.SessionSummary) =>
   agentStatusOf(s)?.state === 'working' ||
   (!!s.queue_status && !!queueStatusMeta(s.queue_status).spin)
-/** The session list does not carry the model or the effort level on every row yet; a row shows them
- *  when its summary has them and drops the tag when not. */
-type RowRun = { model?: string | null; effort?: string | null }
-const modelOf = (s: api.SessionSummary) => (s as api.SessionSummary & RowRun).model ?? null
-const effortOf = (s: api.SessionSummary) => (s as api.SessionSummary & RowRun).effort ?? null
+/** The model and effort of the session's newest assistant turn, as CliMayte's rows say them
+ *  (`Sonnet 5.5`); a row drops the tag when its summary has neither. */
+const modelOf = (s: api.SessionSummary) => (s.model ? modelName(s.model) : null)
+const effortOf = (s: api.SessionSummary) => s.effort ?? null
 
 const { t } = useI18n()
 /** The row's hover. A row is one line, as dense as a CliMayte task row (owner, 2026-10-03), so what
