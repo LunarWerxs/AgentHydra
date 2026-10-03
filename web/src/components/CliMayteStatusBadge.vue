@@ -12,17 +12,19 @@ import { useI18n } from 'vue-i18n'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CliMayteStatus, CliMayteWorkerView } from '@/lib/api'
-import { CLIMAYTE_STATUS, climayteFailedStory, climayteStoryLines } from '@/lib/climayte-status'
+import { climayteFailedStory, climayteStatusMeta, climayteStoryLines } from '@/lib/climayte-status'
 
 const props = defineProps<{
   status: CliMayteStatus
+  /** `wave`: a manager held while its wave runs; it reads "Managing wave", not as stuck. */
+  hold?: 'wave' | null
   iconOnly?: boolean
   /** The task and every loaded task, for a failed task's story on hover (the list's icon). */
   task?: CliMayteWorkerView
   tasks?: CliMayteWorkerView[]
 }>()
 const { t } = useI18n()
-const meta = computed(() => CLIMAYTE_STATUS[props.status])
+const meta = computed(() => climayteStatusMeta(props.status, props.hold))
 const story = computed(() => {
   const s = props.task && props.tasks ? climayteFailedStory(props.task, props.tasks) : null
   return s ? climayteStoryLines(s, (key, values) => t(key, values)) : null

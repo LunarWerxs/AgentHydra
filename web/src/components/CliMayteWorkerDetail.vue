@@ -342,7 +342,7 @@ async function onStop() {
              else is one hover away: the token split on the tokens, the rest behind the info button. -->
         <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div class="flex min-w-0 flex-wrap items-center gap-1.5">
-            <CliMayteStatusBadge :status="worker.status" />
+            <CliMayteStatusBadge :status="worker.status" :hold="worker.hold" />
             <Badge
               v-if="verdictMark"
               :variant="

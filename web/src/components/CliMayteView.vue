@@ -35,13 +35,19 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
+import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import type { CliMayteRemotePc, CliMayteRemoteWorker, CliMayteWorkerView } from '@/lib/api'
+import type {
+  CliMayteRemotePc,
+  CliMayteRemoteWorker,
+  CliMayteWave,
+  CliMayteWorkerView,
+} from '@/lib/api'
 import {
   type CliMayteScorecard,
   type CliMayteTotals,
@@ -49,6 +55,7 @@ import {
   getCliMayteScorecard,
   getCliMayteTotals,
   getCliMayteWorker,
+  listCliMayteWaves,
   listCliMayteWorkers,
 } from '@/lib/api'
 import {
@@ -79,6 +86,8 @@ const remoteRows = ref<ListRow[]>([])
 const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value])
 /** Local and remote ids may match, so a row is selected by this key, never its bare id. */
 const rowKey = (w: ListRow) => (w.remote ? `${w.remote.pc}/${w.id}` : w.id)
+/** Manager waves (GET /api/corch/waves; none when the route is missing). */
+const waves = ref<CliMayteWave[]>([])
 const loading = ref(false)
 const loaded = ref(false)
 const selectedId = ref<string | null>(null)
@@ -246,12 +255,14 @@ async function load(opts: { silent?: boolean } = {}) {
   try {
     // The scorecard is extra: a failed read keeps the last one and never marks CliMayte unreachable.
     // The other PCs' queue is extra too: a failed read keeps the last one.
-    const [list, sums, score, remote] = await Promise.all([
+    const [list, sums, score, remote, waveList] = await Promise.all([
       listCliMayteWorkers(),
       getCliMayteTotals(),
       getCliMayteScorecard().catch(() => null),
       getCliMayteRemote().catch(() => null),
+      listCliMayteWaves(),
     ])
+    if (!sameData(waves.value, waveList)) waves.value = waveList
     workers.value = reconcileList(workers.value, list, (w) => w.id)
     if (remote) {
       const next = remote.enabled
@@ -293,6 +304,12 @@ async function load(opts: { silent?: boolean } = {}) {
 
 function onVisible() {
   if (document.visibilityState === 'visible') void load({ silent: true })
+}
+
+/** A wave's manager link: open that worker's row. */
+function selectManager(id: string) {
+  const m = workers.value.find((x) => x.id === id)
+  if (m) select(m)
 }
 
 function select(w: ListRow) {
@@ -545,6 +562,12 @@ onUnmounted(() => {
           </span>
           <Switch v-model="hideFinished" />
         </label>
+        <CliMayteWaves
+          :waves="waves"
+          :workers="workers"
+          :now="now"
+          @select-worker="selectManager"
+        />
         <!-- Narrow: 24 task rows (a row is 2rem, py-1.5 around a text-sm line, plus its 1px divider).
              Wide: the height the window leaves. -->
         <div
@@ -576,7 +599,7 @@ onUnmounted(() => {
                 :title="rowHint(w)"
                 @click="select(w)"
               >
-                <CliMayteStatusBadge :status="w.status" icon-only :task="w" :tasks="workers" />
+                <CliMayteStatusBadge :status="w.status" :hold="w.hold" icon-only :task="w" :tasks="workers" />
                 <span class="flex min-w-0 flex-1 items-center gap-1">
                   <!-- Another PC's task: a small cloud, the PC on hover (the row's hover says it too). -->
                   <Cloud

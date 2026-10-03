@@ -1,0 +1,207 @@
+<script setup lang="ts">
+// Waves in the CliMayte view (docs/CLIMAYTE.md, "Manager"): a manager worker dispatches and follows a
+// set of keyed tasks. Each live wave (running or reported), and a finished one from the last 24 h,
+// is one header: its id, status, how many keys are in each state and its manager. Opened, it lists
+// each key with its proof, the escalations with their reasons, and the report (collapsed).
+// The view loads the waves with its own refresh cycle and passes them in; there is no timer here.
+import { Check, ChevronRight, CircleAlert, Minus, Network, X } from '@lucide/vue'
+import { computed, ref } from 'vue'
+import { Badge } from '@/components/ui/badge'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import type {
+  CliMayteWave,
+  CliMayteWaveStatus,
+  CliMayteWaveTaskState,
+  CliMayteWorkerView,
+} from '@/lib/api'
+
+const props = defineProps<{
+  waves: CliMayteWave[]
+  workers: CliMayteWorkerView[]
+  now: number
+}>()
+const emit = defineEmits<{ selectWorker: [id: string] }>()
+
+const DAY_MS = 24 * 3600 * 1000
+const STATE_ORDER: CliMayteWaveTaskState[] = ['pending', 'running', 'passed', 'failed', 'escalated']
+const STATE_TONE: Record<CliMayteWaveTaskState, string> = {
+  pending: 'text-muted-foreground',
+  running: 'text-info',
+  passed: 'text-success',
+  failed: 'text-destructive',
+  escalated: 'text-warning',
+}
+const STATUS_VARIANT: Record<
+  CliMayteWaveStatus,
+  'info' | 'warning' | 'success' | 'destructive' | 'outline'
+> = {
+  running: 'info',
+  reported: 'warning',
+  verified: 'success',
+  rejected: 'destructive',
+  failed: 'destructive',
+  cancelled: 'outline',
+}
+
+const live = (w: CliMayteWave) => w.status === 'running' || w.status === 'reported'
+/** Live waves, and a finished one for 24 h after it last changed, newest first. */
+const shown = computed(() => props.waves.filter((w) => live(w) || props.now - w.updatedAt < DAY_MS))
+
+// A live wave starts open and a finished one collapsed; a click overrides either.
+const open = ref<Record<string, boolean>>({})
+const reportOpen = ref<Record<string, boolean>>({})
+
+const counts = (w: CliMayteWave) =>
+  STATE_ORDER.map((state) => ({
+    state,
+    n: w.tasks.filter((k) => k.state === state).length,
+  })).filter((c) => c.n > 0)
+const hasManager = (w: CliMayteWave) => props.workers.some((x) => x.id === w.managerId)
+const short = (sha: string) => sha.slice(0, 7)
+const escalationsOf = (w: CliMayteWave, key: string) => w.escalations.filter((e) => e.key === key)
+/** Escalations on a key the plan no longer lists: none is dropped. */
+const strays = (w: CliMayteWave) =>
+  w.escalations.filter((e) => !w.tasks.some((k) => k.key === e.key))
+</script>
+
+<template>
+  <section v-if="shown.length" :aria-label="$t('climayte.waves')" class="flex flex-col gap-1.5">
+    <h3 class="flex items-center gap-1.5 px-1 text-xs font-medium text-muted-foreground">
+      <Network class="size-3.5" aria-hidden="true" />
+      {{ $t('climayte.waves') }}
+    </h3>
+    <div class="scroll-slim max-h-80 divide-y overflow-y-auto rounded-lg border bg-card text-xs">
+      <Collapsible
+        v-for="w in shown"
+        :key="w.id"
+        :open="open[w.id] ?? live(w)"
+        @update:open="(v: boolean) => (open[w.id] = v)"
+      >
+        <CollapsibleTrigger as-child>
+          <button
+            type="button"
+            class="group flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 bg-muted/40 px-3 py-1.5 text-start transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            :title="$t('climayte.waveHint', { rounds: w.rounds, max: w.maxRounds })"
+          >
+            <ChevronRight
+              class="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90"
+              aria-hidden="true"
+            />
+            <span class="mono text-2xs font-medium">{{ w.id }}</span>
+            <Badge :variant="STATUS_VARIANT[w.status]">
+              <span class="text-2xs">{{ $t(`climayte.waveStatus.${w.status}`) }}</span>
+            </Badge>
+            <span class="flex flex-wrap items-center gap-x-2 text-2xs tabular-nums">
+              <span v-for="c in counts(w)" :key="c.state" :class="STATE_TONE[c.state]">
+                {{ c.n }} {{ $t(`climayte.waveState.${c.state}`) }}
+              </span>
+            </span>
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div class="flex flex-col gap-2 px-3 py-2">
+            <p class="flex flex-wrap items-center gap-x-1.5 text-2xs text-muted-foreground">
+              {{ $t('climayte.waveManager') }}
+              <button
+                v-if="hasManager(w)"
+                type="button"
+                class="mono rounded px-1 text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                @click="emit('selectWorker', w.managerId)"
+              >
+                {{ w.managerId }}
+              </button>
+              <span v-else class="mono">{{ w.managerId }}</span>
+            </p>
+            <ul class="divide-y rounded-md border">
+              <li v-for="k in w.tasks" :key="k.key" class="flex flex-col gap-0.5 px-2.5 py-1.5">
+                <div class="flex min-w-0 items-center gap-2">
+                  <span class="mono shrink-0 text-2xs text-muted-foreground">{{ k.key }}</span>
+                  <span class="min-w-0 flex-1 truncate font-medium" :title="k.title">{{ k.title }}</span>
+                  <span class="shrink-0 text-2xs" :class="STATE_TONE[k.state]">{{
+                    $t(`climayte.waveState.${k.state}`)
+                  }}</span>
+                </div>
+                <div
+                  v-if="k.proof"
+                  class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-2xs text-muted-foreground"
+                >
+                  <span class="flex items-center gap-1">
+                    {{ $t('climayte.waveProofCheck') }}
+                    <Check
+                      v-if="k.proof.check === true"
+                      class="size-3 text-success"
+                      :aria-label="$t('climayte.waveProofPass')"
+                    />
+                    <X
+                      v-else-if="k.proof.check === false"
+                      class="size-3 text-destructive"
+                      :aria-label="$t('climayte.waveProofFail')"
+                    />
+                    <Minus v-else class="size-3" :aria-label="$t('climayte.waveProofNone')" />
+                  </span>
+                  <span class="flex items-center gap-1">
+                    {{ $t('climayte.waveProofPaths') }}
+                    <Check
+                      v-if="k.proof.paths === true"
+                      class="size-3 text-success"
+                      :aria-label="$t('climayte.waveProofOk')"
+                    />
+                    <X
+                      v-else-if="k.proof.paths === false"
+                      class="size-3 text-destructive"
+                      :aria-label="$t('climayte.waveProofNotOk')"
+                    />
+                    <Minus v-else class="size-3" :aria-label="$t('climayte.waveProofNone')" />
+                  </span>
+                  <span v-if="k.proof.commits.length" class="mono">{{
+                    k.proof.commits.map(short).join(' ')
+                  }}</span>
+                  <span v-if="k.proof.note" class="min-w-0 wrap-break-word">{{ k.proof.note }}</span>
+                </div>
+                <p
+                  v-for="(e, i) in escalationsOf(w, k.key)"
+                  :key="i"
+                  class="flex items-start gap-1 text-2xs text-warning"
+                >
+                  <CircleAlert class="mt-px size-3 shrink-0" aria-hidden="true" />
+                  <span class="wrap-break-word">{{ e.reason }}</span>
+                </p>
+              </li>
+            </ul>
+            <p
+              v-for="(e, i) in strays(w)"
+              :key="`e${i}`"
+              class="flex items-start gap-1 text-2xs text-warning"
+            >
+              <CircleAlert class="mt-px size-3 shrink-0" aria-hidden="true" />
+              <span class="wrap-break-word"><span class="mono">{{ e.key }}</span>: {{ e.reason }}</span>
+            </p>
+            <Collapsible
+              v-if="w.report"
+              :open="reportOpen[w.id] ?? false"
+              @update:open="(v: boolean) => (reportOpen[w.id] = v)"
+            >
+              <CollapsibleTrigger as-child>
+                <button
+                  type="button"
+                  class="group flex items-center gap-1.5 rounded-md py-0.5 text-start text-2xs hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <ChevronRight
+                    class="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90"
+                    aria-hidden="true"
+                  />
+                  <span class="font-medium">{{ $t('climayte.waveReport') }}</span>
+                </button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <pre
+                  class="mono scroll-slim mt-1 max-h-60 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-2.5 text-xs text-muted-foreground"
+                >{{ w.report }}</pre>
+              </CollapsibleContent>
+            </Collapsible>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
+  </section>
+</template>

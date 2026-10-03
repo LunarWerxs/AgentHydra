@@ -11,6 +11,7 @@ import {
   ListChecks,
   LoaderCircle,
   type LucideIcon,
+  Network,
 } from '@lucide/vue'
 import type { BadgeVariants } from '@/components/ui/badge/badge-variants'
 import type {
@@ -82,6 +83,23 @@ export const CLIMAYTE_STATUS: Record<CliMayteStatus, CliMayteStatusMeta> = {
     hint: 'climayte.statusCancelledHint',
   },
 }
+
+/** A manager held between turns while its wave runs (`waiting` with `hold: 'wave'`): at work, not
+ *  stuck and not waiting for quota, so it reads as info, not the warning `waiting` has. */
+export const CLIMAYTE_WAVE_HOLD: CliMayteStatusMeta = {
+  variant: 'info',
+  icon: Network,
+  spin: false,
+  label: 'climayte.statusManaging',
+  hint: 'climayte.statusManagingHint',
+}
+
+/** The chip for a status, or the manager's own when it is held on a wave. */
+export const climayteStatusMeta = (
+  status: CliMayteStatus,
+  hold?: 'wave' | null,
+): CliMayteStatusMeta =>
+  status === 'waiting' && hold === 'wave' ? CLIMAYTE_WAVE_HOLD : CLIMAYTE_STATUS[status]
 
 export const CLIMAYTE_OUTCOME: Record<
   CliMayteAttemptOutcome,

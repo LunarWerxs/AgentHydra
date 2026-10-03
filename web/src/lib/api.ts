@@ -1046,6 +1046,10 @@ export interface CliMayteWorkerView {
   verdicts?: CliMayteVerdict[]
   /** Finished, and nothing ran since its newest verdict (server/src/climayte-lib.ts toView). */
   judged?: boolean
+  /** The wave a manager (kind `manage`) runs, or a task it dispatched belongs to. */
+  wave?: string | null
+  /** A manager held between turns while its wave runs: `status` is `waiting`, not stuck. */
+  hold?: 'wave' | null
 }
 /** One thumbs up or down on a finished task (server/src/climayte.ts). */
 export interface CliMayteVerdict {
@@ -1162,6 +1166,50 @@ export const sendCliMayteWorker = (id: string, text: string, urgent = false) =>
     `/api/corch/workers/${encodeURIComponent(id)}/send`,
     { method: 'POST', body: JSON.stringify({ text, urgent }) },
   )
+/** A wave: the manager worker's record of keyed tasks (mirrors CliMayteWave, server/src/climayte-lib.ts). */
+export type CliMayteWaveTaskState = 'pending' | 'running' | 'passed' | 'failed' | 'escalated'
+export type CliMayteWaveStatus =
+  | 'running'
+  | 'reported'
+  | 'verified'
+  | 'rejected'
+  | 'failed'
+  | 'cancelled'
+export interface CliMayteWave {
+  id: string
+  group: string
+  managerId: string
+  plan: string
+  cwd: string
+  branch: string
+  verify: string | null
+  tasks: Array<{
+    key: string
+    prompt: string
+    title: string
+    kind: string
+    check: string | null
+    paths: string[]
+    after: string[]
+    workerId: string | null
+    state: CliMayteWaveTaskState
+    proof: { check: boolean | null; commits: string[]; paths: boolean | null; note: string } | null
+  }>
+  escalations: Array<{ key: string; reason: string; at: number }>
+  notes: string
+  rounds: number
+  maxRounds: number
+  batch: { size: number; settleS: number; held: string[]; since: number | null }
+  status: CliMayteWaveStatus
+  report: string | null
+  createdAt: number
+  updatedAt: number
+}
+/** Newest first. The route may be missing on an older daemon: that is no waves, not an error. */
+export const listCliMayteWaves = () =>
+  j<{ waves: CliMayteWave[] }>('/api/corch/waves')
+    .then((r) => r.waves ?? [])
+    .catch(() => [] as CliMayteWave[])
 export const getCliMayteScorecard = () => j<CliMayteScorecard>('/api/corch/scorecard')
 /** A thumbs up or down on a finished task; a fail with `retry` sends it back one rung up the
  *  model/thinking ladder, and `next` says which. */
