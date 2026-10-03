@@ -40,6 +40,7 @@ import {
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { getSetting, setSetting } from './db'
+import { IS_PRIMARY_INSTALL } from './instance'
 
 /** The settings key. '1' (the default) means keep the registration current on every boot. */
 export const MCP_REGISTER_SETTING = 'mcp_register_claude_code'
@@ -70,6 +71,21 @@ export function claudeCodeConfigPath(env: NodeJS.ProcessEnv = process.env): stri
   return join(dir || homedir(), '.claude.json')
 }
 
+/**
+ * Is this daemon barred from the machine-wide Claude Code config? A side-run (a relocated store,
+ * see IS_PRIMARY_INSTALL) must never write, update or remove `mcpServers.agenthydra` in the user's
+ * real ~/.claude.json: on 2026-10-03 a scratch daemon on 7801 and the primary on 7787 rewrote each
+ * other's URL every minute for hours, and every Claude session that started in a 7801 minute got
+ * its agenthydra tools from the scratch store. Same rule the runtime.json pointer follows. An
+ * explicit AGENTHYDRA_MCP_CONFIG names the side-run's OWN file, so it stays allowed.
+ */
+export function registrationBarred(
+  primary: boolean = IS_PRIMARY_INSTALL,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !primary && !env.AGENTHYDRA_MCP_CONFIG?.trim()
+}
+
 export interface McpHttpEntry {
   type: 'http'
   url: string
@@ -90,6 +106,8 @@ export type McpRegisterAction =
   | 'removed'
   | 'absent'
   | 'disabled'
+  /** Not attempted, and not an error: this daemon is a side-run (see registrationBarred). */
+  | 'side-run'
   | 'failed'
 
 export interface McpRegisterStatus {
@@ -355,13 +373,19 @@ export function syncMcpRegistration(
     daemonUrl: string
     enabled?: boolean
     configPath?: string
+    /** Seams for the test: production reads IS_PRIMARY_INSTALL and process.env. */
+    primary?: boolean
+    env?: NodeJS.ProcessEnv
   },
   deps: McpRegisterDeps = {},
 ): McpRegisterStatus {
   const enabled = opts.enabled ?? mcpRegisterEnabled()
-  const configPath = opts.configPath ?? claudeCodeConfigPath()
+  const configPath = opts.configPath ?? claudeCodeConfigPath(opts.env)
   const desired = desiredEntry(opts.daemonUrl)
   const base: SyncBase = { enabled, configPath, desired }
+  // Before the file is even read: a barred daemon touches nothing, whatever the file holds.
+  if (registrationBarred(opts.primary, opts.env))
+    return { ...base, registered: false, entry: null, action: 'side-run', error: null }
   const writeConfig = deps.writeConfig ?? writeConfigAtomic
   let raced: McpRegisterStatus | null = null
 
@@ -422,6 +446,8 @@ export function syncMcpRegistration(
 export function createMcpReasserter(opts: {
   daemonUrl: () => string
   configPath?: string
+  primary?: boolean
+  env?: NodeJS.ProcessEnv
   log?: { info: (message: string) => void; warn: (message: string) => void }
 }): { run: (enabled?: boolean) => McpRegisterStatus | null; last: () => McpRegisterStatus | null } {
   let last: McpRegisterStatus | null = null
@@ -435,6 +461,8 @@ export function createMcpReasserter(opts: {
           daemonUrl: opts.daemonUrl(),
           enabled,
           configPath: opts.configPath,
+          primary: opts.primary,
+          env: opts.env,
         })
         last = reg
         if (reg.error) {
@@ -461,6 +489,16 @@ export function mcpRegistrationStatus(opts: {
   const enabled = mcpRegisterEnabled()
   const configPath = opts.configPath ?? claudeCodeConfigPath()
   const desired = desiredEntry(opts.daemonUrl)
+  if (registrationBarred())
+    return {
+      enabled,
+      configPath,
+      registered: false,
+      entry: null,
+      desired,
+      action: 'side-run',
+      error: null,
+    }
   const { config, error } = readConfig(configPath)
   // A remembered WRITE failure outranks a clean read. A read-only ~/.claude.json reads perfectly,
   // so without this the panel reports "not registered" and cannot say why.

@@ -1,3 +1,4 @@
+import './relaunch-identity-boot'
 import { spawn } from 'node:child_process'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
@@ -125,8 +126,8 @@ import { orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
-import { buildRelaunchArgv } from './relaunch-argv.mjs'
 import { relaunchWithHandoff, writeRelaunchAck } from './relaunch-handoff'
+import { planRelaunchSuccessor } from './relaunch-identity'
 import {
   acknowledgeResetEvents,
   listResetEvents,
@@ -136,7 +137,7 @@ import {
 import { jsonBody } from './route-helpers'
 import { warmSessionScanCache } from './sessions'
 import { peerDaemon, setPeerDaemon, sideRunHeader, sideRunHealthFields } from './side-run'
-import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
+import { isRelaunchSuccessor, skipSingleInstanceGuard } from './single-instance'
 import { startStallSentinel, stopStallSentinel } from './stall-sentinel'
 import { syncStatusHooks } from './status-hooks'
 import { startTitleSweep } from './title-sweep'
@@ -339,7 +340,16 @@ app.get('/api/health', (c) =>
     runningCode: runningCode.status(),
     mcpRegistration: (() => {
       const last = mcpReasserter.last()
-      return last ? { enabled: last.enabled, registered: last.registered, error: last.error } : null
+      // `skipped`: this daemon is a side-run and left the machine-wide config alone on purpose.
+      // That is not an error, so it must not read as one (mcp-register.ts, registrationBarred).
+      return last
+        ? {
+            enabled: last.enabled,
+            registered: last.registered,
+            error: last.error,
+            skipped: last.action === 'side-run' ? 'side-run' : null,
+          }
+        : null
     })(),
     ts: Date.now(),
   }),
@@ -572,6 +582,8 @@ const appSettings = () => ({
       mcpConfigPath: st.configPath,
       mcpUrl: st.desired.url,
       mcpRegisterError: st.error,
+      // Not an error: a side-run never touches the machine-wide Claude Code config.
+      mcpRegisterSkipped: st.action === 'side-run' ? 'side-run' : null,
     }
   })(),
   // Cheap on purpose: a path probe, not orchestratorStatus(), which spawns python. This is read
@@ -1288,18 +1300,21 @@ function spawnRelaunchSuccessor(): void {
   // placeholder pair, NOT respawnable. The shared kit builder handles that, pins the port we are
   // actually SERVING on (never the preferred one), and keeps the argv a fixed point so it cannot
   // grow by two tokens on every update. No `command` here: main.ts's daemon mode takes no verb.
-  const relaunchArgv = buildRelaunchArgv(process.argv, {
+  // The identity (store, home, config paths) rides there too, as `--handoff-env`: a side-run's
+  // successor must open the side-run's store, not the machine's (relaunch-identity.ts).
+  const relaunchArgv = planRelaunchSuccessor({
+    argv: process.argv,
     execPath: process.execPath,
     isCompiled: IS_COMPILED,
     boundPort,
-    relaunchFlag: RELAUNCH_FLAG,
   })
   // Through buildDetachedSpawn, not a plain spawn. `detached: true` is NOT a process-tree escape
   // on Windows — the shared primitive's own header says so, and that is the reason it exists.
   // Left as a plain spawn the successor stays inside THIS process's tree for the whole
   // handoff, so a tray Quit (`taskkill /T /F`) landing in that window kills the outgoing daemon
   // AND its replacement, leaving the user with none. That hand-off is also why the relaunch
-  // signal and the port ride as FLAGS above: WMI does not carry our environment block.
+  // signal, the port and the store identity ride as FLAGS above: WMI does not carry our
+  // environment block.
   // hideWindow: the successor is a CONSOLE program (bun), and WMI's default STARTUPINFO gives
   // it a VISIBLE console on the owner's desktop at every auto-update - the recurring mystery
   // "command prompt that says starting" (found live 2026-08-30). Same ShowWindow=0 mechanism

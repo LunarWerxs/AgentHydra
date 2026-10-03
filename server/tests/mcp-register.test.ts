@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   claudeCodeConfigPath,
+  createMcpReasserter,
   desiredEntry,
   MCP_SERVER_KEY,
   mcpRegistrationStatus,
@@ -235,4 +236,40 @@ test('the config path follows CLAUDE_CONFIG_DIR, and AGENTHYDRA_MCP_CONFIG beats
   expect(
     claudeCodeConfigPath({ CLAUDE_CONFIG_DIR: 'C:\\alt', AGENTHYDRA_MCP_CONFIG: 'C:\\x\\y.json' }),
   ).toBe('C:\\x\\y.json')
+})
+
+// 2026-10-03: a side-run on 7801 rewrote the machine-wide ~/.claude.json every minute, fighting the
+// primary daemon for the `agenthydra` key, so Claude sessions started in its minutes got tools from
+// the scratch store. A daemon that is not the primary install must leave another daemon's entry alone.
+test('a side-run reasserter leaves the other daemon entry in the machine config untouched', () => {
+  const configPath = join(scratch(), '.claude.json')
+  const other = `${JSON.stringify({ mcpServers: { [MCP_SERVER_KEY]: { type: 'http', url: `${URL_}/api/mcp` } } }, null, 2)}
+`
+  writeFileSync(configPath, other)
+  const reasserter = createMcpReasserter({
+    daemonUrl: () => 'http://127.0.0.1:7801',
+    configPath,
+    primary: false,
+    env: {},
+  })
+  const res = reasserter.run(true)
+  expect(res?.action).toBe('side-run')
+  expect(res?.error).toBeNull()
+  expect(readFileSync(configPath, 'utf8')).toBe(other)
+})
+
+// A side-run that names its own file (AGENTHYDRA_MCP_CONFIG) is not touching the machine's.
+test('a side-run with its own AGENTHYDRA_MCP_CONFIG still registers into that file', () => {
+  const configPath = join(scratch(), 'own.json')
+  const res = syncMcpRegistration({
+    daemonUrl: 'http://127.0.0.1:7801',
+    enabled: true,
+    configPath,
+    primary: false,
+    env: { AGENTHYDRA_MCP_CONFIG: configPath },
+  })
+  expect(res.action).toBe('added')
+  expect(read(configPath)).toEqual({
+    mcpServers: { [MCP_SERVER_KEY]: { type: 'http', url: 'http://127.0.0.1:7801/api/mcp' } },
+  })
 })
