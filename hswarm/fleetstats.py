@@ -22,13 +22,18 @@ from pathlib import Path
 
 from . import __version__, config
 
-INGEST = os.environ.get("HSWARM_PING_URL", "")  # usage pings are off unless an ingest URL and key are configured`nKEY = os.environ.get("HSWARM_PING_KEY", "")`nURL = "https://hydraswarm.invalid/app"`n_session = secrets.token_hex(16)
+INGEST = os.environ.get("HSWARM_PING_URL", "")  # usage pings are off unless an ingest URL and key are configured
+KEY = os.environ.get("HSWARM_PING_KEY", "")
+URL = "https://hydraswarm.invalid/app"
+_session = secrets.token_hex(16)
 _lock = threading.Lock()
 _id: tuple[str, bool] | None = None
 _threads: list[threading.Thread] = []
 
 
 def enabled() -> bool:
+    if not (INGEST and KEY):
+        return False
     if os.environ.get("HSWARM_NO_PING", "").strip().lower() not in ("", "0", "false", "off", "no"):
         return False
     if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
