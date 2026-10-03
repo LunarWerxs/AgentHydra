@@ -28,7 +28,7 @@ import {
   climayteWaves,
   climayteWaveVerify,
 } from '../climayte'
-import { remoteSnapshots } from '../climayte-remote'
+import { buildStatus, remoteSnapshots } from '../climayte-remote'
 import { queueSharingOn } from '../core/cli-login-sync'
 import {
   cancelQuickAdd,
@@ -37,6 +37,7 @@ import {
   startQuickAdd,
   submitQuickAddCode,
 } from '../core/cli-quick-add'
+import { ownBuild } from '../core/own-build'
 import { app } from '../http-app'
 import { CLIMAYTE_MAX_WAIT_S } from '../mcp-client'
 import { jsonBody } from '../route-helpers'
@@ -86,12 +87,13 @@ app.get('/api/corch/workers', async (c) => {
 app.get('/api/corch/remote', (c) => {
   const enabled = queueSharingOn()
   const pcs = enabled
-    ? remoteSnapshots().map(({ pc, name, at, stale, workers }) => ({
+    ? remoteSnapshots().map(({ pc, name, at, stale, workers, build }) => ({
         pc,
         name,
         at,
         stale,
         workers,
+        ...buildStatus(name, build, ownBuild()),
       }))
     : []
   return c.json({ enabled, pcs })

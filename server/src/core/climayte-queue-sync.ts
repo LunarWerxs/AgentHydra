@@ -35,6 +35,7 @@ import {
   setRemote,
 } from '../climayte-remote'
 import { MIRROR_FRESH_MS, type StoreMirror } from './login-sync-mirror'
+import { ownBuild } from './own-build'
 
 /** The store's cap on a queue blob (cloud/login-sync-worker/worker.js). */
 export const QUEUE_MAX_BLOB = 256 * 1024
@@ -86,7 +87,7 @@ export function buildSnapshot(pc: string, name: string, now = Date.now()): Queue
   const live: Record<string, RemoteLive> = {}
   for (const [id, r] of liveByAccount)
     live[id] = { sessionPct: r.sessionPct, weekPct: r.weekPct, at: r.at }
-  return { pc, name, at: now, workers: list, live }
+  return { pc, name, at: now, workers: list, live, build: ownBuild() }
 }
 
 /** The encrypted blob for a snapshot: base64 of {v, iv, tag, data}, `data` the gzipped JSON. */

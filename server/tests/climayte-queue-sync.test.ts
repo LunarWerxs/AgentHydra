@@ -17,6 +17,7 @@ import { Hono } from 'hono'
 import { MAX_PER_ACCOUNT, pickAccount } from '../src/climayte'
 import { liveByAccount, workers } from '../src/climayte-core'
 import {
+  buildStatus,
   clearRemote,
   type QueueSnapshot,
   type RemoteWorker,
@@ -87,6 +88,13 @@ describe('the queue snapshot', () => {
     expect(openQueue(randomBytes(32), pc, blob)).toBeNull()
   })
 
+  test('carries the sender’s build through the seal, and an old snapshot without one still opens', () => {
+    const pc = randomUUID()
+    const build = { version: '1.2.3', commit: 'abc1234', date: '2026-10-02T18:40:00.000Z' }
+    expect(openQueue(key, pc, sealQueue(key, { ...snapshot(pc, []), build }))?.build).toEqual(build)
+    expect(openQueue(key, pc, sealQueue(key, snapshot(pc, [])))?.build).toBeUndefined()
+  })
+
   test('over the cap the oldest finished workers go first and every active one stays', () => {
     const pc = randomUUID()
     // Random titles do not compress, so the size grows with the count.
@@ -112,6 +120,34 @@ describe('the queue snapshot', () => {
     expect(keptFinished.map((w) => w.id)).toEqual(
       finished.slice(0, keptFinished.length).map((w) => w.id),
     )
+  })
+})
+
+describe('whether the other PC runs an older AgentHydra', () => {
+  const mine = { version: '1.0.0', commit: 'bbbbbbb', date: '2026-10-03T12:00:00.000Z' }
+  const at = (iso: string) => ({ version: '1.0.0', commit: 'abc1234', date: iso })
+
+  test('no build at all reads as behind', () => {
+    const s = buildStatus('CornuCopia', null, mine)
+    expect(s).toMatchObject({ build: null, behind: true })
+    expect(s.behindNote).toContain('CornuCopia runs an older AgentHydra')
+  })
+
+  test('an older commit reads behind, naming its commit and date', () => {
+    const s = buildStatus('CornuCopia', at('2026-10-02T18:40:00.000Z'), mine)
+    expect(s.behind).toBe(true)
+    expect(s.behindNote).toContain('abc1234, Oct 2, 18:40 UTC')
+    expect(s.behindNote).toContain('Settings -> Update on that PC')
+  })
+
+  test('a newer commit says this PC is behind, and the same hour says nothing', () => {
+    const newer = buildStatus('CornuCopia', at('2026-10-04T00:00:00.000Z'), mine)
+    expect(newer.behind).toBe(false)
+    expect(newer.behindNote).toContain('This PC is behind CornuCopia')
+    expect(buildStatus('CornuCopia', at('2026-10-03T11:30:00.000Z'), mine)).toMatchObject({
+      behind: false,
+      behindNote: null,
+    })
   })
 })
 
@@ -230,6 +266,10 @@ describe('a pass through the store', () => {
     expect(answer.pcs).toHaveLength(1)
     expect(answer.pcs[0]).toMatchObject({ pc: other, name: 'OTHER-PC', stale: false })
     expect(answer.pcs[0].workers[0].title).toBe('their task')
+    // Their snapshot shares no build (an AgentHydra from before this field): it reads as behind. Ours does share one.
+    expect(answer.pcs[0]).toMatchObject({ build: null, behind: true })
+    expect(answer.pcs[0].behindNote).toContain('OTHER-PC runs an older AgentHydra')
+    expect(snap.build?.version).toBeTruthy()
     // Nothing of theirs became a worker here (other test files share this process's workers).
     expect(workers.has(answer.pcs[0].workers[0].id)).toBe(false)
     expect(workers.has('w-mine')).toBe(true)

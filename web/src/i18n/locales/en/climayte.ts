@@ -69,6 +69,8 @@ export default {
   remoteOn: 'On {name}',
   remoteOnStale: 'On {name}, last seen {n} min ago',
   remoteNote: 'Running on another PC: it can only be viewed here.',
+  // Seen from the owner's other PC: how long its task has been waiting (CliMayteView remoteWaited).
+  remoteWaited: 'waiting {d}',
   // The detail header's id chip (CliMayteWorkerDetail copyId): name a task in chat by it.
   copyId: "Copy this task's id, to name it in chat",
   idCopied: 'Copied',

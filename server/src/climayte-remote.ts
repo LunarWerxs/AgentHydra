@@ -41,13 +41,66 @@ export interface RemoteLive {
   at: number
 }
 
-/** What one PC shares: its queue and its live readings, as of `at`. */
+/** The AgentHydra build a PC runs: package version, short commit sha and the commit's ISO date. */
+export interface QueueBuild {
+  version: string
+  commit: string | null
+  date: string | null
+}
+
+/** What one PC shares: its queue and its live readings, as of `at`. `build` is absent from every
+ *  snapshot an older AgentHydra uploaded. */
 export interface QueueSnapshot {
   pc: string
   name: string
   at: number
   workers: RemoteWorker[]
   live: Record<string, RemoteLive>
+  build?: QueueBuild | null
+}
+
+/** A PC whose commit is older than this one's by more than this reads as behind. */
+export const BEHIND_MS = 60 * 60_000
+
+const fmtDate = (iso: string): string => {
+  const d = new Date(iso)
+  const mon = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${mon} ${d.getUTCDate()}, ${p(d.getUTCHours())}:${p(d.getUTCMinutes())} UTC`
+}
+
+/** Whether the other PC runs an older (or newer) AgentHydra than this one, and the one line saying so. */
+export function buildStatus(
+  name: string,
+  theirs: QueueBuild | null | undefined,
+  mine: QueueBuild | null,
+): { build: QueueBuild | null; behind: boolean; behindNote: string | null } {
+  const build = theirs ?? null
+  const label = build
+    ? `${build.commit ?? `v${build.version}`}${build.date ? `, ${fmtDate(build.date)}` : ''}`
+    : ''
+  if (!build)
+    return {
+      build: null,
+      behind: true,
+      behindNote: `${name} runs an older AgentHydra (its build is not shown); its waits and placement can be wrong until it updates (Settings -> Update on that PC).`,
+    }
+  const t = build.date ? Date.parse(build.date) : Number.NaN
+  const m = mine?.date ? Date.parse(mine.date) : Number.NaN
+  if (Number.isNaN(t) || Number.isNaN(m)) return { build, behind: false, behindNote: null }
+  if (m - t > BEHIND_MS)
+    return {
+      build,
+      behind: true,
+      behindNote: `${name} runs an older AgentHydra (${label}); its waits and placement can be wrong until it updates (Settings -> Update on that PC).`,
+    }
+  if (t - m > BEHIND_MS)
+    return {
+      build,
+      behind: false,
+      behindNote: `This PC is behind ${name} (${label}): update this AgentHydra (Settings -> Update).`,
+    }
+  return { build, behind: false, behindNote: null }
 }
 
 const remote = new Map<string, { version: number; snap: QueueSnapshot }>()

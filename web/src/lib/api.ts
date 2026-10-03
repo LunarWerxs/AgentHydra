@@ -1142,6 +1142,12 @@ export interface CliMayteRemotePc {
   at: number
   stale: boolean
   workers: CliMayteRemoteWorker[]
+  /** The AgentHydra build that PC runs; null from a build that does not share it. */
+  build: { version: string; commit: string | null; date: string | null } | null
+  /** That PC runs older code than this one (or shares no build at all). */
+  behind: boolean
+  /** One line saying so (or that this PC is behind); null when the builds match. */
+  behindNote: string | null
 }
 export const getCliMayteRemote = () =>
   j<{ enabled: boolean; pcs: CliMayteRemotePc[] }>('/api/corch/remote')

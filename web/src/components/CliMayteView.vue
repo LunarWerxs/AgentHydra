@@ -93,6 +93,8 @@ const workers = ref<CliMayteWorkerView[]>([])
 const remoteRows = ref<ListRow[]>([])
 /** Every row the list shows: this PC's workers, then the other PCs'. */
 const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value])
+/** One warning line per other PC whose build differs from this one's (its `behindNote`). */
+const remoteNotes = ref<Array<{ pc: string; note: string }>>([])
 /** Local and remote ids may match, so a row is selected by this key, never its bare id. */
 const rowKey = (w: ListRow) => (w.remote ? `${w.remote.pc}/${w.id}` : w.id)
 /** Manager waves (GET /api/corch/waves; none when the route is missing). */
@@ -287,6 +289,10 @@ async function load(opts: { silent?: boolean } = {}) {
         ? remote.pcs.flatMap((pc) => pc.workers.map((r) => remoteRow(pc, r)))
         : []
       remoteRows.value = reconcileList(remoteRows.value, next, rowKey)
+      const notes = remote.enabled
+        ? remote.pcs.flatMap((pc) => (pc.behindNote ? [{ pc: pc.pc, note: pc.behindNote }] : []))
+        : []
+      if (!sameData(remoteNotes.value, notes)) remoteNotes.value = notes
     }
     if (!sameData(totals.value, sums)) totals.value = sums
     if (score && !sameData(scorecard.value, score)) scorecard.value = score
@@ -422,6 +428,14 @@ function activeLabel(totalS: number): string {
   return t('climayte.activeDays', { d: Math.floor(h / 24), h: h % 24 })
 }
 
+/** "waiting 3h 12m" for another PC's waiting task: since its last change, which is when it began to wait. */
+function remoteWaited(w: ListRow): string | null {
+  if (!w.remote || w.status !== 'waiting') return null
+  return t('climayte.remoteWaited', {
+    d: activeLabel(Math.max(60, (now.value - w.updatedAt) / 1000)),
+  })
+}
+
 /** The row's hover: the title in full, its account, and the one line that needs attention (a
  *  failure's reason, what a waiting or re-queued task waits for, what a running one is doing). */
 function rowHint(w: ListRow): string {
@@ -451,6 +465,7 @@ function rowHint(w: ListRow): string {
     w.account ?? t('climayte.noAccount'),
     ...runs,
     line,
+    remoteWaited(w),
     t('climayte.rowActiveHint', { d: activeLabel(activeS(w)) }),
     new Date(w.createdAt).toLocaleString(),
   ]
@@ -629,6 +644,16 @@ onUnmounted(() => {
             {{ $t('climayte.staleBanner') }}
           </p>
 
+          <p
+            v-for="n in remoteNotes"
+            :key="n.pc"
+            role="status"
+            class="mx-3 mb-2 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
+          >
+            <Cloud class="size-3.5 shrink-0" aria-hidden="true" />
+            {{ n.note }}
+          </p>
+
           <div v-if="rows.length" class="flex flex-col gap-1.5 px-3 pb-2">
             <label class="flex cursor-pointer items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>
@@ -773,6 +798,9 @@ onUnmounted(() => {
         </div>
         <p v-if="selectedRemote.lastActivity" class="wrap-break-word text-xs text-muted-foreground">
           {{ selectedRemote.lastActivity }}
+        </p>
+        <p v-if="remoteWaited(selectedRemote)" class="text-xs text-warning">
+          {{ remoteWaited(selectedRemote) }}
         </p>
         <pre
           v-if="selectedRemote.error"
