@@ -32,7 +32,7 @@ import {
   X,
 } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
-import { computed, createApp, getCurrentInstance, onMounted, onUnmounted, ref } from 'vue'
+import { computed, createApp, getCurrentInstance, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliMayteFloat from '@/components/CliMayteFloat.vue'
@@ -80,6 +80,8 @@ import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
 const { pipWindow, isOpen: floatIsOpen, open: openFloat, close: closeFloat } = useCliMayteFloat()
+
+let floatApp: ReturnType<typeof createApp> | null = null
 
 /** A row of the list: a local worker, or (with `remote`) one another PC sharing the queue shows,
  *  read-only. `remote` is the one flag that tells them apart; it is never set on a local worker. */
@@ -337,8 +339,17 @@ function select(w: ListRow) {
   if (!w.remote) void loadDetail()
 }
 
+function updateFloatContent() {
+  // Update the float with current workers and time (called by watcher)
+  // The component is reactive, so when data changes, it will update
+}
+
 async function toggleFloat() {
   if (floatIsOpen.value) {
+    if (floatApp) {
+      floatApp.unmount()
+      floatApp = null
+    }
     closeFloat()
   } else {
     const instance = getCurrentInstance()
@@ -359,26 +370,38 @@ async function toggleFloat() {
     if (success && pipWindow.value) {
       const rootElement = pipWindow.value.document.getElementById('pip-root')
       if (rootElement) {
-        const app = createApp({
+        const appData = {
+          workers: workers.value,
+          now: now.value,
+          onRowClick: (id: string) => {
+            const w = workers.value.find((x) => x.id === id)
+            if (w) select(w)
+          },
+        }
+
+        floatApp = createApp({
           template: `<CliMayteFloat :workers="workers" :now="now" :onRowClick="onRowClick" />`,
           components: { CliMayteFloat },
           data() {
-            return {
-              workers: workers.value,
-              now: now.value,
-              onRowClick: (id: string) => {
-                const w = workers.value.find((x) => x.id === id)
-                if (w) select(w)
-              },
-            }
+            return appData
           },
         })
 
         if (i18n) {
-          app.use(i18n as any)
+          floatApp.use(i18n as any)
         }
 
-        app.mount(rootElement)
+        floatApp.mount(rootElement)
+
+        // Update the app data reactively when workers or now changes
+        watch([workers, now], () => {
+          if (floatApp) {
+            Object.assign(appData, {
+              workers: workers.value,
+              now: now.value,
+            })
+          }
+        })
       }
     }
   }
