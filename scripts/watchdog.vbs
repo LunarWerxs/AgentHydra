@@ -3,5 +3,9 @@
 ' 2026-09-01: "something just keeps running a bun executable over and over again and it's
 ' getting annoying"). Same check, same cadence, zero windows - the same wscript pattern
 ' Supervisor-Tick.vbs and the orchestrator's job shims already use.
+' watchdog.mjs is resolved beside this file, so the task follows whichever checkout it points
+' at (the live checkout, docs/LIVE-CHECKOUT.md) instead of a hard-coded path.
 Set sh = CreateObject("WScript.Shell")
-sh.Run """" & sh.ExpandEnvironmentStrings("%USERPROFILE%") & "\.bun\bin\bun.exe"" ""D:\PublicProjects\AgentHydra\app\scripts\watchdog.mjs""", 0, True
+Set fso = CreateObject("Scripting.FileSystemObject")
+mjs = fso.GetParentFolderName(WScript.ScriptFullName) & "\watchdog.mjs"
+sh.Run """" & sh.ExpandEnvironmentStrings("%USERPROFILE%") & "\.bun\bin\bun.exe"" """ & mjs & """", 0, True

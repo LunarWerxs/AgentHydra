@@ -69,9 +69,10 @@ def account_names() -> dict[str, str]:
     out: dict[str, str] = {}
     try:
         import json as _json
+        import os as _os
         from pathlib import Path as _Path
-        raw = _json.loads((_Path(__file__).resolve().parent.parent / "state"
-                           / "usage-survey.json").read_text(encoding="utf-8"))
+        state = _os.environ.get("ORCHESTRATOR_STATE_DIR") or (_Path(__file__).resolve().parent.parent / "state")
+        raw = _json.loads((_Path(state) / "usage-survey.json").read_text(encoding="utf-8"))
         for row in (raw.get("survey") or {}).get("rows") or []:
             label = str(((row.get("result") or {}).get("snapshot") or {}).get("account") or "")
             name = label.split("<")[0].strip()

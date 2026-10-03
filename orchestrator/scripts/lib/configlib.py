@@ -42,7 +42,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-STATE = Path(__file__).resolve().parent.parent.parent / "state"
+# ORCHESTRATOR_STATE_DIR wins, as in ledgerlib: with it set, the policy lives with the rest of the
+# state wherever the checkout is (docs/LIVE-CHECKOUT.md). Read once, at import.
+STATE = Path(os.environ.get("ORCHESTRATOR_STATE_DIR") or (Path(__file__).resolve().parent.parent.parent / "state"))
 CONFIG_PATH = Path(os.environ.get("ORCH_CONFIG") or (STATE / "config.json"))
 
 

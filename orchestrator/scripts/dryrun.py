@@ -39,6 +39,7 @@ Exit:  0 every run clean and self-consistent - 2 runs failed, flapped, or the ma
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -48,7 +49,8 @@ from lib import clilib
 
 REPO = Path(__file__).resolve().parent.parent
 ORCH = REPO / "orch.py"
-REPORTS = REPO / "state" / "dryruns"
+# The state dir follows ORCHESTRATOR_STATE_DIR like every lib (one state dir, whichever checkout runs).
+REPORTS = Path(os.environ.get("ORCHESTRATOR_STATE_DIR") or (REPO / "state")) / "dryruns"
 
 # The policy variants --matrix walks: (name, overrides, expectation).
 #
@@ -341,7 +343,6 @@ def run_matrix(runs_each: int) -> dict:
     """One dry loop per policy variant, each in a subprocess with ORCH_CONFIG pointed at a
     throwaway file - the owner's real state/config.json is never touched, read or written by
     this. The assertion is that a variant CHANGES SOMETHING a person can see."""
-    import os
     import tempfile
 
     out = []

@@ -174,6 +174,15 @@ class WrapperTest(unittest.TestCase):
         self.assertIn("already serving", body)
         self.assertIn("dashboard.py", body)
 
+    def test_wrapper_pins_the_state_dir_it_was_written_for(self):
+        # A job started from the live checkout must not fall back to that checkout's own
+        # state/ (docs/LIVE-CHECKOUT.md): the one state dir travels inside the wrapper, set
+        # before the job body runs.
+        body = schedule_jobs.write_wrapper("reconcile", schedule_jobs.JOBS["reconcile"]).read_text(encoding="utf-8")
+        pin = f'set "ORCHESTRATOR_STATE_DIR={self._tmp.name}"'
+        self.assertIn(pin, body)
+        self.assertLess(body.index(pin), body.index("call :main"))
+
     def test_reconcile_job_never_retries_unattended(self):
         # AH-16: a lock-carrying job's own command now lives in its .work.cmd (run_locked.py
         # runs that file while holding the job lock); the main wrapper only names that path.
