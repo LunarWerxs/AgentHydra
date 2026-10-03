@@ -511,6 +511,7 @@ function noteLaunch(
   w.status = 'running'
   w.error = null
   w.notBefore = null
+  delete w.heldForResetSince
   changed(w)
 }
 

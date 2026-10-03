@@ -207,7 +207,7 @@ function holdForRoom(
  *  When to start instead, or nothing when the task need not wait. */
 function cooldownFor(
   s: TickState,
-  w: Pick<CliMayteWorker, 'accounts' | 'priority'>,
+  w: Pick<CliMayteWorker, 'accounts' | 'priority' | 'heldForResetSince'>,
   acct: CliMayteAccount,
   allowed: CliMayteAccount[],
   groupActive: Map<string, number>,
@@ -237,7 +237,11 @@ function cooldownFor(
       })),
     expected,
     s.now,
-    { home: atHome, priority: w.priority ?? 0 },
+    {
+      home: atHome,
+      priority: w.priority ?? 0,
+      heldSince: w.heldForResetSince ? Date.parse(w.heldForResetSince) : null,
+    },
   )
 }
 
@@ -250,7 +254,7 @@ interface Refusal {
 
 function refusalOn(
   s: TickState,
-  w: Pick<CliMayteWorker, 'accounts' | 'priority'>,
+  w: Pick<CliMayteWorker, 'accounts' | 'priority' | 'heldForResetSince'>,
   acct: CliMayteAccount,
   allowed: CliMayteAccount[],
   groupActive: Map<string, number>,
@@ -285,6 +289,7 @@ function holdForReset(
   now: number,
 ): void {
   const until = new Date(cooldown).toISOString()
+  w.heldForResetSince ??= new Date(now).toISOString()
   const head = `Waiting for a reset: ${acctLabel(acct)} has used ${Math.round(acct.weekPct ?? 0)}% of its week with ${Math.round(weekPacePct(acct, now) ?? 0)}% of the week gone`
   const why = `${head}, and an account this task fits refills its 5-hour window at ${new Date(cooldown).toLocaleTimeString()}. It starts then (or sooner, where room opens); other tasks keep going meanwhile, and priority work never waits.`
   if (w.status !== 'waiting' || !w.error?.startsWith(head) || w.waitUntil !== until) {

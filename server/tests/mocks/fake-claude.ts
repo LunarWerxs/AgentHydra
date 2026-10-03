@@ -91,7 +91,12 @@ function findTranscript(): string | null {
 }
 
 if (existsSync(join(configDir, 'fake-quota'))) {
-  const notice = "You've hit your session limit · resets 4am"
+  // Three hours out, its zone named. A fixed "resets 4am" is 04:00Z under bun test, so from 03:30Z
+  // every night the wall was within the 30-minute wait-at-home window and the move never came.
+  const at = new Date(Date.now() + 3 * 3600_000)
+  const h = at.getUTCHours()
+  const clock = `${h % 12 || 12}:${String(at.getUTCMinutes()).padStart(2, '0')}${h < 12 ? 'am' : 'pm'}`
+  const notice = `You've hit your session limit · resets ${clock} (UTC)`
   const dir = join(configDir, 'projects', 'fake-proj')
   mkdirSync(dir, { recursive: true })
   const wall = {

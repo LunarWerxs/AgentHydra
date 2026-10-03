@@ -192,6 +192,9 @@ export interface CliMayteWorker {
   /** While waiting: when it expects to start (ISO, UTC), the first account's limit or reset that
    *  lets it; absent or null when not known. A waiter reads this, never the error text's local time. */
   waitUntil?: string | null
+  /** When it was first held for another account's refill this turn (ISO): the hold ends one
+   *  COOLDOWN_WAIT_MS later however many refills come (waitsForCooldown). Cleared at launch. */
+  heldForResetSince?: string | null
   revived?: boolean // a message revived it after it stopped: deliver that message next
   sessions?: string[] // earlier sessions of this task, oldest first (each handoff starts a new one)
   /** The kind of work (climayte-scorecard CLIMAYTE_KINDS): the scorecard learns what each kind needs. */

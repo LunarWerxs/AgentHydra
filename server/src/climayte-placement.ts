@@ -229,15 +229,19 @@ export type CooldownTarget = Pick<
  *  the resets of #101, #102, #98 and #103, which sat at 0-44% with free slots, then started at the
  *  same readings they had while held). The caller tries the task's next account before it holds
  *  (climayte-schedule scheduleWorker). Never held: a session going on at home (warm cache) and
- *  priority work. */
+ *  priority work. Nor held past COOLDOWN_WAIT_MS in all (`heldSince`, when its first hold began):
+ *  other work takes each refilled account first, and a task kept waiting for the next one, then the
+ *  next, never started (2026-10-03: two 4% tasks waited 30 minutes while the reset they named slid
+ *  from 10:29 to 10:41). */
 export function waitsForCooldown(
   chosen: Pick<CliMayteAccount, 'id' | 'weekPct' | 'weekResetsAt'>,
   others: CooldownTarget[],
   expected: number,
   now: number,
-  opts: { home: boolean; priority: number },
+  opts: { home: boolean; priority: number; heldSince?: number | null },
 ): number | null {
   if (opts.home || opts.priority > 0) return null
+  if (opts.heldSince != null && now - opts.heldSince >= COOLDOWN_WAIT_MS) return null
   const gap = paceGap(chosen, now)
   if (gap === null || gap <= PACE_BAND) return null
   const fitsNow = (a: CooldownTarget): boolean =>

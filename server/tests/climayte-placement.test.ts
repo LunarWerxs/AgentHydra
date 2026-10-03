@@ -108,6 +108,14 @@ describe('waitsForCooldown', () => {
     // Priority work and a session at home never wait.
     expect(waitsForCooldown(max5, [pro(12)], 20, now, { home: false, priority: 1 })).toBeNull()
     expect(waitsForCooldown(max5, [pro(12)], 20, now, { home: true, priority: 0 })).toBeNull()
+    // Held a whole cooldown window already, other work having taken each refill: it starts now
+    // (2026-10-03: two small tasks waited 30 minutes for a reset that kept sliding later).
+    expect(
+      waitsForCooldown(max5, [pro(12)], 20, now, { ...go, heldSince: now - 30 * 60_000 }),
+    ).toBeNull()
+    expect(waitsForCooldown(max5, [pro(12)], 20, now, { ...go, heldSince: now - 60_000 })).toBe(
+      now + 12 * 60_000,
+    )
   })
 })
 
