@@ -59,6 +59,13 @@ def test_usage_from_api_shapes():
     assert (u2.hit, u2.miss) == (100, 200)
 
 
+def test_cache_tokens_are_billed_at_their_own_prices():
+    # Opus 5.5 direct: 0.2 cache read, 4.0 input, 5.0 cache write, 20 output (USD per 1M).
+    u = Usage.from_api({"prompt_tokens": 3_000_000, "completion_tokens": 1_000_000, "prompt_tokens_details": {"cached_tokens": 1_000_000, "cache_write_tokens": 1_000_000}})
+    assert (u.hit, u.miss, u.write) == (1_000_000, 2_000_000, 1_000_000)
+    assert config.cost_usd("rank:claude-opus-5-5:direct", u.hit, u.miss, u.out, write=u.write) == pytest.approx(0.2 + 4.0 + 5.0 + 20.0)
+
+
 def test_chat_body_keeps_only_given_options():
     b = _body("deepseek-flash", [{"role": "user", "content": "x"}], tools=None, tool_choice=None, max_tokens=16000, thinking=False, reasoning_effort="low", response_format=None, user="", stop=None)
     assert b == {"model": "deepseek-flash", "messages": [{"role": "user", "content": "x"}], "thinking": {"type": "disabled"}, "max_tokens": 16000, "reasoning_effort": "low"}

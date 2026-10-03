@@ -46,7 +46,9 @@ class Usage:
         miss = int(u.get("prompt_cache_miss_tokens") or max(0, int(u.get("prompt_tokens") or 0) - hit))
         out = int(u.get("completion_tokens") or 0)
         reasoning = int((u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
-        return Usage(hit, miss, out, reasoning)
+        # OpenRouter-shaped usage reports the part of the prompt written to the cache; it is billed at the write rate.
+        write = min(int((u.get("prompt_tokens_details") or {}).get("cache_write_tokens") or 0), miss)
+        return Usage(hit, miss, out, reasoning, write)
 
 
 @dataclass

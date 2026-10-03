@@ -1059,7 +1059,7 @@ def _chat_result(r: httpx.Response, attempts: int, model: str, t0: float, upstre
     return ChatResult(
         message=choice.get("message") or {}, finish_reason=choice.get("finish_reason") or "", usage=usage, model=model,
         seconds=time.perf_counter() - t0,
-        cost_usd=reported if reported is not None else config.cost_usd(model, usage.hit, usage.miss, usage.out, now),
+        cost_usd=reported if reported is not None else config.cost_usd(model, usage.hit, usage.miss, usage.out, now, write=usage.write),
         peak=config.is_peak(now), attempts=attempts, raw=data,
     )
 
