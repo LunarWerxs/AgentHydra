@@ -628,8 +628,9 @@ async def hswarm_savings(days: int = 14, include_today: bool = False) -> dict:
 @_served
 @_returns_errors
 async def hswarm_sync(push: bool = True, restore: bool = False) -> dict:
-    """Sync this machine's utilization ledger with the fleet: pull the other machines' shards from this repo's
-    `sync` branch, import them, export ours, regenerate TOTALS.md (the running total), commit and push.
+    """Sync this machine's utilization ledger with the fleet: pull the other machines' shards from the `sync` branch
+    of the private repo HSWARM_SYNC_REPO names (off when unset), import them, export ours, regenerate TOTALS.md (the
+    running total), commit and push.
     restore=true first reads THIS machine's own shard back, rebuilding the ledger after a lost ~/.hswarm."""
     out = await asyncio.to_thread(utilization.restore) if restore else {}
     return {**({"restore": out} if restore else {}), **await asyncio.to_thread(utilization.sync, push)}

@@ -14,8 +14,9 @@ the numbers of its day. A caller whose model is unknown (a CLI run) is priced at
 the cheapest a sub-agent is allowed to be, and the row's `basis` says so.
 
 Sync: the DB stays machine-local; what travels is one shard per machine, `<machine>.jsonl`, on the
-`sync` branch of this repo, checked out as a worktree under ~/.hswarm/sync-tree so the code checkout is
-never touched. Two machines never write the same file, so nothing ever conflicts. `hswarm sync` pulls,
+`sync` branch of the private repo HSWARM_SYNC_REPO names (a local clone; never this package's own repo,
+which is public, while a shard carries project paths, session ids and labels), checked out as a worktree
+under ~/.hswarm/sync-tree so no code checkout is touched. With it unset, sync is off. Two machines never write the same file, so nothing ever conflicts. `hswarm sync` pulls,
 imports the other shards, exports this one, regenerates TOTALS.md (the fleet running total, readable
 on GitHub) and pushes; the daily savings task does the same.
 """
@@ -1005,20 +1006,38 @@ Checked out as a worktree under ~/.hswarm/sync-tree on each machine; never edit 
 """
 
 
+def sync_repo() -> Path:
+    """The private clone the sync branch lives in (HSWARM_SYNC_REPO). HSwarm ships inside the public AgentHydra repo,
+    and under ZSwarm this was the package's own (private) repo: deriving it from the package would publish every
+    machine's shard. RuntimeError, which every sync caller reports as a note, when it is unset or is that repo."""
+    raw = os.environ.get("HSWARM_SYNC_REPO", "").strip()
+    if not raw:
+        raise RuntimeError("sync is off: set HSWARM_SYNC_REPO to a local clone of a PRIVATE git repo "
+                           "(a shard carries project paths, session ids and labels)")
+    repo = Path(raw).expanduser().resolve()
+    if not (repo / ".git").exists():
+        raise RuntimeError(f"sync is off: HSWARM_SYNC_REPO {repo} is not a git checkout")
+    own = _git(REPO, "remote", "get-url", "origin").stdout.strip()
+    if repo == REPO.resolve() or (own and _git(repo, "remote", "get-url", "origin").stdout.strip() == own):
+        raise RuntimeError("sync is off: HSWARM_SYNC_REPO is HSwarm's own (public) repo; name a private one")
+    return repo
+
+
 def ensure_sync_tree() -> Path:
     """The worktree for the sync branch: attached to origin/sync when it exists, else started from an empty tree."""
+    repo = sync_repo()
     t = sync_dir()
     if (t / ".git").exists():
         return t
-    _git(REPO, "worktree", "prune")
-    _git(REPO, "fetch", "--quiet", "origin", SYNC_BRANCH)  # may fail: the branch does not exist until the first machine pushes
-    if _git(REPO, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{SYNC_BRANCH}").returncode == 0:
-        _git(REPO, "worktree", "add", "--quiet", "-B", SYNC_BRANCH, str(t), f"origin/{SYNC_BRANCH}", check=True)
+    _git(repo, "worktree", "prune")
+    _git(repo, "fetch", "--quiet", "origin", SYNC_BRANCH)  # may fail: the branch does not exist until the first machine pushes
+    if _git(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{SYNC_BRANCH}").returncode == 0:
+        _git(repo, "worktree", "add", "--quiet", "-B", SYNC_BRANCH, str(t), f"origin/{SYNC_BRANCH}", check=True)
         _git(t, "branch", "--quiet", "--set-upstream-to", f"origin/{SYNC_BRANCH}", SYNC_BRANCH)
     else:
-        empty_tree = _git(REPO, "hash-object", "-t", "tree", "--stdin", check=True, input_text="").stdout.strip()
-        root = _git(REPO, "commit-tree", empty_tree, "-m", "sync: shard branch for hswarm utilization ledgers", check=True).stdout.strip()
-        _git(REPO, "worktree", "add", "--quiet", "-B", SYNC_BRANCH, str(t), root, check=True)
+        empty_tree = _git(repo, "hash-object", "-t", "tree", "--stdin", check=True, input_text="").stdout.strip()
+        root = _git(repo, "commit-tree", empty_tree, "-m", "sync: shard branch for hswarm utilization ledgers", check=True).stdout.strip()
+        _git(repo, "worktree", "add", "--quiet", "-B", SYNC_BRANCH, str(t), root, check=True)
     if not (t / "README.md").exists():
         (t / "README.md").write_text(SYNC_README, encoding="utf-8")
     return t
