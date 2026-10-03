@@ -27,7 +27,6 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 // biome-ignore lint/style/useImportType: used as a component in the template, which Biome cannot see; a type-only import left the search box an unstyled <input>
 import { Input } from '@/components/ui/input'
-import { useShellWidth } from '@/composables/useShellWidth'
 import { useHswarmApi } from '@/lib/hswarm-api'
 import HSwarmClients from './hswarm/HSwarmClients.vue'
 import HSwarmJobs from './hswarm/HSwarmJobs.vue'
@@ -39,8 +38,6 @@ import HSwarmSavings from './hswarm/HSwarmSavings.vue'
 import HSwarmTools from './hswarm/HSwarmTools.vue'
 
 const { t } = useI18n()
-// The console uses the whole window; the base shell is 1000px, which leaves the page pane 700px.
-const { fullWidth: shellWide } = useShellWidth()
 const { status, error, loading, state, fetchStatus, fetchState, refresh, apiCall } = useHswarmApi()
 
 type Dot = 'ok' | 'warn' | 'nokey' | 'off' | 'run' | 'bad'
@@ -530,7 +527,6 @@ async function askIcons() {
 }
 
 onMounted(async () => {
-  shellWide.value = true
   window.addEventListener('keydown', onGlobalKey)
   await fetchStatus()
   if (status.value?.running) {
@@ -542,7 +538,6 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKey)
-  shellWide.value = false
 })
 
 async function handleRefresh() {
