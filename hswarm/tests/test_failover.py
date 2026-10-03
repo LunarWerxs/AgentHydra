@@ -793,15 +793,15 @@ def test_a_task_replying_every_turn_is_never_listed_quiet_and_a_silent_one_is(mo
             self.turns = 0
 
         async def chat(self, messages, **kw):
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.15)
             self.turns += 1
             if self.turns <= 8:
                 call = {"id": f"c{self.turns}", "type": "function",
                         "function": {"name": "read_file", "arguments": '{"path": "f%d.txt"}' % (self.turns - 1)}}
                 return ChatResult(message={"role": "assistant", "content": "", "tool_calls": [call]}, finish_reason="tool_calls",
-                                  usage=Usage(), model="m", seconds=0.05, cost_usd=0.0, peak=False)
+                                  usage=Usage(), model="m", seconds=0.15, cost_usd=0.0, peak=False)
             return ChatResult(message={"role": "assistant", "content": "done"}, finish_reason="stop", usage=Usage(),
-                              model="m", seconds=0.05, cost_usd=0.0, peak=False)
+                              model="m", seconds=0.15, cost_usd=0.0, peak=False)
 
     class Silent:
         pool = None
@@ -809,7 +809,9 @@ def test_a_task_replying_every_turn_is_never_listed_quiet_and_a_silent_one_is(mo
         async def chat(self, messages, **kw):
             await asyncio.sleep(30)
 
-    monkeypatch.setattr(config, "QUIET_TASK_S", 0.2)
+    # Replies 0.15 s apart against a 1 s quiet bar: quiet ages round to 0.1 s, so 0.05 s against 0.2 s left a busy box
+    # one 0.1 s scheduling stall from a false "quiet" (seen under a loaded full-suite run, 2026-10-03).
+    monkeypatch.setattr(config, "QUIET_TASK_S", 1.0)
     monkeypatch.setattr(dispatch, "plan_for", lambda task, explain=False: {"profile": "general", "candidates": [
         {"model": "rank:glm-5-3:nvidia", "provider": "nvidia", "free": True}]})
     monkeypatch.setattr(dispatch, "rescue_legs", lambda task, plan: [])
@@ -839,9 +841,9 @@ def test_a_task_replying_every_turn_is_never_listed_quiet_and_a_silent_one_is(mo
 
     job, samples = asyncio.run(watch(Steady(), 5))
     assert job.results["t"].status == "ok" and job.results["t"].turns == 9, job.results["t"]
-    assert any(t > 0.3 for t, _ in samples), samples  # it ran past QUIET_TASK_S
+    assert any(t > 1.1 for t, _ in samples), samples  # it ran past QUIET_TASK_S
     assert not any(q for _, q in samples), samples  # and replying all the while, it was never quiet
-    _, samples = asyncio.run(watch(Silent(), 0.4))
+    _, samples = asyncio.run(watch(Silent(), 1.4))
     assert "t" in samples[-1][1], samples  # no reply at all: quiet
 
 
