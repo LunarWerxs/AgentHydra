@@ -305,6 +305,13 @@ function formatUSD(value: number): string {
   return `$${value.toFixed(2)}`
 }
 
+// Short y-axis label: $1.2K from 1,000 up, whole dollars when the value is whole, cents otherwise.
+function formatUSDAxis(value: number): string {
+  if (value >= 1000) return `$${Number((value / 1000).toFixed(1))}K`
+  if (Number.isInteger(value)) return `$${value}`
+  return formatUSD(value)
+}
+
 // Format compact number
 function formatNumber(value: number): string {
   if (value < 1000) return String(value)
@@ -436,6 +443,7 @@ function formatPercent(value: number): string {
             v-else
             :points="spendChartData"
             :format="formatUSD"
+            :axis-format="formatUSDAxis"
             :label-at="(ms) => new Date(ms).toLocaleDateString()"
             value-label="Spend"
             change-label="Daily"

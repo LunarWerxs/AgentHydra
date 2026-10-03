@@ -24,6 +24,8 @@ import { areaPath, axisMax, linePath, ticks } from '@/lib/chart'
 const props = defineProps<{
   points: Array<{ at: number; value: number }>
   format: (n: number) => string
+  /** A shorter formatter for the y-axis labels only; the tooltip keeps `format`. */
+  axisFormat?: (n: number) => string
   labelAt: (ms: number) => string
   valueLabel: string
   changeLabel: string
@@ -31,7 +33,9 @@ const props = defineProps<{
 }>()
 
 const H = 150
-const PAD_L = 34
+const PAD_L_MIN = 34
+/** Width of one axis-label glyph in viewBox units (text-3xs, tabular figures), rounded up. */
+const GLYPH_W = 5.6
 const PAD_B = 16
 const plotH = H - PAD_B
 
@@ -43,10 +47,17 @@ const W = computed(() => Math.max(320, Math.floor(width.value || 720)))
 
 const max = computed(() => axisMax(Math.max(0, ...props.points.map((p) => p.value))))
 const axisTicks = computed(() => ticks(max.value))
+const axisText = (n: number) => (props.axisFormat ?? props.format)(n)
+/** The left margin grows with the widest y-label, so a value like $600.00 is never clipped by the
+ *  svg edge (the labels are right-anchored at PAD_L - 6 and run leftwards). */
+const PAD_L = computed(() => {
+  const widest = Math.max(0, ...axisTicks.value.map((t) => axisText(t).length))
+  return Math.max(PAD_L_MIN, Math.ceil(widest * GLYPH_W) + 10)
+})
 const xy = computed(() => {
   const n = Math.max(1, props.points.length - 1)
   return props.points.map((p, i) => ({
-    x: PAD_L + (i / n) * (W.value - PAD_L),
+    x: PAD_L.value + (i / n) * (W.value - PAD_L.value),
     y: plotH - (p.value / max.value) * plotH,
   }))
 })
@@ -79,7 +90,7 @@ function onMove(e: MouseEvent) {
   // One unit per pixel, so this is a direct read rather than a scale.
   const local = e.clientX - rect.left
   const n = Math.max(1, props.points.length - 1)
-  const i = Math.round(((local - PAD_L) / (W.value - PAD_L)) * n)
+  const i = Math.round(((local - PAD_L.value) / (W.value - PAD_L.value)) * n)
   hover.value = Math.min(props.points.length - 1, Math.max(0, i))
   tip.value = { x: e.clientX, y: e.clientY }
 }
@@ -113,7 +124,7 @@ function onMove(e: MouseEvent) {
         :y="plotH - (t / max) * plotH + 3"
         text-anchor="end"
         class="fill-muted-foreground text-3xs tabular-nums"
-      >{{ format(t) }}</text>
+      >{{ axisText(t) }}</text>
 
       <path :d="areaPath(xy, plotH)" class="fill-(--viz-seq) opacity-14" />
       <path
