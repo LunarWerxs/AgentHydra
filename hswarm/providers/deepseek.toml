@@ -1,5 +1,4 @@
-# DeepSeek, direct. The first hswarm provider; its prices are PEAK rates and off-peak is exactly half
-# (DeepSeek pricing page, 2026-09). `balance_authority = "reading"`: its balance is its word on whether
+# DeepSeek, direct. The first hswarm provider; its prices (data/prices.json) are PEAK rates and off-peak is exactly half. `balance_authority = "reading"`: its balance is its word on whether
 # a call will be served, so a key reading zero is parked before a worker gets it.
 
 base_url = "https://api.deepseek.com"
@@ -19,7 +18,7 @@ docs = "https://api-docs.deepseek.com"
 [models.deepseek-flash]
 ctx = 1000000
 max_out = 384000
-peak = {hit = 0.006, miss = 0.3, out = 1.2}
+price_ref = "deepseek-flash"
 concurrency_limit = 2500
 aliases = ["deepseek-chat", "deepseek-v4-flash", "deepseek-v4.1-flash", "flash"]
 route = ["deepseek-flash", "deepseek-flash-or", "deepseek-flash-hf"]
@@ -28,7 +27,7 @@ route_cc = ["deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or"]
 [models.deepseek-v4-pro]
 ctx = 1000000
 max_out = 384000
-peak = {hit = 0.044, miss = 1.32, out = 3.96}
+price_ref = "deepseek-v4-pro"
 concurrency_limit = 500
 aliases = ["deepseek-reasoner", "pro"]
 

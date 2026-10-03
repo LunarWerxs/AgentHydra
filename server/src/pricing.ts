@@ -33,6 +33,8 @@
 // are half price and Claude Code does not make them. Both would need data the transcript does not
 // carry.
 
+import priceFile from '../../hswarm/data/prices.json'
+
 /** Per-million-token list prices for one model, in USD. */
 export interface ModelPrice {
   input: number
@@ -60,108 +62,39 @@ export const CACHE_READ_RATIO = 0.1
 export const CACHE_WRITE_5M_RATIO = 1.25
 export const CACHE_WRITE_1H_RATIO = 2
 
-/** The day this table was last checked against Anthropic's published pricing. Surfaced in the UI. */
-export const PRICES_AS_OF = '2026-09-30'
-
-// Keys are canonical (lowercased, date suffix stripped) model ids. Entries below the divider are
-// models that no longer take new traffic but still appear in an archived transcript.
-const PRICES: Record<string, ModelPrice> = {
-  // Every Anthropic row still listed at platform.claude.com/docs/en/about-claude/pricing was checked
-  // against it on 2026-09-30; the Claude 3.x rows below the divider are no longer on that page.
-  // In the 5.5 / 5.1 generation two publish a cache read below the 0.1x ratio: Opus 5.5 reads at
-  // $0.20 on a $4 input, Fable/Mythos 5.1 at $0.25 on $10, so it is stated outright. Sonnet 5.5's
-  // $0.20 on $2 is the ordinary ratio.
-  'claude-fable-5-1': { input: 10, output: 50, cacheReadUsd: 0.25 },
-  'claude-mythos-5-1': { input: 10, output: 50, cacheReadUsd: 0.25 },
-  'claude-opus-5-5': { input: 4, output: 20, cacheReadUsd: 0.2 },
-  'claude-sonnet-5-5': { input: 2, output: 10 },
-  'claude-fable-5': { input: 10, output: 50 },
-  'claude-mythos-5': { input: 10, output: 50 },
-  'claude-opus-5': { input: 5, output: 25 },
-  'claude-opus-4-8': { input: 5, output: 25 },
-  'claude-opus-4-7': { input: 5, output: 25 },
-  'claude-opus-4-6': { input: 5, output: 25 },
-  'claude-opus-4-5': { input: 5, output: 25 },
-  // Sonnet 5 launched at an introductory $2/$10 through 2026-08-31, and Anthropic then made that the
-  // standard price: the scheduled rise to $3/$15 on 2026-09-01 never happened (pricing page footnote,
-  // checked 2026-09-30). So $2/$10 is right for every turn on either side of the old cutover.
-  'claude-sonnet-5': { input: 2, output: 10 },
-  'claude-sonnet-4-6': { input: 3, output: 15 },
-  'claude-sonnet-4-5': { input: 3, output: 15 },
-  'claude-haiku-4-5': { input: 1, output: 5 },
-  // Kept for as long as past transcripts exist: retired model ids
-  // still appear in historical sessions/transcripts, and dropping them would price those turns as
-  // unknown.
-  // Retired model ids, kept so an earlier session still prices.
-  'claude-opus-4-1': { input: 15, output: 75 },
-  'claude-opus-4-0': { input: 15, output: 75 },
-  'claude-opus-4': { input: 15, output: 75 },
-  'claude-sonnet-4-0': { input: 3, output: 15 },
-  'claude-sonnet-4': { input: 3, output: 15 },
-  'claude-3-7-sonnet': { input: 3, output: 15 },
-  'claude-3-5-sonnet': { input: 3, output: 15 },
-  'claude-3-5-haiku': { input: 0.8, output: 4 },
-  'claude-3-haiku': { input: 0.25, output: 1.25 },
-  'claude-3-opus': { input: 15, output: 75 },
-
-  // --- OpenAI, as Codex writes the ids -----------------------------------------------------
-  //
-  // Codex records a bare model id (`gpt-5.6-sol`) in each rollout's `turn_context`. Cache rates
-  // follow the same shape as Anthropic's and are therefore derived: OpenAI bills a cached input
-  // token at 0.1x uncached, and — for GPT-5.6 and later only — a cache WRITE at 1.25x. Earlier
-  // generations create cache entries for free, which is `cacheWrite5mUsd: 0` rather than a missing
-  // entry, because "free" and "unknown" must not look the same. In practice Codex reports
-  // `cache_write_input_tokens: 0` on every turn observed here, so the write rate is defensive.
-  'gpt-5.6-sol': { input: 5, output: 30 },
-  'gpt-5.6-terra': { input: 2, output: 12 },
-  'gpt-5.6-luna': { input: 0.2, output: 1.2 },
-  'gpt-5.6-cyber': { input: 12.5, output: 75 },
-  'gpt-5.5': { input: 5, output: 30, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-  'gpt-5.5-pro': { input: 30, output: 180, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-  'gpt-5.4': { input: 2.5, output: 15, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-  'gpt-5.4-mini': { input: 0.75, output: 4.5, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-  'gpt-5.4-nano': { input: 0.2, output: 1.25, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-  'gpt-5.3-codex': { input: 1.75, output: 14, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-  'gpt-5.2': { input: 1.75, output: 14, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-  'gpt-5.1': { input: 1.25, output: 10, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-  'gpt-5.1-codex-mini': { input: 0.25, output: 2, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-  'gpt-5': { input: 1.25, output: 10, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-  'gpt-5-mini': { input: 0.25, output: 2, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-  'gpt-5-nano': { input: 0.05, output: 0.4, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
-
-  // --- DeepSeek, as the DeepSeek Harness writes the ids ---------------------------------------
-  //
-  // Read off api-docs.deepseek.com/quick_start/pricing on 2026-09-12. These are here and not left
-  // to the downloaded LiteLLM catalog because that catalog has no `deepseek-flash` key at all
-  // (checked against the cached copy on this machine: it carries deepseek-chat, deepseek-reasoner
-  // and deepseek-v4-*, but not the id DeepSeek's own first-party API reports), so every harness
-  // session would have read UNPRICED forever while a published rate sat one page away.
-  //
-  // ⛔ PEAK RATES, WHICH ARE THE LIST PRICES. DeepSeek halves them outside 01:00-04:00 and
-  // 06:00-10:00 UTC on weekdays, so a session run overnight was billed half of what this reports.
-  // The discount is NOT applied per turn even though a DSH transcript does timestamp every one:
-  // the window is DeepSeek's to change, a stale window would misprice silently, and this file's
-  // standing rule is list prices only (see rule 3 at the top). Read it as an upper bound.
-  //
-  // The cache rates are absolute, not derived: DeepSeek's cache HIT is 2% of its input rate rather
-  // than Anthropic's 10%, so deriving would overstate a cached token fivefold. There is no separate
-  // cache-WRITE charge at all — a miss is billed at the plain input rate — which is why the write
-  // rates equal the input rate instead of carrying the 1.25x premium.
-  'deepseek-flash': {
-    input: 0.3,
-    output: 1.2,
-    cacheReadUsd: 0.006,
-    cacheWrite5mUsd: 0.3,
-    cacheWrite1hUsd: 0.3,
-  },
-  'deepseek-v4-pro': {
-    input: 1.32,
-    output: 3.96,
-    cacheReadUsd: 0.044,
-    cacheWrite5mUsd: 1.32,
-    cacheWrite1hUsd: 1.32,
-  },
+/** One model's row in hswarm/data/prices.json, the single place a list price is written (hswarm/prices.py
+ *  reads the same file; tests/pricing-parity.test.ts proves both price alike). Rates are USD per million;
+ *  a cache rate left out is derived from `input` by the ratios above. */
+interface PriceFileRow {
+  input: number
+  output: number
+  cache_read?: number
+  cache_write_5m?: number
+  cache_write_1h?: number
+  intro?: { input: number; output: number; until: string }
 }
+
+/** The day the table was last checked against the published prices. Surfaced in the UI. */
+export const PRICES_AS_OF: string = priceFile.as_of
+
+// Keys are canonical (lowercased, date suffix stripped) model ids. The rows, their sources and check
+// dates, the retired Claude ids kept for archived transcripts, the OpenAI ids as Codex writes them and
+// DeepSeek's peak rates (the list price; the off-peak halving is NOT applied here, so read it as an upper
+// bound) all live in the file. Not modelled: Anthropic fast mode and batch pricing, because transcripts do
+// not record which turns used them.
+const PRICES: Record<string, ModelPrice> = Object.fromEntries(
+  Object.entries(priceFile.models as Record<string, PriceFileRow>).map(([id, r]) => [
+    id,
+    {
+      input: r.input,
+      output: r.output,
+      ...(r.intro && { intro: r.intro }),
+      ...(r.cache_read !== undefined && { cacheReadUsd: r.cache_read }),
+      ...(r.cache_write_5m !== undefined && { cacheWrite5mUsd: r.cache_write_5m }),
+      ...(r.cache_write_1h !== undefined && { cacheWrite1hUsd: r.cache_write_1h }),
+    } satisfies ModelPrice,
+  ]),
+)
 
 /**
  * A downloaded catalog, when one is in force. Consulted BEFORE the bundled table.

@@ -22,24 +22,17 @@ import json
 import os
 from pathlib import Path
 
+from . import prices
+
 PROJECTS = Path(os.environ.get("HSWARM_CLAUDE_PROJECTS") or (Path.home() / ".claude" / "projects"))
 LONG_PATH_PREFIX = "\\\\?\\" if os.name == "nt" else ""  # sub-agent transcripts nest past Windows' 260-char limit
 SUBAGENT_DIR = f"{os.sep}subagents{os.sep}"
 
-# (model-id prefix, USD per 1M input, per 1M output, cache-read multiplier): Anthropic first-party list
-# prices from the claude-api skill, checked 2026-09-15. Cache writes cost 1.25x input on the 5-minute TTL
-# and 2x on the 1-hour TTL. The first matching prefix wins, so a longer id sits above its shorter stem.
-PRICES = (
-    ("claude-fable-5-1", 10.0, 50.0, 0.025),
-    ("claude-fable-5", 10.0, 50.0, 0.1),
-    ("claude-opus-5", 5.0, 25.0, 0.1),
-    ("claude-opus-4-8", 5.0, 25.0, 0.1),
-    ("claude-opus-4-7", 5.0, 25.0, 0.1),
-    ("claude-opus-4-6", 5.0, 25.0, 0.1),
-    ("claude-sonnet-5", 2.0, 10.0, 0.1),
-    ("claude-sonnet-4-6", 3.0, 15.0, 0.1),
-    ("claude-haiku-4-5", 1.0, 5.0, 0.1),
-)
+# Prices come from data/prices.json through prices.py (exact id, no prefix match). PRICES below is only the
+# (prefix, in, out, cache-read multiplier) view the native scanners are handed (native.py); the longest id sorts first so a
+# stem never shadows a longer id. Their cache writes are the derived 1.25x / 2x, which every Claude row uses.
+PRICES = tuple(sorted(((k, e["input"], e["output"], prices.rates(e)["cache_read"] / e["input"])
+                       for k, e in prices.models().items() if k.startswith("claude-")), key=lambda r: -len(r[0])))
 TOKEN_FIELDS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")
 # The five buckets one Anthropic request bills, in the order the price formula weighs them.
 TOKEN_KEYS = ("input", "cache_read", "cache_5m", "cache_1h", "output")
@@ -60,12 +53,7 @@ def split_tokens(usage: dict) -> dict:
 
 def price_tokens(model: str, t: dict) -> float | None:
     """API-equivalent USD of the token buckets on `model`; None for a model with no known price ("not measured", never zero)."""
-    match = next((p for p in PRICES if model.startswith(p[0])), None)
-    if match is None:
-        return None
-    _, inp, out, read_x = match
-    weighted_in = t["input"] + t["cache_read"] * read_x + t["cache_5m"] * 1.25 + t["cache_1h"] * 2.0
-    return (weighted_in * inp + t["output"] * out) / 1_000_000
+    return prices.cost(model, t)
 
 
 def price_request(model: str, usage: dict) -> float | None:

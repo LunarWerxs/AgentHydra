@@ -20,17 +20,13 @@ docs = "https://inference-docs.cerebras.ai/api-reference/chat-completions"
 [models.cerebras-gpt-oss-120b]
 api_id = "gpt-oss-120b"
 ctx = 131072
-price = {hit = 0.35, miss = 0.35, out = 0.75}
-source = "https://www.cerebras.ai/pricing (Developer tier; no cache discount published)"
-verified_at = "2026-10-03"
+price_ref = "cerebras/cerebras-gpt-oss-120b"
 fallback = true
 
 [models."cerebras-qwen3.8-27b"]
 api_id = "qwen-3.8-27b"
 ctx = 131072
-price = {hit = 0.99, miss = 0.99, out = 1.49}
-source = "https://www.cerebras.ai/pricing (Developer tier; no cache discount published)"
-verified_at = "2026-10-03"
+price_ref = "cerebras/cerebras-qwen3.8-27b"
 
 # Models with a `benchmark_slug` take part in AUTO: the slug names their published scores in
 # data/published-models.json. `inherits` copies another model's settings; the lines below it

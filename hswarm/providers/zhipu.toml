@@ -11,7 +11,5 @@ docs = "https://docs.z.ai/guides/llm/glm-4.6"
 [models."glm-4.5-air"]
 api_id = "glm-4.5-air"
 ctx = 131072
-price = {hit = 0.03, miss = 0.2, out = 1.1}
-source = "https://docs.z.ai/guides/overview/pricing"
-verified_at = "2026-10-03"
+price_ref = "zhipu/glm-4.5-air"
 fallback = true

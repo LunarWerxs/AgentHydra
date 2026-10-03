@@ -20,10 +20,8 @@ ctx = 1048576
 max_out = 65536
 vision = true
 tools = true
-price = {hit = 0.075, miss = 0.75, out = 3.75}
+price_ref = "gemini/gemini-3.8-flash"
 # List price; the free tier (HSwarm's key pool) charges nothing. Promotional rate through 2026-12-31, then 1.50 in / 7.50 out / 0.15 cached.
-source = "https://ai.google.dev/gemini-api/docs/pricing"
-verified_at = "2026-10-03"
 route = ["gemini-3.8-flash", "deepseek-flash-or"]
 
 [models."gemini-3.7-flash"]
@@ -31,38 +29,30 @@ ctx = 1048576
 max_out = 65536
 vision = true
 tools = true
-price = {hit = 0.075, miss = 0.75, out = 3.75}
+price_ref = "gemini/gemini-3.7-flash"
 # Same promotional rate as 3.8 Flash (through 2026-12-31, then 1.50 / 7.50 / 0.15).
-source = "https://ai.google.dev/gemini-api/docs/pricing"
-verified_at = "2026-10-03"
 
 [models."gemini-3.5-flash"]
 ctx = 1048576
 max_out = 65536
 vision = true
 tools = true
-price = {hit = 0.15, miss = 1.5, out = 9.0}
-source = "https://ai.google.dev/gemini-api/docs/pricing"
-verified_at = "2026-10-03"
+price_ref = "gemini/gemini-3.5-flash"
 
 [models."gemini-3.5-flash-lite"]
 ctx = 1048576
 max_out = 65536
 vision = true
 tools = true
-price = {hit = 0.03, miss = 0.3, out = 2.5}
+price_ref = "gemini/gemini-3.5-flash-lite"
 # Cache-read price is not shown on the page; 0.03 is the usual 10% of input, UNVERIFIED.
-source = "https://ai.google.dev/gemini-api/docs/pricing"
-verified_at = "2026-10-03"
 
 [models."gemini-3.1-flash-lite"]
 ctx = 1048576
 max_out = 65536
 vision = true
 tools = true
-price = {hit = 0.025, miss = 0.25, out = 1.5}
-source = "https://ai.google.dev/gemini-api/docs/pricing"
-verified_at = "2026-10-03"
+price_ref = "gemini/gemini-3.1-flash-lite"
 
 # Models with a `benchmark_slug` take part in AUTO: the slug names their published scores in
 # data/published-models.json. `inherits` copies another model's settings; the lines below it

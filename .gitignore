@@ -2,6 +2,7 @@ node_modules/
 dist/
 /out/
 data/
+!/hswarm/data/
 *.log
 .DS_Store
 .env

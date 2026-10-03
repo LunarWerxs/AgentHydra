@@ -16,24 +16,18 @@ docs = "https://console.groq.com/docs/openai"
 [models.groq-gpt-oss-120b]
 api_id = "openai/gpt-oss-120b"
 ctx = 131072
-price = {hit = 0.075, miss = 0.15, out = 0.60}
-source = "https://console.groq.com/docs/models (cached input 50% off: https://console.groq.com/docs/prompt-caching)"
-verified_at = "2026-10-03"
+price_ref = "groq/groq-gpt-oss-120b"
 route = ["groq-gpt-oss-120b", "cerebras-gpt-oss-120b"]
 
 [models.groq-gpt-oss-20b]
 api_id = "openai/gpt-oss-20b"
 ctx = 131072
-price = {hit = 0.0375, miss = 0.075, out = 0.30}
-source = "https://console.groq.com/docs/models (cached input 50% off: https://console.groq.com/docs/prompt-caching)"
-verified_at = "2026-10-03"
+price_ref = "groq/groq-gpt-oss-20b"
 
 [models."groq-qwen3.8-27b"]
 api_id = "qwen/qwen3.8-27b"
 ctx = 131072
-price = {hit = 0.80, miss = 0.80, out = 4.00}
-source = "https://console.groq.com/docs/models (no prompt caching on this model, so hit = miss)"
-verified_at = "2026-10-03"
+price_ref = "groq/groq-qwen3.8-27b"
 
 # Models with a `benchmark_slug` take part in AUTO: the slug names their published scores in
 # data/published-models.json. `inherits` copies another model's settings; the lines below it

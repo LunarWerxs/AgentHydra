@@ -24,6 +24,8 @@ import time
 import tomllib
 from pathlib import Path
 
+from . import prices
+
 HOME = Path(os.environ.get("HSWARM_HOME") or (Path.home() / ".hswarm"))
 JOBS_DIR = HOME / "jobs"
 LEDGER = HOME / "ledger.jsonl"
@@ -248,7 +250,7 @@ ROLES: dict[str, str | None] = {
 PANEL: list[str] = []
 
 # Peak windows, UTC, Monday-Friday: 01:00-04:00 and 06:00-10:00.
-PEAK_WINDOWS = ((1, 4), (6, 10))
+PEAK_WINDOWS = prices.peak_windows()  # DeepSeek's full-rate hours, written once in data/prices.json
 
 # ---- routing (owner ask, Michael, 2026-09-17: take the cheaper path to a model, per call) ----
 #
@@ -387,6 +389,13 @@ def _add_models(provider: str, models, user: bool) -> None:
                 table[name] = tuple(str(x).strip().lower() for x in legs)
                 if key == "route" and user and "route_cc" not in spec:
                     ROUTES_CC.pop(name, None)  # a hand-written order wins for cc too, unless route_cc says otherwise
+        ref = spec.pop("price_ref", None)  # the price lives in data/prices.json (prices.py); the registry carries its resolved shape
+        if ref and "price" not in spec and "peak" not in spec:
+            found = prices.registry_price(str(ref))
+            if found is None:
+                print(f"[hswarm] {provider}/{name}: price_ref {ref!r} is not in data/prices.json; the model stays unpriced", file=sys.stderr)
+            else:
+                spec["peak" if found[1] else "price"] = found[0]
         old = MODELS.get(name, {})
         merged = {**old, **spec}
         # A table changes only what it names, one level down too: `price = {out = 0.5}` keeps the shipped hit and

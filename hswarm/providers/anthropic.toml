@@ -40,9 +40,8 @@ anthropic_auth = "x-api-key"
 passthrough = ["anthropic:", "ant:"]
 docs = "https://docs.anthropic.com/en/api/messages"
 
-# Prices are Anthropic list, per million tokens (platform.claude.com/docs/en/about-claude/pricing, read 2026-10-01):
-# `write` is a 5-minute cache write, 1.25x input; a cache read is a tenth of input on Sonnet 5.5 and a
-# twentieth on Opus 5.5 ($0.20, not the $0.40 a tenth would make).
+# Prices are not written here: `price_ref` names the entry in data/prices.json (with its source and check date),
+# the one table TypeScript and Python both read.
 # Every entry sets `cc_effort = true`, which is what lets selection.py offer it to the cc backend -
 # real headless Claude Code at that effort, the shape an Opus 5.5 agent swarm actually has.
 
@@ -53,11 +52,9 @@ ctx = 1000000
 max_out = 128000
 vision = true
 tools = true
-price = {hit = 0.2, miss = 4.0, out = 20.0, write = 5.0}
+price_ref = "claude-opus-5-5"
 default_thinking = true
 cc_effort = true
-source = "https://platform.claude.com/docs/en/about-claude/pricing"
-verified_at = "2026-10-03"
 
 [models."rank:claude-opus-5-5-low:direct"]
 inherits = "rank:claude-opus-5-5:direct"
@@ -86,11 +83,9 @@ ctx = 1000000
 max_out = 128000
 vision = true
 tools = true
-price = {hit = 0.2, miss = 2.0, out = 10.0, write = 2.5}
+price_ref = "claude-sonnet-5-5"
 default_thinking = true
 cc_effort = true
-source = "https://platform.claude.com/docs/en/about-claude/pricing"
-verified_at = "2026-10-03"
 
 [models."rank:claude-sonnet-5-5-low:direct"]
 inherits = "rank:claude-sonnet-5-5:direct"

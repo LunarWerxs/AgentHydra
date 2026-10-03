@@ -20,14 +20,10 @@ price = {hit = 2.0, miss = 2.0, out = 5.0}
 [models.ministral-8b]
 api_id = "ministral-8b-latest"
 ctx = 131072
-price = {hit = 0.015, miss = 0.15, out = 0.15}
-source = "https://mistral.ai/pricing/api"
-verified_at = "2026-10-03"
+price_ref = "mistral/ministral-8b"
 
 [models."mistral-medium-3.5"]
 api_id = "mistral-medium-3.5"
 ctx = 131072
-price = {hit = 0.15, miss = 1.5, out = 7.5}
-source = "https://mistral.ai/pricing/api"
-verified_at = "2026-10-03"
+price_ref = "mistral/mistral-medium-3.5"
 fallback = true
