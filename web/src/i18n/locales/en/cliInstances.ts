@@ -70,6 +70,8 @@ export default {
   limitResetUsedHint: 'Available again {date}. Checked {ago}.',
   limitResetDoneLabel: 'Limit reset used {ago}',
   limitResetDoneHint: 'Next one available {date}.',
+  limitResetNoneLabel: 'No limit reset',
+  limitResetNoneHint: 'Checked {ago}.',
   limitResetUnknownDate: 'later',
   delete: 'Delete',
   nameLabel: 'Instance name',

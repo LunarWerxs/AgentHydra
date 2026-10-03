@@ -44,10 +44,24 @@ account right now."), `available` (check only), `error`. The last real answer is
 instance as `lastLimitReset` and drawn as an icon beside its name (green: used just now, or
 available; grey: this week's already spent).
 
-## Status (2026-09-30)
+## The daily check
+
+Read from Claude Code 2.1.286 (2026-10-03): the weekly session reset is claimed only when the CLI's
+own rate-limit state is `rejected` with type `five_hour` and a future reset time. Below the 5-hour
+limit `/limit-reset` cannot spend it; it only finds banked grants (a check backs out of the
+question) and answers "A reset isn't available ..." when there is none.
+
+So AgentHydra checks every signed-in CLI account once a day (`server/src/core/cli-reset-sweep.ts`:
+first pass 10 minutes after start, then hourly; accounts one at a time) and stores the answer, so
+each row shows it. An account is checked only when its last check is over 24 h old (or never) and
+it has a 5-hour reading under 90% taken in the last 30 minutes. No reading, a stale one, or one
+near the limit means no check: at the limit a check could spend the weekly reset. The reading is
+re-read right before each run. Each run starts no MCP servers.
+
+## Status (2026-10-03)
 
 - Checked live: #83, #84, #88 and #90 all answered "A reset isn't available for this account right
   now"; nothing asked, nothing spent, about 10 s each, nothing left running.
 - Not yet seen live: a reset actually going through, and the "Use your reset?" question (no
   account had a banked grant on the CLI).
-- Not a background check, on purpose: a check can still spend a weekly session reset.
+- Background check: daily, only below the 5-hour limit (see above), never at it.

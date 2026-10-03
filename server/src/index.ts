@@ -58,6 +58,7 @@ import { createChatGptContextPack } from './context-pack'
 import { refreshCliInstanceTokens } from './core/cli-instance-tokens'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
 import { startLoginSync, stopLoginSync } from './core/cli-login-sync'
+import { startCliResetSweep } from './core/cli-reset-sweep'
 import { reconcileCodexInstanceDirs } from './core/codex-instances'
 import { startDesktopCliFeed, stopDesktopCliFeed } from './core/desktop-cli-feed'
 import { createRunningCodeProbe, restartNeededMessage } from './core/running-code'
@@ -1474,6 +1475,8 @@ startCliMayte()
 // your quota does not consume it — so keeping the numbers warm costs essentially nothing. Toggle in
 // the Instances tab's filter menu.
 startUsageRefresh()
+// Daily safe limit-reset check per signed-in CLI account (core/cli-reset-sweep.ts).
+startCliResetSweep()
 // Login sync between the owner's PCs (core/cli-login-sync.ts): idle until set up.
 startLoginSync()
 startDesktopCliFeed()

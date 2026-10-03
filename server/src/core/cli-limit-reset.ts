@@ -10,15 +10,21 @@
 //
 // So this runs the real CLI, in a hidden terminal (Bun's PTY, no window), types `/limit-reset`,
 // accepts the banked-grant question when one is asked (the person already asked for the reset by
-// clicking), and reports the CLI's own words. ⛔ It is never a way to CHECK: the session variant
-// resets at once with no question, so running it spends whatever it finds.
+// clicking), and reports the CLI's own words.
+//
+// Checking (`confirm: false`) is safe below the 5-hour limit. The weekly session reset is claimed
+// only when the CLI's own rate-limit state is `rejected` with type `five_hour` and a future reset
+// time (read from Claude Code 2.1.286, 2026-10-03); below that limit `/limit-reset` only finds
+// banked grants, backs out of the question, and answers "A reset isn't available ..." when there is
+// none. AT the 5-hour limit a check could still spend the weekly reset, so never check there
+// (core/cli-reset-sweep.ts keeps its daily check away from it).
 //
 // Before the first run it marks the account's CLI setup finished and trusts one scratch folder in
 // the account's .claude.json, so the CLI opens straight to its prompt instead of a setup screen or
 // a "do you trust this folder" question whose default answer exits.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DATA_DIR, resolveClaudeExe } from '../config'
+import { CLAUDE_PROBE_NO_MCP_ARGS, DATA_DIR, resolveClaudeExe } from '../config'
 import type { CliLimitResetResult } from '../types'
 import { killProcessTree } from './process'
 
@@ -117,7 +123,8 @@ export async function runCliLimitReset(
   configDir: string,
   opts: {
     /** false = CHECK: at the banked reset's "Use your reset?" question, press Escape and report it
-     *  as available. The weekly session reset asks nothing, so a check still uses that one. */
+     *  as available. Spends nothing while the account's 5-hour usage is below its limit; at the
+     *  limit the weekly session reset asks nothing and a check could use it. */
     confirm?: boolean
   } = {},
 ): Promise<LimitResetResult> {
@@ -172,7 +179,7 @@ function spawnResetCli(
   out: { raw: string },
 ): ReturnType<typeof Bun.spawn> {
   const decoder = new TextDecoder()
-  return Bun.spawn([resolveClaudeExe()], {
+  return Bun.spawn([resolveClaudeExe(), ...CLAUDE_PROBE_NO_MCP_ARGS], {
     cwd: WORK_DIR,
     env,
     windowsHide: true,

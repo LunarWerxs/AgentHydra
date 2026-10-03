@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Every signed-in CLI account's row shows whether it has a limit reset** (owner, 2026-10-03). A daily background check (`core/cli-reset-sweep.ts`: first pass 10 minutes after start, then hourly, one account at a time) runs `/limit-reset` as a check for each signed-in account not checked in 24 hours, and only while its 5-hour usage reading is under 90% and under 30 minutes old: the weekly session reset is claimed only at the 5-hour limit, so a check there could spend it. Each run starts no MCP servers. An `unavailable` answer now draws a muted "No limit reset" icon. See docs/CLI-LIMIT-RESET.md.
+
 ## [1.8.0] - 2026-10-03
 
 ### Added
