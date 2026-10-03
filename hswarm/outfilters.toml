@@ -2,7 +2,7 @@
 # WHY: these commands print mostly noise a worker pays for and never uses; each filter drops the
 # known noise and keeps errors, warnings and summaries. A filter must carry [[tests.<name>]] cases
 # and pass them, or it is rejected at load. Override one by name in ~/.hswarm/filters.toml or in a
-# project's .hswarm/filters.toml; `python -m hswarm filters` lists what is in effect.
+# project's .hswarm/filters.toml; `python hswarm.py filters` lists what is in effect.
 
 [filters.pip-install]
 description = "pip install: drop resolver and download chatter, keep errors and what was installed"
