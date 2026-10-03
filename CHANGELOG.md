@@ -17,6 +17,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the usage history keep every number, and CliMayte, fan_out and the account survey read them as
   before (`POST /api/usage/clear`; the tables' routes serve no reading taken before a row's clear).
 
+### Changed
+
+- **Pushing a release tag takes seconds once CI is green on its commit** (811552a). The pre-push
+  hook ran the whole `check:deep` lane, about 25 minutes, on every `v*.*.*` tag, although
+  docs/RELEASING.md already makes green CI the step before tagging and ci.yml runs every one of
+  those lanes on that commit. It now asks `gh` for a successful ci.yml run on the tagged commit and
+  then runs only the kit check GitHub cannot run (2.8 s measured); when it cannot confirm green CI it
+  says why and runs the full `check:deep` as before.
+
 ### Fixed
 
 - **A frozen daemon no longer gets a second daemon started beside it, and the MCP reads the daemon
