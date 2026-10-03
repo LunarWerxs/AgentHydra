@@ -30,9 +30,10 @@ shared folder, and what the tests use). A new backend is a class with get() and 
 
 SEALED PAIRING (wire format v1, shared with ZSwarm byte for byte): `vault request <backend>` on a new machine makes an
 X25519 key (HSWARM_HOME/vault-request.key) and leaves requests/<machine>.json beside the vault file; `vault grant` on a
-vault machine seals the pairing code to that public key once a person confirmed its fingerprint (requests/<machine>.sealed);
+vault machine seals the pairing code to that public key once a person typed its full fingerprint (requests/<machine>.sealed);
 `vault accept` on the new machine opens it and joins. The backend only ever holds the public key and ciphertext, and the
-code never reaches a screen, a pipe or a log.
+code never reaches a screen, a pipe or a log. A sealed file proves nothing about who wrote it, so `request` also pins the
+backend's vault file (HSWARM_HOME/vault-request.pin) and `accept` joins only a code whose key opens that pin.
 """
 from __future__ import annotations
 
@@ -41,6 +42,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import socket
 import subprocess
 import sys
@@ -95,6 +97,11 @@ def request_key_file() -> Path:
 
 def request_file() -> Path:
     return config.HOME / "vault-request.json"
+
+
+def pin_file() -> Path:
+    """The backend's vault file as `request` read it: `accept` joins only a code whose key opens it."""
+    return config.HOME / "vault-request.pin"
 
 
 def key_file() -> Path:
@@ -306,7 +313,13 @@ class DirBackend:
         return _etag(blob)
 
     def _request_path(self, name: str) -> Path:
-        return self.dir / "requests" / request_name(name)
+        """requests/<name>, once neither the folder nor the file is a link: a link there could point a write or a delete
+        anywhere this user may write."""
+        path = self.dir / "requests" / request_name(name)
+        for p in (path.parent, path):
+            if p.is_symlink() or (hasattr(p, "is_junction") and p.is_junction()):
+                raise VaultError(f"{p} is a symlink; refusing")
+        return path
 
     def list_requests(self) -> list[str]:
         try:
@@ -323,9 +336,16 @@ class DirBackend:
     def write_request(self, name: str, data: bytes) -> None:
         path = self._request_path(name)
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")  # a dot name never matches the request names, so no reader lists it
-        tmp.write_bytes(data)
-        os.replace(tmp, path)
+        path = self._request_path(name)  # again: the folder may have just been made
+        tmp = path.with_name(f".{path.name}.{_tmp_token()}.tmp")  # a dot name never matches the request names, so no reader lists it
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def delete_request(self, name: str) -> None:
         self._request_path(name).unlink(missing_ok=True)
@@ -344,12 +364,14 @@ _SSH_PUT = (
     "mv -f $d/in.tmp $d/vault.bin; "
     "ls -1t $d/history | tail -n +{keep} | while read f; do rm -f $d/history/$f; done; exit 0"
 )
-# The requests/ folder beside the vault file. {name} is always checked against REQUEST_NAME_RX first.
+# The requests/ folder beside the vault file. {name} is always checked against REQUEST_NAME_RX first, {tmp} against
+# _TMP_RX. Exit 8 or 9: the folder or the file is a symlink, and nothing was read, written or removed.
 _SSH_REQ_LIST = "d={dir}/requests; test -d $d || exit 0; ls -1 $d"
-_SSH_REQ_READ = "f={dir}/requests/{name}; test -f $f || exit 3; cat $f"
-_SSH_REQ_WRITE = ("d={dir}/requests; umask 077; mkdir -p $d && chmod 700 $d && cat > $d/.{name}.tmp && "
-                  "mv -f $d/.{name}.tmp $d/{name}")
-_SSH_REQ_DELETE = "rm -f {dir}/requests/{name}"
+_SSH_REQ_CHECK = "d={dir}/requests; f=$d/{name}; test ! -L $d || exit 8; test ! -L $f || exit 9; "
+_SSH_REQ_READ = _SSH_REQ_CHECK + "test -f $f || exit 3; cat $f"
+_SSH_REQ_WRITE = _SSH_REQ_CHECK + "umask 077; mkdir -p $d && chmod 700 $d && cat > $d/.{name}.{tmp}.tmp && mv -f $d/.{name}.{tmp}.tmp $f"
+_SSH_REQ_DELETE = _SSH_REQ_CHECK + "rm -f $f"
+_TMP_RX = re.compile(r"^[0-9a-f]{16}$")
 _NAME_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$")
 _DIR_RX = re.compile(r"^/?[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
 
@@ -405,8 +427,10 @@ class SshBackend:
                          .get(rc) or f"could not write the vault over ssh ({self.dest}): {err.strip()[:300] or f'exit {rc}'}")
 
     def _req(self, template: str, what: str, name: str | None = None, stdin: bytes = b"") -> tuple[int, bytes]:
-        script = template.format(dir=self.dir, name=request_name(name) if name is not None else "")
-        rc, out, err = self._run(script, stdin)
+        name = request_name(name) if name is not None else ""
+        rc, out, err = self._run(template.format(dir=self.dir, name=name, tmp=_tmp_token()), stdin)
+        if rc in (8, 9):
+            raise VaultError(f"{self.label}/requests{f'/{name}' if rc == 9 else ''} is a symlink; refusing")
         if rc not in (0, 3):
             raise VaultError(f"could not {what} over ssh ({self.dest}): {err.strip()[:300] or f'exit {rc}'}")
         return rc, out
@@ -432,6 +456,14 @@ def request_name(name: str) -> str:
     if not isinstance(name, str) or not REQUEST_NAME_RX.fullmatch(name):
         raise VaultError(f"{name!r} is not a pairing request name (<machine>.json or <machine>.sealed)")
     return name
+
+
+def _tmp_token() -> str:
+    """16 random hex digits for a request write's temp file: no two writes share one, and nobody can plant it in advance."""
+    token = secrets.token_hex(8)
+    if not _TMP_RX.fullmatch(token):
+        raise VaultError("could not make a temp file name for a pairing request")
+    return token
 
 
 def open_backend(url: str):
@@ -638,8 +670,9 @@ def adopt() -> dict:
 
 
 def machine_name() -> str:
-    """This machine's name in requests/: the host name, lower case, every character outside [a-z0-9-] made '-', 63 at most."""
-    name = re.sub(r"[^a-z0-9-]", "-", socket.gethostname().lower())[:63]
+    """This machine's name in requests/: the host name, lower case, every character outside [a-z0-9-] made '-', no '-' at
+    either end, 63 at most ("machine" when nothing is left)."""
+    name = re.sub(r"[^a-z0-9-]", "-", socket.gethostname().lower()).strip("-")[:63].rstrip("-") or "machine"
     request_name(f"{name}.json")
     return name
 
@@ -727,7 +760,8 @@ def _read_request_key() -> bytes:
 
 def request(backend: str, force: bool = False) -> dict:
     """Ask the vault at `backend` for its pairing code: publish this machine's request public key there. A repeat re-uses
-    the saved key, so the fingerprint stays the one the person already compared."""
+    the saved key, so the fingerprint stays the one the person already compared. The backend's vault file is pinned here
+    (every run refreshes it): `accept` joins only a code whose key opens it, so a grant sealed by anyone else is refused."""
     from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
     from .shared import atomic_write
@@ -736,12 +770,16 @@ def request(backend: str, force: bool = False) -> dict:
         raise VaultError("this machine already has a vault (`hswarm vault status`); `hswarm vault request --force` asks to replace it")
     be = open_backend(backend)
     machine = machine_name()
+    pin, _etag_ = be.get()
+    if not pin:
+        raise VaultError(f"no vault at {be.label}: a pairing request needs an existing vault")
     if request_key_file().exists():
         priv = X25519PrivateKey.from_private_bytes(_read_request_key())
     else:
         priv = X25519PrivateKey.generate()
         raw = priv.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
         atomic_write(request_key_file(), _b64(raw) + "\n", private=True)
+    atomic_write(pin_file(), pin, private=True)
     _write_json(request_file(), {"backend": backend, "machine": machine, **({"replace": True} if force else {})})
     pub = _raw_pub(priv)
     doc = {"v": 1, "machine": machine, "pub": _b64(pub), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
@@ -769,19 +807,18 @@ def requests_waiting(be=None) -> list[dict]:
     return out
 
 
-def canonical_fingerprint(text: str | None) -> str | None:
-    """The full 16-hex-character request fingerprint a person typed, in the canonical XXXX-XXXX-XXXX-XXXX form: case and dashes
-    (or spaces) do not matter. Anything shorter or longer, or not hex, is None: a part of a fingerprint confirms nothing."""
-    h = re.sub(r"[-\s]", "", text or "").upper()
-    if not re.fullmatch(r"[0-9A-F]{16}", h):
-        return None
-    return "-".join(h[i:i + 4] for i in range(0, 16, 4))
+def fingerprint_matches(typed, fp: str) -> bool:
+    """Whether a person typed the WHOLE fingerprint `fp`: exactly its 16 hex digits once dashes and spaces are removed and
+    case is ignored. The one comparison behind the terminal prompt, --yes and the console. A first few characters are not
+    enough: anyone who can write to the backend grinds a key whose fingerprint starts the same in seconds."""
+    h = re.sub(r"[-\s]", "", str(typed or "")).upper()
+    return re.fullmatch(r"[0-9A-F]{16}", h) is not None and h == fp.replace("-", "")
 
 
 def grant(machine: str | None = None, yes: str | None = None, ask=None) -> dict:
-    """Seal this vault's pairing code to one request, once a person confirmed it: `yes` is the FULL fingerprint, or `ask(row)`
-    (a terminal only) returns what the person typed, which must be the fingerprint's first 4 characters. Anything else
-    refuses and writes nothing. Returns the machine and the fingerprint, never the code."""
+    """Seal this vault's pairing code to one request, once a person confirmed it: `yes`, or what `ask(row)` returns (a
+    terminal only), must be the FULL fingerprint. Anything else refuses and writes nothing. Returns the machine and the
+    fingerprint, never the code."""
     cfg = _load_config()
     be = open_backend(cfg["backend"])
     rows = [r for r in requests_waiting(be) if "error" not in r]
@@ -797,15 +834,12 @@ def grant(machine: str | None = None, yes: str | None = None, ask=None) -> dict:
                              f"{len(chosen)} requests are waiting ({', '.join(r['machine'] for r in chosen)}): name one, `hswarm vault grant <machine>`")
     row = chosen[0]
     fp = row["fingerprint"]
-    if yes is not None:
-        ok = canonical_fingerprint(yes) == fp
-    elif ask is not None:
-        ok = str(ask(row) or "").strip().upper() == fp[:4]
-    else:
-        raise VaultError("a grant needs a person: run it in a terminal and type the fingerprint's first 4 characters, "
-                         "or pass --yes <the full fingerprint the new machine printed>; nothing was granted")
-    if not ok:
-        raise VaultError(f"that does not match {row['machine']}'s fingerprint {fp}; nothing was granted")
+    if yes is None and ask is None:
+        raise VaultError("a grant needs a person: run it in a terminal and type the full fingerprint the new machine printed, "
+                         "or pass --yes <that full fingerprint>; nothing was granted")
+    if not fingerprint_matches(yes if yes is not None else ask(row), fp):
+        raise VaultError(f"that does not match {row['machine']}'s full fingerprint {fp} (all 16 characters; case and dashes "
+                         "do not matter); nothing was granted")
     sealed = seal_grant(pair_code(), _unb64(row["pub"], 32), row["machine"])
     be.write_request(f"{row['machine']}.sealed", json.dumps(sealed, sort_keys=True).encode("utf-8"))
     return {"granted": row["machine"], "fingerprint": fp}
@@ -825,26 +859,38 @@ def accept(force: bool = False) -> dict:
     except ValueError:
         doc = None
     code = open_grant(doc, priv, machine)
+    key, _url = parse_code(code)
+    try:
+        pin = pin_file().read_bytes()
+    except FileNotFoundError:
+        raise VaultError("this request was made before the vault pin existed: run `vault request <backend>` again "
+                         "(the fingerprint stays the same), then `vault accept`") from None
+    try:
+        unseal(key, pin)
+    except VaultError:
+        raise VaultError("the granted code does not open the vault this machine saw when it asked; the grant was not written "
+                         "by a vault machine (or the vault was re-keyed since). Nothing was saved.") from None
     out = join(code, backend=req["backend"], force=force or bool(req.get("replace")), _via="accept")
     try:
         be.delete_request(f"{machine}.json")
         be.delete_request(f"{machine}.sealed")
     except (VaultError, OSError) as e:
         out["cleanup"] = f"joined, but requests/{machine}.json and .sealed are still on the backend ({type(e).__name__}): remove them by hand"
-    request_key_file().unlink(missing_ok=True)
-    request_file().unlink(missing_ok=True)
+    for path in (request_key_file(), request_file(), pin_file()):
+        path.unlink(missing_ok=True)
     return out
 
 
 def _request_status() -> dict | None:
-    """This machine's open request, for `status`: machine, fingerprint and whether the grant is there."""
+    """This machine's open request, for `status`: machine, fingerprint, whether the vault is pinned and whether the grant is there."""
     if not request_file().exists():
         return None
     try:
         from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
         req, priv = _load_request()
-        row = {"machine": req["machine"], "fingerprint": request_fingerprint(_raw_pub(X25519PrivateKey.from_private_bytes(priv)))}
+        row = {"machine": req["machine"], "fingerprint": request_fingerprint(_raw_pub(X25519PrivateKey.from_private_bytes(priv))),
+               "pinned": pin_file().exists()}
     except VaultError as e:
         return {"error": str(e)}
     try:

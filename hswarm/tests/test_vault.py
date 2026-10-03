@@ -6,6 +6,7 @@ import base64
 import contextlib
 import json
 import os
+import re
 import stat
 import sys
 import time
@@ -534,7 +535,7 @@ def test_sealed_pairing_round_trip_joins_b_without_the_code_ever_printing(fleet,
     assert vault.request(_alias(fleet))["fingerprint"] == fp  # a repeat re-uses the saved key
     assert _request_files(fleet) == ["box-b.json"]
     fleet.write("groq_api_keys", "gsk-test-from-b-0002")
-    assert vault.status()["request"] == {"machine": "box-b", "fingerprint": fp, "granted": "no"}
+    assert vault.status()["request"] == {"machine": "box-b", "fingerprint": fp, "pinned": True, "granted": "no"}
 
     fleet.on("box-a")
     assert vault.status()["pending_requests"] == 1
@@ -557,7 +558,7 @@ def test_sealed_pairing_round_trip_joins_b_without_the_code_ever_printing(fleet,
     assert json.loads(vault.config_file().read_text(encoding="utf-8"))["backend"] == _alias(fleet)  # the URL box-b asked on
     assert set(keys_of("groq_api_keys")) == {"gsk-test-from-a-0001", "gsk-test-from-b-0002"}
     assert _request_files(fleet) == []
-    assert not vault.request_key_file().exists() and not vault.request_file().exists()
+    assert not any(p.exists() for p in (vault.request_key_file(), vault.request_file(), vault.pin_file()))
     st = vault.status()
     assert "request" not in st and "adopt` has nothing to do" in st["paired_by"]
 
@@ -589,9 +590,15 @@ def test_grant_refuses_without_a_person_or_with_a_wrong_fingerprint_and_writes_n
         vault.grant(ask=lambda row: fp[:3])
     assert _request_files(fleet) == ["box-b.json"] and (_server(fleet) / "vault.bin").read_bytes() == before
 
-    monkeypatch.setattr("builtins.input", lambda _prompt: fp[:4].lower())  # the person typed it at the terminal
+    monkeypatch.setattr("builtins.input", lambda _prompt: fp[:4])  # 16 bits: a key with the same start is ground in seconds
+    assert cli.main(["vault", "grant"]) == 2
+    assert _request_files(fleet) == ["box-b.json"]
+
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or fp.replace("-", "").lower())
     assert cli.main(["vault", "grant"]) == 0
     assert _request_files(fleet) == ["box-b.json", "box-b.sealed"]
+    assert "full fingerprint" in prompts[0] and fp not in prompts[0]  # typed from the new machine's screen, not copied from here
 
 
 def test_accept_before_a_grant_says_not_granted_yet_and_changes_nothing(fleet, capsys):
@@ -631,6 +638,87 @@ def test_a_tampered_or_foreign_grant_does_not_open_and_nothing_is_saved(fleet, c
     assert vault.accept()["joined"] == f"dir:{_server(fleet)}"
 
 
+def _folder(path: Path) -> dict[str, bytes]:
+    return {p.name: p.read_bytes() for p in sorted(path.iterdir())}
+
+
+def test_a_grant_sealed_by_another_vault_is_refused_by_the_pin_and_nothing_is_saved(fleet, capsys):
+    """Anyone who can write to the backend can seal THEIR vault's code to box-b's public request key, and swap the vault
+    file too, so join's own check passes; the vault box-b pinned when it asked is what refuses it."""
+    _vault_and_request(fleet, capsys)
+    fleet.write("groq_api_keys", "gsk-test-from-b-0002")
+    b_secrets = _folder(config.SECRETS_DIR)
+    req = json.loads((_server(fleet) / "requests" / "box-b.json").read_text(encoding="utf-8"))
+
+    fleet.on("mallory")
+    fleet.write("groq_api_keys", "gsk-test-from-mallory-9")
+    evil = fleet.tmp / "evil-server"
+    vault.init(f"dir:{evil}")
+    evil_code = vault.pair_code()
+    forged = vault.seal_grant(evil_code, base64.b64decode(req["pub"]), "box-b")
+    (_server(fleet) / "requests" / "box-b.sealed").write_text(json.dumps(forged), encoding="utf-8")
+    (_server(fleet) / "vault.bin").write_bytes((evil / "vault.bin").read_bytes())
+
+    fleet.on("box-b")
+    with pytest.raises(vault.VaultError, match="does not open the vault this machine saw when it asked") as err:
+        vault.accept()
+    assert evil_code not in str(err.value) and "Nothing was saved" in str(err.value)
+    assert not vault.key_file().exists() and not vault.config_file().exists() and not vault.base_file().exists()
+    assert _folder(config.SECRETS_DIR) == b_secrets
+    assert vault.request_key_file().exists() and vault.pin_file().exists()  # the request stands; a real grant still opens
+
+
+def test_accept_without_the_vault_pin_asks_for_a_new_request_which_keeps_the_fingerprint(fleet, capsys):
+    fp = _vault_and_request(fleet, capsys)
+    fleet.on("box-a")
+    vault.grant("box-b", yes=fp)
+    fleet.on("box-b")
+    vault.pin_file().unlink()  # a request made before the pin existed
+    assert vault.status()["request"]["pinned"] is False
+    with pytest.raises(vault.VaultError, match=r"made before the vault pin existed: run `vault request <backend>` again"):
+        vault.accept()
+    assert not vault.configured() and vault.request_key_file().exists()
+    assert vault.request(_alias(fleet))["fingerprint"] == fp and vault.status()["request"]["pinned"] is True
+    assert vault.accept()["joined"] == f"dir:{_server(fleet)}"
+
+
+def test_a_request_to_a_backend_without_a_vault_is_refused_and_writes_nothing(fleet):
+    fleet.on("box-b")
+    empty = fleet.tmp / "empty-server"
+    empty.mkdir()
+    with pytest.raises(vault.VaultError, match=r"no vault at dir:.*empty-server: a pairing request needs an existing vault"):
+        vault.request(f"dir:{empty}")
+    assert list(empty.iterdir()) == []
+    assert not any(p.exists() for p in (vault.request_key_file(), vault.request_file(), vault.pin_file()))
+
+
+def test_machine_name_has_no_dash_at_either_end_and_is_never_empty(monkeypatch):
+    for host, name in (("-Box_1-", "box-1"), ("a" * 62 + "_b", "a" * 62), ("___", "machine")):
+        monkeypatch.setattr(vault.socket, "gethostname", lambda host=host: host)
+        assert vault.machine_name() == name, host
+
+
+def test_the_dir_backend_refuses_a_symlinked_request_file_or_folder(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "box-b.json").write_bytes(b"outside")
+    linked_file, linked_dir = tmp_path / "one" / "requests" / "box-b.json", tmp_path / "two" / "requests"
+    linked_file.parent.mkdir(parents=True)
+    linked_dir.parent.mkdir()
+    try:
+        linked_file.symlink_to(outside / "box-b.json")
+        linked_dir.symlink_to(outside, target_is_directory=True)
+    except OSError as e:
+        pytest.skip(f"this machine cannot make a symlink: {e}")
+    for server, shown in ((tmp_path / "one", linked_file), (tmp_path / "two", linked_dir)):
+        be = vault.DirBackend(server)
+        for op in (lambda: be.read_request("box-b.json"), lambda: be.write_request("box-b.json", b"{}"),
+                   lambda: be.delete_request("box-b.json")):
+            with pytest.raises(vault.VaultError, match=f"{re.escape(str(shown))} is a symlink; refusing"):
+                op()
+    assert _folder(outside) == {"box-b.json": b"outside"} and linked_file.is_symlink()
+
+
 def test_a_bad_request_name_is_refused_before_any_file_access(fleet):
     fleet.on("box-a")
     server = _server(fleet)
@@ -648,7 +736,21 @@ def test_a_bad_request_name_is_refused_before_any_file_access(fleet):
     assert calls == [] and (server / "vault.bin").read_bytes() == b"ZSV1-not-a-request"
     assert sorted(p.name for p in server.iterdir()) == ["requests", "vault.bin"] and not any((server / "requests").iterdir())
     backends[1].write_request("box-b.json", b"{}")
-    assert calls[-1].endswith("mv -f $d/.box-b.json.tmp $d/box-b.json") and "chmod 700 $d" in calls[-1]
+    backends[1].write_request("box-b.json", b"{}")
+    tmps = [re.search(r"cat > \$d/(\.box-b\.json\.[0-9a-f]{16}\.tmp) && mv -f \$d/\1 \$f$", s) for s in calls[-2:]]
+    assert all(tmps) and tmps[0].group(1) != tmps[1].group(1)  # a fresh random temp name per write, never a guessable one
+    assert "chmod 700 $d" in calls[-1]
+    backends[1].read_request("box-b.json")
+    backends[1].delete_request("box-b.json")
+    check = "d=hswarm-vault/requests; f=$d/box-b.json; test ! -L $d || exit 8; test ! -L $f || exit 9; "
+    assert all(s.startswith(check) for s in calls[-4:])  # the link checks come before every cat, mv and rm
+    assert calls[-2].endswith("cat $f") and calls[-1].endswith("rm -f $f")
+    for rc, path in ((8, "requests"), (9, "requests/box-b.json")):
+        linked = vault.SshBackend("ssh://host.example.invalid/hswarm-vault", run=lambda script, stdin, rc=rc: (rc, b"", ""))
+        for op in (lambda: linked.read_request("box-b.json"), lambda: linked.write_request("box-b.json", b"{}"),
+                   lambda: linked.delete_request("box-b.json")):
+            with pytest.raises(vault.VaultError, match=f"hswarm-vault/{re.escape(path)} is a symlink; refusing"):
+                op()
 
 
 def test_golden_vector_matches_the_spec_shared_with_zswarm():

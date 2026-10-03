@@ -135,14 +135,15 @@ def local_host(host: str, port: int) -> bool:
     return host in {f"{h}:{port}" for h in LOCAL_HOSTS}
 
 
-def atomic_write(path: Path, text: str, private: bool = False) -> None:
-    """Swap `text` in as the whole of `path`: a reader sees the old file or the new one, never half of either.
-    private=True makes it owner-only (0600 on POSIX) from the moment the temp file exists, never after the write."""
+def atomic_write(path: Path, text: str | bytes, private: bool = False) -> None:
+    """Swap `text` (or bytes, written as they are) in as the whole of `path`: a reader sees the old file or the new one,
+    never half of either. private=True makes it owner-only (0600 on POSIX) from the moment the temp file exists, never
+    after the write."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")  # one per process: two writers never share a temp file
     tmp.unlink(missing_ok=True)  # a leftover from a crash could carry a wider mode than asked for
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600 if private else 0o666)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
+    with os.fdopen(fd, "wb") if isinstance(text, bytes) else os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
     for attempt in range(REPLACE_TRIES):
         try:

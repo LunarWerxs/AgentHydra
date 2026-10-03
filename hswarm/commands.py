@@ -603,7 +603,7 @@ async def cmd_vault(a) -> int:
             ask = None
             if a.yes is None and sys.stdin.isatty():
                 def ask(row):
-                    return input(f"grant {row['machine']} ({row['fingerprint']})? type the fingerprint's first 4 characters: ")
+                    return input(f"grant {row['machine']}? type the full fingerprint the new machine printed (16 characters): ")
             r = await asyncio.to_thread(vault.grant, a.target, a.yes, ask)
             if a.json:
                 _print(r)

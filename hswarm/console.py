@@ -254,12 +254,9 @@ def _vault_requests(_b: dict) -> dict:
 
 def _vault_grant(b: dict) -> dict:
     machine = str(b.get("machine") or "")
-    fp = vault.canonical_fingerprint(b.get("fingerprint"))
     if not machine:
         raise VaultError("name the machine to grant")
-    if fp is None:
-        raise VaultError("type the request's full 16-character fingerprint (first 4 characters are not enough); nothing was granted")
-    return vault.grant(machine, yes=fp)
+    return vault.grant(machine, yes=str(b.get("fingerprint") or ""))  # grant's one comparison: the full fingerprint or nothing
 
 
 def _vault_accept(_b: dict) -> dict:
