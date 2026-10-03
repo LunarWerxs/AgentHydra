@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS claude_accounts (
   PRIMARY KEY (machine, day, account)
 );
 """
+SCHEMA_VERSION = 1  # PRAGMA user_version: 1 = utilizations.day plus the (machine, day) and (machine, seq) indexes
 CLAUDE_DAY_COLUMNS = ("machine", "day", "claude_usd", "sub_usd", "subagents", "partial", "by_model", "rules", "tokens", "plan_usd")
 CLAUDE_ACCOUNT_COLUMNS = ("machine", "day", "account", "tier", "usd", "requests", "sessions", "tokens", "plan_usd")
 TOKEN_KEYS = claude_usage.TOKEN_KEYS
@@ -105,9 +106,31 @@ def connect() -> sqlite3.Connection:
     c = sqlite3.connect(db_path(), timeout=15)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")  # one MCP server per Claude session: several writers, never a lock error
-    c.executescript(SCHEMA)
-    _migrate(c)
+    c.execute("PRAGMA busy_timeout=15000")
+    if c.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:  # a migrated DB pays nothing per connect
+        c.executescript(SCHEMA)
+        _migrate(c)
     return c
+
+
+def local_day(ts: str | None) -> str | None:
+    """The local calendar date of an ISO timestamp (a naive one is UTC, as SQLite reads it); None when unreadable."""
+    try:
+        t = dt.datetime.fromisoformat(str(ts))
+        return (t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)).astimezone().date().isoformat()
+    except ValueError:
+        return None
+
+
+def _backfill_days(c: sqlite3.Connection, batch: int = 500) -> None:
+    """Fill `day` on old rows in small committed batches, so a running server is never locked out for long.
+    Readers cover the rows not reached yet (see _CLAUDE_SQL); a row whose ts is unreadable stays NULL."""
+    while True:
+        n = c.execute("UPDATE utilizations SET day = date(ts, 'localtime') WHERE id IN "
+                      "(SELECT id FROM utilizations WHERE day IS NULL AND date(ts, 'localtime') IS NOT NULL LIMIT ?)", (batch,)).rowcount
+        c.commit()
+        if n < batch:
+            return
 
 
 def _migrate(c: sqlite3.Connection) -> None:
@@ -133,6 +156,17 @@ def _migrate(c: sqlite3.Connection) -> None:
                 n += 1
                 c.execute("UPDATE utilizations SET seq = ? WHERE id = ?", (n, rid))
         c.commit()
+    if "day" not in cols:  # the row's local date, stored at write time: `date(ts,'localtime')` cannot use an index
+        try:
+            c.execute("ALTER TABLE utilizations ADD COLUMN day TEXT")
+        except sqlite3.OperationalError as e:  # another process added it between our check and now
+            if "duplicate column" not in str(e).lower():
+                raise
+    c.execute("CREATE INDEX IF NOT EXISTS utilizations_machine_day ON utilizations(machine, day)")
+    c.execute("CREATE INDEX IF NOT EXISTS utilizations_machine_seq ON utilizations(machine, seq)")
+    c.commit()
+    _backfill_days(c)
+    c.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def next_seq(c: sqlite3.Connection, row: dict) -> int:
@@ -270,6 +304,8 @@ def current_profile(c: sqlite3.Connection) -> dict | None:
 
 
 def _upsert(c: sqlite3.Connection, table: str, columns: tuple, row: dict) -> None:
+    if table == "utilizations":
+        columns, row = columns + ("day",), row | {"day": local_day(row.get("ts"))}
     c.execute(f"INSERT OR REPLACE INTO {table} ({','.join(columns)}) VALUES ({','.join('?' * len(columns))})", [row.get(k) for k in columns])
 
 
@@ -649,7 +685,9 @@ _CLAUDE_SQL = ("SELECT COALESCE(SUM(d.claude_usd), 0) AS claude_usd, COUNT(*) AS
                # part-day of usage against a whole day of plan and read as a worse rate than the fleet really has.
                "SUM(CASE WHEN d.partial = 0 THEN d.plan_usd END) AS plan_usd, "
                "SUM(CASE WHEN d.partial = 0 AND d.plan_usd IS NULL THEN 1 ELSE 0 END) AS days_without_plan FROM claude_days d "
-               "WHERE EXISTS (SELECT 1 FROM utilizations u WHERE u.machine = d.machine AND date(u.ts, 'localtime') = d.day)")
+               # `u.day` is stored at write time and indexed; rows the backfill has not reached (day NULL) fall back to the date function.
+               "WHERE (EXISTS (SELECT 1 FROM utilizations u WHERE u.machine = d.machine AND u.day = d.day) "
+               "OR EXISTS (SELECT 1 FROM utilizations u WHERE u.machine = d.machine AND u.day IS NULL AND date(u.ts, 'localtime') = d.day))")
 # What the same work would have cost in TOKENS, not dollars: one task = one measured sub-agent, so the profile's
 # buckets x tasks. A row with no profile contributes NULL (SUM skips it) and is counted as unsized instead.
 _TOKENS_SQL = ("SELECT SUM(u.tasks * (p.input + p.cache_read + p.cache_5m + p.cache_1h + p.output)) AS est_tokens, "
@@ -923,7 +961,8 @@ def export_shard(c: sqlite3.Connection, where: Path) -> Path:
     lines += [json.dumps({"row": "claude_day", **dict(r)}, sort_keys=True) for r in c.execute("SELECT * FROM claude_days WHERE machine = ? ORDER BY day", (MACHINE,))]
     lines += [json.dumps({"row": "claude_account", **dict(r)}, sort_keys=True)
               for r in c.execute("SELECT * FROM claude_accounts WHERE machine = ? ORDER BY day, account", (MACHINE,))]
-    lines += [json.dumps({"row": "utilization", **dict(r)}, sort_keys=True) for r in c.execute("SELECT * FROM utilizations WHERE machine = ? ORDER BY id", (MACHINE,))]
+    lines += [json.dumps({"row": "utilization", **{k: v for k, v in dict(r).items() if k != "day"}}, sort_keys=True)  # `day` is derived per machine
+              for r in c.execute("SELECT * FROM utilizations WHERE machine = ? ORDER BY id", (MACHINE,))]
     p = shard_path(where)
     tmp = p.with_suffix(".jsonl.tmp")
     tmp.write_text("".join(line + "\n" for line in lines), encoding="utf-8")

@@ -309,3 +309,26 @@ def test_decide_books_its_jev_spend_as_a_utilization(tmp_path, monkeypatch):
     assert rows[0]["worker_usd"] == pytest.approx(0.0001) and rows[0]["orchestrator_model"] == "claude-opus-5-5"
     ledger = [json.loads(line) for line in config.LEDGER.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert [(r["job"], r["provider"], r["calls"]) for r in ledger] == [("decide", "typesafe", 3)]
+
+
+def test_old_db_migrates_to_a_stored_day_and_readers_cover_unbackfilled_rows(tmp_path):
+    import sqlite3
+
+    utilization.record({"id": "a", "ts": "2026-09-15T12:00:00+00:00", "kind": "run", "machine": utilization.MACHINE, "tasks": 1, "worker_usd": 0.01})
+    c = utilization.connect()
+    day = c.execute("SELECT day FROM utilizations WHERE id = 'a'").fetchone()[0]
+    assert day == utilization.local_day("2026-09-15T12:00:00+00:00")
+    c.execute("INSERT OR REPLACE INTO claude_days (machine, day, claude_usd, partial) VALUES (?, ?, 5.0, 0)", (utilization.MACHINE, day))
+    c.commit()
+    # A DB from before this change: no stored day on the row, version 0. The old rows must still be seen by the summary.
+    c.execute("UPDATE utilizations SET day = NULL")
+    c.commit()
+    assert utilization.totals(c)["claude_days"] == 1  # fallback path while the backfill is incomplete
+    c.execute("PRAGMA user_version = 0")
+    c.close()
+    c = utilization.connect()
+    assert c.execute("PRAGMA user_version").fetchone()[0] == utilization.SCHEMA_VERSION
+    assert c.execute("SELECT day FROM utilizations WHERE id = 'a'").fetchone()[0] == day
+    names = {r[1] for r in c.execute("PRAGMA index_list(utilizations)")}
+    assert {"utilizations_machine_day", "utilizations_machine_seq"} <= names
+    assert utilization.totals(c)["claude_days"] == 1
