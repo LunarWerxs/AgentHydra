@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import {
@@ -67,6 +68,7 @@ export interface ClaudeNativeLaunchDependencies {
   managedRoot?: string
   build?: Readonly<ClaudeManagedBuild>
   assertPortAvailable?: (port: number) => Promise<void>
+  runningExecutablePaths?: () => Promise<string[] | null>
 }
 
 function childPath(root: string, path: string): string {
@@ -493,6 +495,118 @@ async function buildCopy(
   return join(target, executable.path)
 }
 
+/** Absolute executable paths of every running process; null when the table cannot be read. */
+async function listRunningExecutablePaths(): Promise<string[] | null> {
+  const script =
+    "$ErrorActionPreference='Stop'; Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | ForEach-Object { $_.ExecutablePath }"
+  return new Promise((done) => {
+    execFile(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { windowsHide: true, timeout: 30_000, maxBuffer: 32 << 20 },
+      (error, stdout) => {
+        if (error) return done(null)
+        done(
+          String(stdout)
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean),
+        )
+      },
+    )
+  })
+}
+
+async function directoryBytes(root: string): Promise<number> {
+  let total = 0
+  for (const item of await readdir(root, { withFileTypes: true })) {
+    const path = join(root, item.name)
+    if (item.isDirectory()) total += await directoryBytes(path)
+    else if (item.isFile()) total += (await lstat(path)).size
+  }
+  return total
+}
+
+const samePath = (path: string) => resolve(path).toLowerCase()
+
+export interface ManagedCopyPrunePlan {
+  keep: { dir: string; bytes: number; reason: 'current' | 'previous' | 'in use' | 'unverified' }[]
+  remove: { dir: string; bytes: number }[]
+}
+
+/**
+ * Which managed copies to keep. Kept: the current one, the newest other one (the previous), and
+ * any a running process executes from. When the process table cannot be read nothing else is
+ * removed. Reads only; `pruneManagedCopies` does the removal.
+ */
+export async function planManagedCopyPrune(
+  managedRoot: string,
+  currentTarget: string,
+  runningPaths: () => Promise<string[] | null> = listRunningExecutablePaths,
+): Promise<ManagedCopyPrunePlan> {
+  const current = samePath(currentTarget)
+  const copies: { dir: string; stamp: number; bytes: number }[] = []
+  for (const item of await readdir(managedRoot, { withFileTypes: true })) {
+    // Staging (.building-*) and aside (.stale-*) folders are not finished copies.
+    if (!item.isDirectory() || item.name.startsWith('.')) continue
+    const dir = childPath(managedRoot, item.name)
+    let stamp: number
+    try {
+      stamp = (await lstat(join(dir, MANIFEST))).mtimeMs
+    } catch {
+      continue
+    }
+    copies.push({ dir, stamp, bytes: await directoryBytes(dir) })
+  }
+  copies.sort((a, b) => b.stamp - a.stamp)
+  const plan: ManagedCopyPrunePlan = { keep: [], remove: [] }
+  let previousKept = false
+  let running: string[] | null | undefined
+  for (const copy of copies) {
+    if (samePath(copy.dir) === current) {
+      plan.keep.push({ ...copy, reason: 'current' })
+    } else if (!previousKept) {
+      previousKept = true
+      plan.keep.push({ ...copy, reason: 'previous' })
+    } else {
+      running ??= await runningPaths()
+      const prefix = `${samePath(copy.dir)}${sep}`
+      if (!running) plan.keep.push({ ...copy, reason: 'unverified' })
+      else if (running.some((path) => samePath(path).startsWith(prefix)))
+        plan.keep.push({ ...copy, reason: 'in use' })
+      else plan.remove.push({ dir: copy.dir, bytes: copy.bytes })
+    }
+  }
+  return plan
+}
+
+/** Removes the copies `planManagedCopyPrune` allows, logging each with its size. Never throws:
+ *  a copy that cannot be removed (Windows refuses a folder in use) stays for the next launch. */
+export async function pruneManagedCopies(
+  managedRoot: string,
+  currentTarget: string,
+  runningPaths?: () => Promise<string[] | null>,
+): Promise<string[]> {
+  const removed: string[] = []
+  try {
+    const plan = await planManagedCopyPrune(managedRoot, currentTarget, runningPaths)
+    for (const copy of plan.remove) {
+      try {
+        await rm(copy.dir, { recursive: true, force: true })
+        removed.push(copy.dir)
+        console.log(
+          `[claude-native] removed old managed copy ${basename(copy.dir)} (${(copy.bytes / 1048576).toFixed(0)} MB)`,
+        )
+      } catch (error) {
+        console.warn(`[claude-native] could not remove ${basename(copy.dir)}: ${String(error)}`)
+      }
+    }
+  } catch (error) {
+    console.warn(`[claude-native] pruning old managed copies skipped: ${String(error)}`)
+  }
+  return removed
+}
+
 /** Builds a launch plan only. It never starts, stops, focuses, or edits an account profile. */
 export async function prepareClaudeNativeLaunch(
   binary: string,
@@ -522,6 +636,8 @@ export async function prepareClaudeNativeLaunch(
   } finally {
     if (preparing.get(key) === operation) preparing.delete(key)
   }
+  // The copy is verified (or just built): older ones can go. Best effort, after the checks above.
+  await pruneManagedCopies(managedRoot, dirname(managedBinary), dependencies.runningExecutablePaths)
   // Copying may take seconds on the first launch. Recheck immediately before handing off.
   await checkPort(config.port)
   return {
