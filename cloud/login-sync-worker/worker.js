@@ -205,25 +205,40 @@ async function putChunk(request, db, id, seq) {
 }
 
 // GET /v1/chats/:id/chunks?from=n — chunks in seq order, one page of at most ~8,000,000 characters.
+// Sizes first, blobs for this page only: a long chat's whole transcript (hundreds of MB) never sits
+// in the Worker's 128 MB at once.
 async function listChunks(db, id, fromParam) {
   const from = fromParam === null ? 0 : Number(fromParam)
   if (!Number.isInteger(from) || from < 0) return json({ error: 'bad from' }, 400)
-  const { results } = await db
+  const { results: sizes } = await db
     .prepare(
-      'SELECT seq, blob, by, created_at FROM chat_chunks WHERE chat = ? AND seq >= ? ORDER BY seq',
+      'SELECT seq, length(blob) AS n FROM chat_chunks WHERE chat = ? AND seq >= ? ORDER BY seq',
     )
     .bind(id, from)
     .all()
-  const rows = results || []
-  const chunks = []
+  const all = sizes || []
   let chars = 0
-  for (const r of rows) {
-    if (chunks.length && chars > MAX_PAGE_CHARS) break
-    chars += r.blob.length
-    chunks.push({ seq: r.seq, blob: r.blob, by: r.by, createdAt: r.created_at })
+  let count = 0
+  for (const r of all) {
+    if (count && chars > MAX_PAGE_CHARS) break
+    chars += r.n
+    count++
   }
-  const next = chunks.length ? chunks[chunks.length - 1].seq + 1 : from
-  return json({ chunks, next, more: chunks.length < rows.length })
+  if (!count) return json({ chunks: [], next: from, more: false })
+  const last = all[count - 1].seq
+  const { results } = await db
+    .prepare(
+      'SELECT seq, blob, by, created_at FROM chat_chunks WHERE chat = ? AND seq >= ? AND seq <= ? ORDER BY seq',
+    )
+    .bind(id, from, last)
+    .all()
+  const chunks = (results || []).map((r) => ({
+    seq: r.seq,
+    blob: r.blob,
+    by: r.by,
+    createdAt: r.created_at,
+  }))
+  return json({ chunks, next: last + 1, more: count < all.length })
 }
 
 async function putRow(request, db, t, id) {
