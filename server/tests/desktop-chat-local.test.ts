@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createChatLocal } from '../src/core/desktop-chat-local'
+import { createChatLocal, type ImportArgs } from '../src/core/desktop-chat-local'
 import type { IncomingChat } from '../src/core/desktop-chat-types'
 
 const ACCT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -98,7 +98,7 @@ describe('land', () => {
         profileRoots: () => [profile],
         projectsDir: projects,
         isRunning: async () => true,
-        importChat: async (a: any) => {
+        importChat: async (a: ImportArgs) => {
           calls.imports.push(a)
           return { ok: true }
         },

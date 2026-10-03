@@ -22,7 +22,9 @@ test('a chat row is written by compare-and-swap and listed without its blob', as
   ).toEqual({
     version: 2,
   })
-  const listed = (await store('GET', '/v1/chats')).json.chats.find((c: any) => c.id === id)
+  const listed = (await store('GET', '/v1/chats')).json.chats.find(
+    (c: { id: string }) => c.id === id,
+  )
   expect(listed.version).toBe(2)
   expect(listed.blob).toBeUndefined()
   expect((await store('GET', `/v1/chats/${id}`)).json.blob).toBe('two')
@@ -37,13 +39,15 @@ test('a chunk seq is written once, lists in order from `from`, and a page stops 
   expect(taken.status).toBe(409)
   expect(taken.json).toEqual({ error: 'taken', next: 2 })
   const all = (await store('GET', `/v1/chats/${id}/chunks`)).json
-  expect(all.chunks.map((c: any) => [c.seq, c.blob, c.by])).toEqual([
+  expect(
+    all.chunks.map((c: { seq: number; blob: string; by: string }) => [c.seq, c.blob, c.by]),
+  ).toEqual([
     [0, 'a', 'pc-a'],
     [1, 'b', 'pc-a'],
   ])
   expect(all).toMatchObject({ next: 2, more: false })
   const tail = (await store('GET', `/v1/chats/${id}/chunks?from=1`)).json
-  expect(tail.chunks.map((c: any) => c.seq)).toEqual([1])
+  expect(tail.chunks.map((c: { seq: number }) => c.seq)).toEqual([1])
   expect((await store('GET', `/v1/chats/${id}/chunks?from=5`)).json).toEqual({
     chunks: [],
     next: 5,
@@ -57,7 +61,7 @@ test('a chunk seq is written once, lists in order from `from`, and a page stops 
   expect(page.chunks).toHaveLength(8)
   expect(page).toMatchObject({ next: 8, more: true })
   const rest = (await store('GET', `/v1/chats/${big}/chunks?from=${page.next}`)).json
-  expect(rest.chunks.map((c: any) => c.seq)).toEqual([8])
+  expect(rest.chunks.map((c: { seq: number }) => c.seq)).toEqual([8])
   expect(rest.more).toBe(false)
 })
 

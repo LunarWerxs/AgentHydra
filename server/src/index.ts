@@ -437,13 +437,9 @@ app.post('/api/corch/mcp/:managerId', async (c) => {
   }
 
   // Refuse if manager doesn't exist, has no wave, or caller's pid doesn't match.
-  // The wave field is added by piece 1 (the wave store). Stub for now: refuse any request.
-  if (!managerWorker) {
+  if (!managerWorker || !managerWorker.wave) {
     return c.json({ error: 'Not a valid manager of a running wave' }, 403)
   }
-
-  // TODO: When piece 1 (wave store) adds the `wave` field to workers, check here:
-  // if (!managerWorker.wave) return c.json({ error: 'Not a valid manager of a running wave' }, 403)
 
   if (!managerWorker.attempts.length) {
     return c.json({ error: 'Not a valid manager of a running wave' }, 403)

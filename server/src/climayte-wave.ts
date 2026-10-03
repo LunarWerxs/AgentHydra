@@ -4,10 +4,10 @@
 // manager session read the same truth. This file holds the store helpers and the pure
 // functions waveStateText and waveDone.
 
-import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
-import type { CliMayteWave, CliMayteWorker } from './climayte-lib'
-import { readJsonStore, mutateJsonStore, type JsonStoreSpec } from './core/json-store'
+import { join } from 'node:path'
+import type { CliMayteTask, CliMayteWave, CliMayteWorker } from './climayte-lib'
+import { type JsonStoreSpec, mutateJsonStore, readJsonStore } from './core/json-store'
 
 // The store path for a wave record.
 export function waveStorePath(configDir: string, waveId: string): string {
@@ -78,6 +78,38 @@ export function writeWave(configDir: string, wave: CliMayteWave): void {
   }
 }
 
+function formatTaskProofParts(proof: NonNullable<CliMayteTask['proof']>): string[] {
+  const parts: string[] = []
+  if (proof.check !== null) {
+    parts.push(`check: ${proof.check ? 'pass' : 'fail'}`)
+  }
+  if (proof.commits.length > 0) {
+    parts.push(`commits: ${proof.commits.join(', ')}`)
+  }
+  if (proof.paths !== null) {
+    parts.push(`paths: ${proof.paths ? 'ok' : 'mismatch'}`)
+  }
+  if (proof.note) {
+    parts.push(proof.note)
+  }
+  return parts
+}
+
+function formatTaskLine(task: CliMayteTask, worker: CliMayteWorker | null): string {
+  const workerStatus = worker ? `${worker.id.slice(0, 10)} (${worker.status})` : 'none'
+  let line = `- ${task.key}: ${task.state}`
+  if (worker) {
+    line += ` → ${workerStatus}`
+  }
+  if (task.proof) {
+    const parts = formatTaskProofParts(task.proof)
+    if (parts.length > 0) {
+      line += ` {${parts.join('; ')}}`
+    }
+  }
+  return line
+}
+
 // Pure: render the wave state as human-readable text. One line per task with its state, worker,
 // proof and rounds. Escalations and notes follow. Used to brief the manager at the start and
 // when it wakes. About 2-4k tokens for 20 tasks.
@@ -94,30 +126,7 @@ export function waveStateText(wave: CliMayteWave, workers: Map<string, CliMayteW
 
   for (const task of wave.tasks) {
     const worker = task.workerId ? workers.get(task.workerId) : null
-    const workerStatus = worker ? `${worker.id.slice(0, 10)} (${worker.status})` : 'none'
-    let line = `- ${task.key}: ${task.state}`
-    if (worker) {
-      line += ` → ${workerStatus}`
-    }
-    if (task.proof) {
-      const parts: string[] = []
-      if (task.proof.check !== null) {
-        parts.push(`check: ${task.proof.check ? 'pass' : 'fail'}`)
-      }
-      if (task.proof.commits.length > 0) {
-        parts.push(`commits: ${task.proof.commits.join(', ')}`)
-      }
-      if (task.proof.paths !== null) {
-        parts.push(`paths: ${task.proof.paths ? 'ok' : 'mismatch'}`)
-      }
-      if (task.proof.note) {
-        parts.push(task.proof.note)
-      }
-      if (parts.length > 0) {
-        line += ` {${parts.join('; ')}}`
-      }
-    }
-    lines.push(line)
+    lines.push(formatTaskLine(task, worker))
   }
 
   if (wave.escalations.length > 0) {

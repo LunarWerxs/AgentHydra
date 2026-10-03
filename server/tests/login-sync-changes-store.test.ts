@@ -151,8 +151,9 @@ test('the list header provides a cursor that misses nothing', async () => {
 
   // A changes call with the initial cursor should show both writes.
   const changes = (await store('GET', `/v1/changes?since=${cursor}`)).json
-  expect(changes.logins.map((l: any) => l.id).sort()).toContainEqual(id1)
-  expect(changes.logins.map((l: any) => l.id).sort()).toContainEqual(id2)
+  const loginIds = changes.logins.map((l: { id: string }) => l.id).sort()
+  expect(loginIds).toContainEqual(id1)
+  expect(loginIds).toContainEqual(id2)
 
   // A changes call with the new cursor should show nothing.
   const nextChanges = (await store('GET', `/v1/changes?since=${newCursor}`)).json
@@ -222,7 +223,7 @@ test('updating a login that was deleted clears its tombstone', async () => {
 
   // Changes should show the write but not the delete (tombstone was cleared).
   const changes = (await store('GET', `/v1/changes?since=${cursor}`)).json
-  const gone = changes.gone.filter((g: any) => g.id === id)
+  const gone = changes.gone.filter((g: { id: string }) => g.id === id)
   // The tombstone from the delete was created, but it was cleared when we recreated the login.
   // So we should see the final write, and either the tombstone is gone or there are multiple entries.
   // Actually, looking at the implementation, when we recreate, we clear the tombstone with:
@@ -251,9 +252,9 @@ test('row count measurements for the changes feed', async () => {
   // - N rows from the table (however many rows exist)
   // Total: 3 (for store_rev) + total_rows_in_tables
 
-  const loginsList = (await store('GET', '/v1/logins')).json.logins
-  const queuesList = (await store('GET', '/v1/queues')).json.queues
-  const chatsList = (await store('GET', '/v1/chats')).json.chats
+  await store('GET', '/v1/logins')
+  await store('GET', '/v1/queues')
+  await store('GET', '/v1/chats')
 
   // Each list call reads:
   // - 1 row for store_rev

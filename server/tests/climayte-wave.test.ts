@@ -1,8 +1,8 @@
 // CliMayte waves: the wave record, the pure helpers that parse its state.
-import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { CliMayteWave, CliMayteWorker } from '../src/climayte-lib'
 import { readWave, waveDone, waveStateText, writeWave } from '../src/climayte-wave'
 

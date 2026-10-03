@@ -10,7 +10,15 @@
 
 import { afterAll, expect, test } from 'bun:test'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ARCHIVED_KEEP_MS, chatSyncRows, syncChats } from '../src/core/desktop-chat-sync'
@@ -26,12 +34,18 @@ import { store } from './login-sync-store'
 
 const key = randomBytes(32)
 const pcs = new Set<string>()
+const tempDirs = new Set<string>()
 
 // The store is shared by every test file in the process: leave none of this file's chats in it, or
 // another file's PC meets rows it cannot open.
 afterAll(async () => {
   for (const r of (await store('GET', '/v1/chats')).json.chats)
     if (pcs.has(r.meta?.pc)) await store('DELETE', `/v1/chats/${r.id}?version=${r.version}`)
+  for (const dir of tempDirs) {
+    try {
+      rmSync(dir, { recursive: true })
+    } catch {}
+  }
 })
 
 interface Pc {
@@ -49,6 +63,7 @@ interface Pc {
 
 function pc(name: string, useKey = key): Pc {
   const dir = mkdtempSync(join(tmpdir(), 'chat-sync-'))
+  tempDirs.add(dir)
   const chats: LocalChat[] = []
   const landed: IncomingChat[] = []
   const appends: Array<[string, number]> = []
