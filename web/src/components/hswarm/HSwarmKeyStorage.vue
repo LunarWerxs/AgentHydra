@@ -49,11 +49,14 @@ const inVault = computed(() => status.value?.mode === 'vault')
 async function load() {
   try {
     status.value = await apiCall('vault/status')
-    requests.value = inVault.value && (status.value?.pending_requests ?? 0) > 0
-      ? (await apiCall('vault/requests')).requests
-      : []
+    requests.value =
+      inVault.value && (status.value?.pending_requests ?? 0) > 0
+        ? (await apiCall('vault/requests')).requests
+        : []
   } catch (error) {
-    toast.error(`${t('hswarm.v.providers.storage.loadError')}: ${error instanceof Error ? error.message : ''}`)
+    toast.error(
+      `${t('hswarm.v.providers.storage.loadError')}: ${error instanceof Error ? error.message : ''}`,
+    )
   }
 }
 
@@ -118,7 +121,13 @@ async function checkGrant() {
 
 async function grant(r: PendingRequest) {
   const fingerprint = typedFingerprint.value[r.machine] ?? ''
-  if (await run('vault/grant', { machine: r.machine, fingerprint }, t('hswarm.v.providers.storage.grantDone', { machine: r.machine }))) {
+  if (
+    await run(
+      'vault/grant',
+      { machine: r.machine, fingerprint },
+      t('hswarm.v.providers.storage.grantDone', { machine: r.machine }),
+    )
+  ) {
     typedFingerprint.value[r.machine] = ''
   }
 }

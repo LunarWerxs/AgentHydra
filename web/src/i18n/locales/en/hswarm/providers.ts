@@ -114,7 +114,8 @@ export default {
     sendRequest: 'Send request',
     pairingCode: 'Pairing code',
     joinVault: 'Join vault',
-    requestWaiting: 'Waiting for a vault machine to grant this request. Check that it shows this fingerprint.',
+    requestWaiting:
+      'Waiting for a vault machine to grant this request. Check that it shows this fingerprint.',
     checkGrant: 'Check for grant',
     notGrantedYet: 'Not granted yet',
     requests: 'Requests for access',
@@ -127,7 +128,8 @@ export default {
     phFolder: 'hswarm-vault',
     phPath: 'D:/Dropbox/hswarm-vault',
     phCode: 'zsv1-…',
-    confirmLeave: 'Stop using the vault on this machine? The keys in this folder and the vault itself stay as they are.',
+    confirmLeave:
+      'Stop using the vault on this machine? The keys in this folder and the vault itself stay as they are.',
     loadError: 'Could not load key storage',
     failed: 'The vault call failed',
     initDone: 'Vault set up',
