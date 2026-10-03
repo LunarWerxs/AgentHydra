@@ -21,7 +21,12 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ARCHIVED_KEEP_MS, chatSyncRows, syncChats } from '../src/core/desktop-chat-sync'
+import {
+  ARCHIVED_KEEP_MS,
+  CHAT_PUSH_EVERY_MS,
+  chatSyncRows,
+  syncChats,
+} from '../src/core/desktop-chat-sync'
 import type {
   ChatIo,
   ChatLocal,
@@ -150,6 +155,9 @@ function pc(name: string, useKey = key): Pc {
   return self
 }
 
+/** A pass far enough after the last one that a chat still growing is sent, not held back. */
+const pastHold = () => Date.now() + CHAT_PUSH_EVERY_MS
+
 const rowFor = async (id: string) =>
   (await store('GET', '/v1/chats')).json.chats.find((r: { id: string }) => r.id === id)
 
@@ -186,7 +194,7 @@ test('A appends turns and B fetches only the new chunks, appending at the length
   expect(b.appends.filter(([s]) => s === chat.sessionId).map(([, n]) => n)).toEqual([0])
 
   a.extend(chat, '{"n":2}\n{"n":3}\n')
-  await syncChats(a.io)
+  await syncChats(a.io, pastHold())
   await syncChats(b.io)
 
   expect(b.appends.filter(([s]) => s === chat.sessionId).map(([, n]) => n)).toEqual([0, 8])
@@ -238,9 +246,10 @@ test('a chat continued on both PCs between passes is diverged and neither transc
 
   a.extend(chat, '{"a":1}\n')
   b.extend(bChat, '{"b":1}\n')
-  await syncChats(a.io)
+  const later = pastHold()
+  await syncChats(a.io, later)
   await syncChats(b.io)
-  await syncChats(a.io)
+  await syncChats(a.io, later)
 
   expect(chatSyncRows(b.io.statePath).find((r) => r.id === chat.id)?.state).toBe('diverged')
   expect(a.text(chat)).toBe('{"n":1}\n{"a":1}\n')
@@ -256,9 +265,39 @@ test('a last line with no newline yet is not sent until it ends', async () => {
   expect(b.text(chat)).toBe('{"n":1}\n')
 
   a.extend(chat, '}\n')
-  await syncChats(a.io)
+  await syncChats(a.io, pastHold())
   await syncChats(b.io)
   expect(b.text(chat)).toBe('{"n":1}\n{"n":2}\n')
+})
+
+test('a chat still being written in goes up when it stops growing or every few minutes; an archive at once', async () => {
+  const a = pc('PC-A')
+  const chat = a.add({}, '{"n":1}\n')
+  const t = Date.now()
+  await syncChats(a.io, t)
+  const version = (await rowFor(chat.id)).version
+
+  // Growing on every pass: held until CHAT_PUSH_EVERY_MS after the last send.
+  a.extend(chat, '{"n":2}\n')
+  await syncChats(a.io, t + 30_000)
+  a.extend(chat, '{"n":3}\n')
+  await syncChats(a.io, t + 60_000)
+  expect(await rowFor(chat.id)).toMatchObject({ version, meta: { b: 8 } })
+  a.extend(chat, '{"n":4}\n')
+  await syncChats(a.io, t + CHAT_PUSH_EVERY_MS)
+  expect((await rowFor(chat.id)).meta.b).toBe(32)
+
+  // A turn that ends goes on the pass after, without waiting out the interval.
+  a.extend(chat, '{"n":5}\n')
+  await syncChats(a.io, t + CHAT_PUSH_EVERY_MS + 30_000)
+  expect((await rowFor(chat.id)).meta.b).toBe(32)
+  await syncChats(a.io, t + CHAT_PUSH_EVERY_MS + 60_000)
+  expect((await rowFor(chat.id)).meta.b).toBe(40)
+
+  a.extend(chat, '{"n":6}\n')
+  ;(a.chats.find((c) => c.id === chat.id) as LocalChat).archived = true
+  await syncChats(a.io, t + CHAT_PUSH_EVERY_MS + 90_000)
+  expect((await rowFor(chat.id)).meta.a).toBe(1)
 })
 
 test('one session filed under two visible records goes up once, through the most recently active', async () => {

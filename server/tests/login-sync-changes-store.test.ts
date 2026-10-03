@@ -137,7 +137,7 @@ test('rows read: an idle changes call against one full set of list calls', async
   for (let i = 0; i < 10; i++) await put('logins')
   for (let i = 0; i < 10; i++) await put('chats', undefined, { s: newId() })
   for (let i = 0; i < 2; i++) await put('queues')
-  const cursor = await listRev()
+  const { rev: cursor } = await changes(0) // a list call here would keep the logins list
 
   storeDb.resetRowsRead()
   expect(await changes(cursor)).toEqual({
@@ -157,4 +157,46 @@ test('rows read: an idle changes call against one full set of list calls', async
   expect(idle).toBe(1)
   expect(lists).toBeGreaterThanOrEqual(22)
   expect(idle).toBeLessThanOrEqual(lists * 0.05)
+})
+
+test('rows read: a changes call reads the changed rows only, and a list nothing changed reads its check', async () => {
+  for (let i = 0; i < 10; i++) await put('logins')
+  const { rev: cursor } = await changes(0)
+  const chat = await put('chats', undefined, { s: newId() })
+
+  storeDb.resetRowsRead()
+  expect((await changes(cursor)).chats.map((r: { id: string }) => r.id)).toEqual([chat])
+  expect(storeDb.rowsRead()).toBe(3) // store_rev twice, then the one changed row
+
+  await store('GET', '/v1/logins')
+  storeDb.resetRowsRead()
+  await store('GET', '/v1/logins')
+  expect(storeDb.rowsRead()).toBeLessThanOrEqual(3) // store_rev and two index tops, not the table
+})
+
+test('a kept list shows every write: an update, a delete below the top, a new row', async () => {
+  const low = await put('logins')
+  const top = await put('logins')
+  const listed = async (): Promise<Map<string, number>> =>
+    new Map(
+      (await store('GET', '/v1/logins')).json.logins.map((r: { id: string; version: number }) => [
+        r.id,
+        r.version,
+      ]),
+    )
+  await listed()
+  const kept = await listed()
+  expect([kept.get(low), kept.get(top)]).toEqual([1, 1])
+
+  expect((await store('DELETE', `/v1/logins/${low}?version=1`)).status).toBe(200)
+  made.logins.delete(low)
+  expect((await listed()).has(low)).toBe(false)
+
+  const updated = await store('PUT', `/v1/logins/${top}`, { version: 1, blob: 'x', meta: {} })
+  expect(updated.json).toEqual({ version: 2 })
+  made.logins.set(top, 2)
+  expect((await listed()).get(top)).toBe(2)
+
+  const fresh = await put('logins')
+  expect((await listed()).get(fresh)).toBe(1)
 })

@@ -12,17 +12,32 @@ type Result = { results: any[]; meta: { changes: number; rows_read: number } }
 
 /**
  * D1's prepare/bind/first/all/run/batch over bun:sqlite: the Worker's storage, nothing more.
- * `meta.rows_read` is the rows a statement returned or changed, which for the Worker's indexed or
- * keyed queries is the rows it looked at; `rowsRead` totals it since the last `resetRowsRead()`.
+ * `meta.rows_read` is, like D1's bill, the rows a statement looked at: a SELECT whose plan walks a
+ * whole table counts every row of it, else the rows returned or changed. `rowsRead` totals it since
+ * the last `resetRowsRead()`.
  */
 export function d1(db: Database) {
   let rowsRead = 0
+  // SCAN walks a whole table or index; a SEARCH using no index (MAX of an unindexed column) does too.
+  const scanned = (sql: string, args: Arg[]): number => {
+    let n = 0
+    const plan = db.query(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as Array<{ detail: string }>
+    for (const { detail } of plan) {
+      const m = /^(SCAN|SEARCH) (\w+)(.*)$/.exec(detail)
+      if (m && (m[1] === 'SCAN' || !m[3].includes('USING')))
+        n += (db.query(`SELECT COUNT(*) AS n FROM ${m[2]}`).get() as { n: number }).n
+    }
+    return n
+  }
   const exec = (sql: string, args: Arg[]): Result => {
     const returns = /^\s*(SELECT|PRAGMA)/i.test(sql) || /\bRETURNING\b/i.test(sql)
     if (returns) {
       const results = db.query(sql).all(...args) as any[]
-      rowsRead += results.length
-      return { results, meta: { changes: 0, rows_read: results.length } }
+      const read = /^\s*SELECT/i.test(sql)
+        ? Math.max(results.length, scanned(sql, args))
+        : results.length
+      rowsRead += read
+      return { results, meta: { changes: 0, rows_read: read } }
     }
     const changes = db.query(sql).run(...args).changes
     rowsRead += changes

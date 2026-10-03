@@ -34,6 +34,10 @@ import { MIRROR_FRESH_MS } from './login-sync-mirror'
 
 /** Raw transcript bytes one pass reads in all; the rest goes on the next pass. */
 export const PASS_READ_MAX = 64 * 1024 * 1024
+/** A shared chat still being written in goes up at most this often. Each send is several D1 writes,
+ *  and a chat a session is working in grows on nearly every 30 s pass: 2026-10-03 measured 513 chat
+ *  sends in 45 minutes. Its new turns still go one pass after it stops growing. */
+export const CHAT_PUSH_EVERY_MS = 5 * 60_000
 /** One read window. A line longer than this grows the window until it ends. */
 const WINDOW = 8 * 1024 * 1024
 /** How long an archived chat stays in the store, so the other PC takes the archive first (owner,
@@ -71,6 +75,9 @@ interface ChatState {
   retry: boolean
   /** When the chat last changed in the store (epoch ms). */
   at: number | null
+  /** When this PC last sent it (epoch ms, this PC's clock), and the local size the last pass saw. */
+  pushedAt?: number
+  seen?: number
   /** Left the store (archived three days): never sent again, not listed. */
   gone?: boolean
 }
@@ -397,6 +404,22 @@ function sendableState(
   return st ?? newState(io, c)
 }
 
+/** A shared chat that grew since the last pass and went up less than CHAT_PUSH_EVERY_MS ago is
+ *  still being written in: it waits. It goes once it stops growing or the interval is up; an archive
+ *  change, an unfinished upload or a backlog still catching up goes at once. Notes the size seen. */
+function stillWriting(st: ChatState, row: StoreRow, c: LocalChat, now: number): boolean {
+  const grew = st.seen !== undefined && c.size !== st.seen
+  st.seen = c.size
+  return (
+    grew &&
+    c.archived === (row.meta?.a === 1) &&
+    !st.up &&
+    st.state === 'synced' &&
+    st.pushedAt !== undefined &&
+    now - st.pushedAt < CHAT_PUSH_EVERY_MS
+  )
+}
+
 /** Send one local chat's new bytes and record. Returns what is left of the pass's read budget. */
 async function sendChat(
   io: ChatIo,
@@ -409,6 +432,7 @@ async function sendChat(
   const row = rows.get(c.id)
   const st = sendableState(io, state, row, c)
   if (!st) return budget
+  if (row && stillWriting(st, row, c, now)) return budget
   const start = st.up ?? { bytes: st.bytes, chunks: st.chunks }
   let at = start
   let out: SendOutcome = 'done'
@@ -458,6 +482,8 @@ async function sendChat(
     note: null,
     retry: false,
     at: now,
+    pushedAt: now,
+    seen: c.size,
   })
   if (row) {
     row.version = st.version

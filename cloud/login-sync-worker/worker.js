@@ -82,6 +82,8 @@ async function ensureSchema(db) {
       'CREATE TABLE IF NOT EXISTS tombstones (table_name TEXT NOT NULL, id TEXT NOT NULL, rev INTEGER NOT NULL, time INTEGER NOT NULL, PRIMARY KEY (table_name, id))',
     )
     .run()
+  // The changes feed and the list check read tombstones by rev: without it each reads them all.
+  await db.prepare('CREATE INDEX IF NOT EXISTS tombstones_rev ON tombstones(rev)').run()
   await db
     .prepare(
       'CREATE TABLE IF NOT EXISTS store_rev (id INTEGER PRIMARY KEY CHECK (id = 1), rev INTEGER NOT NULL, floor INTEGER NOT NULL)',
@@ -157,19 +159,50 @@ const row = (t, r) =>
     ...(r.blob !== undefined ? { blob: r.blob } : {}),
   }
 
+// Each list, kept in this isolate while its table has not changed. D1 bills the rows a query looks
+// at, so a PC listing a table every 30 s paid for every row of it each time; a list that has not
+// changed now costs its check, three indexed rows. The check sees every write: an insert or update
+// gives its row the newest rev (the table's top), a delete leaves a tombstone at the newest rev, and
+// dropping old tombstones raises floor. A list older than LIST_KEEP_MS is read again anyway, so a
+// row changed by hand-run SQL (which moves no rev) shows within minutes.
+const LIST_KEEP_MS = 10 * 60 * 1000
+const listCache = new Map()
+const listCheck = (db, t) =>
+  db.prepare(
+    `SELECT rev, floor, (SELECT MAX(rev) FROM ${t.table}) AS top, (SELECT MAX(rev) FROM tombstones) AS gone FROM store_rev WHERE id = 1`,
+  )
+const stampOf = (c) => `${c?.top ?? ''}/${c?.gone ?? ''}/${c?.floor ?? 0}`
+
 // GET /v1/logins, GET /v1/queues, GET /v1/chats — the shared list, without the encrypted blobs. The
-// store rev is read in the same batch and sent as x-store-rev, so a client can start its changes
-// cursor there without missing a write.
+// store rev is read in the same statement or batch and sent as x-store-rev, so a client can start
+// its changes cursor there without missing a write.
 async function listRows(db, t) {
-  const [revRes, listRes] = await db.batch([
-    db.prepare('SELECT rev FROM store_rev WHERE id = 1'),
+  const now = Date.now()
+  const kept = listCache.get(t.table)
+  if (kept && now - kept.at < LIST_KEEP_MS) {
+    const check = await listCheck(db, t).first()
+    if (stampOf(check) === kept.stamp) return listResponse(kept.body, check.rev)
+  }
+  const [checkRes, listRes] = await db.batch([
+    listCheck(db, t),
     db.prepare(`SELECT ${t.key}, version, meta, updated_at FROM ${t.table} ORDER BY ${t.key}`),
   ])
-  const rows = (listRes.results || []).map((r) => row(t, r))
-  const response = json({ [LIST_NAME[t.table]]: rows })
-  response.headers.set('x-store-rev', String(revRes.results?.[0]?.rev ?? 0))
-  return response
+  const check = checkRes.results?.[0]
+  const body = JSON.stringify({
+    [LIST_NAME[t.table]]: (listRes.results || []).map((r) => row(t, r)),
+  })
+  listCache.set(t.table, { stamp: stampOf(check), body, at: now })
+  return listResponse(body, check?.rev ?? 0)
 }
+
+const listResponse = (body, rev) =>
+  new Response(body, {
+    headers: {
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+      'x-store-rev': String(rev),
+    },
+  })
 
 // GET /v1/logins/:id, GET /v1/queues/:pc — one stored row, blob included.
 async function fetchRow(db, t, id) {
@@ -380,7 +413,9 @@ const changed = (t, r) => ({
 // GET /v1/changes?since=<n> — what changed after cursor n. The store_rev row is read alone first:
 // an idle cursor (n equals rev) is answered from that one row. Otherwise the rev, floor, changed rows
 // and tombstones come from ONE batch, one consistent snapshot. full: true when n is older than the
-// kept tombstones (below floor) or newer than the store (it was reset).
+// kept tombstones (below floor) or newer than the store (it was reset). Each query is in rev order so
+// it walks the rev index from n and reads only the changed rows; in key order D1 read the whole
+// table on every call.
 async function getChanges(db, sinceParam) {
   const since = Number(sinceParam)
   if (sinceParam === null || sinceParam === '' || !Number.isInteger(since))
@@ -392,17 +427,15 @@ async function getChanges(db, sinceParam) {
   const [revRes, logins, queues, chats, tombs] = await db.batch([
     db.prepare('SELECT rev, floor FROM store_rev WHERE id = 1'),
     db
-      .prepare('SELECT id, version, meta, updated_at FROM logins WHERE rev > ? ORDER BY id')
+      .prepare('SELECT id, version, meta, updated_at FROM logins WHERE rev > ? ORDER BY rev')
       .bind(since),
     db
-      .prepare('SELECT pc, version, meta, updated_at FROM queues WHERE rev > ? ORDER BY pc')
+      .prepare('SELECT pc, version, meta, updated_at FROM queues WHERE rev > ? ORDER BY rev')
       .bind(since),
     db
-      .prepare('SELECT id, version, meta, updated_at FROM chats WHERE rev > ? ORDER BY id')
+      .prepare('SELECT id, version, meta, updated_at FROM chats WHERE rev > ? ORDER BY rev')
       .bind(since),
-    db
-      .prepare('SELECT table_name, id FROM tombstones WHERE rev > ? ORDER BY table_name, id')
-      .bind(since),
+    db.prepare('SELECT table_name, id FROM tombstones WHERE rev > ? ORDER BY rev').bind(since),
   ])
   const rev = revRes.results?.[0]?.rev ?? 0
   const floor = revRes.results?.[0]?.floor ?? 0
