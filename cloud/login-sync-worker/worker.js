@@ -21,6 +21,13 @@
 //   GET    /v1/queues            {queues:[{pc, version, meta, updatedAt}]}   (CliMayte queue snapshots,
 //   GET    /v1/queues/:pc        {pc, version, blob, meta, updatedAt} | 404   one per PC, in their own
 //   PUT    /v1/queues/:pc        {version, blob, meta} -> {version} | 409     table; blob up to 256 KB)
+//   GET    /v1/chats             {chats:[{id, version, meta, updatedAt}]}   (desktop chat sync: one row
+//   GET    /v1/chats/:id         {id, version, blob, meta, updatedAt} | 404  per chat, written like a
+//   PUT    /v1/chats/:id         {version, blob, meta} -> {version} | 409     login; blob up to 256 KB)
+//   DELETE /v1/chats/:id?version=n   -> {ok:true} (row and all its chunks) | 409
+//   PUT    /v1/chats/:id/chunks/:seq {blob, by}: an append-only transcript piece, written once
+//                                -> {seq}; 409 {error:'taken', next} when that seq exists
+//   GET    /v1/chats/:id/chunks?from=n  {chunks:[{seq, blob, by, createdAt}], next, more}
 
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const MAX_META = 4 * 1024
@@ -31,16 +38,29 @@ const MAX_META = 4 * 1024
 // login on that PC.
 const LOGINS = { table: 'logins', key: 'id', maxBlob: 64 * 1024 }
 const QUEUES = { table: 'queues', key: 'pc', maxBlob: 256 * 1024 }
+const CHATS = { table: 'chats', key: 'id', maxBlob: 256 * 1024 }
+const LIST_NAME = { logins: 'logins', queues: 'queues', chats: 'chats' }
+
+// chat transcript chunks: append-only, one row per (chat, seq), never changed once written
+const MAX_CHUNK = 1048576
+const MAX_SEQ = 1000000
+const MAX_BY = 64
+const MAX_PAGE_CHARS = 8000000
 
 let schemaReady = false
 async function ensureSchema(db) {
   if (schemaReady) return
-  for (const t of [LOGINS, QUEUES])
+  for (const t of [LOGINS, QUEUES, CHATS])
     await db
       .prepare(
         `CREATE TABLE IF NOT EXISTS ${t.table} (${t.key} TEXT PRIMARY KEY, version INTEGER NOT NULL, blob TEXT NOT NULL, meta TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
       )
       .run()
+  await db
+    .prepare(
+      'CREATE TABLE IF NOT EXISTS chat_chunks (chat TEXT NOT NULL, seq INTEGER NOT NULL, blob TEXT NOT NULL, by TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (chat, seq))',
+    )
+    .run()
   schemaReady = true
 }
 
@@ -87,7 +107,7 @@ async function listRows(db, t) {
     .prepare(`SELECT ${t.key}, version, meta, updated_at FROM ${t.table} ORDER BY ${t.key}`)
     .all()
   const rows = (results || []).map((r) => row(t, r))
-  return json(t === QUEUES ? { queues: rows } : { logins: rows })
+  return json({ [LIST_NAME[t.table]]: rows })
 }
 
 // GET /v1/logins/:id, GET /v1/queues/:pc — one stored row, blob included.
@@ -144,6 +164,68 @@ async function deleteLogin(db, id, version) {
   return json({ error: 'version conflict' }, 409)
 }
 
+// DELETE /v1/chats/:id — the row delete is the compare-and-swap; its chunks go only after it won.
+async function deleteChat(db, id, version) {
+  if (!Number.isInteger(version) || version < 1) return json({ error: 'bad version' }, 400)
+  const result = await db
+    .prepare('DELETE FROM chats WHERE id = ? AND version = ?')
+    .bind(id, version)
+    .run()
+  if ((result?.meta?.changes ?? 0) !== 1) return json({ error: 'version conflict' }, 409)
+  await db.prepare('DELETE FROM chat_chunks WHERE chat = ?').bind(id).run()
+  return json({ ok: true })
+}
+
+// PUT /v1/chats/:id/chunks/:seq — insert once; a taken seq answers where the chat's chunks end.
+async function putChunk(request, db, id, seq) {
+  let body
+  try {
+    body = await request.json()
+  } catch {
+    return json({ error: 'body must be JSON' }, 400)
+  }
+  const blob = body?.blob
+  const by = body?.by ?? ''
+  if (!Number.isInteger(seq) || seq < 0 || seq > MAX_SEQ) return json({ error: 'bad seq' }, 400)
+  if (typeof blob !== 'string' || !blob || blob.length > MAX_CHUNK)
+    return json({ error: 'bad blob' }, 400)
+  if (typeof by !== 'string' || by.length > MAX_BY) return json({ error: 'bad by' }, 400)
+  const result = await db
+    .prepare(
+      'INSERT INTO chat_chunks (chat, seq, blob, by, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(chat, seq) DO NOTHING',
+    )
+    .bind(id, seq, blob, by, Date.now())
+    .run()
+  if ((result?.meta?.changes ?? 0) === 1) return json({ seq })
+  const top = await db
+    .prepare('SELECT MAX(seq) AS top FROM chat_chunks WHERE chat = ?')
+    .bind(id)
+    .first()
+  return json({ error: 'taken', next: (top?.top ?? -1) + 1 }, 409)
+}
+
+// GET /v1/chats/:id/chunks?from=n — chunks in seq order, one page of at most ~8,000,000 characters.
+async function listChunks(db, id, fromParam) {
+  const from = fromParam === null ? 0 : Number(fromParam)
+  if (!Number.isInteger(from) || from < 0) return json({ error: 'bad from' }, 400)
+  const { results } = await db
+    .prepare(
+      'SELECT seq, blob, by, created_at FROM chat_chunks WHERE chat = ? AND seq >= ? ORDER BY seq',
+    )
+    .bind(id, from)
+    .all()
+  const rows = results || []
+  const chunks = []
+  let chars = 0
+  for (const r of rows) {
+    if (chunks.length && chars > MAX_PAGE_CHARS) break
+    chars += r.blob.length
+    chunks.push({ seq: r.seq, blob: r.blob, by: r.by, createdAt: r.created_at })
+  }
+  const next = chunks.length ? chunks[chunks.length - 1].seq + 1 : from
+  return json({ chunks, next, more: chunks.length < rows.length })
+}
+
 async function putRow(request, db, t, id) {
   let body
   try {
@@ -167,9 +249,21 @@ export default {
     if (path === '/v1/logins' && request.method === 'GET') return listRows(db, LOGINS)
     if (path === '/v1/queues' && request.method === 'GET') return listRows(db, QUEUES)
 
-    const m = /^\/v1\/(logins|queues)\/([^/]+)$/.exec(path)
+    if (path === '/v1/chats' && request.method === 'GET') return listRows(db, CHATS)
+
+    const c = /^\/v1\/chats\/([^/]+)\/chunks(?:\/([^/]+))?$/.exec(path)
+    if (c) {
+      if (!ID_RE.test(c[1])) return json({ error: 'bad id' }, 400)
+      if (c[2] === undefined && request.method === 'GET')
+        return listChunks(db, c[1], url.searchParams.get('from'))
+      if (c[2] !== undefined && request.method === 'PUT')
+        return putChunk(request, db, c[1], /^\d+$/.test(c[2]) ? Number(c[2]) : Number.NaN)
+      return json({ error: 'method not allowed' }, 405)
+    }
+
+    const m = /^\/v1\/(logins|queues|chats)\/([^/]+)$/.exec(path)
     if (!m) return json({ error: 'not found' }, 404)
-    const t = m[1] === 'queues' ? QUEUES : LOGINS
+    const t = m[1] === 'queues' ? QUEUES : m[1] === 'chats' ? CHATS : LOGINS
     const id = m[2]
     if (!ID_RE.test(id)) return json({ error: 'bad id' }, 400)
 
@@ -178,6 +272,8 @@ export default {
 
     if (request.method === 'DELETE' && t === LOGINS)
       return deleteLogin(db, id, Number(url.searchParams.get('version')))
+    if (request.method === 'DELETE' && t === CHATS)
+      return deleteChat(db, id, Number(url.searchParams.get('version')))
 
     return json({ error: 'method not allowed' }, 405)
   },

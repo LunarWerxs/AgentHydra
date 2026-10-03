@@ -56,6 +56,15 @@ token, never the token.
 | `GET /v1/queues` | each PC's CliMayte queue snapshot: pc id, version, meta (name, time, count) |
 | `GET /v1/queues/:pc` | one PC's encrypted queue blob (up to 256 KB) |
 | `PUT /v1/queues/:pc` | `{version, blob, meta}`, written like a login (compare-and-swap on the version) |
+| `GET /v1/chats` | each synced desktop chat: id, version, meta (no blobs) |
+| `GET /v1/chats/:id` | one chat's encrypted blob (up to 256 KB) |
+| `PUT /v1/chats/:id` | `{version, blob, meta}`, written like a login (compare-and-swap on the version) |
+| `DELETE /v1/chats/:id?version=n` | removes the chat row and all its chunks when `n` is current, else 409 |
+| `PUT /v1/chats/:id/chunks/:seq` | `{blob, by}`: an append-only transcript piece (up to 1,048,576 characters), written once; 409 `{error:'taken', next}` if that seq exists |
+| `GET /v1/chats/:id/chunks?from=n` | `{chunks, next, more}`: chunks from seq `n` in order, one page of about 8,000,000 characters |
+
+The chat routes (desktop chat sync) need this Worker **redeployed** too: paste the new `worker.js` over
+the old one. Chats and chunks live in their own `chats` and `chat_chunks` tables.
 
 The queue routes (the "Share CliMayte queue" toggle in AgentHydra) need this Worker **redeployed
 once**: paste the new `worker.js` over the old one. Queues live in their own `queues` table, never in
