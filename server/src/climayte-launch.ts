@@ -56,6 +56,7 @@ import { readWave, waveStateText } from './climayte-wave'
 import { PORT } from './config'
 import { MCP_PATH, MCP_SERVER_KEY } from './mcp-register'
 import { getOrchestratorDaemonUrl } from './orchestrator'
+import { getProviderSettings } from './provider-settings'
 
 /** Piece 6: when a manager's conversation exceeds this (the newest request's input, cache reads and
  *  cache writes), the next wake starts a fresh session from waveStateText instead of a handoff note. */
@@ -277,6 +278,18 @@ function launchText(
   if (note) return handoffText(w, last, note, p.oldSession, accounts, acct)
   if (p.delivers) return followUpText(w, p)
   return goOnText(w, last, p) ?? w.prompt
+}
+
+/** The owner's worker preamble (`climayteWorkerPreamble`, empty by default) ahead of the first
+ *  message of a session that starts here: a new task, a retry or move with no session to resume, a
+ *  handoff's fresh session. A resumed session already had it, so a message sent to a worker never
+ *  gets it, and a message re-sent from the attempt before (prevPromptOf) already starts with it. A
+ *  wave's manager is not a worker and never gets it. */
+function withPreamble(w: CliMayteWorker, p: LaunchPlan, text: string): string {
+  const preamble = getProviderSettings().climayteWorkerPreamble
+  if (!preamble || p.resume || p.wake || w.kind === 'manage') return text
+  const head = `${preamble}\n\n`
+  return text.startsWith(head) ? text : head + text
 }
 
 /** The MCP servers a worker never gets. AgentHydra's own: 84 of a worker's 138 tools were
@@ -610,7 +623,7 @@ export function launch(
     resume,
     ...deliveryPlan(w, last, fresh),
   }
-  const text = launchText(w, plan, accounts, acct)
+  const text = withPreamble(w, plan, launchText(w, plan, accounts, acct))
 
   mkdirSync(LOGS, { recursive: true })
   mkdirSync(PROMPTS, { recursive: true })

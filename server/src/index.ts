@@ -633,6 +633,8 @@ app.post('/api/settings', async (c) => {
     keepaliveWeeklyFloorPct:
       typeof body.keepaliveWeeklyFloorPct === 'number' ? body.keepaliveWeeklyFloorPct : undefined,
     allowExtraUsage: typeof body.allowExtraUsage === 'boolean' ? body.allowExtraUsage : undefined,
+    climayteWorkerPreamble:
+      typeof body.climayteWorkerPreamble === 'string' ? body.climayteWorkerPreamble : undefined,
   })
   // The nudge acts on its switch at once (a pass now when it was switched on, its timer re-armed),
   // not at the next sweep up to 30 minutes later.

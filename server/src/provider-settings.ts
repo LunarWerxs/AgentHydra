@@ -18,8 +18,12 @@ export function getProviderSettings(): ProviderSettings {
     // OPT-IN FOR THE SAME REASON AS THE KEEPALIVE, ONLY STRONGER: this one SPENDS MONEY. Some
     // accounts bill paid extra usage past their limits; only an explicit '1' lets any work do so.
     allowExtraUsage: getSetting('allow_extra_usage') === '1',
+    climayteWorkerPreamble: getSetting('climayte_worker_preamble'),
   }
 }
+
+/** A preamble is a few lines ahead of a task, not a second brief: longer is cut. */
+const MAX_PREAMBLE = 4000
 
 /** The floor is a PERCENTAGE and a safety rail, so a nonsense value must land somewhere safe rather
  *  than somewhere permissive: anything unparseable becomes 85 (the owner's weekly line, 2026-10-01:
@@ -46,5 +50,10 @@ export function setProviderSettings(patch: Partial<ProviderSettings>): ProviderS
     setSetting('keepalive_weekly_floor', String(clampFloor(String(patch.keepaliveWeeklyFloorPct))))
   if (typeof patch.allowExtraUsage === 'boolean')
     setSetting('allow_extra_usage', patch.allowExtraUsage ? '1' : '0')
+  if (typeof patch.climayteWorkerPreamble === 'string')
+    setSetting(
+      'climayte_worker_preamble',
+      patch.climayteWorkerPreamble.trim().slice(0, MAX_PREAMBLE).trimEnd(),
+    )
   return getProviderSettings()
 }

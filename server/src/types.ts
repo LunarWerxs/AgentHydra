@@ -1536,6 +1536,11 @@ export interface ProviderSettings {
    *  before its account would bill and moves it, and the extra-usage guard (extra-usage.ts) stops
    *  every Claude session on an account that has extra usage switched on once it nears its limit. */
   allowExtraUsage: boolean
+  /** Text CliMayte puts ahead of the first message of every worker session it starts (a new task,
+   *  a retry whose session never began, a handoff's fresh session), followed by a blank line. Never
+   *  ahead of a resumed session's message or a message sent to a worker, and never to a wave's
+   *  manager. Empty by default: the prompt is the task, byte for byte. This machine's alone. */
+  climayteWorkerPreamble: string
 }
 
 /** Bounded, secret-screened repository context returned for a manual ChatGPT handoff. */

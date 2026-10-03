@@ -162,6 +162,15 @@ and a daemon start removes those of every worker that is gone or finished, never
 connections-local was denied for a day to save tokens (`8486a2d`); a worker asked to use
 connections_execute then had no such tool and drove the local MCP through a script.
 
+**The worker preamble** (2026-10-03): the setting `climayteWorkerPreamble` (Instances tab -> gear;
+`POST /api/settings`; key `climayte_worker_preamble` in this machine's settings table, never
+synced) is put ahead of the first message of every session a launch starts, then a blank line
+(`withPreamble` in `climayte-launch.ts`). A launch that resumes a session sends no preamble, so a
+follow-up, a steering message or a move that carried the transcript reaches the session as written;
+a message re-sent from the attempt before already starts with it and is not prefixed twice; a
+wave's manager never gets it. Empty by default, so the first prompt is the task byte for byte. An
+owner uses it to have every worker read a role prompt first.
+
 ### Runner and restarts (`server/src/climayte-runner.ts`)
 
 Owner, 2026-09-30: restarting AgentHydra must not break CliMayte workers. A `Bun.spawn` child sits in
