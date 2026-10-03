@@ -92,7 +92,7 @@ def test_the_request_carries_the_wire_id_the_attribution_headers_and_usage_inclu
     asyncio.run(c.chat([{"role": "user", "content": "x"}], model="or:deepseek/deepseek-chat-v3.1"))
     assert sent["body"]["model"] == "deepseek/deepseek-chat-v3.1"  # not the `or:` registry name
     assert sent["body"]["usage"] == {"include": True}  # so the provider reports what it charged
-    assert sent["headers"]["http-referer"].endswith("/HydraSwarm") and sent["headers"]["x-title"] == "HydraSwarm"
+    assert sent["headers"]["http-referer"] == "https://github.com/LunarWerxs/AgentHydra" and sent["headers"]["x-title"] == "HydraSwarm"
     assert sent["headers"]["authorization"] == "Bearer " + OR[0]
 
 
