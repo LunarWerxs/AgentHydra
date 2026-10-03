@@ -18,6 +18,7 @@ import asyncio
 import hmac
 import json
 import os
+import re
 import secrets
 import traceback
 from importlib.resources import files
@@ -25,6 +26,8 @@ from pathlib import Path
 
 from . import config, ledger, settings, shared
 from .shared import local_host  # the Host check every custom route shares
+from . import vault
+from .vault import NotGranted, VaultError
 
 MAX_BODY = 1_000_000
 SIGN_IN_PAGE = ("<!doctype html><meta charset=utf-8><title>hswarm</title>"
@@ -201,6 +204,82 @@ def _install(b: dict) -> dict:
     return {"client": name, "log": lines, "clients": install.clients()}
 
 
+_HOST_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _backend_url(b: dict) -> str:
+    """The vault backend a form names: kind 'ssh' (host, optional user and port, folder) or 'dir' (a path), or a ready `backend`
+    URL. Checked here so a stray character never reaches an ssh command line."""
+    kind = b.get("kind")
+    if kind == "ssh":
+        host, user, port, folder = (str(b.get(k) or "").strip() for k in ("host", "user", "port", "folder"))
+        if not _HOST_RX.match(host) or (user and not _HOST_RX.match(user)) or not folder:
+            raise VaultError("an SSH server needs a host name, optionally a user (letters, digits, . _ -) and port, and a folder on it")
+        if port and not (port.isdigit() and 0 < int(port) < 65536):
+            raise VaultError("the port is a number from 1 to 65535")
+        return f"ssh://{user + '@' if user else ''}{host}{':' + port if port else ''}/{folder}"
+    if kind == "dir":
+        path = str(b.get("path") or "").strip()
+        if not path:
+            raise VaultError("a synced folder needs its path")
+        return f"dir:{path}"
+    url = str(b.get("backend") or "").strip()
+    if not url:
+        raise VaultError("name the vault's backend: an SSH server or a synced folder")
+    return url
+
+
+def _vault_status(_b: dict) -> dict:
+    """Where this machine's keys live: always the folder; also a vault when one is set up. Counts, names and fingerprints only."""
+    s = vault.status()
+    out = {"mode": "vault" if s["configured"] else "folder",
+           "folder": {"path": str(config.SECRETS_DIR), "lists": s["local"], "keys": sum(s["local"].values())}}
+    if s.get("request"):
+        out["request"] = s["request"]
+    if s.get("adopt"):
+        out["adopt"] = s["adopt"]
+    if s["configured"]:
+        try:
+            label = vault.open_backend(s["backend"]).label
+        except VaultError:
+            label = s["backend"]
+        out.update(backend=label, machine=s.get("machine"), last_sync=s.get("last_sync"), vault=s.get("vault"),
+                   vault_error=s.get("vault_error"), pending_requests=s.get("pending_requests", 0))
+    return out
+
+
+def _vault_requests(_b: dict) -> dict:
+    return {"requests": [{k: v for k, v in r.items() if k != "pub"} for r in vault.requests_waiting()]}
+
+
+def _vault_grant(b: dict) -> dict:
+    machine = str(b.get("machine") or "")
+    fp = vault.canonical_fingerprint(b.get("fingerprint"))
+    if not machine:
+        raise VaultError("name the machine to grant")
+    if fp is None:
+        raise VaultError("type the request's full 16-character fingerprint (first 4 characters are not enough); nothing was granted")
+    return vault.grant(machine, yes=fp)
+
+
+def _vault_accept(_b: dict) -> dict:
+    try:
+        return {"granted": True, **vault.accept()}
+    except NotGranted as e:
+        return {"granted": False, "message": str(e)}
+
+
+def _vault_leave(b: dict) -> dict:
+    if b.get("confirm") is not True:
+        raise VaultError("leaving needs confirm: true; it removes this machine's vault key and setup, never the keys in the folder")
+    return vault.leave()
+
+
+def _vault(fn):
+    """A vault call off the event loop (an ssh backend blocks); its VaultError text is the 400 the page shows."""
+    return lambda b: asyncio.to_thread(fn, b)
+
+
 RUN_ARGS = {"tasks", "cwd", "tools", "model", "role", "backend", "system", "max_turns", "schema", "timeout_s", "concurrency",
             "budget_usd", "label", "wait", "wait_s", "thinking", "reasoning_effort", "max_cost_usd", "profile", "max_answer_chars",
             "unbatched"}
@@ -233,6 +312,16 @@ ROUTES = {
                                                         daily_cap_usd=b.get("daily_cap_usd")),
     ("POST", "models/test"): _test,
     ("POST", "select"): _select,
+    ("GET", "vault/status"): _vault(_vault_status),
+    ("GET", "vault/requests"): _vault(_vault_requests),
+    ("POST", "vault/init"): _vault(lambda b: vault.init(_backend_url(b))),
+    ("POST", "vault/join"): _vault(lambda b: vault.join(str(b.get("code") or ""))),
+    ("POST", "vault/request"): _vault(lambda b: vault.request(_backend_url(b))),
+    ("POST", "vault/accept"): _vault(_vault_accept),
+    ("POST", "vault/grant"): _vault(_vault_grant),
+    ("POST", "vault/sync"): _vault(lambda b: vault.sync()),
+    ("POST", "vault/adopt"): _vault(lambda b: vault.adopt()),
+    ("POST", "vault/leave"): _vault(_vault_leave),
     ("GET", "doctor"): _doctor,
     # Off the event loop: the first read of the day chart parses the whole ledger (~1 s on a big one).
     ("GET", "usage"): lambda b: asyncio.to_thread(lambda: {"days": ledger.daily(max(1, min(90, int(b.get("days") or 14))))}),
@@ -261,7 +350,7 @@ async def handle(method: str, path: str, body: dict) -> tuple[int, dict]:
         if hasattr(out, "__await__"):
             out = await out
         return 200, out
-    except (settings.SettingsError, ValueError) as e:
+    except (settings.SettingsError, ValueError, VaultError) as e:
         return 400, {"error": str(e).strip("'\"")}
     except Exception as e:  # noqa: BLE001 - a console must show why, never a bare 500
         frame = traceback.extract_tb(e.__traceback__)[-1]

@@ -769,6 +769,15 @@ def requests_waiting(be=None) -> list[dict]:
     return out
 
 
+def canonical_fingerprint(text: str | None) -> str | None:
+    """The full 16-hex-character request fingerprint a person typed, in the canonical XXXX-XXXX-XXXX-XXXX form: case and dashes
+    (or spaces) do not matter. Anything shorter or longer, or not hex, is None: a part of a fingerprint confirms nothing."""
+    h = re.sub(r"[-\s]", "", text or "").upper()
+    if not re.fullmatch(r"[0-9A-F]{16}", h):
+        return None
+    return "-".join(h[i:i + 4] for i in range(0, 16, 4))
+
+
 def grant(machine: str | None = None, yes: str | None = None, ask=None) -> dict:
     """Seal this vault's pairing code to one request, once a person confirmed it: `yes` is the FULL fingerprint, or `ask(row)`
     (a terminal only) returns what the person typed, which must be the fingerprint's first 4 characters. Anything else
@@ -789,7 +798,7 @@ def grant(machine: str | None = None, yes: str | None = None, ask=None) -> dict:
     row = chosen[0]
     fp = row["fingerprint"]
     if yes is not None:
-        ok = yes == fp
+        ok = canonical_fingerprint(yes) == fp
     elif ask is not None:
         ok = str(ask(row) or "").strip().upper() == fp[:4]
     else:
@@ -922,6 +931,16 @@ def status() -> dict:
     except (VaultError, OSError):
         pass
     return out
+
+
+def leave() -> dict:
+    """Stop using the vault on this machine: remove its vault.key, vault.json and base, and nothing else. The key lists in
+    secrets/ stay as they are, and so does everything on the backend (other machines keep syncing). Returns where it left."""
+    cfg = _load_config()
+    label = open_backend(cfg["backend"]).label
+    for path in (key_file(), config_file(), base_file()):
+        path.unlink(missing_ok=True)
+    return {"left": label, "kept_in_folder": sum(len(k) for k in scan().values())}
 
 
 def autosync_loop() -> None:

@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle2, Clock, Eye, EyeOff, Plus, Trash2, Zap } from
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import HSwarmKeyStorage from '@/components/hswarm/HSwarmKeyStorage.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -328,6 +329,9 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
 
 <template>
   <div class="h-full flex flex-col gap-2 p-4">
+    <!-- Where the keys live: this folder, or also a shared encrypted vault -->
+    <HSwarmKeyStorage v-if="!props.provider" @changed="emit('changed')" />
+
     <!-- Toolbar -->
     <div class="flex items-center gap-2">
       <Button @click="() => probeBalance()" :disabled="loading" size="sm">

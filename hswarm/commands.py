@@ -618,6 +618,14 @@ async def cmd_vault(a) -> int:
                 return 3
         elif action == "sync":
             out = await asyncio.to_thread(lambda: vault.sync(rebase=a.rebase, allow_removals=a.allow_removals, dry_run=a.dry_run))
+        elif action == "leave":
+            if not a.force:
+                if not sys.stdin.isatty():
+                    raise vault.VaultError("leaving removes this machine's vault key and setup (the keys in secrets/ and the backend stay): "
+                                           "run it in a terminal to confirm, or pass --force")
+                if input("stop using the vault on this machine? type yes: ").strip().lower() != "yes":
+                    raise vault.VaultError("not confirmed; the vault is still set up here")
+            out = await asyncio.to_thread(vault.leave)
         elif action == "list":
             out = {"rows": await asyncio.to_thread(vault.rows, a.target)}
         elif action in ("add", "remove"):
