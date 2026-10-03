@@ -94,9 +94,9 @@ describe('login sync between two PCs', () => {
         const r = await store('GET', `/v1/logins/${id}`)
         return { version: r.json.version as number, login: openLogin(key, id, r.json.blob)! }
       }
-      const otherPc = async (expiresAt: number) => {
+      const otherPc = async (expiresAt: number, credentials = creds(expiresAt)) => {
         const { version, login } = await inStore()
-        const theirs: PortableLogin = { ...login, credentials: creds(expiresAt) }
+        const theirs: PortableLogin = { ...login, credentials }
         const r = await store('PUT', `/v1/logins/${id}`, {
           version,
           blob: sealLogin(key, theirs),
@@ -125,6 +125,15 @@ describe('login sync between two PCs', () => {
       await runLoginSync()
       expect(here()).toBe(creds(3000))
       expect((await inStore()).login.credentials).toBe(creds(3000))
+      // The same expiry written another way: neither copy is newer, so the PCs agree. Before, this
+      // pass and the landing's newer-copy check refused each other every 30 s (#125, 2026-10-03).
+      const reordered = JSON.stringify({
+        claudeAiOauth: { expiresAt: 3000, refreshToken: 'rt-3000', accessToken: 'at-3000' },
+      })
+      await otherPc(3000, reordered)
+      await runLoginSync()
+      expect(loginSyncStatus().lastError).toBeNull()
+      expect(here()).toBe(creds(3000))
       // Anthropic ended the login: the CLI empties its tokens and keeps the file. Nothing to share
       // and no sync error (one dead login read as "sync is broken"); its own row says signed out.
       writeFileSync(
@@ -134,7 +143,7 @@ describe('login sync between two PCs', () => {
       await runLoginSync()
       expect(loginSyncStatus().lastError).toBeNull()
       expect(loginSyncStatus().logins.find((l) => l.id === id)?.note).toBe('signedOut')
-      expect((await inStore()).login.credentials).toBe(creds(3000))
+      expect((await inStore()).login.credentials).toBe(reordered)
       // Signed in again here: that login goes up.
       writeFileSync(join(dir, '.credentials.json'), creds(4000))
       await runLoginSync()

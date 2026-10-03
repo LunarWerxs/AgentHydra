@@ -436,18 +436,24 @@ function findLandingInstance(
   return { rec, matchedBy: 'account' }
 }
 
+/** A landing's row. `blocked` says why one was refused when the reason is no conflict: a session
+ *  runs there now (it lands once that finishes), or this PC holds a copy as new or newer. */
+export type LandedRow = LoginMoveRow & { written: boolean; blocked?: 'running' | 'newer' }
+
 /** A found instance's row fields plus the running-session and fail-closed account checks. A refusal
  *  message means nothing may be written; `null` means the login may land on this instance. */
 function landingBlockReason(
-  row: LoginMoveRow & { written: boolean },
+  row: LandedRow,
   rec: CliInstance,
   login: PortableLogin,
   email: string | null,
 ): string | null {
   row.num = rec.num ?? null
   const running = readLiveRegistry(rec.configDir).length
-  if (running)
+  if (running) {
+    row.blocked = 'running'
     return `${running} Claude session${running === 1 ? ' is' : 's are'} running on #${rec.num} here; let it finish, then try again.`
+  }
   if (!isLoggedIn(rec.configDir)) return null
   // Fail closed: a login here whose account cannot be matched to this one is never replaced.
   const here = emailIn(oauthAccountOf(rec.configDir))
@@ -460,8 +466,10 @@ function landingBlockReason(
     row.written = true
     return 'Already here: this PC is signed in with this login.'
   }
-  if (credentialExpiry(current) >= credentialExpiry(login.credentials))
+  if (credentialExpiry(current) >= credentialExpiry(login.credentials)) {
+    row.blocked = 'newer'
     return `#${rec.num} is signed in here with a newer copy of this login, so nothing was changed.`
+  }
   return null
 }
 
@@ -472,10 +480,8 @@ function landingBlockReason(
  * login's, or when it holds a newer copy of the same login. `written`: the credential file now
  * holds this login (true for one already here, too); `ok` is that and the auth check passing.
  */
-export async function landLogin(
-  login: PortableLogin,
-): Promise<LoginMoveRow & { written: boolean }> {
-  const row: LoginMoveRow & { written: boolean } = {
+export async function landLogin(login: PortableLogin): Promise<LandedRow> {
+  const row: LandedRow = {
     id: login.id,
     num: login.num,
     name: login.name,
@@ -538,7 +544,7 @@ export async function importCliLogins(opts: {
   if (logins instanceof Error) return { ok: false, message: logins.message, rows: [] }
   const rows: LoginMoveRow[] = []
   for (const login of logins) {
-    const { written: _written, ...row } = await landLogin(login)
+    const { written: _written, blocked: _blocked, ...row } = await landLogin(login)
     rows.push(row)
   }
   const landed = rows.filter((r) => r.ok).length

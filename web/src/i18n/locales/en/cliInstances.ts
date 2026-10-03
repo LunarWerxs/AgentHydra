@@ -239,7 +239,7 @@ export default {
   syncStateOwnHint: 'Signed in separately on this PC, so sync leaves it alone.',
   syncStateWaiting: 'Waiting',
   syncStateWaitingHint:
-    'A newer login is in the store. It lands here once this desktop instance is closed.',
+    'A newer login is in the store. It lands here once nothing is using this instance: its desktop app closed, its Claude sessions finished.',
   syncStateFed: 'From desktop',
   syncStateFedHint: 'This CLI login comes from its desktop instance, which is the one that syncs.',
   syncStateSignedOut: 'Signed out',

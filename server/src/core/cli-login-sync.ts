@@ -400,8 +400,23 @@ function note(
   action: CliLoginSyncStatus['events'][number]['action'],
   text: string,
 ): void {
-  c.events = [{ at: Date.now(), num, action, note: text }, ...c.events].slice(0, MAX_EVENTS)
+  const now = Date.now()
+  // The same word again within NOTE_REPEAT_MS is not news: a login that waits for a busy instance
+  // was noted on every 30-second pass and pushed the real events out of the list.
+  if (
+    c.events.some(
+      (e) => e.num === num && e.action === action && e.note === text && now - e.at < NOTE_REPEAT_MS,
+    )
+  )
+    return
+  c.events = [{ at: now, num, action, note: text }, ...c.events].slice(0, MAX_EVENTS)
 }
+const NOTE_REPEAT_MS = 10 * 60_000
+
+/** CLI instances a newer store login waits for (a Claude session runs on them here): their rows say
+ *  Waiting, and the pass reports no problem. Rebuilt by every pass. */
+let cliWaiting = new Set<string>()
+let cliWaitingPass = new Set<string>()
 
 export interface LoginSyncPassResult {
   ok: boolean
@@ -557,7 +572,12 @@ async function landPortableLogin(
       row.matchedBy === 'created' ? 'created' : 'pulled',
       row.ok ? row.message : `Landed; ${row.message}`,
     )
-  } else {
+  } else if (row.blocked === 'running') {
+    // It lands once the session there finishes: a wait, not a sync failure.
+    cliWaitingPass.add(login.id)
+    note(c, row.num, 'skipped', row.message)
+  } else if (row.blocked !== 'newer') {
+    // 'newer': this PC's copy is as new, and goes up from its own instance's turn.
     out.problems.push(`#${row.num ?? '?'}: ${row.message}`)
     note(c, row.num, 'skipped', row.message)
   }
@@ -789,9 +809,15 @@ async function syncCliInstance(
     out.unchanged++
     return
   }
-  if (credentialExpiry(text) > credentialExpiry(theirs.credentials))
-    await uploadHere(l, c, store, out, by, inst, slot, remote.version)
-  else await landPortableLogin(c, out, { ...theirs, id: inst.id }, remote.version, slot)
+  const mine = credentialExpiry(text)
+  const their = credentialExpiry(theirs.credentials)
+  if (mine > their) await uploadHere(l, c, store, out, by, inst, slot, remote.version)
+  else if (mine === their) {
+    // The same login written two ways (one expiry): neither is newer. Agree on it, or this pass and
+    // the landing's newer-copy check would refuse each other every 30 seconds (#125, 2026-10-03).
+    c.state[slot] = { version: remote.version, hash }
+    out.unchanged++
+  } else await landPortableLogin(c, out, { ...theirs, id: inst.id }, remote.version, slot)
 }
 
 /** This PC's own row of an account whose row is another (its instance took that one): removed once
@@ -933,6 +959,7 @@ async function executeSyncPass(
   excluded: Set<string>,
   by: string,
 ): Promise<void> {
+  cliWaitingPass = new Set()
   try {
     const list = await call(l, 'GET', '/v1/logins')
     if (list.status !== 200 || !Array.isArray(list.json?.logins))
@@ -963,6 +990,7 @@ async function executeSyncPass(
     }
     await syncStoreOnlyLogins(l, c, store, out, insts, slots, excluded)
     await syncDesktopLoginsPass(l, c, store, excluded, out, by)
+    cliWaiting = cliWaitingPass
     c.lastError = out.problems.length ? out.problems[0]! : null
   } catch (err) {
     out.ok = false
@@ -1072,7 +1100,7 @@ export function loginSyncStatus(): CliLoginSyncStatus {
         !remote.signedOut &&
         c.state[slot]?.version === remote.version,
       problem: null,
-      note: fed ? 'fed' : signedOut ? 'signedOut' : null,
+      note: fed ? 'fed' : signedOut ? 'signedOut' : cliWaiting.has(i.id) ? 'waiting' : null,
     })
   }
   // Desktop profiles signed in here, by account (desktop-login-sync.ts).
