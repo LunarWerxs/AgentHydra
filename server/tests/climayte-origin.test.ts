@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Hono } from 'hono'
 import {
   climayteCancel,
   climayteGet,
@@ -34,6 +35,11 @@ import { POINTER_DIR } from '../src/instance'
 import { TOOLS, toolsForCaller } from '../src/mcp'
 import { CALLER_AWARE_TOOLS, setCallerTranscriptResolver } from '../src/mcp-self'
 import '../src/routes/climayte'
+
+// The shared `app` in http-app.ts freezes its router on its first request, after which every later
+// file that loads a routes/*.ts module dies at import (queue-patch-guard.test.ts has the story).
+// A fresh Hono with the routes copied in keeps the shared one open.
+const http = new Hono().route('/', app)
 
 const SID = '12345678-aaaa-4bbb-8ccc-1234567890ab'
 const SPOOF = '99999999-dead-4bee-8fee-000000000000'
@@ -75,7 +81,7 @@ beforeAll(() => {
     const u = new URL(String(url))
     if (init?.method === 'POST')
       posted.push({ url: u.pathname, body: init.body ? JSON.parse(String(init.body)) : null })
-    return app.fetch(new Request(`http://127.0.0.1${u.pathname}${u.search}`, init))
+    return http.fetch(new Request(`http://127.0.0.1${u.pathname}${u.search}`, init))
   }
 })
 
@@ -171,7 +177,7 @@ describe('climayte_run records the calling chat as the origin', () => {
   })
 
   test('the route refuses a malformed origin rather than storing it', async () => {
-    const res = await app.fetch(
+    const res = await http.fetch(
       new Request('http://127.0.0.1/api/corch/workers', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
