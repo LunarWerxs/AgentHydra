@@ -3,7 +3,7 @@ name = "hswarm"
 version = "1.2.7"  # keep equal to hswarm/__init__.py __version__
 description = "HydraSwarm (hswarm): a cheap worker swarm with a flagship orchestrator: MCP server + CLI + local console, any OpenAI-compatible provider by config."
 requires-python = ">=3.11"
-dependencies = ["httpx>=0.28.1", "jsonschema>=4.23", "mcp>=2.2.0", "tomlkit>=0.13"]
+dependencies = ["cryptography>=43", "httpx>=0.28.1", "jsonschema>=4.23", "mcp>=2.2.0", "tomlkit>=0.13"]
 
 [project.optional-dependencies]
 test = ["pytest>=9.1.1", "pytest-asyncio>=1.4.0", "pytest-timeout>=2.3"]

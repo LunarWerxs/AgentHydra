@@ -45,6 +45,41 @@ python -m hswarm import-keys --from /path/to/zswarm
 
 This copies key files from `<clone>/.secrets/` into `$HSWARM_HOME/secrets/` and prints only counts (never a key).
 
+### Key vault
+
+Keys follow you between machines, encrypted, never through git. `$HSWARM_HOME/secrets/` holds one list per provider
+(`openrouter_api_keys`, plus `.dead` and `.unfunded` lists). The vault is one encrypted file on a server only you can
+reach, and every paired machine merges its lists with it every two minutes while `mcp --http` runs. It is ZSwarm's
+vault (ported from `zswarm/vault.py`): the same file, merge and pairing code, so an HSwarm and a ZSwarm can share one.
+
+```bash
+python -m hswarm vault init ssh://user@host/hswarm-vault   # first machine: makes the vault from the keys it has
+python -m hswarm vault adopt                               # this machine's ZSwarm is already paired: use its vault
+python -m hswarm vault pair                                # prints the pairing code (a terminal only; hand it over directly)
+python -m hswarm vault join                                # other machine: paste the code at the hidden prompt
+python -m hswarm vault add openrouter                      # keys from stdin or a hidden prompt; synced at once
+python -m hswarm vault remove openrouter <fingerprint>     # a rolled key; every machine drops it at its next sync
+python -m hswarm vault list [openrouter]  |  status  |  sync [--dry-run] [--allow-removals] [--rebase]
+```
+
+- **What is stored.** AES-256-GCM, a random vault key in `$HSWARM_HOME/vault.key` (owner-only). The server holds
+  ciphertext only, so a plain SSH box, a shared folder (`dir:<folder>`) or any other backend is a placement choice,
+  not a trust decision.
+- **What is synced.** The list files in `$HSWARM_HOME/secrets/` and nothing else; the disabled slot (`keys.json`)
+  is each machine's own measurement.
+- **How two machines agree.** Each key is one entry: the key, a time and who wrote it, or a tombstone when removed.
+  The newer entry wins and a removal wins a tie. A write is compare-and-swap on the file's hash, so a writer that
+  lost a race re-reads, merges and retries.
+- **Safety.** A machine's first sync only adds. A sync that would remove a quarter of the keys or empty a list stops
+  and says so (`--allow-removals`; `--rebase` brings everything back from the vault). A server that went back to an
+  older vault is refused. The server keeps the last 40 versions. A failed background sync is logged once and the
+  next tick retries.
+- **`adopt`.** When `~/.zswarm` (or `ZSWARM_HOME`) holds `vault.key` and `vault.json` and `$HSWARM_HOME` has no
+  vault, `adopt` copies those two files here owner-only (only once the key opens the stored vault), then runs a
+  first sync, which only adds. `vault status` says when it is available.
+- **Output.** Every verb prints counts and 8-character fingerprints. `pair` prints the code only to a terminal: the
+  code opens every key, so it goes person to person, never into a chat or a ticket.
+
 ### Configuration Directory
 
 Default: `~/.hswarm`
@@ -88,7 +123,7 @@ The AgentHydra daemon starts HydraSwarm by default (`python -m hswarm mcp --http
 - All state is isolated under `HSWARM_HOME` (default `~/.hswarm`)
 - Console runs on port 7793 (`--port` or `HSWARM_PORT` to change)
 - All environment variables use the `HSWARM_*` prefix
-- Keys come from env vars or `HSWARM_HOME/secrets`; nothing is shared with any other install
+- Keys come from env vars or `HSWARM_HOME/secrets`; nothing is shared with any other install unless you pair a key vault (`hswarm vault`, above)
 
 ## Worker safety
 

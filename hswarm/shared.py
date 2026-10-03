@@ -239,6 +239,9 @@ def serve(port: int = PORT) -> None:
     for name in ("httpx", "httpcore"):  # one INFO entry per provider call: 318k of them were 90% of the 113 MB log
         logging.getLogger(name).setLevel(logging.WARNING)
     threading.Thread(target=_watch, args=(port, started), name="hswarm-code-watch", daemon=True).start()
+    from . import vault
+
+    threading.Thread(target=vault.autosync_loop, name="hswarm-vault-sync", daemon=True).start()  # idle until `hswarm vault init|join|adopt`
     mcp.run(transport="streamable-http", host=HOST, port=port, session_idle_timeout=IDLE_SESSION_S)
 
 

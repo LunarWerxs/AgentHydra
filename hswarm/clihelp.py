@@ -37,6 +37,11 @@ META: dict[str, dict] = {
     "keys": {"effect": WRITE, "guide": "`keys` (list) is offline and read-only; `probe` makes one free GET per key and may return a topped-up key to the pool; "
              "`enable` / `disable` edit the disabled slot. Pass the 8-character fingerprint, never a key.",
              "examples": ["hswarm keys --json", "hswarm keys probe --provider deepseek"]},
+    "vault": {"effect": WRITE, "guide": "The shared key vault: HSWARM_HOME/secrets lists, encrypted, in step with the other paired machines. `status`, `list` and `sync --dry-run` only read; "
+              "`sync`, `add`, `remove`, `init`, `join` and `adopt` change secrets/ and the vault. `adopt` copies this machine's paired ZSwarm vault setup into HSWARM_HOME. "
+              "`pair` prints the vault key's pairing code and refuses unless stdout is a terminal: never run it for a chat, the person runs it in their own terminal. "
+              "Keys come from stdin or a hidden prompt, never argv; every output is counts and 8-character fingerprints.",
+              "examples": ["hswarm vault status", "hswarm vault sync --dry-run", "hswarm vault list openrouter"]},
     "models": {"effect": WRITE, "guide": "Listing is read-only; --refresh rewrites ~/.hswarm/openrouter-models.json from the provider's catalogue.",
                "examples": ["hswarm models --grep glm --json", "hswarm models --routes"]},
     "ask": {"effect": SPEND, "guide": "One paid, tool-free model call. Prefer the hswarm_ask MCP tool inside a Claude session; --json returns data.",

@@ -553,6 +553,68 @@ async def _keys_edit(a, action: str) -> int:
     return 0
 
 
+def _read_secret_text(prompt: str) -> str:
+    """Keys and pairing codes come from stdin (piped) or a hidden prompt, never the command line or the screen."""
+    if sys.stdin.isatty():
+        import getpass
+
+        return getpass.getpass(prompt)
+    return sys.stdin.read()
+
+
+async def cmd_vault(a) -> int:
+    """The shared key vault (vault.py). Every verb prints counts and fingerprints; a key and the pairing code never reach
+    a pipe: `pair` refuses unless stdout is a terminal, so a script or an agent running it learns nothing."""
+    from . import vault
+
+    action = a.action
+    try:
+        if action == "pair":
+            if not sys.stdout.isatty():
+                raise vault.VaultError("the pairing code opens every stored key, so it prints only to a terminal: run `hswarm vault pair` "
+                                       "in your own terminal and hand the code over directly (text or DM), never in a chat or a ticket")
+            print(await asyncio.to_thread(vault.pair_code))
+            return 0
+        if action == "init":
+            if not a.target:
+                raise vault.VaultError("hswarm vault init <backend>, e.g. ssh://user@host/hswarm-vault or dir:D:/shared/hswarm-vault")
+            out = await asyncio.to_thread(vault.init, a.target)
+        elif action == "join":
+            out = await asyncio.to_thread(vault.join, _read_secret_text("vault pairing code (hidden): "), a.backend, a.force)
+        elif action == "adopt":
+            out = await asyncio.to_thread(vault.adopt)
+        elif action == "sync":
+            out = await asyncio.to_thread(lambda: vault.sync(rebase=a.rebase, allow_removals=a.allow_removals, dry_run=a.dry_run))
+        elif action == "list":
+            out = {"rows": await asyncio.to_thread(vault.rows, a.target)}
+        elif action in ("add", "remove"):
+            if not a.target or (action == "remove" and not a.fingerprint):
+                raise vault.VaultError("hswarm vault add <list>  |  hswarm vault remove <list> <fingerprint>")
+            if action == "add":
+                from . import settings
+
+                out = await asyncio.to_thread(vault.add_keys, a.target, settings.split_keys(_read_secret_text(f"{a.target} API key(s), space-separated (hidden): ")))
+            else:
+                out = await asyncio.to_thread(vault.remove_key, a.target, a.fingerprint)
+        else:
+            out = await asyncio.to_thread(vault.status)
+    except vault.VaultError as e:
+        print(f"hswarm vault {action}: {e}", file=sys.stderr)
+        return 2
+    if a.json:
+        _print(out)
+        return 0
+    if "rows" in out:
+        print(f"{'list':30} {'fingerprint':12} {'key':14} added by / at")
+        for r in out["rows"]:
+            print(f"{r['list']:30} {r['fingerprint']:12} {r['masked']:14} {(r['by'] or '-')} {r['at'] or ''}")
+        print(f"{len(out['rows'])} keys")
+    else:
+        for k, v in out.items():
+            print(f"{k}: {v}")
+    return 0
+
+
 def _print_keys(out: dict) -> None:
     """A table a human reads at a glance; the fingerprint is the handle every other verb takes."""
     for name, p in (out.get("providers") or {}).items():
@@ -688,5 +750,5 @@ async def cmd_egress(a) -> int:
 COMMANDS = {
     "doctor": cmd_doctor, "web": cmd_web, "ask": cmd_ask, "panel": cmd_panel, "run": cmd_run, "status": cmd_status, "cancel": cmd_cancel, "results": cmd_results,
     "jobs": cmd_jobs, "cost": cmd_cost, "savings": cmd_savings, "usage": cmd_usage, "bench": cmd_bench, "sync": cmd_sync,
-    "maintain": cmd_maintain, "history": cmd_history, "keys": cmd_keys, "import-keys": cmd_import_keys, "models": cmd_models, "survival": cmd_survival, "prefix": cmd_prefix, "egress": cmd_egress,
+    "maintain": cmd_maintain, "history": cmd_history, "keys": cmd_keys, "vault": cmd_vault, "import-keys": cmd_import_keys, "models": cmd_models, "survival": cmd_survival, "prefix": cmd_prefix, "egress": cmd_egress,
 }
