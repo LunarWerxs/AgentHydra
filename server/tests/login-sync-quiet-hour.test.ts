@@ -461,7 +461,7 @@ type PacedPc = ReturnType<typeof pacedPc>
 /** One tick of a PC's loop (cli-login-sync.ts startLoginSync): a pass when one is due. Returns whether
  *  this tick uploaded this PC's queue. */
 async function tickPc(p: PacedPc, now: number, local = false): Promise<boolean> {
-  if (local && localWorkPending()) p.pace.nudge()
+  if (local && localWorkPending(p.io.pc)) p.pace.nudge()
   if (!p.pace.due(now)) return false
   p.passes++ // a free-plan isolate that never saw the head
   freshIsolate() // a free-plan isolate that never saw the head
@@ -561,6 +561,71 @@ test('a worker queued mid-hour on a backed-off PC is uploaded within one 30 s ti
     expect(uploadedAt).toBeGreaterThan(0)
     expect(uploadedAt - changedAt).toBeLessThanOrEqual(TICK)
     expect(a.passes).toBe(passesBefore + 1)
+  } finally {
+    delete env.HEAD_CACHE_S
+    workers.clear()
+    for (const [k, v] of savedWorkers) workers.set(k, v)
+  }
+})
+
+// PIECE 1 OF THE STORAGE PLAN: a running CliMayte worker whose snapshot has not changed used to nudge
+// the pass on every tick (about 120 passes an hour instead of about 12). Only news nudges now.
+test('a running worker with an unchanged snapshot backs off; a shape change still uploads next tick', async () => {
+  resetQueueSync()
+  await sweep()
+  clock = realNow()
+  env.HEAD_CACHE_S = '0'
+  const savedWorkers = new Map(workers)
+  workers.clear()
+  const t0 = clock
+  const a = pacedPc(0)
+  const b = pacedPc(1)
+  let n = 0
+  const run = (extra = '') => {
+    n++
+    workers.set('w-run', {
+      id: 'w-run',
+      group: 'g-run',
+      title: 'running',
+      pending: [],
+      status: 'running',
+      attempts: [{ account: { id: 'acct-a', num: 7, name: 'a' }, startedAt: t0, endedAt: null }],
+      accountId: 'acct-a',
+      lastActivity: `tool call ${n}${extra}`,
+      error: null,
+      costUsd: n / 100,
+      createdAt: t0,
+      updatedAt: clock,
+    } as any)
+  }
+  try {
+    run()
+    await tickPc(a, clock, true) // first upload
+    await tickPc(b, clock)
+    const passesAtStart = a.passes
+    const start = clock
+    while (clock - start < HOUR) {
+      clock += TICK
+      run() // activity and cost move on every tick; the shape does not
+      await tickPc(a, clock, true)
+      await tickPc(b, clock)
+    }
+    const perHour = a.passes - passesAtStart
+    console.log(`one running worker, snapshot unchanged: ${perHour} passes in the hour (was ~120)`)
+    expect(perHour).toBeLessThanOrEqual(20)
+
+    clock += TICK
+    run()
+    workers.get('w-run')!.status = 'waiting' as any
+    const changedAt = clock
+    let uploadedAt = 0
+    while (!uploadedAt && clock - changedAt <= 5 * 60_000) {
+      clock += TICK
+      if (await tickPc(a, clock, true)) uploadedAt = clock
+      await tickPc(b, clock)
+    }
+    expect(uploadedAt).toBeGreaterThan(0)
+    expect(uploadedAt - changedAt).toBeLessThanOrEqual(TICK)
   } finally {
     delete env.HEAD_CACHE_S
     workers.clear()

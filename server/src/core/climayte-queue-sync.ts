@@ -247,6 +247,18 @@ const livePrint = (snap: QueueSnapshot): string =>
       .map((id) => [id, bucket(snap.live[id].sessionPct), bucket(snap.live[id].weekPct)]),
   )
 
+/** Whether a pass run at `now` would upload this PC's snapshot for news: nothing sent yet, a worker's
+ *  shape changed, or a live bucket moved and LIVE_GATE_MS has passed. Local and free (no store call).
+ *  A running worker's activity and cost alone are not news, so they do not make a pass due. The
+ *  heartbeat is not counted either: the pace's own backoff (at most IDLE_MAX_MS) reaches it. */
+export function queueUploadPending(pc: string, now = Date.now()): boolean {
+  const sent = sentBy.get(pc)
+  if (!sent) return true
+  const snap = buildSnapshot(pc, '', now)
+  if (shapePrint(snap) !== sent.shape) return true
+  return now - sent.at >= LIVE_GATE_MS && livePrint(snap) !== sent.live
+}
+
 /** True when the snapshot went up with news in it: a worker's shape or a live bucket changed. A
  *  volatile-only change (activity, cost, clocks, error, running time) goes up only once LIVE_GATE_MS has
  *  passed since the last upload, with the current values, and is not news; nor is a heartbeat. */

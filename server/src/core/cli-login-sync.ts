@@ -76,8 +76,6 @@ import {
 } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
-import { workers } from '../climayte-core'
-import { isLive } from '../climayte-lib'
 import { clearRemote } from '../climayte-remote'
 import { CONFIG_DIR } from '../config'
 import { seal, unseal } from '../dpapi-seal.mjs'
@@ -95,7 +93,7 @@ import {
   readText,
 } from './cli-login-move'
 import { logoutCliInstance } from './cli-logout'
-import { syncQueue } from './climayte-queue-sync'
+import { queueUploadPending, syncQueue } from './climayte-queue-sync'
 import { createChatLocal } from './desktop-chat-local'
 import { chatSyncRows, syncChats } from './desktop-chat-sync'
 import type { ChatLocal } from './desktop-chat-types'
@@ -1205,8 +1203,7 @@ async function pass(): Promise<LoginSyncPassResult> {
     out.pushed === 0 &&
     out.landed === 0 &&
     !queueMoved &&
-    mirrorFor(l).changesIn(['logins', 'chats']) === seen &&
-    !climayteBusy()
+    mirrorFor(l).changesIn(['logins', 'chats']) === seen
   c.lastSyncAt = Date.now()
   // Re-read what another call changed meanwhile (an exclusion, a pause) and keep it.
   const now = readConfig()
@@ -1225,12 +1222,18 @@ async function pass(): Promise<LoginSyncPassResult> {
   return out
 }
 
-/** A CliMayte worker is queued, running, waiting or checking on this PC: its changes go up, so the
- *  sync polls at the base pace. */
-const climayteBusy = (): boolean => [...workers.values()].some(isLive)
+/** Something here a pass must look at, found without asking the store (the loop's tick checks it): a
+ *  login file moved, or this PC's CliMayte queue has news to upload (a worker's shape changed, a live
+ *  bucket moved). A worker that is merely running, with nothing changed, is not news: it used to keep
+ *  the pass at the base pace all day. The other PC's changes arrive on the pace's normal backoff. */
+export const localWorkPending = (pc: string | undefined = sharedQueuePc()): boolean =>
+  loginFilesMoved() || (pc !== undefined && queueUploadPending(pc))
 
-/** Something here a pass must look at, found without asking the store (the loop's tick checks it). */
-export const localWorkPending = (): boolean => loginFilesMoved() || climayteBusy()
+/** This PC's queue id while it shares its queue, else undefined. */
+const sharedQueuePc = (): string | undefined => {
+  const c = readConfig()
+  return c?.shareQueue ? c.pcId : undefined
+}
 
 /** A login file here moved since the last tick: its mtime and size, by instance. Statting is free; a
  *  hash against the store's copy would read as a change forever for a login that cannot land. */
