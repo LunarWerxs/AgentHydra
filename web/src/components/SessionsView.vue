@@ -51,6 +51,8 @@ import SessionComposer, { type ComposerTarget } from '@/components/SessionCompos
 import SessionSettings from '@/components/SessionSettings.vue'
 import SessionTranscriptTurns from '@/components/SessionTranscriptTurns.vue'
 import SourceBadge from '@/components/SourceBadge.vue'
+import SideList from '@/components/side-list/SideList.vue'
+import SideListRow from '@/components/side-list/SideListRow.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import {
@@ -341,6 +343,16 @@ const AGENT_STATUS_LABEL: Record<api.AgentStatus['state'], string> = {
   done: 'sessions.agentStatusDone',
 }
 const agentStatusOf = (s: api.SessionSummary) => liveStatusBySession.value.get(s.session_id) ?? null
+/** Working right now: the hook says the agent is working, or its queue entry is a spinning status.
+ *  The row shows it as a spinner; blocked, done and the other queue states stay marks. */
+const isLive = (s: api.SessionSummary) =>
+  agentStatusOf(s)?.state === 'working' ||
+  (!!s.queue_status && !!queueStatusMeta(s.queue_status).spin)
+/** The session list does not carry the model or the effort level on every row yet; a row shows them
+ *  when its summary has them and drops the tag when not. */
+type RowRun = { model?: string | null; effort?: string | null }
+const modelOf = (s: api.SessionSummary) => (s as api.SessionSummary & RowRun).model ?? null
+const effortOf = (s: api.SessionSummary) => (s as api.SessionSummary & RowRun).effort ?? null
 
 const { t } = useI18n()
 /** The row's hover. A row is one line, as dense as a CliMayte task row (owner, 2026-10-03), so what
@@ -594,6 +606,18 @@ function onComposerSent(mode: 'now' | 'queued') {
         class="sessions-sidebar-w flex h-full min-h-0 flex-col transition-opacity duration-200"
         :class="collapsed ? 'pointer-events-none opacity-0' : 'opacity-100'"
       >
+        <SideList
+          :empty="
+            !(sessionsLoading && sessions.length === 0 && !bodySearchActive) &&
+            !bodySearchActive &&
+            filtered.length === 0
+          "
+          :class="{ 'select-none': box }"
+          @pointerdown="boxPointerDown"
+          @click.capture="boxClickGuard"
+          @keydown="listKeydown"
+        >
+        <template #header>
         <div class="flex shrink-0 items-center gap-2 px-3 py-1.5 pe-11">
           <div class="relative flex-1">
             <Search class="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -941,22 +965,63 @@ function onComposerSent(mode: 'now' | 'queued') {
           </button>
         </div>
 
-        <!-- relative + the pointer/keydown handlers: box select, Ctrl+A and Escape over the rows
-             below (composables/useMultiSelect.ts); the band is drawn in the list's content
-             coordinates, and select-none keeps a drag from the padding off the page text -->
-        <div
-          class="scroll-slim relative min-h-0 flex-1 overflow-y-auto"
-          :class="{ 'select-none': box }"
-          @pointerdown="boxPointerDown"
-          @click.capture="boxClickGuard"
-          @keydown="listKeydown"
-        >
+        </template>
+
+        <!-- The pointer/keydown handlers on the list (box select, Ctrl+A and Escape over the rows,
+             composables/useMultiSelect.ts) are SideList's attrs, which land on its scrolling body;
+             the band is drawn in the list's content coordinates, and select-none keeps a drag from
+             the padding off the page text -->
+        <template #before>
           <div
             v-if="box"
             class="pointer-events-none absolute inset-x-1 top-(--box-top) z-10 h-(--box-h) rounded-md border border-primary/60 bg-primary/10"
             :style="{ '--box-top': `${box.top}px`, '--box-h': `${box.height}px` }"
             aria-hidden="true"
           />
+          <!-- a LATER poll failing must not blank a list that already has good (if aging) data —
+               it stays on screen, just labelled stale. Non-modal: a state of the list, not a toast. -->
+          <p
+            v-if="sessionsStatus.stale.value"
+            class="m-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-2xs text-warning"
+          >
+            {{ $t('sessions.staleHint', { reason: sessionsStatus.error.value }) }}
+          </p>
+        </template>
+
+        <template #empty>
+          <!-- AH-20: the FIRST session fetch failing is not the same fact as a genuinely empty
+               list — show why, with a Retry, rather than the plain "no sessions" copy that would
+               read as an empty account instead of an outage. -->
+          <div
+            v-if="sessionsStatus.unavailable.value"
+            class="p-4 text-center text-xs text-muted-foreground"
+          >
+            <CircleAlert class="mx-auto mb-1.5 size-5 text-warning" />
+            <p>{{ $t('sessions.unavailable', { reason: sessionsStatus.error.value }) }}</p>
+            <button
+              type="button"
+              class="mt-1.5 font-medium text-primary hover:underline"
+              @click="refreshSessions"
+            >
+              {{ $t('sessions.retry') }}
+            </button>
+          </div>
+
+          <div v-else class="p-4 text-center text-xs text-muted-foreground">
+            <p>{{ $t('sessions.noSessionsFound') }}</p>
+            <!-- the window is the most likely reason, and it is invisible until you open the ⋯
+                 menu; offer the widening instead of making the user go find it -->
+            <button
+              v-if="emptyBecauseOfPeriod"
+              type="button"
+              class="mt-1.5 font-medium text-primary hover:underline"
+              @click="sessionPeriod = 'all'"
+            >
+              {{ $t('sessions.periodEmptyHint', { period: periodLabel }) }}
+            </button>
+          </div>
+        </template>
+
           <!-- first-load skeletons so the list never looks blank -->
           <template v-if="sessionsLoading && sessions.length === 0 && !bodySearchActive">
             <div v-for="i in 12" :key="i" class="flex h-8 items-center gap-2 border-b border-border px-3">
@@ -1001,47 +1066,6 @@ function onComposerSent(mode: 'now' | 'queued') {
             </button>
           </template>
 
-          <!-- AH-20: the FIRST session fetch failing is not the same fact as a genuinely empty
-               list — show why, with a Retry, rather than the plain "no sessions" copy that would
-               read as an empty account instead of an outage. -->
-          <div
-            v-else-if="filtered.length === 0 && sessionsStatus.unavailable.value"
-            class="p-4 text-center text-xs text-muted-foreground"
-          >
-            <CircleAlert class="mx-auto mb-1.5 size-5 text-warning" />
-            <p>{{ $t('sessions.unavailable', { reason: sessionsStatus.error.value }) }}</p>
-            <button
-              type="button"
-              class="mt-1.5 font-medium text-primary hover:underline"
-              @click="refreshSessions"
-            >
-              {{ $t('sessions.retry') }}
-            </button>
-          </div>
-
-          <div v-else-if="filtered.length === 0" class="p-4 text-center text-xs text-muted-foreground">
-            <p>{{ $t('sessions.noSessionsFound') }}</p>
-            <!-- the window is the most likely reason, and it is invisible until you open the ⋯
-                 menu; offer the widening instead of making the user go find it -->
-            <button
-              v-if="emptyBecauseOfPeriod"
-              type="button"
-              class="mt-1.5 font-medium text-primary hover:underline"
-              @click="sessionPeriod = 'all'"
-            >
-              {{ $t('sessions.periodEmptyHint', { period: periodLabel }) }}
-            </button>
-          </div>
-
-          <!-- a LATER poll failing must not blank a list that already has good (if aging) data —
-               it stays on screen, just labelled stale. Non-modal: a state of the list, not a toast. -->
-          <p
-            v-if="sessionsStatus.stale.value"
-            class="m-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-2xs text-warning"
-          >
-            {{ $t('sessions.staleHint', { reason: sessionsStatus.error.value }) }}
-          </p>
-
           <template v-if="!bodySearchActive">
             <!-- Each row owns a ContextMenu so right-click acts on the row under the pointer without
                  first selecting it (selecting would load a transcript the user never asked for).
@@ -1053,58 +1077,44 @@ function onComposerSent(mode: 'now' | 'queued') {
                      title, the few live marks, the source chip, and when it last moved. Where it
                      ran, the branch, the size, the account, its parts and subagents ride on the
                      row's hover (rowHintOf); the open transcript has all of it. -->
-                <button
-                  type="button"
+                <SideListRow
                   :data-select-key="s.source === 'claude' ? sessionKey(s) : undefined"
-                  class="flex w-full min-w-0 items-center gap-2 border-b border-border px-3 py-1.5 text-start text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  :class="[
-                    // Selected is a RAISED GREY, not an accent tint. bg-primary/10 composited to a
-                    // maroon (#352626) against the dark ground, which read as a colour wash rather
-                    // than a selection. Ladder in the sidebar: rest → hover (accent/50) → selected.
-                    // The leading bar is CliMayte's selected row (--shadow-row-selected, style.css).
-                    (selectMode
-                      ? isChecked(s)
-                      : s.session_id === selectedId && s.source === selectedSource)
-                      ? 'bg-accent shadow-row-selected'
-                      : 'hover:bg-accent/50',
-                    // done rows stay in place and stay readable; they just stop competing for the eye
-                    s.done && s.session_id !== selectedId ? 'opacity-55' : '',
-                  ]"
-                  :aria-current="s.session_id === selectedId && s.source === selectedSource ? 'true' : undefined"
-                  :title="rowHintOf(s)"
+                  :label="s.title"
+                  :selected="
+                    selectMode ? isChecked(s) : s.session_id === selectedId && s.source === selectedSource
+                  "
+                  :active="isLive(s)"
+                  :active-label="$t('sessions.agentStatusWorking')"
+                  :hint="rowHintOf(s)"
+                  :dim="s.done && s.session_id !== selectedId"
+                  :struck="s.done"
+                  :model="modelOf(s)"
+                  :effort="effortOf(s)"
+                  :time="s.last_activity_at"
                   @click="rowClick(s, $event)"
                 >
-                  <span
-                    v-if="selectMode"
-                    class="grid size-4 shrink-0 place-items-center rounded border transition-colors"
-                    :class="[
-                      isChecked(s)
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'border-border',
-                      s.source !== 'claude' ? 'opacity-25' : '',
-                    ]"
-                  >
-                    <Check v-if="isChecked(s)" class="size-3" />
-                  </span>
-                  <CircleCheck
-                    v-else-if="s.done"
-                    class="size-3.5 shrink-0 text-success"
-                    :aria-label="$t('sessions.done')"
-                  />
-                  <!-- with "show archived" on, the one mark that tells an archived row from a live one -->
-                  <span
-                    v-if="s.archived"
-                    class="relative inline-flex shrink-0 items-center text-muted-foreground"
-                    :title="$t('sessions.archived')"
-                  >
-                    <Archive class="size-3.5" aria-hidden="true" />
-                    <span class="sr-only">{{ $t('sessions.archived') }}</span>
-                  </span>
-                  <span
-                    class="min-w-0 flex-1 truncate font-medium"
-                    :class="s.done ? 'line-through decoration-muted-foreground/40' : ''"
-                  ><!-- the search's matched characters, bolded; one plain run when not searching
-                    --><template v-for="(run, ri) in titleRunsOf(s)" :key="ri"><span
+                  <template #badge>
+                    <span
+                      v-if="selectMode"
+                      class="grid size-4 shrink-0 place-items-center rounded border transition-colors"
+                      :class="[
+                        isChecked(s)
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-border',
+                        s.source !== 'claude' ? 'opacity-25' : '',
+                      ]"
+                    >
+                      <Check v-if="isChecked(s)" class="size-3" />
+                    </span>
+                    <CircleCheck
+                      v-else-if="s.done"
+                      class="size-3.5 shrink-0 text-success"
+                      :aria-label="$t('sessions.done')"
+                    />
+                  </template>
+                  <template #title>
+                    <!-- the search's matched characters, bolded; one plain run when not searching -->
+                    <template v-for="(run, ri) in titleRunsOf(s)" :key="ri"><span
                       v-if="run.hit"
                       class="font-semibold text-primary"
                     >{{ run.text }}</span><template v-else>{{ run.text }}</template></template><!--
@@ -1113,94 +1123,92 @@ function onComposerSent(mode: 'now' | 'queued') {
                     --><span
                       v-if="titleIsUnattributed(s)"
                       class="ms-1 align-middle text-3xs font-normal text-muted-foreground/70"
-                    >&lt;{{ s.title_tag }}&gt;</span></span>
-                  <!-- the wall this conversation died at. `pending` is the actionable half —
-                       nothing followed the notice, so it is still sitting there — and it is the
-                       only one loud enough to earn the warning colour. -->
-                  <!-- ONLY while the wall is still the bottom of the transcript. A session that
-                       hit a limit in the past and carried on is not rate limited, and a badge
-                       that stays on forever stops meaning "this one needs you" — which is the
-                       only thing it is for. `pending` is exactly that: nothing followed the
-                       notice. Ever-hit is still reachable, as a filter. -->
-                  <!-- Icons, not text chips (CliMayte's list does the same): the label is each
-                       icon's hover and screen-reader text, and the row's hover says it too. -->
-                  <span
-                    v-if="s.limit_stop?.pending"
-                    class="relative inline-flex shrink-0 items-center text-warning"
-                    :title="`${$t('sessions.rateLimitedBadgePending')}: ${limitTooltipOf(s)}`"
-                  >
-                    <CircleAlert class="size-3.5" aria-hidden="true" />
-                    <span class="sr-only">{{ $t('sessions.rateLimitedBadgePending') }}</span>
-                  </span>
-                  <!-- live status as the daemon wrote it (agent-status.ts): working, waiting on
-                       you, or done. The tooltip carries the provenance, so a mark can be traced
-                       to the hook event that set it. -->
-                  <span
-                    v-if="agentStatusOf(s)"
-                    class="relative inline-flex shrink-0 items-center"
-                    :class="AGENT_STATUS_ICON[agentStatusOf(s)?.state ?? 'done'].tone"
-                    :title="`${$t(AGENT_STATUS_LABEL[agentStatusOf(s)?.state ?? 'done'])}: ${$t('sessions.agentStatusTooltip', {
-                      event: agentStatusOf(s)?.event,
-                      waiting: agentStatusOf(s)?.waiting ?? '-',
-                      subagents: agentStatusOf(s)?.subagents,
-                    })}`"
-                  >
-                    <component
-                      :is="AGENT_STATUS_ICON[agentStatusOf(s)?.state ?? 'done'].icon"
-                      class="size-3.5"
-                      :class="AGENT_STATUS_ICON[agentStatusOf(s)?.state ?? 'done'].spin ? 'animate-spin' : ''"
-                      aria-hidden="true"
+                    >&lt;{{ s.title_tag }}&gt;</span>
+                  </template>
+                  <template #mark>
+                    <!-- with "show archived" on, the one mark that tells an archived row from a live one -->
+                    <span
+                      v-if="s.archived"
+                      class="relative inline-flex shrink-0 items-center text-muted-foreground"
+                      :title="$t('sessions.archived')"
+                    >
+                      <Archive class="size-3.5" aria-hidden="true" />
+                      <span class="sr-only">{{ $t('sessions.archived') }}</span>
+                    </span>
+                    <!-- ONLY while the wall is still the bottom of the transcript: `pending` is
+                         nothing followed the notice, so it is still sitting there. -->
+                    <span
+                      v-if="s.limit_stop?.pending"
+                      class="relative inline-flex shrink-0 items-center text-warning"
+                      :title="`${$t('sessions.rateLimitedBadgePending')}: ${limitTooltipOf(s)}`"
+                    >
+                      <CircleAlert class="size-3.5" aria-hidden="true" />
+                      <span class="sr-only">{{ $t('sessions.rateLimitedBadgePending') }}</span>
+                    </span>
+                    <!-- live status as the daemon wrote it (agent-status.ts); "working" is the
+                         row's spinner, so only blocked and done are marks here. The tooltip carries
+                         the provenance, so a mark can be traced to the hook event that set it. -->
+                    <span
+                      v-if="agentStatusOf(s) && agentStatusOf(s)?.state !== 'working'"
+                      class="relative inline-flex shrink-0 items-center"
+                      :class="AGENT_STATUS_ICON[agentStatusOf(s)?.state ?? 'done'].tone"
+                      :title="`${$t(AGENT_STATUS_LABEL[agentStatusOf(s)?.state ?? 'done'])}: ${$t('sessions.agentStatusTooltip', {
+                        event: agentStatusOf(s)?.event,
+                        waiting: agentStatusOf(s)?.waiting ?? '-',
+                        subagents: agentStatusOf(s)?.subagents,
+                      })}`"
+                    >
+                      <component
+                        :is="AGENT_STATUS_ICON[agentStatusOf(s)?.state ?? 'done'].icon"
+                        class="size-3.5"
+                        aria-hidden="true"
+                      />
+                      <span class="sr-only">{{ $t(AGENT_STATUS_LABEL[agentStatusOf(s)?.state ?? 'done']) }}</span>
+                    </span>
+                    <span
+                      v-if="s.queue_status && !queueStatusMeta(s.queue_status).spin"
+                      class="relative inline-flex shrink-0 items-center"
+                      :class="queueIconTone(s.queue_status)"
+                      :title="queueStatusMeta(s.queue_status).label"
+                    >
+                      <component :is="queueStatusMeta(s.queue_status).icon" class="size-3.5" aria-hidden="true" />
+                      <span class="sr-only">{{ queueStatusMeta(s.queue_status).label }}</span>
+                    </span>
+                    <ListTodo
+                      v-else-if="s.dispatched && !s.queue_status"
+                      class="size-3.5 shrink-0 text-muted-foreground"
+                      :aria-label="$t('sessions.dispatched')"
                     />
-                    <span class="sr-only">{{ $t(AGENT_STATUS_LABEL[agentStatusOf(s)?.state ?? 'done']) }}</span>
-                  </span>
-                  <span
-                    v-if="s.queue_status"
-                    class="relative inline-flex shrink-0 items-center"
-                    :class="queueIconTone(s.queue_status)"
-                    :title="queueStatusMeta(s.queue_status).label"
-                  >
-                    <component
-                      :is="queueStatusMeta(s.queue_status).icon"
-                      class="size-3.5"
-                      :class="queueStatusMeta(s.queue_status).spin ? 'animate-spin' : ''"
-                      aria-hidden="true"
-                    />
-                    <span class="sr-only">{{ queueStatusMeta(s.queue_status).label }}</span>
-                  </span>
-                  <ListTodo
-                    v-else-if="s.dispatched"
-                    class="size-3.5 shrink-0 text-muted-foreground"
-                    :aria-label="$t('sessions.dispatched')"
-                  />
-                  <!-- one conversation, several transcripts. Deliberately a label and not a
-                       fold: every older copy measured held turns the newer one did not, and they
-                       were things the user typed, so hiding one would lose them. Why this part
-                       ended is its hover. -->
-                  <span
-                    v-if="s.copy_count > 1"
-                    class="shrink-0 text-2xs text-muted-foreground tabular-nums"
-                    :title="copyWhyOf(s)"
-                  >{{ $t('sessions.copyOf', { i: s.copy_index, n: s.copy_count }) }}</span>
-                  <!-- Only when it tells rows apart: under a one-source filter every row would wear
-                       the same chip, so it shows just where a tool names itself. The hover says it. -->
-                  <SourceBadge
-                    v-if="sessionSourceFilter === 'all' || rowSourceLabel(s) !== sourceLabel(s.source)"
-                    :source="s.source"
-                    class="shrink-0"
-                  >
-                    {{ rowSourceLabel(s) }}
-                  </SourceBadge>
+                    <!-- one conversation, several transcripts. Deliberately a label and not a
+                         fold: every older copy measured held turns the newer one did not. Why this
+                         part ended is its hover. -->
+                    <span
+                      v-if="s.copy_count > 1"
+                      class="shrink-0 text-2xs text-muted-foreground tabular-nums"
+                      :title="copyWhyOf(s)"
+                    >{{ $t('sessions.copyOf', { i: s.copy_index, n: s.copy_count }) }}</span>
+                  </template>
+                  <template #trailing>
+                    <!-- Only when it tells rows apart: under a one-source filter every row would wear
+                         the same chip, so it shows just where a tool names itself. -->
+                    <SourceBadge
+                      v-if="sessionSourceFilter === 'all' || rowSourceLabel(s) !== sourceLabel(s.source)"
+                      :source="s.source"
+                      class="shrink-0"
+                    >
+                      {{ rowSourceLabel(s) }}
+                    </SourceBadge>
+                  </template>
                   <!-- the dot rides the timestamp it is derived from, so "green" and "2m ago" are
                        obviously the same fact rather than two claims to reconcile -->
-                  <span class="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground tabular-nums">
+                  <template #time-prefix>
                     <span
                       class="size-1.5 shrink-0 rounded-full"
                       :class="ACTIVITY_CLASS[activityOf(s)]"
                       :title="$t(ACTIVITY_LABEL[activityOf(s)])"
                     ></span>
-                    {{ timeAgo(s.last_activity_at) }}
-                  </span>
-                </button>
+                  </template>
+                </SideListRow>
               </ContextMenuTrigger>
               <ContextMenuContent class="max-w-60">
                 <!-- Bulk section: only when THIS row is one of several checked rows, so a
@@ -1363,7 +1371,7 @@ function onComposerSent(mode: 'now' | 'queued') {
               </ContextMenuContent>
             </ContextMenu>
           </template>
-        </div>
+        </SideList>
       </div>
 
       <!-- drag-resize handle (double-click resets) -->
