@@ -282,12 +282,28 @@ export function workerFileIds(): string[] {
  *  says; the account's own servers still load beside them, and a name in both is one server.
  *  AgentHydra's own server is left out by name and by its endpoint, so a second PC's daemon under
  *  another name is left out too. The file, or null when there is nothing to give (no owner dir, as
- *  under tests). */
+ *  under tests).
+ *  For `manage` kind workers, also includes the manager endpoint for wave control. */
 function writeWorkerMcp(w: CliMayteWorker): string | null {
   const file = workerFiles(w.id)[1]
   const servers = ownerClaudeDir
     ? ownerMcpServers(ownerClaudeDir, { names: WORKER_DENIED_MCP, paths: [MCP_PATH] })
     : {}
+
+  // For managers, add the manager endpoint (piece 4). The URL uses the manager's own worker ID.
+  // The daemon listens on 127.0.0.1; the id is not a secret (piece 4, docs/CLIMAYTE.md).
+  if (w.kind === 'manage') {
+    // The manager's MCP config lists the manager endpoint with only a URL (no header, no token).
+    // The URL is constructed with localhost:7787 (the default daemon port); if the daemon
+    // hopped to a different port, this will be resolved at runtime through MCP connection
+    // mechanics. The manager connects back to the daemon on localhost, where it is always
+    // accessible.
+    servers['climayte-manager'] = {
+      type: 'http',
+      url: `http://127.0.0.1:7787/api/corch/mcp/${w.id}`,
+    }
+  }
+
   if (Object.keys(servers).length === 0) {
     rmSync(file, { force: true })
     return null
