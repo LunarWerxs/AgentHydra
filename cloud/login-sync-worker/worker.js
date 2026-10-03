@@ -229,7 +229,7 @@ const keepHead = (row) => {
             headers: { 'cache-control': `max-age=${Math.ceil(headCacheMs / 1000)}` },
           }),
         ),
-      ).catch(() => {}),
+      ).catch(() => {}), // floor-ok: best-effort cache tier; a failed put only means the next poll reads the D1 head
     )
   return headKept.row
 }
@@ -243,7 +243,7 @@ async function seedHeadFromCache() {
     const age = kept ? Date.now() - kept.at : -1
     if (age >= 0 && age < headCacheMs && kept.row && (!headKept || headKept.at < kept.at))
       headKept = { at: kept.at, row: kept.row }
-  } catch {}
+  } catch {} // floor-ok: best-effort cache tier; a failed match or unreadable entry falls through to the D1 head read
 }
 // The head this isolate still trusts, else null.
 const trustedHead = (trust) => {
