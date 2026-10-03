@@ -1093,7 +1093,7 @@ describe('a wave is judged wherever it is stored, not only on the account its ta
       { id: 'two-b', num: 2, name: 'b', configDir: acctB, sessionPct: 0, weekPct: 0 },
     ])
     startCliMayte()
-  })
+  }, 30_000) // git init and the fake CLI setup spawn processes: under a second here, seconds on a loaded box
   afterAll(() => {
     for (const group of groups) climayteCancel({ group })
     forgetManagers()
@@ -1216,7 +1216,7 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
       { id: 'entry-1', num: 1, name: 'entry', configDir: acct, sessionPct: 0, weekPct: 0 },
     ])
     startCliMayte()
-  })
+  }, 30_000) // git init and the fake CLI setup spawn processes: under a second here, seconds on a loaded box
   afterAll(() => {
     for (const group of groups) climayteCancel({ group })
     forgetManagers()
