@@ -678,8 +678,11 @@ heartbeat catches stuck workers and due batches. The outbox is `<POINTER_DIR>/cl
 an event is written pending before the send and marked delivered only once the send is confirmed, so
 a daemon restart replays what was not delivered and never what was.
 
-**The message**, plain text, ids and reasons only (never a prompt, a report or a verdict note, so
-worker text never enters the chat):
+**The message**, plain text, ids and reasons only (never a prompt, a report, a verdict note, or an
+error a worker wrote or its stderr, so worker text never enters the chat). A failed worker's bullet
+names CliMayte's own reason (`failedReason`: not converging, overloaded, its check failed, its CLI
+run ended in an error, ...) and ends `details in climayte_status`, because a failed attempt's error
+can be the worker's own report:
 
 ```
 [AgentHydra · CliMayte] Not from the user. Ping 3-5, 3 updates since 14:02:
@@ -693,11 +696,13 @@ Next: climayte_status {group:"g-1f2e3d", report:true}, then climayte_verdict.
 At most 15 bullets (`+N more` after that), one tally line per group.
 
 **Delivery, in order.** (1) The chat's own peer pipe (`peer-message.ts`, found through `home`'s live
-session registry; it queues behind a running turn), confirmed by the text appearing in the
-transcript within 45 s. (2) While the chat is not live, the same again every 2 minutes for 2 hours.
+session registry; it queues behind a running turn). A write the pipe accepted is delivered, once:
+a chat mid-turn (inside a long `climayte_status` wait, say) shows it when the turn ends, so its
+transcript not growing within 45 s is journalled as `ping-unconfirmed` and never sent again (each
+resend queued another copy). An origin without a transcript is not waited on at all. (2) While the
+chat has no pipe, or the pipe refused the write, the same again every 2 minutes for 2 hours.
 (3) Then, only for a failed or settled group on a desktop chat whose instance is running, the
-composer (`POST /api/sessions/:id/message`), and never after a pipe write that may already have
-landed. (4) Last, one OS toast, and the batch is kept as that chat's unread pings, which its next
+composer (`POST /api/sessions/:id/message`). (4) Last, one OS toast, and the batch is kept as that chat's unread pings, which its next
 `climayte_status` shows (`unreadPings`) and marks read. A `worker` origin gets the text through
 `climayteSend` instead.
 

@@ -190,6 +190,7 @@ function harness(
   for (const w of opts.workers ?? []) ws.set(w.id, w)
   const listeners = new Set<(w: PingWorker) => void>()
   let peerCalls = 0
+  const confirms: number[] = []
   const deps: CliMaytePingDeps = {
     dir,
     workers: () => [...ws.values()],
@@ -208,8 +209,9 @@ function harness(
         timers = timers.filter((t) => t.id !== id)
       },
     },
-    deliverPeer: async (sessionId, _transcript, text, _confirm, home) => {
+    deliverPeer: async (sessionId, _transcript, text, confirm, home) => {
       peerCalls++
+      confirms.push(confirm)
       const r = opts.peer ? opts.peer(peerCalls) : { ok: true, reason: 'enqueued' }
       if (r.ok) sent.push({ sessionId, text, home })
       return r
@@ -264,6 +266,7 @@ function harness(
     workerSends,
     journal,
     peerCalls: () => peerCalls,
+    confirms,
   }
 }
 
@@ -414,8 +417,18 @@ describe('the message', () => {
     expect(
       line({ ...base, status: 'done', check: 'x', verdicts: [{ verdict: 'pass', by: 'check' }] }),
     ).toBe('w-9c0d1e2f "Delete stale buckets": done on #35, check passed.')
-    expect(line({ ...base, status: 'failed', error: 'not converging (4 moves)\nmore' })).toBe(
-      'w-9c0d1e2f "Delete stale buckets": failed: not converging (4 moves).',
+    const failed = (error: string, outcome = 'error') =>
+      line({ ...base, status: 'failed', error, attempts: [attempt(35, { outcome })] })
+    expect(
+      failed(
+        'Not converging: 4 moves between accounts in this turn, so CliMayte stopped it to ask. Split the task.',
+        'quota',
+      ),
+    ).toBe(
+      'w-9c0d1e2f "Delete stale buckets": failed: not converging (4 moves between accounts); details in climayte_status.',
+    )
+    expect(failed('Anthropic stayed overloaded through 3 retries: 529', 'transient')).toBe(
+      'w-9c0d1e2f "Delete stale buckets": failed: Anthropic stayed overloaded through 3 retries; details in climayte_status.',
     )
     expect(line({ ...base, status: 'cancelled' })).toBe(
       'w-9c0d1e2f "Delete stale buckets": cancelled.',
@@ -437,7 +450,30 @@ describe('the message', () => {
     expect(lines).toContain('+2 more')
     const long = worker({ title: 'T'.repeat(200), status: 'failed', error: 'E'.repeat(400) })
     const e = pingEvents(snapshotOf(worker(), null, T0), long, T0)[0]
-    expect(e.line).toBe(`w-1a2b3c4d "${'T'.repeat(80)}": failed: ${'E'.repeat(160)}.`)
+    expect(e.line).toStartWith(`w-1a2b3c4d "${'T'.repeat(80)}": failed: `)
+    expect(e.line).not.toContain('EEE')
+  })
+
+  test("a failed worker's error holding its own report or stderr never reaches the chat", () => {
+    // climayte.ts settleWorker: a failed attempt's error is its result text, else its stderr.
+    const base = worker({ id: 'w-9c0d1e2f', title: 'Delete stale buckets' })
+    const p = snapshotOf(base, null, T0)
+    for (const error of [
+      'REPORT-BODY: I deleted 14 buckets in account 1234 and here is the table',
+      'STDERR-BODY Error: ENOENT C:/Users/someone/secret.txt',
+    ]) {
+      const w = {
+        ...base,
+        status: 'failed' as const,
+        error,
+        attempts: [attempt(35, { outcome: 'error' })],
+      }
+      const bullet = pingEvents(p, w, T0)[0].line
+      expect(bullet).not.toContain('BODY')
+      expect(bullet).toBe(
+        'w-9c0d1e2f "Delete stale buckets": failed: its CLI run ended in an error; details in climayte_status.',
+      )
+    }
   })
 
   test('carries no prompt, report, follow-up or verdict note', async () => {
@@ -548,20 +584,35 @@ describe('the outbox', () => {
     h.ping.stop()
   })
 
-  test('a pipe that took the bytes but never showed them bars the composer', async () => {
+  test('a pipe that took the bytes is delivered once: a busy chat is never sent a copy', async () => {
+    // A chat mid-turn (inside a long climayte_status wait) queues what the pipe took, so its
+    // transcript does not grow in time. Re-piping every 2 minutes gave it up to 60 copies.
     const a = running('w-a')
     const h = harness({
       workers: [a],
-      peer: (n) =>
-        n === 1
-          ? { ok: false, reason: 'wrote-but-no-transcript-growth' }
-          : { ok: false, reason: 'not-live' },
+      peer: () => ({ ok: false, reason: 'wrote-but-no-transcript-growth' }),
       composer: { eligible: true, ok: true },
     })
     h.change({ ...a, status: 'failed', error: 'boom' })
-    await h.at(3 * 3_600_000)
+    await h.at(30 * 60_000)
+    expect(h.peerCalls()).toBe(1)
     expect(h.composerSent).toHaveLength(0)
-    expect(h.toasts).toHaveLength(1)
+    expect(h.toasts).toHaveLength(0)
+    expect(h.ping.unreadPings(SID).count).toBe(0)
+    expect(h.journal.filter((j) => j.event === 'ping-failed')).toHaveLength(0)
+    h.ping.stop()
+  })
+
+  test('an origin without a transcript is not confirmed by waiting on one', async () => {
+    // Nothing can grow, so a 45 s wait would read every delivery as a failure.
+    const a = running('w-a')
+    const h = harness({
+      workers: [a],
+      peer: () => ({ ok: false, reason: 'wrote-but-no-transcript-growth' }),
+    })
+    h.change({ ...a, status: 'failed', error: 'boom' })
+    await h.at(60_000)
+    expect(h.confirms).toEqual([0])
     h.ping.stop()
   })
 

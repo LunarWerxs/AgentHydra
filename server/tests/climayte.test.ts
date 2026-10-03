@@ -2116,6 +2116,9 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     }
     expect(w?.status).toBe('waiting')
     expect(w?.error).toContain('Waiting for room')
+    // A timed hold names the time it starts by, whatever happens to the room meanwhile.
+    const by = new Date(resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    expect(w?.error).toContain(`It starts by ${by} either way (an account it fits refills then).`)
     // The row a status read returns carries the size, with the room when it started waiting.
     expect(w?.size).toMatchObject({ window: 85, room: 15, roomOn: '#41' })
     // When it expects room, for a waiter to sleep until: the account's 5-hour reset, in UTC.
@@ -2444,6 +2447,24 @@ describe('integration: the five-minute rule (owner, 2026-10-03)', () => {
     expect(held?.error).toContain('#151')
     expect(held?.error).toContain('per_account_strict')
     expect(launchedOn(two)).toEqual([])
+  }, 40_000)
+
+  test('a task held off an account with room by its worker cap says so (not strict)', async () => {
+    // capNote, 2026-10-03 11:05: seven tasks waited behind a flat 4-worker cap while #35 had room.
+    fake()
+    const cd = dir('cn-1', ['fake-slow', ''])
+    // A Max 5x account: a cap of 8, and room left once 8 Pro-sized tasks run on it.
+    setCliMayteAccountsProvider(() => [acct('cn-1', 181, cd, 10, 5)])
+    startCliMayte()
+    const ids = [1, 2, 3, 4, 5, 6, 7, 8].map((n) =>
+      dispatch('cn-G', `cap ${n}`, { accounts: ['cn-1'] }),
+    )
+    for (const id of ids) await until(id, (x) => x?.status === 'running', 10_000)
+    const ninth = dispatch('cn-G', 'cap 9', { accounts: ['cn-1'] })
+    const held = await until(ninth, (x) => !!x?.error, 10_000)
+    expect(launchedOn(ninth)).toEqual([])
+    expect(held?.error).toContain('#181 has room but runs 8 workers (its cap).')
+    expect(held?.error).not.toContain('per_account_strict')
   }, 40_000)
 
   test('a limit that resets in 20 minutes moves at once; one that resets in 3 waits at home', async () => {

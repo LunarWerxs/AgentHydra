@@ -13,15 +13,17 @@
 // written there as pending before the send and marked delivered only once the send is confirmed, so
 // a daemon restart replays what was not delivered and never what was.
 //
-// DELIVERY, in order: the chat's own peer pipe (peer-message.ts; it queues behind a running turn),
-// retried every 2 minutes for 2 hours while the chat is not live; then, only for a failed or settled
-// group on a desktop chat whose instance runs, the composer (POST /api/sessions/:id/message), and
-// never after a pipe write that might already have landed; last, one OS toast and the batch kept as
+// DELIVERY, in order: the chat's own peer pipe (peer-message.ts; it queues behind a running turn).
+// A write the pipe accepted is delivered, once, even when the transcript has not grown yet (a busy
+// chat shows it when its turn ends); only a chat with no pipe, or a refused write, is retried every
+// 2 minutes for 2 hours; then, only for a failed or settled group on a desktop chat whose instance
+// runs, the composer (POST /api/sessions/:id/message); last, one OS toast and the batch kept as
 // `unreadPings` for the caller's next climayte_status. A manager worker (origin kind 'worker') gets
 // the text as a non-urgent climayteSend instead.
 //
-// WHAT A PING CARRIES: ids, titles, groups, statuses, accounts by instance number and short reasons.
-// Never a prompt, a report, a follow-up or a verdict note, so worker text never enters the chat.
+// WHAT A PING CARRIES: ids, titles, groups, statuses, accounts by instance number and reasons in
+// CliMayte's own words (failedReason). Never a prompt, a report, a follow-up, a verdict note, an
+// error a worker wrote or its stderr, so worker text never enters the chat.
 //
 // Kill switch: the file `<dir>/ping-off`. While it exists nothing is recorded or sent.
 //
@@ -168,6 +170,33 @@ const reason = (s: string | null | undefined, fallback: string): string => {
   return cut(line || fallback, REASON_MAX).replace(/[.!]+$/, '')
 }
 
+/** Why a worker failed, in CliMayte's own words only. A failed attempt's `error` can be the
+ *  worker's final report or its stderr (climayte.ts settleWorker), and a ping never carries worker
+ *  text, so the reason is one of CliMayte's own messages, recognised by how it starts, or else the
+ *  way the last attempt ended. climayte_status has the full error. */
+const FAILED_REASONS: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
+  [/^Not converging: ([\w%(). ,]+?) in this turn/, (m) => `not converging (${m[1]})`],
+  [/^Anthropic stayed overloaded/, () => 'Anthropic stayed overloaded through 3 retries'],
+  [/^The CLI was stopped before it finished/, () => 'the CLI was stopped three times in one turn'],
+  [/^The check itself is broken/, () => 'its check command is broken'],
+  [/^The check still failed/, () => 'its check still failed after every round'],
+  [/^The wave's proof still failed/, () => "the wave's proof still failed after every round"],
+]
+const OUTCOME_REASONS: Partial<Record<string, string>> = {
+  error: 'its CLI run ended in an error',
+  done: 'it ended without passing',
+  transient: 'Anthropic stayed overloaded',
+  interrupted: 'its CLI run was stopped',
+}
+export function failedReason(w: Pick<PingWorker, 'error' | 'attempts'>): string {
+  const error = w.error ?? ''
+  for (const [re, say] of FAILED_REASONS) {
+    const m = error.match(re)
+    if (m) return say(m)
+  }
+  return OUTCOME_REASONS[w.attempts.at(-1)?.outcome ?? ''] ?? 'no reason recorded'
+}
+
 /** An account by its instance number, never its name (which can be a login). */
 const accountLabel = (a: PingAttempt | undefined): string =>
   a?.account.num != null ? `#${a.account.num}` : 'an unnumbered account'
@@ -231,7 +260,7 @@ export function pingEvents(prev: PingSnapshot | null, w: PingWorker, now: number
   else if (w.status === 'done' && entered)
     add('needs-verdict', `${who}: done on ${accountLabel(last)}, needs your verdict.`)
   if (w.status === 'failed' && entered)
-    add('failed', `${who}: failed: ${reason(w.error, 'no reason recorded')}.`)
+    add('failed', `${who}: failed: ${failedReason(w)}; details in climayte_status.`)
   if (w.status === 'cancelled' && entered) add('cancelled', `${who}: cancelled.`)
   if (
     w.status === 'waiting' &&
@@ -299,9 +328,8 @@ interface OriginBox {
   lastFlush: number | null
   /** A group settled, or the origin has no live work: flush SETTLED_FLUSH_MS after this. */
   urgentAt: number | null
-  /** Set by a failed send: the next try, and whether the composer is ruled out (a pipe write that
-   *  may have landed, so typing would risk a duplicate). */
-  retry: { firstAt: number; nextAt: number; tries: number; composerUnsafe: boolean } | null
+  /** Set by a send that did not reach the chat (no pipe, or the pipe refused it): the next try. */
+  retry: { firstAt: number; nextAt: number; tries: number } | null
   /** Pings no channel delivered, for the caller's next climayte_status. */
   unread: Array<{ at: number; seqs: string; text: string }>
 }
@@ -541,25 +569,39 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
   }
 
   /** A send failed: try again in RETRY_EVERY_MS, or report true once RETRY_FOR_MS has passed. */
-  const retryOrGiveUp = (box: OriginBox, unsafe: boolean): boolean => {
+  const retryOrGiveUp = (box: OriginBox): boolean => {
     const now = clock.now()
     box.retry = box.retry
       ? { ...box.retry, tries: box.retry.tries + 1 }
-      : { firstAt: now, nextAt: now, tries: 1, composerUnsafe: false }
-    if (unsafe) box.retry.composerUnsafe = true
+      : { firstAt: now, nextAt: now, tries: 1 }
     box.retry.nextAt = now + RETRY_EVERY_MS
     return now - box.retry.firstAt >= RETRY_FOR_MS
   }
 
   const sendChat = async (box: OriginBox, o: ChatOrigin, batch: QueuedPing[], text: string) => {
-    const r = await deliverPeer(o.sessionId, o.transcript, text, PEER_CONFIRM_MS, o.home).catch(
+    // Without a transcript nothing can grow, so there is nothing to wait 45 s for.
+    const confirmMs = o.transcript ? PEER_CONFIRM_MS : 0
+    const r = await deliverPeer(o.sessionId, o.transcript, text, confirmMs, o.home).catch(
       (err) => ({ ok: false, reason: `error: ${String(err)}` }),
     )
     if (r.ok) return settle(box, batch)
+    // The pipe took the bytes: the chat has the ping, queued behind its turn when it is busy (a
+    // long climayte_status wait, say), which is why its transcript has not grown yet. That is
+    // delivered, once. Sending it again queued a copy every 2 minutes, up to 60 of them.
+    if (r.reason === 'wrote-but-no-transcript-growth') {
+      if (o.transcript)
+        journal({
+          ts: new Date(clock.now()).toISOString(),
+          event: 'ping-unconfirmed',
+          origin: originLabel(o),
+          seq: seqRange(batch),
+        })
+      return settle(box, batch)
+    }
     fail(box, batch, 'peer', r.reason)
-    if (!retryOrGiveUp(box, r.reason === 'wrote-but-no-transcript-growth')) return
+    if (!retryOrGiveUp(box)) return
     const settles = batch.some((e) => e.kind === 'group-done' || e.kind === 'failed')
-    if (settles && !box.retry?.composerUnsafe && deps.composer) {
+    if (settles && deps.composer) {
       const ok = await deps.composer.eligible(o).catch(() => false)
       if (ok) {
         const c = await deps.composer
@@ -590,7 +632,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     }
     if (r.ok) return settle(box, batch)
     fail(box, batch, 'climayte_send', r.message)
-    if (retryOrGiveUp(box, false)) {
+    if (retryOrGiveUp(box)) {
       fail(box, batch, 'dropped', 'not delivered for 2 hours')
       settle(box, batch)
     }
