@@ -21,7 +21,17 @@ import {
 import { workers as liveWorkers } from '../src/climayte-core'
 import { MANAGER_CONTEXT_TOKENS } from '../src/climayte-launch'
 import type { CliMayteWave, CliMayteWorker } from '../src/climayte-lib'
+import { OPUS } from '../src/climayte-scorecard'
 import { readWave, waveBatch, waveDone, waveStateText, writeWave } from '../src/climayte-wave'
+
+/** The scorecard row of the rung these tests launch (`model: 'opus'`, `effort: 'high'`). Bun runs
+ *  every test file in one process, in directory order, which differs by platform: matching on effort
+ *  alone finds another file's Sonnet high row first on Linux. */
+function opusHighCode() {
+  return climayteScorecard().rows.find(
+    (r) => r.kind === 'code' && r.model === OPUS && r.effort === 'high',
+  )
+}
 
 // Managers record their wake spend by kind, and CliMayte prices the next manager from it: a test
 // file that leaves them behind changes what climayte.test.ts's manager sizing test expects.
@@ -941,8 +951,9 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
     expect(saved?.escalations.map((e) => e.key)).toContain('nothing')
 
     // The provisional pass is not on the scorecard. The orchestrator's fail on the same work leaves
-    // one fail, not a pass and a fail.
-    const row = () => climayteScorecard().rows.find((r) => r.kind === 'code' && r.effort === 'high')
+    // one fail, not a pass and a fail. The row is the rung these workers ran (Opus high), named by
+    // model too: climayte.test.ts, run first in the same process, leaves a Sonnet high code row.
+    const row = () => opusHighCode()
     expect(row()?.pass ?? 0).toBe(0)
     const fails = row()?.fail ?? 0
     expect(
@@ -1305,7 +1316,7 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
     writeWave(acct, wave)
     return { ...r, id }
   }
-  const code = () => climayteScorecard().rows.find((r) => r.kind === 'code' && r.effort === 'high')
+  const code = () => opusHighCode()
 
   test('verify ok confirms the provisional passes and passes the manager; an unreported wave is refused', async () => {
     const { wave, managerId, id } = await reportedWave()
