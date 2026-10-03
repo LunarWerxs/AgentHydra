@@ -231,6 +231,41 @@ export interface CliMayteWorker {
   /** A move found the transcript on no account (field note 30): the last handoff note, which the
    *  next message continues from in a fresh session. */
   handoffNote?: string | null
+  /** The wave this worker belongs to (a task in a wave, or the manager worker). */
+  wave?: string | null
+  /** A manager with a live, unreported wave is held: no new attempt starts until the wave reports. */
+  hold?: 'wave' | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CliMayteWave {
+  id: string // 'wv-' + 6 hex
+  group: string // the workers' group; the manager's is 'mgr-' + id
+  managerId: string // the manager worker
+  plan: string // absolute path of the plan file (the manager reads it as needed)
+  cwd: string // the repository the wave works in
+  branch: string // the branch commits must land on (default: cwd's current branch)
+  verify: string | null // the command the orchestrator runs on the merged result, carried to the report
+  tasks: Array<{
+    key: string // stable name from the plan ('t1', 'api-routes'), survives re-dispatch
+    prompt: string
+    title: string
+    kind: string
+    check: string | null
+    paths: string[] // globs the diff may touch; [] = must not commit
+    after: string[] // keys that must pass first (rounds)
+    workerId: string | null // the current worker for this key
+    state: 'pending' | 'running' | 'passed' | 'failed' | 'escalated'
+    proof: { check: boolean | null; commits: string[]; paths: boolean | null; note: string } | null
+  }>
+  escalations: Array<{ key: string; reason: string; at: number }>
+  notes: string // the manager's scratch, capped at 2,000 chars
+  rounds: number
+  maxRounds: number // re-dispatches per key, default 3
+  batch: { size: number; settleS: number; held: string[]; since: number | null }
+  status: 'running' | 'reported' | 'verified' | 'rejected' | 'failed' | 'cancelled'
+  report: string | null // the short report the orchestrator is woken with
   createdAt: number
   updatedAt: number
 }
