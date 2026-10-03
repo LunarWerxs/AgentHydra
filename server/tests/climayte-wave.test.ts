@@ -1094,18 +1094,17 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
     const r = start(withChain)
     const wave = readWave(acct, r.wave) as CliMayteWave
     const state = waveStateText(wave, new Map())
-    expect(state).toContain('- nav: pending "Nav: Instances group"')
+    // A pending task with no after keys is ready; one whose after key has not passed is not.
+    expect(state).toContain('- nav: pending (ready) "Nav: Instances group"')
     expect(state).toContain('- instances-home: pending "Instances home page" after: nav')
     expect(state).toContain('- climayte-float: pending "Float: add climayte" after: instances-home')
-    // No task is ready yet since none have passed
-    expect(state).not.toContain('(ready)')
 
-    // Mark the first task as passed
     wave.tasks[0].state = 'passed'
     writeWave(acct, wave)
     const stateAfterPass = waveStateText(wave, new Map())
-    // The second task should now be ready since its after-key has passed
-    expect(stateAfterPass).toContain('- instances-home: pending (ready)')
+    expect(stateAfterPass).toContain('- instances-home: pending (ready) "Instances home page"')
+    expect(stateAfterPass).toContain('- climayte-float: pending "Float: add climayte"')
+    expect(stateAfterPass).not.toContain('climayte-float: pending (ready)')
   })
 
   /** A reported wave whose one task passed provisionally (the daemon's judgement, by: 'wave'). */

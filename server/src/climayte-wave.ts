@@ -107,7 +107,7 @@ function formatTaskLine(
   let line = `- ${task.key}: ${task.state}`
 
   // Add ready marker for pending tasks whose after-keys have all passed
-  if (task.state === 'pending' && task.after.length > 0) {
+  if (task.state === 'pending') {
     const afterPassed = task.after.every((key) => {
       const afterTask = allTasks.find((t) => t.key === key)
       return afterTask?.state === 'passed'
