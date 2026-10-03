@@ -757,3 +757,7 @@ stays quiet on the fixed one, so none can rot into a silent no-op.
   inheriting bun's 5s default. Such a case times the runner, not itself, and a cold windows-latest
   box runs this class ~10x slower than a dev machine. A repo-wide `bun test --timeout N` stands the
   check down, which is the better answer for a suite where nearly everything spawns.
+- `fixer-only-called-by-its-test.mjs`: an exported fixer (a name matching
+  `^(sweep|reassert|run.*Once)`) that only test code names. `reassertAutomationStamps` and
+  `sweepUntitledDesktopChats` both shipped like that, unit-tested and documented as running on a
+  timer, with no production caller. Wire it or delete it with its test; never allowlist it.

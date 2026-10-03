@@ -13,7 +13,7 @@
 // the fixed one. A guardrail that cannot fail is not a guardrail.
 
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -646,6 +646,10 @@ const EXEMPT_FROM_FIXTURES: Record<string, string> = {
     'diffs export sets across a WHOLE .mjs / .d.mts file PAIR, not a single text blob a ' +
     'findViolations(text) signature could take; its regression coverage is the run({ root }) ' +
     'assertion against the real repo tree, exercised for every check below.',
+  'fixer-only-called-by-its-test.mjs':
+    'judges a fixer by who ELSE names it, so its unit is a whole tree of files, never one text ' +
+    'blob; it exports findOrphans(files) instead, and the planted-tree describe block below proves ' +
+    'it fires on the shape that shipped twice and stays quiet once a production caller exists.',
 }
 
 for (const file of CHECK_FILES) {
@@ -760,6 +764,79 @@ describe('spawn-test-without-timeout.mjs — repo-wide timeout stand-down', () =
     // stops enforcing anything. That should be a deliberate, visible change, not a silent one.
     const { globalTimeoutMs } = await load()
     expect(globalTimeoutMs(REPO_ROOT)).toBeNull()
+  })
+})
+
+// fixer-only-called-by-its-test.mjs, fired at a PLANTED tree: a temp module exporting sweepX that
+// only a test imports, exactly the state reassertAutomationStamps and sweepUntitledDesktopChats
+// shipped in. Then the same tree with a caller, and the two real fixers with their real callers
+// taken away, so the check is proven against the bugs it was written from, not a synthetic one.
+describe('fixer-only-called-by-its-test.mjs — planted orphan', () => {
+  const FIXER = 'export function sweepX(): number {\n  return 0\n}\n'
+  const TEST =
+    "import { sweepX } from '../src/sweep-x'\ntest('sweeps', () => expect(sweepX()).toBe(0))\n"
+  let root = ''
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true })
+    root = ''
+  })
+  const plant = (files: Record<string, string>) => {
+    root = mkdtempSync(join(tmpdir(), 'fixer-orphan-'))
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(join(root, rel, '..'), { recursive: true })
+      writeFileSync(join(root, rel), text)
+    }
+  }
+  const load = async () =>
+    import(pathToFileURL(join(CHECKS_DIR, 'fixer-only-called-by-its-test.mjs')).href)
+
+  test('fails the build when only a test imports the fixer', async () => {
+    plant({
+      'server/src/sweep-x.ts': FIXER,
+      'server/tests/sweep-x.test.ts': TEST,
+      // A doc comment and a string naming it are not callers.
+      'server/src/index.ts': "// sweepX runs on a timer\nconst note = 'sweepX()'\n",
+    })
+    const result = await (await load()).audit.run({ root })
+    expect(result.failed).toBe(true)
+    expect(result.findings.map((f: { symbol: string }) => f.symbol)).toEqual(['sweepX'])
+    expect(result.report).toContain('server/src/sweep-x.ts:1 sweepX')
+  })
+
+  test('passes once production code calls it, from another file or its own', async () => {
+    plant({
+      'server/src/sweep-x.ts': FIXER,
+      'server/tests/sweep-x.test.ts': TEST,
+      'server/src/index.ts':
+        "import { sweepX } from './sweep-x'\nsetInterval(() => { try { sweepX() } catch {} }, 1000)\n",
+    })
+    expect((await (await load()).audit.run({ root })).failed).toBe(false)
+    rmSync(root, { recursive: true, force: true })
+    plant({
+      'server/src/sweep-x.ts': `${FIXER}export function start() {\n  setInterval(sweepX, 1000)\n}\n`,
+      'server/tests/sweep-x.test.ts': TEST,
+    })
+    expect((await (await load()).audit.run({ root })).failed).toBe(false)
+  })
+
+  test('catches both real fixers once their real production callers are taken away', async () => {
+    const { findOrphans } = await load()
+    const read = (rel: string) => ({ path: rel, text: readFileSync(join(REPO_ROOT, rel), 'utf8') })
+    const owner = read('server/src/session-launch.ts')
+    const tests = [
+      read('server/tests/session-launch.test.ts'),
+      read('server/tests/title-sweep.test.ts'),
+    ]
+    // With its caller present, neither is an orphan; without it, each is, which is the state each
+    // one shipped in.
+    const callers = [
+      read('server/src/title-sweep.ts'),
+      read('server/src/automation-stamp-sweep.ts'),
+    ]
+    expect(findOrphans([owner, ...tests, ...callers])).toEqual([])
+    const symbols = findOrphans([owner, ...tests]).map((f: { symbol: string }) => f.symbol)
+    expect(symbols).toContain('sweepUntitledDesktopChats')
+    expect(symbols).toContain('reassertAutomationStamps')
   })
 })
 
