@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-03
+
 ### Added
 
 - **A chat that dispatches CliMayte work is pinged when it settles** (owner, 2026-10-03: "when a chat finishes, it pings the orchestrator that started it"). `climayte_run`, `climayte_manage` and `climayte_status` are now caller-aware: the daemon resolves the calling chat and stores it as the worker's `origin` (an `origin` a client writes into its own arguments is ignored; the route checks the session id and Claude home before storing). The daemon starts the ping outbox with CliMayte: finishes, verdicts needed, failures, cancels, a settled group, and a worker that was 5-hour or weekly limited and moved go back to that chat in batches, through its peer pipe, then a retry for 2 hours, the composer for a desktop chat, and last a toast plus `unreadPings` on its next `climayte_status`. A task a manager worker dispatches reports to that worker. The dispatch answer says `ping: on` or `ping: off (<why>)`; `notify: false` opts out; `climayte_status {group, ping: true}` adopts a group already running; the file `~/.agenthydra/climayte/ping-off` turns pings off. See docs/CLIMAYTE.md "Pings to the dispatching chat".
