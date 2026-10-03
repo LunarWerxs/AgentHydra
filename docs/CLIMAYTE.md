@@ -162,15 +162,6 @@ and a daemon start removes those of every worker that is gone or finished, never
 connections-local was denied for a day to save tokens (`8486a2d`); a worker asked to use
 connections_execute then had no such tool and drove the local MCP through a script.
 
-**The worker preamble** (2026-10-03): the setting `climayteWorkerPreamble` (Instances tab -> gear;
-`POST /api/settings`; key `climayte_worker_preamble` in this machine's settings table, never
-synced) is put ahead of the first message of every session a launch starts, then a blank line
-(`withPreamble` in `climayte-launch.ts`). A launch that resumes a session sends no preamble, so a
-follow-up, a steering message or a move that carried the transcript reaches the session as written;
-a message re-sent from the attempt before already starts with it and is not prefixed twice; a
-wave's manager never gets it. Empty by default, so the first prompt is the task byte for byte. An
-owner uses it to have every worker read a role prompt first.
-
 ### Runner and restarts (`server/src/climayte-runner.ts`)
 
 Owner, 2026-09-30: restarting AgentHydra must not break CliMayte workers. A `Bun.spawn` child sits in
@@ -429,6 +420,10 @@ that folder as `ownerDir`, makes the account folder match:
   measured what the full set cost: a fresh session's first request grew 57k -> 90k tokens
   (Connections) when it arrived, and that prefix is re-read on every request and written to cache
   on every fresh session and move.
+- **A first step for every worker** (owner, 2026-10-03: each worker should read its role prompt
+  first): it goes in this machine's worker `CLAUDE.md`, not in the task prompt. Every session loads
+  that file, so the step holds through retries, moves to another account and compaction with no
+  special casing; the 658805b prompt-preamble setting did the same job and was taken back out.
 
 ### Scorecard (`server/src/climayte-scorecard.ts`, `5710553`)
 

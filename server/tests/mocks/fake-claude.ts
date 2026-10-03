@@ -99,14 +99,6 @@ function findTranscript(): string | null {
   return null
 }
 
-// Anthropic overloaded before the session began: no init, nothing written. The marker goes with
-// it, so the next launch on this account runs the turn.
-if (existsSync(join(configDir, 'fake-overloaded-once'))) {
-  rmSync(join(configDir, 'fake-overloaded-once'))
-  emit({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 529 Overloaded', session_id: sessionId, total_cost_usd: 0, num_turns: 0 })
-  process.exit(1)
-}
-
 if (existsSync(join(configDir, 'fake-quota'))) {
   // Three hours out, its zone named. A fixed "resets 4am" is 04:00Z under bun test, so from 03:30Z
   // every night the wall was within the 30-minute wait-at-home window and the move never came.

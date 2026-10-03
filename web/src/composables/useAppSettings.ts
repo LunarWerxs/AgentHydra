@@ -29,8 +29,6 @@ const keepaliveWeeklyFloorPct = ref(85)
 // Work on paid extra usage (usage credits). Mirrors the server's default: OFF, because it spends
 // money rather than quota.
 const allowExtraUsage = ref(false)
-// What CliMayte puts ahead of each worker's first message. Empty by default: the task alone.
-const climayteWorkerPreamble = ref('')
 // Reset notifications (server/src/reset-watch.ts). Defaults mirror getNotificationSettings():
 // announcing a rollover is on, the intrusive channels (persistent repeats, email) are opt-in.
 const notifyEnabled = ref(true)
@@ -72,7 +70,6 @@ function absorb(s: api.AppSettings): void {
   keepaliveEnabled.value = s.keepaliveEnabled
   keepaliveWeeklyFloorPct.value = s.keepaliveWeeklyFloorPct
   allowExtraUsage.value = s.allowExtraUsage
-  climayteWorkerPreamble.value = s.climayteWorkerPreamble
   transcriptEditor.value = s.transcriptEditor
   transcriptEditorResolved.value = s.transcriptEditorResolved
   notifyEnabled.value = s.notifyEnabled
@@ -129,7 +126,6 @@ export function useAppSettings() {
     keepaliveEnabled,
     keepaliveWeeklyFloorPct,
     allowExtraUsage,
-    climayteWorkerPreamble,
     transcriptEditor,
     transcriptEditorResolved,
     notifyEnabled,
