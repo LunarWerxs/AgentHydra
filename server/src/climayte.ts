@@ -1857,7 +1857,17 @@ function processBatchWakes(now: number): void {
       // The wake ends the hold (piece 2) that kept the manager's turn from starting again.
       manager.hold = null
       manager.notBefore = null
+      // A manager ends every turn `done` and only this wake starts the next one (field note 71, live
+      // wave wv-2fb769: the report sat in `pending` for over an hour). Queue it as climayteSend does
+      // for a finished worker; one still running keeps the report for its next turn.
+      if (!isActive(manager)) {
+        manager.status = 'queued'
+        manager.retries = 0
+        manager.error = null
+        manager.revived = true
+      }
       changed(manager)
+      schedule(0)
     }
 
     // Write the updated wave back to disk.

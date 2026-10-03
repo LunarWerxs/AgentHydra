@@ -1149,6 +1149,42 @@ describe('a wave is judged wherever it is stored, not only on the account its ta
       provisional: true,
     })
   }, 90_000)
+
+  test('a batch wake starts a manager that ended its turn `done`, with the wake message as its prompt', async () => {
+    // Found live 2026-10-03 (wave wv-2fb769): the wake queued its message on the finished manager
+    // and nothing ever started it, so the wave sat for over an hour.
+    const mgr = climayteRun({
+      tasks: [{ prompt: 'manage idle', cwd: repo, title: 'manager', kind: 'manage' }],
+      group: 'twoacct-manager',
+    })
+    groups.push(mgr.group)
+    const mid = mgr.workers[0]?.id as string
+    await until(() => climayteList({ id: mid })[0]?.status === 'done', 30_000)
+    expect(climayteList({ id: mid })[0]).toMatchObject({ status: 'done' })
+
+    const run = checkedTask('woken')
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+    const wave = { ...oneTask('wv-woken', id), managerId: mid }
+    writeWave(acctA, wave)
+    ;(liveWorkers.get(id) as CliMayteWorker).wave = wave.id
+    ;(liveWorkers.get(mid) as CliMayteWorker).wave = wave.id
+
+    // The task passes, the batch (size 1) is full, the wake fires: the manager takes a second turn.
+    const launched = () =>
+      [acctA, acctB].flatMap((dir) => {
+        try {
+          return readFileSync(join(dir, 'fake-launches.jsonl'), 'utf8')
+            .split('\n')
+            .filter(Boolean)
+            .map((l) => (JSON.parse(l) as { prompt: string }).prompt)
+        } catch {
+          return []
+        }
+      })
+    await until(() => launched().includes('Wave batch: 1 changed tasks: x'), 40_000)
+    expect(launched()).toContain('Wave batch: 1 changed tasks: x')
+  }, 90_000)
 })
 
 describe('the orchestrator starts and verifies a wave (piece 7)', () => {
