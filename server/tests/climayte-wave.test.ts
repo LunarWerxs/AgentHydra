@@ -23,6 +23,12 @@ import { MANAGER_CONTEXT_TOKENS } from '../src/climayte-launch'
 import type { CliMayteWave, CliMayteWorker } from '../src/climayte-lib'
 import { readWave, waveBatch, waveDone, waveStateText, writeWave } from '../src/climayte-wave'
 
+// Managers record their wake spend by kind, and CliMayte prices the next manager from it: a test
+// file that leaves them behind changes what climayte.test.ts's manager sizing test expects.
+function forgetManagers(): void {
+  for (const [id, w] of liveWorkers) if (w.kind === 'manage') liveWorkers.delete(id)
+}
+
 describe('wave store', () => {
   let tempDir: string
 
@@ -819,6 +825,7 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
 
   afterAll(() => {
     for (const group of groups) climayteCancel({ group })
+    forgetManagers()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -1043,6 +1050,7 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
   })
   afterAll(() => {
     for (const group of groups) climayteCancel({ group })
+    forgetManagers()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })

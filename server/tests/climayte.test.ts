@@ -2008,9 +2008,19 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
   }, 60_000)
 
   test('a manager is priced per wake and never asked to split, however big the tasks on record ran (piece 6)', async () => {
+    factor = 1
     setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
     setCliMayteAccountsProvider(() => [
-      { id: 'size-pro', num: 41, name: 'pro', configDir: proDir, sessionPct, weekPct: 0 },
+      {
+        id: 'size-pro',
+        num: 41,
+        name: 'pro',
+        configDir: proDir,
+        sessionPct,
+        weekPct: 0,
+        planFactor: factor,
+        sessionResetsAt: resetAt,
+      },
     ])
     startCliMayte()
     await onRecord('debug', 'low', 1_550_000) // about 150% of a Pro window on Sonnet
