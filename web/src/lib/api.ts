@@ -68,6 +68,7 @@ import type {
   UsageSettings,
   UsageSnapshot,
 } from '@agenthydra/server/types'
+import type { ChatSyncRow } from '../../../server/src/core/desktop-chat-types'
 
 export type {
   Account,
@@ -860,11 +861,21 @@ export const moveCliLoginsOut = (ids: string[], passphrase: string, signOut = fa
 export type CliLoginSyncStatusQueue = CliLoginSyncStatus & {
   shareQueue: boolean
   queueError: string | null
+  /** Desktop chat sync: this PC shares its chats, why that half failed last pass, and the chats. */
+  shareChats: boolean
+  chatsError: string | null
+  chats: ChatSyncRow[]
 }
 export const getLoginSync = () => j<CliLoginSyncStatusQueue>('/api/cli-instances/sync')
 /** Share the CliMayte queue with the other PCs on the same store; answers the status. */
 export const setLoginSyncQueue = (enabled: boolean) =>
   j<CliLoginSyncStatusQueue>('/api/cli-instances/sync/queue', {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  })
+/** Sync this PC's desktop chats with the other PCs on the same store; answers the status. */
+export const setLoginSyncChats = (enabled: boolean) =>
+  j<CliLoginSyncStatusQueue>('/api/cli-instances/sync/chats', {
     method: 'POST',
     body: JSON.stringify({ enabled }),
   })

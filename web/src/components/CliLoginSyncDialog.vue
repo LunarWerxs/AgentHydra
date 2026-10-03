@@ -9,7 +9,7 @@
 // here, and what the last passes did. Every explanation is behind an info bubble, never a paragraph
 // (owner, 2026-10-01: "verbose as FUCK", then "give it one of those little info bubbles"). CLI and
 // desktop logins are listed together, each tagged with its kind. Nothing here shows a login.
-import { Cloud, Copy, LoaderCircle, Pause, Play, RefreshCw, Unplug } from '@lucide/vue'
+import { Cloud, Copy, LoaderCircle, Monitor, Pause, Play, RefreshCw, Unplug } from '@lucide/vue'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -32,12 +32,13 @@ import {
   getLoginSyncPairingCode,
   joinLoginSync,
   runLoginSyncNow,
+  setLoginSyncChats,
   setLoginSyncEnabled,
   setLoginSyncExcluded,
   setLoginSyncQueue,
   setupLoginSync,
 } from '@/lib/api'
-import { timeAgo } from '@/lib/format'
+import { bytes, timeAgo } from '@/lib/format'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const open = defineModel<boolean>('open', { default: false })
@@ -149,6 +150,30 @@ async function setShareQueue(on: boolean) {
     working.value = false
   }
 }
+
+async function setShareChats(on: boolean) {
+  working.value = true
+  try {
+    status.value = await setLoginSyncChats(on)
+    emit('changed')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : String(err))
+  } finally {
+    working.value = false
+  }
+}
+
+const CHAT_STATE_KEY: Record<CliLoginSyncStatusQueue['chats'][number]['state'], string> = {
+  synced: 'cliInstances.syncChatSynced',
+  sending: 'cliInstances.syncChatSending',
+  receiving: 'cliInstances.syncChatReceiving',
+  waiting: 'cliInstances.syncChatWaiting',
+  diverged: 'cliInstances.syncChatDiverged',
+}
+/** The synced chats, newest change first. */
+const chatRows = computed(() =>
+  [...(status.value?.chats ?? [])].sort((a, b) => (b.at ?? 0) - (a.at ?? 0)),
+)
 
 async function include(id: string, value: boolean) {
   try {
@@ -400,6 +425,55 @@ const recent = computed(() => {
             <InfoHint :text="$t('cliInstances.syncQueueHint')" />
           </span>
           <p v-if="status.queueError" class="text-destructive">{{ status.queueError }}</p>
+        </div>
+
+        <div class="flex min-w-0 flex-col gap-1">
+          <span class="flex items-center gap-1.5">
+            <label class="flex cursor-pointer items-center gap-2 font-medium">
+              <Switch
+                :model-value="!!status.shareChats"
+                :disabled="working"
+                :aria-label="$t('cliInstances.syncChats')"
+                @update:model-value="setShareChats"
+              />
+              {{ $t('cliInstances.syncChats') }}
+            </label>
+            <InfoHint :text="$t('cliInstances.syncChatsHint')" />
+          </span>
+          <p v-if="status.chatsError" class="text-destructive">{{ status.chatsError }}</p>
+          <template v-if="status.shareChats">
+            <ul
+              v-if="chatRows.length"
+              class="flex max-h-60 flex-col divide-y overflow-y-auto rounded-md border"
+              :aria-label="$t('cliInstances.syncChatsList')"
+            >
+              <li v-for="c in chatRows" :key="c.id" class="flex items-center gap-2 px-2 py-1.5">
+                <span class="min-w-0 flex-1 truncate" :title="c.title ?? undefined">
+                  {{ c.title || $t('cliInstances.syncChatUntitled') }}
+                </span>
+                <span
+                  class="flex max-w-32 shrink-0 items-center gap-1 text-muted-foreground"
+                  :title="c.fromHere ? undefined : $t('cliInstances.syncChatFromPc', { pc: c.origin.name })"
+                >
+                  <Monitor v-if="c.fromHere" class="size-3.5 shrink-0" aria-hidden="true" />
+                  <Cloud v-else class="size-3.5 shrink-0" aria-hidden="true" />
+                  <span class="truncate">
+                    {{ c.fromHere ? $t('cliInstances.syncChatThisPc') : c.origin.name }}
+                  </span>
+                </span>
+                <span
+                  class="shrink-0 whitespace-nowrap text-muted-foreground"
+                  :title="c.note ?? undefined"
+                >
+                  {{ $t(CHAT_STATE_KEY[c.state]) }}
+                </span>
+                <span class="w-14 shrink-0 text-end tabular-nums text-muted-foreground">
+                  {{ bytes(c.bytes) }}
+                </span>
+              </li>
+            </ul>
+            <p v-else class="text-muted-foreground">{{ $t('cliInstances.syncChatsNone') }}</p>
+          </template>
         </div>
 
         <ul
