@@ -571,8 +571,9 @@ def test_grant_refuses_without_a_person_or_with_a_wrong_fingerprint_and_writes_n
     fp = _vault_and_request(fleet, capsys)
     fleet.on("box-a")
     before = (_server(fleet) / "vault.bin").read_bytes()
+    near = fp[:-1] + ("0" if fp[-1] != "0" else "1")  # every character but the last right: still not the fingerprint
     for argv in (["vault", "grant"], ["vault", "grant", "box-b", "--yes", fp[:4]], ["vault", "grant", "--yes", "0000-0000-0000-0000"],
-                 ["vault", "grant", "--yes", fp.lower()]):
+                 ["vault", "grant", "--yes", near], ["vault", "grant", "--yes", fp[:-1]]):
         assert cli.main(argv) == 2, argv
     assert "nothing was granted" in capsys.readouterr().err
 
