@@ -345,7 +345,7 @@ onUnmounted(stop)
 </script>
 
 <template>
-  <div ref="root" class="flex flex-col gap-2 p-3">
+  <div ref="root" class="@container flex flex-col gap-2 p-3">
     <div class="flex items-center gap-1.5">
       <h2 class="text-sm font-semibold">{{ $t('instances.home.title') }}</h2>
       <InfoHint :text="`${$t('instances.home.refreshHint')} ${$t('instances.home.sessionsLocalOnly')}`" />
@@ -364,7 +364,9 @@ onUnmounted(stop)
       </IconTooltip>
     </div>
     <SwarmStatsCard @open="emit('navigate', 'hswarm')" />
-    <div class="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-2">
+    <!-- 1, 2 or all-in-a-row columns by the view's own width, never 3 + 1: a lone chart on its own row
+         wasted a band of the page (owner, 2026-10-03: the at-a-glance page must stay compact). -->
+    <div class="grid grid-cols-1 gap-2 @2xl:grid-cols-2" :class="modelSplit.length ? '@6xl:grid-cols-4' : '@6xl:grid-cols-3'">
       <section class="rounded-lg border bg-card px-3 py-1.5">
         <h3 class="mb-1 flex items-center gap-2 text-xs font-semibold">
           {{ $t('instances.home.chartHeadroom') }}
@@ -413,7 +415,11 @@ onUnmounted(stop)
         <HourBars :hours="workerHours" :series="outcomeSeries" height-class="h-[5.5rem]" />
       </section>
 
-      <section class="cursor-pointer rounded-lg border bg-card px-3 py-1.5" @click="emit('navigate', 'sessions')">
+      <section
+        class="cursor-pointer rounded-lg border bg-card px-3 py-1.5"
+        :class="{ '@2xl:@max-6xl:col-span-2': !modelSplit.length }"
+        @click="emit('navigate', 'sessions')"
+      >
         <h3 class="mb-1 flex items-center gap-2 text-xs font-semibold">
           {{ $t('instances.home.chartSessions') }}
           <span class="text-3xs font-normal text-muted-foreground tabular-nums">{{ sessions.length }}</span>
