@@ -83,3 +83,19 @@ def test_daily_spend_counts_each_ledger_line_once_and_waits_for_a_whole_line():
         f.write(row("ok", 2.0)[20:])
     today = ledger.daily(2)[-1]
     assert (today["tasks"], today["cost_usd"], today["providers"]) == (4, 3.75, {"groq": 3.75})
+
+
+def test_daily_counts_tokens_per_day_and_provider_with_cached_input_apart():
+    import datetime as dt
+    import json
+
+    from hswarm import config, ledger
+
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    rows = [{"ts": now, "status": "ok", "cost_usd": 0.1, "provider": "groq", "in_hit": 30, "in_miss": 70, "out": 20},
+            {"ts": now, "status": "ok", "cost_usd": None, "provider": "gemini", "in_miss": 5, "out": 5}]
+    config.LEDGER.parent.mkdir(parents=True, exist_ok=True)
+    config.LEDGER.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    today = ledger.daily(2)[-1]
+    assert (today["tokens_in"], today["tokens_out"], today["tokens_cached"]) == (105, 25, 30)
+    assert today["provider_tokens"] == {"groq": 120, "gemini": 10}

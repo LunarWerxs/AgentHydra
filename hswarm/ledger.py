@@ -108,7 +108,7 @@ def daily(days: int = 14) -> list[dict]:
                     _fold_day(line)
         today = dt.datetime.now().astimezone().date()
         wanted = [(today - dt.timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
-        empty = {"tasks": 0, "ok": 0, "error": 0, "cost_usd": 0.0, "providers": {}, "models": {}}
+        empty = _new_day()
         return [{"date": d, **_DAILY["days"].get(d, empty)} for d in wanted]
 
 
@@ -158,6 +158,16 @@ def over_daily_cap() -> str | None:
             f"it in hswarm ui (Routing & roles) or as daily_cap_usd in {config.SETTINGS_FILE}, or wait until tomorrow")
 
 
+def _int(v) -> int:
+    return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+
+def _new_day() -> dict:
+    """A day with nothing in it. Tokens: tokens_in counts cached input too (tokens_cached is the cached part of it)."""
+    return {"tasks": 0, "ok": 0, "error": 0, "cost_usd": 0.0, "tokens_in": 0, "tokens_out": 0, "tokens_cached": 0,
+            "providers": {}, "provider_tokens": {}, "models": {}}
+
+
 def _fold_day(line: bytes) -> None:
     try:
         r = json.loads(line)
@@ -166,13 +176,20 @@ def _fold_day(line: bytes) -> None:
         return
     if r.get("cached"):
         return  # an answer a resume reused: no call, no spend
-    b = _DAILY["days"].setdefault(day, {"tasks": 0, "ok": 0, "error": 0, "cost_usd": 0.0, "providers": {}, "models": {}})
+    b = _DAILY["days"].setdefault(day, _new_day())
     b["tasks"] += 1
     outcome = "ok" if r.get("status") == "ok" else "error"
     b[outcome] += 1
     cost = r.get("cost_usd") or 0.0
     b["cost_usd"] = round(b["cost_usd"] + cost, 6)
     who = r.get("provider") or "other"
+    cached_in = _int(r.get("in_hit"))
+    tin = cached_in + _int(r.get("in_miss"))
+    tout = _int(r.get("out"))
+    b["tokens_in"] += tin
+    b["tokens_out"] += tout
+    b["tokens_cached"] += cached_in
+    b["provider_tokens"][who] = b["provider_tokens"].get(who, 0) + tin + tout
     b["providers"][who] = round(b["providers"].get(who, 0.0) + cost, 6)
     # Per model too, for the console's provider and model pages: [tasks, ok, failed, cost, seconds].
     m = b["models"].setdefault(str(r.get("model") or "other"), [0, 0, 0, 0.0, 0.0])

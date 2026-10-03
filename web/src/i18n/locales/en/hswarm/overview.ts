@@ -19,7 +19,7 @@ export default {
   models: 'models',
   usableNow: 'usable now',
 
-  spend14Days: 'Spend, 14 days',
+  spend14Days: 'Tokens, 14 days',
   loading: 'loading…',
   nothingRun: 'nothing has run yet',
   loadFailed: 'could not load',
@@ -47,11 +47,14 @@ export default {
   action2: 'Connect Claude Code',
 
   // Charts
-  spendChart: 'Spend, last 14 days',
+  spendChart: 'Tokens, last 14 days',
   showNumbers: 'Show the numbers',
-  spendIn14Days: 'in 14 days',
+  tokensIn14Days: 'tokens in 14 days',
+  cachedInput: 'of it cached input',
+  atListPrice: 'at list price',
+  tokens: 'Tokens',
   day: 'Day',
-  cost: 'Cost',
+  cost: 'Value at list price',
   errors: 'Errors',
   separator: '·',
   timeUnit: 's',
@@ -59,15 +62,15 @@ export default {
   outcomeChart: 'Failed tasks, share per day',
   taskFailureRate: "Share of the day's tasks that failed",
 
-  noSpendTitle: 'No spend yet',
-  noSpendBody: 'Every task the swarm runs is costed here, per day',
+  noSpendTitle: 'No tokens yet',
+  noSpendBody: 'Every task the swarm runs is counted here, per day',
   noTasksTitle: 'No tasks yet',
   noTasksBody: 'Finished tasks show up here per day, ok or failed',
 
   keyHealth: 'Key health by provider',
-  moneyChart: 'Where the money went (14 days)',
+  moneyChart: 'Tokens by provider (14 days)',
   chartsEmpty:
-    'Spend, failures and key health are charted here once you have a key and the swarm has run a task.',
+    'Tokens, failures and key health are charted here once you have a key and the swarm has run a task.',
 
   results: {
     title: 'Model results',

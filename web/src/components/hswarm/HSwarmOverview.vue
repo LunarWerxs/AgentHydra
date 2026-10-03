@@ -24,6 +24,10 @@ import { useHswarmApi } from '@/lib/hswarm-api'
 interface UsageDay {
   date: string
   cost_usd: number
+  tokens_in?: number
+  tokens_out?: number
+  tokens_cached?: number
+  provider_tokens?: Record<string, number>
   tasks: number
   ok: number
   error: number
@@ -134,6 +138,19 @@ const autoModels = computed(() => {
   )
 })
 
+const totalTokens = computed(() => {
+  return (
+    usage.value?.days.reduce(
+      (sum: number, d: any) => sum + (d.tokens_in || 0) + (d.tokens_out || 0),
+      0,
+    ) || 0
+  )
+})
+
+const totalCachedTokens = computed(() => {
+  return usage.value?.days.reduce((sum: number, d: any) => sum + (d.tokens_cached || 0), 0) || 0
+})
+
 const totalSpend = computed(() => {
   return usage.value?.days.reduce((sum: number, d: any) => sum + (d.cost_usd || 0), 0) || 0
 })
@@ -186,6 +203,8 @@ const spendDays = computed(() => {
   return usage.value.days.map((d) => ({
     date: d.date,
     cost: d.cost_usd || 0,
+    tokens: (d.tokens_in || 0) + (d.tokens_out || 0),
+    cached: d.tokens_cached || 0,
     tasks: d.tasks || 0,
     ok: d.ok || 0,
     error: d.error || 0,
@@ -195,7 +214,7 @@ const spendDays = computed(() => {
 const spendChartData = computed(() => {
   return spendDays.value.map((d) => ({
     at: new Date(d.date).getTime(),
-    value: d.cost,
+    value: d.tokens,
   }))
 })
 
@@ -223,10 +242,20 @@ const healthData = computed(() => {
   }))
 })
 
+const costByProvider = computed(() => {
+  const m = new Map<string, number>()
+  usage.value?.days.forEach((d) => {
+    Object.entries(d.providers || {}).forEach(([k, v]) => {
+      m.set(k, (m.get(k) || 0) + (v || 0))
+    })
+  })
+  return m
+})
+
 const moneyData = computed(() => {
   const byProvider = new Map<string, number>()
   usage.value?.days.forEach((d) => {
-    Object.entries(d.providers || {}).forEach(([k, v]) => {
+    Object.entries(d.provider_tokens || {}).forEach(([k, v]) => {
       byProvider.set(k, (byProvider.get(k) || 0) + (v || 0))
     })
   })
@@ -238,20 +267,28 @@ const moneyData = computed(() => {
   if (list.length <= 8) {
     return list.map(([name, value]) => ({
       key: name,
-      label: name,
+      label: `${name} · ${formatUSD(costByProvider.value.get(name) || 0)}`,
       value,
+      detail: formatUSD(costByProvider.value.get(name) || 0),
     }))
   }
 
   const shown = list.slice(0, 7)
   const othersValue = list.slice(7).reduce((sum, [, v]) => sum + v, 0)
-  shown.push([`${list.length - 7} others`, othersValue])
-
-  return shown.map(([name, value]) => ({
+  const othersCost = list.slice(7).reduce((sum, [k]) => sum + (costByProvider.value.get(k) || 0), 0)
+  const rows = shown.map(([name, value]) => ({
     key: name,
-    label: name,
+    label: `${name} · ${formatUSD(costByProvider.value.get(name) || 0)}`,
     value,
+    detail: formatUSD(costByProvider.value.get(name) || 0),
   }))
+  rows.push({
+    key: `${list.length - 7} others`,
+    label: `${list.length - 7} others · ${formatUSD(othersCost)}`,
+    value: othersValue,
+    detail: formatUSD(othersCost),
+  })
+  return rows
 })
 
 // Doctor run
@@ -305,11 +342,12 @@ function formatUSD(value: number): string {
   return `$${value.toFixed(2)}`
 }
 
-// Short y-axis label: $1.2K from 1,000 up, whole dollars when the value is whole, cents otherwise.
-function formatUSDAxis(value: number): string {
-  if (value >= 1000) return `$${Number((value / 1000).toFixed(1))}K`
-  if (Number.isInteger(value)) return `$${value}`
-  return formatUSD(value)
+// Tokens, compact: 1.2K, 3.4M, 5.6B.
+function formatTokens(value: number): string {
+  if (value < 1000) return String(Math.round(value))
+  if (value < 1e6) return `${Number((value / 1e3).toFixed(1))}K`
+  if (value < 1e9) return `${Number((value / 1e6).toFixed(1))}M`
+  return `${Number((value / 1e9).toFixed(1))}B`
 }
 
 // Format compact number
@@ -379,9 +417,9 @@ function formatPercent(value: number): string {
           <TrendingUp class="size-3.5 shrink-0" />
           <span class="truncate">{{ t('hswarm.v.overview.spend14Days') }}</span>
         </div>
-        <div class="whitespace-nowrap text-2xl font-semibold leading-8">{{ formatUSD(totalSpend) }}</div>
+        <div class="whitespace-nowrap text-2xl font-semibold leading-8">{{ formatTokens(totalTokens) }}</div>
         <p class="truncate text-xs text-muted-foreground">
-          {{ totalTasks > 0 ? `${formatNumber(totalTasks)} ${totalTasks === 1 ? t('hswarm.v.overview.task') : t('hswarm.v.overview.tasks')}` : usage?.error ? t('hswarm.v.overview.loadFailed') : usage ? t('hswarm.v.overview.nothingRun') : t('hswarm.v.overview.loading') }}
+          {{ totalSpend > 0 ? `${formatUSD(totalSpend)} ${t('hswarm.v.overview.atListPrice')} ${t('hswarm.v.overview.separator')} ` : '' }}{{ totalTasks > 0 ? `${formatNumber(totalTasks)} ${totalTasks === 1 ? t('hswarm.v.overview.task') : t('hswarm.v.overview.tasks')}` : usage?.error ? t('hswarm.v.overview.loadFailed') : usage ? t('hswarm.v.overview.nothingRun') : t('hswarm.v.overview.loading') }}
         </p>
       </div>
     </div>
@@ -430,32 +468,35 @@ function formatPercent(value: number): string {
         <CardHeader>
           <CardTitle class="text-base">{{ t('hswarm.v.overview.spendChart') }}</CardTitle>
           <p class="text-sm text-muted-foreground mt-2">
-            <strong>{{ formatUSD(totalSpend) }}</strong> {{ t('hswarm.v.overview.spendIn14Days') }}
+            <strong>{{ formatTokens(totalTokens) }}</strong> {{ t('hswarm.v.overview.tokensIn14Days') }}
+            <span v-if="totalCachedTokens > 0">{{ t('hswarm.v.overview.separator') }} {{ formatTokens(totalCachedTokens) }} {{ t('hswarm.v.overview.cachedInput') }}</span>
+            <span v-if="totalSpend > 0">{{ t('hswarm.v.overview.separator') }} {{ formatUSD(totalSpend) }} {{ t('hswarm.v.overview.atListPrice') }}</span>
             <span v-if="totalTasks > 0">{{ t('hswarm.v.overview.separator') }} {{ formatNumber(totalTasks) }} {{ totalTasks === 1 ? t('hswarm.v.overview.task') : t('hswarm.v.overview.tasks') }}</span>
           </p>
         </CardHeader>
         <CardContent>
-          <div v-if="totalSpend <= 0" class="py-4 text-center">
+          <div v-if="totalTokens <= 0" class="py-4 text-center">
             <div class="text-sm font-medium">{{ t('hswarm.v.overview.noSpendTitle') }}</div>
             <p class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.noSpendBody') }}</p>
           </div>
           <AreaLine
             v-else
             :points="spendChartData"
-            :format="formatUSD"
-            :axis-format="formatUSDAxis"
+            :format="formatTokens"
+            :axis-format="formatTokens"
             :label-at="(ms) => new Date(ms).toLocaleDateString()"
-            value-label="Spend"
+            value-label="Tokens"
             change-label="Daily"
             peak-label="Peak"
           />
-          <details v-if="totalSpend > 0" class="mt-1 rounded-lg border">
+          <details v-if="totalTokens > 0" class="mt-1 rounded-lg border">
             <summary class="cursor-pointer px-2 py-1 text-xs text-muted-foreground">{{ t('hswarm.v.overview.showNumbers') }}</summary>
             <div>
             <table class="w-full text-sm">
               <thead class="bg-muted">
                 <tr>
                   <th class="px-2 py-1 text-left font-medium">{{ t('hswarm.v.overview.day') }}</th>
+                  <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.tokens') }}</th>
                   <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.cost') }}</th>
                   <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.tasks') }}</th>
                   <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.errors') }}</th>
@@ -464,6 +505,7 @@ function formatPercent(value: number): string {
               <tbody>
                 <tr v-for="d in [...spendDays].reverse()" :key="d.date" class="border-t hover:bg-muted/50">
                   <td class="px-2 py-1">{{ d.date }}</td>
+                  <td class="px-2 py-1 text-right">{{ formatTokens(d.tokens) }}</td>
                   <td class="px-2 py-1 text-right">{{ formatUSD(d.cost) }}</td>
                   <td class="px-2 py-1 text-right">{{ d.tasks }}</td>
                   <td class="px-2 py-1 text-right">{{ d.error }}</td>
@@ -521,7 +563,7 @@ function formatPercent(value: number): string {
         <CardContent>
           <BarRows
             :rows="moneyData"
-            :format="formatUSD"
+            :format="formatTokens"
           />
         </CardContent>
       </Card>
