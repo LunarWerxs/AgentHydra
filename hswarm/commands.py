@@ -708,6 +708,23 @@ async def cmd_import_keys(a) -> int:
     return 0
 
 
+async def cmd_import_zswarm(a) -> int:
+    """Import a ZSwarm home's stats and history into HSWARM_HOME (import_zswarm.py); prints counts only."""
+    from . import import_zswarm
+
+    src = Path(a.source_dir) if a.source_dir else import_zswarm.default_source()
+    try:
+        out = await asyncio.to_thread(import_zswarm.run, src, config.HOME, a.dry_run)
+    except (OSError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    if a.json:
+        print(json.dumps({"dry_run": a.dry_run, "source": str(src), "counts": out}))
+    else:
+        print(import_zswarm.summary_line(out, a.dry_run))
+    return 0
+
+
 async def cmd_models(a) -> int:
     from . import catalogue
 
@@ -791,5 +808,5 @@ async def cmd_egress(a) -> int:
 COMMANDS = {
     "doctor": cmd_doctor, "web": cmd_web, "ask": cmd_ask, "panel": cmd_panel, "run": cmd_run, "status": cmd_status, "cancel": cmd_cancel, "results": cmd_results,
     "jobs": cmd_jobs, "cost": cmd_cost, "savings": cmd_savings, "usage": cmd_usage, "bench": cmd_bench, "sync": cmd_sync,
-    "maintain": cmd_maintain, "history": cmd_history, "keys": cmd_keys, "vault": cmd_vault, "import-keys": cmd_import_keys, "models": cmd_models, "survival": cmd_survival, "prefix": cmd_prefix, "egress": cmd_egress,
+    "maintain": cmd_maintain, "history": cmd_history, "keys": cmd_keys, "vault": cmd_vault, "import-keys": cmd_import_keys, "import-zswarm": cmd_import_zswarm, "models": cmd_models, "survival": cmd_survival, "prefix": cmd_prefix, "egress": cmd_egress,
 }

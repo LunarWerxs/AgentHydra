@@ -66,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     ik = sub.add_parser("import-keys", help="import API keys from a ZSwarm clone's .secrets/ directory")
     ik.add_argument("--from", dest="source_dir", required=True, help="path to a ZSwarm clone with .secrets/")
 
+    iz = sub.add_parser("import-zswarm", help="import ZSwarm's stats and history (database, ledger and other logs, jobs, archives) into HSwarm; safe to repeat")
+    iz.add_argument("--from", dest="source_dir", help="the ZSwarm home (default: $ZSWARM_HOME or ~/.zswarm)")
+    iz.add_argument("--dry-run", dest="dry_run", action="store_true", help="count what would be imported and write nothing")
+    iz.add_argument("--json", action="store_true")
+
     vt = sub.add_parser("vault", help="the shared key vault: HSWARM_HOME/secrets key lists, encrypted on a server only you can reach, kept in step on every paired machine")
     vt.add_argument("action", nargs="?", default="status", choices=["status", "init", "join", "adopt", "pair", "request", "grant", "accept", "sync", "list", "add", "remove", "leave"],
                     help="status (default) | init <backend> (make the vault from this machine's keys) | join (reads the pairing code from a hidden prompt) "

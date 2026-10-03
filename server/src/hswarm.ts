@@ -130,6 +130,8 @@ export async function startHSwarm(
     logDir?: string
     env?: NodeJS.ProcessEnv
     spawn?: typeof Bun.spawn
+    /** Spawns the ZSwarm import (tests pass a fake). */
+    importSpawn?: typeof Bun.spawn
   } = {},
 ): Promise<void> {
   if (stopRequested) return
@@ -191,13 +193,6 @@ export async function startHSwarm(
       PYTHONUNBUFFERED: '1',
     }
 
-    // ZSwarm is the live swarm until it retires; HSwarm only reads its history.
-    const homeDir = env.HOME || env.USERPROFILE || homedir()
-    const zswarmDb = join(homeDir, '.zswarm', 'zswarm.sqlite')
-    if (!env.HSWARM_STATS_DB && existsSync(zswarmDb)) {
-      env.HSWARM_STATS_DB = zswarmDb
-    }
-
     proc = spawnFn(command, {
       cwd: dir,
       stdout: fd,
@@ -212,6 +207,7 @@ export async function startHSwarm(
     state.port = port
     state.lastError = null
     backoffMs = MIN_BACKOFF_MS
+    startZswarmImport({ python, dir, env, spawn: deps.importSpawn })
 
     // Watch for crash and restart with backoff
     proc.exited
@@ -246,6 +242,7 @@ function scheduleRestart(deps: {
   logDir?: string
   env?: NodeJS.ProcessEnv
   spawn?: typeof Bun.spawn
+  importSpawn?: typeof Bun.spawn
 }): void {
   if (stopRequested) return
   const delay = Math.min(backoffMs, MAX_BACKOFF_MS)
@@ -253,9 +250,87 @@ function scheduleRestart(deps: {
   setTimeout(() => startHSwarm(deps), delay)
 }
 
+const ZSWARM_IMPORT_FIRST_MS = 30_000
+const ZSWARM_IMPORT_EVERY_MS = 60 * 60 * 1000
+let importTimer: ReturnType<typeof setTimeout> | null = null
+let importRunning = false
+
+/** The counts-only log line for one `import-zswarm --json` result. */
+function importSummary(stdout: string): string {
+  try {
+    const counts = JSON.parse(stdout).counts as Record<string, Record<string, unknown>>
+    let read = 0
+    let added = 0
+    const add = (c: Record<string, unknown>) => {
+      read += Number(c.read) || 0
+      added += Number(c.added) || 0
+    }
+    for (const [kind, c] of Object.entries(counts)) {
+      if (kind === 'sqlite') for (const t of Object.values(c)) add(t as Record<string, unknown>)
+      else add(c)
+    }
+    return `read ${read}, added ${added}`
+  } catch {
+    return 'finished with output that is not the counts'
+  }
+}
+
+/**
+ * Bring ZSwarm's stats and history into HSwarm's own home: once shortly after the sidecar starts, then
+ * hourly, for as long as ~/.zswarm exists (ZSwarm keeps running until it is retired). One run at a time,
+ * hidden, unref'd. Logs counts only.
+ */
+export function startZswarmImport(deps: {
+  python: string
+  dir: string
+  env: NodeJS.ProcessEnv
+  spawn?: typeof Bun.spawn
+  firstMs?: number
+  everyMs?: number
+}): void {
+  const homeDir = deps.env.HOME || deps.env.USERPROFILE || homedir()
+  const zswarmHome = deps.env.ZSWARM_HOME?.trim() || join(homeDir, '.zswarm')
+  if (importTimer) clearTimeout(importTimer)
+  const spawnFn = deps.spawn ?? Bun.spawn
+  const tick = async () => {
+    importTimer = null
+    if (stopRequested) return
+    if (existsSync(zswarmHome) && !importRunning) {
+      importRunning = true
+      try {
+        const child = spawnFn([deps.python, '-m', 'hswarm', 'import-zswarm', '--json'], {
+          cwd: deps.dir,
+          stdout: 'pipe',
+          stderr: 'ignore',
+          stdin: 'ignore',
+          windowsHide: true,
+          env: deps.env,
+        })
+        const out = await new Response(child.stdout as ReadableStream).text()
+        const code = await child.exited
+        console.log(
+          `[hswarm] zswarm import ${code === 0 ? importSummary(out) : `failed (exit ${code})`}`,
+        )
+      } catch (e) {
+        console.error('[hswarm] zswarm import failed:', e instanceof Error ? e.message : String(e))
+      } finally {
+        importRunning = false
+      }
+    }
+    if (!stopRequested && existsSync(zswarmHome)) {
+      importTimer = setTimeout(tick, deps.everyMs ?? ZSWARM_IMPORT_EVERY_MS)
+      importTimer.unref?.()
+    }
+  }
+  importTimer = setTimeout(tick, deps.firstMs ?? ZSWARM_IMPORT_FIRST_MS)
+  importTimer.unref?.()
+}
+
 /** Stop hswarm. Returns a promise that settles once the process is gone. */
 export async function stopHSwarm(): Promise<void> {
   stopRequested = true
+  if (importTimer) clearTimeout(importTimer)
+  importTimer = null
   if (!proc || !state.running) return
 
   try {

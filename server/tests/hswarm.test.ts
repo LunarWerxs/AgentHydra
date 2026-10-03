@@ -122,15 +122,11 @@ test('a sidecar that exits is started again', async () => {
   expect(getHSwarmStatus()).toMatchObject({ running: true, lastError: null })
 })
 
-test('HSWARM_STATS_DB is set when zswarm.sqlite exists and env does not override it', async () => {
-  const { writeFileSync } = await import('node:fs')
-  const zswarmDb = join(tmp, '.zswarm', 'zswarm.sqlite')
+test('a ZSwarm home is imported into HSwarm by a hidden import-zswarm run, and the stats DB is left to HSwarm', async () => {
   mkdirSync(join(tmp, '.zswarm'), { recursive: true })
-  writeFileSync(zswarmDb, '')
-
-  let capturedEnv: NodeJS.ProcessEnv | null = null
+  let sidecarEnv: NodeJS.ProcessEnv | null = null
   const spawn = ((cmd: string[], opts: any) => {
-    capturedEnv = opts.env
+    sidecarEnv = opts.env
     let exit = () => {}
     const exited = new Promise<number>((resolve) => {
       exit = () => resolve(0)
@@ -138,20 +134,56 @@ test('HSWARM_STATS_DB is set when zswarm.sqlite exists and env does not override
     return { pid: undefined, exited, kill: () => exit() }
   }) as unknown as typeof Bun.spawn
 
-  const home = tmp
+  const importCalls: { cmd: string[]; opts: any }[] = []
+  const importSpawn = ((cmd: string[], opts: any) => {
+    importCalls.push({ cmd, opts })
+    const counts = { sqlite: { utilizations: { read: 3, added: 2, already_there: 1 } } }
+    return {
+      stdout: new Response(JSON.stringify({ counts })).body,
+      exited: Promise.resolve(0),
+    }
+  }) as unknown as typeof Bun.spawn
+
+  const { startZswarmImport } = await import('../src/hswarm')
+  startZswarmImport({
+    python: 'python',
+    dir: tmp,
+    env: { HOME: tmp, USERPROFILE: tmp },
+    spawn: importSpawn,
+    firstMs: 5,
+    everyMs: 60_000,
+  })
+  await Bun.sleep(100)
+  expect(importCalls).toHaveLength(1)
+  expect(importCalls[0].cmd.slice(1)).toEqual(['-m', 'hswarm', 'import-zswarm', '--json'])
+  expect(importCalls[0].opts).toMatchObject({ cwd: tmp, windowsHide: true })
+  await stopHSwarm()
+  resetHSwarmStateForTests()
+
   await startHSwarm({
     enabled: true,
     dir: withPackage('stats-test'),
     logDir: join(tmp, 'logs'),
     spawn,
+    importSpawn,
     port: 1,
-    env: { HOME: home, USERPROFILE: home },
+    env: { HOME: tmp, USERPROFILE: tmp },
   })
+  expect(sidecarEnv!.HSWARM_STATS_DB).toBeUndefined()
 
-  expect(capturedEnv).toBeDefined()
-  expect(capturedEnv!.HSWARM_STATS_DB).toBe(zswarmDb)
-
-  // Clean up for next test
+  // A person's own HSWARM_STATS_DB still reaches the sidecar.
+  await stopHSwarm()
+  resetHSwarmStateForTests()
+  await startHSwarm({
+    enabled: true,
+    dir: withPackage('stats-test'),
+    logDir: join(tmp, 'logs'),
+    spawn,
+    importSpawn,
+    port: 1,
+    env: { HOME: tmp, USERPROFILE: tmp, HSWARM_STATS_DB: join(tmp, 'mine.sqlite') },
+  })
+  expect(sidecarEnv!.HSWARM_STATS_DB).toBe(join(tmp, 'mine.sqlite'))
   await stopHSwarm()
   resetHSwarmStateForTests()
 })
