@@ -98,9 +98,33 @@ function formatTaskProofParts(proof: NonNullable<CliMayteTask['proof']>): string
   return parts
 }
 
-function formatTaskLine(task: CliMayteTask, worker: CliMayteWorker | null): string {
+function formatTaskLine(
+  task: CliMayteTask,
+  worker: CliMayteWorker | null,
+  allTasks: CliMayteTask[],
+): string {
   const workerStatus = worker ? `${worker.id.slice(0, 10)} (${worker.status})` : 'none'
   let line = `- ${task.key}: ${task.state}`
+
+  // Add ready marker for pending tasks whose after-keys have all passed
+  if (task.state === 'pending' && task.after.length > 0) {
+    const afterPassed = task.after.every((key) => {
+      const afterTask = allTasks.find((t) => t.key === key)
+      return afterTask?.state === 'passed'
+    })
+    if (afterPassed) {
+      line += ' (ready)'
+    }
+  }
+
+  // Add title
+  line += ` "${task.title}"`
+
+  // Add after-keys
+  if (task.after.length > 0) {
+    line += ` after: ${task.after.join(', ')}`
+  }
+
   if (worker) {
     line += ` → ${workerStatus}`
   }
@@ -129,7 +153,7 @@ export function waveStateText(wave: CliMayteWave, workers: Map<string, CliMayteW
 
   for (const task of wave.tasks) {
     const worker = task.workerId ? (workers.get(task.workerId) ?? null) : null
-    lines.push(formatTaskLine(task, worker))
+    lines.push(formatTaskLine(task, worker, wave.tasks))
   }
 
   if (wave.escalations.length > 0) {

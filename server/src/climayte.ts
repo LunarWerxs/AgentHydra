@@ -2692,7 +2692,7 @@ export function climayteWaveStart(input: {
   return {
     wave: id,
     managerId,
-    waiter: `python ~/.claude/tools/climayte_wait.py --group 'mgr-${id}' --unjudged --wake-on done,failed,cancelled --timeout-s 7200`,
+    waiter: `python ~/.claude/tools/climayte_wait.py --wave ${id} --timeout-s 7200`,
   }
 }
 

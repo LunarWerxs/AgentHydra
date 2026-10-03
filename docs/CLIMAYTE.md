@@ -1071,15 +1071,12 @@ settings at `:336-339`; `MCP_PATH` is `/api/mcp`, `server/src/mcp-register.ts:79
 status or verdict today, and giving it the whole server back would undo both reasons. The design
 gives it a separate, small endpoint instead (piece 4).
 
-**How does the orchestrator's waiter wait on just the manager?** The waiter takes groups only
-(`--group`, prefixes with `*`), and treats `waiting` as live work it keeps polling through
-(`climayte_wait.py:14-20`); with `--wake-on done,failed,cancelled` (`:154`) a worker that merely
-enters `waiting` does not wake it. So the manager runs alone in its own group, `mgr-<wave>`, and
-between its turns it sits in `waiting` (held for its wave, piece 2). The orchestrator runs
-`climayte_wait --group mgr-<wave> --wake-on done,failed,cancelled --timeout-s 7200`
-and wakes only when the manager reports (`done`), dies (`failed`) or is stopped. `climayte_status`
-with `wait_seconds` is NOT the way: `climayteWait` resolves on any status change in scope
-(`climayte.ts:2082-2104`), and the manager changes status on every wake.
+**How does the orchestrator's waiter wait on just the manager?** The waiter exits when the wave's
+status leaves `running` or the manager worker failed or was cancelled. The orchestrator runs
+`python ~/.claude/tools/climayte_wait.py --wave <id> --timeout-s 7200`
+and wakes once per wave when the manager reports the wave done, rejected, verified, or failed,
+or when the manager dies. This ensures the orchestrator wakes only once per wave, not at every
+manager turn (piece 2).
 
 **How do sizing and placement treat a long-lived, mostly idle manager?** As one ordinary task,
 which is wrong both ways, so piece 6 changes it. Between wakes no CLI runs at all (each wake is a

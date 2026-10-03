@@ -1081,8 +1081,31 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
     expect(climayteList({ group: `mgr-${r.wave}` }).map((w) => w.kind)).toEqual(['manage'])
     expect(climayteList({ group: wave?.group })).toHaveLength(0)
     expect(r.waiter).toBe(
-      `python ~/.claude/tools/climayte_wait.py --group 'mgr-${r.wave}' --unjudged --wake-on done,failed,cancelled --timeout-s 7200`,
+      `python ~/.claude/tools/climayte_wait.py --wave ${r.wave} --timeout-s 7200`,
     )
+  })
+
+  test('waveStateText shows task titles, after-keys, and ready markers for after-chains', () => {
+    const withChain = [
+      task('nav', { title: 'Nav: Instances group' }),
+      task('instances-home', { title: 'Instances home page', after: ['nav'] }),
+      task('climayte-float', { title: 'Float: add climayte', after: ['instances-home'] }),
+    ]
+    const r = start(withChain)
+    const wave = readWave(acct, r.wave) as CliMayteWave
+    const state = waveStateText(wave, new Map())
+    expect(state).toContain('- nav: pending "Nav: Instances group"')
+    expect(state).toContain('- instances-home: pending "Instances home page" after: nav')
+    expect(state).toContain('- climayte-float: pending "Float: add climayte" after: instances-home')
+    // No task is ready yet since none have passed
+    expect(state).not.toContain('(ready)')
+
+    // Mark the first task as passed
+    wave.tasks[0].state = 'passed'
+    writeWave(acct, wave)
+    const stateAfterPass = waveStateText(wave, new Map())
+    // The second task should now be ready since its after-key has passed
+    expect(stateAfterPass).toContain('- instances-home: pending (ready)')
   })
 
   /** A reported wave whose one task passed provisionally (the daemon's judgement, by: 'wave'). */
