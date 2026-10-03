@@ -1555,27 +1555,11 @@ export function copySessionTranscript(
     const dir = join(root, d.name, sessionId)
     if (existsSync(dir))
       cpSync(dir, join(dest, sessionId), { recursive: true, preserveTimestamps: true })
-    // The CLI's auto-memory lives beside the transcripts, per account: `projects/<project>/memory/`.
-    // A note the session saved there on the old account would be missing on the new one, so the
-    // project's memory comes along too, newer file wins, nothing on the destination is removed.
-    const memory = join(root, d.name, 'memory')
-    if (existsSync(memory)) mergeNewer(memory, join(dest, 'memory'))
+    // No memory folder comes along: workers run with the CLI's auto-memory off, and memory lives in
+    // the Connections store, which every account reads (2026-10-03).
     return true
   }
   return false
-}
-
-/** Copy every file of `from` into `to` that is missing there or older there, keeping mtimes (so the
- *  next merge compares like with like). Files only in `to` are left alone. */
-function mergeNewer(from: string, to: string): void {
-  mkdirSync(to, { recursive: true })
-  for (const e of readdirSync(from, { withFileTypes: true })) {
-    const src = join(from, e.name)
-    const dst = join(to, e.name)
-    if (e.isDirectory()) mergeNewer(src, dst)
-    else if (e.isFile() && (!existsSync(dst) || statSync(src).mtimeMs > statSync(dst).mtimeMs))
-      cpSync(src, dst, { preserveTimestamps: true })
-  }
 }
 
 const isLive = (w: Pick<CliMayteWorker, 'status'>): boolean =>

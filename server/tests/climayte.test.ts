@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
@@ -233,25 +234,19 @@ describe('copySessionTranscript', () => {
   const root = mkdtempSync(join(tmpdir(), 'ah-climayte-move-'))
   afterAll(() => rmSync(root, { recursive: true, force: true }))
 
-  test("a moved session brings its project's memory: the newer file wins, nothing is removed", () => {
+  test('a moved session lands on the new account with its mtime, so --resume finds it there', () => {
     const from = join(root, 'a')
     const to = join(root, 'b')
-    const mem = (dir: string) => join(dir, 'projects', 'p', 'memory')
-    mkdirSync(mem(from), { recursive: true })
-    mkdirSync(mem(to), { recursive: true })
-    writeFileSync(join(from, 'projects', 'p', 'S.jsonl'), '{}')
-    writeFileSync(join(mem(from), 'MEMORY.md'), 'from A')
-    writeFileSync(join(mem(from), 'note.md'), 'learned on A')
-    writeFileSync(join(mem(to), 'MEMORY.md'), 'older on B')
-    writeFileSync(join(mem(to), 'only-b.md'), 'kept')
+    mkdirSync(join(from, 'projects', 'p'), { recursive: true })
+    writeFileSync(join(from, 'projects', 'p', 'S.jsonl'), '{"turn":1}')
     const old = new Date(Date.now() - 60_000)
-    utimesSync(join(mem(to), 'MEMORY.md'), old, old)
+    utimesSync(join(from, 'projects', 'p', 'S.jsonl'), old, old)
 
     expect(copySessionTranscript(from, to, 'S')).toBe(true)
-    const read = (f: string) => readFileSync(join(mem(to), f), 'utf8')
-    expect(read('MEMORY.md')).toBe('from A')
-    expect(read('note.md')).toBe('learned on A')
-    expect(read('only-b.md')).toBe('kept')
+    const moved = join(to, 'projects', 'p', 'S.jsonl')
+    expect(readFileSync(moved, 'utf8')).toBe('{"turn":1}')
+    expect(Math.round(statSync(moved).mtimeMs / 1000)).toBe(Math.round(old.getTime() / 1000))
+    expect(copySessionTranscript(from, to, 'missing')).toBe(false)
   })
 })
 
