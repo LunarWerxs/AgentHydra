@@ -28,6 +28,8 @@ export type CliMayteJournalEvent =
   | 'interrupted' // the CLI was killed from outside (a daemon restart); resumed
   | 'cleaned' // its attempt ended and what the session left running was ended (`notice`: which)
   | 'waiting' // no account it may use is free
+  | 'spill' // no account within its group's per_account took it: it started past it (`notice`: why)
+  | 'start-short' // no account had room for it, none refills within five minutes: it started where the most room is (`notice`)
   | 'turn-done' // a turn finished and a queued follow-up comes next
   | 'turn-end' // a turn ended with this text (a Stop hook can force more turns after the report)
   | 'check' // the worker reported done; CliMayte runs the task's check command (`notice`: the command)
@@ -327,6 +329,10 @@ export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Da
       return `interrupted${on} (AgentHydra restarted or the process was killed); resuming, retry ${e.retry ?? '?'}/3`
     case 'waiting':
       return describeWaitingLine(e, at)
+    case 'spill':
+      return `spilled past its group's per_account${on}: ${e.notice ?? ''}`
+    case 'start-short':
+      return `started short${on}: ${e.notice ?? ''}`
     case 'turn-done':
       return describeDoneTurnLine(e, on, 'turn-done')
     case 'turn-end':

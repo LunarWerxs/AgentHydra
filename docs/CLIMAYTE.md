@@ -27,6 +27,9 @@ instance CliMayte can use. No naming, no terminal, no `/login`.
   for work that needs Claude quality the zswarm cannot give (AgentHydra's MCP instructions say so),
   and placement is AgentHydra's job: new work goes around an account someone else is using (see
   Placement). It runs nothing by itself: a chat or the CliMayte view still sends every task.
+- **2026-10-03:** "when a worker hits a five-hour or weekly limit, CliMayte moves it to another
+  account and resumes it, unless the limit resets in under five minutes; distribute the load." See
+  "The five-minute rule" under Placement; it supersedes the 2026-10-01 pace cooldown where they clash.
 
 ## Server: `server/src/climayte.ts`
 
@@ -497,7 +500,8 @@ Pro accounts, where tasks costing about a quarter of a window each could never a
   projection before the next one is placed. When nothing fits, the
   lowest projection still wins: finishing part of the work and handing off beats waiting hours.
   A group with no `perAccount` from its dispatcher runs 2 workers per Pro window of the account
-  (`groupCap`: 2 on a Pro, up to `MAX_PER_ACCOUNT` on a Max 5x that is not ahead of its pace).
+  (`groupCap`: 2 on a Pro, 10 on a Max 5x, under `maxPerAccount`; since 2026-10-03 an account ahead
+  of its weekly pace is no longer halved).
 - Weekly pace (owner, 2026-10-01, with several Pro accounts and a Max 5x: "just because the pro
   accounts have run low on usage does not mean you should begin immediately dumping everything into
   the 5X ... usage is usage, but it should smartly take into account the cool-down rate of
@@ -509,14 +513,15 @@ Pro accounts, where tasks costing about a quarter of a window each could never a
   gone held 19 tasks), and ranks behind every account that is not. `waitsForCooldown` refuses an
   account that is ahead of its pace when another account the task may use (signed in, nobody
   else's, under the weekly stop line, under the group's cap) has no room for the task now, refills
-  its 5-hour window (its reset, or the end of its limit wall) within 30 minutes
-  (`COOLDOWN_WAIT_MS`), has room for the task in a fresh window and is at least `PACE_BAND` less
+  its 5-hour window (its reset, or the end of its limit wall) within 5 minutes
+  (`RESUME_WAIT_MS`; it was 30, `COOLDOWN_WAIT_MS`, until the five-minute rule), has room for the task in a fresh window and is at least `PACE_BAND` less
   ahead of its own pace. An account the task already fits on is never waited for, and a refusal
   passes the task to its next account: the row waits ("Waiting for a reset: ...", `waitUntil` the
   earliest such reset) only when every account refuses it. A held task starts no session, but the
   wait is not free: 2026-10-02, 31 tasks waited 776 task-minutes for resets of accounts that had
   room all along. Never held: a session going on
-  at home, priority work (`priority` above 0), and anything when the weekly reset is unknown.
+  at home, priority work (`priority` above 0), a session that hit a limit or handed off (it is
+  moving anyway), and anything when the weekly reset is unknown.
 - **Someone else's account takes no new work** (`accountInUse`, 2026-10-02). Each account in the
   pool carries `handsOnAgoMs`, how long ago a hand used its linked desktop app (that app's
   `logs/main.log`, a message sent or a chat clicked in the last ten minutes; `core/hands-on.ts`, the
@@ -526,6 +531,44 @@ Pro accounts, where tasks costing about a quarter of a window each could never a
   on, and a task whose `accounts` names it still goes there. With only such accounts left, the
   task waits and its row names them: "Waiting for an account nobody else is using: #14 (its
   desktop app used 3 min ago) ...".
+
+### The five-minute rule (owner, 2026-10-03)
+
+"When a worker hits a five-hour or weekly limit, CliMayte moves it to another account and resumes
+it, unless the limit resets in under five minutes; distribute the load." That day priority-1 tasks
+sat "waiting" while accounts had room: a flat 4-worker cap per account, and waits for home and for
+room with no time bound (one message, "expected to use about 22% of a Pro 5-hour window, and the best
+account now has about 19% left", held 9 tasks). The rule: a task never waits more than
+`RESUME_WAIT_MS` (5 minutes) while some account admits it. It supersedes the 2026-10-01 pace
+cooldown wherever the two clash.
+
+- **Waiting at home** (`waitsForHome`): a session stopped at its own account's limit resumes there
+  only when that account frees up within 5 minutes; otherwise it moves at once. Priority work never
+  waits.
+- **Waiting for a reset** (`waitsForCooldown`): the reset horizon and the total time held
+  (`heldForResetSince`) are both 5 minutes, and a session that hit a limit or handed off (its last
+  attempt `quota` or `handoff`) is never held for pace.
+- **Waiting for room** (`waitsForRoom`): only when an account whose fresh window holds the task frees
+  up within 5 minutes (`fitFreesAt`, the helper `holdForRoom` uses for `waitUntil` too).
+- **Workers per account** (`maxPerAccount`): `MAX_PER_ACCOUNT` (4) per Pro window, up to
+  `ACCOUNT_WORKERS_CEILING` (8): Pro 4, Max 5x 8, Max 20x 8. How many sessions one account runs at
+  once before the API refuses is unmeasured; the ceiling is one constant.
+- **`per_account` spills.** It is a preference: when no account within it takes the task, the task
+  goes to the best account past it (journal `spill`). The walls, the 85% line, `maxPerAccount`,
+  someone else's account and a stale reading still apply. `per_account_strict: true` on
+  `climayte_run` keeps it a hard cap for that group (kept with `perAccount` in `workers.json`).
+- **The order in `scheduleWorker`:** the home step (above); then (1) the first account with no
+  refusal; (2) spill, unless strict; (3) a room hold or a reset hold, only when it frees within 5
+  minutes ("It starts by HH:MM either way"); (4) start short: the lowest projection with at least
+  `MIN_START_ROOM_PCT` (10 Pro-points, times the plan) left under the 85% line (journal
+  `start-short`); it runs to the stop line, hands off, and the continuation is placed again by itself;
+  (5) wait. Under 10 points left a start would be asked to hand off at once (run 1's twenty hops at
+  89-97%), so a task with no account of that much room waits for room; a task with no eligible
+  account at all waits for one. A waiting row names the accounts with room that are at their worker
+  cap ("#35, #101 have room but run 8/4 workers (their cap)").
+- **Not converging** (`notConverging`): a move after a limit (`quota`) and a handoff the usage stop
+  line asked for (`windDown.pct` set) are the rule working, so neither counts toward the moves or
+  handoffs caps. The attempts cap (8) and the spend cap (3 times the estimate) still bound a task.
 
 ### Sizing (`server/src/climayte-placement.ts` sizeTask and waitsForRoom, `0c2c13b`)
 
@@ -544,7 +587,8 @@ plan: a Max 5x window holds five Pro windows (`planFactor`).
   end (projected over FIT_PCT) but a fresh window of an account it may use would, the task waits
   ("Waiting for room ...") and smaller tasks take that room; it starts first once an account has
   room (a reset, or the work there finishing). A session going on at home, and a task no window
-  fits (sent `whole`), are never held.
+  fits (sent `whole`), are never held. Since 2026-10-03 it waits only when such a window frees up
+  within 5 minutes; else it starts short (see the five-minute rule).
 - **Why half:** run 1's 49 finished tasks averaged 24% of a Pro window and 80% stayed under 36%, but
   single tasks ran to 93% and 107%, and code on Opus high (33% on average) moved 33 times over 19
   tasks. An estimate is an average; over half a window a task runs past the whole one often enough
@@ -587,8 +631,9 @@ ran, the two things `pickAccount` scores on), `moved`, `limit`, `signed-out`, `h
 `handoff-written`, `handoff-resumed`, `follow-up-queued`, `follow-up-delivered`, `retry`,
 `interrupted` (its CLI ended with no result: killed from outside, or a pre-runner worker at a
 restart), `waiting`, `turn-end` (each turn's closing
-text, first line), `turn-done`, `priority` (changed by `climayte_priority`), `done`, `failed`,
-`cancelled`. Read with `climayteJournal(filter)` (entries, oldest first, the newest `limit`, default
+text, first line), `turn-done`, `priority` (changed by `climayte_priority`), `spill` (started past
+its group's `per_account`, `notice` says why), `start-short` (started with less room than its
+estimate, `notice` says how much), `done`, `failed`, `cancelled`. Read with `climayteJournal(filter)` (entries, oldest first, the newest `limit`, default
 100) or `climayteJournalLines(filter)`, one readable line each, e.g.
 `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`; when a
 model or effort was asked for, the line ends ` with claude-opus-5-5, effort max`.
@@ -621,7 +666,7 @@ export function startCliMayte(): void
 `account` (`#<num> <name>` or null), `ranS` (seconds it ran: the sum of its attempts, not the time
 since it was created), `reportedModel` (the model the CLI reported at init on the newest attempt
 that got that far), and `attempts` as `{ account, outcome, notice, requested?, model? }`.
-Validation: `cwd` must be an existing directory; `prompt` non-empty; `perAccount` 1..4, default 2 per Pro window of the account (`groupCap`).
+Validation: `cwd` must be an existing directory; `prompt` non-empty; `perAccount` 1..4, default 2 per Pro window of the account (`groupCap`); it spills past the cap unless `perAccountStrict` (see the five-minute rule).
 
 ## Server: quick add, `server/src/core/cli-quick-add.ts`
 
@@ -897,7 +942,7 @@ desktop? ... to save me from having to do both individually."
 - `GET /api/corch/workers/:id?wait=` → `climayteGet` (404 when unknown)
 - `GET /api/corch/journal?group=&id=&since=&limit=&format=lines` → `climayteJournal`, or
   `climayteJournalLines` with `format=lines`; `since` is an ISO time or epoch ms
-- `POST /api/corch/workers` body `{ tasks, group?, accounts?, perAccount?, model?, effort?, copies? }` → `climayteRun`.
+- `POST /api/corch/workers` body `{ tasks, group?, accounts?, perAccount?, perAccountStrict?, model?, effort?, copies? }` → `climayteRun`.
   A task the same `group` was sent in the last 10 minutes (`REPEAT_WINDOW_MS`: same title, prompt
   and cwd, not cancelled or failed) answers with the worker already made, marked `repeat: true`,
   and starts nothing; the answer carries `repeated` and a `note`. `copies: true` makes new ones
@@ -930,7 +975,7 @@ wrapped as `{ peerWarning, result }`, and an error carries it).
 
 ## MCP tools (`server/src/mcp.ts`)
 
-- `climayte_run { tasks: [{ prompt, cwd, title?, model?, effort? }], group?, accounts?, per_account?, model?, effort?, copies? }`
+- `climayte_run { tasks: [{ prompt, cwd, title?, model?, effort? }], group?, accounts?, per_account?, per_account_strict?, model?, effort?, copies? }`
   MUTATES. Description says: when the owner tells a chat to climayte a task or fully delegate it,
   the chat keeps only the orchestration and every piece of work goes here; each task must be
   self-contained (a CLI worker sees none of this chat), name its folder, and say what "done"

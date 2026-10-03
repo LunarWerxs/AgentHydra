@@ -57,6 +57,7 @@ import {
   packLog,
   peekLog,
   perAccount,
+  perAccountStrict,
   placementState,
   ROOT,
   readInto,
@@ -1944,6 +1945,8 @@ export function climayteRun(input: {
   group?: string
   accounts?: string[]
   perAccount?: number
+  /** per_account as a hard cap: the group never spills past it (owner ruling, 2026-10-03). */
+  perAccountStrict?: boolean
   model?: string
   effort?: string
   modelWhy?: string
@@ -1999,6 +2002,9 @@ export function climayteRun(input: {
   // Joining a group keeps its cap unless the caller names a new one. A group nobody gave a cap
   // has none on record and takes the default, which scales with each account's plan (groupCap).
   if (input.perAccount !== undefined) perAccount[group] = cap
+  // Likewise its strictness: per_account spills past the cap unless the dispatcher said strict.
+  if (input.perAccountStrict === true) perAccountStrict[group] = true
+  else if (input.perAccountStrict === false) delete perAccountStrict[group]
   const made = fresh.map((i, k) =>
     newWorker(input.tasks[i] as RunTask, settings[i], sized[k], group, input.accounts, now),
   )

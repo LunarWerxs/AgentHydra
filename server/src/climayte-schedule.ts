@@ -9,6 +9,7 @@ import {
   journal,
   overageAllowed,
   perAccount,
+  perAccountStrict,
   placementState,
   walls,
   workers,
@@ -21,6 +22,7 @@ import {
   type CliMayteWorker,
   groupCap,
   isLoginWall,
+  maxPerAccount,
   pickAccount,
   rankAccounts,
   WIND_DOWN_SESSION_PCT,
@@ -31,7 +33,10 @@ import {
   type CostEstimate,
   DEFAULT_TASK_PCT,
   FIT_PCT,
+  fallsShort,
+  MIN_START_ROOM_PCT,
   projectedPct,
+  RESUME_WAIT_MS,
   type RunningLoad,
   sizeTask,
   waitsForCooldown,
@@ -101,12 +106,81 @@ function accountFreesAt(a: CliMayteAccount, now: number): number | null {
   return a.sessionResetsAt ?? null
 }
 
-function firstFreeAt(pool: CliMayteAccount[], now: number): string | null {
+function firstFreeMs(pool: CliMayteAccount[], now: number): number | null {
   const at = pool
     .map((a) => accountFreesAt(a, now))
     .filter((t): t is number => t !== null && t > now)
     .sort((a, b) => a - b)[0]
-  return at === undefined ? null : new Date(at).toISOString()
+  return at ?? null
+}
+
+const isoOrNull = (ms: number | null): string | null =>
+  ms === null ? null : new Date(ms).toISOString()
+
+function firstFreeAt(pool: CliMayteAccount[], now: number): string | null {
+  return isoOrNull(firstFreeMs(pool, now))
+}
+
+/** When an account whose fresh 5-hour window holds the task (`expected`, % of a Pro window) next
+ *  takes work: the end of its wall, else its reset. What a task held for room waits for
+ *  (waitsForRoom), or null when no such time is known. */
+function fitFreesAt(allowed: CliMayteAccount[], expected: number, now: number): number | null {
+  return firstFreeMs(
+    allowed.filter((a) => expected / (a.planFactor ?? 1) <= FIT_PCT),
+    now,
+  )
+}
+
+/** The room left on an account under FIT_PCT once the work running there is done, in Pro points
+ *  (times its plan). */
+function roomOn(s: TickState, a: CliMayteAccount): number {
+  const left =
+    FIT_PCT - projectedPct(a, s.running.get(a.id) ?? [], 0, s.finishedSince.get(a.id) ?? 0)
+  return Math.max(0, left * (a.planFactor ?? 1))
+}
+
+const clock = (ms: number): string =>
+  new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+/** The accounts with room (at least MIN_START_ROOM_PCT) that a cap keeps the task off: every group's
+ *  workers at maxPerAccount, or, for a per_account_strict group, its own at the group's cap. Said
+ *  in a hold so it names what keeps the task waiting (2026-10-03 11:05: seven tasks waited behind a
+ *  flat 4-worker cap while #35 sat at 26%). Empty, or a sentence with a leading space. */
+function capNote(
+  s: TickState,
+  allowed: CliMayteAccount[],
+  groupActive: Map<string, number>,
+  cap: number | null,
+  strict: boolean,
+): string {
+  const roomy = allowed.filter(
+    (a) =>
+      !((walls[a.id]?.until ?? 0) > s.now) &&
+      (a.weekPct ?? 0) < weekStopPct(a.weekResetsAt, s.now) &&
+      roomOn(s, a) >= MIN_START_ROOM_PCT,
+  )
+  const say = (list: CliMayteAccount[], counts: (a: CliMayteAccount) => number, what: string) => {
+    const many = list.length > 1
+    return `${list.map(acctLabel).join(', ')} ${many ? 'have' : 'has'} room but run${many ? '' : 's'} ${list.map(counts).join('/')} ${what}`
+  }
+  const full = roomy.filter((a) => (s.active.get(a.id) ?? 0) >= maxPerAccount(a))
+  const parts: string[] = []
+  if (full.length)
+    parts.push(
+      say(
+        full,
+        (a) => s.active.get(a.id) ?? 0,
+        `workers (${full.length > 1 ? 'their' : 'its'} cap)`,
+      ),
+    )
+  const capped = strict
+    ? roomy.filter((a) => !full.includes(a) && (groupActive.get(a.id) ?? 0) >= groupCap(a, cap))
+    : []
+  if (capped.length)
+    parts.push(
+      say(capped, (a) => groupActive.get(a.id) ?? 0, "of this group's (per_account_strict)"),
+    )
+  return parts.length ? ` ${parts.join('; ')}.` : ''
 }
 
 /** The picked account is the session's own, and its last attempt did not end in a way that sends
@@ -153,37 +227,39 @@ function holdForHome(w: CliMayteWorker, home: CliMayteAccount, at: number): void
   }
 }
 
-/** The best account has too little room for what this task is expected to use: it waits for room. */
+/** The best eligible account has too little room for what this task is expected to use: it waits
+ *  for room. `timed`: an account it fits refills within RESUME_WAIT_MS (waitsForRoom), so it starts
+ *  by then either way; otherwise no account has the room to start it short (MIN_START_ROOM_PCT).
+ *  `note`: the accounts with room a cap keeps it off (capNote). */
 function holdForRoom(
   s: TickState,
   w: CliMayteWorker,
   acct: CliMayteAccount,
   cost: CostEstimate,
   allowed: CliMayteAccount[],
+  hold: { fitAt: number | null; timed: boolean; note: string },
 ): void {
   const expected = cost.pct
-  const factor = acct.planFactor ?? 1
-  const room = Math.max(
-    0,
-    (FIT_PCT -
-      projectedPct(acct, s.running.get(acct.id) ?? [], 0, s.finishedSince.get(acct.id) ?? 0)) *
-      factor,
-  )
+  const room = roomOn(s, acct)
   const head = `Waiting for room: this task is expected to use about ${Math.round(expected)}% of a Pro 5-hour window`
-  const why = `${head}, and the best account now (${acctLabel(acct)}) has about ${Math.round(room)}% left. It starts the moment one has room (a reset, or the work there finishing); smaller tasks go meanwhile.`
+  const when =
+    hold.timed && hold.fitAt !== null
+      ? `It starts by ${clock(hold.fitAt)} either way (an account it fits refills then).`
+      : 'It starts the moment one has room (a reset, or the work there finishing); smaller tasks go meanwhile.'
+  const why = `${head}, and the best eligible account now (${acctLabel(acct)}) has about ${Math.round(room)}% left. ${when}${hold.note}`
+  // A timed hold counts toward the five minutes a task waits in all (heldForResetSince).
+  if (hold.timed) w.heldForResetSince ??= new Date(s.now).toISOString()
   // Room for certain at the first reset of an account whose fresh window holds it (the work
   // running there may finish sooner).
-  const until = firstFreeAt(
-    allowed.filter((a) => expected / (a.planFactor ?? 1) <= FIT_PCT),
-    s.now,
-  )
+  const until = isoOrNull(hold.fitAt)
   if (w.waitUntil !== until && w.status === 'waiting') {
     w.waitUntil = until
     changed(w)
   }
-  // Said again only when the estimate changes: the room left moves every tick, and each new
-  // figure would be a journal line.
-  if (w.status !== 'waiting' || !w.error?.startsWith(head)) {
+  // Said again only when the estimate or what it waits for changes: the room left moves every
+  // tick, and each new figure would be a journal line.
+  const tail = `${when}${hold.note}`
+  if (w.status !== 'waiting' || !w.error?.startsWith(head) || !w.error.endsWith(tail)) {
     w.waitUntil = until
     w.status = 'waiting'
     w.error = why
@@ -214,6 +290,7 @@ function cooldownFor(
   cap: number | null,
   expected: number,
   atHome: boolean,
+  moving: boolean,
 ): ReturnType<typeof waitsForCooldown> {
   return waitsForCooldown(
     acct,
@@ -226,7 +303,7 @@ function cooldownFor(
           !isLoginWall(walls[a.id]?.reason) &&
           (!accountInUse(a) || !!w.accounts?.includes(a.id)) &&
           (a.weekPct ?? 0) < weekStopPct(a.weekResetsAt, s.now) &&
-          (groupActive.get(a.id) ?? 0) < groupCap(a, cap, s.now),
+          (groupActive.get(a.id) ?? 0) < groupCap(a, cap),
       )
       .map((a) => ({
         ...a,
@@ -241,12 +318,14 @@ function cooldownFor(
       home: atHome,
       priority: w.priority ?? 0,
       heldSince: w.heldForResetSince ? Date.parse(w.heldForResetSince) : null,
+      moving,
     },
   )
 }
 
-/** Why a task does not start on `acct` now: no room for it there (`cooldown` null, waitsForRoom),
- *  or a reset worth waiting for (`cooldown`, when; waitsForCooldown). */
+/** Why a task does not start on `acct` now: it falls short there (`cooldown` null, fallsShort;
+ *  whether it waits for room is scheduleWorker's call, waitsForRoom), or a reset worth waiting for
+ *  (`cooldown`, when; waitsForCooldown). */
 interface Refusal {
   acct: CliMayteAccount
   cooldown: number | null
@@ -261,11 +340,12 @@ function refusalOn(
   cap: number | null,
   placement: CliMaytePlacement,
   atHome: boolean,
+  moving = false,
 ): Refusal | null {
   const factors = allowed.map((a) => a.planFactor ?? 1)
-  if (waitsForRoom(acct, placement, factors, atHome)) return { acct, cooldown: null }
+  if (fallsShort(acct, placement, factors, atHome)) return { acct, cooldown: null }
   const { expected } = placement
-  const cooldown = cooldownFor(s, w, acct, allowed, groupActive, cap, expected, atHome)
+  const cooldown = cooldownFor(s, w, acct, allowed, groupActive, cap, expected, atHome, moving)
   return cooldown ? { acct, cooldown } : null
 }
 
@@ -364,6 +444,7 @@ function noAccountReason(
   w: CliMayteWorker,
   allowed: CliMayteAccount[],
   until: string | null,
+  note: string,
 ): string {
   const { accounts } = s
   const soonest = until ? Date.parse(until) : undefined
@@ -380,25 +461,32 @@ function noAccountReason(
         `${acctLabel(a)} (${a.handsOnAgoMs != null ? 'its desktop app is in use' : 'other sessions running'})`,
     )
   if (inUse.length)
-    return `Waiting for an account nobody else is using: ${inUse.join(', ')}; the others are at their limit or signed out. It starts when one frees up.`
-  return `Every eligible account is at its usage limit, past the ${WIND_DOWN_SESSION_PCT}% stop line, or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.`
+    return `Waiting for an account nobody else is using: ${inUse.join(', ')}; the others are at their limit or signed out. It starts when one frees up.${note}`
+  return `Every eligible account is at its usage limit, past the ${WIND_DOWN_SESSION_PCT}% stop line, or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.${note}`
 }
 
-/** Busy (every eligible account at its worker cap) stays queued; nothing eligible at all
- *  waits. */
-function holdForAccount(s: TickState, w: CliMayteWorker, allowed: CliMayteAccount[]): void {
+/** Busy (every eligible account at its worker cap) stays queued, naming the accounts with room
+ *  that a cap holds (`note`, capNote); nothing eligible at all waits. */
+function holdForAccount(
+  s: TickState,
+  w: CliMayteWorker,
+  allowed: CliMayteAccount[],
+  note: string,
+): void {
   const { now, accounts } = s
   const idle = new Map<string, number>()
   if (pickAccount(w, accounts, walls, idle, Number.MAX_SAFE_INTEGER, now, idle, s.allowFull)) {
-    if (w.status === 'waiting') {
+    const slot = note ? `Waiting for a slot:${note}` : null
+    const stale = !slot && !!w.error?.startsWith('Waiting for a slot')
+    if (w.status === 'waiting' || (slot && w.error !== slot) || stale) {
       w.status = 'queued'
-      w.error = null
+      w.error = slot
       changed(w)
     }
     return
   }
   const until = firstFreeAt(allowed, now)
-  const why = noAccountReason(s, w, allowed, until)
+  const why = noAccountReason(s, w, allowed, until, note)
   if (w.status !== 'waiting' || w.error !== why || w.waitUntil !== until) {
     if (w.status !== 'waiting' || w.error !== why)
       journal(w, 'waiting', { error: firstLine(why), until: until ?? undefined })
@@ -410,14 +498,23 @@ function holdForAccount(s: TickState, w: CliMayteWorker, allowed: CliMayteAccoun
 }
 
 /** One due task: start it on the best account that takes it now, or say what it waits for. An
- *  account that refuses it (no room, or a reset worth waiting for) passes it to the next: it waits
- *  only when every account refuses, for what the best one named and until the earliest reset.
+ *  account that refuses it (no room, or a reset worth waiting for) passes it to the next.
  *  2026-10-02 05:09: held on #90 (ahead of its pace) alone, 8 tasks waited while #95 and #94 had no
- *  worker; two then started on #95 at the same 43%. */
+ *  worker; two then started on #95 at the same 43%. The five-minute rule (owner, 2026-10-03: "When
+ *  a worker hits a five-hour or weekly limit, CliMayte moves it to another account and resumes it,
+ *  unless the limit resets in under five minutes; distribute the load"), in order: a session
+ *  stopped at its own account's limit waits for it only within RESUME_WAIT_MS (waitsForHome); the
+ *  first ranked account with no refusal takes it; else, unless the group is per_account_strict, the
+ *  first account past the group's per_account with no refusal (journal 'spill'); else it holds for
+ *  room or a reset only when one comes within RESUME_WAIT_MS; else it starts short on the best
+ *  account with at least MIN_START_ROOM_PCT left (journal 'start-short': it hands off at the stop
+ *  line and its continuation is placed again); else it waits. At 11:05 that day priority-1 tasks
+ *  sat waiting behind a flat 4-worker cap and an unbounded wait for room while #35 had room. */
 export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
   const { now, accounts } = s
   // No cap from the dispatcher: the default, which counts Pro windows (groupCap).
   const cap = perAccount[w.group] ?? null
+  const strict = perAccountStrict[w.group] === true
   const groupActive = groupCounts(s.byGroup, w.group)
   const cost = s.costOf(w)
   const expected = cost.pct
@@ -438,7 +535,7 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
   // rankAccounts puts that account last, so it goes back the moment it takes work again, and waits
   // for it when it frees up soon (waitsForHome).
   const home = quotaHome(w, allowed)
-  if (ranked.length && home && ranked[0]?.id !== home.id) {
+  if (home && ranked[0]?.id !== home.id) {
     if (pickAccount(w, [home], walls, s.active, cap, now, groupActive)) ranked = [home]
     else {
       const back = waitsForHome(homeFreesAt(home, now), now, w.priority ?? 0)
@@ -448,25 +545,79 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
       }
     }
   }
+  // Off a limit or a handoff the session moves anyway: never held for another account's pace.
+  const moving = ['quota', 'handoff'].includes(w.attempts.at(-1)?.outcome ?? '')
   const refused: Refusal[] = []
-  for (const acct of ranked) {
-    const atHome = staysHome(w, acct) || acct.id === home?.id
-    const no = refusalOn(s, w, acct, allowed, groupActive, cap, placement, atHome)
-    if (!no) {
-      startOn(s, w, acct, cost, groupActive)
+  const firstTaker = (list: CliMayteAccount[], c: number | null): CliMayteAccount | null => {
+    for (const acct of list) {
+      if (refused.some((r) => r.acct.id === acct.id)) continue
+      const atHome = staysHome(w, acct) || acct.id === home?.id
+      const no = refusalOn(s, w, acct, allowed, groupActive, c, placement, atHome, moving)
+      if (!no) return acct
+      refused.push(no)
+    }
+    return null
+  }
+  // (1) The best account within the group's cap.
+  const pick = firstTaker(ranked, cap)
+  if (pick) {
+    startOn(s, w, pick, cost, groupActive)
+    return
+  }
+  // (2) per_account is a preference: past it, on the best account that takes the task. Every
+  // other bar (walls, the stop line, maxPerAccount, a desktop in use, a stale reading) holds.
+  let spill: CliMayteAccount[] = []
+  if (!strict && (refused.length || !ranked.length)) {
+    const over = Number.POSITIVE_INFINITY
+    spill = rankAccounts(
+      w,
+      accounts,
+      walls,
+      s.active,
+      over,
+      now,
+      groupActive,
+      s.allowFull,
+      placement,
+    )
+    const past = firstTaker(spill, over)
+    if (past) {
+      const within = cap ?? 'the default'
+      journal(w, 'spill', {
+        account: acctLabel(past),
+        notice: `no account within its per_account (${within}) took it now`,
+      })
+      startOn(s, w, past, cost, groupActive)
       return
     }
-    refused.push(no)
   }
-  const first = refused[0]
-  if (!first) {
-    holdForAccount(s, w, allowed)
+  // (3) Room or a reset within five minutes: wait for it.
+  const fitAt = fitFreesAt(allowed, expected, now)
+  const heldLong = !!w.heldForResetSince && now - Date.parse(w.heldForResetSince) >= RESUME_WAIT_MS
+  const factors = allowed.map((a) => a.planFactor ?? 1)
+  const short = refused.find((r) => r.cooldown === null)
+  if (short && !heldLong && waitsForRoom(short.acct, placement, factors, false, fitAt, now)) {
+    holdForRoom(s, w, short.acct, cost, allowed, { fitAt, timed: true, note: '' })
     return
   }
-  if (first.cooldown === null) {
-    holdForRoom(s, w, first.acct, cost, allowed)
+  const reset = refused.find((r) => r.cooldown !== null)
+  if (reset) {
+    const resets = refused.flatMap((r) => r.cooldown ?? [])
+    holdForReset(w, reset.acct, Math.min(...resets), now)
     return
   }
-  const resets = refused.flatMap((r) => r.cooldown ?? [])
-  holdForReset(w, first.acct, Math.min(...resets), now)
+  // (4) Nothing comes soon: start short where the most room is, if there is enough to work in.
+  const roomy = (spill.length ? spill : ranked).find((a) => roomOn(s, a) >= MIN_START_ROOM_PCT)
+  if (roomy) {
+    journal(w, 'start-short', {
+      account: acctLabel(roomy),
+      notice: `expected to use about ${Math.round(expected)}% of a Pro 5-hour window, about ${Math.round(roomOn(s, roomy))}% left there; it hands off at the ${WIND_DOWN_SESSION_PCT}% line and goes on where there is room`,
+    })
+    startOn(s, w, roomy, cost, groupActive)
+    return
+  }
+  // (5) Nowhere to start it.
+  const note = capNote(s, allowed, groupActive, cap, strict)
+  if (short) holdForRoom(s, w, short.acct, cost, allowed, { fitAt, timed: false, note })
+  else holdForAccount(s, w, allowed, note)
 }

@@ -135,6 +135,10 @@ app.post('/api/corch/workers', async (c) => {
   const accounts = body.accounts as string[] | undefined
   // The MCP tool's spelling is per_account; either reaches the 1..4 check.
   const cap = body.perAccount ?? body.per_account
+  // per_account as a hard cap (never spills); either spelling, a boolean or nothing.
+  const strict = body.perAccountStrict ?? body.per_account_strict
+  if (strict !== undefined && typeof strict !== 'boolean')
+    return c.json({ error: 'perAccountStrict must be true or false' }, 400)
   try {
     return c.json(
       climayteRun({
@@ -142,6 +146,7 @@ app.post('/api/corch/workers', async (c) => {
         group: optStr(body.group),
         accounts,
         perAccount: cap === undefined ? undefined : Number(cap),
+        perAccountStrict: strict,
         // Validated by climayteRun (unknown values are refused with the valid ones listed).
         model: body.model as string | undefined,
         effort: body.effort as string | undefined,

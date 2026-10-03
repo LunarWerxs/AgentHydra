@@ -209,9 +209,18 @@ export function paceGap(
     : acct.weekPct - pace
 }
 
-/** The longest a task waits for another account's 5-hour reset instead of starting on one that is
- *  ahead of its weekly pace. */
-export const COOLDOWN_WAIT_MS = 30 * 60_000
+/** The longest anything waits while an account could take it: a session for its own account's
+ *  reset, a task for room or for another account's reset (owner, 2026-10-03: "When a worker hits a
+ *  five-hour or weekly limit, CliMayte moves it to another account and resumes it, unless the limit
+ *  resets in under five minutes; distribute the load"). It replaces a 30-minute wait: at 11:05 that
+ *  day priority-1 tasks sat waiting while accounts had room. */
+export const RESUME_WAIT_MS = 5 * 60_000
+
+/** A task that fits nowhere and has no room coming within RESUME_WAIT_MS still starts where the
+ *  projection is lowest, if at least this much is left there under FIT_PCT (Pro points, times the
+ *  plan): it runs to the stop line, hands off, and its continuation is placed again. With less it
+ *  would be asked to hand off at once. */
+export const MIN_START_ROOM_PCT = 10
 
 /** An account counts as ahead of its weekly pace only past this many points (paceGap), and a reset
  *  is worth waiting for only on an account at least this much less ahead. Weekly readings are whole
@@ -239,25 +248,26 @@ export type CooldownTarget = Pick<
  *  runs out. So a task is held off `chosen` when `chosen` has spent more of its week than the week
  *  has run (by over PACE_BAND), and an account it may use (`others`: allowed, signed in, nobody
  *  else's, under the weekly stop line) has no room for it NOW, refills its 5-hour window within
- *  COOLDOWN_WAIT_MS with room for it, and is at least PACE_BAND less ahead of its own pace.
+ *  RESUME_WAIT_MS with room for it, and is at least PACE_BAND less ahead of its own pace.
  *  Answers that reset (epoch ms), or null to start now. An account the task already fits on is
  *  never waited for: a reset gains nothing there (2026-10-02: 31 tasks waited 776 task-minutes for
  *  the resets of #101, #102, #98 and #103, which sat at 0-44% with free slots, then started at the
  *  same readings they had while held). The caller tries the task's next account before it holds
- *  (climayte-schedule scheduleWorker). Never held: a session going on at home (warm cache) and
- *  priority work. Nor held past COOLDOWN_WAIT_MS in all (`heldSince`, when its first hold began):
- *  other work takes each refilled account first, and a task kept waiting for the next one, then the
- *  next, never started (2026-10-03: two 4% tasks waited 30 minutes while the reset they named slid
- *  from 10:29 to 10:41). */
+ *  (climayte-schedule scheduleWorker). Never held: a session going on at home (warm cache),
+ *  priority work, and a session `moving` off a limit or a handoff (it moves anyway; owner,
+ *  2026-10-03). Nor held past RESUME_WAIT_MS in all (`heldSince`, when its first hold began): other
+ *  work takes each refilled account first, and a task kept waiting for the next one, then the next,
+ *  never started (2026-10-03: two 4% tasks waited 30 minutes while the reset they named slid from
+ *  10:29 to 10:41). */
 export function waitsForCooldown(
   chosen: Pick<CliMayteAccount, 'id' | 'weekPct' | 'weekResetsAt'>,
   others: CooldownTarget[],
   expected: number,
   now: number,
-  opts: { home: boolean; priority: number; heldSince?: number | null },
+  opts: { home: boolean; priority: number; heldSince?: number | null; moving?: boolean },
 ): number | null {
-  if (opts.home || opts.priority > 0) return null
-  if (opts.heldSince != null && now - opts.heldSince >= COOLDOWN_WAIT_MS) return null
+  if (opts.home || opts.priority > 0 || opts.moving) return null
+  if (opts.heldSince != null && now - opts.heldSince >= RESUME_WAIT_MS) return null
   const gap = paceGap(chosen, now)
   if (gap === null || gap <= PACE_BAND) return null
   const fitsNow = (a: CooldownTarget): boolean =>
@@ -268,7 +278,7 @@ export function waitsForCooldown(
         a.id !== chosen.id &&
         !!a.sessionResetsAt &&
         a.sessionResetsAt > now &&
-        a.sessionResetsAt - now <= COOLDOWN_WAIT_MS &&
+        a.sessionResetsAt - now <= RESUME_WAIT_MS &&
         expected / (a.planFactor ?? 1) <= FIT_PCT &&
         !fitsNow(a) &&
         (paceGap(a, now) ?? 0) <= gap - PACE_BAND,
@@ -279,21 +289,22 @@ export function waitsForCooldown(
 
 /** A session stopped at its own account's limit or ceiling (not a handoff) resumes there, warm, if
  *  that account frees up (`freesAt`: the end of its wall, else its 5-hour reset) within
- *  COOLDOWN_WAIT_MS: a move re-writes the whole conversation into a cold cache, a measured median of
+ *  RESUME_WAIT_MS: a move re-writes the whole conversation into a cold cache, a measured median of
  *  219k cache-write tokens against 49k for a resume on the same account. Answers when to start, or
- *  null to move now. Priority work never waits. */
+ *  null to move now. Priority work never waits. It waited up to 30 minutes until the owner ruled on
+ *  2026-10-03: "CliMayte moves it to another account and resumes it, unless the limit resets in
+ *  under five minutes". */
 export function waitsForHome(freesAt: number | null, now: number, priority: number): number | null {
   if (priority > 0 || freesAt === null || freesAt <= now) return null
-  return freesAt - now <= COOLDOWN_WAIT_MS ? freesAt : null
+  return freesAt - now <= RESUME_WAIT_MS ? freesAt : null
 }
 
-/** Hold a task rather than start it on `chosen` (the best account pickAccount found) when it is not
- *  projected to finish there but would fit a fresh window of an account it may use: it would run
- *  out partway and move, re-writing its whole conversation into a cold cache. Smaller tasks take the
- *  room meanwhile, and the held one starts first once an account has room (a reset, or the work
- *  there finishing). A session going on on its own account (`home`) is never held, and neither is a
- *  task no window fits (run as a whole on the owner's say), which goes where the projection is lowest. */
-export function waitsForRoom(
+/** The task is not projected to finish on `chosen` (the best account pickAccount found) but would
+ *  fit a fresh window of an account it may use: it would run out partway and move, re-writing its
+ *  whole conversation into a cold cache. A session going on on its own account (`home`) never falls
+ *  short, and neither does a task no window fits (run as a whole on the owner's say), which goes
+ *  where the projection is lowest. */
+export function fallsShort(
   chosen: Pick<CliMayteAccount, 'id' | 'sessionPct'> & { planFactor?: number },
   placement: CliMaytePlacement,
   allowedFactors: number[],
@@ -307,4 +318,25 @@ export function waitsForRoom(
     placement.finishedSince?.get(chosen.id) ?? 0,
   )
   return projected > FIT_PCT && allowedFactors.some((f) => placement.expected / f <= FIT_PCT)
+}
+
+/** Hold a task rather than start it on `chosen` when it falls short there (fallsShort) and an
+ *  account whose fresh window holds it refills within RESUME_WAIT_MS (`fitFreesAt`: the first such
+ *  reset or wall end, null when none is known). Smaller tasks take the room meanwhile, and the held
+ *  one starts first once an account has room. With no such reset it does not wait: 2026-10-03, nine
+ *  tasks sat "expected to use about 22% of a Pro 5-hour window, and the best account now has about
+ *  19% left" with no bound on the wait (owner: "distribute the load"). */
+export function waitsForRoom(
+  chosen: Pick<CliMayteAccount, 'id' | 'sessionPct'> & { planFactor?: number },
+  placement: CliMaytePlacement,
+  allowedFactors: number[],
+  home: boolean,
+  fitFreesAt: number | null,
+  now: number,
+): boolean {
+  return (
+    fallsShort(chosen, placement, allowedFactors, home) &&
+    fitFreesAt !== null &&
+    fitFreesAt - now <= RESUME_WAIT_MS
+  )
 }

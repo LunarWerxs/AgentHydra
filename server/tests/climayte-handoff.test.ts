@@ -69,8 +69,11 @@ describe('a handoff on conversation size', () => {
     // Four account changes, each a fresh session after a size handoff: the task is converging.
     const long = ['a', 'b', 'a', 'b', 'a'].map((id) => at(id, 'handoff', context))
     expect(notConverging(w(long))).toBeNull()
-    // The same four changes after a limit are a task bouncing between accounts.
-    const bouncing = ['a', 'b', 'a', 'b', 'a'].map((id) => at(id, 'quota'))
+    // The same four changes after a limit are the five-minute rule moving it (owner, 2026-10-03), not
+    // a move that counts; after a transient failure they are a task bouncing between accounts.
+    const limits = ['a', 'b', 'a', 'b', 'a'].map((id) => at(id, 'quota'))
+    expect(notConverging(w(limits))).toBeNull()
+    const bouncing = ['a', 'b', 'a', 'b', 'a'].map((id) => at(id, 'transient'))
     expect(notConverging(w(bouncing))).toMatch(/4 moves/)
   })
 

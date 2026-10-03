@@ -1161,6 +1161,7 @@ export const runCliMayte = (input: {
   group?: string
   accounts?: string[]
   perAccount?: number
+  perAccountStrict?: boolean
 }) =>
   j<{ group: string; workers: CliMayteWorkerView[] }>('/api/corch/workers', {
     method: 'POST',
@@ -1259,6 +1260,8 @@ export interface CliMayteJournalEntry {
     | 'failed'
     | 'cancelled'
     | 'nudged'
+    | 'spill'
+    | 'start-short'
   account?: string
   from?: string
   attempt?: number

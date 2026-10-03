@@ -100,9 +100,11 @@ function findTranscript(): string | null {
 }
 
 if (existsSync(join(configDir, 'fake-quota'))) {
-  // Three hours out, its zone named. A fixed "resets 4am" is 04:00Z under bun test, so from 03:30Z
-  // every night the wall was within the 30-minute wait-at-home window and the move never came.
-  const at = new Date(Date.now() + 3 * 3600_000)
+  // Three hours out unless the marker names minutes, its zone named. A fixed "resets 4am" is 04:00Z
+  // under bun test, so from 03:30Z every night the wall was within the wait-at-home window and the
+  // move never came.
+  const minutes = Number(readFileSync(join(configDir, 'fake-quota'), 'utf8').trim()) || 180
+  const at = new Date(Date.now() + minutes * 60_000)
   const h = at.getUTCHours()
   const clock = `${h % 12 || 12}:${String(at.getUTCMinutes()).padStart(2, '0')}${h < 12 ? 'am' : 'pm'}`
   const notice = `You've hit your session limit · resets ${clock} (UTC)`

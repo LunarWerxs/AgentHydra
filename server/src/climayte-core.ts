@@ -111,6 +111,9 @@ export function journal(
 interface Store {
   workers: CliMayteWorker[]
   perAccount: Record<string, number>
+  /** Groups whose per_account is a hard cap (climayte_run per_account_strict); absent before
+   *  2026-10-03. */
+  perAccountStrict?: Record<string, boolean>
 }
 
 const STORE_SPEC: JsonStoreSpec<Store> = {
@@ -118,9 +121,13 @@ const STORE_SPEC: JsonStoreSpec<Store> = {
   decode: (p) => {
     const w = (p as { workers?: unknown })?.workers
     if (!Array.isArray(w)) return null
-    return { workers: w as CliMayteWorker[], perAccount: (p as Store).perAccount ?? {} }
+    return {
+      workers: w as CliMayteWorker[],
+      perAccount: (p as Store).perAccount ?? {},
+      perAccountStrict: (p as Store).perAccountStrict ?? {},
+    }
   },
-  empty: () => ({ workers: [], perAccount: {} }),
+  empty: () => ({ workers: [], perAccount: {}, perAccountStrict: {} }),
 }
 
 /** Finished work, one file per worker. workers.json was rewritten whole on every change: 2.8 MB
@@ -142,6 +149,10 @@ const dirty = new Set<string>()
 export const workers = new Map<string, CliMayteWorker>()
 
 export let perAccount: Record<string, number> = {}
+
+/** Groups whose per_account never spills (climayte-schedule scheduleWorker): the cap before the
+ *  owner's 2026-10-03 ruling that a group's per_account is a preference. */
+export let perAccountStrict: Record<string, boolean> = {}
 
 export let walls: CliMayteWalls = {}
 
@@ -474,6 +485,7 @@ export function load(): void {
   if (read.status === 'ok') {
     loadWorkers(read.value.workers)
     perAccount = read.value.perAccount
+    perAccountStrict = read.value.perAccountStrict ?? {}
     if (backfillTokens() || dirty.size) save()
   } else if (read.status === 'missing') {
     // Finished work is still on record when only workers.json is gone.
@@ -533,7 +545,7 @@ export function save(): void {
     }
   }
   dirty.clear()
-  writeJsonStoreAtomic(STORE_SPEC.path, { workers: hot, perAccount })
+  writeJsonStoreAtomic(STORE_SPEC.path, { workers: hot, perAccount, perAccountStrict })
   // A revived worker's file (and a removed one's) goes only now that workers.json is written: a
   // finished worker is filed before it leaves workers.json and unfiled after it is back there, so
   // a crash at any point leaves it in at least one of them.

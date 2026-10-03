@@ -65,6 +65,7 @@ import { HOOKS, load, workers } from '../src/climayte-core'
 import { attemptCause, type CliMayteWorker } from '../src/climayte-lib'
 import { forgetOwnerSync, ownerMcpServers, syncOwnerClaude } from '../src/climayte-owner-sync'
 import { waitsForHome } from '../src/climayte-placement'
+import { clearRemote, setRemote } from '../src/climayte-remote'
 import { isPidAlive, killProcessTree } from '../src/core/process'
 import { setProviderSettings } from '../src/provider-settings'
 import { parseResetTime } from '../src/usage'
@@ -364,8 +365,14 @@ describe('climayteRun refuses what can never run', () => {
 describe('notConverging', () => {
   // A task that keeps moving, handing off or overspending stops and asks instead of spending on:
   // the worst on record ran 12 attempts and 6 moves for $18.77 (stress review, 2026-10-02).
-  const at = (id: string, outcome: string, tokens?: Record<string, number>) =>
-    ({ account: { id, num: 1, name: id }, outcome, tokens }) as any
+  const at = (
+    id: string,
+    outcome: string,
+    tokens?: Record<string, number>,
+    extra: Record<string, unknown> = {},
+  ) => ({ account: { id, num: 1, name: id }, outcome, tokens, ...extra }) as any
+  // A handoff asked for because its account reached the usage stop line (not conversation size).
+  const usage = { windDown: { at: 0, pct: 86, path: 'h.md' } }
   const w = (attempts: unknown[], expected = 10) =>
     ({ attempts, model: 'claude-opus-5-5', size: { expected } }) as any
 
@@ -373,8 +380,30 @@ describe('notConverging', () => {
     ['a few limits on one account', [at('a', 'quota'), at('a', 'quota'), at('a', 'running')], null],
     [
       'four moves',
-      [at('a', 'quota'), at('b', 'quota'), at('a', 'quota'), at('b', 'quota'), at('a', 'quota')],
+      [
+        at('a', 'transient'),
+        at('b', 'transient'),
+        at('a', 'transient'),
+        at('b', 'transient'),
+        at('a', 'transient'),
+      ],
       /4 moves/,
+    ],
+    // Owner, 2026-10-03: a worker at a five-hour or weekly limit is moved and resumed. Those moves,
+    // and the handoffs the usage stop line asks for, are the rule working, not a task going round.
+    [
+      'limit moves are planned',
+      [at('a', 'quota'), at('b', 'quota'), at('c', 'quota'), at('d', 'quota'), at('e', 'quota')],
+      null,
+    ],
+    [
+      'usage wind-down handoffs are planned',
+      [
+        at('a', 'handoff', undefined, usage),
+        at('b', 'handoff', undefined, usage),
+        at('c', 'handoff', undefined, usage),
+      ],
+      null,
     ],
     ['three handoffs', [at('a', 'handoff'), at('a', 'handoff'), at('a', 'handoff')], /3 handoffs/],
     [
@@ -1902,7 +1931,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
   const groups: string[] = []
   let sessionPct = 0
   let factor = 1
-  const resetAt = Date.now() + 2 * 3_600_000
+  let resetAt = Date.now() + 2 * 3_600_000
 
   afterAll(() => {
     for (const group of groups) climayteCancel({ group })
@@ -2044,6 +2073,8 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     factor = 1
     await onRecord('review', 'medium', 310_000) // about 30% of a Pro window
     sessionPct = 70
+    // The account refills within five minutes, so the task waits for it (owner, 2026-10-03).
+    resetAt = Date.now() + 4 * 60_000
     const run = climayteRun({
       tasks: [
         {
@@ -2075,15 +2106,53 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     expect(done?.status).toBe('done')
     expect(done?.waitUntil).toBeUndefined()
   }, 60_000)
+
+  test('with no reset within five minutes it starts short where at least 10% is left, else waits', async () => {
+    // Owner, 2026-10-03: nine tasks sat "expected to use about 22% of a Pro 5-hour window, and the
+    // best account now has about 19% left". A task that runs short hands off at the stop line and
+    // its continuation moves by itself; under 10% left it would hand off at once.
+    factor = 1
+    resetAt = Date.now() + 2 * 3_600_000
+    await onRecord('sweep', 'medium', 400_000)
+    sessionPct = 80
+    const task = {
+      prompt: 'a sweep that runs short',
+      cwd,
+      kind: 'sweep',
+      model: 'sonnet',
+      effort: 'medium',
+    }
+    const run = climayteRun({ tasks: [task], group: 'size-short', size: 'whole' })
+    groups.push(run.group)
+    const expected = run.workers[0]?.size?.expected ?? 0
+    // Over the 15% left at 70% and within a fresh window, so only the room left decides.
+    expect(expected).toBeGreaterThan(15)
+    expect(expected).toBeLessThan(85)
+    const id = run.workers[0]?.id as string
+    const deadline = Date.now() + 10_000
+    let w = climayteList({ id })[0]
+    while (w?.status === 'queued' && Date.now() < deadline) {
+      await climayteWait({ id }, 1_000)
+      w = climayteList({ id })[0]
+    }
+    // 5% left: it waits.
+    expect(w?.status).toBe('waiting')
+    sessionPct = 70
+    const done = await settle(id)
+    expect(done?.status).toBe('done')
+    expect(climayteJournal({ id }).some((e) => e.event === 'start-short')).toBe(true)
+  }, 60_000)
 })
 
 test("a session stopped at its own account's limit waits for a reset soon instead of moving", () => {
   const now = Date.now()
   // A move re-writes the whole conversation into a cold cache (median 219k cache-write tokens
-  // against 49k for a resume at home): ten minutes' wait is cheaper, two hours' is not.
-  expect(waitsForHome(now + 10 * 60_000, now, 0)).toBe(now + 10 * 60_000)
-  expect(waitsForHome(now + 2 * 3_600_000, now, 0)).toBeNull()
-  expect(waitsForHome(now + 10 * 60_000, now, 1)).toBeNull()
+  // against 49k for a resume at home), but the owner ruled on 2026-10-03: "CliMayte moves it to
+  // another account and resumes it, unless the limit resets in under five minutes". Four minutes'
+  // wait holds; ten minutes' moves.
+  expect(waitsForHome(now + 4 * 60_000, now, 0)).toBe(now + 4 * 60_000)
+  expect(waitsForHome(now + 10 * 60_000, now, 0)).toBeNull()
+  expect(waitsForHome(now + 4 * 60_000, now, 1)).toBeNull()
 })
 
 describe('spend per attempt (field note 41): what each run used, the re-read after a move apart', () => {
@@ -2207,3 +2276,176 @@ describe.skipIf(process.platform !== 'win32')(
     }, 40_000)
   },
 )
+
+describe('integration: the five-minute rule (owner, 2026-10-03)', () => {
+  // "When a worker hits a five-hour or weekly limit, CliMayte moves it to another account and
+  // resumes it, unless the limit resets in under five minutes; distribute the load."
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-five-'))
+  const cwd = join(root, 'work')
+  const dir = (name: string, marker?: [string, string]) => {
+    const d = join(root, name)
+    mkdirSync(d, { recursive: true })
+    if (marker) writeFileSync(join(d, marker[0]), marker[1])
+    return d
+  }
+  mkdirSync(cwd, { recursive: true })
+  const groups: string[] = []
+  const acct = (
+    id: string,
+    num: number,
+    configDir: string,
+    sessionPct: number,
+    planFactor = 1,
+  ) => ({
+    id,
+    num,
+    name: id,
+    configDir,
+    sessionPct,
+    weekPct: 10,
+    planFactor,
+  })
+
+  afterAll(() => {
+    for (const group of groups) climayteCancel({ group })
+    clearRemote()
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  const fake = () =>
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+  const until = async (
+    id: string,
+    done: (w: ReturnType<typeof climayteList>[number] | undefined) => boolean,
+    ms: number,
+  ) => {
+    const deadline = Date.now() + ms
+    let w = climayteList({ id })[0]
+    while (!done(w) && Date.now() < deadline) {
+      await climayteWait({ id }, Math.min(1_000, Math.max(1, deadline - Date.now())))
+      w = climayteList({ id })[0]
+    }
+    return w
+  }
+  const dispatch = (group: string, title: string, extra: Record<string, unknown> = {}) => {
+    const run = climayteRun({
+      tasks: [{ prompt: `${title}: do the fake task`, cwd, title }],
+      group,
+      size: 'whole',
+      ...extra,
+    })
+    groups.push(run.group)
+    return run.workers[0]?.id as string
+  }
+  const launchedOn = (id: string) =>
+    climayteJournal({ id })
+      .filter((e) => e.event === 'launched')
+      .map((e) => e.account)
+
+  test('the 11:05 repro: a priority task starts on the Max with room, not behind a flat 4-worker cap', async () => {
+    // 2026-10-03 11:05: the Max 20x #35 at 26% ran 4 workers from other groups and the Pros ran 4
+    // each; the one Pro with no worker had about 19% left of a 22% task. Seven tasks waited.
+    fake()
+    const running = (account: { id: string; num: number }, n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        id: `w-remote-${account.id}-${i}`,
+        title: 'other work',
+        group: 'g-other',
+        status: 'running',
+        kind: null,
+        model: null,
+        effort: null,
+        account: { id: account.id, num: account.num, name: account.id },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        activeS: 60,
+        costUsd: 0,
+        lastActivity: null,
+        error: null,
+        verdict: null,
+      }))
+    const max = acct('rp-max', 35, dir('rp-max'), 26, 20)
+    const pros = [101, 102, 103].map((n) => acct(`rp-pro-${n}`, n, dir(`rp-pro-${n}`), 30))
+    setRemote(
+      {
+        pc: 'five-minute-rule-pc',
+        name: 'other PC',
+        at: Date.now(),
+        workers: [max, ...pros].flatMap((a) => running(a, 4)),
+        live: {},
+      },
+      1,
+    )
+    setCliMayteAccountsProvider(() => [
+      acct('rp-short', 133, dir('rp-short'), 66),
+      max,
+      ...pros,
+      acct('rp-past', 98, dir('rp-past'), 90),
+    ])
+    startCliMayte()
+    const id = dispatch('rp-teardown', 'teardown plane', { perAccount: 1, priority: 1 })
+    const w = await until(id, (x) => x?.status !== 'queued', 10_000)
+    expect(w?.error ?? '').not.toContain('Waiting for room')
+    expect(launchedOn(id)).toEqual(['#35'])
+  }, 30_000)
+
+  test('per_account spills to an account with room once nothing within it fits; strict waits', async () => {
+    fake()
+    const spillDirs = [dir('sp-1', ['fake-slow', '']), dir('sp-2')]
+    const strictDirs = [dir('st-1', ['fake-slow', '']), dir('st-2')]
+    setCliMayteAccountsProvider(() => [
+      acct('sp-1', 141, spillDirs[0] as string, 10, 5),
+      acct('sp-2', 142, spillDirs[1] as string, 86),
+      acct('st-1', 151, strictDirs[0] as string, 10, 5),
+      acct('st-2', 152, strictDirs[1] as string, 86),
+    ])
+    startCliMayte()
+    const only = (ids: string[]) => ({ perAccount: 1, accounts: ids })
+    const first = dispatch('sp-G', 'spill one', only(['sp-1', 'sp-2']))
+    expect((await until(first, (x) => x?.status === 'running', 10_000))?.status).toBe('running')
+    expect(launchedOn(first)).toEqual(['#141'])
+    // #142 is past the 85% stop line (a room test would hang on the cost estimate, which earlier
+    // tests' finished tasks move), and #141 already runs this group's one: it spills to #141.
+    const second = dispatch('sp-G', 'spill two', only(['sp-1', 'sp-2']))
+    const spilled = await until(second, (x) => x?.status !== 'queued', 10_000)
+    expect(spilled?.status).toBe('running')
+    expect(launchedOn(second)).toEqual(['#141'])
+    expect(climayteJournal({ id: second }).some((e) => e.event === 'spill')).toBe(true)
+
+    // per_account_strict keeps the old hard cap: the second task stays queued for a slot, and says
+    // #151 has room but runs this group's one.
+    const strict = { ...only(['st-1', 'st-2']), perAccountStrict: true }
+    const one = dispatch('st-G', 'strict one', strict)
+    expect((await until(one, (x) => x?.status === 'running', 10_000))?.status).toBe('running')
+    const two = dispatch('st-G', 'strict two', strict)
+    const held = await until(two, (x) => !!x?.error, 10_000)
+    expect(held?.status).toBe('queued')
+    expect(held?.error).toContain('#151')
+    expect(held?.error).toContain('per_account_strict')
+    expect(launchedOn(two)).toEqual([])
+  }, 40_000)
+
+  test('a limit that resets in 20 minutes moves at once; one that resets in 3 waits at home', async () => {
+    fake()
+    setCliMayteAccountsProvider(() => [
+      acct('q-home', 161, dir('q-home', ['fake-quota', '20']), 0),
+      acct('q-other', 162, dir('q-other'), 20),
+      acct('q3-home', 171, dir('q3-home', ['fake-quota', '3']), 0),
+      acct('q3-other', 172, dir('q3-other'), 20),
+    ])
+    startCliMayte()
+    const moves = dispatch('q-move', 'moves on', { accounts: ['q-home', 'q-other'] })
+    const done = await until(moves, (x) => x?.status === 'done' || x?.status === 'failed', 20_000)
+    expect(done?.status).toBe('done')
+    expect(done?.attempts[0]?.outcome).toBe('quota')
+    expect(launchedOn(moves)).toEqual(['#161', '#162'])
+
+    const waits = dispatch('q-wait', 'waits at home', { accounts: ['q3-home', 'q3-other'] })
+    const held = await until(waits, (x) => x?.status === 'waiting', 15_000)
+    expect(held?.status).toBe('waiting')
+    expect(held?.error).toContain('Waiting for its own account #171')
+    expect(launchedOn(waits)).toEqual(['#171'])
+  }, 45_000)
+})

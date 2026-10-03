@@ -27,6 +27,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **CliMayte: the five-minute rule** (owner, 2026-10-03: "when a worker hits a five-hour or weekly limit, CliMayte moves it to another account and resumes it, unless the limit resets in under five minutes; distribute the load"). Priority-1 tasks sat waiting while accounts had room: a flat 4 workers per account (a Max 20x the same as a Pro), and waits for home and for room with no time bound. Now a task never waits more than 5 minutes (`RESUME_WAIT_MS`) while an account admits it: a limited session moves unless its own account frees within 5 minutes, a room or pace hold lasts only for a reset within 5 minutes, and with no such reset a task starts short on the account with the most room when at least 10 Pro-points are left (`MIN_START_ROOM_PCT`), then hands off at the stop line. An account runs 4 workers per Pro window up to 8 (`ACCOUNT_WORKERS_CEILING`), a group's default share is no longer halved on an account ahead of its weekly pace, and `per_account` spills to an account past it when nothing within it fits (`per_account_strict: true` on `climayte_run` keeps the hard cap). Moves after a limit and usage wind-down handoffs no longer count toward the "not converging" caps. A waiting row names the accounts with room that are at their worker cap. Field note 78.
+
 - **Pushing a release tag takes seconds once CI is green on its commit** (811552a). The pre-push
   hook ran the whole `check:deep` lane, about 25 minutes, on every `v*.*.*` tag, although
   docs/RELEASING.md already makes green CI the step before tagging and ci.yml runs every one of

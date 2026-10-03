@@ -649,7 +649,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'climayte_run',
     description:
-      "MUTATES: CLIMAYTE A TASK. When the owner tells a chat to climayte a task or fully delegate it, and for any work that needs Claude quality the zswarm could not deliver, the chat keeps only the orchestration (split, dispatch, read results, check them) and the real work goes here. AgentHydra chooses the account: new work goes around an account a person is using (its desktop app used in the last ten minutes) or another Claude session runs on, the calling chat's own included. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra's CliMayte view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what \"done\" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2) caps the concurrent workers of THIS GROUP per account (other groups count separately; an account runs at most 4 across all groups, and only as many as its projected 5-hour usage holds under the 85% stop line); top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). SIZE: each task is sized before it starts against the plans of its accounts (a Max 5x window holds five Pro windows): a task expected to use more than half of the biggest window it may use starts NOTHING in this dispatch and comes back `split needed` with the number of pieces (send them as self-contained tasks, or `size: whole` to run it as it is); a task that fits a fresh window but not what any account has left WAITS for room (status waiting) while smaller tasks start. Returns the group and, per worker, its id, title, status, account and `size` (expected % of a Pro window and its basis, the biggest window, the most room any account has now); then climayte_status {group, wait_seconds} waits for results.",
+      "MUTATES: CLIMAYTE A TASK. When the owner tells a chat to climayte a task or fully delegate it, and for any work that needs Claude quality the zswarm could not deliver, the chat keeps only the orchestration (split, dispatch, read results, check them) and the real work goes here. AgentHydra chooses the account: new work goes around an account a person is using (its desktop app used in the last ten minutes) or another Claude session runs on, the calling chat's own included. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra's CliMayte view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what \"done\" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2 per Pro window) is how many concurrent workers of THIS GROUP an account takes (other groups count separately); it is a preference: when no account within it takes a task, the task goes to an account with room past it, unless `per_account_strict: true` makes it a hard cap. An account runs 4 workers per Pro window across all groups, at most 8, and only as many as its projected 5-hour usage holds under the 85% stop line; top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). SIZE: each task is sized before it starts against the plans of its accounts (a Max 5x window holds five Pro windows): a task expected to use more than half of the biggest window it may use starts NOTHING in this dispatch and comes back `split needed` with the number of pieces (send them as self-contained tasks, or `size: whole` to run it as it is); a task that fits a fresh window but not what any account has left WAITS for room (status waiting) while smaller tasks start. Returns the group and, per worker, its id, title, status, account and `size` (expected % of a Pro window and its basis, the biggest window, the most room any account has now); then climayte_status {group, wait_seconds} waits for results.",
     inputSchema: S(
       {
         tasks: {
@@ -707,6 +707,11 @@ export const TOOLS: McpEngineTool[] = [
             'CLI instances to use: numbers (7, "#7") or ids. Omit for every signed-in one.',
         },
         per_account: { type: 'number' },
+        per_account_strict: {
+          type: 'boolean',
+          description:
+            'Make per_account a hard cap: the group waits rather than go past it. Default false: per_account spills to an account with room when no account within it takes the task.',
+        },
         model: {
           type: 'string',
           description:
@@ -764,6 +769,8 @@ export const TOOLS: McpEngineTool[] = [
           group: a.group != null ? str(a.group) : undefined,
           accounts,
           perAccount: a.per_account != null ? Number(a.per_account) : undefined,
+          perAccountStrict:
+            typeof a.per_account_strict === 'boolean' ? a.per_account_strict : undefined,
           model: a.model != null ? str(a.model) : undefined,
           effort: a.effort != null ? str(a.effort) : undefined,
           modelWhy: a.modelWhy != null ? str(a.modelWhy) : undefined,

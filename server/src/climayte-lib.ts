@@ -195,8 +195,9 @@ export interface CliMayteWorker {
   /** While waiting: when it expects to start (ISO, UTC), the first account's limit or reset that
    *  lets it; absent or null when not known. A waiter reads this, never the error text's local time. */
   waitUntil?: string | null
-  /** When it was first held for another account's refill this turn (ISO): the hold ends one
-   *  COOLDOWN_WAIT_MS later however many refills come (waitsForCooldown). Cleared at launch. */
+  /** When it was first held for another account's refill or for room this turn (ISO): the hold ends
+   *  one RESUME_WAIT_MS later however many refills come (waitsForCooldown, waitsForRoom). Cleared
+   *  at launch. */
   heldForResetSince?: string | null
   revived?: boolean // a message revived it after it stopped: deliver that message next
   sessions?: string[] // earlier sessions of this task, oldest first (each handoff starts a new one)
@@ -1239,8 +1240,19 @@ export function summarizeEvent(raw: unknown): string | null {
   return null
 }
 
-/** The most workers any one account runs at once, over every group. */
+/** The most workers one Pro window runs at once, over every group (maxPerAccount scales it). */
 export const MAX_PER_ACCOUNT = 4
+
+/** The most workers any one account runs at once, whatever its plan (owner ruling, 2026-10-03). */
+export const ACCOUNT_WORKERS_CEILING = 8
+
+/** How many workers an account runs at once, over every group: MAX_PER_ACCOUNT per Pro window its
+ *  5-hour window holds, up to ACCOUNT_WORKERS_CEILING (Pro 4, Max 5x 8, Max 20x 8). 2026-10-03
+ *  11:05: the Max 20x #35 at 26% ran 4 workers and was refused a fifth by a flat 4, while seven
+ *  tasks waited. */
+export function maxPerAccount(a: Pick<CliMayteAccount, 'planFactor'>): number {
+  return Math.min(MAX_PER_ACCOUNT * (a.planFactor ?? 1), ACCOUNT_WORKERS_CEILING)
+}
 
 /** What one worker already running on an account (from ANY group) adds to its score: a full usage
  *  window's worth, so an idle account wins over a busy one unless it is near its limit. Field note 8
@@ -1253,19 +1265,19 @@ export const ACTIVE_WEIGHT = 100
 export const DEFAULT_PER_ACCOUNT = 2
 
 /** How many of one group's workers an account takes at once. A cap the dispatcher set
- *  (`perAccount`) holds as given. The default counts Pro windows, not workers: 2 for each Pro
- *  window the account's 5-hour window holds (planFactor), unless the account is ahead of its weekly
- *  pace (owner, 2026-10-01: not everything into the 5x). 2026-10-02 04:36: the Max 5x #103 sat at
- *  0-12% with room for 425 Pro-points and ran 2 tasks at a time, like each Pro, while 24 waited.
- *  MAX_PER_ACCOUNT still holds above it. */
+ *  (`perAccount`) holds as given (and spills past it when nothing within it takes the task, unless
+ *  the group is per_account_strict: climayte-schedule scheduleWorker). The default counts Pro
+ *  windows, not workers: 2 for each Pro window the account's 5-hour window holds (planFactor).
+ *  2026-10-02 04:36: the Max 5x #103 sat at 0-12% with room for 425 Pro-points and ran 2 tasks at a
+ *  time, like each Pro, while 24 waited. It was halved on an account ahead of its weekly pace until
+ *  the owner ruled on 2026-10-03 ("distribute the load"): that held priority work back while the
+ *  account had room; the weekly pace still orders the accounts (placedRank). maxPerAccount still
+ *  holds above it. */
 export function groupCap(
-  a: Pick<CliMayteAccount, 'planFactor' | 'weekPct' | 'weekResetsAt'>,
+  a: Pick<CliMayteAccount, 'planFactor'>,
   perAccount: number | null,
-  now: number,
 ): number {
-  if (perAccount !== null) return perAccount
-  const ahead = (paceGap(a, now) ?? 0) > PACE_BAND
-  return DEFAULT_PER_ACCOUNT * (ahead ? 1 : (a.planFactor ?? 1))
+  return perAccount ?? DEFAULT_PER_ACCOUNT * (a.planFactor ?? 1)
 }
 
 /** An account's rank with a placement (climayte-placement.ts), lowest first, and the projection
@@ -1392,13 +1404,13 @@ function keepsHome(a: CliMayteAccount, r: RankInputs): boolean {
 }
 
 /** The account may take the worker at all: one it may use, not walled, not full (unless
- *  allowFull), and under MAX_PER_ACCOUNT. */
+ *  allowFull), and under its worker cap (maxPerAccount). */
 function accountAdmits(a: CliMayteAccount, r: RankInputs): boolean {
   return (
     (!r.worker.accounts || r.worker.accounts.includes(a.id)) &&
     !isWalledNow(r.walls[a.id], r.now) &&
     (r.allowFull || !accountIsFull(a)) &&
-    (r.active.get(a.id) ?? 0) < MAX_PER_ACCOUNT
+    (r.active.get(a.id) ?? 0) < maxPerAccount(a)
   )
 }
 
@@ -1424,7 +1436,7 @@ function takesNewWork(a: CliMayteAccount, r: RankInputs): boolean {
   // New work goes around an account someone else is using; a task that names the account is a
   // person's word.
   if (accountInUse(a) && !r.worker.accounts?.includes(a.id)) return false
-  return (r.groupActive.get(a.id) ?? 0) < groupCap(a, r.perAccount, r.now)
+  return (r.groupActive.get(a.id) ?? 0) < groupCap(a, r.perAccount)
 }
 
 /** Every account that takes the worker now, best first; the session's own account alone when it
@@ -1432,7 +1444,7 @@ function takesNewWork(a: CliMayteAccount, r: RankInputs): boolean {
  *  account (groupCap; null: the default); a session going back to its own account is not held to
  *  it (2026-10-02 05:13: a new task took #102's slot while a finished task's check ran, the check
  *  failed, and the 33-turn session moved to #94, about 170k cache-write tokens more than resuming
- *  at home). `active` counts every group's, is held under MAX_PER_ACCOUNT, and is what the score
+ *  at home). `active` counts every group's, is held under maxPerAccount, and is what the score
  *  spreads by (ACTIVE_WEIGHT). The account of a last
  *  quota/auth attempt is not excluded (its wall keeps it out while the wall is real), only tried
  *  last, so a worker restricted to it resumes once the limit resets or the login works again.
@@ -1644,10 +1656,13 @@ export function notConverging(
   if (!turn.length) return null
   // A handoff on conversation size is the plan working, not a task going in circles: a long task
   // makes one every CONTEXT_HANDOFF_TOKENS, and its fresh session starts wherever there is most
-  // room, so neither it nor the account change after it counts. The attempts and spend caps still
-  // bound it.
+  // room, so neither it nor the account change after it counts. Nor does a move off a limit, or a
+  // handoff the usage stop line asked for (owner, 2026-10-03: "When a worker hits a five-hour or
+  // weekly limit, CliMayte moves it to another account and resumes it"): that is the rule working.
+  // The attempts and spend caps still bound it.
   const planned = (a: CliMayteAttempt): boolean =>
-    a.outcome === 'handoff' && a.windDown?.reason === 'context'
+    a.outcome === 'quota' ||
+    (a.outcome === 'handoff' && (a.windDown?.reason === 'context' || a.windDown?.pct != null))
   let moves = 0
   for (let i = 1; i < turn.length; i++)
     if (turn[i]!.account.id !== turn[i - 1]!.account.id && !planned(turn[i - 1]!)) moves++

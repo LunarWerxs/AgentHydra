@@ -17,6 +17,7 @@ import {
   projectedPct,
   WEEK_MS,
   waitsForCooldown,
+  waitsForHome,
   waitsForRoom,
 } from '../src/climayte-placement'
 
@@ -96,39 +97,64 @@ describe('waitsForCooldown', () => {
     })
     const go = { home: false, priority: 0 }
     // The owner's case: the Max 5x has spent 70% of its week at the half-week mark, and a low Pro
-    // that refills in 12 minutes can then take the 20% task: wait for that reset.
-    expect(waitsForCooldown(max5, [pro(12), pro(45)], 20, now, go)).toBe(now + 12 * 60_000)
+    // that refills in 4 minutes can then take the 20% task: wait for that reset.
+    expect(waitsForCooldown(max5, [pro(4), pro(45)], 20, now, go)).toBe(now + 4 * 60_000)
     // That Pro already has room (2026-10-02: tasks waited for the reset of #98, at 0%): a reset
     // gains nothing, and neither does one of a Pro whose running work leaves the task room.
-    expect(waitsForCooldown(max5, [pro(12, 30, 0)], 20, now, go)).toBeNull()
-    const busy = { ...pro(12, 30, 40), running: [{ expected: 30, startPct: 40 }] }
-    expect(waitsForCooldown(max5, [busy], 20, now, go)).toBe(now + 12 * 60_000)
+    expect(waitsForCooldown(max5, [pro(4, 30, 0)], 20, now, go)).toBeNull()
+    const busy = { ...pro(4, 30, 40), running: [{ expected: 30, startPct: 40 }] }
+    expect(waitsForCooldown(max5, [busy], 20, now, go)).toBe(now + 4 * 60_000)
     expect(waitsForCooldown(max5, [{ ...busy, running: [] }], 20, now, go)).toBeNull()
     // Whole-percent readings: 3% used with 2.74% of the week gone (#94) is not ahead of pace.
     const noise = { id: 'a94', weekPct: 3, weekResetsAt: now + WEEK_MS * 0.9726 }
-    const fresh = { ...pro(12, 0), weekResetsAt: noise.weekResetsAt }
+    const fresh = { ...pro(4, 0), weekResetsAt: noise.weekResetsAt }
     expect(waitsForCooldown(noise, [fresh], 5, now, go)).toBeNull()
     // The Pro is within the band of the 5x's pace (66% used against 70%): not worth a wait.
-    expect(waitsForCooldown(max5, [pro(12, 66)], 20, now, go)).toBeNull()
-    // Nothing refills within half an hour: start on the 5x now.
-    expect(waitsForCooldown(max5, [pro(45)], 20, now, go)).toBeNull()
+    expect(waitsForCooldown(max5, [pro(4, 66)], 20, now, go)).toBeNull()
+    // Nothing refills within five minutes: start on the 5x now (owner, 2026-10-03: a task never
+    // waits more than five minutes while some account admits it).
+    expect(waitsForCooldown(max5, [pro(6)], 20, now, go)).toBeNull()
     // The 5x behind its pace (its week is room it loses at the reset): use it.
-    expect(waitsForCooldown({ ...max5, weekPct: 40 }, [pro(12)], 20, now, go)).toBeNull()
+    expect(waitsForCooldown({ ...max5, weekPct: 40 }, [pro(4)], 20, now, go)).toBeNull()
     // The Pro is further ahead of its own pace than the 5x: nothing gained by waiting.
-    expect(waitsForCooldown(max5, [pro(12, 90)], 20, now, go)).toBeNull()
+    expect(waitsForCooldown(max5, [pro(4, 90)], 20, now, go)).toBeNull()
     // A task no fresh Pro window holds: the 5x is where it fits.
-    expect(waitsForCooldown(max5, [pro(12)], 120, now, go)).toBeNull()
+    expect(waitsForCooldown(max5, [pro(4)], 120, now, go)).toBeNull()
     // Priority work and a session at home never wait.
-    expect(waitsForCooldown(max5, [pro(12)], 20, now, { home: false, priority: 1 })).toBeNull()
-    expect(waitsForCooldown(max5, [pro(12)], 20, now, { home: true, priority: 0 })).toBeNull()
-    // Held a whole cooldown window already, other work having taken each refill: it starts now
-    // (2026-10-03: two small tasks waited 30 minutes for a reset that kept sliding later).
+    expect(waitsForCooldown(max5, [pro(4)], 20, now, { home: false, priority: 1 })).toBeNull()
+    expect(waitsForCooldown(max5, [pro(4)], 20, now, { home: true, priority: 0 })).toBeNull()
+    // Held five minutes already, other work having taken each refill: it starts now (2026-10-03:
+    // two small tasks waited 30 minutes for a reset that kept sliding later).
     expect(
-      waitsForCooldown(max5, [pro(12)], 20, now, { ...go, heldSince: now - 30 * 60_000 }),
+      waitsForCooldown(max5, [pro(4)], 20, now, { ...go, heldSince: now - 5 * 60_000 }),
     ).toBeNull()
-    expect(waitsForCooldown(max5, [pro(12)], 20, now, { ...go, heldSince: now - 60_000 })).toBe(
-      now + 12 * 60_000,
+    expect(waitsForCooldown(max5, [pro(4)], 20, now, { ...go, heldSince: now - 60_000 })).toBe(
+      now + 4 * 60_000,
     )
+    // A session that hit a limit or handed off is moving anyway: it is never held for pace.
+    expect(waitsForCooldown(max5, [pro(4)], 20, now, { ...go, moving: true })).toBeNull()
+  })
+})
+
+describe('the five-minute rule (owner, 2026-10-03)', () => {
+  // "When a worker hits a five-hour or weekly limit, CliMayte moves it to another account and
+  // resumes it, unless the limit resets in under five minutes; distribute the load."
+  const now = 1_000_000_000_000
+  const min = 60_000
+
+  test('a session waits at home only for a reset within five minutes; priority never waits', () => {
+    expect(waitsForHome(now + 4 * min, now, 0)).toBe(now + 4 * min)
+    expect(waitsForHome(now + 6 * min, now, 0)).toBeNull()
+    expect(waitsForHome(now + 4 * min, now, 1)).toBeNull()
+  })
+
+  test('a task waits for room only when an account it fits refills within five minutes', () => {
+    const chosen = { id: 'a', sessionPct: 80 }
+    const placement = { expected: 40, running: new Map() }
+    // 2026-10-03: nine tasks held for "about 19% left" with no time bound on the wait.
+    expect(waitsForRoom(chosen, placement, [1], false, now + 20 * min, now)).toBe(false)
+    expect(waitsForRoom(chosen, placement, [1], false, now + 4 * min, now)).toBe(true)
+    expect(waitsForRoom(chosen, placement, [1], false, null, now)).toBe(false)
   })
 })
 
@@ -177,9 +203,29 @@ describe('which account a task starts on', () => {
     // A cap the dispatcher set holds as given, and a Pro stays at 2.
     expect(pickAccount(worker(), [max5], {}, two('max5'), 2, now)).toBeNull()
     expect(pickAccount(worker(), [acct('pro', 2)], {}, two('pro'), null, now)).toBeNull()
-    // Ahead of its weekly pace (70% used at the half-week mark), the 5x takes no more than a Pro.
+    // Ahead of its weekly pace (70% used at the half-week mark), the 5x still takes 2 per Pro window:
+    // the halving held priority work back while the account had room (owner, 2026-10-03:
+    // "distribute the load").
     const spent = acct('spent', 3, 10, 70, { planFactor: 5, ...weekAt(50) })
-    expect(pickAccount(worker(), [spent], {}, two('spent'), null, now)).toBeNull()
+    expect(pickAccount(worker(), [spent], {}, two('spent'), null, now)?.id).toBe('spent')
+    const ten = new Map([['spent', 10]])
+    expect(pickAccount(worker(), [spent], {}, new Map(), null, now, ten)).toBeNull()
+  })
+
+  test('an account runs 4 workers per Pro window, up to 8 (owner, 2026-10-03)', () => {
+    // 2026-10-03 11:05: the Max 20x #35 at 26% ran 4 workers and was refused a fifth by the flat
+    // 4-worker cap, while 7 tasks waited.
+    const busy = (id: string, n: number) => new Map([[id, n]])
+    const none = new Map<string, number>()
+    const pro = acct('pro', 1, 10, 10, { planFactor: 1 })
+    const max5 = acct('max5', 2, 10, 10, { planFactor: 5 })
+    const max20 = acct('max20', 3, 10, 10, { planFactor: 20 })
+    expect(pickAccount(worker(), [pro], {}, busy('pro', 3), null, now, none)?.id).toBe('pro')
+    expect(pickAccount(worker(), [pro], {}, busy('pro', 4), null, now, none)).toBeNull()
+    expect(pickAccount(worker(), [max5], {}, busy('max5', 7), null, now, none)?.id).toBe('max5')
+    expect(pickAccount(worker(), [max5], {}, busy('max5', 8), null, now, none)).toBeNull()
+    expect(pickAccount(worker(), [max20], {}, busy('max20', 7), null, now, none)?.id).toBe('max20')
+    expect(pickAccount(worker(), [max20], {}, busy('max20', 8), null, now, none)).toBeNull()
   })
 
   test("a session's follow-up goes back to its own account though the group's slots there are taken", () => {
@@ -244,10 +290,12 @@ describe('waitsForRoom', () => {
   test('never holds a session going on at home, nor a task no window fits', () => {
     const chosen = { id: 'a', sessionPct: 80 }
     const placement = { expected: 40, running: new Map() }
-    expect(waitsForRoom(chosen, placement, [1], false)).toBe(true)
+    const now = 1_000_000_000_000
+    const soon = now + 60_000
+    expect(waitsForRoom(chosen, placement, [1], false, soon, now)).toBe(true)
     // Its own account has its conversation in a warm cache: it carries on there.
-    expect(waitsForRoom(chosen, placement, [1], true)).toBe(false)
+    expect(waitsForRoom(chosen, placement, [1], true, soon, now)).toBe(false)
     // 150% fits no Pro window, so waiting would be for ever: it goes where the projection is lowest.
-    expect(waitsForRoom(chosen, { ...placement, expected: 150 }, [1], false)).toBe(false)
+    expect(waitsForRoom(chosen, { ...placement, expected: 150 }, [1], false, soon, now)).toBe(false)
   })
 })
