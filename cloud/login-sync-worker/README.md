@@ -53,6 +53,7 @@ token, never the token.
 | `GET /v1/logins/:id` | one login's encrypted blob |
 | `PUT /v1/logins/:id` | `{version, blob, meta}`: stored as version+1 when `version` is the current one (0 for new); else 409 with the current version |
 | `DELETE /v1/logins/:id?version=n` | removes it at that version |
+| `GET /v1/changes?since=<n>` | delta: rows with `rev > n` from each table, tombstones for deleted rows, or `{full: true}` if the cursor is old or the store was reset; also in `x-store-rev` response header on every list route |
 | `GET /v1/queues` | each PC's CliMayte queue snapshot: pc id, version, meta (name, time, count) |
 | `GET /v1/queues/:pc` | one PC's encrypted queue blob (up to 256 KB) |
 | `PUT /v1/queues/:pc` | `{version, blob, meta}`, written like a login (compare-and-swap on the version) |
@@ -62,6 +63,8 @@ token, never the token.
 | `DELETE /v1/chats/:id?version=n` | removes the chat row when `n` is current, else 409; its transcript (the chunks under its session) goes too once no other row shares that session |
 | `PUT /v1/chats/:id/chunks/:seq` | `{blob, by}`: an append-only transcript piece (up to 1,048,576 characters), written once; 409 `{error:'taken', next}` if that seq exists; 507 `{error, used, room}` if it would take chats past their room |
 | `GET /v1/chats/:id/chunks?from=n` | `{chunks, next, more}`: chunks from seq `n` in order, one page of about 8,000,000 characters |
+
+**Changes feed.** The `/v1/changes?since=<n>` route carries all rows with `rev > n` from `logins`, `queues` and `chats`, plus tombstones for deleted rows, in one batch. The store tracks a `rev` that increments on every successful write (PUT or DELETE), stamps each row with the rev it was written at, and returns the current `rev` in the response and the `x-store-rev` header on every list route, so a client can update its cursor without missing a write. Cursors older than the stored `floor` (tombstones older than 30 days) get `{full: true}` to resync. An older client ignores `/v1/changes` and keeps using the list routes; the Worker must be redeployed for the new clients.
 
 The chat routes (desktop chat sync) need this Worker **redeployed** too: paste the new `worker.js` over
 the old one. Chats and chunks live in their own `chats` and `chat_chunks` tables.

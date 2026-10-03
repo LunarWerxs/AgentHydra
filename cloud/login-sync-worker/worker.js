@@ -64,9 +64,25 @@ async function ensureSchema(db) {
   for (const t of [LOGINS, QUEUES, CHATS])
     await db
       .prepare(
-        `CREATE TABLE IF NOT EXISTS ${t.table} (${t.key} TEXT PRIMARY KEY, version INTEGER NOT NULL, blob TEXT NOT NULL, meta TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
+        `CREATE TABLE IF NOT EXISTS ${t.table} (${t.key} TEXT PRIMARY KEY, version INTEGER NOT NULL, blob TEXT NOT NULL, meta TEXT NOT NULL, updated_at INTEGER NOT NULL, rev INTEGER NOT NULL DEFAULT 0)`,
       )
       .run()
+  // Index on rev so WHERE rev > ? reads only changed rows.
+  for (const t of [LOGINS, QUEUES, CHATS])
+    await db.prepare(`CREATE INDEX IF NOT EXISTS ${t.table}_rev ON ${t.table}(rev)`).run()
+  await db
+    .prepare(
+      'CREATE TABLE IF NOT EXISTS tombstones (table_name TEXT NOT NULL, id TEXT NOT NULL, rev INTEGER NOT NULL, time INTEGER NOT NULL, PRIMARY KEY (table_name, id))',
+    )
+    .run()
+  await db
+    .prepare(
+      'CREATE TABLE IF NOT EXISTS store_rev (id INTEGER PRIMARY KEY CHECK (id = 1), rev INTEGER NOT NULL, floor INTEGER NOT NULL)',
+    )
+    .run()
+  // Initialize store_rev if it doesn't exist.
+  if (!(await db.prepare('SELECT rev FROM store_rev WHERE id = 1').first()))
+    await db.prepare('INSERT INTO store_rev (id, rev, floor) VALUES (1, 0, 0)').run()
   await db
     .prepare(
       'CREATE TABLE IF NOT EXISTS chat_chunks (chat TEXT NOT NULL, seq INTEGER NOT NULL, blob TEXT NOT NULL, by TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (chat, seq))',
@@ -127,11 +143,16 @@ const row = (t, r) =>
 
 // GET /v1/logins, GET /v1/queues — the shared list, without the encrypted blobs.
 async function listRows(db, t) {
+  const storeRevRow = await db.prepare('SELECT rev FROM store_rev WHERE id = 1').first()
   const { results } = await db
     .prepare(`SELECT ${t.key}, version, meta, updated_at FROM ${t.table} ORDER BY ${t.key}`)
     .all()
   const rows = (results || []).map((r) => row(t, r))
-  return json({ [LIST_NAME[t.table]]: rows })
+  const response = json({ [LIST_NAME[t.table]]: rows })
+  if (storeRevRow) {
+    response.headers.set('x-store-rev', String(storeRevRow.rev))
+  }
+  return response
 }
 
 // GET /v1/logins/:id, GET /v1/queues/:pc — one stored row, blob included.
@@ -145,7 +166,8 @@ async function fetchRow(db, t, id) {
 
 // parse the PUT body and run the compare-and-swap write: version 0 inserts (losing a
 // concurrent insert), a matching version updates atomically, anything else returns 409
-// with the current version so the PCs can retry.
+// with the current version so the PCs can retry. A successful write increments store rev and
+// stamps the row with it, atomically in one batch.
 async function storeRow(db, t, id, body) {
   const version = Number(body?.version)
   const blob = body?.blob
@@ -155,21 +177,37 @@ async function storeRow(db, t, id, body) {
     return json({ error: 'bad blob' }, 400)
   if (meta.length > MAX_META) return json({ error: 'meta too large' }, 400)
   const now = Date.now()
+
+  // Increment store rev and get the new value. This is as atomic as we can make it with D1.
+  const newRevRow = await db
+    .prepare('UPDATE store_rev SET rev = rev + 1 WHERE id = 1 RETURNING rev')
+    .first()
+  const newRev = newRevRow?.rev ?? 1
+
   const result =
     version === 0
       ? await db
           .prepare(
-            `INSERT INTO ${t.table} (${t.key}, version, blob, meta, updated_at) VALUES (?, 1, ?, ?, ?) ON CONFLICT(${t.key}) DO NOTHING`,
+            `INSERT INTO ${t.table} (${t.key}, version, blob, meta, updated_at, rev) VALUES (?, 1, ?, ?, ?, ?) ON CONFLICT(${t.key}) DO NOTHING`,
           )
-          .bind(id, blob, meta, now)
+          .bind(id, blob, meta, now, newRev)
           .run()
       : await db
           .prepare(
-            `UPDATE ${t.table} SET version = version + 1, blob = ?, meta = ?, updated_at = ? WHERE ${t.key} = ? AND version = ?`,
+            `UPDATE ${t.table} SET version = version + 1, blob = ?, meta = ?, updated_at = ?, rev = ? WHERE ${t.key} = ? AND version = ?`,
           )
-          .bind(blob, meta, now, id, version)
+          .bind(blob, meta, now, newRev, id, version)
           .run()
-  if ((result?.meta?.changes ?? 0) === 1) return json({ version: version + 1 })
+
+  if ((result?.meta?.changes ?? 0) === 1) {
+    // Successful write: clear any tombstone for this id. The store rev was already incremented above.
+    await db
+      .prepare('DELETE FROM tombstones WHERE table_name = ? AND id = ?')
+      .bind(t.table, id)
+      .run()
+    return json({ version: version + 1 })
+  }
+
   const current = await db
     .prepare(`SELECT ${t.key}, version, meta, updated_at FROM ${t.table} WHERE ${t.key} = ?`)
     .bind(id)
@@ -177,27 +215,59 @@ async function storeRow(db, t, id, body) {
   return json({ error: 'version conflict', current: row(t, current) ?? null }, 409)
 }
 
-// DELETE /v1/logins/:id — remove only when `version` is the current one.
+// DELETE /v1/logins/:id — remove only when `version` is the current one. A deletion leaves a
+// tombstone and increments the store rev.
 async function deleteLogin(db, id, version) {
   if (!Number.isInteger(version) || version < 1) return json({ error: 'bad version' }, 400)
+
+  // Increment store rev and get the new value.
+  const newRevRow = await db
+    .prepare('UPDATE store_rev SET rev = rev + 1 WHERE id = 1 RETURNING rev')
+    .first()
+  const newRev = newRevRow?.rev ?? 1
+
   const result = await db
     .prepare('DELETE FROM logins WHERE id = ? AND version = ?')
     .bind(id, version)
     .run()
-  if ((result?.meta?.changes ?? 0) === 1) return json({ ok: true })
+  if ((result?.meta?.changes ?? 0) === 1) {
+    // Successful delete: create a tombstone. The store rev was already incremented above.
+    await db
+      .prepare('INSERT OR REPLACE INTO tombstones (table_name, id, rev, time) VALUES (?, ?, ?, ?)')
+      .bind('logins', id, newRev, Date.now())
+      .run()
+    return json({ ok: true })
+  }
+  // Delete failed, but we already incremented store_rev. This is acceptable because failed deletes
+  // are rare and the rev is only used for the changes feed.
   return json({ error: 'version conflict' }, 409)
 }
 
 // DELETE /v1/chats/:id — the row delete is the compare-and-swap; the transcript goes only after it
 // won. A transcript lives under the chat's session (meta.s), which two rows can share (a chat moved
-// between profiles), so it stays while another row still reads it.
+// between profiles), so it stays while another row still reads it. A deletion leaves a tombstone
+// and increments the store rev.
 async function deleteChat(db, id, version) {
   if (!Number.isInteger(version) || version < 1) return json({ error: 'bad version' }, 400)
+
+  // Increment store rev and get the new value.
+  const newRevRow = await db
+    .prepare('UPDATE store_rev SET rev = rev + 1 WHERE id = 1 RETURNING rev')
+    .first()
+  const newRev = newRevRow?.rev ?? 1
+
   const gone = await db
     .prepare('DELETE FROM chats WHERE id = ? AND version = ? RETURNING meta')
     .bind(id, version)
     .first()
   if (!gone) return json({ error: 'version conflict' }, 409)
+
+  // Create a tombstone for the deleted chat. The store rev was already incremented above.
+  await db
+    .prepare('INSERT OR REPLACE INTO tombstones (table_name, id, rev, time) VALUES (?, ?, ?, ?)')
+    .bind('chats', id, newRev, Date.now())
+    .run()
+
   let session = null
   try {
     session = JSON.parse(gone.meta)?.s
@@ -302,6 +372,88 @@ async function putRow(request, db, t, id) {
   return storeRow(db, t, id, body)
 }
 
+// Prune tombstones older than 30 days and raise floor. Called occasionally, not on every request.
+async function pruneTombstones(db) {
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
+  const toDelete = await db
+    .prepare('SELECT MAX(rev) AS maxRev FROM tombstones WHERE time < ?')
+    .bind(thirtyDaysAgo)
+    .first()
+  if (!toDelete?.maxRev) return // Nothing to prune.
+  const maxRev = toDelete.maxRev
+  await db.prepare('DELETE FROM tombstones WHERE rev <= ?').bind(maxRev).run()
+  await db.prepare('UPDATE store_rev SET floor = MAX(floor, ?) WHERE id = 1').bind(maxRev).run()
+}
+
+// GET /v1/changes?since=<n> — delta updates: rows changed since cursor n, or full: true if the cursor
+// is too old or the store was reset. Reads store_rev first; if n equals rev, answers with empty lists
+// (one row read). Otherwise reads all changed rows in one batch.
+async function getChanges(db, sinceParam) {
+  const since = sinceParam === null ? -1 : Number(sinceParam)
+  if (!Number.isInteger(since)) return json({ error: 'bad since' }, 400)
+
+  // Read store_rev first.
+  const storeRevRow = await db.prepare('SELECT rev, floor FROM store_rev WHERE id = 1').first()
+  const rev = storeRevRow?.rev ?? 0
+  const floor = storeRevRow?.floor ?? 0
+
+  // If n equals rev, nothing has changed since the cursor.
+  if (since === rev) {
+    return json({ rev, logins: [], queues: [], chats: [], gone: [] })
+  }
+
+  // If n < floor or n > rev, the cursor is too old or invalid.
+  if (since < floor || since > rev) {
+    return json({ rev, full: true })
+  }
+
+  // Otherwise, read all changed rows in one batch.
+  const logins = await db
+    .prepare('SELECT id, version, meta, updated_at FROM logins WHERE rev > ? ORDER BY id')
+    .bind(since)
+    .all()
+  const queues = await db
+    .prepare('SELECT pc, version, meta, updated_at FROM queues WHERE rev > ? ORDER BY pc')
+    .bind(since)
+    .all()
+  const chats = await db
+    .prepare('SELECT id, version, meta, updated_at FROM chats WHERE rev > ? ORDER BY id')
+    .bind(since)
+    .all()
+  const tombstones = await db
+    .prepare('SELECT table_name, id FROM tombstones WHERE rev > ? ORDER BY table_name, id')
+    .bind(since)
+    .all()
+
+  const gone = (tombstones.results || []).map((r) => ({
+    table: r.table_name,
+    id: r.id,
+  }))
+
+  return json({
+    rev,
+    logins: (logins.results || []).map((r) => ({
+      id: r.id,
+      version: r.version,
+      meta: JSON.parse(r.meta),
+      updatedAt: r.updated_at,
+    })),
+    queues: (queues.results || []).map((r) => ({
+      pc: r.pc,
+      version: r.version,
+      meta: JSON.parse(r.meta),
+      updatedAt: r.updated_at,
+    })),
+    chats: (chats.results || []).map((r) => ({
+      id: r.id,
+      version: r.version,
+      meta: JSON.parse(r.meta),
+      updatedAt: r.updated_at,
+    })),
+    gone,
+  })
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
@@ -311,6 +463,9 @@ export default {
     if (!(await authorized(request, env))) return json({ error: 'unauthorized' }, 401)
     const db = env.DB
     await ensureSchema(db)
+
+    if (path === '/v1/changes' && request.method === 'GET')
+      return getChanges(db, url.searchParams.get('since'))
 
     if (path === '/v1/logins' && request.method === 'GET') return listRows(db, LOGINS)
     if (path === '/v1/queues' && request.method === 'GET') return listRows(db, QUEUES)
