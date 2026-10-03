@@ -168,17 +168,32 @@ describe('relaunch successor refuses a store another daemon owns', () => {
   })
 
   it('--from-pid matching the pointer pid starts; a different pid refuses', () => {
-    const argv = (pid: number) => ['bun', 'x', '--port', '7801', '--relaunch', '--from-pid', `${pid}`]
+    const argv = (pid: number) => [
+      'bun',
+      'x',
+      '--port',
+      '7801',
+      '--relaunch',
+      '--from-pid',
+      `${pid}`,
+    ]
     expect(relaunchRefusal({ argv: argv(4242), selfPid: self, owner: live })).toBeNull()
-    expect(relaunchRefusal({ argv: argv(555), selfPid: self, owner: live })).toContain(
-      'pid 555',
-    )
+    expect(relaunchRefusal({ argv: argv(555), selfPid: self, owner: live })).toContain('pid 555')
   })
 
   it('no live owner starts, and the successor passes its own pid without accumulating it', () => {
-    expect(relaunchRefusal({ argv: ['bun', 'x', '--relaunch'], selfPid: self, owner: null })).toBeNull()
+    expect(
+      relaunchRefusal({ argv: ['bun', 'x', '--relaunch'], selfPid: self, owner: null }),
+    ).toBeNull()
     const plan = (argv: string[]) =>
-      planRelaunchSuccessor({ argv, execPath: 'bun', isCompiled: false, boundPort: 7810, env: {}, selfPid: 77 })
+      planRelaunchSuccessor({
+        argv,
+        execPath: 'bun',
+        isCompiled: false,
+        boundPort: 7810,
+        env: {},
+        selfPid: 77,
+      })
     const first = plan(['bun', 'src/index.ts'])
     expect(first).toContain('--from-pid')
     expect(first[first.indexOf('--from-pid') + 1]).toBe('77')

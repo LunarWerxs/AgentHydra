@@ -175,7 +175,9 @@ export function relaunchRefusal(opts: {
   if (!owner || owner.pid === opts.selfPid) return null
   const fromPid = numericFlag(argv, FROM_PID_FLAG)
   const ownPort = numericFlag(argv, '--port')
-  if (fromPid !== undefined ? owner.pid === fromPid : ownPort === undefined || owner.port === ownPort)
+  if (
+    fromPid !== undefined ? owner.pid === fromPid : ownPort === undefined || owner.port === ownPort
+  )
     return null
   const from =
     fromPid !== undefined
