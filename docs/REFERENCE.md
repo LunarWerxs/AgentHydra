@@ -534,6 +534,28 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 `server/src/core/shared.ts`; the web mapping and deterministic defaults live in
 `web/src/lib/instance-appearance.ts`.
 
+### The usage numbers on a row
+
+The 5-hour and weekly columns of the Instances, CLI and Codex tables come from three stores in the
+data directory (`~/.agenthydra/data/`), and the tables read them only through `GET /api/usage/cache`
+and `GET /api/cli-instances` (the quick panel serves the same two):
+
+| Store | Holds | Written when |
+|---|---|---|
+| `usage-cache.json` | each signed-in account's newest reading | a check (the background sweep, a row's refresh, the tab's catch-up on open) |
+| `usage-last-known.json` | a signed-out account's last reading, shown dimmed | the account signs out (`dropCachedUsage(key, { keepLastKnown: true })`) |
+| `usage-cleared.json` | when each row's usage was cleared from the tables | **Clear usage stats** in the row's ⋯ menu (`POST /api/usage/clear`) |
+
+A CLI row also carries its reading on its own record (`lastUsageCheck`), and CliMayte lays its
+workers' streamed readings and limit walls over both routes (docs/CLIMAYTE.md).
+
+**Clear usage stats** deletes nothing: the routes stop serving any reading of that row taken at or
+before the clear, so a signed-out row stays blank and a signed-in one fills in again at its next
+check. CliMayte, fan_out and the account survey read the stores directly, never these routes, so a
+clear never changes where work goes. The open browser keeps the clear time too
+(`web/src/composables/useUsage.ts`), because its usage maps only ever merge and a poll in flight at
+the click would otherwise put the old number back until a reload.
+
 ## Known noise in an instance's own log
 
 Every Claude Desktop instance keeps its own `logs/main.log` under its profile folder. One line there
