@@ -61,9 +61,22 @@ const chatRoom = (env) => {
   return Math.floor((Number.isFinite(mb) && mb > 0 ? mb : CHAT_ROOM_MB) * 1048576)
 }
 
+// Bump when the schema below changes: a database at this PRAGMA user_version is not migrated again.
+const SCHEMA_VERSION = 1
 let schemaReady = false
 async function ensureSchema(db) {
   if (schemaReady) return
+  // One statement tells a cold isolate the database is current. If the PRAGMA is unavailable the
+  // version reads as 0 and the migration below runs (idempotent), as it always did.
+  const have = await db
+    .prepare('PRAGMA user_version')
+    .first()
+    .then((r) => Number(r?.user_version) || 0)
+    .catch(() => 0)
+  if (have >= SCHEMA_VERSION) {
+    schemaReady = true
+    return
+  }
   for (const t of [LOGINS, QUEUES, CHATS]) {
     await db
       .prepare(
@@ -122,8 +135,18 @@ async function ensureSchema(db) {
         'INSERT OR IGNORE INTO chat_usage (id, chars) SELECT 1, COALESCE(SUM(length(blob)), 0) FROM chat_chunks',
       )
       .run()
-  // Once per isolate, not per request: drop tombstones older than 30 days and raise floor to the
-  // highest rev dropped, so a cursor older than the kept tombstones is answered with full: true.
+  // Prunes by time: without this index the prune reads every tombstone.
+  await db.prepare('CREATE INDEX IF NOT EXISTS tombstones_time ON tombstones(time)').run()
+  schemaReady = true
+  await db
+    .prepare(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+    .run()
+    .catch(() => {})
+}
+
+// Cron (daily, see README): drop tombstones older than 30 days and raise floor to the highest rev
+// dropped, so a cursor older than the kept tombstones is answered with full: true.
+async function pruneTombstones(db) {
   const cutoff = Date.now() - TOMBSTONE_KEEP_MS
   const dropped = await db.batch([
     db
@@ -133,7 +156,6 @@ async function ensureSchema(db) {
       .bind(cutoff),
     db.prepare('DELETE FROM tombstones WHERE time < ?').bind(cutoff),
   ])
-  schemaReady = true
   // Tombstones dropped means the floor may have risen: the head any tier holds is behind it.
   if ((dropped?.[1]?.meta?.changes ?? 0) > 0) keepHead(await db.prepare(HEAD_SQL).first())
 }
@@ -720,6 +742,11 @@ export default {
         else await done
       }
     }
+  },
+  async scheduled(_event, env) {
+    if (!env.DB) return
+    await ensureSchema(env.DB)
+    await pruneTombstones(env.DB)
   },
   // For tests: what a fresh isolate starts without (the head, the kept lists and rows).
   forgetIsolate() {

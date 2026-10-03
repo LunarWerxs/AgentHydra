@@ -7,7 +7,7 @@ import { Database } from 'bun:sqlite'
 import { expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { d1 } from './login-sync-store'
+import { clearCache, d1 } from './login-sync-store'
 
 const token = 'old-schema-token'
 const sqlite = new Database(':memory:')
@@ -66,7 +66,7 @@ test('an old database is upgraded: old rows are listed at rev 0, writes and chan
   expect((await call('GET', '/v1/chats')).json.chats).toEqual([])
 })
 
-test('a tombstone older than 30 days is pruned at start-up and raises floor', async () => {
+test('a tombstone older than 30 days is pruned by the cron and raises floor', async () => {
   // a database that already holds a 31-day-old tombstone at rev 5 and a fresh one at rev 8
   const db = new Database(':memory:')
   for (const [table, key] of [
@@ -92,15 +92,20 @@ test('a tombstone older than 30 days is pruned at start-up and raises floor', as
     await import(
       `${join(import.meta.dir, '..', '..', 'cloud', 'login-sync-worker', 'worker.js')}?prune`
     )
-  ).default as typeof worker
+  ).default as typeof worker & { scheduled: (e: unknown, env: unknown) => Promise<void> }
+  const dbEnv = { DB: d1(db), TOKEN_SHA256: env.TOKEN_SHA256 }
   const ask = async (path: string) =>
     (
       await w.fetch(
         new Request(`http://store${path}`, { headers: { authorization: `Bearer ${token}` } }),
-        { DB: d1(db), TOKEN_SHA256: env.TOKEN_SHA256 },
+        dbEnv,
       )
     ).json() as Promise<any>
 
+  clearCache() // the first test left its head (rev 3) in the shared cache tier under the same host
+  // a request alone no longer prunes: the old tombstone is still there
+  expect((await ask('/v1/changes?since=3')).gone?.length).toBe(2)
+  await w.scheduled({}, dbEnv)
   expect(await ask('/v1/changes?since=3')).toEqual({ rev: 9, full: true })
   expect((await ask('/v1/changes?since=5')).gone).toEqual([{ table: 'logins', id: recent }])
 })

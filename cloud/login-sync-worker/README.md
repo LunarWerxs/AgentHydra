@@ -28,6 +28,11 @@ token, never the token.
    Worker's address and the token. Then "Copy pairing code" and paste it into Login sync on your
    other PC.
 
+5. Add a Cron Trigger (Worker settings > Triggers, for example `17 3 * * *`, once a day). It prunes
+   tombstones older than 30 days (`scheduled()`); a request never does. Without it the Worker still
+   works and tombstones only pile up. The schema is checked with one `PRAGMA user_version` per cold
+   isolate and migrated only when the database is behind.
+
 `GET /v1/health` answers `{"ok":true}` without a token, to check the address.
 
 ## Using it
