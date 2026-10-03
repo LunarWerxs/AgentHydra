@@ -141,7 +141,7 @@ computer-use and the rest) for that run only; its environment sets
 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. Both keys are in the CLI binary (2.1.286).
 
 **A worker's MCP servers are the owner's** (2026-10-02): `--mcp-config <hooks>/<id>.mcp.json`
-gives it the servers in the owner's own user scope (`~/.claude.json`), less the two denied, so
+gives it the servers in the owner's own user scope ([`~/.claude.json`](CLAUDE-CONFIG-LAYOUT.md)), less the two denied, so
 connections-local and zswarm are there whatever its account's `.claude.json` says. That copy is
 seeded once, when the account is made, and drifts: one of 33 accounts listed no server at all. Only
 an entry with no credential is carried: a URL and at most its `headersHelper`, the command that signs

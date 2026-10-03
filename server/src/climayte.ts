@@ -1735,6 +1735,24 @@ function repeatOf(t: RunTask, group: string, now: number): CliMayteWorker | null
   return null
 }
 
+/** An account the task may use must exist: an unknown one used to make a task that waited forever
+ *  for an account that will never sign in (fuzz, 2026-10-02). A signed-out instance is known, and
+ *  its task waits for the sign-in as before. */
+function assertKnownAccounts(accounts: string[] | undefined): void {
+  if (!accounts?.length) return
+  let pool: CliMayteAccount[] = []
+  try {
+    pool = accountsProvider()
+  } catch {
+    // the instance store below still knows every account
+  }
+  const unknown = accounts.filter((id) => !pool.some((a) => a.id === id) && !getCliInstance(id))
+  if (unknown.length)
+    throw new Error(
+      `accounts: ${unknown.join(', ')} ${unknown.length === 1 ? 'is not a CLI instance' : 'are not CLI instances'} (give CLI instance ids; climayte_run also takes numbers)`,
+    )
+}
+
 /** `model` / `effort` / `kind` at the top level are the group's default: a task that names its
  *  own wins. All are validated (climayteModel, climayteEffort, climayteKind) before anything is created.
  *  Model `auto` lets the scorecard choose model AND effort for the task's kind (default `code`):
@@ -1763,12 +1781,7 @@ export function climayteRun(input: {
   size?: string
   /** Make new workers even for tasks an earlier dispatch of this group already made. */
   copies?: boolean
-}): {
-  group: string
-  workers: Array<CliMayteWorkerView & { repeat?: true }>
-  repeated?: number
-  note?: string
-} {
+}): RunReply {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
@@ -1792,24 +1805,7 @@ export function climayteRun(input: {
   })
   const cap = input.perAccount ?? 2
   if (!Number.isInteger(cap) || cap < 1 || cap > 4) throw new Error('perAccount must be 1..4')
-  // An account the task may use must exist: an unknown one used to make a task that waited
-  // forever for an account that will never sign in (fuzz, 2026-10-02). A signed-out instance is
-  // known, and its task waits for the sign-in as before.
-  if (input.accounts?.length) {
-    let pool: CliMayteAccount[] = []
-    try {
-      pool = accountsProvider()
-    } catch {
-      // the instance store below still knows every account
-    }
-    const unknown = input.accounts.filter(
-      (id) => !pool.some((a) => a.id === id) && !getCliInstance(id),
-    )
-    if (unknown.length)
-      throw new Error(
-        `accounts: ${unknown.join(', ')} ${unknown.length === 1 ? 'is not a CLI instance' : 'are not CLI instances'} (give CLI instance ids; climayte_run also takes numbers)`,
-      )
-  }
+  assertKnownAccounts(input.accounts)
   const now = Date.now()
   // Only a named group can repeat: an unnamed one is new by definition.
   const named = input.group?.trim()
@@ -1852,9 +1848,29 @@ export function climayteRun(input: {
     startCliMayte()
     schedule(0)
   }
+  return runReply(group, repeats, fresh, made, now)
+}
+
+/** What climayteRun answers. */
+interface RunReply {
+  group: string
+  workers: Array<CliMayteWorkerView & { repeat?: true }>
+  repeated?: number
+  note?: string
+}
+
+/** climayteRun's answer, one row per task in the caller's order: the earlier worker, marked
+ *  `repeat`, for a task an earlier dispatch made (`repeats`), else the one made now (`made`, for
+ *  the tasks at `fresh`), and a note when any task was a repeat. */
+function runReply(
+  group: string,
+  repeats: Array<CliMayteWorker | null>,
+  fresh: number[],
+  made: CliMayteWorker[],
+  now: number,
+): RunReply {
   const madeFor = new Map(fresh.map((i, k) => [i, made[k] as CliMayteWorker]))
-  const views = input.tasks.map((_, i) => {
-    const earlier = repeats[i]
+  const views = repeats.map((earlier, i) => {
     if (earlier) return { ...toView(earlier, now), repeat: true as const }
     return toView(madeFor.get(i) as CliMayteWorker, now)
   })
@@ -1864,7 +1880,7 @@ export function climayteRun(input: {
     group,
     workers: views,
     repeated,
-    note: `${repeated} of ${input.tasks.length} task(s) repeat what this group was sent in the last ${REPEAT_WINDOW_MS / 60_000} minutes (same title, prompt and folder): those rows are the workers already made (repeat: true), and nothing new was started for them. Send copies: true to run them again.`,
+    note: `${repeated} of ${repeats.length} task(s) repeat what this group was sent in the last ${REPEAT_WINDOW_MS / 60_000} minutes (same title, prompt and folder): those rows are the workers already made (repeat: true), and nothing new was started for them. Send copies: true to run them again.`,
   }
 }
 
