@@ -96,6 +96,7 @@ interface HSwarmDeps {
   spawn?: typeof Bun.spawn
   /** Spawns the ZSwarm import (tests pass a fake). */
   importSpawn?: typeof Bun.spawn
+  importFirstMs?: number
   probe?: (port: number) => Promise<Record<string, unknown> | null>
   watchEveryMs?: number
 }
@@ -196,6 +197,15 @@ export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
 
   if (state.running && state.pid) return
 
+  // The sidecar's env, shared by the spawn path and the ZSwarm import of an adopted server.
+  const env: NodeJS.ProcessEnv = {
+    ...(deps.env ?? process.env),
+    HSWARM_PORT: String(port),
+    HSWARM_HOME: hswarmHome(deps.env),
+    HSWARM_SUPERVISED: '1',
+    PYTHONUNBUFFERED: '1',
+  }
+
   // Probe for an existing live hswarm before starting a competitor
   const liveHSwarm = await (deps.probe ?? probeHSwarm)(port)
   if (liveHSwarm?.hswarm === true && typeof liveHSwarm.pid === 'number') {
@@ -205,6 +215,8 @@ export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
     state.lastError = null
     backoffMs = MIN_BACKOFF_MS
     console.log(`[hswarm] adopting existing server on port ${port} with pid ${liveHSwarm.pid}`)
+    // The old sidecar usually survives a daemon restart; the hourly import must not stop with it.
+    startZswarmImport({ python, dir, env, spawn: deps.importSpawn, firstMs: deps.importFirstMs })
     watchAdopted(deps, port)
     return
   }
@@ -217,14 +229,6 @@ export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
     // The shared server itself, in the foreground: `hswarm ui` only starts it detached and exits,
     // which read as a crash here and restarted it forever.
     const command = [python, '-m', 'hswarm', 'mcp', '--http', '--port', String(port)]
-
-    const env: NodeJS.ProcessEnv = {
-      ...(deps.env ?? process.env),
-      HSWARM_PORT: String(port),
-      HSWARM_HOME: hswarmHome(deps.env),
-      HSWARM_SUPERVISED: '1',
-      PYTHONUNBUFFERED: '1',
-    }
 
     proc = spawnFn(command, {
       cwd: dir,
@@ -240,7 +244,7 @@ export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
     state.port = port
     state.lastError = null
     backoffMs = MIN_BACKOFF_MS
-    startZswarmImport({ python, dir, env, spawn: deps.importSpawn })
+    startZswarmImport({ python, dir, env, spawn: deps.importSpawn, firstMs: deps.importFirstMs })
 
     // Watch for crash and restart with backoff
     proc.exited

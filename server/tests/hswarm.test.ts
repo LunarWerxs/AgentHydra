@@ -134,13 +134,21 @@ test('an adopted server is watched and replaced by our own child once it stops a
     })
     return { pid: undefined, exited, kill: () => exit() }
   }) as unknown as typeof Bun.spawn
+  mkdirSync(join(tmp, '.zswarm'), { recursive: true })
+  let imports = 0
+  const importSpawn = (() => {
+    imports++
+    return { stdout: new Response('{}').body, exited: Promise.resolve(0) }
+  }) as unknown as typeof Bun.spawn
 
   await startHSwarm({
     enabled: true,
     dir: withPackage('adopted'),
     logDir: join(tmp, 'logs'),
+    env: { HOME: tmp, USERPROFILE: tmp },
     spawn,
-    importSpawn: spawn,
+    importSpawn,
+    importFirstMs: 5,
     probe,
     watchEveryMs: 5,
     port: 1,
@@ -150,6 +158,7 @@ test('an adopted server is watched and replaced by our own child once it stops a
 
   await Bun.sleep(40) // several intervals, all answered
   expect(spawns).toBe(0)
+  expect(imports).toBe(1) // the hourly ZSwarm import runs for an adopted server too
 
   live = false
   await Bun.sleep(80)
