@@ -103,7 +103,7 @@ import {
   syncDesktopLogins,
 } from './desktop-login-sync'
 import { setBeforeLaunchHook } from './instances'
-import { MIRROR_FRESH_MS, StoreMirror } from './login-sync-mirror'
+import { StoreMirror } from './login-sync-mirror'
 
 export const SYNC_EVERY_MS = 30_000
 const CONFIG_PATH = join(CONFIG_DIR, 'login-sync.json')
