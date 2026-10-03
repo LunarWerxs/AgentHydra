@@ -2679,6 +2679,47 @@ export function climayteWaveStart(input: {
   }
 }
 
+/** The note a wave verification records: the orchestrator's own (trimmed, at most 1000 chars), else
+ *  none for an accepted wave and a stock line for a rejected one. */
+function waveVerifyNote(note: unknown, accepted: boolean): string | null {
+  if (typeof note === 'string' && note.trim()) return note.trim().slice(0, 1000)
+  return accepted ? null : 'The orchestrator rejected the wave.'
+}
+
+/** Confirm every provisional wave pass on the wave's task workers; returns how many were confirmed. */
+function confirmWavePasses(wave: CliMayteWave): number {
+  let confirmed = 0
+  for (const t of wave.tasks) {
+    const w = t.workerId ? workers.get(t.workerId) : undefined
+    if (!w) continue
+    for (const v of w.verdicts ?? []) {
+      if (v.by === 'wave' && v.provisional) {
+        delete v.provisional
+        confirmed++
+      }
+    }
+    changed(w)
+  }
+  return confirmed
+}
+
+/** Record the orchestrator's pass or fail on the wave's manager, when it still exists. */
+function recordManagerVerdict(wave: CliMayteWave, accepted: boolean, note: string | null): void {
+  const manager = workers.get(wave.managerId)
+  if (!manager) return
+  // Recorded directly: the manager may still be ending its turn, which climayteVerdict refuses.
+  manager.verdicts = [
+    ...(manager.verdicts ?? []),
+    verdictRecord(manager, accepted ? 'pass' : 'fail', note, 'orchestrator'),
+  ]
+  journal(manager, 'verdict', {
+    verdict: accepted ? 'pass' : 'fail',
+    notice: note ? firstLine(note) : undefined,
+    kind: 'manage',
+  })
+  changed(manager)
+}
+
 /** Piece 7: the orchestrator's one verification of a reported wave. `ok` confirms every provisional
  *  pass of its tasks (they count in the scorecard from then on) and records a pass on the manager;
  *  not `ok` confirms none and records a fail on the manager, `retry: false` (the wave is over). */
@@ -2697,40 +2738,9 @@ export function climayteWaveVerify(
       message: `Wave ${id} is ${wave.status}: only a reported wave can be verified.`,
     }
   const accepted = input.ok === true
-  const note =
-    typeof input.note === 'string' && input.note.trim()
-      ? input.note.trim().slice(0, 1000)
-      : accepted
-        ? null
-        : 'The orchestrator rejected the wave.'
-  let confirmed = 0
-  if (accepted) {
-    for (const t of wave.tasks) {
-      const w = t.workerId ? workers.get(t.workerId) : undefined
-      if (!w) continue
-      for (const v of w.verdicts ?? []) {
-        if (v.by === 'wave' && v.provisional) {
-          delete v.provisional
-          confirmed++
-        }
-      }
-      changed(w)
-    }
-  }
-  const manager = workers.get(wave.managerId)
-  if (manager) {
-    // Recorded directly: the manager may still be ending its turn, which climayteVerdict refuses.
-    manager.verdicts = [
-      ...(manager.verdicts ?? []),
-      verdictRecord(manager, accepted ? 'pass' : 'fail', note, 'orchestrator'),
-    ]
-    journal(manager, 'verdict', {
-      verdict: accepted ? 'pass' : 'fail',
-      notice: note ? firstLine(note) : undefined,
-      kind: 'manage',
-    })
-    changed(manager)
-  }
+  const note = waveVerifyNote(input.note, accepted)
+  const confirmed = accepted ? confirmWavePasses(wave) : 0
+  recordManagerVerdict(wave, accepted, note)
   wave.status = accepted ? 'verified' : 'rejected'
   wave.updatedAt = Date.now()
   writeWave(configDir, wave)

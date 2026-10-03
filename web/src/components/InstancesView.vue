@@ -86,6 +86,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useAppSettings } from '@/composables/useAppSettings'
+import { useClaudeAppHints } from '@/composables/useClaudeAppHints'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useCodexInstances } from '@/composables/useCodexInstances'
 import { useDshInstances } from '@/composables/useDshInstances'
@@ -116,15 +117,7 @@ import type { InstanceFacts } from '@/lib/instance-filter'
 import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
 import { useTooltipConfig } from '@/lib/tooltip-config'
-import {
-  billsPastLimit,
-  bindingWeeklyPct,
-  flaggedCodeCredit,
-  formatMoney,
-  shortDate,
-  usageCheckedAgo,
-  usageReasonMessageKey,
-} from '@/lib/usage'
+import { billsPastLimit, bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
 import { planSize } from '@/lib/usage-pool'
 import {
@@ -173,60 +166,9 @@ const {
 const usageKeyFor = (inst: CMInstance) => `desktop:${inst.dir}`
 const usageFor = (inst: CMInstance) => snapshotFor(usageKeyFor(inst))
 
-// --- what only the running Claude app serves (server/src/claude-app-usage.ts) --------------------
-// Each is read from the app and kept, dated, while it is closed; the row carries an icon only for
-// what is worth a glance (a banked reset, credit money, billing past the plan limits) and the usage
-// chip's popover carries the rest.
-function appCheckedAgo(inst: CMInstance): string {
-  const at = usageFor(inst)?.claudeApp?.checkedAt
-  return at ? usageCheckedAgo(at) : '—'
-}
-
-function resetBankedHint(inst: CMInstance): string {
-  const expires = shortDate(usageFor(inst)?.resetCreditsExpiresAt)
-  return t('instances.resetBankedHint', { expires, checked: appCheckedAgo(inst) })
-}
-
-const codeCreditFor = (inst: CMInstance) => flaggedCodeCredit(usageFor(inst))
-
-function codeCreditLabel(inst: CMInstance): string {
-  const credit = codeCreditFor(inst)
-  if (credit?.state === 'unclaimed') return t('instances.codeCreditUnclaimed')
-  if (credit?.state === 'locked') return t('instances.codeCreditLocked')
-  return t('instances.codeCredit', {
-    remaining: formatMoney(credit?.remainingUsd),
-    limit: formatMoney(credit?.limitUsd),
-  })
-}
-
-function codeCreditHint(inst: CMInstance): string {
-  const credit = codeCreditFor(inst)
-  const at = { expires: shortDate(credit?.expiresAt), checked: appCheckedAgo(inst) }
-  if (credit?.state === 'unclaimed') return t('instances.codeCreditUnclaimedHint', at)
-  if (credit?.state === 'locked')
-    return t('instances.codeCreditLockedHint', { ...at, reason: credit.lockedReason ?? '—' })
-  return t('instances.codeCreditHint', at)
-}
-
-/** Usage credits worth an icon: only when ON, because then the account bills past its limits. */
-const usageCreditsOnFor = (inst: CMInstance) => {
-  const credits = usageFor(inst)?.claudeApp?.usageCredits
-  return credits?.enabled ? credits : null
-}
-
-function usageCreditsHint(inst: CMInstance): string {
-  const credits = usageCreditsOnFor(inst)
-  if (!credits) return t('instances.extraUsageOnHint')
-  const used = formatMoney(credits?.used, credits?.currency ?? null)
-  const checked = appCheckedAgo(inst)
-  return credits?.limit == null
-    ? t('instances.usageCreditsOnHintUncapped', { used, checked })
-    : t('instances.usageCreditsOnHint', {
-        used,
-        limit: formatMoney(credits.limit, credits.currency),
-        checked,
-      })
-}
+// What only the running Claude app serves: the row's banked-reset, credit and billing hints.
+const { resetBankedHint, codeCreditFor, codeCreditLabel, codeCreditHint, usageCreditsHint } =
+  useClaudeAppHints(usageFor)
 
 // --- usage mode ---------------------------------------------------------------------------------
 // One toolbar toggle swaps the PROCESS columns (PID / uptime / memory — "is it healthy?") for the

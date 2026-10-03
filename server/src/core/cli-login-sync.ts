@@ -1004,6 +1004,41 @@ ${l.token}`
   return mirror.m
 }
 
+/** One store row's fields from its meta, each defaulted when missing or of the wrong type. */
+function storeRowOf(r: { version: number; meta?: any }): StoreRow {
+  const meta = r.meta ?? {}
+  const numOr = <T>(v: unknown, fallback: T): number | T => (typeof v === 'number' ? v : fallback)
+  const strOr = (v: unknown): string | null => (typeof v === 'string' ? v : null)
+  return {
+    version: r.version,
+    num: numOr(meta.num, null),
+    kind: meta.kind === 'desktop' ? 'desktop' : 'cli',
+    name: strOr(meta.name),
+    acct: strOr(meta.acct),
+    expiresAt: numOr(meta.expiresAt, 0),
+    at: numOr(meta.at, 0),
+    signedOut: meta.signedOut === true,
+  }
+}
+
+/** Refresh the store mirror (the logins, plus the queue and chats when shared) and read its logins. */
+async function readStoreLogins(l: Live, c: SyncConfig): Promise<Map<string, StoreRow>> {
+  const m = mirrorFor(l)
+  await m.refresh({
+    tables: [
+      'logins',
+      ...(c.shareQueue ? ['queues' as const] : []),
+      ...(c.shareChats ? ['chats' as const] : []),
+    ],
+  })
+  const list = m.view('logins')
+  if (!list.ok) throw httpError('Reading the store', list.reply)
+  const store = new Map<string, StoreRow>()
+  for (const r of list.rows as Array<{ id: string; version: number; meta?: any }>)
+    store.set(r.id, storeRowOf(r))
+  return store
+}
+
 async function executeSyncPass(
   l: Live,
   c: SyncConfig,
@@ -1013,28 +1048,7 @@ async function executeSyncPass(
 ): Promise<void> {
   cliWaitingPass = new Set()
   try {
-    const m = mirrorFor(l)
-    await m.refresh({
-      tables: [
-        'logins',
-        ...(c.shareQueue ? ['queues' as const] : []),
-        ...(c.shareChats ? ['chats' as const] : []),
-      ],
-    })
-    const list = m.view('logins')
-    if (!list.ok) throw httpError('Reading the store', list.reply)
-    const store = new Map<string, StoreRow>()
-    for (const r of list.rows as Array<{ id: string; version: number; meta?: any }>)
-      store.set(r.id, {
-        version: r.version,
-        num: typeof r.meta?.num === 'number' ? r.meta.num : null,
-        kind: r.meta?.kind === 'desktop' ? 'desktop' : 'cli',
-        name: typeof r.meta?.name === 'string' ? r.meta.name : null,
-        acct: typeof r.meta?.acct === 'string' ? r.meta.acct : null,
-        expiresAt: typeof r.meta?.expiresAt === 'number' ? r.meta.expiresAt : 0,
-        at: typeof r.meta?.at === 'number' ? r.meta.at : 0,
-        signedOut: r.meta?.signedOut === true,
-      })
+    const store = await readStoreLogins(l, c)
     lastStore = store
     await learnAccounts(l, store)
 
