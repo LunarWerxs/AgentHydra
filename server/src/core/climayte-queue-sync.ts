@@ -202,10 +202,15 @@ const hash = (value: unknown): string =>
 const bucket = (pct: number | null): number | null =>
   typeof pct === 'number' ? Math.floor(pct / LIVE_BUCKET) * LIVE_BUCKET : pct
 
+/** The workers sorted by id: the snapshot lists newest-updated first, and that order moves on every tool
+ *  call of a running worker, so a fingerprint must not depend on it. */
+const byId = (workers: QueueSnapshot['workers']): QueueSnapshot['workers'] =>
+  [...workers].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+
 /** What a reader of the list sees change: a change here uploads at once and counts as news. */
 const shapePrint = (snap: QueueSnapshot): string =>
   hash(
-    snap.workers.map((w) => [
+    byId(snap.workers).map((w) => [
       w.id,
       w.title,
       w.group,
@@ -223,7 +228,16 @@ const shapePrint = (snap: QueueSnapshot): string =>
  *  change here alone rides the LIVE_GATE_MS gate and is no news. Measured 2026-10-03: with a few
  *  running workers it made an upload every ~21 s. */
 const volatilePrint = (snap: QueueSnapshot): string =>
-  hash(snap.workers.map((w) => [w.id, w.lastActivity, w.costUsd, w.updatedAt, w.error, w.activeS]))
+  hash(
+    byId(snap.workers).map((w) => [
+      w.id,
+      w.lastActivity,
+      w.costUsd,
+      w.updatedAt,
+      w.error,
+      w.activeS,
+    ]),
+  )
 
 /** The live readings without their `at`, with the percentages in 5-point steps. */
 const livePrint = (snap: QueueSnapshot): string =>

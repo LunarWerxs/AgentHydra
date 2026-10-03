@@ -458,6 +458,51 @@ describe('when this PC uploads', () => {
       }
     })
 
+    // Measured 2026-10-03: the list is newest-updated first, so two running workers swapping places
+    // changed the fingerprints with no worker's content changing: an upload at once, and news.
+    test('two workers swapping places in the list is no news and waits for the gate', async () => {
+      begin()
+      const two = (a: number, b: number) => {
+        for (const [id, at] of [
+          ['w-busy', a],
+          ['w-busy2', b],
+        ] as const)
+          workers.set(id, {
+            id,
+            group: `g-${id}`,
+            title: id,
+            status: 'running',
+            attempts: [
+              {
+                account: { id: 'acct-a', num: 7, name: 'a@example.com' },
+                startedAt: t0,
+                endedAt: null,
+              },
+            ],
+            accountId: 'acct-a',
+            lastActivity: 'Read a.ts',
+            error: null,
+            costUsd: 0.1,
+            createdAt: t0,
+            updatedAt: at,
+          } as any)
+      }
+      try {
+        two(t0 + 10, t0 + 20)
+        expect(await syncQueue(io, t0)).toBe(true)
+        expect(puts).toHaveLength(1)
+        // Only the update order swapped (the timestamps are the volatile part).
+        two(t0 + 40, t0 + 30)
+        expect(await syncQueue(io, t0 + 30_000)).toBe(false)
+        two(t0 + 50, t0 + 60)
+        expect(await syncQueue(io, t0 + 31_000)).toBe(false)
+        expect(puts).toHaveLength(1)
+      } finally {
+        workers.delete('w-busy2')
+        end()
+      }
+    })
+
     test('finishing goes up at once', async () => {
       begin()
       try {
