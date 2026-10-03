@@ -53,6 +53,10 @@ import { ownerMcpServers, syncOwnerClaude } from './climayte-owner-sync'
 import { launchRunner } from './climayte-runner'
 import { MCP_PATH, MCP_SERVER_KEY } from './mcp-register'
 
+/** Piece 6: when a manager's conversation exceeds this (the newest request's input, cache reads and
+ *  cache writes), the next wake starts a fresh session from waveStateText instead of a handoff note. */
+export const MANAGER_CONTEXT_TOKENS = 60_000
+
 /** What a launch decides before it starts the CLI, and what its bookkeeping needs afterwards. */
 interface LaunchPlan {
   /** This attempt's index: how many came before it. */
@@ -441,10 +445,11 @@ function startRunner(
         // No auto-memory: a worker does one task and what it should carry over goes in its
         // report or handoff note, yet the memory instructions rode in every request. The CLI
         // reads this variable ahead of the autoMemoryEnabled setting (2.1.286).
+        // Piece 6: managers use 1-hour cache (less re-read cost on frequent wakes).
         env: {
           ...scrubbedEnv(acct.configDir, w.id),
           ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
-          CLAUDE_CODE_PROMPT_CACHE_TTL: '5m',
+          CLAUDE_CODE_PROMPT_CACHE_TTL: w.kind === 'manage' ? '1h' : '5m',
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
         },
         stdin: promptFile,

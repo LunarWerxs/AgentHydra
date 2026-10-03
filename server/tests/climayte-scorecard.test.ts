@@ -15,7 +15,8 @@ const v = (
   model: string,
   effort: string | null,
   units = 100_000,
-): CliMayteVerdict => ({ at: 0, verdict, note: null, model, effort, units })
+  overrides?: Partial<CliMayteVerdict>,
+): CliMayteVerdict => ({ at: 0, verdict, note: null, model, effort, units, ...overrides })
 const task = (kind: string, ...verdicts: CliMayteVerdict[]) => ({ kind, verdicts })
 const times = (n: number, make: () => ReturnType<typeof task>) => Array.from({ length: n }, make)
 
@@ -56,6 +57,48 @@ describe('pickConfig', () => {
       ...times(3, () => task('code', v('pass', OPUS, 'high', 400_000))),
     ])
     expect(pickConfig('code', rows, 0).config).toEqual({ model: SONNET, effort: 'medium' })
+  })
+})
+
+describe('scoreRows', () => {
+  test('skips provisional verdicts (piece 5: wave verdicts stay out until orchestrator confirms)', () => {
+    // A provisional pass (by: 'wave') is skipped; a regular pass counts.
+    const rows = scoreRows([
+      task(
+        'code',
+        v('pass', SONNET, 'medium'),
+        v('pass', SONNET, 'high', 100_000, { provisional: true }),
+      ),
+    ])
+    // Only the non-provisional pass (Sonnet medium) counted.
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toEqual(
+      expect.objectContaining({
+        kind: 'code',
+        model: SONNET,
+        effort: 'medium',
+        pass: 1,
+        fail: 0,
+      }),
+    )
+  })
+
+  test('counts only the newest verdict per span of work (later verdicts replace earlier ones)', () => {
+    // Earlier pass is replaced by later fail.
+    const rows = scoreRows([
+      task('code', v('pass', SONNET, 'medium', 100_000), v('fail', OPUS, 'high', 200_000)),
+    ])
+    // Only the fail (Opus high) counted, earlier pass ignored.
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toEqual(
+      expect.objectContaining({
+        kind: 'code',
+        model: OPUS,
+        effort: 'high',
+        pass: 0,
+        fail: 1,
+      }),
+    )
   })
 })
 

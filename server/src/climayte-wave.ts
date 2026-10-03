@@ -205,3 +205,52 @@ export function waveBatch(
   // Nothing is running and we have changes; wake with what we have.
   return size > 0 ? Array.from(taskIds) : null
 }
+
+// Judge a wave task's proof: all present proofs pass. A proof is:
+// - The check command passed (if check is not null)
+// - Each commit exists in the repo
+// - Each commit is an ancestor of the branch
+// - The diff of each commit touches only allowed paths
+//
+// Returns { pass: boolean; note: string | null; provisional: boolean }. If pass is true and
+// at least one proof was present (check passed or commits exist), the verdict is provisional
+// (piece 5: orchestrator confirms with climayte_wave_verify).
+//
+// This is called after the task's check runs. The proof object holds check (boolean | null),
+// commits (string[]), paths (boolean | null), and note from the judgment.
+export function judgeWaveTask(
+  task: CliMayteTask,
+  proof: CliMayteTask['proof'],
+): {
+  pass: boolean
+  note: string | null
+  provisional: boolean
+} {
+  if (!proof) {
+    // No proof yet (task not judged): not a pass.
+    return { pass: false, note: null, provisional: false }
+  }
+
+  // If the check failed, proof fails.
+  if (proof.check === false) {
+    return { pass: false, note: proof.note || 'The check failed', provisional: false }
+  }
+
+  // If paths proof failed, proof fails.
+  if (proof.paths === false) {
+    return {
+      pass: false,
+      note: proof.note || 'Diff touches paths outside the brief',
+      provisional: false,
+    }
+  }
+
+  // All present proofs passed (check !== false and paths !== false).
+  // If at least one proof exists (check passed or commits), it's provisional.
+  if (proof.check === true || proof.commits.length > 0) {
+    return { pass: true, note: null, provisional: true }
+  }
+
+  // No provable proof (no check, no commits): unproven.
+  return { pass: false, note: null, provisional: false }
+}

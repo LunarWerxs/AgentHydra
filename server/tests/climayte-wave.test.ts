@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import type { CliMayteWave, CliMayteWorker } from '../src/climayte-lib'
 import { readWave, waveBatch, waveDone, waveStateText, writeWave } from '../src/climayte-wave'
 
+type CliMayteTask = CliMayteWave['tasks'][0]
+
 describe('wave store', () => {
   let tempDir: string
 
@@ -751,5 +753,146 @@ describe('waveBatch', () => {
     const result = waveBatch(wave, workers, now)
     expect(result).not.toBeNull()
     expect(result).toContain('t1')
+  })
+})
+
+describe('judgeWaveTask', () => {
+  test('no proof is not a pass', async () => {
+    const { judgeWaveTask } = await import('../src/climayte-wave')
+    const task: CliMayteTask = {
+      key: 't1',
+      prompt: 'Task',
+      title: 'Task',
+      kind: 'code',
+      check: null,
+      paths: ['src/**'],
+      after: [],
+      workerId: null,
+      state: 'pending',
+      proof: null,
+    }
+    const result = judgeWaveTask(task, null)
+    expect(result.pass).toBe(false)
+    expect(result.provisional).toBe(false)
+  })
+
+  test('check passed is a provisional pass', async () => {
+    const { judgeWaveTask } = await import('../src/climayte-wave')
+    const task: CliMayteTask = {
+      key: 't1',
+      prompt: 'Task',
+      title: 'Task',
+      kind: 'code',
+      check: 'bun test',
+      paths: ['src/**'],
+      after: [],
+      workerId: null,
+      state: 'passed',
+      proof: {
+        check: true,
+        commits: [],
+        paths: true,
+        note: '',
+      },
+    }
+    const result = judgeWaveTask(task, task.proof)
+    expect(result.pass).toBe(true)
+    expect(result.provisional).toBe(true)
+  })
+
+  test('commits present is a provisional pass', async () => {
+    const { judgeWaveTask } = await import('../src/climayte-wave')
+    const task: CliMayteTask = {
+      key: 't1',
+      prompt: 'Task',
+      title: 'Task',
+      kind: 'code',
+      check: null,
+      paths: ['src/**'],
+      after: [],
+      workerId: null,
+      state: 'passed',
+      proof: {
+        check: null,
+        commits: ['abc123def456'],
+        paths: true,
+        note: '',
+      },
+    }
+    const result = judgeWaveTask(task, task.proof)
+    expect(result.pass).toBe(true)
+    expect(result.provisional).toBe(true)
+  })
+
+  test('check failed is not a pass', async () => {
+    const { judgeWaveTask } = await import('../src/climayte-wave')
+    const task: CliMayteTask = {
+      key: 't1',
+      prompt: 'Task',
+      title: 'Task',
+      kind: 'code',
+      check: 'bun test',
+      paths: ['src/**'],
+      after: [],
+      workerId: null,
+      state: 'failed',
+      proof: {
+        check: false,
+        commits: [],
+        paths: true,
+        note: 'Test failed: src/main.ts line 42',
+      },
+    }
+    const result = judgeWaveTask(task, task.proof)
+    expect(result.pass).toBe(false)
+    expect(result.provisional).toBe(false)
+  })
+
+  test('paths mismatch is not a pass', async () => {
+    const { judgeWaveTask } = await import('../src/climayte-wave')
+    const task: CliMayteTask = {
+      key: 't1',
+      prompt: 'Task',
+      title: 'Task',
+      kind: 'code',
+      check: null,
+      paths: ['src/**'],
+      after: [],
+      workerId: null,
+      state: 'failed',
+      proof: {
+        check: null,
+        commits: ['abc123'],
+        paths: false,
+        note: 'Diff touched docs/README.md outside allowed paths',
+      },
+    }
+    const result = judgeWaveTask(task, task.proof)
+    expect(result.pass).toBe(false)
+    expect(result.provisional).toBe(false)
+  })
+
+  test('no check and no commits is unproven', async () => {
+    const { judgeWaveTask } = await import('../src/climayte-wave')
+    const task: CliMayteTask = {
+      key: 't1',
+      prompt: 'Task',
+      title: 'Task',
+      kind: 'review',
+      check: null,
+      paths: [],
+      after: [],
+      workerId: null,
+      state: 'passed',
+      proof: {
+        check: null,
+        commits: [],
+        paths: null,
+        note: '',
+      },
+    }
+    const result = judgeWaveTask(task, task.proof)
+    expect(result.pass).toBe(false)
+    expect(result.provisional).toBe(false)
   })
 })

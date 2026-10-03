@@ -32,6 +32,7 @@ export const CLIMAYTE_KINDS = [
   'mechanical',
   'docs',
   'trivial',
+  'manage',
 ] as const
 export type CliMayteKind = (typeof CLIMAYTE_KINDS)[number]
 
@@ -71,6 +72,7 @@ const START: Record<CliMayteKind, number> = {
   code: 2,
   review: 2,
   debug: 4,
+  manage: 2, // Sonnet low: reading reports and following a plan
 }
 
 /** A rung is trusted after this many verdicts at or above PASS_BAR, the floor for "reliably"... */
@@ -106,8 +108,12 @@ export interface CliMayteVerdict {
   /** The part of `units` that was re-reading conversations into a cold cache (rereadUnits): left out
    *  of what a kind costs. Absent on verdicts recorded before 2026-10-01 until the load backfill. */
   reread?: number
-  /** Who judged: the task's own check command, the orchestrating chat, or the owner in the view. */
-  by?: 'check' | 'orchestrator' | 'owner'
+  /** Who judged: the task's own check command, the orchestrating chat, the owner in the view, or
+   *  the daemon by wave commands. */
+  by?: 'check' | 'orchestrator' | 'owner' | 'wave'
+  /** Provisional verdicts (by: 'wave') stay out of the scorecard until the orchestrator confirms them
+   *  by calling climayte_wave_verify with ok: true. */
+  provisional?: boolean
 }
 
 /** One attempt's tokens in weighted units. Writes are 5-minute ones for attempts launched with the
@@ -148,14 +154,32 @@ export interface ScoreRow {
 }
 
 /** Every verdict on record, summed per kind and setting; ladder order (cheapest first) within a
- *  kind, settings off the ladder (a CLI default) after it. */
+ *  kind, settings off the ladder (a CLI default) after it. Skips provisional verdicts (piece 5:
+ *  the daemon judges by command, passes stay provisional until the orchestrator confirms them).
+ *  Counts only the newest verdict per span of work: a later verdict on the same work (no attempt
+ *  since the previous verdict) replaces an earlier one. */
 export function scoreRows(
   tasks: Iterable<{ kind?: string | null; verdicts?: CliMayteVerdict[] }>,
 ): ScoreRow[] {
   const rows = new Map<string, ScoreRow>()
   for (const t of tasks) {
     if (!t.kind || !t.verdicts?.length) continue
-    for (const v of t.verdicts) {
+    // Keep only the newest verdict per span of work, skipping provisional ones.
+    const filteredVerdicts: CliMayteVerdict[] = []
+    for (let i = t.verdicts.length - 1; i >= 0; i--) {
+      const v = t.verdicts[i]!
+      // Skip provisional verdicts (piece 5).
+      if (v.provisional) continue
+      // Keep this verdict only if we haven't seen a newer one covering this work.
+      // A newer verdict covers this work if there's no newer verdict already kept.
+      if (filteredVerdicts.length === 0 || filteredVerdicts[0]!.at < v.at) {
+        // Replace any older verdict with the same work span (no attempts between them).
+        // For now, just keep the newest, since later verdicts replace earlier ones.
+        filteredVerdicts.unshift(v)
+        if (filteredVerdicts.length > 1) filteredVerdicts.pop()
+      }
+    }
+    for (const v of filteredVerdicts) {
       const key = `${t.kind}|${v.model ?? ''}|${v.effort ?? ''}`
       const row = rows.get(key) ?? {
         kind: t.kind,

@@ -65,6 +65,17 @@ describe('expectedCost', () => {
       expectedCost(sonnetCode, [...opus, ...done('code', S, 'medium', 5, 20)]).pct,
     ).toBeCloseTo(5, 0)
   })
+
+  test('manage kind (piece 6) uses reasonable defaults', () => {
+    // A manage task with no record: starts with Sonnet low (START.manage = 2).
+    // The expected cost would be computed if there are no other manage tasks on record.
+    const manageTask = { kind: 'manage', model: 'claude-sonnet-5-5', effort: 'low' }
+    expect(expectedCost(manageTask, [])).toEqual({
+      pct: DEFAULT_TASK_PCT,
+      basis: 'default',
+      samples: 0,
+    })
+  })
 })
 
 describe('waitsForCooldown', () => {
