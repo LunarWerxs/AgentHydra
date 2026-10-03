@@ -22,6 +22,7 @@ import {
   Cloud,
   CloudOff,
   Network,
+  PictureInPicture2,
   RefreshCw,
   RotateCcw,
   Star,
@@ -31,9 +32,10 @@ import {
   X,
 } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, createApp, getCurrentInstance, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import CliMayteFloat from '@/components/CliMayteFloat.vue'
 import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
@@ -44,6 +46,7 @@ import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import { useCliMayteFloat } from '@/composables/useCliMayteFloat'
 import type {
   CliMayteRemotePc,
   CliMayteRemoteWorker,
@@ -76,6 +79,7 @@ import type { SideListGroup } from '@/lib/side-list'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
+const { pipWindow, isOpen: floatIsOpen, open: openFloat, close: closeFloat } = useCliMayteFloat()
 
 /** A row of the list: a local worker, or (with `remote`) one another PC sharing the queue shows,
  *  read-only. `remote` is the one flag that tells them apart; it is never set on a local worker. */
@@ -131,6 +135,10 @@ const selectedRow = computed(() => rows.value.find((w) => rowKey(w) === selected
 const selectedRemote = computed(() => (selectedRow.value?.remote ? selectedRow.value : null))
 const selected = computed(() =>
   selectedRemote.value ? null : (detail.value ?? selectedRow.value ?? null),
+)
+
+const hasPictureInPictureAPI = computed(
+  () => typeof document !== 'undefined' && 'documentPictureInPicture' in window,
 )
 
 /** A remote worker as a row: only the fields the other PC sends, the rest empty. */
@@ -329,6 +337,53 @@ function select(w: ListRow) {
   if (!w.remote) void loadDetail()
 }
 
+async function toggleFloat() {
+  if (floatIsOpen.value) {
+    closeFloat()
+  } else {
+    const instance = getCurrentInstance()
+    const i18n = instance?.appContext.config.globalProperties.$i18n
+
+    const success = await openFloat({
+      running: workers.value.filter((w) => w.status === 'running' || w.status === 'checking'),
+      queued: workers.value.filter(
+        (w) => isCliMayteActive(w) && w.status !== 'running' && w.status !== 'checking',
+      ),
+      now: now.value,
+      onRowClick: (id: string) => {
+        const w = workers.value.find((x) => x.id === id)
+        if (w) select(w)
+      },
+    })
+
+    if (success && pipWindow.value) {
+      const rootElement = pipWindow.value.document.getElementById('pip-root')
+      if (rootElement) {
+        const app = createApp({
+          template: `<CliMayteFloat :workers="workers" :now="now" :onRowClick="onRowClick" />`,
+          components: { CliMayteFloat },
+          data() {
+            return {
+              workers: workers.value,
+              now: now.value,
+              onRowClick: (id: string) => {
+                const w = workers.value.find((x) => x.id === id)
+                if (w) select(w)
+              },
+            }
+          },
+        })
+
+        if (i18n) {
+          app.use(i18n as any)
+        }
+
+        app.mount(rootElement)
+      }
+    }
+  }
+}
+
 /** How long the task has been active: its sessions' running time over every attempt, not the time
  *  since it was queued (owner, 2026-10-02: "if it sat for two hours, but it only worked for one,
  *  then it should show one hour, not three"). Waiting for an account or a reset does not count. */
@@ -409,6 +464,7 @@ onUnmounted(() => {
   if (clock !== null) window.clearInterval(clock)
   timer = null
   clock = null
+  closeFloat()
 })
 </script>
 
@@ -516,16 +572,29 @@ onUnmounted(() => {
           </CollapsibleContent>
         </Collapsible>
       </div>
-      <Button
-        variant="outline"
-        size="icon"
-        :disabled="loading"
-        :aria-label="$t('climayte.refresh')"
-        :title="$t('climayte.refresh')"
-        @click="load()"
-      >
-        <RefreshCw :class="loading ? 'animate-spin' : ''" />
-      </Button>
+      <div class="flex gap-1">
+        <Button
+          v-if="hasPictureInPictureAPI"
+          variant="outline"
+          size="icon"
+          :aria-label="$t('climayte.floatButton')"
+          :title="$t('climayte.floatButton')"
+          :class="floatIsOpen ? 'bg-accent' : ''"
+          @click="toggleFloat()"
+        >
+          <PictureInPicture2 class="size-4" />
+        </Button>
+        <Button
+          variant="outline"
+          size="icon"
+          :disabled="loading"
+          :aria-label="$t('climayte.refresh')"
+          :title="$t('climayte.refresh')"
+          @click="load()"
+        >
+          <RefreshCw :class="loading ? 'animate-spin' : ''" />
+        </Button>
+      </div>
     </header>
 
           <p

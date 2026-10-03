@@ -159,6 +159,11 @@ export default {
     'Priority {n}: when it waits for an account, it starts ahead of tasks with a lower priority',
   verdicts: 'Verdicts',
   verdictPct: '{pct}% of a Pro window',
+  // --- floating window (CliMayteFloat.vue, CliMayteView.vue) ---
+  floatButton: 'Floating tasks',
+  floatRunning: 'Running | Running ({0})',
+  floatQueued: 'Queued | Queued ({0})',
+  floatEmpty: 'No tasks running',
   // --- the scorecard (CliMayteView.vue): what passed per kind of task, and what it cost ---
   scoreTitle: 'What works',
   scoreHint:
