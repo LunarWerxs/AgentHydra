@@ -148,6 +148,20 @@ export const store = (method: string, path: string, body?: unknown) =>
     body: body === undefined ? undefined : JSON.stringify(body),
   }).then(async (r) => ({ status: r.status, json: (await r.json()) as any }))
 
+/** Delete every login row through the Worker's own route, which moves the rev and leaves a tombstone,
+ *  so a PC's mirror drops them too. The store is one per test process and every file shares it: a file
+ *  that needs a store holding only its own logins empties it first, because another file's rows are
+ *  sealed with that file's key and a PC that cannot open a row reports a sync error. Bun runs the files
+ *  in directory order, which differs by platform (on Linux desktop-login-sync and
+ *  login-sync-quiet-hour ran before cli-login-sync and failed its no-error check). */
+export async function emptyLogins() {
+  const r = await store('GET', '/v1/logins')
+  for (const l of (r.json?.logins ?? []) as Array<{ id: string; version: number }>) {
+    const d = await store('DELETE', `/v1/logins/${l.id}?version=${l.version}`)
+    if (d.status !== 200) throw new Error(`emptyLogins: DELETE ${l.id} answered ${d.status}`)
+  }
+}
+
 /** Delete a queue row the way a Worker delete would: bump the rev and leave a tombstone, so the Worker's
  *  kept list and the changes feed drop it (the Worker has no queue DELETE route; a hand-run delete
  *  moves no rev, and a list kept in the isolate would show the row for hours). */

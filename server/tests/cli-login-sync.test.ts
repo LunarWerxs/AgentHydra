@@ -7,7 +7,7 @@
 // this pins. The store is the real Worker, run here on bun:sqlite behind D1's prepare/bind API; the
 // other PC is played by writing to the store with the key from this PC's pairing code.
 
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,7 +24,7 @@ import {
   sealLogin,
   setLoginSyncExcluded,
 } from '../src/core/cli-login-sync'
-import { base, store, token } from './login-sync-store'
+import { base, emptyLogins, store, token } from './login-sync-store'
 
 // Scratch dirs from this file, reaped whatever the outcome, even on a throw before or past a test's
 // own try/finally.
@@ -64,6 +64,10 @@ const creds = (expiresAt: number) =>
   })
 
 describe('login sync between two PCs', () => {
+  // Every test is two PCs and only their logins: another file's rows (sealed with its key) would be a
+  // sync error here.
+  beforeEach(emptyLogins)
+
   // It starts the stand-in CLI several times, and that alone takes 4.6-5.0 s on this box (measured
   // 2026-10-02, the same before and after the sync refactor): past bun's 5 s default under load.
   test('the later expiry wins either way, a stale copy never does, and a left-out login stays put', async () => {
