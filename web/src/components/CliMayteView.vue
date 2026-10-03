@@ -46,7 +46,7 @@ import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
 import OffloadStatsCard from '@/components/OffloadStatsCard.vue'
-import SideList from '@/components/side-list/SideList.vue'
+import SideBar from '@/components/side-list/SideBar.vue'
 import SideListRow from '@/components/side-list/SideListRow.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -464,12 +464,11 @@ onUnmounted(() => {
 
 <template>
   <div class="flex h-full min-h-0">
-    <!-- The same sidebar as the Sessions tab (SideList / SideListRow): a header that never scrolls
-         (title, counter, hide finished, waves) over the task list. -->
-    <aside class="min-h-0 w-88 shrink-0 overflow-hidden border-e border-border bg-sidebar">
-      <SideList :groups="sideGroups" :empty="!groups.length">
+    <!-- The same sidebar as the Sessions tab (SideBar.vue: rail, resize, grouped rows): a header
+         that never scrolls (title, counter, hide finished, waves) over the task list. -->
+    <SideBar storage-key="agenthydra.climayte" :groups="sideGroups" :empty="!groups.length">
         <template #header>
-    <header class="flex items-start justify-between gap-2 px-3 pt-2.5 pb-2">
+    <header class="flex items-start justify-between gap-2 px-3 pt-2.5 pb-2 pe-11">
       <div class="flex min-w-0 flex-1 flex-col gap-1">
         <h2 class="flex items-center gap-2 text-base font-semibold">
           <Network class="size-4.5" />
@@ -607,8 +606,7 @@ onUnmounted(() => {
             </template>
           </SideListRow>
         </template>
-      </SideList>
-    </aside>
+    </SideBar>
 
     <section class="flex min-h-0 min-w-0 flex-1 flex-col p-4">
       <OffloadStatsCard

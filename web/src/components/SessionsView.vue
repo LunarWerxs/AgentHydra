@@ -29,11 +29,10 @@ import {
   KeyRound,
   Link,
   ListTodo,
+  Loader2,
   LoaderCircle,
   MessagesSquare,
   MoreHorizontal,
-  PanelLeftClose,
-  PanelLeftOpen,
   RefreshCw,
   Search,
   Settings2,
@@ -43,7 +42,6 @@ import {
   Wrench,
   X,
 } from '@lucide/vue'
-import { useMediaQuery } from '@vueuse/core'
 import { type Component, type ComponentPublicInstance, computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
@@ -51,7 +49,7 @@ import SessionComposer, { type ComposerTarget } from '@/components/SessionCompos
 import SessionSettings from '@/components/SessionSettings.vue'
 import SessionTranscriptTurns from '@/components/SessionTranscriptTurns.vue'
 import SourceBadge from '@/components/SourceBadge.vue'
-import SideList from '@/components/side-list/SideList.vue'
+import SideBar from '@/components/side-list/SideBar.vue'
 import SideListRow from '@/components/side-list/SideListRow.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -108,7 +106,7 @@ import { useSessionSecrets } from '@/composables/useSessionSecrets'
 import { useSessionUsage } from '@/composables/useSessionUsage'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useTranscriptDisplay } from '@/composables/useTranscriptDisplay'
-import { clampWidth, SIDEBAR_DEFAULT, useUiPrefs } from '@/composables/useUiPrefs'
+import { useUiPrefs } from '@/composables/useUiPrefs'
 import type * as api from '@/lib/api'
 // Values, not types: the export menu builds its links with these at runtime. Importing the
 // module as `import type` (2026-09-26 cleanup) left the template calling an undefined `api`.
@@ -117,6 +115,8 @@ import { baseName, queueStatusMeta, shortId, timeAgo } from '@/lib/format'
 import { highlightRuns, rankByQuery, sessionSearchFields, type TextRun } from '@/lib/fuzzy'
 import { groupByProject } from '@/lib/session-groups'
 import { sessionShape } from '@/lib/session-shape'
+import { sessionSourceIcon } from '@/lib/session-source-icon'
+import type { SideListGroup } from '@/lib/side-list'
 import { cn } from '@/lib/utils'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
@@ -145,7 +145,6 @@ const {
   showThinking,
   humanOnly,
   compactTranscript,
-  sidebarWidth,
   advancedCaseSensitive,
   copyPathIncludeName,
   copyPathIncludePrompt,
@@ -433,35 +432,21 @@ const emptyBecauseOfPeriod = computed(
   () => sessionPeriod.value !== 'all' && !search.value.trim() && sessions.value.length === 0,
 )
 
-// --- sidebar: persisted drag-resize + animated collapse, auto-collapsing when narrow -------------
-const isWide = useMediaQuery('(min-width: 1024px)')
-const collapsed = ref(!isWide.value)
-watch(isWide, (wide) => {
-  collapsed.value = !wide
-})
-
-const resizing = ref(false)
-function startResize(e: PointerEvent) {
-  const startX = e.clientX
-  const startWidth = sidebarWidth.value
-  resizing.value = true
-  const onMove = (ev: PointerEvent) => {
-    sidebarWidth.value = clampWidth(startWidth + ev.clientX - startX)
-  }
-  const onUp = () => {
-    resizing.value = false
-    window.removeEventListener('pointermove', onMove)
-    window.removeEventListener('pointerup', onUp)
-  }
-  window.addEventListener('pointermove', onMove)
-  window.addEventListener('pointerup', onUp)
-}
-
-// The dragged width rides the aside as --sidebar-w (set in the template); `.sessions-sidebar-w`
-// (style.css) caps it at the viewport (a 340px sidebar on a 390px phone would crush the
-// transcript), and the collapsed rail is w-11 (44px). The width transition (`transition-width`,
-// style.css) animates the collapse toggle but is suspended during a drag so resizing tracks the
-// pointer 1:1.
+// --- the rows, grouped by project as CliMayte groups by hand-off -----------------------------------
+// Grouping is always on: the sidebar (components/side-list/SideBar.vue) is the one CliMayte runs,
+// and its header line is the project folder with a count. Body-search results and the first-load
+// skeletons are not session rows, so they leave the groups empty and ride the default slot.
+const rowKey = (s: api.SessionSummary) => `${s.source}:${s.session_id}`
+const sideGroups = computed<SideListGroup<api.SessionSummary>[]>(() =>
+  bodySearchActive.value || (sessionsLoading.value && sessions.value.length === 0)
+    ? []
+    : groupByProject(filtered.value).map((g) => ({
+        key: g.project,
+        label: g.project,
+        items: g.sessions,
+        keyOf: rowKey,
+      })),
+)
 
 // --- multi-select: pick several sessions, message them all at once - or move them ---------------
 const {
@@ -579,44 +564,20 @@ function onComposerSent(mode: 'now' | 'queued') {
 
 <template>
   <div class="flex h-full min-h-0">
-    <!-- sidebar: session list in its own scroll column; collapses to a slim rail with an
-         animated width morph (the toggle button rides the sliding right edge) -->
-    <!-- bg-sidebar, not transparent: the list is the recessed ground of the two-pane split. Without
-         its own surface every region painted --background and the whole app read as one flat sheet,
-         separated only by the hairline border. -->
-    <aside
-      class="relative min-h-0 shrink-0 overflow-hidden border-e border-border bg-sidebar"
-      :class="[collapsed ? 'w-11' : 'sessions-sidebar-w', resizing ? '' : 'transition-width duration-300 ease-in-out']"
-      :style="{ '--sidebar-w': `${sidebarWidth}px` }"
+    <!-- The sidebar CliMayte runs too (SideBar.vue): rail, resize, grouped rows. -->
+    <SideBar
+      storage-key="agenthydra.sessions"
+      :groups="sideGroups"
+      :empty="
+        !(sessionsLoading && sessions.length === 0 && !bodySearchActive) &&
+        !bodySearchActive &&
+        filtered.length === 0
+      "
+      :class="{ 'select-none': box }"
+      @pointerdown="boxPointerDown"
+      @click.capture="boxClickGuard"
+      @keydown="listKeydown"
     >
-      <IconTooltip :label="collapsed ? $t('sessions.expandSidebar') : $t('sessions.collapseSidebar')">
-        <Button
-          variant="ghost"
-          size="icon"
-          class="absolute right-2 top-1.5 z-10"
-          @click="collapsed = !collapsed"
-        >
-          <PanelLeftOpen v-if="collapsed" />
-          <PanelLeftClose v-else />
-        </Button>
-      </IconTooltip>
-
-      <!-- expanded content keeps its full width while animating so it clips, not reflows -->
-      <div
-        class="sessions-sidebar-w flex h-full min-h-0 flex-col transition-opacity duration-200"
-        :class="collapsed ? 'pointer-events-none opacity-0' : 'opacity-100'"
-      >
-        <SideList
-          :empty="
-            !(sessionsLoading && sessions.length === 0 && !bodySearchActive) &&
-            !bodySearchActive &&
-            filtered.length === 0
-          "
-          :class="{ 'select-none': box }"
-          @pointerdown="boxPointerDown"
-          @click.capture="boxClickGuard"
-          @keydown="listKeydown"
-        >
         <template #header>
         <div class="flex shrink-0 items-center gap-2 px-3 py-1.5 pe-11">
           <div class="relative flex-1">
@@ -1066,15 +1027,16 @@ function onComposerSent(mode: 'now' | 'queued') {
             </button>
           </template>
 
-          <template v-if="!bodySearchActive">
+          <template #row="{ item: s }">
             <!-- Each row owns a ContextMenu so right-click acts on the row under the pointer without
                  first selecting it (selecting would load a transcript the user never asked for).
                  The menu content only mounts while open, so the per-row cost is a reka root, not a
                  rendered menu. -->
-            <ContextMenu v-for="s in filtered" :key="`${s.source}:${s.session_id}`">
+            <ContextMenu>
               <ContextMenuTrigger as-child>
-                <!-- One line per session, as dense as a CliMayte task row (owner, 2026-10-03): the
-                     title, the few live marks, the source chip, and when it last moved. Where it
+                <!-- One line per session, laid out as a CliMayte task row (owner, 2026-10-03): a
+                     status icon, the tool as a small icon, the title, the few marks, "model ·
+                     effort" and when it last moved. Where it
                      ran, the branch, the size, the account, its parts and subagents ride on the
                      row's hover (rowHintOf); the open transcript has all of it. -->
                 <SideListRow
@@ -1083,8 +1045,6 @@ function onComposerSent(mode: 'now' | 'queued') {
                   :selected="
                     selectMode ? isChecked(s) : s.session_id === selectedId && s.source === selectedSource
                   "
-                  :active="isLive(s)"
-                  :active-label="$t('sessions.agentStatusWorking')"
                   :hint="rowHintOf(s)"
                   :dim="s.done && s.session_id !== selectedId"
                   :struck="s.done"
@@ -1093,6 +1053,28 @@ function onComposerSent(mode: 'now' | 'queued') {
                   :time="s.last_activity_at"
                   @click="rowClick(s, $event)"
                 >
+                  <!-- working: the spinner; done: the done mark; otherwise a quiet dot whose colour is
+                       how fresh the last turn is (the same fact as the time on the right) -->
+                  <template #status>
+                    <span class="grid size-3.5 shrink-0 place-items-center">
+                      <Loader2
+                        v-if="isLive(s)"
+                        class="size-3.5 animate-spin text-primary"
+                        :aria-label="$t('sessions.agentStatusWorking')"
+                      />
+                      <CircleCheck
+                        v-else-if="s.done"
+                        class="size-3.5 text-success"
+                        :aria-label="$t('sessions.done')"
+                      />
+                      <span
+                        v-else
+                        class="size-1.5 rounded-full"
+                        :class="ACTIVITY_CLASS[activityOf(s)]"
+                        :title="$t(ACTIVITY_LABEL[activityOf(s)])"
+                      ></span>
+                    </span>
+                  </template>
                   <template #badge>
                     <span
                       v-if="selectMode"
@@ -1106,10 +1088,11 @@ function onComposerSent(mode: 'now' | 'queued') {
                     >
                       <Check v-if="isChecked(s)" class="size-3" />
                     </span>
-                    <CircleCheck
-                      v-else-if="s.done"
-                      class="size-3.5 shrink-0 text-success"
-                      :aria-label="$t('sessions.done')"
+                    <component
+                      :is="sessionSourceIcon(s.source, rowSourceLabel(s))"
+                      class="size-3.5 shrink-0 text-muted-foreground"
+                      :aria-label="rowSourceLabel(s)"
+                      :title="rowSourceLabel(s)"
                     />
                   </template>
                   <template #title>
@@ -1187,26 +1170,6 @@ function onComposerSent(mode: 'now' | 'queued') {
                       class="shrink-0 text-2xs text-muted-foreground tabular-nums"
                       :title="copyWhyOf(s)"
                     >{{ $t('sessions.copyOf', { i: s.copy_index, n: s.copy_count }) }}</span>
-                  </template>
-                  <template #trailing>
-                    <!-- Only when it tells rows apart: under a one-source filter every row would wear
-                         the same chip, so it shows just where a tool names itself. -->
-                    <SourceBadge
-                      v-if="sessionSourceFilter === 'all' || rowSourceLabel(s) !== sourceLabel(s.source)"
-                      :source="s.source"
-                      class="shrink-0"
-                    >
-                      {{ rowSourceLabel(s) }}
-                    </SourceBadge>
-                  </template>
-                  <!-- the dot rides the timestamp it is derived from, so "green" and "2m ago" are
-                       obviously the same fact rather than two claims to reconcile -->
-                  <template #time-prefix>
-                    <span
-                      class="size-1.5 shrink-0 rounded-full"
-                      :class="ACTIVITY_CLASS[activityOf(s)]"
-                      :title="$t(ACTIVITY_LABEL[activityOf(s)])"
-                    ></span>
                   </template>
                 </SideListRow>
               </ContextMenuTrigger>
@@ -1371,19 +1334,7 @@ function onComposerSent(mode: 'now' | 'queued') {
               </ContextMenuContent>
             </ContextMenu>
           </template>
-        </SideList>
-      </div>
-
-      <!-- drag-resize handle (double-click resets) -->
-      <div
-        v-show="!collapsed"
-        class="absolute inset-y-0 right-0 z-10 w-1.5 cursor-col-resize touch-none transition-colors"
-        :class="resizing ? 'bg-accent' : 'hover:bg-accent/60'"
-        :title="$t('sessions.resizeSidebar')"
-        @pointerdown.prevent="startResize"
-        @dblclick="sidebarWidth = SIDEBAR_DEFAULT"
-      />
-    </aside>
+    </SideBar>
 
     <!-- detail: its own scroll column, composer pinned at the bottom -->
     <section class="flex min-h-0 min-w-0 flex-1 flex-col">
