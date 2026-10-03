@@ -180,7 +180,7 @@ export default {
   // One line each (owner, 2026-10-01: the dialog was "verbose as FUCK"); the long version is
   // cloud/login-sync-worker/README.md.
   syncIntro:
-    'Sign in on one PC and the other gets the login within a minute. The store only holds encrypted copies.',
+    'Sign in or log out on one PC and the other follows within a minute; an account signed in on both is one login. The store only holds encrypted copies.',
   // Says what goes wrong otherwise: "keep it open on one PC at a time" alone was read twice and
   // still left "what happens if I do not?" (SUE round, 2026-10-01).
   syncDesktopNote:
@@ -242,6 +242,9 @@ export default {
     'A newer login is in the store. It lands here once this desktop instance is closed.',
   syncStateFed: 'From desktop',
   syncStateFedHint: 'This CLI login comes from its desktop instance, which is the one that syncs.',
+  syncStateSignedOut: 'Signed out',
+  syncStateSignedOutHint:
+    'Signed out (logged out on one of your PCs, or ended by Anthropic), so there is nothing to sync. Sign it in again and the next sync signs your other PC in too.',
   syncStateProblem: 'Can’t sync',
   syncInclude: 'Sync this login on this PC',
   syncRecent: 'Recent',
@@ -249,5 +252,7 @@ export default {
   syncEventPulled: 'updated here',
   syncEventCreated: 'added here',
   syncEventSkipped: 'skipped',
+  syncEventSignedOut: 'signed out',
+  syncEventMerged: 'merged',
   syncEventError: 'error',
 }

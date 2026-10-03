@@ -22,6 +22,7 @@ import {
   joinLoginSync,
   loginSyncPairingCode,
   loginSyncStatus,
+  noteLoggedOutHere,
   runLoginSync,
   setLoginSyncEnabled,
   setLoginSyncExcluded,
@@ -466,8 +467,8 @@ app.post('/api/cli-instances/:id/logout', (c) => {
   const result = logoutCliInstance(id)
   if (result.ok) {
     dropCachedUsage(cliKey(id), { keepLastKnown: true })
-    // Signed out here on purpose: login sync must not sign it straight back in from the store.
-    setLoginSyncExcluded(id, true)
+    // Signed out here on purpose: login sync signs the other PCs out of it too.
+    noteLoggedOutHere(id)
   }
   return c.json(result)
 })

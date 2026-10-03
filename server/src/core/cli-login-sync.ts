@@ -8,12 +8,19 @@
 // refreshes (the #88 symptom). Sync closes that gap: the PC that refreshed uploads the new login and
 // the other lands it within a sync (SYNC_EVERY_MS).
 //
-// THE STORE holds versioned blobs keyed by CLI instance id, written compare-and-swap on the version.
-// It only ever holds ciphertext: each login is AES-256-GCM encrypted under a 32-byte key that lives on
-// the PCs (DPAPI-sealed in <CONFIG_DIR>/login-sync.json) with its instance id as associated data, so
-// a blob cannot be passed off as another login. The Worker checks a bearer token against the SHA-256
-// it was deployed with. Key, token and address travel between PCs only inside the pairing code the
-// owner copies from the Login sync dialog.
+// THE STORE holds versioned blobs keyed by row id, written compare-and-swap on the version. It only
+// ever holds ciphertext: each login is AES-256-GCM encrypted under a 32-byte key that lives on the PCs
+// (DPAPI-sealed in <CONFIG_DIR>/login-sync.json) with its row id as associated data, so a blob cannot
+// be passed off as another login. The Worker checks a bearer token against the SHA-256 it was
+// deployed with. Key, token and address travel between PCs only inside the pairing code the owner
+// copies from the Login sync dialog.
+//
+// ONE ROW PER ACCOUNT (owner, 2026-10-02: "if I have the same [email] logged in on this PC, don't
+// sync them twice. Combine them into one"). A CLI row is named by the instance id of the PC that
+// sent it first, and carries its account as `meta.acct` (an HMAC of the email under the sync key, so
+// the store never holds the address). An instance here whose account already has a row uses that
+// row (its `slot`) instead of adding its own; where two rows of one account exist, every PC picks the
+// same one (the later expiry, then the lower id) and the PC that sent the other removes it.
 //
 // ONE PASS (every SYNC_EVERY_MS while on, and on "Sync now"): list the store; for each login the copy
 // whose access token expires later is the newer one (a refresh pushes the expiry out), so it wins.
@@ -21,7 +28,13 @@
 // last wrote); a newer copy in the store is landed here with the import's guards (landLogin: never
 // under a running session, never over another account, never over a newer copy). A login in the
 // store with no instance here gets one, with the same id and number. A login left out here
-// (`excluded`: "Stop syncing", a Log out, a move away) is neither uploaded nor landed.
+// (`excluded`: "Stop syncing", a move away) is neither uploaded nor landed.
+//
+// A LOG OUT REACHES EVERY PC (owner, 2026-10-02: "if I log something out, it logs out on both"). A
+// login this PC held and shared that is gone here (AgentHydra's Log out, or `claude /logout`) turns
+// its row into a signed-out marker (`meta.signedOut`); the other PCs sign out of it, unless theirs was
+// signed in after the logout, which then goes up in its place. Signing in again anywhere brings it
+// back everywhere. Deleting an instance stays on its PC: its row is neither marked nor brought back.
 //
 // DESKTOP LOGINS ride the same pass, store and key (core/desktop-login-sync.ts): keyed by account uuid
 // with meta.kind 'desktop', landed only into closed profiles, never over a login a PC signed in on
@@ -35,16 +48,34 @@
 // ⛔ SECRETS: the token and key are read only to make requests and encrypt; status answers never
 // carry them. The pairing code is the one answer that does, for the owner's copy button.
 
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+} from 'node:crypto'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { clearRemote } from '../climayte-remote'
 import { CONFIG_DIR } from '../config'
 import { seal, unseal } from '../dpapi-seal.mjs'
-import type { CliLoginSyncStatus } from '../types'
+import type { CliInstance, CliLoginSyncStatus } from '../types'
+import { dropCachedUsage } from '../usage-cache'
+import { cliKey, desktopKey } from '../usage-service'
 import { listCliInstances } from './cli-instances'
 import {
+  cliLoginEmail,
   credentialExpiry,
   credPath,
   landLogin,
@@ -52,6 +83,7 @@ import {
   readPortableLogin,
   readText,
 } from './cli-login-move'
+import { logoutCliInstance } from './cli-logout'
 import { syncQueue } from './climayte-queue-sync'
 import { hasOwnCliLogin } from './desktop-cli-feed'
 import {
@@ -329,8 +361,19 @@ export function queueSharingOn(): boolean {
   return !!c?.enabled && c.shareQueue === true
 }
 
-/** Leave one login out of sync on this PC (or put it back). A Log out here and a move away leave it
- *  out, so the store does not sign it straight back in. */
+/** Logins logged out here on purpose (AgentHydra's Log out: a CLI instance id or a desktop account
+ *  uuid), so the next pass marks them signed out in the store at once instead of waiting a second
+ *  pass to be sure the credential is really gone. */
+const loggedOutHere = new Set<string>()
+
+/** A login was logged out on this PC: every other PC signs out of it too (see the header). */
+export function noteLoggedOutHere(id: string): void {
+  loggedOutHere.add(id)
+  if (readConfig()?.enabled) void runLoginSync().catch(() => {})
+}
+
+/** Leave one login out of sync on this PC (or put it back). A move away and a deleted instance leave
+ *  it out, so the store neither signs it straight back in nor signs the other PCs out of it. */
 export function setLoginSyncExcluded(id: string, excluded: boolean): void {
   const c = readConfig()
   if (!c) return
@@ -376,9 +419,54 @@ interface StoreRow {
   kind: string
   /** A desktop login's profile folder name on the PC that sent it. */
   name: string | null
+  /** A CLI login's account (acctKey of its email): the row's meta, else learned by opening it. */
+  acct: string | null
+  /** When its access token expires (ms) as the row says; 0 for a signed-out marker. */
+  expiresAt: number
+  /** When it was last written (ms, by the writing PC's clock). */
+  at: number
+  /** Signed out everywhere: a PC logged it out, and the others sign out of it too. */
+  signedOut: boolean
 }
 /** What the store held at the last pass, for the status's per-login rows. */
 let lastStore = new Map<string, StoreRow>()
+/** Each CLI instance's row at the last pass: its own id, or its account's row from another PC. */
+let lastSlots = new Map<string, string>()
+/** CLI rows that are no separate login here (a second row of an account an instance here has, a
+ *  signed-out marker, one whose instance was deleted here): the status leaves them out. */
+let lastHidden = new Set<string>()
+/** Logins this PC held that were missing at a pass, and since when (see confirmGone). */
+const missingSince = new Map<string, number>()
+/** How long a login must stay missing before it counts as logged out here. */
+const MISSING_FOR_MS = 10_000
+/** Accounts learned by opening rows written before rows carried `meta.acct`, by `<id>:<version>`. */
+const learnedAcct = new Map<string, string | null>()
+
+/** A CLI login's account as the store sees it: its email under the sync key (see the header). */
+const acctKey = (key: Buffer, email: string): string =>
+  createHmac('sha256', key).update(`cli-account:${email.toLowerCase()}`).digest('hex').slice(0, 32)
+
+/** A login this PC held is missing now. True once it is still missing a pass later, or at once after
+ *  AgentHydra's Log out here: a credential caught mid-rewrite must never sign an account out
+ *  everywhere. */
+function confirmGone(id: string): boolean {
+  if (loggedOutHere.has(id)) return true
+  const first = missingSince.get(id)
+  if (first === undefined) missingSince.set(id, Date.now())
+  return first !== undefined && Date.now() - first >= MISSING_FOR_MS
+}
+const clearGone = (id: string): void => {
+  missingSince.delete(id)
+  loggedOutHere.delete(id)
+}
+
+const mtimeOf = (path: string): number => {
+  try {
+    return statSync(path).mtimeMs
+  } catch {
+    return 0
+  }
+}
 
 /** One sync pass (see the header). Never two at once: a second call shares the running one. */
 export function runLoginSync(): Promise<LoginSyncPassResult> {
@@ -398,19 +486,26 @@ async function uploadLogin(
   login: PortableLogin,
   expect: number,
 ): Promise<void> {
+  const acct = login.email ? acctKey(l.key, login.email) : null
+  const expiresAt = credentialExpiry(login.credentials)
+  const at = Date.now()
   const r = await call(l, 'PUT', `/v1/logins/${login.id}`, {
     version: expect,
     blob: sealLogin(l.key, login),
-    meta: {
-      num: login.num,
-      expiresAt: credentialExpiry(login.credentials),
-      by,
-      at: Date.now(),
-    },
+    meta: { num: login.num, acct, expiresAt, by, at },
   })
   if (r.status === 200 && typeof r.json?.version === 'number') {
     c.state[login.id] = { version: r.json.version, hash: sha256(login.credentials) }
-    store.set(login.id, { version: r.json.version, num: login.num, kind: 'cli', name: null })
+    store.set(login.id, {
+      version: r.json.version,
+      num: login.num,
+      kind: 'cli',
+      name: null,
+      acct,
+      expiresAt,
+      at,
+      signedOut: false,
+    })
     out.pushed++
     note(c, login.num, 'pushed', 'Uploaded this PC’s newer login.')
   } else if (r.status === 409) {
@@ -440,17 +535,21 @@ async function downloadLogin(
   return login
 }
 
+/** Sign a store login in here. `login.id` names the instance it lands in (landLogin finds it by id,
+ *  else by account, else makes it); `slot` the store row it came from, which the agreement is kept
+ *  under. */
 async function landPortableLogin(
   c: SyncConfig,
   out: LoginSyncPassResult,
   login: PortableLogin,
   version: number,
+  slot: string,
 ): Promise<void> {
   const row = await landLogin(login)
   if (row.written) {
     // The hash of what was landed, not of the file now: `claude auth status` (landLogin's check)
     // can refresh the login, and that newer file must read as a change here and go up.
-    c.state[login.id] = { version, hash: sha256(login.credentials) }
+    c.state[slot] = { version, hash: sha256(login.credentials) }
     out.landed++
     note(
       c,
@@ -464,73 +563,290 @@ async function landPortableLogin(
   }
 }
 
+/** Fill in the account of CLI rows written before rows carried it, opening each once per version. */
+async function learnAccounts(l: Live, store: Map<string, StoreRow>): Promise<void> {
+  for (const [id, r] of store) {
+    if (r.kind === 'desktop' || r.acct || r.signedOut) continue
+    const k = `${id}:${r.version}`
+    if (!learnedAcct.has(k)) {
+      const got = await call(l, 'GET', `/v1/logins/${id}`)
+      const login =
+        got.status === 200 && typeof got.json?.blob === 'string'
+          ? openLogin(l.key, id, got.json.blob)
+          : null
+      learnedAcct.set(k, login?.email ? acctKey(l.key, login.email) : null)
+    }
+    r.acct = learnedAcct.get(k) ?? null
+  }
+}
+
+/** Of two rows of one account, the one every PC keeps: a live one over a signed-out marker, then the
+ *  later expiry, then the lower id. */
+function keeps(store: Map<string, StoreRow>, a: string, b: string): boolean {
+  const x = store.get(a)!
+  const y = store.get(b)!
+  if (x.signedOut !== y.signedOut) return !x.signedOut
+  if (x.expiresAt !== y.expiresAt) return x.expiresAt > y.expiresAt
+  return a < b
+}
+
+/** Each CLI instance's row (see the header): its account's row when the store has one, else its own
+ *  id. A login fed by its desktop instance has none of its own and keeps its id; of two instances
+ *  here on one account, the first takes the account's row. */
+function slotsFor(
+  key: Buffer,
+  store: Map<string, StoreRow>,
+  insts: CliInstance[],
+): Map<string, string> {
+  const byAcct = new Map<string, string>()
+  for (const [id, r] of store) {
+    if (r.kind === 'desktop' || !r.acct) continue
+    const kept = byAcct.get(r.acct)
+    if (!kept || keeps(store, id, kept)) byAcct.set(r.acct, id)
+  }
+  const local = new Set(insts.map((i) => i.id))
+  const taken = new Set<string>()
+  const slots = new Map<string, string>()
+  for (const i of insts) {
+    const email = cliLoginEmail(i)
+    const fed = !!i.associatedDesktopDir && !hasOwnCliLogin(i.configDir)
+    const row = !fed && email ? byAcct.get(acctKey(key, email)) : undefined
+    const slot = row && (row === i.id || !local.has(row)) && !taken.has(row) ? row : i.id
+    taken.add(slot)
+    slots.set(i.id, slot)
+  }
+  return slots
+}
+
+/** Upload this instance's login to its row; a login that cannot go says why. */
+async function uploadHere(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  out: LoginSyncPassResult,
+  by: string,
+  inst: CliInstance,
+  slot: string,
+  expect: number,
+): Promise<void> {
+  const read = readPortableLogin(inst.id, { whileRunning: true })
+  if ('login' in read) await uploadLogin(l, c, store, out, by, { ...read.login, id: slot }, expect)
+  else out.problems.push(`#${inst.num}: ${read.error}`)
+}
+
+/** Turn a row into the signed-out marker (see the header): the other PCs sign out of it. */
+async function markSignedOut(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  out: LoginSyncPassResult,
+  by: string,
+  row: {
+    id: string
+    kind: 'cli' | 'desktop'
+    num: number | null
+    name: string | null
+    acct: string | null
+  },
+  expect: number,
+): Promise<number | null> {
+  const at = Date.now()
+  const meta =
+    row.kind === 'desktop'
+      ? { kind: 'desktop', name: row.name, num: row.num }
+      : { acct: row.acct, num: row.num }
+  const marker = { id: row.id, signedOut: true }
+  const r = await call(l, 'PUT', `/v1/logins/${row.id}`, {
+    version: expect,
+    blob: sealLogin(l.key, marker),
+    meta: { ...meta, signedOut: true, expiresAt: 0, by, at },
+  })
+  if (r.status === 200 && typeof r.json?.version === 'number') {
+    const v = r.json.version as number
+    c.state[row.id] = { version: v, hash: '' }
+    store.set(row.id, { ...row, version: v, expiresAt: 0, at, signedOut: true })
+    out.pushed++
+    note(c, row.num, 'signedOut', 'Logged out here, so your other PCs sign out of it too.')
+    return v
+  }
+  if (r.status === 409) {
+    out.problems.push(`#${row.num}: changed in the store meanwhile; next pass decides.`)
+    return null
+  }
+  throw httpError(`Signing #${row.num} out`, r)
+}
+
+/** No credential file here. One this PC held and shared is gone: logged out here, so its row turns
+ *  into the signed-out marker (confirmGone first). Otherwise the store's live copy signs it in. */
+async function syncWithoutLogin(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  out: LoginSyncPassResult,
+  by: string,
+  inst: CliInstance,
+  slot: string,
+): Promise<void> {
+  const remote = store.get(slot)
+  if (!remote) return
+  if (remote.signedOut) {
+    c.state[slot] = { version: remote.version, hash: '' }
+    clearGone(inst.id)
+    return
+  }
+  if (c.state[slot]?.hash) {
+    if (!confirmGone(inst.id)) return
+    const row = {
+      id: slot,
+      kind: 'cli' as const,
+      num: inst.num ?? null,
+      name: null,
+      acct: remote.acct,
+    }
+    if ((await markSignedOut(l, c, store, out, by, row, remote.version)) !== null)
+      clearGone(inst.id)
+    return
+  }
+  const login = await downloadLogin(l, store, c, out, slot)
+  if (login) await landPortableLogin(c, out, { ...login, id: inst.id }, remote.version, slot)
+}
+
+/** The row says signed out (another PC logged it out) and this PC holds a live login for it. A login
+ *  signed in here after the logout is the newer word and goes up in its place; the one this PC last
+ *  shared, or any written before the logout, signs out here (once no session runs on it). */
+async function meetSignOut(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  out: LoginSyncPassResult,
+  by: string,
+  inst: CliInstance,
+  slot: string,
+  hash: string,
+): Promise<void> {
+  const remote = store.get(slot)!
+  const st = c.state[slot]
+  // This PC already took that logout, so any login here now is a new sign-in.
+  const signedInSince =
+    st?.version === remote.version ||
+    (st?.hash !== hash && mtimeOf(credPath(inst.configDir)) > remote.at)
+  if (signedInSince) {
+    await uploadHere(l, c, store, out, by, inst, slot, remote.version)
+    return
+  }
+  // A session runs on it (it would write the login back): the next pass tries again.
+  if (!logoutCliInstance(inst.id).ok) return
+  dropCachedUsage(cliKey(inst.id), { keepLastKnown: true })
+  c.state[slot] = { version: remote.version, hash: '' }
+  note(c, inst.num ?? null, 'signedOut', 'Logged out on another PC, so signed out here too.')
+}
+
 async function syncCliInstance(
   l: Live,
   c: SyncConfig,
   store: Map<string, StoreRow>,
   out: LoginSyncPassResult,
   by: string,
-  excluded: Set<string>,
-  inst: ReturnType<typeof listCliInstances>[number],
+  inst: CliInstance,
+  slot: string,
 ): Promise<void> {
-  if (excluded.has(inst.id)) return
-  const remote = store.get(inst.id)
-  const text = readText(credPath(inst.configDir))
+  const path = credPath(inst.configDir)
+  const text = readText(path)
   if (!text) {
-    // Signed out here and not left out: the store's copy signs it in.
-    if (remote) {
-      const login = await downloadLogin(l, store, c, out, inst.id)
-      if (login) await landPortableLogin(c, out, login, remote.version)
-    }
+    // A file there that did not read (held mid-write) is left for the next pass.
+    if (!existsSync(path)) await syncWithoutLogin(l, c, store, out, by, inst, slot)
     return
   }
+  clearGone(inst.id)
+  const remote = store.get(slot)
+  const st = c.state[slot]
   const hash = sha256(text)
-  const st = c.state[inst.id]
+  // The CLI keeps the file but empties its tokens when Anthropic ends the login (revoked, or its
+  // refresh refused): signed out here, and nothing to share. Its row says so (loginSyncStatus); it is
+  // no sync failure, so it never takes the dialog's error line (owner, 2026-10-02: one dead login read
+  // as "sync is broken"). Another PC's live copy still lands over it below; a new sign-in here
+  // changes the file and goes up.
+  const hollow = !hasOwnCliLogin(inst.configDir)
+  if (remote?.signedOut) {
+    if (!hollow) await meetSignOut(l, c, store, out, by, inst, slot, hash)
+    return
+  }
   if (remote && st && st.version === remote.version) {
-    if (st.hash === hash) {
-      out.unchanged++
-      return
-    }
-    const read = readPortableLogin(inst.id, { whileRunning: true })
-    if ('login' in read) await uploadLogin(l, c, store, out, by, read.login, remote.version)
-    else out.problems.push(`#${inst.num}: ${read.error}`)
+    if (st.hash !== hash && !hollow)
+      await uploadHere(l, c, store, out, by, inst, slot, remote.version)
+    else out.unchanged++
     return
   }
   if (!remote) {
-    const read = readPortableLogin(inst.id, { whileRunning: true })
-    if ('login' in read) await uploadLogin(l, c, store, out, by, read.login, 0)
-    // A hollow login is not worth sharing; nothing to report until it is signed in properly.
+    if (!hollow) await uploadHere(l, c, store, out, by, inst, slot, 0)
     return
   }
   // The store moved on since this PC last agreed with it (or never has): the newer copy wins.
-  const theirs = await downloadLogin(l, store, c, out, inst.id)
+  const theirs = await downloadLogin(l, store, c, out, slot)
   if (!theirs) return
   if (theirs.credentials === text) {
-    c.state[inst.id] = { version: remote.version, hash }
+    c.state[slot] = { version: remote.version, hash }
     out.unchanged++
     return
   }
-  if (credentialExpiry(text) > credentialExpiry(theirs.credentials)) {
-    const read = readPortableLogin(inst.id, { whileRunning: true })
-    if ('login' in read) await uploadLogin(l, c, store, out, by, read.login, remote.version)
-    else out.problems.push(`#${inst.num}: ${read.error}`)
-  } else await landPortableLogin(c, out, theirs, remote.version)
+  if (credentialExpiry(text) > credentialExpiry(theirs.credentials))
+    await uploadHere(l, c, store, out, by, inst, slot, remote.version)
+  else await landPortableLogin(c, out, { ...theirs, id: inst.id }, remote.version, slot)
 }
 
+/** This PC's own row of an account whose row is another (its instance took that one): removed once
+ *  this PC agrees with the kept row, so the account is one row again. */
+async function dropOwnDuplicate(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  inst: CliInstance,
+  slot: string,
+): Promise<void> {
+  const own = store.get(inst.id)
+  if (slot === inst.id || !own || own.kind === 'desktop') return
+  if (c.state[slot]?.version !== store.get(slot)?.version) return
+  const r = await call(l, 'DELETE', `/v1/logins/${inst.id}?version=${own.version}`)
+  if (r.status !== 200) return
+  store.delete(inst.id)
+  delete c.state[inst.id]
+  note(c, inst.num ?? null, 'merged', 'Two copies of one account in the store are one again.')
+}
+
+/** Logins only the store holds: an instance for each here, same id and number. Not a row that is no
+ *  separate login here (lastHidden), nor one left out. */
 async function syncStoreOnlyLogins(
   l: Live,
   c: SyncConfig,
   store: Map<string, StoreRow>,
   out: LoginSyncPassResult,
-  here: Set<string>,
+  insts: CliInstance[],
+  slots: Map<string, string>,
   excluded: Set<string>,
 ): Promise<void> {
-  // Logins only the store holds: an instance for each here, same id and number.
-  for (const [id, remote] of store) {
-    if (here.has(id) || excluded.has(id) || remote.kind === 'desktop') continue
-    const login = await downloadLogin(l, store, c, out, id)
-    if (login) await landPortableLogin(c, out, login, remote.version)
+  const used = new Set(slots.values())
+  const accts = new Set<string>()
+  for (const i of insts) {
+    const email = cliLoginEmail(i)
+    if (email) accts.add(acctKey(l.key, email))
   }
+  const hidden = new Set<string>()
+  for (const [id, remote] of store) {
+    if (remote.kind === 'desktop' || used.has(id)) continue
+    // `c.state[id]` with no instance here holding it: this PC had it and deleted its instance.
+    if (
+      remote.signedOut ||
+      excluded.has(id) ||
+      (remote.acct && accts.has(remote.acct)) ||
+      c.state[id]
+    ) {
+      hidden.add(id)
+      continue
+    }
+    const login = await downloadLogin(l, store, c, out, id)
+    if (login) await landPortableLogin(c, out, login, remote.version, id)
+  }
+  lastHidden = hidden
 }
 
 async function syncDesktopLoginsPass(
@@ -567,6 +883,10 @@ async function syncDesktopLoginsPass(
             num: login.num,
             kind: 'desktop',
             name: login.name,
+            acct: null,
+            expiresAt: login.expiresAt,
+            at: Date.now(),
+            signedOut: false,
           })
           out.pushed++
           note(c, login.num, 'pushed', 'Uploaded this PC’s newer desktop login.')
@@ -585,6 +905,19 @@ async function syncDesktopLoginsPass(
         if (!login) out.problems.push(`${id}: the store's copy does not open with this PC's key.`)
         return login
       },
+      markSignedOut: (uuid: string, num: number | null, name: string | null, expect: number) =>
+        markSignedOut(
+          l,
+          c,
+          store,
+          out,
+          by,
+          { id: uuid, kind: 'desktop', num, name, acct: null },
+          expect,
+        ),
+      confirmGone,
+      clearGone,
+      dropUsage: (dir: string) => dropCachedUsage(desktopKey(dir), { keepLastKnown: true }),
     })
   } catch (err) {
     const msg = `Desktop logins: ${err instanceof Error ? err.message : String(err)}`
@@ -611,15 +944,24 @@ async function executeSyncPass(
         num: typeof r.meta?.num === 'number' ? r.meta.num : null,
         kind: r.meta?.kind === 'desktop' ? 'desktop' : 'cli',
         name: typeof r.meta?.name === 'string' ? r.meta.name : null,
+        acct: typeof r.meta?.acct === 'string' ? r.meta.acct : null,
+        expiresAt: typeof r.meta?.expiresAt === 'number' ? r.meta.expiresAt : 0,
+        at: typeof r.meta?.at === 'number' ? r.meta.at : 0,
+        signedOut: r.meta?.signedOut === true,
       })
     lastStore = store
+    await learnAccounts(l, store)
 
-    const here = new Set<string>()
-    for (const inst of listCliInstances()) {
-      here.add(inst.id)
-      await syncCliInstance(l, c, store, out, by, excluded, inst)
+    const insts = listCliInstances()
+    const slots = slotsFor(l.key, store, insts)
+    lastSlots = slots
+    for (const inst of insts) {
+      if (excluded.has(inst.id)) continue
+      const slot = slots.get(inst.id)!
+      await syncCliInstance(l, c, store, out, by, inst, slot)
+      await dropOwnDuplicate(l, c, store, inst, slot)
     }
-    await syncStoreOnlyLogins(l, c, store, out, here, excluded)
+    await syncStoreOnlyLogins(l, c, store, out, insts, slots, excluded)
     await syncDesktopLoginsPass(l, c, store, excluded, out, by)
     c.lastError = out.problems.length ? out.problems[0]! : null
   } catch (err) {
@@ -703,14 +1045,18 @@ export function loginSyncStatus(): CliLoginSyncStatus {
   const logins: CliLoginSyncStatus['logins'] = []
   const seen = new Set<string>()
   for (const i of listCliInstances()) {
+    // Its row: its own, or its account's row from another PC (one row per account).
+    const slot = lastSlots.get(i.id) ?? i.id
     seen.add(i.id)
-    const remote = lastStore.get(i.id)
+    seen.add(slot)
+    const remote = lastStore.get(slot)
     const file = !!readText(credPath(i.configDir))
-    // Here but never in the store: say why when this PC's copy cannot go (a hollow login).
-    const read = file && !remote ? readPortableLogin(i.id, { whileRunning: true }) : null
-    // A login it takes from its desktop instance (desktop-cli-feed.ts) has no refresh token by
-    // design: the desktop login is the one that syncs.
-    const fed = file && !!i.associatedDesktopDir && !hasOwnCliLogin(i.configDir)
+    // A credential file with no refresh token: a login it takes from its desktop instance
+    // (desktop-cli-feed.ts) by design, the desktop login being the one that syncs; else one whose
+    // tokens the CLI emptied when Anthropic ended it, waiting for a new sign-in.
+    const hollow = file && !hasOwnCliLogin(i.configDir)
+    const fed = hollow && !!i.associatedDesktopDir
+    const signedOut = (hollow && !fed) || (!file && !!remote?.signedOut)
     logins.push({
       id: i.id,
       kind: 'cli',
@@ -719,9 +1065,14 @@ export function loginSyncStatus(): CliLoginSyncStatus {
       here: i.loggedIn || file,
       inStore: !!remote,
       excluded: excluded.has(i.id),
-      inSync: !!remote && c.state[i.id]?.version === remote.version,
-      problem: !fed && read && 'error' in read ? read.error : null,
-      note: fed ? 'fed' : null,
+      inSync:
+        file &&
+        !hollow &&
+        !!remote &&
+        !remote.signedOut &&
+        c.state[slot]?.version === remote.version,
+      problem: null,
+      note: fed ? 'fed' : signedOut ? 'signedOut' : null,
     })
   }
   // Desktop profiles signed in here, by account (desktop-login-sync.ts).
@@ -747,7 +1098,7 @@ export function loginSyncStatus(): CliLoginSyncStatus {
     })
   }
   for (const [id, remote] of lastStore)
-    if (!seen.has(id))
+    if (!seen.has(id) && !lastHidden.has(id) && !remote.signedOut)
       logins.push({
         id,
         kind: remote.kind === 'desktop' ? 'desktop' : 'cli',

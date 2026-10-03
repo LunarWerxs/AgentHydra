@@ -8,7 +8,7 @@
 // other PC is played by writing to the store with the key from this PC's pairing code.
 
 import { afterAll, describe, expect, test } from 'bun:test'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCliInstance, deleteCliInstance, getCliInstance } from '../src/core/cli-instances'
@@ -17,6 +17,8 @@ import {
   configureLoginSync,
   disconnectLoginSync,
   loginSyncPairingCode,
+  loginSyncStatus,
+  noteLoggedOutHere,
   openLogin,
   runLoginSync,
   sealLogin,
@@ -123,11 +125,115 @@ describe('login sync between two PCs', () => {
       await runLoginSync()
       expect(here()).toBe(creds(3000))
       expect((await inStore()).login.credentials).toBe(creds(3000))
+      // Anthropic ended the login: the CLI empties its tokens and keeps the file. Nothing to share
+      // and no sync error (one dead login read as "sync is broken"); its own row says signed out.
+      writeFileSync(
+        join(dir, '.credentials.json'),
+        JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: '', expiresAt: 0 } }),
+      )
+      await runLoginSync()
+      expect(loginSyncStatus().lastError).toBeNull()
+      expect(loginSyncStatus().logins.find((l) => l.id === id)?.note).toBe('signedOut')
+      expect((await inStore()).login.credentials).toBe(creds(3000))
+      // Signed in again here: that login goes up.
+      writeFileSync(join(dir, '.credentials.json'), creds(4000))
+      await runLoginSync()
+      expect((await inStore()).login.credentials).toBe(creds(4000))
       // Left out on this PC: a newer copy in the store does not land.
       setLoginSyncExcluded(id, true)
       await otherPc(9000)
       await runLoginSync()
-      expect(here()).toBe(creds(3000))
+      expect(here()).toBe(creds(4000))
+    } finally {
+      disconnectLoginSync()
+      deleteCliInstance(id, getCliInstance(id)?.name)
+      process.env.AGENTHYDRA_CLAUDE_PATH = claudeWas
+      rmSync(fake.dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  // Owner, 2026-10-02: the same email on both PCs must be one login, not two, and a log out on one
+  // PC must sign the other out too. The other PC is played by writing to the store.
+  test('one email signed in on both PCs is one row, and a log out on either reaches the other', async () => {
+    const fake = refreshingClaude()
+    const claudeWas = process.env.AGENTHYDRA_CLAUDE_PATH
+    process.env.AGENTHYDRA_CLAUDE_PATH = fake.path
+    const made = createCliInstance('both@example.com (Pro)')
+    const id = (made.data as { id: string }).id
+    const dir = getCliInstance(id)!.configDir
+    const theirId = '00000000-0000-4000-8000-000000000001'
+    try {
+      writeFileSync(join(dir, '.credentials.json'), creds(1000))
+      writeFileSync(
+        join(dir, '.claude.json'),
+        JSON.stringify({ oauthAccount: { emailAddress: 'both@example.com' } }),
+      )
+      expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+      await runLoginSync()
+      const key = Buffer.from(
+        JSON.parse(
+          Buffer.from(loginSyncPairingCode()!.slice('ahsync1:'.length), 'base64url').toString(),
+        ).k,
+        'base64',
+      )
+      const mine = await store('GET', `/v1/logins/${id}`)
+      const rows = async () =>
+        ((await store('GET', '/v1/logins')).json.logins as any[]).map((r) => r.id)
+      // The other PC signed the same email in on its own instance, with a later expiry, and sent it
+      // before it knew of this PC's row (the way a PC syncing before this change did).
+      const theirs: PortableLogin = {
+        ...openLogin(key, id, mine.json.blob)!,
+        id: theirId,
+        num: null,
+        credentials: creds(5000),
+      }
+      const put = await store('PUT', `/v1/logins/${theirId}`, {
+        version: 0,
+        blob: sealLogin(key, theirs),
+        meta: { num: null, expiresAt: 5000, acct: mine.json.meta.acct },
+      })
+      expect(put.status).toBe(200)
+      await runLoginSync()
+      // One instance here, on the newer login, and one row left in the store.
+      expect(readFileSync(join(dir, '.credentials.json'), 'utf8')).toBe(creds(5000))
+      expect((await rows()).filter((r) => r === id || r === theirId)).toEqual([theirId])
+      // And one row in the dialog: the store's copy is this instance's, not a second login (the
+      // first test's row is still in the shared store, so only these two ids are counted).
+      expect(
+        loginSyncStatus()
+          .logins.filter((l) => l.id === id || l.id === theirId)
+          .map((l) => [l.id, l.inStore]),
+      ).toEqual([[id, true]])
+
+      // Logged out on the other PC: this PC signs out too.
+      const kept = await store('GET', `/v1/logins/${theirId}`)
+      expect(
+        (
+          await store('PUT', `/v1/logins/${theirId}`, {
+            version: kept.json.version,
+            blob: sealLogin(key, { id: theirId }),
+            meta: { ...kept.json.meta, signedOut: true, expiresAt: 0, at: Date.now() },
+          })
+        ).status,
+      ).toBe(200)
+      await runLoginSync()
+      expect(existsSync(join(dir, '.credentials.json'))).toBe(false)
+
+      // Signed in again here: the other PC gets it back.
+      writeFileSync(join(dir, '.credentials.json'), creds(6000))
+      await runLoginSync()
+      const back = await store('GET', `/v1/logins/${theirId}`)
+      expect(back.json.meta.signedOut).not.toBe(true)
+      expect(openLogin(key, theirId, back.json.blob)!.credentials).toBe(creds(6000))
+
+      // Logged out here: the store says so, for the other PC.
+      rmSync(join(dir, '.credentials.json'))
+      noteLoggedOutHere(id)
+      await runLoginSync()
+      expect((await store('GET', `/v1/logins/${theirId}`)).json.meta.signedOut).toBe(true)
+      // And it stays signed out here: the store does not sign it back in.
+      await runLoginSync()
+      expect(existsSync(join(dir, '.credentials.json'))).toBe(false)
     } finally {
       disconnectLoginSync()
       deleteCliInstance(id, getCliInstance(id)?.name)

@@ -1425,20 +1425,20 @@ export interface CliLoginSyncStatus {
     excluded: boolean
     /** This PC and the store agreed on it at the last pass. */
     inSync: boolean
-    /** A real error only: why this PC's copy cannot be shared (a credential file with no refresh
-     *  token), or null. The dialog shows it as "Can't sync"; a row sync leaves alone by design
-     *  says so in `note`, never here. */
+    /** A real sync error for this login, or null. The dialog shows it as "Can't sync"; a row sync
+     *  leaves alone says why in `note`, never here. */
     problem: string | null
-    /** Why sync leaves it as it is, when that is by design: signed in separately on this PC
-     *  ('own'), a newer login waiting for its desktop instance to close ('waiting'), or a CLI login
-     *  taken from its desktop instance, which is the one that syncs ('fed'). */
-    note: 'own' | 'waiting' | 'fed' | null
+    /** Why sync leaves it as it is: signed in separately on this PC ('own'), a newer login waiting
+     *  for its desktop instance to close ('waiting'), a CLI login taken from its desktop instance,
+     *  which is the one that syncs ('fed'), or signed out until it is signed in again: logged out
+     *  on a PC, or ended by Anthropic, its tokens emptied by the CLI ('signedOut'). */
+    note: 'own' | 'waiting' | 'fed' | 'signedOut' | null
   }>
   /** The newest first: what the passes did. */
   events: Array<{
     at: number
     num: number | null
-    action: 'pushed' | 'pulled' | 'created' | 'skipped' | 'error'
+    action: 'pushed' | 'pulled' | 'created' | 'skipped' | 'signedOut' | 'merged' | 'error'
     note: string
   }>
 }

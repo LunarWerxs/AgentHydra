@@ -175,6 +175,7 @@ const NOTE_KEY: Record<NonNullable<Login['note']>, [string, string]> = {
   own: ['cliInstances.syncStateOwn', 'cliInstances.syncStateOwnHint'],
   waiting: ['cliInstances.syncStateWaiting', 'cliInstances.syncStateWaitingHint'],
   fed: ['cliInstances.syncStateFed', 'cliInstances.syncStateFedHint'],
+  signedOut: ['cliInstances.syncStateSignedOut', 'cliInstances.syncStateSignedOutHint'],
 }
 /** A row's state: a word or two on the row, the sentence behind it on hover. Left out first (it is
  *  what the row's switch says), then what sync leaves alone by design, then a real error. */
@@ -213,11 +214,11 @@ const shown = computed(() =>
   syncAll.value ? rows.value.filter((r) => failing(r.login)) : rows.value,
 )
 /** "X of Y in sync": Y is the logins that take part, so not the left-out ones, nor the ones sync
- *  leaves alone for good (signed in separately here, or fed by a desktop login that syncs itself). */
+ *  leaves alone (signed in separately here, fed by a desktop login that syncs itself, or signed out
+ *  until someone signs it in again). */
+const SITS_OUT: ReadonlySet<Login['note']> = new Set(['own', 'fed', 'signedOut'])
 const syncCount = computed(() => {
-  const taking = rows.value
-    .map((r) => r.login)
-    .filter((l) => !l.excluded && l.note !== 'own' && l.note !== 'fed')
+  const taking = rows.value.map((r) => r.login).filter((l) => !l.excluded && !SITS_OUT.has(l.note))
   const n = taking.filter((l) => l.inSync).length
   // Still on their way: taking part, not there yet, and nothing wrong with them. Sync brings them
   // in by itself, so the dialog says so instead of leaving a half-full count to be read as stuck.
@@ -255,6 +256,8 @@ const EVENT_KEY: Record<string, string> = {
   pulled: 'cliInstances.syncEventPulled',
   created: 'cliInstances.syncEventCreated',
   skipped: 'cliInstances.syncEventSkipped',
+  signedOut: 'cliInstances.syncEventSignedOut',
+  merged: 'cliInstances.syncEventMerged',
   error: 'cliInstances.syncEventError',
 }
 /** What the last passes did, newest first: the same action within a minute is one line

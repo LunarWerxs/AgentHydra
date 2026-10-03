@@ -119,6 +119,11 @@ const emailOfName = (name: string): string | null => {
   return m ? m[1]!.toLowerCase() : null
 }
 
+/** The account a CLI instance is signed in to (or was, by its "<email> (<plan>)" name), lowercased;
+ *  null when neither says. Login sync keys its rows by it, as the import matches instances by it. */
+export const cliLoginEmail = (rec: Pick<CliInstance, 'configDir' | 'name'>): string | null =>
+  emailIn(oauthAccountOf(rec.configDir)) ?? emailOfName(rec.name)
+
 export const readText = (path: string): string | null => {
   try {
     return readFileSync(path, 'utf8')

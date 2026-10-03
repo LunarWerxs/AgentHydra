@@ -25,6 +25,9 @@
 //   sign the other out. A PC joins the store's copy only where it has none: a signed-out profile of
 //   the same folder name, or a new profile made with that name and number.
 // - From then on the copy whose tokens expire later wins, as for the CLI (a refresh pushes them out).
+// - A logout reaches every PC, as for the CLI (owner, 2026-10-02): an account this PC held and shared
+//   that no profile here holds now turns its row into the signed-out marker, and the other PCs sign
+//   their profile out of it once its app is closed, unless theirs was signed in after the logout.
 // - Cookies are read only while the profile is closed (Chromium holds the database locked); a pass
 //   while it runs sends the new tokens with the cookies the store already has.
 // - Windows only: elsewhere the profile key lives in the Keychain or a keyring, which nothing here
@@ -57,6 +60,7 @@ import {
   getWindowsMasterKey,
 } from './crypto'
 import { ensureWindowsMasterKey } from './crypto/keys.win'
+import { logoutInstance } from './instance-logout'
 import { claimInstanceNumber, instanceNumbers, instanceRef } from './instance-numbers'
 import { createInstance } from './lifecycle'
 import { instancesRoot, normalizePath } from './paths'
@@ -537,14 +541,42 @@ export async function landDesktopLogin(
 
 /** One pass's view of the store and this PC's agreement with it, from core/cli-login-sync.ts. */
 export interface DesktopSyncContext {
-  /** The store's rows (desktop and CLI alike; a desktop one has kind 'desktop'). */
-  store: Map<string, { version: number; num: number | null; kind: string; name: string | null }>
+  /** The store's rows (desktop and CLI alike; a desktop one has kind 'desktop'). `signedOut`: a PC
+   *  logged the account out and the others sign out too; `at`: when the row was written. */
+  store: Map<
+    string,
+    {
+      version: number
+      num: number | null
+      kind: string
+      name: string | null
+      signedOut: boolean
+      at: number
+    }
+  >
   state: Record<string, { version: number; hash: string; cookies?: number }>
   excluded: Set<string>
   /** Upload; the new version, or null when the store moved meanwhile (409). */
   upload(login: PortableDesktopLogin, expect: number): Promise<number | null>
   download(id: string): Promise<PortableDesktopLogin | null>
-  note(num: number | null, action: 'pushed' | 'pulled' | 'created' | 'skipped', text: string): void
+  /** Turn the account's row into the signed-out marker; the new version, or null (409). */
+  markSignedOut(
+    uuid: string,
+    num: number | null,
+    name: string | null,
+    expect: number,
+  ): Promise<number | null>
+  /** An account this PC held is missing now: true once that is sure (a pass later, or at once after
+   *  AgentHydra's Log out). `clearGone` when it is there again. */
+  confirmGone(uuid: string): boolean
+  clearGone(uuid: string): void
+  /** Drop a signed-out profile's cached usage, as a Log out does. */
+  dropUsage(dir: string): void
+  note(
+    num: number | null,
+    action: 'pushed' | 'pulled' | 'created' | 'skipped' | 'signedOut',
+    text: string,
+  ): void
   out: { pushed: number; landed: number; unchanged: number; problems: string[] }
 }
 
@@ -720,6 +752,31 @@ async function syncMovedProfile(
   } else await landFromStore(pass, theirs, look.p, remote.version)
 }
 
+/** The store says signed out (another PC logged this account out) and a profile here holds it. A
+ *  login signed in here after the logout is the newer word and goes up in its place; the one this PC
+ *  last shared, or any written before the logout, signs out here once its app is closed. */
+async function meetSignOut(
+  pass: DesktopPass,
+  look: ProfileLook,
+  remote: DesktopStoreRow,
+): Promise<void> {
+  const { ctx } = pass
+  const st = look.st
+  // This PC already took that logout, so a login here now is a new sign-in.
+  const signedInSince =
+    st?.version === remote.version ||
+    (st?.hash !== look.hash && mtimeOf(join(look.p.dir, 'config.json')) > remote.at)
+  if (signedInSince) {
+    await sendProfile(pass, look, remote.version, null)
+    return
+  }
+  if (!look.isClosed) return
+  if (!(await logoutInstance(look.p.dir)).ok) return
+  ctx.dropUsage(look.p.dir)
+  ctx.state[look.uuid] = { version: remote.version, hash: '' }
+  ctx.note(look.p.num, 'signedOut', 'Logged out on another PC, so signed out here too.')
+}
+
 /** One profile signed in on this PC against the store's copy of its account. */
 async function syncProfile(
   pass: DesktopPass,
@@ -728,6 +785,7 @@ async function syncProfile(
 ): Promise<void> {
   const { ctx } = pass
   if (ctx.excluded.has(uuid)) return
+  ctx.clearGone(uuid)
   const remote = ctx.store.get(uuid)
   if (remote && remote.kind !== 'desktop') return
   const tokens = await readDesktopTokens(p.dir)
@@ -750,6 +808,10 @@ async function syncProfile(
     await sendProfile(pass, look, 0, null)
     return
   }
+  if (remote.signedOut) {
+    await meetSignOut(pass, look, remote)
+    return
+  }
   // Signed in here on its own while the store holds the other PC's: two separate sign-ins, each
   // staying signed in by itself. Left alone both ways.
   if (!look.st) {
@@ -760,7 +822,10 @@ async function syncProfile(
   else await syncMovedProfile(pass, look, remote, look.st)
 }
 
-/** Accounts only the store holds: a signed-out profile here of the same folder name, else a new one. */
+/** Accounts no profile here holds. Signed out everywhere: nothing to do. One this PC held and shared:
+ *  logged out here (a profile deleted here is left out first), so its row turns into the signed-out
+ *  marker. Otherwise the store's copy signs in a signed-out profile here of the same folder name,
+ *  else a new one. */
 async function syncStoreOnlyAccounts(
   pass: DesktopPass,
   mine: Map<string, DesktopProfile & { uuid: string }>,
@@ -768,6 +833,19 @@ async function syncStoreOnlyAccounts(
   const { ctx } = pass
   for (const [uuid, remote] of ctx.store) {
     if (remote.kind !== 'desktop' || mine.has(uuid) || ctx.excluded.has(uuid)) continue
+    if (remote.signedOut) {
+      ctx.state[uuid] = { version: remote.version, hash: '' }
+      ctx.clearGone(uuid)
+      continue
+    }
+    if (ctx.state[uuid]?.hash) {
+      if (
+        ctx.confirmGone(uuid) &&
+        (await ctx.markSignedOut(uuid, remote.num, remote.name, remote.version)) !== null
+      )
+        ctx.clearGone(uuid)
+      continue
+    }
     const target = pass.profiles.find((p) => !p.uuid && p.name === remote.name) ?? null
     if (target && !isClosedDir(pass.running, target.dir)) {
       pass.waiting.add(uuid)
