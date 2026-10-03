@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { climayteLimitWalls, climayteLiveReadings } from '../climayte'
-import { cliInstanceTokens } from '../core/cli-instance-tokens'
+import { accountTokens, cliAccountUuid, resetsOf } from '../core/account-tokens'
 import {
   associateCliInstance,
   createCliInstance,
@@ -45,6 +45,7 @@ import {
 } from '../core/codex-instances'
 import { logoutCodexInstance } from '../core/codex-logout'
 import { feedCliFromDesktop } from '../core/desktop-cli-feed'
+import { allInstanceNumbers, parseInstanceRef } from '../core/instance-numbers'
 import { resolveInstance, resolveInstanceError } from '../core/instance-ref'
 import { listInstances } from '../core/instances'
 import {
@@ -52,6 +53,7 @@ import {
   CODEX_LAUNCH_EFFORTS,
   launchOptionError,
 } from '../core/launch-options'
+import { readLoginUuid } from '../core/login-state'
 import { db } from '../db'
 import { turnOffExtraUsage } from '../extra-usage'
 import { app } from '../http-app'
@@ -59,7 +61,7 @@ import { instanceDirParam } from '../instance-dir-param'
 import { readLiveRegistry } from '../live-registry'
 import { jsonBody } from '../route-helpers'
 import { fileNudgeStore } from '../session-keepalive'
-import type { UsageCheckResult, UsageSnapshot } from '../types'
+import type { AccountTokens, UsageCheckResult, UsageSnapshot } from '../types'
 import {
   allCachedUsage,
   checkUsage,
@@ -89,6 +91,7 @@ import {
   checkUsageForDesktop,
   cliKey,
   codexKey,
+  desktopKey,
   surveyUsage,
 } from '../usage-service'
 import { deepseekBalance } from '../zswarm-cost'
@@ -426,12 +429,8 @@ app.get('/api/cli-instances', (c) => {
   const nudges = fileNudgeStore.read()
   const cleared = usageClearedAt()
   return c.json(
-    listCliInstances().map((i) => ({
-      ...i,
-      lastNudge: nudges[i.id] ?? null,
-      liveSessions: readLiveRegistry(i.configDir).length,
-      tokens: cliInstanceTokens(i.configDir),
-      lastUsageCheck: shownUsage(
+    listCliInstances().map((i) => {
+      const lastUsageCheck = shownUsage(
         cliKey(i.id),
         withLimitWall(
           withLiveReading(i.lastUsageCheck, live.get(i.id), i.name),
@@ -439,9 +438,31 @@ app.get('/api/cli-instances', (c) => {
           i.name,
         ),
         cleared,
-      ),
-    })),
+      )
+      return {
+        ...i,
+        lastNudge: nudges[i.id] ?? null,
+        liveSessions: readLiveRegistry(i.configDir).length,
+        // The account signed in here now, not this folder: a re-login shows the new account's.
+        tokens: accountTokens(cliAccountUuid(i.configDir, i.loggedIn), resetsOf(lastUsageCheck)),
+        lastUsageCheck,
+      }
+    }),
   )
+})
+// What the account signed in to each desktop instance has run (core/account-tokens.ts), by instance
+// dir, for the desktop table's Tokens column. A signed-out profile is null.
+app.get('/api/desktop-instance-tokens', (c) => {
+  const out: Record<string, AccountTokens | null> = {}
+  for (const ref of Object.keys(allInstanceNumbers())) {
+    const parsed = parseInstanceRef(ref)
+    if (parsed?.kind !== 'desktop') continue
+    out[parsed.id] = accountTokens(
+      readLoginUuid(parsed.id),
+      resetsOf(getCachedUsage(desktopKey(parsed.id))),
+    )
+  }
+  return c.json(out)
 })
 app.post('/api/cli-instances', async (c) => {
   const body = await jsonBody(c)

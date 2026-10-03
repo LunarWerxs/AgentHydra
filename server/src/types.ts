@@ -1334,9 +1334,8 @@ export interface UsageCheckResult {
 
 // --- CLI instances (Feature A) ----------------------------------------------
 
-/** A CLI instance: a `CLAUDE_CONFIG_DIR` associated with an account, logged in once. */
-/** Tokens run through one CLI instance, one usage per reply (core/cli-instance-tokens.ts). */
-export interface CliInstanceTokens {
+/** Tokens in one span, the four kinds kept apart (core/account-tokens.ts). */
+export interface TokenParts {
   input: number
   output: number
   cacheRead: number
@@ -1344,6 +1343,14 @@ export interface CliInstanceTokens {
   total: number
 }
 
+/** What an ACCOUNT has run on this PC: its current 5-hour window, current week and all time. */
+export interface AccountTokens {
+  fiveHour: TokenParts
+  week: TokenParts
+  total: TokenParts
+}
+
+/** A CLI instance: a `CLAUDE_CONFIG_DIR` associated with an account, logged in once. */
 export interface CliInstance {
   /** Permanent short handle (`#7`), shared with desktop + Codex instances in one sequence. See
    *  core/instance-numbers.ts. Re-derived from the registry on every hydrate; the copy that ends
@@ -1374,9 +1381,9 @@ export interface CliInstance {
   /** Claude sessions running on this account now (its live registry, CliMayte workers included). Set by
    *  GET /api/cli-instances only; absent elsewhere. */
   liveSessions?: number
-  /** Tokens this instance's own transcripts on this PC add up to (core/cli-instance-tokens.ts). Set
-   *  by GET /api/cli-instances only; null until the first sweep after a daemon start. */
-  tokens?: CliInstanceTokens | null
+  /** What the account signed in here now has run on this PC (core/account-tokens.ts). Set by GET
+   *  /api/cli-instances only; null when signed out, and until the first sweep after a daemon start. */
+  tokens?: AccountTokens | null
   /** What the CLI said the last time its `/limit-reset` was run from AgentHydra (core/cli-limit-reset.ts).
    *  Undefined until then. The only honest reading there is: the usage endpoint will not say. */
   lastLimitReset?: CliLimitResetResult | null

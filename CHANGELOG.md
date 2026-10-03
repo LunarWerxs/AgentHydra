@@ -235,11 +235,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   job. The instructions block got shorter while gaining it (1,991 characters against a 2,200 cap),
   which every request pays for.
 
-- **How many tokens each CLI account has run** (`server/src/core/cli-instance-tokens.ts`, the
-  `tokens` field of `GET /api/cli-instances`). Added up from the instance's own transcripts on this
-  PC, one usage per reply (a reply is written as several lines that repeat its usage), and re-read
-  only when a transcript changed. Work the same account did in a desktop app or on another PC is not
-  in it. The CLI table shows it as a Tokens column.
+- **Tokens belong to the account signed in, for CLI and desktop** (`server/src/core/account-tokens.ts`;
+  `tokens` of `GET /api/cli-instances`, `GET /api/desktop-instance-tokens`). A reply's usage is
+  credited to the account signed in to its instance when it was written (CLI), or to the account the
+  desktop chat record is filed under, so signing an instance in to another account moves the figure
+  with it. Each row shows its current account's tokens for the current 5-hour window, current week or
+  all time on this PC (a 5h / Week / Total switch in each table's header, remembered per table), with
+  input, output, cache read and cache write on hover. One usage per reply, and a transcript is
+  re-read only when it changed. Another PC's work is not counted.
 
 - **One sign-in for desktop and CLI** (`server/src/core/desktop-cli-feed.ts`). "Add a CLI login…"
   on a signed-in desktop instance now gives the CLI instance that desktop login straight away: no

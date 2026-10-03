@@ -20,12 +20,20 @@ export default {
   poolCounted: 'Accounts counted: {n}, weighted by plan size (a Max 5x counts as five Pros).',
   poolLeftOut: 'Left out: {signedOut} signed out, {unread} with no usage reading.',
   colConfigDir: 'Config dir',
-  // The Tokens column: what an account has run, from its own transcripts (cli-instance-tokens.ts).
+  // The Tokens column: what an account has run, from its own transcripts (account-tokens.ts).
   colTokens: 'Tokens',
   tokensLabel: '{total} tokens',
   tokensBreakdown:
     '{output} output · {input} input · {cacheRead} cache read · {cacheWrite} cache write',
-  tokensSource: 'From this instance’s transcripts on this PC',
+  tokensSource:
+    'For the account signed in here now, from every transcript on this PC (CLI and desktop). Another PC’s work is not counted.',
+  tokensWindowLabel: 'Tokens shown',
+  tokensWindow5h: '5h',
+  tokensWindowWeek: 'Week',
+  tokensWindowTotal: 'Total',
+  tokensWindow5hHint: 'The account’s current 5-hour window',
+  tokensWindowWeekHint: 'The account’s current week',
+  tokensWindowTotalHint: 'All time on this PC',
   loggedIn: 'Logged in',
   loggedOut: 'Not logged in',
   noAccount: 'No account',

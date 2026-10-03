@@ -1,5 +1,6 @@
 import type {
   Account,
+  AccountTokens,
   ActivityReport,
   AgentPresence,
   AgentStatus,
@@ -794,6 +795,8 @@ export const sendTestNotification = () =>
 
 // --- CLI instances (Feature A) -------------------------------------------------
 export const listCliInstances = () => j<CliInstance[]>('/api/cli-instances')
+export const listDesktopInstanceTokens = () =>
+  j<Record<string, AccountTokens | null>>('/api/desktop-instance-tokens')
 export const createCliInstance = (name: string) =>
   j<CMActionResult>('/api/cli-instances', { method: 'POST', body: JSON.stringify({ name }) })
 export const launchCliInstance = (id: string, opts: { model?: string; effort?: string } = {}) =>
