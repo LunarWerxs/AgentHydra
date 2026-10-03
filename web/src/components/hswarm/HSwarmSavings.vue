@@ -5,7 +5,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { shortUsd } from '@/lib/chart'
-import { useHswarmApi } from '@/lib/hswarm-api'
+import { accountDisplay, type HswarmAccountName, useHswarmApi } from '@/lib/hswarm-api'
 import InfoHint from '@/shell/InfoHint.vue'
 
 type Row = Record<string, any>
@@ -27,6 +27,8 @@ interface Col {
   label: string
   num?: boolean
   fmt?: (v: any, r: Row) => string
+  muted?: (v: any) => boolean
+  title?: (v: any) => string | undefined
   get?: (r: Row) => any
 }
 interface Table {
@@ -45,7 +47,7 @@ const WINDOWS = [7, 14, 30]
 const days = ref(14)
 const mode = ref<'list' | 'plan'>('list')
 const stats = ref<Stats | null>(null)
-const names = ref<Record<string, { num: number; label: string; kind: string }>>({})
+const names = ref<Record<string, HswarmAccountName>>({})
 const error = ref<string | null>(null)
 const loading = ref(false)
 
@@ -286,10 +288,9 @@ const rule = computed(() => {
 })
 
 // ---- tables ----
-const acctName = (id: string) => {
-  const n = names.value[id]
-  return n ? `#${n.num} ${n.label}` : id
-}
+const acctName = (id: string) => accountDisplay(id, names.value, t).text
+const acctMuted = (id: string) => accountDisplay(id, names.value, t).muted
+const acctTitle = (id: string) => accountDisplay(id, names.value, t).title
 const tables = computed<Table[]>(() => {
   const s = stats.value
   if (!s) return []
@@ -321,7 +322,13 @@ const tables = computed<Table[]>(() => {
       rows: s.accounts?.rows ?? [],
       folded: 12,
       cols: [
-        { key: 'account', label: t('hswarm.v.savings.cAccount'), fmt: (v) => acctName(v) },
+        {
+          key: 'account',
+          label: t('hswarm.v.savings.cAccount'),
+          fmt: (v) => acctName(v),
+          muted: acctMuted,
+          title: acctTitle,
+        },
         { key: 'tier', label: t('hswarm.v.savings.cTier'), fmt: (v) => String(v || '—') },
         { key: 'days', label: t('hswarm.v.savings.cDays'), num: true, fmt: int as any },
         {
@@ -569,7 +576,8 @@ const ariaSort = (tid: string, key: string) => {
                   v-for="col in tb.cols"
                   :key="col.key"
                   class="px-2 py-0.5 whitespace-nowrap"
-                  :class="col.num ? 'text-end tabular-nums' : 'max-w-[18rem] truncate'"
+                  :class="[col.num ? 'text-end tabular-nums' : 'max-w-[18rem] truncate', col.muted?.(r[col.key]) ? 'text-muted-foreground' : '']"
+                  :title="col.title?.(r[col.key])"
                 >{{ col.fmt ? col.fmt(r[col.key], r) : (r[col.key] ?? '—') }}</td>
               </tr>
             </tbody>

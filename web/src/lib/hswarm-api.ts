@@ -72,10 +72,32 @@ async function fetchStats(days: number) {
   return apiCall(`stats?days=${days}`)
 }
 
-/** acct id (as hswarm's report names it) -> the instance signed in as it; empty when the daemon cannot say. */
-async function fetchAccountNames(): Promise<
-  Record<string, { num: number; label: string; kind: string }>
-> {
+export interface HswarmAccountName {
+  num?: number
+  label: string
+  kind?: string
+  /** Signed out or moved: named from what AgentHydra remembers, not from a current login. */
+  former?: boolean
+}
+
+/** How one acct id reads in a table: former accounts say so, an id nobody knows stays raw with a hint. */
+export function accountDisplay(
+  id: string,
+  names: Record<string, HswarmAccountName>,
+  t: (key: string, params?: Record<string, unknown>) => string,
+): { text: string; muted: boolean; title?: string } {
+  const n = names[id]
+  if (!n) return { text: id, muted: false, title: t('swarmStats.accountUnknown') }
+  if (!n.former) return { text: `#${n.num} ${n.label}`, muted: false }
+  const text =
+    n.num != null
+      ? t('swarmStats.accountWas', { name: n.label, num: n.num })
+      : t('swarmStats.accountSignedOut', { name: n.label })
+  return { text, muted: true }
+}
+
+/** acct id (as hswarm's report names it) -> the instance signed in as it (or `former` ones); empty when the daemon cannot say. */
+async function fetchAccountNames(): Promise<Record<string, HswarmAccountName>> {
   try {
     const response = await fetch('/api/hswarm-accounts')
     return response.ok ? await response.json() : {}

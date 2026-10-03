@@ -214,3 +214,44 @@ test('an account uuid maps to the acct id hswarm prints and to the instance sign
   })
   expect(cliOnly[id]).toEqual({ num: 9, label: 'cli-a', kind: 'cli' })
 })
+
+test('a signed-out account is named from known accounts and login history, never over a current login', async () => {
+  const { hswarmAccountMap, hswarmAccountId } = await import('../src/routes/hswarm')
+  const current = '00000000-0000-0000-0000-0000000000a1'
+  const moved = '00000000-0000-0000-0000-0000000000a2'
+  const nameOnly = '00000000-0000-0000-0000-0000000000a3'
+  const stranger = '00000000-0000-0000-0000-0000000000a4'
+  const history: Record<string, Array<{ accountUuid: string; lastSeenAt: string | null }>> = {
+    'dir-2': [
+      { accountUuid: moved, lastSeenAt: '2026-01-01T00:00:00Z' },
+      { accountUuid: current, lastSeenAt: '2026-01-02T00:00:00Z' },
+    ],
+    'dir-5': [{ accountUuid: moved, lastSeenAt: '2026-03-01T00:00:00Z' }],
+  }
+  const map = hswarmAccountMap({
+    desktop: [
+      { num: 2, name: 'inst-2', label: null, loginUuid: current, account: null, dir: 'dir-2' },
+      { num: 5, name: 'inst-5', label: null, loginUuid: null, account: null, dir: 'dir-5' },
+    ],
+    cli: [],
+    cliUuid: () => null,
+    known: {
+      [current]: { name: 'Stale Name', email: null },
+      [nameOnly]: { name: null, email: 'someone@example.com' },
+    },
+    pastLogins: (dir) => history[dir] ?? [],
+  })
+  // The current login keeps its instance and is not marked former, though known and history name it too.
+  expect(map[hswarmAccountId(current)]).toEqual({ num: 2, label: 'inst-2', kind: 'desktop' })
+  // Known only from history: the instance it last ran on (newest activity), flagged former.
+  expect(map[hswarmAccountId(moved)]).toEqual({
+    num: 5,
+    label: 'inst-5',
+    kind: 'desktop',
+    former: true,
+  })
+  // Known by name only: former, no instance number.
+  expect(map[hswarmAccountId(nameOnly)]).toEqual({ label: 'someone@example.com', former: true })
+  // Nobody knows it: absent.
+  expect(map[hswarmAccountId(stranger)]).toBeUndefined()
+})

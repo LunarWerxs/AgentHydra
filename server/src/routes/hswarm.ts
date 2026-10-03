@@ -12,14 +12,19 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { listCliInstances } from '../core/cli-instances'
+import { readKnownAccounts } from '../core/known-accounts'
+import { readLoginHistory } from '../core/login-history'
 import { type FleetInstanceEntry, fleetInstances } from '../fleet-instances'
 import { getHSwarmStatus, hswarmHome } from '../hswarm'
 import { app } from '../http-app'
 
 export interface HSwarmAccountRef {
-  num: number
+  /** Absent for a former account no instance is known to have run on. */
+  num?: number
   label: string
-  kind: 'desktop' | 'cli'
+  kind?: 'desktop' | 'cli'
+  /** Not signed in anywhere right now: named from the known-accounts store or a profile's login history. */
+  former?: true
 }
 
 /** The id hswarm prints for an account: hswarm/accounts.py account_id. */
@@ -28,10 +33,16 @@ export function hswarmAccountId(uuid: string): string {
 }
 
 export interface HSwarmAccountSources {
-  desktop: Array<Pick<FleetInstanceEntry, 'num' | 'name' | 'label' | 'loginUuid' | 'account'>>
+  desktop: Array<
+    Pick<FleetInstanceEntry, 'num' | 'name' | 'label' | 'loginUuid' | 'account'> & { dir?: string }
+  >
   cli: Array<{ num: number; name: string; configDir: string }>
   /** The account uuid of a CLI config folder (its .claude.json oauthAccount), or null. */
   cliUuid: (configDir: string) => string | null
+  /** Every account uuid ever remembered, with its display name (known-accounts store). */
+  known?: Record<string, { name?: string | null; email?: string | null }>
+  /** Accounts a desktop profile folder has been signed into, with when each was last busy there (ISO). */
+  pastLogins?: (dir: string) => Array<{ accountUuid: string; lastSeenAt: string | null }>
 }
 
 function cliAccountUuid(configDir: string): string | null {
@@ -44,7 +55,7 @@ function cliAccountUuid(configDir: string): string | null {
   }
 }
 
-/** acct id -> the instance signed in as it. Desktop instances win over a CLI one for the same account
+/** acct id -> the instance signed in as it, then (`former: true`) accounts only known from the past. Desktop instances win over a CLI one for the same account
  *  (they are listed first), and the lowest number wins within a kind. */
 export function hswarmAccountMap(src: HSwarmAccountSources): Record<string, HSwarmAccountRef> {
   const out: Record<string, HSwarmAccountRef> = {}
@@ -63,13 +74,52 @@ export function hswarmAccountMap(src: HSwarmAccountSources): Record<string, HSwa
   for (const c of [...src.cli].sort((a, b) => a.num - b.num)) {
     add(src.cliUuid(c.configDir), { num: c.num, label: c.name, kind: 'cli' })
   }
+
+  // Fallback tier: signed-out or moved accounts. Never overrides a current login (`out[id]` is set).
+  const last = new Map<string, { num: number; label: string; at: string }>()
+  for (const d of src.desktop) {
+    if (!d.dir || !src.pastLogins) continue
+    for (const p of src.pastLogins(d.dir)) {
+      const at = p.lastSeenAt ?? ''
+      const prev = last.get(p.accountUuid)
+      if (!prev || at > prev.at || (at === prev.at && d.num < prev.num)) {
+        last.set(p.accountUuid, { num: d.num, label: d.label || d.name, at })
+      }
+    }
+  }
+  const knownName = (uuid: string) => {
+    const k = src.known?.[uuid]
+    return k?.name || k?.email || ''
+  }
+  for (const uuid of new Set([...Object.keys(src.known ?? {}), ...last.keys()])) {
+    const id = hswarmAccountId(uuid)
+    if (out[id]) continue
+    const where = last.get(uuid)
+    const label = knownName(uuid) || where?.label
+    if (!label) continue
+    out[id] = where
+      ? { num: where.num, label, kind: 'desktop', former: true }
+      : { label, former: true }
+  }
   return out
 }
 
 app.get('/api/hswarm-accounts', async (c) => {
   try {
     const desktop = await fleetInstances()
-    return c.json(hswarmAccountMap({ desktop, cli: listCliInstances(), cliUuid: cliAccountUuid }))
+    return c.json(
+      hswarmAccountMap({
+        desktop,
+        cli: listCliInstances(),
+        cliUuid: cliAccountUuid,
+        known: readKnownAccounts(),
+        pastLogins: (dir) =>
+          readLoginHistory(dir).entries.map((e) => ({
+            accountUuid: e.accountUuid,
+            lastSeenAt: e.lastSeenAt,
+          })),
+      }),
+    )
   } catch {
     return c.json({})
   }

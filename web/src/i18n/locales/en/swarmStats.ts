@@ -17,4 +17,7 @@ export default {
   colTasks: 'Tasks',
   colSaved: 'Est. saved',
   colLast: 'Last',
+  accountWas: '{name} (was #{num})',
+  accountSignedOut: '{name} (signed out)',
+  accountUnknown: 'Not signed in on this PC',
 }

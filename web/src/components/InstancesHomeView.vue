@@ -48,7 +48,7 @@ import {
   usedPct,
   workersPerHour,
 } from '@/lib/home-charts'
-import { useHswarmApi } from '@/lib/hswarm-api'
+import { accountDisplay, type HswarmAccountName, useHswarmApi } from '@/lib/hswarm-api'
 import { useSwarmStats } from '@/lib/swarm-stats'
 import { pooledRemaining } from '@/lib/usage-pool'
 import IconTooltip from '@/shell/IconTooltip.vue'
@@ -69,7 +69,7 @@ const { now } = useUsageMode(true)
 
 const { fetchAccountNames } = useHswarmApi()
 const { stats: swarmStats } = useSwarmStats(14)
-const accountNames = ref<Record<string, { num: number; label: string; kind: string }>>({})
+const accountNames = ref<Record<string, HswarmAccountName>>({})
 onMounted(async () => {
   accountNames.value = await fetchAccountNames()
 })
@@ -78,10 +78,12 @@ const swarmRows = computed(() =>
     .sort((a, b) => b.runs - a.runs)
     .slice(0, 8)
     .map((r) => {
-      const n = accountNames.value[r.account]
+      const shown = accountDisplay(r.account, accountNames.value, t)
       return {
         key: r.account,
-        name: n ? `#${n.num} ${n.label}` : r.account,
+        name: shown.text,
+        muted: shown.muted || !accountNames.value[r.account],
+        title: shown.title,
         runs: r.runs,
         tasks: r.tasks,
         saved: formatUsd(r.est_usd - r.worker_usd),
@@ -476,7 +478,11 @@ onUnmounted(stop)
         </thead>
         <tbody>
           <tr v-for="r in swarmRows" :key="r.key" class="border-t border-border/50">
-            <td class="max-w-0 truncate py-0.5">{{ r.name }}</td>
+            <td
+              class="max-w-0 truncate py-0.5"
+              :class="r.muted ? 'text-muted-foreground' : ''"
+              :title="r.title"
+            >{{ r.name }}</td>
             <td class="py-0.5 text-end">{{ r.runs }}</td>
             <td class="py-0.5 text-end">{{ r.tasks }}</td>
             <td class="py-0.5 text-end">{{ r.saved }}</td>
