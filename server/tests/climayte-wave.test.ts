@@ -1018,6 +1018,139 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
   }, 90_000)
 })
 
+describe('a wave is judged wherever it is stored, not only on the account its task ran on', () => {
+  // Found live 2026-10-03 (wave wv-2fb769): a wave sits in the config dir of ONE account, and a task
+  // placed on any other account found no wave, so it was judged as an ordinary task and the wave stalled.
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-twoacct-'))
+  const repo = join(root, 'repo')
+  const acctA = join(root, 'acct-a')
+  const acctB = join(root, 'acct-b')
+  const groups: string[] = []
+  const fake = [process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')]
+  const until = async (ok: () => boolean, ms = 25_000) => {
+    const deadline = Date.now() + ms
+    while (!ok() && Date.now() < deadline) await climayteWait({}, 1_000)
+    return ok()
+  }
+  const oneTask = (id: string, workerId: string): CliMayteWave => ({
+    id,
+    group: '',
+    managerId: 'w-nobody',
+    plan: '',
+    cwd: repo,
+    branch: 'main',
+    verify: null,
+    tasks: [
+      {
+        key: 'x',
+        prompt: '',
+        title: 'x',
+        kind: 'code',
+        check: 'echo proved',
+        paths: ['src/**'],
+        after: [],
+        workerId,
+        state: 'running',
+        proof: null,
+      },
+    ],
+    escalations: [],
+    notes: '',
+    rounds: 0,
+    maxRounds: 3,
+    batch: { size: 1, settleS: 600, held: [], since: null },
+    status: 'running',
+    report: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
+  const checkedTask = (title: string) =>
+    climayteRun({
+      tasks: [
+        {
+          prompt: title,
+          cwd: repo,
+          title,
+          kind: 'code',
+          model: 'opus',
+          effort: 'high',
+          modelWhy: 'the rung this test judges',
+          check: 'echo proved',
+        },
+      ],
+      group: `twoacct-${title}`,
+      accounts: ['two-b'],
+    })
+
+  beforeAll(() => {
+    mkdirSync(repo, { recursive: true })
+    mkdirSync(acctA, { recursive: true })
+    mkdirSync(acctB, { recursive: true })
+    execFileSync('git', ['init', '-q'], { cwd: repo, windowsHide: true })
+    setCliMayteClaudeCommand(fake)
+    setCliMayteAccountsProvider(() => [
+      { id: 'two-a', num: 1, name: 'a', configDir: acctA, sessionPct: 0, weekPct: 0 },
+      { id: 'two-b', num: 2, name: 'b', configDir: acctB, sessionPct: 0, weekPct: 0 },
+    ])
+    startCliMayte()
+  })
+  afterAll(() => {
+    for (const group of groups) climayteCancel({ group })
+    forgetManagers()
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test('a wave stored under account A whose task runs and passes its check on account B ends passed (provisional) and in the batch', async () => {
+    const run = checkedTask('cross')
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+    const wave = oneTask('wv-cross', id)
+    writeWave(acctA, wave)
+    ;(liveWorkers.get(id) as CliMayteWorker).wave = wave.id
+
+    await until(() => readWave(acctA, wave.id)?.tasks[0]?.state !== 'running', 30_000)
+
+    const saved = readWave(acctA, wave.id)
+    expect(climayteList({ id })[0]?.attempts[0]?.account.id).toBe('two-b')
+    expect(saved?.tasks[0]?.state).toBe('passed')
+    expect(saved?.tasks[0]?.proof).toMatchObject({ check: true })
+    expect(saved?.batch.held).toEqual(['x'])
+    expect(climayteList({ id })[0]?.verdicts?.at(-1)).toMatchObject({
+      verdict: 'pass',
+      by: 'wave',
+      provisional: true,
+    })
+  }, 60_000)
+
+  test('a task still `running` in its wave while its worker is done with a check pass is judged on the next tick', async () => {
+    // The worker finished (and passed its check) before the wave knew it: a daemon restarted mid-check.
+    const run = checkedTask('missed')
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+    await until(() => climayteList({ id })[0]?.verdicts?.at(-1)?.by === 'check', 30_000)
+    expect(climayteList({ id })[0]).toMatchObject({ status: 'done' })
+
+    const wave = oneTask('wv-missed', id)
+    writeWave(acctA, wave)
+    ;(liveWorkers.get(id) as CliMayteWorker).wave = wave.id
+    // Nothing is active, so climayteWait returns at once: sleep for the idle tick (15 s) to come.
+    const deadline = Date.now() + 40_000
+    while (readWave(acctA, wave.id)?.tasks[0]?.state === 'running' && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 500))
+
+    const saved = readWave(acctA, wave.id)
+    expect(saved?.tasks[0]?.state).toBe('passed')
+    expect(saved?.batch.held).toEqual(['x'])
+    expect(climayteList({ id })[0]?.verdicts?.at(-1)).toMatchObject({
+      verdict: 'pass',
+      by: 'wave',
+      provisional: true,
+    })
+  }, 90_000)
+})
+
 describe('the orchestrator starts and verifies a wave (piece 7)', () => {
   const root = mkdtempSync(join(tmpdir(), 'ah-climayte-entry-'))
   const repo = join(root, 'repo')

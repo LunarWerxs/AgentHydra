@@ -982,6 +982,7 @@ async function tick(): Promise<void> {
       }
     }
     // Piece 3: Process wave batch wakes.
+    reconcileWaves(now)
     processBatchWakes(now)
     // Last, so packing never stands between a running worker and its overage stop.
     packOldLogs(now)
@@ -1475,16 +1476,13 @@ function settleWorker(
   // hold it in waiting with hold: 'wave'.
   if (v.outcome === 'done' && w.kind === 'manage' && w.wave && w.status !== 'failed') {
     try {
-      const configDir = configDirOf(w.accountId ?? '', accountsProvider())
-      if (configDir) {
-        const wave = readWave(configDir, w.wave)
-        if (wave && wave.status === 'running' && !wave.report && !waveDone(wave)) {
-          const running = wave.tasks.filter((t) => t.state === 'running').length
-          const queued = wave.tasks.filter((t) => t.state === 'pending').length
-          w.status = 'waiting'
-          w.hold = 'wave'
-          w.error = `Managing wave ${w.wave}: ${running} running, ${queued} queued`
-        }
+      const wave = liveWave(w.wave)?.wave
+      if (wave && wave.status === 'running' && !wave.report && !waveDone(wave)) {
+        const running = wave.tasks.filter((t) => t.state === 'running').length
+        const queued = wave.tasks.filter((t) => t.state === 'pending').length
+        w.status = 'waiting'
+        w.hold = 'wave'
+        w.error = `Managing wave ${w.wave}: ${running} running, ${queued} queued`
       }
     } catch {
       // If we can't read the wave, proceed normally (status is already set by settleWorker).
@@ -1500,11 +1498,11 @@ function settleWorker(
 function judgeInWave(w: CliMayteWorker, checkPassed: boolean | null): boolean {
   if (!w.wave || w.kind === 'manage') return false
   try {
-    const configDir = configDirOf(w.accountId ?? '', accountsProvider())
-    if (!configDir) return false
-    const wave = modifiedWaves.get(w.wave)?.wave ?? readWave(configDir, w.wave)
+    // The wave sits in the account it was started on, which is not always the worker's own.
+    const found = liveWave(w.wave)
+    const wave = found?.wave
     const task = wave?.tasks.find((t) => t.workerId === w.id)
-    if (!wave || !task || wave.status !== 'running') return false
+    if (!found || !wave || !task || wave.status !== 'running') return false
     const now = Date.now()
     const j = judgeWaveTask(task, wave, w.result, checkPassed)
     task.proof = j.proof
@@ -1526,7 +1524,7 @@ function judgeInWave(w: CliMayteWorker, checkPassed: boolean | null): boolean {
       task.state = 'escalated'
       wave.escalations.push({ key: task.key, reason: `unproven: ${j.note}`, at: now })
     }
-    modifiedWaves.set(w.wave, { wave, configDir })
+    modifiedWaves.set(w.wave, { wave, configDir: found.configDir })
     // A task sent back for another round is no change the manager needs yet.
     if (task.state !== 'running') addToWaveBatch(w, now, true)
     return true
@@ -1541,20 +1539,18 @@ function addToWaveBatch(w: CliMayteWorker, now: number, judged = false): void {
   // so waveBatch can decide when to wake the manager.
   if (w.wave && (judged || w.status !== 'failed')) {
     try {
-      const configDir = configDirOf(w.accountId ?? '', accountsProvider())
-      if (configDir) {
-        const wave = modifiedWaves.get(w.wave)?.wave ?? readWave(configDir, w.wave)
-        if (wave && wave.status === 'running' && !wave.report) {
-          // Find the task in the wave that this worker belongs to.
-          const task = wave.tasks.find((t) => t.workerId === w.id)
-          if (task && !wave.batch.held.includes(task.key)) {
-            wave.batch.held.push(task.key)
-            if (wave.batch.since === null) {
-              wave.batch.since = now
-            }
-            wave.updatedAt = now
-            modifiedWaves.set(w.wave, { wave, configDir })
+      const found = liveWave(w.wave)
+      const wave = found?.wave
+      if (found && wave && wave.status === 'running' && !wave.report) {
+        // Find the task in the wave that this worker belongs to.
+        const task = wave.tasks.find((t) => t.workerId === w.id)
+        if (task && !wave.batch.held.includes(task.key)) {
+          wave.batch.held.push(task.key)
+          if (wave.batch.since === null) {
+            wave.batch.since = now
           }
+          wave.updatedAt = now
+          modifiedWaves.set(w.wave, { wave, configDir: found.configDir })
         }
       }
     } catch {
@@ -2545,6 +2541,61 @@ function findWave(id: string): { wave: CliMayteWave; configDir: string } | null 
     if (wave) return { wave, configDir }
   }
   return null
+}
+
+/** A wave by id for a change on the tick: the copy the tick already holds (modifiedWaves), else the
+ *  one on disk, with the directory it lives in. A wave is stored under the account it was started
+ *  on, which is not the account every one of its tasks runs on. */
+function liveWave(id: string): { wave: CliMayteWave; configDir: string } | null {
+  return modifiedWaves.get(id) ?? findWave(id)
+}
+
+/** How often reconcileWaves reads the wave records (a read of every wave file). */
+const WAVE_RECONCILE_MS = 5_000
+let nextWaveReconcile = 0
+
+/** A task of a running wave that is `running` while its worker has finished was missed by the
+ *  worker's finish (a wave read from the wrong account, a daemon restarted mid-check): judge it now.
+ *  A finished worker is judged on its check and commits (judgeInWave), a failed or cancelled one
+ *  ends its task `failed`. A pass stays provisional until the orchestrator accepts the wave. */
+function reconcileWaves(now: number): void {
+  if (now < nextWaveReconcile) return
+  nextWaveReconcile = now + WAVE_RECONCILE_MS
+  // Most workers never belong to a wave: read no wave file unless a finished one does.
+  const finished = [...workers.values()].filter(
+    (w) =>
+      w.wave &&
+      w.kind !== 'manage' &&
+      (w.status === 'done' || w.status === 'failed' || w.status === 'cancelled'),
+  )
+  if (!finished.length) return
+  const ids = new Set(finished.map((w) => w.wave as string))
+  for (const id of ids) {
+    const wave = liveWave(id)?.wave
+    if (!wave || wave.status !== 'running') continue
+    for (const task of wave.tasks) {
+      if (task.state !== 'running' || !task.workerId) continue
+      const w = workers.get(task.workerId)
+      if (!w || w.wave !== id) continue
+      try {
+        if (w.status === 'done') {
+          // With a check, only its own latest pass settles the task (a fail sends the worker back).
+          const last = w.verdicts?.at(-1)
+          if (w.check && !(last?.by === 'check' && last.verdict === 'pass')) continue
+          judgeInWave(w, w.check ? true : null)
+        } else if (w.status === 'failed' || w.status === 'cancelled') {
+          const found = liveWave(id)
+          const t = found?.wave.tasks.find((x) => x.key === task.key)
+          if (!found || !t) continue
+          t.state = 'failed'
+          modifiedWaves.set(id, { wave: found.wave, configDir: found.configDir })
+          addToWaveBatch(w, now, true)
+        }
+      } catch (err) {
+        console.error(`[climayte] wave ${id}: could not reconcile ${task.key}:`, err)
+      }
+    }
+  }
 }
 
 /** Every wave on record, newest first, exactly as stored (GET /api/corch/waves). */
