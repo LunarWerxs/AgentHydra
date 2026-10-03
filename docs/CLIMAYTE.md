@@ -794,7 +794,7 @@ beside `login-sync.json` and survives turning the switch off. Status carries `sh
 `chatsError` (apart from `lastError` and `queueError`) and `chats` (empty while off). Test:
 `server/tests/cli-login-sync-chats.test.ts`.
 
-The store stays small (2026-10-03): a chat archived a week ago leaves it, row and transcript, and is
+The store stays small (2026-10-03): a chat archived three days ago leaves it, row and transcript, and is
 never sent again (`ARCHIVED_KEEP_MS`); the Worker refuses chunks past 400 MB of chats (`CHAT_STORE_MB`
 raises it), under D1's 500 MB free-plan database that the logins share, and `chatsError` says so.
 Measured that day: 9 chats, 157 MB of transcript stored as 50 MB, about 2.5 MB more per busy hour.

@@ -68,8 +68,8 @@ the old one. Chats and chunks live in their own `chats` and `chat_chunks` tables
 
 **Room for chats.** Transcripts take at most 400 MB of the database (a running total in
 `chat_usage`), because D1's free plan stops a whole database at 500 MB and the logins live in the same
-one: a full chat room never stops a login from syncing. AgentHydra removes a chat from the store a week
-after it was archived (each PC keeps its copy). On Workers Paid (10 GB per database) you can raise the
+one: a full chat room never stops a login from syncing. AgentHydra removes a chat from the store three
+days after it was archived (each PC keeps its copy). On Workers Paid (10 GB per database) you can raise the
 room with an optional plain-text variable `CHAT_STORE_MB`.
 
 The queue routes (the "Share CliMayte queue" toggle in AgentHydra) need this Worker **redeployed

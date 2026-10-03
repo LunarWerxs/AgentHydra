@@ -179,7 +179,7 @@ test('A appends turns and B fetches only the new chunks, appending at the length
   expect(chatSyncRows(b.io.statePath).find((r) => r.id === chat.id)?.bytes).toBe(24)
 })
 
-test('a chat archived before it was shared never goes up; archiving a shared one reaches B and leaves the store a week later', async () => {
+test('a chat archived before it was shared never goes up; archiving a shared one reaches B and leaves the store three days later', async () => {
   const a = pc('PC-A')
   const b = pc('PC-B')
   const old = a.add({ archived: true }, '{"old":1}\n')
@@ -199,7 +199,7 @@ test('a chat archived before it was shared never goes up; archiving a shared one
   expect(mineLanded).toHaveLength(2)
   expect(mineLanded[1].archived).toBe(true)
 
-  // A week on, it leaves the store with its transcript; neither PC lists it, and unarchiving it
+  // Three days on, it leaves the store with its transcript; neither PC lists it, and unarchiving it
   // does not send it again.
   const later = Date.now() + ARCHIVED_KEEP_MS + 3600_000
   await syncChats(a.io, later)
