@@ -34,6 +34,7 @@ import {
   remoteVersion,
   setRemote,
 } from '../climayte-remote'
+import { MIRROR_FRESH_MS, type StoreMirror } from './login-sync-mirror'
 
 /** The store's cap on a queue blob (cloud/login-sync-worker/worker.js). */
 export const QUEUE_MAX_BLOB = 256 * 1024
@@ -158,6 +159,8 @@ export function fitSnapshot(
 }
 
 export interface QueueIo {
+  /** The store mirror of the pass; without one the list route is read directly. */
+  mirror?: StoreMirror
   call: (method: string, path: string, body?: unknown) => Promise<{ status: number; json: any }>
   key: Buffer
   /** This PC's id and name. */
@@ -210,13 +213,23 @@ async function upload(io: QueueIo, own: number, now: number): Promise<void> {
   sent = { fingerprint: print, at: now }
 }
 
-/** One queue pass: upload this PC's snapshot when it changed (or the heartbeat is due), download
- *  every other PC's that changed. Throws the first problem after doing all it can. */
-export async function syncQueue(io: QueueIo, now = Date.now()): Promise<void> {
+async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: number }>> {
+  if (io.mirror) {
+    await io.mirror.refresh({ maxAgeMs: MIRROR_FRESH_MS })
+    const v = io.mirror.view('queues')
+    if (!v.ok) throw queueFailure('Reading the queues', v.reply)
+    return v.rows as Array<{ pc: string; version: number }>
+  }
   const list = await io.call('GET', '/v1/queues')
   if (list.status !== 200 || !Array.isArray(list.json?.queues))
     throw queueFailure('Reading the queues', list)
-  const rows = list.json.queues as Array<{ pc: string; version: number }>
+  return list.json.queues
+}
+
+/** One queue pass: upload this PC's snapshot when it changed (or the heartbeat is due), download
+ *  every other PC's that changed. Throws the first problem after doing all it can. */
+export async function syncQueue(io: QueueIo, now = Date.now()): Promise<void> {
+  const rows = await queueRows(io)
   const own = rows.find((r) => r.pc === io.pc)?.version ?? 0
   let problem: Error | null = null
   try {

@@ -103,6 +103,7 @@ import {
   syncDesktopLogins,
 } from './desktop-login-sync'
 import { setBeforeLaunchHook } from './instances'
+import { MIRROR_FRESH_MS, StoreMirror } from './login-sync-mirror'
 
 export const SYNC_EVERY_MS = 30_000
 const CONFIG_PATH = join(CONFIG_DIR, 'login-sync.json')
@@ -236,7 +237,7 @@ async function call(
   method: string,
   path: string,
   body?: unknown,
-): Promise<{ status: number; json: any }> {
+): Promise<{ status: number; json: any; rev?: number }> {
   const res = await fetch(new URL(path, l.url), {
     method,
     headers: { authorization: `Bearer ${l.token}`, 'content-type': 'application/json' },
@@ -250,7 +251,10 @@ async function call(
   } catch {
     // not JSON (a proxy's error page): the status says enough
   }
-  return { status: res.status, json }
+  // The store's change counter, sent on the list routes: where a changes cursor can start.
+  const header = res.headers.get('x-store-rev')
+  const rev = header !== null && /^\d+$/.test(header) ? Number(header) : undefined
+  return { status: res.status, json, rev }
 }
 
 const httpError = (what: string, r: { status: number; json: any }): Error =>
@@ -990,6 +994,16 @@ async function syncDesktopLoginsPass(
   }
 }
 
+// One mirror per store (address and token): the pass and the queue and chat parts all read it.
+let mirror: { id: string; m: StoreMirror } | null = null
+function mirrorFor(l: Live): StoreMirror {
+  const id = `${l.url}
+${l.token}`
+  if (mirror?.id !== id)
+    mirror = { id, m: new StoreMirror((method, path) => call(l, method, path)) }
+  return mirror.m
+}
+
 async function executeSyncPass(
   l: Live,
   c: SyncConfig,
@@ -999,11 +1013,12 @@ async function executeSyncPass(
 ): Promise<void> {
   cliWaitingPass = new Set()
   try {
-    const list = await call(l, 'GET', '/v1/logins')
-    if (list.status !== 200 || !Array.isArray(list.json?.logins))
-      throw httpError('Reading the store', list)
+    const m = mirrorFor(l)
+    await m.refresh()
+    const list = m.view('logins')
+    if (!list.ok) throw httpError('Reading the store', list.reply)
     const store = new Map<string, StoreRow>()
-    for (const r of list.json.logins as Array<{ id: string; version: number; meta?: any }>)
+    for (const r of list.rows as Array<{ id: string; version: number; meta?: any }>)
       store.set(r.id, {
         version: r.version,
         num: typeof r.meta?.num === 'number' ? r.meta.num : null,
@@ -1053,6 +1068,7 @@ async function queuePass(l: Live, c: SyncConfig, by: string): Promise<void> {
   try {
     await syncQueue({
       call: (method, path, body) => call(l, method, path, body),
+      mirror: mirrorFor(l),
       key: l.key,
       pc: c.pcId,
       name: by,
@@ -1095,6 +1111,7 @@ function chatsPass(l: Live, c: SyncConfig, by: string): void {
     try {
       await syncChats({
         call: (method, path, body) => call(l, method, path, body),
+        mirror: mirrorFor(l),
         key: l.key,
         pc,
         name: by,

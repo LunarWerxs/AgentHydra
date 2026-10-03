@@ -8,6 +8,8 @@
 //                          and landing a chat another PC shared.
 // cli-login-sync.ts runs a chat pass beside the logins when the "Sync desktop chats" box is on.
 
+import type { StoreMirror } from './login-sync-mirror'
+
 /** One desktop chat on this PC, as the sync sees it. */
 export interface LocalChat {
   /** The desktop record's id: its file is `local_<id>.json`. A UUID. */
@@ -61,6 +63,8 @@ export interface ChatLocal {
 
 /** What the chat pass needs from login sync. */
 export interface ChatIo {
+  /** The store mirror of the pass; without one the list route is read directly. */
+  mirror?: StoreMirror
   /** One authorised request to the store; `json` is the parsed answer body (null when none). */
   call: (method: string, path: string, body?: unknown) => Promise<{ status: number; json: any }>
   /** The sync's 32-byte key. */

@@ -66,6 +66,8 @@ token, never the token.
 
 **Changes feed.** The `/v1/changes?since=<n>` route carries all rows with `rev > n` from `logins`, `queues` and `chats`, plus tombstones for deleted rows, in one batch. The store tracks a `rev` that increments on every successful write (PUT or DELETE), stamps each row with the rev it was written at, and returns the current `rev` in the response and the `x-store-rev` header on every list route, so a client can update its cursor without missing a write. Cursors older than the stored `floor` (tombstones older than 30 days) get `{full: true}` to resync. A cursor equal to the current rev is answered from the one `store_rev` row (idle: 1 row read, against every row of all three tables for the list routes). A refused write (409, 507) changes nothing, rev included. An existing database is upgraded on first use (a `rev` column and index are added; old rows keep rev 0). An older client ignores `/v1/changes` and keeps using the list routes; the Worker must be redeployed for the new clients.
 
+**Client use.** Each PC keeps one mirror of the three lists (`server/src/core/login-sync-mirror.ts`): the first pass reads the full lists and starts the cursor at the lowest `x-store-rev`; later passes ask only `GET /v1/changes?since=<cursor>` (upsert rows, drop `gone`), and a missing route, a list without `x-store-rev` or `{full: true}` means the full lists again.
+
 The chat routes (desktop chat sync) need this Worker **redeployed** too: paste the new `worker.js` over
 the old one. Chats and chunks live in their own `chats` and `chat_chunks` tables.
 

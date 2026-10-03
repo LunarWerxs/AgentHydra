@@ -30,6 +30,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { cutChunks, openChunk, openRecord, sealRecord, shareableEnd } from './chat-sync-codec'
 import type { ChatIo, ChatSyncRow, IncomingChat, LocalChat } from './desktop-chat-types'
+import { MIRROR_FRESH_MS } from './login-sync-mirror'
 
 /** Raw transcript bytes one pass reads in all; the rest goes on the next pass. */
 export const PASS_READ_MAX = 64 * 1024 * 1024
@@ -184,11 +185,20 @@ function sealedOk(x: any, id: string): x is Sealed {
 }
 
 async function readRows(io: ChatIo): Promise<Map<string, StoreRow>> {
-  const list = await io.call('GET', '/v1/chats')
-  if (list.status !== 200 || !Array.isArray(list.json?.chats))
-    throw chatFailure('Reading the chats', list)
+  let listed: StoreRow[]
+  if (io.mirror) {
+    await io.mirror.refresh({ maxAgeMs: MIRROR_FRESH_MS })
+    const v = io.mirror.view('chats')
+    if (!v.ok) throw chatFailure('Reading the chats', v.reply)
+    listed = v.rows as StoreRow[]
+  } else {
+    const list = await io.call('GET', '/v1/chats')
+    if (list.status !== 200 || !Array.isArray(list.json?.chats))
+      throw chatFailure('Reading the chats', list)
+    listed = list.json.chats
+  }
   const rows = new Map<string, StoreRow>()
-  for (const r of list.json.chats as StoreRow[]) if (r.meta?.k === 'r') rows.set(r.id, r)
+  for (const r of listed) if (r.meta?.k === 'r') rows.set(r.id, r)
   return rows
 }
 
