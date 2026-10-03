@@ -28,8 +28,12 @@ describe('toolsForCaller', () => {
     const bound = toolsForCaller(async () => CALLER_PID)
     const rebound = bound.filter((t, i) => t !== TOOLS[i]).map((t) => t.name)
     // history_search / history_read resolve the CALLER's own transcript, so they are bound too.
+    // The climayte_* tools resolve the calling chat as the origin a ping goes back to.
     expect(rebound.sort()).toEqual([
       'check_my_usage',
+      'climayte_manage',
+      'climayte_run',
+      'climayte_status',
       'history_read',
       'history_search',
       'move_chat',

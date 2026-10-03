@@ -366,6 +366,8 @@ export interface CliMaytePing {
   idle(): Promise<void>
   /** Pings for this chat that no channel delivered; `clear` marks them read. */
   unreadPings(sessionId: string, opts?: { clear?: boolean }): { count: number; texts: string[] }
+  /** The chats holding unread pings: climayte_status traces its caller only when there are any. */
+  unreadSessions(): string[]
   stop(): void
 }
 
@@ -671,6 +673,11 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
         save()
       }
       return { count: texts.length, texts }
+    },
+    unreadSessions() {
+      return Object.values(ledger.origins).flatMap((b) =>
+        b.origin.kind === 'chat' && b.unread.length ? [b.origin.sessionId] : [],
+      )
     },
     stop() {
       stopped = true

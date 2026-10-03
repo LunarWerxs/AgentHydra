@@ -23,7 +23,7 @@ import {
 import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
-import { climayteRunningCount, startCliMayte } from './climayte'
+import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayte'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
 import {
   APP_ROOT,
@@ -1123,6 +1123,7 @@ function stopBackgroundTimers(): void {
   stopDesktopCliFeed()
   stopExtraUsageGuard()
   stopStallSentinel()
+  stopCliMaytePing()
 }
 
 // Every toolbox child this daemon spawns is told THIS daemon's URL (audit AH-04): the bound

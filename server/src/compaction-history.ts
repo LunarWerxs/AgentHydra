@@ -277,6 +277,9 @@ export function readHistory(sources: HistorySource[], sourceId: string, offset =
 export interface OwnTranscript {
   sessionId: string
   path: string
+  /** The Claude home (config dir) whose registry or projects named it: where its live peer pipe is
+   *  published, so CliMayte's ping can reach it (climayte-ping.ts). */
+  home: string
   /** How the session was found, printed back so the answer can be checked rather than believed. */
   how: string
 }
@@ -304,7 +307,7 @@ export async function resolveOwnTranscript(opts: {
     for (const home of [...homes, ...(await moreHomes())]) {
       const path = findTranscriptById(home, wanted)
       if (path)
-        return { sessionId: wanted, path, how: `session id given; transcript under ${home}` }
+        return { sessionId: wanted, path, home, how: `session id given; transcript under ${home}` }
     }
     throw new Error(`no Claude Code transcript for session ${wanted} on this machine`)
   }
@@ -324,6 +327,7 @@ export async function resolveOwnTranscript(opts: {
         return {
           sessionId: reg.sessionId,
           path,
+          home,
           how: `calling engine pid ${pid} is live session ${reg.sessionId} (${home}/sessions)`,
         }
     }

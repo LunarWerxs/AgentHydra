@@ -4,7 +4,7 @@
 // (the bunfig preload), so climayte's `<CONFIG_DIR>/corch/` state never touches a real install. The
 // accounts are fakes pointing at temp config dirs, and the CLI is tests/mocks/fake-claude.ts run by
 // the same bun that runs this suite.
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import {
   existsSync,
   lstatSync,
@@ -1525,8 +1525,17 @@ describe('climayte_status scope (field notes 1, 4 and 7)', () => {
     const originalFetch = globalThis.fetch
     let urls: string[] = []
     let answer: unknown = []
-    afterAll(() => {
+    // The caller is pinned: unpinned, it resolves whatever chat runs this suite.
+    beforeAll(async () => {
+      const { setCallerTranscriptResolver } = await import('../src/mcp-self')
+      setCallerTranscriptResolver(async () => {
+        throw new Error('no calling chat in this test')
+      })
+    })
+    afterAll(async () => {
       globalThis.fetch = originalFetch
+      const { setCallerTranscriptResolver } = await import('../src/mcp-self')
+      setCallerTranscriptResolver(null)
     })
     const tool = async (name: string) => {
       const { TOOLS } = await import('../src/mcp')
@@ -1549,10 +1558,15 @@ describe('climayte_status scope (field notes 1, 4 and 7)', () => {
       await t.run({ active: true, limit: 5 })
       await t.run({ id: 'w-1', wait_seconds: 5 })
       const paths = urls.map((u) => new URL(u).pathname + new URL(u).search)
+      // Each read first asks which chats hold unread pings (docs/CLIMAYTE.md).
       expect(paths).toEqual([
+        '/api/corch/pings',
         '/api/corch/workers?limit=20&brief=1',
+        '/api/corch/pings',
         '/api/corch/workers?group=g-1&brief=1',
+        '/api/corch/pings',
         '/api/corch/workers?active=1&limit=5&brief=1',
+        '/api/corch/pings',
         '/api/corch/workers/w-1?wait=5',
       ])
     })
@@ -1563,11 +1577,16 @@ describe('climayte_status scope (field notes 1, 4 and 7)', () => {
         group: 'g-1',
         workers: [{ id: 'w-1', title: 'x', status: 'queued', account: null, prompt: 'long' }],
       }
-      const r = await t.run({ tasks: [{ prompt: 'long', cwd: '.' }] })
+      const { ping, ...r } = (await t.run({ tasks: [{ prompt: 'long', cwd: '.' }] })) as {
+        ping: string
+      }
       expect(r).toEqual({
         group: 'g-1',
         workers: [{ id: 'w-1', title: 'x', status: 'queued', account: null }],
       })
+      expect(ping).toBe(
+        'off: no calling chat in this test; run python ~/.claude/tools/climayte_wait.py --group g-1',
+      )
     })
   })
 })

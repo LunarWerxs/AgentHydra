@@ -638,6 +638,79 @@ estimate, `notice` says how much), `done`, `failed`, `cancelled`. Read with `cli
 `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`; when a
 model or effort was asked for, the line ends ` with claude-opus-5-5, effort max`.
 
+### Pings to the dispatching chat (`server/src/climayte-ping.ts`, owner, 2026-10-03)
+
+Owner, 2026-10-03: "when a chat finishes, it pings the orchestrator that started it", and a worker
+that is five-hour or weekly limited and moved is reported to that chat too. Until then a chat only
+learned by polling (`climayte_status`, or a background `climayte_wait.py` it had to remember).
+
+**Origin.** Every worker can carry an `origin`, saved with it in `workers.json`:
+`{ kind: 'chat', sessionId, home, transcript, how }` (the dispatching chat and the Claude home whose
+live registry reaches it) or `{ kind: 'worker', workerId }` (a manager worker). It is only ever set
+from the caller the daemon itself resolved: `climayte_run`, `climayte_manage` and `climayte_status`
+are caller-aware (`CALLER_AWARE_TOOLS` in `mcp-self.ts`), so the MCP route binds them to the calling
+process, and the tool turns that into the chat's transcript (`callerOrigin`, using
+`resolveOwnTranscript`, whose answer now names its `home`). An `origin` key a client writes into
+its own tool arguments is ignored. The tool posts the resolved origin to `POST /api/corch/workers`
+(or `/api/corch/waves`), and the route checks it again before storing it: `sessionId` must be a
+UUID and `home` an absolute folder that exists; a malformed one is dropped and pings are off for
+that dispatch. `notify: false` on `climayte_run` / `climayte_manage` sends no origin at all.
+
+- A `climayte_run` whose caller is itself a CliMayte worker's session gets
+  `{ kind: 'worker', workerId }`: the worker hears of it through `climayteSend` (non-urgent), never
+  its transcript. Wave tasks (`wave_dispatch`) get no origin: the wave report already wakes the
+  manager. The manager worker carries the origin of the chat that called `climayte_manage`.
+- The tool's answer says which: `ping: "on: <first 8 of the session id> is messaged when work
+  settles (<how>)"`, `ping: "on: manager <id> is sent a message when work settles"`, or
+  `ping: "off: <why>; run python ~/.claude/tools/climayte_wait.py --group <g>"`.
+
+**What triggers a ping.** Each worker change is diffed against the last snapshot of that worker.
+Things the chat must act on: done with the check passed, done and needing a verdict, check failed
+(sent back or not), failed, cancelled, the group settled. Things it only needs to know: limited and
+moved (an account hit its 5-hour or weekly limit and the work resumed on another), stuck (waiting
+more than 5 minutes, the five-minute rule's bound).
+
+**Batching** (so fifteen finishes cost the chat one turn, not fifteen): a settled group, or an origin
+with no live work left, goes out 10 s later; otherwise the first event the chat must act on opens a
+window that closes after 90 s of quiet or 5 minutes after it opened, whichever is first.
+Information-only events ride along with the next batch, or go alone after 30 minutes. A 15 s
+heartbeat catches stuck workers and due batches. The outbox is `<POINTER_DIR>/climayte/pings.json`:
+an event is written pending before the send and marked delivered only once the send is confirmed, so
+a daemon restart replays what was not delivered and never what was.
+
+**The message**, plain text, ids and reasons only (never a prompt, a report or a verdict note, so
+worker text never enters the chat):
+
+```
+[AgentHydra · CliMayte] Not from the user. Ping 3-5, 3 updates since 14:02:
+• w-1a2b3c4d "Fix events rows": #94 hit its 5-hour limit; resumed on #102 after 12s.
+• w-1a2b3c4d "Fix events rows": done on #102, needs your verdict.
+• w-5e6f7a8b "Docs": done on #84, check passed.
+Group g-1f2e3d: 2 done, 0 failed, 0 running, 1 waiting.
+Next: climayte_status {group:"g-1f2e3d", report:true}, then climayte_verdict.
+```
+
+At most 15 bullets (`+N more` after that), one tally line per group.
+
+**Delivery, in order.** (1) The chat's own peer pipe (`peer-message.ts`, found through `home`'s live
+session registry; it queues behind a running turn), confirmed by the text appearing in the
+transcript within 45 s. (2) While the chat is not live, the same again every 2 minutes for 2 hours.
+(3) Then, only for a failed or settled group on a desktop chat whose instance is running, the
+composer (`POST /api/sessions/:id/message`), and never after a pipe write that may already have
+landed. (4) Last, one OS toast, and the batch is kept as that chat's unread pings, which its next
+`climayte_status` shows (`unreadPings`) and marks read. A `worker` origin gets the text through
+`climayteSend` instead.
+
+**Adopting a running group.** Work dispatched before origins existed, or by a caller that could not
+be traced, has no origin. `climayte_status { group, ping: true }` makes the calling chat the origin
+of that group's live workers that have none, and only those (a worker another chat or manager owns
+keeps its origin); it answers `adopted` (how many) and a `ping` line like `climayte_run`'s.
+
+**Kill switch.** While the file `<POINTER_DIR>/climayte/ping-off` exists (`~/.agenthydra/climayte/ping-off`
+on a normal install), nothing is recorded or sent, and dispatches answer `ping: "off: ..."` naming
+the file. Delete it to turn pings back on. `startCliMayte()` starts the outbox (`startCliMaytePing`
+with the real worker feed and transports) and daemon shutdown stops it (`stopCliMaytePing`).
+
 ### API (what routes and MCP call)
 
 ```ts
@@ -947,6 +1020,11 @@ desktop? ... to save me from having to do both individually."
   and cwd, not cancelled or failed) answers with the worker already made, marked `repeat: true`,
   and starts nothing; the answer carries `repeated` and a `note`. `copies: true` makes new ones
   anyway (field note 62).
+  The body's `origin` (only ever the caller the MCP tool resolved) is validated and stored; the
+  answer carries `ping: { on: true, to? } | { on: false, why }`. `POST /api/corch/waves` the same.
+- `POST /api/corch/adopt` `{ group, origin }` → `climayteAdopt` (`climayte_status {group, ping:true}`);
+  `GET /api/corch/pings` → `{ unread: [sessionId] }`, the chats holding undelivered pings;
+  `POST /api/corch/pings/read` `{ sessionId }` → that chat's `{ count, texts }`, marked read
 - `POST /api/corch/workers/:id/send` `{ text, urgent?, model?, effort? }` → `climayteSend`
 - `POST /api/corch/workers/:id/handoff` → `climayteHandoff`
 - `POST /api/corch/workers/:id/priority` `{ priority }` → `climayteSetPriority` (400 on a bad value)
@@ -983,8 +1061,13 @@ wrapped as `{ peerWarning, result }`, and an error carries it).
   account by themselves at a usage limit, and are visible in AgentHydra's CliMayte view. Answers
   only `{ group, workers: [{ id, title, status, account }] }` (field note 7: the full view echoed
   every prompt back). `model` (opus or sonnet) and `effort` (low..max) get one description line
-  each; the top-level pair is the group default.
-- `climayte_status { group?, id?, ids?, report?, chars?, active?, limit?, wait_seconds? }`:
+  each; the top-level pair is the group default. Takes `notify: false` (no ping, see "Pings to
+  the dispatching chat") and answers a `ping` line saying whether the calling chat will be pinged.
+- `climayte_status { group?, id?, ids?, report?, chars?, active?, limit?, wait_seconds?, ping? }`:
+  `ping: true` with a `group` adopts that group's live workers without an origin for the calling
+  chat (answers `adopted` and a `ping` line); every call also shows the calling chat's
+  `unreadPings` (pings no channel delivered) and marks them read. When there are extras, a list
+  answer is wrapped as `{ workers, ...extras }`.
   `report: true` → the report view (above) for the scope, `ids` several workers at once. Without it,
   `id` → that ONE worker's detail
   (`climayteGet`, with its `events`; field note 4). Otherwise a brief list, newest first: a `group`'s

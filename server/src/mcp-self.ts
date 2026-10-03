@@ -1,6 +1,7 @@
 // server/src/mcp-self.ts - which instance is calling, split out of mcp.ts: the self-
 // identification that has to run in the MCP server process, the caller-pid plumbing the HTTP
 // transport feeds it, and the `nextStep` line every usage tool attaches.
+import type { OwnTranscript } from './compaction-history'
 import type { SelfIdentityDetection } from './core/self-identity'
 import { apiOrLocal, qs, type ResolvedInstanceRow } from './mcp-client'
 import type { UsageAdvice, UsageSnapshot } from './types'
@@ -107,6 +108,8 @@ async function detectSelf(
 export type CallerPidSource = () => Promise<number | null>
 export const CALLER_PID_ARG = 'callerPid'
 // history_search / history_read are here because "my own transcript" is a caller identity too.
+// climayte_run / climayte_manage / climayte_status record or adopt the CALLING chat as the origin
+// CliMayte pings when the work settles (callerOrigin; owner, 2026-10-03).
 export const CALLER_AWARE_TOOLS = new Set([
   'whoami',
   'check_my_usage',
@@ -114,6 +117,9 @@ export const CALLER_AWARE_TOOLS = new Set([
   'move_chats',
   'history_search',
   'history_read',
+  'climayte_run',
+  'climayte_manage',
+  'climayte_status',
 ])
 
 /** The HTTP caller's pid; null when the route bound a caller but the lookup named nobody (or
@@ -145,6 +151,59 @@ export async function ownTranscript(a: Record<string, unknown>) {
       return dir ? [dir] : []
     },
   })
+}
+
+/** The chat CliMayte pings about work this call dispatches (climayte-ping.ts). */
+export interface CallerChatOrigin {
+  kind: 'chat'
+  sessionId: string
+  home: string
+  transcript: string | null
+  how: string
+}
+
+type CallerTranscriptResolver = (a: Record<string, unknown>) => Promise<OwnTranscript>
+let callerTranscriptResolver: CallerTranscriptResolver | null = null
+/** Tests only: stand in for the process walk (null puts the real one back). */
+export function setCallerTranscriptResolver(fn: CallerTranscriptResolver | null): void {
+  callerTranscriptResolver = fn
+}
+
+/** The calling chat as a ping origin, or why there is none. Only the route's caller binding counts:
+ *  no argument a client sends (an `origin`, a `session_id`) is read, so a chat cannot have another
+ *  chat's work reported to it, or its own reported elsewhere. Never throws. */
+export async function callerOrigin(
+  a: Record<string, unknown>,
+): Promise<{ origin: CallerChatOrigin; why: null } | { origin: null; why: string }> {
+  try {
+    const t = callerTranscriptResolver
+      ? await callerTranscriptResolver(a)
+      : await (async () => {
+          const callerPid = await callerPidFromArgs(a)
+          if (callerPid === null) throw new Error('the calling process could not be traced')
+          const { resolveOwnTranscript } = await import('./compaction-history')
+          return resolveOwnTranscript({
+            callerPid: callerPid ?? null,
+            extraHomes: async () => {
+              const dir = (await detectSelf(false, callerPid)).configDir
+              return dir ? [dir] : []
+            },
+          })
+        })()
+    return {
+      origin: {
+        kind: 'chat',
+        sessionId: t.sessionId,
+        home: t.home,
+        transcript: t.path,
+        how: t.how,
+      },
+      why: null,
+    }
+  } catch (err) {
+    const msg = (err instanceof Error ? err.message : String(err)).split('\n')[0].trim()
+    return { origin: null, why: msg || 'the calling chat could not be identified' }
+  }
 }
 
 /** Identity as the tools report it: the instance (when it is a managed one), the evidence, and an

@@ -126,6 +126,12 @@ import {
   windDownAt,
   windDownMessage,
 } from './climayte-lib'
+import {
+  type CliMayteOrigin,
+  type CliMaytePing,
+  type CliMaytePingDeps,
+  startCliMaytePing,
+} from './climayte-ping'
 import { FIT_PCT, projectedPct, sizeTask } from './climayte-placement'
 import { launchRunner, type RunnerPids, readRunnerExit, readRunnerPids } from './climayte-runner'
 import { roomNow, scheduleWorker, tickAccounts, tickState } from './climayte-schedule'
@@ -148,6 +154,7 @@ import { judgeWaveTask, readWave, waveBatch, waveDone, writeWave } from './clima
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { isPidAlive, killProcessTree } from './core/process'
+import { POINTER_DIR } from './instance'
 import { parseResetTime } from './usage'
 
 export {
@@ -1957,6 +1964,8 @@ export function climayteRun(input: {
   copies?: boolean
   /** The wave these workers are tasks of (set by the manager's wave_dispatch). */
   wave?: string
+  /** Who dispatched them, as the route resolved the caller (originFor); pinged when they settle. */
+  origin?: CliMayteOrigin
 }): RunReply {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
@@ -2008,8 +2017,11 @@ export function climayteRun(input: {
   const made = fresh.map((i, k) =>
     newWorker(input.tasks[i] as RunTask, settings[i], sized[k], group, input.accounts, now),
   )
+  // A wave's tasks are reported to their manager by the wave's own batch wake, so they carry none.
+  const origin = input.wave ? undefined : originFor(input.origin)
   for (const [k, w] of made.entries()) {
     if (input.wave) w.wave = input.wave
+    if (origin) w.origin = origin
     workers.set(w.id, w)
     journal(w, 'dispatched', {
       cwd: w.cwd,
@@ -2664,6 +2676,8 @@ export function climayteWaveStart(input: {
   verify?: unknown
   branch?: unknown
   maxRounds?: unknown
+  /** The climayte_manage caller: the manager worker reports to it. */
+  origin?: CliMayteOrigin
 }): { wave: string; managerId: string; waiter: string } {
   load()
   const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
@@ -2730,6 +2744,7 @@ export function climayteWaveStart(input: {
       },
     ],
     group: `mgr-${id}`,
+    origin: input.origin,
   })
   const managerId = manager.workers[0]?.id as string
   const mw = workers.get(managerId)
@@ -3040,5 +3055,131 @@ export function startCliMayte(): void {
   if (started) return
   started = true
   sweepWorkerFiles()
+  startPing()
   schedule(0)
+}
+
+// --- pings to the dispatching chat (climayte-ping.ts; docs/CLIMAYTE.md) ----------------------------
+// Owner, 2026-10-03: "when a chat finishes, it pings the orchestrator that started it", and a worker
+// limited and moved is reported to that chat too. Every worker carries the chat (or worker) that
+// dispatched it as its `origin`; the outbox started here diffs every change and sends the batch.
+
+/** The ping outbox's folder: pings.json, pings-journal.jsonl and the `ping-off` kill switch. */
+export const PING_DIR = join(POINTER_DIR, 'climayte')
+const PING_OFF = join(PING_DIR, 'ping-off')
+
+let ping: CliMaytePing | null = null
+let pingOverrides: Partial<CliMaytePingDeps> | null = null
+
+/** A chat origin naming a CliMayte worker's own session is that worker: a manager (or any worker)
+ *  that dispatches work hears of it through climayteSend, not its transcript. */
+function originFor(o: CliMayteOrigin | undefined): CliMayteOrigin | undefined {
+  if (o?.kind !== 'chat') return o
+  for (const w of workers.values())
+    if (w.sessionId === o.sessionId || w.sessions?.includes(o.sessionId))
+      return { kind: 'worker', workerId: w.id }
+  return o
+}
+
+/** The composer fallback: a desktop chat whose instance runs, typed into through the daemon's own
+ *  message route (which tries the peer pipe first and never types over a live one). */
+const composer: NonNullable<CliMaytePingDeps['composer']> = {
+  async eligible(o) {
+    const { findDesktopChat } = await import('./instance-sessions')
+    if (!findDesktopChat(o.sessionId)) return false
+    const { desktopHomeFor } = await import('./session-launch')
+    const home = await desktopHomeFor(o.sessionId).catch(() => null)
+    if (!home) return false
+    const { listInstances } = await import('./core/instances')
+    const { samePathKey } = await import('./path-key')
+    return (await listInstances()).some((i) => samePathKey(i.dir, home) && i.isRunning)
+  },
+  async send(sessionId, text) {
+    const { api, JSON_HEADERS } = await import('./mcp-client')
+    try {
+      const r = (await api(`/api/sessions/${encodeURIComponent(sessionId)}/message`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ text }),
+      })) as { ok?: boolean; detail?: string }
+      return { ok: r?.ok === true, reason: r?.detail ?? 'sent' }
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : String(err) }
+    }
+  },
+}
+
+function startPing(): void {
+  if (ping) return
+  mkdirSync(PING_DIR, { recursive: true })
+  ping = startCliMaytePing({
+    dir: PING_DIR,
+    workers: () => [...workers.values()],
+    subscribe: onCliMayteChange,
+    climayteSend: (id, text) => climayteSend(id, text),
+    composer,
+    ...pingOverrides,
+  })
+}
+
+/** Stop the ping outbox (daemon shutdown). Pending pings stay in pings.json for the next start. */
+export function stopCliMaytePing(): void {
+  ping?.stop()
+  ping = null
+}
+
+/** The running outbox, or null before startCliMayte. */
+export function climaytePing(): CliMaytePing | null {
+  return ping
+}
+
+/** Tests only: replace the outbox's transports (null: the real ones). A running outbox is restarted
+ *  with them, so no test ever reaches a real chat. */
+export function setCliMaytePingDeps(deps: Partial<CliMaytePingDeps> | null): void {
+  pingOverrides = deps
+  if (!ping) return
+  stopCliMaytePing()
+  startPing()
+}
+
+/** Whether a dispatch with a valid origin will be pinged, and why not. */
+export function climaytePingState(): { on: true } | { on: false; why: string } {
+  if (existsSync(PING_OFF)) return { on: false, why: `pings are switched off (${PING_OFF})` }
+  return { on: true }
+}
+
+/** Pings no channel delivered to this chat (the last resort), marked read. */
+export function climayteUnreadPings(sessionId: string): { count: number; texts: string[] } {
+  return ping?.unreadPings(sessionId, { clear: true }) ?? { count: 0, texts: [] }
+}
+
+/** The chats with unread pings (none before startCliMayte). */
+export function climayteUnreadSessions(): string[] {
+  return ping?.unreadSessions() ?? []
+}
+
+/** climayte_status {group, ping: true}: the caller becomes the origin of the group's live workers
+ *  that have none, so work dispatched before origins existed (or with an untraced caller) is
+ *  pinged from now on. A worker already reporting elsewhere keeps its origin. */
+export function climayteAdopt(
+  group: string,
+  origin: CliMayteOrigin,
+): { adopted: number; owned: number; live: number; origin: CliMayteOrigin } {
+  load()
+  const o = originFor(origin) as CliMayteOrigin
+  let adopted = 0
+  let owned = 0
+  let live = 0
+  for (const w of workers.values()) {
+    if (w.group !== group || !isActive(w)) continue
+    live++
+    if (w.origin) {
+      owned++
+      continue
+    }
+    w.origin = o
+    adopted++
+  }
+  if (adopted) save()
+  return { adopted, owned, live, origin: o }
 }

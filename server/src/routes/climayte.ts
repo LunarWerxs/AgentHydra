@@ -4,8 +4,11 @@
 // MCP tools go through here too, never climayte.ts directly: a stdio MCP server is its own process,
 // and a second CliMayte there would relaunch the daemon's workers as if they had died.
 
+import { existsSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import {
   CliMayteSplitNeeded,
+  climayteAdopt,
   climayteCancel,
   climayteCapacity,
   climayteGet,
@@ -13,6 +16,7 @@ import {
   climayteJournal,
   climayteJournalLines,
   climayteList,
+  climaytePingState,
   climayteRemove,
   climayteReports,
   climayteRun,
@@ -20,6 +24,8 @@ import {
   climayteSend,
   climayteSetPriority,
   climayteTotals,
+  climayteUnreadPings,
+  climayteUnreadSessions,
   climayteVerdict,
   climayteVerdicts,
   climayteWait,
@@ -28,6 +34,7 @@ import {
   climayteWaves,
   climayteWaveVerify,
 } from '../climayte'
+import type { CliMayteOrigin } from '../climayte-ping'
 import { buildStatus, remoteSnapshots } from '../climayte-remote'
 import { queueSharingOn } from '../core/cli-login-sync'
 import {
@@ -51,6 +58,40 @@ const waitMs = (v: string | undefined): number =>
 const optInt = (v: string | undefined): number | undefined => {
   const n = Math.floor(Number(v))
   return v !== undefined && v !== '' && Number.isFinite(n) && n >= 0 ? n : undefined
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** The dispatching chat the MCP tool resolved from its caller binding (mcp-self.ts callerOrigin),
+ *  checked before anything is pinged at it: a session id that is a UUID, a Claude home that is an
+ *  absolute folder on this machine. The tool never forwards an origin from its client's arguments;
+ *  a body without one is simply not pinged. */
+function chatOrigin(v: unknown): { origin: CliMayteOrigin | undefined; why: string | null } {
+  if (v === undefined || v === null) return { origin: undefined, why: null }
+  const o = v as Record<string, unknown>
+  if (o.kind !== 'chat') return { origin: undefined, why: 'origin refused: kind must be chat' }
+  if (typeof o.sessionId !== 'string' || !UUID.test(o.sessionId))
+    return { origin: undefined, why: 'origin refused: sessionId is not a session id' }
+  if (typeof o.home !== 'string' || !isAbsolute(o.home) || !existsSync(o.home))
+    return { origin: undefined, why: 'origin refused: home is not a folder on this machine' }
+  const transcript = typeof o.transcript === 'string' && o.transcript ? o.transcript : null
+  const how = typeof o.how === 'string' ? o.how.slice(0, 300) : ''
+  return {
+    origin: { kind: 'chat', sessionId: o.sessionId, home: o.home, transcript, how },
+    why: null,
+  }
+}
+
+/** What a dispatch answers about its pings: on (to a chat, or to the worker that dispatched it),
+ *  or off and why. */
+function pingReply(
+  origin: CliMayteOrigin | undefined,
+  refused: string | null,
+): { on: true; to?: string } | { on: false; why: string } {
+  if (!origin) return { on: false, why: refused ?? 'no origin was sent' }
+  const state = climaytePingState()
+  if (!state.on) return state
+  return origin.kind === 'worker' ? { on: true, to: origin.workerId } : { on: true }
 }
 
 // --- CliMayte workers -----------------------------------------------------------
@@ -139,27 +180,31 @@ app.post('/api/corch/workers', async (c) => {
   const strict = body.perAccountStrict ?? body.per_account_strict
   if (strict !== undefined && typeof strict !== 'boolean')
     return c.json({ error: 'perAccountStrict must be true or false' }, 400)
+  const { origin, why } = chatOrigin(body.origin)
   try {
-    return c.json(
-      climayteRun({
-        tasks: body.tasks as Parameters<typeof climayteRun>[0]['tasks'],
-        group: optStr(body.group),
-        accounts,
-        perAccount: cap === undefined ? undefined : Number(cap),
-        perAccountStrict: strict,
-        // Validated by climayteRun (unknown values are refused with the valid ones listed).
-        model: body.model as string | undefined,
-        effort: body.effort as string | undefined,
-        // Holds a named model or effort; without it the pick is auto (runSetting).
-        modelWhy: optStr(body.modelWhy),
-        kind: body.kind as string | undefined,
-        priority: body.priority as number | undefined,
-        size: body.size as string | undefined,
-        // A repeat of this group's dispatch from the last minutes answers with the workers it made
-        // (field note 62); `copies: true` makes new ones anyway.
-        copies: body.copies === true,
-      }),
-    )
+    const reply = climayteRun({
+      tasks: body.tasks as Parameters<typeof climayteRun>[0]['tasks'],
+      group: optStr(body.group),
+      accounts,
+      perAccount: cap === undefined ? undefined : Number(cap),
+      perAccountStrict: strict,
+      // Validated by climayteRun (unknown values are refused with the valid ones listed).
+      model: body.model as string | undefined,
+      effort: body.effort as string | undefined,
+      // Holds a named model or effort; without it the pick is auto (runSetting).
+      modelWhy: optStr(body.modelWhy),
+      kind: body.kind as string | undefined,
+      priority: body.priority as number | undefined,
+      size: body.size as string | undefined,
+      // A repeat of this group's dispatch from the last minutes answers with the workers it made
+      // (field note 62); `copies: true` makes new ones anyway.
+      copies: body.copies === true,
+      origin,
+    })
+    // The origin as stored: a chat that is itself a CliMayte worker became that worker.
+    const made = reply.workers.find((w) => !w.repeat)
+    const stored = made ? (climayteGet(made.id) as { origin?: CliMayteOrigin } | null) : null
+    return c.json({ ...reply, ping: pingReply(stored?.origin ?? origin, why) })
   } catch (err) {
     // Too big for one window (climayte sizeTasks): nothing started, and the pieces it needs.
     if (err instanceof CliMayteSplitNeeded)
@@ -220,17 +265,19 @@ app.post('/api/corch/verdicts', async (c) => {
 // mistake: 400 with the reason, nothing started.
 app.post('/api/corch/waves', async (c) => {
   const body = await jsonBody(c)
+  const { origin, why } = chatOrigin(body.origin)
   try {
-    return c.json(
-      climayteWaveStart({
-        plan: body.plan,
-        cwd: body.cwd,
-        tasks: body.tasks,
-        verify: body.verify,
-        branch: body.branch,
-        maxRounds: body.max_rounds ?? body.maxRounds,
-      }),
-    )
+    const reply = climayteWaveStart({
+      plan: body.plan,
+      cwd: body.cwd,
+      tasks: body.tasks,
+      verify: body.verify,
+      branch: body.branch,
+      maxRounds: body.max_rounds ?? body.maxRounds,
+      origin,
+    })
+    const stored = climayteGet(reply.managerId) as { origin?: CliMayteOrigin } | null
+    return c.json({ ...reply, ping: pingReply(stored?.origin ?? origin, why) })
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
   }
@@ -247,6 +294,26 @@ app.post('/api/corch/waves/:id/verify', async (c) => {
   return c.json({ ok: r.ok, message: r.message }, r.status as 200 | 404 | 409)
 })
 // What works per kind of task, from every verdict (climayte-scorecard.ts).
+// --- pings to the dispatching chat (climayte-ping.ts) -----------------------------------
+// climayte_status {group, ping: true}: the caller becomes the origin of the group's live workers
+// that have none (work dispatched before origins, or by an untraced caller).
+app.post('/api/corch/adopt', async (c) => {
+  const body = await jsonBody(c)
+  const group = optStr(body.group)
+  if (!group) return c.json({ error: 'group is required' }, 400)
+  const { origin, why } = chatOrigin(body.origin)
+  if (!origin) return c.json({ error: why ?? 'origin is required' }, 400)
+  const r = climayteAdopt(group, origin)
+  return c.json({ ...r, ping: pingReply(r.origin, null) })
+})
+// Which chats hold pings no channel delivered; POST .../read answers one chat's and marks them read.
+app.get('/api/corch/pings', (c) => c.json({ unread: climayteUnreadSessions() }))
+app.post('/api/corch/pings/read', async (c) => {
+  const body = await jsonBody(c)
+  const sid = optStr(body.sessionId)
+  if (!sid) return c.json({ error: 'sessionId is required' }, 400)
+  return c.json(climayteUnreadPings(sid))
+})
 app.get('/api/corch/scorecard', (c) => c.json(climayteScorecard()))
 app.post('/api/corch/workers/:id/handoff', (c) => c.json(climayteHandoff(c.req.param('id'))))
 app.post('/api/corch/cancel', async (c) => {

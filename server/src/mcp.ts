@@ -57,6 +57,8 @@ import { withOutputShaping } from './mcp-output'
 import {
   CALLER_AWARE_TOOLS,
   CALLER_PID_ARG,
+  type CallerChatOrigin,
+  callerOrigin,
   callerPidFromArgs,
   instanceLabel,
   type SelfIdentityPayload,
@@ -195,6 +197,121 @@ async function resolveMoveTarget(
       `${instanceLabel(row)} is a ${row.kind} instance; a chat can only land in a Claude DESKTOP instance.`,
     )
   return { toRef: String(row.num), targetNote: targetConfirmation('to', row) }
+}
+
+/** What a CliMayte dispatch answers about its pings (docs/CLIMAYTE.md "Pings to the dispatching
+ *  chat"). `route`: the route's own answer (absent when this daemon predates pings). */
+function climaytePingLine(
+  caller: { origin: CallerChatOrigin | null; why: string | null },
+  route: unknown,
+  group: string,
+): string {
+  const off = (why: string) =>
+    `off: ${why}; run python ~/.claude/tools/climayte_wait.py --group ${group}`
+  if (!caller.origin) return off(caller.why ?? 'the calling chat could not be identified')
+  const r = route as { on?: boolean; why?: string; to?: string } | null | undefined
+  if (!r || typeof r.on !== 'boolean') return off('this AgentHydra daemon does not send pings yet')
+  if (!r.on) return off(r.why ?? 'pings are off')
+  if (r.to) return `on: manager ${r.to} is sent a message when work settles`
+  return `on: ${caller.origin.sessionId.slice(0, 8)} is messaged when work settles (${caller.origin.how})`
+}
+
+/** The calling chat for a dispatch, unless the caller opted out with `notify: false`. */
+async function dispatchOrigin(
+  a: Record<string, unknown>,
+): Promise<{ origin: CallerChatOrigin | null; why: string | null }> {
+  if (a.notify === false) return { origin: null, why: 'notify: false' }
+  return callerOrigin(a)
+}
+
+/** climayte_status's ping extras: `ping: true` adopts the group's live workers without an origin
+ *  for the caller; pings no channel delivered to the caller are shown (and marked read). Null when
+ *  there is nothing to add. Never throws: a status read must not fail on its extras. */
+async function climayteStatusPings(
+  a: Record<string, unknown>,
+  group: string | undefined,
+): Promise<Record<string, unknown> | null> {
+  const extra: Record<string, unknown> = {}
+  let caller: { origin: CallerChatOrigin | null; why: string | null } | null = null
+  if (a.ping === true) {
+    if (!group) extra.ping = 'off: ping: true needs a group'
+    else {
+      caller = await callerOrigin(a)
+      try {
+        const r = caller.origin
+          ? ((await api('/api/corch/adopt', {
+              method: 'POST',
+              headers: JSON_HEADERS,
+              body: JSON.stringify({ group, origin: caller.origin }),
+            })) as { adopted?: number; ping?: unknown })
+          : null
+        if (r) extra.adopted = r.adopted ?? 0
+        extra.ping = climaytePingLine(caller, r?.ping, group)
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err)
+        extra.ping = climaytePingLine({ origin: null, why }, null, group)
+      }
+    }
+  }
+  try {
+    const { unread } = (await api('/api/corch/pings')) as { unread?: string[] }
+    if (Array.isArray(unread) && unread.length) {
+      caller ??= await callerOrigin(a)
+      const sid = caller.origin?.sessionId
+      if (sid && unread.includes(sid))
+        extra.unreadPings = await api('/api/corch/pings/read', {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ sessionId: sid }),
+        })
+    }
+  } catch {
+    // a daemon without the pings route: nothing unread to show
+  }
+  return Object.keys(extra).length ? extra : null
+}
+
+/** climayte_status's own answer: one worker, a wave, or the list in scope. */
+async function climayteStatusRead(
+  a: Record<string, unknown>,
+  group: string | undefined,
+): Promise<unknown> {
+  const wait = Math.min(CLIMAYTE_MAX_WAIT_S, Math.max(0, Number(a.wait_seconds) || 0))
+  const ids = Array.isArray(a.ids) ? a.ids.map((x) => str(x)).filter(Boolean) : []
+  if (a.wave != null && str(a.wave)) {
+    const w = str(a.wave)
+    const wave = (await api(`/api/corch/waves/${encodeURIComponent(w)}`)) as { group?: string }
+    const part = (group: string) =>
+      api(`/api/corch/workers${qs({ group, brief: 1, all: a.all === true ? 1 : undefined })}`)
+    const [manager, tasks] = await Promise.all([part(`mgr-${w}`), part(wave?.group ?? '')])
+    return [...(manager as unknown[]), ...(tasks as unknown[])]
+  }
+  if (a.id != null && str(a.id) && a.report !== true)
+    return api(
+      `/api/corch/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined })}`,
+    )
+  const limit =
+    a.limit != null && Number.isFinite(Number(a.limit))
+      ? Math.max(0, Math.floor(Number(a.limit)))
+      : group
+        ? undefined
+        : RECENT_FINISHED
+  const report = a.report === true
+  const chars = Number(a.chars)
+  return api(
+    `/api/corch/workers${qs({
+      group,
+      id: report && a.id != null && str(a.id) ? str(a.id) : undefined,
+      ids: ids.length ? ids.join(',') : undefined,
+      active: a.active === true ? 1 : undefined,
+      limit: ids.length ? undefined : limit,
+      brief: report ? undefined : 1,
+      all: a.all === true ? 1 : undefined,
+      report: report ? 1 : undefined,
+      chars: report && Number.isFinite(chars) && chars >= 0 ? Math.floor(chars) : undefined,
+      wait: wait > 0 ? wait : undefined,
+    })}`,
+  )
 }
 
 export const TOOLS: McpEngineTool[] = [
@@ -740,6 +857,11 @@ export const TOOLS: McpEngineTool[] = [
           description:
             'Default size for every task without its own: auto or whole (see the task `size`).',
         },
+        notify: {
+          type: 'boolean',
+          description:
+            'Default true: this chat is messaged when the work settles (finished, failed, needs a verdict, a group done; a worker limited and moved rides along). false: no messages; poll with climayte_status.',
+        },
         copies: {
           type: 'boolean',
           description:
@@ -761,10 +883,14 @@ export const TOOLS: McpEngineTool[] = [
             }),
           )
         : undefined
+      // The origin is only ever the caller the route bound: an `origin` in the client's own
+      // arguments is never read (callerOrigin).
+      const caller = await dispatchOrigin(a)
       const r = (await api('/api/corch/workers', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
+          ...(caller.origin ? { origin: caller.origin } : {}),
           tasks: Array.isArray(a.tasks) ? a.tasks : [],
           group: a.group != null ? str(a.group) : undefined,
           accounts,
@@ -784,6 +910,7 @@ export const TOOLS: McpEngineTool[] = [
         workers?: Array<Record<string, unknown>>
         repeated?: number
         note?: string
+        ping?: unknown
       }
       // Field note 7 (2026-09-30): the whole view per worker echoed 300 characters of every prompt
       // the orchestrator had just written, about 3k characters per five-task dispatch.
@@ -800,6 +927,7 @@ export const TOOLS: McpEngineTool[] = [
           ...(w.repeat ? { repeat: true } : {}),
         })),
         ...(r.repeated ? { repeated: r.repeated, note: r.note } : {}),
+        ping: climaytePingLine(caller, r.ping, r.group ?? str(a.group)),
       }
     },
   },
@@ -830,14 +958,21 @@ export const TOOLS: McpEngineTool[] = [
         verify: { type: 'string' },
         branch: { type: 'string', description: "Default: cwd's current branch." },
         max_rounds: { type: 'number', description: 'Re-dispatches per key (default 3).' },
+        notify: {
+          type: 'boolean',
+          description:
+            'Default true: this chat is messaged when the manager settles. false: no messages.',
+        },
       },
       ['plan', 'cwd', 'tasks'],
     ),
-    run: (a) =>
-      api('/api/corch/waves', {
+    run: async (a) => {
+      const caller = await dispatchOrigin(a)
+      const r = (await api('/api/corch/waves', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
+          ...(caller.origin ? { origin: caller.origin } : {}),
           plan: a.plan != null ? str(a.plan) : undefined,
           cwd: a.cwd != null ? str(a.cwd) : undefined,
           tasks: Array.isArray(a.tasks) ? a.tasks : [],
@@ -845,7 +980,10 @@ export const TOOLS: McpEngineTool[] = [
           branch: a.branch != null ? str(a.branch) : undefined,
           max_rounds: a.max_rounds != null ? Number(a.max_rounds) : undefined,
         }),
-      }),
+      })) as { wave?: string; ping?: unknown } & Record<string, unknown>
+      if (!r || typeof r.wave !== 'string') return r
+      return { ...r, ping: climaytePingLine(caller, r.ping, `mgr-${r.wave}`) }
+    },
   },
   {
     name: 'climayte_wave_verify',
@@ -902,45 +1040,21 @@ export const TOOLS: McpEngineTool[] = [
         description:
           "A wave id (from climayte_manage): lists that wave's workers plus its manager, newest first.",
       },
+      ping: {
+        type: 'boolean',
+        description:
+          "With `group`: make THIS chat the one messaged when that group's live workers settle (those that report to nobody yet: dispatched before pings, or by an untraced caller). Answers `adopted` and a `ping` line.",
+      },
     }),
     run: async (a) => {
-      const wait = Math.min(CLIMAYTE_MAX_WAIT_S, Math.max(0, Number(a.wait_seconds) || 0))
-      const ids = Array.isArray(a.ids) ? a.ids.map((x) => str(x)).filter(Boolean) : []
-      if (a.wave != null && str(a.wave)) {
-        const w = str(a.wave)
-        const wave = (await api(`/api/corch/waves/${encodeURIComponent(w)}`)) as { group?: string }
-        const part = (group: string) =>
-          api(`/api/corch/workers${qs({ group, brief: 1, all: a.all === true ? 1 : undefined })}`)
-        const [manager, tasks] = await Promise.all([part(`mgr-${w}`), part(wave?.group ?? '')])
-        return [...(manager as unknown[]), ...(tasks as unknown[])]
-      }
-      if (a.id != null && str(a.id) && a.report !== true)
-        return api(
-          `/api/corch/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined })}`,
-        )
       const group = a.group != null && str(a.group) ? str(a.group) : undefined
-      const limit =
-        a.limit != null && Number.isFinite(Number(a.limit))
-          ? Math.max(0, Math.floor(Number(a.limit)))
-          : group
-            ? undefined
-            : RECENT_FINISHED
-      const report = a.report === true
-      const chars = Number(a.chars)
-      return api(
-        `/api/corch/workers${qs({
-          group,
-          id: report && a.id != null && str(a.id) ? str(a.id) : undefined,
-          ids: ids.length ? ids.join(',') : undefined,
-          active: a.active === true ? 1 : undefined,
-          limit: ids.length ? undefined : limit,
-          brief: report ? undefined : 1,
-          all: a.all === true ? 1 : undefined,
-          report: report ? 1 : undefined,
-          chars: report && Number.isFinite(chars) && chars >= 0 ? Math.floor(chars) : undefined,
-          wait: wait > 0 ? wait : undefined,
-        })}`,
-      )
+      // Adoption first, so the list read after it already shows it.
+      const extra = await climayteStatusPings(a, group)
+      const answer = await climayteStatusRead(a, group)
+      if (!extra) return answer
+      return Array.isArray(answer)
+        ? { workers: answer, ...extra }
+        : { ...(answer as Record<string, unknown>), ...extra }
     },
   },
   {

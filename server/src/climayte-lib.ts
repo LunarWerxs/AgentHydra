@@ -10,6 +10,7 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import type { CliMayteOrigin } from './climayte-ping'
 import {
   type CliMaytePlacement,
   FIT_PCT,
@@ -239,6 +240,10 @@ export interface CliMayteWorker {
   wave?: string | null
   /** A manager with a live, unreported wave is held: no new attempt starts until the wave reports. */
   hold?: 'wave' | null
+  /** Who dispatched it, so its news is pinged back there (climayte-ping.ts): the calling chat as
+   *  the MCP route resolved it, or the worker that dispatched it. Absent: nobody is pinged (work
+   *  dispatched before 2026-10-03, a wave task, or `notify: false`). */
+  origin?: CliMayteOrigin
   createdAt: number
   updatedAt: number
 }
