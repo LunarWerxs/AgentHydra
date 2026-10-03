@@ -323,11 +323,13 @@ async function takeAll(
 
 /** One chat pass: send what this PC holds that the store lacks, then take what the store holds that
  *  this PC lacks. Does all it can, then throws the first problem. */
-export async function syncChats(io: ChatIo, now = Date.now()): Promise<void> {
+/** Returns whether anything moved (the state file changed): the sync loop polls less often when not. */
+export async function syncChats(io: ChatIo, now = Date.now()): Promise<boolean> {
   const rows = await readRows(io)
   const loaded = readState(io.statePath)
   const state: StateFile = loaded && loaded.pc === io.pc ? loaded : { pc: io.pc, chats: {} }
   const before = JSON.stringify(state)
+  let moved = false
   let problem: Error | null = null
   const fail = (err: unknown) => {
     problem ??= asError(err)
@@ -349,9 +351,13 @@ export async function syncChats(io: ChatIo, now = Date.now()): Promise<void> {
     await pruneArchived(io, rows, gone, now, fail)
     for (const id of gone) if (state.chats[id]) state.chats[id].gone = true
   } finally {
-    if (JSON.stringify(state) !== before) writeState(io.statePath, state)
+    if (JSON.stringify(state) !== before) {
+      writeState(io.statePath, state)
+      moved = true
+    }
   }
   if (problem) throw problem
+  return moved
 }
 
 type SendOutcome = 'done' | 'stopped'

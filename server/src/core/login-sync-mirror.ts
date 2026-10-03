@@ -50,10 +50,17 @@ export class StoreMirror {
   private listed = new Set<Table>()
   private cursor: number | null = null
   private at = 0
+  private changed: Record<Table, number> = { logins: 0, queues: 0, chats: 0 }
   private queue: Promise<void> = Promise.resolve()
   private items = new Map<string, { stamp: string; reply: Reply }>()
 
   constructor(private readonly call: Call) {}
+
+  /** How many refreshes brought rows of `tables` in or out (the feed's changes, a full list). The sync
+   *  loop compares it across a pass: unchanged means the store had nothing new for this PC there. */
+  changesIn(tables: Table[]): number {
+    return tables.reduce((n, t) => n + this.changed[t], 0)
+  }
 
   /** Bring `tables` (default: logins) up to date. `maxAgeMs` reuses a refresh at most that old (0:
    *  always ask); `full` reads the full lists whatever the cursor. Calls run one after another, so a
@@ -122,12 +129,15 @@ export class StoreMirror {
     if (r.status !== 200 || j?.full === true || !Number.isInteger(j?.rev)) return false
     for (const g of Array.isArray(j.gone) ? j.gone : [])
       if (g?.table in KEY) {
+        this.changed[g.table as Table]++
         this.rowsBy[g.table as Table].delete(g.id)
         this.items.delete(`/v1/${g.table}/${g.id}`)
       }
     for (const t of TABLES)
-      for (const row of Array.isArray(j[t.name]) ? j[t.name] : [])
+      for (const row of Array.isArray(j[t.name]) ? j[t.name] : []) {
         this.rowsBy[t.name].set(row[t.key], row)
+        this.changed[t.name]++
+      }
     this.cursor = j.rev
     return true
   }
@@ -141,6 +151,7 @@ export class StoreMirror {
       delete this.failed[t.name]
       this.listed.add(t.name)
       const res = await this.listOne(t.name, t.key)
+      this.changed[t.name]++
       if (!res || res.rev < 0) complete = false
       else low = low === null ? res.rev : Math.min(low, res.rev)
     }

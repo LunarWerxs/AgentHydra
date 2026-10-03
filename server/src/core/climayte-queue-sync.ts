@@ -31,6 +31,7 @@ import {
   type QueueSnapshot,
   type RemoteLive,
   type RemoteWorker,
+  remoteSnapshots,
   remoteVersion,
   setRemote,
 } from '../climayte-remote'
@@ -212,7 +213,8 @@ const livePrint = (snap: QueueSnapshot): string =>
       .map((id) => [id, bucket(snap.live[id].sessionPct), bucket(snap.live[id].weekPct)]),
   )
 
-async function upload(io: QueueIo, own: number, now: number): Promise<void> {
+/** True when the snapshot went up with something new in it; a heartbeat (nothing changed) is false. */
+async function upload(io: QueueIo, own: number, now: number): Promise<boolean> {
   const { blob, snap } = fitSnapshot(io.key, buildSnapshot(io.pc, io.name, now))
   const w = workersPrint(snap)
   const l = livePrint(snap)
@@ -220,7 +222,7 @@ async function upload(io: QueueIo, own: number, now: number): Promise<void> {
   // A worker change goes at once; a live-bucket change only after LIVE_GATE_MS; else the heartbeat.
   if (sent && sent.workers === w) {
     const age = now - sent.at
-    if (age < HEARTBEAT_MS && (sent.live === l || age < LIVE_GATE_MS)) return
+    if (age < HEARTBEAT_MS && (sent.live === l || age < LIVE_GATE_MS)) return false
   }
   const body = (version: number) => ({
     version,
@@ -232,6 +234,7 @@ async function upload(io: QueueIo, own: number, now: number): Promise<void> {
     r = await io.call('PUT', `/v1/queues/${io.pc}`, body(r.json.current.version))
   if (r.status !== 200) throw queueFailure('Uploading this PC’s queue', r)
   sentBy.set(io.pc, { workers: w, live: l, at: now })
+  return !sent || sent.workers !== w || sent.live !== l
 }
 
 async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: number }>> {
@@ -249,13 +252,17 @@ async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: numb
 
 /** One queue pass: upload this PC's snapshot when a worker changed, when the live readings moved a
  *  bucket (at most every LIVE_GATE_MS) or when the heartbeat is due, download
- *  every other PC's that changed. Throws the first problem after doing all it can. */
-export async function syncQueue(io: QueueIo, now = Date.now()): Promise<void> {
+ *  every other PC's that changed. Throws the first problem after doing all it can. Returns whether
+ *  anything the queue shares moved: this PC's snapshot went up, or another PC's came down with its
+ *  workers or live readings changed (a heartbeat alone is no news). The sync loop polls less often when
+ *  nothing moved. */
+export async function syncQueue(io: QueueIo, now = Date.now()): Promise<boolean> {
+  let moved = false
   const rows = await queueRows(io)
   const own = rows.find((r) => r.pc === io.pc)?.version ?? 0
   let problem: Error | null = null
   try {
-    await upload(io, own, now)
+    moved = await upload(io, own, now)
   } catch (err) {
     problem = err instanceof Error ? err : new Error(String(err))
   }
@@ -269,10 +276,14 @@ export async function syncQueue(io: QueueIo, now = Date.now()): Promise<void> {
         throw queueFailure('Downloading the other PC’s queue', r)
       const snap = openQueue(io.key, row.pc, r.json.blob)
       if (!snap) throw new Error('The other PC’s queue does not open with this PC’s key.')
+      const prev = remoteSnapshots().find((s) => s.pc === row.pc)
+      if (!prev || workersPrint(prev) !== workersPrint(snap) || livePrint(prev) !== livePrint(snap))
+        moved = true
       setRemote(snap, r.json.version ?? row.version)
     } catch (err) {
       problem ??= err instanceof Error ? err : new Error(String(err))
     }
   }
   if (problem) throw problem
+  return moved
 }

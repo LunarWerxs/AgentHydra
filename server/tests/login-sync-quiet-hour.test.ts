@@ -16,12 +16,30 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { liveByAccount } from '../src/climayte-core'
+import { liveByAccount, workers } from '../src/climayte-core'
+import {
+  clearRemote,
+  type QueueSnapshot,
+  remoteSnapshots,
+  remoteVersion,
+  setRemote,
+} from '../src/climayte-remote'
+import { localWorkPending } from '../src/core/cli-login-sync'
 import { resetQueueSync, sealQueue, syncQueue } from '../src/core/climayte-queue-sync'
 import { syncChats } from '../src/core/desktop-chat-sync'
 import type { ChatIo, ChatLocal, LocalChat } from '../src/core/desktop-chat-types'
 import { StoreMirror } from '../src/core/login-sync-mirror'
-import { dropQueue, type StatementStat, store, storeDb } from './login-sync-store'
+import { IDLE_MAX_MS, SyncPace } from '../src/core/login-sync-pace'
+import {
+  base,
+  dropQueue,
+  env,
+  freshIsolate,
+  type StatementStat,
+  store,
+  storeDb,
+  token,
+} from './login-sync-store'
 
 const key = randomBytes(32)
 const HOUR = 3_600_000
@@ -335,4 +353,148 @@ test('a busy hour: logins refreshed, a chat growing, both PCs heartbeating', asy
   const hour = await runHour(true, true)
   report('busy hour', hour)
   expect(hour.reads).toBeLessThanOrEqual(900)
+})
+
+// THE ADAPTIVE POLL (owner, 2026-10-03: ~2,300 rows an hour with both PCs idle). The Worker is on
+// *.workers.dev, where the Cache API is a no-op and free-plan isolates are short-lived, so every pass
+// reads the one-row head from D1: modelled here with HEAD_CACHE_S=0 and a fresh isolate per request.
+// Both PCs run the real syncQueue and the real SyncPace: a pass only when one is due, and a quiet
+// pass (nothing moved) doubles the wait from 30 s up to IDLE_MAX_MS.
+/** The store call the daemon makes (cli-login-sync.ts `call`): the reply with its x-store-rev, which
+ *  is what lets the mirror use the changes feed instead of listing the tables. */
+const storeWithRev = async (method: string, path: string) => {
+  const res = await fetch(`${base}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+  })
+  const h = res.headers.get('x-store-rev')
+  return { status: res.status, json: await res.json(), rev: h !== null ? Number(h) : undefined }
+}
+
+function pacedPc(i: number) {
+  const pc = randomUUID()
+  made.queues.push(pc)
+  return {
+    io: {
+      call: store,
+      mirror: new StoreMirror(storeWithRev),
+      key,
+      pc,
+      name: `PC-${i}`,
+    },
+    pace: new SyncPace(),
+    passes: 0,
+    remote: [] as Array<[QueueSnapshot, number]>,
+  }
+}
+type PacedPc = ReturnType<typeof pacedPc>
+
+/** One tick of a PC's loop (cli-login-sync.ts startLoginSync): a pass when one is due. Returns whether
+ *  this tick uploaded this PC's queue. */
+async function tickPc(p: PacedPc, now: number, local = false): Promise<boolean> {
+  if (local && localWorkPending()) p.pace.nudge()
+  if (!p.pace.due(now)) return false
+  p.passes++ // a free-plan isolate that never saw the head
+  freshIsolate() // a free-plan isolate that never saw the head
+  const before = p.io.mirror.changesIn(['logins', 'chats'])
+  await p.io.mirror.refresh({ tables: ['logins', 'queues'] })
+  // Both PCs share this process's remote-queue map, which one PC per process never does: each keeps
+  // its own copy of what it downloaded.
+  clearRemote()
+  for (const [snap, v] of p.remote) setRemote(snap, v)
+  const moved = await syncQueue(p.io, now)
+  p.remote = remoteSnapshots().map((s) => [s, remoteVersion(s.pc) ?? 0])
+  p.pace.afterPass(!moved && p.io.mirror.changesIn(['logins', 'chats']) === before, now)
+  return moved
+}
+
+async function pacedHour(paced: boolean) {
+  resetQueueSync()
+  await sweep()
+  clock = realNow()
+  for (let i = 0; i < 55; i++) {
+    const id = randomUUID()
+    await store('PUT', `/v1/logins/${id}`, { version: 0, blob: 'b', meta: { num: i } })
+    made.logins.push(id)
+  }
+  env.HEAD_CACHE_S = '0'
+  const pcs = [pacedPc(0), pacedPc(1)]
+  try {
+    for (const p of pcs) await tickPc(p, clock) // start-up reads: the full lists, once
+    storeDb.resetRowsRead()
+    const start = clock
+    while (clock - start < HOUR) {
+      clock += TICK
+      for (const p of pcs) {
+        if (!paced) p.pace.nudge() // the old loop: a pass on every tick
+        await tickPc(p, clock)
+      }
+    }
+    return { reads: reads(storeDb.statements()), passes: pcs.map((p) => p.passes) }
+  } finally {
+    delete env.HEAD_CACHE_S
+  }
+}
+
+// Measured (uncached Worker, two idle PCs): polling every 30 s read 272 rows an hour (120 passes each,
+// the head every time, plus the heartbeats); with the backoff each PC makes 16-17 passes and the hour
+// reads 59 rows: about 34 for the head, the rest the heartbeats (a PC's every-15-minute upload moves the
+// store, so the other reads the change and the queue once). Ceiling 75 leaves room for the heartbeat
+// landing a pass later; 1,400 a day is 58 an hour.
+test('a quiet hour of two PCs on an uncached Worker polls adaptively and reads about 60 rows', async () => {
+  const fixed = await pacedHour(false)
+  const hour = await pacedHour(true)
+  console.log(
+    `uncached Worker, quiet hour: fixed 30 s ${fixed.reads} rows (passes ${fixed.passes}); backoff ${hour.reads} rows (passes ${hour.passes})`,
+  )
+  expect(hour.reads).toBeLessThanOrEqual(75)
+  expect(hour.reads).toBeLessThan(fixed.reads / 3)
+  for (const n of hour.passes) expect(n).toBeLessThanOrEqual(20) // not 120
+  expect(IDLE_MAX_MS).toBeLessThan(15 * 60_000) // the queue heartbeat still goes up in time
+})
+
+test('a worker queued mid-hour on a backed-off PC is uploaded within one 30 s tick', async () => {
+  resetQueueSync()
+  await sweep()
+  clock = realNow()
+  env.HEAD_CACHE_S = '0'
+  const savedWorkers = new Map(workers)
+  workers.clear()
+  const a = pacedPc(0)
+  const b = pacedPc(1)
+  try {
+    const start = clock
+    // 30 quiet minutes: the backoff reaches its ceiling
+    while (clock - start < 30 * 60_000) {
+      clock += TICK
+      await tickPc(a, clock, true)
+      await tickPc(b, clock)
+    }
+    expect(a.passes).toBeLessThan(20)
+    const passesBefore = a.passes
+    workers.set('w-new', {
+      id: 'w-new',
+      group: 'g-new',
+      title: 'queued mid-hour',
+      pending: [],
+      status: 'queued',
+      attempts: [],
+      createdAt: clock,
+      updatedAt: clock,
+    } as any)
+    const changedAt = clock
+    let uploadedAt = 0
+    while (!uploadedAt && clock - changedAt <= 5 * 60_000) {
+      clock += TICK
+      if (await tickPc(a, clock, true)) uploadedAt = clock
+      await tickPc(b, clock)
+    }
+    expect(uploadedAt).toBeGreaterThan(0)
+    expect(uploadedAt - changedAt).toBeLessThanOrEqual(TICK)
+    expect(a.passes).toBe(passesBefore + 1)
+  } finally {
+    delete env.HEAD_CACHE_S
+    workers.clear()
+    for (const [k, v] of savedWorkers) workers.set(k, v)
+  }
 })

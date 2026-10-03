@@ -1562,7 +1562,7 @@ export function copySessionTranscript(
   return false
 }
 
-const isLive = (w: Pick<CliMayteWorker, 'status'>): boolean =>
+export const isLive = (w: Pick<CliMayteWorker, 'status'>): boolean =>
   w.status === 'queued' ||
   w.status === 'running' ||
   w.status === 'waiting' ||

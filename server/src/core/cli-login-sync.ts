@@ -6,7 +6,8 @@
 // the 2 PCs", and "I sometimes need both to stay logged in". One login signed in on two PCs breaks
 // when either refreshes it: the refresh rotates the token and the other PC's copy no longer
 // refreshes (the #88 symptom). Sync closes that gap: the PC that refreshed uploads the new login and
-// the other lands it within a sync (SYNC_EVERY_MS).
+// the other lands it within a sync (SYNC_EVERY_MS when anything is moving, up to IDLE_MAX_MS when both
+// PCs are idle: login-sync-pace.ts).
 //
 // THE STORE holds versioned blobs keyed by row id, written compare-and-swap on the version. It only
 // ever holds ciphertext: each login is AES-256-GCM encrypted under a 32-byte key that lives on the PCs
@@ -22,7 +23,9 @@
 // row (its `slot`) instead of adding its own; where two rows of one account exist, every PC picks the
 // same one (the later expiry, then the lower id) and the PC that sent the other removes it.
 //
-// ONE PASS (every SYNC_EVERY_MS while on, and on "Sync now"): list the store; for each login the copy
+// ONE PASS (due every SYNC_EVERY_MS while something moves, backing off to IDLE_MAX_MS (5 min) while
+// this PC and the store are idle, and on "Sync now"; a login file or a CliMayte worker changing here
+// makes the next 30 s tick run one): list the store; for each login the copy
 // whose access token expires later is the newer one (a refresh pushes the expiry out), so it wins.
 // A change here since the last sync is uploaded (even while a session runs: the file is what that CLI
 // last wrote); a newer copy in the store is landed here with the import's guards (landLogin: never
@@ -73,6 +76,8 @@ import {
 } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
+import { workers } from '../climayte-core'
+import { isLive } from '../climayte-lib'
 import { clearRemote } from '../climayte-remote'
 import { CONFIG_DIR } from '../config'
 import { seal, unseal } from '../dpapi-seal.mjs'
@@ -104,8 +109,11 @@ import {
 } from './desktop-login-sync'
 import { setBeforeLaunchHook } from './instances'
 import { StoreMirror } from './login-sync-mirror'
+import { BASE_MS, SyncPace } from './login-sync-pace'
 
-export const SYNC_EVERY_MS = 30_000
+export { IDLE_MAX_MS } from './login-sync-pace'
+/** The loop's tick, and the wait of a PC with something to do. */
+export const SYNC_EVERY_MS = BASE_MS
 const CONFIG_PATH = join(CONFIG_DIR, 'login-sync.json')
 const CHATS_STATE_PATH = join(CONFIG_DIR, 'desktop-chat-sync.json')
 const PAIRING_PREFIX = 'ahsync1:'
@@ -528,8 +536,22 @@ const mtimeOf = (path: string): number => {
   }
 }
 
-/** One sync pass (see the header). Never two at once: a second call shares the running one. */
-export function runLoginSync(): Promise<LoginSyncPassResult> {
+const pace = new SyncPace()
+/** A pass someone asked for (not the loop's own tick) is running or waiting: it is never quiet, so the
+ *  next poll is 30 s away, not backed off. */
+let asked = false
+
+/** A change here that a pass must send (a login refreshed, a chat or queue change): the next 30 s tick
+ *  runs a pass, whatever the backoff had reached. Cheap; call it from any path that makes one. */
+export function nudgeLoginSync(): void {
+  pace.nudge()
+}
+
+/** One sync pass (see the header). Never two at once: a second call shares the running one. The
+ *  loop's own tick passes `{ background: true }`; every other caller (Sync now, a launch, a setting)
+ *  is someone using the app, so the polling pace starts over. */
+export function runLoginSync(opts: { background?: boolean } = {}): Promise<LoginSyncPassResult> {
+  if (!opts.background) asked = true
   if (!running)
     running = pass().finally(() => {
       running = null
@@ -1082,14 +1104,14 @@ let queueError: string | null = null
 
 /** The queue half of a pass (climayte-queue-sync.ts). Its failures are its own: kept in queueError and
  *  noted once per message, never in lastError and never stopping what the pass already did. */
-async function queuePass(l: Live, c: SyncConfig, by: string): Promise<void> {
+async function queuePass(l: Live, c: SyncConfig, by: string): Promise<boolean> {
   if (!c.shareQueue) {
     queueError = null
-    return
+    return false
   }
   c.pcId ??= randomUUID()
   try {
-    await syncQueue({
+    const moved = await syncQueue({
       call: (method, path, body) => call(l, method, path, body),
       mirror: mirrorFor(l),
       key: l.key,
@@ -1097,10 +1119,12 @@ async function queuePass(l: Live, c: SyncConfig, by: string): Promise<void> {
       name: by,
     })
     queueError = null
+    return moved
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     if (msg !== queueError) note(c, null, 'error', `CliMayte queue: ${msg}`)
     queueError = msg
+    return true // a queue that cannot sync is not idle: keep trying at the base pace
   }
 }
 
@@ -1132,7 +1156,7 @@ function chatsPass(l: Live, c: SyncConfig, by: string): void {
   const pc = c.pcId
   chatsRunning = (async () => {
     try {
-      await syncChats({
+      const moved = await syncChats({
         call: (method, path, body) => call(l, method, path, body),
         mirror: mirrorFor(l),
         key: l.key,
@@ -1142,6 +1166,7 @@ function chatsPass(l: Live, c: SyncConfig, by: string): void {
         statePath: CHATS_STATE_PATH,
       })
       chatsError = null
+      if (moved) nudgeLoginSync()
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       const now = readConfig()
@@ -1170,8 +1195,18 @@ async function pass(): Promise<LoginSyncPassResult> {
   }
   const excluded = new Set(c.excluded)
   const by = hostname()
+  // The queue's own news is judged by queuePass (a heartbeat of the other PC is none).
+  const seen = mirrorFor(l).changesIn(['logins', 'chats'])
   await executeSyncPass(l, c, out, excluded, by)
-  await queuePass(l, c, by)
+  const queueMoved = await queuePass(l, c, by)
+  const quiet =
+    out.ok &&
+    out.problems.length === 0 &&
+    out.pushed === 0 &&
+    out.landed === 0 &&
+    !queueMoved &&
+    mirrorFor(l).changesIn(['logins', 'chats']) === seen &&
+    !climayteBusy()
   c.lastSyncAt = Date.now()
   // Re-read what another call changed meanwhile (an exclusion, a pause) and keep it.
   const now = readConfig()
@@ -1183,7 +1218,38 @@ async function pass(): Promise<LoginSyncPassResult> {
   }
   writeConfig(c)
   chatsPass(l, c, by)
+  // Whatever someone asked for (a manual sync, a launch) starts the pace over; the pace also starts
+  // over by itself when this pass was not quiet.
+  pace.afterPass(quiet && !asked, Date.now())
+  asked = false
   return out
+}
+
+/** A CliMayte worker is queued, running, waiting or checking on this PC: its changes go up, so the
+ *  sync polls at the base pace. */
+const climayteBusy = (): boolean => [...workers.values()].some(isLive)
+
+/** Something here a pass must look at, found without asking the store (the loop's tick checks it). */
+export const localWorkPending = (): boolean => loginFilesMoved() || climayteBusy()
+
+/** A login file here moved since the last tick: its mtime and size, by instance. Statting is free; a
+ *  hash against the store's copy would read as a change forever for a login that cannot land. */
+const credStamps = new Map<string, string>()
+function loginFilesMoved(): boolean {
+  let moved = false
+  for (const i of listCliInstances()) {
+    let stamp = ''
+    try {
+      const st = statSync(credPath(i.configDir))
+      stamp = `${st.mtimeMs}/${st.size}`
+    } catch {
+      // no file: the stamp stays empty
+    }
+    const was = credStamps.get(i.id)
+    credStamps.set(i.id, stamp)
+    if (was !== undefined && was !== stamp) moved = true
+  }
+  return moved
 }
 
 /** What the Login sync dialog shows. Never a token, key or login. */
@@ -1329,15 +1395,21 @@ export async function syncBeforeLaunch(_dir: string): Promise<void> {
 }
 
 let timer: ReturnType<typeof setInterval> | null = null
-/** Start the sync loop (daemon boot). Each tick is a no-op until sync is set up and on. */
+/** Start the sync loop (daemon boot). It ticks every SYNC_EVERY_MS (a tick that runs no pass costs the
+ *  store nothing); a tick runs a pass when one is due (login-sync-pace.ts), or sooner when a CliMayte
+ *  worker is live here or a login file moved. Each tick is a no-op until sync is set up and on. */
 export function startLoginSync(): void {
   if (timer) return
   setBeforeLaunchHook(syncBeforeLaunch, 'login-sync')
   timer = setInterval(() => {
-    if (readConfig()?.enabled) void runLoginSync().catch(() => {})
+    if (!readConfig()?.enabled) return
+    if (localWorkPending()) pace.nudge()
+    if (pace.due(Date.now())) void runLoginSync({ background: true }).catch(() => {})
   }, SYNC_EVERY_MS)
   timer.unref?.()
-  if (readConfig()?.enabled) setTimeout(() => void runLoginSync().catch(() => {}), 15_000).unref?.()
+  // The first pass comes 15 s after boot, as before.
+  if (readConfig()?.enabled)
+    setTimeout(() => void runLoginSync({ background: true }).catch(() => {}), 15_000).unref?.()
 }
 
 /** Stop the sync loop (daemon shutdown). */
