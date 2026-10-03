@@ -12,6 +12,7 @@ import { type CliMayteAccount, dueOrder, pickAccount, rankAccounts } from '../sr
 import {
   DEFAULT_TASK_PCT,
   expectedCost,
+  MANAGER_WAKE_PCT,
   planFactor,
   projectedPct,
   WEEK_MS,
@@ -66,15 +67,16 @@ describe('expectedCost', () => {
     ).toBeCloseTo(5, 0)
   })
 
-  test('manage kind (piece 6) uses reasonable defaults', () => {
-    // A manage task with no record: starts with Sonnet low (START.manage = 2).
-    // The expected cost would be computed if there are no other manage tasks on record.
-    const manageTask = { kind: 'manage', model: 'claude-sonnet-5-5', effort: 'low' }
-    expect(expectedCost(manageTask, [])).toEqual({
-      pct: DEFAULT_TASK_PCT,
-      basis: 'default',
+  test('a manager costs a wake, not a task: its kind average, else 2%', () => {
+    const S = 'claude-sonnet-5-5'
+    const manager = { kind: 'manage', model: S, effort: 'low' }
+    const done = (kind: string, pct: number) => ({ kind, model: S, effort: 'low', pct })
+    expect(expectedCost(manager, [done('code', 30)])).toMatchObject({
+      pct: MANAGER_WAKE_PCT,
       samples: 0,
     })
+    const wakes = expectedCost(manager, [done('manage', 1), done('manage', 2), done('code', 30)])
+    expect(wakes.pct).toBeCloseTo(1.5, 5)
   })
 })
 

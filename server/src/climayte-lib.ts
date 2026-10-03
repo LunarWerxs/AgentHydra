@@ -92,8 +92,11 @@ export interface CliMayteAttempt {
   /** The session this attempt ran in. A planned handoff starts a new one, so the worker's current
    *  `sessionId` is not every attempt's. null: the log names none (the CLI never started). */
   sessionId?: string | null
-  /** The prompt cache it ran with ('5m' since 49e6ab1; absent: the 1-hour default). */
-  cacheTtl?: '5m'
+  /** The prompt cache it ran with ('5m' since 49e6ab1, '1h' for a manager; absent: the 1-hour default). */
+  cacheTtl?: '5m' | '1h'
+  /** The conversation's size when it ended: what its newest request read (contextTokens). A
+   *  manager past MANAGER_CONTEXT_TOKENS starts its next wake in a fresh session. */
+  context?: number | null
   /** The account's 5-hour usage when it started (placement measures what running work spent). */
   startPct?: number | null
   /** The highest 5-hour usage its account reported while it ran (the CLI's rate_limit_event), with

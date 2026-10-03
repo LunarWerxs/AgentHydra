@@ -143,7 +143,7 @@ import {
   scoreRows,
   UNITS_PER_PRO_PERCENT,
 } from './climayte-scorecard'
-import { readWave, waveBatch, waveDone, writeWave } from './climayte-wave'
+import { judgeWaveTask, readWave, waveBatch, waveDone, writeWave } from './climayte-wave'
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { isPidAlive, killProcessTree } from './core/process'
@@ -635,6 +635,8 @@ function judgeCheck(w: CliMayteWorker, code: number | null, output: string): voi
   w.status = 'done'
   const cmd = firstLine(w.check, 200)
   if (code === 0) {
+    // A task of a wave is judged by the daemon on the check and the commits together (piece 5).
+    if (judgeInWave(w, true)) return
     climayteVerdict(w.id, { verdict: 'pass', note: `The check passed: ${cmd}`, by: 'check' })
     return
   }
@@ -1490,14 +1492,58 @@ function settleWorker(
   }
 }
 
-function addToWaveBatch(w: CliMayteWorker, now: number): void {
+/** Piece 5: judge a finished wave task by command (judgeWaveTask) instead of the manager's word:
+ *  the check (`checkPassed`, null with none) and its commits. A pass is provisional (it stays out of
+ *  the scorecard until the orchestrator accepts the wave); a failed proof sends the task back one
+ *  rung up like a failed check, three rounds and then failed; nothing provable records no verdict and
+ *  escalates the key as `unproven`. False when the worker is no task of a running wave. */
+function judgeInWave(w: CliMayteWorker, checkPassed: boolean | null): boolean {
+  if (!w.wave || w.kind === 'manage') return false
+  try {
+    const configDir = configDirOf(w.accountId ?? '', accountsProvider())
+    if (!configDir) return false
+    const wave = modifiedWaves.get(w.wave)?.wave ?? readWave(configDir, w.wave)
+    const task = wave?.tasks.find((t) => t.workerId === w.id)
+    if (!wave || !task || wave.status !== 'running') return false
+    const now = Date.now()
+    const j = judgeWaveTask(task, wave, w.result, checkPassed)
+    task.proof = j.proof
+    if (j.verdict === 'pass') {
+      task.state = 'passed'
+      climayteVerdict(w.id, { verdict: 'pass', note: j.note, by: 'wave', provisional: true })
+    } else if (j.verdict === 'fail') {
+      const fails =
+        (w.verdicts ?? []).filter((v) => v.by === 'wave' && v.verdict === 'fail').length + 1
+      const retry = fails < MAX_CHECK_FAILS
+      task.state = retry ? 'running' : 'failed'
+      if (!retry) {
+        w.status = 'failed'
+        w.error = `The wave's proof still failed after ${MAX_CHECK_FAILS} rounds; it needs the orchestrator. Last: ${firstLine(j.note)}`
+        journal(w, 'failed', { error: firstLine(w.error) })
+      }
+      climayteVerdict(w.id, { verdict: 'fail', note: j.note, retry, by: 'wave' })
+    } else {
+      task.state = 'escalated'
+      wave.escalations.push({ key: task.key, reason: `unproven: ${j.note}`, at: now })
+    }
+    modifiedWaves.set(w.wave, { wave, configDir })
+    // A task sent back for another round is no change the manager needs yet.
+    if (task.state !== 'running') addToWaveBatch(w, now, true)
+    return true
+  } catch {
+    // A wave that cannot be read judges as an ordinary task.
+    return false
+  }
+}
+
+function addToWaveBatch(w: CliMayteWorker, now: number, judged = false): void {
   // Piece 3: The daemon's batch wake. When a wave task finishes, add it to the wave's batch.held
   // so waveBatch can decide when to wake the manager.
-  if (w.wave && w.status !== 'failed') {
+  if (w.wave && (judged || w.status !== 'failed')) {
     try {
       const configDir = configDirOf(w.accountId ?? '', accountsProvider())
       if (configDir) {
-        let wave = modifiedWaves.get(w.wave)?.wave ?? readWave(configDir, w.wave)
+        const wave = modifiedWaves.get(w.wave)?.wave ?? readWave(configDir, w.wave)
         if (wave && wave.status === 'running' && !wave.report) {
           // Find the task in the wave that this worker belongs to.
           const task = wave.tasks.find((t) => t.workerId === w.id)
@@ -1531,6 +1577,7 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   at.outcome = v.outcome
   at.notice = v.notice
   at.endedAt = now
+  at.context = contextTokens(events)
   const spent = charge(w, at)
   w.turns += v.turns
   keepResults(w, at, v)
@@ -1544,9 +1591,10 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
     w.error =
       `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
   journalFinish(w, at, v, spent)
+  // A wave task with no check is judged now; with one, when its check ends (judgeCheck).
+  const judged = w.status === 'done' && !w.check && judgeInWave(w, null)
   if (w.status === 'done' && w.check) startCheck(w)
-
-  addToWaveBatch(w, now)
+  if (!judged && w.status !== 'checking') addToWaveBatch(w, now)
 
   changed(w)
   schedule(50)
@@ -1788,10 +1836,15 @@ export const REPEAT_WINDOW_MS = 10 * 60_000
 /** Piece 3: The daemon's batch wake. Process all waves that have held task changes and decide
  * whether to wake their managers with a batch report. Clear the modified waves map at the end. */
 function processBatchWakes(now: number): void {
-  for (const [waveId, { wave, configDir }] of modifiedWaves) {
+  for (const [, { wave, configDir }] of modifiedWaves) {
     const manager = workers.get(wave.managerId)
     if (!manager || manager.status === 'failed' || manager.status === 'cancelled') {
-      // Manager is not available; skip this wave.
+      // Manager is not available; keep what the tasks' judgements changed in the wave.
+      try {
+        writeWave(configDir, wave)
+      } catch {
+        // The next change writes it again.
+      }
       continue
     }
 
@@ -1805,6 +1858,9 @@ function processBatchWakes(now: number): void {
       // The manager gets a one-line summary of the changed task keys.
       const report = `Wave batch: ${ids.length} changed tasks: ${ids.join(', ')}`
       manager.pending.push(report)
+      // The wake ends the hold (piece 2) that kept the manager's turn from starting again.
+      manager.hold = null
+      manager.notBefore = null
       changed(manager)
     }
 
@@ -2055,7 +2111,9 @@ function sizeTasks(
       allowed.map((a) => a.planFactor ?? 1),
     )
     const n = numbers[i] ?? i + 1
-    const whole = sizeOf(t.size, `task ${n}: `) === 'whole' || groupSize === 'whole'
+    // A manager's cost is per wake (expectedCost) and it never splits: its wave does the work.
+    const whole =
+      s.kind === 'manage' || sizeOf(t.size, `task ${n}: `) === 'whole' || groupSize === 'whole'
     const title = t.title?.trim() || firstLine(t.prompt, 60)
     if (fit.split && !whole)
       tooBig.push({
@@ -2366,20 +2424,32 @@ function verdictRecord(
   passed: 'pass' | 'fail',
   note: string | null,
   by: unknown,
+  provisional = false,
 ): CliMayteVerdict {
   // The work this verdict judges: every attempt since the previous verdict.
-  const since = w.verdicts?.at(-1)?.at ?? 0
+  const previous = w.verdicts?.at(-1)
+  const since = previous?.at ?? 0
   const ran = w.attempts.filter((a) => a.startedAt >= since)
   const reported = [...ran].reverse().find((a) => a.model)?.model ?? null
+  // No attempt since the previous verdict: this one judges the same work and replaces it in the
+  // scorecard (scoreRows), so it keeps what that work cost.
+  const span = w.attempts.at(-1)?.startedAt
+  const same = !ran.length && previous?.span !== undefined && previous.span === span
   return {
     at: Date.now(),
     verdict: passed,
     note,
     model: ladderModel(w.model ?? reported),
     effort: w.effort,
-    units: ran.reduce((sum, a) => sum + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl), 0),
-    reread: ran.reduce((sum, a) => sum + rereadUnits(a, w.model), 0),
-    by: by === 'check' || by === 'owner' ? by : 'orchestrator',
+    units: same
+      ? previous.units
+      : ran.reduce((sum, a) => sum + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl), 0),
+    reread: same
+      ? (previous.reread ?? 0)
+      : ran.reduce((sum, a) => sum + rereadUnits(a, w.model), 0),
+    by: by === 'check' || by === 'owner' || by === 'wave' ? by : 'orchestrator',
+    ...(provisional ? { provisional: true } : {}),
+    ...(span !== undefined ? { span } : {}),
   }
 }
 
@@ -2414,7 +2484,14 @@ function sendBack(
  *  rung up the ladder unless `retry` is false. `kind` tags a task dispatched without one. */
 export function climayteVerdict(
   id: string,
-  input: { verdict?: unknown; note?: unknown; retry?: unknown; kind?: unknown; by?: unknown },
+  input: {
+    verdict?: unknown
+    note?: unknown
+    retry?: unknown
+    kind?: unknown
+    by?: unknown
+    provisional?: boolean
+  },
 ): { ok: boolean; message: string; next?: { model: string; effort: string | null } | null } {
   load()
   const w = workers.get(id)
@@ -2429,7 +2506,7 @@ export function climayteVerdict(
     return { ok: false, message: 'Say what was wrong (note): the worker gets it with the retry.' }
   const badKind = tagKind(w, input.kind)
   if (badKind !== null) return { ok: false, message: badKind }
-  const verdict = verdictRecord(w, input.verdict, note, input.by)
+  const verdict = verdictRecord(w, input.verdict, note, input.by, input.provisional === true)
   w.verdicts = [...(w.verdicts ?? []), verdict]
   let next: { model: string; effort: string | null } | null = null
   let message = verdict.verdict === 'pass' ? 'Recorded a pass.' : 'Recorded a fail; not sent back.'

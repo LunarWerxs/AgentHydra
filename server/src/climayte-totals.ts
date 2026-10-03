@@ -211,6 +211,22 @@ function sizedTasks(since: number): SizedTask[] {
   return sized
 }
 
+/** What each wave's manager spent since `since`: its attempts, priced as they ran (the 1-hour cache). */
+function managerPct(since: number): Array<{ wave: string; wakes: number; pct: number }> {
+  const out: Array<{ wave: string; wakes: number; pct: number }> = []
+  for (const w of workers.values()) {
+    if (w.kind !== 'manage' || !w.wave) continue
+    const ran = w.attempts.filter((a) => (a.endedAt ?? Date.now()) >= since)
+    if (!ran.length) continue
+    const units = ran.reduce(
+      (s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),
+      0,
+    )
+    out.push({ wave: w.wave, wakes: ran.length, pct: pct1(units) })
+  }
+  return out
+}
+
 function sizingOf(sized: SizedTask[]): ReturnType<typeof climayteTotals>['sizing'] {
   const sum = (k: 'expected' | 'used' | 'work'): number =>
     Math.round(sized.reduce((s, x) => s + x[k], 0) * 10) / 10
@@ -290,6 +306,9 @@ export function climayteTotals(since = 0): {
     pct: number | null
   }>
   peaks: Array<{ account: string; resetsAt: string | null; peakPct: number; runs: number }>
+  /** Per wave, what its manager spent in the period, in % of a Pro 5-hour window, over `wakes`
+   *  attempts (piece 6): the cost of managing against the work it managed. */
+  managerPct: Array<{ wave: string; wakes: number; pct: number }>
   sizing: {
     tasks: number
     expectedPct: number
@@ -360,6 +379,7 @@ export function climayteTotals(since = 0): {
         ...p,
         resetsAt: resetsAt ? new Date(resetsAt).toISOString() : null,
       })),
+    managerPct: managerPct(since),
     sizing: sizingOf(sized),
   }
 }

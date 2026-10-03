@@ -2007,6 +2007,34 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     climayteCancel({ group: 'size-max' })
   }, 60_000)
 
+  test('a manager is priced per wake and never asked to split, however big the tasks on record ran (piece 6)', async () => {
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteAccountsProvider(() => [
+      { id: 'size-pro', num: 41, name: 'pro', configDir: proDir, sessionPct, weekPct: 0 },
+    ])
+    startCliMayte()
+    await onRecord('debug', 'low', 1_550_000) // about 150% of a Pro window on Sonnet
+    const big = {
+      prompt: 'a big task',
+      cwd,
+      kind: 'debug',
+      model: 'sonnet',
+      effort: 'low',
+      modelWhy: 'sized',
+    }
+    expect(() => climayteRun({ tasks: [big], group: 'size-not-manage' })).toThrow('split needed')
+
+    const run = climayteRun({
+      tasks: [{ prompt: 'manage the wave of 20 tasks', cwd, kind: 'manage' }],
+      group: 'size-manage',
+    })
+    groups.push(run.group)
+    const manager = run.workers[0]
+    expect(manager).toMatchObject({ kind: 'manage', effort: 'low' })
+    expect(manager?.size?.expected).toBe(2)
+    climayteCancel({ group: 'size-manage' })
+  }, 60_000)
+
   test('a task that fits a fresh window but not the room left waits, then starts once there is room', async () => {
     factor = 1
     await onRecord('review', 'medium', 310_000) // about 30% of a Pro window

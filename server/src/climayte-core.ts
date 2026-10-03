@@ -47,6 +47,7 @@ import {
 import {
   type CostEstimate,
   expectedCost,
+  type FinishedCost,
   modelFamily,
   planFactor,
   type RunningLoad,
@@ -602,20 +603,26 @@ export function placementState(): {
   running: Map<string, RunningLoad[]>
   finishedSince: Map<string, number>
 } {
-  const finished = [...workers.values()]
-    .filter((w) => w.status === 'done' && w.tokens)
-    .map((w) => ({
-      kind: w.kind ?? null,
-      model: ladderModel(w.model ?? w.attempts.at(-1)?.model),
-      effort: w.effort,
+  const finished: FinishedCost[] = []
+  for (const w of workers.values()) {
+    const model = ladderModel(w.model ?? w.attempts.at(-1)?.model)
+    const work = (a: CliMayteWorker['attempts'][number]): number =>
+      (attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl) - rereadUnits(a, w.model)) /
+      UNITS_PER_PRO_PERCENT
+    // A manager is priced per wake (an attempt), however long its wave keeps it open (piece 6).
+    if (w.kind === 'manage') {
+      for (const a of w.attempts)
+        if (a.tokens) finished.push({ kind: 'manage', model, effort: w.effort, pct: work(a) })
+    } else if (w.status === 'done' && w.tokens) {
       // The work only: a move's re-read is what the move cost, not what the task costs.
-      pct:
-        w.attempts.reduce(
-          (s, a) =>
-            s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl) - rereadUnits(a, w.model),
-          0,
-        ) / UNITS_PER_PRO_PERCENT,
-    }))
+      finished.push({
+        kind: w.kind ?? null,
+        model,
+        effort: w.effort,
+        pct: w.attempts.reduce((s, a) => s + work(a), 0),
+      })
+    }
+  }
   const costOf = (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort'>): CostEstimate =>
     expectedCost({ kind: w.kind, model: ladderModel(w.model), effort: w.effort }, finished)
   const running = new Map<string, RunningLoad[]>()

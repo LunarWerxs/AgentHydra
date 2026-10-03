@@ -4,6 +4,7 @@
 // manager session read the same truth. This file holds the store helpers and the pure
 // functions waveStateText and waveDone.
 
+import { spawnSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CliMayteWave, CliMayteWorker } from './climayte-lib'
@@ -206,51 +207,75 @@ export function waveBatch(
   return size > 0 ? Array.from(taskIds) : null
 }
 
-// Judge a wave task's proof: all present proofs pass. A proof is:
-// - The check command passed (if check is not null)
-// - Each commit exists in the repo
-// - Each commit is an ancestor of the branch
-// - The diff of each commit touches only allowed paths
-//
-// Returns { pass: boolean; note: string | null; provisional: boolean }. If pass is true and
-// at least one proof was present (check passed or commits exist), the verdict is provisional
-// (piece 5: orchestrator confirms with climayte_wave_verify).
-//
-// This is called after the task's check runs. The proof object holds check (boolean | null),
-// commits (string[]), paths (boolean | null), and note from the judgment.
+/** The shas on the last `Commits:` line of a worker's report; [] for `Commits: none` or no such line. */
+export function commitsOf(report: string | null): string[] {
+  const lines = [...(report ?? '').matchAll(/^[ >*_-]*Commits:[ ]*(.+)$/gim)]
+  const last = lines.at(-1)?.[1]?.trim()
+  if (!last || /^none\b/i.test(last)) return []
+  return last.split(/[\s,;]+/).filter(Boolean)
+}
+
+/** A git command in `cwd`, hidden: its exit code and output. */
+function git(cwd: string, args: string[]): { code: number | null; out: string } {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 30_000 })
+  return { code: r.status, out: (r.stdout ?? '').trim() }
+}
+
+export interface WaveJudgement {
+  /** `unproven`: nothing a command could check (no check, no commits): no verdict is recorded. */
+  verdict: 'pass' | 'fail' | 'unproven'
+  note: string
+  proof: NonNullable<CliMayteTask['proof']>
+}
+
+/** The daemon judges a wave task by command, never by the manager's word (piece 5): the task's check
+ *  (`checkPassed`: null when it has none), and for each sha on the report's `Commits:` line that the
+ *  commit exists, is on the wave's branch, and its diff stays inside the brief's `paths` (globs;
+ *  [] = the task must not commit). A pass is only ever provisional until the orchestrator accepts
+ *  the wave; a failed proof says what to fix. */
 export function judgeWaveTask(
   task: CliMayteTask,
-  proof: CliMayteTask['proof'],
-): {
-  pass: boolean
-  note: string | null
-  provisional: boolean
-} {
-  if (!proof) {
-    // No proof yet (task not judged): not a pass.
-    return { pass: false, note: null, provisional: false }
+  wave: Pick<CliMayteWave, 'cwd' | 'branch'>,
+  report: string | null,
+  checkPassed: boolean | null,
+): WaveJudgement {
+  const commits = commitsOf(report)
+  const proof: WaveJudgement['proof'] = { check: checkPassed, commits, paths: null, note: '' }
+  const fail = (note: string): WaveJudgement => {
+    proof.note = note
+    return { verdict: 'fail', note, proof }
   }
-
-  // If the check failed, proof fails.
-  if (proof.check === false) {
-    return { pass: false, note: proof.note || 'The check failed', provisional: false }
-  }
-
-  // If paths proof failed, proof fails.
-  if (proof.paths === false) {
-    return {
-      pass: false,
-      note: proof.note || 'Diff touches paths outside the brief',
-      provisional: false,
+  const globs = task.paths.map((p) => new Bun.Glob(p))
+  for (const sha of commits) {
+    if (!/^[0-9a-f]{7,40}$/i.test(sha))
+      return fail(`\`${sha}\` on the Commits line is not a commit sha.`)
+    if (git(wave.cwd, ['cat-file', '-e', `${sha}^{commit}`]).code !== 0)
+      return fail(`Commit ${sha} does not exist in ${wave.cwd}.`)
+    if (git(wave.cwd, ['merge-base', '--is-ancestor', sha, wave.branch]).code !== 0)
+      return fail(`Commit ${sha} is not on the branch ${wave.branch}.`)
+    const files = git(wave.cwd, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha])
+      .out.split('\n')
+      .map((f) => f.trim())
+      .filter(Boolean)
+    const outside = files.filter((f) => !globs.some((g) => g.match(f)))
+    if (outside.length) {
+      proof.paths = false
+      return fail(
+        task.paths.length
+          ? `Commit ${sha} touches ${outside.slice(0, 5).join(', ')}, outside the brief's paths (${task.paths.join(', ')}).`
+          : `Commit ${sha} touches ${outside.slice(0, 5).join(', ')}, but this task must not commit.`,
+      )
     }
+    proof.paths = true
   }
-
-  // All present proofs passed (check !== false and paths !== false).
-  // If at least one proof exists (check passed or commits), it's provisional.
-  if (proof.check === true || proof.commits.length > 0) {
-    return { pass: true, note: null, provisional: true }
+  if (checkPassed === null && commits.length === 0) {
+    proof.note = 'Nothing a command could check: no check and no commits.'
+    return { verdict: 'unproven', note: proof.note, proof }
   }
-
-  // No provable proof (no check, no commits): unproven.
-  return { pass: false, note: null, provisional: false }
+  const parts = [
+    checkPassed ? 'the check passed' : '',
+    commits.length ? `${commits.length} commit(s) on ${wave.branch} inside the brief's paths` : '',
+  ]
+  proof.note = `Provisional pass: ${parts.filter(Boolean).join('; ')}.`
+  return { verdict: 'pass', note: proof.note, proof }
 }

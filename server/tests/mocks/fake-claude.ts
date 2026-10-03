@@ -18,6 +18,15 @@ const sessionId = resume ?? flag('--session-id') ?? crypto.randomUUID()
 const configDir = process.env.CLAUDE_CONFIG_DIR ?? ''
 const prompt = await Bun.stdin.text()
 
+// Every launch is recorded in the account's folder, so a test can see the cache TTL it was given, the
+// session it ran in and the prompt it started from.
+if (configDir)
+  appendFileSync(
+    join(configDir, 'fake-launches.jsonl'),
+    `${JSON.stringify({ ttl: process.env.CLAUDE_CODE_PROMPT_CACHE_TTL ?? null, session: sessionId, resume: !!resume, prompt })}
+`,
+  )
+
 const emit = (ev: unknown) => process.stdout.write(`${JSON.stringify(ev)}\n`)
 const line = (ev: unknown) => `${JSON.stringify(ev)}\n`
 const readJson = (path: string | null): Record<string, unknown> | null => {
@@ -327,8 +336,22 @@ appendFileSync(
     }),
 )
 init()
-emit({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'Working on it.' }] } })
+// `FAKE-CONTEXT:<n>` in the prompt: the newest request read n tokens (the conversation's size).
+const context = Number(/FAKE-CONTEXT:(\d+)/.exec(prompt)?.[1] ?? 0)
+emit({
+  type: 'assistant',
+  session_id: sessionId,
+  message: {
+    role: 'assistant',
+    model: 'fake-model',
+    ...(context ? { usage: { input_tokens: 0, output_tokens: 1, cache_read_input_tokens: context, cache_creation_input_tokens: 0 } } : {}),
+    content: [{ type: 'text', text: 'Working on it.' }],
+  },
+})
 // A session started from a handoff says so, so a test can see the handoff reached it.
 const answer = prompt.includes('HANDOFF: step 3 of 5 done') ? 'FAKE DONE FROM HANDOFF' : 'FAKE DONE'
-emit({ type: 'result', subtype: 'success', is_error: false, result: answer, session_id: sessionId, total_cost_usd: 0.01, num_turns: 1 })
+// `FAKE-COMMITS:<shas>` in the prompt: the report ends with the Commits line a wave task is judged on.
+const commits = /FAKE-COMMITS:(\S+)/.exec(prompt)?.[1]
+const report = commits ? `${answer}\nCommits:${commits.replaceAll(',', ' ')}` : answer
+emit({ type: 'result', subtype: 'success', is_error: false, result: report, session_id: sessionId, total_cost_usd: 0.01, num_turns: 1 })
 process.exit(0)

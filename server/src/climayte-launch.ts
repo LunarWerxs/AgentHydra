@@ -33,6 +33,7 @@ import {
   tailText,
   transcriptCandidates,
   transcriptFile,
+  workers,
 } from './climayte-core'
 import { firstLine } from './climayte-journal'
 import {
@@ -51,11 +52,45 @@ import {
 } from './climayte-lib'
 import { ownerMcpServers, syncOwnerClaude } from './climayte-owner-sync'
 import { launchRunner } from './climayte-runner'
+import { readWave, waveStateText } from './climayte-wave'
 import { MCP_PATH, MCP_SERVER_KEY } from './mcp-register'
 
 /** Piece 6: when a manager's conversation exceeds this (the newest request's input, cache reads and
  *  cache writes), the next wake starts a fresh session from waveStateText instead of a handoff note. */
 export const MANAGER_CONTEXT_TOKENS = 60_000
+
+/** What a manager's fresh session is told first (the wave's state follows it): its job and the one
+ *  rule that matters, that it can never write a pass. */
+export const MANAGER_BRIEF = `You are the manager of a wave of tasks (the CLIManager). The wave's state is below and its tools are the climayte-manager MCP server: wave_state, wave_dispatch, wave_send, wave_cancel, wave_escalate, wave_note, wave_report. Dispatch the keys whose "after" keys have passed, answer escalations, and call wave_report when every key is passed, failed or escalated. You never write a pass: the daemon judges each task by command (its check, that its commits exist on the branch, that its diff stays inside the brief's paths), and the orchestrator accepts the wave. End every brief you write with a line \`Commits: <sha>...\` or \`Commits: none\`. You never deploy, publish or release. Keep your own replies short; each wake costs the owner usage.`
+
+/** A manager's session ends and a fresh one starts from the wave's state (waveStateText) rather than
+ *  a resume or a handoff note when it grew past MANAGER_CONTEXT_TOKENS, or after a handoff, a
+ *  limit, a move or a crash: the state is on disk, so nothing is lost and the new session is small. */
+function managerWake(
+  w: CliMayteWorker,
+  last: CliMayteWorker['attempts'][number] | undefined,
+  moving: boolean,
+): boolean {
+  if (w.kind !== 'manage' || !w.wave || !last) return false
+  return moving || last.outcome !== 'done' || (last.context ?? 0) > MANAGER_CONTEXT_TOKENS
+}
+
+/** The prompt of a manager's fresh session: its brief, the wave as the store holds it, and what was
+ *  queued for it (the batch report that woke it). */
+function managerText(
+  w: CliMayteWorker,
+  accounts: CliMayteAccount[],
+  acct: CliMayteAccount,
+): string {
+  let state = '(The wave record could not be read; call wave_state.)'
+  for (const dir of [acct.configDir, ...accounts.map((a) => a.configDir)]) {
+    const wave = w.wave ? readWave(dir, w.wave) : null
+    if (!wave) continue
+    state = waveStateText(wave, workers)
+    break
+  }
+  return [MANAGER_BRIEF, state, ...w.pending].join('\n\n')
+}
 
 /** What a launch decides before it starts the CLI, and what its bookkeeping needs afterwards. */
 interface LaunchPlan {
@@ -64,6 +99,8 @@ interface LaunchPlan {
   last: CliMayteWorker['attempts'][number] | undefined
   /** The handoff file a fresh session starts from, when this launch starts one. */
   note: string | null | undefined
+  /** A manager's fresh session started from the wave's state (managerWake). */
+  wake: boolean
   fresh: boolean
   oldSession: CliMayteWorker['sessionId']
   sessionId: string
@@ -83,13 +120,17 @@ interface LaunchPlan {
 function sessionPlan(
   w: CliMayteWorker,
   last: CliMayteWorker['attempts'][number] | undefined,
-): Pick<LaunchPlan, 'note' | 'fresh' | 'oldSession' | 'sessionId'> {
-  const note = w.handoffNote ?? (last?.outcome === 'handoff' ? last.windDown?.path : undefined)
-  const fresh = !!note
+  moving: boolean,
+): Pick<LaunchPlan, 'note' | 'wake' | 'fresh' | 'oldSession' | 'sessionId'> {
+  const wake = managerWake(w, last, moving)
+  const note = wake
+    ? undefined
+    : (w.handoffNote ?? (last?.outcome === 'handoff' ? last.windDown?.path : undefined))
+  const fresh = wake || !!note
   const oldSession = w.sessionId
   const sessionId = fresh || !w.sessionId ? crypto.randomUUID() : w.sessionId
   if (!fresh) w.sessionId = sessionId
-  return { note, fresh, oldSession, sessionId }
+  return { note, wake, fresh, oldSession, sessionId }
 }
 
 /** Moving accounts: carry the transcript over so `--resume` finds it there, from whichever account
@@ -230,6 +271,7 @@ function launchText(
 ): string {
   const { last, note } = p
   if (!last) return w.prompt
+  if (p.wake) return managerText(w, accounts, acct)
   if (note) return handoffText(w, last, note, p.oldSession, accounts, acct)
   if (p.delivers) return followUpText(w, p)
   return goOnText(w, last, p) ?? w.prompt
@@ -546,9 +588,9 @@ export function launch(
 ): void {
   const n = w.attempts.length
   const last = w.attempts[n - 1]
-  const session = sessionPlan(w, last)
-  const { fresh, sessionId } = session
   const fromId = w.accountId !== acct.id ? w.accountId : null
+  const session = sessionPlan(w, last, !!fromId)
+  const { fresh, sessionId } = session
   let copied: boolean | undefined
   if (fromId && !fresh) {
     const moved = moveTranscript(w, acct, accounts, sessionId)
@@ -590,7 +632,7 @@ export function launch(
     notice: null,
     resumed: resume,
     sessionId,
-    cacheTtl: '5m',
+    cacheTtl: w.kind === 'manage' ? '1h' : '5m',
     startPct: acct.sessionPct,
     daemonPid: process.pid,
     runner,

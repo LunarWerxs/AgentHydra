@@ -27,6 +27,7 @@ describe('pickConfig', () => {
     expect(pickConfig('sweep', [], 0).config).toEqual({ model: SONNET, effort: 'medium' })
     expect(pickConfig('code', [], 0).config).toEqual({ model: SONNET, effort: 'medium' })
     expect(pickConfig('debug', [], 0).config).toEqual({ model: OPUS, effort: 'medium' })
+    expect(pickConfig('manage', [], 0).config).toEqual({ model: SONNET, effort: 'low' })
 
     // Sonnet high passed 3 of 3 code tasks: code moves to it.
     const high = times(3, () => task('code', v('pass', SONNET, 'high')))
@@ -67,7 +68,7 @@ describe('scoreRows', () => {
       task(
         'code',
         v('pass', SONNET, 'medium'),
-        v('pass', SONNET, 'high', 100_000, { provisional: true }),
+        v('pass', SONNET, 'high', 100_000, { provisional: true, span: 5 }),
       ),
     ])
     // Only the non-provisional pass (Sonnet medium) counted.
@@ -83,22 +84,20 @@ describe('scoreRows', () => {
     )
   })
 
-  test('counts only the newest verdict per span of work (later verdicts replace earlier ones)', () => {
-    // Earlier pass is replaced by later fail.
+  test('counts only the newest verdict per span of work: an orchestrator fail after a provisional wave pass leaves one fail', () => {
+    // Same span (no attempt between them): the later verdict replaces the earlier one. A new span counts on its own.
     const rows = scoreRows([
-      task('code', v('pass', SONNET, 'medium', 100_000), v('fail', OPUS, 'high', 200_000)),
+      task(
+        'code',
+        v('pass', SONNET, 'medium', 100_000, { by: 'wave', provisional: true, span: 10 }),
+        v('fail', SONNET, 'medium', 100_000, { by: 'orchestrator', span: 10 }),
+        v('pass', OPUS, 'medium', 50_000, { by: 'check', span: 20 }),
+      ),
     ])
-    // Only the fail (Opus high) counted, earlier pass ignored.
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toEqual(
-      expect.objectContaining({
-        kind: 'code',
-        model: OPUS,
-        effort: 'high',
-        pass: 0,
-        fail: 1,
-      }),
-    )
+    expect(rows.map((r) => [r.model, r.effort, r.pass, r.fail])).toEqual([
+      [SONNET, 'medium', 0, 1],
+      [OPUS, 'medium', 1, 0],
+    ])
   })
 })
 

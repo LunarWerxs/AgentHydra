@@ -27,6 +27,10 @@ export const FIT_PCT = 85
  *  26.6% a task, a sweep on Opus high 35.9%, mechanical on Sonnet medium 0.8%. */
 export const DEFAULT_TASK_PCT = 25
 
+/** A manager wake's cost with nothing on record, in % of a Pro 5-hour window (piece 6): it reads a
+ *  batch report and dispatches, no more. */
+export const MANAGER_WAKE_PCT = 2
+
 /** A worker running on an account: what its task is expected to cost, and the account's 5-hour
  *  usage when its attempt started (null when unknown). */
 export interface RunningLoad {
@@ -113,6 +117,18 @@ export function expectedCost(
   task: { kind?: string | null; model: string | null; effort: string | null },
   finished: FinishedCost[],
 ): CostEstimate {
+  // A manager's cost is per wake: the average of the kind's wake attempts (they arrive as one
+  // FinishedCost each), else MANAGER_WAKE_PCT. Never the whole-task default, never a whole task.
+  if (task.kind === 'manage') {
+    const wakes = finished.filter((f) => f.kind === 'manage')
+    return wakes.length
+      ? {
+          pct: wakes.reduce((s, f) => s + f.pct, 0) / wakes.length,
+          basis: 'kind',
+          samples: wakes.length,
+        }
+      : { pct: MANAGER_WAKE_PCT, basis: 'default', samples: 0 }
+  }
   const own = modelMultiplier(task.model ?? 'claude-opus-5-5')
   const scaled = (f: FinishedCost): number =>
     (f.pct * own) / modelMultiplier(f.model ?? 'claude-opus-5-5')

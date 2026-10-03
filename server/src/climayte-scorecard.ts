@@ -72,7 +72,7 @@ const START: Record<CliMayteKind, number> = {
   code: 2,
   review: 2,
   debug: 4,
-  manage: 2, // Sonnet low: reading reports and following a plan
+  manage: 1, // Sonnet low: reading reports and following a plan
 }
 
 /** A rung is trusted after this many verdicts at or above PASS_BAR, the floor for "reliably"... */
@@ -114,6 +114,10 @@ export interface CliMayteVerdict {
   /** Provisional verdicts (by: 'wave') stay out of the scorecard until the orchestrator confirms them
    *  by calling climayte_wave_verify with ok: true. */
   provisional?: boolean
+  /** The work this verdict judges: the start of the task's newest attempt when it was recorded. A
+   *  verdict with the same span as the one before judges the same work (no attempt since) and
+   *  replaces it in the scorecard. Absent on older verdicts: each counts on its own. */
+  span?: number
 }
 
 /** One attempt's tokens in weighted units. Writes are 5-minute ones for attempts launched with the
@@ -164,21 +168,10 @@ export function scoreRows(
   const rows = new Map<string, ScoreRow>()
   for (const t of tasks) {
     if (!t.kind || !t.verdicts?.length) continue
-    // Keep only the newest verdict per span of work, skipping provisional ones.
-    const filteredVerdicts: CliMayteVerdict[] = []
-    for (let i = t.verdicts.length - 1; i >= 0; i--) {
-      const v = t.verdicts[i]!
-      // Skip provisional verdicts (piece 5).
-      if (v.provisional) continue
-      // Keep this verdict only if we haven't seen a newer one covering this work.
-      // A newer verdict covers this work if there's no newer verdict already kept.
-      if (filteredVerdicts.length === 0 || filteredVerdicts[0]!.at < v.at) {
-        // Replace any older verdict with the same work span (no attempts between them).
-        // For now, just keep the newest, since later verdicts replace earlier ones.
-        filteredVerdicts.unshift(v)
-        if (filteredVerdicts.length > 1) filteredVerdicts.pop()
-      }
-    }
+    // The newest verdict per span of work; a provisional one leaves its span out of the card.
+    const bySpan = new Map<number | string, CliMayteVerdict>()
+    for (const [i, v] of t.verdicts.entries()) bySpan.set(v.span ?? `v${i}`, v)
+    const filteredVerdicts = [...bySpan.values()].filter((v) => !v.provisional)
     for (const v of filteredVerdicts) {
       const key = `${t.kind}|${v.model ?? ''}|${v.effort ?? ''}`
       const row = rows.get(key) ?? {

@@ -1,12 +1,25 @@
 // CliMayte waves: the wave record, the pure helpers that parse its state.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import {
+  climayteCancel,
+  climayteList,
+  climayteRun,
+  climayteScorecard,
+  climayteTotals,
+  climayteVerdict,
+  climayteWait,
+  setCliMayteAccountsProvider,
+  setCliMayteClaudeCommand,
+  startCliMayte,
+} from '../src/climayte'
+import { workers as liveWorkers } from '../src/climayte-core'
+import { MANAGER_CONTEXT_TOKENS } from '../src/climayte-launch'
 import type { CliMayteWave, CliMayteWorker } from '../src/climayte-lib'
 import { readWave, waveBatch, waveDone, waveStateText, writeWave } from '../src/climayte-wave'
-
-type CliMayteTask = CliMayteWave['tasks'][0]
 
 describe('wave store', () => {
   let tempDir: string
@@ -756,143 +769,242 @@ describe('waveBatch', () => {
   })
 })
 
-describe('judgeWaveTask', () => {
-  test('no proof is not a pass', async () => {
-    const { judgeWaveTask } = await import('../src/climayte-wave')
-    const task: CliMayteTask = {
-      key: 't1',
-      prompt: 'Task',
-      title: 'Task',
+describe('integration: the daemon judges a wave by command, a manager costs wakes (pieces 5 and 6)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-judge-'))
+  const repo = join(root, 'repo')
+  const acct = join(root, 'acct')
+  const groups: string[] = []
+  const fake = [process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')]
+  let branch = ''
+  const sha: Record<string, string> = {}
+  const git = (...args: string[]) =>
+    execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+  const commit = (file: string) => {
+    mkdirSync(dirname(join(repo, file)), { recursive: true })
+    writeFileSync(join(repo, file), file)
+    git('add', '--', file)
+    git('commit', '-q', '-m', file)
+    return git('rev-parse', 'HEAD')
+  }
+  const launches = () =>
+    readFileSync(join(acct, 'fake-launches.jsonl'), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map(
+        (l) =>
+          JSON.parse(l) as { ttl: string | null; session: string; resume: boolean; prompt: string },
+      )
+
+  beforeAll(() => {
+    mkdirSync(repo, { recursive: true })
+    mkdirSync(acct, { recursive: true })
+    git('init', '-q')
+    git('config', 'user.email', 't@example.com')
+    git('config', 'user.name', 'test')
+    commit('README.md')
+    branch = git('branch', '--show-current')
+    sha.inside = commit('src/a.ts')
+    sha.outside = commit('docs/b.md')
+    git('checkout', '-q', '-b', 'side')
+    sha.off = commit('src/c.ts')
+    git('checkout', '-q', branch)
+    setCliMayteClaudeCommand(fake)
+    setCliMayteAccountsProvider(() => [
+      { id: 'judge-1', num: 1, name: 'judge', configDir: acct, sessionPct: 0, weekPct: 0 },
+    ])
+    startCliMayte()
+  })
+
+  afterAll(() => {
+    for (const group of groups) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  const until = async (ok: () => boolean, ms = 25_000) => {
+    const deadline = Date.now() + ms
+    while (!ok() && Date.now() < deadline) await climayteWait({}, 1_000)
+    return ok()
+  }
+  const blankWave = (id: string): CliMayteWave => ({
+    id,
+    group: '',
+    managerId: '',
+    plan: '',
+    cwd: repo,
+    branch,
+    verify: null,
+    tasks: [],
+    escalations: [],
+    notes: '',
+    rounds: 0,
+    maxRounds: 3,
+    batch: { size: 1, settleS: 600, held: [], since: null },
+    status: 'running',
+    report: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
+  const waveOf = (
+    id: string,
+    managerId: string,
+    keys: Array<[string, string | null]>,
+  ): CliMayteWave => ({
+    ...blankWave(id),
+    managerId,
+    tasks: keys.map(([key, workerId]) => ({
+      key,
+      prompt: '',
+      title: key,
       kind: 'code',
       check: null,
       paths: ['src/**'],
       after: [],
-      workerId: null,
-      state: 'pending',
+      workerId,
+      state: 'running' as const,
       proof: null,
-    }
-    const result = judgeWaveTask(task, null)
-    expect(result.pass).toBe(false)
-    expect(result.provisional).toBe(false)
+    })),
+  })
+  const codeTask = (title: string, prompt: string) => ({
+    prompt,
+    cwd: repo,
+    title,
+    kind: 'code',
+    model: 'opus',
+    effort: 'high',
+    modelWhy: 'the rung this test judges',
   })
 
-  test('check passed is a provisional pass', async () => {
-    const { judgeWaveTask } = await import('../src/climayte-wave')
-    const task: CliMayteTask = {
-      key: 't1',
-      prompt: 'Task',
-      title: 'Task',
-      kind: 'code',
-      check: 'bun test',
-      paths: ['src/**'],
-      after: [],
-      workerId: null,
-      state: 'passed',
-      proof: {
-        check: true,
-        commits: [],
-        paths: true,
-        note: '',
-      },
+  test('commits are checked, a pass stays provisional and out of the scorecard, a later verdict replaces it', async () => {
+    const run = climayteRun({
+      tasks: [
+        codeTask('inside', `inside FAKE-COMMITS:${sha.inside}`),
+        codeTask('outside', `outside FAKE-COMMITS:${sha.outside}`),
+        codeTask('off', `off FAKE-COMMITS:${sha.off}`),
+        codeTask('nothing', 'nothing to commit'),
+      ],
+      group: 'judge-group',
+      perAccount: 4,
+    })
+    groups.push(run.group)
+    const ids = run.workers.map((w) => w.id)
+    const wave = waveOf('wv-judge1', 'w-nobody', [
+      ['inside', ids[0] as string],
+      ['outside', ids[1] as string],
+      ['off', ids[2] as string],
+      ['nothing', ids[3] as string],
+    ])
+    writeWave(acct, wave)
+    for (const id of ids) {
+      const w = liveWorkers.get(id)
+      if (w) w.wave = wave.id
     }
-    const result = judgeWaveTask(task, task.proof)
-    expect(result.pass).toBe(true)
-    expect(result.provisional).toBe(true)
-  })
+    await until(
+      () => readWave(acct, wave.id)?.tasks.every((t) => t.state !== 'running') === true,
+      30_000,
+    )
+    await until(
+      () => (climayteList({ id: ids[2] as string })[0]?.verdicts?.length ?? 0) > 0,
+      10_000,
+    )
 
-  test('commits present is a provisional pass', async () => {
-    const { judgeWaveTask } = await import('../src/climayte-wave')
-    const task: CliMayteTask = {
-      key: 't1',
-      prompt: 'Task',
-      title: 'Task',
-      kind: 'code',
+    const verdict = (i: number) => climayteList({ id: ids[i] as string })[0]?.verdicts?.[0]
+    expect(verdict(0)).toMatchObject({ verdict: 'pass', by: 'wave', provisional: true })
+    expect(verdict(1)).toMatchObject({ verdict: 'fail', by: 'wave' })
+    expect(verdict(1)?.note).toContain('outside the brief')
+    expect(verdict(2)).toMatchObject({ verdict: 'fail', by: 'wave' })
+    expect(verdict(2)?.note).toContain('is not on the branch')
+    expect(verdict(3)).toBeUndefined()
+
+    const saved = readWave(acct, wave.id)
+    expect(saved?.tasks.map((t) => t.state)).toEqual([
+      'passed',
+      'escalated',
+      'escalated',
+      'escalated',
+    ])
+    expect(saved?.tasks[0]?.proof).toMatchObject({
       check: null,
-      paths: ['src/**'],
-      after: [],
-      workerId: null,
-      state: 'passed',
-      proof: {
-        check: null,
-        commits: ['abc123def456'],
-        paths: true,
-        note: '',
-      },
-    }
-    const result = judgeWaveTask(task, task.proof)
-    expect(result.pass).toBe(true)
-    expect(result.provisional).toBe(true)
-  })
+      commits: [sha.inside],
+      paths: true,
+    })
+    expect(saved?.escalations.map((e) => e.key)).toContain('nothing')
 
-  test('check failed is not a pass', async () => {
-    const { judgeWaveTask } = await import('../src/climayte-wave')
-    const task: CliMayteTask = {
-      key: 't1',
-      prompt: 'Task',
-      title: 'Task',
-      kind: 'code',
-      check: 'bun test',
-      paths: ['src/**'],
-      after: [],
-      workerId: null,
-      state: 'failed',
-      proof: {
-        check: false,
-        commits: [],
-        paths: true,
-        note: 'Test failed: src/main.ts line 42',
-      },
-    }
-    const result = judgeWaveTask(task, task.proof)
-    expect(result.pass).toBe(false)
-    expect(result.provisional).toBe(false)
-  })
+    // The provisional pass is not on the scorecard. The orchestrator's fail on the same work leaves
+    // one fail, not a pass and a fail.
+    const row = () => climayteScorecard().rows.find((r) => r.kind === 'code' && r.effort === 'high')
+    expect(row()?.pass ?? 0).toBe(0)
+    const fails = row()?.fail ?? 0
+    expect(
+      climayteVerdict(ids[0] as string, { verdict: 'fail', note: 'wrong', retry: false }).ok,
+    ).toBe(true)
+    expect(row()?.pass ?? 0).toBe(0)
+    expect(row()?.fail).toBe(fails + 1)
+    expect(climayteList({ id: ids[0] as string })[0]?.verdicts?.map((v) => v.by)).toEqual([
+      'wave',
+      'orchestrator',
+    ])
+  }, 60_000)
 
-  test('paths mismatch is not a pass', async () => {
-    const { judgeWaveTask } = await import('../src/climayte-wave')
-    const task: CliMayteTask = {
-      key: 't1',
-      prompt: 'Task',
-      title: 'Task',
-      kind: 'code',
-      check: null,
-      paths: ['src/**'],
-      after: [],
-      workerId: null,
-      state: 'failed',
-      proof: {
-        check: null,
-        commits: ['abc123'],
-        paths: false,
-        note: 'Diff touched docs/README.md outside allowed paths',
-      },
-    }
-    const result = judgeWaveTask(task, task.proof)
-    expect(result.pass).toBe(false)
-    expect(result.provisional).toBe(false)
-  })
+  test('a manager runs on the 1-hour cache and starts a fresh session from the wave state past the context limit', async () => {
+    const manager = climayteRun({
+      tasks: [
+        {
+          prompt: `manage FAKE-SPEND:2000000 FAKE-CONTEXT:${MANAGER_CONTEXT_TOKENS + 10_000}`,
+          cwd: repo,
+          title: 'manager',
+          kind: 'manage',
+        },
+      ],
+      group: 'mgr-wv-judge2',
+    })
+    groups.push(manager.group)
+    const mid = manager.workers[0]?.id as string
+    const wave = waveOf('wv-judge2', mid, [['late', null]])
+    writeWave(acct, wave)
+    const m = liveWorkers.get(mid) as CliMayteWorker
+    m.wave = wave.id
+    // Its first turn ends with a task still to come: held.
+    await until(() => climayteList({ id: mid })[0]?.hold === 'wave')
+    expect(climayteList({ id: mid })[0]).toMatchObject({
+      status: 'waiting',
+      hold: 'wave',
+      effort: 'low',
+    })
 
-  test('no check and no commits is unproven', async () => {
-    const { judgeWaveTask } = await import('../src/climayte-wave')
-    const task: CliMayteTask = {
-      key: 't1',
-      prompt: 'Task',
-      title: 'Task',
-      kind: 'review',
-      check: null,
-      paths: [],
-      after: [],
-      workerId: null,
-      state: 'passed',
-      proof: {
-        check: null,
-        commits: [],
-        paths: null,
-        note: '',
-      },
-    }
-    const result = judgeWaveTask(task, task.proof)
-    expect(result.pass).toBe(false)
-    expect(result.provisional).toBe(false)
-  })
+    // The task arrives and passes on its commit: the wave is done, which wakes the manager at once.
+    const task = climayteRun({
+      tasks: [codeTask('late', `late FAKE-COMMITS:${sha.inside}`)],
+      group: 'judge-late',
+    })
+    groups.push(task.group)
+    const tid = task.workers[0]?.id as string
+    writeWave(acct, waveOf(wave.id, mid, [['late', tid]]))
+    const t = liveWorkers.get(tid) as CliMayteWorker
+    t.wave = wave.id
+    await until(
+      () =>
+        (climayteList({ id: mid })[0]?.attempts.length ?? 0) >= 2 &&
+        climayteList({ id: mid })[0]?.status !== 'running',
+    )
+
+    const ran = launches().filter(
+      (l) => l.prompt.startsWith('manage') || l.prompt.includes('# Wave wv-judge2'),
+    )
+    expect(ran).toHaveLength(2)
+    // The second wake is a new session (no resume), told the wave as the store holds it.
+    expect(ran[1]?.resume).toBe(false)
+    expect(ran[1]?.session).not.toBe(ran[0]?.session)
+    expect(ran[1]?.prompt).toContain('You are the manager of a wave')
+    expect(ran[1]?.prompt).toContain('- late: passed')
+    // The 1-hour cache for the manager, the 5-minute one for the task, and the attempts say so.
+    expect(ran.map((l) => l.ttl)).toEqual(['1h', '1h'])
+    expect(launches().find((l) => l.prompt.startsWith('late'))?.ttl).toBe('5m')
+
+    // The totals say what managing the wave cost, per wave.
+    const mine = climayteTotals().managerPct.find((p) => p.wave === 'wv-judge2')
+    expect(mine?.wakes).toBe(2)
+    expect(mine?.pct).toBeGreaterThan(0)
+  }, 90_000)
 })
