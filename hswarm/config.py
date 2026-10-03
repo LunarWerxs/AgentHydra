@@ -619,6 +619,32 @@ def free_tier(model: str) -> bool:
         return False
 
 
+def billed_of(model: str) -> bool | None:
+    """Does a call to `model` take money from an account? True: paid per use. False: free or trial (a provider whose
+    calls cost nothing, an OpenRouter `:free` model, or a provider file that says its key pool is free tier with
+    `key_billing = "free"`). None: not known (a provider with a free tier or trial whose keys may be either). The
+    ledger writes this beside cost_usd (the list price), so a report can tell money spent from value used."""
+    try:
+        spec = PROVIDERS.get(provider_of(model), {})
+        if spec.get("free_calls") or api_model_id(model).endswith(":free"):
+            return False
+    except (KeyError, ValueError):  # a model not in the registry (a test fake) has no terms to go by
+        return None
+    say = spec.get("key_billing")
+    if say in ("free", "paid"):
+        return say == "paid"
+    if say == "unknown" or spec.get("free_tier"):
+        return None
+    return True
+
+
+def billed_of_legs(models: list[str]) -> bool | None:
+    """One answer for a task that spent on several legs (failover, escalation): the shared answer, else None, since the
+    ledger line carries one cost for all of them and cannot say which part was money."""
+    seen = {billed_of(m) for m in models if m}
+    return seen.pop() if len(seen) == 1 else None
+
+
 def is_peak(when: dt.datetime | None = None) -> bool:
     t = (when or dt.datetime.now(dt.timezone.utc)).astimezone(dt.timezone.utc)
     if t.weekday() >= 5:

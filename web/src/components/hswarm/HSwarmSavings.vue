@@ -476,9 +476,9 @@ const ariaSort = (tid: string, key: string) => {
     <template v-else-if="stats">
       <!-- Hero: one line -->
       <div class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-lg border bg-card px-3 py-2">
-        <span class="text-3xl font-semibold leading-9 tabular-nums" :class="(totals[F.saved] ?? 0) < 0 ? 'text-destructive' : 'text-success'">{{ hero.saved }}</span>
-        <span class="text-sm text-muted-foreground">{{ t('hswarm.v.savings.saved') }}</span>
-        <span class="text-sm tabular-nums"><b>{{ hero.tokens }}</b> <span class="text-muted-foreground">{{ t('hswarm.v.savings.tokensAvoided') }}</span></span>
+        <span class="text-3xl font-semibold leading-9 tabular-nums">{{ hero.tokens }}</span>
+        <span class="text-sm text-muted-foreground">{{ t('hswarm.v.savings.tokensAvoided') }}</span>
+        <span class="text-sm tabular-nums" :class="(totals[F.saved] ?? 0) < 0 ? 'text-destructive' : 'text-success'"><b>{{ hero.saved }}</b> <span class="text-muted-foreground">{{ t('hswarm.v.savings.saved') }}</span></span>
         <span class="text-sm tabular-nums"><b>{{ hero.share }}</b> <span class="text-muted-foreground">{{ t('hswarm.v.savings.ofTheWork') }}</span></span>
         <span class="text-sm text-muted-foreground tabular-nums">{{ hero.runs }} {{ t('hswarm.v.savings.runs') }} · {{ hero.tasks }} {{ t('hswarm.v.savings.tasks') }} · {{ t('hswarm.v.savings.since', { day: hero.since }) }}</span>
         <span v-if="stats.source === 'zswarm'" class="rounded-full border px-1.5 text-[11px] text-muted-foreground">{{ t('hswarm.v.savings.fromZswarm') }}</span>

@@ -96,6 +96,43 @@ export function accountDisplay(
   return { text, muted: true }
 }
 
+/** The money fields a ledger report carries: value at list price for every call, and the part known to be billed. */
+export interface HswarmMoney {
+  value_usd?: number
+  /** Calls known to be billed (a paid key). */
+  spent_usd?: number
+  /** Calls known to be free or trial. */
+  free_usd?: number
+  /** Calls written before the ledger said whether they were billed. */
+  unknown_usd?: number
+}
+
+export function formatUsd(value: number): string {
+  if (value === 0) return '$0.00'
+  if (value < 0.01) return `$${value.toFixed(4)}`
+  return `$${value.toFixed(2)}`
+}
+
+/**
+ * The secondary money line under a token headline: "$X spent · $Y value at list price", where spending is known.
+ * Lines from before the ledger recorded it are counted apart and said so, never folded into spent. Empty when there
+ * is no money to show.
+ */
+export function moneyLine(
+  m: HswarmMoney,
+  t: (key: string, params?: Record<string, unknown>) => string,
+): string {
+  const value = m.value_usd ?? 0
+  if (value <= 0) return ''
+  const unknown = m.unknown_usd ?? 0
+  const sep = ` ${t('hswarm.v.money.separator')} `
+  const parts: string[] = []
+  if (unknown < value) parts.push(t('hswarm.v.money.spent', { usd: formatUsd(m.spent_usd ?? 0) }))
+  parts.push(t('hswarm.v.money.value', { usd: formatUsd(value) }))
+  if (unknown > 0) parts.push(t('hswarm.v.money.unknown', { usd: formatUsd(unknown) }))
+  return parts.join(sep)
+}
+
 /** acct id (as hswarm's report names it) -> the instance signed in as it (or `former` ones); empty when the daemon cannot say. */
 async function fetchAccountNames(): Promise<Record<string, HswarmAccountName>> {
   try {

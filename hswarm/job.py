@@ -171,6 +171,7 @@ class Job:
             "tasks": len(self.tasks),
             "counts": counts,
             **self._summary_extras(),
+            "tokens": sum(_usage_tokens(r.usage) for r in self.results.values()),
             "cost_usd": round(self.cost(), 6),
             "cost_unknown_tasks": sum(1 for r in self.results.values() if r.cost_usd is None),
             "budget_usd": self.budget_usd,
@@ -412,6 +413,13 @@ def _live_counts(tasks: list, results: dict) -> dict[str, int]:
     return counts
 
 
+def _usage_tokens(usage: object) -> int:
+    """Tokens a task moved: input (cached or not) plus output, the same count the console's usage chart makes."""
+    if not isinstance(usage, dict):
+        return 0
+    return sum(v for k in ("in_hit", "in_miss", "out") if isinstance(v := usage.get(k), int) and not isinstance(v, bool))
+
+
 def _live_summary(summary: dict, tasks: list, results: dict) -> dict:
     """The record's summary with its counts, cost and longest task recomputed over the live results."""
     counts = _live_counts(tasks, results)
@@ -419,6 +427,7 @@ def _live_summary(summary: dict, tasks: list, results: dict) -> dict:
     return {
         **summary,
         "counts": counts or summary.get("counts", {}),
+        "tokens": sum(_usage_tokens(r.get("usage")) for r in results.values() if isinstance(r, dict)),
         "cost_usd": round(sum(c for c in costs if isinstance(c, (int, float))), 6),
         "cost_unknown_tasks": sum(1 for c in costs if c is None),
         "longest_task_s": round(max((r.get("seconds") or 0.0) for r in results.values()), 2) if results else 0.0,

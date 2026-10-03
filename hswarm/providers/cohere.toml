@@ -4,6 +4,7 @@ base_url = "https://api.cohere.ai/compatibility/v1"
 about = "Cohere's Command models. A free trial key, then paid per use."
 key_url = "https://dashboard.cohere.com/api-keys"  # where a person makes an API key
 website = "https://cohere.com"  # the company's site; the console shows its favicon
+key_billing = "unknown"  # a trial key and a paid key look alike: the ledger leaves `billed` off
 models_path = "/models"
 docs = "https://docs.cohere.com/docs/compatibility-api"
 

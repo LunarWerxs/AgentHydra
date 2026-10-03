@@ -5,6 +5,7 @@ about = "Very fast open models. Has a free tier with daily limits."
 key_url = "https://cloud.cerebras.ai/"  # where a person makes an API key
 website = "https://www.cerebras.ai"  # the company's site; the console shows its favicon
 free_tier = true  # free terms may keep what is sent: HSWARM_REDACT_FREE_TIER redacts tasks here
+key_billing = "free"  # the key pool is free-tier keys: a call is not billed (the ledger's `billed` field)
 # The free tier is a DAILY token cap, and a key that spends it answers 402: today's allowance, not money. A 402
 # here is dated to this hour (UTC) and probation lets the key out then, not 24 h after the 402. 2026-10-02: 416 of
 # 419 keys were parked as "out of credit" and every one served again that evening. The hour is assumed, not

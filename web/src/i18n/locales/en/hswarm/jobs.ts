@@ -10,7 +10,7 @@ export default {
     label: 'Label',
     state: 'State',
     tasks: 'Tasks',
-    cost: 'Cost',
+    cost: 'Tokens',
     created: 'Created',
   },
   runningNow: 'Running now',
@@ -22,7 +22,7 @@ export default {
   taskResults: 'Task results',
   taskStatus: 'Status',
   taskModel: 'Model',
-  taskCost: 'Cost',
+  taskCost: 'Tokens',
   taskAnswer: 'Answer',
   noResults: 'No task results yet.',
 }

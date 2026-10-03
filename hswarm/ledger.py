@@ -23,6 +23,16 @@ def append_row(row: dict) -> None:
         pass
 
 
+def billed_fields(res) -> dict:
+    """`{"billed": bool}` for a result's ledger line, or {} when it is not known (see config.billed_of). Every leg the
+    task spent on counts: the failed-over ones and an escalation's teacher, since cost_usd covers them too."""
+    models = [res.model, *(getattr(res, "failover", None) or [])]
+    if getattr(res, "escalation", None):
+        models.append(res.escalation.get("to"))
+    billed = config.billed_of_legs(models)
+    return {} if billed is None else {"billed": billed}
+
+
 def ask_row(res, caller: dict | None) -> dict:
     """The ledger line for a one-shot hswarm_ask, so asks are attributed and costed like jobs."""
     return {
@@ -30,7 +40,7 @@ def ask_row(res, caller: dict | None) -> dict:
         "backend": res.backend, "model": res.model, "provider": _provider(res.model), "status": res.status, "calls": max(1, res.turns), **res.usage,
         "cost_usd": res.cost_usd, "seconds": res.seconds, "peak": config.is_peak(),
         "upstream": ",".join(getattr(res, "upstream", []) or []) or None, "api_seconds": getattr(res, "api_seconds", 0.0),
-        "failover": ",".join(getattr(res, "failover", []) or []) or None, "taint": getattr(res, "taint", "") or None, **ledger_fields(caller),
+        "failover": ",".join(getattr(res, "failover", []) or []) or None, "taint": getattr(res, "taint", "") or None, **billed_fields(res), **ledger_fields(caller),
     }
 
 
@@ -158,13 +168,35 @@ def over_daily_cap() -> str | None:
             f"it in hswarm ui (Routing & roles) or as daily_cap_usd in {config.SETTINGS_FILE}, or wait until tomorrow")
 
 
+def money_kind(r: dict) -> str:
+    """How a ledger line's cost_usd (list price) was paid: "spent" (billed true: money left an account), "free"
+    (billed false: a free or trial key) or "unknown" (no `billed` field: every line from before it was written)."""
+    b = r.get("billed")
+    return "spent" if b is True else "free" if b is False else "unknown"
+
+
+def _split(rows: list[dict]) -> dict[str, float]:
+    split = {"spent": 0.0, "free": 0.0, "unknown": 0.0}
+    for r in rows:
+        split[money_kind(r)] += float(r.get("cost_usd") or 0.0)
+    return split
+
+
+def money_totals(split: dict[str, float]) -> dict:
+    """The money fields every report carries: value_usd is the list price of all calls, spent_usd only the calls known
+    to be billed, free_usd the free/trial ones, unknown_usd the lines that never said (written before `billed`)."""
+    return {"value_usd": round(sum(split.values()), 6), "spent_usd": round(split["spent"], 6),
+            "free_usd": round(split["free"], 6), "unknown_usd": round(split["unknown"], 6)}
+
+
 def _int(v) -> int:
     return v if isinstance(v, int) and not isinstance(v, bool) else 0
 
 
 def _new_day() -> dict:
     """A day with nothing in it. Tokens: tokens_in counts cached input too (tokens_cached is the cached part of it)."""
-    return {"tasks": 0, "ok": 0, "error": 0, "cost_usd": 0.0, "tokens_in": 0, "tokens_out": 0, "tokens_cached": 0,
+    return {"tasks": 0, "ok": 0, "error": 0, "cost_usd": 0.0, "value_usd": 0.0, "spent_usd": 0.0, "free_usd": 0.0, "unknown_usd": 0.0,
+            "tokens_in": 0, "tokens_out": 0, "tokens_cached": 0,
             "providers": {}, "provider_tokens": {}, "models": {}}
 
 
@@ -181,7 +213,9 @@ def _fold_day(line: bytes) -> None:
     outcome = "ok" if r.get("status") == "ok" else "error"
     b[outcome] += 1
     cost = r.get("cost_usd") or 0.0
-    b["cost_usd"] = round(b["cost_usd"] + cost, 6)
+    b["cost_usd"] = b["value_usd"] = round(b["value_usd"] + cost, 6)  # cost_usd: the older name for value_usd
+    kind = money_kind(r) + "_usd"
+    b[kind] = round(b[kind] + cost, 6)
     who = r.get("provider") or "other"
     cached_in = _int(r.get("in_hit"))
     tin = cached_in + _int(r.get("in_miss"))
@@ -206,6 +240,7 @@ def ledger_summary(days: float = 1.0) -> dict:
     rows = [r for r in rows if not r.get("cached")]
     total = 0.0
     unknown = 0
+    split = {"spent": 0.0, "free": 0.0, "unknown": 0.0}
     by_model: dict[str, dict] = {}
     by_backend: dict[str, dict] = {}
     by_status: dict[str, int] = {}
@@ -217,6 +252,7 @@ def ledger_summary(days: float = 1.0) -> dict:
             unknown += 1  # a backend without usage data reports None, which is "not measured", never zero
         else:
             total += c
+            split[money_kind(r)] += c
         for k in tok:
             if isinstance(r.get(k), int):
                 tok[k] += r[k]
@@ -233,7 +269,7 @@ def ledger_summary(days: float = 1.0) -> dict:
         by_model[model]["survival"] = survival.mean(scores)
     nxt, state = config.next_rate_change()
     return {
-        "window_days": days, "tasks": len(rows), "cached_tasks": cached, "cost_usd": round(total, 6), "cost_unknown_tasks": unknown, "tokens": tok,
+        "window_days": days, "tasks": len(rows), "cached_tasks": cached, "cost_usd": round(total, 6), "cost_unknown_tasks": unknown, "tokens": tok, **money_totals(split),
         "by_model": by_model, "by_backend": by_backend, "by_status": by_status,
         "rate_now": "peak" if config.is_peak() else "off-peak (50% off)",
         "next_rate_change_utc": nxt.isoformat(timespec="minutes"), "next_rate_state": state, "ledger": str(config.LEDGER),
@@ -346,7 +382,7 @@ def usage_report(hours: float = 24.0) -> dict:
     routing = routing_rows(hours)
     return {
         "window_hours": hours,
-        "swarm": {"tasks": len(rows), "cached_tasks": cached, "cost_usd": round(sum(float(r.get("cost_usd") or 0.0) for r in rows), 4), "callers": _caller_groups(rows), "ledger": str(config.LEDGER)},
+        "swarm": {"tasks": len(rows), "cached_tasks": cached, "cost_usd": round(sum(float(r.get("cost_usd") or 0.0) for r in rows), 4), **money_totals(_split(rows)), "callers": _caller_groups(rows), "ledger": str(config.LEDGER)},
         "claude_fanouts": {**_fanouts(routing), "log": str(config.ROUTING)},
     }
 

@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 
 from . import config
-from .ledger import _window_start
+from .ledger import _window_start, money_kind
 
 TOP_DAILY = 6
 _CACHE: dict = {}
@@ -67,10 +67,11 @@ def compute(days: int, ledger: Path, survival_log: Path, now: dt.datetime | None
                     continue
                 name = str(r.get("model") or "other")
                 m = models.setdefault(name, {"model": name, "tasks": 0, "ok": 0, "failed": 0, "cost_usd": 0.0, "seconds": 0.0,
-                                             "tokens": 0, "scored": 0, "_surv": 0.0})
+                                             "spent_usd": 0.0, "free_usd": 0.0, "unknown_usd": 0.0, "tokens": 0, "scored": 0, "_surv": 0.0})
                 m["tasks"] += 1
                 m["ok" if r.get("status") == "ok" else "failed"] += 1
                 m["cost_usd"] += float(r.get("cost_usd") or 0.0)
+                m[money_kind(r) + "_usd"] += float(r.get("cost_usd") or 0.0)
                 m["seconds"] += float(r.get("seconds") or 0.0)
                 m["tokens"] += sum(r.get(k) or 0 for k in ("in_hit", "in_miss", "out", "reasoning") if isinstance(r.get(k), int))
                 day = at.astimezone().date().isoformat()
@@ -86,7 +87,10 @@ def compute(days: int, ledger: Path, survival_log: Path, now: dt.datetime | None
     for m in sorted(models.values(), key=lambda m: (-m["tasks"], m["model"])):
         s = m.pop("_surv")
         out.append({**m, "success_rate": round(m["ok"] / m["tasks"], 4), "cost_usd": round(m["cost_usd"], 6),
+                    "value_usd": round(m["cost_usd"], 6), "spent_usd": round(m["spent_usd"], 6),
+                    "free_usd": round(m["free_usd"], 6), "unknown_usd": round(m["unknown_usd"], 6),
                     "cost_per_ok": round(m["cost_usd"] / m["ok"], 6) if m["ok"] else None,
+                    "tokens_per_ok": round(m["tokens"] / m["ok"]) if m["ok"] else None,
                     "avg_seconds": round(m["seconds"] / m["tasks"], 2), "seconds": round(m["seconds"], 1),
                     "survival": round(s / m["scored"], 4) if m["scored"] else None})
     top = [m["model"] for m in out[:TOP_DAILY]]

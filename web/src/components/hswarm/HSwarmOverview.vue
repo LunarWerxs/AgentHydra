@@ -18,12 +18,16 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
-import type { HswarmState } from '@/lib/hswarm-api'
-import { useHswarmApi } from '@/lib/hswarm-api'
+import type { HswarmMoney, HswarmState } from '@/lib/hswarm-api'
+import { moneyLine, useHswarmApi } from '@/lib/hswarm-api'
 
 interface UsageDay {
   date: string
   cost_usd: number
+  value_usd?: number
+  spent_usd?: number
+  free_usd?: number
+  unknown_usd?: number
   tokens_in?: number
   tokens_out?: number
   tokens_cached?: number
@@ -151,9 +155,19 @@ const totalCachedTokens = computed(() => {
   return usage.value?.days.reduce((sum: number, d: any) => sum + (d.tokens_cached || 0), 0) || 0
 })
 
-const totalSpend = computed(() => {
-  return usage.value?.days.reduce((sum: number, d: any) => sum + (d.cost_usd || 0), 0) || 0
+// The money under the token headline: list-price value of every call, and the part known to be billed. Days from before
+// the ledger recorded billing count as unknown (their value is in value_usd, never in spent_usd).
+const money = computed<HswarmMoney>(() => {
+  const m = { value_usd: 0, spent_usd: 0, free_usd: 0, unknown_usd: 0 }
+  for (const d of usage.value?.days ?? []) {
+    m.value_usd += d.value_usd ?? d.cost_usd ?? 0
+    m.spent_usd += d.spent_usd ?? 0
+    m.free_usd += d.free_usd ?? 0
+    m.unknown_usd += d.unknown_usd ?? (d.value_usd == null ? (d.cost_usd ?? 0) : 0)
+  }
+  return m
 })
+const moneyText = computed(() => moneyLine(money.value, t))
 
 const totalTasks = computed(() => {
   return usage.value?.days.reduce((sum: number, d: any) => sum + (d.tasks || 0), 0) || 0
@@ -419,7 +433,7 @@ function formatPercent(value: number): string {
         </div>
         <div class="whitespace-nowrap text-2xl font-semibold leading-8">{{ formatTokens(totalTokens) }}</div>
         <p class="truncate text-xs text-muted-foreground">
-          {{ totalSpend > 0 ? `${formatUSD(totalSpend)} ${t('hswarm.v.overview.atListPrice')} ${t('hswarm.v.overview.separator')} ` : '' }}{{ totalTasks > 0 ? `${formatNumber(totalTasks)} ${totalTasks === 1 ? t('hswarm.v.overview.task') : t('hswarm.v.overview.tasks')}` : usage?.error ? t('hswarm.v.overview.loadFailed') : usage ? t('hswarm.v.overview.nothingRun') : t('hswarm.v.overview.loading') }}
+          {{ moneyText ? `${moneyText} ${t('hswarm.v.overview.separator')} ` : '' }}{{ totalTasks > 0 ? `${formatNumber(totalTasks)} ${totalTasks === 1 ? t('hswarm.v.overview.task') : t('hswarm.v.overview.tasks')}` : usage?.error ? t('hswarm.v.overview.loadFailed') : usage ? t('hswarm.v.overview.nothingRun') : t('hswarm.v.overview.loading') }}
         </p>
       </div>
     </div>
@@ -470,7 +484,7 @@ function formatPercent(value: number): string {
           <p class="text-sm text-muted-foreground mt-2">
             <strong>{{ formatTokens(totalTokens) }}</strong> {{ t('hswarm.v.overview.tokensIn14Days') }}
             <span v-if="totalCachedTokens > 0">{{ t('hswarm.v.overview.separator') }} {{ formatTokens(totalCachedTokens) }} {{ t('hswarm.v.overview.cachedInput') }}</span>
-            <span v-if="totalSpend > 0">{{ t('hswarm.v.overview.separator') }} {{ formatUSD(totalSpend) }} {{ t('hswarm.v.overview.atListPrice') }}</span>
+            <span v-if="moneyText">{{ t('hswarm.v.overview.separator') }} {{ moneyText }}</span>
             <span v-if="totalTasks > 0">{{ t('hswarm.v.overview.separator') }} {{ formatNumber(totalTasks) }} {{ totalTasks === 1 ? t('hswarm.v.overview.task') : t('hswarm.v.overview.tasks') }}</span>
           </p>
         </CardHeader>

@@ -8,7 +8,8 @@ import BarRows from '@/components/charts/BarRows.vue'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { seriesColor } from '@/lib/chart'
-import { useHswarmApi } from '@/lib/hswarm-api'
+import type { HswarmMoney } from '@/lib/hswarm-api'
+import { formatUsd, moneyLine, useHswarmApi } from '@/lib/hswarm-api'
 
 interface ModelRow {
   model: string
@@ -17,7 +18,12 @@ interface ModelRow {
   failed: number
   success_rate: number
   cost_usd: number
+  value_usd?: number
+  spent_usd?: number
+  free_usd?: number
+  unknown_usd?: number
   cost_per_ok: number | null
+  tokens_per_ok?: number | null
   avg_seconds: number
   tokens: number
   scored: number
@@ -58,15 +64,41 @@ watch(range, load)
 const models = computed(() => stats.value?.models ?? [])
 const order = computed(() => models.value.map((m) => m.model))
 const pct = (n: number) => `${Math.round(n * 100)}%`
-const usd = (n: number) => (n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`)
+const tokenFmt = (n: number) =>
+  n < 1e3
+    ? String(Math.round(n))
+    : n < 1e6
+      ? `${Number((n / 1e3).toFixed(1))}K`
+      : `${Number((n / 1e6).toFixed(1))}M`
 
 const outcomeMax = computed(() => Math.max(1, ...models.value.map((m) => m.tasks)))
-const costRows = computed(() =>
+// Tokens per successful task lead; the list-price value of the same task is its secondary figure.
+const tokenRows = computed(() =>
   models.value
-    .filter((m) => m.cost_per_ok !== null)
-    .sort((a, b) => (a.cost_per_ok ?? 0) - (b.cost_per_ok ?? 0))
-    .map((m) => ({ key: m.model, label: m.model, value: m.cost_per_ok ?? 0 })),
+    .filter((m) => m.tokens_per_ok != null)
+    .sort((a, b) => (a.tokens_per_ok ?? 0) - (b.tokens_per_ok ?? 0))
+    .map((m) => ({
+      key: m.model,
+      label: m.model,
+      value: m.tokens_per_ok ?? 0,
+      detail:
+        m.cost_per_ok != null
+          ? `${formatUsd(m.cost_per_ok)} ${t('hswarm.v.money.atListPrice')}`
+          : undefined,
+    })),
 )
+// What the shown models moved and what it was worth, spent apart from value.
+const totals = computed<HswarmMoney>(() => {
+  const m = { value_usd: 0, spent_usd: 0, free_usd: 0, unknown_usd: 0 }
+  for (const r of models.value) {
+    m.value_usd += r.value_usd ?? r.cost_usd ?? 0
+    m.spent_usd += r.spent_usd ?? 0
+    m.free_usd += r.free_usd ?? 0
+    m.unknown_usd += r.unknown_usd ?? (r.value_usd == null ? (r.cost_usd ?? 0) : 0)
+  }
+  return m
+})
+const totalsText = computed(() => moneyLine(totals.value, t))
 const survivalRows = computed(() =>
   models.value
     .filter((m) => m.survival !== null)
@@ -135,9 +167,10 @@ const colorOf = (name: string) => seriesColor(name, dailyTop.value)
         </section>
 
         <section class="space-y-1.5">
-          <h3 class="text-xs font-semibold">{{ t('hswarm.v.overview.results.costPerOk') }}</h3>
-          <BarRows v-if="costRows.length" :rows="costRows" :order="order" :format="usd" />
+          <h3 class="text-xs font-semibold">{{ t('hswarm.v.overview.results.tokensPerOk') }}</h3>
+          <BarRows v-if="tokenRows.length" :rows="tokenRows" :order="order" :format="tokenFmt" />
           <p v-else class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.noOk') }}</p>
+          <p v-if="totalsText" class="text-2xs text-muted-foreground">{{ totalsText }}</p>
         </section>
 
         <section class="space-y-1.5">

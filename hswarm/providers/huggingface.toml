@@ -6,6 +6,7 @@ base_url = "https://router.huggingface.co/v1"
 about = "Hugging Face's router to many open models. A small free monthly credit, then paid per use."
 key_url = "https://huggingface.co/settings/tokens"  # where a person makes an API key
 website = "https://huggingface.co"  # the company's site; the console shows its favicon
+key_billing = "unknown"  # the free monthly credit and paid usage look alike: the ledger leaves `billed` off
 check_path = "https://huggingface.co/api/whoami-v2"  # needs the key, unlike the router's /models
 key_env = ["HF_TOKENS", "HF_TOKEN", "HUGGINGFACE_API_KEY"]
 options = ["reasoning_effort"]

@@ -5,6 +5,7 @@ about = "Very fast open models. Has a free tier with daily limits."
 key_url = "https://console.groq.com/keys"  # where a person makes an API key
 website = "https://groq.com"  # the company's site; the console shows its favicon
 free_tier = true  # free terms may keep what is sent: HSWARM_REDACT_FREE_TIER redacts tasks here
+key_billing = "free"  # the key pool is free-tier keys: a call is not billed (the ledger's `billed` field)
 options = ["reasoning_effort"]
 models_path = "/models"
 anthropic_url = "facade"

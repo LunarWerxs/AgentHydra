@@ -35,7 +35,7 @@ from .client import DeepSeekClient, account_gone, regain_at
 from .envelope import admit as admit_envelope
 from .envelope import record_spend as record_tree_spend
 from .job import Job, new_job_id
-from .ledger import batch_argparser, ledger_summary  # noqa: F401 - re-exported for the batch tools and the CLI
+from .ledger import batch_argparser, billed_fields, ledger_summary  # noqa: F401 - re-exported for the batch tools and the CLI
 from .spec import Result, Task, add_spend, merge_taint, mis_scoped, now_iso
 from .worker import classify_liveness
 
@@ -1398,6 +1398,7 @@ class JobManager:
                 "escalated": (f"{res.escalation['to']}:{res.escalation['kept']}" if res.escalation else None),
                 "liveness": res.liveness or None,
                 "taint": res.taint or None,
+                **({} if res.cached_from else billed_fields(res)),
                 **ledger_fields(job.caller),
             }
             if getattr(res, "edit_snapshot", None):
