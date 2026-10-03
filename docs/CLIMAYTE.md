@@ -865,7 +865,11 @@ desktop? ... to save me from having to do both individually."
 - `GET /api/corch/workers/:id?wait=` → `climayteGet` (404 when unknown)
 - `GET /api/corch/journal?group=&id=&since=&limit=&format=lines` → `climayteJournal`, or
   `climayteJournalLines` with `format=lines`; `since` is an ISO time or epoch ms
-- `POST /api/corch/workers` body `{ tasks, group?, accounts?, perAccount?, model?, effort? }` → `climayteRun`
+- `POST /api/corch/workers` body `{ tasks, group?, accounts?, perAccount?, model?, effort?, copies? }` → `climayteRun`.
+  A task the same `group` was sent in the last 10 minutes (`REPEAT_WINDOW_MS`: same title, prompt
+  and cwd, not cancelled or failed) answers with the worker already made, marked `repeat: true`,
+  and starts nothing; the answer carries `repeated` and a `note`. `copies: true` makes new ones
+  anyway (field note 62).
 - `POST /api/corch/workers/:id/send` `{ text, urgent?, model?, effort? }` → `climayteSend`
 - `POST /api/corch/workers/:id/handoff` → `climayteHandoff`
 - `POST /api/corch/workers/:id/priority` `{ priority }` → `climayteSetPriority` (400 on a bad value)
@@ -882,9 +886,19 @@ desktop? ... to save me from having to do both individually."
 Registered in `server/src/index.ts` beside the other route modules; `startCliMayte()` is called at
 boot after the stores are ready.
 
+One daemon owns the store (field note 62). The workers live in that daemon's memory, so a second
+daemon on the same store holds a different half of them and resumes the first one's running workers
+as interrupted. A start whose `/api/health` probes all time out while the pointer's daemon is still a
+live process holding its port ends instead of hopping (`findStalledOwner`); the MCP tools a daemon
+serves at `/api/mcp` read that daemon, not whatever `runtime.json` names (`useOwnDaemon`); and a
+daemon that finds another live one on its store (`findPeerDaemon`, on the minute pointer tick) logs
+`TWO DAEMONS`, lists it as `peer` in `/api/health` and stamps every `/api` answer with
+`x-agenthydra-peer`, which the MCP client turns into a `peerWarning` on every tool answer (a list is
+wrapped as `{ peerWarning, result }`, and an error carries it).
+
 ## MCP tools (`server/src/mcp.ts`)
 
-- `climayte_run { tasks: [{ prompt, cwd, title?, model?, effort? }], group?, accounts?, per_account?, model?, effort? }`
+- `climayte_run { tasks: [{ prompt, cwd, title?, model?, effort? }], group?, accounts?, per_account?, model?, effort?, copies? }`
   MUTATES. Description says: when the owner tells a chat to climayte a task or fully delegate it,
   the chat keeps only the orchestration and every piece of work goes here; each task must be
   self-contained (a CLI worker sees none of this chat), name its folder, and say what "done"

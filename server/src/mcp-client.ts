@@ -7,6 +7,7 @@
 import { appEnv, IS_COMPILED, PORT, SERVICE_NAME } from './config'
 import { instanceFilePath, readInstanceInfo } from './instance'
 import type { McpEngineTool } from './mcp-stdio.mjs'
+import { PEER_HEADER } from './side-run'
 
 const DEFAULT_BASE = `http://127.0.0.1:${PORT}`
 
@@ -14,10 +15,21 @@ const DEFAULT_BASE = `http://127.0.0.1:${PORT}`
  *  rest of this process talks to the default. Cleared only by resetDaemonResolutionForTests. */
 let staleFallbackBase: string | null = null
 
-// Resolve the base URL per call: an explicit AGENTHYDRA_URL/AGENTHYDRA_PORT always wins, else
-// follow the port the daemon ACTUALLY bound (~/.agenthydra/runtime.json), so an auto-hopped port
-// still works, else fall back to the static configured default.
+/** Set by the daemon at boot (index.ts): the tools it serves at /api/mcp read THAT daemon. */
+let ownBase: string | null = null
+
+/** Inside a daemon: every tool reads this daemon, whatever the pointer or AGENTHYDRA_URL says. A
+ *  chat connected to one daemon's /api/mcp read the other's workers through runtime.json while two
+ *  ran one store (2026-10-02, docs/CLIMAYTE-FIELD-NOTES.md note 62). */
+export function useOwnDaemon(url: string): void {
+  ownBase = url
+}
+
+// Resolve the base URL per call: inside a daemon, that daemon; else an explicit
+// AGENTHYDRA_URL/AGENTHYDRA_PORT, else the port the daemon ACTUALLY bound
+// (~/.agenthydra/runtime.json), so an auto-hopped port still works, else the configured default.
 export function daemonBase(): string {
+  if (ownBase) return ownBase
   const url = appEnv('URL')
   if (url) return url
   const port = appEnv('PORT')
@@ -68,7 +80,8 @@ async function healthOf(base: string, timeoutMs: number): Promise<DaemonHealth |
  * never second-guessed.
  */
 async function recoverFromStalePointer(): Promise<{ note: string; recovered: boolean }> {
-  if (appEnv('URL') || appEnv('PORT') || staleFallbackBase) return { note: '', recovered: false }
+  if (ownBase || appEnv('URL') || appEnv('PORT') || staleFallbackBase)
+    return { note: '', recovered: false }
   const named = readInstanceInfo()?.url
   if (!named) return { note: '', recovered: false }
   const note =
@@ -105,24 +118,48 @@ function noteSideRun(res: Response): void {
   console.error(`[agenthydra mcp] ${daemonWarning}`)
 }
 
-/** Every tool answer carries `daemonWarning` while one is set. Applied where tools are handed to a
+/** Non-null while the daemon's latest answer said another daemon serves the same store
+ *  (`x-agenthydra-peer`, side-run.ts). Unlike a side-run, a peer can go away, so every answer
+ *  sets or clears it. */
+let peerWarning: string | null = null
+
+function notePeer(res: Response): void {
+  const peer = (res as { headers?: Headers }).headers?.get(PEER_HEADER)
+  peerWarning = peer
+    ? `TWO DAEMONS on one store: ${daemonBase()} answered this, and ${peer} also runs. Each holds ` +
+      'its own CliMayte workers, so work made through the other one is missing here: an empty ' +
+      'list or "not found" may be wrong. Do NOT dispatch again; tell the owner to stop one daemon.'
+    : null
+}
+
+/** Every tool answer carries `daemonWarning` while one is set, and `peerWarning` while a second
+ *  daemon serves the same store; a list answer is wrapped as `{ peerWarning, result }` then, since
+ *  an empty list is exactly the answer that misled (note 62). Applied where tools are handed to a
  *  transport (stdio and HTTP), not to TOOLS itself, so a test of one tool sees the bare result. */
 export function withDaemonWarning(tools: McpEngineTool[]): McpEngineTool[] {
   return tools.map((t) => ({
     ...t,
     run: async (args: Record<string, unknown>, signal?: AbortSignal) => {
       const value = await t.run(args, signal)
-      return daemonWarning && value && typeof value === 'object' && !Array.isArray(value)
-        ? { daemonWarning, ...(value as Record<string, unknown>) }
-        : value
+      if (peerWarning && Array.isArray(value)) return { peerWarning, result: value }
+      const object = value && typeof value === 'object' && !Array.isArray(value)
+      if (!object || (!daemonWarning && !peerWarning)) return value
+      return {
+        ...(daemonWarning ? { daemonWarning } : {}),
+        ...(peerWarning ? { peerWarning } : {}),
+        ...(value as Record<string, unknown>),
+      }
     },
   }))
 }
 
-/** Tests only: forget a stale-pointer fallback and a side-run notice left by an earlier case. */
+/** Tests only: forget a stale-pointer fallback, a side-run or peer notice and an own-daemon base
+ *  left by an earlier case. */
 export function resetDaemonResolutionForTests(): void {
   staleFallbackBase = null
   daemonWarning = null
+  peerWarning = null
+  ownBase = null
 }
 
 export async function api(pathname: string, init?: RequestInit): Promise<unknown> {
@@ -146,7 +183,11 @@ export async function api(pathname: string, init?: RequestInit): Promise<unknown
     }
   }
   noteSideRun(res)
-  if (!res.ok) throw new Error(`AgentHydra ${res.status}: ${await res.text()}`)
+  notePeer(res)
+  if (!res.ok)
+    throw new Error(
+      `AgentHydra ${res.status}: ${await res.text()}${peerWarning ? ` (${peerWarning})` : ''}`,
+    )
   const text = await res.text()
   try {
     return JSON.parse(text) as unknown

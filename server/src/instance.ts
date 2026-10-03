@@ -2,7 +2,8 @@
 // (`createInstancePointer`, synced in as `./instance-pointer.mjs`). The daemon records the
 // port it ACTUALLY bound in <CONFIG_DIR>/runtime.json so the tray launcher and the
 // /api/health probe can find it and enforce single-instance. Best-effort throughout.
-import { CONFIG_DIR, DATA_DIR, HOST, PORT, SERVICE_NAME } from './config'
+import { connect } from 'node:net'
+import { CONFIG_DIR, DATA_DIR, DB_PATH, HOST, PORT, SERVICE_NAME } from './config'
 import { isPathInside } from './core/paths'
 import { createInstancePointer, type InstanceInfo } from './instance-pointer.mjs'
 
@@ -54,6 +55,7 @@ interface HealthBody {
   ok?: boolean
   service?: string
   pid?: number
+  dbPath?: string
 }
 
 /** /api/health of `url` as OUR service, or null: not answering, not ok, or someone else's server. */
@@ -136,15 +138,101 @@ export async function reassertInstancePointer(
  * process also lands there — it just costs the probes it costs today and still answers null.
  */
 export function singleInstanceProbeAttempts(careful = 3): number {
+  const pid = readInstanceInfo()?.pid
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return careful
+  return processExists(pid) === false ? 1 : careful
+}
+
+/** Whether `pid` is a running process: false only on ESRCH (no such process). EPERM means it IS
+ *  running, just not ours to signal; any other failure is unknown (null). */
+function processExists(pid: number): boolean | null {
   try {
-    const pid = readInstanceInfo()?.pid
-    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return careful
     process.kill(pid, 0)
-    return careful
+    return true
   } catch (error) {
-    // ESRCH: no such process — the pointer outlived its daemon. EPERM means it IS running, just
-    // not ours to signal, so that one keeps the careful path.
     const code = (error as NodeJS.ErrnoException | undefined)?.code
-    return code === 'ESRCH' ? 1 : careful
+    return code === 'ESRCH' ? false : code === 'EPERM' ? true : null
   }
+}
+
+/** Whether something accepts a TCP connection at `url`'s host and port within timeoutMs. */
+function portAccepts(url: string, timeoutMs: number): Promise<boolean> {
+  let host: string
+  let port: number
+  try {
+    const u = new URL(url)
+    host = u.hostname
+    port = Number(u.port)
+  } catch {
+    return Promise.resolve(false)
+  }
+  if (!port) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const sock = connect({ host, port })
+    const done = (ok: boolean) => {
+      sock.destroy()
+      resolve(ok)
+    }
+    sock.setTimeout(timeoutMs, () => done(false))
+    sock.once('connect', () => done(true))
+    sock.once('error', () => done(false))
+  })
+}
+
+/**
+ * The daemon the pointer names, when it is ALIVE BUT NOT ANSWERING: its process exists and its
+ * port still accepts connections, but /api/health timed out (the boot guard asks this only after
+ * every probe failed). That is a blocked event loop, not a free slot.
+ *
+ * 2026-10-02 22:58Z (docs/CLIMAYTE-FIELD-NOTES.md, note 62): the daemon on 7787 froze for 25.6 s,
+ * the tray started another, its probes all timed out inside the freeze, and it waited out the busy
+ * port, hopped to 7788 and took the pointer. Two daemons then ran one store: each resumed the
+ * other's running CliMayte workers as interrupted (two copies of each on two accounts), and every
+ * MCP tool followed the pointer to 7788 while the orchestrator POSTed to 7787. A frozen daemon
+ * answers again in seconds; a second daemon on its store is damage that lasts until one is stopped.
+ *
+ * Null when the pointer is ours or names no pid, when that process is gone (a crash: the boot goes
+ * on as before), or when nothing accepts on its port (a process that kept the pid but not the port).
+ */
+export async function findStalledOwner(timeoutMs = 1000): Promise<InstanceInfo | null> {
+  const info = readInstanceInfo()
+  const pid = info?.pid
+  if (!info?.url || typeof pid !== 'number' || pid <= 0 || pid === process.pid) return null
+  if (processExists(pid) === false) return null
+  return (await portAccepts(info.url, timeoutMs)) ? info : null
+}
+
+const sameFile = (a: string, b: string) =>
+  process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+
+/**
+ * Another LIVE AgentHydra serving THIS daemon's store, or null: the pointer's daemon when it is not
+ * this one, and the default port's when this one hopped off it. Only a /api/health that answers as
+ * our service, from another pid, naming this daemon's database counts (a side-run's own store is
+ * not this one). The running daemon asks on its pointer tick and stamps every answer with what it
+ * found (side-run.ts), so a client reading one of two daemons is told so instead of reading a
+ * partial store as the whole (note 62).
+ */
+export async function findPeerDaemon(
+  boundPort: number,
+  timeoutMs = 1000,
+): Promise<{ url: string; pid: number } | null> {
+  const own = `http://${HOST}:${boundPort}`
+  const info = readInstanceInfo()
+  const urls = new Set<string>()
+  if (info?.url && info.pid !== process.pid) urls.add(info.url)
+  if (boundPort !== PORT) urls.add(DEFAULT_URL)
+  urls.delete(own)
+  for (const url of urls) {
+    const body = await ourHealthAt(url, timeoutMs)
+    if (
+      body &&
+      typeof body.pid === 'number' &&
+      body.pid !== process.pid &&
+      typeof body.dbPath === 'string' &&
+      sameFile(body.dbPath, DB_PATH)
+    )
+      return { url, pid: body.pid }
+  }
+  return null
 }

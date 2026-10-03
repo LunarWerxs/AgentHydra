@@ -14,7 +14,13 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { rmSync, writeFileSync } from 'node:fs'
 import { PORT } from '../src/config'
 import { instanceFilePath } from '../src/instance'
-import { daemonBase, resetDaemonResolutionForTests, TOOLS, withDaemonWarning } from '../src/mcp'
+import {
+  daemonBase,
+  resetDaemonResolutionForTests,
+  TOOLS,
+  useOwnDaemon,
+  withDaemonWarning,
+} from '../src/mcp'
 
 const DEFAULT_BASE = `http://127.0.0.1:${PORT}`
 const DEAD = 'http://127.0.0.1:1'
@@ -24,7 +30,7 @@ const origUrl = process.env.AGENTHYDRA_URL
 const origPort = process.env.AGENTHYDRA_PORT
 let calls: string[] = []
 
-type Answer = { body: unknown; headers?: Record<string, string> } | 'refuse'
+type Answer = { body: unknown; status?: number; headers?: Record<string, string> } | 'refuse'
 
 function stubFetch(answers: Record<string, Answer>) {
   // @ts-expect-error test stub, narrower than the real fetch signature
@@ -34,7 +40,7 @@ function stubFetch(answers: Record<string, Answer>) {
     const answer = hit ? hit[1] : 'refuse'
     if (answer === 'refuse') throw new TypeError('fetch failed: connection refused')
     return new Response(JSON.stringify(answer.body), {
-      status: 200,
+      status: answer.status ?? 200,
       headers: { 'content-type': 'application/json', ...(answer.headers ?? {}) },
     })
   }
@@ -159,5 +165,52 @@ describe('a side-run daemon is announced on every wrapped tool result', () => {
       unknown
     >
     expect('daemonWarning' in result).toBe(false)
+  })
+})
+
+// 2026-10-02 (docs/CLIMAYTE-FIELD-NOTES.md, note 62): two daemons ran one store, 7787 and a stray on
+// 7788 that had taken runtime.json. The MCP tools served BY 7787 still dialled the pointer, so
+// climayte_status answered [] and a 404 for 16 workers POSTed to 7787, and the orchestrator sent
+// them twice more.
+describe('the daemon serving the MCP is the daemon its tools read', () => {
+  const STRAY = 'http://127.0.0.1:7788'
+  const OWN = 'http://127.0.0.1:7787'
+
+  test('a tool run inside a daemon reads that daemon, whatever the pointer or AGENTHYDRA_URL says', async () => {
+    writePointer(STRAY)
+    process.env.AGENTHYDRA_URL = STRAY
+    useOwnDaemon(OWN)
+    stubFetch({ [OWN]: { body: [] }, [STRAY]: { body: [] } })
+    await tool('climayte_status').run({ group: 'odin-w14' })
+    expect(calls).toEqual([`${OWN}/api/corch/workers?group=odin-w14&brief=1`])
+  })
+})
+
+describe('a second daemon on the same store is announced on every answer, lists and errors too', () => {
+  const PEER = { 'x-agenthydra-peer': 'http://127.0.0.1:7788 pid 82052' }
+  const wrapped = () => withDaemonWarning(TOOLS)
+  const run = (name: string, args: Record<string, unknown>) =>
+    wrapped()
+      .find((t) => t.name === name)
+      ?.run(args)
+
+  test('an empty list says it may be the other daemon that holds the work', async () => {
+    stubFetch({ [DEFAULT_BASE]: { body: [], headers: PEER } })
+    const answer = (await run('climayte_status', { group: 'odin-w14' })) as Record<string, unknown>
+    expect(answer.result).toEqual([])
+    expect(String(answer.peerWarning)).toContain('TWO DAEMONS')
+    expect(String(answer.peerWarning)).toContain('http://127.0.0.1:7788 pid 82052')
+  })
+
+  test('a 404 carries it too, and an answer without the header clears it', async () => {
+    stubFetch({
+      [DEFAULT_BASE]: { body: { error: 'worker not found' }, status: 404, headers: PEER },
+    })
+    const err = await failureOf(run('climayte_status', { id: 'w-ff9e5992' }))
+    expect(err).toContain('worker not found')
+    expect(err).toContain('TWO DAEMONS')
+
+    stubFetch({ [DEFAULT_BASE]: { body: [] } })
+    expect(await run('climayte_status', { group: 'odin-w14' })).toEqual([])
   })
 })

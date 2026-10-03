@@ -72,6 +72,7 @@ import type { UsageSnapshot } from './types'
 export {
   daemonBase,
   resetDaemonResolutionForTests,
+  useOwnDaemon,
   withCallBudget,
   withDaemonWarning,
 } from './mcp-client'
@@ -723,6 +724,11 @@ export const TOOLS: McpEngineTool[] = [
           description:
             'Default size for every task without its own: auto or whole (see the task `size`).',
         },
+        copies: {
+          type: 'boolean',
+          description:
+            'A task this `group` was already sent in the last 10 minutes (same title, prompt and cwd, not cancelled or failed) answers with the worker it made, marked `repeat: true`, and starts nothing. `copies: true` makes new workers anyway.',
+        },
       },
       ['tasks'],
     ),
@@ -752,8 +758,14 @@ export const TOOLS: McpEngineTool[] = [
           kind: a.kind != null ? str(a.kind) : undefined,
           priority: a.priority != null ? Number(a.priority) : undefined,
           size: a.size != null ? str(a.size) : undefined,
+          copies: a.copies === true,
         }),
-      })) as { group?: string; workers?: Array<Record<string, unknown>> }
+      })) as {
+        group?: string
+        workers?: Array<Record<string, unknown>>
+        repeated?: number
+        note?: string
+      }
       // Field note 7 (2026-09-30): the whole view per worker echoed 300 characters of every prompt
       // the orchestrator had just written, about 3k characters per five-task dispatch.
       if (!Array.isArray(r?.workers)) return r
@@ -766,7 +778,9 @@ export const TOOLS: McpEngineTool[] = [
           account: w.account,
           ...(w.auto ? { model: w.model, effort: w.effort } : {}),
           size: w.size,
+          ...(w.repeat ? { repeat: true } : {}),
         })),
+        ...(r.repeated ? { repeated: r.repeated, note: r.note } : {}),
       }
     },
   },

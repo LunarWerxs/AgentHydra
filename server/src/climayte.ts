@@ -1710,10 +1710,37 @@ function newWorker(
   }
 }
 
+/** How long a dispatch counts as a repeat of the same group's earlier one (repeatOf). */
+export const REPEAT_WINDOW_MS = 10 * 60_000
+
+/**
+ * The worker an earlier dispatch already made for this task, or null: same group, same title, same
+ * prompt and folder, made within REPEAT_WINDOW_MS, and not cancelled or failed (sending one of those
+ * again is a retry). Field note 62 (2026-10-02): told by its MCP view that 16 workers it had just
+ * POSTed did not exist, an orchestrator sent them twice more; 48 ran and 32 were cancelled.
+ */
+function repeatOf(t: RunTask, group: string, now: number): CliMayteWorker | null {
+  const title = t.title?.trim() || t.prompt.replace(/\s+/g, ' ').trim().slice(0, 60)
+  for (const w of workers.values())
+    if (
+      w.group === group &&
+      w.title === title &&
+      w.prompt === t.prompt &&
+      w.cwd === t.cwd &&
+      now - w.createdAt <= REPEAT_WINDOW_MS &&
+      w.status !== 'cancelled' &&
+      w.status !== 'failed'
+    )
+      return w
+  return null
+}
+
 /** `model` / `effort` / `kind` at the top level are the group's default: a task that names its
  *  own wins. All are validated (climayteModel, climayteEffort, climayteKind) before anything is created.
  *  Model `auto` lets the scorecard choose model AND effort for the task's kind (default `code`):
- *  the cheapest setting that keeps passing, or one rung cheaper on every 4th pick (pickConfig). */
+ *  the cheapest setting that keeps passing, or one rung cheaper on every 4th pick (pickConfig).
+ *  A task an earlier dispatch of the same group already made (repeatOf) answers with that worker,
+ *  marked `repeat`, and makes nothing, unless `copies` asks for new ones. */
 export function climayteRun(input: {
   tasks: Array<{
     prompt: string
@@ -1734,7 +1761,14 @@ export function climayteRun(input: {
   kind?: string
   priority?: number
   size?: string
-}): { group: string; workers: CliMayteWorkerView[] } {
+  /** Make new workers even for tasks an earlier dispatch of this group already made. */
+  copies?: boolean
+}): {
+  group: string
+  workers: Array<CliMayteWorkerView & { repeat?: true }>
+  repeated?: number
+  note?: string
+} {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
@@ -1776,16 +1810,29 @@ export function climayteRun(input: {
         `accounts: ${unknown.join(', ')} ${unknown.length === 1 ? 'is not a CLI instance' : 'are not CLI instances'} (give CLI instance ids; climayte_run also takes numbers)`,
       )
   }
-  const sized = sizeTasks(input, settings)
-  const group = input.group?.trim() || `g-${hex(6)}`
+  const now = Date.now()
+  // Only a named group can repeat: an unnamed one is new by definition.
+  const named = input.group?.trim()
+  const repeats = input.tasks.map((t) =>
+    named && input.copies !== true ? repeatOf(t, named, now) : null,
+  )
+  const fresh = input.tasks.flatMap((_, i) => (repeats[i] ? [] : [i]))
+  // Sized and made: only the tasks no earlier dispatch made.
+  const sized = fresh.length
+    ? sizeTasks(
+        { ...input, tasks: fresh.map((i) => input.tasks[i] as RunTask) },
+        fresh.map((i) => settings[i] as RunSetting),
+        fresh.map((i) => i + 1),
+      )
+    : []
+  const group = named || `g-${hex(6)}`
   // Joining a group keeps its cap unless the caller names a new one. A group nobody gave a cap
   // has none on record and takes the default, which scales with each account's plan (groupCap).
   if (input.perAccount !== undefined) perAccount[group] = cap
-  const now = Date.now()
-  const made = input.tasks.map((t, i) =>
-    newWorker(t, settings[i], sized[i], group, input.accounts, now),
+  const made = fresh.map((i, k) =>
+    newWorker(input.tasks[i] as RunTask, settings[i], sized[k], group, input.accounts, now),
   )
-  for (const [i, w] of made.entries()) {
+  for (const [k, w] of made.entries()) {
     workers.set(w.id, w)
     journal(w, 'dispatched', {
       cwd: w.cwd,
@@ -1793,17 +1840,32 @@ export function climayteRun(input: {
       model: w.model,
       effort: w.effort,
       kind: w.kind ?? undefined,
-      reason: settings[i]?.reason,
+      reason: settings[fresh[k] as number]?.reason,
       priority: w.priority,
     })
   }
-  // One save for the whole dispatch: a save per task wrote the store 21 times for 21 tasks, 0.3 s
-  // of the daemon's loop (71 dispatches carried 215 tasks, 2026-10-02).
-  save()
-  for (const w of made) notify(w)
-  startCliMayte()
-  schedule(0)
-  return { group, workers: made.map((w) => toView(w, now)) }
+  if (made.length) {
+    // One save for the whole dispatch: a save per task wrote the store 21 times for 21 tasks,
+    // 0.3 s of the daemon's loop (71 dispatches carried 215 tasks, 2026-10-02).
+    save()
+    for (const w of made) notify(w)
+    startCliMayte()
+    schedule(0)
+  }
+  const madeFor = new Map(fresh.map((i, k) => [i, made[k] as CliMayteWorker]))
+  const views = input.tasks.map((_, i) => {
+    const earlier = repeats[i]
+    if (earlier) return { ...toView(earlier, now), repeat: true as const }
+    return toView(madeFor.get(i) as CliMayteWorker, now)
+  })
+  const repeated = repeats.filter(Boolean).length
+  if (!repeated) return { group, workers: views }
+  return {
+    group,
+    workers: views,
+    repeated,
+    note: `${repeated} of ${input.tasks.length} task(s) repeat what this group was sent in the last ${REPEAT_WINDOW_MS / 60_000} minutes (same title, prompt and folder): those rows are the workers already made (repeat: true), and nothing new was started for them. Send copies: true to run them again.`,
+  }
 }
 
 /** A dispatch with a task too big for one window (sizeTask): nothing was started. */
@@ -1824,10 +1886,12 @@ export class CliMayteSplitNeeded extends Error {
 
 /** Sizes every task of a dispatch against the accounts it may use (climayte-placement sizeTask), and
  *  refuses the whole dispatch, starting nothing, when a task is over SPLIT_SHARE of the biggest
- *  window unless it (or the dispatch) says `size: 'whole'`. */
+ *  window unless it (or the dispatch) says `size: 'whole'`. `numbers`: each task's number in the
+ *  caller's own list, when repeats were taken out of it (climayteRun). */
 function sizeTasks(
   input: Parameters<typeof climayteRun>[0],
   settings: Array<{ model: string | null; effort: string | null; kind: string | null }>,
+  numbers: number[] = input.tasks.map((_, i) => i + 1),
 ): CliMayteSizing[] {
   const sizeOf = (v: unknown, where: string): 'auto' | 'whole' => {
     if (v === undefined || v === null || v === '') return 'auto'
@@ -1864,11 +1928,12 @@ function sizeTasks(
       cost.pct,
       allowed.map((a) => a.planFactor ?? 1),
     )
-    const whole = sizeOf(t.size, `task ${i + 1}: `) === 'whole' || groupSize === 'whole'
+    const n = numbers[i] ?? i + 1
+    const whole = sizeOf(t.size, `task ${n}: `) === 'whole' || groupSize === 'whole'
     const title = t.title?.trim() || firstLine(t.prompt, 60)
     if (fit.split && !whole)
       tooBig.push({
-        task: i + 1,
+        task: n,
         title,
         expected: Math.round(cost.pct),
         window: fit.window,

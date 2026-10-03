@@ -19,6 +19,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A frozen daemon no longer gets a second daemon started beside it, and the MCP reads the daemon
+  that serves it.** On 2026-10-02 the daemon froze for 25 s; the tray started another, which found
+  no answer, hopped to port 7788 and took `runtime.json`. Two daemons then ran one store: each
+  resumed the other's running CliMayte workers (two copies on two accounts), and the MCP tools,
+  which followed `runtime.json`, answered `[]` and "worker not found" for 16 workers posted to
+  7787, so an orchestrator sent them twice more. Now a start whose health probes all time out while
+  the recorded daemon is still alive and holding its port ends instead of hopping; tools served at
+  `/api/mcp` read their own daemon; and a daemon that finds another on its store says `TWO DAEMONS`
+  in its log, in `/api/health` (`peer`) and on every MCP answer (`peerWarning`, lists and errors
+  included).
+- **CliMayte returns the workers it already made when a dispatch is sent again.** The same group,
+  titles, prompts and folders within 10 minutes answer with the existing workers (`repeat: true`)
+  and start nothing; `copies: true` makes new ones.
 - **CliMayte workers have the Connections MCP (connections-local) again, on every account.** A
   worker is given the owner's own MCP servers on its command line (`--mcp-config`: a URL and at
   most the headersHelper command that signs in at connect time, so no credential is written to a

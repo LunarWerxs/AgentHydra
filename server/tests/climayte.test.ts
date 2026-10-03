@@ -1002,6 +1002,54 @@ describe('priority (field note 20)', () => {
   })
 })
 
+// Field note 62 (2026-10-02): an orchestrator told the 16 workers it had just made did not exist
+// sent the same dispatch twice more; 48 ran and 32 had to be cancelled.
+describe('a repeated dispatch returns the workers it already made (field note 62)', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'ah-climayte-repeat-'))
+  afterAll(() => {
+    setCliMayteAccountsProvider(null)
+    rmSync(cwd, { recursive: true, force: true })
+  })
+  const tasks = [
+    { prompt: 'fix the storage fixtures', cwd, title: 'w14: storage' },
+    { prompt: 'fix the other fixtures', cwd, title: 'w14: the rest' },
+  ]
+
+  test('same group, titles and prompts: the same workers come back, marked, and nothing new is made', () => {
+    setCliMayteAccountsProvider(() => [])
+    const group = 'repeat-same'
+    const first = climayteRun({ group, tasks })
+    const again = climayteRun({ group, tasks })
+    const mixed = climayteRun({
+      group,
+      tasks: [...tasks, { prompt: 'a third', cwd, title: 'new' }],
+    })
+    climayteCancel({ group })
+    const ids = first.workers.map((w) => w.id)
+    expect(again.workers.map((w) => [w.id, w.repeat])).toEqual(ids.map((id) => [id, true]))
+    expect(again.repeated).toBe(2)
+    expect(mixed.workers.slice(0, 2).map((w) => w.id)).toEqual(ids)
+    expect(mixed.workers[2]?.repeat).toBeUndefined()
+    expect(climayteList({ group })).toHaveLength(3)
+  })
+
+  test('copies when asked, after the window, after a cancel, or in another group', () => {
+    setCliMayteAccountsProvider(() => [])
+    const fresh = (run: ReturnType<typeof climayteRun>) => run.workers.every((w) => !w.repeat)
+    const group = 'repeat-copies'
+    const first = climayteRun({ group, tasks })
+    expect(fresh(climayteRun({ group, tasks, copies: true }))).toBe(true)
+    expect(fresh(climayteRun({ group: 'repeat-elsewhere', tasks }))).toBe(true)
+    climayteCancel({ group: 'repeat-elsewhere' })
+    for (const w of workers.values()) if (w.group === group) w.createdAt -= 11 * 60_000
+    expect(fresh(climayteRun({ group, tasks }))).toBe(true)
+    climayteCancel({ group })
+    expect(fresh(climayteRun({ group, tasks }))).toBe(true)
+    climayteCancel({ group })
+    expect(first.workers).toHaveLength(2)
+  })
+})
+
 describe("syncOwnerClaude: the owner's CLAUDE.md and skills in an account folder (field note 5)", () => {
   const root = mkdtempSync(join(tmpdir(), 'ah-climayte-owner-'))
   const owner = join(root, 'owner')

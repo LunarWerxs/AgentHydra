@@ -11,9 +11,13 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer, type Server } from 'node:net'
+import { DB_PATH, PORT } from '../src/config'
 import {
   DEFAULT_URL,
   findLiveOnDefaultPort,
+  findPeerDaemon,
+  findStalledOwner,
   instanceFilePath,
   readInstanceInfo,
   reassertInstancePointer,
@@ -112,5 +116,79 @@ describe('reassertInstancePointer: the running daemon keeps its own pointer hone
     stubFetch({})
     expect(await reassertInstancePointer(7787, extra)).toBe('kept')
     expect(calls).toEqual([])
+  })
+})
+
+// 2026-10-02 22:58Z: the daemon on 7787 froze for 25.6 s, the tray started another, and that one's
+// boot probes all timed out, so it hopped to 7788 and took the pointer. Two daemons then ran one
+// store: every MCP tool read 7788 while workers POSTed to 7787 did not exist there, and both
+// resumed the same workers on two accounts (docs/CLIMAYTE-FIELD-NOTES.md, note 62).
+describe('findStalledOwner: a frozen daemon is not "nothing running"', () => {
+  /** A port that accepts connections and never answers them: a daemon whose loop is blocked. */
+  async function silentPort(): Promise<{ server: Server; port: number }> {
+    const server = createServer(() => {})
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+    const addr = server.address()
+    return { server, port: typeof addr === 'object' && addr ? addr.port : 0 }
+  }
+  /** Another live process, standing in for the frozen daemon's pid. */
+  const otherProcess = () =>
+    Bun.spawn([process.execPath, '-e', 'setInterval(() => {}, 1000)'], { stdout: 'ignore' })
+
+  test('the pointer names a live process whose port still accepts: that daemon owns the store', async () => {
+    const { server, port } = await silentPort()
+    const other = otherProcess()
+    try {
+      const url = `http://127.0.0.1:${port}`
+      writeFileSync(instanceFilePath(), JSON.stringify({ port, url, pid: other.pid, startedAt: 1 }))
+      expect(await findStalledOwner(1000)).toMatchObject({ url, pid: other.pid })
+    } finally {
+      other.kill()
+      server.close()
+    }
+  })
+
+  test('a crashed daemon (its pid gone) or a closed port is no owner: the boot goes on', async () => {
+    const { server, port } = await silentPort()
+    const other = otherProcess()
+    try {
+      const url = `http://127.0.0.1:${port}`
+      writeForeignPointer(url, 99_999_999)
+      expect(await findStalledOwner(1000)).toBeNull()
+      server.close()
+      writeFileSync(instanceFilePath(), JSON.stringify({ port, url, pid: other.pid, startedAt: 1 }))
+      expect(await findStalledOwner(1000)).toBeNull()
+    } finally {
+      other.kill()
+      server.close()
+    }
+  })
+})
+
+describe('findPeerDaemon: a second live daemon on this store is found and named', () => {
+  const health = (pid: number, dbPath = DB_PATH) => ({
+    ok: true,
+    body: { ok: true, service: 'agenthydra', pid, dbPath },
+  })
+  const HOPPED = 'http://127.0.0.1:7790'
+
+  test('the pointer names another live daemon on the same store: that is the peer', async () => {
+    writeForeignPointer(HOPPED, 4242)
+    stubFetch({ [HOPPED]: health(4242) })
+    expect(await findPeerDaemon(PORT, 500)).toEqual({ url: HOPPED, pid: 4242 })
+  })
+
+  test('a daemon that hopped off the default port finds the one still on it', async () => {
+    writeInstanceInfo(7790, {})
+    stubFetch({ [DEFAULT_URL]: health(4343) })
+    expect(await findPeerDaemon(7790, 500)).toEqual({ url: DEFAULT_URL, pid: 4343 })
+  })
+
+  test('a daemon on another store (a side-run) or nothing live is no peer', async () => {
+    writeForeignPointer(HOPPED, 4242)
+    stubFetch({ [HOPPED]: health(4242, 'X:/scratch/agenthydra.db') })
+    expect(await findPeerDaemon(PORT, 500)).toBeNull()
+    stubFetch({})
+    expect(await findPeerDaemon(PORT, 500)).toBeNull()
   })
 })

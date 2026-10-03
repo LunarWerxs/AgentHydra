@@ -142,6 +142,9 @@ app.post('/api/corch/workers', async (c) => {
         kind: body.kind as string | undefined,
         priority: body.priority as number | undefined,
         size: body.size as string | undefined,
+        // A repeat of this group's dispatch from the last minutes answers with the workers it made
+        // (field note 62); `copies: true` makes new ones anyway.
+        copies: body.copies === true,
       }),
     )
   } catch (err) {

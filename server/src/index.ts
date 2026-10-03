@@ -78,6 +78,8 @@ import {
   clearInstanceInfo,
   findLiveInstance,
   findLiveOnDefaultPort,
+  findPeerDaemon,
+  findStalledOwner,
   IS_PRIMARY_INSTALL,
   instanceFilePath,
   POINTER_DIR,
@@ -95,6 +97,7 @@ import {
   RENAMED_TOOLS as MCP_RENAMED_TOOLS,
   SERVER_INFO as MCP_SERVER_INFO,
   toolsForCaller as mcpToolsForCaller,
+  useOwnDaemon as mcpUseOwnDaemon,
   withCallBudget as mcpWithCallBudget,
   withDaemonWarning as mcpWithDaemonWarning,
   withRenamedTools as mcpWithRenamedTools,
@@ -131,7 +134,7 @@ import {
 } from './reset-watch'
 import { jsonBody } from './route-helpers'
 import { warmSessionScanCache } from './sessions'
-import { sideRunHeader, sideRunHealthFields } from './side-run'
+import { peerDaemon, setPeerDaemon, sideRunHeader, sideRunHealthFields } from './side-run'
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
 import { startStallSentinel, stopStallSentinel } from './stall-sentinel'
 import { syncStatusHooks } from './status-hooks'
@@ -996,6 +999,18 @@ if (!skipSingleInstanceGuard()) {
     if (releaseDoubleClick && !noAutoOpen()) openUi(live.url)
     process.exit(0)
   }
+  // Every probe timed out, but the pointer's daemon is still a live process holding its port: it is
+  // frozen, not gone (2026-10-02 22:58Z, a 25.6 s stall; docs/CLIMAYTE-FIELD-NOTES.md note 62).
+  // Hopping to PORT+1 here is what made two daemons on one store, so this start ends instead. The
+  // tray tries again on its next missed probe and finds the daemon answering, or gone.
+  const stalled = await findStalledOwner(2000)
+  if (stalled) {
+    console.log(
+      `\n  AgentHydra pid ${stalled.pid} holds ${stalled.url} but did not answer /api/health (busy or frozen).` +
+        `\n  Not starting a second daemon on the same store. If it never answers, stop pid ${stalled.pid} and start again.\n`,
+    )
+    process.exit(0)
+  }
 }
 // A daemon relaunched by the auto-updater (AGENTHYDRA_RELAUNCH=1) waits for its predecessor to
 // free the preferred port BEFORE probing/binding, so it rebinds the SAME port (an open browser
@@ -1049,6 +1064,19 @@ const pointerReassertTimer = setInterval(() => {
           `[agenthydra] ${instanceFilePath()} was missing or named a dead daemon; re-asserted it for this one (pid ${process.pid}, port ${boundPort})`,
         )
     })
+    // A second daemon on this store (note 62): said once when it appears and once when it goes,
+    // and stamped on every answer while it lasts (side-run.ts), so no client reads half the fleet.
+    .then(() => findPeerDaemon(boundPort))
+    .then((found) => {
+      const was = peerDaemon()
+      setPeerDaemon(found)
+      if (found && found.pid !== was?.pid)
+        console.error(
+          `[agenthydra] TWO DAEMONS on one store: this one (pid ${process.pid}, port ${boundPort}) and pid ${found.pid} at ${found.url}. Each holds its own CliMayte workers and resumes the other's as interrupted; stop one.`,
+        )
+      else if (!found && was)
+        console.warn(`[agenthydra] the second daemon (pid ${was.pid}, ${was.url}) is gone`)
+    })
     .catch(() => {})
   // The MCP entry goes stale the same way the pointer does (another process rewrites the file it
   // lives in), so it is re-asserted on the same cadence. Only while registration is ON: with it
@@ -1071,6 +1099,10 @@ function stopBackgroundTimers(): void {
 // to whatever answers there. See orchestratorChildEnv.
 daemonSelfUrl = readInstanceInfo()?.url ?? `http://127.0.0.1:${boundPort}`
 setOrchestratorDaemonUrl(daemonSelfUrl)
+// The MCP tools this daemon serves at /api/mcp reach the store through HTTP, and until now they
+// dialled whatever runtime.json named: with a second daemon holding the pointer, a chat connected
+// HERE read THAT one's workers (note 62). They read this daemon now, the one serving them.
+mcpUseOwnDaemon(daemonSelfUrl)
 // Keep Claude Code's user-scope MCP config pointing at THIS daemon (see mcp-register.ts). Here,
 // after the port is bound, because the entry carries the URL: registering before the hop is
 // resolved would write a URL nothing is listening on. Runs on every boot so a hop cannot leave a
