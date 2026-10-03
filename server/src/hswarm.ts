@@ -8,7 +8,7 @@
 
 import { closeSync, existsSync, mkdirSync, openSync, renameSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { APP_ROOT, appEnv, DATA_DIR } from './config'
 import { killProcessTree } from './core/process'
 
@@ -98,6 +98,8 @@ interface HSwarmDeps {
   importSpawn?: typeof Bun.spawn
   importFirstMs?: number
   probe?: (port: number) => Promise<Record<string, unknown> | null>
+  /** Ends a foreign server by pid (tests pass a fake). */
+  kill?: (pid: number) => void
   watchEveryMs?: number
 }
 
@@ -141,17 +143,63 @@ function clearAdoptTimer(): void {
   adoptTimer = null
 }
 
+/** A folder path in a form two spellings of the same folder share. */
+function normalizeDir(p: string): string {
+  const resolved = resolve(p)
+  return process.platform === 'win32' ? resolved.replace(/\\/g, '/').toLowerCase() : resolved
+}
+
+/** True when a live server's /health says it runs from `dir`; a server of older code names no folder. */
+function runsFrom(live: Record<string, unknown>, dir: string): boolean {
+  return typeof live.package === 'string' && normalizeDir(live.package) === normalizeDir(dir)
+}
+
+/** Ends a server that runs from another folder, the way HSwarm's own restart does (its running jobs are
+ *  carried on by the next server's adopt_orphans), and waits a few seconds for the port to go quiet.
+ *  Returns whether the port is free. */
+async function replaceForeign(
+  deps: HSwarmDeps,
+  port: number,
+  dir: string,
+  live: Record<string, unknown>,
+): Promise<boolean> {
+  const theirs = typeof live.package === 'string' ? live.package : 'an unknown folder'
+  console.log(`[hswarm] server on port ${port} runs from ${theirs}, not ${dir}; replacing it`)
+  try {
+    if (typeof live.pid === 'number') (deps.kill ?? killProcessTree)(live.pid)
+  } catch (e) {
+    console.error('[hswarm] ending the server failed:', e instanceof Error ? e.message : String(e))
+  }
+  const probe = deps.probe ?? probeHSwarm
+  for (let waited = 0; waited <= REPLACE_WAIT_MS; waited += REPLACE_POLL_MS) {
+    if (!(await probe(port))) return true
+    await Bun.sleep(REPLACE_POLL_MS)
+  }
+  return false
+}
+
+const REPLACE_WAIT_MS = 5_000
+const REPLACE_POLL_MS = 100
+
 /** An adopted server is not our child, so nothing tells us it died: look at /health on an interval and, when
- *  it stops answering, clear the state and start again (which spawns our own supervised child). */
-function watchAdopted(deps: HSwarmDeps, port: number): void {
+ *  it stops answering (or a server of another folder took the port), clear the state and start again (which
+ *  spawns our own supervised child). */
+function watchAdopted(deps: HSwarmDeps, port: number, dir: string): void {
   clearAdoptTimer()
   adoptTimer = setTimeout(async () => {
     adoptTimer = null
     if (stopRequested || !state.running || proc) return
     const live = await (deps.probe ?? probeHSwarm)(port)
     if (stopRequested || !state.running || proc) return
+    if (live?.hswarm === true && runsFrom(live, dir)) {
+      watchAdopted(deps, port, dir)
+      return
+    }
     if (live?.hswarm === true) {
-      watchAdopted(deps, port)
+      state.running = false
+      state.pid = null
+      state.lastError = 'adopted server runs from another folder'
+      void startHSwarm(deps) // sees the foreign server and replaces it
       return
     }
     console.log(`[hswarm] adopted server on port ${port} stopped answering; starting our own`)
@@ -208,7 +256,15 @@ export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
 
   // Probe for an existing live hswarm before starting a competitor
   const liveHSwarm = await (deps.probe ?? probeHSwarm)(port)
-  if (liveHSwarm?.hswarm === true && typeof liveHSwarm.pid === 'number') {
+  if (liveHSwarm?.hswarm === true && !runsFrom(liveHSwarm, dir)) {
+    // Adopting it would leave this folder's code unserved: end it and start our own.
+    if (!(await replaceForeign(deps, port, dir, liveHSwarm))) {
+      state.lastError = `the server on port ${port} runs from another folder and did not end`
+      console.log(`[hswarm] ${state.lastError}`)
+      scheduleRestart(deps)
+      return
+    }
+  } else if (liveHSwarm?.hswarm === true && typeof liveHSwarm.pid === 'number') {
     state.running = true
     state.pid = liveHSwarm.pid
     state.port = port
@@ -217,7 +273,7 @@ export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
     console.log(`[hswarm] adopting existing server on port ${port} with pid ${liveHSwarm.pid}`)
     // The old sidecar usually survives a daemon restart; the hourly import must not stop with it.
     startZswarmImport({ python, dir, env, spawn: deps.importSpawn, firstMs: deps.importFirstMs })
-    watchAdopted(deps, port)
+    watchAdopted(deps, port, dir)
     return
   }
 

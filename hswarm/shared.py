@@ -232,7 +232,7 @@ def serve(port: int = PORT) -> None:
     async def health(request):
         if not local_host(request.headers.get("host", ""), port):  # a rebound page must not learn hswarm runs here
             return JSONResponse({"error": "answers only on 127.0.0.1 / localhost"}, status_code=403)
-        return JSONResponse({"hswarm": True, "pid": os.getpid(), "port": port, "up_s": round(time.time() - started), **code_stamp()})
+        return JSONResponse({"hswarm": True, "pid": os.getpid(), "port": port, "package": str(PACKAGE.parent), "up_s": round(time.time() - started), **code_stamp()})
 
     from . import console
 

@@ -124,7 +124,8 @@ test('a sidecar that exits is started again', async () => {
 
 test('an adopted server is watched and replaced by our own child once it stops answering', async () => {
   let live = true
-  const probe = async () => (live ? { hswarm: true, pid: 4242 } : null)
+  const adoptedDir = withPackage('adopted')
+  const probe = async () => (live ? { hswarm: true, pid: 4242, package: adoptedDir } : null)
   let spawns = 0
   const spawn = (() => {
     spawns++
@@ -143,7 +144,7 @@ test('an adopted server is watched and replaced by our own child once it stops a
 
   await startHSwarm({
     enabled: true,
-    dir: withPackage('adopted'),
+    dir: adoptedDir,
     logDir: join(tmp, 'logs'),
     env: { HOME: tmp, USERPROFILE: tmp },
     spawn,
@@ -164,6 +165,72 @@ test('an adopted server is watched and replaced by our own child once it stops a
   await Bun.sleep(80)
   expect(spawns).toBe(1)
   expect(getHSwarmStatus().pid).not.toBe(4242)
+})
+
+/** A server on the port that answers until `kill` is called with its pid; reports `pkg` as its folder. */
+function serverOnPort(pkg: string | undefined) {
+  let up = true
+  const killed: number[] = []
+  return {
+    killed,
+    probe: async () => (up ? { hswarm: true, pid: 4242, package: pkg } : null),
+    kill: (pid: number) => {
+      killed.push(pid)
+      up = false
+    },
+  }
+}
+
+function countingSpawn() {
+  const calls: number[] = []
+  const spawn = (() => {
+    calls.push(1)
+    let exit = () => {}
+    const exited = new Promise<number>((resolve) => {
+      exit = () => resolve(0)
+    })
+    return { pid: undefined, exited, kill: () => exit() }
+  }) as unknown as typeof Bun.spawn
+  return { calls, spawn }
+}
+
+test('a server running another package folder (or one that names none) is ended and replaced by our own', async () => {
+  for (const theirs of [withPackage('stale'), undefined]) {
+    const server = serverOnPort(theirs)
+    const { calls, spawn } = countingSpawn()
+    await startHSwarm({
+      enabled: true,
+      dir: withPackage('fresh'),
+      logDir: join(tmp, 'logs'),
+      probe: server.probe,
+      kill: server.kill,
+      spawn,
+      port: 1,
+    })
+    expect(server.killed).toEqual([4242])
+    expect(calls).toHaveLength(1)
+    await stopHSwarm()
+    resetHSwarmStateForTests()
+  }
+})
+
+test('a server running our own package folder is adopted and left alone', async () => {
+  const dir = withPackage('ours')
+  const server = serverOnPort(dir)
+  const { calls, spawn } = countingSpawn()
+  await startHSwarm({
+    enabled: true,
+    dir,
+    logDir: join(tmp, 'logs'),
+    probe: server.probe,
+    kill: server.kill,
+    spawn,
+    watchEveryMs: 60_000,
+    port: 1,
+  })
+  expect(server.killed).toEqual([])
+  expect(calls).toHaveLength(0)
+  expect(getHSwarmStatus()).toMatchObject({ running: true, pid: 4242 })
 })
 
 test('a ZSwarm home is imported into HSwarm by a hidden import-zswarm run, and the stats DB is left to HSwarm', async () => {

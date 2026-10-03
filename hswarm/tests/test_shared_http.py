@@ -197,6 +197,7 @@ def test_one_http_server_serves_two_clients_at_once(tmp_path):
             time.sleep(0.2)
         health = shared.probe(port)
         assert health and health["hswarm"] and health["pid"] == proc.pid
+        assert health["package"] == str(shared.PACKAGE.parent)  # the daemon adopts a server only from its own folder
 
         async def one_client(cwd: str):
             # Each chat's own folder rides on its own requests; a folder that does not exist makes hswarm_run refuse
