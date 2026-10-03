@@ -85,6 +85,21 @@ async function probeHSwarm(port: number, timeoutMs = 500): Promise<Record<string
   return null
 }
 
+/** Everything startHSwarm can be handed; tests inject spawn, probe and watchEveryMs to stay off the real port. */
+interface HSwarmDeps {
+  enabled?: boolean
+  dir?: string
+  python?: string
+  port?: number
+  logDir?: string
+  env?: NodeJS.ProcessEnv
+  spawn?: typeof Bun.spawn
+  /** Spawns the ZSwarm import (tests pass a fake). */
+  importSpawn?: typeof Bun.spawn
+  probe?: (port: number) => Promise<Record<string, unknown> | null>
+  watchEveryMs?: number
+}
+
 interface HSwarmState {
   running: boolean
   port: number | null
@@ -117,23 +132,40 @@ const MIN_BACKOFF_MS = 1_000
 const MAX_BACKOFF_MS = 30_000
 let backoffMs = MIN_BACKOFF_MS
 
+/** How often an adopted server's /health is looked at again. */
+const ADOPT_WATCH_MS = 15_000
+let adoptTimer: ReturnType<typeof setTimeout> | null = null
+function clearAdoptTimer(): void {
+  if (adoptTimer) clearTimeout(adoptTimer)
+  adoptTimer = null
+}
+
+/** An adopted server is not our child, so nothing tells us it died: look at /health on an interval and, when
+ *  it stops answering, clear the state and start again (which spawns our own supervised child). */
+function watchAdopted(deps: HSwarmDeps, port: number): void {
+  clearAdoptTimer()
+  adoptTimer = setTimeout(async () => {
+    adoptTimer = null
+    if (stopRequested || !state.running || proc) return
+    const live = await (deps.probe ?? probeHSwarm)(port)
+    if (stopRequested || !state.running || proc) return
+    if (live?.hswarm === true) {
+      watchAdopted(deps, port)
+      return
+    }
+    console.log(`[hswarm] adopted server on port ${port} stopped answering; starting our own`)
+    state.running = false
+    state.pid = null
+    state.lastError = 'adopted server stopped answering'
+    void startHSwarm(deps)
+  }, deps.watchEveryMs ?? ADOPT_WATCH_MS)
+}
+
 /**
  * Start hswarm if enabled and not running. Restarts with exponential backoff on crash.
  * Logging goes to a file under the daemon's data dir, resolved lazily.
  */
-export async function startHSwarm(
-  deps: {
-    enabled?: boolean
-    dir?: string
-    python?: string
-    port?: number
-    logDir?: string
-    env?: NodeJS.ProcessEnv
-    spawn?: typeof Bun.spawn
-    /** Spawns the ZSwarm import (tests pass a fake). */
-    importSpawn?: typeof Bun.spawn
-  } = {},
-): Promise<void> {
+export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
   if (stopRequested) return
 
   const enabled = deps.enabled ?? appEnv('HSWARM_ENABLED')?.trim() !== '0'
@@ -165,7 +197,7 @@ export async function startHSwarm(
   if (state.running && state.pid) return
 
   // Probe for an existing live hswarm before starting a competitor
-  const liveHSwarm = await probeHSwarm(port)
+  const liveHSwarm = await (deps.probe ?? probeHSwarm)(port)
   if (liveHSwarm?.hswarm === true && typeof liveHSwarm.pid === 'number') {
     state.running = true
     state.pid = liveHSwarm.pid
@@ -173,6 +205,7 @@ export async function startHSwarm(
     state.lastError = null
     backoffMs = MIN_BACKOFF_MS
     console.log(`[hswarm] adopting existing server on port ${port} with pid ${liveHSwarm.pid}`)
+    watchAdopted(deps, port)
     return
   }
 
@@ -234,16 +267,7 @@ export async function startHSwarm(
   }
 }
 
-function scheduleRestart(deps: {
-  enabled?: boolean
-  dir?: string
-  python?: string
-  port?: number
-  logDir?: string
-  env?: NodeJS.ProcessEnv
-  spawn?: typeof Bun.spawn
-  importSpawn?: typeof Bun.spawn
-}): void {
+function scheduleRestart(deps: HSwarmDeps): void {
   if (stopRequested) return
   const delay = Math.min(backoffMs, MAX_BACKOFF_MS)
   backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS)
@@ -331,7 +355,14 @@ export async function stopHSwarm(): Promise<void> {
   stopRequested = true
   if (importTimer) clearTimeout(importTimer)
   importTimer = null
-  if (!proc || !state.running) return
+  clearAdoptTimer()
+  if (!proc) {
+    // An adopted server is somebody else's process (a chat's keeper started it): forget it, never kill it.
+    state.running = false
+    state.pid = null
+    return
+  }
+  if (!state.running) return
 
   try {
     if (proc.pid) {
@@ -373,6 +404,7 @@ export function setHSwarmEnabled(enabled: boolean): void {
 /** Exposed for testing: reset internal state. */
 export function resetHSwarmStateForTests(): void {
   stopRequested = false
+  clearAdoptTimer()
   state = { running: false, port: null, pid: null, lastError: null }
   proc = null
   backoffMs = MIN_BACKOFF_MS

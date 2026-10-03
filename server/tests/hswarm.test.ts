@@ -122,6 +122,41 @@ test('a sidecar that exits is started again', async () => {
   expect(getHSwarmStatus()).toMatchObject({ running: true, lastError: null })
 })
 
+test('an adopted server is watched and replaced by our own child once it stops answering', async () => {
+  let live = true
+  const probe = async () => (live ? { hswarm: true, pid: 4242 } : null)
+  let spawns = 0
+  const spawn = (() => {
+    spawns++
+    let exit = () => {}
+    const exited = new Promise<number>((resolve) => {
+      exit = () => resolve(0)
+    })
+    return { pid: undefined, exited, kill: () => exit() }
+  }) as unknown as typeof Bun.spawn
+
+  await startHSwarm({
+    enabled: true,
+    dir: withPackage('adopted'),
+    logDir: join(tmp, 'logs'),
+    spawn,
+    importSpawn: spawn,
+    probe,
+    watchEveryMs: 5,
+    port: 1,
+  })
+  expect(spawns).toBe(0)
+  expect(getHSwarmStatus()).toMatchObject({ running: true, pid: 4242 })
+
+  await Bun.sleep(40) // several intervals, all answered
+  expect(spawns).toBe(0)
+
+  live = false
+  await Bun.sleep(80)
+  expect(spawns).toBe(1)
+  expect(getHSwarmStatus().pid).not.toBe(4242)
+})
+
 test('a ZSwarm home is imported into HSwarm by a hidden import-zswarm run, and the stats DB is left to HSwarm', async () => {
   mkdirSync(join(tmp, '.zswarm'), { recursive: true })
   let sidecarEnv: NodeJS.ProcessEnv | null = null
@@ -170,6 +205,7 @@ test('a ZSwarm home is imported into HSwarm by a hidden import-zswarm run, and t
     env: { HOME: tmp, USERPROFILE: tmp },
   })
   expect(sidecarEnv!.HSWARM_STATS_DB).toBeUndefined()
+  expect(sidecarEnv!.HSWARM_SUPERVISED).toBe('1')
 
   // A person's own HSWARM_STATS_DB still reaches the sidecar.
   await stopHSwarm()

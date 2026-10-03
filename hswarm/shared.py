@@ -61,7 +61,7 @@ def _sources() -> dict[str, int]:
     """Every hswarm source file in the package: relative name -> mtime in ns."""
     out = {}
     for p in PACKAGE.rglob("*.py"):
-        if "tests" in p.parts:
+        if "tests" in p.relative_to(PACKAGE).parts:  # relative: a checkout under a folder named tests is still a package
             continue
         try:
             out[p.relative_to(PACKAGE).as_posix()] = p.stat().st_mtime_ns
@@ -241,8 +241,7 @@ def serve(port: int = PORT) -> None:
     logging.getLogger("uvicorn.access").addFilter(_NoQuery())
     for name in ("httpx", "httpcore"):  # one INFO entry per provider call: 318k of them were 90% of the 113 MB log
         logging.getLogger(name).setLevel(logging.WARNING)
-    if not os.environ.get("HSWARM_SUPERVISED"):
-        threading.Thread(target=_watch, args=(port, started), name="hswarm-code-watch", daemon=True).start()
+    threading.Thread(target=_watch, args=(port, started), name="hswarm-code-watch", daemon=True).start()
     from . import vault
 
     threading.Thread(target=vault.autosync_loop, name="hswarm-vault-sync", daemon=True).start()  # idle until `hswarm vault init|join|adopt`
@@ -431,15 +430,19 @@ def succeed(port: int, old_pid: int, wait_s: float = 30.0) -> None:
 def _watch(port: int, started: float) -> None:
     """The shared server's watcher thread: when a restart is due (_restart_due), hand over and end this process. It
     ends at once, as the proven restart does (taskkill /F): the successor's adopt_orphans carries the running jobs
-    on, and a contained child dies with its job object (procs.contain)."""
+    on, and a contained child dies with its job object (procs.contain). Under a supervisor (HSWARM_SUPERVISED, read at
+    each decision; the daemon sets it) there is no successor and no start lock: the supervisor starts the next server
+    when this one exits, so a daemon-run server loads new code too."""
     state = {"started": started}
     while True:
         time.sleep(WATCH_EVERY_S)
         try:
-            if _restart_due(state, time.time()) and _hand_over(port):
-                print(f"[hswarm] pid {os.getpid()} (code from {code_stamp()['code_at']}) ends to load the code on disk; "
-                      f"the next server on port {port} carries its running jobs on", file=sys.stderr, flush=True)
-                os._exit(0)
+            if _restart_due(state, time.time()):
+                supervised = bool(os.environ.get("HSWARM_SUPERVISED"))
+                if supervised or _hand_over(port):
+                    print(f"[hswarm] pid {os.getpid()} (code from {code_stamp()['code_at']}) ends to load the code on disk; "
+                          f"the next server on port {port} carries its running jobs on", file=sys.stderr, flush=True)
+                    os._exit(0)
         except Exception as e:  # noqa: BLE001 - a watcher that died would leave this server on old code for good
             print(f"[hswarm] code watch: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
@@ -486,8 +489,9 @@ def connect(port: int = PORT) -> int:
     """The chat's headersHelper (`python -m hswarm connect`): make sure the shared server is up, then print the chat's
     X-Hswarm-* headers as JSON. Claude Code runs it with the chat's folder and environment each time it connects the
     entry, so a chat never reaches the server without its own cwd and caller stamp, and a server that cannot come up
-    fails that chat's connection with the reason. Register it once per machine:
-      claude mcp add-json -s user hswarm '{"type":"http","url":"http://127.0.0.1:7793/mcp","headersHelper":"python -m hswarm connect"}'
+    fails that chat's connection with the reason. Register it once per machine with `python -m hswarm install`, which
+    writes the entry's headersHelper from config.launcher(), a command that starts from any folder (a bare
+    `python -m hswarm connect` only works from the AgentHydra root).
     """
     from .caller import _instance_of
 

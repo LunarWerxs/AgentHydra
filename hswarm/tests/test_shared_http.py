@@ -282,20 +282,36 @@ def test_a_process_whose_sources_changed_on_disk_says_it_runs_the_older_code(mon
     assert note and "2 source file(s) changed" in note and "agent.py" in note and "dispatch.py" in note, note
 
 
-def test_sources_excludes_tests_directory():
-    """_sources() should not include test files, so test-only commits don't trigger server restarts."""
-    sources = shared._sources()
-    for path in sources.keys():
-        assert "tests" not in path.split("/"), f"test file {path} should not be in sources"
+def test_sources_excludes_tests_relative_to_package(monkeypatch, tmp_path):
+    """A checkout under a folder named tests still has sources: only the package's own tests/ is excluded."""
+    pkg = tmp_path / "tests" / "hswarm"
+    (pkg / "tests").mkdir(parents=True)
+    (pkg / "a.py").write_text("x = 1")
+    (pkg / "tests" / "b.py").write_text("x = 2")
+    monkeypatch.setattr(shared, "PACKAGE", pkg)
+    assert set(shared._sources()) == {"a.py"}
 
 
-def test_hswarm_supervised_env_skips_code_watch(monkeypatch):
-    """The code checks HSWARM_SUPERVISED to conditionally start the watch thread."""
-    # Just verify the environment variable logic works
-    monkeypatch.setenv("HSWARM_SUPERVISED", "1")
-    # When HSWARM_SUPERVISED is set, os.environ.get("HSWARM_SUPERVISED") should be truthy
-    assert os.environ.get("HSWARM_SUPERVISED") == "1"
+class _Exit(BaseException):
+    """os._exit stand-in: a BaseException, so _watch's `except Exception` does not swallow it."""
 
-    # Without the flag, it should be falsy
-    monkeypatch.delenv("HSWARM_SUPERVISED")
-    assert not os.environ.get("HSWARM_SUPERVISED")
+
+@pytest.mark.parametrize("supervised", [True, False])
+def test_watch_hands_over_only_when_unsupervised(monkeypatch, supervised):
+    """Under a supervisor the watcher exits without a detached successor or start lock; otherwise it hands over first."""
+    calls = []
+    monkeypatch.setattr(shared.time, "sleep", lambda s: None)
+    monkeypatch.setattr(shared, "_restart_due", lambda state, now: True)
+    monkeypatch.setattr(shared, "_hand_over", lambda port: calls.append(port) or True)
+
+    def fake_exit(code):
+        raise _Exit(code)
+
+    monkeypatch.setattr(shared.os, "_exit", fake_exit)
+    if supervised:
+        monkeypatch.setenv("HSWARM_SUPERVISED", "1")
+    else:
+        monkeypatch.delenv("HSWARM_SUPERVISED", raising=False)
+    with pytest.raises(_Exit):
+        shared._watch(7793, 0.0)
+    assert calls == ([] if supervised else [7793])
