@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import blobs, breaker, config, escalation, review, scripted, survival, utilization, verify
+from . import blobs, breaker, config, escalation, input_limit, review, scripted, survival, utilization, verify
 from .agent import LIVE_ROW, LIVE_SPEND, run_api_task
 from .budget import Budget
 from .caller import detect as detect_caller
@@ -1145,9 +1145,13 @@ class JobManager:
         the route edited on another provider, whose session cannot be carried here: the first run is told it the
         same way. A pool with no key left returns the last run's result, saying so; a pool with none to begin with
         runs nothing and says that. Either way the error carries `NoUsableKey`, which is what lets the route fail
-        over to the next provider."""
+        over to the next provider. A key whose input-tokens-per-minute limit cannot take a worker's first turn
+        (input_limit.py) is never launched on: a run refused for it records the limit and the task goes on on the
+        next key, the key left enabled for api work."""
         pool = pool if pool is not None else self.client.pool
-        tried: set[str] = set()
+        model = input_limit.api_model(task.model)
+        short = {k for k in pool.keys if input_limit.too_small_for_cc(k, model)}
+        tried: set[str] = set(short)
         dead: list[dict] = []
         res: Result | None = None
         transcript: dict = {}
@@ -1159,12 +1163,16 @@ class JobManager:
             if key is None or waited + wait_s > CC_KEY_WAIT_S:
                 why = ("every key in the pool is disabled" if key is None
                        else f"every key with balance is resting, the soonest wakes in {wait_s:.0f} s")
+                if key is None and short and pool.live_besides(tried - short) == 0 and pool.live_besides(set(pool.keys) - short):
+                    why = input_limit.why_short([input_limit.limit(k, model) or 0 for k in short], model)
                 if res is None:
                     res = Result(id=task.id, backend="cc", model=task.model, status="error", started=now_iso(), finished=now_iso(),
                                  error=f"NoUsableKey: no key to run on: {why}; top up and run `hswarm keys probe`, or `hswarm keys enable <fingerprint>`")
                     earlier = dead
                 else:
-                    if dead[-1].get("revoked"):
+                    if dead[-1].get("short"):
+                        res.error = f"{res.error or ''} (key {dead[-1]['key']} cannot take a cc worker's first turn; NoUsableKey: {why})".strip()
+                    elif dead[-1].get("revoked"):
                         res.error = f"{res.error or ''} (key {dead[-1]['key']} refused by the provider (401/403); NoUsableKey: no usable key left to retry on: {why})".strip()
                     else:
                         res.error = f"{res.error or ''} (key {dead[-1]['key']} disabled as out of credit; NoUsableKey: no key with credit left to retry on: {why})".strip()
@@ -1193,17 +1201,21 @@ class JobManager:
             res, transcript = await run_cc_task(left, key, after)
             restarted = restarted or bool(dead and not (isinstance(transcript, dict) and transcript.get("resumed")))
             revoked = key_revoked(res)
-            if not revoked and not out_of_balance(res):
+            limited = res.status == "error" and input_limit.from_error(key, model, res.error)
+            if limited and limited < config.CC_FIRST_TURN_TOKENS:
+                short.add(key)  # the key is fine: it stays enabled, only no cc worker starts on it (input_limit.py)
+            elif not revoked and not out_of_balance(res):
                 self._fold_dead_runs(res, transcript, dead, restarted)
                 return res, transcript
-            if revoked:
+            elif revoked:
                 # A refused key rests with a strike, the same ladder the API client uses for a 401/403, and
                 # the task goes again on the next key instead of ending here.
                 pool.rest(key, 0, status=401, dead=True, gone=account_gone(res.error))
             else:
                 pool.broke(key, status=402, until=regain_at(res.error))
             dead.append({"key": config.fingerprint(key), "error": res.error, "cost_usd": res.cost_usd, "usage": dict(res.usage),
-                         "turns": res.turns, "seconds": res.seconds, "transcript": transcript, "taint": res.taint, "revoked": revoked})
+                         "turns": res.turns, "seconds": res.seconds, "transcript": transcript, "taint": res.taint, "revoked": revoked,
+                         "short": key in short})
             session = transcript.get("session_id") if isinstance(transcript, dict) else None
             after = {"session_id": session, "files_changed": sorted({*(after or {}).get("files_changed", ()), *res.files_changed})}
 

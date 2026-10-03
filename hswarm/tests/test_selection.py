@@ -135,6 +135,33 @@ def test_auto_pins_a_live_route_and_a_job_on_dead_pools_is_refused_at_submit(tmp
     assert f"{providers[0]} all 1 keys disabled" in str(refused.value), refused.value
 
 
+def test_a_cc_leg_whose_key_cannot_take_a_workers_first_turn_is_unavailable_and_refused_at_submit(tmp_path):
+    """2026-10-02 and 10-03: hswarm_select { profile: code, backend: cc } offered five anthropic-direct Opus legs on a
+    key whose organisation allows 10,000 input tokens a minute, and every task sent there died of a 429 in 5-37 s: a
+    headless Claude Code worker's first turn alone is tens of thousands of tokens."""
+    from hswarm import dispatch, input_limit
+
+    key = "sk-ant-test-0001"
+    config.SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    (config.SECRETS_DIR / config.PROVIDERS["anthropic"]["key_files"][0]).write_text(key + "\n", encoding="utf-8")
+    opus = lambda plan: [c["model"] for c in plan if config.MODELS[c["model"]]["provider"] == "anthropic"  # noqa: E731
+                         and config.MODELS[c["model"]].get("api_id") == "claude-opus-5-5"]
+    assert opus(dispatch._plan("code", tools="read", backend="cc", min_context=0)["candidates"])
+
+    said = "API Error: Request rejected (429) · This request would exceed your organization's rate limit of 10,000 input tokens per minute (model: {})"
+    input_limit.from_error(key, "claude-opus-5-5", said.format("claude-opus-5-5"))
+    plan = dispatch._plan("code", tools="read", backend="cc", min_context=0, explain=True)
+    assert not opus(plan["candidates"]), plan["candidates"]
+    gone = {u["model"]: u["why"] for u in plan["unavailable"]}
+    assert opus([{"model": m} for m in gone]) and all("10,000 input tokens per minute" in gone[m] for m in opus([{"model": m} for m in gone]))
+
+    input_limit.from_error(key, "claude-sonnet-5-5", said.format("claude-sonnet-5-5"))
+    task = Task.from_dict({"prompt": "x", "cwd": str(tmp_path), "tools": "read", "backend": "cc", "profile": "code"})
+    with pytest.raises(ValueError, match="CliMayte") as refused:
+        JobManager().submit([task])
+    assert "10,000 input tokens per minute" in str(refused.value), refused.value
+
+
 def test_auto_role_is_respected(tmp_path):
     t = Task(id="j", prompt="hi", cwd=str(tmp_path), tools="none", role="judge")._normalised()
     assert t.profile == "decision" and t.model == _p("decision")[0]["model"]
@@ -220,10 +247,9 @@ def test_a_crawl_mark_reaches_every_hswarm_process_and_the_newest_reading_wins()
     assert not selection.crawling("rank:glm-5-3-flash:nvidia")
 
 
-def test_auto_never_picks_claude_sonnet_or_haiku_on_any_leg():
-    """Jacob, 2026-09-24: never Sonnet, never Haiku. On 2026-09-30 a `code` task on the cc backend auto-picked
-    claude-sonnet-5-5 as the cheapest route over its floors, so the plan itself refuses the families, evaluated legs,
-    siblings and backups alike, and names why in `rejected`."""
+def test_auto_never_picks_claude_haiku_on_any_leg():
+    """AUTO refuses the Haiku family on every leg (evaluated, sibling, backup) and names why in `rejected`. Sonnet is
+    not barred: Jacob retired the 2026-09-24 never-Sonnet ruling on 2026-10-03, because it predated Sonnet 5.5."""
     everywhere = lambda p: True  # noqa: E731 - a live-looking plan, so siblings and backups are offered too
     for backend in ("api", "cc"):
         for profile in selection.PROFILES:
@@ -233,4 +259,8 @@ def test_auto_never_picks_claude_sonnet_or_haiku_on_any_leg():
             assert not picked, f"{profile} on {backend} offered {picked}"
     code = selection.plan("code", tools="all", backend="cc", usable=everywhere)
     assert code["candidates"], "barring the families left a cc code task with no route at all"
-    assert any(r["filter"] == "family" and "sonnet" in r["model"] for r in code["rejected"])
+    assert selection.auto_barred({"benchmark_slug": "claude-haiku-4-5"})
+    assert selection.auto_barred({"api_id": "anthropic/claude-haiku-4-5-20251001"})
+    assert not selection.auto_barred({"benchmark_slug": "claude-sonnet-5-5-high"})
+    assert not any(r["filter"] == "family" for r in code["rejected"])
+    assert any("sonnet" in c["model"] for c in code["candidates"]), "Sonnet 5.5 is an ordinary AUTO candidate again"

@@ -60,7 +60,7 @@ except ImportError:  # pragma: no cover - POSIX
     msvcrt = None
     import fcntl
 
-from . import anthropic_native, config, egress, faults
+from . import anthropic_native, config, egress, faults, input_limit
 from .usage import ApiError, ChatResult, Usage, request_body  # noqa: F401 - re-exported
 
 # Seconds the running task's calls spent rate-limited, from a call's first 429 to its reply or its give-up. That is
@@ -1391,6 +1391,8 @@ class ChatClient:
                 self.retries += 1
                 await asyncio.sleep(self._backoff(attempt))
                 continue
+            if self.native:  # Anthropic names the key's input-tokens-per-minute limit on every answer; cc reads it (input_limit.py)
+                input_limit.from_headers(key, model_id, r.headers)
             if r.status_code == 200:
                 self.pool.recover(key, free=free)  # a :free 200 must not re-enable a key that is out of PAID credit
                 if self.gate is not None:

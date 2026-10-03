@@ -454,6 +454,8 @@ async def hswarm_select(profile: str = "general", tools: str = "none", backend: 
     and `load_bias`, each rejected route's filter and reason (a provider whose terms allow evaluation only is
     rejected with filter "purpose" unless purpose="evaluation"), each unavailable route's why (all keys disabled,
     every key resting, no key here) and what opened each breaker. Ask for it only to debug a route.
+    `input_limit` (backend cc) names the legs kept out because every live key's input-tokens-per-minute limit is under
+    a Claude Code worker's first turn: no cc task can start there, so a hswarm_run on them is refused at submit.
     Set task.profile when dispatching; final acceptance remains with the desktop Opus 5.5 orchestrator."""
     from .breaker import mark_open
     from .dispatch import _plan, _pressure, _rebias_levels, _rescue, _with_rescue
@@ -480,6 +482,9 @@ async def hswarm_select(profile: str = "general", tools: str = "none", backend: 
              "candidates": [{"model": c["model"]} | {k: c[k] for k in ("crawling", "rescue") if c.get(k)}
                             | ({"breaker": True} if "breaker" in c else {}) for c in out["candidates"]],
              "rejected": len(out.get("rejected") or ()), "unavailable": len(out.get("unavailable") or ())}
+    # A cc leg no worker can start on (input_limit.py) says why in the brief: a chat writes why-not-hswarm from it.
+    if short := sorted({u["why"] for u in out.get("unavailable") or () if u.get("input_limit")}):
+        brief["input_limit"] = short
     return brief | {k: out[k] for k in ("below_floor", "saturated") if out.get(k)}
 
 

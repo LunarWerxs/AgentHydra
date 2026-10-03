@@ -305,6 +305,38 @@ def test_a_cc_task_with_no_key_left_says_so(tmp_path, monkeypatch):
     assert all(s["broke"] for s in fc.pool.status())
 
 
+def test_a_cc_run_refused_for_its_keys_input_token_limit_records_it_and_moves_on(tmp_path, monkeypatch):
+    # 2026-10-02 and 10-03: five cc tasks died in 5-37 s on "rate limit of 10,000 input tokens per minute", a key no
+    # cc worker's first turn fits, and the next task was launched on the same key again.
+    _isolate(monkeypatch, tmp_path)
+    from hswarm import input_limit, jobs
+    from hswarm.spec import Result
+
+    keys = ["sk-aaaa1111", "sk-bbbb2222"]
+    used = []
+
+    async def fake_cc(task, api_key, after=None):
+        used.append(api_key)
+        if api_key == keys[0]:
+            return Result(id=task.id, backend="cc", model=task.model, status="error",
+                          error="API Error: Request rejected (429) · This request would exceed your organization's rate limit "
+                                "of 10,000 input tokens per minute (model: deepseek-flash)"), {}
+        return Result(id=task.id, backend="cc", model=task.model, status="ok", answer="done"), {}
+
+    monkeypatch.setattr(jobs, "run_cc_task", fake_cc)
+    fc = _cc_pool_client(keys)
+
+    async def go():
+        m = JobManager(client=fc)
+        t = Task.from_dict({"prompt": "x", "cwd": str(tmp_path), "backend": "cc", "tools": "none", "model": "deepseek-flash"}, {}, 0)
+        return await asyncio.wait_for(m.run_batch([t]), 10)
+
+    assert asyncio.run(go()).results["t1"].status == "ok" and used == keys
+    assert input_limit.limit(keys[0], "deepseek-flash") == 10_000 and not fc.pool.status()[0]["broke"]  # the key is fine for api work
+    used.clear()
+    assert asyncio.run(go()).results["t1"].status == "ok" and used == [keys[1]]  # never launched on the short key again
+
+
 # --- the review of the cc rotation (2026-09-16) ------------------------------------------------------------
 
 

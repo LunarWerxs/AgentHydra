@@ -6,7 +6,7 @@ model. Found 2026-09-21 on Jacob's PC: every hswarm_run errored "No deepseek API
 gate kept sending every session there, because nothing it could read said so.
 
 It judges the AUTO routes a plain hswarm_run takes (tool-using, tool-free, and cc's own), from the shared key
-state only - no network call, so the server can write it at start and a job can rewrite it when it ends in
+state and the keys' recorded input-tokens-per-minute limits (a cc leg no worker can start on is not usable) only - no network call, so the server can write it at start and a job can rewrite it when it ends in
 NoUsableKey. A leg counts when its provider has a key that is not disabled; a resting (429) key still counts,
 because a rate limit passes and a missing key does not. Fingerprint-free: no key, and no fingerprint, is written.
 """
@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 
-from . import config, keys
+from . import config, input_limit, keys
 from .spec import now_iso
 
 def path():
@@ -36,8 +36,13 @@ def compute() -> dict:
     for chain, profile, backend, tools in (("tools", "code", "api", "read"), ("tool_free", "general", "api", "none"), ("cc", "code", "cc", "read")):
         legs = [c["model"] for c in plan(profile, tools=tools, backend=backend)["candidates"]]
         live = {leg: _live_keys(config.provider_of(leg)) for leg in legs}
-        chains[chain] = {"legs": legs, "usable_legs": [leg for leg in legs if live[leg] > 0],
+        # A cc leg whose every live key's input-tokens-per-minute limit is under a worker's first turn cannot start one
+        # task (input_limit.py): it is not usable, and the gate reads why, so it stops sending code work to cc.
+        short = {leg: why for leg in legs if backend == "cc" and live[leg] > 0 and (why := input_limit.cc_short(leg))}
+        chains[chain] = {"legs": legs, "usable_legs": [leg for leg in legs if live[leg] > 0 and leg not in short],
                          "live_keys": {config.provider_of(leg): n for leg, n in live.items()}}
+        if short:
+            chains[chain]["input_limit"] = short
     usable = any(chain["usable_legs"] for chain in chains.values())
     why = "" if usable else (
         "no key with credit on any leg of the auto routes (tools: " + ", ".join(chains["tools"]["legs"])

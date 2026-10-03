@@ -156,6 +156,10 @@ GATE_RECOVER_S = 30.0
 # edits on disk and no report, and a ONE-file edit's floor was ~19 turns. A worker that dies at the cap costs
 # full price and returns nothing, so headroom is cheaper than a retry. `lean` (spec.Task) cuts the cost itself.
 DEFAULT_MAX_TURNS = {"api": 24, "cc": 40}
+# The input tokens a headless Claude Code worker's FIRST turn sends: its system prompt, tool schemas and the folder's
+# CLAUDE.md/AGENTS.md, before it reads a file. A conservative floor: a key whose organisation allows fewer input tokens
+# a minute cannot start one cc task (input_limit.py; 10,000 on the 2026-10-02 Anthropic key failed every task).
+CC_FIRST_TURN_TOKENS = 40_000
 # A worker's cost cap when its task names none, by the profile AUTO resolved. 0.25 catches a reasoning runaway on the
 # cheap legs most profiles lead with. `critical` leads with Opus 5.5 at xhigh ($20/M out), where 0.25 stopped a
 # review of a 600-line diff after 5 turns (job 20260930-170329-0193). A named max_cost_usd always wins, and the job's

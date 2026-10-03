@@ -8,7 +8,7 @@ import os
 import re
 import time
 
-from . import breaker, budget, config, context, keys, selection
+from . import breaker, budget, config, context, input_limit, keys, selection
 from .client import NoUsableKey
 from .leggate import GateQueued, wait_for_pilot
 from .spec import Result, add_spend, now_iso
@@ -78,13 +78,22 @@ def _dead(pool):
     return pool is not None and hasattr(pool, "disabled") and len(pool) <= len(pool.disabled())
 
 
+def _fits_cc(plan, backend):
+    """A cc plan without the legs no cc worker can start on (input_limit.cc_short: every live key's input-tokens-per-
+    minute limit is under a worker's first turn); `_plan` names them under `unavailable`."""
+    if backend == "cc":
+        plan["candidates"] = [c for c in plan["candidates"] if not input_limit.cc_short(c["model"])]
+    return plan
+
+
 def _plan_here(profile, *, min_context, wake=_wake, **kw):
     """The evaluated plan over pools that can answer now; when nothing can (every candidate pool is resting on
     429s), the plan over pools that are merely busy, so the task queues on its gate instead of being refused
     as NoCapableSwarmRoute at width (the `cc` smoke of 2026-09-25)."""
-    plan = selection.plan(profile, usable=lambda p: _usable(p, wake), min_context=min_context, **kw)
+    backend = kw.get("backend")
+    plan = _fits_cc(selection.plan(profile, usable=lambda p: _usable(p, wake), min_context=min_context, **kw), backend)
     if not plan["candidates"]:
-        busy = selection.plan(profile, usable=lambda p: _alive(p, wake), min_context=min_context, **kw)
+        busy = _fits_cc(selection.plan(profile, usable=lambda p: _alive(p, wake), min_context=min_context, **kw), backend)
         if busy["candidates"]:
             return busy
     return plan
@@ -116,9 +125,12 @@ def _plan(profile, *, min_context, explain=False, **kw):
             break
     if explain:
         chosen = {c["model"] for c in plan["candidates"]}
-        plan["unavailable"] = [{"model": c["model"], "provider": c["provider"], "why": _why_not(c["provider"], wake)}
+        cc = kw.get("backend") == "cc"
+        plan["unavailable"] = [{"model": c["model"], "provider": c["provider"], "why": short or _why_not(c["provider"], wake)}
+                               | ({"input_limit": True} if short else {})
                                for c in selection.plan(profile, min_context=min_context, **kw)["candidates"]
-                               if c["model"] not in chosen]
+                               if c["model"] not in chosen
+                               for short in [cc and _alive(c["provider"], wake) and input_limit.cc_short(c["model"])]]
     return plan
 
 
@@ -245,7 +257,7 @@ def unreachable(task):
         return None
     dead: dict[str, list[str]] = {}
     for u in plan["unavailable"]:
-        if u["why"].startswith("all "):
+        if u["why"].startswith("all ") or u.get("input_limit"):
             dead.setdefault(f"{u['provider']} {u['why']}", []).append(u["model"])
     if not dead:
         return None
@@ -276,7 +288,7 @@ def route_outlook(tasks, gates=None):
                   min_scores=t.min_scores, exclude_models=t.exclude_models, vision=t.role == "vision")
         label = f"profile {t.profile} (tools {t.tools}, backend {t.backend})"
         wake = _memo_wake()
-        plan = selection.plan(t.profile, usable=lambda p: _alive(p, wake), min_context=0, **kw)
+        plan = _fits_cc(selection.plan(t.profile, usable=lambda p: _alive(p, wake), min_context=0, **kw), t.backend)
         providers = sorted({config.provider_of(c["model"]) for c in plan["candidates"]})
         if not providers:
             notes.append(f"{label}: no evaluated route has a usable key; its tasks will fail NoCapableSwarmRoute")

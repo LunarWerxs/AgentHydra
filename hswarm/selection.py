@@ -37,12 +37,11 @@ PURPOSES = {
     "evaluation": "the answer is only measured or compared: a benchmark, an eval, a probe, a spike, a scratch test",
 }
 
-# Model families AUTO never picks, on any leg: evaluated, sibling or backup. Jacob, 2026-09-24: "never Haiku, and never
-# Sonnet, for anything: every Claude sub-agent is Opus 5.5" - Sonnet on thinking costs what Opus does. On 2026-09-30 a
-# `code` task on the cc backend still came back on claude-sonnet-5-5, the cheapest route over its floors, because the
-# rule lived only in each caller's memory to pass exclude_models. It lives here now. Naming the model (`model=`) is the
-# explicit override: a pinned model never goes through this plan.
-AUTO_BARRED_FAMILIES = ("claude-sonnet", "claude-haiku")
+# Model families AUTO never picks, on any leg: evaluated, sibling or backup. Haiku only: the 2026-09-24 never-Sonnet
+# ruling was retired on 2026-10-03 because it predated Sonnet 5.5, so Sonnet is an ordinary AUTO candidate again and
+# the benchmark order decides. Naming the model (`model=`) is the explicit override: a pinned model never goes through
+# this plan.
+AUTO_BARRED_FAMILIES = ("claude-haiku",)
 
 
 def auto_barred(entry) -> bool:
@@ -178,7 +177,7 @@ def plan(profile="general", *, tools="none", backend="api", usable=None, reasoni
         if name in config.DISABLED_MODELS or not config.provider_enabled(entry["provider"]):
             why = ("disabled", "switched off in settings")
         elif auto_barred(entry):
-            why = ("family", "Claude Sonnet and Haiku are never picked automatically; name the model to use one")
+            why = ("family", "Claude Haiku is never picked automatically; name the model to use one")
         elif purpose != "evaluation" and config.PROVIDERS[entry["provider"]].get("evaluation_only"):
             why = ("purpose", f"{entry['provider']}'s own terms allow evaluation only; this task's purpose is {purpose!r}")
         elif not p:

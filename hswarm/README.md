@@ -142,6 +142,21 @@ These match ZSwarm (ported 2026-10-03; ideas from CopilotKit's OpenBot and OpenT
 - **Every worker and ask is told today's UTC date as authoritative**, right after the safety charter
   (`guard.current_date_line`).
 
+## Routing and memory (ported 2026-10-03)
+
+- **AUTO may pick Claude Sonnet; Haiku stays barred.** The Haiku family is rejected on every leg (evaluated, sibling and
+  backup) with the reason `family`; naming a model (`model=`) is the explicit override (`selection.AUTO_BARRED_FAMILIES`).
+- **A `cc` leg whose key cannot start a worker is listed unavailable and refused.** A headless Claude Code worker's first
+  turn is tens of thousands of input tokens (`config.CC_FIRST_TURN_TOKENS`, 40,000). `input_limit.py` records each key's
+  input-tokens-per-minute limit per model (Anthropic's header on native calls, or the 429 a cc worker dies of) for 3 days
+  in `HSWARM_HOME/input_limits.json`, keyed by fingerprint. A leg whose every live key is under that is kept out of the
+  candidates, named under `unavailable` with the reason, refused at submit, and shown in `hswarm_select`'s `input_limit`.
+- **`hswarm distill --live` triages its facts in the same run**, and `hswarm triage` saves each `keep` to the Connections
+  memory store as a tentative memory (a duplicate, trivial or rejected candidate never reaches it; an existing slug is left
+  alone). Nothing is staged on disk. `--dry-run` prints what would be saved. The memory kit checkout (its `global/` and
+  `repos/` indexes and `home/tools/memstore.py`) is `HSWARM_MEMORY_REPO`, default `~/claude-memory`.
+- `indexdiet` and the hooks module it fed are retired along with the memory index they served.
+
 ## Development
 
 For debugging, set environment variables:
