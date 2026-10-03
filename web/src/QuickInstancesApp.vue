@@ -113,25 +113,18 @@ const sortedClaude = computed(() =>
   ),
 )
 /**
- * ONLY the UNLINKED CLI logins get their own row here — the same rule the full manager's CLI table
- * uses (components/CliInstancesSection.vue unlinkedCliInstances).
- *
- * Without this the two windows disagreed about the same machine: the full manager folded a linked
- * CLI login onto its desktop instance's row and reported "CLI instances (0 of 1)", while this
- * window listed that identical login as a standalone "Claude CLI" row — so the same account
- * appeared once in one window and twice in the other, and the header totals could never be
- * reconciled. A linked login is the same Anthropic account signed in twice; it belongs to the
- * desktop row, which now carries a terminal badge for it.
- *
- * The `desktopDirs` check is the same ghost-link backstop as over there: a link pointing at a
- * desktop instance that no longer exists must resurface here rather than vanish from both views.
+ * EVERY CLI login gets its own row here, the linked ones too, the same rule the full manager's CLI
+ * table follows (components/CliInstancesSection.vue). The owner, 2026-10-03: a CLI login linked to
+ * a desktop row must still show in the CLI list ("I need to see it over there"). The desktop row
+ * keeps its terminal badge as well, and a linked row names that desktop row, so the two windows
+ * agree about the same machine.
  */
-const unlinkedClaudeCli = computed(() => {
-  const desktopDirs = new Set(claude.value.map((i) => i.dir))
-  return claudeCli.value.filter(
-    (c) => !c.associatedDesktopDir || !desktopDirs.has(c.associatedDesktopDir),
-  )
-})
+/** The desktop row a CLI login is linked to, or null (unlinked, or linked to a row that is gone). */
+function linkedDesktopName(cli: CliInstance): string | null {
+  const dir = cli.associatedDesktopDir
+  const desktop = dir ? claude.value.find((i) => i.dir === dir) : undefined
+  return desktop ? (desktop.label ?? desktop.name) : null
+}
 /** The linked ones, per desktop dir, for that row's badge. */
 const linkedCliByDir = computed(() => {
   const byDir = new Map<string, CliInstance[]>()
@@ -150,7 +143,7 @@ function linkedClisFor(dir: string): CliInstance[] {
 }
 
 const sortedClaudeCli = computed(() =>
-  [...unlinkedClaudeCli.value].sort((a, b) => a.name.localeCompare(b.name)),
+  [...claudeCli.value].sort((a, b) => a.name.localeCompare(b.name)),
 )
 
 // Sort first, then filter: the filter REMOVES rows, it never reorders them.
@@ -172,11 +165,8 @@ const sortedCodex = computed(() =>
   ),
 )
 const visibleCodex = computed(() => visible(sortedCodex.value, factsForCodex))
-// Counts ROWS, not records: a CLI login folded onto its desktop row is one instance shown once, so
-// counting claudeCli in full would report a machine as having more instances than it has rows.
-const total = computed(
-  () => claude.value.length + unlinkedClaudeCli.value.length + codex.value.length,
-)
+// Counts ROWS: every CLI login has a row of its own, linked ones included.
+const total = computed(() => claude.value.length + claudeCli.value.length + codex.value.length)
 /** The plan labels the filter flyout offers. Blanks are fine — planOptions drops them. */
 const presentPlans = computed(() => [
   ...claude.value.map((i) => i.account?.planLabel),
@@ -665,8 +655,6 @@ onBeforeUnmount(() => {
               </span>
             </template>
             <div class="flex w-28 justify-end">
-              <!-- The UNLINKED count, matching the rows actually rendered below. Using the raw
-                   claudeCli length here would have promised a row that folding removed. -->
               <Badge variant="secondary">{{ sortedClaudeCli.length }}</Badge>
             </div>
           </div>
@@ -689,7 +677,10 @@ onBeforeUnmount(() => {
             <div class="min-w-0 flex-1">
               <p class="truncate text-sm font-medium">{{ instance.name }}</p>
               <p class="truncate text-xs text-muted-foreground">
-                {{ instance.loggedIn ? 'Signed in' : 'Needs sign-in' }}
+                {{ instance.loggedIn ? 'Signed in' : 'Needs sign-in'
+                }}<template v-if="linkedDesktopName(instance)">
+                  · linked to {{ linkedDesktopName(instance) }}</template
+                >
               </p>
             </div>
             <template v-if="usageMode">

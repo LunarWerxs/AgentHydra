@@ -33,15 +33,12 @@ export default {
   loggedIn: 'Logged in',
   loggedOut: 'Not logged in',
   noAccount: 'No account',
-  // Names the marker to look for. "shown on their desktop instance" was true but unactionable —
-  // the row it pointed at had no visible sign of the link, so the reader was told where to look
-  // and then found nothing there.
-  linkedElsewhere: '+ {count} on a desktop row in the Instances tab (⌨ marks them)',
-  // "(0)" alone reads as "you have none"; "(0 of 1)" says the missing one is elsewhere, not absent.
+  // The heading's count while the usage filter sets rows aside: "3 of 5", not a bare "3".
   countOfTotal: '{shown} of {total}',
-  allLinked: 'Every CLI instance is linked to a desktop instance',
-  allLinkedHint:
-    'Linked ones sit on their desktop instance’s row in the Instances tab, marked with a terminal icon, since they are the same account. Unlink one to bring it back here.',
+  // The chip beside a linked login's name: which desktop row it is the same account as.
+  linkedTo: 'Linked to desktop instance #{num} {name}',
+  linkedToHint:
+    'The same Claude account as that desktop instance, signed in a second time for the CLI. It also shows on that row in the Instances tab, marked with a terminal icon.',
   // The pill beside a row's name: Claude sessions live on this login now (GET /api/cli-instances).
   liveSessions:
     '{n} Claude session running on this account, CliMayte’s included | {n} Claude sessions running on this account, CliMayte’s included',

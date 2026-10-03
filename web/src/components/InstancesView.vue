@@ -126,6 +126,7 @@ import {
   usageReasonMessageKey,
 } from '@/lib/usage'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
+import { planSize } from '@/lib/usage-pool'
 import {
   msUntilReset,
   resetLabel,
@@ -290,7 +291,8 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
       },
     },
     { key: 'usageSession', accessor: (i: CMInstance) => usageFor(i)?.session?.pct ?? undefined },
-    { key: 'plan', accessor: (i: CMInstance) => i.account?.planLabel ?? undefined },
+    // By plan size (Pro 1, Max 5x 5, Max 20x 20), not the label's spelling; no plan sorts last.
+    { key: 'plan', accessor: (i: CMInstance) => planSize(i.account?.planLabel) },
     // By the instant, not the "3h ago" text, so the order is true across units.
     {
       key: 'lastRunning',
@@ -598,7 +600,8 @@ async function onLoginCli(cli: CliInstance) {
   if (result?.ok) toast.success(t('instances.toastCliLoginOpened', { name: cli.name }))
   else toast.error(result?.message ?? t('instances.toastCliLoginFailed'))
 }
-/** Send a linked CLI instance back down to the CLI table (where rename/delete/associate live). */
+/** Unlink a CLI instance from this desktop row: the icon here goes, its own row on the CLI tab stays
+ *  (losing only its link chip). */
 async function onUnlinkCli(cli: CliInstance) {
   const result = await linkCliDesktop(cli.id, null)
   if (result?.ok) toast.success(t('instances.toastCliUnlinked'))
@@ -1241,7 +1244,17 @@ onUnmounted(() => {
             <!-- Name is the one column that gives way. Ten nowrap columns needed 1008px inside a
                  988px frame, so the table scrolled sideways (owner, 2026-09-26); now this column
                  takes whatever the others leave (w-full, and max-w-0 on its cells so their content
-                 cannot force the table wider), never below min-w-36, and the name elides. -->
+                 cannot force the table wider), never below min-w-36, and the name elides.
+                 Every other column carries NO width and so sits at its content's width. In auto
+                 table layout a fixed width is a floor, not a size: the w-24 / w-28 / w-40 the
+                 columns used to carry summed to ~940px of the ~990px frame, which left Name at
+                 its 144px floor, one or two letters after its icons, while "Last running" kept
+                 112px for "Now" (owner, 2026-10-03: "I can't view the name").
+                 A header is a floor too: TableHead is nowrap, so "Last running" plus its sort
+                 arrow and hint held that column at ~110px with the w-28 gone. The headers whose
+                 label is far wider than their cells (Instance account, Usage 5h, Usage week, Last
+                 running) may wrap instead (whitespace-normal), stacking onto two lines, so the
+                 column is as wide as its longest word and the rest goes to Name. -->
             <TableHead class="w-full min-w-36">
               <span class="inline-flex items-center gap-0.5">
                 <SortButton :direction="indicatorFor('name')" @sort="toggleSort('name')">
@@ -1250,7 +1263,7 @@ onUnmounted(() => {
                 <InfoHint :text="$t('instances.colNameHint')" />
               </span>
             </TableHead>
-            <TableHead class="w-40">
+            <TableHead class="whitespace-normal">
               <span class="inline-flex items-center gap-0.5">
                 <SortButton :direction="indicatorFor('account')" @sort="toggleSort('account')">
                   {{ $t('instances.colAccount') }}
@@ -1278,45 +1291,43 @@ onUnmounted(() => {
             </template>
             <!-- … swapped one-for-one for the quota columns in usage mode, so the table keeps its
                  shape and only its subject changes. -->
-            <!-- The quota columns carry FIXED widths (w-28 / w-24), here and in the CLI tab's table.
-                 Auto table layout sizes columns from their content, so without them the same
-                 "Weekly" column came out 110px in one table and 78px in the next, and here the
-                 columns would shift as one provider's rows came and went. The Codex and DeepSeek
-                 rows render into these same columns, so their cells follow this header. -->
+            <!-- The quota columns once carried fixed widths so the same "Weekly" column did not
+                 come out 110px in one table and 78px in the next. Name taking the slack (w-full,
+                 here and in the CLI tab's table) does that now: every other column sits at its
+                 content's width, which for the two bars is UsageBar's own min-w-20 in both tables.
+                 The Codex and DeepSeek rows render into these same columns, so their cells follow
+                 this header. -->
             <template v-else>
-              <TableHead class="w-28">
+              <TableHead>
                 <SortButton :direction="indicatorFor('session')" @sort="toggleSort('session')">
                   {{ $t('instances.colSession') }}
                 </SortButton>
               </TableHead>
-              <TableHead class="w-28">
+              <TableHead>
                 <SortButton :direction="indicatorFor('weekly')" @sort="toggleSort('weekly')">
                   {{ $t('instances.colWeekly') }}
                 </SortButton>
               </TableHead>
             </template>
-            <TableHead
-              v-if="usageMode"
-              class="w-24"
-            >
+            <TableHead v-if="usageMode" class="whitespace-normal">
               <SortButton :direction="indicatorFor('usageSession')" @sort="toggleSort('usageSession')">
                 {{ $t('instances.colUsageSession') }}
               </SortButton>
             </TableHead>
-            <TableHead class="w-24">
+            <TableHead class="whitespace-normal">
               <SortButton :direction="indicatorFor('usage')" @sort="toggleSort('usage')">
                 {{ usageMode ? $t('instances.colUsageWeek') : $t('instances.colUsage') }}
               </SortButton>
             </TableHead>
-            <TableHead class="w-24">
+            <TableHead>
               <SortButton :direction="indicatorFor('plan')" @sort="toggleSort('plan')">
                 {{ $t('instances.colPlan') }}
               </SortButton>
             </TableHead>
             <!-- After Plan, before Actions, in both column modes: when an account was last opened
                  is as true in usage mode as in process mode, and placing it right of every other
-                 column keeps the fixed-width quota columns aligned with the tables below. -->
-            <TableHead class="w-28">
+                 column keeps the quota columns aligned with the tables below. -->
+            <TableHead class="whitespace-normal">
               <span class="inline-flex items-center gap-0.5">
                 <SortButton :direction="indicatorFor('lastRunning')" @sort="toggleSort('lastRunning')">
                   {{ $t('instances.colLastRunning') }}
@@ -1498,7 +1509,8 @@ onUnmounted(() => {
                   </span>
                 </IconTooltip>
                 <!-- A linked CLI login used to be visible NOWHERE on the row — its only trace was
-                     the "CLI instances (0 of 1)" shortfall in the table below, which reads as
+                     the old "CLI instances (0 of 1)" shortfall in the CLI table (it now lists
+                     every login, linked ones with a chip), which reads as
                      something hiding a row rather than as "it moved up here". An icon costs no row
                      height (the reason the old mono sub-line was removed) and answers "which of
                      these accounts owns the missing CLI login?" at a glance. Indicator only: the
@@ -1790,8 +1802,8 @@ onUnmounted(() => {
                          login…" creates + links one on demand and opens the /login terminal. That
                          item is worded as a CREATE, not as a sign-in: it used to share the exact
                          label of the plain sign-in above, so clicking it silently produced a new
-                         managed instance and the only visible consequence was the CLI table below
-                         quietly reading "0 of 1". -->
+                         managed instance and the only visible consequence was the CLI table
+                         quietly reading "0 of 1" (back when it hid linked logins). -->
                     <DropdownMenuSeparator />
                     <template v-if="linkedCliFor(inst.dir)">
                       <template v-for="cli in linkedClis(inst.dir)" :key="`cli-${cli.id}`">

@@ -46,6 +46,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAnalyticsPrefs } from '@/composables/useAnalyticsPrefs'
+import { useShellWidth } from '@/composables/useShellWidth'
 import type {
   ActivityReport,
   AgentPresence,
@@ -63,6 +64,8 @@ import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
+// The header's full-width toggle lifts this page's own reading cap too.
+const { fullWidth } = useShellWidth()
 const { analyticsPeriod, analyticsTokenMode, toggleTokenMode } = useAnalyticsPrefs()
 
 /** Narrow every cost/model chart to one vendor. Client-side over the report already fetched: the
@@ -456,7 +459,7 @@ const survivalAverage = computed(() => {
 
 <template>
   <div class="scroll-slim h-full overflow-y-auto">
-    <div class="mx-auto w-full max-w-5xl space-y-4 p-4">
+    <div class="mx-auto w-full space-y-4 p-4" :class="fullWidth ? '' : 'max-w-5xl'">
       <!-- filters in one row above the charts -->
       <div class="flex flex-wrap items-center gap-2">
         <h2 class="me-auto flex items-center gap-2 text-sm font-semibold">

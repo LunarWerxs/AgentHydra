@@ -69,7 +69,7 @@ export default {
   instanceDefault: 'Default',
   // --- one conversation, several transcripts ---
   copyOf: 'part {i} of {n}',
-  // The short form, shown on the row itself, so the reason is visible without hovering.
+  // Why a part ended, short form. The list row shows only "part i of n"; the reason is its hover.
   endedInterrupted: 'you stopped it',
   endedUsageLimit: 'hit a usage limit',
   endedOverload: 'server was overloaded',
@@ -86,7 +86,6 @@ export default {
   instanceOther: 'CLI / other',
   // Shown on a session that fanned out. The subagents are sessions in the provider's own store, but
   // not conversations the user held, so they are folded into this row rather than listed beside it.
-  subagents: '{count} subagents',
   subagentsHint:
     'Spawned {count} subagent sessions. They are folded into this row rather than listed separately; their tokens are still counted.',
   // --- list options (the ⋯ menu) ---
@@ -271,4 +270,10 @@ export default {
   unavailable: 'Could not load sessions: {reason}.',
   retry: 'Retry',
   staleHint: 'Showing the last known list, updates unavailable: {reason}.',
+  // A list row is one line; the rest of what it knows is its hover, one fact per line.
+  rowHintFolder: 'Folder: {folder}',
+  rowHintFolderBranch: 'Folder: {folder} · branch {branch}',
+  rowHintActivity: 'Messages: {n} · last active {ago}',
+  rowHintSource: 'Source: {source}',
+  rowHintAccount: 'Account: {account}',
 }

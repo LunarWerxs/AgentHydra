@@ -1,13 +1,13 @@
 <script setup lang="ts">
-// CLI Instances: the table of CLI logins that DON'T belong to a desktop instance yet.
+// CLI Instances: the table of every CLI login on this PC.
 // A "CLI instance" is an isolated CLAUDE_CONFIG_DIR the daemon can run a real `claude` against (as
 // opposed to a Claude Desktop profile).
 //
-// This table used to list every CLI instance. It no longer does: once one is LINKED to a desktop
-// instance it is the same Anthropic account signed in twice, so it moves UP onto that account's row
-// in InstancesView and disappears from here. Listing it in both places was the half-measure that
-// made the "unified per-account view" not actually unified. Full lifecycle (create / rename /
-// associate / delete) still lives here; the account row carries launch / sign-in / unlink.
+// One LINKED to a desktop instance is the same Anthropic account signed in twice. It shows on that
+// account's row in InstancesView (the ⌨ icon) AND here, marked with a chip naming the row (owner,
+// 2026-10-03: "When I add a CLI instance... it needs to also add it to the CLI row... I need to see
+// it over there"). Full lifecycle (create / rename / associate / link / delete) lives here; the
+// account row carries launch / sign-in / unlink as well.
 import {
   ArrowRightLeft,
   Cloud,
@@ -28,6 +28,7 @@ import {
   Terminal,
   Timer,
   Trash2,
+  Unlink,
 } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
@@ -85,9 +86,9 @@ import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
 import { formatTokens } from '@/lib/climayte-status'
 import { formatUsd, timeAgo } from '@/lib/format'
-import { nameOverflowTitle, shortDisplayName } from '@/lib/instance-appearance'
+import { displayName, nameOverflowTitle, shortDisplayName } from '@/lib/instance-appearance'
 import { billsPastLimit, bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
-import { pooledRemaining } from '@/lib/usage-pool'
+import { planSize, pooledRemaining } from '@/lib/usage-pool'
 import {
   msUntilReset,
   resetLabel,
@@ -126,7 +127,7 @@ const {
 const { accounts, refreshAccounts } = useData()
 // The desktop instances are the link targets. useInstances is a module singleton that the Instances
 // tab keeps loaded; this table lives on the CLI tab, so a window opened straight onto it reads the
-// list once on mount (below), or every linked CLI instance would show here as unlinked.
+// list once on mount (below), or every linked CLI instance would show here without its link chip.
 const { instances: desktopInstances, refreshInstances } = useInstances()
 const { target: quickAddTarget, setQuickAddTarget, clearQuickAddTarget } = useQuickAddTarget()
 
@@ -158,7 +159,7 @@ const poolOf = (which: 'session' | 'weekAll') =>
   pooledRemaining(
     cliInstances.value.map((inst) => ({
       signedIn: inst.loggedIn,
-      planLabel: inst.planLabel,
+      planLabel: planFor(inst),
       limit: usageFor(inst)?.[which],
     })),
     now.value,
@@ -167,33 +168,32 @@ const sessionPool = computed(() => poolOf('session'))
 const weekPool = computed(() => poolOf('weekAll'))
 
 /**
- * ONLY the UNLINKED CLI instances live in this table.
+ * EVERY CLI instance lives in this table, the linked ones included.
  *
- * A CLI instance that has been linked to a desktop instance is the same Anthropic account signed in
- * twice, so it belongs to that account, not to a separate list. It is rendered on its desktop
- * instance's row up in InstancesView (that row IS the account) and is deliberately NOT repeated
- * here — showing it in both places is duplication, not a unified view. "Unlink" on the account row
- * sends it back down here.
+ * A linked one is the same Anthropic account as its desktop instance, signed in twice, so the
+ * Instances tab shows it on that row too (the ⌨ icon). It used to be listed ONLY there, and a login
+ * added from a desktop row then never appeared on the CLI tab at all (owner, 2026-10-03: "I need to
+ * see it over there"). Here it keeps its own row and a chip naming the desktop row it belongs to.
  *
- * "Unlinked" also covers a CLI instance whose associatedDesktopDir no longer matches any CURRENTLY
- * existing desktop instance — a ghost link. removeInstance() clears the link server-side when its
- * desktop instance is deleted (core/lifecycle.ts), but checking desktopInstances here too is a
- * frontend backstop: if that cleanup were ever bypassed, a CLI instance pointing at a vanished
- * desktop dir would otherwise stay "linked" forever — hidden from this table with no row left to
- * show it, and so unmanageable. Comparing against the live desktop list guarantees it always
- * surfaces somewhere.
+ * A link only counts while its desktop instance still exists. removeInstance() clears it
+ * server-side when the desktop instance is deleted (core/lifecycle.ts); checking the live desktop
+ * list too is a frontend backstop, so a ghost link to a vanished folder never draws a chip pointing
+ * at nothing.
  */
-const unlinkedCliInstances = computed(() => {
-  const desktopDirs = new Set(desktopInstances.value.map((i) => i.dir))
-  return cliInstances.value.filter(
-    (c) => !c.associatedDesktopDir || !desktopDirs.has(c.associatedDesktopDir),
-  )
-})
-/** How many moved up onto a desktop instance's row (so the header can explain the shortfall). */
-const linkedCount = computed(() => cliInstances.value.length - unlinkedCliInstances.value.length)
+const desktopByDir = computed(() => new Map(desktopInstances.value.map((d) => [d.dir, d])))
+/** The desktop instance this CLI login is linked to, or null when it is not (or the link is stale). */
+function linkedDesktop(inst: CliInstance) {
+  const dir = inst.associatedDesktopDir
+  return dir ? (desktopByDir.value.get(dir) ?? null) : null
+}
+/** What the Plan cell shows, and so what its sort orders by: the login's own plan, else its desktop
+ *  row's, since a linked login is that same account. */
+function planFor(inst: CliInstance): string | null {
+  return inst.planLabel ?? linkedDesktop(inst)?.account?.planLabel ?? null
+}
 
 const { sortedRows, toggleSort, indicatorFor } = useSortable(
-  () => unlinkedCliInstances.value,
+  () => cliInstances.value,
   [
     { key: 'loggedIn', accessor: (i: CliInstance) => i.loggedIn },
     { key: 'name', accessor: (i: CliInstance) => i.name },
@@ -216,6 +216,9 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
       },
     },
     { key: 'usageSession', accessor: (i: CliInstance) => usageFor(i)?.session?.pct ?? undefined },
+    // By the label the cell shows, as the Instances table sorts its Plan column.
+    // By plan size (Pro 1, Max 5x 5, Max 20x 20), not the label's spelling; no plan sorts last.
+    { key: 'plan', accessor: (i: CliInstance) => planSize(planFor(i)) },
     // Biggest first: the question asked of this column is which account ran the most.
     { key: 'tokens', accessor: (i: CliInstance) => i.tokens?.total, first: 'desc' },
   ],
@@ -231,12 +234,12 @@ const { dimmed: filterDimmed, visible: filterVisible } = useInstanceFilter()
 /**
  * What one CLI row is, as far as the filter is concerned.
  *
- * `open` is deliberately absent, not `false`: an unlinked CLI login is a CLAUDE_CONFIG_DIR, not an
- * app, so it is never open OR closed, and the filter's "an unknown fact never sets a row aside"
+ * `open` is deliberately absent, not `false`: a CLI login, linked or not, is a CLAUDE_CONFIG_DIR,
+ * not an app, so it is never open OR closed, and the filter's "an unknown fact never sets a row aside"
  * rule leaves this table alone when you filter by status. Claiming `false` would empty it the
- * moment someone asked for the open accounts. Its plan is unknown for the same kind of reason —
- * a CLI login carries no account record of its own; the linked ones live on their desktop row,
- * which has the plan.
+ * moment someone asked for the open accounts. Its plan is left out too, as the filter flyout
+ * offers no CLI plans (InstancesView's presentPlans), so a plan the menu cannot name never sets a
+ * CLI row aside.
  */
 const filterFacts = (inst: CliInstance) => ({ usage: usageFor(inst), signedIn: inst.loggedIn })
 
@@ -244,43 +247,43 @@ const visibleRows = computed(() => filterVisible(sortedRows.value, filterFacts))
 /** The Account column names a legacy pasted credential. With none in use (the norm: a login comes
  *  from signing the instance in) every row would read "No account" beside a name that is an email,
  *  so the column is left out and the name gets its width (SUE round, 2026-10-01). */
-const showAccountColumn = computed(() =>
-  unlinkedCliInstances.value.some((i) => !!i.associatedAccountLabel),
-)
+const showAccountColumn = computed(() => cliInstances.value.some((i) => !!i.associatedAccountLabel))
 /** How much of a name the row shows: the default beside the Account column, more without it. */
 const nameMax = computed(() => (showAccountColumn.value ? undefined : 36))
 /** Rows this table dropped for the filter — said out loud in the heading beside the count. */
 const hiddenByFilter = computed(() => sortedRows.value.length - visibleRows.value.length)
-/** There ARE unlinked CLI instances, the filter just took all of them. */
+/** There ARE CLI instances, the filter just took all of them. */
 const allHiddenByFilter = computed(
-  () => unlinkedCliInstances.value.length > 0 && visibleRows.value.length === 0,
+  () => cliInstances.value.length > 0 && visibleRows.value.length === 0,
 )
 
 /**
- * The heading's parenthetical. "x of y" whenever this table is showing fewer rows than there are
- * CLI instances — for either reason, a linked one that moved up onto its account row or one the
- * usage filter set aside. A bare "(0)" read as "you have no CLI instances" to someone who could
- * plainly see one elsewhere, which is the whole reason this says the total.
+ * The heading's parenthetical: the row count, or "x of y" while the usage filter has set rows
+ * aside. Every CLI instance is a row here, linked or not, so a shortfall has no other cause.
  */
 const headingCount = computed(() =>
   // No count before the first answer: a "(0)" over loading bars read as "my accounts are gone"
-  // (SUE round, 2026-10-01). A linked instance is not missing from this count: it lives on its
-  // desktop row (the count's hover says so). "10 of 11" with no filter on read as a lost account
-  // (owner, 2026-10-02), so "x of y" is only for rows the filter set aside, or for a table whose
-  // every instance is linked.
+  // (SUE round, 2026-10-01).
   loading.value && cliInstances.value.length === 0
     ? '…'
-    : visibleRows.value.length === unlinkedCliInstances.value.length &&
-        unlinkedCliInstances.value.length > 0
+    : hiddenByFilter.value === 0
       ? String(visibleRows.value.length)
       : t('cliInstances.countOfTotal', {
           shown: visibleRows.value.length,
-          total:
-            unlinkedCliInstances.value.length > 0
-              ? unlinkedCliInstances.value.length
-              : cliInstances.value.length,
+          total: cliInstances.value.length,
         }),
 )
+
+// The name column gives way when the table is narrow, so the CSS can elide a name the character
+// cap left whole; the native title then carries it in full (same check as InstancesView).
+const clippedName = ref<string | null>(null)
+function noteNameClip(e: PointerEvent, inst: CliInstance): void {
+  const el = e.currentTarget as HTMLElement
+  clippedName.value = el.scrollWidth > el.clientWidth ? inst.id : null
+}
+function nameTitle(inst: CliInstance): string | undefined {
+  return clippedName.value === inst.id ? inst.name : nameOverflowTitle(inst.name, nameMax.value)
+}
 
 function isBusy(inst: CliInstance): boolean {
   return busyIds.value.has(inst.id)
@@ -354,6 +357,12 @@ function openLinkDialog(inst: CliInstance) {
   linkTarget.value = inst
   linkError.value = null
   linkOpen.value = true
+}
+/** Unlink straight from the row's menu, as the Instances table's linked-CLI menu does. */
+async function onUnlink(inst: CliInstance) {
+  const result = await linkDesktop(inst.id, null)
+  if (result?.ok) toast.success(t('cliInstances.toastUnlinked'))
+  else toast.error(result?.message ?? t('cliInstances.toastLinkFailed'))
 }
 async function onLinkSubmit(desktopDir: string | null) {
   const inst = linkTarget.value
@@ -616,10 +625,8 @@ onUnmounted(() => {
 <template>
   <!-- No border-t: the parent (CliView) separates this table from CliMayte with space instead. -->
   <div>
-    <!-- The shared header every instance table uses; the count says "x of y" when rows are
-         elsewhere (see headingCount), and hovering it says where: linked ones have moved onto their
-         account's row in the Instances tab (a sentence beside the title before; owner, 2026-10-01:
-         "I don't think that text is necessary"). It folds the table away (owner, 2026-10-01: "the
+    <!-- The shared header every instance table uses; the count says "x of y" while the filter
+         sets rows aside (see headingCount). It folds the table away (owner, 2026-10-01: "the
          list of accounts should be collapsable"), which leaves CliMayte below the whole window;
          folded, the header carries the two pooled gauges. Its plus shows Quick add's email row. -->
     <InstanceSectionHeader
@@ -627,9 +634,6 @@ onUnmounted(() => {
       provider="claude"
       :title="$t('cliInstances.title')"
       :count="headingCount"
-      :count-hint="
-        linkedCount > 0 ? $t('cliInstances.linkedElsewhere', { count: linkedCount }) : undefined
-      "
       :refresh-label="$t('cliInstances.refresh')"
       :refreshing="loading"
       :create-label="$t('cliInstances.createInstance')"
@@ -750,17 +754,19 @@ onUnmounted(() => {
               ●
             </SortButton>
           </TableHead>
-          <TableHead
-            :class="showAccountColumn ? 'w-44' : 'w-72'"
-          >
+          <!-- Name is the one column that gives way, as in the Instances table: it takes whatever
+               the others leave (w-full, and max-w-0 on its cells so a long name cannot force the
+               table wider), never below min-w-36. Every other column is as wide as its content
+               and no wider: a fixed width in auto table layout is a floor, not a size, and
+               those floors were what left a name one letter wide (owner, 2026-10-03). A nowrap
+               header is a floor as well, so the two usage headers, far wider than their
+               percentages, may wrap onto two lines (whitespace-normal), as in the Instances table. -->
+          <TableHead class="w-full min-w-36">
             <SortButton :direction="indicatorFor('name')" @sort="toggleSort('name')">
               {{ $t('cliInstances.colName') }}
             </SortButton>
           </TableHead>
-          <TableHead
-            v-if="showAccountColumn"
-            class="w-40"
-          >
+          <TableHead v-if="showAccountColumn">
             <SortButton :direction="indicatorFor('account')" @sort="toggleSort('account')">
               {{ $t('cliInstances.colAccount') }}
             </SortButton>
@@ -772,37 +778,40 @@ onUnmounted(() => {
               {{ $t('cliInstances.colConfigDir') }}
             </SortButton>
           </TableHead>
-          <!-- Fixed widths, matching the Instances table's quota columns, so the same fact has the
-               same bar length on both tabs. -->
+          <!-- No fixed widths: with Name taking the slack, each quota column sits at its content's
+               width, which for the two bars is UsageBar's own min-w-20 in both tables, so the same
+               fact still has the same bar length on both tabs. -->
           <template v-else>
-            <TableHead class="w-28">
+            <TableHead>
               <SortButton :direction="indicatorFor('session')" @sort="toggleSort('session')">
                 {{ $t('instances.colSession') }}
               </SortButton>
             </TableHead>
-            <TableHead class="w-28">
+            <TableHead>
               <SortButton :direction="indicatorFor('weekly')" @sort="toggleSort('weekly')">
                 {{ $t('instances.colWeekly') }}
               </SortButton>
             </TableHead>
           </template>
-          <TableHead
-            v-if="usageMode"
-            class="w-24"
-          >
+          <TableHead v-if="usageMode" class="whitespace-normal">
             <SortButton :direction="indicatorFor('usageSession')" @sort="toggleSort('usageSession')">
               {{ $t('instances.colUsageSession') }}
             </SortButton>
           </TableHead>
-          <TableHead class="w-24">
+          <TableHead class="whitespace-normal">
             <SortButton :direction="indicatorFor('usage')" @sort="toggleSort('usage')">
               {{ usageMode ? $t('instances.colUsageWeek') : $t('cliInstances.colUsage') }}
             </SortButton>
           </TableHead>
-          <!-- The account's plan, the same badge as the Instances table (owner, 2026-09-30). -->
-          <TableHead class="w-24">{{ $t('instances.colPlan') }}</TableHead>
+          <!-- The account's plan, the same badge as the Instances table (owner, 2026-09-30), and
+               sortable like every other column here (owner, 2026-10-03). -->
+          <TableHead>
+            <SortButton :direction="indicatorFor('plan')" @sort="toggleSort('plan')">
+              {{ $t('instances.colPlan') }}
+            </SortButton>
+          </TableHead>
           <!-- What the account has run, from its own transcripts on this PC (cli-instance-tokens.ts). -->
-          <TableHead class="w-20">
+          <TableHead>
             <SortButton :direction="indicatorFor('tokens')" @sort="toggleSort('tokens')">
               {{ $t('cliInstances.colTokens') }}
             </SortButton>
@@ -810,28 +819,20 @@ onUnmounted(() => {
           <TableHead class="text-end">{{ $t('cliInstances.colActions') }}</TableHead>
         </TableRow>
       </TableHeader>
-      <!-- visibleRows, not unlinkedCliInstances: with the usage filter set to hide, this table can
-           be emptied while it still has rows to show, and a blank tbody explains nothing. -->
+      <!-- visibleRows, not cliInstances: with the usage filter set to hide, this table can be
+           emptied while it still has rows to show, and a blank tbody explains nothing. -->
       <TableBody v-if="visibleRows.length === 0">
         <TableEmpty v-if="!loading" :colspan="(usageMode ? 10 : 8) - (showAccountColumn ? 0 : 1)">
           <div class="flex flex-col items-center gap-1 text-center">
             <component :is="allHiddenByFilter ? Funnel : Terminal" class="mb-1 size-6 opacity-40" />
             <p class="font-medium text-foreground">
-              {{
-                allHiddenByFilter
-                  ? $t('instances.filterAllHidden')
-                  : linkedCount > 0
-                    ? $t('cliInstances.allLinked')
-                    : $t('cliInstances.empty')
-              }}
+              {{ allHiddenByFilter ? $t('instances.filterAllHidden') : $t('cliInstances.empty') }}
             </p>
             <p class="text-xs text-muted-foreground">
               {{
                 allHiddenByFilter
                   ? $t('instances.filterAllHiddenHint')
-                  : linkedCount > 0
-                    ? $t('cliInstances.allLinkedHint')
-                    : $t('cliInstances.emptyHint')
+                  : $t('cliInstances.emptyHint')
               }}
             </p>
           </div>
@@ -870,20 +871,46 @@ onUnmounted(() => {
               :title="inst.loggedIn ? $t('cliInstances.loggedIn') : $t('cliInstances.loggedOut')"
             />
           </TableCell>
-          <TableCell>
+          <TableCell class="max-w-0">
             <!-- Same chip as the desktop table on purpose: the number comes from ONE sequence
                  spanning all three instance families, so it must look identical everywhere or
                  that guarantee stops being obvious. -->
-            <div class="flex items-center gap-1.5 font-medium">
+            <div class="flex min-w-0 items-center gap-1.5 font-medium">
               <InstanceNumber :num="inst.num" />
-              <!-- Capped to the column like the desktop table's name, with the full name on
-                   hover: these are names a person typed, so nothing stops one being a sentence,
-                   and table layout is auto — one long name widens this column and the three
-                   stacked tables stop lining up. Native title, not IconTooltip: this cell has no
-                   other hover to extend, and the row above it already reveals its path this way. -->
-              <span :title="nameOverflowTitle(inst.name, nameMax)">
-                {{ shortDisplayName(inst.name, nameMax) }}
-              </span>
+              <!-- Capped like the desktop table's name, and elided by the CSS (min-w-0 +
+                   truncate) only when the column is truly out of room, with the full name on
+                   hover either way. Native title, not IconTooltip: this cell has no other hover
+                   to extend, and the row above it already reveals its path this way. -->
+              <span
+                class="min-w-0 truncate"
+                :title="nameTitle(inst)"
+                @pointerenter="noteNameClip($event, inst)"
+              >{{ shortDisplayName(inst.name, nameMax) }}</span>
+              <!-- Linked to a desktop instance: the same account, also shown on that row in the
+                   Instances tab. The chip names the row by its number; the hover says the rest. -->
+              <IconTooltip
+                v-if="linkedDesktop(inst)"
+                :label="
+                  $t('cliInstances.linkedTo', {
+                    num: linkedDesktop(inst)!.num,
+                    name: displayName(linkedDesktop(inst)!),
+                  })
+                "
+                :description="$t('cliInstances.linkedToHint')"
+              >
+                <span
+                  class="inline-flex items-center gap-0.5 text-muted-foreground"
+                  :aria-label="
+                    $t('cliInstances.linkedTo', {
+                      num: linkedDesktop(inst)!.num,
+                      name: displayName(linkedDesktop(inst)!),
+                    })
+                  "
+                >
+                  <Monitor class="size-3.5" />
+                  <InstanceNumber :num="linkedDesktop(inst)!.num" />
+                </span>
+              </IconTooltip>
               <!-- How many Claude sessions run on this login right now, CliMayte's workers included.
                    Hidden at 0: an idle account needs no badge saying so. Green, the colour of
                    running (owner, 2026-10-01: "that should be green, not blue"). -->
@@ -992,7 +1019,7 @@ onUnmounted(() => {
             />
           </TableCell>
           <TableCell>
-            <Badge v-if="inst.planLabel" variant="outline">{{ inst.planLabel }}</Badge>
+            <Badge v-if="planFor(inst)" variant="outline">{{ planFor(inst) }}</Badge>
             <span v-else class="text-xs text-muted-foreground">—</span>
           </TableCell>
           <TableCell>
@@ -1044,6 +1071,13 @@ onUnmounted(() => {
                   </DropdownMenuItem>
                   <DropdownMenuItem :disabled="isBusy(inst)" @click="openLinkDialog(inst)">
                     <Monitor /> {{ $t('cliInstances.linkDesktop') }}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    v-if="linkedDesktop(inst)"
+                    :disabled="isBusy(inst)"
+                    @click="onUnlink(inst)"
+                  >
+                    <Unlink /> {{ $t('instances.unlinkCli') }}
                   </DropdownMenuItem>
                   <!-- "Associate account" points a CLI instance at a LEGACY pasted credential.
                        With none saved (the norm now — accounts come from signing in instances),

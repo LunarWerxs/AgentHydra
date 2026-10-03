@@ -3,7 +3,9 @@ import {
   BarChart3,
   Boxes,
   ListChecks,
+  Maximize2,
   MessagesSquare,
+  Minimize2,
   Monitor,
   Moon,
   Power,
@@ -162,16 +164,17 @@ function onSettingsButton() {
   settingsOpen.value = true
 }
 const anyPanelOpen = computed(() => settingsOpen.value || queueOpen.value)
-const { wide } = useShellWidth()
+const { wide, fullWidth } = useShellWidth()
 // widthPx drives the content shift, the --content-inset-right var, and both panels'
 // rendered width below — one value so they can never disagree. shellMaxWidth makes the
-// shift the panel's actual overlap with the centered shell (0 on a wide monitor).
+// shift the panel's actual overlap with the centered shell (0 on a wide monitor); in
+// full-width mode there is no centered shell, so it is null and the shift is the whole panel.
 // shiftPx reaches the template as the --push-shift custom property on the shell: the main
 // column pads by exactly that, and the header by that plus its own 16px of breathing room
 // (--header-pe), or its buttons would sit flush against the panel edge.
 const { side, shiftPx, widthPx } = usePushPanel(anyPanelOpen, {
   widthPx: 480,
-  shellMaxWidth: () => (wide.value ? SHELL_WIDE_MAX : SHELL_BASE_MAX),
+  shellMaxWidth: () => (fullWidth.value ? null : wide.value ? SHELL_WIDE_MAX : SHELL_BASE_MAX),
 })
 
 // --- settings-panel header controls: theme picker + shut down (moved out of the Appearance
@@ -288,11 +291,12 @@ onUnmounted(stopAvailabilityPolling)
   <!-- fixed-viewport shell, centered at a comfortable reading width: each view scrolls
        its own columns internally; the page itself never scrolls. Views that benefit from
        room (an open transcript) request the wide cap via useShellWidth and the whole
-       shell — header included — animates out to meet them. -->
+       shell — header included — animates out to meet them. The header's full-width toggle
+       lifts the cap altogether; 100vw rather than `none` so max-width still animates. -->
   <div
     class="mx-auto flex h-dvh w-full max-w-(--shell-max) flex-col overflow-hidden border-x border-border transition-max-width duration-300 ease-in-out"
     :style="{
-      '--shell-max': `${wide ? SHELL_WIDE_MAX : SHELL_BASE_MAX}px`,
+      '--shell-max': fullWidth ? '100vw' : `${wide ? SHELL_WIDE_MAX : SHELL_BASE_MAX}px`,
       '--push-shift': `${shiftPx}px`,
       '--header-pe': `calc(${shiftPx}px + 1rem)`,
     }"
@@ -362,6 +366,19 @@ onUnmounted(stopAvailabilityPolling)
         >
           <RotateCw :class="restarting ? 'animate-spin' : ''" />
           <span class="hidden sm:inline">{{ $t(restarting ? 'app.restarting' : 'app.restartNeeded') }}</span>
+        </Button>
+        <!-- Full window width and back (owner, 2026-10-03). Remembered across reloads; off is the
+             centered shell exactly as before, wide cap for a transcript included. The tooltip names
+             the click's effect; the label stays constant and aria-pressed carries the state. -->
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          :title="fullWidth ? $t('app.shellFitWidth') : $t('app.shellFullWidth')"
+          :aria-label="$t('app.shellFullWidth')"
+          :aria-pressed="fullWidth"
+          @click="fullWidth = !fullWidth"
+        >
+          <component :is="fullWidth ? Minimize2 : Maximize2" />
         </Button>
         <!-- The update hint lives HERE, on the button that leads to the update controls, rather
              than as a banner or a toast. A newer version is not urgent — it does not want the

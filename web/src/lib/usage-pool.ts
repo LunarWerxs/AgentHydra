@@ -15,6 +15,11 @@ export function planFactor(planLabel: string | null | undefined): number {
   return Number.isFinite(n) && n > 0 ? n : 1
 }
 
+/** A plan column's sort value: its size by planFactor, or undefined (sorts last) with no plan. */
+export function planSize(planLabel: string | null | undefined): number | undefined {
+  return planLabel ? planFactor(planLabel) : undefined
+}
+
 /** One account's part in a pool: whether it is signed in, its plan, and its reading of the window
  *  being pooled (null or undefined when that window was never read). */
 export interface PoolAccount {

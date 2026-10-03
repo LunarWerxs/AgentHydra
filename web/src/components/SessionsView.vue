@@ -17,21 +17,19 @@ import {
   CircleCheck,
   CircleSlash,
   ClipboardCopy,
-  Clock,
   Coins,
   Copy,
   Download,
   FileSymlink,
   FileText,
   FolderGit2,
-  GitBranch,
-  GitFork,
   Globe,
+  Hand,
   Hourglass,
   KeyRound,
-  Layers,
   Link,
   ListTodo,
+  LoaderCircle,
   MessagesSquare,
   MoreHorizontal,
   PanelLeftClose,
@@ -46,14 +44,14 @@ import {
   X,
 } from '@lucide/vue'
 import { useMediaQuery } from '@vueuse/core'
-import { type ComponentPublicInstance, computed, ref, watch } from 'vue'
+import { type Component, type ComponentPublicInstance, computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
 import SessionComposer, { type ComposerTarget } from '@/components/SessionComposer.vue'
 import SessionSettings from '@/components/SessionSettings.vue'
 import SessionTranscriptTurns from '@/components/SessionTranscriptTurns.vue'
 import SourceBadge from '@/components/SourceBadge.vue'
-import StatusBadge from '@/components/StatusBadge.vue'
-import { Badge, type BadgeVariants } from '@/components/ui/badge'
+import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import {
   ContextMenu,
@@ -113,7 +111,7 @@ import type * as api from '@/lib/api'
 // Values, not types: the export menu builds its links with these at runtime. Importing the
 // module as `import type` (2026-09-26 cleanup) left the template calling an undefined `api`.
 import { sessionExportUrl, sessionFileUrl } from '@/lib/api'
-import { baseName, shortId, timeAgo } from '@/lib/format'
+import { baseName, queueStatusMeta, shortId, timeAgo } from '@/lib/format'
 import { highlightRuns, rankByQuery, sessionSearchFields, type TextRun } from '@/lib/fuzzy'
 import { groupByProject } from '@/lib/session-groups'
 import { sessionShape } from '@/lib/session-shape'
@@ -304,9 +302,7 @@ const {
   rowSourceLabel,
   sourceHasFile: SOURCE_HAS_FILE,
   sourceFileIsText: SOURCE_FILE_IS_TEXT,
-  shapeLabel,
   shapeTitleOf,
-  copyChipOf,
   copyWhyOf,
   activityOf,
   ACTIVITY_CLASS,
@@ -321,17 +317,68 @@ const liveStatusBySession = computed(() => {
   for (const st of agentStatuses.value) if (!st.restoredUnconfirmed) m.set(st.sessionId, st)
   return m
 })
-const AGENT_STATUS_VARIANT: Record<api.AgentStatus['state'], BadgeVariants['variant']> = {
-  working: 'primary',
-  blocked: 'warning',
-  done: 'success',
+/** The row's live marks are bare icons, as CliMayte's list shows its status (icon-only): a row is
+ *  one line, and full-text chips left the title no room at the sidebar's width. The label is the
+ *  icon's hover and its screen-reader text. */
+type StatusIcon = { icon: Component; tone: string; spin?: boolean }
+const AGENT_STATUS_ICON: Record<api.AgentStatus['state'], StatusIcon> = {
+  working: { icon: LoaderCircle, tone: 'text-primary', spin: true },
+  blocked: { icon: Hand, tone: 'text-warning' },
+  done: { icon: Check, tone: 'text-success' },
 }
+/** A queue status's colour, for the bare icon (the chip's variant, as CliMayteStatusBadge does). */
+const QUEUE_ICON_TONE: Record<string, string> = {
+  info: 'text-info',
+  success: 'text-success',
+  warning: 'text-warning',
+  destructive: 'text-destructive',
+}
+const queueIconTone = (status: api.QueueStatus) =>
+  QUEUE_ICON_TONE[queueStatusMeta(status).variant ?? ''] ?? 'text-muted-foreground'
 const AGENT_STATUS_LABEL: Record<api.AgentStatus['state'], string> = {
   working: 'sessions.agentStatusWorking',
   blocked: 'sessions.agentStatusBlocked',
   done: 'sessions.agentStatusDone',
 }
 const agentStatusOf = (s: api.SessionSummary) => liveStatusBySession.value.get(s.session_id) ?? null
+
+const { t } = useI18n()
+/** The row's hover. A row is one line, as dense as a CliMayte task row (owner, 2026-10-03), so what
+ *  its second line used to carry rides here, one fact per line, the way CliMayte's rowHint does. */
+function rowHintOf(s: api.SessionSummary): string {
+  // Always said for a Claude session, even when the answer is "we don't know": Claude Desktop
+  // wrote no record of which account ran it, and only saying so tells that apart from a gap.
+  let account: string | null = null
+  if (s.source === 'claude')
+    account = s.instance
+      ? s.instance === 'default'
+        ? t('sessions.instanceDefault')
+        : instanceLabelFor(s.instance)
+      : t('sessions.instanceUnknown')
+  else if (s.instance) account = s.instance_num ? `${s.instance} (#${s.instance_num})` : s.instance
+  const lines = [
+    s.title,
+    titleOriginOf(s),
+    s.git_branch
+      ? t('sessions.rowHintFolderBranch', { folder: baseName(s.cwd), branch: s.git_branch })
+      : t('sessions.rowHintFolder', { folder: baseName(s.cwd) }),
+    t('sessions.rowHintActivity', { n: s.message_count, ago: timeAgo(s.last_activity_at) }),
+    shapeTitleOf(s),
+    t('sessions.rowHintSource', { source: rowSourceLabel(s) }),
+  ]
+  // the row's icons, said in words
+  if (s.limit_stop?.pending) lines.push(t('sessions.rateLimitedBadgePending'))
+  const live = agentStatusOf(s)
+  if (live) lines.push(t(AGENT_STATUS_LABEL[live.state]))
+  if (s.queue_status) lines.push(queueStatusMeta(s.queue_status).label)
+  if (s.dispatched) lines.push(t('sessions.dispatched'))
+  if (account) lines.push(t('sessions.rowHintAccount', { account }))
+  if (s.source === 'claude' && !s.instance) lines.push(t('sessions.instanceUnknownHint'))
+  if (s.copy_count > 1) lines.push(copyWhyOf(s))
+  if (s.subagent_count > 0) lines.push(t('sessions.subagentsHint', { count: s.subagent_count }))
+  if (s.archived) lines.push(t('sessions.archived'))
+  return lines.join('\n')
+}
 
 const { doneCount, toggleDone, clearDoneMarks } = useDoneMarks({ sessions })
 const { openFile, copyingFile, copyFile, copyFileLocation } = useSessionFileActions({
@@ -534,7 +581,7 @@ function onComposerSent(mode: 'now' | 'queued') {
         <Button
           variant="ghost"
           size="icon"
-          class="absolute right-2 top-3 z-10"
+          class="absolute right-2 top-1.5 z-10"
           @click="collapsed = !collapsed"
         >
           <PanelLeftOpen v-if="collapsed" />
@@ -547,7 +594,7 @@ function onComposerSent(mode: 'now' | 'queued') {
         class="sessions-sidebar-w flex h-full min-h-0 flex-col transition-opacity duration-200"
         :class="collapsed ? 'pointer-events-none opacity-0' : 'opacity-100'"
       >
-        <div class="flex shrink-0 items-center gap-2 p-3 pe-11">
+        <div class="flex shrink-0 items-center gap-2 px-3 py-1.5 pe-11">
           <div class="relative flex-1">
             <Search class="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -898,7 +945,7 @@ function onComposerSent(mode: 'now' | 'queued') {
              below (composables/useMultiSelect.ts); the band is drawn in the list's content
              coordinates, and select-none keeps a drag from the padding off the page text -->
         <div
-          class="scroll-slim relative min-h-0 flex-1 overflow-y-auto p-2"
+          class="scroll-slim relative min-h-0 flex-1 overflow-y-auto"
           :class="{ 'select-none': box }"
           @pointerdown="boxPointerDown"
           @click.capture="boxClickGuard"
@@ -912,13 +959,9 @@ function onComposerSent(mode: 'now' | 'queued') {
           />
           <!-- first-load skeletons so the list never looks blank -->
           <template v-if="sessionsLoading && sessions.length === 0 && !bodySearchActive">
-            <div v-for="i in 6" :key="i" class="mb-1.5 px-3 py-2.5">
-              <Skeleton class="h-4 w-(--skeleton-w)" :style="{ '--skeleton-w': `${88 - (i % 3) * 16}%` }" />
-              <div class="mt-2.5 flex items-center gap-2">
-                <Skeleton class="h-3 w-16" />
-                <Skeleton class="h-3 w-10" />
-                <Skeleton class="h-3 w-12" />
-              </div>
+            <div v-for="i in 12" :key="i" class="flex h-8 items-center gap-2 border-b border-border px-3">
+              <Skeleton class="h-4 w-(--skeleton-w)" :style="{ '--skeleton-w': `${72 - (i % 3) * 16}%` }" />
+              <Skeleton class="ms-auto h-3 w-10" />
             </div>
           </template>
 
@@ -930,7 +973,7 @@ function onComposerSent(mode: 'now' | 'queued') {
             <button
               v-for="r in bodyResults"
               :key="`${r.source}:${r.session_id}`"
-              class="mb-1.5 w-full rounded-lg border border-transparent px-3 py-2.5 text-start transition-colors hover:border-border hover:bg-accent/50"
+              class="w-full border-b border-border px-3 py-1.5 text-start transition-colors hover:bg-accent/50"
               @click="selectFromBodyResult(r)"
             >
               <div class="flex items-start justify-between gap-2">
@@ -947,11 +990,12 @@ function onComposerSent(mode: 'now' | 'queued') {
               <p
                 v-for="(snippet, i) in r.snippets"
                 :key="i"
-                class="mt-1 line-clamp-2 text-xs text-muted-foreground"
+                class="mt-0.5 truncate text-xs text-muted-foreground"
+                :title="snippet"
               >
                 {{ snippet }}
               </p>
-              <p v-if="r.truncated" class="mt-1 text-2xs text-muted-foreground/70">
+              <p v-if="r.truncated" class="mt-0.5 text-2xs text-muted-foreground/70">
                 {{ r.match_count - r.snippets.length }} {{ $t('sessions.truncatedMatches') }}
               </p>
             </button>
@@ -993,7 +1037,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                it stays on screen, just labelled stale. Non-modal: a state of the list, not a toast. -->
           <p
             v-if="sessionsStatus.stale.value"
-            class="mb-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-2xs text-warning"
+            class="m-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-2xs text-warning"
           >
             {{ $t('sessions.staleHint', { reason: sessionsStatus.error.value }) }}
           </p>
@@ -1005,164 +1049,157 @@ function onComposerSent(mode: 'now' | 'queued') {
                  rendered menu. -->
             <ContextMenu v-for="s in filtered" :key="`${s.source}:${s.session_id}`">
               <ContextMenuTrigger as-child>
+                <!-- One line per session, as dense as a CliMayte task row (owner, 2026-10-03): the
+                     title, the few live marks, the source chip, and when it last moved. Where it
+                     ran, the branch, the size, the account, its parts and subagents ride on the
+                     row's hover (rowHintOf); the open transcript has all of it. -->
                 <button
+                  type="button"
                   :data-select-key="s.source === 'claude' ? sessionKey(s) : undefined"
-                  class="mb-1.5 w-full rounded-lg border px-3 py-2.5 text-start transition-colors"
+                  class="flex w-full min-w-0 items-center gap-2 border-b border-border px-3 py-1.5 text-start text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   :class="[
                     // Selected is a RAISED GREY, not an accent tint. bg-primary/10 composited to a
                     // maroon (#352626) against the dark ground, which read as a colour wash rather
                     // than a selection. Ladder in the sidebar: rest → hover (accent/50) → selected.
+                    // The leading bar is CliMayte's selected row (--shadow-row-selected, style.css).
                     (selectMode
                       ? isChecked(s)
                       : s.session_id === selectedId && s.source === selectedSource)
-                      ? 'border-border bg-accent'
-                      : 'border-transparent hover:border-border hover:bg-accent/50',
+                      ? 'bg-accent shadow-row-selected'
+                      : 'hover:bg-accent/50',
                     // done rows stay in place and stay readable; they just stop competing for the eye
                     s.done && s.session_id !== selectedId ? 'opacity-55' : '',
                   ]"
+                  :aria-current="s.session_id === selectedId && s.source === selectedSource ? 'true' : undefined"
+                  :title="rowHintOf(s)"
                   @click="rowClick(s, $event)"
                 >
-                  <div class="flex items-start justify-between gap-2">
-                    <span
-                      v-if="selectMode"
-                      class="mt-0.5 grid size-4 shrink-0 place-items-center rounded border transition-colors"
-                      :class="[
-                        isChecked(s)
-                          ? 'border-primary bg-primary text-primary-foreground'
-                          : 'border-border',
-                        s.source !== 'claude' ? 'opacity-25' : '',
-                      ]"
-                    >
-                      <Check v-if="isChecked(s)" class="size-3" />
-                    </span>
-                    <CircleCheck
-                      v-else-if="s.done"
-                      class="mt-0.5 size-3.5 shrink-0 text-success"
-                      :aria-label="$t('sessions.done')"
+                  <span
+                    v-if="selectMode"
+                    class="grid size-4 shrink-0 place-items-center rounded border transition-colors"
+                    :class="[
+                      isChecked(s)
+                        ? 'border-primary bg-primary text-primary-foreground'
+                        : 'border-border',
+                      s.source !== 'claude' ? 'opacity-25' : '',
+                    ]"
+                  >
+                    <Check v-if="isChecked(s)" class="size-3" />
+                  </span>
+                  <CircleCheck
+                    v-else-if="s.done"
+                    class="size-3.5 shrink-0 text-success"
+                    :aria-label="$t('sessions.done')"
+                  />
+                  <!-- with "show archived" on, the one mark that tells an archived row from a live one -->
+                  <span
+                    v-if="s.archived"
+                    class="relative inline-flex shrink-0 items-center text-muted-foreground"
+                    :title="$t('sessions.archived')"
+                  >
+                    <Archive class="size-3.5" aria-hidden="true" />
+                    <span class="sr-only">{{ $t('sessions.archived') }}</span>
+                  </span>
+                  <span
+                    class="min-w-0 flex-1 truncate font-medium"
+                    :class="s.done ? 'line-through decoration-muted-foreground/40' : ''"
+                  ><!-- the search's matched characters, bolded; one plain run when not searching
+                    --><template v-for="(run, ri) in titleRunsOf(s)" :key="ri"><span
+                      v-if="run.hit"
+                      class="font-semibold text-primary"
+                    >{{ run.text }}</span><template v-else>{{ run.text }}</template></template><!--
+                    A title nobody chose gets a mark, and only that case: the string came out of a
+                    wrapper around the first message, so it may match nothing the user has named.
+                    --><span
+                      v-if="titleIsUnattributed(s)"
+                      class="ms-1 align-middle text-3xs font-normal text-muted-foreground/70"
+                    >&lt;{{ s.title_tag }}&gt;</span></span>
+                  <!-- the wall this conversation died at. `pending` is the actionable half —
+                       nothing followed the notice, so it is still sitting there — and it is the
+                       only one loud enough to earn the warning colour. -->
+                  <!-- ONLY while the wall is still the bottom of the transcript. A session that
+                       hit a limit in the past and carried on is not rate limited, and a badge
+                       that stays on forever stops meaning "this one needs you" — which is the
+                       only thing it is for. `pending` is exactly that: nothing followed the
+                       notice. Ever-hit is still reachable, as a filter. -->
+                  <!-- Icons, not text chips (CliMayte's list does the same): the label is each
+                       icon's hover and screen-reader text, and the row's hover says it too. -->
+                  <span
+                    v-if="s.limit_stop?.pending"
+                    class="relative inline-flex shrink-0 items-center text-warning"
+                    :title="`${$t('sessions.rateLimitedBadgePending')}: ${limitTooltipOf(s)}`"
+                  >
+                    <CircleAlert class="size-3.5" aria-hidden="true" />
+                    <span class="sr-only">{{ $t('sessions.rateLimitedBadgePending') }}</span>
+                  </span>
+                  <!-- live status as the daemon wrote it (agent-status.ts): working, waiting on
+                       you, or done. The tooltip carries the provenance, so a mark can be traced
+                       to the hook event that set it. -->
+                  <span
+                    v-if="agentStatusOf(s)"
+                    class="relative inline-flex shrink-0 items-center"
+                    :class="AGENT_STATUS_ICON[agentStatusOf(s)?.state ?? 'done'].tone"
+                    :title="`${$t(AGENT_STATUS_LABEL[agentStatusOf(s)?.state ?? 'done'])}: ${$t('sessions.agentStatusTooltip', {
+                      event: agentStatusOf(s)?.event,
+                      waiting: agentStatusOf(s)?.waiting ?? '-',
+                      subagents: agentStatusOf(s)?.subagents,
+                    })}`"
+                  >
+                    <component
+                      :is="AGENT_STATUS_ICON[agentStatusOf(s)?.state ?? 'done'].icon"
+                      class="size-3.5"
+                      :class="AGENT_STATUS_ICON[agentStatusOf(s)?.state ?? 'done'].spin ? 'animate-spin' : ''"
+                      aria-hidden="true"
                     />
+                    <span class="sr-only">{{ $t(AGENT_STATUS_LABEL[agentStatusOf(s)?.state ?? 'done']) }}</span>
+                  </span>
+                  <span
+                    v-if="s.queue_status"
+                    class="relative inline-flex shrink-0 items-center"
+                    :class="queueIconTone(s.queue_status)"
+                    :title="queueStatusMeta(s.queue_status).label"
+                  >
+                    <component
+                      :is="queueStatusMeta(s.queue_status).icon"
+                      class="size-3.5"
+                      :class="queueStatusMeta(s.queue_status).spin ? 'animate-spin' : ''"
+                      aria-hidden="true"
+                    />
+                    <span class="sr-only">{{ queueStatusMeta(s.queue_status).label }}</span>
+                  </span>
+                  <ListTodo
+                    v-else-if="s.dispatched"
+                    class="size-3.5 shrink-0 text-muted-foreground"
+                    :aria-label="$t('sessions.dispatched')"
+                  />
+                  <!-- one conversation, several transcripts. Deliberately a label and not a
+                       fold: every older copy measured held turns the newer one did not, and they
+                       were things the user typed, so hiding one would lose them. Why this part
+                       ended is its hover. -->
+                  <span
+                    v-if="s.copy_count > 1"
+                    class="shrink-0 text-2xs text-muted-foreground tabular-nums"
+                    :title="copyWhyOf(s)"
+                  >{{ $t('sessions.copyOf', { i: s.copy_index, n: s.copy_count }) }}</span>
+                  <!-- Only when it tells rows apart: under a one-source filter every row would wear
+                       the same chip, so it shows just where a tool names itself. The hover says it. -->
+                  <SourceBadge
+                    v-if="sessionSourceFilter === 'all' || rowSourceLabel(s) !== sourceLabel(s.source)"
+                    :source="s.source"
+                    class="shrink-0"
+                  >
+                    {{ rowSourceLabel(s) }}
+                  </SourceBadge>
+                  <!-- the dot rides the timestamp it is derived from, so "green" and "2m ago" are
+                       obviously the same fact rather than two claims to reconcile -->
+                  <span class="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground tabular-nums">
                     <span
-                      class="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-snug"
-                      :class="s.done ? 'line-through decoration-muted-foreground/40' : ''"
-                      :title="titleOriginOf(s)"
-                    ><!-- the search's matched characters, bolded; one plain run when not searching
-                      --><template v-for="(run, ri) in titleRunsOf(s)" :key="ri"><span
-                        v-if="run.hit"
-                        class="font-semibold text-primary"
-                      >{{ run.text }}</span><template v-else>{{ run.text }}</template></template><!--
-                      A title nobody chose gets a mark, and only that case: the string came out of a
-                      wrapper around the first message, so it may match nothing the user has named.
-                      --><span
-                        v-if="titleIsUnattributed(s)"
-                        class="ms-1 align-middle text-3xs font-normal text-muted-foreground/70"
-                      >&lt;{{ s.title_tag }}&gt;</span></span>
-                    <!-- the wall this conversation died at. `pending` is the actionable half —
-                         nothing followed the notice, so it is still sitting there — and it is the
-                         only one loud enough to earn the warning colour. -->
-                    <!-- ONLY while the wall is still the bottom of the transcript. A session that
-                         hit a limit in the past and carried on is not rate limited, and a badge
-                         that stays on forever stops meaning "this one needs you" — which is the
-                         only thing it is for. `pending` is exactly that: nothing followed the
-                         notice. Ever-hit is still reachable, as a filter. -->
-                    <Badge
-                      v-if="s.limit_stop?.pending"
-                      variant="warning"
-                      :title="limitTooltipOf(s)"
-                      class="shrink-0"
-                    >
-                      {{ $t('sessions.rateLimitedBadgePending') }}
-                    </Badge>
-                    <!-- live status as the daemon wrote it (agent-status.ts): working, waiting on
-                         you, or done. The tooltip carries the provenance, so a badge can be traced
-                         to the hook event that set it. -->
-                    <Badge
-                      v-if="agentStatusOf(s)"
-                      :variant="AGENT_STATUS_VARIANT[agentStatusOf(s)?.state ?? 'done']"
-                      class="shrink-0"
-                      :title="$t('sessions.agentStatusTooltip', {
-                        event: agentStatusOf(s)?.event,
-                        waiting: agentStatusOf(s)?.waiting ?? '-',
-                        subagents: agentStatusOf(s)?.subagents,
-                      })"
-                    >
-                      {{ $t(AGENT_STATUS_LABEL[agentStatusOf(s)?.state ?? 'done']) }}
-                    </Badge>
-                    <StatusBadge v-if="s.queue_status" :status="s.queue_status" />
-                    <SourceBadge :source="s.source">
-                      {{ rowSourceLabel(s) }}
-                    </SourceBadge>
-                  </div>
-                  <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-muted-foreground">
-                    <span class="inline-flex items-center gap-1"><FolderGit2 class="size-3" />{{ baseName(s.cwd) }}</span>
-                    <span v-if="s.git_branch" class="inline-flex items-center gap-1"><GitBranch class="size-3" />{{ s.git_branch }}</span>
-                    <span class="inline-flex items-center gap-1"><MessagesSquare class="size-3" />{{ s.message_count }}</span>
-                    <!-- the dot rides the timestamp it is derived from, so "green" and "2m ago" are
-                         obviously the same fact rather than two claims to reconcile -->
-                    <span class="inline-flex items-center gap-1">
-                      <span
-                        class="size-1.5 shrink-0 rounded-full"
-                        :class="ACTIVITY_CLASS[activityOf(s)]"
-                        :title="$t(ACTIVITY_LABEL[activityOf(s)])"
-                      ></span>
-                      <Clock class="size-3" />{{ timeAgo(s.last_activity_at) }}
-                    </span>
-                    <!-- SIZE, not a name. It sat unlabelled next to the account chip, so on a row
-                         whose account was unknown "Marathon" was the last word on the line and read
-                         as one. The tooltip says what it is; the always-present chip below stops it
-                         being last. -->
-                    <span class="inline-flex items-center gap-1" :title="shapeTitleOf(s)">
-                      <ListTodo v-if="s.dispatched" class="size-3" />
-                      <Hourglass v-else class="size-3" />{{ shapeLabel(sessionShape(s)) }}
-                    </span>
-                    <!-- Always rendered for a Claude session, even when the answer is "we don't
-                         know". A blank space where the account goes reads as a rendering gap; the
-                         truth is that Claude Desktop wrote no record of which account ran it, and
-                         only saying so distinguishes the two. -->
-                    <span
-                      v-if="s.source === 'claude'"
-                      class="inline-flex items-center gap-1"
-                      :class="s.instance ? '' : 'text-muted-foreground/60'"
-                      :title="s.instance ? undefined : $t('sessions.instanceUnknownHint')"
-                    >
-                      <Boxes class="size-3" />{{ s.instance ? (s.instance === 'default' ? $t('sessions.instanceDefault') : instanceLabelFor(s.instance)) : $t('sessions.instanceUnknown') }}
-                    </span>
-                    <!-- A store that splits per ACCOUNT (Codex: one CODEX_HOME per instance) names
-                         its own on the row, so the label is shown as-is rather than resolved
-                         against the Claude desktop list. No "unknown" branch: the path the rollout
-                         was read from IS the answer, so this is either known or not a row. -->
-                    <span
-                      v-else-if="s.instance"
-                      class="inline-flex items-center gap-1"
-                      :title="s.instance_num ? `#${s.instance_num}` : undefined"
-                    >
-                      <Boxes class="size-3" />{{ s.instance }}
-                    </span>
-                    <!-- one conversation, several transcripts. Deliberately a label and not a
-                         fold: every older copy measured held turns the newer one did not, and they
-                         were things the user typed, so hiding one would lose them. -->
-                    <span
-                      v-if="s.copy_count > 1"
-                      class="inline-flex items-center gap-1"
-                      :title="copyWhyOf(s)"
-                    >
-                      <Layers class="size-3" />{{ copyChipOf(s) }}
-                    </span>
-                    <!-- this row stands for a fan-out: the subagents are sessions in the provider's
-                         own store, folded in here rather than listed as conversations of their own -->
-                    <span
-                      v-if="s.subagent_count > 0"
-                      class="inline-flex items-center gap-1"
-                      :title="$t('sessions.subagentsHint', { count: s.subagent_count })"
-                    >
-                      <GitFork class="size-3" />{{ $t('sessions.subagents', { count: s.subagent_count }) }}
-                    </span>
-                    <!-- only meaningful while archived rows are being shown at all -->
-                    <span
-                      v-if="s.archived"
-                      class="inline-flex items-center gap-1 text-muted-foreground"
-                    >
-                      <Archive class="size-3" />{{ $t('sessions.archived') }}
-                    </span>
-                  </div>
+                      class="size-1.5 shrink-0 rounded-full"
+                      :class="ACTIVITY_CLASS[activityOf(s)]"
+                      :title="$t(ACTIVITY_LABEL[activityOf(s)])"
+                    ></span>
+                    {{ timeAgo(s.last_activity_at) }}
+                  </span>
                 </button>
               </ContextMenuTrigger>
               <ContextMenuContent class="max-w-60">

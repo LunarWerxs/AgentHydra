@@ -149,7 +149,7 @@ export default {
   // Deliberately NOT "Sign in CLI": on a row with no CLI login yet this creates a whole new managed
   // CLI instance and links it to this account before opening the terminal. Labelling that the same
   // as the plain sign-in made a linked instance appear out of nowhere, which then showed up as the
-  // unexplained "CLI instances (0 of 1)" shortfall in the table below.
+  // unexplained "CLI instances (0 of 1)" shortfall in the CLI table (which then hid linked logins).
   addCli: 'Add a CLI login…',
   unlinkCli: 'Unlink CLI instance',
   // The row badge that makes a linked CLI login visible without opening the actions menu.
@@ -159,16 +159,16 @@ export default {
   linkedCliSignedOut: 'Needs sign-in. Open this row’s ⋯ menu to finish it.',
   toastCliLaunched: 'Opened a terminal for the linked CLI instance.',
   toastCliLaunchFailed: 'Failed to launch the linked CLI instance.',
-  // Both "added" toasts say where the login went: it lives on this row (⌨), and the CLI tab's
-  // table lists only unlinked logins, so looking there it "never added" (owner, 2026-10-02).
+  // Both "added" toasts say where the login went: on this row (⌨) and in the CLI tab's table,
+  // marked as linked (owner, 2026-10-03: "I need to see it over there").
   toastCliLoginOpened:
-    'Opened a terminal. Run /login there to sign “{name}” in. It lives on this account’s row (the ⌨ icon), not in the CLI tab’s list.',
+    'Opened a terminal. Run /login there to sign “{name}” in. It shows on this account’s row (the ⌨ icon) and in the CLI tab’s list, marked as linked.',
   toastCliLoginOpenedNoDesktop:
     'Opened a terminal. Run /login there. This desktop instance has no Claude Code sign-in to share yet; using its Code tab once creates one, and the CLI login then follows it.',
   toastCliSignedInFromDesktop:
-    'CLI login “{name}” added, signed in with this account’s desktop sign-in. It lives on this row (the ⌨ icon), not in the CLI tab’s list, since it is the same account.',
+    'CLI login “{name}” added, signed in with this account’s desktop sign-in. It shows on this row (the ⌨ icon) and in the CLI tab’s list, marked as linked, since it is the same account.',
   toastCliLoginFailed: 'Failed to open a terminal for the CLI sign-in.',
-  toastCliUnlinked: 'Unlinked. It is back in the CLI tab’s instances table.',
+  toastCliUnlinked: 'Unlinked. It stays in the CLI tab’s instances table, no longer linked.',
   toastCliUnlinkFailed: 'Failed to unlink the CLI instance.',
   toastCliCreateFailed: 'Failed to create a CLI instance for this account.',
   quitExternalDialogTitle: 'Quit your regular Claude Desktop?',
@@ -210,7 +210,7 @@ export default {
   filterStatusOpen: 'Open',
   filterStatusClosed: 'Closed',
   filterStatusHint:
-    'Whether an instance is running right now. Rows that cannot be open or closed, an unlinked CLI login has no window of its own, are never set aside by this.',
+    'Whether an instance is running right now. Rows that cannot be open or closed, a CLI login has no window of its own, are never set aside by this.',
   // Plan facet: which account types to keep.
   filterPlanAll: 'Any plan',
   filterPlanHint:

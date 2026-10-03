@@ -6,6 +6,8 @@ export default {
   settings: 'Settings',
   settingsUpdateAvailable: 'Settings: an update is available',
   discord: 'Join the LunarWerx Discord',
+  shellFullWidth: 'Use the full window width',
+  shellFitWidth: 'Back to the centered width',
   restartNeeded: 'Restart to load new code',
   restarting: 'Restarting…',
   restartNeededHint:
