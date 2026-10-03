@@ -43,7 +43,7 @@ def _scripted_workers(verdicts: dict[str, dict]):
         async def run_batch(self, tasks, concurrency, label):
             results = {}
             for t in tasks:
-                name = next(l[6:] for l in t.prompt.splitlines() if l.startswith("name: "))
+                name = next(line[6:] for line in t.prompt.splitlines() if line.startswith("name: "))
                 results[t.id] = SimpleNamespace(status="ok", data=verdicts[name], error=None)
             return SimpleNamespace(id="job-42", results=results, summary=lambda: {"cost_usd": 0.01})
 
