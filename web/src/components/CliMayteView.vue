@@ -561,9 +561,11 @@ onUnmounted(() => {
             :selected="rowKey(w) === selectedId"
             :dim="!!w.remote?.stale"
             :hint="rowHint(w)"
+            :chip="w.priority ? $t('climayte.rowPriority', { n: w.priority }) : undefined"
+            :chip-hint="w.priority ? $t('climayte.rowPriorityHint', { n: w.priority }) : undefined"
             :tag="runTag(w)?.text"
             :tag-tone="runTag(w)?.differs ? 'warning' : 'muted'"
-            :time-text="activeLabel(activeS(w))"
+            :time="activeLabel(activeS(w))"
             @click="select(w)"
           >
             <template #status>
@@ -595,14 +597,6 @@ onUnmounted(() => {
                 />
                 <X v-else class="size-3.5 text-destructive" :aria-label="verdictMark(w)?.label" />
               </span>
-            </template>
-            <!-- Only a priority other than the default 0 is shown (field note 20). -->
-            <template #trailing>
-              <span
-                v-if="w.priority"
-                class="shrink-0 rounded bg-muted px-1 text-2xs font-medium tabular-nums text-muted-foreground"
-                :title="$t('climayte.rowPriorityHint', { n: w.priority })"
-              >{{ $t('climayte.rowPriority', { n: w.priority }) }}</span>
             </template>
           </SideListRow>
         </template>

@@ -1,16 +1,13 @@
 <script setup lang="ts">
 /**
  * One row of a `SideList`, one line (about 33px): status icon, leading badge, title, trailing
- * mark, a small "model · effort" tag, and when it last moved. It is a `<button>`, so Enter and
+ * marks, a number chip (`P3`, `#71`), a small "model · effort" tag, and when it last moved. It is a `<button>`, so Enter and
  * Space select it; the `click` listener falls through to the button and receives the MouseEvent
  * (modifier keys included). Other attributes (`data-*`, `class`) land on the button too.
  */
 import { Loader2 } from '@lucide/vue'
-import { computed } from 'vue'
-import { timeAgo } from '@/lib/format'
-import { modelEffortTag } from '@/lib/side-list'
 
-const props = withDefaults(
+withDefaults(
   defineProps<{
     /** The row's title, truncated to one line. */
     label: string
@@ -26,16 +23,16 @@ const props = withDefaults(
     dim?: boolean
     /** Strike the title through (a row marked done). */
     struck?: boolean
-    model?: string | null
-    effort?: string | null
-    /** The whole tag text, when it is not "model · effort" (CliMayte's run tag). */
+    /** The number chip after the title: a CliMayte priority (`P3`) or a session's instance (`#71`). */
+    chip?: string
+    /** The chip's native hover hint. */
+    chipHint?: string
+    /** The small tag text: "model · effort" (see modelEffortTag). */
     tag?: string
     /** `warning` colours the tag amber (the run differs from what was asked for). */
     tagTone?: 'muted' | 'warning'
-    /** When it last moved: epoch ms or an ISO string; shown relative. */
-    time?: number | string | null
-    /** The time text itself, when it is not "ago" (CliMayte's active duration). */
-    timeText?: string
+    /** The time text: how long ago it moved, or how long it ran. */
+    time?: string
   }>(),
   {
     selected: false,
@@ -44,12 +41,11 @@ const props = withDefaults(
     hint: undefined,
     dim: false,
     struck: false,
-    model: null,
-    effort: null,
+    chip: undefined,
+    chipHint: undefined,
     tag: undefined,
     tagTone: 'muted',
-    time: null,
-    timeText: undefined,
+    time: undefined,
   },
 )
 
@@ -62,14 +58,9 @@ defineSlots<{
   title?: () => unknown
   /** After the title, inside its line (a verdict mark, small icons). */
   mark?: () => unknown
-  /** After the title line, before the tag (a priority chip, a source badge). */
-  trailing?: () => unknown
   /** Inside the time text, before it (an activity dot). */
   'time-prefix'?: () => unknown
 }>()
-
-const tagText = computed(() => props.tag ?? modelEffortTag(props.model, props.effort))
-const timeLabel = computed(() => props.timeText ?? (props.time == null ? '' : timeAgo(props.time)))
 </script>
 
 <template>
@@ -98,18 +89,22 @@ const timeLabel = computed(() => props.timeText ?? (props.time == null ? '' : ti
       </span>
       <slot name="mark" />
     </span>
-    <slot name="trailing" />
     <span
-      v-if="tagText"
+      v-if="chip"
+      class="shrink-0 rounded bg-muted px-1 text-2xs font-medium tabular-nums text-muted-foreground"
+      :title="chipHint"
+    >{{ chip }}</span>
+    <span
+      v-if="tag"
       class="max-w-28 shrink-0 truncate text-2xs"
       :class="tagTone === 'warning' ? 'text-warning' : 'text-muted-foreground'"
-    >{{ tagText }}</span>
+    >{{ tag }}</span>
     <span
-      v-if="timeLabel"
+      v-if="time"
       class="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground tabular-nums"
     >
       <slot name="time-prefix" />
-      {{ timeLabel }}
+      {{ time }}
     </span>
   </button>
 </template>

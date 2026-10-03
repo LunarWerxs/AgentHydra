@@ -118,6 +118,7 @@ import { groupByProject } from '@/lib/session-groups'
 import { sessionShape } from '@/lib/session-shape'
 import { sessionSourceIcon } from '@/lib/session-source-icon'
 import type { SideListGroup } from '@/lib/side-list'
+import { modelEffortTag } from '@/lib/side-list'
 import { cn } from '@/lib/utils'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
@@ -1048,9 +1049,10 @@ function onComposerSent(mode: 'now' | 'queued') {
                   :hint="rowHintOf(s)"
                   :dim="s.done && s.session_id !== selectedId"
                   :struck="s.done"
-                  :model="modelOf(s)"
-                  :effort="effortOf(s)"
-                  :time="s.last_activity_at"
+                  :chip="s.instance_num ? `#${s.instance_num}` : undefined"
+                  :chip-hint="s.instance ?? undefined"
+                  :tag="modelEffortTag(modelOf(s), effortOf(s))"
+                  :time="timeAgo(s.last_activity_at)"
                   @click="rowClick(s, $event)"
                 >
                   <!-- working: the spinner; done: the done mark; otherwise a quiet dot whose colour is
