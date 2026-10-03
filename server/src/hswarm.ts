@@ -58,6 +58,33 @@ function pythonBinary(env: NodeJS.ProcessEnv = process.env, platform = process.p
   return platform === 'win32' ? 'python' : 'python3'
 }
 
+/** Probe GET http://127.0.0.1:<port>/health and return the parsed response, or null if not hswarm. */
+async function probeHSwarm(port: number, timeoutMs = 500): Promise<Record<string, unknown> | null> {
+  const url = `http://127.0.0.1:${port}/health`
+  try {
+    const abortController = new AbortController()
+    const timeout = setTimeout(() => abortController.abort(), timeoutMs)
+    try {
+      const response = await fetch(url, { signal: abortController.signal })
+      if (response.status === 200) {
+        const data: unknown = await response.json()
+        if (
+          typeof data === 'object' &&
+          data !== null &&
+          (data as Record<string, unknown>)['hswarm'] === true
+        ) {
+          return data as Record<string, unknown>
+        }
+      }
+    } finally {
+      clearTimeout(timeout)
+    }
+  } catch {
+    // connection failed, timeout, or invalid JSON
+  }
+  return null
+}
+
 interface HSwarmState {
   running: boolean
   port: number | null
@@ -135,6 +162,18 @@ export async function startHSwarm(
 
   if (state.running && state.pid) return
 
+  // Probe for an existing live hswarm before starting a competitor
+  const liveHSwarm = await probeHSwarm(port)
+  if (liveHSwarm?.hswarm === true && typeof liveHSwarm.pid === 'number') {
+    state.running = true
+    state.pid = liveHSwarm.pid
+    state.port = port
+    state.lastError = null
+    backoffMs = MIN_BACKOFF_MS
+    console.log(`[hswarm] adopting existing server on port ${port} with pid ${liveHSwarm.pid}`)
+    return
+  }
+
   let fd = -1
   try {
     fd = openHSwarmLog(deps.logDir ?? join(DATA_DIR, 'logs'))
@@ -148,6 +187,7 @@ export async function startHSwarm(
       ...(deps.env ?? process.env),
       HSWARM_PORT: String(port),
       HSWARM_HOME: hswarmHome(deps.env),
+      HSWARM_SUPERVISED: '1',
       PYTHONUNBUFFERED: '1',
     }
 

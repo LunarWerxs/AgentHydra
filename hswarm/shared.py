@@ -1,8 +1,8 @@
 """ONE MCP server per machine instead of one per chat (owner ask, 2026-09-24).
 
-A stdio server is a child of each Claude chat: 59-73 MB apiece, about 2.6 GB at 40 chats. `hswarm.py mcp --http`
+A stdio server is a child of each Claude chat: 59-73 MB apiece, about 2.6 GB at 40 chats. `python -m hswarm mcp --http`
 serves FastMCP's streamable-http transport on 127.0.0.1 only, and every chat connects to it with
-{"type": "http", "url": "http://127.0.0.1:7793/mcp"}. `hswarm.py serve-ensure` keeps it up with nobody watching:
+{"type": "http", "url": "http://127.0.0.1:7793/mcp"}. `python -m hswarm serve-ensure` keeps it up with nobody watching:
 it returns at once when the port answers, else starts the server detached and hidden, behind a lock file so two
 callers cannot start two.
 
@@ -61,6 +61,8 @@ def _sources() -> dict[str, int]:
     """Every hswarm source file in the package: relative name -> mtime in ns."""
     out = {}
     for p in PACKAGE.rglob("*.py"):
+        if "tests" in p.parts:
+            continue
         try:
             out[p.relative_to(PACKAGE).as_posix()] = p.stat().st_mtime_ns
         except FileNotFoundError:  # a file gone between the listing and the stat (mid-checkout) is not a source
@@ -178,7 +180,7 @@ async def _request_headers(ctx, call_next):
 # accept with WinError 64, and CPython's proactor serving loop answers ANY accept error by closing the LISTENING
 # socket (asyncio/proactor_events.py _start_serving, 3.14.2): the server lives on, running its jobs, but deaf. The next
 # chat then finds nothing on the port and starts another server, which adopts the deaf one's running jobs while the
-# deaf one keeps running them. Three servers were on 7793 on 2026-09-27, each start preceded by that WinError 64.
+# deaf one keeps running them. This incident happened on ZSwarm's port 7790 on 2026-09-27, each start preceded by that WinError 64.
 _DROPPED_MID_ACCEPT = {64, 1236}  # ERROR_NETNAME_DELETED, ERROR_CONNECTION_ABORTED
 
 
@@ -209,7 +211,7 @@ def keep_listening_through_dropped_clients() -> None:
 
 
 def serve(port: int = PORT) -> None:
-    """Run the shared server in this process (blocks). `hswarm.py mcp --http [--port N]`."""
+    """Run the shared server in this process (blocks). `python -m hswarm mcp --http [--port N]`."""
     global ACTIVE, SERVING_PORT
     from starlette.responses import JSONResponse
 
@@ -238,7 +240,8 @@ def serve(port: int = PORT) -> None:
     logging.getLogger("uvicorn.access").addFilter(_NoQuery())
     for name in ("httpx", "httpcore"):  # one INFO entry per provider call: 318k of them were 90% of the 113 MB log
         logging.getLogger(name).setLevel(logging.WARNING)
-    threading.Thread(target=_watch, args=(port, started), name="hswarm-code-watch", daemon=True).start()
+    if not os.environ.get("HSWARM_SUPERVISED"):
+        threading.Thread(target=_watch, args=(port, started), name="hswarm-code-watch", daemon=True).start()
     from . import vault
 
     threading.Thread(target=vault.autosync_loop, name="hswarm-vault-sync", daemon=True).start()  # idle until `hswarm vault init|join|adopt`
@@ -307,7 +310,7 @@ def _detached(argv: list[str], out) -> int:
 
 
 def _spawn(port: int) -> int:
-    """Start `hswarm.py mcp --http` detached from the caller, with no window, output to the log. Returns its pid."""
+    """Start `python -m hswarm mcp --http` detached from the caller, with no window, output to the log. Returns its pid."""
     exe = Path(sys.executable)
     if os.name == "nt" and exe.with_name("pythonw.exe").exists():
         exe = exe.with_name("pythonw.exe")
@@ -479,11 +482,11 @@ def ensure(port: int = PORT, wait_s: float = 30.0) -> dict:
 
 
 def connect(port: int = PORT) -> int:
-    """The chat's headersHelper (`hswarm.py connect`): make sure the shared server is up, then print the chat's
+    """The chat's headersHelper (`python -m hswarm connect`): make sure the shared server is up, then print the chat's
     X-Hswarm-* headers as JSON. Claude Code runs it with the chat's folder and environment each time it connects the
     entry, so a chat never reaches the server without its own cwd and caller stamp, and a server that cannot come up
     fails that chat's connection with the reason. Register it once per machine:
-      claude mcp add-json -s user hswarm '{"type":"http","url":"http://127.0.0.1:7793/mcp","headersHelper":"python <abs>/hswarm.py connect"}'
+      claude mcp add-json -s user hswarm '{"type":"http","url":"http://127.0.0.1:7793/mcp","headersHelper":"python -m hswarm connect"}'
     """
     from .caller import _instance_of
 

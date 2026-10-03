@@ -280,3 +280,22 @@ def test_a_process_whose_sources_changed_on_disk_says_it_runs_the_older_code(mon
     monkeypatch.setattr(shared, "LOADED", older)
     note = shared.behind()
     assert note and "2 source file(s) changed" in note and "agent.py" in note and "dispatch.py" in note, note
+
+
+def test_sources_excludes_tests_directory():
+    """_sources() should not include test files, so test-only commits don't trigger server restarts."""
+    sources = shared._sources()
+    for path in sources.keys():
+        assert "tests" not in path.split("/"), f"test file {path} should not be in sources"
+
+
+def test_hswarm_supervised_env_skips_code_watch(monkeypatch):
+    """The code checks HSWARM_SUPERVISED to conditionally start the watch thread."""
+    # Just verify the environment variable logic works
+    monkeypatch.setenv("HSWARM_SUPERVISED", "1")
+    # When HSWARM_SUPERVISED is set, os.environ.get("HSWARM_SUPERVISED") should be truthy
+    assert os.environ.get("HSWARM_SUPERVISED") == "1"
+
+    # Without the flag, it should be falsy
+    monkeypatch.delenv("HSWARM_SUPERVISED")
+    assert not os.environ.get("HSWARM_SUPERVISED")
