@@ -388,4 +388,87 @@ describe('when this PC uploads', () => {
       resetQueueSync()
     }
   })
+  // Measured 2026-10-03: a few running workers made an upload every ~21 s (171 an hour) because their
+  // lastActivity, cost and clocks moved on every tool call; each one moved the store's revision and
+  // made the other PC download, and the sync pace never backed off.
+  describe('a running worker whose activity and cost keep moving', () => {
+    const t0 = 1_800_000_000_000
+    const puts: number[] = []
+    const pc = randomUUID()
+    const io = {
+      key,
+      pc,
+      name: 'THIS-PC',
+      call: async (method: string, path: string) => {
+        if (method === 'PUT') puts.push(1)
+        return path === '/v1/queues'
+          ? { status: 200, json: { queues: [] } }
+          : { status: 200, json: { version: 1 } }
+      },
+    }
+    const saved = new Map(liveByAccount)
+    const run = (over: Record<string, unknown>) =>
+      workers.set('w-busy', {
+        id: 'w-busy',
+        group: 'g-busy',
+        title: 'busy',
+        status: 'running',
+        attempts: [
+          {
+            account: { id: 'acct-a', num: 7, name: 'a@example.com' },
+            startedAt: t0,
+            endedAt: null,
+          },
+        ],
+        accountId: 'acct-a',
+        lastActivity: 'Read a.ts',
+        error: null,
+        costUsd: 0.1,
+        createdAt: t0,
+        updatedAt: t0,
+        ...over,
+      } as any)
+    const begin = () => {
+      resetQueueSync()
+      puts.length = 0
+      liveByAccount.clear()
+    }
+    const end = () => {
+      workers.delete('w-busy')
+      for (const [k, v] of saved) liveByAccount.set(k, v)
+      resetQueueSync()
+    }
+
+    test('goes up once a gate, is no news in between, and its current values ride the gated upload', async () => {
+      begin()
+      try {
+        run({})
+        expect(await syncQueue(io, t0)).toBe(true)
+        expect(puts).toHaveLength(1)
+        // A minute on: activity, cost and the clock moved, nothing else.
+        run({ lastActivity: 'Edit b.ts', costUsd: 0.25, updatedAt: t0 + 60_000 })
+        expect(await syncQueue(io, t0 + 60_000)).toBe(false)
+        expect(puts).toHaveLength(1)
+        // Past the gate it goes up, still no news, and carries the values of now.
+        run({ lastActivity: 'Bash test', costUsd: 0.4, updatedAt: t0 + LIVE_GATE_MS })
+        expect(await syncQueue(io, t0 + LIVE_GATE_MS)).toBe(false)
+        expect(puts).toHaveLength(2)
+      } finally {
+        end()
+      }
+    })
+
+    test('finishing goes up at once', async () => {
+      begin()
+      try {
+        run({})
+        await syncQueue(io, t0)
+        run({ status: 'done', lastActivity: 'Edit b.ts', costUsd: 0.25, updatedAt: t0 + 60_000 })
+        expect(await syncQueue(io, t0 + 60_000)).toBe(true)
+        expect(puts).toHaveLength(2)
+      } finally {
+        end()
+      }
+    })
+  })
 })

@@ -188,9 +188,9 @@ function queueFailure(what: string, r: { status: number; json: any }): Error {
   )
 }
 
-/** What each PC id last uploaded: fingerprints of its workers and of its live readings (not the clock,
- *  running time or reading times) and when. */
-const sentBy = new Map<string, { workers: string; live: string; at: number }>()
+/** What each PC id last uploaded: fingerprints of its workers' shape, of their volatile fields and of
+ *  its live readings (not the clock or reading times) and when. */
+const sentBy = new Map<string, { shape: string; volatile: string; live: string; at: number }>()
 
 export function resetQueueSync(): void {
   sentBy.clear()
@@ -202,8 +202,28 @@ const hash = (value: unknown): string =>
 const bucket = (pct: number | null): number | null =>
   typeof pct === 'number' ? Math.floor(pct / LIVE_BUCKET) * LIVE_BUCKET : pct
 
-const workersPrint = (snap: QueueSnapshot): string =>
-  hash(snap.workers.map(({ activeS, ...rest }) => rest))
+/** What a reader of the list sees change: a change here uploads at once and counts as news. */
+const shapePrint = (snap: QueueSnapshot): string =>
+  hash(
+    snap.workers.map((w) => [
+      w.id,
+      w.title,
+      w.group,
+      w.status,
+      w.kind,
+      w.model,
+      w.effort,
+      w.account,
+      w.createdAt,
+      w.verdict,
+    ]),
+  )
+
+/** What moves on every tool call of a running worker (activity, cost, clocks, error, running time): a
+ *  change here alone rides the LIVE_GATE_MS gate and is no news. Measured 2026-10-03: with a few
+ *  running workers it made an upload every ~21 s. */
+const volatilePrint = (snap: QueueSnapshot): string =>
+  hash(snap.workers.map((w) => [w.id, w.lastActivity, w.costUsd, w.updatedAt, w.error, w.activeS]))
 
 /** The live readings without their `at`, with the percentages in 5-point steps. */
 const livePrint = (snap: QueueSnapshot): string =>
@@ -213,16 +233,21 @@ const livePrint = (snap: QueueSnapshot): string =>
       .map((id) => [id, bucket(snap.live[id].sessionPct), bucket(snap.live[id].weekPct)]),
   )
 
-/** True when the snapshot went up with something new in it; a heartbeat (nothing changed) is false. */
+/** True when the snapshot went up with news in it: a worker's shape or a live bucket changed. A
+ *  volatile-only change (activity, cost, clocks, error, running time) goes up only once LIVE_GATE_MS has
+ *  passed since the last upload, with the current values, and is not news; nor is a heartbeat. */
 async function upload(io: QueueIo, own: number, now: number): Promise<boolean> {
   const { blob, snap } = fitSnapshot(io.key, buildSnapshot(io.pc, io.name, now))
-  const w = workersPrint(snap)
+  const s = shapePrint(snap)
+  const v = volatilePrint(snap)
   const l = livePrint(snap)
   const sent = sentBy.get(io.pc)
-  // A worker change goes at once; a live-bucket change only after LIVE_GATE_MS; else the heartbeat.
-  if (sent && sent.workers === w) {
+  // A shape change goes at once; a live-bucket or volatile change only after LIVE_GATE_MS; else the
+  // heartbeat.
+  if (sent && sent.shape === s) {
     const age = now - sent.at
-    if (age < HEARTBEAT_MS && (sent.live === l || age < LIVE_GATE_MS)) return false
+    if (age < HEARTBEAT_MS && ((sent.live === l && sent.volatile === v) || age < LIVE_GATE_MS))
+      return false
   }
   const body = (version: number) => ({
     version,
@@ -233,8 +258,8 @@ async function upload(io: QueueIo, own: number, now: number): Promise<boolean> {
   if (r.status === 409 && typeof r.json?.current?.version === 'number')
     r = await io.call('PUT', `/v1/queues/${io.pc}`, body(r.json.current.version))
   if (r.status !== 200) throw queueFailure('Uploading this PC’s queue', r)
-  sentBy.set(io.pc, { workers: w, live: l, at: now })
-  return !sent || sent.workers !== w || sent.live !== l
+  sentBy.set(io.pc, { shape: s, volatile: v, live: l, at: now })
+  return !sent || sent.shape !== s || sent.live !== l
 }
 
 async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: number }>> {
@@ -250,11 +275,12 @@ async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: numb
   return list.json.queues
 }
 
-/** One queue pass: upload this PC's snapshot when a worker changed, when the live readings moved a
- *  bucket (at most every LIVE_GATE_MS) or when the heartbeat is due, download
- *  every other PC's that changed. Throws the first problem after doing all it can. Returns whether
- *  anything the queue shares moved: this PC's snapshot went up, or another PC's came down with its
- *  workers or live readings changed (a heartbeat alone is no news). The sync loop polls less often when
+/** One queue pass: upload this PC's snapshot when a worker's shape changed, when the live readings
+ *  moved a bucket or a worker's activity, cost or clocks changed (those two at most every
+ *  LIVE_GATE_MS) or when the heartbeat is due, download every other PC's that changed. Throws the
+ *  first problem after doing all it can. Returns whether anything the queue shares moved: this PC's
+ *  snapshot went up with a shape or live-bucket change, or another PC's came down with one (a heartbeat
+ *  or a volatile-only change is no news; it is still stored). The sync loop polls less often when
  *  nothing moved. */
 export async function syncQueue(io: QueueIo, now = Date.now()): Promise<boolean> {
   let moved = false
@@ -277,7 +303,7 @@ export async function syncQueue(io: QueueIo, now = Date.now()): Promise<boolean>
       const snap = openQueue(io.key, row.pc, r.json.blob)
       if (!snap) throw new Error('The other PC’s queue does not open with this PC’s key.')
       const prev = remoteSnapshots().find((s) => s.pc === row.pc)
-      if (!prev || workersPrint(prev) !== workersPrint(snap) || livePrint(prev) !== livePrint(snap))
+      if (!prev || shapePrint(prev) !== shapePrint(snap) || livePrint(prev) !== livePrint(snap))
         moved = true
       setRemote(snap, r.json.version ?? row.version)
     } catch (err) {

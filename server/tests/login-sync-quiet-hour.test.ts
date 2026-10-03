@@ -25,7 +25,7 @@ import {
   setRemote,
 } from '../src/climayte-remote'
 import { localWorkPending } from '../src/core/cli-login-sync'
-import { resetQueueSync, sealQueue, syncQueue } from '../src/core/climayte-queue-sync'
+import { LIVE_GATE_MS, resetQueueSync, sealQueue, syncQueue } from '../src/core/climayte-queue-sync'
 import { syncChats } from '../src/core/desktop-chat-sync'
 import type { ChatIo, ChatLocal, LocalChat } from '../src/core/desktop-chat-types'
 import { StoreMirror } from '../src/core/login-sync-mirror'
@@ -344,6 +344,75 @@ test('a quiet hour of two CliMayte PCs with usage readings refreshing stays a ha
     expect(reads(stats)).toBeLessThanOrEqual(90) // measured 68: the head every 30 s, 4 heartbeats each
     expect(writes(stats)).toBeLessThanOrEqual(20) // measured 16: 8 uploads (2 PCs x 4 heartbeats)
   } finally {
+    liveByAccount.clear()
+    for (const [k, v] of savedLive) liveByAccount.set(k, v)
+  }
+})
+
+// Measured 2026-10-03 19:00-20:00Z: 171 queue uploads an hour (one per ~21 s) with a few CliMayte workers
+// running, because their lastActivity, cost and clocks changed on every pass and each change uploaded
+// at once. Now only the gate (LIVE_GATE_MS) lets them up: one PC, two running workers whose activity
+// and cost change on every 30 s pass.
+test('an hour with two running workers whose activity changes every pass uploads about once per gate', async () => {
+  resetQueueSync()
+  await sweep()
+  const savedLive = new Map(liveByAccount)
+  const savedWorkers = new Map(workers)
+  liveByAccount.clear()
+  workers.clear()
+  clock = realNow()
+  const pc = randomUUID()
+  made.queues.push(pc)
+  let puts = 0
+  const io = {
+    call: (method: string, path: string, body?: unknown) => {
+      if (method === 'PUT' && path === `/v1/queues/${pc}`) puts++
+      return store(method, path, body)
+    },
+    mirror: new StoreMirror((m, p) => store(m, p) as never),
+    key,
+    pc,
+    name: 'PC-W',
+  }
+  const t0 = clock
+  const touch = (n: number) => {
+    for (const id of ['w-a', 'w-b'])
+      workers.set(id, {
+        id,
+        group: 'g-q',
+        title: id,
+        status: 'running',
+        attempts: [{ account: { id: 'acct-a', num: 7, name: 'a' }, startedAt: t0, endedAt: null }],
+        accountId: 'acct-a',
+        lastActivity: `tool call ${n}`,
+        error: null,
+        costUsd: n / 100,
+        createdAt: t0,
+        updatedAt: clock,
+      } as any)
+  }
+  try {
+    touch(0)
+    await syncQueue(io, clock)
+    const first = puts
+    storeDb.resetRowsRead()
+    let tick = 0
+    while (clock - t0 < HOUR) {
+      clock += TICK
+      touch(++tick)
+      await syncQueue(io, clock)
+    }
+    const stats = storeDb.statements()
+    const uploads = puts - first
+    console.log(
+      `two running workers, activity changing every pass: ${uploads} uploads, ${reads(stats)} rows read in the hour`,
+    )
+    // the 10-minute gate: 6 an hour (the 15-minute heartbeat never comes first), plus one for the hour's edge
+    expect(uploads).toBeLessThanOrEqual(Math.ceil(HOUR / LIVE_GATE_MS) + 1)
+    expect(uploads).toBeGreaterThanOrEqual(1)
+  } finally {
+    workers.clear()
+    for (const [k, v] of savedWorkers) workers.set(k, v)
     liveByAccount.clear()
     for (const [k, v] of savedLive) liveByAccount.set(k, v)
   }
