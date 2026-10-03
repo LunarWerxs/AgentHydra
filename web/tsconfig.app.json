@@ -1,0 +1,5 @@
+{
+  // The same project as tsconfig.json (the repo's one typecheck config), under the name the
+  // Vue/Vite tooling convention uses, so `vue-tsc --noEmit -p tsconfig.app.json` also works.
+  "extends": "./tsconfig.json"
+}
