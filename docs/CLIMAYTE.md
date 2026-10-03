@@ -1022,7 +1022,7 @@ stderr and exits 1), appends to it, prints init, an assistant text and a `result
 ## Manager (the CLIManager): design, not built (2026-10-03)
 
 Today one orchestrator chat does all the coordination: a long desktop chat on Opus, about 200k
-tokens of context, that dispatches with `climayte_run`, waits with `~/.claude/tools/climayte_wait.py`,
+tokens of context, that dispatches with `climayte_run`, waits with the owner's `climayte_wait` helper (see CLIMAYTE-FIELD-NOTES.md),
 reads each batch, checks the proof and records verdicts. Measured 2026-10-03: each of its requests
 costs about 0.40% of a Pro 5-hour window (reads 0.12, cache writes 0.09, output 0.19), because every
 step re-reads that context, and every worker report it reads makes the next step dearer. Run 2 counted
@@ -1076,7 +1076,7 @@ gives it a separate, small endpoint instead (piece 4).
 (`climayte_wait.py:14-20`); with `--wake-on done,failed,cancelled` (`:154`) a worker that merely
 enters `waiting` does not wake it. So the manager runs alone in its own group, `mgr-<wave>`, and
 between its turns it sits in `waiting` (held for its wave, piece 2). The orchestrator runs
-`python ~/.claude/tools/climayte_wait.py --group mgr-<wave> --wake-on done,failed,cancelled --timeout-s 7200`
+`climayte_wait --group mgr-<wave> --wake-on done,failed,cancelled --timeout-s 7200`
 and wakes only when the manager reports (`done`), dies (`failed`) or is stopped. `climayte_status`
 with `wait_seconds` is NOT the way: `climayteWait` resolves on any status change in scope
 (`climayte.ts:2082-2104`), and the manager changes status on every wake.
@@ -1244,7 +1244,7 @@ the orchestrator accepts, with its cost per wave, like any kind. `modelWhy` stil
 ### Build list
 
 Each piece builds and checks on its own; a later piece uses the earlier ones but each test stands
-alone. Checks run through `~/.claude/tools/fairjob.cmd -Weight 3 -Run "<command>"` from `app/`, plus
+alone. Checks run through the owner's `fairjob` wrapper (weight 3) from `app/`, plus
 `bun run --cwd server typecheck` for every piece.
 
 1. **The wave store and its pure helpers.** `CliMayteWave`, `wave?` and `hold?` on the worker, the

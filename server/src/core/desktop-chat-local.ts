@@ -114,6 +114,36 @@ async function defaultRename(
 
 const retry = (reason: string): LandOutcome => ({ ok: false, reason, retry: true })
 
+function accountOrgOf(metaPath: string): { account: string; org: string } | null {
+  const parts = metaPath.split(/[\\/]/)
+  const org = parts[parts.length - 2]
+  const account = parts[parts.length - 3]
+  return account && org ? { account, org } : null
+}
+
+function recordOf(c: {
+  archived: boolean
+  title?: string | null
+  lastActivityAt?: string | null
+  cwd?: string | null
+  metaPath: string
+}): Record<string, unknown> | null {
+  if (!c.archived) {
+    try {
+      return JSON.parse(readFileSync(c.metaPath, 'utf8')) as Record<string, unknown>
+    } catch {
+      return null
+    }
+  }
+  const last = c.lastActivityAt ? Date.parse(c.lastActivityAt) : Number.NaN
+  return {
+    ...(c.title ? { title: c.title } : {}),
+    isArchived: true,
+    ...(Number.isFinite(last) ? { lastActivityAt: last } : {}),
+    ...(c.cwd ? { cwd: c.cwd } : {}),
+  }
+}
+
 export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
   const roots = opts.profileRoots ?? defaultProfileRoots
   const projectsDir = opts.projectsDir ?? join(homedir(), '.claude', 'projects')
@@ -163,33 +193,17 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
       if (c.staleLogin || !isUuid(c.cliSessionId)) continue
       const id = c.chatId?.startsWith('local_') ? c.chatId.slice('local_'.length) : null
       if (!isUuid(id)) continue
-      const parts = c.metaPath.split(/[\\/]/)
-      const org = parts[parts.length - 2]
-      const account = parts[parts.length - 3]
-      if (!account || !org) continue
-      let record: Record<string, unknown>
-      if (c.archived) {
-        const last = c.lastActivityAt ? Date.parse(c.lastActivityAt) : Number.NaN
-        record = {
-          ...(c.title ? { title: c.title } : {}),
-          isArchived: true,
-          ...(Number.isFinite(last) ? { lastActivityAt: last } : {}),
-          ...(c.cwd ? { cwd: c.cwd } : {}),
-        }
-      } else {
-        try {
-          record = JSON.parse(readFileSync(c.metaPath, 'utf8')) as Record<string, unknown>
-        } catch {
-          continue
-        }
-      }
+      const where = accountOrgOf(c.metaPath)
+      if (!where) continue
+      const record = recordOf(c)
+      if (!record) continue
       const project = findProject(c.cliSessionId, c.cwd)
       out.push({
         id,
         sessionId: c.cliSessionId,
         project,
-        account,
-        org,
+        account: where.account,
+        org: where.org,
         record,
         archived: c.archived,
         size: project ? size(project, c.cliSessionId) : 0,

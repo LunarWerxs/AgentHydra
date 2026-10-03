@@ -1490,6 +1490,33 @@ function settleWorker(
   }
 }
 
+function addToWaveBatch(w: CliMayteWorker, now: number): void {
+  // Piece 3: The daemon's batch wake. When a wave task finishes, add it to the wave's batch.held
+  // so waveBatch can decide when to wake the manager.
+  if (w.wave && w.status !== 'failed') {
+    try {
+      const configDir = configDirOf(w.accountId ?? '', accountsProvider())
+      if (configDir) {
+        let wave = modifiedWaves.get(w.wave)?.wave ?? readWave(configDir, w.wave)
+        if (wave && wave.status === 'running' && !wave.report) {
+          // Find the task in the wave that this worker belongs to.
+          const task = wave.tasks.find((t) => t.workerId === w.id)
+          if (task && !wave.batch.held.includes(task.key)) {
+            wave.batch.held.push(task.key)
+            if (wave.batch.since === null) {
+              wave.batch.since = now
+            }
+            wave.updatedAt = now
+            modifiedWaves.set(w.wave, { wave, configDir })
+          }
+        }
+      }
+    } catch {
+      // If we can't update the wave, the batch will be updated on the next tick.
+    }
+  }
+}
+
 function finish(w: CliMayteWorker, events: unknown[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (at?.outcome !== 'running') return
@@ -1519,30 +1546,7 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   journalFinish(w, at, v, spent)
   if (w.status === 'done' && w.check) startCheck(w)
 
-  // Piece 3: The daemon's batch wake. When a wave task finishes, add it to the wave's batch.held
-  // so waveBatch can decide when to wake the manager.
-  if (w.wave && w.status !== 'failed') {
-    try {
-      const configDir = configDirOf(w.accountId ?? '', accountsProvider())
-      if (configDir) {
-        let wave = modifiedWaves.get(w.wave)?.wave ?? readWave(configDir, w.wave)
-        if (wave && wave.status === 'running' && !wave.report) {
-          // Find the task in the wave that this worker belongs to.
-          const task = wave.tasks.find((t) => t.workerId === w.id)
-          if (task && !wave.batch.held.includes(task.key)) {
-            wave.batch.held.push(task.key)
-            if (wave.batch.since === null) {
-              wave.batch.since = now
-            }
-            wave.updatedAt = now
-            modifiedWaves.set(w.wave, { wave, configDir })
-          }
-        }
-      }
-    } catch {
-      // If we can't update the wave, the batch will be updated on the next tick.
-    }
-  }
+  addToWaveBatch(w, now)
 
   changed(w)
   schedule(50)
@@ -1798,8 +1802,7 @@ function processBatchWakes(now: number): void {
       wave.batch.since = null
       wave.updatedAt = now
 
-      // Build the batch report from climayteReports.
-      // For now, just queue a simple message. The actual report building would call climayteReports.
+      // The manager gets a one-line summary of the changed task keys.
       const report = `Wave batch: ${ids.length} changed tasks: ${ids.join(', ')}`
       manager.pending.push(report)
       changed(manager)

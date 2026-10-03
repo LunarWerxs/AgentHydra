@@ -183,46 +183,41 @@ function sealedOk(x: any, id: string): x is Sealed {
   )
 }
 
-/** One chat pass: send what this PC holds that the store lacks, then take what the store holds that
- *  this PC lacks. Does all it can, then throws the first problem. */
-export async function syncChats(io: ChatIo, now = Date.now()): Promise<void> {
+async function readRows(io: ChatIo): Promise<Map<string, StoreRow>> {
   const list = await io.call('GET', '/v1/chats')
   if (list.status !== 200 || !Array.isArray(list.json?.chats))
     throw chatFailure('Reading the chats', list)
   const rows = new Map<string, StoreRow>()
   for (const r of list.json.chats as StoreRow[]) if (r.meta?.k === 'r') rows.set(r.id, r)
+  return rows
+}
 
-  const loaded = readState(io.statePath)
-  const state: StateFile = loaded && loaded.pc === io.pc ? loaded : { pc: io.pc, chats: {} }
-  const before = JSON.stringify(state)
+// The key is checked on a row this PC has not handled before, so a PC with the wrong key sends
+// nothing sealed under it.
+async function openFresh(
+  io: ChatIo,
+  rows: Map<string, StoreRow>,
+  state: StateFile,
+): Promise<Map<string, Sealed>> {
   const opened = new Map<string, Sealed>()
-  let problem: Error | null = null
-  const fail = (err: unknown) => {
-    problem ??= asError(err)
-  }
-
-  // The key is checked on a row this PC has not handled before, so a PC with the wrong key sends
-  // nothing sealed under it.
   const fresh = [...rows.values()].find((r) => !state.chats[r.id])
-  if (fresh) {
-    const r = await io.call('GET', `/v1/chats/${fresh.id}`)
-    if (r.status === 200 && typeof r.json?.blob === 'string') {
-      const rec = openRecord(io.key, fresh.id, r.json.blob)
-      if (rec === null) throw new Error('A shared chat does not open with this PC’s key.')
-      if (sealedOk(rec, fresh.id)) opened.set(fresh.id, rec)
-    }
-  }
+  if (!fresh) return opened
+  const r = await io.call('GET', `/v1/chats/${fresh.id}`)
+  if (r.status !== 200 || typeof r.json?.blob !== 'string') return opened
+  const rec = openRecord(io.key, fresh.id, r.json.blob)
+  if (rec === null) throw new Error('A shared chat does not open with this PC’s key.')
+  if (sealedOk(rec, fresh.id)) opened.set(fresh.id, rec)
+  return opened
+}
 
-  const local = io.local.list()
-  const localIds = new Set(local.map((c) => c.id))
-  const save = () => {
-    const after = JSON.stringify(state)
-    if (after !== before) writeState(io.statePath, state)
-  }
-
-  // One session can be filed under two visible records here (a chat moved between profiles keeps its
-  // session id). Its one stream goes up through one of them: the one already shared, else the most
-  // recently active. The other would restart the stream at chunk 0 and stop on 'taken' every pass.
+// One session can be filed under two visible records here (a chat moved between profiles keeps its
+// session id). Its one stream goes up through one of them: the one already shared, else the most
+// recently active. The other would restart the stream at chunk 0 and stop on 'taken' every pass.
+function pickSharers(
+  local: LocalChat[],
+  rows: Map<string, StoreRow>,
+  state: StateFile,
+): Map<string, LocalChat> {
   const rank = (c: LocalChat): [number, number] => [
     rows.has(c.id) || (state.chats[c.id]?.version ?? 0) > 0 ? 1 : 0,
     typeof c.record.lastActivityAt === 'number' ? c.record.lastActivityAt : 0,
@@ -235,48 +230,98 @@ export async function syncChats(io: ChatIo, now = Date.now()): Promise<void> {
     const [hs, ha] = had ? rank(had) : [-1, -1]
     if (!had || cs > hs || (cs === hs && ca > ha)) sharer.set(c.sessionId, c)
   }
+  return sharer
+}
+
+async function pruneArchived(
+  io: ChatIo,
+  rows: Map<string, StoreRow>,
+  gone: string[],
+  now: number,
+  fail: (err: unknown) => void,
+): Promise<void> {
+  for (const row of rows.values()) {
+    if (row.meta?.a !== 1 || now - (row.updatedAt ?? now) < ARCHIVED_KEEP_MS) continue
+    try {
+      const r = await io.call('DELETE', `/v1/chats/${row.id}?version=${row.version}`)
+      if (r.status === 200) gone.push(row.id)
+      else if (r.status !== 409) throw chatFailure('Removing an archived chat', r)
+    } catch (err) {
+      fail(err)
+    }
+  }
+}
+
+async function sendAll(
+  io: ChatIo,
+  state: StateFile,
+  rows: Map<string, StoreRow>,
+  local: LocalChat[],
+  sharer: Map<string, LocalChat>,
+  now: number,
+  fail: (err: unknown) => void,
+): Promise<void> {
+  let budget = PASS_READ_MAX
+  for (const c of local) {
+    if (!UUID_RE.test(c.id) || !UUID_RE.test(c.sessionId)) continue
+    if (!c.archived && sharer.get(c.sessionId) !== c) continue
+    try {
+      budget = await sendChat(io, state, rows, c, budget, now)
+    } catch (err) {
+      fail(err)
+    }
+  }
+}
+
+async function takeAll(
+  io: ChatIo,
+  state: StateFile,
+  rows: Map<string, StoreRow>,
+  opened: Awaited<ReturnType<typeof openFresh>>,
+  localIds: Set<string>,
+  now: number,
+  fail: (err: unknown) => void,
+): Promise<void> {
+  for (const row of rows.values()) {
+    const st = state.chats[row.id]
+    if (st && st.version === row.version && !st.retry) continue
+    try {
+      await takeChat(io, state, row, opened.get(row.id), localIds.has(row.id), now)
+    } catch (err) {
+      fail(err)
+    }
+  }
+}
+
+/** One chat pass: send what this PC holds that the store lacks, then take what the store holds that
+ *  this PC lacks. Does all it can, then throws the first problem. */
+export async function syncChats(io: ChatIo, now = Date.now()): Promise<void> {
+  const rows = await readRows(io)
+  const loaded = readState(io.statePath)
+  const state: StateFile = loaded && loaded.pc === io.pc ? loaded : { pc: io.pc, chats: {} }
+  const before = JSON.stringify(state)
+  let problem: Error | null = null
+  const fail = (err: unknown) => {
+    problem ??= asError(err)
+  }
+  const opened = await openFresh(io, rows, state)
+
+  const local = io.local.list()
+  const localIds = new Set(local.map((c) => c.id))
+  const sharer = pickSharers(local, rows, state)
 
   // A chat this PC shared or took whose row is no longer listed left the store.
   const gone = Object.keys(state.chats).filter((id) => state.chats[id].version > 0 && !rows.has(id))
 
   try {
-    // --- send ---
-    let budget = PASS_READ_MAX
-    for (const c of local) {
-      if (!UUID_RE.test(c.id) || !UUID_RE.test(c.sessionId)) continue
-      if (!c.archived && sharer.get(c.sessionId) !== c) continue
-      try {
-        budget = await sendChat(io, state, rows, c, budget, now)
-      } catch (err) {
-        fail(err)
-      }
-    }
+    await sendAll(io, state, rows, local, sharer, now, fail)
+    await takeAll(io, state, rows, opened, localIds, now, fail)
 
-    // --- take ---
-    for (const row of rows.values()) {
-      const st = state.chats[row.id]
-      if (st && st.version === row.version && !st.retry) continue
-      try {
-        await takeChat(io, state, row, opened.get(row.id), localIds.has(row.id), now)
-      } catch (err) {
-        fail(err)
-      }
-    }
-
-    // --- prune: a chat archived three days ago leaves the store; each PC keeps its copy ---
-    for (const row of rows.values()) {
-      if (row.meta?.a !== 1 || now - (row.updatedAt ?? now) < ARCHIVED_KEEP_MS) continue
-      try {
-        const r = await io.call('DELETE', `/v1/chats/${row.id}?version=${row.version}`)
-        if (r.status === 200) gone.push(row.id)
-        else if (r.status !== 409) throw chatFailure('Removing an archived chat', r)
-      } catch (err) {
-        fail(err)
-      }
-    }
+    // A chat archived three days ago leaves the store; each PC keeps its copy.
+    await pruneArchived(io, rows, gone, now, fail)
     for (const id of gone) if (state.chats[id]) state.chats[id].gone = true
   } finally {
-    save()
+    if (JSON.stringify(state) !== before) writeState(io.statePath, state)
   }
   if (problem) throw problem
 }
@@ -323,6 +368,25 @@ async function uploadBytes(
   return { bytes: pos, chunks: seq, budget, out: 'done' }
 }
 
+/** The chat's state when it may be sent now, else null (not in step, diverged, or not shareable). */
+function sendableState(
+  io: ChatIo,
+  state: StateFile,
+  row: StoreRow | undefined,
+  c: LocalChat,
+): ChatState | null {
+  const st = state.chats[c.id]
+  if (row) {
+    // Only a chat this PC has in step with the store: someone else's change is taken first.
+    if (!st || st.version !== row.version || row.meta?.b !== st.bytes) return null
+    if (st.state === 'diverged' || st.state === 'waiting') return null
+    return st
+  }
+  if (c.archived || !c.project) return null
+  if (st && st.version > 0) return null
+  return st ?? newState(io, c)
+}
+
 /** Send one local chat's new bytes and record. Returns what is left of the pass's read budget. */
 async function sendChat(
   io: ChatIo,
@@ -333,16 +397,8 @@ async function sendChat(
   now: number,
 ): Promise<number> {
   const row = rows.get(c.id)
-  let st = state.chats[c.id]
-  if (row) {
-    // Only a chat this PC has in step with the store: someone else's change is taken first.
-    if (!st || st.version !== row.version || row.meta?.b !== st.bytes) return budget
-    if (st.state === 'diverged' || st.state === 'waiting') return budget
-  } else {
-    if (c.archived || !c.project) return budget
-    if (st && st.version > 0) return budget
-    st ??= newState(io, c)
-  }
+  const st = sendableState(io, state, row, c)
+  if (!st) return budget
   const start = st.up ?? { bytes: st.bytes, chunks: st.chunks }
   let at = start
   let out: SendOutcome = 'done'
@@ -376,14 +432,10 @@ async function sendChat(
     blob: sealRecord(io.key, c.id, sealed),
     meta: { k: 'r', s: c.sessionId, pc: st.origin.pc, b: at.bytes, a: c.archived ? 1 : 0, at: now },
   })
-  if (r.status === 409) {
-    state.chats[c.id] = st // chunks written stay noted in `up`; the next pass re-reads
-    return budget
-  }
-  if (r.status !== 200 || !Number.isInteger(r.json?.version)) {
-    state.chats[c.id] = st
+  state.chats[c.id] = st // on a 409 or failure, chunks written stay noted in `up`
+  if (r.status === 409) return budget
+  if (r.status !== 200 || !Number.isInteger(r.json?.version))
     throw chatFailure('Uploading a chat', r)
-  }
   Object.assign(st, {
     version: r.json.version,
     bytes: at.bytes,
@@ -397,7 +449,6 @@ async function sendChat(
     retry: false,
     at: now,
   })
-  state.chats[c.id] = st
   if (row) {
     row.version = st.version
     row.meta = { ...row.meta, b: at.bytes }

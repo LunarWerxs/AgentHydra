@@ -417,6 +417,51 @@ async function getChanges(db, sinceParam) {
   })
 }
 
+function routeList(db, path) {
+  const tables = { '/v1/logins': LOGINS, '/v1/queues': QUEUES, '/v1/chats': CHATS }
+  return tables[path] ? listRows(db, tables[path]) : null
+}
+
+function routeChunks(request, db, env, url, match) {
+  if (!ID_RE.test(match[1])) return json({ error: 'bad id' }, 400)
+  if (match[2] === undefined && request.method === 'GET')
+    return listChunks(db, match[1], url.searchParams.get('from'))
+  if (match[2] !== undefined && request.method === 'PUT')
+    return putChunk(
+      request,
+      db,
+      env,
+      match[1],
+      /^\d+$/.test(match[2]) ? Number(match[2]) : Number.NaN,
+    )
+  return json({ error: 'method not allowed' }, 405)
+}
+
+function routeRow(request, db, url, match) {
+  const t = match[1] === 'queues' ? QUEUES : match[1] === 'chats' ? CHATS : LOGINS
+  const id = match[2]
+  if (!ID_RE.test(id)) return json({ error: 'bad id' }, 400)
+  if (request.method === 'GET') return fetchRow(db, t, id)
+  if (request.method === 'PUT') return putRow(request, db, t, id)
+  const version = Number(url.searchParams.get('version'))
+  if (request.method === 'DELETE' && t === LOGINS) return deleteLogin(db, id, version)
+  if (request.method === 'DELETE' && t === CHATS) return deleteChat(db, id, version)
+  return json({ error: 'method not allowed' }, 405)
+}
+
+function route(request, db, env, url, path) {
+  if (path === '/v1/changes' && request.method === 'GET')
+    return getChanges(db, url.searchParams.get('since'))
+  if (request.method === 'GET') {
+    const listed = routeList(db, path)
+    if (listed) return listed
+  }
+  const c = /^\/v1\/chats\/([^/]+)\/chunks(?:\/([^/]+))?$/.exec(path)
+  if (c) return routeChunks(request, db, env, url, c)
+  const m = /^\/v1\/(logins|queues|chats)\/([^/]+)$/.exec(path)
+  return m ? routeRow(request, db, url, m) : json({ error: 'not found' }, 404)
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
@@ -427,38 +472,6 @@ export default {
     const db = env.DB
     await ensureSchema(db)
 
-    if (path === '/v1/changes' && request.method === 'GET')
-      return getChanges(db, url.searchParams.get('since'))
-
-    if (path === '/v1/logins' && request.method === 'GET') return listRows(db, LOGINS)
-    if (path === '/v1/queues' && request.method === 'GET') return listRows(db, QUEUES)
-
-    if (path === '/v1/chats' && request.method === 'GET') return listRows(db, CHATS)
-
-    const c = /^\/v1\/chats\/([^/]+)\/chunks(?:\/([^/]+))?$/.exec(path)
-    if (c) {
-      if (!ID_RE.test(c[1])) return json({ error: 'bad id' }, 400)
-      if (c[2] === undefined && request.method === 'GET')
-        return listChunks(db, c[1], url.searchParams.get('from'))
-      if (c[2] !== undefined && request.method === 'PUT')
-        return putChunk(request, db, env, c[1], /^\d+$/.test(c[2]) ? Number(c[2]) : Number.NaN)
-      return json({ error: 'method not allowed' }, 405)
-    }
-
-    const m = /^\/v1\/(logins|queues|chats)\/([^/]+)$/.exec(path)
-    if (!m) return json({ error: 'not found' }, 404)
-    const t = m[1] === 'queues' ? QUEUES : m[1] === 'chats' ? CHATS : LOGINS
-    const id = m[2]
-    if (!ID_RE.test(id)) return json({ error: 'bad id' }, 400)
-
-    if (request.method === 'GET') return fetchRow(db, t, id)
-    if (request.method === 'PUT') return putRow(request, db, t, id)
-
-    if (request.method === 'DELETE' && t === LOGINS)
-      return deleteLogin(db, id, Number(url.searchParams.get('version')))
-    if (request.method === 'DELETE' && t === CHATS)
-      return deleteChat(db, id, Number(url.searchParams.get('version')))
-
-    return json({ error: 'method not allowed' }, 405)
+    return route(request, db, env, url, path)
   },
 }
