@@ -71,7 +71,7 @@ def test_job_and_ledger_carry_the_caller(tmp_path, monkeypatch):
     assert job.caller["instance"] == "funzypops" and job.caller["label"] == "unit-batch"
     on_disk = json.loads((config.JOBS_DIR / job.id / "job.json").read_text(encoding="utf-8"))
     assert on_disk["caller"]["instance"] == "funzypops" and on_disk["summary"]["caller"].startswith("funzypops / abcdef12 / ")
-    rows = [json.loads(l) for l in (tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows = [json.loads(line) for line in (tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 2 and all(r["caller_instance"] == "funzypops" and r["caller_session"] == "abcdef12" for r in rows)
 
 
@@ -88,7 +88,7 @@ def test_usage_report_groups_by_caller_and_reads_the_routing_log(tmp_path, monke
         {"ts": ts, "job": "ask", "task": "ask", "backend": "api", "model": "deepseek-flash", "status": "ok", "cost_usd": 0.001, "caller_instance": "work", "caller_session": "bbbbbbbb", "caller_cwd": "D:/x/MG_AI"},
         {"ts": ts, "job": "job-old", "task": "t1", "backend": "api", "model": "deepseek-flash", "status": "ok", "cost_usd": 0.005},
     ]
-    config.LEDGER.write_text("\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8")
+    config.LEDGER.write_text("\n".join(json.dumps(row) for row in lines) + "\n", encoding="utf-8")
     routing = [
         {"ts": ts, "session_id": "cccccccc-1", "instance": "temp2", "cwd": "D:/x/Connections", "tool": "Agent", "model": "sonnet", "agents": 1, "mechanical": "find every", "reason": "", "decision": "blocked"},
         {"ts": ts, "session_id": "cccccccc-1", "instance": "temp2", "cwd": "D:/x/Connections", "tool": "Workflow", "model": "opus", "agents": 3, "mechanical": "summarize each", "reason": "", "decision": "reminded"},

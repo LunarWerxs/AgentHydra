@@ -433,7 +433,7 @@ def _reprice(c: sqlite3.Connection, prof: dict) -> int:
 
 def _routing_rows() -> list[dict]:
     try:
-        return [json.loads(l) for l in config.ROUTING.read_text(encoding="utf-8").splitlines() if l.strip()]
+        return [json.loads(line) for line in config.ROUTING.read_text(encoding="utf-8").splitlines() if line.strip()]
     except (OSError, ValueError):
         return []
 
@@ -925,7 +925,7 @@ def export_shard(c: sqlite3.Connection, where: Path) -> Path:
     lines += [json.dumps({"row": "utilization", **dict(r)}, sort_keys=True) for r in c.execute("SELECT * FROM utilizations WHERE machine = ? ORDER BY id", (MACHINE,))]
     p = shard_path(where)
     tmp = p.with_suffix(".jsonl.tmp")
-    tmp.write_text("".join(l + "\n" for l in lines), encoding="utf-8")
+    tmp.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
     os.replace(tmp, p)
     return p
 

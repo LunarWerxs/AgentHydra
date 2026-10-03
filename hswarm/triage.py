@@ -119,7 +119,7 @@ def load_repo_indexes(repos_dir: Path) -> tuple[str, list[str]]:
             if not d.is_dir() or not idx.exists():
                 continue
             names.append(d.name)
-            titles = [f"[{m.group(1)[:90]}]({m.group(2)})" for l in idx.read_text(encoding="utf-8").splitlines() if (m := re.match(r"- \[(.*?)\]\((.*?)\)", l))]
+            titles = [f"[{m.group(1)[:90]}]({m.group(2)})" for line in idx.read_text(encoding="utf-8").splitlines() if (m := re.match(r"- \[(.*?)\]\((.*?)\)", line))]
             if titles:
                 blocks.append(f"## {d.name}\n" + "\n".join(titles))
     return "\n".join(blocks), names
@@ -128,9 +128,9 @@ def load_repo_indexes(repos_dir: Path) -> tuple[str, list[str]]:
 def load_index(path: Path) -> str:
     # keep the hook short: title, slug, first ~200 chars of hook
     out = []
-    for l in path.read_text(encoding="utf-8").splitlines():
-        m = re.match(r"- \[(.*?)\]\((.*?)\)\s*-?\s*(.*)", l)
-        if l.startswith("- [") and m:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"- \[(.*?)\]\((.*?)\)\s*-?\s*(.*)", line)
+        if line.startswith("- [") and m:
             out.append(f"[{m.group(1)}]({m.group(2)}) - {m.group(3)[:200]}")
     return "\n".join(out)
 

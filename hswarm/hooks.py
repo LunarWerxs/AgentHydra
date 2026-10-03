@@ -37,8 +37,8 @@ STOP = {"The", "This", "That", "When", "Never", "Always", "Every", "After", "Bef
 def parse_index(path: Path) -> tuple[list[str], list[dict]]:
     lines = path.read_text(encoding="utf-8").splitlines()
     entries = []
-    for i, l in enumerate(lines):
-        m = ENTRY_RX.match(l)
+    for i, line in enumerate(lines):
+        m = ENTRY_RX.match(line)
         if m:
             entries.append({"line": i, "title": m.group("title"), "slug": m.group("slug"), "hook": m.group("hook")})
     return lines, entries

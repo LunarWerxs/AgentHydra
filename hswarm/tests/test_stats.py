@@ -3,14 +3,12 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import sqlite3
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from hswarm import console, stats, utilization
+from hswarm import stats, utilization
 
 NO_ACCOUNTS = {"rows": [], "worked": 0, "open": 0}
 

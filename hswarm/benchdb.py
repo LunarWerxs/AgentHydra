@@ -34,7 +34,6 @@ import hashlib
 import json
 import os
 import socket
-import statistics
 import subprocess
 import sys
 from pathlib import Path

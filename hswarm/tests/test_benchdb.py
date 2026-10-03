@@ -1,7 +1,6 @@
 """The bench results DB: rows are reused only when they are a real measurement of the same test."""
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import json
 

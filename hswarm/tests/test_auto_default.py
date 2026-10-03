@@ -46,7 +46,9 @@ def test_cc_selects_only_verified_effort_and_anthropic_endpoints():
 
 
 def test_a_task_resolves_auto_by_its_tools(tmp_path):
-    mk = lambda **kw: Task.from_dict({"prompt": "x", "cwd": str(tmp_path), **kw}, {}, 0)
+    def mk(**kw):
+        return Task.from_dict({"prompt": "x", "cwd": str(tmp_path), **kw}, {}, 0)
+
     assert mk(tools="none").model == config.default_model_for("none")
     assert mk(tools="read").model == config.default_model_for("read")
     # an explicitly named model or role always wins over AUTO

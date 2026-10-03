@@ -39,9 +39,9 @@ def py_grep(pattern: str, root: Path, glob: str | None, ignore_case: bool, limit
         if not p.is_file() or any(part in IGNORED_DIRS for part in p.parts) or (glob and not fnmatch.fnmatch(p.name, glob)):
             continue
         try:
-            for i, l in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-                if rx.search(l):
-                    lines.append(f"{p}:{i}:{l}")
+            for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                if rx.search(line):
+                    lines.append(f"{p}:{i}:{line}")
                     if len(lines) >= limit:
                         return lines
         except OSError:
@@ -52,10 +52,10 @@ def py_grep(pattern: str, root: Path, glob: str | None, ignore_case: bool, limit
 def relative_hits(rel: Callable[[Path], str], lines: list[str], root: Path) -> list[str]:
     """Rewrite each hit's path relative to the worker's cwd so answers cite `src/a.py:12`, not `D:\\...`."""
     out = []
-    for l in lines:
-        m = GREP_LINE_RX.match(l)
+    for line in lines:
+        m = GREP_LINE_RX.match(line)
         if not m:
-            out.append(l)
+            out.append(line)
             continue
         pth = Path(m.group(1))
         out.append(f"{rel((pth if pth.is_absolute() else root / pth).resolve())}:{m.group(2)}:{m.group(3)}")

@@ -274,7 +274,7 @@ def _relative_paths(paths: list[str], cwd: str) -> list[str]:
 
 
 def _meaningful_stderr(err: str) -> str:
-    return "\n".join(l for l in err.splitlines() if l.strip() and not any(rx.search(l) for rx in _STDERR_NOISE))
+    return "\n".join(line for line in err.splitlines() if line.strip() and not any(rx.search(line) for rx in _STDERR_NOISE))
 
 
 def trust_project(cwd: str) -> None:

@@ -538,7 +538,7 @@ def seats_text(plan_est_usd: float | None, days: float | None) -> str:
 
 def hero_block(total: dict, plan: dict, rates: dict) -> str:
     """One hero per unit; the switch shows one of them."""
-    saved, est, worker = total["saved_usd"], total["est_usd"], total["worker_usd"]
+    saved, worker = total["saved_usd"], total["worker_usd"]
     fleet = rates.get("fleet") or {}
     out = [f"<div class='mu'><div class='hero {sign_class(saved)}'>{_e(signed(saved))}<small>{'saved' if saved is None or saved >= 0 else 'lost'}</small></div>",
            "<div class='heroline'>The Claude-priced value of the work the swarm did, minus what DeepSeek actually charged. Anthropic list-price "

@@ -135,7 +135,7 @@ def test_job_manager_routes_each_task_to_its_providers_client(overlay, tmp_path,
     assert (moonshot.calls, deepseek.calls) == (1, 1)
     assert job.results["a"].cost_usd is None and job.results["a"].status == "ok"  # unpriced: '-', and the task still succeeds
     assert job.summary()["cost_unknown_tasks"] == 1
-    rows = [json.loads(l) for l in (tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows = [json.loads(line) for line in (tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()]
     assert {r["task"]: r["provider"] for r in rows} == {"a": "moonshot", "b": "deepseek"}
 
 
