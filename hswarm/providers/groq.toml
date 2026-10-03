@@ -1,0 +1,50 @@
+# Groq: very fast, free tier capped per key (requests per minute and per day).
+
+base_url = "https://api.groq.com/openai/v1"
+about = "Very fast open models. Has a free tier with daily limits."
+key_url = "https://console.groq.com/keys"  # where a person makes an API key
+website = "https://groq.com"  # the company's site; the console shows its favicon
+free_tier = true  # free terms may keep what is sent: HSWARM_REDACT_FREE_TIER redacts tasks here
+options = ["reasoning_effort"]
+models_path = "/models"
+anthropic_url = "facade"
+docs = "https://console.groq.com/docs/openai"
+
+# Best tool-FREE reasoner measured (51/51, 2026-09-20), and never on a tool-using route: it emits
+# harmony-format tool calls this backend rejects with a 400, which does not fail over.
+[models.groq-gpt-oss-120b]
+api_id = "openai/gpt-oss-120b"
+ctx = 131072
+price = {hit = 0.15, miss = 0.15, out = 0.75}
+route = ["groq-gpt-oss-120b", "cerebras-gpt-oss-120b"]
+
+[models.groq-gpt-oss-20b]
+api_id = "openai/gpt-oss-20b"
+ctx = 131072
+price = {hit = 0.1, miss = 0.1, out = 0.5}
+
+[models."groq-qwen3.8-27b"]
+api_id = "qwen/qwen3.8-27b"
+ctx = 131072
+price = {hit = 0.2, miss = 0.2, out = 0.8}
+
+# Models with a `benchmark_slug` take part in AUTO: the slug names their published scores in
+# data/published-models.json. `inherits` copies another model's settings; the lines below it
+# change what differs.
+[models."rank:gpt-oss-120b:groq"]
+inherits = "groq-gpt-oss-120b"
+benchmark_slug = "gpt-oss-120b"
+tools = false
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+note = "Direct host of the evidenced configuration (same model, same high effort). Tool-free only: in a multi-tool loop it emits harmony-channel calls the api backend rejects (config.py); schema asks through submit_result work (probed 2026-09-25)."
+
+[models."rank:qwen3-8-27b:groq"]
+inherits = "groq-qwen3.8-27b"
+benchmark_slug = "qwen3-8-27b"
+tools = true
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+note = "Measured at xhigh (qwen3-8-27b); served at high, the highest effort Groq and Cerebras accept (both 400 on xhigh, probed 2026-09-25). Provisional: the evidence is an upper bound for this route."

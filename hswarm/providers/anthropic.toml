@@ -1,0 +1,113 @@
+# Anthropic, direct. The keys are in `.secrets/anthropic_api_keys` and were never wired to a provider, so
+# until 2026-09-29 hswarm's only Claude route was OpenRouter - whose 4287 keys are all dead (4060 revoked,
+# 227 out of credit), which read as "no Claude route exists at all". Probed 2026-09-29: of 356 keys in the
+# pool 144 authenticate, and of those about 37% (3 of 8 sampled) have credit, serving both
+# claude-sonnet-5-5 and claude-opus-5-5. Direct beats the OpenRouter path for the same reason it does
+# everywhere else (docs: one model id, one host, no fp8 host swapped in mid-task).
+#
+# THE api BACKEND SPEAKS THE NATIVE MESSAGES API (`transport` below, since 2026-10-01). base_url is Anthropic's
+# OpenAI-compatible endpoint, and it cannot carry the two things that matter:
+#   * PROMPT CACHING. Its own docs: "Prompt caching is not supported", and usage.prompt_tokens_details is
+#     always empty. 1,513 Claude tasks of 3+ turns on it (2026-10-01) carried 147.4M input tokens, 0 cached:
+#     every turn re-sent the whole transcript at full price. The native endpoint caches at the breakpoints
+#     hswarm sets (anthropic_native.py) and reports cache reads, which land in usage.in_hit.
+#   * EFFORT. It silently ignores `reasoning_effort` (measured 2026-09-29: Sonnet 5.5 spent 1159/1192/1239/
+#     853/1170/727 completion tokens at none/low/medium/high/xhigh/max, noise, not a dial). The native
+#     endpoint carries `output_config.effort` and it is real: output climbed 695/780/1129/1205/2114
+#     (Sonnet) and 1003/1229/1081/1268/2456 (Opus) across low/medium/high/xhigh/max. So the `-low` ...
+#     `-xhigh` entries below now run at their effort on the api backend too, as cc always did.
+# A prompt cache belongs to one organisation, so `sticky_keys` keeps each task on the key it started on.
+
+base_url = "https://api.anthropic.com/v1"
+transport = "anthropic"  # the api backend posts to anthropic_url + /v1/messages, not base_url's /chat/completions
+sticky_keys = true  # one key per task for its whole life: round-robin would send each turn to another org's cache
+about = "Anthropic's own API: Claude Opus, Sonnet, Fable and Haiku, paid per token, no third-party host in between."
+key_url = "https://console.anthropic.com/settings/keys"  # where a person makes an API key
+website = "https://www.anthropic.com"  # the company's site; the console shows its favicon
+options = ["reasoning_effort"]  # carried as output_config.effort by the native transport
+models_path = "/models"
+# No credit endpoint exists, so there is nothing for a balance probe to read: a key's funding shows up
+# only when a real call answers 400 "credit balance is too low", which client.py routes to broke().
+balance_authority = "status"
+# The key check chats with the cheapest model on the account. This is a one-token liveness ping, not work:
+# the no-Haiku rule is about what does the thinking, and nothing here reasons.
+check_model = "claude-haiku-4-5-20251001"
+# The native endpoint. cc_env() sees no `anthropic_auth`, so it hands the key to Claude Code as
+# ANTHROPIC_API_KEY (x-api-key), which is what a real Anthropic key wants - a bearer token is
+# OpenRouter's shape, not Anthropic's.
+anthropic_url = "https://api.anthropic.com"
+anthropic_auth = "x-api-key"
+passthrough = ["anthropic:", "ant:"]
+docs = "https://docs.anthropic.com/en/api/messages"
+
+# Prices are Anthropic list, per million tokens (platform.claude.com/docs/en/about-claude/pricing, read 2026-10-01):
+# `write` is a 5-minute cache write, 1.25x input; a cache read is a tenth of input on Sonnet 5.5 and a
+# twentieth on Opus 5.5 ($0.20, not the $0.40 a tenth would make).
+# Every entry sets `cc_effort = true`, which is what lets selection.py offer it to the cc backend -
+# real headless Claude Code at that effort, the shape an Opus 5.5 agent swarm actually has.
+
+[models."rank:claude-opus-5-5:direct"]
+api_id = "claude-opus-5-5"
+benchmark_slug = "claude-opus-5-5"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 4.0, out = 20.0, write = 5.0}
+default_thinking = true
+cc_effort = true
+source = "https://api.anthropic.com/v1/models"
+verified_at = "2026-09-29"
+
+[models."rank:claude-opus-5-5-low:direct"]
+inherits = "rank:claude-opus-5-5:direct"
+benchmark_slug = "claude-opus-5-5-low"
+default_reasoning_effort = "low"
+
+[models."rank:claude-opus-5-5-medium:direct"]
+inherits = "rank:claude-opus-5-5:direct"
+benchmark_slug = "claude-opus-5-5-medium"
+default_reasoning_effort = "medium"
+
+[models."rank:claude-opus-5-5-high:direct"]
+inherits = "rank:claude-opus-5-5:direct"
+benchmark_slug = "claude-opus-5-5-high"
+default_reasoning_effort = "high"
+
+[models."rank:claude-opus-5-5-xhigh:direct"]
+inherits = "rank:claude-opus-5-5:direct"
+benchmark_slug = "claude-opus-5-5-xhigh"
+default_reasoning_effort = "xhigh"
+
+[models."rank:claude-sonnet-5-5:direct"]
+api_id = "claude-sonnet-5-5"
+benchmark_slug = "claude-sonnet-5-5"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 2.0, out = 10.0, write = 2.5}
+default_thinking = true
+cc_effort = true
+source = "https://api.anthropic.com/v1/models"
+verified_at = "2026-09-29"
+
+[models."rank:claude-sonnet-5-5-low:direct"]
+inherits = "rank:claude-sonnet-5-5:direct"
+benchmark_slug = "claude-sonnet-5-5-low"
+default_reasoning_effort = "low"
+
+[models."rank:claude-sonnet-5-5-medium:direct"]
+inherits = "rank:claude-sonnet-5-5:direct"
+benchmark_slug = "claude-sonnet-5-5-medium"
+default_reasoning_effort = "medium"
+
+[models."rank:claude-sonnet-5-5-high:direct"]
+inherits = "rank:claude-sonnet-5-5:direct"
+benchmark_slug = "claude-sonnet-5-5-high"
+default_reasoning_effort = "high"
+
+[models."rank:claude-sonnet-5-5-xhigh:direct"]
+inherits = "rank:claude-sonnet-5-5:direct"
+benchmark_slug = "claude-sonnet-5-5-xhigh"
+default_reasoning_effort = "xhigh"

@@ -1,0 +1,103 @@
+# The worker shell policy (hswarm/shellpolicy.py). Every command a `bash` tool call would run is checked
+# against these prefix rules after its wrappers are peeled (env, timeout, nice, xargs, find -exec, sh -c,
+# bash <<EOF, eval, sudo, cmd //c, powershell -Command, git -c alias.*) and its argv[0] is reduced to a bare
+# program name (/usr/bin/git.exe -> git).
+#
+#   pattern       argv prefix; a list in a position is a set of alternatives for that word
+#   decision      "forbidden" or "allow"; the LONGEST matching pattern decides, a tie goes to forbidden
+#   justification what the worker should do instead; it is the tool result the worker reads
+#   unless_env    optional: the rule is off while this environment variable is "1"
+#   hard          optional: no per-task shell grant lifts it
+#   match         examples that MUST match this rule, run when the file loads
+#   not_match     examples that must NOT match it; a rule failing its own examples refuses every bash call
+#
+# A machine adds or tightens rules in ~/.hswarm/shell_rules.toml (same format, loaded on top of this one).
+# Examples are TOML literal strings ('...'), so a backslash is a backslash, as bash would see it.
+
+# 2026-09-21: a worker told to write one fixture ran `git checkout <base> -- <detector>` "to test the old
+# bytes" in a shared checkout, and the stale file sat in the tree AND the index until the orchestrator
+# noticed. A worker's shell runs in the caller's working tree, where other sessions commit straight off disk.
+[[rule]]
+pattern = ["git", ["add", "am", "apply", "checkout", "checkout-index", "cherry-pick", "clean", "commit", "gc", "merge", "mv",
+                   "prune", "pull", "push", "read-tree", "rebase", "reset", "restore", "revert", "rm", "stash", "switch",
+                   "update-index", "update-ref", "worktree"]]
+decision = "forbidden"
+unless_env = "HSWARM_ALLOW_GIT_WRITES"
+justification = """this worker runs in a shared working tree, and a git write (checkout/restore/add/stash/reset/commit ...) \
+changes files or the index other sessions commit from. Read-only git (show, log, diff, status, ls-files) is fine; \
+write only the file your task names, with write_file or edit_file."""
+match = [
+    'git checkout abc123~1 -- src/check.mjs',
+    'cd x && git restore .',
+    'GIT_INDEX_FILE=/tmp/i git reset --hard',
+    'env git stash',
+    'timeout 60 git restore .',
+    'nice -n 5 git reset --hard',
+    'find . -name "*.mjs" -exec git checkout -- {} \;',
+    'ls | xargs -I{} git rm {}',
+    "sh -c 'git checkout main'",
+    'bash -lc "git add -A"',
+    'eval git reset --hard',
+    'echo "$(git stash)"',
+    'git -c alias.co=checkout co main',
+    "g'i't commit -m x",
+    '/usr/bin/git.exe push',
+    "bash <<< 'git stash'",
+    '''sh <<'EOF'
+git reset --hard
+EOF''',
+    'git read-tree HEAD',
+]
+not_match = [
+    'git log -1 --format=%h',
+    'echo git checkout is fine as text',
+    "grep -n 'git reset' README.md",
+    'git -c alias.co=checkout log',
+    '''cat <<EOF
+git checkout main
+EOF''',
+]
+
+# Write forms of subcommands whose bare form only lists: moving, deleting or forcing a branch, tag or note
+# rewrites refs every session on the checkout shares.
+[[rule]]
+pattern = ["git", ["branch", "notes"], ["-f", "--force", "-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy",
+                                        "add", "append", "copy", "edit", "merge", "prune", "remove"]]
+decision = "forbidden"
+unless_env = "HSWARM_ALLOW_GIT_WRITES"
+justification = """this worker runs in a shared working tree, and moving, deleting or forcing a branch or note rewrites refs other sessions use. Listing is fine: `git branch -a`, `git branch --show-current`, `git notes list`."""
+match = ['git branch -D feature', 'git branch -f main HEAD~1', 'git notes add -m x']
+not_match = ['git branch -a', 'git branch --show-current', 'git notes list']
+
+[[rule]]
+pattern = ["git", "tag", ["-a", "--annotate", "-s", "--sign", "-u", "--local-user", "-d", "--delete", "-f", "--force",
+                          "-m", "--message"]]
+decision = "forbidden"
+unless_env = "HSWARM_ALLOW_GIT_WRITES"
+justification = """this worker runs in a shared working tree, and creating, moving or deleting a tag rewrites refs other sessions use. Listing is fine: `git tag -l`, `git tag --contains <commit>`."""
+match = ['git tag -a v1 -m x', 'git tag -d v1']
+not_match = ['git tag -l', 'git tag --contains HEAD']
+
+# The read-only forms of two write subcommands: listing is not writing.
+[[rule]]
+pattern = ["git", ["stash", "worktree"], ["list", "show"]]
+decision = "allow"
+match = ['git stash list', 'git worktree list --porcelain', 'git stash show -p']
+not_match = ['git stash pop', 'git worktree add ../x']
+
+# .git/config is shared by every session on the checkout, and an alias written there
+# (`git config alias.co checkout`) is the one wrapper a line-by-line check cannot see.
+[[rule]]
+pattern = ["git", "config"]
+decision = "forbidden"
+unless_env = "HSWARM_ALLOW_GIT_WRITES"
+justification = """git config writes .git/config, which every session on this checkout shares. \
+Read a value with `git config --get <key>` or `git config --list`."""
+match = ['git config alias.co checkout', 'git config --unset user.name']
+not_match = ['git log']
+
+[[rule]]
+pattern = ["git", "config", ["--get", "--get-all", "--get-regexp", "--list", "-l", "get", "list"]]
+decision = "allow"
+match = ['git config --get user.email', 'git config --list']
+not_match = ['git config alias.co checkout']

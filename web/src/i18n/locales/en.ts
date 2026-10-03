@@ -8,6 +8,7 @@ import climayte from './en/climayte'
 import codexInstances from './en/codexInstances'
 import composer from './en/composer'
 import dshInstances from './en/dshInstances'
+import hswarm from './en/hswarm'
 import incidents from './en/incidents'
 import instances from './en/instances'
 import notifications from './en/notifications'
@@ -16,6 +17,7 @@ import run from './en/run'
 import scheduler from './en/scheduler'
 import sessions from './en/sessions'
 import settings from './en/settings'
+import swarmStats from './en/swarmStats'
 
 export default {
   analytics,
@@ -26,6 +28,7 @@ export default {
   composer,
   climayte,
   dshInstances,
+  hswarm,
   incidents,
   instances,
   notifications,
@@ -34,4 +37,5 @@ export default {
   scheduler,
   sessions,
   settings,
+  swarmStats,
 }

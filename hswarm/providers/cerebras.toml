@@ -1,0 +1,49 @@
+# Cerebras: wafer-scale, very fast, free tier capped per day in tokens.
+
+base_url = "https://api.cerebras.ai/v1"
+about = "Very fast open models. Has a free tier with daily limits."
+key_url = "https://cloud.cerebras.ai/"  # where a person makes an API key
+website = "https://www.cerebras.ai"  # the company's site; the console shows its favicon
+free_tier = true  # free terms may keep what is sent: HSWARM_REDACT_FREE_TIER redacts tasks here
+# The free tier is a DAILY token cap, and a key that spends it answers 402: today's allowance, not money. A 402
+# here is dated to this hour (UTC) and probation lets the key out then, not 24 h after the 402. 2026-10-02: 416 of
+# 419 keys were parked as "out of credit" and every one served again that evening. The hour is assumed, not
+# published: a key let out before the real reset answers one 402 and is dated to the next one.
+daily_quota_reset_utc_hour = 0
+options = ["reasoning_effort"]
+models_path = "/models"
+anthropic_url = "facade"
+docs = "https://inference-docs.cerebras.ai/api-reference/chat-completions"
+
+# The same model on a second host, the tool-free fallback: 50/51.
+[models.cerebras-gpt-oss-120b]
+api_id = "gpt-oss-120b"
+ctx = 131072
+price = {hit = 0.25, miss = 0.25, out = 0.69}
+fallback = true
+
+[models."cerebras-qwen3.8-27b"]
+api_id = "qwen-3.8-27b"
+ctx = 131072
+price = {hit = 0.2, miss = 0.2, out = 0.8}
+
+# Models with a `benchmark_slug` take part in AUTO: the slug names their published scores in
+# data/published-models.json. `inherits` copies another model's settings; the lines below it
+# change what differs.
+[models."rank:gpt-oss-120b:cerebras"]
+inherits = "cerebras-gpt-oss-120b"
+benchmark_slug = "gpt-oss-120b"
+tools = false
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+note = "Direct host of the evidenced configuration (same model, same high effort). Tool-free only: in a multi-tool loop it emits harmony-channel calls the api backend rejects (config.py); schema asks through submit_result work (probed 2026-09-25)."
+
+[models."rank:qwen3-8-27b:cerebras"]
+inherits = "cerebras-qwen3.8-27b"
+benchmark_slug = "qwen3-8-27b"
+tools = true
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+note = "Measured at xhigh (qwen3-8-27b); served at high, the highest effort Groq and Cerebras accept (both 400 on xhigh, probed 2026-09-25). Provisional: the evidence is an upper bound for this route."

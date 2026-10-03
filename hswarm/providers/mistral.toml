@@ -1,0 +1,28 @@
+# Mistral la Plateforme. It answers 422 to the extra `user` field, hence `omit`.
+# Retired from routing 2026-09-23 (a day on mistral cost ~$607): its models are reached by name only.
+
+base_url = "https://api.mistral.ai/v1"
+about = "Mistral's own models. Has a free tier."
+key_url = "https://console.mistral.ai/api-keys"  # where a person makes an API key
+website = "https://mistral.ai"  # the company's site; the console shows its favicon
+free_tier = true  # free terms may keep what is sent: HSWARM_REDACT_FREE_TIER redacts tasks here
+models_path = "/models"
+omit = ["user"]
+docs = "https://docs.mistral.ai/api/"
+
+# Mistral models are reached by name only (retired from every route 2026-09-23).
+[models.magistral-medium]
+api_id = "magistral-medium-latest"
+ctx = 131072
+price = {hit = 2.0, miss = 2.0, out = 5.0}
+
+[models.ministral-8b]
+api_id = "ministral-8b-latest"
+ctx = 131072
+price = {hit = 0.1, miss = 0.1, out = 0.1}
+
+[models."mistral-medium-3.5"]
+api_id = "mistral-medium-3.5"
+ctx = 131072
+price = {hit = 0.4, miss = 0.4, out = 2.0}
+fallback = true

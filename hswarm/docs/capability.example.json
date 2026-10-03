@@ -1,0 +1,11 @@
+{
+  "identifier": "docs-writer",
+  "description": "Reads the repo, writes only under docs/, never sees secrets. Copy to <repo>/.hswarm/capabilities/docs-writer.json and name it in a task: {\"capability\": \"docs-writer\"}.",
+  "permissions": [
+    "read",
+    { "identifier": "write_file", "allow": ["docs/**"] },
+    { "identifier": "edit_file", "allow": ["docs/**", "README.md"] },
+    "deny-bash"
+  ],
+  "deny": [".secrets/**", "**/.env", "**/*.pem", "**/*.key"]
+}

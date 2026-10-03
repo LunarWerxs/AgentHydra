@@ -1,0 +1,185 @@
+"""TypeSafe's Jev: a "System One" model that answers TYPED questions - pick one option, yes/no, rate on a
+scale - with a probability for every answer, in about 0.15 s. It cannot write text or use tools, so it is
+never a worker model; hswarm reaches it only through `hswarm_decide` (hswarm/decisions.py), where it answers
+first and anything it is unsure of goes to a generative model. Measured 2026-09-21: docs/BENCH-2026-09-21-jev.md.
+
+API: POST https://api.typesafe.ai/v1/systemone with a Bearer key and {state, model, questions: {id: question}};
+one answer comes back per question id. Price $0.042 per million INPUT tokens, output free. Limits (2026-09-21,
+"adjusting dynamically"): 1,200 requests/min, 250k tokens/s, 64k tokens per request of which the state plus the
+longest question may use 32k. Keys: TYPESAFE_API_KEYS / TYPESAFE_API_KEY, or `.secrets/typesafe_api_keys` (one
+per line), or `keys = [...]` in ~/.hswarm/providers/typesafe.toml: the provider file (hswarm/providers/typesafe.toml)
+owns the address and the key sources, like every other provider's. A key is never printed or logged.
+
+The same client reaches Featherless's Simple Jev (github.com/featherless-ai/simple-jev): open models that answer
+through TypeSafe's own request and response shape (its /v1/systemone is an alias of /v1/classifier) by reading the
+next-token scores of the answer labels. Any model id starting `featherless-ai/` goes to the public demo, which
+needs no key, refuses a question over 2k tokens with a 422 (never truncates), and allows 2 requests a second per
+caller; every client of that host shares one pacer so several bench arms stay under the limit together.
+
+It also reaches Cloudflare's Clef decision models (blog.cloudflare.com/clef-decision-models, 2026-10-01): `clef` and
+`clef-flash` on Workers AI take TypeSafe's request and answer in TypeSafe's shape, inside Workers AI's
+{"result": ..., "success": ...} envelope; up to 64 questions a call, 64k context. They need a Cloudflare token with
+Workers AI access (CLOUDFLARE_API_TOKEN, or a clone's .secrets/cloudflare_api_keys) and CLOUDFLARE_ACCOUNT_ID.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import random
+import time
+from urllib.parse import urlsplit
+
+import httpx
+
+from . import config, egress
+
+URL = config.PROVIDERS["typesafe"]["base_url"] + "/systemone"
+# PINNED, not the jev-latest alias: hswarm_decide's 0.7 threshold and Dredd's seat thresholds were tuned on this
+# version's probabilities, and TypeSafe's models page says to pin the version a threshold was tuned against because
+# the alias moves with each release. Move it after bench/decide.py has measured the new version.
+MODEL = "jev-1.13.0"
+USD_PER_INPUT_TOKEN = 0.042 / 1_000_000
+RETRYABLE = {429, 500, 502, 503, 504, 529}
+KEY_DEAD = {401, 402, 403}  # a bad, unpaid or unpermitted key does not heal inside a run
+SIMPLE_JEV_PREFIX = "featherless-ai/"
+SIMPLE_JEV_DEMO_URL = "https://simple-jev-demo-api.featherless.ai/v1/systemone"
+SIMPLE_JEV_DEMO_INTERVAL = 0.5  # the demo's 2 requests/second
+_NEXT_SLOT: dict[str, float] = {}  # url -> earliest monotonic time the next request may start, shared by every client
+# $ per million input tokens, output free (developers.cloudflare.com/workers-ai/models/clef and /clef-flash, 2026-10-02).
+CLEF_PRICES = {"clef": 0.24, "clef-flash": 0.09}
+CLEF_URL = "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/@cf/cloudflare/{model}"
+NO_KEY = {"typesafe": "no usable TypeSafe key (TYPESAFE_API_KEY or .secrets/typesafe_api_keys)",
+          "cloudflare": "no usable Cloudflare token (CLOUDFLARE_API_TOKEN or .secrets/cloudflare_api_keys, plus CLOUDFLARE_ACCOUNT_ID)"}
+
+
+def is_typed_model(model: str) -> bool:
+    """A model that answers typed questions natively (Jev, Clef, or an open model behind Simple Jev), not a generative one."""
+    return model == "jev" or model in CLEF_PRICES or model.startswith(("jev-", SIMPLE_JEV_PREFIX))
+
+
+def load_keys() -> list[str]:
+    """Every TypeSafe key the provider file's sources hold: the environment, the user's file, a clone's .secrets/."""
+    return config.load_api_keys("typesafe")
+
+
+def clef_keys() -> list[str]:
+    """Cloudflare tokens with Workers AI access: CLOUDFLARE_API_TOKEN (comma-separated for several), then a clone's
+    .secrets/cloudflare_api_keys."""
+    env = config._split_keys(os.environ.get("CLOUDFLARE_API_TOKEN"))
+    return list(dict.fromkeys(env + config._read_key_lines(config.SECRETS_DIR / "cloudflare_api_keys")))
+
+
+class Jev:
+    """Async client: round-robin over the key pool, backoff on limits and overload (honouring retry-after),
+    a key that answers 401/402/403 leaves the rotation for the life of this client."""
+
+    # 30 s: an answer takes 0.15-2 s, so a longer wait is a hung connection, and a timeout is retried like a 5xx.
+    def __init__(self, keys: list[str] | None = None, concurrency: int = 16, timeout: float = 30.0, http: httpx.AsyncClient | None = None,
+                 *, url: str = URL, usd_per_input_token: float = USD_PER_INPUT_TOKEN, keyless: bool = False, min_interval: float = 0.0,
+                 provider: str = "typesafe"):
+        self.url, self.keyless, self.min_interval, self.provider = url, keyless, min_interval, provider
+        self.usd_per_input_token = usd_per_input_token
+        self.keys = [] if keyless else list(keys if keys is not None else load_keys())
+        self.sem = asyncio.Semaphore(concurrency)
+        self._http = http
+        self._own = http is None
+        self._timeout = timeout
+        self._i = 0
+        self.calls = 0
+
+    @classmethod
+    def for_model(cls, model: str, concurrency: int = 16, **kw) -> "Jev":
+        """The client that serves `model`: TypeSafe for jev-*, the keyless Featherless demo for featherless-ai/*,
+        Workers AI for clef and clef-flash (no account id means no usable key)."""
+        if model.startswith(SIMPLE_JEV_PREFIX):
+            return cls(concurrency=min(concurrency, 2), url=SIMPLE_JEV_DEMO_URL, usd_per_input_token=0.0, keyless=True,
+                       min_interval=SIMPLE_JEV_DEMO_INTERVAL, **kw)
+        if model in CLEF_PRICES:
+            account = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+            return cls(keys=clef_keys() if account else [], concurrency=concurrency, url=CLEF_URL.format(account=account, model=model),
+                       usd_per_input_token=CLEF_PRICES[model] / 1_000_000, provider="cloudflare", **kw)
+        return cls(concurrency=concurrency, **kw)
+
+    @property
+    def usable(self) -> bool:
+        return self.keyless or bool(self.keys)
+
+    async def _pace(self) -> None:
+        """Hold this request until the endpoint's next free slot. No await sits between reading and booking the
+        slot, so concurrent tasks on one event loop can never take the same one."""
+        if self.min_interval <= 0:
+            return
+        now = time.monotonic()
+        slot = max(now, _NEXT_SLOT.get(self.url, 0.0))
+        _NEXT_SLOT[self.url] = slot + self.min_interval
+        if slot > now:
+            await asyncio.sleep(slot - now)
+
+    async def __aenter__(self) -> "Jev":
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout))
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        if self._own and self._http is not None:
+            await self._http.aclose()
+
+    def _key(self) -> str | None:
+        if self.keyless:
+            return ""
+        if not self.keys:
+            return None
+        self._i = (self._i + 1) % len(self.keys)
+        return self.keys[self._i]
+
+    async def ask(self, state, questions: dict, model: str = MODEL, attempts: int = 7) -> dict:
+        """{"status": "ok", answers, secs, in, out, model, cost_usd} or {"status": "error", error, http}."""
+        last: dict = {"status": "error", "error": NO_KEY.get(self.provider, f"no usable {self.provider} key"), "http": None}
+        body = {"state": state, "model": model, "questions": questions}
+        # Serialised once so the egress receipt hashes the exact bytes that leave (egress.py).
+        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        sink = f"{self.provider}:{urlsplit(self.url).hostname}"
+        for attempt in range(attempts):
+            key = self._key()
+            if key is None:
+                return last
+            async with self.sem:
+                await self._pace()
+                t0 = time.perf_counter()
+                egress.record(sink, payload, provider=self.provider, model=model)  # fail-closed raises here, unsent
+                try:
+                    headers = {"Content-Type": "application/json", **({} if self.keyless else {"Authorization": f"Bearer {key}"})}
+                    resp = await self._http.post(self.url, content=payload, headers=headers)
+                except httpx.HTTPError as e:
+                    resp, last = None, {"status": "error", "error": f"{type(e).__name__}: {e}"[:200], "http": None}
+                secs = time.perf_counter() - t0
+                self.calls += 1
+            if resp is not None and resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data.get("result"), dict):  # Workers AI wraps the System One answer: {"result": ..., "success": ...}
+                    data = data["result"]
+                usage = data.get("usage") or {}
+                tin = int(usage.get("input_tokens") or 0)
+                return {"status": "ok", "answers": data.get("answers") or {}, "secs": secs, "in": tin, "out": int(usage.get("output_tokens") or 0),
+                        "model": data.get("model") or model, "cost_usd": tin * self.usd_per_input_token}
+            if resp is not None:
+                last = {"status": "error", "error": f"HTTP {resp.status_code}: {resp.text[:180]}", "http": resp.status_code}
+                if resp.status_code in KEY_DEAD:
+                    if self.keyless:
+                        return last  # no key to rotate: a keyless endpoint that refuses us keeps refusing
+                    self.keys = [k for k in self.keys if k != key]
+                    continue
+                if resp.status_code not in RETRYABLE:
+                    return last  # a 422 is a malformed question: resending it unchanged fails the same way
+                ra = resp.headers.get("retry-after")
+                await asyncio.sleep(float(ra) if ra and ra.replace(".", "", 1).isdigit() else _backoff(attempt))
+            else:
+                await asyncio.sleep(_backoff(attempt))
+        return last
+
+
+def _backoff(attempt: int) -> float:
+    """Exponential, capped at 60 s, less up to a quarter at random so a burst of concurrent calls refused together
+    does not come back together (the TypeSafe SDK's backoff_jitter)."""
+    return min(2 * 2 ** attempt, 60) * (1 - 0.25 * random.random())

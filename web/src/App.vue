@@ -3,6 +3,8 @@ import {
   BarChart3,
   Bot,
   Boxes,
+  ChevronDown,
+  Layers,
   ListChecks,
   Maximize2,
   MessagesSquare,
@@ -15,13 +17,14 @@ import {
   Sun,
   Terminal,
 } from '@lucide/vue'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AnalyticsView from '@/components/AnalyticsView.vue'
 import AutomationSettings from '@/components/AutomationSettings.vue'
 import CliMayteView from '@/components/CliMayteView.vue'
 import CliView from '@/components/CliView.vue'
+import HSwarmView from '@/components/HSwarmView.vue'
 import InstancesHomeView from '@/components/InstancesHomeView.vue'
 import InstancesView from '@/components/InstancesView.vue'
 import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
@@ -35,6 +38,7 @@ import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -50,7 +54,7 @@ import { openShortcutSheet, useShortcuts } from '@/composables/useShortcuts'
 import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
-import { INSTANCES_VIEWS } from '@/lib/app-view'
+import { INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
 import { pendingSessionJump } from '@/lib/session-jump'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
@@ -143,6 +147,14 @@ useShortcuts([
       view.value = 'desktop'
     },
   },
+  {
+    keys: 'mod+7',
+    labelKey: 'app.shortcutHswarm',
+    groupKey: 'app.shortcutGroupApp',
+    run: () => {
+      view.value = 'hswarm'
+    },
+  },
 ])
 
 // settings + queue share the right edge; usePanels keeps them mutually exclusive
@@ -226,12 +238,13 @@ async function onShutdown() {
 }
 
 // Top-level tabs. Instances is a group: clicking it opens the landing page, and its two sub-pages
-// sit in a small list right below it. The group reads as active on any of its three views.
+// sit in a hover dropdown. The group reads as active on any of its three views.
 const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
   { id: 'sessions', labelKey: 'app.tabSessions', icon: MessagesSquare },
   { id: 'climayte', labelKey: 'app.tabClimayte', icon: Bot },
   { id: 'instances-home', labelKey: 'app.tabInstances', icon: Boxes },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
+  { id: 'hswarm', labelKey: 'app.tabHswarm', icon: Layers },
 ]
 const instancesSub: { id: AppView; labelKey: string; icon: typeof Terminal }[] = [
   { id: 'cli', labelKey: 'app.tabCli', icon: Terminal },
@@ -242,10 +255,66 @@ function tabActive(id: AppView) {
   return id === 'instances-home' ? inInstances.value : view.value === id
 }
 
+// Instances dropdown: opens on mouse hover (closing ~150 ms after the pointer leaves both the tab and
+// the menu), on ArrowDown from the tab, on Enter/Space on the chevron, and on a tap of the chevron.
+// Only keyboard opens move focus into the menu; a hover must not steal it.
+const instancesMenuOpen = ref(false)
+let instancesMenuViaKeyboard = false
+let instancesCloseTimer: ReturnType<typeof setTimeout> | undefined
+function cancelInstancesClose() {
+  clearTimeout(instancesCloseTimer)
+}
+function hoverInstances(e: PointerEvent) {
+  if (e.pointerType === 'touch') return
+  cancelInstancesClose()
+  instancesMenuOpen.value = true
+}
+function leaveInstances(e: PointerEvent) {
+  if (e.pointerType === 'touch') return
+  cancelInstancesClose()
+  instancesCloseTimer = setTimeout(() => {
+    instancesMenuOpen.value = false
+  }, 150)
+}
+function setInstancesMenu(open: boolean) {
+  cancelInstancesClose()
+  instancesMenuOpen.value = open
+}
+function onInstancesTabKeydown(e: KeyboardEvent) {
+  // Enter/Space keep their normal job on the tab (open the landing page): keep them from reaching the
+  // trigger around it, which would open the menu instead.
+  if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
+  else if (e.key === 'ArrowDown') instancesMenuViaKeyboard = true
+}
+function onInstancesChevronPointerdown(e: PointerEvent) {
+  // With a mouse the hover already opened the menu: a click must not toggle it shut again.
+  if (e.pointerType === 'mouse') {
+    e.stopPropagation()
+    setInstancesMenu(true)
+  }
+}
+function onInstancesChevronKeydown() {
+  instancesMenuViaKeyboard = true
+}
+function onInstancesOpenAutoFocus(e: Event) {
+  if (!instancesMenuViaKeyboard) e.preventDefault()
+  instancesMenuViaKeyboard = false
+}
+function pickInstancesSub(id: AppView) {
+  view.value = id
+  setInstancesMenu(false)
+}
+
 // The landing page names the page a tile opens in its own words: its `instances` is the desktop page.
-function onHomeNavigate(to: 'cli' | 'instances' | 'climayte' | 'sessions' | 'analytics') {
+function onHomeNavigate(
+  to: 'cli' | 'instances' | 'climayte' | 'sessions' | 'analytics' | 'hswarm',
+) {
   view.value = to === 'instances' ? 'desktop' : to
 }
+
+provide(OPEN_VIEW, (v: AppView) => {
+  view.value = v
+})
 
 const runningCount = computed(() => queue.value.filter((q) => q.status === 'running').length)
 
@@ -348,8 +417,66 @@ onUnmounted(stopAvailabilityPolling)
 
       <!-- view tabs -->
       <nav class="ms-2 flex items-start gap-1" :aria-label="$t('app.navLabel')">
-        <div v-for="n in nav" :key="n.id" class="flex flex-col items-stretch">
+        <template v-for="n in nav" :key="n.id">
+          <!-- Instances: the tab opens the landing page; hovering it (or its chevron) drops down CLI and Desktop -->
+          <DropdownMenu
+            v-if="n.id === 'instances-home'"
+            :open="instancesMenuOpen"
+            :modal="false"
+            @update:open="setInstancesMenu"
+          >
+            <DropdownMenuTrigger as-child>
+              <div
+                class="flex items-center"
+                @pointerenter="hoverInstances"
+                @pointerleave="leaveInstances"
+              >
+                <Button
+                  :variant="tabActive(n.id) ? 'secondary' : 'ghost'"
+                  size="sm"
+                  :title="$t(n.labelKey)"
+                  :aria-current="view === n.id ? 'page' : tabActive(n.id) ? 'true' : undefined"
+                  @pointerdown.stop
+                  @keydown="onInstancesTabKeydown"
+                  @click="view = n.id"
+                >
+                  <component :is="n.icon" />
+                  <span class="hidden sm:inline">{{ $t(n.labelKey) }}</span>
+                </Button>
+                <Button
+                  :variant="tabActive(n.id) ? 'secondary' : 'ghost'"
+                  size="icon-sm"
+                  class="-ms-1 w-5"
+                  :aria-label="$t('app.instancesMenu')"
+                  @pointerdown="onInstancesChevronPointerdown"
+                  @keydown="onInstancesChevronKeydown"
+                >
+                  <ChevronDown class="size-3" />
+                </Button>
+              </div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              :aria-label="$t('app.instancesMenu')"
+              @open-auto-focus="onInstancesOpenAutoFocus"
+              @close-auto-focus.prevent
+              @pointerenter="hoverInstances"
+              @pointerleave="leaveInstances"
+            >
+              <DropdownMenuItem
+                v-for="sub in instancesSub"
+                :key="sub.id"
+                :class="view === sub.id ? 'bg-secondary text-foreground' : ''"
+                :aria-current="view === sub.id ? 'page' : undefined"
+                @select="pickInstancesSub(sub.id)"
+              >
+                <component :is="sub.icon" />
+                {{ $t(sub.labelKey) }}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
+            v-else
             :variant="tabActive(n.id) ? 'secondary' : 'ghost'"
             size="sm"
             :title="$t(n.labelKey)"
@@ -359,23 +486,7 @@ onUnmounted(stopAvailabilityPolling)
             <component :is="n.icon" />
             <span class="hidden sm:inline">{{ $t(n.labelKey) }}</span>
           </Button>
-          <!-- the Instances group's sub-list: CLI and Desktop, directly under it -->
-          <ul v-if="n.id === 'instances-home'" class="mt-0.5 flex items-center justify-center gap-0.5">
-            <li v-for="sub in instancesSub" :key="sub.id">
-              <button
-                type="button"
-                class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs font-medium outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                :class="view === sub.id ? 'bg-secondary text-foreground' : 'text-muted-foreground'"
-                :title="$t(sub.labelKey)"
-                :aria-current="view === sub.id ? 'page' : undefined"
-                @click="view = sub.id"
-              >
-                <component :is="sub.icon" class="size-3" />
-                <span class="hidden sm:inline">{{ $t(sub.labelKey) }}</span>
-              </button>
-            </li>
-          </ul>
-        </div>
+        </template>
       </nav>
 
       <div class="ms-auto flex items-center gap-2">
@@ -473,6 +584,7 @@ onUnmounted(stopAvailabilityPolling)
           <CliMayteView v-else-if="view === 'climayte'" class="h-full" />
           <InstancesHomeView v-else-if="view === 'instances-home'" @navigate="onHomeNavigate" />
           <CliView v-else-if="view === 'cli'" />
+          <HSwarmView v-else-if="view === 'hswarm'" />
           <InstancesView v-else />
         </Transition>
       </main>

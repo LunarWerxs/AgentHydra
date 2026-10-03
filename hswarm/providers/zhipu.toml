@@ -1,0 +1,15 @@
+# Z.ai / BigModel, the GLM family.
+
+base_url = "https://api.z.ai/api/paas/v4"
+about = "Z.ai's GLM models. Paid per use."
+key_url = "https://z.ai/manage-apikey/apikey-list"  # where a person makes an API key
+website = "https://z.ai"  # the company's site; the console shows its favicon
+models_path = "/models"
+docs = "https://docs.z.ai/guides/llm/glm-4.6"
+
+# Paid per call; retired from routing 2026-09-23. Reached by name only.
+[models."glm-4.5-air"]
+api_id = "glm-4.5-air"
+ctx = 131072
+price = {hit = 0.2, miss = 0.2, out = 1.1}
+fallback = true

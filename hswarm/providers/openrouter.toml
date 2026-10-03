@@ -1,0 +1,412 @@
+# OpenRouter: one endpoint in front of ~440 models, and every key is its own account.
+# Any of its ids works without a file change as `or:<id>` (`or:<id>#<host>` pins one host).
+# `balance_authority = "status"`: /credits reads negative on keys that still serve (free grants
+# are not counted), so only a real 402 parks a key. The two headers are public attribution, not secrets.
+
+base_url = "https://openrouter.ai/api/v1"
+about = "One account for hundreds of models from many companies. Paid per use; a few models are free."
+key_url = "https://openrouter.ai/settings/keys"  # where a person makes an API key
+website = "https://openrouter.ai"  # the company's site; the console shows its favicon
+options = ["reasoning", "reasoning_effort", "provider", "transforms", "models", "route", "usage"]
+models_path = "/models"
+balance_path = "/key"
+credits_path = "/credits"
+balance_authority = "status"
+check_model = "openai/gpt-oss-20b:free"  # the key check chats with it: /key answers 200 for deleted accounts
+headers = {HTTP-Referer = "https://github.com/Lunarwerx/HydraSwarm", X-Title = "HydraSwarm"}
+passthrough = ["or:", "openrouter:"]
+anthropic_url = "https://openrouter.ai/api"
+anthropic_auth = "bearer"
+docs = "https://openrouter.ai/docs"
+
+# The same model through OpenRouter, steered to DeepInfra (fp8) with `order` and fallbacks on (a strict pin
+# 404s when the host is down). A FALLBACK: benchmarked 2026-09-17, every OpenRouter path found a planted bug
+# in code review 11/20 against 10/10 direct, at ~3.5x the latency. Cheaper at peak, which does not buy a
+# review regression. `fallback = false` in your own openrouter.toml promotes it.
+[models.deepseek-flash-or]
+api_id = "deepseek/deepseek-v4.1-flash"
+ctx = 1000000
+max_out = 384000
+price = {hit = 0.006, miss = 0.2, out = 0.6}
+concurrency_limit = 2500
+extra = {provider = {order = ["deepinfra"], allow_fallbacks = true}}
+fallback = true
+
+# Models with a `benchmark_slug` take part in AUTO: the slug names their published scores in
+# data/published-models.json. `inherits` copies another model's settings; the lines below it
+# change what differs.
+[models."rank:claude-opus-5-5"]
+api_id = "anthropic/claude-opus-5.5"
+benchmark_slug = "claude-opus-5-5"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 4.0, out = 20.0}
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:claude-opus-5-5-xhigh"]
+api_id = "anthropic/claude-opus-5.5"
+benchmark_slug = "claude-opus-5-5-xhigh"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 4.0, out = 20.0}
+default_reasoning_effort = "xhigh"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:claude-opus-5-5-high"]
+api_id = "anthropic/claude-opus-5.5"
+benchmark_slug = "claude-opus-5-5-high"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 4.0, out = 20.0}
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:claude-fable-5-1"]
+api_id = "anthropic/claude-fable-5.1"
+benchmark_slug = "claude-fable-5-1"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.25, miss = 10.0, out = 50.0}
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:gpt-6-astra"]
+api_id = "openai/gpt-6-astra"
+benchmark_slug = "gpt-6-astra"
+ctx = 1050000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 1.0, miss = 10.0, out = 50.0}
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:claude-opus-5-5-medium"]
+api_id = "anthropic/claude-opus-5.5"
+benchmark_slug = "claude-opus-5-5-medium"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 4.0, out = 20.0}
+default_reasoning_effort = "medium"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:gpt-6-astra-high"]
+api_id = "openai/gpt-6-astra"
+benchmark_slug = "gpt-6-astra-high"
+ctx = 1050000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 1.0, miss = 10.0, out = 50.0}
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:gpt-6-sol"]
+api_id = "openai/gpt-6-sol"
+benchmark_slug = "gpt-6-sol"
+ctx = 1050000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 2.0, out = 10.0}
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:mimo-v2-6-pro"]
+api_id = "xiaomi/mimo-v2.6-pro"
+benchmark_slug = "mimo-v2-6-pro"
+ctx = 1048576
+max_out = 131072
+vision = true
+tools = true
+price = {hit = 0.0036, miss = 0.435, out = 0.87}
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:glm-5-3"]
+api_id = "z-ai/glm-5.3"
+benchmark_slug = "glm-5-3"
+ctx = 1310720
+max_out = 943717
+vision = false
+tools = true
+price = {hit = 0.26, miss = 1.4, out = 4.4}
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:gpt-6-sol-high"]
+api_id = "openai/gpt-6-sol"
+benchmark_slug = "gpt-6-sol-high"
+ctx = 1050000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 2.0, out = 10.0}
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:claude-opus-5-5-low"]
+api_id = "anthropic/claude-opus-5.5"
+benchmark_slug = "claude-opus-5-5-low"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 4.0, out = 20.0}
+default_reasoning_effort = "low"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:glm-5-3-flash"]
+api_id = "z-ai/glm-5.3-flash"
+benchmark_slug = "glm-5-3-flash"
+ctx = 1310720
+max_out = 131072
+vision = true
+tools = true
+price = {hit = 0.0285, miss = 0.045, out = 0.6}
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:gemini-3-8-flash"]
+api_id = "google/gemini-3.8-flash"
+benchmark_slug = "gemini-3-8-flash"
+ctx = 1048576
+max_out = 65536
+vision = true
+tools = true
+price = {hit = 0.075, miss = 0.75, out = 3.75}
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:deepseek-v4-1-flash"]
+api_id = "deepseek/deepseek-v4.1-flash"
+benchmark_slug = "deepseek-v4-1-flash"
+ctx = 1048576
+max_out = 393216
+vision = true
+tools = true
+price = {hit = 0.006, miss = 0.3, out = 1.2}
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:claude-sonnet-5"]
+api_id = "anthropic/claude-sonnet-5"
+benchmark_slug = "claude-sonnet-5"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 2.0, out = 10.0}
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:claude-sonnet-5-5"]
+api_id = "anthropic/claude-sonnet-5.5"
+benchmark_slug = "claude-sonnet-5-5"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 2.0, out = 10.0}
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-28"
+
+[models."rank:claude-sonnet-5-5-xhigh"]
+api_id = "anthropic/claude-sonnet-5.5"
+benchmark_slug = "claude-sonnet-5-5-xhigh"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 2.0, out = 10.0}
+default_reasoning_effort = "xhigh"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-28"
+
+[models."rank:claude-sonnet-5-5-high"]
+api_id = "anthropic/claude-sonnet-5.5"
+benchmark_slug = "claude-sonnet-5-5-high"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 2.0, out = 10.0}
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-28"
+
+[models."rank:claude-sonnet-5-5-medium"]
+api_id = "anthropic/claude-sonnet-5.5"
+benchmark_slug = "claude-sonnet-5-5-medium"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 2.0, out = 10.0}
+default_reasoning_effort = "medium"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-28"
+
+[models."rank:claude-sonnet-5-5-low"]
+api_id = "anthropic/claude-sonnet-5.5"
+benchmark_slug = "claude-sonnet-5-5-low"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.2, miss = 2.0, out = 10.0}
+default_reasoning_effort = "low"
+default_thinking = true
+cc_effort = true
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-28"
+
+[models."rank:gpt-6-luna"]
+api_id = "openai/gpt-6-luna"
+benchmark_slug = "gpt-6-luna"
+ctx = 1050000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.01, miss = 0.1, out = 0.5}
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:deepseek-v4-pro"]
+api_id = "deepseek/deepseek-v4-pro-0813"
+benchmark_slug = "deepseek-v4-pro"
+ctx = 1048576
+max_out = 384000
+vision = false
+tools = true
+price = {hit = 0.0154, miss = 0.462, out = 1.386}
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:qwen3-8-27b"]
+api_id = "qwen/qwen3.8-27b"
+benchmark_slug = "qwen3-8-27b"
+ctx = 1000000
+max_out = 131072
+vision = true
+tools = true
+price = {hit = 0.085, miss = 0.42, out = 3.0}
+default_reasoning_effort = "xhigh"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:gpt-6-luna-high"]
+api_id = "openai/gpt-6-luna"
+benchmark_slug = "gpt-6-luna-high"
+ctx = 1050000
+max_out = 128000
+vision = true
+tools = true
+price = {hit = 0.01, miss = 0.1, out = 0.5}
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:minimax-m3"]
+api_id = "minimax/minimax-m3"
+benchmark_slug = "minimax-m3"
+ctx = 1048576
+max_out = 512000
+vision = true
+tools = true
+price = {hit = 0.06, miss = 0.3, out = 1.2}
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"
+
+[models."rank:gpt-oss-120b"]
+api_id = "openai/gpt-oss-120b"
+benchmark_slug = "gpt-oss-120b"
+ctx = 131072
+max_out = 65536
+vision = false
+tools = true
+price = {hit = 0.075, miss = 0.15, out = 0.6}
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+source = "https://openrouter.ai/api/v1/models"
+verified_at = "2026-09-25"

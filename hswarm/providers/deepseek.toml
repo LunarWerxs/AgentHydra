@@ -1,0 +1,52 @@
+# DeepSeek, direct. The first hswarm provider; its prices are PEAK rates and off-peak is exactly half
+# (DeepSeek pricing page, 2026-09). `balance_authority = "reading"`: its balance is its word on whether
+# a call will be served, so a key reading zero is parked before a worker gets it.
+
+base_url = "https://api.deepseek.com"
+about = "DeepSeek's own models, direct. Paid per use, and prices halve off-peak."
+key_url = "https://platform.deepseek.com/api_keys"  # where a person makes an API key
+website = "https://www.deepseek.com"  # the company's site; the console shows its favicon
+key_files = ["deepseek_api_keys", "deepseek_api_key"]
+options = ["thinking", "reasoning_effort"]
+models_path = "/models"
+balance_path = "/user/balance"
+balance_authority = "reading"
+anthropic_url = "https://api.deepseek.com/anthropic"
+anthropic_auth = "x-api-key"
+docs = "https://api-docs.deepseek.com"
+
+# The default model. Its route tries direct DeepSeek, then the two router legs (fallbacks).
+[models.deepseek-flash]
+ctx = 1000000
+max_out = 384000
+peak = {hit = 0.006, miss = 0.3, out = 1.2}
+concurrency_limit = 2500
+aliases = ["deepseek-chat", "deepseek-v4-flash", "deepseek-v4.1-flash", "flash"]
+route = ["deepseek-flash", "deepseek-flash-or", "deepseek-flash-hf"]
+route_cc = ["deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or"]
+
+[models.deepseek-v4-pro]
+ctx = 1000000
+max_out = 384000
+peak = {hit = 0.044, miss = 1.32, out = 3.96}
+concurrency_limit = 500
+aliases = ["deepseek-reasoner", "pro"]
+
+# Models with a `benchmark_slug` take part in AUTO: the slug names their published scores in
+# data/published-models.json. `inherits` copies another model's settings; the lines below it
+# change what differs.
+[models."rank:deepseek-v4-1-flash:direct"]
+inherits = "deepseek-flash"
+benchmark_slug = "deepseek-v4-1-flash"
+tools = true
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = false
+
+[models."rank:deepseek-v4-pro:direct"]
+inherits = "deepseek-v4-pro"
+benchmark_slug = "deepseek-v4-pro"
+tools = true
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = false

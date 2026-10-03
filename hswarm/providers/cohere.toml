@@ -1,0 +1,46 @@
+# Cohere, the Command family, through its OpenAI-compatibility endpoint.
+
+base_url = "https://api.cohere.ai/compatibility/v1"
+about = "Cohere's Command models. A free trial key, then paid per use."
+key_url = "https://dashboard.cohere.com/api-keys"  # where a person makes an API key
+website = "https://cohere.com"  # the company's site; the console shows its favicon
+models_path = "/models"
+docs = "https://docs.cohere.com/docs/compatibility-api"
+
+# Tested 2026-09-26 on trial keys through the compatibility endpoint; both answer cleanly (Command A Plus and Command A
+# Reasoning put their thinking into the answer text there, so they are left out). No published test scores, so AUTO
+# never picks them: a task reaches them by name (model: "command-a") or through a role.
+# NOT a backup: tried as one on 2026-09-26 it wrote tool calls and schema answers as plain text, which came back
+# marked ok with no data (a dozen tasks across four jobs). A backup must pass the harness's own tool protocol.
+[models.command-a]
+api_id = "command-a-03-2025"
+ctx = 256000
+max_out = 8192
+tools = true
+price = {hit = 2.5, miss = 2.5, out = 10.0}
+
+[models.command-r7b]
+api_id = "command-r7b-12-2024"
+ctx = 128000
+max_out = 4096
+price = {hit = 0.0375, miss = 0.0375, out = 0.15}
+
+# Cohere's MULTILINGUAL model, 23 languages, and the cheapest paid route here for translation work by a
+# wide margin: $0.50/$1.50 against Gemini 3.5 Flash's $1.50/$9.00, read off cohere.com/pricing on
+# 2026-09-30 ("Aya Expanse models (8B and 32B) on the API are charged at $0.50/1M tokens for input and
+# $1.50/1M tokens for output"). Reached by name for a translation batch; AUTO still never picks it,
+# because Cohere publishes no task scores.
+# ⛔ NOT command-a-translate, whatever its name suggests: Cohere's own docs say it is "free until rate
+# limits are reached" and that production use needs a sales contract, so it is an evaluation route, not
+# a shipping one - the same ruling that keeps NVIDIA's free tier out of shipped translations.
+# ⛔ AND IT CANNOT CARRY A SCHEMA OR A TOOL. Tried as a translation arm on 2026-09-30 and Cohere
+# answered `400 TOOL_USE_NOT_SUPPORTED: tool use is not supported by the provided model:
+# c4ai-aya-expanse-32b`. Every hswarm task that wants data wants a schema, and a schema is a tool call
+# here, so the cheapest multilingual price on this machine buys nothing the harness can read. It stays
+# listed because a free-text task (translate-and-return-prose) still works, and because the next person
+# to notice the price should find this line instead of re-running the experiment.
+[models.aya-expanse-32b]
+api_id = "c4ai-aya-expanse-32b"
+ctx = 128000
+max_out = 4096
+price = {hit = 0.5, miss = 0.5, out = 1.5}

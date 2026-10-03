@@ -1,0 +1,29 @@
+# Hugging Face Inference Providers: one OpenAI-compatible router over many hosts.
+# `hf:<repo id>` reaches any model it serves; `#<host>` pins a host, which here rides in the model id
+# (`host_pin = "suffix"`), so the pin survives a `cc` worker too.
+
+base_url = "https://router.huggingface.co/v1"
+about = "Hugging Face's router to many open models. A small free monthly credit, then paid per use."
+key_url = "https://huggingface.co/settings/tokens"  # where a person makes an API key
+website = "https://huggingface.co"  # the company's site; the console shows its favicon
+check_path = "https://huggingface.co/api/whoami-v2"  # needs the key, unlike the router's /models
+key_env = ["HF_TOKENS", "HF_TOKEN", "HUGGINGFACE_API_KEY"]
+options = ["reasoning_effort"]
+models_path = "/models"
+balance_authority = "status"
+passthrough = ["hf:"]
+host_pin = "suffix"
+upstream_header = "x-inference-provider"
+anthropic_url = "https://router.huggingface.co"
+anthropic_auth = "bearer"
+docs = "https://huggingface.co/docs/inference-providers"
+
+# The same model through the Hugging Face router, hard-pinned to DeepInfra by the id suffix. Benchmarked
+# 86/90 against direct's 88/90 in the same window. A fallback, ahead of OpenRouter's (same price, a pin that holds).
+[models.deepseek-flash-hf]
+api_id = "deepseek-ai/DeepSeek-V4.1-Flash:deepinfra"
+ctx = 1000000
+max_out = 384000
+price = {hit = 0.006, miss = 0.2, out = 0.6}
+concurrency_limit = 2500
+fallback = true

@@ -24,7 +24,7 @@ import {
   RefreshCw,
   Wrench,
 } from '@lucide/vue'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, inject, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CommandCorrections from '@/components/CommandCorrections.vue'
@@ -35,6 +35,7 @@ import EditsFeed from '@/components/charts/EditsFeed.vue'
 import HourGrid from '@/components/charts/HourGrid.vue'
 import TimeBars from '@/components/charts/TimeBars.vue'
 import TokenSplit from '@/components/charts/TokenSplit.vue'
+import SwarmStatsCard from '@/components/swarm-stats/SwarmStatsCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -58,12 +59,14 @@ import type {
   TokenSinkReport,
 } from '@/lib/api'
 import * as api from '@/lib/api'
+import { OPEN_VIEW } from '@/lib/app-view'
 import { modelVendor, shortUsd, vendorLabel } from '@/lib/chart'
 import { baseName, formatCompact, formatUsd } from '@/lib/format'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
+const openView = inject(OPEN_VIEW, () => {})
 // The header's full-width toggle lifts this page's own reading cap too.
 const { fullWidth } = useShellWidth()
 const { analyticsPeriod, analyticsTokenMode, toggleTokenMode } = useAnalyticsPrefs()
@@ -460,6 +463,7 @@ const survivalAverage = computed(() => {
 <template>
   <div class="scroll-slim h-full overflow-y-auto">
     <div class="mx-auto w-full space-y-4 p-4" :class="fullWidth ? '' : 'max-w-5xl'">
+      <SwarmStatsCard @open="openView('hswarm')" />
       <!-- filters in one row above the charts -->
       <div class="flex flex-wrap items-center gap-2">
         <h2 class="me-auto flex items-center gap-2 text-sm font-semibold">

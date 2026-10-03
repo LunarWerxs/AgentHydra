@@ -32,7 +32,16 @@ import {
   X,
 } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
-import { computed, createApp, getCurrentInstance, onMounted, onUnmounted, ref, watch } from 'vue'
+import {
+  computed,
+  createApp,
+  getCurrentInstance,
+  inject,
+  onMounted,
+  onUnmounted,
+  ref,
+  watch,
+} from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliMayteFloat from '@/components/CliMayteFloat.vue'
@@ -41,6 +50,7 @@ import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
 import SideList from '@/components/side-list/SideList.vue'
 import SideListRow from '@/components/side-list/SideListRow.vue'
+import SwarmStatsCard from '@/components/swarm-stats/SwarmStatsCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -63,6 +73,7 @@ import {
   listCliMayteWaves,
   listCliMayteWorkers,
 } from '@/lib/api'
+import { OPEN_VIEW } from '@/lib/app-view'
 import {
   CLIMAYTE_OUTCOME,
   climayteQueuedNote,
@@ -79,6 +90,7 @@ import type { SideListGroup } from '@/lib/side-list'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
+const openView = inject(OPEN_VIEW, () => {})
 const { pipWindow, isOpen: floatIsOpen, open: openFloat, close: closeFloat } = useCliMayteFloat()
 
 let floatApp: ReturnType<typeof createApp> | null = null
@@ -741,6 +753,7 @@ onUnmounted(() => {
     </aside>
 
     <section class="flex min-h-0 min-w-0 flex-1 flex-col p-4">
+      <SwarmStatsCard compact class="mb-2 shrink-0 !py-1" @open="openView('hswarm')" />
       <div
         v-if="!loaded && unreachable"
         role="alert"

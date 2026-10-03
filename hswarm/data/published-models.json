@@ -1,0 +1,1516 @@
+{
+  "as_of_utc": "2026-09-28T20:47:45.592412+00:00",
+  "index_version": "4.3.2",
+  "cost_unit": "USD per AA Intelligence Index task",
+  "points": [
+    {
+      "slug": "claude-opus-5-5",
+      "name": "Claude Opus 5.5 (max with fallback)",
+      "short": "Opus 5.5 (max +fallback)",
+      "creator": "Anthropic",
+      "score": 58.0,
+      "cost": 5.98,
+      "input": 4.0,
+      "output": 20.0,
+      "source": "https://artificialanalysis.ai/models/claude-opus-5-5",
+      "pareto": true,
+      "full_name": "Claude Opus 5.5 (Adaptive Reasoning, Max Effort, Default Fallback)",
+      "release_date": "2026-09-22",
+      "scores": {
+        "aa-briefcase": 1821.85,
+        "gdpval-aa": 1846.17,
+        "automationbench-aa": 0.6953868128636069,
+        "terminalbench-4-0": 0.595959595959596,
+        "scicode": 0.668981481481482,
+        "humanitys-last-exam": 0.613531047265987,
+        "gdp-pdf": 0.262,
+        "critpt": 0.317142857142857,
+        "omniscience": 46.4166666666667,
+        "long-context": 0.846666666666667
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-opus-5-5",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-opus-5-5",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-opus-5-5",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-opus-5-5",
+        "scicode": "https://artificialanalysis.ai/models/claude-opus-5-5",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-opus-5-5",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-opus-5-5",
+        "critpt": "https://artificialanalysis.ai/models/claude-opus-5-5",
+        "omniscience": "https://artificialanalysis.ai/models/claude-opus-5-5",
+        "long-context": "https://artificialanalysis.ai/models/claude-opus-5-5"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.6621666666666667,
+        "hallucinationRate": 0.5860878145041933,
+        "attemptRate": 0.89
+      },
+      "briefcase_ci": {
+        "lower95ci": 1810.1,
+        "upper95ci": 1833.6
+      },
+      "gdpval_ci": {
+        "lower95ci": 1822.93,
+        "upper95ci": 1869.4
+      },
+      "cached_input": 0.2,
+      "cache_write": 5
+    },
+    {
+      "slug": "claude-opus-5-5-xhigh",
+      "name": "Claude Opus 5.5 (xhigh with fallback)",
+      "short": "Opus 5.5 (xhigh +fallback)",
+      "creator": "Anthropic",
+      "score": 56.0,
+      "cost": 3.46,
+      "input": 4.0,
+      "output": 20.0,
+      "source": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+      "pareto": true,
+      "full_name": "Claude Opus 5.5 (Adaptive Reasoning, Xhigh Effort, Default Fallback)",
+      "release_date": "2026-09-22",
+      "scores": {
+        "aa-briefcase": 1779.5,
+        "gdpval-aa": 1820.11,
+        "automationbench-aa": 0.6495283516401527,
+        "terminalbench-4-0": 0.595959595959596,
+        "scicode": 0.650462962962963,
+        "humanitys-last-exam": 0.575069508804449,
+        "gdp-pdf": 0.266,
+        "critpt": 0.317142857142857,
+        "omniscience": 42.65,
+        "long-context": 0.846666666666667
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+        "scicode": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+        "critpt": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+        "omniscience": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+        "long-context": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.6538333333333334,
+        "hallucinationRate": 0.6567164179104478,
+        "attemptRate": 0.915
+      },
+      "briefcase_ci": {
+        "lower95ci": 1768.79,
+        "upper95ci": 1790.21
+      },
+      "gdpval_ci": {
+        "lower95ci": 1798.02,
+        "upper95ci": 1842.19
+      },
+      "cached_input": 0.2,
+      "cache_write": 5
+    },
+    {
+      "slug": "claude-opus-5-5-high",
+      "name": "Claude Opus 5.5 (high with fallback)",
+      "short": "Opus 5.5 (high +fallback)",
+      "creator": "Anthropic",
+      "score": 54.0,
+      "cost": 1.82,
+      "input": 4.0,
+      "output": 20.0,
+      "source": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+      "pareto": true,
+      "full_name": "Claude Opus 5.5 (Adaptive Reasoning, High Effort, Default Fallback)",
+      "release_date": "2026-09-22",
+      "scores": {
+        "aa-briefcase": 1704.5,
+        "gdpval-aa": 1691.72,
+        "automationbench-aa": 0.6320677483186213,
+        "terminalbench-4-0": 0.565656565656566,
+        "scicode": 0.604166666666667,
+        "humanitys-last-exam": 0.555607043558851,
+        "gdp-pdf": 0.288,
+        "critpt": 0.308571428571429,
+        "omniscience": 40.6333333333333,
+        "long-context": 0.826666666666667
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+        "scicode": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+        "critpt": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+        "omniscience": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+        "long-context": "https://artificialanalysis.ai/models/claude-opus-5-5-high"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.6458333333333334,
+        "hallucinationRate": 0.676235294117647,
+        "attemptRate": 0.9153333333333333
+      },
+      "briefcase_ci": {
+        "lower95ci": 1694.54,
+        "upper95ci": 1714.47
+      },
+      "gdpval_ci": {
+        "lower95ci": 1672.17,
+        "upper95ci": 1711.27
+      },
+      "cached_input": 0.2,
+      "cache_write": 5
+    },
+    {
+      "slug": "claude-fable-5-1",
+      "name": "Claude Fable 5.1 (max with fallback)",
+      "short": "Fable 5.1 (max +fallback)",
+      "creator": "Anthropic",
+      "score": 53.0,
+      "cost": 7.63,
+      "input": 10.0,
+      "output": 50.0,
+      "source": "https://artificialanalysis.ai/models/claude-fable-5-1",
+      "pareto": false,
+      "full_name": "Claude Fable 5.1 (Adaptive Reasoning, Max Effort, Default Fallback)",
+      "release_date": "2026-09-01",
+      "scores": {
+        "aa-briefcase": 1678.37,
+        "gdpval-aa": 1734.67,
+        "automationbench-aa": 0.5937591715646424,
+        "terminalbench-4-0": 0.52020202020202,
+        "scicode": 0.630787037037037,
+        "humanitys-last-exam": 0.591288229842447,
+        "gdp-pdf": 0.262,
+        "critpt": 0.297142857142857,
+        "omniscience": 43.45,
+        "long-context": 0.853333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-fable-5-1",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-fable-5-1",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-fable-5-1",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-fable-5-1",
+        "scicode": "https://artificialanalysis.ai/models/claude-fable-5-1",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-fable-5-1",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-fable-5-1",
+        "critpt": "https://artificialanalysis.ai/models/claude-fable-5-1",
+        "omniscience": "https://artificialanalysis.ai/models/claude-fable-5-1",
+        "long-context": "https://artificialanalysis.ai/models/claude-fable-5-1"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.6723333333333333,
+        "hallucinationRate": 0.7258392675483215,
+        "attemptRate": 0.9338333333333333
+      },
+      "briefcase_ci": {
+        "lower95ci": 1668.51,
+        "upper95ci": 1688.34
+      },
+      "gdpval_ci": {
+        "lower95ci": 1710.09,
+        "upper95ci": 1759.25
+      },
+      "cached_input": 0.25,
+      "cache_write": 12.5
+    },
+    {
+      "slug": "gpt-6-astra",
+      "name": "GPT-6 Astra (max)",
+      "short": "GPT6 Astra (max)",
+      "creator": "OpenAI",
+      "score": 53.0,
+      "cost": 3.26,
+      "input": 10.0,
+      "output": 50.0,
+      "source": "https://artificialanalysis.ai/models/gpt-6-astra",
+      "pareto": false,
+      "full_name": "GPT-6 Astra (max)",
+      "release_date": "2026-09-03",
+      "scores": {
+        "aa-briefcase": 1568.86,
+        "gdpval-aa": 1541.89,
+        "automationbench-aa": 0.6849174806688876,
+        "terminalbench-4-0": 0.590909090909091,
+        "scicode": 0.564814814814815,
+        "humanitys-last-exam": 0.546802594995366,
+        "gdp-pdf": 0.31,
+        "critpt": 0.317142857142857,
+        "omniscience": 43.4,
+        "long-context": 0.806666666666667
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/gpt-6-astra",
+        "gdpval-aa": "https://artificialanalysis.ai/models/gpt-6-astra",
+        "automationbench-aa": "https://artificialanalysis.ai/models/gpt-6-astra",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/gpt-6-astra",
+        "scicode": "https://artificialanalysis.ai/models/gpt-6-astra",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/gpt-6-astra",
+        "gdp-pdf": "https://artificialanalysis.ai/models/gpt-6-astra",
+        "critpt": "https://artificialanalysis.ai/models/gpt-6-astra",
+        "omniscience": "https://artificialanalysis.ai/models/gpt-6-astra",
+        "long-context": "https://artificialanalysis.ai/models/gpt-6-astra"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.626,
+        "hallucinationRate": 0.5133689839572193,
+        "attemptRate": 0.834
+      },
+      "briefcase_ci": {
+        "lower95ci": 1558.69,
+        "upper95ci": 1579.61
+      },
+      "gdpval_ci": {
+        "lower95ci": 1516.58,
+        "upper95ci": 1567.2
+      },
+      "cached_input": 1,
+      "cache_write": 12.5
+    },
+    {
+      "slug": "claude-opus-5-5-medium",
+      "name": "Claude Opus 5.5 (medium with fallback)",
+      "short": "Opus 5.5 (medium +fallback)",
+      "creator": "Anthropic",
+      "score": 51.0,
+      "cost": 1.34,
+      "input": 4.0,
+      "output": 20.0,
+      "source": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+      "pareto": true,
+      "full_name": "Claude Opus 5.5 (Adaptive Reasoning, Medium Effort, Default Fallback)",
+      "release_date": "2026-09-22",
+      "scores": {
+        "aa-briefcase": 1642.05,
+        "gdpval-aa": 1576.2,
+        "automationbench-aa": 0.6121742919892179,
+        "terminalbench-4-0": 0.525252525252525,
+        "scicode": 0.592592592592593,
+        "humanitys-last-exam": 0.547265987025023,
+        "gdp-pdf": 0.256,
+        "critpt": 0.277142857142857,
+        "omniscience": 40.3166666666667,
+        "long-context": 0.843333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+        "scicode": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+        "critpt": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+        "omniscience": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+        "long-context": "https://artificialanalysis.ai/models/claude-opus-5-5-medium"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.6455,
+        "hallucinationRate": 0.6835919134931829,
+        "attemptRate": 0.9178333333333333
+      },
+      "briefcase_ci": {
+        "lower95ci": 1632.46,
+        "upper95ci": 1651.63
+      },
+      "gdpval_ci": {
+        "lower95ci": 1557.62,
+        "upper95ci": 1594.78
+      },
+      "cached_input": 0.2,
+      "cache_write": 5
+    },
+    {
+      "slug": "gpt-6-astra-high",
+      "name": "GPT-6 Astra (high)",
+      "short": "GPT6 Astra (high)",
+      "creator": "OpenAI",
+      "score": 51.0,
+      "cost": 1.73,
+      "input": 10.0,
+      "output": 50.0,
+      "source": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+      "pareto": false,
+      "full_name": "GPT-6 Astra (high)",
+      "release_date": "2026-09-03",
+      "scores": {
+        "aa-briefcase": 1506.86,
+        "gdpval-aa": 1484.52,
+        "automationbench-aa": 0.666122174975011,
+        "terminalbench-4-0": 0.54040404040404,
+        "scicode": 0.554398148148148,
+        "humanitys-last-exam": 0.530583873957368,
+        "gdp-pdf": 0.31,
+        "critpt": 0.288571428571429,
+        "omniscience": 43.7333333333333,
+        "long-context": 0.8
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+        "gdpval-aa": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+        "automationbench-aa": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+        "scicode": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+        "gdp-pdf": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+        "critpt": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+        "omniscience": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+        "long-context": "https://artificialanalysis.ai/models/gpt-6-astra-high"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.6113333333333333,
+        "hallucinationRate": 0.44768439108061747,
+        "attemptRate": 0.8028333333333333
+      },
+      "briefcase_ci": {
+        "lower95ci": 1497.09,
+        "upper95ci": 1517.05
+      },
+      "gdpval_ci": {
+        "lower95ci": 1458.76,
+        "upper95ci": 1510.27
+      },
+      "cached_input": 1,
+      "cache_write": 12.5
+    },
+    {
+      "slug": "gpt-6-sol",
+      "name": "GPT-6 Sol (max)",
+      "short": "GPT6 Sol (max)",
+      "creator": "OpenAI",
+      "score": 48.0,
+      "cost": 1.06,
+      "input": 2.0,
+      "output": 10.0,
+      "source": "https://artificialanalysis.ai/models/gpt-6-sol",
+      "pareto": true,
+      "full_name": "GPT-6 Sol (max)",
+      "release_date": "2026-09-22",
+      "scores": {
+        "aa-briefcase": 1482.78,
+        "gdpval-aa": 1486.93,
+        "automationbench-aa": 0.6163369295959864,
+        "terminalbench-4-0": 0.439393939393939,
+        "scicode": 0.576388888888889,
+        "humanitys-last-exam": 0.479147358665431,
+        "gdp-pdf": 0.248,
+        "critpt": 0.308571428571429,
+        "omniscience": 27.1166666666667,
+        "long-context": 0.836666666666667
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/gpt-6-sol",
+        "gdpval-aa": "https://artificialanalysis.ai/models/gpt-6-sol",
+        "automationbench-aa": "https://artificialanalysis.ai/models/gpt-6-sol",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/gpt-6-sol",
+        "scicode": "https://artificialanalysis.ai/models/gpt-6-sol",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/gpt-6-sol",
+        "gdp-pdf": "https://artificialanalysis.ai/models/gpt-6-sol",
+        "critpt": "https://artificialanalysis.ai/models/gpt-6-sol",
+        "omniscience": "https://artificialanalysis.ai/models/gpt-6-sol",
+        "long-context": "https://artificialanalysis.ai/models/gpt-6-sol"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.5448333333333333,
+        "hallucinationRate": 0.6012449652142072,
+        "attemptRate": 0.8318333333333333
+      },
+      "briefcase_ci": {
+        "lower95ci": 1472.91,
+        "upper95ci": 1492.66
+      },
+      "gdpval_ci": {
+        "lower95ci": 1468.4,
+        "upper95ci": 1505.47
+      },
+      "cached_input": 0.2,
+      "cache_write": 2.5
+    },
+    {
+      "slug": "mimo-v2-6-pro",
+      "name": "MiMo-V2.6-Pro",
+      "short": "MiMo-V2.6-Pro",
+      "creator": "Xiaomi",
+      "score": 46.0,
+      "cost": 0.13,
+      "input": 0.43,
+      "output": 0.87,
+      "source": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+      "pareto": true,
+      "full_name": "MiMo-V2.6-Pro",
+      "release_date": "2026-09-21",
+      "scores": {
+        "aa-briefcase": 1517.15,
+        "gdpval-aa": 1673.19,
+        "automationbench-aa": 0.5862340943419085,
+        "terminalbench-4-0": 0.348484848484849,
+        "scicode": 0.608796296296296,
+        "humanitys-last-exam": 0.493512511584801,
+        "gdp-pdf": 0.192,
+        "critpt": 0.265714285714286,
+        "omniscience": 8.38333333333333,
+        "long-context": 0.863333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+        "gdpval-aa": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+        "automationbench-aa": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+        "scicode": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+        "gdp-pdf": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+        "critpt": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+        "omniscience": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+        "long-context": "https://artificialanalysis.ai/models/mimo-v2-6-pro"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.3485,
+        "hallucinationRate": 0.40624200562803786,
+        "attemptRate": 0.631
+      },
+      "briefcase_ci": {
+        "lower95ci": 1506.65,
+        "upper95ci": 1528.47
+      },
+      "gdpval_ci": {
+        "lower95ci": 1653.84,
+        "upper95ci": 1692.54
+      },
+      "cached_input": 0.0036,
+      "cache_write": null
+    },
+    {
+      "slug": "glm-5-3",
+      "name": "GLM-5.3 (max)",
+      "short": "GLM-5.3 (max)",
+      "creator": "Z AI",
+      "score": 45.0,
+      "cost": 2.01,
+      "input": 1.4,
+      "output": 4.4,
+      "source": "https://artificialanalysis.ai/models/glm-5-3",
+      "pareto": false,
+      "full_name": "GLM-5.3 (max)",
+      "release_date": "2026-08-18",
+      "scores": {
+        "aa-briefcase": 1516.54,
+        "gdpval-aa": 1645.52,
+        "automationbench-aa": 0.622028649962642,
+        "terminalbench-4-0": 0.419191919191919,
+        "scicode": 0.590277777777778,
+        "humanitys-last-exam": 0.422613531047266,
+        "gdp-pdf": 0.112,
+        "critpt": 0.191428571428571,
+        "omniscience": 14.3,
+        "long-context": 0.796666666666667
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/glm-5-3",
+        "gdpval-aa": "https://artificialanalysis.ai/models/glm-5-3",
+        "automationbench-aa": "https://artificialanalysis.ai/models/glm-5-3",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/glm-5-3",
+        "scicode": "https://artificialanalysis.ai/models/glm-5-3",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/glm-5-3",
+        "gdp-pdf": "https://artificialanalysis.ai/models/glm-5-3",
+        "critpt": "https://artificialanalysis.ai/models/glm-5-3",
+        "omniscience": "https://artificialanalysis.ai/models/glm-5-3",
+        "long-context": "https://artificialanalysis.ai/models/glm-5-3"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.3385,
+        "hallucinationRate": 0.29554043839758126,
+        "attemptRate": 0.547
+      },
+      "briefcase_ci": {
+        "lower95ci": 1507.48,
+        "upper95ci": 1526.03
+      },
+      "gdpval_ci": {
+        "lower95ci": 1620.63,
+        "upper95ci": 1670.41
+      },
+      "cached_input": 0.26,
+      "cache_write": null
+    },
+    {
+      "slug": "gpt-6-sol-high",
+      "name": "GPT-6 Sol (high)",
+      "short": "GPT6 Sol (high)",
+      "creator": "OpenAI",
+      "score": 43.0,
+      "cost": 0.37,
+      "input": 2.0,
+      "output": 10.0,
+      "source": "https://artificialanalysis.ai/models/gpt-6-sol-high",
+      "pareto": false,
+      "full_name": "GPT-6 Sol (high)",
+      "release_date": "2026-09-22",
+      "scores": {
+        "aa-briefcase": 1289.0,
+        "gdpval-aa": 1376.05,
+        "automationbench-aa": 0.6012584091127188,
+        "terminalbench-4-0": 0.262626262626263,
+        "scicode": 0.548611111111111,
+        "humanitys-last-exam": 0.44114921223355,
+        "gdp-pdf": 0.28,
+        "critpt": 0.254285714285714,
+        "omniscience": 26.816666666666666,
+        "long-context": 0.836666666666667
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/evaluations/aa-briefcase",
+        "gdpval-aa": "https://artificialanalysis.ai/models/gpt-6-sol-high",
+        "automationbench-aa": "https://artificialanalysis.ai/models/gpt-6-sol-high",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/gpt-6-sol-high",
+        "scicode": "https://artificialanalysis.ai/models/gpt-6-sol-high",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/gpt-6-sol-high",
+        "gdp-pdf": "https://artificialanalysis.ai/models/gpt-6-sol-high",
+        "critpt": "https://artificialanalysis.ai/models/gpt-6-sol-high",
+        "omniscience": "https://artificialanalysis.ai/models/gpt-6-sol-high",
+        "long-context": "https://artificialanalysis.ai/models/gpt-6-sol-high"
+      },
+      "omniscience_detail": {},
+      "briefcase_ci": {},
+      "gdpval_ci": {},
+      "cached_input": 0.2,
+      "cache_write": 2.5
+    },
+    {
+      "slug": "claude-opus-5-5-low",
+      "name": "Claude Opus 5.5 (low with fallback)",
+      "short": "Opus 5.5 (low +fallback)",
+      "creator": "Anthropic",
+      "score": 42.0,
+      "cost": 0.55,
+      "input": 4.0,
+      "output": 20.0,
+      "source": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+      "pareto": false,
+      "full_name": "Claude Opus 5.5 (Adaptive Reasoning, Low Effort, Default Fallback)",
+      "release_date": "2026-09-22",
+      "scores": {
+        "aa-briefcase": 1285.0,
+        "gdpval-aa": 1223.51,
+        "automationbench-aa": 0.5292537042934996,
+        "terminalbench-4-0": 0.313131313131313,
+        "scicode": 0.585648148148148,
+        "humanitys-last-exam": 0.483317886932345,
+        "gdp-pdf": 0.256,
+        "critpt": 0.177142857142857,
+        "omniscience": 38.86666666666667,
+        "long-context": 0.806666666666667
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/evaluations/aa-briefcase",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+        "scicode": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+        "critpt": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+        "omniscience": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+        "long-context": "https://artificialanalysis.ai/models/claude-opus-5-5-low"
+      },
+      "omniscience_detail": {},
+      "briefcase_ci": {},
+      "gdpval_ci": {},
+      "cached_input": 0.2,
+      "cache_write": 5
+    },
+    {
+      "slug": "glm-5-3-flash",
+      "name": "GLM-5.3-Flash",
+      "short": "GLM-5.3-Flash",
+      "creator": "Z AI",
+      "score": 42.0,
+      "cost": 0.25,
+      "input": 0.15,
+      "output": 0.5,
+      "source": "https://artificialanalysis.ai/models/glm-5-3-flash",
+      "pareto": false,
+      "full_name": "GLM 5.3 Flash",
+      "release_date": "2026-08-26",
+      "scores": {
+        "aa-briefcase": 1452.46,
+        "gdpval-aa": 1640.78,
+        "automationbench-aa": 0.6036862782167782,
+        "terminalbench-4-0": 0.328282828282828,
+        "scicode": 0.516203703703704,
+        "humanitys-last-exam": 0.398517145505097,
+        "gdp-pdf": 0.154,
+        "critpt": 0.154285714285714,
+        "omniscience": 7.46666666666667,
+        "long-context": 0.8
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/glm-5-3-flash",
+        "gdpval-aa": "https://artificialanalysis.ai/models/glm-5-3-flash",
+        "automationbench-aa": "https://artificialanalysis.ai/models/glm-5-3-flash",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/glm-5-3-flash",
+        "scicode": "https://artificialanalysis.ai/models/glm-5-3-flash",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/glm-5-3-flash",
+        "gdp-pdf": "https://artificialanalysis.ai/models/glm-5-3-flash",
+        "critpt": "https://artificialanalysis.ai/models/glm-5-3-flash",
+        "omniscience": "https://artificialanalysis.ai/models/glm-5-3-flash",
+        "long-context": "https://artificialanalysis.ai/models/glm-5-3-flash"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.275,
+        "hallucinationRate": 0.27632183908045976,
+        "attemptRate": 0.48683333333333334
+      },
+      "briefcase_ci": {
+        "lower95ci": 1443.64,
+        "upper95ci": 1461.59
+      },
+      "gdpval_ci": {
+        "lower95ci": 1618.06,
+        "upper95ci": 1663.5
+      },
+      "cached_input": 0.026,
+      "cache_write": null
+    },
+    {
+      "slug": "gemini-3-8-flash",
+      "name": "Gemini 3.8 Flash (high)",
+      "short": "Gem 3.8 Flash (high)",
+      "creator": "Google",
+      "score": 41.0,
+      "cost": 1.24,
+      "input": 0.75,
+      "output": 3.75,
+      "source": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+      "pareto": false,
+      "full_name": "Gemini 3.8 Flash (high)",
+      "release_date": "2026-09-02",
+      "scores": {
+        "aa-briefcase": 1201.59,
+        "gdpval-aa": 1411.95,
+        "automationbench-aa": 0.5993009432118243,
+        "terminalbench-4-0": 0.196969696969697,
+        "scicode": 0.565972222222222,
+        "humanitys-last-exam": 0.478220574606117,
+        "gdp-pdf": 0.21,
+        "critpt": 0.182857142857143,
+        "omniscience": 29.55,
+        "long-context": 0.813333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+        "gdpval-aa": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+        "automationbench-aa": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+        "scicode": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+        "gdp-pdf": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+        "critpt": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+        "omniscience": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+        "long-context": "https://artificialanalysis.ai/models/gemini-3-8-flash"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.546,
+        "hallucinationRate": 0.551762114537445,
+        "attemptRate": 0.8166666666666667
+      },
+      "briefcase_ci": {
+        "lower95ci": 1192.42,
+        "upper95ci": 1211.68
+      },
+      "gdpval_ci": {
+        "lower95ci": 1386.5,
+        "upper95ci": 1437.4
+      },
+      "cached_input": 0.075,
+      "cache_write": 0.75
+    },
+    {
+      "slug": "deepseek-v4-1-flash",
+      "name": "DeepSeek V4.1 Flash (max)",
+      "short": "DS V4.1 Flash (max)",
+      "creator": "DeepSeek",
+      "score": 39.0,
+      "cost": 0.27,
+      "input": 0.3,
+      "output": 1.2,
+      "source": "https://artificialanalysis.ai/models/deepseek-v4-1-flash",
+      "pareto": false,
+      "full_name": "DeepSeek V4.1 Flash (Reasoning, Max Effort)",
+      "release_date": "2026-09-10",
+      "scores": {
+        "aa-briefcase": 1425.29,
+        "gdpval-aa": 1600,
+        "automationbench-aa": 0.6889097769674057,
+        "terminalbench-4-0": 0.267676767676768,
+        "scicode": 0.518518518518518,
+        "humanitys-last-exam": 0.392493049119555,
+        "gdp-pdf": 0.128,
+        "critpt": 0.142857142857143,
+        "omniscience": -5.3,
+        "long-context": 0.84
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/deepseek-v4-1-flash",
+        "gdpval-aa": "https://artificialanalysis.ai/models/deepseek-v4-1-flash",
+        "automationbench-aa": "https://artificialanalysis.ai/models/deepseek-v4-1-flash",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/deepseek-v4-1-flash",
+        "scicode": "https://artificialanalysis.ai/models/deepseek-v4-1-flash",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/deepseek-v4-1-flash",
+        "gdp-pdf": "https://artificialanalysis.ai/models/deepseek-v4-1-flash",
+        "critpt": "https://artificialanalysis.ai/models/deepseek-v4-1-flash",
+        "omniscience": "https://artificialanalysis.ai/models/deepseek-v4-1-flash",
+        "long-context": "https://artificialanalysis.ai/models/deepseek-v4-1-flash"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.464,
+        "hallucinationRate": 0.9645522388059702,
+        "attemptRate": 0.9965
+      },
+      "briefcase_ci": {
+        "lower95ci": 1415.37,
+        "upper95ci": 1435.22
+      },
+      "gdpval_ci": {
+        "lower95ci": 1600,
+        "upper95ci": 1600
+      },
+      "cached_input": 0.006,
+      "cache_write": null
+    },
+    {
+      "slug": "claude-sonnet-5",
+      "name": "Claude Sonnet 5 (max)",
+      "short": "Sonnet 5 (max)",
+      "creator": "Anthropic",
+      "score": 38.0,
+      "cost": 5.09,
+      "input": 2.0,
+      "output": 10.0,
+      "source": "https://artificialanalysis.ai/models/claude-sonnet-5",
+      "pareto": false,
+      "full_name": "Claude Sonnet 5 (Adaptive Reasoning, Max Effort)",
+      "release_date": "2026-06-30",
+      "scores": {
+        "aa-briefcase": 1359.0,
+        "gdpval-aa": 1449.2,
+        "automationbench-aa": 0.36512675717036386,
+        "terminalbench-4-0": 0.141414141414141,
+        "scicode": 0.542824074074074,
+        "humanitys-last-exam": 0.412882298424467,
+        "gdp-pdf": 0.132,
+        "critpt": 0.168571428571429,
+        "omniscience": 16.45,
+        "long-context": 0.82
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/evaluations/aa-briefcase",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-sonnet-5",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-sonnet-5",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-sonnet-5",
+        "scicode": "https://artificialanalysis.ai/models/claude-sonnet-5",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-sonnet-5",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-sonnet-5",
+        "critpt": "https://artificialanalysis.ai/models/claude-sonnet-5",
+        "omniscience": "https://artificialanalysis.ai/models/claude-sonnet-5",
+        "long-context": "https://artificialanalysis.ai/models/claude-sonnet-5"
+      },
+      "omniscience_detail": {},
+      "briefcase_ci": {},
+      "gdpval_ci": {},
+      "cached_input": 0.2,
+      "cache_write": 2.5
+    },
+    {
+      "slug": "gpt-6-luna",
+      "name": "GPT-6 Luna (max)",
+      "short": "GPT6 Luna (max)",
+      "creator": "OpenAI",
+      "score": 37.0,
+      "cost": 0.07,
+      "input": 0.1,
+      "output": 0.5,
+      "source": "https://artificialanalysis.ai/models/gpt-6-luna",
+      "pareto": true,
+      "full_name": "GPT-6 Luna (max)",
+      "release_date": "2026-09-22",
+      "scores": {
+        "aa-briefcase": 1299.23,
+        "gdpval-aa": 1367.09,
+        "automationbench-aa": 0.5316814034483175,
+        "terminalbench-4-0": 0.126262626262626,
+        "scicode": 0.546296296296296,
+        "humanitys-last-exam": 0.385078776645042,
+        "gdp-pdf": 0.204,
+        "critpt": 0.194285714285714,
+        "omniscience": 0.65,
+        "long-context": 0.833333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/gpt-6-luna",
+        "gdpval-aa": "https://artificialanalysis.ai/models/gpt-6-luna",
+        "automationbench-aa": "https://artificialanalysis.ai/models/gpt-6-luna",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/gpt-6-luna",
+        "scicode": "https://artificialanalysis.ai/models/gpt-6-luna",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/gpt-6-luna",
+        "gdp-pdf": "https://artificialanalysis.ai/models/gpt-6-luna",
+        "critpt": "https://artificialanalysis.ai/models/gpt-6-luna",
+        "omniscience": "https://artificialanalysis.ai/models/gpt-6-luna",
+        "long-context": "https://artificialanalysis.ai/models/gpt-6-luna"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.43783333333333335,
+        "hallucinationRate": 0.7672694930329084,
+        "attemptRate": 0.8848333333333334
+      },
+      "briefcase_ci": {
+        "lower95ci": 1290.31,
+        "upper95ci": 1308.15
+      },
+      "gdpval_ci": {
+        "lower95ci": 1348.3,
+        "upper95ci": 1385.87
+      },
+      "cached_input": 0.01,
+      "cache_write": 0.125
+    },
+    {
+      "slug": "deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro 0813 (max)",
+      "short": "DS V4 Pro 0813 (max)",
+      "creator": "DeepSeek",
+      "score": 36.0,
+      "cost": 0.67,
+      "input": 1.32,
+      "output": 3.96,
+      "source": "https://artificialanalysis.ai/models/deepseek-v4-pro",
+      "pareto": false,
+      "full_name": "DeepSeek V4 Pro 0813 (Reasoning, Max Effort)",
+      "release_date": "2026-08-13",
+      "scores": {
+        "aa-briefcase": 1258.0,
+        "gdpval-aa": 1441.42,
+        "automationbench-aa": 0.5671165546344002,
+        "terminalbench-4-0": 0.141414141414141,
+        "scicode": 0.510416666666667,
+        "humanitys-last-exam": 0.410101946246525,
+        "gdp-pdf": 0.114,
+        "critpt": 0.18,
+        "omniscience": 0.8333333333333334,
+        "long-context": 0.803333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/evaluations/aa-briefcase",
+        "gdpval-aa": "https://artificialanalysis.ai/models/deepseek-v4-pro",
+        "automationbench-aa": "https://artificialanalysis.ai/models/deepseek-v4-pro",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/deepseek-v4-pro",
+        "scicode": "https://artificialanalysis.ai/models/deepseek-v4-pro",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/deepseek-v4-pro",
+        "gdp-pdf": "https://artificialanalysis.ai/models/deepseek-v4-pro",
+        "critpt": "https://artificialanalysis.ai/models/deepseek-v4-pro",
+        "omniscience": "https://artificialanalysis.ai/models/deepseek-v4-pro",
+        "long-context": "https://artificialanalysis.ai/models/deepseek-v4-pro"
+      },
+      "omniscience_detail": {},
+      "briefcase_ci": {},
+      "gdpval_ci": {},
+      "cached_input": 0.044,
+      "cache_write": null
+    },
+    {
+      "slug": "qwen3-8-27b",
+      "name": "Qwen3.8 27B (xhigh)",
+      "short": "Qwen3.8 27B (xhigh)",
+      "creator": "Alibaba",
+      "score": 34.0,
+      "cost": 1.01,
+      "input": 0.5,
+      "output": 3.0,
+      "source": "https://artificialanalysis.ai/models/qwen3-8-27b",
+      "pareto": false,
+      "full_name": "Qwen3.8 27B (xhigh)",
+      "release_date": "2026-08-14",
+      "scores": {
+        "aa-briefcase": 1399.5,
+        "gdpval-aa": 1408.94,
+        "automationbench-aa": 0.48242443682241926,
+        "terminalbench-4-0": 0.0555555555555556,
+        "scicode": 0.466435185185185,
+        "humanitys-last-exam": 0.33920296570899,
+        "gdp-pdf": 0.166,
+        "critpt": 0.0542857142857143,
+        "omniscience": -9.98333333333333,
+        "long-context": 0.82
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/qwen3-8-27b",
+        "gdpval-aa": "https://artificialanalysis.ai/models/qwen3-8-27b",
+        "automationbench-aa": "https://artificialanalysis.ai/models/qwen3-8-27b",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/qwen3-8-27b",
+        "scicode": "https://artificialanalysis.ai/models/qwen3-8-27b",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/qwen3-8-27b",
+        "gdp-pdf": "https://artificialanalysis.ai/models/qwen3-8-27b",
+        "critpt": "https://artificialanalysis.ai/models/qwen3-8-27b",
+        "omniscience": "https://artificialanalysis.ai/models/qwen3-8-27b",
+        "long-context": "https://artificialanalysis.ai/models/qwen3-8-27b"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.15583333333333332,
+        "hallucinationRate": 0.30286278381046394,
+        "attemptRate": 0.4206666666666667
+      },
+      "briefcase_ci": {
+        "lower95ci": 1391.73,
+        "upper95ci": 1407.73
+      },
+      "gdpval_ci": {
+        "lower95ci": 1382.62,
+        "upper95ci": 1435.26
+      },
+      "cached_input": 0.1,
+      "cache_write": null
+    },
+    {
+      "slug": "gpt-6-luna-high",
+      "name": "GPT-6 Luna (high)",
+      "short": "GPT6 Luna (high)",
+      "creator": "OpenAI",
+      "score": 32.0,
+      "cost": 0.03,
+      "input": 0.1,
+      "output": 0.5,
+      "source": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+      "pareto": true,
+      "full_name": "GPT-6 Luna (high)",
+      "release_date": "2026-09-22",
+      "scores": {
+        "aa-briefcase": 1176.0,
+        "gdpval-aa": 1290.37,
+        "automationbench-aa": 0.4782449139916615,
+        "terminalbench-4-0": 0.0454545454545455,
+        "scicode": 0.503472222222222,
+        "humanitys-last-exam": 0.329471733086191,
+        "gdp-pdf": 0.138,
+        "critpt": 0.154285714285714,
+        "omniscience": -5.5,
+        "long-context": 0.793333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/evaluations/aa-briefcase",
+        "gdpval-aa": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+        "automationbench-aa": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+        "scicode": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+        "gdp-pdf": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+        "critpt": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+        "omniscience": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+        "long-context": "https://artificialanalysis.ai/models/gpt-6-luna-high"
+      },
+      "omniscience_detail": {},
+      "briefcase_ci": {},
+      "gdpval_ci": {},
+      "cached_input": 0.01,
+      "cache_write": 0.125
+    },
+    {
+      "slug": "minimax-m3",
+      "name": "MiniMax-M3",
+      "short": "MiniMax-M3",
+      "creator": "MiniMax",
+      "score": 29.0,
+      "cost": 0.51,
+      "input": 0.3,
+      "output": 1.2,
+      "source": "https://artificialanalysis.ai/models/minimax-m3",
+      "pareto": false,
+      "full_name": "MiniMax-M3",
+      "release_date": "2026-06-01",
+      "scores": {
+        "aa-briefcase": 1090.13,
+        "gdpval-aa": 1230.07,
+        "automationbench-aa": 0.21251257600749407,
+        "terminalbench-4-0": 0.0202020202020202,
+        "scicode": 0.471064814814815,
+        "humanitys-last-exam": 0.389712696941613,
+        "gdp-pdf": 0.098,
+        "critpt": 0.0371428571428571,
+        "omniscience": 1.35,
+        "long-context": 0.83
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/minimax-m3",
+        "gdpval-aa": "https://artificialanalysis.ai/models/minimax-m3",
+        "automationbench-aa": "https://artificialanalysis.ai/models/minimax-m3",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/minimax-m3",
+        "scicode": "https://artificialanalysis.ai/models/minimax-m3",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/minimax-m3",
+        "gdp-pdf": "https://artificialanalysis.ai/models/minimax-m3",
+        "critpt": "https://artificialanalysis.ai/models/minimax-m3",
+        "omniscience": "https://artificialanalysis.ai/models/minimax-m3",
+        "long-context": "https://artificialanalysis.ai/models/minimax-m3"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.167,
+        "hallucinationRate": 0.1842737094837935,
+        "attemptRate": 0.34883333333333333
+      },
+      "briefcase_ci": {
+        "lower95ci": 1083.04,
+        "upper95ci": 1097.36
+      },
+      "gdpval_ci": {
+        "lower95ci": 1208.7,
+        "upper95ci": 1251.44
+      },
+      "cached_input": 0.06,
+      "cache_write": 0.375
+    },
+    {
+      "slug": "gpt-oss-120b",
+      "name": "gpt-oss-120b (high)",
+      "short": "gpt-oss-120b (high)",
+      "creator": "OpenAI",
+      "score": 12.0,
+      "cost": 0.11,
+      "input": 0.15,
+      "output": 0.59,
+      "source": "https://artificialanalysis.ai/models/gpt-oss-120b",
+      "pareto": false,
+      "full_name": "gpt-oss-120b (high)",
+      "release_date": "2025-08-05",
+      "scores": {
+        "aa-briefcase": 0.0,
+        "gdpval-aa": 595.5,
+        "automationbench-aa": 0.0019906990691605595,
+        "terminalbench-4-0": 0,
+        "scicode": 0.340277777777778,
+        "humanitys-last-exam": 0.196014828544949,
+        "gdp-pdf": 0.04,
+        "critpt": 0.0114285714285714,
+        "omniscience": -49.25,
+        "long-context": 0.52
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/evaluations/aa-briefcase",
+        "gdpval-aa": "https://artificialanalysis.ai/models/gpt-oss-120b",
+        "automationbench-aa": "https://artificialanalysis.ai/models/gpt-oss-120b",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/gpt-oss-120b",
+        "scicode": "https://artificialanalysis.ai/models/gpt-oss-120b",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/gpt-oss-120b",
+        "gdp-pdf": "https://artificialanalysis.ai/models/gpt-oss-120b",
+        "critpt": "https://artificialanalysis.ai/models/gpt-oss-120b",
+        "omniscience": "https://artificialanalysis.ai/models/gpt-oss-120b",
+        "long-context": "https://artificialanalysis.ai/models/gpt-oss-120b"
+      },
+      "omniscience_detail": {},
+      "briefcase_ci": {},
+      "gdpval_ci": {},
+      "cached_input": 0.125,
+      "cache_write": null
+    },
+    {
+      "slug": "kimi-k3",
+      "name": "Kimi K3 (max)",
+      "short": "Kimi K3 (max)",
+      "creator": "Moonshot AI",
+      "score": 44.0,
+      "cost": 2.0,
+      "input": 3,
+      "output": 15,
+      "source": "https://artificialanalysis.ai/models/kimi-k3",
+      "pareto": false,
+      "full_name": "Kimi K3 (max)",
+      "release_date": "2026-07-16",
+      "scores": {
+        "aa-briefcase": 1505.22,
+        "gdpval-aa": 1523.97,
+        "automationbench-aa": 0.5827297780015204,
+        "terminalbench-4-0": 0.126262626262626,
+        "scicode": 0.594907407407407,
+        "humanitys-last-exam": 0.468952734012975,
+        "gdp-pdf": 0.22,
+        "critpt": 0.234285714285714,
+        "omniscience": 19.7,
+        "long-context": 0.886666666666667
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/kimi-k3",
+        "gdpval-aa": "https://artificialanalysis.ai/models/kimi-k3",
+        "automationbench-aa": "https://artificialanalysis.ai/models/kimi-k3",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/kimi-k3",
+        "scicode": "https://artificialanalysis.ai/models/kimi-k3",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/kimi-k3",
+        "gdp-pdf": "https://artificialanalysis.ai/models/kimi-k3",
+        "critpt": "https://artificialanalysis.ai/models/kimi-k3",
+        "omniscience": "https://artificialanalysis.ai/models/kimi-k3",
+        "long-context": "https://artificialanalysis.ai/models/kimi-k3"
+      },
+      "omniscience_detail": null,
+      "briefcase_ci": null,
+      "gdpval_ci": null,
+      "cached_input": null,
+      "cache_write": null
+    },
+    {
+      "slug": "nvidia-nemotron-3-ultra-550b-a55b",
+      "name": "Nemotron 3 Ultra (max)",
+      "short": "Nemotron 3 Ultra (max)",
+      "creator": "NVIDIA",
+      "score": 23.0,
+      "cost": 0.6,
+      "input": 0.6,
+      "output": 2.5,
+      "source": "https://artificialanalysis.ai/models/nvidia-nemotron-3-ultra-550b-a55b",
+      "pareto": false,
+      "full_name": "Nemotron 3 Ultra 550B A55B (Reasoning)",
+      "release_date": "2026-06-04",
+      "scores": {
+        "aa-briefcase": 876.34,
+        "gdpval-aa": 1000.35,
+        "automationbench-aa": 0.02986349541593992,
+        "terminalbench-4-0": 0.00505050505050505,
+        "scicode": 0.402777777777778,
+        "humanitys-last-exam": 0.284059314179796,
+        "gdp-pdf": 0.05,
+        "critpt": 0.0314285714285714,
+        "omniscience": -0.4,
+        "long-context": 0.793333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/nvidia-nemotron-3-ultra-550b-a55b",
+        "gdpval-aa": "https://artificialanalysis.ai/models/nvidia-nemotron-3-ultra-550b-a55b",
+        "automationbench-aa": "https://artificialanalysis.ai/models/nvidia-nemotron-3-ultra-550b-a55b",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/nvidia-nemotron-3-ultra-550b-a55b",
+        "scicode": "https://artificialanalysis.ai/models/nvidia-nemotron-3-ultra-550b-a55b",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/nvidia-nemotron-3-ultra-550b-a55b",
+        "gdp-pdf": "https://artificialanalysis.ai/models/nvidia-nemotron-3-ultra-550b-a55b",
+        "critpt": "https://artificialanalysis.ai/models/nvidia-nemotron-3-ultra-550b-a55b",
+        "omniscience": "https://artificialanalysis.ai/models/nvidia-nemotron-3-ultra-550b-a55b",
+        "long-context": "https://artificialanalysis.ai/models/nvidia-nemotron-3-ultra-550b-a55b"
+      },
+      "omniscience_detail": null,
+      "briefcase_ci": null,
+      "gdpval_ci": null,
+      "cached_input": null,
+      "cache_write": null
+    },
+    {
+      "slug": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5 (max with fallback)",
+      "short": "Sonnet 5.5 (max +fallback)",
+      "creator": "Anthropic",
+      "score": 56.0,
+      "cost": 7.6,
+      "input": 2.0,
+      "output": 10.0,
+      "source": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+      "pareto": false,
+      "full_name": "Claude Sonnet 5.5 (Adaptive Reasoning, Max Effort, Default Fallback)",
+      "release_date": "2026-09-28",
+      "scores": {
+        "aa-briefcase": 1810.9,
+        "gdpval-aa": 1844.21,
+        "automationbench-aa": 0.7132534614553299,
+        "terminalbench-4-0": 0.636363636363636,
+        "scicode": 0.609953703703704,
+        "humanitys-last-exam": 0.549582947173309,
+        "gdp-pdf": 0.258,
+        "critpt": 0.314285714285714,
+        "omniscience": 32.3,
+        "long-context": 0.826666666666667
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+        "scicode": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+        "critpt": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+        "omniscience": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+        "long-context": "https://artificialanalysis.ai/models/claude-sonnet-5-5"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.5395,
+        "hallucinationRate": 0.47014115092290987
+      },
+      "briefcase_ci": {
+        "lower95ci": 1799.9,
+        "upper95ci": 1821.89
+      },
+      "gdpval_ci": {},
+      "cached_input": 0.2,
+      "cache_write": 2.5
+    },
+    {
+      "slug": "claude-sonnet-5-5-xhigh",
+      "name": "Claude Sonnet 5.5 (xhigh with fallback)",
+      "short": "Sonnet 5.5 (xhigh +fallback)",
+      "creator": "Anthropic",
+      "score": 52.0,
+      "cost": 2.74,
+      "input": 2.0,
+      "output": 10.0,
+      "source": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+      "pareto": false,
+      "full_name": "Claude Sonnet 5.5 (Adaptive Reasoning, Xhigh Effort, Default Fallback)",
+      "release_date": "2026-09-28",
+      "scores": {
+        "aa-briefcase": 1745.67,
+        "gdpval-aa": 1724.9,
+        "automationbench-aa": 0.646549151727818,
+        "terminalbench-4-0": 0.570707070707071,
+        "scicode": 0.572916666666667,
+        "humanitys-last-exam": 0.5,
+        "gdp-pdf": 0.246,
+        "critpt": 0.311428571428571,
+        "omniscience": 23.5,
+        "long-context": 0.796666666666667
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+        "scicode": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+        "critpt": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+        "omniscience": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+        "long-context": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.5303333333333333,
+        "hallucinationRate": 0.6288147622427254
+      },
+      "briefcase_ci": {
+        "lower95ci": 1735.4,
+        "upper95ci": 1755.95
+      },
+      "gdpval_ci": {},
+      "cached_input": 0.2,
+      "cache_write": 2.5
+    },
+    {
+      "slug": "claude-sonnet-5-5-high",
+      "name": "Claude Sonnet 5.5 (high with fallback)",
+      "short": "Sonnet 5.5 (high +fallback)",
+      "creator": "Anthropic",
+      "score": 47.0,
+      "cost": 1.08,
+      "input": 2.0,
+      "output": 10.0,
+      "source": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+      "pareto": false,
+      "full_name": "Claude Sonnet 5.5 (Adaptive Reasoning, High Effort, Default Fallback)",
+      "release_date": "2026-09-28",
+      "scores": {
+        "aa-briefcase": 1633.97,
+        "gdpval-aa": 1517.33,
+        "automationbench-aa": 0.5907601772480616,
+        "terminalbench-4-0": 0.439393939393939,
+        "scicode": 0.537037037037037,
+        "humanitys-last-exam": 0.458294717330862,
+        "gdp-pdf": 0.252,
+        "critpt": 0.245714285714286,
+        "omniscience": 20.95,
+        "long-context": 0.78
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+        "scicode": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+        "critpt": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+        "omniscience": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+        "long-context": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.5198333333333334,
+        "hallucinationRate": 0.6463033668864977
+      },
+      "briefcase_ci": {
+        "lower95ci": 1624.15,
+        "upper95ci": 1643.79
+      },
+      "gdpval_ci": {},
+      "cached_input": 0.2,
+      "cache_write": 2.5
+    },
+    {
+      "slug": "claude-sonnet-5-5-medium",
+      "name": "Claude Sonnet 5.5 (medium with fallback)",
+      "short": "Sonnet 5.5 (medium +fallback)",
+      "creator": "Anthropic",
+      "score": 41.0,
+      "cost": 0.59,
+      "input": 2.0,
+      "output": 10.0,
+      "source": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+      "pareto": false,
+      "full_name": "Claude Sonnet 5.5 (Adaptive Reasoning, Medium Effort, Default Fallback)",
+      "release_date": "2026-09-28",
+      "scores": {
+        "aa-briefcase": 1460.71,
+        "gdpval-aa": 1292.2,
+        "automationbench-aa": 0.5291040339124842,
+        "terminalbench-4-0": 0.297979797979798,
+        "scicode": 0.528935185185185,
+        "humanitys-last-exam": 0.39805375347544,
+        "gdp-pdf": 0.202,
+        "critpt": 0.168571428571429,
+        "omniscience": 20.1,
+        "long-context": 0.763333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+        "scicode": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+        "critpt": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+        "omniscience": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+        "long-context": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.4716666666666667,
+        "hallucinationRate": 0.5123028391167193
+      },
+      "briefcase_ci": {
+        "lower95ci": 1451.05,
+        "upper95ci": 1470.37
+      },
+      "gdpval_ci": {},
+      "cached_input": 0.2,
+      "cache_write": 2.5
+    },
+    {
+      "slug": "claude-sonnet-5-5-low",
+      "name": "Claude Sonnet 5.5 (low with fallback)",
+      "short": "Sonnet 5.5 (low +fallback)",
+      "creator": "Anthropic",
+      "score": 36.0,
+      "cost": 0.41,
+      "input": 2.0,
+      "output": 10.0,
+      "source": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+      "pareto": false,
+      "full_name": "Claude Sonnet 5.5 (Adaptive Reasoning, Low Effort, Default Fallback)",
+      "release_date": "2026-09-28",
+      "scores": {
+        "aa-briefcase": 1264.48,
+        "gdpval-aa": 1167.96,
+        "automationbench-aa": 0.5005835580831958,
+        "terminalbench-4-0": 0.207070707070707,
+        "scicode": 0.490740740740741,
+        "humanitys-last-exam": 0.362372567191844,
+        "gdp-pdf": 0.16,
+        "critpt": 0.114285714285714,
+        "omniscience": 19.366666666666667,
+        "long-context": 0.76
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+        "scicode": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+        "critpt": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+        "omniscience": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+        "long-context": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low"
+      },
+      "omniscience_detail": {
+        "accuracy": 0.463,
+        "hallucinationRate": 0.5015518311607697
+      },
+      "briefcase_ci": {
+        "lower95ci": 1254.65,
+        "upper95ci": 1274.3
+      },
+      "gdpval_ci": {},
+      "cached_input": 0.2,
+      "cache_write": 2.5
+    }
+  ],
+  "benchmarks": {
+    "aa-briefcase": {
+      "name": "AA-Briefcase v1.1",
+      "relevance": "Professional analysis and deliverables",
+      "unit": "Elo",
+      "source": "https://artificialanalysis.ai/evaluations/aa-briefcase"
+    },
+    "gdpval-aa": {
+      "name": "GDPval-AA v2.1",
+      "relevance": "Judgment in real professional tasks",
+      "unit": "Elo",
+      "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+    },
+    "automationbench-aa": {
+      "name": "AutomationBench-AA",
+      "relevance": "Cross-app decisions and rule-compliant tool use",
+      "unit": "% objectives, violations score zero",
+      "source": "https://artificialanalysis.ai/evaluations/automationbench-aa"
+    },
+    "terminalbench-4-0": {
+      "name": "Terminal-Bench 4.0",
+      "relevance": "Difficult coding, debugging and terminal execution",
+      "unit": "% pass@1",
+      "source": "https://artificialanalysis.ai/evaluations/terminalbench-4-0"
+    },
+    "scicode": {
+      "name": "SciCode",
+      "relevance": "Executable scientific code",
+      "unit": "% subproblems passed",
+      "source": "https://artificialanalysis.ai/evaluations/scicode"
+    },
+    "humanitys-last-exam": {
+      "name": "Humanityâ€™s Last Exam",
+      "relevance": "Difficult multidisciplinary reasoning",
+      "unit": "% correct; AA text, no tools",
+      "source": "https://artificialanalysis.ai/evaluations/humanitys-last-exam"
+    },
+    "gdp-pdf": {
+      "name": "GDP.pdf",
+      "relevance": "Grounded professional document reasoning",
+      "unit": "% all-pass",
+      "source": "https://artificialanalysis.ai/evaluations/gdp-pdf"
+    },
+    "long-context": {
+      "name": "AA-LCR v1.1",
+      "relevance": "Reasoning over long documents",
+      "unit": "% correct",
+      "source": "https://artificialanalysis.ai/evaluations/artificial-analysis-long-context-reasoning"
+    },
+    "omniscience": {
+      "name": "AA-Omniscience",
+      "relevance": "Knowledge, uncertainty and hallucination",
+      "unit": "index points",
+      "source": "https://artificialanalysis.ai/evaluations/omniscience"
+    },
+    "critpt": {
+      "name": "CritPt",
+      "relevance": "Research-level physics reasoning; under review",
+      "unit": "% correct",
+      "source": "https://artificialanalysis.ai/evaluations/critpt"
+    }
+  },
+  "scope": "24 selected exact configurations; not an exhaustive catalogue. All 240 component scores sourced, no new model benchmarks. kimi-k3 and nvidia-nemotron-3-ultra-550b-a55b were added 2026-09-27 from the same source, for their free NVIDIA routes.",
+  "selection_policy": "Published task-specific evidence first; choose cheapest capable available Swarm route, escalate for quality or capacity. Desktop Opus 5.5 retains orchestration and final decisions.",
+  "cost_note": "Measured AA index cost per task, rounded as published; not a prediction of production cost. Token rates are separate, current standard API reference rates.",
+  "limitations": [
+    "AA Index includes CritPt at 10% and CritPt is marked under review.",
+    "Opus 5.5 and Fable 5.1 rows include production fallback as named, so these are deployed configurations rather than isolated weights.",
+    "Small score gaps are not reliable universal ordering; the Pareto frontier uses rounded point estimates only.",
+    "Different task categories and providers can change the preferred model.",
+    "No account access or current quota validation is implied."
+  ]
+}

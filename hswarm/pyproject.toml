@@ -1,0 +1,25 @@
+[project]
+name = "hswarm"
+version = "1.2.7"  # keep equal to hswarm/__init__.py __version__
+description = "HydraSwarm (hswarm): a cheap worker swarm with a flagship orchestrator: MCP server + CLI + local console, any OpenAI-compatible provider by config."
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.28.1", "jsonschema>=4.23", "mcp>=2.2.0", "tomlkit>=0.13"]
+
+[project.optional-dependencies]
+test = ["pytest>=9.1.1", "pytest-asyncio>=1.4.0", "pytest-timeout>=2.3"]
+
+[project.scripts]
+hswarm = "hswarm.cli:main"
+
+# This file sits inside the package folder, so the package is the folder itself.
+[tool.setuptools]
+packages = ["hswarm"]
+package-dir = { hswarm = "." }
+
+[tool.setuptools.package-data]
+hswarm = ["data/*.json", "data/*.md", "outfilters.toml", "shell_rules.toml", "reviewers/*.md", "providers/*.toml", "ui/*.html", "ui/*.js", "ui/*.svg", "docs/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["live: hits a provider API (costs money, needs a key)"]

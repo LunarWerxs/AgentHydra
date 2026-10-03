@@ -1,0 +1,7 @@
+# Perplexity Sonar (search-grounded). No free tier, paid per call.
+
+base_url = "https://api.perplexity.ai"
+about = "Perplexity's Sonar models, which search the web as they answer. Paid per use."
+key_url = "https://www.perplexity.ai/account/api/keys"  # where a person makes an API key
+website = "https://www.perplexity.ai"  # the company's site; the console shows its favicon
+docs = "https://docs.perplexity.ai/"

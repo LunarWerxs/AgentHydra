@@ -75,6 +75,7 @@ import {
 import { startExtraUsageGuard, stopExtraUsageGuard } from './extra-usage'
 import { findFreePort } from './find-free-port.mjs'
 import { cleanupStaleUpdateArtifacts, missingComponents } from './github-updater'
+import { startHSwarm, stopHSwarm } from './hswarm'
 import { app } from './http-app'
 import {
   clearInstanceInfo,
@@ -819,6 +820,7 @@ await import('./routes/desktop-sessions')
 await import('./routes/session-message')
 await import('./routes/versions')
 await import('./routes/climayte')
+await import('./routes/hswarm')
 
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------
 app.post('/api/portable-window', async (c) => {
@@ -1234,6 +1236,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
     // away, and a tick landing after clearInstanceInfo() would write the pointer back.
     clearInterval(pointerReassertTimer)
     stopBackgroundTimers()
+    await stopHSwarm()
     await flushConnectionsBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()
@@ -1282,6 +1285,7 @@ function relaunchDaemon(): Promise<boolean> {
       // The successor is up and waiting for our port. The short delay only lets a
       // /api/daemon/restart response flush before the socket carrying it closes.
       setTimeout(async () => {
+        await stopHSwarm()
         await flushConnectionsBeforeExit()
         clearInstanceInfo()
         stopAutoUpdate()
@@ -1511,6 +1515,11 @@ startResetWatch({
     if (key.startsWith('cli:')) await checkUsageForCliInstance(key.slice('cli:'.length))
   },
 })
+
+// --- HydraSwarm sidecar (serves ZSwarm console API on /api/hswarm/*) ---------
+// On by default; AGENTHYDRA_HSWARM_ENABLED=0 switches it off. Runs in the
+// background with automatic restart on crash (exponential backoff).
+void startHSwarm({ logDir: join(DATA_DIR, 'logs') })
 
 // Explicit serve, NOT Bun's implicit `export default { fetch }` sugar: the implicit form only
 // auto-serves when THIS file is the process entrypoint, and the compiled binary reaches the daemon

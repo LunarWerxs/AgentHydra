@@ -1,0 +1,20 @@
+// ZSwarm stats card — compact summary of work delegated to ZSwarm.
+export default {
+  title: 'Swarm',
+  savedToday: 'Saved today',
+  saved7d: 'Saved 7 days',
+  savedAllTime: 'All-time saved',
+  tasksToday: 'Tasks today',
+  tokensKept: 'Tokens kept off today',
+  fromZswarm: 'from ZSwarm history',
+  measuredDays: 'Measured on {n} of the last {total} days; the rest are not counted.',
+  loading: 'Loading…',
+  offline: 'HSwarm is not running',
+  empty: 'No work delegated yet',
+  byAccount: 'Swarm work by account',
+  colAccount: 'Account',
+  colRuns: 'Runs',
+  colTasks: 'Tasks',
+  colSaved: 'Est. saved',
+  colLast: 'Last',
+}

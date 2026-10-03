@@ -1,0 +1,8 @@
+# Moonshot (Kimi).
+
+base_url = "https://api.moonshot.ai/v1"
+about = "Moonshot's Kimi models. Paid per use."
+key_url = "https://platform.kimi.ai/console/api-keys"  # where a person makes an API key
+website = "https://platform.kimi.ai"  # the company's site; the console shows its favicon
+models_path = "/models"
+docs = "https://platform.moonshot.ai/docs"

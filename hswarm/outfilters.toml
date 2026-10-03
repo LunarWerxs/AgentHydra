@@ -1,0 +1,263 @@
+# Built-in output filters for a worker's bash tool (see hswarm/outfilters.py for every key).
+# WHY: these commands print mostly noise a worker pays for and never uses; each filter drops the
+# known noise and keeps errors, warnings and summaries. A filter must carry [[tests.<name>]] cases
+# and pass them, or it is rejected at load. Override one by name in ~/.hswarm/filters.toml or in a
+# project's .hswarm/filters.toml; `python hswarm.py filters` lists what is in effect.
+
+[filters.pip-install]
+description = "pip install: drop resolver and download chatter, keep errors and what was installed"
+match_command = '\bpip3?(?:\.exe)?\s+install\b'
+strip_lines_matching = [
+    '^\s*Requirement already satisfied:',
+    '^\s*(?:Collecting|Downloading|Using cached|Obtaining) \S',
+    '^\s*[━╸╺╾─]{3,}',
+    '^\s*(?:Preparing metadata|Installing build dependencies|Getting requirements to build|Building wheels? for|Created wheel for|Stored in directory:)',
+    '^\s*(?:Attempting uninstall:|Found existing installation:|Uninstalling \S|Successfully uninstalled \S)',
+]
+on_empty = "pip install: nothing to report (every requirement already satisfied)"
+
+[[tests.pip-install]]
+name = "download chatter goes, the install line stays"
+input = '''
+Requirement already satisfied: httpx>=0.28.1 in /venv/lib/site-packages (0.28.1)
+Collecting mcp>=2.2.0
+  Downloading mcp-2.2.0-py3-none-any.whl (120 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 120.3/120.3 kB 4.1 MB/s eta 0:00:00
+Installing collected packages: mcp
+Successfully installed mcp-2.2.0
+'''
+expected = '''
+Installing collected packages: mcp
+Successfully installed mcp-2.2.0
+'''
+
+[[tests.pip-install]]
+name = "a resolution error survives"
+input = '''
+Collecting nosuchpkg
+ERROR: Could not find a version that satisfies the requirement nosuchpkg (from versions: none)
+ERROR: No matching distribution found for nosuchpkg
+'''
+expected = '''
+ERROR: Could not find a version that satisfies the requirement nosuchpkg (from versions: none)
+ERROR: No matching distribution found for nosuchpkg
+'''
+
+[[tests.pip-install]]
+name = "all satisfied collapses to one line"
+input = '''
+Requirement already satisfied: httpx>=0.28.1 in /venv/lib/site-packages (0.28.1)
+Requirement already satisfied: mcp>=2.2.0 in /venv/lib/site-packages (2.2.0)
+'''
+expected = "pip install: nothing to report (every requirement already satisfied)"
+
+
+[filters.npm-install]
+description = "npm/pnpm install: drop deprecation and funding chatter, keep ERR lines and the summary"
+match_command = '\b(?:npm|pnpm)\s+(?:install|i|ci|add)\b'
+match_output = [
+    { pattern = '(?m)^up to date, audited \d+ packages', unless = '(?m)^npm ERR!|\d+ (?:low|moderate|high|critical)\b', message = "npm install: up to date, nothing changed, no vulnerabilities reported" },
+]
+strip_lines_matching = [
+    '^npm WARN deprecated ',
+    '^npm notice\b',
+    '^\s*\d+ packages? (?:is|are) looking for funding',
+    '^\s*run `npm fund` for details',
+    '^Progress: resolved \d+',
+    '^Packages: \+\d+',
+    '^\s*\+{3,}\s*$',
+    '^\s*$',
+]
+
+[[tests.npm-install]]
+name = "deprecations and funding go, the summary stays"
+input = '''
+npm WARN deprecated inflight@1.0.6: This module is not supported, and leaks memory.
+npm WARN deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported
+
+added 231 packages, and audited 232 packages in 9s
+
+41 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+'''
+expected = '''
+added 231 packages, and audited 232 packages in 9s
+found 0 vulnerabilities
+'''
+
+[[tests.npm-install]]
+name = "an ERR block survives"
+input = '''
+npm WARN deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
+npm ERR! code ERESOLVE
+npm ERR! ERESOLVE unable to resolve dependency tree
+'''
+expected = '''
+npm ERR! code ERESOLVE
+npm ERR! ERESOLVE unable to resolve dependency tree
+'''
+
+[[tests.npm-install]]
+name = "up to date short-circuits"
+input = '''
+
+up to date, audited 232 packages in 1s
+
+41 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+'''
+expected = "npm install: up to date, nothing changed, no vulnerabilities reported"
+
+[[tests.npm-install]]
+name = "up to date with vulnerabilities does not short-circuit"
+input = '''
+up to date, audited 232 packages in 1s
+
+3 vulnerabilities (1 low, 2 high)
+'''
+expected = '''
+up to date, audited 232 packages in 1s
+3 vulnerabilities (1 low, 2 high)
+'''
+
+
+[filters.pytest]
+description = "pytest: drop the session header and all-green progress rows, keep failures and the summary"
+# pytest as a word on its own ("python -m pytest", "uv run pytest"), never "cat pytest.log".
+match_command = '(?:^|[\s;&|(])pytest(?=[\s;&|)]|$)'
+strip_lines_matching = [
+    '^(?:platform \S+ -- Python|cachedir:|rootdir:|configfile:|testpaths:|plugins:|asyncio: mode=)',
+    '^\S+\.py\s+[.sxX]+\s*(?:\[\s*\d+%\])?\s*$',
+    '^[.sxX]+\s*(?:\[\s*\d+%\])?\s*$',
+    '^\S+\.py::\S.*\s(?:PASSED|SKIPPED|XFAIL|XPASS)(?:\s+\[\s*\d+%\])?\s*$',
+]
+
+[[tests.pytest]]
+name = "a failure and its traceback survive, the green rows go"
+input = '''
+============================= test session starts =============================
+platform linux -- Python 3.12.4, pytest-9.1.1, pluggy-1.6.0
+rootdir: /work/repo
+configfile: pyproject.toml
+plugins: asyncio-1.4.0
+collected 5 items
+
+tests/test_a.py ...                                                      [ 60%]
+tests/test_b.py .F                                                       [100%]
+
+================================== FAILURES ===================================
+___________________________________ test_two ___________________________________
+
+    def test_two():
+>       assert 1 == 2
+E       assert 1 == 2
+
+tests/test_b.py:5: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_b.py::test_two - assert 1 == 2
+========================= 1 failed, 4 passed in 0.12s =========================
+'''
+expected = '''
+============================= test session starts =============================
+collected 5 items
+
+tests/test_b.py .F                                                       [100%]
+
+================================== FAILURES ===================================
+___________________________________ test_two ___________________________________
+
+    def test_two():
+>       assert 1 == 2
+E       assert 1 == 2
+
+tests/test_b.py:5: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_b.py::test_two - assert 1 == 2
+========================= 1 failed, 4 passed in 0.12s =========================
+'''
+
+[[tests.pytest]]
+name = "a quiet all-green run is its summary"
+input = '''
+........................................................................ [ 21%]
+....s................................................................... [ 42%]
+340 passed, 4 skipped in 109.60s (0:01:49)
+'''
+expected = "340 passed, 4 skipped in 109.60s (0:01:49)"
+
+[[tests.pytest]]
+name = "verbose PASSED rows go, a FAILED row stays"
+input = '''
+tests/test_x.py::test_one PASSED                                         [ 50%]
+tests/test_x.py::test_two FAILED                                         [100%]
+'''
+expected = "tests/test_x.py::test_two FAILED                                         [100%]"
+
+
+[filters.cargo]
+description = "cargo build/check/test: drop per-crate progress and passing test rows, keep warnings, errors, results"
+match_command = '\bcargo\s+(?:build|check|test|run|clippy|install|b|c|t|r)\b'
+strip_lines_matching = [
+    '^\s*(?:Compiling|Checking|Downloaded|Downloading|Fresh|Locking|Adding|Updating|Blocking|Documenting|Packaging|Verifying|Archiving) \S',
+    '^test \S+ \.\.\. ok$',
+]
+
+[[tests.cargo]]
+name = "crate progress goes, a warning stays"
+input = '''
+    Updating crates.io index
+  Downloaded serde v1.0.210
+   Compiling serde v1.0.210
+   Compiling zscan v0.1.0 (/work/native/zscan-rs)
+warning: unused variable: `x`
+ --> src/main.rs:3:9
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.20s
+'''
+expected = '''
+warning: unused variable: `x`
+ --> src/main.rs:3:9
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.20s
+'''
+
+[[tests.cargo]]
+name = "passing test rows go, the failure stays"
+input = '''
+running 3 tests
+test parse::reads_usage ... ok
+test parse::skips_blank ... ok
+test parse::rejects_bad ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored
+'''
+expected = '''
+running 3 tests
+test parse::rejects_bad ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored
+'''
+
+
+[filters.git-transfer]
+description = "git clone/fetch: drop object-transfer progress, keep what was fetched and any error"
+match_command = '\bgit(?:\.exe)?\s+(?:-C\s+\S+\s+)?(?:clone|fetch)\b'
+strip_lines_matching = [
+    '^(?:remote: )?(?:Enumerating objects|Counting objects|Compressing objects|Writing objects|Receiving objects|Resolving deltas|Unpacking objects|Updating files|Total \d+|Delta compression using)\b',
+]
+
+[[tests.git-transfer]]
+name = "transfer progress goes"
+input = '''
+Cloning into 'hswarm'...
+remote: Enumerating objects: 1520, done.
+remote: Counting objects: 100% (1520/1520), done.
+Receiving objects: 100% (1520/1520), 2.10 MiB | 8.00 MiB/s, done.
+Resolving deltas: 100% (980/980), done.
+'''
+expected = "Cloning into 'hswarm'..."
+
+[[tests.git-transfer]]
+name = "a carriage-return progress redraw collapses and goes, the error stays"
+input = "Receiving objects:  50% (760/1520)\rReceiving objects: 100% (1520/1520), done.\nfatal: early EOF"
+expected = "fatal: early EOF"

@@ -1,0 +1,63 @@
+# Google Gemini through its OpenAI-compatible endpoint. Free tier; per-model, per-region quotas.
+# `anthropic_url = "facade"` runs `cc` workers through hswarm's local Anthropic Messages facade.
+
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+about = "Google's Gemini models. Has a free tier."
+key_url = "https://aistudio.google.com/apikey"  # where a person makes an API key
+website = "https://ai.google.dev"  # the company's site; the console shows its favicon
+free_tier = true  # free terms may keep what is sent: HSWARM_REDACT_FREE_TIER redacts tasks here
+options = ["reasoning_effort"]
+models_path = "/models"
+anthropic_url = "facade"
+docs = "https://ai.google.dev/gemini-api/docs/openai"
+
+# 100% on the judgment suite, 24/24 tool-using, free. The vision default. The primary of its own route,
+# so never a fallback. `vision = true` marks a model that reads images; `tools = true` one that calls tools
+# (every Gemini flash model does, through the OpenAI-compatible endpoint).
+[models."gemini-3.8-flash"]
+ctx = 1048576
+max_out = 65536
+vision = true
+tools = true
+price = {hit = 0.075, miss = 0.75, out = 3.75}
+route = ["gemini-3.8-flash", "deepseek-flash-or"]
+
+[models."gemini-3.7-flash"]
+ctx = 1048576
+max_out = 65536
+vision = true
+tools = true
+price = {hit = 0.075, miss = 0.75, out = 3.75}
+
+[models."gemini-3.5-flash"]
+ctx = 1048576
+max_out = 65536
+vision = true
+tools = true
+price = {hit = 0.15, miss = 1.5, out = 9.0}
+
+[models."gemini-3.5-flash-lite"]
+ctx = 1048576
+max_out = 65536
+vision = true
+tools = true
+price = {hit = 0.03, miss = 0.3, out = 2.5}
+
+[models."gemini-3.1-flash-lite"]
+ctx = 1048576
+max_out = 65536
+vision = true
+tools = true
+price = {hit = 0.03, miss = 0.3, out = 2.5}
+
+# Models with a `benchmark_slug` take part in AUTO: the slug names their published scores in
+# data/published-models.json. `inherits` copies another model's settings; the lines below it
+# change what differs.
+[models."rank:gemini-3-8-flash:direct"]
+inherits = "gemini-3.8-flash"
+benchmark_slug = "gemini-3-8-flash"
+tools = true
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+siblings = ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]

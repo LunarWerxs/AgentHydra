@@ -1,0 +1,7 @@
+# Alibaba DashScope (Qwen), international endpoint.
+
+base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+about = "Alibaba's Qwen models. Paid per use."
+key_url = "https://bailian.console.alibabacloud.com/?apiKey=1"  # where a person makes an API key
+website = "https://www.alibabacloud.com"  # the company's site; the console shows its favicon
+docs = "https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope"

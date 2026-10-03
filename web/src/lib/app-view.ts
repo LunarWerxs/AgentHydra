@@ -24,9 +24,16 @@
 // Storages are taken by parameter, the same reasoning lib/storage-rebrand.ts carries: the rule
 // above is worth a test, and a test of it should not need a DOM.
 
-import { type Ref, ref, watch } from 'vue'
+import { type InjectionKey, type Ref, ref, watch } from 'vue'
 
-export type AppView = 'sessions' | 'climayte' | 'instances-home' | 'cli' | 'desktop' | 'analytics'
+export type AppView =
+  | 'sessions'
+  | 'climayte'
+  | 'instances-home'
+  | 'cli'
+  | 'desktop'
+  | 'analytics'
+  | 'hswarm'
 export const APP_VIEWS: readonly AppView[] = [
   'sessions',
   'climayte',
@@ -34,6 +41,7 @@ export const APP_VIEWS: readonly AppView[] = [
   'cli',
   'desktop',
   'analytics',
+  'hswarm',
 ]
 
 /** The views under the Instances group: the landing page and its two sub-pages. */
@@ -128,3 +136,6 @@ export function createTabView(stored: Ref<AppView>, session: Storage | null): Re
 
   return view
 }
+
+/** Provided by App.vue: lets a nested view switch the tab (e.g. a stats card's "open HSwarm"). */
+export const OPEN_VIEW: InjectionKey<(view: AppView) => void> = Symbol('open-view')
