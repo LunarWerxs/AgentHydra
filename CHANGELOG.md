@@ -9,6 +9,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Two PCs can share their visible Claude Desktop chats** (owner, 2026-10-02: "sync all desktop instance chats/threads ... Compressed ... We keep track of which computer it came from"). A new switch in the Login sync dialog (off by default, set on each PC; `POST /api/cli-instances/sync/chats`) sends this PC's visible chats, not the archived ones, and takes the other PCs', compressed and encrypted under the sync key, and the dialog lists each chat with the PC it came from. Chats ride a pass of their own beside the logins, and a chat that cannot sync shows as `chatsError`, never as a login error. **Redeploy the login-sync Worker** if it predates the chat routes.
 - **Clear usage stats, on every account row's ⋯ menu** (Instances, CLI and Codex; owner, 2026-10-02:
   "clear the like old 5hour and usage stats in the ui", "not like delete the stats"). A signed-out
   account keeps its last reading on its row, dimmed, and until now nothing took it off. The item

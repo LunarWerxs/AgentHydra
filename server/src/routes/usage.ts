@@ -24,6 +24,7 @@ import {
   loginSyncStatus,
   noteLoggedOutHere,
   runLoginSync,
+  setChatSharing,
   setLoginSyncEnabled,
   setLoginSyncExcluded,
   setQueueSharing,
@@ -526,6 +527,11 @@ app.post('/api/cli-instances/sync/enabled', async (c) => {
 app.post('/api/cli-instances/sync/queue', async (c) => {
   const body = await jsonBody(c)
   setQueueSharing(body.enabled === true)
+  return c.json(loginSyncStatus())
+})
+app.post('/api/cli-instances/sync/chats', async (c) => {
+  const body = await jsonBody(c)
+  setChatSharing(body.enabled === true)
   return c.json(loginSyncStatus())
 })
 app.post('/api/cli-instances/sync/exclude', async (c) => {

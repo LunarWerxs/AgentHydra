@@ -45,6 +45,12 @@
 // the store's own `queues` table). It fails apart from the logins: its error is `queueError`, and a
 // queue that cannot sync never stops a login pass.
 //
+// THE DESKTOP CHATS ride the pass too when their toggle is on (`shareChats`, off by default, per PC):
+// the visible Claude Desktop chats go up and come down compressed and encrypted, each remembering the
+// PC it came from (core/desktop-chat-sync.ts, the store's `chats` and `chat_chunks`). A chat pass can
+// read tens of MB, so it runs after the logins' part of the pass, not inside it, and at most one at a
+// time. Its error is `chatsError`, apart from `lastError` and `queueError`; it never fails a login pass.
+//
 // ⛔ SECRETS: the token and key are read only to make requests and encrypt; status answers never
 // carry them. The pairing code is the one answer that does, for the owner's copy button.
 
@@ -85,6 +91,9 @@ import {
 } from './cli-login-move'
 import { logoutCliInstance } from './cli-logout'
 import { syncQueue } from './climayte-queue-sync'
+import { createChatLocal } from './desktop-chat-local'
+import { chatSyncRows, syncChats } from './desktop-chat-sync'
+import type { ChatLocal } from './desktop-chat-types'
 import { hasOwnCliLogin } from './desktop-cli-feed'
 import {
   asDesktopLogin,
@@ -97,6 +106,7 @@ import { setBeforeLaunchHook } from './instances'
 
 export const SYNC_EVERY_MS = 30_000
 const CONFIG_PATH = join(CONFIG_DIR, 'login-sync.json')
+const CHATS_STATE_PATH = join(CONFIG_DIR, 'desktop-chat-sync.json')
 const PAIRING_PREFIX = 'ahsync1:'
 const MAX_EVENTS = 30
 
@@ -121,6 +131,8 @@ interface SyncConfig {
   pcId?: string
   /** Share this PC's CliMayte queue and read the other PCs'. Absent: off. */
   shareQueue?: boolean
+  /** Share this PC's visible desktop chats and read the other PCs'. Absent: off. */
+  shareChats?: boolean
   excluded: string[]
   state: Record<string, SyncState>
   lastSyncAt: number | null
@@ -263,6 +275,7 @@ function freshConfig(url: string, token: string, key: Buffer): SyncConfig {
     // Setting up again keeps this PC's id and its queue choice.
     pcId: readConfig()?.pcId ?? randomUUID(),
     shareQueue: readConfig()?.shareQueue ?? false,
+    shareChats: readConfig()?.shareChats ?? false,
     excluded: [],
     state: {},
     lastSyncAt: null,
@@ -355,6 +368,30 @@ export function setQueueSharing(on: boolean): { ok: boolean; message: string } {
   }
 }
 
+/** Turn the desktop chat sharing on or off on this PC (needs login sync set up). Off keeps the chat
+ *  state file, so turning it on again resumes. */
+export function setChatSharing(on: boolean): { ok: boolean; message: string } {
+  const c = readConfig()
+  if (!c) return { ok: false, message: 'Login sync is not set up on this PC.' }
+  c.shareChats = on
+  c.pcId ??= randomUUID()
+  writeConfig(c)
+  if (on) void runLoginSync()
+  else chatsError = null
+  return {
+    ok: true,
+    message: on
+      ? 'This PC shares its desktop chats.'
+      : 'This PC no longer shares its desktop chats.',
+  }
+}
+
+/** Login sync is set up, on, and this PC shares its desktop chats (so reads the others'). */
+export function chatSharingOn(): boolean {
+  const c = readConfig()
+  return !!c?.enabled && c.shareChats === true
+}
+
 /** Login sync is set up, on, and this PC shares its CliMayte queue (so reads the others'). */
 export function queueSharingOn(): boolean {
   const c = readConfig()
@@ -391,6 +428,7 @@ export function disconnectLoginSync(): { ok: boolean; message: string } {
   rmSync(CONFIG_PATH, { force: true })
   clearRemote()
   queueError = null
+  chatsError = null
   return { ok: true, message: 'This PC no longer syncs logins. The store still holds them.' }
 }
 
@@ -1027,6 +1065,58 @@ async function queuePass(l: Live, c: SyncConfig, by: string): Promise<void> {
   }
 }
 
+/** Why the chats could not sync at the last chat pass; null when they did or are off. */
+let chatsError: string | null = null
+let chatsRunning: Promise<void> | null = null
+let chatLocal: () => ChatLocal = () => createChatLocal()
+
+/** Tests: this PC's chats are a fake. Pass null for the real ones. */
+export function setChatLocalForTests(local: ChatLocal | null): void {
+  chatLocal = local ? () => local : () => createChatLocal()
+}
+
+/** Resolves when no chat pass is running (tests await it; a pass does not). */
+export function chatsIdle(): Promise<void> {
+  return chatsRunning ?? Promise.resolve()
+}
+
+/** Start the chat half of a pass (desktop-chat-sync.ts) unless one is still running, so two never
+ *  overlap, and do not wait for it: the logins' pass is already written and the next one is not held
+ *  behind a long read. Its failures are its own: chatsError and one note per message. */
+function chatsPass(l: Live, c: SyncConfig, by: string): void {
+  if (!c.shareChats) {
+    chatsError = null
+    return
+  }
+  if (chatsRunning) return
+  c.pcId ??= randomUUID()
+  const pc = c.pcId
+  chatsRunning = (async () => {
+    try {
+      await syncChats({
+        call: (method, path, body) => call(l, method, path, body),
+        key: l.key,
+        pc,
+        name: by,
+        local: chatLocal(),
+        statePath: CHATS_STATE_PATH,
+      })
+      chatsError = null
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const now = readConfig()
+      if (!now?.shareChats) return
+      if (msg !== chatsError) {
+        note(now, null, 'error', `Desktop chats: ${msg}`)
+        writeConfig(now)
+      }
+      chatsError = msg
+    }
+  })().finally(() => {
+    chatsRunning = null
+  })
+}
+
 async function pass(): Promise<LoginSyncPassResult> {
   const out: LoginSyncPassResult = { ok: true, pushed: 0, landed: 0, unchanged: 0, problems: [] }
   const c = readConfig()
@@ -1048,9 +1138,11 @@ async function pass(): Promise<LoginSyncPassResult> {
   if (now) {
     c.enabled = now.enabled
     c.shareQueue = now.shareQueue
+    c.shareChats = now.shareChats
     c.excluded = now.excluded
   }
   writeConfig(c)
+  chatsPass(l, c, by)
   return out
 }
 
@@ -1066,6 +1158,9 @@ export function loginSyncStatus(): CliLoginSyncStatus {
       lastError: null,
       shareQueue: false,
       queueError: null,
+      shareChats: false,
+      chatsError: null,
+      chats: [],
       logins: [],
       events: [],
     }
@@ -1153,6 +1248,9 @@ export function loginSyncStatus(): CliLoginSyncStatus {
     lastError: c.lastError,
     shareQueue: c.shareQueue === true,
     queueError,
+    shareChats: c.shareChats === true,
+    chatsError,
+    chats: c.shareChats === true ? chatSyncRows(CHATS_STATE_PATH) : [],
     logins,
     events: c.events,
   }

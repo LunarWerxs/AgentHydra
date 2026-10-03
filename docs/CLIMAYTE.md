@@ -783,6 +783,17 @@ MCP tools are unchanged. A queue that cannot sync (a Worker without the queue ro
 network) is `queueError` in the sync status and one line in its events, never the logins' `lastError`.
 The Worker needs redeploying once for the queue routes. Test: `server/tests/climayte-queue-sync.test.ts`.
 
+### Two PCs: the desktop chats switch (owner, 2026-10-02)
+
+Beside the queue switch, the Login sync dialog has a second one, off by default and set per PC
+(`POST /api/cli-instances/sync/chats {enabled}`; `shareChats` in `login-sync.json`). On, each pass
+hands the visible Claude Desktop chats to `core/desktop-chat-sync.ts`: compressed, encrypted under the
+sync key, with the PC each came from. The chat pass starts after the logins' part is written and is not
+waited for; a second one never starts while one runs. Its state file `desktop-chat-sync.json` sits
+beside `login-sync.json` and survives turning the switch off. Status carries `shareChats`,
+`chatsError` (apart from `lastError` and `queueError`) and `chats` (empty while off). Test:
+`server/tests/cli-login-sync-chats.test.ts`.
+
 ### Desktop logins: `server/src/core/desktop-login-sync.ts` (owner, 2026-10-01)
 
 "Yes, build the desktop login sync." The same pass, store and key carry desktop logins, so a Claude

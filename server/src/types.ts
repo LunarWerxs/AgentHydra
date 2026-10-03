@@ -3,6 +3,7 @@
 // CodexInstance below references this type directly, so it is imported as well as re-exported
 // (see the Codex re-export block further down).
 import type { CodexAccount } from './core/codex-account'
+import type { ChatSyncRow } from './core/desktop-chat-types'
 
 export type {
   CodexMoveChat,
@@ -1410,6 +1411,12 @@ export interface CliLoginSyncStatus {
   shareQueue: boolean
   /** Why the queue could not sync at the last pass, apart from `lastError` (the logins'); null when it did. */
   queueError: string | null
+  /** This PC shares its visible desktop chats through the store and reads the other PCs' (desktop-chat-sync). */
+  shareChats: boolean
+  /** Why the chats could not sync at the last chat pass, apart from `lastError` and `queueError`; null when they did. */
+  chatsError: string | null
+  /** The synced chats with the PC each came from; [] while sharing is off. */
+  chats: ChatSyncRow[]
   logins: Array<{
     /** A CLI instance's id, or a desktop account's uuid. */
     id: string
