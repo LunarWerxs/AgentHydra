@@ -205,13 +205,18 @@ export async function findStalledOwner(timeoutMs = 1000): Promise<InstanceInfo |
 const sameFile = (a: string, b: string) =>
   process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 
+/** How many ports past the default a hopped daemon is looked for (findFreePort takes the first free). */
+const HOP_SCAN = 4
+
 /**
  * Another LIVE AgentHydra serving THIS daemon's store, or null: the pointer's daemon when it is not
- * this one, and the default port's when this one hopped off it. Only a /api/health that answers as
- * our service, from another pid, naming this daemon's database counts (a side-run's own store is
- * not this one). The running daemon asks on its pointer tick and stamps every answer with what it
- * found (side-run.ts), so a client reading one of two daemons is told so instead of reading a
- * partial store as the whole (note 62).
+ * this one, else one on the default port or the few just past it, where a hop lands. A twin need
+ * not hold the pointer: on 2026-10-02 7787 restarted and took it back while the stray stayed on
+ * 7788, named nowhere. Only a /api/health that answers as our service, from another pid, naming this
+ * daemon's database counts (a side-run's own store is not this one; instance mode answers as another
+ * service). The running daemon asks on its pointer tick and stamps every answer with what it found
+ * (side-run.ts), so a client reading one of two daemons is told so instead of reading a partial
+ * store as the whole (note 62). Nothing listening on a port is refused at once on loopback.
  */
 export async function findPeerDaemon(
   boundPort: number,
@@ -221,7 +226,7 @@ export async function findPeerDaemon(
   const info = readInstanceInfo()
   const urls = new Set<string>()
   if (info?.url && info.pid !== process.pid) urls.add(info.url)
-  if (boundPort !== PORT) urls.add(DEFAULT_URL)
+  for (let p = PORT; p <= PORT + HOP_SCAN; p++) urls.add(`http://${HOST}:${p}`)
   urls.delete(own)
   for (const url of urls) {
     const body = await ourHealthAt(url, timeoutMs)

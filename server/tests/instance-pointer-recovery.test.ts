@@ -178,6 +178,15 @@ describe('findPeerDaemon: a second live daemon on this store is found and named'
     expect(await findPeerDaemon(PORT, 500)).toEqual({ url: HOPPED, pid: 4242 })
   })
 
+  // Seen live 2026-10-02 23:50Z: 7787 restarted onto the fix and took the pointer back, so the stray
+  // on 7788 was named nowhere, and the daemon on the default port reported no peer.
+  test('the daemon on the default port finds a twin that hopped to the next port', async () => {
+    writeInstanceInfo(PORT, {})
+    const next = `http://127.0.0.1:${PORT + 1}`
+    stubFetch({ [next]: health(4444) })
+    expect(await findPeerDaemon(PORT, 500)).toEqual({ url: next, pid: 4444 })
+  })
+
   test('a daemon that hopped off the default port finds the one still on it', async () => {
     writeInstanceInfo(7790, {})
     stubFetch({ [DEFAULT_URL]: health(4343) })
