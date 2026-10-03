@@ -513,5 +513,5 @@ if ($script:Problems.Count) {
   exit 1
 }
 $verb = if ($DryRun) { 'Plan is coherent' } else { 'Done' }
-Write-Host "$verb ($ModeName): 0 problems, $($script:Warnings.Count) warning(s)."
+Write-Host "$verb ($ModeName): nothing blocks it, $($script:Warnings.Count) warning(s)."
 exit 0
