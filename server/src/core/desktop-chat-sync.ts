@@ -410,13 +410,15 @@ function sendableState(
 function stillWriting(st: ChatState, row: StoreRow, c: LocalChat, now: number): boolean {
   const grew = st.seen !== undefined && c.size !== st.seen
   st.seen = c.size
+  // A clock set back since the last send makes this negative: send, rather than wait it out.
+  const since = st.pushedAt === undefined ? -1 : now - st.pushedAt
   return (
     grew &&
     c.archived === (row.meta?.a === 1) &&
     !st.up &&
     st.state === 'synced' &&
-    st.pushedAt !== undefined &&
-    now - st.pushedAt < CHAT_PUSH_EVERY_MS
+    since >= 0 &&
+    since < CHAT_PUSH_EVERY_MS
   )
 }
 

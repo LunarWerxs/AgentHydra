@@ -294,9 +294,14 @@ test('a chat still being written in goes up when it stops growing or every few m
   await syncChats(a.io, t + CHAT_PUSH_EVERY_MS + 60_000)
   expect((await rowFor(chat.id)).meta.b).toBe(40)
 
+  // A clock set back an hour since that send does not hold the chat for the hour.
   a.extend(chat, '{"n":6}\n')
+  await syncChats(a.io, t - 3600_000)
+  expect((await rowFor(chat.id)).meta.b).toBe(48)
+
+  a.extend(chat, '{"n":7}\n')
   ;(a.chats.find((c) => c.id === chat.id) as LocalChat).archived = true
-  await syncChats(a.io, t + CHAT_PUSH_EVERY_MS + 90_000)
+  await syncChats(a.io, t - 3600_000 + 30_000)
   expect((await rowFor(chat.id)).meta.a).toBe(1)
 })
 
