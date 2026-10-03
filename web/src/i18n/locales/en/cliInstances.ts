@@ -19,11 +19,7 @@ export default {
   poolWeekNone: 'Weekly limit: no usage reading yet',
   poolCounted: 'Accounts counted: {n}, weighted by plan size (a Max 5x counts as five Pros).',
   poolLeftOut: 'Left out: {signedOut} signed out, {unread} with no usage reading.',
-  colName: 'Name',
-  colAccount: 'Account',
   colConfigDir: 'Config dir',
-  colUsage: 'Usage',
-  colActions: 'Actions',
   // The Tokens column: what an account has run, from its own transcripts (cli-instance-tokens.ts).
   colTokens: 'Tokens',
   tokensLabel: '{total} tokens',
@@ -43,7 +39,6 @@ export default {
   liveSessions:
     '{n} Claude session running on this account, CliMayte’s included | {n} Claude sessions running on this account, CliMayte’s included',
   launch: 'Launch',
-  moreActions: 'More actions',
   login: 'Log in',
   // "Log in" on a row points Quick add at that instance (CliQuickAdd.vue, useQuickAddTarget.ts).
   quickAddTarget:

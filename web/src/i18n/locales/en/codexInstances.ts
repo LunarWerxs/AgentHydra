@@ -28,7 +28,6 @@ export default {
   launch: 'Launch',
   quitDesktop: 'Quit desktop',
   launchCli: 'Launch CLI',
-  moreActions: 'More actions',
   login: 'Log in',
   logout: 'Log out',
   logoutQuitFirst: 'Quit this Codex Desktop instance first.',

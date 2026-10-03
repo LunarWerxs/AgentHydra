@@ -2,7 +2,7 @@
 // DeepSeek Harness instances as rows of the combined Instances table: one DSH_HOME per row.
 //
 // Rows only: the table, its header, its empty state and the provider filter belong to
-// InstancesView, and every row here renders that table's ten cells in its order, in both modes. A
+// InstancesView, and every row here is the shared InstanceRow drawing that table's columns. A
 // DeepSeek account IS a home (credentials, settings, plugin profiles and every conversation live
 // under one root), so most of the ten are facts it does not have: no signed-in account, no process
 // this row owns, and no quota, because the harness bills a pay-as-you-go API key with no 5-hour or
@@ -11,26 +11,16 @@
 // ⛔ The SPA never sees a server's URL. `dsh web` prints a one-time `?token=` that is the whole of
 // its authentication, so "launch" and "open" are daemon actions that open the window on the machine
 // the daemon runs on and answer with an outcome. See server/src/core/dsh-instances.ts.
-import { Copy, EllipsisVertical, Pencil, Play, Square, Trash2 } from '@lucide/vue'
+import { Copy, Pencil, Play, Square, Trash2 } from '@lucide/vue'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
-import InstanceAccountBadge from '@/components/InstanceAccountBadge.vue'
-import InstanceGlyph from '@/components/InstanceGlyph.vue'
-import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
-import InstanceNumber from '@/components/InstanceNumber.vue'
-import ProviderLogo from '@/components/ProviderLogo.vue'
-import { Badge } from '@/components/ui/badge'
+import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
+import InstanceRow from '@/components/InstanceRow.vue'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { TableCell, TableRow } from '@/components/ui/table'
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { useDshInstances } from '@/composables/useDshInstances'
 import {
   createDshInstance,
@@ -41,9 +31,10 @@ import {
   renameDshInstance,
 } from '@/lib/api'
 import { shortDisplayName } from '@/lib/instance-appearance'
-import IconTooltip from '@/shell/IconTooltip.vue'
+import type { InstanceColumn, InstanceRowModel } from '@/lib/instance-table'
 
-defineProps<{ usageMode: boolean }>()
+// The table's column list (lib/instance-table.ts): the one the header draws, so the cells follow it.
+defineProps<{ columns: InstanceColumn[] }>()
 
 const { t } = useI18n()
 const { instances, refresh, startPolling, stopPolling } = useDshInstances()
@@ -108,6 +99,40 @@ function menuActionsFor(inst: DshInstance): MenuIconAction[] {
       run: () => openRename(inst),
     },
   ]
+}
+
+/** What the shared row draws for one DeepSeek home. Most of the columns are facts a home does not
+ *  have, so they are left out of the model and the row says so with a dash: a home is signed in with
+ *  an API key, not an account; the list reports whether a server answers for it, not which process
+ *  it is; and pay-as-you-go has no 5-hour or weekly window to fill. */
+function rowModel(inst: DshInstance): InstanceRowModel {
+  return {
+    id: inst.id,
+    num: inst.num,
+    provider: 'deepseek',
+    status: { on: inst.running, title: statusTitle(inst) },
+    glyph: { dir: inst.home, running: inst.running },
+    // The home and its chat count are the hover, the same place the Claude rows keep their profile
+    // folder, so every row is one line tall.
+    name: {
+      shown: shortDisplayName(inst.name),
+      tooltip: () => ({
+        label: inst.name,
+        description: inst.home,
+        detail: t('dshInstances.sessionCount', { count: inst.sessions }, inst.sessions),
+      }),
+    },
+    // The machine's own install, badged like the Claude rows' External one.
+    badge: inst.isDefault
+      ? { label: t('dshInstances.defaultBadge'), title: t('dshInstances.defaultHint') }
+      : undefined,
+    account: {},
+    noQuota: t('dshInstances.noQuota'),
+    plan: { label: t('dshInstances.planApiKey'), plain: true, title: t('dshInstances.noQuota') },
+    // "Now" while its server runs; the list keeps no record of when it last did.
+    lastRunning: inst.running ? { label: t('instances.lastRunningNow'), running: true } : null,
+    menu: { name: inst.name, actions: menuActionsFor(inst) },
+  }
 }
 
 async function onNameSubmit(name: string): Promise<void> {
@@ -179,129 +204,48 @@ defineExpose({ openCreate, refresh })
 </script>
 
 <template>
-  <TableRow v-for="inst in instances" :key="inst.id">
-    <!-- 1 status: one dot, same size and colours as the Codex and CLI rows; the words and the port
-         are its hover. -->
-    <TableCell>
-      <span
-        role="img"
-        class="inline-block size-2 rounded-full"
-        :class="inst.running ? 'bg-success' : 'bg-muted-foreground/40'"
-        :title="statusTitle(inst)"
-        :aria-label="statusTitle(inst)"
-      />
-    </TableCell>
-    <!-- 2 name: max-w-0 so a long name or home elides instead of widening the table. -->
-    <TableCell class="max-w-0">
-      <div class="flex min-w-0 items-center gap-1.5 font-medium">
-        <ProviderLogo provider="deepseek" class="size-3.5" />
-        <!-- Same chip as every other instance row: the number comes from ONE sequence spanning
-             all four families, so it has to look identical everywhere. -->
-        <InstanceNumber :num="inst.num" />
-        <InstanceGlyph :dir="inst.home" :running="inst.running" />
-        <!-- The home and its chat count are the hover, the same place the Claude rows keep their
-             profile folder, so every row is one line tall. -->
-        <IconTooltip
-          :label="inst.name"
-          :description="inst.home"
-          :detail="$t('dshInstances.sessionCount', { count: inst.sessions }, inst.sessions)"
-        >
-          <span class="min-w-0 cursor-default truncate">{{ shortDisplayName(inst.name) }}</span>
-        </IconTooltip>
-        <!-- The machine's own install, badged like the Claude rows' External one. -->
-        <Badge v-if="inst.isDefault" variant="outline" :title="$t('dshInstances.defaultHint')">
-          {{ $t('dshInstances.defaultBadge') }}
-        </Badge>
-      </div>
-    </TableCell>
-    <!-- 3 account: a home is signed in with an API key, not an account; the shared cell's dash. -->
-    <TableCell><InstanceAccountBadge :email="null" /></TableCell>
-    <!-- 4-6 PID, Uptime, Memory: the list reports whether a server answers for the home, not which
-         process it is. -->
-    <template v-if="!usageMode">
-      <TableCell><span class="text-xs text-muted-foreground">—</span></TableCell>
-      <TableCell><span class="text-xs text-muted-foreground">—</span></TableCell>
-      <TableCell><span class="text-xs text-muted-foreground">—</span></TableCell>
+  <InstanceRow v-for="inst in instances" :key="inst.id" :columns="columns" :row="rowModel(inst)">
+    <template #primary>
+      <Button
+        size="sm"
+        variant="outline"
+        :disabled="busyId === inst.id"
+        :title="inst.running ? $t('dshInstances.openHint') : $t('dshInstances.launchHint')"
+        @click="act(inst.id, () => launchDshInstance(inst.id))"
+      >
+        <Play class="size-3.5" />
+        {{
+          busyId === inst.id
+            ? $t('dshInstances.launching')
+            : inst.running
+              ? $t('dshInstances.open')
+              : $t('dshInstances.launch')
+        }}
+      </Button>
     </template>
-    <!-- 4-6 Session (5h), Weekly, 5-hour usage: pay-as-you-go has no window to fill. -->
-    <template v-else>
-      <TableCell>
-        <span class="text-xs text-muted-foreground" :title="$t('dshInstances.noQuota')">—</span>
-      </TableCell>
-      <TableCell>
-        <span class="text-xs text-muted-foreground" :title="$t('dshInstances.noQuota')">—</span>
-      </TableCell>
-      <TableCell>
-        <span class="text-xs text-muted-foreground" :title="$t('dshInstances.noQuota')">—</span>
-      </TableCell>
+    <template #menu>
+      <DropdownMenuItem
+        v-if="inst.running"
+        :title="$t('dshInstances.quitHint')"
+        @select="act(inst.id, () => quitDshInstance(inst.id))"
+      >
+        <Square />{{ $t('dshInstances.quit') }}
+      </DropdownMenuItem>
+      <DropdownMenuItem @select="copyHome(inst)">
+        <Copy />{{ $t('dshInstances.copyHome') }}
+      </DropdownMenuItem>
+      <!-- The default home is the machine's own install: it can be read and launched, never
+           removed or deleted from here. -->
+      <template v-if="!inst.isDefault">
+        <DropdownMenuItem :title="$t('dshInstances.removeHint')" @select="onRemove(inst)">
+          <Trash2 />{{ $t('dshInstances.remove') }}
+        </DropdownMenuItem>
+        <DropdownMenuItem variant="destructive" @select="deleteTarget = inst">
+          <Trash2 />{{ $t('dshInstances.delete') }}
+        </DropdownMenuItem>
+      </template>
     </template>
-    <!-- 7 usage -->
-    <TableCell>
-      <span class="text-xs text-muted-foreground" :title="$t('dshInstances.noQuota')">—</span>
-    </TableCell>
-    <!-- 8 plan -->
-    <TableCell>
-      <span class="text-xs text-muted-foreground" :title="$t('dshInstances.noQuota')">{{
-        $t('dshInstances.planApiKey')
-      }}</span>
-    </TableCell>
-    <!-- 9 last running: "Now" while its server runs; the list keeps no record of when it last did. -->
-    <TableCell>
-      <span v-if="inst.running" class="text-xs text-success">{{ $t('instances.lastRunningNow') }}</span>
-      <span v-else class="text-xs text-muted-foreground">—</span>
-    </TableCell>
-    <!-- 10 actions -->
-    <TableCell class="text-end">
-      <div class="flex items-center justify-end gap-1">
-        <Button
-          size="sm"
-          variant="outline"
-          :disabled="busyId === inst.id"
-          :title="inst.running ? $t('dshInstances.openHint') : $t('dshInstances.launchHint')"
-          @click="act(inst.id, () => launchDshInstance(inst.id))"
-        >
-          <Play class="size-3.5" />
-          {{
-            busyId === inst.id
-              ? $t('dshInstances.launching')
-              : inst.running
-                ? $t('dshInstances.open')
-                : $t('dshInstances.launch')
-          }}
-        </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger as-child>
-            <Button variant="ghost" size="sm" :aria-label="$t('dshInstances.moreActions')">
-              <EllipsisVertical class="size-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <InstanceMenuHeader :num="inst.num" :name="inst.name" :actions="menuActionsFor(inst)" />
-            <DropdownMenuItem
-              v-if="inst.running"
-              :title="$t('dshInstances.quitHint')"
-              @select="act(inst.id, () => quitDshInstance(inst.id))"
-            >
-              <Square />{{ $t('dshInstances.quit') }}
-            </DropdownMenuItem>
-            <DropdownMenuItem @select="copyHome(inst)">
-              <Copy />{{ $t('dshInstances.copyHome') }}
-            </DropdownMenuItem>
-            <!-- The default home is the machine's own install: it can be read and launched, never
-                 removed or deleted from here. -->
-            <template v-if="!inst.isDefault">
-              <DropdownMenuItem :title="$t('dshInstances.removeHint')" @select="onRemove(inst)">
-                <Trash2 />{{ $t('dshInstances.remove') }}
-              </DropdownMenuItem>
-              <DropdownMenuItem variant="destructive" @select="deleteTarget = inst">
-                <Trash2 />{{ $t('dshInstances.delete') }}
-              </DropdownMenuItem>
-            </template>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </TableCell>
-  </TableRow>
+  </InstanceRow>
 
   <!-- Both dialogs portal to the body, so sitting beside the rows inside the table's body is safe. -->
   <CliInstanceNameDialog

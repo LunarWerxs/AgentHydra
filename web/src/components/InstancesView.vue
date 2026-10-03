@@ -6,7 +6,6 @@ import {
   Coins,
   Cpu,
   CreditCard,
-  EllipsisVertical,
   Eraser,
   FolderOpen,
   Funnel,
@@ -32,28 +31,22 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CodexInstanceRows from '@/components/CodexInstanceRows.vue'
-import CopyResetDate from '@/components/CopyResetDate.vue'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import DshInstanceRows from '@/components/DshInstanceRows.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
-import InstanceAccountBadge from '@/components/InstanceAccountBadge.vue'
 import InstanceChatsDialog from '@/components/InstanceChatsDialog.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
-import InstanceGlyph from '@/components/InstanceGlyph.vue'
-import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
-import InstanceNumber from '@/components/InstanceNumber.vue'
+import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
+import InstanceRow from '@/components/InstanceRow.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
 import InstanceSettings from '@/components/InstanceSettings.vue'
+import InstanceTable from '@/components/InstanceTable.vue'
 import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
 import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
-import SortButton from '@/components/SortButton.vue'
-import UsageBadge from '@/components/UsageBadge.vue'
-import UsageBar from '@/components/UsageBar.vue'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -75,25 +68,15 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableEmpty,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { useAppSettings } from '@/composables/useAppSettings'
 import { useClaudeAppHints } from '@/composables/useClaudeAppHints'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useCodexInstances } from '@/composables/useCodexInstances'
 import { useDshInstances } from '@/composables/useDshInstances'
 import { useInstanceFilter } from '@/composables/useInstanceFilter'
+import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
 import { useInstances } from '@/composables/useInstances'
 import { useMoveAllChats } from '@/composables/useMoveAllChats'
-import { useSortable } from '@/composables/useSortable'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
@@ -114,22 +97,13 @@ import {
   shortDisplayName,
 } from '@/lib/instance-appearance'
 import type { InstanceFacts } from '@/lib/instance-filter'
+import { type InstanceRowModel, instanceColumns, nameTooltipFor } from '@/lib/instance-table'
 import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
-import { useTooltipConfig } from '@/lib/tooltip-config'
-import { billsPastLimit, bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
+import { billsPastLimit, usageReasonMessageKey } from '@/lib/usage'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
 import { planSize } from '@/lib/usage-pool'
-import {
-  msUntilReset,
-  resetLabel,
-  SESSION_WINDOW_MS,
-  WEEK_WINDOW_MS,
-  waitSeverity,
-  windowRemainingPct,
-} from '@/lib/usage-reset'
 import IconTooltip from '@/shell/IconTooltip.vue'
-import InfoHint from '@/shell/InfoHint.vue'
 
 const {
   instances,
@@ -150,7 +124,6 @@ const {
 } = useInstances()
 
 const { t } = useI18n()
-const { enabled: tooltipsEnabled } = useTooltipConfig()
 const {
   snapshotFor,
   clearUsage,
@@ -177,78 +150,9 @@ const { resetBankedHint, codeCreditFor, codeCreditLabel, codeCreditHint, usageCr
 // cell in both tables formats against, so the whole tab ticks together.
 const { usageMode, toggle: toggleUsageMode, now } = useUsageMode(true)
 
-/** "2h 14m" left on a window, or null when there is no reset instant to count down to. */
-function sessionResetFor(inst: CMInstance): string | null {
-  return resetLabel(usageFor(inst)?.session, now.value)
-}
-function weeklyResetFor(inst: CMInstance): string | null {
-  return resetLabel(usageFor(inst)?.weekAll, now.value)
-}
-// How much of each window is still to run — the bar's LENGTH, on both windows.
-function sessionRemaining(inst: CMInstance): number {
-  return windowRemainingPct(usageFor(inst)?.session, SESSION_WINDOW_MS, now.value) ?? 0
-}
-function weeklyRemaining(inst: CMInstance): number {
-  return windowRemainingPct(usageFor(inst)?.weekAll, WEEK_WINDOW_MS, now.value) ?? 0
-}
-// Colour, on the WEEKLY window only. Same number as the length (waitSeverity bands it as a
-// fraction of its own window), so short+green = nearly back and long+red = most of the week still
-// ahead. The 5-hour bar beside it is drawn `neutral` — see UsageBar's UsageBarVariant for why the
-// row spends its colour on the window that decides whether an account is worth starting on.
-function weeklyWait(inst: CMInstance) {
-  return waitSeverity(weeklyRemaining(inst))
-}
-
 // The sort survives a reload: persisted through useUiPrefs. It orders the Claude rows; the Codex
 // and DeepSeek rows below them keep their own order.
 const { desktopSortKey, desktopSortDirection } = useUiPrefs()
-
-const { sortedRows, toggleSort, indicatorFor } = useSortable(
-  () => instances.value,
-  [
-    { key: 'running', accessor: (i: CMInstance) => i.isRunning },
-    // sort by what the cell actually shows (the display label, falling back to folder name)
-    { key: 'name', accessor: (i: CMInstance) => displayName(i) },
-    // Sort by what the cell actually shows (see accountCellName).
-    { key: 'account', accessor: (i: CMInstance) => accountCellName(i) },
-    { key: 'pid', accessor: (i: CMInstance) => i.pid ?? undefined },
-    { key: 'uptime', accessor: (i: CMInstance) => (i.isRunning ? i.startTime : null) },
-    { key: 'memory', accessor: (i: CMInstance) => i.memoryBytes ?? undefined },
-    // Usage-mode columns. Sorted by TIME REMAINING, not by the reset timestamp string: "soonest
-    // reset first" is the ordering anyone asking this question wants, and it is stable as the
-    // clock advances because every row shifts by the same amount.
-    {
-      key: 'session',
-      accessor: (i: CMInstance) => msUntilReset(usageFor(i)?.session, now.value) ?? undefined,
-    },
-    {
-      key: 'weekly',
-      accessor: (i: CMInstance) => msUntilReset(usageFor(i)?.weekAll, now.value) ?? undefined,
-    },
-    {
-      key: 'usage',
-      accessor: (i: CMInstance) => {
-        const snap = usageFor(i)
-        return snap ? (bindingWeeklyPct(snap) ?? undefined) : undefined
-      },
-    },
-    { key: 'usageSession', accessor: (i: CMInstance) => usageFor(i)?.session?.pct ?? undefined },
-    // By plan size (Pro 1, Max 5x 5, Max 20x 20), not the label's spelling; no plan sorts last.
-    { key: 'plan', accessor: (i: CMInstance) => planSize(i.account?.planLabel) },
-    // By the instant, not the "3h ago" text, so the order is true across units.
-    {
-      key: 'lastRunning',
-      accessor: (i: CMInstance) =>
-        i.isRunning
-          ? Number.MAX_SAFE_INTEGER
-          : i.lastRunningAt
-            ? Date.parse(i.lastRunningAt)
-            : undefined,
-    },
-  ],
-  { key: desktopSortKey, direction: desktopSortDirection },
-  { rowKey: (i: CMInstance) => i.dir },
-)
 
 /** "Now" while it runs, else "3h ago" since it was last seen running on this PC (owner,
  *  2026-09-30: last running, not last launched). Reads the shared clock so the cell ticks. */
@@ -268,12 +172,7 @@ function lastRunningExact(inst: CMInstance): string | undefined {
 // much quota is left. It runs AFTER the sort — it removes or greys rows, it never reorders them.
 // Its provider choice decides which providers' rows the table draws at all (see "which providers
 // the table draws" below).
-const {
-  dimmed: filterDimmed,
-  visible: filterVisible,
-  providerShown,
-  showProvider,
-} = useInstanceFilter()
+const { providerShown, showProvider } = useInstanceFilter()
 
 /** What one row is, as far as the filter is concerned. A desktop instance knows all three facts:
  *  it has a window that is open or shut, and an account with a plan and a quota reading. */
@@ -287,7 +186,34 @@ const filterFacts = (inst: CMInstance): InstanceFacts => ({
   signedIn: inst.loginUuid != null,
 })
 
-const visibleRows = computed(() => filterVisible(sortedRows.value, filterFacts))
+const { toggleSort, indicatorFor, visibleRows, isDimmed } = useInstanceSource({
+  rows: () => instances.value,
+  rowKey: (i: CMInstance) => i.dir,
+  facts: filterFacts,
+  persisted: { key: desktopSortKey, direction: desktopSortDirection },
+  columns: [
+    { key: 'status', accessor: (i: CMInstance) => i.isRunning },
+    // sort by what the cell actually shows (the display label, falling back to folder name)
+    { key: 'name', accessor: (i: CMInstance) => displayName(i) },
+    // Sort by what the cell actually shows (see accountCellName).
+    { key: 'account', accessor: (i: CMInstance) => accountCellName(i) },
+    { key: 'pid', accessor: (i: CMInstance) => i.pid ?? undefined },
+    { key: 'uptime', accessor: (i: CMInstance) => (i.isRunning ? i.startTime : null) },
+    { key: 'memory', accessor: (i: CMInstance) => i.memoryBytes ?? undefined },
+    // By plan size (Pro 1, Max 5x 5, Max 20x 20), not the label's spelling; no plan sorts last.
+    ...quotaSortColumns(usageFor, (i: CMInstance) => planSize(i.account?.planLabel), now),
+    // By the instant, not the "3h ago" text, so the order is true across units.
+    {
+      key: 'lastRunning',
+      accessor: (i: CMInstance) =>
+        i.isRunning
+          ? Number.MAX_SAFE_INTEGER
+          : i.lastRunningAt
+            ? Date.parse(i.lastRunningAt)
+            : undefined,
+    },
+  ],
+})
 
 /**
  * The plan labels the FILTER FLYOUT offers, gathered from every provider it can act on.
@@ -324,30 +250,6 @@ const editError = ref<string | null>(null)
 // this one cell, and a truncated name must never become a value anything acts on.
 function nameCellText(inst: CMInstance): string {
   return shortDisplayName(displayName(inst))
-}
-
-// The name cell's hover, and the only place the FULL name is readable once the cell elides it
-// (owner directive, 2026-09-11: cap the name, hover for the rest).
-//
-// Three facts compete for two lines here, so the cut decides the order. A name that fits keeps the
-// hover exactly as it was — folder on top, "click to focus" under it — because repeating text the
-// cell is already showing in full is noise. A name that was cut leads with the full name and pushes
-// the other two down a line each; `detail` on IconTooltip exists for that third line.
-function nameTooltip(inst: CMInstance): { label: string; description?: string; detail?: string } {
-  const full = displayName(inst)
-  const focus = inst.isRunning ? t('instances.focusHint') : undefined
-  return nameCellText(inst) === full && clippedName.value !== inst.dir
-    ? { label: inst.dir, description: focus }
-    : { label: full, description: inst.dir, detail: focus }
-}
-
-// The name column also gives way when the window is narrow, so the CSS can elide a name the
-// character cap left whole. Measured on hover, the one moment the tooltip is about to be read,
-// so a name cut either way leads its hover with the full text.
-const clippedName = ref<string | null>(null)
-function noteNameClip(e: PointerEvent, inst: CMInstance): void {
-  const el = e.currentTarget as HTMLElement
-  clippedName.value = el.scrollWidth > el.clientWidth ? inst.dir : null
 }
 
 // The account cell identifies the LOGIN, so it shows the email handle and nothing else — see
@@ -485,6 +387,86 @@ const allHiddenByFilter = computed(() => totalRows.value > 0 && shownRows.value 
  *  theirs so one provider's rows do not run straight into the next one's. */
 const lastProvider = computed<Provider>(() =>
   dshShown.value ? 'deepseek' : codexShown.value ? 'codex' : 'claude',
+)
+
+// --- the table: one column list, one row model ---------------------------------------------------
+// The same InstanceTable and InstanceRow the CLI tab draws (components/InstanceTable.vue). The Codex
+// and DeepSeek row components get this column list and hand the shared row their own models.
+const columns = computed(() => instanceColumns('desktop', { usageMode: usageMode.value }))
+
+/** What the shared row draws for one Claude desktop instance. */
+function rowModel(inst: CMInstance): InstanceRowModel {
+  const accountName = accountCellName(inst)
+  const status = inst.isRunning ? t('instances.running') : t('instances.stopped')
+  const shown = nameCellText(inst)
+  return {
+    id: inst.dir,
+    num: inst.num,
+    dimmed: isDimmed(inst),
+    provider: 'claude',
+    status: { on: inst.isRunning, pulse: true, title: status },
+    glyph: { dir: inst.dir, icon: inst.icon, color: inst.color, running: inst.isRunning },
+    name: {
+      shown,
+      tooltip: (clipped) =>
+        nameTooltipFor(
+          {
+            full: displayName(inst),
+            shown,
+            folder: inst.dir,
+            hint: inst.isRunning ? t('instances.focusHint') : undefined,
+          },
+          clipped,
+        ),
+      onClick: inst.isRunning ? () => void onFocus(inst) : undefined,
+      busy: isBusy(inst),
+    },
+    badge: inst.isExternal ? { label: t('instances.external') } : undefined,
+    // No "Resolve" button: every instance resolves itself (useInstances.autoResolveAccounts), so a
+    // missing account is a moment, not a state you act on.
+    account: accountName
+      ? {
+          email: inst.account?.email,
+          profile: inst.account?.name,
+          fallback: inst.account?.label,
+          variant: accountBadgeVariant(inst),
+        }
+      : { empty: t('instances.resolving') },
+    pid: inst.pid,
+    uptime: inst.isRunning ? formatUptime(inst.startTime) : null,
+    memory: formatBytes(inst.memoryBytes),
+    usage: {
+      snapshot: usageFor(inst),
+      checking: isChecking(usageKeyFor(inst)),
+      key: usageKeyFor(inst),
+      onCheck: () => void onCheckUsage(inst),
+    },
+    plan: inst.account?.planLabel ? { label: inst.account.planLabel } : null,
+    lastRunning:
+      inst.isRunning || inst.lastRunningAt
+        ? {
+            label: lastRunningLabel(inst),
+            running: inst.isRunning,
+            title: lastRunningExact(inst),
+          }
+        : null,
+    menu: { name: inst.name, actions: menuActionsFor(inst) },
+  }
+}
+
+/** Keyed off the rows actually drawn, across every provider, not off the instance lists: with the
+ *  filter on, it can empty a table that still has instances behind it, and that must not land as a
+ *  blank table with no explanation. */
+const emptyState = computed(() =>
+  shownRows.value > 0 || (claudeShown.value && loading.value)
+    ? null
+    : allHiddenByFilter.value
+      ? {
+          icon: Funnel,
+          title: t('instances.filterAllHidden'),
+          hint: t('instances.filterAllHiddenHint'),
+        }
+      : { icon: Boxes, title: t('instances.empty'), hint: t('instances.emptyHint') },
 )
 
 // --- create: one + menu for every provider --------------------------------------------------------
@@ -1166,681 +1148,330 @@ onUnmounted(() => {
     <!-- pb-16: the last section sat flush against the bottom edge of the scroll area, its last row
          half-hidden behind the window chrome (owner, 2026-09-20). -->
     <div class="flex flex-col gap-10 pb-16">
-      <!-- px-1.5 rather than the kit's px-2: ten columns in the 1000px frame, and the 36px this
-           gives back is what lets every capped name fit the Name column whole. -->
-      <Table density="compact">
-        <TableHeader sticky>
-          <TableRow>
-            <TableHead
-              class="w-10"
-              :title="tooltipsEnabled ? $t('instances.sortByStatus') : undefined"
-            >
-              <SortButton :direction="indicatorFor('running')" quiet @sort="toggleSort('running')">
-                ●
-              </SortButton>
-            </TableHead>
-            <!-- Both header hints exist because these two columns were the source of a real "where
-                 do these names even come from?" — one row's Name can be a label you typed, the
-                 next row's the account it is signed into, the next its folder, and nothing said
-                 which. The rule is now written down where the question gets asked. -->
-            <!-- Name is the one column that gives way. Ten nowrap columns needed 1008px inside a
-                 988px frame, so the table scrolled sideways (owner, 2026-09-26); now this column
-                 takes whatever the others leave (w-full, and max-w-0 on its cells so their content
-                 cannot force the table wider), never below min-w-36, and the name elides.
-                 Every other column carries NO width and so sits at its content's width. In auto
-                 table layout a fixed width is a floor, not a size: the w-24 / w-28 / w-40 the
-                 columns used to carry summed to ~940px of the ~990px frame, which left Name at
-                 its 144px floor, one or two letters after its icons, while "Last running" kept
-                 112px for "Now" (owner, 2026-10-03: "I can't view the name").
-                 A header is a floor too: TableHead is nowrap, so "Last running" plus its sort
-                 arrow and hint held that column at ~110px with the w-28 gone. The headers whose
-                 label is far wider than their cells (Instance account, Usage 5h, Usage week, Last
-                 running) may wrap instead (whitespace-normal), stacking onto two lines, so the
-                 column is as wide as its longest word and the rest goes to Name. -->
-            <TableHead class="w-full min-w-36">
-              <span class="inline-flex items-center gap-0.5">
-                <SortButton :direction="indicatorFor('name')" @sort="toggleSort('name')">
-                  {{ $t('instances.colName') }}
-                </SortButton>
-                <InfoHint :text="$t('instances.colNameHint')" />
-              </span>
-            </TableHead>
-            <TableHead class="whitespace-normal">
-              <span class="inline-flex items-center gap-0.5">
-                <SortButton :direction="indicatorFor('account')" @sort="toggleSort('account')">
-                  {{ $t('instances.colAccount') }}
-                </SortButton>
-                <InfoHint :text="$t('instances.colAccountHint')" />
-              </span>
-            </TableHead>
-            <!-- Process columns (default mode) … -->
-            <template v-if="!usageMode">
-              <TableHead>
-                <SortButton :direction="indicatorFor('pid')" @sort="toggleSort('pid')">
-                  {{ $t('instances.colPid') }}
-                </SortButton>
-              </TableHead>
-              <TableHead>
-                <SortButton :direction="indicatorFor('uptime')" @sort="toggleSort('uptime')">
-                  {{ $t('instances.colUptime') }}
-                </SortButton>
-              </TableHead>
-              <TableHead>
-                <SortButton :direction="indicatorFor('memory')" @sort="toggleSort('memory')">
-                  {{ $t('instances.colMemory') }}
-                </SortButton>
-              </TableHead>
-            </template>
-            <!-- … swapped one-for-one for the quota columns in usage mode, so the table keeps its
-                 shape and only its subject changes. -->
-            <!-- The quota columns once carried fixed widths so the same "Weekly" column did not
-                 come out 110px in one table and 78px in the next. Name taking the slack (w-full,
-                 here and in the CLI tab's table) does that now: every other column sits at its
-                 content's width, which for the two bars is UsageBar's own min-w-20 in both tables.
-                 The Codex and DeepSeek rows render into these same columns, so their cells follow
-                 this header. -->
-            <template v-else>
-              <TableHead>
-                <SortButton :direction="indicatorFor('session')" @sort="toggleSort('session')">
-                  {{ $t('instances.colSession') }}
-                </SortButton>
-              </TableHead>
-              <TableHead>
-                <SortButton :direction="indicatorFor('weekly')" @sort="toggleSort('weekly')">
-                  {{ $t('instances.colWeekly') }}
-                </SortButton>
-              </TableHead>
-            </template>
-            <TableHead v-if="usageMode" class="whitespace-normal">
-              <SortButton :direction="indicatorFor('usageSession')" @sort="toggleSort('usageSession')">
-                {{ $t('instances.colUsageSession') }}
-              </SortButton>
-            </TableHead>
-            <TableHead class="whitespace-normal">
-              <SortButton :direction="indicatorFor('usage')" @sort="toggleSort('usage')">
-                {{ usageMode ? $t('instances.colUsageWeek') : $t('instances.colUsage') }}
-              </SortButton>
-            </TableHead>
-            <TableHead>
-              <SortButton :direction="indicatorFor('plan')" @sort="toggleSort('plan')">
-                {{ $t('instances.colPlan') }}
-              </SortButton>
-            </TableHead>
-            <!-- After Plan, before Actions, in both column modes: when an account was last opened
-                 is as true in usage mode as in process mode, and placing it right of every other
-                 column keeps the quota columns aligned with the tables below. -->
-            <TableHead class="whitespace-normal">
-              <span class="inline-flex items-center gap-0.5">
-                <SortButton :direction="indicatorFor('lastRunning')" @sort="toggleSort('lastRunning')">
-                  {{ $t('instances.colLastRunning') }}
-                </SortButton>
-                <InfoHint :text="$t('instances.colLastRunningHint')" />
-              </span>
-            </TableHead>
-            <TableHead class="text-end">{{ $t('instances.colActions') }}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <!-- One body per provider, Claude first: a table may hold several tbody elements, and the
-             Codex and DeepSeek row components render bare rows into theirs. -->
-        <!-- first-load skeleton rows so the table never looks blank -->
-        <TableBody v-if="claudeShown && loading && visibleRows.length === 0">
-          <TableRow v-for="i in 4" :key="i">
-            <TableCell><Skeleton class="size-2" /></TableCell>
-            <TableCell>
-              <Skeleton class="h-4 w-(--skeleton-w)" :style="{ '--skeleton-w': `${9 - (i % 3) * 2}rem` }" />
-              <Skeleton class="mt-1.5 h-3 w-44" />
-            </TableCell>
-            <TableCell><Skeleton class="h-5 w-24" /></TableCell>
-            <template v-if="!usageMode">
-              <TableCell><Skeleton class="h-3 w-10" /></TableCell>
-              <TableCell><Skeleton class="h-3 w-12" /></TableCell>
-              <TableCell><Skeleton class="h-3 w-14" /></TableCell>
-            </template>
-            <template v-else>
-              <TableCell><Skeleton class="h-8 w-20" /></TableCell>
-              <TableCell><Skeleton class="h-8 w-20" /></TableCell>
-              <TableCell><Skeleton class="h-5 w-14" /></TableCell>
-            </template>
-            <TableCell><Skeleton class="h-5 w-14" /></TableCell>
-            <TableCell><Skeleton class="h-5 w-16" /></TableCell>
-            <TableCell><Skeleton class="h-3 w-14" /></TableCell>
-            <TableCell>
-              <div class="flex justify-end"><Skeleton class="h-6 w-20" /></div>
-            </TableCell>
-          </TableRow>
-        </TableBody>
+      <!-- ONE table for every provider's desktop instances: the same InstanceTable and InstanceRow
+           the CLI tab draws, fed this kind's columns (lib/instance-table.ts). The Claude rows are
+           the bodies below; the Codex and DeepSeek rows are their own components handing the same
+           InstanceRow their own models. -->
+      <InstanceTable
+        :columns="columns"
+        :indicator-for="indicatorFor"
+        density="compact"
+        :skeleton="claudeShown && loading && visibleRows.length === 0"
+        :skeleton-rows="4"
+        :empty="emptyState"
+        @sort="toggleSort"
+      >
         <TransitionGroup
-          v-else-if="claudeShown"
+          v-if="claudeShown"
           tag="tbody"
           name="row-fade"
           data-slot="table-body"
           class="[&>tr]:transition-colors [&>tr]:duration-200"
           :class="lastProvider === 'claude' ? '[&_tr:last-child]:border-0' : undefined"
         >
-          <!-- Dimmed, not disabled: a filtered-out instance is one you've decided against for now,
-               not one you can't touch — every action on the row still works. It does not react to
-               the pointer at all, though (no lift on hover, and `hover:bg-transparent` overrides the
-               kit row's own hover tint via tailwind-merge): a row that brightens as you sweep past
-               it keeps pulling the eye back to the accounts you just told it to set aside, which is
-               the opposite of what the filter is for. -->
-          <TableRow
+          <InstanceRow
             v-for="inst in visibleRows"
             :key="inst.dir"
-            :variant="filterDimmed(filterFacts(inst)) ? 'faded' : 'default'"
-            class="group/row"
-            @contextmenu.prevent="rowMenuOpen = inst.dir"
+            :columns="columns"
+            :row="rowModel(inst)"
+            :menu-open="rowMenuOpen === inst.dir"
+            @update:menu-open="(v: boolean) => (rowMenuOpen = v ? inst.dir : null)"
           >
-            <TableCell>
-              <!-- A status dot, as on every provider's rows, so the first column reads one way down
-                   the whole table. The instance's own glyph moved beside its name. -->
-              <span
-                role="img"
-                class="inline-block size-2 rounded-full"
-                :class="inst.isRunning ? 'bg-success animate-pulse' : 'bg-muted-foreground/40'"
-                :title="inst.isRunning ? $t('instances.running') : $t('instances.stopped')"
-                :aria-label="inst.isRunning ? $t('instances.running') : $t('instances.stopped')"
-              />
-            </TableCell>
-            <TableCell class="max-w-0">
-              <!-- The folder used to sit under the name as a permanent mono sub-line, which made
-                   every row two lines tall to show a path nobody reads at rest. It moved into the
-                   tooltip, where it is one hover away and costs no height. The tooltip is on EVERY
-                   row now, not just running ones, because the folder is what it is really for; the
-                   focus hint rides along as the description when clicking would actually focus.
-                   A name too long for the column takes the first line instead, and pushes both of
-                   those down one — see nameTooltip. -->
-              <div class="flex min-w-0 items-center gap-1.5 font-medium">
-                <!-- The provider's mark first: Claude, Codex and DeepSeek rows share this table. -->
-                <ProviderLogo provider="claude" class="size-3.5" />
-                <!-- The permanent number sits BEFORE the name because the name is the untrustworthy
-                     half: a profile signed into a different account than the folder it was named
-                     after keeps showing the old name, and the number never drifts. -->
-                <InstanceNumber :num="inst.num" />
-                <!-- The instance's own glyph and colour, its identity; faded while it is closed. -->
-                <InstanceGlyph
-                  :dir="inst.dir"
-                  :icon="inst.icon"
-                  :color="inst.color"
-                  :running="inst.isRunning"
-                />
-                <!-- min-w-0 + truncate: when the column is squeezed, the name elides and the number
-                     and marker icons around it keep their size. -->
-                <IconTooltip v-bind="nameTooltip(inst)">
-                  <button
-                    v-if="inst.isRunning"
-                    type="button"
-                    class="min-w-0 cursor-pointer truncate text-start hover:underline"
-                    :disabled="isBusy(inst)"
-                    @pointerenter="noteNameClip($event, inst)"
-                    @click="onFocus(inst)"
-                  >
-                    {{ nameCellText(inst) }}
-                  </button>
-                  <span
-                    v-else
-                    class="min-w-0 cursor-default truncate"
-                    @pointerenter="noteNameClip($event, inst)"
-                  >{{ nameCellText(inst) }}</span>
-                </IconTooltip>
-                <Badge v-if="inst.isExternal" variant="outline">{{ $t('instances.external') }}</Badge>
-                <!-- The name you typed no longer matches the account this profile is signed into.
-                     A label overrides everything and nothing ever re-checked one, so a row goes on
-                     being named after an account it left — which is how a folder called `4claude`
-                     ends up labelled "3claude". The marker only reports the disagreement; the ⋯
-                     menu is where you resolve it, because the override is still yours to keep. -->
-                <IconTooltip
-                  v-if="labelDisagreesWithAccount(inst)"
-                  :label="$t('instances.labelStale')"
-                  :description="
-                    $t('instances.labelStaleHint', {
-                      label: inst.label ?? '',
-                      account: accountDisplayName(inst.account) ?? '',
-                    })
-                  "
+            <template #name-extra>
+
+              <!-- The name you typed no longer matches the account this profile is signed into.
+                   A label overrides everything and nothing ever re-checked one, so a row goes on
+                   being named after an account it left — which is how a folder called `4claude`
+                   ends up labelled "3claude". The marker only reports the disagreement; the ⋯
+                   menu is where you resolve it, because the override is still yours to keep. -->
+              <IconTooltip
+                v-if="labelDisagreesWithAccount(inst)"
+                :label="$t('instances.labelStale')"
+                :description="
+                  $t('instances.labelStaleHint', {
+                    label: inst.label ?? '',
+                    account: accountDisplayName(inst.account) ?? '',
+                  })
+                "
+              >
+                <span
+                  class="inline-flex items-center"
+                  :aria-label="$t('instances.labelStale')"
                 >
-                  <span
-                    class="inline-flex items-center"
-                    :aria-label="$t('instances.labelStale')"
-                  >
-                    <TriangleAlert class="size-3.5 text-warning" />
-                  </span>
-                </IconTooltip>
-                <!-- A banked usage-limit reset (claude.ai Settings -> Usage -> Resets) this account
-                     has not spent. Read from the running app; a closed app shows its last reading. -->
-                <IconTooltip
-                  v-if="(usageFor(inst)?.resetCredits ?? 0) > 0"
-                  :label="
+                  <TriangleAlert class="size-3.5 text-warning" />
+                </span>
+              </IconTooltip>
+              <!-- A banked usage-limit reset (claude.ai Settings -> Usage -> Resets) this account
+                   has not spent. Read from the running app; a closed app shows its last reading. -->
+              <IconTooltip
+                v-if="(usageFor(inst)?.resetCredits ?? 0) > 0"
+                :label="
+                  $t('instances.resetBanked', { count: usageFor(inst)?.resetCredits ?? 0 })
+                "
+                :description="resetBankedHint(inst)"
+              >
+                <span
+                  class="inline-flex items-center"
+                  :aria-label="
                     $t('instances.resetBanked', { count: usageFor(inst)?.resetCredits ?? 0 })
                   "
-                  :description="resetBankedHint(inst)"
                 >
-                  <span
-                    class="inline-flex items-center"
-                    :aria-label="
-                      $t('instances.resetBanked', { count: usageFor(inst)?.resetCredits ?? 0 })
-                    "
-                  >
-                    <RotateCcw class="size-3.5 text-success" />
-                  </span>
-                </IconTooltip>
-                <!-- claude.ai's one-time Claude Code & Cowork credit: money left to spend, or one
-                     never claimed / held back, which the account is not getting. -->
-                <IconTooltip
-                  v-if="codeCreditFor(inst)"
-                  :label="codeCreditLabel(inst)"
-                  :description="codeCreditHint(inst)"
-                >
-                  <span class="inline-flex items-center" :aria-label="codeCreditLabel(inst)">
-                    <Coins
-                      class="size-3.5"
-                      :class="
-                        codeCreditFor(inst)?.state === 'active' ? 'text-success' : 'text-warning'
-                      "
-                    />
-                  </span>
-                </IconTooltip>
-                <!-- Usage credits ON: this account bills usage past its plan limits. Off is the
-                     quiet default and gets no icon (the usage chip's popover says it either way). -->
-                <IconTooltip
-                  v-if="billsPastLimit(usageFor(inst))"
-                  :label="$t('instances.usageCreditsOn')"
-                  :description="usageCreditsHint(inst)"
-                >
-                  <span class="inline-flex items-center" :aria-label="$t('instances.usageCreditsOn')">
-                    <CreditCard class="size-3.5 text-warning" />
-                  </span>
-                </IconTooltip>
-                <!-- A linked CLI login used to be visible NOWHERE on the row — its only trace was
-                     the old "CLI instances (0 of 1)" shortfall in the CLI table (it now lists
-                     every login, linked ones with a chip), which reads as
-                     something hiding a row rather than as "it moved up here". An icon costs no row
-                     height (the reason the old mono sub-line was removed) and answers "which of
-                     these accounts owns the missing CLI login?" at a glance. Indicator only: the
-                     actions stay in the ⋯ menu so a stray click can't launch a terminal. -->
-                <IconTooltip
-                  v-for="cli in linkedClis(inst.dir)"
-                  :key="`cli-badge-${cli.id}`"
-                  :label="$t('instances.linkedCliTooltip', { name: cli.name })"
-                  :description="
-                    cli.loggedIn
-                      ? $t('instances.linkedCliSignedIn')
-                      : $t('instances.linkedCliSignedOut')
-                  "
-                >
-                  <span
-                    class="inline-flex items-center"
-                    :aria-label="$t('instances.linkedCliBadge')"
-                  >
-                    <Terminal
-                      class="size-3.5"
-                      :class="cli.loggedIn ? 'text-muted-foreground' : 'text-warning'"
-                    />
-                  </span>
-                </IconTooltip>
-              </div>
-              <!-- No inline CLI sub-line here either: it made one row taller than the rest and
-                   only ever showed for whichever account happened to be linked. The linked CLI
-                   login's ACTIONS (and CLI sign-in for rows without one) live in the actions menu,
-                   where EVERY row gets them without cluttering the table; only the badge above,
-                   which is what makes the link discoverable at all, sits on the row. -->
-            </TableCell>
-            <TableCell>
-              <!-- No "Resolve" button: every instance resolves itself (see
-                   useInstances.autoResolveAccounts), so a missing account is a moment, not a
-                   state you act on. The cell shows the account's EMAIL HANDLE — one rule for every
-                   row, so this column can be compared down the table; the full address and the
-                   Anthropic profile name are one hover away, and the plan/tier is its own column.
-                   A logged-out instance still lands here as a badge — its account.label reads
-                   "(not logged in)".
-
-                   Clicking it copies the FULL address (the cell only has room for the handle, and
-                   the handle is not something you can paste at anything). Only a row with a
-                   resolved email becomes a button: a signed-out row has a badge to show and
-                   nothing to copy, and a button that does nothing is worse than plain text.
-
-                   The history button beside it lists every account the profile has been signed
-                   into. Always shown when the row cannot name a live account (that is when you
-                   need to know where it went); on a healthy row it waits for hover or focus, so
-                   seventy rows do not each carry one more icon. -->
-              <div class="flex items-center gap-1">
-                <InstanceAccountBadge
-                  v-if="accountCellName(inst)"
-                  :email="inst.account?.email"
-                  :profile="inst.account?.name"
-                  :fallback="inst.account?.label"
-                  :variant="accountBadgeVariant(inst)"
-                />
-                <span v-else class="text-xs text-muted-foreground">
-                  {{ $t('instances.resolving') }}
+                  <RotateCcw class="size-3.5 text-success" />
                 </span>
-                <span
-                  class="inline-flex"
-                  :class="
-                    inst.account?.status === 'live'
-                      ? 'opacity-0 group-hover/row:opacity-100 focus-within:opacity-100'
-                      : undefined
-                  "
-                >
-                  <LoginHistoryPopover :dir="inst.dir" :num="inst.num" />
-                </span>
-              </div>
-            </TableCell>
-            <template v-if="!usageMode">
-              <TableCell><span class="mono text-muted-foreground">{{ inst.pid ?? '—' }}</span></TableCell>
-              <TableCell>
-                <span class="text-muted-foreground">{{ inst.isRunning ? formatUptime(inst.startTime) : '—' }}</span>
-              </TableCell>
-              <TableCell><span class="text-muted-foreground">{{ formatBytes(inst.memoryBytes) }}</span></TableCell>
-            </template>
-            <template v-else>
-              <!-- A bar, not a bare number: the point of usage mode is scanning ten rows at once
-                   for the ones up against a wall, and ten integers all look alike until you read
-                   each one. The number stays inside the bar (91 vs 96 is the whole decision), and
-                   the countdown under it says when the number stops mattering. -->
-              <TableCell>
-                <UsageBar
-                  v-if="sessionResetFor(inst)"
-                  :fill-pct="sessionRemaining(inst)"
-                  variant="neutral"
-                  :label="sessionResetFor(inst) ?? ''"
-                  :aria-label="$t('instances.resetsIn', { when: sessionResetFor(inst) })"
-                />
-                <span v-else class="text-muted-foreground">—</span>
-              </TableCell>
-              <TableCell>
-                <CopyResetDate v-if="weeklyResetFor(inst)" :limit="usageFor(inst)?.weekAll">
-                  <UsageBar
-                    :fill-pct="weeklyRemaining(inst)"
-                    :variant="weeklyWait(inst)"
-                    :label="weeklyResetFor(inst) ?? ''"
-                    :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
-                  />
-                </CopyResetDate>
-                <span v-else class="text-muted-foreground">—</span>
-              </TableCell>
-            </template>
-            <TableCell v-if="usageMode">
-              <UsageBadge
-                scope="session"
-                :snapshot="usageFor(inst)"
-                :checking="isChecking(usageKeyFor(inst))"
-                :usage-key="usageKeyFor(inst)"
-                @check="onCheckUsage(inst)"
-              />
-            </TableCell>
-            <TableCell>
-              <UsageBadge
-                :snapshot="usageFor(inst)"
-                :checking="isChecking(usageKeyFor(inst))"
-                :usage-key="usageKeyFor(inst)"
-                @check="onCheckUsage(inst)"
-              />
-            </TableCell>
-            <TableCell>
-              <!-- Plan / account type ("Max 20×", "Pro", "Free"), pulled out of the account cell
-                   so it reads at a glance and sorts on its own. `account.planLabel` is computed
-                   server-side (resolvePlanLabel) so a generic rate-limit tier never leaks here. -->
-              <Badge v-if="inst.account?.planLabel" variant="outline">
-                {{ inst.account.planLabel }}
-              </Badge>
-              <span v-else class="text-xs text-muted-foreground">—</span>
-            </TableCell>
-            <TableCell>
-              <span
-                v-if="inst.isRunning || inst.lastRunningAt"
-                class="text-xs tabular-nums"
-                :class="inst.isRunning ? 'text-success' : ''"
-                :title="tooltipsEnabled ? lastRunningExact(inst) : undefined"
+              </IconTooltip>
+              <!-- claude.ai's one-time Claude Code & Cowork credit: money left to spend, or one
+                   never claimed / held back, which the account is not getting. -->
+              <IconTooltip
+                v-if="codeCreditFor(inst)"
+                :label="codeCreditLabel(inst)"
+                :description="codeCreditHint(inst)"
               >
-                {{ lastRunningLabel(inst) }}
+                <span class="inline-flex items-center" :aria-label="codeCreditLabel(inst)">
+                  <Coins
+                    class="size-3.5"
+                    :class="
+                      codeCreditFor(inst)?.state === 'active' ? 'text-success' : 'text-warning'
+                    "
+                  />
+                </span>
+              </IconTooltip>
+              <!-- Usage credits ON: this account bills usage past its plan limits. Off is the
+                   quiet default and gets no icon (the usage chip's popover says it either way). -->
+              <IconTooltip
+                v-if="billsPastLimit(usageFor(inst))"
+                :label="$t('instances.usageCreditsOn')"
+                :description="usageCreditsHint(inst)"
+              >
+                <span class="inline-flex items-center" :aria-label="$t('instances.usageCreditsOn')">
+                  <CreditCard class="size-3.5 text-warning" />
+                </span>
+              </IconTooltip>
+              <!-- A linked CLI login used to be visible NOWHERE on the row — its only trace was
+                   the old "CLI instances (0 of 1)" shortfall in the CLI table (it now lists
+                   every login, linked ones with a chip), which reads as
+                   something hiding a row rather than as "it moved up here". An icon costs no row
+                   height (the reason the old mono sub-line was removed) and answers "which of
+                   these accounts owns the missing CLI login?" at a glance. Indicator only: the
+                   actions stay in the ⋯ menu so a stray click can't launch a terminal. -->
+              <IconTooltip
+                v-for="cli in linkedClis(inst.dir)"
+                :key="`cli-badge-${cli.id}`"
+                :label="$t('instances.linkedCliTooltip', { name: cli.name })"
+                :description="
+                  cli.loggedIn
+                    ? $t('instances.linkedCliSignedIn')
+                    : $t('instances.linkedCliSignedOut')
+                "
+              >
+                <span
+                  class="inline-flex items-center"
+                  :aria-label="$t('instances.linkedCliBadge')"
+                >
+                  <Terminal
+                    class="size-3.5"
+                    :class="cli.loggedIn ? 'text-muted-foreground' : 'text-warning'"
+                  />
+                </span>
+              </IconTooltip>
+            </template>
+            <!-- The history button beside the account badge lists every account the profile has
+                 been signed into. Always shown when the row cannot name a live account (that is
+                 when you need to know where it went); on a healthy row it waits for hover or
+                 focus, so seventy rows do not each carry one more icon. -->
+            <template #account-extra>
+              <span
+                class="inline-flex"
+                :class="
+                  inst.account?.status === 'live'
+                    ? 'opacity-0 group-hover/row:opacity-100 focus-within:opacity-100'
+                    : undefined
+                "
+              >
+                <LoginHistoryPopover :dir="inst.dir" :num="inst.num" />
               </span>
-              <span v-else class="text-xs text-muted-foreground">—</span>
-            </TableCell>
-            <TableCell>
-              <div class="flex items-center justify-end gap-1">
-                <Button
-                  v-if="!inst.isRunning"
-                  variant="outline"
-                  size="sm"
-                  :disabled="isBusy(inst)"
-                  @click="onOpen(inst)"
-                >
-                  <Play /> {{ $t('instances.open') }}
-                </Button>
-                <!-- running: the primary action is Focus (bring the window forward); Quit moves
-                     under the kebab so the common action is one click and the destructive one is deliberate -->
-                <!-- The same pulsing green dot the status glyph carries, on the button that only
-                     exists while the instance is running. The Actions column is where the eye ends
-                     up (it is where you click), and "Open" vs "Focus" is a quiet way to encode
-                     running-ness — the dot says it the same way the left of the row already does,
-                     so the two cannot be read as different states. -->
-                <Button v-else variant="outline" size="sm" :disabled="isBusy(inst)" @click="onFocus(inst)">
-                  <span class="relative inline-flex">
-                    <AppWindow />
-                    <span
-                      class="absolute -right-1 -top-1 size-1.5 rounded-full bg-success ring-2 ring-background animate-pulse"
-                    />
-                  </span>
-                  {{ $t('instances.focusShort') }}
-                </Button>
+            </template>
+            <template #primary>
+              <Button
+                v-if="!inst.isRunning"
+                variant="outline"
+                size="sm"
+                :disabled="isBusy(inst)"
+                @click="onOpen(inst)"
+              >
+                <Play /> {{ $t('instances.open') }}
+              </Button>
+              <!-- running: the primary action is Focus (bring the window forward); Quit moves
+                   under the kebab so the common action is one click and the destructive one is
+                   deliberate. The pulsing green dot is the one the status dot carries. -->
+              <Button v-else variant="outline" size="sm" :disabled="isBusy(inst)" @click="onFocus(inst)">
+                <span class="relative inline-flex">
+                  <AppWindow />
+                  <span
+                    class="absolute -right-1 -top-1 size-1.5 rounded-full bg-success ring-2 ring-background animate-pulse"
+                  />
+                </span>
+                {{ $t('instances.focusShort') }}
+              </Button>
+            </template>
+            <template #menu>
 
-                <DropdownMenu
-                  :open="rowMenuOpen === inst.dir"
-                  @update:open="(v) => (rowMenuOpen = v ? inst.dir : null)"
+              <!-- Quit lives here now (the row's primary button is Focus when running);
+                   disabled unless running, mirroring the old Focus item's guard -->
+              <DropdownMenuItem
+                :disabled="!inst.isRunning || isBusy(inst)"
+                @click="onQuit(inst)"
+              >
+                <Square /> {{ $t('instances.quit') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem :disabled="isBusy(inst)" @click="onRevealFolder(inst)">
+                <FolderOpen /> {{ $t('instances.openFolder') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem :disabled="isBusy(inst)" @click="onCreateShortcut(inst)">
+                <MonitorDown /> {{ $t('instances.createShortcut') }}
+              </DropdownMenuItem>
+              <!-- What this account is HOLDING, before any question about moving it. Sits
+                   directly above the move submenu because they are the two halves of one
+                   thought and the answer here decides whether the other is wanted. -->
+              <DropdownMenuItem @click="openChats(inst)">
+                <MessagesSquare /> {{ $t('instances.chats') }}
+                <!-- Active (not archived) chats on this account; 0 means none. Absent
+                     until the first count arrives rather than a guessed 0. -->
+                <span
+                  v-if="activeChatsOf(inst) !== undefined"
+                  class="ms-auto min-w-5 rounded-full px-1.5 text-center text-2xs font-medium tabular-nums"
+                  :class="activeChatsOf(inst) ? 'bg-primary text-primary-foreground' : 'border border-muted-foreground/50 text-muted-foreground'"
+                  :title="$t('instances.chatsActiveCount', { n: activeChatsOf(inst) ?? 0 })"
+                  :aria-label="$t('instances.chatsActiveCount', { n: activeChatsOf(inst) ?? 0 })"
                 >
-                  <!-- No tooltip wrapper here: the kebab is self-explanatory, and nesting a
-                       TooltipTrigger around the DropdownMenuTrigger swallowed the click so the
-                       menu never opened (and the zero-delay tooltip was intrusive). aria-label
-                       keeps it accessible. -->
-                  <DropdownMenuTrigger as-child>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      :aria-label="$t('instances.moreActions')"
+                  {{ activeChatsOf(inst) }}
+                </span>
+              </DropdownMenuItem>
+              <!-- Every active chat on this account, moved to one other account. One line
+                   per destination: a green dot marks a running app, the same mark the
+                   row's own icon carries. Closed accounts stay out of the list until the
+                   switch at the top is on (owner, 2026-09-08: two-line rows over twenty
+                   accounts were a scroll, and "not running - lands in its store" said
+                   nothing the dot's absence does not). A closed destination is still not
+                   started: the chat lands in its store and is there when the app opens. -->
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger :disabled="moveAllBusy">
+                  <ArrowRightLeft /> {{ $t('instances.moveChats') }}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent class="max-w-64">
+                  <!-- The list is DESTINATIONS, and until this heading it never said so.
+                       A switch reading "Show not running" sitting directly under "Move
+                       chats to account" reads as a filter on the chats (owner, 2026-09-09,
+                       asked exactly that: does it only move chats that are not running?).
+                       It never was: the move takes every unarchived, not-done chat and
+                       stops a live one first - see moveChatsConfirmBody, which now leads
+                       with that. Naming the list is what disambiguates the switch. -->
+                  <DropdownMenuLabel>
+                    {{ $t('instances.moveChatsTargetsLabel') }}
+                  </DropdownMenuLabel>
+                  <!-- @select.prevent keeps the submenu open across the flip; reka closes
+                       it on select otherwise. -->
+                  <DropdownMenuCheckboxItem
+                    :model-value="moveShowClosed"
+                    @select.prevent
+                    @update:model-value="moveShowClosed = $event"
+                  >
+                    {{ $t('instances.moveChatsShowNotRunning') }}
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem v-if="moveTargetsFor(inst).length === 0" disabled>
+                    {{ moveShowClosed || instances.length <= 1 ? $t('instances.moveChatsNoTargets') : $t('instances.moveChatsNoRunningTargets') }}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    v-for="to in moveTargetsFor(inst)"
+                    :key="to.dir"
+                    :disabled="moveAllBusy"
+                    @click="prepareMoveAll(inst, to)"
+                  >
+                    <span
+                      class="inline-flex size-3 shrink-0 items-center justify-center"
+                      :title="to.isRunning ? $t('instances.running') : $t('instances.stopped')"
                     >
-                      <EllipsisVertical />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <!-- w-56: without it the menu inherits the tiny kebab trigger's width and
-                       "Create desktop shortcut" wraps/clips; a fixed width fits it on one line -->
-                  <DropdownMenuContent align="end" class="max-w-56">
-                    <!-- The menu leads with WHICH instance it belongs to, by number. On a table of
-                         fourteen near-identically named rows, an open kebab menu is otherwise
-                         detached from the row it came from — and "Delete" is the wrong item to be
-                         unsure about. Copying it here is one click from every row's menu. -->
-                    <InstanceMenuHeader
-                      :num="inst.num"
-                      :name="inst.name"
-                      :actions="menuActionsFor(inst)"
-                    />
-                    <!-- Quit lives here now (the row's primary button is Focus when running);
-                         disabled unless running, mirroring the old Focus item's guard -->
-                    <DropdownMenuItem
-                      :disabled="!inst.isRunning || isBusy(inst)"
-                      @click="onQuit(inst)"
-                    >
-                      <Square /> {{ $t('instances.quit') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem :disabled="isBusy(inst)" @click="onRevealFolder(inst)">
-                      <FolderOpen /> {{ $t('instances.openFolder') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem :disabled="isBusy(inst)" @click="onCreateShortcut(inst)">
-                      <MonitorDown /> {{ $t('instances.createShortcut') }}
-                    </DropdownMenuItem>
-                    <!-- What this account is HOLDING, before any question about moving it. Sits
-                         directly above the move submenu because they are the two halves of one
-                         thought and the answer here decides whether the other is wanted. -->
-                    <DropdownMenuItem @click="openChats(inst)">
-                      <MessagesSquare /> {{ $t('instances.chats') }}
-                      <!-- Active (not archived) chats on this account; 0 means none. Absent
-                           until the first count arrives rather than a guessed 0. -->
                       <span
-                        v-if="activeChatsOf(inst) !== undefined"
-                        class="ms-auto min-w-5 rounded-full px-1.5 text-center text-2xs font-medium tabular-nums"
-                        :class="activeChatsOf(inst) ? 'bg-primary text-primary-foreground' : 'border border-muted-foreground/50 text-muted-foreground'"
-                        :title="$t('instances.chatsActiveCount', { n: activeChatsOf(inst) ?? 0 })"
-                        :aria-label="$t('instances.chatsActiveCount', { n: activeChatsOf(inst) ?? 0 })"
-                      >
-                        {{ activeChatsOf(inst) }}
-                      </span>
-                    </DropdownMenuItem>
-                    <!-- Every active chat on this account, moved to one other account. One line
-                         per destination: a green dot marks a running app, the same mark the
-                         row's own icon carries. Closed accounts stay out of the list until the
-                         switch at the top is on (owner, 2026-09-08: two-line rows over twenty
-                         accounts were a scroll, and "not running - lands in its store" said
-                         nothing the dot's absence does not). A closed destination is still not
-                         started: the chat lands in its store and is there when the app opens. -->
-                    <DropdownMenuSub>
-                      <DropdownMenuSubTrigger :disabled="moveAllBusy">
-                        <ArrowRightLeft /> {{ $t('instances.moveChats') }}
-                      </DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent class="max-w-64">
-                        <!-- The list is DESTINATIONS, and until this heading it never said so.
-                             A switch reading "Show not running" sitting directly under "Move
-                             chats to account" reads as a filter on the chats (owner, 2026-09-09,
-                             asked exactly that: does it only move chats that are not running?).
-                             It never was: the move takes every unarchived, not-done chat and
-                             stops a live one first - see moveChatsConfirmBody, which now leads
-                             with that. Naming the list is what disambiguates the switch. -->
-                        <DropdownMenuLabel>
-                          {{ $t('instances.moveChatsTargetsLabel') }}
-                        </DropdownMenuLabel>
-                        <!-- @select.prevent keeps the submenu open across the flip; reka closes
-                             it on select otherwise. -->
-                        <DropdownMenuCheckboxItem
-                          :model-value="moveShowClosed"
-                          @select.prevent
-                          @update:model-value="moveShowClosed = $event"
-                        >
-                          {{ $t('instances.moveChatsShowNotRunning') }}
-                        </DropdownMenuCheckboxItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem v-if="moveTargetsFor(inst).length === 0" disabled>
-                          {{ moveShowClosed || instances.length <= 1 ? $t('instances.moveChatsNoTargets') : $t('instances.moveChatsNoRunningTargets') }}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          v-for="to in moveTargetsFor(inst)"
-                          :key="to.dir"
-                          :disabled="moveAllBusy"
-                          @click="prepareMoveAll(inst, to)"
-                        >
-                          <span
-                            class="inline-flex size-3 shrink-0 items-center justify-center"
-                            :title="to.isRunning ? $t('instances.running') : $t('instances.stopped')"
-                          >
-                            <span
-                              v-if="to.isRunning"
-                              class="size-2 rounded-full bg-success animate-pulse"
-                            />
-                          </span>
-                          <span class="truncate">{{ instLabel(to) }}</span>
-                        </DropdownMenuItem>
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                    <!-- CLI section, on EVERY row: a desktop instance and its CLI login are the
-                         same Anthropic account signed in twice. With a linked CLI instance the
-                         items act on it (Launch / Sign in + Unlink); without one, "Add a CLI
-                         login…" creates + links one on demand and opens the /login terminal. That
-                         item is worded as a CREATE, not as a sign-in: it used to share the exact
-                         label of the plain sign-in above, so clicking it silently produced a new
-                         managed instance and the only visible consequence was the CLI table
-                         quietly reading "0 of 1" (back when it hid linked logins). -->
-                    <DropdownMenuSeparator />
-                    <template v-if="linkedCliFor(inst.dir)">
-                      <template v-for="cli in linkedClis(inst.dir)" :key="`cli-${cli.id}`">
-                        <DropdownMenuItem v-if="cli.loggedIn" @click="onLaunchCli(cli)">
-                          <Terminal /> {{ $t('instances.launchCli') }}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem v-else @click="onLoginCli(cli)">
-                          <LogIn /> {{ $t('instances.loginCli') }}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem @click="onUnlinkCli(cli)">
-                          <Unlink /> {{ $t('instances.unlinkCli') }}
-                        </DropdownMenuItem>
-                      </template>
-                    </template>
-                    <DropdownMenuItem
-                      v-else
-                      :disabled="cliSignInBusy.has(inst.dir)"
-                      @click="onSignInCli(inst)"
-                    >
-                      <LogIn /> {{ $t('instances.addCli') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <!-- Old numbers stay on a row by design (a signed-out account keeps its last
-                         reading, dimmed); this blanks them on request until the next reading
-                         (owner, 2026-10-02: "clear the old 5hour and usage stats in the ui"). -->
-                    <DropdownMenuItem :disabled="!usageFor(inst)" @click="onClearUsage(inst)">
-                      <Eraser /> {{ $t('instances.clearUsage') }}
-                    </DropdownMenuItem>
-                    <!-- Edit (name + icon + color) is pure UI metadata, so it stays enabled even
-                         while the instance runs (unlike Delete, which touches the folder) -->
-                    <!-- Drop the typed name and let the row be called after the account again.
-                         Offered on every labelled row, not only the mismatched ones, because "go
-                         back to the account name" is a thing you want on purpose — but it is the
-                         mismatched rows the warning marker sends here. -->
-                    <DropdownMenuItem
-                      v-if="inst.label"
-                      :disabled="isBusy(inst) || !accountDisplayName(inst.account)"
-                      @click="onUseAccountName(inst)"
-                    >
-                      <UserRound /> {{ $t('instances.useAccountName') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      variant="destructive"
-                      :disabled="inst.isRunning || isBusy(inst)"
-                      @click="openDeleteDialog(inst)"
-                    >
-                      <Trash2 /> {{ $t('instances.delete') }}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </TableCell>
-          </TableRow>
+                        v-if="to.isRunning"
+                        class="size-2 rounded-full bg-success animate-pulse"
+                      />
+                    </span>
+                    <span class="truncate">{{ instLabel(to) }}</span>
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <!-- CLI section, on EVERY row: a desktop instance and its CLI login are the
+                   same Anthropic account signed in twice. With a linked CLI instance the
+                   items act on it (Launch / Sign in + Unlink); without one, "Add a CLI
+                   login…" creates + links one on demand and opens the /login terminal. That
+                   item is worded as a CREATE, not as a sign-in: it used to share the exact
+                   label of the plain sign-in above, so clicking it silently produced a new
+                   managed instance and the only visible consequence was the CLI table
+                   quietly reading "0 of 1" (back when it hid linked logins). -->
+              <DropdownMenuSeparator />
+              <template v-if="linkedCliFor(inst.dir)">
+                <template v-for="cli in linkedClis(inst.dir)" :key="`cli-${cli.id}`">
+                  <DropdownMenuItem v-if="cli.loggedIn" @click="onLaunchCli(cli)">
+                    <Terminal /> {{ $t('instances.launchCli') }}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem v-else @click="onLoginCli(cli)">
+                    <LogIn /> {{ $t('instances.loginCli') }}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem @click="onUnlinkCli(cli)">
+                    <Unlink /> {{ $t('instances.unlinkCli') }}
+                  </DropdownMenuItem>
+                </template>
+              </template>
+              <DropdownMenuItem
+                v-else
+                :disabled="cliSignInBusy.has(inst.dir)"
+                @click="onSignInCli(inst)"
+              >
+                <LogIn /> {{ $t('instances.addCli') }}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <!-- Old numbers stay on a row by design (a signed-out account keeps its last
+                   reading, dimmed); this blanks them on request until the next reading
+                   (owner, 2026-10-02: "clear the old 5hour and usage stats in the ui"). -->
+              <DropdownMenuItem :disabled="!usageFor(inst)" @click="onClearUsage(inst)">
+                <Eraser /> {{ $t('instances.clearUsage') }}
+              </DropdownMenuItem>
+              <!-- Edit (name + icon + color) is pure UI metadata, so it stays enabled even
+                   while the instance runs (unlike Delete, which touches the folder) -->
+              <!-- Drop the typed name and let the row be called after the account again.
+                   Offered on every labelled row, not only the mismatched ones, because "go
+                   back to the account name" is a thing you want on purpose — but it is the
+                   mismatched rows the warning marker sends here. -->
+              <DropdownMenuItem
+                v-if="inst.label"
+                :disabled="isBusy(inst) || !accountDisplayName(inst.account)"
+                @click="onUseAccountName(inst)"
+              >
+                <UserRound /> {{ $t('instances.useAccountName') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                variant="destructive"
+                :disabled="inst.isRunning || isBusy(inst)"
+                @click="openDeleteDialog(inst)"
+              >
+                <Trash2 /> {{ $t('instances.delete') }}
+              </DropdownMenuItem>
+            </template>
+          </InstanceRow>
         </TransitionGroup>
         <tbody
           v-if="codexShown"
           data-slot="table-body"
           :class="lastProvider === 'codex' ? '[&_tr:last-child]:border-0' : undefined"
         >
-          <CodexInstanceRows ref="codexRows" :usage-mode="usageMode" />
+          <CodexInstanceRows ref="codexRows" :columns="columns" />
         </tbody>
         <!-- Hideable in Settings → Providers like Codex (owner, 2026-09-30): someone who never
              uses DeepSeek should not have to scroll past its rows. -->
         <tbody v-if="dshShown" data-slot="table-body" class="[&_tr:last-child]:border-0">
-          <DshInstanceRows ref="dshRows" :usage-mode="usageMode" />
+          <DshInstanceRows ref="dshRows" :columns="columns" />
         </tbody>
-        <!-- Keyed off the rows actually drawn, across every provider, not off the instance lists:
-             with "hide" on (or a provider left out), the filter can empty a table that still has
-             instances behind it, and that must not land as a blank table with no explanation. -->
-        <TableBody v-if="shownRows === 0 && !(claudeShown && loading)">
-          <!-- Usage mode swaps three process columns for two quota ones and adds the 5-hour
-               usage chip, which lands back on ten either way (Last launched shows in both). Kept as
-               an expression rather than a literal so a future column change cannot silently desync
-               the span from the header. -->
-          <TableEmpty :colspan="usageMode ? 10 : 10">
-            <div class="flex flex-col items-center gap-1 text-center">
-              <component :is="allHiddenByFilter ? Funnel : Boxes" class="mb-1 size-6 opacity-40" />
-              <p class="font-medium text-foreground">
-                {{
-                  allHiddenByFilter
-                    ? $t('instances.filterAllHidden')
-                    : $t('instances.empty')
-                }}
-              </p>
-              <p class="text-xs text-muted-foreground">
-                {{
-                  allHiddenByFilter
-                    ? $t('instances.filterAllHiddenHint')
-                    : $t('instances.emptyHint')
-                }}
-              </p>
-            </div>
-          </TableEmpty>
-        </TableBody>
-      </Table>
+      </InstanceTable>
     </div>
 
     <!-- "Chats": this one account's chats, read-only. No action on the account itself, so it

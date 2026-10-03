@@ -27,7 +27,6 @@ export default {
   remove: 'Remove from the list',
   removeHint: 'Forget this instance. Its home and chats stay on disk.',
   delete: 'Delete home and chats',
-  moreActions: 'More actions',
   copyHome: 'Copy home path',
   copied: 'Copied the home path',
   // Shown while a launch is in flight: the harness prints its address only once the server is up,

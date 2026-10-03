@@ -1,12 +1,11 @@
 <script setup lang="ts">
 // The Codex rows of the combined Instances table (owner, 2026-09-30). InstancesView.vue owns the
-// <Table>, its header, the empty state and the create/refresh controls; this renders ONLY one
-// <TableRow> per Codex instance, in the 10-column contract every provider's rows follow, plus this
+// table, its header, the empty state and the create/refresh controls; this renders ONLY one shared
+// InstanceRow per Codex instance (the columns it is handed, the model it builds), plus this
 // provider's dialogs (reka dialogs teleport, so they can sit beside the rows).
 import {
   AppWindow,
   ArrowRightLeft,
-  EllipsisVertical,
   Eraser,
   LogIn,
   LogOut,
@@ -21,17 +20,10 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
-import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
-import InstanceAccountBadge from '@/components/InstanceAccountBadge.vue'
-import InstanceGlyph from '@/components/InstanceGlyph.vue'
-import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
-import InstanceNumber from '@/components/InstanceNumber.vue'
+import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
+import InstanceRow from '@/components/InstanceRow.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
-import ProviderLogo from '@/components/ProviderLogo.vue'
-import UsageBadge from '@/components/UsageBadge.vue'
-import UsageBar from '@/components/UsageBar.vue'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -42,44 +34,30 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  DropdownMenu,
   DropdownMenuCheckboxItem,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { TableCell, TableRow } from '@/components/ui/table'
 import { useAppSettings } from '@/composables/useAppSettings'
 import { useCodexInstances } from '@/composables/useCodexInstances'
-import { useInstanceFilter } from '@/composables/useInstanceFilter'
-import { useSortable } from '@/composables/useSortable'
+import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import { type CodexInstance, type CodexMovePlan, moveCodexChat, planCodexChatMove } from '@/lib/api'
 import { shortDisplayName } from '@/lib/instance-appearance'
 import type { InstanceFacts } from '@/lib/instance-filter'
+import type { InstanceColumn, InstanceRowModel } from '@/lib/instance-table'
 import { moveTargets } from '@/lib/move-chats'
-import { bindingWeeklyPct } from '@/lib/usage'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
-import {
-  msUntilReset,
-  resetLabel,
-  SESSION_WINDOW_MS,
-  WEEK_WINDOW_MS,
-  waitSeverity,
-  windowRemainingPct,
-} from '@/lib/usage-reset'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
-// Usage mode is TAB-WIDE (composables/useUsageMode.ts); the combined table passes it down so its
-// header and these rows can never disagree about which three columns sit in slots 4-6.
-defineProps<{ usageMode: boolean }>()
+// The table's column list (lib/instance-table.ts): the one the header draws, so the cells follow it.
+defineProps<{ columns: InstanceColumn[] }>()
 
 const {
   instances,
@@ -156,18 +134,6 @@ const refreshing = computed(() => loading.value || refreshingUsage.value)
 
 // The shared clock every countdown cell on the tab formats against, so the whole tab ticks together.
 const { now } = useUsageMode(true)
-const sessionResetFor = (instance: CodexInstance) =>
-  resetLabel(usageFor(instance)?.session, now.value)
-const weeklyResetFor = (instance: CodexInstance) =>
-  resetLabel(usageFor(instance)?.weekAll, now.value)
-// One number per window drives the bar's length; the WEEKLY one also drives its colour, and the
-// 5-hour bar is drawn `neutral` — same contract as the Claude rows (see UsageBar).
-const sessionRemaining = (instance: CodexInstance) =>
-  windowRemainingPct(usageFor(instance)?.session, SESSION_WINDOW_MS, now.value) ?? 0
-const weeklyRemaining = (instance: CodexInstance) =>
-  windowRemainingPct(usageFor(instance)?.weekAll, WEEK_WINDOW_MS, now.value) ?? 0
-const weeklyWait = (instance: CodexInstance) => waitSeverity(weeklyRemaining(instance))
-
 /** The one fact the status dot reports: is the thing this row launches actually up? With the
  *  desktop surface switched off in Settings there is no desktop to be up, so the dot falls back to
  *  the CLI's own fact — signed in or not. */
@@ -223,58 +189,9 @@ async function onRedeemResetCredit(instance: CodexInstance) {
 // sort (the persisted key InstancesView sorts the Claude rows by), under the same column keys. A
 // key these rows hold no fact for (uptime, memory, last launched) leaves them in list order.
 const { desktopSortKey, desktopSortDirection } = useUiPrefs()
-const { sortedRows } = useSortable(
-  () => instances.value,
-  [
-    {
-      key: 'running',
-      accessor: (instance: CodexInstance) =>
-        `${desktopEnabled.value && instance.isDesktopRunning ? '0' : '1'}:${cliEnabled.value && instance.loggedIn ? '0' : '1'}`,
-    },
-    { key: 'name', accessor: (instance: CodexInstance) => instance.name },
-    {
-      key: 'account',
-      accessor: (instance: CodexInstance) =>
-        instance.account?.email ?? instance.account?.name ?? undefined,
-    },
-    { key: 'pid', accessor: (instance: CodexInstance) => instance.desktopPid ?? undefined },
-    {
-      key: 'plan',
-      accessor: (instance: CodexInstance) => instance.account?.planLabel ?? undefined,
-    },
-    // Usage-mode columns — by time remaining, so "soonest reset first" is what a sort gives you.
-    {
-      key: 'session',
-      accessor: (instance: CodexInstance) =>
-        msUntilReset(usageFor(instance)?.session, now.value) ?? undefined,
-    },
-    {
-      key: 'weekly',
-      accessor: (instance: CodexInstance) =>
-        msUntilReset(usageFor(instance)?.weekAll, now.value) ?? undefined,
-    },
-    {
-      key: 'usage',
-      accessor: (instance: CodexInstance) => {
-        const snap = usageFor(instance)
-        return snap ? (bindingWeeklyPct(snap) ?? undefined) : undefined
-      },
-    },
-    {
-      key: 'usageSession',
-      accessor: (instance: CodexInstance) => usageFor(instance)?.session?.pct ?? undefined,
-    },
-  ],
-  { key: desktopSortKey, direction: desktopSortDirection },
-  { rowKey: (instance: CodexInstance) => instance.id },
-)
 
-// --- filter -------------------------------------------------------------------------------------
 // The tab's filter is tab-wide (composables/useInstanceFilter.ts), and a Codex row is an account
-// like any other: it has a desktop profile that is open or shut, a plan, and a quota reading. It
-// runs AFTER the sort — it removes or greys rows, it never reorders them.
-const { dimmed: filterDimmed, visible: filterVisible } = useInstanceFilter()
-
+// like any other: it has a desktop profile that is open or shut, a plan, and a quota reading.
 /** `open` is left UNKNOWN when the Codex desktop surface is switched off in Settings: "closed"
  *  would be a claim about a profile this view is not even reporting on. An unknown fact never sets
  *  a row aside (see lib/instance-filter.ts). */
@@ -285,10 +202,79 @@ const filterFacts = (instance: CodexInstance): InstanceFacts => ({
   signedIn: instance.loggedIn,
 })
 
-const visibleRows = computed(() => filterVisible(sortedRows.value, filterFacts))
-/** Codex rows the filter dropped, for the combined heading's "hidden by filter" note: a row that
- *  quietly stopped being listed reads as a bug rather than as the filter working. */
-const hiddenByFilter = computed(() => sortedRows.value.length - visibleRows.value.length)
+const { visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
+  rows: () => instances.value,
+  rowKey: (instance: CodexInstance) => instance.id,
+  facts: filterFacts,
+  persisted: { key: desktopSortKey, direction: desktopSortDirection },
+  columns: [
+    {
+      key: 'status',
+      accessor: (instance: CodexInstance) =>
+        `${desktopEnabled.value && instance.isDesktopRunning ? '0' : '1'}:${cliEnabled.value && instance.loggedIn ? '0' : '1'}`,
+    },
+    { key: 'name', accessor: (instance: CodexInstance) => instance.name },
+    {
+      key: 'account',
+      accessor: (instance: CodexInstance) =>
+        instance.account?.email ?? instance.account?.name ?? undefined,
+    },
+    { key: 'pid', accessor: (instance: CodexInstance) => instance.desktopPid ?? undefined },
+    ...quotaSortColumns(
+      usageFor,
+      (instance: CodexInstance) => instance.account?.planLabel ?? undefined,
+      now,
+    ),
+  ],
+})
+
+/** What the shared row draws for one Codex instance (components/InstanceRow.vue). */
+function rowModel(instance: CodexInstance): InstanceRowModel {
+  const email = instance.account?.email
+  return {
+    id: instance.id,
+    num: instance.num,
+    dimmed: isDimmed(instance),
+    provider: 'codex',
+    status: { on: !!statusOn(instance), title: statusTitle(instance) },
+    glyph: { dir: instance.codexHome, running: !!statusOn(instance) },
+    name: {
+      shown: shortDisplayName(instance.name),
+      tooltip: () => ({ label: instance.name, description: instance.codexHome }),
+    },
+    badge: instance.isExternal ? { label: t('instances.external') } : undefined,
+    // The email comes straight off the list payload (the server resolves it from auth.json).
+    account: {
+      email,
+      profile: instance.account?.name,
+      fallback:
+        instance.account?.authMode === 'apikey'
+          ? t('codexInstances.authApiKey')
+          : t('codexInstances.loggedOutShort'),
+      variant: email ? 'success' : 'outline',
+    },
+    pid: instance.desktopPid,
+    usage: {
+      snapshot: usageFor(instance),
+      checking: isCheckingUsage(instance),
+      key: usageKey(instance),
+      onCheck: () => void onCheckUsage(instance),
+    },
+    // Plan, from `plan_type`. The live check prefers ChatGPT's server-computed value over the
+    // id_token's mint-time claim, so a lapsed or upgraded plan cannot linger here.
+    plan: instance.account?.planLabel ? { label: instance.account.planLabel } : null,
+    // "Now" while its desktop runs; Codex keeps no record of when it last did.
+    lastRunning: instance.isDesktopRunning
+      ? { label: t('instances.lastRunningNow'), running: true }
+      : null,
+    // A DISCOVERED row (the default install, or a Codex Desktop running from a profile we didn't
+    // create) has no store entry, so every mutating action would fail with "not found": it is
+    // listed to be READ and offers no menu.
+    menu: instance.isExternal
+      ? undefined
+      : { name: instance.name, actions: menuActionsFor(instance), class: 'max-w-52' },
+  }
+}
 
 const createOpen = ref(false)
 const creating = ref(false)
@@ -542,137 +528,17 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
 </script>
 
 <template>
-  <TableRow
+  <InstanceRow
     v-for="instance in visibleRows"
     :key="instance.id"
-    :variant="filterDimmed(filterFacts(instance)) ? 'faded' : 'default'"
+    :columns="columns"
+    :row="rowModel(instance)"
   >
-    <!-- 1. Status: one dot, same size and colours as the other providers' rows; both facts
-         (desktop up, CLI signed in) live in its title. -->
-    <TableCell>
-      <span
-        class="inline-block size-2 rounded-full"
-        :class="statusOn(instance) ? 'bg-success' : 'bg-muted-foreground/40'"
-        :title="statusTitle(instance)"
-      />
-    </TableCell>
-    <!-- 2. Name: max-w-0 so a long name elides instead of widening the table. Codex instances
-         share ONE number sequence with the Claude rows, so `#7` here can never be a different `#7`
-         there. CODEX_HOME, which used to be a column of its own, is in the name's hover, the same
-         place the Claude rows keep their profile folder. -->
-    <TableCell class="max-w-0">
-      <div class="flex min-w-0 items-center gap-1.5 font-medium">
-        <ProviderLogo provider="codex" class="size-3.5" />
-        <InstanceNumber :num="instance.num" />
-        <InstanceGlyph :dir="instance.codexHome" :running="statusOn(instance)" />
-        <IconTooltip :label="instance.name" :description="instance.codexHome">
-          <span class="min-w-0 cursor-default truncate">{{ shortDisplayName(instance.name) }}</span>
-        </IconTooltip>
-        <Badge v-if="instance.isExternal" variant="outline">{{ $t('instances.external') }}</Badge>
-      </div>
-    </TableCell>
-    <!-- 3. Account: the same email-handle pill as the Claude rows (InstanceAccountBadge). The
-         email comes straight off the list payload (the server resolves it from auth.json). -->
-    <TableCell>
-      <InstanceAccountBadge
-        :email="instance.account?.email"
-        :profile="instance.account?.name"
-        :fallback="
-          instance.account?.authMode === 'apikey'
-            ? $t('codexInstances.authApiKey')
-            : $t('codexInstances.loggedOutShort')
-        "
-        :variant="instance.account?.email ? 'success' : 'outline'"
-      />
-    </TableCell>
-    <!-- 4-6. Process columns: the desktop's PID; Codex reports no start time or memory. -->
-    <template v-if="!usageMode">
-      <TableCell>
-        <span v-if="instance.desktopPid != null" class="mono text-muted-foreground">
-          {{ instance.desktopPid }}
-        </span>
-        <span v-else class="text-xs text-muted-foreground">—</span>
-      </TableCell>
-      <TableCell><span class="text-xs text-muted-foreground">—</span></TableCell>
-      <TableCell><span class="text-xs text-muted-foreground">—</span></TableCell>
-    </template>
-    <!-- 4-6. Quota columns: the two reset countdowns and the 5-hour chip. -->
-    <template v-else>
-      <TableCell>
-        <UsageBar
-          v-if="sessionResetFor(instance)"
-          :fill-pct="sessionRemaining(instance)"
-          variant="neutral"
-          :label="sessionResetFor(instance) ?? ''"
-          :aria-label="$t('instances.resetsIn', { when: sessionResetFor(instance) })"
-        />
-        <span
-          v-else
-          class="text-xs text-muted-foreground"
-          :title="
-            usageFor(instance)?.sessionLimitUnavailable
-              ? $t('codexInstances.noSessionLimit')
-              : undefined
-          "
-        >{{ usageFor(instance)?.sessionLimitUnavailable ? 'N/A' : '—' }}</span>
-      </TableCell>
-      <TableCell>
-        <CopyResetDate v-if="weeklyResetFor(instance)" :limit="usageFor(instance)?.weekAll">
-          <UsageBar
-            :fill-pct="weeklyRemaining(instance)"
-            :variant="weeklyWait(instance)"
-            :label="weeklyResetFor(instance) ?? ''"
-            :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(instance) })"
-          />
-        </CopyResetDate>
-        <span v-else class="text-xs text-muted-foreground">—</span>
-      </TableCell>
-      <TableCell>
-        <UsageBadge
-          scope="session"
-          :snapshot="usageFor(instance)"
-          :checking="isCheckingUsage(instance)"
-          :usage-key="usageKey(instance)"
-          @check="onCheckUsage(instance)"
-        />
-      </TableCell>
-    </template>
-    <!-- 7. Usage -->
-    <TableCell>
-      <UsageBadge
-        :snapshot="usageFor(instance)"
-        :checking="isCheckingUsage(instance)"
-        :usage-key="usageKey(instance)"
-        @check="onCheckUsage(instance)"
-      />
-    </TableCell>
-    <!-- 8. Plan, from `plan_type`. The live check prefers ChatGPT's server-computed value over the
-         id_token's mint-time claim, so a lapsed or upgraded plan cannot linger here. -->
-    <TableCell>
-      <Badge v-if="instance.account?.planLabel" variant="outline">
-        {{ instance.account.planLabel }}
-      </Badge>
-      <span v-else class="text-xs text-muted-foreground">—</span>
-    </TableCell>
-    <!-- 9. Last running: "Now" while its desktop runs; Codex keeps no record of when it last did. -->
-    <TableCell>
-      <span v-if="instance.isDesktopRunning" class="text-xs text-success">
-        {{ $t('instances.lastRunningNow') }}
+    <template #primary>
+      <span v-if="instance.isExternal" class="whitespace-nowrap text-3xs text-muted-foreground">
+        {{ $t('codexInstances.externalHint') }}
       </span>
-      <span v-else class="text-xs text-muted-foreground">—</span>
-    </TableCell>
-    <!-- 10. Actions -->
-    <TableCell>
-      <!-- A DISCOVERED row (the default install, or a Codex Desktop running from a profile we
-           didn't create) has no store entry, so every mutating action would fail with "not found".
-           It is listed to be READ — identity, plan, quota — and says so instead of offering buttons
-           that cannot work. -->
-      <div v-if="instance.isExternal" class="flex items-center justify-end">
-        <span class="whitespace-nowrap text-3xs text-muted-foreground">
-          {{ $t('codexInstances.externalHint') }}
-        </span>
-      </div>
-      <div v-else class="flex items-center justify-end gap-1">
+      <template v-else>
         <Button
           v-if="desktopEnabled && !instance.isDesktopRunning"
           variant="outline"
@@ -708,102 +574,90 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
         >
           <Terminal /> {{ $t('codexInstances.launch') }}
         </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger as-child>
-            <Button variant="ghost" size="icon-sm" :aria-label="$t('codexInstances.moreActions')">
-              <EllipsisVertical />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" class="max-w-52">
-            <InstanceMenuHeader
-              :num="instance.num"
-              :name="instance.name"
-              :actions="menuActionsFor(instance)"
+      </template>
+    </template>
+    <template #menu>
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger :disabled="moveBusy || isBusy(instance)">
+          <ArrowRightLeft /> {{ $t('instances.moveChats') }}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent class="max-w-72">
+          <DropdownMenuCheckboxItem
+            :model-value="moveShowClosed"
+            @select.prevent
+            @update:model-value="moveShowClosed = $event"
+          >
+            {{ $t('instances.moveChatsShowNotRunning') }}
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem v-if="moveTargetsFor(instance).length === 0" disabled>
+            {{
+              moveShowClosed
+                ? $t('instances.moveChatsNoTargets')
+                : $t('instances.moveChatsNoRunningTargets')
+            }}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            v-for="to in moveTargetsFor(instance)"
+            :key="to.id"
+            @click="prepareMove(instance, to)"
+          >
+            <span
+              class="size-2 shrink-0 rounded-full"
+              :class="to.isDesktopRunning ? 'bg-success' : 'bg-muted-foreground/40'"
             />
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger :disabled="moveBusy || isBusy(instance)">
-                <ArrowRightLeft /> {{ $t('instances.moveChats') }}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent class="max-w-72">
-                <DropdownMenuCheckboxItem
-                  :model-value="moveShowClosed"
-                  @select.prevent
-                  @update:model-value="moveShowClosed = $event"
-                >
-                  {{ $t('instances.moveChatsShowNotRunning') }}
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem v-if="moveTargetsFor(instance).length === 0" disabled>
-                  {{
-                    moveShowClosed
-                      ? $t('instances.moveChatsNoTargets')
-                      : $t('instances.moveChatsNoRunningTargets')
-                  }}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  v-for="to in moveTargetsFor(instance)"
-                  :key="to.id"
-                  @click="prepareMove(instance, to)"
-                >
-                  <span
-                    class="size-2 shrink-0 rounded-full"
-                    :class="to.isDesktopRunning ? 'bg-success' : 'bg-muted-foreground/40'"
-                  />
-                  <span class="truncate">{{ moveLabel(to) }}</span>
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuItem
-              v-if="desktopEnabled"
-              :disabled="!instance.isDesktopRunning || isBusy(instance)"
-              @click="onQuitDesktop(instance)"
-            >
-              <Square /> {{ $t('codexInstances.quitDesktop') }}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator v-if="desktopEnabled && cliEnabled" />
-            <DropdownMenuItem
-              v-if="cliEnabled"
-              :disabled="isBusy(instance)"
-              @click="onLaunchCli(instance)"
-            >
-              <Terminal /> {{ $t('codexInstances.launchCli') }}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              v-if="cliEnabled"
-              :disabled="isBusy(instance)"
-              @click="onLogin(instance)"
-            >
-              <LogIn /> {{ $t('codexInstances.login') }}
-            </DropdownMenuItem>
-            <!-- Only for a signed-in ChatGPT login: an API-key auth has no ChatGPT subscription and
-                 so no bankable reset credits. Disabled (with a title explaining why) when the cached
-                 usage already shows the redeem would be refused; the click still round-trips to the
-                 server otherwise, which gives the authoritative answer when the cache is stale. -->
-            <DropdownMenuItem
-              v-if="instance.account?.authMode === 'chatgpt'"
-              :disabled="isBusy(instance) || !!redeemDisabledReason(instance)"
-              :title="redeemDisabledReason(instance) ?? undefined"
-              @click="onRedeemResetCredit(instance)"
-            >
-              <RotateCcw /> {{ $t('codexInstances.redeemResetCredit') }}
-            </DropdownMenuItem>
-            <!-- Blanks the row's old numbers until its next reading (owner, 2026-10-02). -->
-            <DropdownMenuItem :disabled="!usageFor(instance)" @click="onClearUsage(instance)">
-              <Eraser /> {{ $t('codexInstances.clearUsage') }}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              variant="destructive"
-              :disabled="instance.isDesktopRunning || isBusy(instance)"
-              @click="openDelete(instance)"
-            >
-              <Trash2 /> {{ $t('codexInstances.delete') }}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </TableCell>
-  </TableRow>
+            <span class="truncate">{{ moveLabel(to) }}</span>
+          </DropdownMenuItem>
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+      <DropdownMenuItem
+        v-if="desktopEnabled"
+        :disabled="!instance.isDesktopRunning || isBusy(instance)"
+        @click="onQuitDesktop(instance)"
+      >
+        <Square /> {{ $t('codexInstances.quitDesktop') }}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator v-if="desktopEnabled && cliEnabled" />
+      <DropdownMenuItem
+        v-if="cliEnabled"
+        :disabled="isBusy(instance)"
+        @click="onLaunchCli(instance)"
+      >
+        <Terminal /> {{ $t('codexInstances.launchCli') }}
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        v-if="cliEnabled"
+        :disabled="isBusy(instance)"
+        @click="onLogin(instance)"
+      >
+        <LogIn /> {{ $t('codexInstances.login') }}
+      </DropdownMenuItem>
+      <!-- Only for a signed-in ChatGPT login: an API-key auth has no ChatGPT subscription and
+           so no bankable reset credits. Disabled (with a title explaining why) when the cached
+           usage already shows the redeem would be refused; the click still round-trips to the
+           server otherwise, which gives the authoritative answer when the cache is stale. -->
+      <DropdownMenuItem
+        v-if="instance.account?.authMode === 'chatgpt'"
+        :disabled="isBusy(instance) || !!redeemDisabledReason(instance)"
+        :title="redeemDisabledReason(instance) ?? undefined"
+        @click="onRedeemResetCredit(instance)"
+      >
+        <RotateCcw /> {{ $t('codexInstances.redeemResetCredit') }}
+      </DropdownMenuItem>
+      <!-- Blanks the row's old numbers until its next reading (owner, 2026-10-02). -->
+      <DropdownMenuItem :disabled="!usageFor(instance)" @click="onClearUsage(instance)">
+        <Eraser /> {{ $t('codexInstances.clearUsage') }}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        variant="destructive"
+        :disabled="instance.isDesktopRunning || isBusy(instance)"
+        @click="openDelete(instance)"
+      >
+        <Trash2 /> {{ $t('codexInstances.delete') }}
+      </DropdownMenuItem>
+    </template>
+  </InstanceRow>
 
   <!-- The dialogs teleport to <body>, so sitting beside the rows puts nothing inside the tbody. -->
   <Dialog

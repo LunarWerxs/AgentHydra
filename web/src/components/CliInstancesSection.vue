@@ -12,7 +12,6 @@ import {
   ArrowRightLeft,
   Cloud,
   CreditCard,
-  EllipsisVertical,
   Eraser,
   FileDown,
   Funnel,
@@ -41,62 +40,37 @@ import CliLimitResetIcon from '@/components/CliLimitResetIcon.vue'
 import CliLoginMoveDialog from '@/components/CliLoginMoveDialog.vue'
 import CliLoginSyncDialog from '@/components/CliLoginSyncDialog.vue'
 import CliQuickAdd from '@/components/CliQuickAdd.vue'
-import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
-import InstanceMenuHeader, { type MenuIconAction } from '@/components/InstanceMenuHeader.vue'
+import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
+import InstanceRow from '@/components/InstanceRow.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
+import InstanceTable from '@/components/InstanceTable.vue'
 import LinkCliInstanceDialog from '@/components/LinkCliInstanceDialog.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import PooledUsageGauges from '@/components/PooledUsageGauges.vue'
-import SortButton from '@/components/SortButton.vue'
-import UsageBadge from '@/components/UsageBadge.vue'
-import UsageBar from '@/components/UsageBar.vue'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableEmpty,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { TableBody } from '@/components/ui/table'
 import { useAppSettings } from '@/composables/useAppSettings'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
-import { useInstanceFilter } from '@/composables/useInstanceFilter'
+import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
 import { useInstances } from '@/composables/useInstances'
 import { useQuickAddTarget } from '@/composables/useQuickAddTarget'
-import { useSortable } from '@/composables/useSortable'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
-import { formatTokens } from '@/lib/climayte-status'
 import { formatUsd, timeAgo } from '@/lib/format'
-import { displayName, nameOverflowTitle, shortDisplayName } from '@/lib/instance-appearance'
-import { billsPastLimit, bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
+import { displayName, shortDisplayName } from '@/lib/instance-appearance'
+import { type InstanceRowModel, instanceColumns, nameTooltipFor } from '@/lib/instance-table'
+import { billsPastLimit, usageReasonMessageKey } from '@/lib/usage'
 import { planSize, pooledRemaining } from '@/lib/usage-pool'
-import {
-  msUntilReset,
-  resetLabel,
-  SESSION_WINDOW_MS,
-  WEEK_WINDOW_MS,
-  waitSeverity,
-  windowRemainingPct,
-} from '@/lib/usage-reset'
+import { SESSION_WINDOW_MS } from '@/lib/usage-reset'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -143,16 +117,6 @@ const usageFor = (inst: CliInstance) => snapshotFor(usageKey(inst))
 // you ask of every instance at once. Here the swap trades the config-dir column — the least useful
 // thing on screen when you're asking about quota — for the two reset countdowns.
 const { usageMode, now } = useUsageMode(true)
-const sessionResetFor = (inst: CliInstance) => resetLabel(usageFor(inst)?.session, now.value)
-const weeklyResetFor = (inst: CliInstance) => resetLabel(usageFor(inst)?.weekAll, now.value)
-// One number per window drives the bar's length; the WEEKLY one also drives its colour, and the
-// 5-hour bar is drawn `neutral` — see InstancesView and UsageBar's UsageBarVariant.
-const sessionRemaining = (inst: CliInstance) =>
-  windowRemainingPct(usageFor(inst)?.session, SESSION_WINDOW_MS, now.value) ?? 0
-const weeklyRemaining = (inst: CliInstance) =>
-  windowRemainingPct(usageFor(inst)?.weekAll, WEEK_WINDOW_MS, now.value) ?? 0
-const weeklyWait = (inst: CliInstance) => waitSeverity(weeklyRemaining(inst))
-
 // The folded table's two gauges (PooledUsageGauges.vue): what is left of each window across EVERY
 // CLI account, the ones linked to a desktop row included, since CliMayte runs on those too.
 const poolOf = (which: 'session' | 'weekAll') =>
@@ -192,45 +156,6 @@ function planFor(inst: CliInstance): string | null {
   return inst.planLabel ?? linkedDesktop(inst)?.account?.planLabel ?? null
 }
 
-const { sortedRows, toggleSort, indicatorFor } = useSortable(
-  () => cliInstances.value,
-  [
-    { key: 'loggedIn', accessor: (i: CliInstance) => i.loggedIn },
-    { key: 'name', accessor: (i: CliInstance) => i.name },
-    { key: 'account', accessor: (i: CliInstance) => i.associatedAccountLabel ?? null },
-    { key: 'configDir', accessor: (i: CliInstance) => i.configDir },
-    // Usage-mode columns — by time remaining, so "soonest reset first" is what a sort gives you.
-    {
-      key: 'session',
-      accessor: (i: CliInstance) => msUntilReset(usageFor(i)?.session, now.value) ?? undefined,
-    },
-    {
-      key: 'weekly',
-      accessor: (i: CliInstance) => msUntilReset(usageFor(i)?.weekAll, now.value) ?? undefined,
-    },
-    {
-      key: 'usage',
-      accessor: (i: CliInstance) => {
-        const snap = usageFor(i)
-        return snap ? (bindingWeeklyPct(snap) ?? undefined) : undefined
-      },
-    },
-    { key: 'usageSession', accessor: (i: CliInstance) => usageFor(i)?.session?.pct ?? undefined },
-    // By the label the cell shows, as the Instances table sorts its Plan column.
-    // By plan size (Pro 1, Max 5x 5, Max 20x 20), not the label's spelling; no plan sorts last.
-    { key: 'plan', accessor: (i: CliInstance) => planSize(planFor(i)) },
-    // Biggest first: the question asked of this column is which account ran the most.
-    { key: 'tokens', accessor: (i: CliInstance) => i.tokens?.total, first: 'desc' },
-  ],
-  undefined,
-  { rowKey: (i: CliInstance) => i.id },
-)
-
-// The filter is tab-wide too (composables/useInstanceFilter.ts): "show me the rows I'm after" is
-// asked of every table at once, so a CLI login over the quota threshold is set aside here on
-// exactly the same terms as a desktop instance up above.
-const { dimmed: filterDimmed, visible: filterVisible } = useInstanceFilter()
-
 /**
  * What one CLI row is, as far as the filter is concerned.
  *
@@ -243,15 +168,28 @@ const { dimmed: filterDimmed, visible: filterVisible } = useInstanceFilter()
  */
 const filterFacts = (inst: CliInstance) => ({ usage: usageFor(inst), signedIn: inst.loggedIn })
 
-const visibleRows = computed(() => filterVisible(sortedRows.value, filterFacts))
+const { toggleSort, indicatorFor, visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
+  rows: () => cliInstances.value,
+  rowKey: (i: CliInstance) => i.id,
+  facts: filterFacts,
+  columns: [
+    { key: 'status', accessor: (i: CliInstance) => i.loggedIn },
+    { key: 'name', accessor: (i: CliInstance) => i.name },
+    { key: 'account', accessor: (i: CliInstance) => i.associatedAccountLabel ?? null },
+    { key: 'configDir', accessor: (i: CliInstance) => i.configDir },
+    // By plan size (Pro 1, Max 5x 5, Max 20x 20), not the label's spelling; no plan sorts last.
+    ...quotaSortColumns(usageFor, (i: CliInstance) => planSize(planFor(i)), now),
+    // Biggest first: the question asked of this column is which account ran the most.
+    { key: 'tokens', accessor: (i: CliInstance) => i.tokens?.total, first: 'desc' },
+  ],
+})
+
 /** The Account column names a legacy pasted credential. With none in use (the norm: a login comes
  *  from signing the instance in) every row would read "No account" beside a name that is an email,
  *  so the column is left out and the name gets its width (SUE round, 2026-10-01). */
 const showAccountColumn = computed(() => cliInstances.value.some((i) => !!i.associatedAccountLabel))
 /** How much of a name the row shows: the default beside the Account column, more without it. */
 const nameMax = computed(() => (showAccountColumn.value ? undefined : 36))
-/** Rows this table dropped for the filter — said out loud in the heading beside the count. */
-const hiddenByFilter = computed(() => sortedRows.value.length - visibleRows.value.length)
 /** There ARE CLI instances, the filter just took all of them. */
 const allHiddenByFilter = computed(
   () => cliInstances.value.length > 0 && visibleRows.value.length === 0,
@@ -274,16 +212,69 @@ const headingCount = computed(() =>
         }),
 )
 
-// The name column gives way when the table is narrow, so the CSS can elide a name the character
-// cap left whole; the native title then carries it in full (same check as InstancesView).
-const clippedName = ref<string | null>(null)
-function noteNameClip(e: PointerEvent, inst: CliInstance): void {
-  const el = e.currentTarget as HTMLElement
-  clippedName.value = el.scrollWidth > el.clientWidth ? inst.id : null
+const columns = computed(() =>
+  instanceColumns('cli', { usageMode: usageMode.value, account: showAccountColumn.value }),
+)
+
+/** What the shared row draws for one CLI login (components/InstanceRow.vue). */
+function rowModel(inst: CliInstance): InstanceRowModel {
+  const plan = planFor(inst)
+  return {
+    id: inst.id,
+    num: inst.num,
+    dimmed: isDimmed(inst),
+    status: {
+      on: inst.loggedIn,
+      title: inst.loggedIn ? t('cliInstances.loggedIn') : t('cliInstances.loggedOut'),
+    },
+    name: {
+      shown: shortDisplayName(inst.name, nameMax.value),
+      tooltip: (clipped) =>
+        nameTooltipFor(
+          {
+            full: inst.name,
+            shown: shortDisplayName(inst.name, nameMax.value),
+            folder: inst.configDir,
+          },
+          clipped,
+        ),
+    },
+    account: {
+      fallback: inst.associatedAccountLabel,
+      variant: 'outline',
+      empty: inst.associatedAccountLabel ? undefined : t('cliInstances.noAccount'),
+    },
+    configDir: inst.configDir,
+    usage: {
+      snapshot: usageFor(inst),
+      checking: isChecking(usageKey(inst)) || isBusy(inst),
+      key: usageKey(inst),
+      onCheck: () => void onCheckUsageFromPopover(inst),
+    },
+    plan: plan ? { label: plan } : null,
+    tokens: inst.tokens,
+    menu: { name: inst.name, actions: menuActionsFor(inst), class: 'max-w-56' },
+  }
 }
-function nameTitle(inst: CliInstance): string | undefined {
-  return clippedName.value === inst.id ? inst.name : nameOverflowTitle(inst.name, nameMax.value)
-}
+
+const linkedLabel = (inst: CliInstance) =>
+  t('cliInstances.linkedTo', {
+    num: linkedDesktop(inst)?.num,
+    name: linkedDesktop(inst) ? displayName(linkedDesktop(inst)!) : '',
+  })
+
+/** What the table says when it has no rows: the filter took them all, or there are none yet. */
+const emptyState = computed(() =>
+  visibleRows.value.length > 0 || loading.value
+    ? null
+    : allHiddenByFilter.value
+      ? {
+          icon: Funnel,
+          title: t('instances.filterAllHidden'),
+          hint: t('instances.filterAllHiddenHint'),
+        }
+      : { icon: Terminal, title: t('cliInstances.empty'), hint: t('cliInstances.emptyHint') },
+)
 
 function isBusy(inst: CliInstance): boolean {
   return busyIds.value.has(inst.id)
@@ -746,167 +737,27 @@ onUnmounted(() => {
     <!-- As long as its rows: unfolded, the table never scrolls inside itself, the tab scrolls instead
          (owner, 2026-10-01: "make this not scroll when expanded (just make it long)"). -->
     <div v-show="accountsOpen">
-    <Table>
-      <TableHeader sticky>
-        <TableRow>
-          <TableHead class="w-10">
-            <SortButton :direction="indicatorFor('loggedIn')" quiet @sort="toggleSort('loggedIn')">
-              ●
-            </SortButton>
-          </TableHead>
-          <!-- Name is the one column that gives way, as in the Instances table: it takes whatever
-               the others leave (w-full, and max-w-0 on its cells so a long name cannot force the
-               table wider), never below min-w-36. Every other column is as wide as its content
-               and no wider: a fixed width in auto table layout is a floor, not a size, and
-               those floors were what left a name one letter wide (owner, 2026-10-03). A nowrap
-               header is a floor as well, so the two usage headers, far wider than their
-               percentages, may wrap onto two lines (whitespace-normal), as in the Instances table. -->
-          <TableHead class="w-full min-w-36">
-            <SortButton :direction="indicatorFor('name')" @sort="toggleSort('name')">
-              {{ $t('cliInstances.colName') }}
-            </SortButton>
-          </TableHead>
-          <TableHead v-if="showAccountColumn">
-            <SortButton :direction="indicatorFor('account')" @sort="toggleSort('account')">
-              {{ $t('cliInstances.colAccount') }}
-            </SortButton>
-          </TableHead>
-          <TableHead
-            v-if="!usageMode"
-          >
-            <SortButton :direction="indicatorFor('configDir')" @sort="toggleSort('configDir')">
-              {{ $t('cliInstances.colConfigDir') }}
-            </SortButton>
-          </TableHead>
-          <!-- No fixed widths: with Name taking the slack, each quota column sits at its content's
-               width, which for the two bars is UsageBar's own min-w-20 in both tables, so the same
-               fact still has the same bar length on both tabs. -->
-          <template v-else>
-            <TableHead>
-              <SortButton :direction="indicatorFor('session')" @sort="toggleSort('session')">
-                {{ $t('instances.colSession') }}
-              </SortButton>
-            </TableHead>
-            <TableHead>
-              <SortButton :direction="indicatorFor('weekly')" @sort="toggleSort('weekly')">
-                {{ $t('instances.colWeekly') }}
-              </SortButton>
-            </TableHead>
-          </template>
-          <TableHead v-if="usageMode" class="whitespace-normal">
-            <SortButton :direction="indicatorFor('usageSession')" @sort="toggleSort('usageSession')">
-              {{ $t('instances.colUsageSession') }}
-            </SortButton>
-          </TableHead>
-          <TableHead class="whitespace-normal">
-            <SortButton :direction="indicatorFor('usage')" @sort="toggleSort('usage')">
-              {{ usageMode ? $t('instances.colUsageWeek') : $t('cliInstances.colUsage') }}
-            </SortButton>
-          </TableHead>
-          <!-- The account's plan, the same badge as the Instances table (owner, 2026-09-30), and
-               sortable like every other column here (owner, 2026-10-03). -->
-          <TableHead>
-            <SortButton :direction="indicatorFor('plan')" @sort="toggleSort('plan')">
-              {{ $t('instances.colPlan') }}
-            </SortButton>
-          </TableHead>
-          <!-- What the account has run, from its own transcripts on this PC (cli-instance-tokens.ts). -->
-          <TableHead>
-            <SortButton :direction="indicatorFor('tokens')" @sort="toggleSort('tokens')">
-              {{ $t('cliInstances.colTokens') }}
-            </SortButton>
-          </TableHead>
-          <TableHead class="text-end">{{ $t('cliInstances.colActions') }}</TableHead>
-        </TableRow>
-      </TableHeader>
       <!-- visibleRows, not cliInstances: with the usage filter set to hide, this table can be
            emptied while it still has rows to show, and a blank tbody explains nothing. -->
-      <TableBody v-if="visibleRows.length === 0">
-        <TableEmpty v-if="!loading" :colspan="(usageMode ? 10 : 8) - (showAccountColumn ? 0 : 1)">
-          <div class="flex flex-col items-center gap-1 text-center">
-            <component :is="allHiddenByFilter ? Funnel : Terminal" class="mb-1 size-6 opacity-40" />
-            <p class="font-medium text-foreground">
-              {{ allHiddenByFilter ? $t('instances.filterAllHidden') : $t('cliInstances.empty') }}
-            </p>
-            <p class="text-xs text-muted-foreground">
-              {{
-                allHiddenByFilter
-                  ? $t('instances.filterAllHiddenHint')
-                  : $t('cliInstances.emptyHint')
-              }}
-            </p>
-          </div>
-        </TableEmpty>
-        <TableRow v-for="i in 2" v-else :key="i">
-          <TableCell><Skeleton class="size-2" /></TableCell>
-          <TableCell><Skeleton class="h-4 w-28" /></TableCell>
-          <TableCell v-if="showAccountColumn"><Skeleton class="h-5 w-20" /></TableCell>
-          <TableCell v-if="!usageMode"><Skeleton class="h-3 w-32" /></TableCell>
-          <template v-else>
-            <TableCell><Skeleton class="h-8 w-16" /></TableCell>
-            <TableCell><Skeleton class="h-8 w-16" /></TableCell>
-            <TableCell><Skeleton class="h-5 w-14" /></TableCell>
-          </template>
-          <TableCell><Skeleton class="h-5 w-14" /></TableCell>
-          <TableCell><Skeleton class="h-5 w-14" /></TableCell>
-          <TableCell><Skeleton class="h-4 w-12" /></TableCell>
-          <TableCell>
-            <div class="flex justify-end"><Skeleton class="size-6" /></div>
-          </TableCell>
-        </TableRow>
-      </TableBody>
-      <TableBody v-else>
-        <!-- Dimmed, never disabled, and inert to the pointer — same contract as the desktop table
-             above: a filtered row is one you've set aside, not one you've lost access to, and it
-             shouldn't light up every time the cursor crosses it. -->
-        <TableRow
-          v-for="inst in visibleRows"
-          :key="inst.id"
-          :variant="filterDimmed(filterFacts(inst)) ? 'faded' : 'default'"
-        >
-          <TableCell>
-            <span
-              class="inline-block size-2 rounded-full"
-              :class="inst.loggedIn ? 'bg-success' : 'bg-muted-foreground/40'"
-              :title="inst.loggedIn ? $t('cliInstances.loggedIn') : $t('cliInstances.loggedOut')"
-            />
-          </TableCell>
-          <TableCell class="max-w-0">
-            <!-- Same chip as the desktop table on purpose: the number comes from ONE sequence
-                 spanning all three instance families, so it must look identical everywhere or
-                 that guarantee stops being obvious. -->
-            <div class="flex min-w-0 items-center gap-1.5 font-medium">
-              <InstanceNumber :num="inst.num" />
-              <!-- Capped like the desktop table's name, and elided by the CSS (min-w-0 +
-                   truncate) only when the column is truly out of room, with the full name on
-                   hover either way. Native title, not IconTooltip: this cell has no other hover
-                   to extend, and the row above it already reveals its path this way. -->
-              <span
-                class="min-w-0 truncate"
-                :title="nameTitle(inst)"
-                @pointerenter="noteNameClip($event, inst)"
-              >{{ shortDisplayName(inst.name, nameMax) }}</span>
+      <InstanceTable
+        :columns="columns"
+        :indicator-for="indicatorFor"
+        :skeleton="loading && visibleRows.length === 0"
+        :skeleton-rows="2"
+        :empty="emptyState"
+        @sort="toggleSort"
+      >
+        <TableBody v-if="visibleRows.length > 0">
+          <InstanceRow v-for="inst in visibleRows" :key="inst.id" :columns="columns" :row="rowModel(inst)">
+            <template #name-extra>
               <!-- Linked to a desktop instance: the same account, also shown on that row in the
                    Instances tab. The chip names the row by its number; the hover says the rest. -->
               <IconTooltip
                 v-if="linkedDesktop(inst)"
-                :label="
-                  $t('cliInstances.linkedTo', {
-                    num: linkedDesktop(inst)!.num,
-                    name: displayName(linkedDesktop(inst)!),
-                  })
-                "
+                :label="linkedLabel(inst)"
                 :description="$t('cliInstances.linkedToHint')"
               >
-                <span
-                  class="inline-flex items-center gap-0.5 text-muted-foreground"
-                  :aria-label="
-                    $t('cliInstances.linkedTo', {
-                      num: linkedDesktop(inst)!.num,
-                      name: displayName(linkedDesktop(inst)!),
-                    })
-                  "
-                >
+                <span class="inline-flex items-center gap-0.5 text-muted-foreground" :aria-label="linkedLabel(inst)">
                   <Monitor class="size-3.5" />
                   <InstanceNumber :num="linkedDesktop(inst)!.num" />
                 </span>
@@ -950,10 +801,7 @@ onUnmounted(() => {
                   })
                 "
               >
-                <span
-                  class="inline-flex items-center"
-                  :aria-label="$t('cliInstances.movedAwayLabel')"
-                >
+                <span class="inline-flex items-center" :aria-label="$t('cliInstances.movedAwayLabel')">
                   <ArrowRightLeft class="size-3.5 text-muted-foreground" />
                 </span>
               </IconTooltip>
@@ -967,163 +815,68 @@ onUnmounted(() => {
                   <CreditCard class="size-3.5 text-warning" />
                 </span>
               </IconTooltip>
-            </div>
-          </TableCell>
-          <TableCell v-if="showAccountColumn">
-            <Badge v-if="inst.associatedAccountLabel" variant="outline">
-              {{ inst.associatedAccountLabel }}
-            </Badge>
-            <span v-else class="text-xs text-muted-foreground">{{ $t('cliInstances.noAccount') }}</span>
-          </TableCell>
-          <TableCell v-if="!usageMode" class="max-w-[16rem]">
-            <span class="mono block truncate text-3xs text-muted-foreground">{{ inst.configDir }}</span>
-          </TableCell>
-          <template v-else>
-            <TableCell>
-              <UsageBar
-                v-if="sessionResetFor(inst)"
-                :fill-pct="sessionRemaining(inst)"
-                variant="neutral"
-                :label="sessionResetFor(inst) ?? ''"
-                :aria-label="$t('instances.resetsIn', { when: sessionResetFor(inst) })"
-              />
-              <span v-else class="text-muted-foreground">—</span>
-            </TableCell>
-            <TableCell>
-              <CopyResetDate v-if="weeklyResetFor(inst)" :limit="usageFor(inst)?.weekAll">
-                <UsageBar
-                  :fill-pct="weeklyRemaining(inst)"
-                  :variant="weeklyWait(inst)"
-                  :label="weeklyResetFor(inst) ?? ''"
-                  :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
-                />
-              </CopyResetDate>
-              <span v-else class="text-muted-foreground">—</span>
-            </TableCell>
-          </template>
-          <TableCell v-if="usageMode">
-            <UsageBadge
-              scope="session"
-              :snapshot="usageFor(inst)"
-              :checking="isChecking(usageKey(inst)) || isBusy(inst)"
-              :usage-key="usageKey(inst)"
-              @check="onCheckUsageFromPopover(inst)"
-            />
-          </TableCell>
-          <TableCell>
-            <UsageBadge
-              :snapshot="usageFor(inst)"
-              :checking="isChecking(usageKey(inst)) || isBusy(inst)"
-              :usage-key="usageKey(inst)"
-              @check="onCheckUsageFromPopover(inst)"
-            />
-          </TableCell>
-          <TableCell>
-            <Badge v-if="planFor(inst)" variant="outline">{{ planFor(inst) }}</Badge>
-            <span v-else class="text-xs text-muted-foreground">—</span>
-          </TableCell>
-          <TableCell>
-            <IconTooltip
-              v-if="inst.tokens"
-              :label="$t('cliInstances.tokensLabel', { total: inst.tokens.total.toLocaleString() })"
-              :description="
-                $t('cliInstances.tokensBreakdown', {
-                  output: formatTokens(inst.tokens.output),
-                  input: formatTokens(inst.tokens.input),
-                  cacheRead: formatTokens(inst.tokens.cacheRead),
-                  cacheWrite: formatTokens(inst.tokens.cacheWrite),
-                })
-              "
-              :detail="$t('cliInstances.tokensSource')"
-            >
-              <span class="font-medium tabular-nums">{{ formatTokens(inst.tokens.total) }}</span>
-            </IconTooltip>
-            <span v-else class="text-xs text-muted-foreground">—</span>
-          </TableCell>
-          <TableCell>
-            <div class="flex items-center justify-end gap-1">
-              <DropdownMenu>
-                <DropdownMenuTrigger as-child>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    :aria-label="$t('cliInstances.moreActions')"
-                    :title="$t('cliInstances.moreActions')"
-                  >
-                    <EllipsisVertical />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" class="max-w-56">
-                  <!-- Which instance this menu belongs to, by number, then its quick actions as
-                       icons — the same header on every table's kebab. -->
-                  <InstanceMenuHeader
-                    :num="inst.num"
-                    :name="inst.name"
-                    :actions="menuActionsFor(inst)"
-                  />
-                  <!-- Launch lives here, not on the row (owner, 2026-10-01: "I kinda never need to
-                       launch the cli"). -->
-                  <DropdownMenuItem :disabled="isBusy(inst)" @click="onLaunch(inst)">
-                    <Play /> {{ $t('cliInstances.launch') }}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem :disabled="isBusy(inst)" @click="onLogin(inst)">
-                    <LogIn /> {{ $t('cliInstances.login') }}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem :disabled="isBusy(inst)" @click="openLinkDialog(inst)">
-                    <Monitor /> {{ $t('cliInstances.linkDesktop') }}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    v-if="linkedDesktop(inst)"
-                    :disabled="isBusy(inst)"
-                    @click="onUnlink(inst)"
-                  >
-                    <Unlink /> {{ $t('instances.unlinkCli') }}
-                  </DropdownMenuItem>
-                  <!-- "Associate account" points a CLI instance at a LEGACY pasted credential.
-                       With none saved (the norm now — accounts come from signing in instances),
-                       the dialog is an empty dead end, so hide it until such a credential exists.
-                       "Link to desktop instance" above is the primary path either way. -->
-                  <DropdownMenuItem
-                    v-if="associateAccountOptions.length > 0"
-                    :disabled="isBusy(inst)"
-                    @click="openAssociateDialog(inst)"
-                  >
-                    <Link2 /> {{ $t('cliInstances.associate') }}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    v-if="inst.loggedIn"
-                    :disabled="isBusy(inst)"
-                    @click="openLimitReset(inst)"
-                  >
-                    <RotateCcw /> {{ $t('cliInstances.limitReset') }}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    v-if="inst.loggedIn"
-                    :disabled="isBusy(inst) || (inst.liveSessions ?? 0) > 0"
-                    @click="openMoveOut(inst)"
-                  >
-                    <ArrowRightLeft /> {{ $t('cliInstances.moveOut') }}
-                  </DropdownMenuItem>
-                  <!-- A signed-out account keeps its last reading, dimmed; this blanks it until
-                       the next reading (owner, 2026-10-02). -->
-                  <DropdownMenuItem :disabled="!usageFor(inst)" @click="onClearUsage(inst)">
-                    <Eraser /> {{ $t('cliInstances.clearUsage') }}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    variant="destructive"
-                    :disabled="isBusy(inst)"
-                    @click="openDeleteDialog(inst)"
-                  >
-                    <Trash2 /> {{ $t('cliInstances.delete') }}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          </TableCell>
-        </TableRow>
-      </TableBody>
-    </Table>
+            </template>
+            <template #menu>
+              <!-- Launch lives here, not on the row (owner, 2026-10-01: "I kinda never need to
+                   launch the cli"). -->
+              <DropdownMenuItem :disabled="isBusy(inst)" @click="onLaunch(inst)">
+                <Play /> {{ $t('cliInstances.launch') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem :disabled="isBusy(inst)" @click="onLogin(inst)">
+                <LogIn /> {{ $t('cliInstances.login') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem :disabled="isBusy(inst)" @click="openLinkDialog(inst)">
+                <Monitor /> {{ $t('cliInstances.linkDesktop') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                v-if="linkedDesktop(inst)"
+                :disabled="isBusy(inst)"
+                @click="onUnlink(inst)"
+              >
+                <Unlink /> {{ $t('instances.unlinkCli') }}
+              </DropdownMenuItem>
+              <!-- "Associate account" points a CLI instance at a LEGACY pasted credential.
+                   With none saved (the norm now — accounts come from signing in instances),
+                   the dialog is an empty dead end, so hide it until such a credential exists.
+                   "Link to desktop instance" above is the primary path either way. -->
+              <DropdownMenuItem
+                v-if="associateAccountOptions.length > 0"
+                :disabled="isBusy(inst)"
+                @click="openAssociateDialog(inst)"
+              >
+                <Link2 /> {{ $t('cliInstances.associate') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                v-if="inst.loggedIn"
+                :disabled="isBusy(inst)"
+                @click="openLimitReset(inst)"
+              >
+                <RotateCcw /> {{ $t('cliInstances.limitReset') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                v-if="inst.loggedIn"
+                :disabled="isBusy(inst) || (inst.liveSessions ?? 0) > 0"
+                @click="openMoveOut(inst)"
+              >
+                <ArrowRightLeft /> {{ $t('cliInstances.moveOut') }}
+              </DropdownMenuItem>
+              <!-- A signed-out account keeps its last reading, dimmed; this blanks it until
+                   the next reading (owner, 2026-10-02). -->
+              <DropdownMenuItem :disabled="!usageFor(inst)" @click="onClearUsage(inst)">
+                <Eraser /> {{ $t('cliInstances.clearUsage') }}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                :disabled="isBusy(inst)"
+                @click="openDeleteDialog(inst)"
+              >
+                <Trash2 /> {{ $t('cliInstances.delete') }}
+              </DropdownMenuItem>
+            </template>
+          </InstanceRow>
+        </TableBody>
+      </InstanceTable>
     </div>
 
     <CliInstanceNameDialog
