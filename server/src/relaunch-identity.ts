@@ -13,9 +13,11 @@
  * config resolves, and one in the machine-wide dir is how the wrong store gets picked. A flag on
  * the command line is the one channel WMI already carries (the port and the relaunch flag use it).
  *
- * The flag is ALWAYS present on a successor, `{}` for a primary. That is what lets a successor tell
- * "my predecessor had nothing to hand over" from "my predecessor never handed me anything" and
- * refuse in the second case, rather than guess the machine store.
+ * A daemon on this code always passes the flag to its successor, `{}` for a primary. An ABSENT flag
+ * therefore means the predecessor predates the handoff (every installed daemon older than the
+ * handoff spawns its successor without it), and such a successor must still start, exactly as it
+ * did before the handoff existed: refusing it (commit 1a239fb) meant no installed daemon could
+ * ever relaunch onto the new code. Only a flag that is PRESENT but unreadable is refused.
  *
  * Imports no config, on purpose: this runs (relaunch-identity-boot.ts, the first import of
  * index.ts) before config.ts resolves the store from the environment.
@@ -83,8 +85,10 @@ export type IdentityResult = { ok: true; applied: number } | { ok: false; reason
 
 /**
  * Successor side, before config resolves: put the predecessor's identity into `env`. Not a
- * successor: nothing to do. A successor with no handoff, or one that cannot be read, is refused:
- * starting anyway would fall back to the machine's real store, which is exactly the damage above.
+ * successor: nothing to do. A successor with no handoff flag comes from a predecessor that predates
+ * the handoff: nothing is applied and it starts as it always did. A flag that is present but
+ * cannot be read (not JSON, not an object, no value) is refused: starting anyway would guess the
+ * machine's real store, which is exactly the damage above.
  */
 export function applyRelaunchIdentity(
   argv: readonly string[] = process.argv,
@@ -92,11 +96,8 @@ export function applyRelaunchIdentity(
 ): IdentityResult {
   if (!isRelaunchSuccessor(env, argv)) return { ok: true, applied: 0 }
   const at = argv.indexOf(HANDOFF_FLAG)
-  if (at === -1 || argv[at + 1] === undefined)
-    return {
-      ok: false,
-      reason: `relaunch successor started without its predecessor's identity (${HANDOFF_FLAG})`,
-    }
+  if (at === -1) return { ok: true, applied: 0 }
+  if (argv[at + 1] === undefined) return { ok: false, reason: `${HANDOFF_FLAG} has no value` }
   let parsed: unknown
   try {
     parsed = JSON.parse(argv[at + 1] as string)

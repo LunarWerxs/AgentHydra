@@ -6,7 +6,7 @@ import { applyRelaunchIdentity } from './relaunch-identity'
 const identity = applyRelaunchIdentity()
 if (!identity.ok) {
   console.error(
-    `[agenthydra] refusing to start: ${identity.reason}. Starting would open the machine's own store instead of the predecessor's.`,
+    `[agenthydra] refusing to start: ${identity.reason}. Its identity cannot be read, so starting would guess the machine's own store instead of the predecessor's.`,
   )
   process.exit(1)
 }

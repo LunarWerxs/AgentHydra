@@ -113,8 +113,23 @@ describe('relaunch successor identity', () => {
     expect(env).toEqual({})
   })
 
-  it('a successor that was never handed its identity refuses to start', () => {
-    const result = applyRelaunchIdentity(['bun', 'src/index.ts', '--relaunch'], {})
-    expect(result.ok).toBe(false)
+  // Regression: 1a239fb refused this, so no daemon older than the handoff (they spawn the
+  // successor without the flag) could ever relaunch onto the new code.
+  it('a successor from a predecessor that predates the handoff starts with nothing applied', () => {
+    const env: NodeJS.ProcessEnv = {}
+    expect(applyRelaunchIdentity(['bun', 'src/index.ts', '--relaunch'], env)).toEqual({
+      ok: true,
+      applied: 0,
+    })
+    expect(env).toEqual({})
+  })
+
+  it('a handoff flag that is present but malformed is still refused', () => {
+    const at = (value: string[]) =>
+      applyRelaunchIdentity(['bun', 'src/index.ts', '--relaunch', '--handoff-env', ...value], {})
+    expect(at(['{not json']).ok).toBe(false)
+    expect(at(['[1]']).ok).toBe(false)
+    expect(at(['"str"']).ok).toBe(false)
+    expect(at([]).ok).toBe(false)
   })
 })
