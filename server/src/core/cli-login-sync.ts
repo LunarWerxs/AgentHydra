@@ -1147,6 +1147,75 @@ async function pass(): Promise<LoginSyncPassResult> {
 }
 
 /** What the Login sync dialog shows. Never a token, key or login. */
+function makeCliLogin(
+  i: ReturnType<typeof listCliInstances>[number],
+  slot: string,
+  remote: any,
+  excluded: Set<string>,
+  state: any,
+): CliLoginSyncStatus['logins'][number] {
+  const file = !!readText(credPath(i.configDir))
+  const hollow = file && !hasOwnCliLogin(i.configDir)
+  const fed = hollow && !!i.associatedDesktopDir
+  const signedOut = (hollow && !fed) || (!file && !!remote?.signedOut)
+  return {
+    id: i.id,
+    kind: 'cli',
+    num: i.num ?? null,
+    name: i.name,
+    here: i.loggedIn || file,
+    inStore: !!remote,
+    excluded: excluded.has(i.id),
+    inSync:
+      file && !hollow && !!remote && !remote.signedOut && state[slot]?.version === remote.version,
+    problem: null,
+    note: fed ? 'fed' : signedOut ? 'signedOut' : cliWaiting.has(i.id) ? 'waiting' : null,
+  }
+}
+
+function makeDesktopLogin(
+  p: ReturnType<typeof listDesktopProfiles>[number],
+  remote: any,
+  excluded: Set<string>,
+  state: any,
+): CliLoginSyncStatus['logins'][number] {
+  return {
+    id: p.uuid!,
+    kind: 'desktop',
+    num: p.num,
+    name: p.name,
+    here: true,
+    inStore: !!remote,
+    excluded: excluded.has(p.uuid!),
+    inSync: !!remote && state[p.uuid!]?.version === remote.version,
+    problem: null,
+    note: desktopNotes.own.has(p.uuid!)
+      ? 'own'
+      : desktopNotes.waiting.has(p.uuid!)
+        ? 'waiting'
+        : null,
+  }
+}
+
+function makeRemoteLogin(
+  id: string,
+  remote: any,
+  excluded: Set<string>,
+): CliLoginSyncStatus['logins'][number] {
+  return {
+    id,
+    kind: remote.kind === 'desktop' ? 'desktop' : 'cli',
+    num: remote.num,
+    name: remote.name ?? id,
+    here: false,
+    inStore: true,
+    excluded: excluded.has(id),
+    inSync: false,
+    problem: null,
+    note: desktopNotes.waiting.has(id) ? 'waiting' : null,
+  }
+}
+
 export function loginSyncStatus(): CliLoginSyncStatus {
   const c = readConfig()
   if (!c)
@@ -1167,73 +1236,26 @@ export function loginSyncStatus(): CliLoginSyncStatus {
   const excluded = new Set(c.excluded)
   const logins: CliLoginSyncStatus['logins'] = []
   const seen = new Set<string>()
+
   for (const i of listCliInstances()) {
-    // Its row: its own, or its account's row from another PC (one row per account).
     const slot = lastSlots.get(i.id) ?? i.id
     seen.add(i.id)
     seen.add(slot)
     const remote = lastStore.get(slot)
-    const file = !!readText(credPath(i.configDir))
-    // A credential file with no refresh token: a login it takes from its desktop instance
-    // (desktop-cli-feed.ts) by design, the desktop login being the one that syncs; else one whose
-    // tokens the CLI emptied when Anthropic ended it, waiting for a new sign-in.
-    const hollow = file && !hasOwnCliLogin(i.configDir)
-    const fed = hollow && !!i.associatedDesktopDir
-    const signedOut = (hollow && !fed) || (!file && !!remote?.signedOut)
-    logins.push({
-      id: i.id,
-      kind: 'cli',
-      num: i.num ?? null,
-      name: i.name,
-      here: i.loggedIn || file,
-      inStore: !!remote,
-      excluded: excluded.has(i.id),
-      inSync:
-        file &&
-        !hollow &&
-        !!remote &&
-        !remote.signedOut &&
-        c.state[slot]?.version === remote.version,
-      problem: null,
-      note: fed ? 'fed' : signedOut ? 'signedOut' : cliWaiting.has(i.id) ? 'waiting' : null,
-    })
+    logins.push(makeCliLogin(i, slot, remote, excluded, c.state))
   }
-  // Desktop profiles signed in here, by account (desktop-login-sync.ts).
+
   for (const p of listDesktopProfiles()) {
     if (!p.uuid || seen.has(p.uuid)) continue
     seen.add(p.uuid)
     const remote = lastStore.get(p.uuid)
-    logins.push({
-      id: p.uuid,
-      kind: 'desktop',
-      num: p.num,
-      name: p.name,
-      here: true,
-      inStore: !!remote,
-      excluded: excluded.has(p.uuid),
-      inSync: !!remote && c.state[p.uuid]?.version === remote.version,
-      problem: null,
-      note: desktopNotes.own.has(p.uuid)
-        ? 'own'
-        : desktopNotes.waiting.has(p.uuid)
-          ? 'waiting'
-          : null,
-    })
+    logins.push(makeDesktopLogin(p, remote, excluded, c.state))
   }
+
   for (const [id, remote] of lastStore)
     if (!seen.has(id) && !lastHidden.has(id) && !remote.signedOut)
-      logins.push({
-        id,
-        kind: remote.kind === 'desktop' ? 'desktop' : 'cli',
-        num: remote.num,
-        name: remote.name ?? id,
-        here: false,
-        inStore: true,
-        excluded: excluded.has(id),
-        inSync: false,
-        problem: null,
-        note: desktopNotes.waiting.has(id) ? 'waiting' : null,
-      })
+      logins.push(makeRemoteLogin(id, remote, excluded))
+
   let host: string | null = null
   try {
     host = new URL(c.url).host
