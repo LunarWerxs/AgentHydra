@@ -7,21 +7,50 @@ import { Database } from 'bun:sqlite'
 import { createHash, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 
-/** D1's prepare/bind/first/all/run over bun:sqlite: the Worker's storage, nothing more. */
-function d1(db: Database) {
+type Arg = string | number
+type Result = { results: any[]; meta: { changes: number; rows_read: number } }
+
+/**
+ * D1's prepare/bind/first/all/run/batch over bun:sqlite: the Worker's storage, nothing more.
+ * `meta.rows_read` is the rows a statement returned or changed, which for the Worker's indexed or
+ * keyed queries is the rows it looked at; `rowsRead` totals it since the last `resetRowsRead()`.
+ */
+export function d1(db: Database) {
+  let rowsRead = 0
+  const exec = (sql: string, args: Arg[]): Result => {
+    const returns = /^\s*(SELECT|PRAGMA)/i.test(sql) || /\bRETURNING\b/i.test(sql)
+    if (returns) {
+      const results = db.query(sql).all(...args) as any[]
+      rowsRead += results.length
+      return { results, meta: { changes: 0, rows_read: results.length } }
+    }
+    const changes = db.query(sql).run(...args).changes
+    rowsRead += changes
+    return { results: [], meta: { changes, rows_read: changes } }
+  }
+  const prepare = (sql: string) => {
+    let args: Arg[] = []
+    const stmt = {
+      bind(...a: Arg[]) {
+        args = a
+        return stmt
+      },
+      run: async () => exec(sql, args),
+      all: async () => exec(sql, args),
+      first: async () => exec(sql, args).results[0] ?? null,
+      exec: () => exec(sql, args),
+    }
+    return stmt
+  }
   return {
-    prepare(sql: string) {
-      let args: Array<string | number> = []
-      const stmt = {
-        bind(...a: Array<string | number>) {
-          args = a
-          return stmt
-        },
-        first: async () => db.query(sql).get(...args) ?? null,
-        all: async () => ({ results: db.query(sql).all(...args) }),
-        run: async () => ({ meta: { changes: db.query(sql).run(...args).changes } }),
-      }
-      return stmt
+    prepare,
+    /** All statements in one transaction, rolled back together if one throws. */
+    async batch(stmts: Array<ReturnType<typeof prepare>>) {
+      return db.transaction(() => stmts.map((s) => s.exec()))()
+    },
+    rowsRead: () => rowsRead,
+    resetRowsRead: () => {
+      rowsRead = 0
     },
   }
 }
@@ -31,8 +60,10 @@ const worker = (
   await import(join(import.meta.dir, '..', '..', 'cloud', 'login-sync-worker', 'worker.js'))
 ).default as { fetch: (r: Request, env: unknown) => Promise<Response> }
 /** The Worker's bindings; a test may set CHAT_STORE_MB and must delete it again. */
+/** The store's D1, for counting the rows a call reads. */
+export const storeDb = d1(new Database(':memory:'))
 export const env: { DB: unknown; TOKEN_SHA256: string; CHAT_STORE_MB?: string } = {
-  DB: d1(new Database(':memory:')),
+  DB: storeDb,
   TOKEN_SHA256: createHash('sha256').update(token).digest('hex'),
 }
 const server = Bun.serve({ port: 0, fetch: (req) => worker.fetch(req, env) })

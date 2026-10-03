@@ -1,270 +1,160 @@
-// server/tests/login-sync-changes-store.test.ts — the changes feed of the real login sync Worker.
+// server/tests/login-sync-changes-store.test.ts — the changes feed of the real login sync Worker:
+// the store rev, the tombstones and GET /v1/changes. Rows made here are removed again, because the
+// store is one per test process.
 
-import { expect, test } from 'bun:test'
-import { base, env, store } from './login-sync-store'
+import { afterAll, expect, test } from 'bun:test'
+import { base, store, storeDb, token } from './login-sync-store'
 
 const newId = () => crypto.randomUUID()
+const made = {
+  logins: new Map<string, number>(),
+  chats: new Map<string, number>(),
+  queues: [] as string[],
+}
 
-test('a write after the cursor shows up exactly once in /v1/changes', async () => {
-  const id = newId()
-  // Get the current rev from a list route.
-  let cursor = (await store('GET', '/v1/logins')).json.logins
-  const listHeader = await fetch(`${base}/v1/logins`, {
-    headers: { authorization: `Bearer e` }, // invalid token to see if header is set
-  }).then((r) => r.headers.get('x-store-rev'))
-  expect(listHeader).toBeNull() // No token, no header.
+afterAll(async () => {
+  for (const [id, v] of made.logins) await store('DELETE', `/v1/logins/${id}?version=${v}`)
+  for (const [id, v] of made.chats) await store('DELETE', `/v1/chats/${id}?version=${v}`)
+  for (const pc of made.queues)
+    await storeDb.prepare('DELETE FROM queues WHERE pc = ?').bind(pc).run()
+})
 
-  const withToken = await fetch(`${base}/v1/logins`, {
-    headers: { authorization: `Bearer ` + (await import('./login-sync-store')).token },
-  }).then((r) => r.headers.get('x-store-rev'))
-  expect(typeof withToken).toBe('string')
-  const cursorRev = Number(withToken)
-  expect(Number.isInteger(cursorRev)).toBe(true)
+/** PUT a new row and remember it for the clean-up. */
+async function put(kind: 'logins' | 'chats' | 'queues', id = newId(), meta: object = {}) {
+  const r = await store('PUT', `/v1/${kind}/${id}`, { version: 0, blob: 'b', meta })
+  expect(r.json).toEqual({ version: 1 })
+  if (kind === 'queues') made.queues.push(id)
+  else made[kind].set(id, 1)
+  return id
+}
 
-  // Write a new login.
+/** The store rev as a list route reports it. */
+async function listRev(kind = 'logins') {
+  const r = await fetch(`${base}/v1/${kind}`, { headers: { authorization: `Bearer ${token}` } })
+  return Number(r.headers.get('x-store-rev'))
+}
+
+const changes = async (since: number) => (await store('GET', `/v1/changes?since=${since}`)).json
+
+test('a write after the cursor shows up exactly once, with no blob; then the feed is idle', async () => {
+  const cursor = await listRev()
+  const login = await put('logins', undefined, { pc: 'a' })
+  const queue = await put('queues')
+  const chat = await put('chats', undefined, { s: newId() })
+
+  const c = await changes(cursor)
+  expect(c.rev).toBe(cursor + 3)
+  expect(c.logins).toEqual([
+    { id: login, version: 1, meta: { pc: 'a' }, updatedAt: expect.any(Number) },
+  ])
+  expect(c.queues.map((r: { pc: string }) => r.pc)).toEqual([queue])
+  expect(c.chats.map((r: { id: string }) => r.id)).toEqual([chat])
+  expect(c.gone).toEqual([])
+  expect(JSON.stringify(c)).not.toContain('"blob"')
+
+  expect(await changes(c.rev)).toEqual({ rev: c.rev, logins: [], queues: [], chats: [], gone: [] })
+})
+
+test('an update shows up once under its new version', async () => {
+  const id = await put('chats', undefined, { s: newId() })
+  const cursor = await listRev('chats')
   expect(
-    (await store('PUT', `/v1/logins/${id}`, { version: 0, blob: 'secret', meta: { pc: 'a' } }))
-      .json,
-  ).toEqual({ version: 1 })
-
-  // The changes feed shows it.
-  const changes = (await store('GET', `/v1/changes?since=${cursorRev}`)).json
-  expect(changes.logins).toHaveLength(1)
-  expect(changes.logins[0].id).toBe(id)
-  expect(changes.logins[0].version).toBe(1)
-  expect(changes.logins[0].meta).toEqual({ pc: 'a' })
-
-  // A second call with the new cursor shows nothing.
-  const nextChanges = (await store('GET', `/v1/changes?since=${changes.rev}`)).json
-  expect(nextChanges).toEqual({ rev: changes.rev, logins: [], queues: [], chats: [], gone: [] })
+    (await store('PUT', `/v1/chats/${id}`, { version: 1, blob: 'x', meta: { n: 2 } })).json,
+  ).toEqual({ version: 2 })
+  made.chats.set(id, 2)
+  const c = await changes(cursor)
+  expect(c.chats).toEqual([{ id, version: 2, meta: { n: 2 }, updatedAt: expect.any(Number) }])
+  expect(c.rev).toBe(cursor + 1)
 })
 
-test('a queue or chat write shows up in /v1/changes', async () => {
-  const pcId = newId()
-  const chatId = newId()
-  const cursor = (await store('GET', '/v1/queues')).json.queues
-  const queueHeader = await fetch(`${base}/v1/queues`, {
-    headers: { authorization: `Bearer ` + (await import('./login-sync-store')).token },
-  }).then((r) => r.headers.get('x-store-rev'))
-  const cursorRev = Number(queueHeader)
-
-  // Write a queue and a chat.
+test('a delete arrives as gone, and a re-created id is not gone', async () => {
+  const cursor = await listRev()
+  const dead = await put('logins')
+  const chat = await put('chats', undefined, { s: newId() })
+  const back = await put('logins')
+  expect((await store('DELETE', `/v1/logins/${dead}?version=1`)).json).toEqual({ ok: true })
+  expect((await store('DELETE', `/v1/chats/${chat}?version=1`)).json).toEqual({ ok: true })
+  made.logins.delete(dead)
+  made.chats.delete(chat)
+  expect((await store('DELETE', `/v1/logins/${back}?version=1`)).json).toEqual({ ok: true })
   expect(
-    (await store('PUT', `/v1/queues/${pcId}`, { version: 0, blob: 'q', meta: { count: 1 } })).json,
+    (await store('PUT', `/v1/logins/${back}`, { version: 0, blob: 'again', meta: {} })).json,
   ).toEqual({ version: 1 })
-  expect(
-    (await store('PUT', `/v1/chats/${chatId}`, { version: 0, blob: 'c', meta: { s: newId() } }))
-      .json,
-  ).toEqual({ version: 1 })
+  made.logins.set(back, 1)
 
-  // Changes shows both.
-  const changes = (await store('GET', `/v1/changes?since=${cursorRev}`)).json
-  expect(changes.queues).toHaveLength(1)
-  expect(changes.queues[0].pc).toBe(pcId)
-  expect(changes.chats).toHaveLength(1)
-  expect(changes.chats[0].id).toBe(chatId)
+  const c = await changes(cursor)
+  expect(c.gone).toEqual(
+    expect.arrayContaining([
+      { table: 'logins', id: dead },
+      { table: 'chats', id: chat },
+    ]),
+  )
+  expect(c.gone).not.toContainEqual({ table: 'logins', id: back })
+  expect(c.logins.map((r: { id: string }) => r.id)).toContain(back)
+  expect(c.logins.map((r: { id: string }) => r.id)).not.toContain(dead)
 })
 
-test('a delete arrives as a tombstone in /v1/changes', async () => {
-  const id = newId()
-  const cursor = Number(
-    await fetch(`${base}/v1/logins`, {
-      headers: { authorization: `Bearer ` + (await import('./login-sync-store')).token },
-    }).then((r) => r.headers.get('x-store-rev')),
-  )
-
-  // Write and delete a login.
-  expect(
-    (await store('PUT', `/v1/logins/${id}`, { version: 0, blob: 'secret', meta: {} })).json,
-  ).toEqual({ version: 1 })
-  expect((await store('DELETE', `/v1/logins/${id}?version=1`)).json).toEqual({ ok: true })
-
-  // Changes shows the tombstone.
-  const changes = (await store('GET', `/v1/changes?since=${cursor}`)).json
-  expect(changes.gone).toContainEqual({ table: 'logins', id })
+test('a refused write changes nothing, rev included', async () => {
+  const id = await put('logins')
+  const rev = await listRev()
+  const refused = [
+    await store('PUT', `/v1/logins/${id}`, { version: 0, blob: 'other', meta: {} }),
+    await store('PUT', `/v1/logins/${id}`, { version: 7, blob: 'other', meta: {} }),
+    await store('PUT', `/v1/logins/${newId()}`, { version: 3, blob: 'other', meta: {} }),
+    await store('DELETE', `/v1/logins/${id}?version=9`),
+    await store('DELETE', `/v1/chats/${newId()}?version=1`),
+    await store('PUT', `/v1/logins/${id}`, { version: 1, blob: '', meta: {} }),
+  ]
+  expect(refused.map((r) => r.status)).toEqual([409, 409, 409, 409, 409, 400])
+  expect(await listRev()).toBe(rev)
+  expect(await changes(rev)).toEqual({ rev, logins: [], queues: [], chats: [], gone: [] })
 })
 
-test('a 409 does not increment the store rev', async () => {
-  const id = newId()
-  const cursor = Number(
-    await fetch(`${base}/v1/logins`, {
-      headers: { authorization: `Bearer ` + (await import('./login-sync-store')).token },
-    }).then((r) => r.headers.get('x-store-rev')),
-  )
-
-  // Write a login.
-  expect(
-    (await store('PUT', `/v1/logins/${id}`, { version: 0, blob: 'secret', meta: {} })).json,
-  ).toEqual({ version: 1 })
-
-  // Try to write with the wrong version. This should return 409 and not increment rev.
-  const conflict = await store('PUT', `/v1/logins/${id}`, { version: 0, blob: 'other', meta: {} })
-  expect(conflict.status).toBe(409)
-  expect(conflict.json.current.version).toBe(1)
-
-  // Changes since the cursor should show only the successful write, not the failed one.
-  const changes = (await store('GET', `/v1/changes?since=${cursor}`)).json
-  expect(changes.logins).toHaveLength(1)
-  expect(changes.logins[0].id).toBe(id)
-  expect(changes.logins[0].version).toBe(1)
+test('a cursor from the future (the store was reset) gets full: true', async () => {
+  const rev = await listRev()
+  expect(await changes(rev + 1000)).toEqual({ rev, full: true })
 })
 
-test('a cursor below floor returns {full: true}', async () => {
-  // This tests the contract: if since < floor, return full: true.
-  // For simplicity, we'll assume floor is 0 initially, so any negative cursor should trigger it.
-  // Or we can manually set up a scenario where we prune old tombstones.
-  // For now, let's test with a cursor way in the future (> rev).
-  const cursor = Number(
-    await fetch(`${base}/v1/logins`, {
-      headers: { authorization: `Bearer ` + (await import('./login-sync-store')).token },
-    }).then((r) => r.headers.get('x-store-rev')),
+test('the list header gives a cursor that misses nothing', async () => {
+  const before = await listRev()
+  const first = await put('logins')
+  const cursor = await listRev()
+  const second = await put('logins')
+  expect(cursor).toBe(before + 1)
+  const ids = (await changes(cursor)).logins.map((r: { id: string }) => r.id)
+  expect(ids).toEqual([second])
+  expect((await changes(before)).logins.map((r: { id: string }) => r.id).sort()).toEqual(
+    [first, second].sort(),
   )
-
-  // A cursor in the future should return full: true.
-  const changes = (await store('GET', `/v1/changes?since=${cursor + 1000}`)).json
-  expect(changes.full).toBe(true)
-  expect(changes.rev).toBe(cursor)
 })
 
-test('the list header provides a cursor that misses nothing', async () => {
-  const id1 = newId()
-  const id2 = newId()
-
-  // Get initial cursor from header.
-  let cursor = Number(
-    await fetch(`${base}/v1/logins`, {
-      headers: { authorization: `Bearer ` + (await import('./login-sync-store')).token },
-    }).then((r) => r.headers.get('x-store-rev')),
-  )
-
-  // Write two logins.
-  await store('PUT', `/v1/logins/${id1}`, { version: 0, blob: 'a', meta: {} })
-  await store('PUT', `/v1/logins/${id2}`, { version: 0, blob: 'b', meta: {} })
-
-  // Get the new cursor from the list header.
-  const newCursor = Number(
-    await fetch(`${base}/v1/logins`, {
-      headers: { authorization: `Bearer ` + (await import('./login-sync-store')).token },
-    }).then((r) => r.headers.get('x-store-rev')),
-  )
-  expect(newCursor).toBeGreaterThan(cursor)
-
-  // A changes call with the initial cursor should show both writes.
-  const changes = (await store('GET', `/v1/changes?since=${cursor}`)).json
-  const loginIds = changes.logins.map((l: { id: string }) => l.id).sort()
-  expect(loginIds).toContainEqual(id1)
-  expect(loginIds).toContainEqual(id2)
-
-  // A changes call with the new cursor should show nothing.
-  const nextChanges = (await store('GET', `/v1/changes?since=${newCursor}`)).json
-  expect(nextChanges.logins).toHaveLength(0)
+test('a bad since is a 400', async () => {
+  expect((await store('GET', '/v1/changes?since=nope')).status).toBe(400)
+  expect((await store('GET', '/v1/changes')).status).toBe(400)
 })
 
-test('bad since returns 400', async () => {
-  const result = await store('GET', '/v1/changes?since=not-a-number')
-  expect(result.status).toBe(400)
-  expect(result.json.error).toBe('bad since')
-})
+test('rows read: an idle changes call against one full set of list calls', async () => {
+  for (let i = 0; i < 10; i++) await put('logins')
+  for (let i = 0; i < 10; i++) await put('chats', undefined, { s: newId() })
+  for (let i = 0; i < 2; i++) await put('queues')
+  const cursor = await listRev()
 
-test('multiple tables in one changes call', async () => {
-  const loginId = newId()
-  const queuePc = newId()
-  const chatId = newId()
-  const cursor = Number(
-    await fetch(`${base}/v1/logins`, {
-      headers: { authorization: `Bearer ` + (await import('./login-sync-store')).token },
-    }).then((r) => r.headers.get('x-store-rev')),
-  )
-
-  // Write to all three tables.
-  await store('PUT', `/v1/logins/${loginId}`, { version: 0, blob: 'l', meta: {} })
-  await store('PUT', `/v1/queues/${queuePc}`, { version: 0, blob: 'q', meta: {} })
-  await store('PUT', `/v1/chats/${chatId}`, { version: 0, blob: 'c', meta: { s: newId() } })
-
-  // Changes should show all three.
-  const changes = (await store('GET', `/v1/changes?since=${cursor}`)).json
-  expect(changes.logins).toHaveLength(1)
-  expect(changes.queues).toHaveLength(1)
-  expect(changes.chats).toHaveLength(1)
-})
-
-test('changes does not include blobs', async () => {
-  const id = newId()
-  const cursor = Number(
-    await fetch(`${base}/v1/logins`, {
-      headers: { authorization: `Bearer ` + (await import('./login-sync-store')).token },
-    }).then((r) => r.headers.get('x-store-rev')),
-  )
-
-  // Write a login with a blob.
-  await store('PUT', `/v1/logins/${id}`, {
-    version: 0,
-    blob: 'secret-blob-content',
-    meta: { pc: 'a' },
+  storeDb.resetRowsRead()
+  expect(await changes(cursor)).toEqual({
+    rev: cursor,
+    logins: [],
+    queues: [],
+    chats: [],
+    gone: [],
   })
+  const idle = storeDb.rowsRead()
 
-  // Changes should not include the blob.
-  const changes = (await store('GET', `/v1/changes?since=${cursor}`)).json
-  expect(changes.logins[0].blob).toBeUndefined()
-})
+  storeDb.resetRowsRead()
+  for (const kind of ['logins', 'queues', 'chats']) await store('GET', `/v1/${kind}`)
+  const lists = storeDb.rowsRead()
 
-test('updating a login that was deleted clears its tombstone', async () => {
-  const id = newId()
-  const cursor = Number(
-    await fetch(`${base}/v1/logins`, {
-      headers: { authorization: `Bearer ` + (await import('./login-sync-store')).token },
-    }).then((r) => r.headers.get('x-store-rev')),
-  )
-
-  // Write, delete, and recreate a login.
-  await store('PUT', `/v1/logins/${id}`, { version: 0, blob: 'a', meta: {} })
-  await store('DELETE', `/v1/logins/${id}?version=1`)
-  await store('PUT', `/v1/logins/${id}`, { version: 0, blob: 'b', meta: {} })
-
-  // Changes should show the write but not the delete (tombstone was cleared).
-  const changes = (await store('GET', `/v1/changes?since=${cursor}`)).json
-  const gone = changes.gone.filter((g: { id: string }) => g.id === id)
-  // The tombstone from the delete was created, but it was cleared when we recreated the login.
-  // So we should see the final write, and either the tombstone is gone or there are multiple entries.
-  // Actually, looking at the implementation, when we recreate, we clear the tombstone with:
-  // await db.prepare('DELETE FROM tombstones WHERE table_name = ? AND id = ?').bind(t.table, id).run()
-  // So the gone list should not have the id.
-  expect(gone).toHaveLength(0)
-})
-
-test('row count measurements for the changes feed', async () => {
-  // Measurement 1: An idle /v1/changes call (when since == rev)
-  // This should read only the store_rev row (1 row total).
-  const cursor = Number(
-    await fetch(`${base}/v1/logins`, {
-      headers: { authorization: `Bearer ` + (await import('./login-sync-store')).token },
-    }).then((r) => r.headers.get('x-store-rev')),
-  )
-
-  // Call /v1/changes with since == rev. This should read only 1 row (store_rev).
-  const idleCall = (await store('GET', `/v1/changes?since=${cursor}`)).json
-  expect(idleCall).toEqual({ rev: cursor, logins: [], queues: [], chats: [], gone: [] })
-  // Idle /v1/changes reads: 1 row (store_rev)
-
-  // Measurement 2: A full set of list calls (GET /v1/logins, /v1/queues, /v1/chats)
-  // Each list call reads:
-  // - 1 row from store_rev (for the x-store-rev header)
-  // - N rows from the table (however many rows exist)
-  // Total: 3 (for store_rev) + total_rows_in_tables
-
-  await store('GET', '/v1/logins')
-  await store('GET', '/v1/queues')
-  await store('GET', '/v1/chats')
-
-  // Each list call reads:
-  // - 1 row for store_rev
-  // - loginsList.length rows from logins
-  // - queuesList.length rows from queues
-  // - chatsList.length rows from chats
-  // Total: 3 + loginsList.length + queuesList.length + chatsList.length rows
-
-  // For example, if there are 8 logins, 8 queues, and 8 chats:
-  // Total: 3 + 8 + 8 + 8 = 27 rows
-  // The improvement is that the old list routes would read 8 + 8 + 8 = 24 rows (no store_rev)
-  // But with idle /v1/changes, we only read 1 row, which is 24x fewer.
+  console.log(`rows_read: idle /v1/changes = ${idle}; one full set of list calls = ${lists}`)
+  expect(idle).toBe(1)
+  expect(lists).toBeGreaterThanOrEqual(22)
+  expect(idle).toBeLessThanOrEqual(lists * 0.05)
 })
