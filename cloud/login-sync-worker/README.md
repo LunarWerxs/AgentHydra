@@ -59,12 +59,18 @@ token, never the token.
 | `GET /v1/chats` | each synced desktop chat: id, version, meta (no blobs) |
 | `GET /v1/chats/:id` | one chat's encrypted blob (up to 256 KB) |
 | `PUT /v1/chats/:id` | `{version, blob, meta}`, written like a login (compare-and-swap on the version) |
-| `DELETE /v1/chats/:id?version=n` | removes the chat row and all its chunks when `n` is current, else 409 |
-| `PUT /v1/chats/:id/chunks/:seq` | `{blob, by}`: an append-only transcript piece (up to 1,048,576 characters), written once; 409 `{error:'taken', next}` if that seq exists |
+| `DELETE /v1/chats/:id?version=n` | removes the chat row when `n` is current, else 409; its transcript (the chunks under its session) goes too once no other row shares that session |
+| `PUT /v1/chats/:id/chunks/:seq` | `{blob, by}`: an append-only transcript piece (up to 1,048,576 characters), written once; 409 `{error:'taken', next}` if that seq exists; 507 `{error, used, room}` if it would take chats past their room |
 | `GET /v1/chats/:id/chunks?from=n` | `{chunks, next, more}`: chunks from seq `n` in order, one page of about 8,000,000 characters |
 
 The chat routes (desktop chat sync) need this Worker **redeployed** too: paste the new `worker.js` over
 the old one. Chats and chunks live in their own `chats` and `chat_chunks` tables.
+
+**Room for chats.** Transcripts take at most 400 MB of the database (a running total in
+`chat_usage`), because D1's free plan stops a whole database at 500 MB and the logins live in the same
+one: a full chat room never stops a login from syncing. AgentHydra removes a chat from the store a week
+after it was archived (each PC keeps its copy). On Workers Paid (10 GB per database) you can raise the
+room with an optional plain-text variable `CHAT_STORE_MB`.
 
 The queue routes (the "Share CliMayte queue" toggle in AgentHydra) need this Worker **redeployed
 once**: paste the new `worker.js` over the old one. Queues live in their own `queues` table, never in

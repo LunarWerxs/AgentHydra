@@ -1,7 +1,7 @@
 // server/tests/login-sync-chats-store.test.ts — the chat and chunk routes of the real login sync Worker.
 
 import { expect, test } from 'bun:test'
-import { base, store } from './login-sync-store'
+import { base, env, store } from './login-sync-store'
 
 const newId = () => crypto.randomUUID()
 const chunk = (id: string, seq: number, blob: string, by = 'pc-a') =>
@@ -73,14 +73,39 @@ test('caps: an oversize blob and a bad id are 400, a missing token is 401', asyn
   expect((await fetch(`${base}/v1/chats`)).status).toBe(401)
 })
 
-test('deleting a chat at its current version removes its chunks; a stale version removes nothing', async () => {
+test('deleting a chat at its current version removes its session’s chunks once no other row shares them', async () => {
+  // The transcript lives under the session (meta.s), and two rows can share one session.
   const id = newId()
-  await store('PUT', `/v1/chats/${id}`, { version: 0, blob: 'one', meta: {} })
-  await chunk(id, 0, 'a')
+  const other = newId()
+  const session = newId()
+  await store('PUT', `/v1/chats/${id}`, { version: 0, blob: 'one', meta: { s: session } })
+  await store('PUT', `/v1/chats/${other}`, { version: 0, blob: 'two', meta: { s: session } })
+  await chunk(session, 0, 'a')
   expect((await store('DELETE', `/v1/chats/${id}?version=9`)).status).toBe(409)
   expect((await store('GET', `/v1/chats/${id}`)).status).toBe(200)
-  expect((await store('GET', `/v1/chats/${id}/chunks`)).json.chunks).toHaveLength(1)
   expect((await store('DELETE', `/v1/chats/${id}?version=1`)).json).toEqual({ ok: true })
   expect((await store('GET', `/v1/chats/${id}`)).status).toBe(404)
-  expect((await store('GET', `/v1/chats/${id}/chunks`)).json.chunks).toEqual([])
+  expect((await store('GET', `/v1/chats/${session}/chunks`)).json.chunks).toHaveLength(1)
+  expect((await store('DELETE', `/v1/chats/${other}?version=1`)).json).toEqual({ ok: true })
+  expect((await store('GET', `/v1/chats/${session}/chunks`)).json.chunks).toEqual([])
+})
+
+test('a chunk that would take chats past their room is refused with 507, and a delete gives the room back', async () => {
+  const id = newId()
+  const session = newId()
+  await store('PUT', `/v1/chats/${id}`, { version: 0, blob: 'r', meta: { s: session } })
+  try {
+    env.CHAT_STORE_MB = '0.000001'
+    const full = await chunk(session, 0, 'a')
+    expect(full.status).toBe(507)
+    expect((await store('GET', `/v1/chats/${session}/chunks`)).json.chunks).toEqual([])
+    // Room for exactly ten more characters than every chunk already stored.
+    env.CHAT_STORE_MB = String((full.json.used + 10.5) / 1048576)
+    expect((await chunk(session, 0, 'x'.repeat(10))).status).toBe(200)
+    expect((await chunk(session, 1, 'y')).status).toBe(507)
+    await store('DELETE', `/v1/chats/${id}?version=1`)
+    expect((await chunk(newId(), 0, 'z'.repeat(10))).status).toBe(200)
+  } finally {
+    delete env.CHAT_STORE_MB
+  }
 })

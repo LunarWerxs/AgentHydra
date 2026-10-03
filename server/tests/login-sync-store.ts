@@ -30,7 +30,8 @@ export const token = randomBytes(24).toString('base64url')
 const worker = (
   await import(join(import.meta.dir, '..', '..', 'cloud', 'login-sync-worker', 'worker.js'))
 ).default as { fetch: (r: Request, env: unknown) => Promise<Response> }
-const env = {
+/** The Worker's bindings; a test may set CHAT_STORE_MB and must delete it again. */
+export const env: { DB: unknown; TOKEN_SHA256: string; CHAT_STORE_MB?: string } = {
   DB: d1(new Database(':memory:')),
   TOKEN_SHA256: createHash('sha256').update(token).digest('hex'),
 }

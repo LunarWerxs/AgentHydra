@@ -8,12 +8,12 @@
 // newline; a PC with another key writes nothing. The store is the real Worker on bun:sqlite
 // (login-sync-store.ts); each PC is a fake ChatLocal over a temp folder with its own state file.
 
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { chatSyncRows, syncChats } from '../src/core/desktop-chat-sync'
+import { ARCHIVED_KEEP_MS, chatSyncRows, syncChats } from '../src/core/desktop-chat-sync'
 import type {
   ChatIo,
   ChatLocal,
@@ -25,6 +25,14 @@ import type {
 import { store } from './login-sync-store'
 
 const key = randomBytes(32)
+const pcs = new Set<string>()
+
+// The store is shared by every test file in the process: leave none of this file's chats in it, or
+// another file's PC meets rows it cannot open.
+afterAll(async () => {
+  for (const r of (await store('GET', '/v1/chats')).json.chats)
+    if (pcs.has(r.meta?.pc)) await store('DELETE', `/v1/chats/${r.id}?version=${r.version}`)
+})
 
 interface Pc {
   io: ChatIo
@@ -79,11 +87,13 @@ function pc(name: string, useKey = key): Pc {
       return landOut
     },
   }
+  const id = randomUUID()
+  pcs.add(id)
   const self: Pc = {
     io: {
       call: store,
       key: useKey,
-      pc: randomUUID(),
+      pc: id,
       name,
       local,
       statePath: join(dir, 'state.json'),
@@ -169,7 +179,7 @@ test('A appends turns and B fetches only the new chunks, appending at the length
   expect(chatSyncRows(b.io.statePath).find((r) => r.id === chat.id)?.bytes).toBe(24)
 })
 
-test('a chat archived before it was shared never goes up; archiving a shared one reaches B', async () => {
+test('a chat archived before it was shared never goes up; archiving a shared one reaches B and leaves the store a week later', async () => {
   const a = pc('PC-A')
   const b = pc('PC-B')
   const old = a.add({ archived: true }, '{"old":1}\n')
@@ -188,6 +198,19 @@ test('a chat archived before it was shared never goes up; archiving a shared one
   const mineLanded = b.landed.filter((l) => l.id === live.id)
   expect(mineLanded).toHaveLength(2)
   expect(mineLanded[1].archived).toBe(true)
+
+  // A week on, it leaves the store with its transcript; neither PC lists it, and unarchiving it
+  // does not send it again.
+  const later = Date.now() + ARCHIVED_KEEP_MS + 3600_000
+  await syncChats(a.io, later)
+  expect(await rowFor(live.id)).toBeUndefined()
+  expect((await store('GET', `/v1/chats/${live.sessionId}/chunks`)).json.chunks).toEqual([])
+  await syncChats(b.io, later)
+  expect(chatSyncRows(a.io.statePath).some((r) => r.id === live.id)).toBe(false)
+  expect(chatSyncRows(b.io.statePath).some((r) => r.id === live.id)).toBe(false)
+  mine.archived = false
+  await syncChats(a.io, later)
+  expect(await rowFor(live.id)).toBeUndefined()
 })
 
 test('a chat continued on both PCs between passes is diverged and neither transcript changes', async () => {

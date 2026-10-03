@@ -23,7 +23,7 @@ import { base, store, token } from './login-sync-store'
 
 const transcript = new TextEncoder().encode('{"type":"user","message":"hello"}\n')
 
-function fakeLocal(): ChatLocal {
+function fakeLocal(): { local: ChatLocal; chat: LocalChat } {
   const chat: LocalChat = {
     id: randomUUID(),
     sessionId: randomUUID(),
@@ -34,13 +34,14 @@ function fakeLocal(): ChatLocal {
     archived: false,
     size: transcript.length,
   }
-  return {
+  const local: ChatLocal = {
     list: () => [chat],
     read: (_p, _s, from, to) => transcript.subarray(from, to),
     size: () => transcript.length,
     append: () => true,
     land: async () => ({ ok: true }),
   }
+  return { local, chat }
 }
 
 /** One login pass, then the chat pass it started. */
@@ -52,7 +53,10 @@ async function pass() {
 
 describe('desktop chats in the login sync pass', () => {
   test('on: a pass syncs the chats and the status lists them', async () => {
-    setChatLocalForTests(fakeLocal())
+    const { local, chat } = fakeLocal()
+    setChatLocalForTests(local)
+    const mine = async () =>
+      (await store('GET', '/v1/chats')).json.chats.filter((r: { id: string }) => r.id === chat.id)
     try {
       expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
       expect(loginSyncStatus().shareChats).toBe(false)
@@ -64,15 +68,18 @@ describe('desktop chats in the login sync pass', () => {
       expect(status.chatsError).toBeNull()
       expect(status.chats.map((c) => c.title)).toEqual(['A shared chat'])
       expect(status.chats[0]).toMatchObject({ fromHere: true, state: 'synced' })
-      expect((await store('GET', '/v1/chats')).json.chats).toHaveLength(1)
+      expect(await mine()).toHaveLength(1)
     } finally {
       disconnectLoginSync()
       setChatLocalForTests(null)
+      // The store is shared by every test file in the process, and this chat is sealed under this
+      // file's key: left behind, it is a row the other files' PCs cannot open.
+      for (const r of await mine()) await store('DELETE', `/v1/chats/${r.id}?version=${r.version}`)
     }
   })
 
   test('a store without chat routes sets chatsError only and the logins still sync', async () => {
-    setChatLocalForTests(fakeLocal())
+    setChatLocalForTests(fakeLocal().local)
     const old = Bun.serve({
       port: 0,
       fetch: (req) =>
@@ -99,7 +106,7 @@ describe('desktop chats in the login sync pass', () => {
   })
 
   test('off: no chat request is made and no chats are listed', async () => {
-    setChatLocalForTests(fakeLocal())
+    setChatLocalForTests(fakeLocal().local)
     const paths: string[] = []
     const spy = Bun.serve({
       port: 0,

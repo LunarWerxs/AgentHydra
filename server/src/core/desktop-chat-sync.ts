@@ -17,6 +17,11 @@
 // 64 MB per pass in all, and only up to its last complete line. A chat continued on two PCs between
 // passes is `diverged`: neither side takes or sends its new turns.
 //
+// THE STORE IS KEPT SMALL. A chat archived a week ago leaves it (row and transcript); every PC keeps
+// its own copy, and neither sends it again, even unarchived: the other PC's agreed position no longer
+// matches a fresh stream. The Worker refuses chunks past its room for chats (400 MB by default, under
+// D1's 500 MB free-plan database the logins share), which the dialog reports as such.
+//
 // The state file keeps, per chat, what the last pass agreed with the store, so the next pass can tell
 // who changed what. Failures are the chat sync's own: the caller keeps them apart from the logins'.
 
@@ -30,6 +35,8 @@ import type { ChatIo, ChatSyncRow, IncomingChat, LocalChat } from './desktop-cha
 export const PASS_READ_MAX = 64 * 1024 * 1024
 /** One read window. A line longer than this grows the window until it ends. */
 const WINDOW = 8 * 1024 * 1024
+/** How long an archived chat stays in the store, so the other PC takes the archive first. */
+export const ARCHIVED_KEEP_MS = 7 * 24 * 3600_000
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const NO_ROUTES =
@@ -62,6 +69,8 @@ interface ChatState {
   retry: boolean
   /** When the chat last changed in the store (epoch ms). */
   at: number | null
+  /** Left the store (archived a week): never sent again, not listed. */
+  gone?: boolean
 }
 
 interface StateFile {
@@ -72,7 +81,7 @@ interface StateFile {
 interface StoreRow {
   id: string
   version: number
-  meta: { k?: string; b?: number } | null
+  meta: { k?: string; b?: number; a?: number } | null
   updatedAt?: number
 }
 
@@ -90,6 +99,10 @@ interface Sealed {
 
 function chatFailure(what: string, r: Reply): Error {
   if (r.status === 404) return new Error(NO_ROUTES)
+  if (r.status === 507)
+    return new Error(
+      `The sync store has no more room for chats (${Math.round((r.json?.room ?? 0) / 1048576)} MB). A chat archived for a week leaves it; logins keep syncing.`,
+    )
   if (r.status === 409)
     return new Error(`${what}: changed in the store meanwhile; next pass retries.`)
   return new Error(
@@ -120,7 +133,7 @@ export function chatSyncRows(statePath: string): ChatSyncRow[] {
   const s = readState(statePath)
   if (!s) return []
   return Object.entries(s.chats)
-    .filter(([, c]) => c.version > 0)
+    .filter(([, c]) => c.version > 0 && !c.gone)
     .map(([id, c]) => ({
       id,
       sessionId: c.sessionId,
@@ -222,6 +235,9 @@ export async function syncChats(io: ChatIo, now = Date.now()): Promise<void> {
     if (!had || cs > hs || (cs === hs && ca > ha)) sharer.set(c.sessionId, c)
   }
 
+  // A chat this PC shared or took whose row is no longer listed left the store.
+  const gone = Object.keys(state.chats).filter((id) => state.chats[id].version > 0 && !rows.has(id))
+
   try {
     // --- send ---
     let budget = PASS_READ_MAX
@@ -245,6 +261,19 @@ export async function syncChats(io: ChatIo, now = Date.now()): Promise<void> {
         fail(err)
       }
     }
+
+    // --- prune: a chat archived a week ago leaves the store; each PC keeps its copy ---
+    for (const row of rows.values()) {
+      if (row.meta?.a !== 1 || now - (row.updatedAt ?? now) < ARCHIVED_KEEP_MS) continue
+      try {
+        const r = await io.call('DELETE', `/v1/chats/${row.id}?version=${row.version}`)
+        if (r.status === 200) gone.push(row.id)
+        else if (r.status !== 409) throw chatFailure('Removing an archived chat', r)
+      } catch (err) {
+        fail(err)
+      }
+    }
+    for (const id of gone) if (state.chats[id]) state.chats[id].gone = true
   } finally {
     save()
   }

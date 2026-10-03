@@ -10,6 +10,9 @@
 //   DB            a D1 database (strongly consistent, so a PC reads what the other just wrote)
 //   TOKEN_SHA256  hex SHA-256 of the access token the PCs send as `Authorization: Bearer <token>`.
 //                 Only the hash lives here; the token itself stays on the PCs.
+//   CHAT_STORE_MB optional: room for chat transcripts in MB of stored text, default 400. D1's free
+//                 plan stops a whole database at 500 MB and the logins live in the same one, so chats
+//                 stop short of that; on Workers Paid (10 GB per database) it can be raised.
 //
 // Routes (JSON in and out):
 //   GET    /v1/health            {ok:true}, no token needed
@@ -24,9 +27,11 @@
 //   GET    /v1/chats             {chats:[{id, version, meta, updatedAt}]}   (desktop chat sync: one row
 //   GET    /v1/chats/:id         {id, version, blob, meta, updatedAt} | 404  per chat, written like a
 //   PUT    /v1/chats/:id         {version, blob, meta} -> {version} | 409     login; blob up to 256 KB)
-//   DELETE /v1/chats/:id?version=n   -> {ok:true} (row and all its chunks) | 409
+//   DELETE /v1/chats/:id?version=n   -> {ok:true} | 409; the row's transcript (the chunks under its
+//                                session, meta.s) goes with it once no other row shares that session
 //   PUT    /v1/chats/:id/chunks/:seq {blob, by}: an append-only transcript piece, written once
-//                                -> {seq}; 409 {error:'taken', next} when that seq exists
+//                                -> {seq}; 409 {error:'taken', next} when that seq exists;
+//                                507 {error, used, room} when it would take chats past their room
 //   GET    /v1/chats/:id/chunks?from=n  {chunks:[{seq, blob, by, createdAt}], next, more}
 
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -46,6 +51,12 @@ const MAX_CHUNK = 1048576
 const MAX_SEQ = 1000000
 const MAX_BY = 64
 const MAX_PAGE_CHARS = 8000000
+const CHAT_ROOM_MB = 400
+
+const chatRoom = (env) => {
+  const mb = Number(env.CHAT_STORE_MB)
+  return Math.floor((Number.isFinite(mb) && mb > 0 ? mb : CHAT_ROOM_MB) * 1048576)
+}
 
 let schemaReady = false
 async function ensureSchema(db) {
@@ -61,6 +72,19 @@ async function ensureSchema(db) {
       'CREATE TABLE IF NOT EXISTS chat_chunks (chat TEXT NOT NULL, seq INTEGER NOT NULL, blob TEXT NOT NULL, by TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (chat, seq))',
     )
     .run()
+  // The characters every chunk holds, kept as one running total: summing the chunks on each write
+  // would read every row of the table every time. Counted once, when the table is new.
+  await db
+    .prepare(
+      'CREATE TABLE IF NOT EXISTS chat_usage (id INTEGER PRIMARY KEY CHECK (id = 1), chars INTEGER NOT NULL)',
+    )
+    .run()
+  if (!(await db.prepare('SELECT chars FROM chat_usage WHERE id = 1').first()))
+    await db
+      .prepare(
+        'INSERT OR IGNORE INTO chat_usage (id, chars) SELECT 1, COALESCE(SUM(length(blob)), 0) FROM chat_chunks',
+      )
+      .run()
   schemaReady = true
 }
 
@@ -164,20 +188,41 @@ async function deleteLogin(db, id, version) {
   return json({ error: 'version conflict' }, 409)
 }
 
-// DELETE /v1/chats/:id — the row delete is the compare-and-swap; its chunks go only after it won.
+// DELETE /v1/chats/:id — the row delete is the compare-and-swap; the transcript goes only after it
+// won. A transcript lives under the chat's session (meta.s), which two rows can share (a chat moved
+// between profiles), so it stays while another row still reads it.
 async function deleteChat(db, id, version) {
   if (!Number.isInteger(version) || version < 1) return json({ error: 'bad version' }, 400)
-  const result = await db
-    .prepare('DELETE FROM chats WHERE id = ? AND version = ?')
+  const gone = await db
+    .prepare('DELETE FROM chats WHERE id = ? AND version = ? RETURNING meta')
     .bind(id, version)
+    .first()
+  if (!gone) return json({ error: 'version conflict' }, 409)
+  let session = null
+  try {
+    session = JSON.parse(gone.meta)?.s
+  } catch {}
+  if (typeof session !== 'string' || !ID_RE.test(session)) return json({ ok: true })
+  const shared = await db
+    .prepare("SELECT 1 FROM chats WHERE json_extract(meta, '$.s') = ? LIMIT 1")
+    .bind(session)
+    .first()
+  if (shared) return json({ ok: true })
+  const freed = await db
+    .prepare('SELECT COALESCE(SUM(length(blob)), 0) AS n FROM chat_chunks WHERE chat = ?')
+    .bind(session)
+    .first()
+  await db.prepare('DELETE FROM chat_chunks WHERE chat = ?').bind(session).run()
+  await db
+    .prepare('UPDATE chat_usage SET chars = MAX(0, chars - ?) WHERE id = 1')
+    .bind(freed?.n ?? 0)
     .run()
-  if ((result?.meta?.changes ?? 0) !== 1) return json({ error: 'version conflict' }, 409)
-  await db.prepare('DELETE FROM chat_chunks WHERE chat = ?').bind(id).run()
   return json({ ok: true })
 }
 
-// PUT /v1/chats/:id/chunks/:seq — insert once; a taken seq answers where the chat's chunks end.
-async function putChunk(request, db, id, seq) {
+// PUT /v1/chats/:id/chunks/:seq — insert once; a taken seq answers where the chat's chunks end, and a
+// chunk that would take chats past their room is refused before it is written.
+async function putChunk(request, db, env, id, seq) {
   let body
   try {
     body = await request.json()
@@ -190,13 +235,19 @@ async function putChunk(request, db, id, seq) {
   if (typeof blob !== 'string' || !blob || blob.length > MAX_CHUNK)
     return json({ error: 'bad blob' }, 400)
   if (typeof by !== 'string' || by.length > MAX_BY) return json({ error: 'bad by' }, 400)
+  const used = (await db.prepare('SELECT chars FROM chat_usage WHERE id = 1').first())?.chars ?? 0
+  const room = chatRoom(env)
+  if (used + blob.length > room) return json({ error: 'no room for more chats', used, room }, 507)
   const result = await db
     .prepare(
       'INSERT INTO chat_chunks (chat, seq, blob, by, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(chat, seq) DO NOTHING',
     )
     .bind(id, seq, blob, by, Date.now())
     .run()
-  if ((result?.meta?.changes ?? 0) === 1) return json({ seq })
+  if ((result?.meta?.changes ?? 0) === 1) {
+    await db.prepare('UPDATE chat_usage SET chars = chars + ? WHERE id = 1').bind(blob.length).run()
+    return json({ seq })
+  }
   const top = await db
     .prepare('SELECT MAX(seq) AS top FROM chat_chunks WHERE chat = ?')
     .bind(id)
@@ -272,7 +323,7 @@ export default {
       if (c[2] === undefined && request.method === 'GET')
         return listChunks(db, c[1], url.searchParams.get('from'))
       if (c[2] !== undefined && request.method === 'PUT')
-        return putChunk(request, db, c[1], /^\d+$/.test(c[2]) ? Number(c[2]) : Number.NaN)
+        return putChunk(request, db, env, c[1], /^\d+$/.test(c[2]) ? Number(c[2]) : Number.NaN)
       return json({ error: 'method not allowed' }, 405)
     }
 
