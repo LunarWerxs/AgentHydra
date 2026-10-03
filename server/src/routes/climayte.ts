@@ -82,7 +82,7 @@ app.get('/api/corch/workers', async (c) => {
   return c.json(climayteList(filter))
 })
 // The other PC's CliMayte queue, as it last shared it through the login sync (core/climayte-queue-sync.ts):
-// shown apart, never part of /api/corch/workers. `stale`: its snapshot is over 3 minutes old.
+// shown apart, never part of /api/corch/workers. `stale`: its snapshot is over 40 minutes old.
 app.get('/api/corch/remote', (c) => {
   const enabled = queueSharingOn()
   const pcs = enabled

@@ -774,8 +774,10 @@ checking workers plus those finished in the last 24 hours (id, title, group, sta
 effort, account, times, active time, cost, last activity, error, verdict: never the prompt, results,
 logs or paths) and this PC's newest live usage reading per account, gzipped and AES-256-GCM encrypted
 under the sync's key with `climayte-queue:<pcId>` as associated data. Over 256 KB the oldest finished
-workers go first. It is uploaded when it changed and at least every 60 s; a snapshot over 3 minutes old
-is stale (that PC is off or not syncing). The rows live in the store's own `queues` table, never in
+workers go first. It is uploaded at once when a worker changed, when this PC's live readings moved
+(percentages in 5-point steps, reading times ignored) at most every 10 minutes, and at least every 15
+minutes (2026-10-03: the old 60 s heartbeat and an upload per usage reading cost ~2,300 D1 rows read an
+hour while idle); a snapshot over 40 minutes old is stale (that PC is off or not syncing). The rows live in the store's own `queues` table, never in
 `logins`: an older AgentHydra would land a `logins` row it does not know as a junk CLI login.
 
 Placement here counts the other PC's running and checking workers toward each account's per-account

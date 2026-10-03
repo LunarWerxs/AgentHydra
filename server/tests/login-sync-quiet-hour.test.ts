@@ -16,6 +16,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { liveByAccount } from '../src/climayte-core'
 import { resetQueueSync, sealQueue, syncQueue } from '../src/core/climayte-queue-sync'
 import { syncChats } from '../src/core/desktop-chat-sync'
 import type { ChatIo, ChatLocal, LocalChat } from '../src/core/desktop-chat-types'
@@ -264,6 +265,70 @@ test('a quiet hour with both PCs heartbeating reads a few hundred rows', async (
   const hour = await runHour(false, true)
   report('quiet hour, heartbeats every 60 s', hour)
   expect(hour.reads).toBeLessThanOrEqual(420)
+})
+
+const writes = (stats: StatementStat[]) =>
+  stats.filter((s) => s.write).reduce((n, s) => n + s.rows, 0)
+
+// Measured 2026-10-03, two PCs idle: the queue was uploaded ~231 times an hour because each account's
+// usage reading (every few minutes, `at` inside the fingerprint) changed it, plus a 60 s heartbeat; each
+// upload cost writes, a store_rev bump, a changes read and the other PC downloading the blob. Both PCs
+// here run the real syncQueue: six accounts' readings refresh every 3 minutes (staggered) and move 1-3
+// points inside their 5-point bucket, no worker changes.
+test('a quiet hour of two CliMayte PCs with usage readings refreshing stays a handful of rows', async () => {
+  resetQueueSync()
+  await sweep()
+  const savedLive = new Map(liveByAccount)
+  liveByAccount.clear()
+  clock = realNow()
+  const pcs = [randomUUID(), randomUUID()].map((pc, i) => {
+    made.queues.push(pc)
+    return {
+      io: {
+        call: store,
+        mirror: new StoreMirror((m, p) => store(m, p) as never),
+        key,
+        pc,
+        name: `PC-${i}`,
+      },
+    }
+  })
+  const accounts = Array.from({ length: 6 }, (_, i) => `acct-${i}`)
+  const reading = (i: number, n: number) => {
+    const p = 11 + 5 * i // 11, 16, ... : +0..3 stays in the same 5-point bucket
+    liveByAccount.set(accounts[i], {
+      sessionPct: p + (n % 4),
+      sessionResetsAt: null,
+      weekPct: p + ((n + 1) % 3),
+      weekResetsAt: null,
+      overageAllowed: false,
+      at: clock,
+    })
+  }
+  try {
+    // Both PCs run in this process, so they upload the same queue under their own ids.
+    for (const [i] of accounts.entries()) reading(i, 0)
+    for (const p of pcs) await syncQueue(p.io, clock)
+    storeDb.resetRowsRead()
+    const start = clock
+    let tick = 0
+    while (clock - start < HOUR) {
+      clock += TICK
+      tick++
+      // an account's reading is refreshed every 6 ticks (3 minutes), one account per tick
+      if (tick % 6 < accounts.length) reading(tick % 6, tick)
+      for (const p of pcs) await syncQueue(p.io, clock)
+    }
+    const stats = storeDb.statements()
+    console.log(
+      `two CliMayte PCs, usage refreshing: ${reads(stats)} rows read, ${writes(stats)} rows written in the hour\n${table(stats)}`,
+    )
+    expect(reads(stats)).toBeLessThanOrEqual(90) // measured 68: the head every 30 s, 4 heartbeats each
+    expect(writes(stats)).toBeLessThanOrEqual(20) // measured 16: 8 uploads (2 PCs x 4 heartbeats)
+  } finally {
+    liveByAccount.clear()
+    for (const [k, v] of savedLive) liveByAccount.set(k, v)
+  }
 })
 
 test('a busy hour: logins refreshed, a chat growing, both PCs heartbeating', async () => {

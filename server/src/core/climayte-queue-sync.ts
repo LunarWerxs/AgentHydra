@@ -40,8 +40,14 @@ import { MIRROR_FRESH_MS, type StoreMirror } from './login-sync-mirror'
 export const QUEUE_MAX_BLOB = 256 * 1024
 /** Workers finished longer ago than this are not shared. */
 export const FINISHED_KEEP_MS = 24 * 60 * 60_000
-/** An unchanged queue is uploaded at least this often, so the other PC can tell this one is alive. */
-export const HEARTBEAT_MS = 60_000
+/** An unchanged queue is uploaded at least this often, so the other PC can tell this one is alive
+ *  (climayte-remote.ts REMOTE_STALE_MS is well over it). Measured 2026-10-03: a 60 s heartbeat plus an
+ *  upload on every usage reading cost the store about 2,300 rows read an hour with both PCs idle. */
+export const HEARTBEAT_MS = 15 * 60_000
+/** A change in the live readings alone (no worker changed) uploads at most this often. */
+export const LIVE_GATE_MS = 10 * 60_000
+/** sessionPct and weekPct count as changed only when they cross a step of this many points. */
+export const LIVE_BUCKET = 5
 
 const PC_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const aad = (pc: string): Buffer => Buffer.from(`climayte-queue:${pc}`, 'utf8')
@@ -180,27 +186,41 @@ function queueFailure(what: string, r: { status: number; json: any }): Error {
   )
 }
 
-/** What this PC last uploaded: a fingerprint of the queue (not the clock or running time) and when. */
-let sent: { fingerprint: string; at: number } | null = null
+/** What each PC id last uploaded: fingerprints of its workers and of its live readings (not the clock,
+ *  running time or reading times) and when. */
+const sentBy = new Map<string, { workers: string; live: string; at: number }>()
 
 export function resetQueueSync(): void {
-  sent = null
+  sentBy.clear()
 }
 
-const fingerprint = (snap: QueueSnapshot): string =>
-  createHash('sha256')
-    .update(
-      JSON.stringify({
-        w: snap.workers.map(({ activeS, ...rest }) => rest),
-        l: snap.live,
-      }),
-    )
-    .digest('hex')
+const hash = (value: unknown): string =>
+  createHash('sha256').update(JSON.stringify(value)).digest('hex')
+
+const bucket = (pct: number | null): number | null =>
+  typeof pct === 'number' ? Math.floor(pct / LIVE_BUCKET) * LIVE_BUCKET : pct
+
+const workersPrint = (snap: QueueSnapshot): string =>
+  hash(snap.workers.map(({ activeS, ...rest }) => rest))
+
+/** The live readings without their `at`, with the percentages in 5-point steps. */
+const livePrint = (snap: QueueSnapshot): string =>
+  hash(
+    Object.keys(snap.live)
+      .sort()
+      .map((id) => [id, bucket(snap.live[id].sessionPct), bucket(snap.live[id].weekPct)]),
+  )
 
 async function upload(io: QueueIo, own: number, now: number): Promise<void> {
   const { blob, snap } = fitSnapshot(io.key, buildSnapshot(io.pc, io.name, now))
-  const print = fingerprint(snap)
-  if (sent && sent.fingerprint === print && now - sent.at < HEARTBEAT_MS) return
+  const w = workersPrint(snap)
+  const l = livePrint(snap)
+  const sent = sentBy.get(io.pc)
+  // A worker change goes at once; a live-bucket change only after LIVE_GATE_MS; else the heartbeat.
+  if (sent && sent.workers === w) {
+    const age = now - sent.at
+    if (age < HEARTBEAT_MS && (sent.live === l || age < LIVE_GATE_MS)) return
+  }
   const body = (version: number) => ({
     version,
     blob,
@@ -210,7 +230,7 @@ async function upload(io: QueueIo, own: number, now: number): Promise<void> {
   if (r.status === 409 && typeof r.json?.current?.version === 'number')
     r = await io.call('PUT', `/v1/queues/${io.pc}`, body(r.json.current.version))
   if (r.status !== 200) throw queueFailure('Uploading this PC’s queue', r)
-  sent = { fingerprint: print, at: now }
+  sentBy.set(io.pc, { workers: w, live: l, at: now })
 }
 
 async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: number }>> {
@@ -226,7 +246,8 @@ async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: numb
   return list.json.queues
 }
 
-/** One queue pass: upload this PC's snapshot when it changed (or the heartbeat is due), download
+/** One queue pass: upload this PC's snapshot when a worker changed, when the live readings moved a
+ *  bucket (at most every LIVE_GATE_MS) or when the heartbeat is due, download
  *  every other PC's that changed. Throws the first problem after doing all it can. */
 export async function syncQueue(io: QueueIo, now = Date.now()): Promise<void> {
   const rows = await queueRows(io)

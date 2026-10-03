@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
 import { MAX_PER_ACCOUNT, pickAccount } from '../src/climayte'
-import { workers } from '../src/climayte-core'
+import { liveByAccount, workers } from '../src/climayte-core'
 import {
   clearRemote,
   type QueueSnapshot,
@@ -32,7 +32,15 @@ import {
   runLoginSync,
   setQueueSharing,
 } from '../src/core/cli-login-sync'
-import { fitSnapshot, openQueue, resetQueueSync, sealQueue } from '../src/core/climayte-queue-sync'
+import {
+  fitSnapshot,
+  HEARTBEAT_MS,
+  LIVE_GATE_MS,
+  openQueue,
+  resetQueueSync,
+  sealQueue,
+  syncQueue,
+} from '../src/core/climayte-queue-sync'
 import { app } from '../src/http-app'
 import '../src/routes/climayte'
 import { base, store, token } from './login-sync-store'
@@ -137,7 +145,7 @@ describe('placement beside the other PC', () => {
     setRemote(snapshot(pc, full), 1)
     expect(place()).toBeNull()
     // The other PC went quiet: its workers no longer hold the account.
-    setRemote(snapshot(pc, full, Date.now() - 4 * 60_000), 2)
+    setRemote(snapshot(pc, full, Date.now() - 41 * 60_000), 2)
     expect(place()?.id).toBe('acct-a')
     clearRemote()
   })
@@ -258,6 +266,86 @@ describe('a pass through the store', () => {
     } finally {
       await old.stop(true)
       disconnectLoginSync()
+    }
+  })
+})
+
+describe('when this PC uploads', () => {
+  test('a worker change at once, a live bucket change after the gate, else the heartbeat', async () => {
+    resetQueueSync()
+    const saved = new Map(liveByAccount)
+    liveByAccount.clear()
+    const puts: number[] = []
+    const pc = randomUUID()
+    const io = {
+      key,
+      pc,
+      name: 'THIS-PC',
+      call: async (method: string, path: string) => {
+        if (method === 'PUT') puts.push(1)
+        return path === '/v1/queues'
+          ? { status: 200, json: { queues: [] } }
+          : { status: 200, json: { version: 1 } }
+      },
+    }
+    const reading = (sessionPct: number, at: number) =>
+      liveByAccount.set('acct-q', {
+        sessionPct,
+        sessionResetsAt: null,
+        weekPct: 3,
+        weekResetsAt: null,
+        overageAllowed: false,
+        at,
+      })
+    try {
+      let t = Date.now()
+      reading(11, t)
+      await syncQueue(io, t)
+      expect(puts).toHaveLength(1)
+      // 11 -> 13 (same bucket) and a newer `at`: nothing, even long after the live gate.
+      t += LIVE_GATE_MS + 1
+      reading(13, t)
+      await syncQueue(io, t)
+      expect(puts).toHaveLength(1)
+      // 13 -> 16 crosses a bucket: held until the gate, which has passed since the last upload.
+      reading(16, t)
+      await syncQueue(io, t)
+      expect(puts).toHaveLength(2)
+      // Another bucket right after: waits for the gate.
+      t += 60_000
+      reading(21, t)
+      await syncQueue(io, t)
+      expect(puts).toHaveLength(2)
+      t += LIVE_GATE_MS
+      await syncQueue(io, t)
+      expect(puts).toHaveLength(3)
+      // A worker change goes at once, gate or not.
+      workers.set('w-gate', {
+        id: 'w-gate',
+        group: 'g-gate',
+        title: 'gate',
+        status: 'queued',
+        attempts: [],
+        accountId: null,
+        costUsd: 0,
+        createdAt: t,
+        updatedAt: t,
+      } as any)
+      t += 1000
+      await syncQueue(io, t)
+      expect(puts).toHaveLength(4)
+      // Nothing changed: the heartbeat, not before.
+      t += HEARTBEAT_MS - 1000
+      await syncQueue(io, t)
+      expect(puts).toHaveLength(4)
+      t += 1000
+      await syncQueue(io, t)
+      expect(puts).toHaveLength(5)
+    } finally {
+      workers.delete('w-gate')
+      liveByAccount.clear()
+      for (const [k, v] of saved) liveByAccount.set(k, v)
+      resetQueueSync()
     }
   })
 })

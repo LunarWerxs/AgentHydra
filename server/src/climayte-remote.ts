@@ -9,8 +9,10 @@
 
 import type { CliMayteLiveUsage } from './climayte-lib'
 
-/** A snapshot older than this is stale: that PC is off, or not syncing. */
-export const REMOTE_STALE_MS = 3 * 60_000
+/** A snapshot older than this is stale: that PC is off, or not syncing. A live PC uploads at least
+ *  every HEARTBEAT_MS (15 min, core/climayte-queue-sync.ts) and the other PC sees it one sync pass
+ *  later, so 40 minutes leaves room for two missed heartbeats before a live PC reads as offline. */
+export const REMOTE_STALE_MS = 40 * 60_000
 
 /** One worker as the other PC shows it: never the prompt, results, logs or paths. */
 export interface RemoteWorker {
