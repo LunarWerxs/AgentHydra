@@ -9,7 +9,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **All of a PC's ZSwarm history moves into HSwarm** (owner, 2026-10-03: "I'm retiring ZSwarm, so all stats from ZSwarm need to be imported into HSwarm"). `python -m hswarm import-zswarm [--dry-run] [--json]` copies the four stats tables (run records, profiles, Claude days and accounts), the task ledger, edit-survival scores, routing decisions, daily savings and the job records and day archives from `~/.zswarm` into HSwarm's home; keys, secrets, vault files and egress logs never move. It is re-runnable (keyed rows, line hashes, a byte offset per file), and while `~/.zswarm` exists the daemon runs it 30 s after the HSwarm sidecar starts and then hourly. HSwarm's stats now read its own database (source `hswarm`) instead of pointing at ZSwarm's.
+- **HSwarm overview: model results** (owner, 2026-10-03: "which models were thumbs up and thumbs down, which models were the most efficient per cost"). A new `model-stats?days=N` route (`hswarm/model_stats.py`, cached on the ledger's size and time) and a section on the overview: passed vs failed per model, cost per successful task, how much of each model's code edits survive a day, and tasks per day by model, over 14 or 30 days.
+- **One CliMayte + HSwarm stats card** (owner, 2026-10-03: "CliMayte is essentially the same as HSwarm now; we offload to either"). The CliMayte tab's right column opens with one card: CliMayte's tasks, runs, tokens and cost beside HSwarm's savings, and "What works" as one green/red pass/fail bar per model (click for the per-kind list). The left header keeps only the title, Hide finished and Waves.
 - **Every signed-in CLI account's row shows whether it has a limit reset** (owner, 2026-10-03). A daily background check (`core/cli-reset-sweep.ts`: first pass 10 minutes after start, then hourly, one account at a time) runs `/limit-reset` as a check for each signed-in account not checked in 24 hours, and only while its 5-hour usage reading is under 90% and under 30 minutes old: the weekly session reset is claimed only at the 5-hour limit, so a check there could spend it. Each run starts no MCP servers. An `unavailable` answer now draws a muted "No limit reset" icon. See docs/CLI-LIMIT-RESET.md.
+
+### Changed
+
+- **The wide toggle is one setting for every page** (owner, 2026-10-03). HSwarm forced the shell wide when opened and narrow when left; now the header button is the only thing that sets it.
+- **Waves stay closed until opened** (owner, 2026-10-03: "they keep auto-expanding ... wrapping on the narrow design"). The Waves box and each wave start collapsed, remember being opened, keep their header on one line, scroll inside a set height, and say what a wave is.
+- **Sessions and CliMayte share one sidebar** (owner, 2026-10-03: "the sidebar for sessions running the same code as the sidebar in CliMayte"). `side-list/SideBar.vue` owns both: collapse, drag-resize with a remembered width per view, grouped rows. Sessions rows take the CliMayte row layout (status icon, a small source icon instead of the coloured pill, model and effort, time) and group by project.
 
 ## [1.8.0] - 2026-10-03
 
