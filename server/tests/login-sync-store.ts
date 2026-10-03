@@ -85,10 +85,42 @@ export function d1(db: Database) {
   }
 }
 
+/**
+ * A minimal in-memory `caches.default` (match/put) for the Worker's shared head tier: an entry lives for
+ * its `cache-control: max-age` on the test clock (Date.now), so a faked clock ages it too.
+ * `clearCache()` empties it (a new colo).
+ */
+const cacheStore = new Map<string, { at: number; maxAge: number; body: string }>()
+const cacheKey = (r: Request | string) => (typeof r === 'string' ? r : r.url)
+;(globalThis as any).caches = {
+  default: {
+    async put(req: Request | string, res: Response) {
+      const m = /max-age=(\d+)/.exec(res.headers.get('cache-control') ?? '')
+      if (m)
+        cacheStore.set(cacheKey(req), {
+          at: Date.now(),
+          maxAge: Number(m[1]),
+          body: await res.text(),
+        })
+    },
+    async match(req: Request | string) {
+      const hit = cacheStore.get(cacheKey(req))
+      if (!hit) return undefined
+      const age = Date.now() - hit.at
+      if (age < 0 || age >= hit.maxAge * 1000) {
+        cacheStore.delete(cacheKey(req))
+        return undefined
+      }
+      return new Response(hit.body)
+    },
+  },
+}
+export const clearCache = () => cacheStore.clear()
+
 export const token = randomBytes(24).toString('base64url')
 const worker = (
   await import(join(import.meta.dir, '..', '..', 'cloud', 'login-sync-worker', 'worker.js'))
-).default as { fetch: (r: Request, env: unknown) => Promise<Response> }
+).default as { fetch: (r: Request, env: unknown) => Promise<Response>; forgetIsolate: () => void }
 /** The Worker's bindings; a test may set CHAT_STORE_MB and must delete it again. */
 /** The store's D1, for counting the rows a call reads. */
 export const storeDb = d1(new Database(':memory:'))
@@ -97,12 +129,15 @@ export const env: {
   TOKEN_SHA256: string
   CHAT_STORE_MB?: string
   HEAD_TRUST_S?: string
+  HEAD_CACHE_S?: string
 } = {
   DB: storeDb,
   TOKEN_SHA256: createHash('sha256').update(token).digest('hex'),
 }
 const server = Bun.serve({ port: 0, fetch: (req) => worker.fetch(req, env) })
 server.unref()
+/** What a fresh isolate starts without: the Worker's kept head, lists and rows. */
+export const freshIsolate = () => worker.forgetIsolate()
 export const base = `http://127.0.0.1:${server.port}`
 
 /** A request to the store with the access token. */

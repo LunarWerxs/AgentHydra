@@ -125,7 +125,7 @@ async function ensureSchema(db) {
   // Once per isolate, not per request: drop tombstones older than 30 days and raise floor to the
   // highest rev dropped, so a cursor older than the kept tombstones is answered with full: true.
   const cutoff = Date.now() - TOMBSTONE_KEEP_MS
-  await db.batch([
+  const dropped = await db.batch([
     db
       .prepare(
         'UPDATE store_rev SET floor = MAX(floor, COALESCE((SELECT MAX(rev) FROM tombstones WHERE time < ?), 0)) WHERE id = 1',
@@ -134,6 +134,8 @@ async function ensureSchema(db) {
     db.prepare('DELETE FROM tombstones WHERE time < ?').bind(cutoff),
   ])
   schemaReady = true
+  // Tombstones dropped means the floor may have risen: the head any tier holds is behind it.
+  if ((dropped?.[1]?.meta?.changes ?? 0) > 0) keepHead(await db.prepare(HEAD_SQL).first())
 }
 
 const json = (body, status = 200) =>
@@ -183,7 +185,19 @@ const row = (t, r) =>
 // even a one-row check twice a poll is 5,760 rows a day. Within the window a change made on ANOTHER
 // isolate shows a poll later (a write through this one drops the head at once); a write itself is a
 // compare-and-swap on D1 and never reads it.
+//
+// Free-plan isolates are short-lived and two PCs often land on different ones, so most polls still
+// found no head here and read D1 (about 310 reads an hour, idle). A second, shared tier stands behind
+// the isolate: the Workers Cache API (caches.default, free, no D1 read), one synthetic GET entry per
+// colo holding the head with max-age HEAD_CACHE_S (env HEAD_CACHE_S; default 120, 0 = off; skipped
+// silently where `caches` is missing: tests, wrangler dev). Read order: isolate memory, cache entry,
+// D1. Every write refreshes BOTH with the head its own batch read after the commit, and so does every
+// D1 head read, so a PC on the same colo sees its own and the other PC's writes at once. TRADE-OFF: a
+// colo the write did not go through keeps its entry until max-age runs out, so a change made through
+// another colo shows up to HEAD_CACHE_S late there (an entry's age also counts against HEAD_TRUST_MS,
+// so an isolate never trusts a head longer than the entry it came from).
 const HEAD_TRUST_MS = 75 * 1000
+const HEAD_CACHE_S = 120
 const HEAD_SQL = 'SELECT rev, floor, logins_rev, queues_rev, chats_rev FROM store_rev WHERE id = 1'
 const NO_HEAD = { rev: 0, floor: 0, logins_rev: 0, queues_rev: 0, chats_rev: 0 }
 let headKept = null
@@ -192,9 +206,44 @@ const trustOf = (env) => {
   const n = s === undefined || s === '' ? Number.NaN : Number(s)
   return Number.isFinite(n) && n >= 0 ? n * 1000 : HEAD_TRUST_MS
 }
+// Shared tier. `headKey` and `headCacheMs` are set by each request; puts wait in `headPuts` until the
+// request's end (ctx.waitUntil where there is one).
+let headKey = null
+let headCacheMs = HEAD_CACHE_S * 1000
+let headPuts = []
+const sharedCache = () => (typeof caches !== 'undefined' && caches?.default) || null
+const headCacheOf = (env) => {
+  const s = env?.HEAD_CACHE_S
+  const n = s === undefined || s === '' ? Number.NaN : Number(s)
+  return Number.isFinite(n) && n >= 0 ? n * 1000 : HEAD_CACHE_S * 1000
+}
 const keepHead = (row) => {
   headKept = { at: Date.now(), row: row ?? NO_HEAD }
+  const cache = sharedCache()
+  if (cache && headKey && headCacheMs > 0)
+    headPuts.push(
+      Promise.resolve(
+        cache.put(
+          headKey,
+          new Response(JSON.stringify(headKept), {
+            headers: { 'cache-control': `max-age=${Math.ceil(headCacheMs / 1000)}` },
+          }),
+        ),
+      ).catch(() => {}),
+    )
   return headKept.row
+}
+// An isolate with no head of its own takes the shared entry, keeping the entry's own age.
+async function seedHeadFromCache() {
+  const cache = sharedCache()
+  if (!cache || !headKey || headCacheMs <= 0) return
+  try {
+    const hit = await cache.match(headKey)
+    const kept = hit ? await hit.json() : null
+    const age = kept ? Date.now() - kept.at : -1
+    if (age >= 0 && age < headCacheMs && kept.row && (!headKept || headKept.at < kept.at))
+      headKept = { at: kept.at, row: kept.row }
+  } catch {}
 }
 // The head this isolate still trusts, else null.
 const trustedHead = (trust) => {
@@ -334,6 +383,7 @@ async function storeRow(db, t, id, body) {
           db
             .prepare(`DELETE FROM tombstones WHERE table_name = ? AND id = ? AND ${has})`)
             .bind(t.table, id, id),
+          db.prepare(HEAD_SQL),
         ])
       : await db.batch([
           db
@@ -346,9 +396,10 @@ async function storeRow(db, t, id, body) {
               `UPDATE ${t.table} SET version = version + 1, blob = ?, meta = ?, updated_at = ?, rev = ${NEXT_REV} WHERE ${t.key} = ? AND version = ?`,
             )
             .bind(blob, meta, now, id, version),
+          db.prepare(HEAD_SQL),
         ])
 
-  headKept = null
+  keepHead(results[results.length - 1].results?.[0])
   if ((results[1]?.meta?.changes ?? 0) === 1) return json({ version: version + 1 })
 
   const current = await db
@@ -377,8 +428,9 @@ async function deleteRow(db, t, id, version) {
     db
       .prepare(`DELETE FROM ${t.table} WHERE ${t.key} = ? AND version = ? RETURNING meta`)
       .bind(id, version),
+    db.prepare(HEAD_SQL),
   ])
-  headKept = null
+  keepHead(results[3].results?.[0])
   return results[2]?.results?.[0] ?? null
 }
 
@@ -638,15 +690,41 @@ function route(request, db, env, url, path) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url)
     const path = url.pathname.replace(/\/+$/, '')
     if (path === '/v1/health') return json({ ok: true })
     if (!env.DB) return json({ error: 'no DB binding' }, 500)
     if (!(await authorized(request, env))) return json({ error: 'unauthorized' }, 401)
     const db = env.DB
+    headKey = sharedCache() ? new URL('/__head', request.url) : null
+    headCacheMs = headCacheOf(env)
     await ensureSchema(db)
+    const trust = trustOf(env)
+    if (
+      request.method === 'GET' &&
+      trust > 0 &&
+      !trustedHead(trust) &&
+      (path === '/v1/changes' || /^\/v1\/(logins|queues|chats)(\/[^/]+)?$/.test(path))
+    )
+      await seedHeadFromCache()
 
-    return route(request, db, env, url, path)
+    try {
+      return await route(request, db, env, url, path)
+    } finally {
+      const puts = headPuts
+      headPuts = []
+      if (puts.length) {
+        const done = Promise.all(puts)
+        if (ctx?.waitUntil) ctx.waitUntil(done)
+        else await done
+      }
+    }
+  },
+  // For tests: what a fresh isolate starts without (the head, the kept lists and rows).
+  forgetIsolate() {
+    headKept = null
+    listCache.clear()
+    itemCache.clear()
   },
 }

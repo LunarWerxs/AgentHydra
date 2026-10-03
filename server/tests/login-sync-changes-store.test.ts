@@ -3,7 +3,15 @@
 // store is one per test process.
 
 import { afterAll, expect, test } from 'bun:test'
-import { base, dropQueue, store, storeDb, token } from './login-sync-store'
+import {
+  base,
+  clearCache,
+  dropQueue,
+  freshIsolate,
+  store,
+  storeDb,
+  token,
+} from './login-sync-store'
 
 const newId = () => crypto.randomUUID()
 const made = {
@@ -198,4 +206,32 @@ test('a kept list shows every write: an update, a delete below the top, a new ro
 
   const fresh = await put('logins')
   expect((await listed()).get(fresh)).toBe(1)
+})
+
+// The head's second tier: the Cache API entry every isolate of a colo shares. Free-plan isolates are
+// short and two PCs land on different ones, so the isolate's own copy alone left most idle polls
+// reading store_rev from D1 (measured: 310 an hour).
+test('idle polls on fresh isolates read the head from D1 once, and a write is seen at once', async () => {
+  clearCache()
+  freshIsolate()
+  const headReads = () =>
+    storeDb.statements().find((s) => s.sql.startsWith('SELECT rev, floor'))?.calls ?? 0
+  const poll = async (since: number) => {
+    freshIsolate() // each poll lands on an isolate that never saw the head
+    return changes(since)
+  }
+  const cursor = (await poll(0)).rev ?? (await listRev())
+  storeDb.resetRowsRead()
+  for (let i = 0; i < 10; i++) expect((await poll(cursor)).rev).toBe(cursor)
+  expect(headReads()).toBeLessThanOrEqual(1)
+
+  // PC A writes through one isolate; PC B's next poll, on another, shows it with no stale head.
+  const login = await put('logins')
+  freshIsolate()
+  const seen = await changes(cursor)
+  expect(seen.rev).toBe(cursor + 1)
+  expect(seen.logins.map((r: { id: string }) => r.id)).toEqual([login])
+  storeDb.resetRowsRead()
+  for (let i = 0; i < 5; i++) expect((await poll(cursor + 1)).rev).toBe(cursor + 1)
+  expect(headReads()).toBe(0)
 })
