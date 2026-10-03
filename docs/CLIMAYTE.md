@@ -1019,6 +1019,295 @@ requires `projects/*/<id>.jsonl` in its own config dir (else prints `No conversa
 stderr and exits 1), appends to it, prints init, an assistant text and a `result` with
 `is_error: false`, `result: 'FAKE DONE'`, `total_cost_usd: 0.01`, `num_turns: 1`, exits 0.
 
+## Manager (the CLIManager): design, not built (2026-10-03)
+
+Today one orchestrator chat does all the coordination: a long desktop chat on Opus, about 200k
+tokens of context, that dispatches with `climayte_run`, waits with `~/.claude/tools/climayte_wait.py`,
+reads each batch, checks the proof and records verdicts. Measured 2026-10-03: each of its requests
+costs about 0.40% of a Pro 5-hour window (reads 0.12, cache writes 0.09, output 0.19), because every
+step re-reads that context, and every worker report it reads makes the next step dearer. Run 2 counted
+8 requests a wake (the `--unjudged` note in climayte_wait.py), so one batch wake is about 3% of a Pro
+window and the cost grows through the wave.
+
+The manager sits between them. The orchestrator hands it ONE WAVE (a plan file and the task list);
+the manager dispatches, waits, has the proof checked, re-dispatches, and wakes the orchestrator once
+per wave with a short report. Rules this design keeps:
+
+1. Cheap to wake: a small context and the cheapest model the scorecard trusts, through a new kind,
+   `manage`, auto-picked like the others.
+2. Its state lives in CliMayte (the wave, its tasks, verdicts, escalations, rounds), never only in
+   its conversation, so it can be started fresh at any moment with nothing lost.
+3. A pass is recorded only on proof a command gives: the task's check, the commit exists, the diff
+   touches only the brief's paths. Anything needing taste or a decision goes up unjudged, with the
+   reason. A lenient judge must not poison the scorecard. It never deploys.
+4. Opt-in per dispatch, for big waves (about 5+ workers or several rounds). Small jobs keep
+   `climayte_run` exactly as it is.
+5. The orchestrator still verifies the merged result once per wave, the way CI runs it.
+6. No manager of managers.
+
+### What the code does today (the five questions)
+
+**How is a CLI worker woken when its sub-workers finish?** It is not, today; but the parts exist.
+A `claude -p` worker ends when its turn ends: `settleWorker` sets `done`, or `queued` when a message
+is pending (`server/src/climayte.ts:1424-1428`), and `finish` starts the check on `done`
+(`climayte.ts:1491`). A message from `climayteSend` (`climayte.ts:2171`) is held in `pending` while
+a turn runs and then resumes the same session (`--resume`, `server/src/climayte-launch.ts:377`) with
+`followUpText` as the prompt (`climayte-launch.ts:192`); the tick starts it like any queued worker
+(`climayte.ts:966-971`). So the daemon can wake the manager the way `climayte_send` does: it appends
+the batch report to the manager's `pending`. The report text is the one the waiter prints: the waiter
+reads `GET /api/corch/workers?report=1&ids=` (`climayte_wait.py:123`), which is `climayteReports`
+(`climayte.ts:2049`), and holds changes into batches with `--batch`/`--settle-s` (`climayte_wait.py:21-27`,
+`holds` at `:243`, `wake` at `:271`). The design moves that batching into the daemon (piece 3), so
+the manager runs no waiter and spends no turn waiting.
+
+**Do workers get the agenthydra MCP server?** No, on purpose. It is denied by name
+(`WORKER_DENIED_MCP`, `climayte-launch.ts:242`; the reason at `:234-236`: 84 of a worker's 138 tools,
+and a worker could start more workers or move desktop chats) and by its endpoint under any name
+(`WORKER_DENIED_MCP_URL` = `*://*/api/mcp*`, `climayte-launch.ts:249`, written into the worker's
+settings at `:336-339`; `MCP_PATH` is `/api/mcp`, `server/src/mcp-register.ts:79`), and
+`ownerMcpServers` drops it from the `--mcp-config` copy by name and by path
+(`server/src/climayte-owner-sync.ts:358-359`; the file is written by `writeWorkerMcp`,
+`climayte-launch.ts:286-297`, and passed at `:382`). So a manager cannot call `climayte_run`,
+status or verdict today, and giving it the whole server back would undo both reasons. The design
+gives it a separate, small endpoint instead (piece 4).
+
+**How does the orchestrator's waiter wait on just the manager?** The waiter takes groups only
+(`--group`, prefixes with `*`), and treats `waiting` as live work it keeps polling through
+(`climayte_wait.py:14-20`); with `--wake-on done,failed,cancelled` (`:154`) a worker that merely
+enters `waiting` does not wake it. So the manager runs alone in its own group, `mgr-<wave>`, and
+between its turns it sits in `waiting` (held for its wave, piece 2). The orchestrator runs
+`python ~/.claude/tools/climayte_wait.py --group mgr-<wave> --wake-on done,failed,cancelled --timeout-s 7200`
+and wakes only when the manager reports (`done`), dies (`failed`) or is stopped. `climayte_status`
+with `wait_seconds` is NOT the way: `climayteWait` resolves on any status change in scope
+(`climayte.ts:2082-2104`), and the manager changes status on every wake.
+
+**How do sizing and placement treat a long-lived, mostly idle manager?** As one ordinary task,
+which is wrong both ways, so piece 6 changes it. Between wakes no CLI runs at all (each wake is a
+fresh `claude -p` turn), and the tick counts only `running` workers per account
+(`server/src/climayte-schedule.ts:84-88`), so an idle manager holds no slot. A wake is a follow-up
+at home: `staysHome` keeps it on its own account (`climayte-schedule.ts:113-115`) and `waitsForRoom`
+never holds a session going on at home (`server/src/climayte-placement.ts:280-293`). But at dispatch
+`sizeTasks` (`climayte.ts:1835`) would price it with `expectedCost`, which for a kind with no record
+falls to `DEFAULT_TASK_PCT` 25 (`climayte-placement.ts:28`, `:112-139`) and, once the kind has a
+record, to the cost of a whole wave, which can pass half a window and answer `split needed`
+(`sizeTask`, `climayte-placement.ts:162-171`). And its group would share `groupCap` with the wave
+(`server/src/climayte-lib.ts:1222`) if they were one group. `accountInUse` is no issue: the
+manager's own sessions are CliMayte's, not "other" (`climayte-lib.ts:267-268`). The turn caps are no
+issue either: `notConverging` counts only attempts since the newest finished one
+(`climayte-lib.ts:1611-1620`), so every wake that ends `done` starts the count again.
+
+**How would the manager's verdicts feed the scorecard?** Every verdict counts the same today:
+`scoreRows` sums every verdict of every task by kind and setting, whoever gave it
+(`server/src/climayte-scorecard.ts:152-176`); `by` is recorded (`climayte-scorecard.ts:110`) but
+anything not `check` or `owner` is stored as `orchestrator` (`climayte.ts:2289`). A verdict judges
+the work since the previous verdict (`verdictRecord`, `climayte.ts:2271-2290`), so a later fail with
+no attempt in between adds a 0-unit fail and leaves the earlier pass counted. A lenient manager
+would therefore teach `pickConfig` (`climayte-scorecard.ts:263`) to trust a cheap rung it should
+not. The design never lets the manager's model say pass (the daemon judges by command), holds those
+passes out of the scorecard until the orchestrator's wave check confirms them, and lets a later
+verdict on the same work replace an earlier one (piece 5).
+
+### The wave record
+
+`<CONFIG_DIR>/corch/waves/<waveId>.json`, one file per wave (`core/json-store.ts`, like the done
+files), so a restarted daemon and a fresh manager session read the same truth.
+
+```ts
+interface CliMayteWave {
+  id: string                 // 'wv-' + 6 hex
+  group: string              // the workers' group; the manager's is 'mgr-' + id
+  managerId: string          // the manager worker
+  plan: string               // absolute path of the plan file (the manager reads it as needed)
+  cwd: string                // the repository the wave works in
+  branch: string             // the branch commits must land on (default: cwd's current branch)
+  verify: string | null      // the command the orchestrator runs on the merged result, carried to the report
+  tasks: Array<{
+    key: string              // stable name from the plan ('t1', 'api-routes'), survives re-dispatch
+    prompt: string; title: string; kind: string; check: string | null
+    paths: string[]          // globs the diff may touch; [] = must not commit
+    after: string[]          // keys that must pass first (rounds)
+    workerId: string | null  // the current worker for this key
+    state: 'pending' | 'running' | 'passed' | 'failed' | 'escalated'
+    proof: { check: boolean | null; commits: string[]; paths: boolean | null; note: string } | null
+  }>
+  escalations: Array<{ key: string; reason: string; at: number }>
+  notes: string              // the manager's scratch, capped at 2,000 chars
+  rounds: number; maxRounds: number      // re-dispatches per key, default 3
+  batch: { size: number; settleS: number; held: string[]; since: number | null }
+  status: 'running' | 'reported' | 'verified' | 'rejected' | 'failed' | 'cancelled'
+  report: string | null      // the short report the orchestrator is woken with
+  createdAt: number; updatedAt: number
+}
+```
+
+Workers carry `wave?: string` (the wave they belong to; the manager carries it too, with
+`kind: 'manage'`) and the manager `hold?: 'wave' | null`.
+
+### How a wave runs
+
+1. **Dispatch** (`climayte_manage`, piece 7). The orchestrator writes the plan to a file and calls
+   `climayte_manage { plan, cwd, tasks: [{ key, prompt, kind, check?, paths, after? }], verify?, branch?, max_rounds? }`.
+   Refused under 3 tasks ("use climayte_run": small jobs keep today's path; the description
+   recommends it from about 5 workers or several rounds), and refused for any task of kind `manage`.
+   It writes the wave, starts the manager in `mgr-<wave>` and answers the waiter command line to run.
+   Nothing else starts: the manager dispatches.
+2. **The manager's first turn** reads the wave state (its prompt, below) and dispatches the tasks
+   whose `after` is met with `wave_dispatch`; the wave tasks are ordinary workers in the wave's group,
+   auto-picked and sized as today. Then it ends its turn.
+3. **Held, not waiting on itself.** When a manager's turn ends `done` while its wave has live tasks
+   and no report, the daemon sets it `waiting` with `hold: 'wave'` and
+   `error: 'Managing wave wv-x: 4 running, 2 queued'` instead of `done`. The tick's due list skips a
+   held worker. No CLI runs; no slot is held.
+4. **The daemon judges, by command** (piece 5). When a wave task reports done, its `check` runs as
+   today; then (or at once with no check) `judgeWaveTask` reads the `Commits:` line every wave brief
+   must end with, and runs, hidden, in `cwd`: `git cat-file -e <sha>^{commit}` per commit,
+   `git merge-base --is-ancestor <sha> <branch>`, and `git diff-tree --no-commit-id --name-only -r <sha>`
+   against the task's `paths`. All present proofs pass, and at least the check or a commit with its
+   paths exist: a pass verdict `by: 'wave'`, `provisional: true`. A proof that fails: a fail verdict
+   `by: 'wave'` with the command and its output, sent back one rung up like a failed check
+   (`judgeCheck`, `climayte.ts:630-664`; three rounds, then the task is failed). Nothing provable (no
+   check and `Commits: none`, as a review or a research task): no verdict, the key is escalated
+   `unproven`.
+5. **Wake the manager** (piece 3). The daemon holds wave changes the way `--batch` does (wake when
+   `batch.size` tasks have changed, `batch.settleS` (600) has run since the first, or nothing is
+   live), then appends ONE message to the manager's pending and clears the hold: the report view of
+   the changed tasks (`climayteReports(..., 600)`, the waiter's text) with each one's proof result,
+   and a header line of counts. A failed task, or a `split needed` answer, wakes it at once.
+6. **The manager's wake**: escalate what needs a decision (`wave_escalate { key, reason }`: a report
+   that says something was left undone, a worker that made a choice the plan does not cover, a plan
+   step that says deploy), re-dispatch a failed or crashed key within `maxRounds` (`wave_dispatch`
+   again, or `wave_send` to continue its session), dispatch the next round whose `after` keys passed,
+   and end its turn. It never writes a pass or a fail.
+7. **Report.** When every key is `passed`, `failed` or `escalated`, the manager calls
+   `wave_report { text }` (at most 2,000 characters; the daemon prefixes a table it builds itself:
+   one line per key, state, proof, commits, and the branch head) and ends its turn. With the wave
+   `reported` the manager is no longer held, so it ends `done`, and the orchestrator's waiter wakes
+   with the report under the manager's line. A turn that ends with nothing live and no report gets
+   one message ("report or dispatch"); a second such turn fails the manager with that reason, and the
+   orchestrator wakes on `failed`.
+8. **The orchestrator verifies once** (rule 5): it runs the wave's `verify` (the repo's CI or gate,
+   through fairjob) on the branch head, reads the escalations, and calls
+   `climayte_wave_verify { wave, ok, note? }`. `ok` confirms the provisional passes (they count in
+   the scorecard from then on) and records a pass on the manager; not `ok` leaves them out, and the
+   orchestrator records its own fails on the tasks it blames (each replaces that task's provisional
+   pass) and a fail on the manager with the note, `retry: false` (the wave is over). An unverified
+   wave's provisional passes never count.
+
+### The manager session
+
+- **Its prompt is the store.** Every fresh session starts from `MANAGER_BRIEF` (appended system
+  prompt, beside `WORKER_BRIEF`) plus `waveStateText(wave, workers)`: the plan path, each key's state,
+  worker, proof and rounds, the escalations and `notes`, rendered from the wave record, about 2-4k
+  tokens for 20 tasks. A follow-up wake resumes the session and carries only the batch message. When
+  its conversation passes `MANAGER_CONTEXT_TOKENS` (60k, against 150k for a worker), or after any
+  handoff, limit, move or crash, the next wake starts a NEW session from the state text instead of a
+  handoff note: there is nothing in the conversation the store does not hold. `climayte_handoff` on
+  the manager does the same at once.
+- **What it may call**: only the manager endpoint's tools (piece 4) and its built-in tools (to read
+  the plan and run a quick look); the lean worker profile's CLAUDE.md, no skills
+  (`skills.txt` empty for `manage`), no zswarm or connections. Less to load is less to re-read.
+- **Cache**: a 1-hour prompt cache for `manage` (`CLAUDE_CODE_PROMPT_CACHE_TTL: '1h'`), where workers
+  run 5 minutes (`climayte-launch.ts:431`): a wake comes about every 10 minutes (the 600 s settle),
+  so with 5 minutes every wake would re-write its whole context into a cold cache. To be measured
+  against 5 minutes on the first real wave (piece 6's numbers).
+- **Expected cost**: a wake is a resumed turn of a few requests on a context under 60k: on the
+  meter fit above (per 1M tokens read 0.4%, write 26%, output 272% of a Pro window), about 1% of a
+  Pro window, most of it output, against about 3% for an orchestrator batch wake that also grows. The
+  manager's tools answer compact JSON and it does not restate reports, because output is the dear
+  part.
+- **It never deploys**: `MANAGER_BRIEF` says so, its endpoint has no tool that could, and
+  `wave_dispatch` appends to every brief "Do not deploy, publish or release; end with a line
+  `Commits: <sha> ...` or `Commits: none`".
+
+### Scope and identity of the manager endpoint
+
+`POST /api/corch/mcp/<managerId>`: the same MCP-over-HTTP handler as `/api/mcp`
+(`server/src/index.ts:368-400`, `handleMcpHttp`), with its own short tool list and instructions. It
+is outside `/api/mcp*`, so the URL deny every worker carries still keeps the full server out, the
+manager's included. The manager's `--mcp-config` lists it as `climayte-manager` with only a URL (no
+header, no token: the daemon listens on 127.0.0.1 and the id is not a secret). Every call is refused
+unless that worker is the live manager of a running wave and the calling process is that worker's
+CLI (`callerPidOf`, `index.ts:356`, against the attempt's `pid`). Every tool is scoped to the wave:
+`wave_state`, `wave_dispatch` (into the wave's group only; refuses kind `manage`, so there is no
+manager of managers, and refuses a key past `maxRounds`), `wave_send`, `wave_cancel`, `wave_escalate`,
+`wave_note`, `wave_report`. There is no verdict tool. Ordinary workers keep the agenthydra server
+denied, so nothing the manager starts can start anything.
+
+### Model: the `manage` kind
+
+`CLIMAYTE_KINDS` gains `manage` (`climayte-scorecard.ts:27-35`); `START.manage` is Sonnet low (rung
+1): the work is reading short reports and following a plan, the judging is done by commands, and
+every 4th pick tries Haiku as for every kind (`EXPLORE_EVERY`). The orchestrator's
+`climayte_wave_verify` is the manager's verdict, so the scorecard learns which rung manages a wave
+the orchestrator accepts, with its cost per wave, like any kind. `modelWhy` still overrides.
+
+### Build list
+
+Each piece builds and checks on its own; a later piece uses the earlier ones but each test stands
+alone. Checks run through `~/.claude/tools/fairjob.cmd -Weight 3 -Run "<command>"` from `app/`, plus
+`bun run --cwd server typecheck` for every piece.
+
+1. **The wave store and its pure helpers.** `CliMayteWave`, `wave?` and `hold?` on the worker, the
+   store under `corch/waves/`, and pure `waveStateText` and `waveDone(wave)` (every key passed,
+   failed or escalated). Files: `server/src/climayte-wave.ts` (new), `server/src/climayte-lib.ts`
+   (types), `server/tests/climayte-wave.test.ts` (new). Check:
+   `bun test server/tests/climayte-wave.test.ts` (a wave survives a reload; the state text names
+   every key's state and proof).
+2. **The hold.** `settleWorker` sets a manager with a live, unreported wave to `waiting` /
+   `hold: 'wave'`; the tick's due filter (`climayte.ts:966`) skips it; the stall rule (one nudge, then
+   failed). Files: `server/src/climayte.ts`, `server/src/climayte-wave.ts`,
+   `server/tests/climayte-wave.test.ts`. Check: the same test file, with the fake CLI
+   (`server/tests/mocks/fake-claude.ts`): a manager whose wave has a running task ends its turn
+   `waiting`, launches nothing on the next ticks, and ends `done` once the wave is reported.
+3. **The daemon's batch wake.** Pure `waveBatch(wave, workers, now) → ids | null` (the `--batch` /
+   `--settle-s` rules of `climayte_wait.py`, plus at once on a failure); the tick calls it and queues
+   one message built from `climayteReports` on the manager. Files: `server/src/climayte-wave.ts`,
+   `server/src/climayte.ts`, `server/tests/climayte-wave.test.ts`. Check:
+   `bun test server/tests/climayte-wave.test.ts` (5 tasks, batch 3: the third change wakes it once
+   with three reports; settle time out wakes it with fewer; a held wake survives a daemon reload).
+4. **The manager endpoint.** `POST /api/corch/mcp/:managerId` with the wave tools and the caller
+   check; the manager's `--mcp-config` lists it; workers' settings unchanged. Files:
+   `server/src/climayte-manager-mcp.ts` (new), `server/src/index.ts` (route),
+   `server/src/climayte-launch.ts` (`writeWorkerMcp` for `manage`), `server/tests/climayte-manager-mcp.test.ts`
+   (new). Check: `bun test server/tests/climayte-manager-mcp.test.ts` (a non-manager or a finished
+   manager is refused; `wave_dispatch` lands in the wave's group and refuses `manage`; an ordinary
+   worker's settings still deny `*://*/api/mcp*` and the agenthydra name).
+5. **Judging by command, and a scorecard that cannot be poisoned.** `judgeWaveTask` (commits, branch,
+   paths) chained after the check; verdicts `by: 'wave'` with `provisional`; `scoreRows` skips
+   provisional verdicts and counts only the newest verdict per span of work (a verdict with no
+   attempt since the previous one replaces it); `by` keeps `wave` instead of folding it into
+   `orchestrator` (`climayte.ts:2289`). Files: `server/src/climayte-wave.ts`, `server/src/climayte.ts`,
+   `server/src/climayte-scorecard.ts`, `server/tests/climayte-scorecard.test.ts`,
+   `server/tests/climayte-wave.test.ts`. Check:
+   `bun test server/tests/climayte-scorecard.test.ts server/tests/climayte-wave.test.ts` (a temp git
+   repo: a commit outside `paths` fails, one inside passes provisionally; a provisional pass is not in
+   `scoreRows`; an orchestrator fail after a pass leaves one fail, not both).
+6. **Kind, cost and placement of the manager.** `manage` in `CLIMAYTE_KINDS` with `START` rung 1;
+   the manager skips `sizeTasks`; its expected cost for placement is per wake (its kind's average wake
+   attempt, else 2%); the 1-hour cache for `manage`; `MANAGER_CONTEXT_TOKENS` starts the next wake in
+   a fresh session from `waveStateText`; totals report `managerPct` per wave. Files:
+   `server/src/climayte-scorecard.ts`, `server/src/climayte-placement.ts`,
+   `server/src/climayte-launch.ts`, `server/src/climayte.ts`, `server/src/climayte-totals.ts`,
+   `server/tests/climayte-placement.test.ts`. Check: `bun test server/tests/climayte-placement.test.ts
+   server/tests/climayte-scorecard.test.ts` (a 20-task wave's manager never answers `split needed`;
+   `pickConfig('manage', [], 0)` is Sonnet low).
+7. **The orchestrator's entry and exit.** `climayte_manage` and `climayte_wave_verify` MCP tools,
+   `POST /api/corch/waves` and `POST /api/corch/waves/:id/verify`, the under-3-tasks refusal, the
+   answer carrying the waiter command, and `climayte_status { wave }`. Files: `server/src/mcp.ts`,
+   `server/src/routes/climayte.ts`, `server/src/climayte.ts`, `server/tests/climayte-wave.test.ts`.
+   Check: `bun test server/tests/climayte-wave.test.ts server/tests/climayte.test.ts`
+   (verify `ok` confirms every provisional pass and records a pass on the manager; not `ok` confirms
+   none).
+8. **The view.** Waves as a group header in the CliMayte view (manager row, keys, escalations,
+   the report); every string through vue-i18n. Files: `web/src/components/CliMayteView.vue`,
+   `web/src/lib/climayte-status.ts` (the held state's chip), `web/src/i18n/locales/en/climayte.ts`.
+   Check: `bun run --cwd web typecheck && bun run --cwd web check:i18n`.
+9. **The skill and a live wave.** The claude-memory `climayte` skill learns when to choose
+   `climayte_manage` and the waiter line; then one real wave of 5+ code tasks. No code here. Check:
+   `GET /api/corch/totals?since=<wave start>` shows the manager's wakes and `managerPct`, the
+   orchestrator woke once (`climayte_log { group: 'mgr-<wave>' }`), and no provisional pass counted
+   before `climayte_wave_verify`.
+
 ## Status (2026-09-30)
 
 - Shipped on `main`: the runtime (`server/src/climayte.ts`), its pure half (`server/src/climayte-lib.ts`),
