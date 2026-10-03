@@ -595,7 +595,7 @@ async function onLaunchCli(cli: CliInstance) {
 }
 async function onLoginCli(cli: CliInstance) {
   const result = await loginCli(cli.id)
-  if (result?.ok) toast.success(t('instances.toastCliLoginOpened'))
+  if (result?.ok) toast.success(t('instances.toastCliLoginOpened', { name: cli.name }))
   else toast.error(result?.message ?? t('instances.toastCliLoginFailed'))
 }
 /** Send a linked CLI instance back down to the CLI table (where rename/delete/associate live). */
@@ -633,7 +633,7 @@ async function onSignInCli(inst: CMInstance) {
     // Signed in from this desktop instance's own login (server core/desktop-cli-feed.ts): no
     // terminal, no second sign-in.
     if (linked.data?.signedInFromDesktop) {
-      toast.success(t('instances.toastCliSignedInFromDesktop'))
+      toast.success(t('instances.toastCliSignedInFromDesktop', { name: cliName }))
       return
     }
     const result = await loginCli(id)
@@ -641,7 +641,7 @@ async function onSignInCli(inst: CMInstance) {
       toast.success(
         linked.data?.desktopHasNoCodeLogin
           ? t('instances.toastCliLoginOpenedNoDesktop')
-          : t('instances.toastCliLoginOpened'),
+          : t('instances.toastCliLoginOpened', { name: cliName }),
       )
     else toast.error(result?.message ?? t('instances.toastCliLoginFailed'))
   } finally {

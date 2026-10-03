@@ -159,11 +159,14 @@ export default {
   linkedCliSignedOut: 'Needs sign-in. Open this row’s ⋯ menu to finish it.',
   toastCliLaunched: 'Opened a terminal for the linked CLI instance.',
   toastCliLaunchFailed: 'Failed to launch the linked CLI instance.',
-  toastCliLoginOpened: 'Opened a terminal. Run /login there to sign this CLI instance in.',
+  // Both "added" toasts say where the login went: it lives on this row (⌨), and the CLI tab's
+  // table lists only unlinked logins, so looking there it "never added" (owner, 2026-10-02).
+  toastCliLoginOpened:
+    'Opened a terminal. Run /login there to sign “{name}” in. It lives on this account’s row (the ⌨ icon), not in the CLI tab’s list.',
   toastCliLoginOpenedNoDesktop:
     'Opened a terminal. Run /login there. This desktop instance has no Claude Code sign-in to share yet; using its Code tab once creates one, and the CLI login then follows it.',
   toastCliSignedInFromDesktop:
-    'CLI login added. It uses this desktop instance’s sign-in, so there is nothing more to do.',
+    'CLI login “{name}” added, signed in with this account’s desktop sign-in. It lives on this row (the ⌨ icon), not in the CLI tab’s list, since it is the same account.',
   toastCliLoginFailed: 'Failed to open a terminal for the CLI sign-in.',
   toastCliUnlinked: 'Unlinked. It is back in the CLI tab’s instances table.',
   toastCliUnlinkFailed: 'Failed to unlink the CLI instance.',
