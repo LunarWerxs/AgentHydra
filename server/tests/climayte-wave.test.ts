@@ -821,7 +821,7 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
       { id: 'judge-1', num: 1, name: 'judge', configDir: acct, sessionPct: 0, weekPct: 0 },
     ])
     startCliMayte()
-  })
+  }, 30_000) // five git commits take over the default 5 s on a loaded box
 
   afterAll(() => {
     for (const group of groups) climayteCancel({ group })
