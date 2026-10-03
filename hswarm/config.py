@@ -511,11 +511,18 @@ def provider_enabled(provider: str) -> bool:
     return PROVIDERS.get(provider, {}).get("enabled", True) is not False
 
 
+# 2026-10-03: AgentHydra has no launcher script and the package is not installed, so `python -m hswarm` only worked from
+# the AgentHydra root. This bootstrap puts the package's parent (argv[1]) on sys.path and runs the module, so it
+# starts from any folder with no install. No backslash and no double quote, so one command string, a stdio
+# command/args pair and a TOML array all carry it unchanged.
+_BOOTSTRAP = ("import sys,runpy;sys.path.insert(0,sys.argv[1]);sys.argv[1:2]=[];"
+              "runpy.run_module('hswarm',run_name='__main__',alter_sys=True)")
+
+
 def launcher() -> list[str]:
-    """The command that runs THIS hswarm: `python <clone>/hswarm.py` from a clone, `python -m hswarm` from a
-    package install, which has no hswarm.py beside the package. Every registration and detached start uses it."""
-    script = Path(__file__).resolve().parent.parent / "hswarm.py"
-    return [sys.executable, str(script)] if script.exists() else [sys.executable, "-m", "hswarm"]
+    """The command that runs THIS hswarm from any working folder, installed or not. Every registration, scheduled
+    task and detached start uses it; callers append the subcommand."""
+    return [sys.executable, "-c", _BOOTSTRAP, str(Path(__file__).resolve().parent.parent)]
 
 
 def _register_passthrough(name: str, original: str | None = None) -> str | None:

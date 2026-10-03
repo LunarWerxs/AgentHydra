@@ -15,12 +15,14 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 async def main() -> int:
+    sys.path.insert(0, str(REPO.parent))
+    from hswarm import config
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
     # The whole environment goes through (the SDK default passes a bare subset), so the server sees the calling
     # session's CLAUDE_CODE_* variables and its rows carry a real caller stamp, as under Claude Code.
-    params = StdioServerParameters(command=sys.executable, args=[str(REPO / "hswarm.py"), "mcp"], env=dict(os.environ))
+    params = StdioServerParameters(command=config.launcher()[0], args=[*config.launcher()[1:], "mcp"], env=dict(os.environ))
     tmp = Path(tempfile.mkdtemp(prefix="hswarm-mcp-"))
     (tmp / "a.txt").write_text("apple\nbanana\ncherry\n")
     async with stdio_client(params) as (r, w):

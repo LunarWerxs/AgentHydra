@@ -89,7 +89,7 @@ def restore(obj: Any, root: str | os.PathLike, home: str | os.PathLike | None = 
 # ---- recording -----------------------------------------------------------------------------------------------
 
 def server_command() -> list[str]:
-    return [sys.executable, str(REPO / "hswarm.py"), "mcp"]
+    return [*config.launcher(), "mcp"]
 
 
 def record_path(target: str) -> Path:
@@ -399,7 +399,7 @@ def minimize(messages: list[dict], cmd: Sequence[str] | None = None, root: str |
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     server = None
-    if "--" in argv:  # everything after -- is the server command (default: this checkout's `hswarm.py mcp`)
+    if "--" in argv:  # everything after -- is the server command (default: this checkout's `hswarm mcp`)
         server, argv = argv[argv.index("--") + 1:], argv[:argv.index("--")]
     ap = argparse.ArgumentParser(prog="hswarm replay", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog="hswarm replay FILE [options] [-- SERVER COMMAND ...]")

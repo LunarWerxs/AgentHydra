@@ -46,18 +46,22 @@ def schedule_savings() -> str:
     WHY hourly: with the daily pass alone a job that finished just after its cutoff stayed a raw folder for up to
     48 h; the 24-48 h band measured 408 folders, 1,374 MiB (2026-10-02), and archives store about 3.8x smaller."""
     if os.name != "nt":
-        return ("savings schedule: Windows only here; add `python hswarm.py maintain --quiet` (daily) and "
-                "`python hswarm.py jobs --archive-hours 24 --apply` (hourly) to cron")
+        return ("savings schedule: Windows only here; add `hswarm maintain --quiet` (daily) and "
+                "`hswarm jobs --archive-hours 24 --apply` (hourly) to cron")
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     exe = pythonw if pythonw.exists() else Path(sys.executable)
+
+    def action(*args: str) -> str:
+        argline = " ".join(f'"{part}"' for part in [*config.launcher()[1:], *args]).replace("'", "''")
+        return f"New-ScheduledTaskAction -Execute '{exe}' -Argument '{argline}' -WorkingDirectory '{REPO}'"
     script = (
-        f"$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '\"{REPO / 'hswarm.py'}\" maintain --quiet' -WorkingDirectory '{REPO}';"
+        f"$a = {action('maintain', '--quiet')};"
         "$t = New-ScheduledTaskTrigger -Daily -At 00:20;"
         "$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries"
         " -ExecutionTimeLimit (New-TimeSpan -Hours 2) -Priority 7;"
         f"Register-ScheduledTask -TaskName '{SAVINGS_TASK}' -Action $a -Trigger $t -Settings $s -Force"
         " -Description 'hswarm: archive old job folders, delete old archives, record the day, sync the fleet, rewrite the page' | Out-Null;"
-        f"$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '\"{REPO / 'hswarm.py'}\" jobs --archive-hours 24 --apply' -WorkingDirectory '{REPO}';"
+        f"$a = {action('jobs', '--archive-hours', '24', '--apply')};"
         "$t = New-ScheduledTaskTrigger -Once -At 00:50 -RepetitionInterval (New-TimeSpan -Hours 1);"
         f"Register-ScheduledTask -TaskName '{PACK_TASK}' -Action $a -Trigger $t -Settings $s -Force"
         " -Description 'hswarm: pack job folders older than 24 hours into one compressed file each' | Out-Null"
@@ -74,7 +78,7 @@ def stdio_entry() -> dict:
 
 
 def http_entry() -> dict:
-    helper = " ".join(f'"{part}"' if " " in part or "\\" in part else part for part in config.launcher() + ["connect"])
+    helper = " ".join(f'"{part}"' if re.search(r"[^\w./:=-]", part) else part for part in config.launcher() + ["connect"])
     return {"type": "http", "url": f"http://127.0.0.1:{shared.PORT}/mcp", "headersHelper": helper.replace("\\", "/")}
 
 
