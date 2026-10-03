@@ -24,6 +24,7 @@ import {
   setSearchIndexClockForTests,
   setSearchIndexPathForTests,
   toMatchExpression,
+  upkeepSearchIndex,
 } from '../src/search-index'
 import { dedupeKey } from '../src/session-locator'
 
@@ -199,6 +200,22 @@ describe('refresh and query', () => {
     const r = await refreshSearchIndex([a]) // b is gone from the store
     expect(r.removed).toBe(1)
     expect(searchIndexCandidates('second')).toEqual(new Set())
+  })
+
+  test('upkeep shrinks an index that deletions bloated, and search still answers', async () => {
+    const big = 'filler '.repeat(4000)
+    const files = Array.from({ length: 12 }, (_, i) =>
+      session(`s${i}`, [turn('user', `${big} keepword${i}`)]),
+    )
+    for (const f of files)
+      await refreshSearchIndex([f, ...files.filter((g) => g !== f)].slice(0, 12))
+    await refreshSearchIndex(files.slice(0, 1)) // drops 11 sessions
+    const before = statSync(searchIndexPath()).size
+    const r = upkeepSearchIndex()
+    expect(r).not.toBeNull()
+    expect(r?.vacuumed || r?.freeRatio === 0).toBe(true)
+    expect(statSync(searchIndexPath()).size).toBeLessThan(before)
+    expect(searchIndexCandidates('keepword0')).toEqual(new Set([claudeKey('s0')]))
   })
 
   test('coverage reports what is current, so a stale index can stand aside', async () => {

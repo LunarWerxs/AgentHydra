@@ -200,6 +200,8 @@ export function toMatchExpression(query: string): string | null {
 export interface IndexRefreshResult {
   indexed: number
   removed: number
+  /** Sessions re-indexed over an existing row (their old FTS rows were deleted). */
+  replaced: number
   /** Sessions still needing work when a budget cut the pass short. */
   remaining: number
   ms: number
@@ -259,6 +261,7 @@ async function indexOneStaleFile(
     if (existing) {
       stmts.dropFts.run(rowid)
       stmts.dropRow.run(rowid)
+      result.replaced++
     }
     stmts.insertDoc.run(rowid, key, f.source, f.path, f.mtime_ms, f.size_bytes)
     stmts.insertFts.run(rowid, text)
@@ -268,13 +271,74 @@ async function indexOneStaleFile(
   }
 }
 
+/** FTS segments past which a refresh that deleted rows triggers `optimize`. Measured 12 on a
+ *  58.7 MB file that should be ~12 MB; a healthy index sits at a handful. */
+export const OPTIMIZE_SEGMENTS = 8
+/** Free-list share of the file past which VACUUM runs (checked after optimize frees its pages). */
+export const VACUUM_FREE_RATIO = 0.25
+const UPKEEP_DELAY_MS = 1000
+
+export interface UpkeepResult {
+  segments: number
+  optimized: boolean
+  freeRatio: number
+  vacuumed: boolean
+}
+
+/**
+ * Compact the index: FTS `optimize` when segments exceed OPTIMIZE_SEGMENTS, then VACUUM when the
+ * free list exceeds VACUUM_FREE_RATIO. Does nothing (returns null) while a refresh is writing or
+ * when the index cannot be opened; never throws.
+ */
+export function upkeepSearchIndex(): UpkeepResult | null {
+  if (refreshing) return null
+  const conn = open()
+  if (!conn) return null
+  const out: UpkeepResult = { segments: 0, optimized: false, freeRatio: 0, vacuumed: false }
+  try {
+    const count = () =>
+      Number(
+        (conn.query('select count(distinct segid) as n from conv_idx').get() as { n: number }).n,
+      )
+    out.segments = count()
+    if (out.segments > OPTIMIZE_SEGMENTS) {
+      conn.exec("insert into conv(conv) values ('optimize')")
+      out.optimized = true
+    }
+    const pages = (p: string) =>
+      Number((conn.query(`pragma ${p}`).get() as Record<string, number>)[p])
+    const total = pages('page_count')
+    out.freeRatio = total > 0 ? pages('freelist_count') / total : 0
+    if (out.freeRatio > VACUUM_FREE_RATIO) {
+      conn.exec('vacuum')
+      out.vacuumed = true
+    }
+  } catch {
+    // Upkeep is best-effort; a failure leaves the index as it was.
+  }
+  return out
+}
+
+let upkeepTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Queue upkeep off the request path; retried shortly if a refresh is writing at the time. */
+function scheduleUpkeep() {
+  if (upkeepTimer) return
+  upkeepTimer = setTimeout(() => {
+    upkeepTimer = null
+    if (refreshing) return scheduleUpkeep()
+    upkeepSearchIndex()
+  }, UPKEEP_DELAY_MS)
+  upkeepTimer.unref?.()
+}
+
 export async function refreshSearchIndex(
   files: IndexableFile[],
   opts: { budgetMs?: number } = {},
 ): Promise<IndexRefreshResult> {
   const started = performance.now()
   const deadline = opts.budgetMs ? started + opts.budgetMs : Number.POSITIVE_INFINITY
-  const result: IndexRefreshResult = { indexed: 0, removed: 0, remaining: 0, ms: 0 }
+  const result: IndexRefreshResult = { indexed: 0, removed: 0, replaced: 0, remaining: 0, ms: 0 }
   const conn = open()
   if (!conn) return result
 
@@ -335,6 +399,8 @@ export async function refreshSearchIndex(
     refreshing = false
     result.ms = performance.now() - started
   }
+  // A re-indexed session deletes its old FTS rows too, so `indexed` counts when rows existed.
+  if (result.removed + result.replaced > 0) scheduleUpkeep()
   return result
 }
 
