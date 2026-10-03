@@ -22,7 +22,14 @@ try {
 // is exactly the kind of stall this exists to catch.
 renewBootWatchdog('db-open')
 export const db = new Database(DB_PATH, { create: true })
+// auto_vacuum only takes effect on a file with no tables yet (an existing file needs the VACUUM in
+// the migration below), so it comes before anything touches the schema.
+db.exec('pragma auto_vacuum = INCREMENTAL')
 db.exec('pragma journal_mode = WAL')
+// WAL + NORMAL cannot corrupt the file on a crash; it can only lose the last commits, which this
+// store (caches, a re-derivable analytics tier, a queue that is re-read) tolerates. FULL fsyncs on
+// every commit for no gain here.
+db.exec('pragma synchronous = NORMAL')
 db.exec('pragma foreign_keys = ON')
 // ⛔ WITHOUT THIS, EVERY LOCK COLLISION IS AN EXCEPTION. SQLite's default busy_timeout is ZERO:
 // a writer that finds the database locked throws SQLITE_BUSY instantly rather than waiting, and
@@ -409,7 +416,6 @@ create table if not exists session_edits (
   ts         integer
 );
 create index if not exists idx_session_edits_key on session_edits(cache_key);
-create index if not exists idx_session_edits_ts on session_edits(ts desc);
 `)
 
 // The skill listings Claude Code injected into sessions, stored ONCE per distinct listing. A
@@ -505,6 +511,70 @@ create table if not exists skill_listings (
     )
   }
 }
+
+// --- indexes and file size (docs/STORAGE-PLAN.md piece 10) -----------------------------------------
+// Gated on `pragma user_version`. Every step is idempotent and user_version is written LAST, so a
+// daemon that dies half-way simply repeats the step on its next start.
+const SCHEMA_VERSION = 1
+if ((db.query<{ user_version: number }, []>('pragma user_version').get()?.user_version ?? 0) < 1) {
+  db.transaction(() => {
+    // The sessions list reads these two with `scan_version >= ?`; a partial index holds only the
+    // rows that have the column set (the minority), so the read no longer scans the whole table.
+    db.exec(
+      'create index if not exists idx_scan_cache_thread on session_scan_cache(scan_version, cache_key, thread_key) where thread_key is not null',
+    )
+    db.exec(
+      'create index if not exists idx_scan_cache_limit on session_scan_cache(scan_version, cache_key) where limit_notice is not null',
+    )
+    // The edits cap delete orders by (ts desc, id desc); the old ts-only index could not serve it.
+    db.exec('create index if not exists idx_session_edits_ts_id on session_edits(ts desc, id desc)')
+    db.exec('drop index if exists idx_session_edits_ts')
+    // Nothing reads session_stats by gone_at through this index (no INDEXED BY anywhere) and ~66%
+    // of rows match, so the planner scans regardless.
+    db.exec('drop index if exists session_stats_gone')
+    db.exec(`pragma user_version = ${SCHEMA_VERSION}`)
+  })()
+}
+
+// A file created before auto_vacuum was set holds its free pages forever. One VACUUM converts it,
+// but it rewrites the whole file, so it runs only when the free list is worth it (over 25%). The
+// condition is the file's own auto_vacuum mode, so it happens once and a crash mid-VACUUM (which
+// SQLite rolls back) just leaves it to the next start.
+{
+  const n = (sql: string) =>
+    Object.values(db.query<Record<string, number>, []>(sql).get() ?? {})[0] ?? 0
+  if (n('pragma auto_vacuum') !== 2) {
+    const pages = n('pragma page_count')
+    if (pages > 0 && n('pragma freelist_count') / pages > 0.25) {
+      try {
+        db.exec('pragma auto_vacuum = INCREMENTAL')
+        db.exec('vacuum')
+      } catch (e) {
+        console.warn(`[agenthydra] one-time database VACUUM skipped: ${(e as Error).message}`)
+      }
+    }
+  }
+}
+
+/** Give back a bounded slice of the free list. Cheap and safe to call often; a no-op unless the file
+ *  is in incremental mode. Returns the pages released. */
+export function reclaimFreePages(maxPages = 256): number {
+  try {
+    const mode = db.query<{ auto_vacuum: number }, []>('pragma auto_vacuum').get()?.auto_vacuum
+    if (mode !== 2) return 0
+    const before =
+      db.query<{ freelist_count: number }, []>('pragma freelist_count').get()?.freelist_count ?? 0
+    if (before === 0) return 0
+    db.exec(`pragma incremental_vacuum(${Math.max(1, Math.floor(maxPages))})`)
+    const after =
+      db.query<{ freelist_count: number }, []>('pragma freelist_count').get()?.freelist_count ?? 0
+    return Math.max(0, before - after)
+  } catch {
+    return 0
+  }
+}
+// Idle housekeeping: a small slice every ten minutes. unref'd so it never keeps the process alive.
+setInterval(() => reclaimFreePages(), 10 * 60_000).unref()
 
 // Every additive-migration block above has now run (schema creation, alter-table backfills, the
 // DPAPI-blob and rate-limited/overloaded repairs) - the slowest part of "db open" a corrupt or
