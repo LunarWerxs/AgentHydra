@@ -364,15 +364,16 @@ async def run_tools(sb: Sandbox, tool_calls: list[dict], schema: dict | None = N
             pending.append(asyncio.sleep(0, result="result accepted"))
         else:
             # the receipt header rides inside the frame
-            pending.append(_framed(name, _stamped(sb, name, args, state, tc.get("id"), turn_start)))
+            pending.append(_framed(sb, name, args, state, tc.get("id"), turn_start))
     return list(await asyncio.gather(*pending)), submitted
 
 
-async def _framed(name: str, output) -> str:
+async def _framed(sb: Sandbox, name: str, args: dict, state: dict, call_id: str | None, turn_start: int) -> str:
     """A sandbox tool's output as the model sees it: inside the one <scan_data> frame, markers escaped. Output
-    whose forged frame could not be defused is withheld with an error the model can read, not shown armed."""
+    whose forged frame could not be defused is withheld with an error the model can read, not shown armed.
+    The call is made in here, not passed in: a turn cancelled before this starts then leaves no unawaited coroutine."""
     try:
-        return frame(name, await output)
+        return frame(name, await _stamped(sb, name, args, state, call_id, turn_start))
     except GuardError as e:
         return f"ERROR: {e}"
 
