@@ -12,6 +12,7 @@ import { StoreMirror } from '../src/core/login-sync-mirror'
 import { base, store, token } from './login-sync-store'
 
 const ids = new Set<string>()
+const ALL = { tables: ['logins' as const, 'queues' as const, 'chats' as const] }
 afterAll(async () => {
   for (const r of (await store('GET', '/v1/logins')).json.logins)
     if (ids.has(r.id)) await store('DELETE', `/v1/logins/${r.id}?version=${r.version}`)
@@ -46,14 +47,19 @@ test('an idle pass asks only for changes, and a write and a delete on one PC rea
   expect(put.status).toBe(200)
 
   // First pass: the full lists, one per table.
-  await a.mirror.refresh()
-  await b.mirror.refresh()
+  await a.mirror.refresh(ALL)
+  await b.mirror.refresh(ALL)
   expect(a.requests.sort()).toEqual(['GET /v1/chats', 'GET /v1/logins', 'GET /v1/queues'])
   expect(a.logins()).toEqual([id])
 
+  // A PC that asks for logins only never lists the other tables.
+  const c = pc()
+  await c.mirror.refresh()
+  expect(c.requests).toEqual(['GET /v1/logins'])
+
   // Nothing changed: exactly one request, the feed, and no list.
   a.requests.length = 0
-  await a.mirror.refresh()
+  await a.mirror.refresh(ALL)
   expect(a.requests).toEqual(['GET /v1/changes'])
 
   // A login written elsewhere reaches B through the feed.
@@ -61,14 +67,14 @@ test('an idle pass asks only for changes, and a write and a delete on one PC rea
   ids.add(id2)
   await store('PUT', `/v1/logins/${id2}`, { version: 0, blob: 'y', meta: { at: 2 } })
   b.requests.length = 0
-  await b.mirror.refresh()
+  await b.mirror.refresh(ALL)
   expect(b.requests).toEqual(['GET /v1/changes'])
   expect(b.logins().sort()).toEqual([id, id2].sort())
 
   // A delete reaches B as `gone`.
   await store('DELETE', `/v1/logins/${id}?version=1`)
   b.requests.length = 0
-  await b.mirror.refresh()
+  await b.mirror.refresh(ALL)
   expect(b.requests).toEqual(['GET /v1/changes'])
   expect(b.logins()).toEqual([id2])
 

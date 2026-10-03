@@ -215,7 +215,7 @@ async function upload(io: QueueIo, own: number, now: number): Promise<void> {
 
 async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: number }>> {
   if (io.mirror) {
-    await io.mirror.refresh({ maxAgeMs: MIRROR_FRESH_MS })
+    await io.mirror.refresh({ tables: ['queues'], maxAgeMs: MIRROR_FRESH_MS })
     const v = io.mirror.view('queues')
     if (!v.ok) throw queueFailure('Reading the queues', v.reply)
     return v.rows as Array<{ pc: string; version: number }>

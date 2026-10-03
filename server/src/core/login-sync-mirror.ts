@@ -38,30 +38,41 @@ export class StoreMirror {
     chats: new Map(),
   }
   private failed: Partial<Record<Table, Reply>> = {}
+  /** Tables whose full list was read (or failed) and that the changes feed keeps current. */
+  private listed = new Set<Table>()
   private cursor: number | null = null
   private at = 0
-  private inflight: Promise<void> | null = null
+  private queue: Promise<void> = Promise.resolve()
 
   constructor(private readonly call: Call) {}
 
-  /** Bring the mirror up to date. `maxAgeMs` reuses a refresh at most that old (0: always ask);
-   *  `full` reads the full lists whatever the cursor. Concurrent calls share one request. */
-  refresh(opts: { maxAgeMs?: number; full?: boolean; now?: number } = {}): Promise<void> {
-    const now = opts.now ?? Date.now()
-    if (!opts.full && this.at && now - this.at < (opts.maxAgeMs ?? 0)) return Promise.resolve()
-    this.inflight ??= this.run(opts.full === true).finally(() => {
-      this.inflight = null
+  /** Bring `tables` (default: logins) up to date. `maxAgeMs` reuses a refresh at most that old (0:
+   *  always ask); `full` reads the full lists whatever the cursor. Calls run one after another, so a
+   *  second caller within the window finds the first one's answer. A table nobody asked for is never
+   *  listed (a PC that shares no chats makes no chat request). */
+  refresh(opts: { tables?: Table[]; maxAgeMs?: number; full?: boolean } = {}): Promise<void> {
+    const tables = opts.tables ?? ['logins']
+    const next = this.queue.then(() => {
+      const covered = tables.every((t) => this.listed.has(t))
+      if (!opts.full && covered && this.at && Date.now() - this.at < (opts.maxAgeMs ?? 0)) return
+      return this.run(tables, opts.full === true)
     })
-    return this.inflight
+    this.queue = next.catch(() => {})
+    return next
   }
 
-  private async run(full: boolean): Promise<void> {
+  private async run(tables: Table[], full: boolean): Promise<void> {
     if (full) this.cursor = null
-    if (this.cursor !== null && (await this.applyChanges(this.cursor))) {
-      this.at = Date.now()
-      return
+    if (this.cursor !== null && !(await this.applyChanges(this.cursor))) this.cursor = null
+    if (this.cursor === null) {
+      // The first pass, a fallback, or {full: true}: the lists of what is asked for.
+      this.listed = new Set()
+      this.failed = {}
+      await this.readLists(tables, null)
+    } else {
+      const missing = tables.filter((t) => !this.listed.has(t))
+      if (missing.length) await this.readLists(missing, this.cursor)
     }
-    await this.readLists()
     this.at = Date.now()
   }
 
@@ -71,13 +82,10 @@ export class StoreMirror {
     try {
       r = await this.call('GET', `/v1/changes?since=${since}`)
     } catch {
-      r = { status: 0, json: null }
-    }
-    const j = r.json
-    if (r.status !== 200 || j?.full === true || !Number.isInteger(j?.rev)) {
-      this.cursor = null
       return false
     }
+    const j = r.json
+    if (r.status !== 200 || j?.full === true || !Number.isInteger(j?.rev)) return false
     for (const g of Array.isArray(j.gone) ? j.gone : [])
       if (g?.table in KEY) this.rowsBy[g.table as Table].delete(g.id)
     for (const t of TABLES)
@@ -87,20 +95,19 @@ export class StoreMirror {
     return true
   }
 
-  private async readLists(): Promise<void> {
-    let low: number | null = null
+  /** Full lists of `tables`. The cursor becomes the lowest rev among them and `cursor`; none (null)
+   *  when a list failed or came without x-store-rev, so the next refresh reads the lists again. */
+  private async readLists(tables: Table[], cursor: number | null): Promise<void> {
+    let low = cursor
     let complete = true
-    this.failed = {}
-    for (const t of TABLES) {
+    for (const t of TABLES.filter((x) => tables.includes(x.name))) {
+      delete this.failed[t.name]
+      this.listed.add(t.name)
       const res = await this.listOne(t.name, t.key)
-      if (!res) {
-        complete = false
-        continue
-      }
-      low = low === null ? res.rev : Math.min(low, res.rev)
-      if (res.rev < 0) complete = false
+      if (!res || res.rev < 0) complete = false
+      else low = low === null ? res.rev : Math.min(low, res.rev)
     }
-    this.cursor = complete && low !== null && low >= 0 ? low : null
+    this.cursor = complete ? low : null
   }
 
   /** One full list into the mirror; its rev (-1 when the header is missing), null when it failed. */

@@ -187,7 +187,7 @@ function sealedOk(x: any, id: string): x is Sealed {
 async function readRows(io: ChatIo): Promise<Map<string, StoreRow>> {
   let listed: StoreRow[]
   if (io.mirror) {
-    await io.mirror.refresh({ maxAgeMs: MIRROR_FRESH_MS })
+    await io.mirror.refresh({ tables: ['chats'], maxAgeMs: MIRROR_FRESH_MS })
     const v = io.mirror.view('chats')
     if (!v.ok) throw chatFailure('Reading the chats', v.reply)
     listed = v.rows as StoreRow[]

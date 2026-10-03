@@ -1014,7 +1014,13 @@ async function executeSyncPass(
   cliWaitingPass = new Set()
   try {
     const m = mirrorFor(l)
-    await m.refresh()
+    await m.refresh({
+      tables: [
+        'logins',
+        ...(c.shareQueue ? ['queues' as const] : []),
+        ...(c.shareChats ? ['chats' as const] : []),
+      ],
+    })
     const list = m.view('logins')
     if (!list.ok) throw httpError('Reading the store', list.reply)
     const store = new Map<string, StoreRow>()
