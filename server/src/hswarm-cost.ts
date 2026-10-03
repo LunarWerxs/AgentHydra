@@ -1,30 +1,30 @@
-// server/src/zswarm-cost.ts - the DeepSeek zswarm's spend, read out of its own ledger, plus its live
-// account balance.
+// server/src/hswarm-cost.ts - HSwarm's spend, read out of its own ledger, plus the live balance of
+// the DeepSeek account its key pays from.
 //
-// The zswarm (`Lunarwerx/zswarm`, cloned at D:/NEWProjects/shared/zswarm; MCP server `zswarm`) is the
-// fleet's DeepSeek fan-out tier. It journals one JSON line per TASK to `~/.zswarm/ledger.jsonl`
-// (zswarm's `config.py` LEDGER) and one directory per JOB under `~/.zswarm/jobs/<id>/` (the session
-// side of this is server/src/zswarm-sessions.ts). Nothing here writes either file - this is a reader,
-// same posture as every other store AgentHydra reads.
+// HSwarm (the hswarm/ package in this repo; MCP server `hswarm`) is the fleet's cheap fan-out tier.
+// It journals one JSON line per TASK to `~/.hswarm/ledger.jsonl` (hswarm/config.py LEDGER) and one
+// directory per JOB under `~/.hswarm/jobs/<id>/` (the session side of this is
+// server/src/hswarm-sessions.ts). Nothing here writes either file - this is a reader, same posture
+// as every other store AgentHydra reads. 2026-10-03: ZSwarm is retired and HSwarm replaces it; `hswarm
+// import-zswarm` merged ZSwarm's ledger into HSwarm's, so its spend history reads from here too.
 //
-// THE BALANCE CALL, AND WHY IT NEVER THROWS. `GET https://api.deepseek.com/user/balance` needs the
-// same key the zswarm itself resolves - env `DEEPSEEK_API_KEY` first, else `refs.DEEPSEEK_API_KEY` in
-// `~/.dsh/.credentials.yaml` (zswarm's own `config.py` `_read_yaml_key`, same file and same field).
-// list_usage calls deepseekBalance() on every survey, right beside the per-account Claude quota
-// checks, so a slow or unreachable DeepSeek endpoint must never slow or fail a Claude quota read:
-// short timeout, cached, and any failure degrades to `status: 'unknown'` - this function does not
-// throw. ⛔ The key itself is read by this code at runtime and is never logged, printed, or returned.
+// THE BALANCE CALL, AND WHY IT NEVER THROWS. `GET https://api.deepseek.com/user/balance` needs a
+// key, found in the order HSwarm itself finds its DeepSeek keys (readDeepSeekKey). list_usage calls
+// deepseekBalance() on every survey, right beside the per-account Claude quota checks, so a slow or
+// unreachable DeepSeek endpoint must never slow or fail a Claude quota read: short timeout, cached,
+// and any failure degrades to `status: 'unknown'` - this function does not throw. ⛔ The key itself
+// is read by this code at runtime and is never logged, printed, or returned.
 
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { ZSWARM_HOME } from './config'
+import { hswarmHome } from './hswarm'
 
-/** One line of `~/.zswarm/ledger.jsonl` - one entry per TASK (a job is usually several). `cost_usd`,
+/** One line of `~/.hswarm/ledger.jsonl` - one entry per TASK (a job is usually several). `cost_usd`,
  *  `in_hit`/`in_miss`/`out` and `reasoning` are null when the backend reports no accounting at all
  *  (the `dsh` backend: DeepSeek Harness headless keeps no cost data of its own). Narrowed to the
  *  fields this module actually aggregates; the ledger carries more (see the TODO this landed from). */
-export interface ZswarmLedgerEntry {
+export interface HSwarmLedgerEntry {
   ts: string
   job: string
   task: string
@@ -37,34 +37,34 @@ export interface ZswarmLedgerEntry {
 /**
  * Read every ledger line, skipping a torn or unparsable one rather than failing the whole file.
  *
- * The ledger is appended to live by every running zswarm job, so the last line can be mid-write at
+ * The ledger is appended to live by every running HSwarm job, so the last line can be mid-write at
  * the moment we read it - the same reason dsh-sessions.ts's readDshLog and every other JSONL reader
  * in this codebase treats one bad line as a skip, not a throw.
  */
-export function readZswarmLedger(root: string = ZSWARM_HOME): ZswarmLedgerEntry[] {
+export function readHSwarmLedger(root: string = hswarmHome()): HSwarmLedgerEntry[] {
   let text: string
   try {
     text = readFileSync(join(root, 'ledger.jsonl'), 'utf8')
   } catch {
     return []
   }
-  const out: ZswarmLedgerEntry[] = []
+  const out: HSwarmLedgerEntry[] = []
   for (const line of text.split('\n')) {
     const trimmed = line.trim()
     if (!trimmed) continue
     try {
       const rec = JSON.parse(trimmed)
       if (rec && typeof rec === 'object' && typeof rec.ts === 'string')
-        out.push(rec as ZswarmLedgerEntry)
+        out.push(rec as HSwarmLedgerEntry)
     } catch {
-      // a torn final line, or a record from a newer zswarm we cannot parse: skip it
+      // a torn final line, or a record from a newer HSwarm we cannot parse: skip it
     }
   }
   return out
 }
 
 /** One day/model/backend bucket's total spend. */
-export interface ZswarmCostRow {
+export interface HSwarmCostRow {
   /** UTC calendar day, taken straight off `ts` (`2026-09-15`) - the ledger already writes UTC. */
   day: string
   model: string
@@ -73,8 +73,8 @@ export interface ZswarmCostRow {
   tasks: number
 }
 
-export interface ZswarmCostSummary {
-  rows: ZswarmCostRow[]
+export interface HSwarmCostSummary {
+  rows: HSwarmCostRow[]
   total_usd: number
   /** Tasks whose backend keeps no cost data (`dsh`) or that errored before anything priced - counted
    *  so `total_usd` never LOOKS complete when part of the ledger is genuinely unpriced. */
@@ -84,15 +84,15 @@ export interface ZswarmCostSummary {
 /**
  * Sum `cost_usd` from the ledger by day/model/backend.
  *
- * A `null` cost contributes zero dollars but is still counted in `unpriced_tasks`, so "the zswarm
- * spent nothing today" and "the zswarm spent an amount we cannot see" stay distinguishable - folding
+ * A `null` cost contributes zero dollars but is still counted in `unpriced_tasks`, so "the swarm
+ * spent nothing today" and "the swarm spent an amount we cannot see" stay distinguishable - folding
  * null into 0 silently would report the second as the first.
  */
-export function summarizeZswarmCost(root: string = ZSWARM_HOME): ZswarmCostSummary {
-  const buckets = new Map<string, ZswarmCostRow>()
+export function summarizeHSwarmCost(root: string = hswarmHome()): HSwarmCostSummary {
+  const buckets = new Map<string, HSwarmCostRow>()
   let total = 0
   let unpriced = 0
-  for (const entry of readZswarmLedger(root)) {
+  for (const entry of readHSwarmLedger(root)) {
     const day = (entry.ts || '').slice(0, 10) || 'unknown'
     const model = entry.model || 'unknown'
     const backend = entry.backend || 'unknown'
@@ -122,7 +122,7 @@ const BALANCE_URL = 'https://api.deepseek.com/user/balance'
  *  wait on a slow DeepSeek endpoint to answer. */
 const BALANCE_TIMEOUT_MS = 3_000
 /** How long a reading is trusted before the next survey re-checks. The balance moves only as fast as
- *  the zswarm spends it, so re-reading every survey call would be a network round trip for a number
+ *  the swarm spends it, so re-reading every survey call would be a network round trip for a number
  *  that is still correct to the cent. */
 const BALANCE_CACHE_MS = 5 * 60_000
 
@@ -138,10 +138,31 @@ export interface DeepSeekBalance {
 let cached: DeepSeekBalance | null = null
 let cachedAt = 0
 
+/** HSwarm's `DEEPSEEK_API_KEYS` form: several keys split on commas, semicolons or whitespace
+ *  (hswarm/config.py _split_keys). */
+const splitKeys = (value: string | undefined): string[] =>
+  (value ?? '').split(/[,;\s]+/).filter(Boolean)
+
+/** HSwarm's key files: one key per line, blank lines and `#` comments skipped (hswarm/config.py
+ *  _read_key_lines). A missing or unreadable file is no keys. */
+function keyLines(path: string): string[] {
+  try {
+    return readFileSync(path, 'utf8')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'))
+  } catch {
+    return []
+  }
+}
+
 /**
- * The DeepSeek API key, read the same way the zswarm itself resolves it: env `DEEPSEEK_API_KEY`
- * first, else `refs.DEEPSEEK_API_KEY` in `~/.dsh/.credentials.yaml` (zswarm's `config.py`
- * `_read_yaml_key`, same file and field DSH itself writes into).
+ * The DeepSeek API key, found where HSwarm finds its own (hswarm/config.py key_sources), so the
+ * balance list_usage reports is the account the swarm spends from: the first of env
+ * `DEEPSEEK_API_KEYS`, else env `DEEPSEEK_API_KEY`, else the first line of
+ * `<HSwarm home>/secrets/deepseek_api_keys` (a key typed into HSwarm's own provider file is not read
+ * here). Last, `refs.DEEPSEEK_API_KEY` in `~/.dsh/.credentials.yaml`, DeepSeek Harness's file, which
+ * this read before HSwarm replaced ZSwarm (2026-10-03).
  *
  * ⛔ NOT A GENERAL YAML PARSER. The file is a flat `key: value` list under one `refs:` section - this
  * looks for exactly that line rather than pulling in a YAML dependency for one field. The value is
@@ -150,8 +171,12 @@ let cachedAt = 0
 export function readDeepSeekKey(
   credentialsPath: string = join(homedir(), '.dsh', '.credentials.yaml'),
 ): string | null {
+  const listed = splitKeys(process.env.DEEPSEEK_API_KEYS)[0]
+  if (listed) return listed
   const envKey = process.env.DEEPSEEK_API_KEY?.trim()
   if (envKey) return envKey
+  const swarmKey = keyLines(join(hswarmHome(), 'secrets', 'deepseek_api_keys'))[0]
+  if (swarmKey) return swarmKey
   let text: string
   try {
     text = readFileSync(credentialsPath, 'utf8')
@@ -187,7 +212,8 @@ export async function deepseekBalance(
       balance_usd: null,
       currency: null,
       checked_at: new Date(now).toISOString(),
-      reason: 'no DeepSeek API key found (env DEEPSEEK_API_KEY or ~/.dsh/.credentials.yaml)',
+      reason:
+        'no DeepSeek API key found (env DEEPSEEK_API_KEYS or DEEPSEEK_API_KEY, HSwarm secrets/deepseek_api_keys, or ~/.dsh/.credentials.yaml)',
     }
     cached = result
     cachedAt = now
@@ -239,7 +265,7 @@ export async function deepseekBalance(
 
 /** Test-only: drop the cached balance so a test can force a fresh check instead of reading whatever
  *  an earlier test in the same process left behind. */
-export function resetZswarmBalanceCache(): void {
+export function resetHSwarmBalanceCache(): void {
   cached = null
   cachedAt = 0
 }

@@ -62,7 +62,7 @@ export default {
   sourceOpenCode: 'OpenCode',
   sourceHermes: 'Hermes',
   sourceDsh: 'DeepSeek',
-  sourceZswarm: 'zswarm',
+  sourceZswarm: 'HSwarm',
   readOnlySource: '{source} sessions are read-only here. Carry this one on in {source} itself.',
   filterInstance: 'Instance',
   instanceAll: 'All instances',

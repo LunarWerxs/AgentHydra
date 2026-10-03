@@ -513,13 +513,13 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'list_usage',
     description:
-      "Survey the quota of EVERY managed instance (desktop + CLI) in one call, each with its permanent instance `num` and its `advice` verdict, plus the DeepSeek zswarm's own account balance (`deepseek`) beside them. Use this to answer 'which of my accounts has headroom?' before routing heavy work, or to find the account that is about to hit its weekly cap — then refer to the winner by its number. When every account is saturated, the mechanical/checkable work belongs on the zswarm (`zswarm_run`), not queued behind a Claude account's reset. Checks are concurrent and cost no quota.",
+      "Survey the quota of EVERY managed instance (desktop + CLI) in one call, each with its permanent instance `num` and its `advice` verdict, plus the DeepSeek account balance HSwarm spends from (`deepseek`) beside them. Use this to answer 'which of my accounts has headroom?' before routing heavy work, or to find the account that is about to hit its weekly cap — then refer to the winner by its number. When every account is saturated, the mechanical/checkable work belongs on HSwarm (`hswarm_run`), not queued behind a Claude account's reset. Checks are concurrent and cost no quota.",
     inputSchema: S(),
     run: async () => {
       const survey = (await apiOrLocal('/api/usage/survey', async () => {
         const { surveyUsage } = await import('./usage-service')
         const { usageAdvice } = await import('./usage')
-        const { deepseekBalance } = await import('./zswarm-cost')
+        const { deepseekBalance } = await import('./hswarm-cost')
         const [rows, deepseek] = await Promise.all([surveyUsage(), deepseekBalance()])
         return {
           rows: rows.map((r) => ({ ...r, advice: usageAdvice(r.result.snapshot) })),
@@ -529,7 +529,7 @@ export const TOOLS: McpEngineTool[] = [
       })) as Record<string, unknown>
       // Every row saturated (weekly binding % >= 90, and actually read — 'unknown' never counts as
       // saturated, that would be guessing) is the trigger the TODO this landed from names: route
-      // mechanical, checkable batch work to the zswarm instead of waiting on a reset.
+      // mechanical, checkable batch work to HSwarm instead of waiting on a reset.
       const rows = (survey.rows ?? []) as Array<{ advice?: { bindingPct?: number | null } }>
       const allSaturated = rows.length > 0 && rows.every((r) => (r.advice?.bindingPct ?? -1) >= 90)
       return {
@@ -540,7 +540,7 @@ export const TOOLS: McpEngineTool[] = [
         nextStep:
           'Route heavy work to the row with the lowest WEEKLY (all models) %, not the lowest session %, and name it by its `num` when you say where you sent it. A row whose advice.severity is "unknown" was not read successfully; that is not headroom.' +
           (allSaturated
-            ? ' EVERY account is at or above 90% weekly: do not fan out to any of them. Mechanical, checkable batch work (find/read/classify/extract-to-schema, not judgment) goes to the DeepSeek zswarm instead - zswarm_run, `deepseek` balance permitting.'
+            ? ' EVERY account is at or above 90% weekly: do not fan out to any of them. Mechanical, checkable batch work (find/read/classify/extract-to-schema, not judgment) goes to HSwarm instead - hswarm_run, `deepseek` balance permitting.'
             : ''),
       }
     },
@@ -766,7 +766,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'climayte_run',
     description:
-      "MUTATES: CLIMAYTE A TASK. When the owner tells a chat to climayte a task or fully delegate it, and for any work that needs Claude quality the zswarm could not deliver, the chat keeps only the orchestration (split, dispatch, read results, check them) and the real work goes here. AgentHydra chooses the account: new work goes around an account a person is using (its desktop app used in the last ten minutes) or another Claude session runs on, the calling chat's own included. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra's CliMayte view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what \"done\" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2 per Pro window) is how many concurrent workers of THIS GROUP an account takes (other groups count separately); it is a preference: when no account within it takes a task, the task goes to an account with room past it, unless `per_account_strict: true` makes it a hard cap. An account runs 4 workers per Pro window across all groups, at most 8, and only as many as its projected 5-hour usage holds under the 85% stop line; top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). SIZE: each task is sized before it starts against the plans of its accounts (a Max 5x window holds five Pro windows): a task expected to use more than half of the biggest window it may use starts NOTHING in this dispatch and comes back `split needed` with the number of pieces (send them as self-contained tasks, or `size: whole` to run it as it is); a task that fits a fresh window but not what any account has left WAITS for room (status waiting) while smaller tasks start. Returns the group and, per worker, its id, title, status, account and `size` (expected % of a Pro window and its basis, the biggest window, the most room any account has now); then climayte_status {group, wait_seconds} waits for results.",
+      "MUTATES: CLIMAYTE A TASK. When the owner tells a chat to climayte a task or fully delegate it, and for any work that needs Claude quality HSwarm could not deliver, the chat keeps only the orchestration (split, dispatch, read results, check them) and the real work goes here. AgentHydra chooses the account: new work goes around an account a person is using (its desktop app used in the last ten minutes) or another Claude session runs on, the calling chat's own included. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra's CliMayte view. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what \"done\" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2 per Pro window) is how many concurrent workers of THIS GROUP an account takes (other groups count separately); it is a preference: when no account within it takes a task, the task goes to an account with room past it, unless `per_account_strict: true` makes it a hard cap. An account runs 4 workers per Pro window across all groups, at most 8, and only as many as its projected 5-hour usage holds under the 85% stop line; top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). SIZE: each task is sized before it starts against the plans of its accounts (a Max 5x window holds five Pro windows): a task expected to use more than half of the biggest window it may use starts NOTHING in this dispatch and comes back `split needed` with the number of pieces (send them as self-contained tasks, or `size: whole` to run it as it is); a task that fits a fresh window but not what any account has left WAITS for room (status waiting) while smaller tasks start. Returns the group and, per worker, its id, title, status, account and `size` (expected % of a Pro window and its basis, the biggest window, the most room any account has now); then climayte_status {group, wait_seconds} waits for results.",
     inputSchema: S(
       {
         tasks: {
@@ -2158,8 +2158,8 @@ CHECK YOUR OWN QUOTA BEFORE HEAVY WORK, unprompted: check_my_usage {} (~300ms, n
 NEVER QUOTE AN UNATTRIBUTED PERCENTAGE: name the instance; say so when identity.warning is set.
 A human who tells you your instance number OVERRULES the detection.
 
-list_usage {} surveys every account (\`deepseek\` = zswarm balance). Mechanical, checkable work
-goes to the zswarm (zswarm_run). Mutating tools say MUTATES:; never /login for a human.
+list_usage {} surveys every account (\`deepseek\` = HSwarm's balance). Mechanical, checkable work
+goes to HSwarm (hswarm_run). Mutating tools say MUTATES:; never /login for a human.
 
 CLIMAYTE IS THE CLAUDE-QUALITY TIER: climayte_run {tasks:[{prompt, cwd}]} runs self-contained
 work on his CLI accounts, moving it when one runs out. Use it for Claude-quality pieces, above all

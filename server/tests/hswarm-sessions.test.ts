@@ -1,7 +1,7 @@
-// server/tests/zswarm-sessions.test.ts - the DeepSeek zswarm job reader (server/src/zswarm-sessions.ts).
+// server/tests/hswarm-sessions.test.ts - the HSwarm job reader (server/src/hswarm-sessions.ts).
 //
 // A real fixture store: real directories, real job.json files, written with the same layout
-// `Lunarwerx/zswarm`'s `zswarm/jobstore.py` writes (job.summary/tasks/results). Nothing is mocked -
+// `hswarm/job.py` writes (job.summary/tasks/results). Nothing is mocked -
 // every bug this reader can have is a bug about the shape of job.json on disk.
 
 import { afterAll, describe, expect, spyOn, test } from 'bun:test'
@@ -9,10 +9,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  listZswarmSessions,
-  listZswarmSessionsAsync,
-  readZswarmSession,
-} from '../src/zswarm-sessions'
+  listHSwarmSessions,
+  listHSwarmSessionsAsync,
+  readHSwarmSession,
+} from '../src/hswarm-sessions'
 
 const homes: string[] = []
 afterAll(() => {
@@ -20,7 +20,7 @@ afterAll(() => {
 })
 
 function newHome(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'zswarm-home-'))
+  const dir = mkdtempSync(join(tmpdir(), 'hswarm-home-'))
   homes.push(dir)
   return dir
 }
@@ -64,11 +64,11 @@ const JOB_TWO_TASKS = {
   },
 }
 
-describe('listZswarmSessions', () => {
+describe('listHSwarmSessions', () => {
   test('lists a job by its own job.json summary', () => {
     const home = newHome()
     writeJob(home, JOB_TWO_TASKS.summary.job_id, JOB_TWO_TASKS)
-    const rows = listZswarmSessions(home)
+    const rows = listHSwarmSessions(home)
     expect(rows).toHaveLength(1)
     expect(rows[0]?.session_id).toBe('20240715-051622-08a3')
     expect(rows[0]?.title).toBe('mcp-smoke')
@@ -80,11 +80,11 @@ describe('listZswarmSessions', () => {
   test('a job directory with no job.json yet contributes nothing', () => {
     const home = newHome()
     mkdirSync(join(home, 'jobs', 'still-running'), { recursive: true })
-    expect(listZswarmSessions(home)).toEqual([])
+    expect(listHSwarmSessions(home)).toEqual([])
   })
 
-  test('a zswarm home that does not exist lists as empty, not an error', () => {
-    expect(listZswarmSessions(join(tmpdir(), 'no-such-zswarm-home-at-all'))).toEqual([])
+  test('an HSwarm home that does not exist lists as empty, not an error', () => {
+    expect(listHSwarmSessions(join(tmpdir(), 'no-such-hswarm-home-at-all'))).toEqual([])
   })
 
   // Regression (2026-09-27): every whole-store sweep re-read and re-parsed every job.json - 625 jobs,
@@ -93,7 +93,7 @@ describe('listZswarmSessions', () => {
   // global JSON.parse by a marker only its jobs carry.
   test('a relisting parses only the jobs that changed, and still reads those', async () => {
     const home = newHome()
-    const MARK = 'zswarm-reread-'
+    const MARK = 'hswarm-reread-'
     const job = (id: string, label: string) =>
       writeJob(home, id, { summary: { job_id: `${MARK}${id}`, label }, tasks: [], results: {} })
     job('a', 'alpha')
@@ -105,20 +105,20 @@ describe('listZswarmSessions', () => {
       parse.mock.calls.filter(([text]) => typeof text === 'string' && text.includes(MARK)).length
     try {
       expect(
-        listZswarmSessions(home)
+        listHSwarmSessions(home)
           .map((r) => r.title)
           .sort(),
       ).toEqual(['alpha', 'beta'])
       expect(parses()).toBe(2)
 
       parse.mockClear()
-      expect(listZswarmSessions(home)).toHaveLength(2)
+      expect(listHSwarmSessions(home)).toHaveLength(2)
       expect(parses()).toBe(0)
 
       // The async listing the sweep uses shares the cache, and re-reads the job that changed.
       job('b', 'beta, still running')
       parse.mockClear()
-      const rows = await listZswarmSessionsAsync(home)
+      const rows = await listHSwarmSessionsAsync(home)
       expect(rows.find((r) => r.session_id === `${MARK}b`)?.title).toBe('beta, still running')
       expect(parses()).toBe(1)
     } finally {
@@ -133,17 +133,17 @@ describe('listZswarmSessions', () => {
       tasks: [],
       results: {},
     })
-    const rows = listZswarmSessions(home)
+    const rows = listHSwarmSessions(home)
     expect(rows[0]?.title).toBe('unlabeled-job')
     expect(rows[0]?.project).toBe('unlabeled-job')
   })
 })
 
-describe('readZswarmSession', () => {
+describe('readHSwarmSession', () => {
   test('turns each task into a prompt/answer pair, in task order', () => {
     const home = newHome()
     const path = writeJob(home, JOB_TWO_TASKS.summary.job_id, JOB_TWO_TASKS)
-    const content = readZswarmSession(path)
+    const content = readHSwarmSession(path)
     expect(content).not.toBeNull()
     const events = content?.events ?? []
     // task 1: user prompt, assistant answer
@@ -171,7 +171,7 @@ describe('readZswarmSession', () => {
       tasks: [{ id: 't1', prompt: 'still going' }],
       results: {},
     })
-    const events = readZswarmSession(path)?.events ?? []
+    const events = readHSwarmSession(path)?.events ?? []
     expect(events).toHaveLength(1)
     expect(events[0]).toMatchObject({ role: 'user', text: 'still going' })
   })
@@ -181,6 +181,6 @@ describe('readZswarmSession', () => {
     const dir = join(home, 'jobs', 'corrupt')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'job.json'), '{not json')
-    expect(readZswarmSession(join(dir, 'job.json'))).toBeNull()
+    expect(readHSwarmSession(join(dir, 'job.json'))).toBeNull()
   })
 })

@@ -1,6 +1,6 @@
 # HydraSwarm (hswarm)
 
-HydraSwarm is a copy of ZSwarm integrated into AgentHydra, running side-by-side with the original without sharing any state.
+HydraSwarm is AgentHydra's swarm. It began as a copy of ZSwarm and replaced it when ZSwarm was retired (2026-10-03); `hswarm import-zswarm` brings a ZSwarm home's history across.
 
 ## What is HydraSwarm?
 

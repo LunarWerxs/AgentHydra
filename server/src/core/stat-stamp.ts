@@ -1,7 +1,7 @@
 // server/src/core/stat-stamp.ts - "is this file still the bytes I parsed?", answered from a stat.
 //
 // Shared by every per-file parse cache that the daemon re-validates on each scan (the desktop chat
-// store in core/chat-store-scan.ts, the zswarm's job.json files in zswarm-sessions.ts), so the one
+// store in core/chat-store-scan.ts, HSwarm's job.json files in hswarm-sessions.ts), so the one
 // subtle rule below has one owner.
 
 import type { Stats } from 'node:fs'

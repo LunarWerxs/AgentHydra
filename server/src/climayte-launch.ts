@@ -286,7 +286,7 @@ function launchText(
  *  connections-local is NOT here (2026-10-02): workers are given tasks that use connections_execute
  *  (the memory tools, the fourman board), and a worker without it reported "the Connections MCP
  *  tools were not exposed in this session" and drove the local MCP by hand through a script.
- *  zswarm stays too: a worker hands wide, cheap work to it. */
+ *  hswarm stays too: a worker hands wide, cheap work to it. */
 const WORKER_DENIED_MCP: readonly string[] = [MCP_SERVER_KEY, 'magnific']
 
 /** AgentHydra's own endpoint on any host, port and scheme, as a `deniedMcpServers` URL pattern:

@@ -120,13 +120,14 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | '
  * Claude/Codex are JSONL; OpenCode and Hermes are each their own shared SQLite DB — two different
  * schemas, so two different readers. `dsh` is DeepSeek Harness: one file per session like Claude's,
  * except the bytes are zstd frames, so it needs a reader of its own rather than a catalog row
- * claiming Claude's format (server/src/dsh-sessions.ts). `zswarm` is the DeepSeek fan-out tier
- * (`Lunarwerx/zswarm`): one JSON job file per "session", where a task's prompt/result stand in for a
- * turn because the zswarm has no back-and-forth conversation of its own (server/src/zswarm-
- * sessions.ts). `foreign` is the last: one reader with a small adapter per tool (Grok, Kimi, VS Code
- * Copilot, Copilot CLI, Zed), which share no format with each other but do share the one thing that
- * matters here — a list of conversations that can be read, and no per-token usage to account for.
- * See server/src/foreign-sessions.ts.
+ * claiming Claude's format (server/src/dsh-sessions.ts). `zswarm` is the swarm's jobs: one JSON job
+ * file per "session", where a task's prompt/result stand in for a turn because the swarm has no
+ * back-and-forth conversation of its own (server/src/hswarm-sessions.ts). Since 2026-10-03 that is
+ * HSwarm's home (ZSwarm is retired; its jobs were imported there), and the id stays `zswarm`
+ * because it is a frozen MCP API value (server/mcp-api-levels/). `foreign` is the last: one reader
+ * with a small adapter per tool (Grok, Kimi, VS Code Copilot, Copilot CLI, Zed), which share no
+ * format with each other but do share the one thing that matters here — a list of conversations
+ * that can be read, and no per-token usage to account for. See server/src/foreign-sessions.ts.
  */
 export type SessionSource =
   | 'claude'

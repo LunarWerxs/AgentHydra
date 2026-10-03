@@ -1532,7 +1532,7 @@ startResetWatch({
   },
 })
 
-// --- HydraSwarm sidecar (serves ZSwarm console API on /api/hswarm/*) ---------
+// --- HydraSwarm sidecar (serves the HSwarm console API on /api/hswarm/*) -----
 // On by default; AGENTHYDRA_HSWARM_ENABLED=0 switches it off. Runs in the
 // background with automatic restart on crash (exponential backoff).
 void startHSwarm({ logDir: join(DATA_DIR, 'logs') })

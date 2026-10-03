@@ -1,7 +1,9 @@
-"""Stats from ZSwarm's or HSwarm's utilization DB, served to the console.
+"""Stats from HSwarm's utilization DB, served to the console.
 
-When HSWARM_STATS_DB is set, reads ZSwarm's production database (read-only) instead of HSwarm's own.
-ZSwarm is the live swarm until it retires; HSwarm only reads its history.
+When HSWARM_STATS_DB is set, reads that database (read-only) instead of HSwarm's own, reported as ZSwarm history:
+it was for reading ZSwarm's production database while ZSwarm ran. ZSwarm is retired (2026-10-03) and
+`hswarm import-zswarm` merged its stats into HSwarm's own DB, so the daemon no longer sets it; a person's own
+value is still honoured.
 """
 from __future__ import annotations
 

@@ -804,7 +804,7 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
   const seeded = {
     agenthydra: local(7787, '/api/mcp'),
     magnific: { type: 'http', url: 'https://mcp.magnific.com' },
-    zswarm: { ...local(7790), headersHelper: 'python zswarm.py connect' },
+    hswarm: { ...local(7793), headersHelper: 'python -m hswarm connect' },
     'connections-local': { ...local(7791), headersHelper: 'node loader.mjs --connect' },
   }
   const keyed = { ...local(7792), headers: { Authorization: 'Bearer not-a-real-token' } }
@@ -832,7 +832,7 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
   // What the --mcp-config file may carry is the filter's test below; fake-claude drops what the
   // settings deny (by name or URL) itself, as the real CLI does, so this one cannot tell whether
   // the file left them out.
-  test('connections-local and zswarm on either account, and its files go when it is done', async () => {
+  test('connections-local and hswarm on either account, and its files go when it is done', async () => {
     setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
     setCliMayteOwnerDir(ownerDir)
     for (const [id, configDir] of [
@@ -860,7 +860,7 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
       const init = events.find((e) => e.subtype === 'init')
       expect([id, init?.mcp_servers?.map((s) => s.name)]).toEqual([
         id,
-        ['connections-local', 'zswarm'],
+        ['connections-local', 'hswarm'],
       ])
       // 440 settings files and 18 MCP files were left behind on the owner's machine (2026-10-02).
       expect([
@@ -925,8 +925,9 @@ describe("the owner's MCP servers a worker is given (ownerMcpServers)", () => {
     const { names, file, logged } = carry(
       JSON.stringify({
         mcpServers: {
-          zswarm: http('http://127.0.0.1:7790/mcp', {
-            headersHelper: 'python C:/Users/someone/.claude/tools/zswarm/zswarm.py connect',
+          hswarm: http('http://127.0.0.1:7793/mcp', {
+            headersHelper:
+              'C:/Users/someone/AppData/Local/Programs/Python/Python314/python.exe -m hswarm connect',
           }),
           'connections-local': http('http://127.0.0.1:7791/mcp', {
             headersHelper:
@@ -942,7 +943,7 @@ describe("the owner's MCP servers a worker is given (ownerMcpServers)", () => {
         },
       }),
     )
-    expect(names).toEqual(['connections-local', 'remote', 'zswarm'])
+    expect(names).toEqual(['connections-local', 'hswarm', 'remote'])
     expect(file).not.toContain(SECRET)
     // A server left out for what it carries is named, and only named.
     for (const name of Object.keys(refused)) expect(logged).toContain(`"${name}"`)

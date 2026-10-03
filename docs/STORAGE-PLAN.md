@@ -252,10 +252,12 @@ the change.
 7. **Prune old `claude-native` builds.** Files: `server/src/claude-native-launch.ts`. Keep the build
    in use and one previous; never delete one a running Claude holds. Measure:
    `du -sh ~/.agenthydra/data/claude-native` (2.5 GB → ~1.2 GB).
-8. **One HSwarm home.** Files: `server/src/zswarm-cost.ts` (read `~/.hswarm/ledger.jsonl`, fall back
-   to `~/.zswarm`), `hswarm/ledger.py` (rotate monthly to `ledger-YYYYMM.jsonl.xz`, with readers
-   following), `hswarm/import_zswarm.py` (one-shot, then stop). Measure: `du -sh ~/.hswarm
-   ~/.zswarm` and spend totals equal before/after.
+8. **One HSwarm home.** The server half landed with ZSwarm's retirement (2026-10-03):
+   `server/src/hswarm-cost.ts` and `server/src/hswarm-sessions.ts` (were `zswarm-*.ts`) read
+   `~/.hswarm` only, with no fallback, since `~/.zswarm` is archived. Left: `hswarm/ledger.py`
+   (rotate monthly to `ledger-YYYYMM.jsonl.xz`, with readers following), `hswarm/import_zswarm.py`
+   (one-shot, then stop). Measure: `du -sh ~/.hswarm ~/.zswarm` and spend totals equal
+   before/after.
 9. **HSwarm SQLite indexes.** Files: `hswarm/utilization.py`: `day` column filled at write
    (local date), index `(machine, day)`, index `(machine, seq)`, schema/migrate gated on
    `PRAGMA user_version`. Measure: `python eqp.py hswarm-copy.sqlite hq.json` (1,274 ms → <1 ms;

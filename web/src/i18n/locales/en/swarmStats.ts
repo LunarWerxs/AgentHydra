@@ -1,4 +1,4 @@
-// ZSwarm stats card — compact summary of work delegated to ZSwarm.
+// Swarm stats card — compact summary of work delegated to HSwarm (ZSwarm's history included).
 export default {
   title: 'Swarm',
   savedToday: 'Saved today',

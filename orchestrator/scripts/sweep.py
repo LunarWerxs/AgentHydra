@@ -260,7 +260,7 @@ def render(batch: dict, executed: dict | None, acting_lanes: list[str],
         for r in rows:
             L.append(f"  - {r['title']}" + (f"  -> {r['to']}" if r.get("to") else ""))
     if batch.get("landNotClaude"):
-        L.append(f"  ({batch['landNotClaude']} 'console stray(s)' excluded - they are zswarm "
+        L.append(f"  ({batch['landNotClaude']} 'console stray(s)' excluded - they are HSwarm "
                  "jobs / OpenCode / DSH sessions, not Claude chats, and no actuator can land "
                  "one. They are visible in the fleet; they are not work.)")
     if batch.get("onHold"):

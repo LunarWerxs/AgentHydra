@@ -4,6 +4,7 @@ import { db } from './db'
 import { readDshSession } from './dsh-sessions'
 import { readForeignSession } from './foreign-sessions'
 import { readHermesSession } from './hermes-sessions'
+import { readHSwarmSession } from './hswarm-sessions'
 import {
   originInstances,
   resolveInstanceByOrigin,
@@ -38,7 +39,6 @@ import type {
   TailEvent,
   TitleSource,
 } from './types'
-import { readZswarmSession } from './zswarm-sessions'
 
 /**
  * Bump whenever parseMeta learns to extract something new.
@@ -329,7 +329,7 @@ function parseSharedStoreMeta(tf: TranscriptFile, key: string): ScannedMeta {
     content = readDshSession(tf.path) ?? { events: [], messageCount: 0 }
   } else if (tf.source === 'zswarm') {
     // tf.path is the job's own job.json; same reason as dsh above, no id lookup to do.
-    content = readZswarmSession(tf.path) ?? { events: [], messageCount: 0 }
+    content = readHSwarmSession(tf.path) ?? { events: [], messageCount: 0 }
   } else if (tf.source === 'hermes') {
     // tf.path, not a default: a Hermes profile is its own database, and this is the field that
     // says which one this row came from.

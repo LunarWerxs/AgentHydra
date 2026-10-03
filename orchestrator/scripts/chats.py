@@ -25,7 +25,7 @@ Usage:
   python chats.py --instance temp2                 # only that instance
   python chats.py --search "rolodexter"            # title contains
   python chats.py --console                        # only console-only (no desktop home)
-                                                   # (Claude Code sessions only - zswarm, codex
+                                                   # (Claude Code sessions only - HSwarm, codex
                                                    # and other headless runs are never chats)
   python chats.py --json
 
@@ -153,14 +153,20 @@ def _ago(ms: int | None) -> str:
     return f"{int(s // 86400)}d"
 
 
+# The name a person reads for a headless source. The daemon's source id `zswarm` stays (a frozen
+# MCP API value), and since ZSwarm retired (2026-10-03) its rows are HSwarm's jobs.
+ORIGIN_NAMES = {"zswarm": "HSwarm"}
+
+
 def render(rows: list[dict]) -> str:
     if not rows:
         return "no chats match."
     L = []
     groups: dict[str, list[dict]] = {}
     for r in rows:
+        origin = ORIGIN_NAMES.get(r["origin"], r["origin"])
         key = r["email"] or ("(console-only - no desktop home)" if r["origin"] == "console"
-                             else f"(headless {r['origin']} runs - never a desktop chat)")
+                             else f"(headless {origin} runs - never a desktop chat)")
         groups.setdefault(key, []).append(r)
     for email, chats in groups.items():
         inst = chats[0]["instance"]

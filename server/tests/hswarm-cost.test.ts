@@ -1,22 +1,22 @@
-// server/tests/zswarm-cost.test.ts - the DeepSeek zswarm's spend (server/src/zswarm-cost.ts): the
-// ledger aggregation and the account balance check.
+// server/tests/hswarm-cost.test.ts - HSwarm's spend (server/src/hswarm-cost.ts): the ledger
+// aggregation and the DeepSeek account balance check.
 //
 // The balance check mocks globalThis.fetch (the same pattern codex-account.test.ts and
-// instances-crypto.test.ts use) rather than hitting the real DeepSeek endpoint, and the credentials
-// file is a scratch path passed in rather than the real ~/.dsh - so this suite never touches the
-// network or the real ~/.zswarm / ~/.dsh.
+// instances-crypto.test.ts use) rather than hitting the real DeepSeek endpoint; the credentials
+// file is a scratch path passed in rather than the real ~/.dsh, and HSWARM_HOME points at a scratch
+// home for every key test - so this suite never touches the network or the real ~/.hswarm / ~/.dsh.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   deepseekBalance,
   readDeepSeekKey,
-  readZswarmLedger,
-  resetZswarmBalanceCache,
-  summarizeZswarmCost,
-} from '../src/zswarm-cost'
+  readHSwarmLedger,
+  resetHSwarmBalanceCache,
+  summarizeHSwarmCost,
+} from '../src/hswarm-cost'
 
 const homes: string[] = []
 afterEach(() => {
@@ -24,9 +24,29 @@ afterEach(() => {
 })
 
 function newHome(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'zswarm-home-'))
+  const dir = mkdtempSync(join(tmpdir(), 'hswarm-home-'))
   homes.push(dir)
   return dir
+}
+
+/** The env the key reader looks at, cleared before and restored after each key test, with
+ *  HSWARM_HOME on an empty scratch home so this machine's own swarm keys are never found. */
+const KEY_ENV = ['DEEPSEEK_API_KEYS', 'DEEPSEEK_API_KEY', 'HSWARM_HOME'] as const
+function isolateKeyEnv(): void {
+  const saved: Record<string, string | undefined> = {}
+  beforeEach(() => {
+    for (const k of KEY_ENV) {
+      saved[k] = process.env[k]
+      delete process.env[k]
+    }
+    process.env.HSWARM_HOME = newHome()
+  })
+  afterEach(() => {
+    for (const k of KEY_ENV) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
+  })
 }
 
 function writeLedger(home: string, lines: unknown[]): void {
@@ -78,28 +98,28 @@ const LEDGER_ROWS = [
   },
 ]
 
-describe('readZswarmLedger', () => {
+describe('readHSwarmLedger', () => {
   test('reads every line and skips a torn one', () => {
     const home = newHome()
     writeFileSync(
       join(home, 'ledger.jsonl'),
       `${JSON.stringify(LEDGER_ROWS[0])}\n{"ts": "2026-09-15T0` /* torn final line */,
     )
-    const rows = readZswarmLedger(home)
+    const rows = readHSwarmLedger(home)
     expect(rows).toHaveLength(1)
     expect(rows[0]?.job).toBe('a')
   })
 
   test('a missing ledger reads as empty, not an error', () => {
-    expect(readZswarmLedger(join(tmpdir(), 'no-such-zswarm-home'))).toEqual([])
+    expect(readHSwarmLedger(join(tmpdir(), 'no-such-hswarm-home'))).toEqual([])
   })
 })
 
-describe('summarizeZswarmCost', () => {
+describe('summarizeHSwarmCost', () => {
   test('sums cost_usd by day/model/backend, and counts unpriced tasks separately', () => {
     const home = newHome()
     writeLedger(home, LEDGER_ROWS)
-    const summary = summarizeZswarmCost(home)
+    const summary = summarizeHSwarmCost(home)
     expect(summary.total_usd).toBeCloseTo(0.0003 + 0.0002 + 0.05, 6)
     expect(summary.unpriced_tasks).toBe(1) // the dsh-backend row
     // two same-day/model/backend rows collapse into one bucket
@@ -119,7 +139,7 @@ describe('summarizeZswarmCost', () => {
   test('an empty ledger summarizes to zero, not an error', () => {
     const home = newHome()
     writeLedger(home, [])
-    const summary = summarizeZswarmCost(home)
+    const summary = summarizeHSwarmCost(home)
     expect(summary.rows).toEqual([])
     expect(summary.total_usd).toBe(0)
     expect(summary.unpriced_tasks).toBe(0)
@@ -127,19 +147,25 @@ describe('summarizeZswarmCost', () => {
 })
 
 describe('readDeepSeekKey', () => {
-  const originalEnv = process.env.DEEPSEEK_API_KEY
-
-  beforeEach(() => {
-    delete process.env.DEEPSEEK_API_KEY
-  })
-  afterEach(() => {
-    if (originalEnv === undefined) delete process.env.DEEPSEEK_API_KEY
-    else process.env.DEEPSEEK_API_KEY = originalEnv
-  })
+  isolateKeyEnv()
 
   test('env var wins when set', () => {
     process.env.DEEPSEEK_API_KEY = 'sk-from-env'
     expect(readDeepSeekKey('/does/not/matter.yaml')).toBe('sk-from-env')
+  })
+
+  // The balance list_usage reports must be the account HSwarm spends from, so the swarm's own key
+  // file is read the way hswarm/config.py reads it: a comment line is never taken for a key.
+  test("HSwarm's secrets/deepseek_api_keys: its first key, ahead of the yaml file", () => {
+    const secrets = join(process.env.HSWARM_HOME as string, 'secrets')
+    mkdirSync(secrets, { recursive: true })
+    writeFileSync(
+      join(secrets, 'deepseek_api_keys'),
+      '# funded 2026-10\n\nsk-from-swarm\nsk-second\n',
+    )
+    const yaml = join(newHome(), '.credentials.yaml')
+    writeFileSync(yaml, "refs:\n  DEEPSEEK_API_KEY: 'sk-from-yaml'\n")
+    expect(readDeepSeekKey(yaml)).toBe('sk-from-swarm')
   })
 
   test('falls back to refs.DEEPSEEK_API_KEY in the yaml file', () => {
@@ -158,18 +184,16 @@ describe('readDeepSeekKey', () => {
 })
 
 describe('deepseekBalance', () => {
-  const originalEnv = process.env.DEEPSEEK_API_KEY
+  isolateKeyEnv()
   const originalFetch = globalThis.fetch
 
   beforeEach(() => {
     process.env.DEEPSEEK_API_KEY = 'sk-test-key'
-    resetZswarmBalanceCache()
+    resetHSwarmBalanceCache()
   })
   afterEach(() => {
-    if (originalEnv === undefined) delete process.env.DEEPSEEK_API_KEY
-    else process.env.DEEPSEEK_API_KEY = originalEnv
     globalThis.fetch = originalFetch
-    resetZswarmBalanceCache()
+    resetHSwarmBalanceCache()
   })
 
   test('a 200 with a usable figure reports ok', async () => {

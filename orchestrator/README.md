@@ -477,9 +477,9 @@ public hostname at `http://localhost:7793`, put `{"tunnel":{"hostname":"orch.exa
 in `state/remote/config.json` (or `CF_TUNNEL_TOKEN` in the env), and add
 `https://orch.example.com/oauth/callback` to the OAuth app's redirect URIs. `ORCH_NO_TUNNEL=1`
 serves loopback only. The port is written once, in `package.json` `config.remotePort` (7793;
-7790 is zswarm's MCP server), and `ORCH_REMOTE_PORT` overrides it for one run. Moving it means
-re-running `scripts/remote_tunnel.py --provision` for both named tunnels, whose Cloudflare
-ingress names the port.
+7790 was ZSwarm's MCP server, retired 2026-10-03), and `ORCH_REMOTE_PORT` overrides it for one
+run. Moving it means re-running `scripts/remote_tunnel.py --provision` for both named tunnels,
+whose Cloudflare ingress names the port.
 
 The Python toolbox stays stdlib-only; `web/` + `server/` are the ONE TypeScript surface, because
 the auth stack (jose, hono, cloudflared) is RepoYeti's and lives there.

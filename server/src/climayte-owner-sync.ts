@@ -293,7 +293,7 @@ type Carry = { entry: McpUrlEntry } | 'credential' | 'other'
 
 /** An entry is carried only when it holds no credential: a URL, and at most a `headersHelper`, the
  *  command the CLI runs at connect time to sign in through this machine's session (the owner's
- *  connections-local is `node <loader.mjs> --connect`, zswarm `python <zswarm.py> connect`), which
+ *  connections-local is `node <loader.mjs> --connect`, hswarm `python -m hswarm connect`), which
  *  holds no secret itself. Static `headers`, `oauth` and `env` can each hold one, and so can the URL
  *  or a helper that echoes a literal header (holdsCredential); what is carried is written to a
  *  file. */
@@ -330,7 +330,7 @@ const saidLeftOut = new Set<string>()
  *  owner's user scope, the `.claude.json` beside `ownerDir` (`~/.claude` -> `~/.claude.json`), less
  *  the `deny.names` and any server whose URL path is one of `deny.paths`, whatever its name (a
  *  second PC's AgentHydra is the same server under another name). Only an entry that holds no
- *  credential is carried (carryEntry): the owner's local servers (connections-local, zswarm) sign
+ *  credential is carried (carryEntry): the owner's local servers (connections-local, hswarm) sign
  *  in through this machine's own session, and no credential is ever copied into a worker's file;
  *  one left out for that is said by its name only. Any other entry is left to the account's own
  *  `.claude.json`, which still loads beside these. No owner config is no servers; one that cannot

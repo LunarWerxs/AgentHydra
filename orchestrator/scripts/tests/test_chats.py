@@ -68,7 +68,7 @@ class ChatsTest(unittest.TestCase):
         self.assertEqual([r["sessionId"] for r in console], ["s4"])
         every = {r["sessionId"]: r for r in chats.collect(False, None, None, None, False)}
         self.assertEqual(every["20260918-223854-25cc"]["origin"], "zswarm")
-        self.assertIn("(headless zswarm runs - never a desktop chat)",
+        self.assertIn("(headless HSwarm runs - never a desktop chat)",
                       chats.render([every["20260918-223854-25cc"]]))
 
     def test_filters(self):

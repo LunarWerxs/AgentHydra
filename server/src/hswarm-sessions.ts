@@ -1,21 +1,26 @@
-// server/src/zswarm-sessions.ts - reader for the DeepSeek zswarm's job records (`Lunarwerx/zswarm`).
+// server/src/hswarm-sessions.ts - reader for HSwarm's job records (the hswarm/ package here).
 //
-// ONE HOME, NOT ONE PER ACCOUNT. Unlike DeepSeek Harness (server/src/dsh-sessions.ts), the zswarm is
-// not a login product with its own per-account state - ZSWARM_HOME (default `~/.zswarm`) is the one
-// root, same posture as OPENCODE_DB_PATH, so there is no dsh-instances.ts-style store list to walk
-// and no InstanceKind to add.
+// ONE HOME, NOT ONE PER ACCOUNT. Unlike DeepSeek Harness (server/src/dsh-sessions.ts), HSwarm is
+// not a login product with its own per-account state - its home (hswarm.ts hswarmHome():
+// HSWARM_HOME, default `~/.hswarm`) is the one root, same posture as OPENCODE_DB_PATH, so there is
+// no dsh-instances.ts-style store list to walk and no InstanceKind to add.
 //
-// A JOB IS THE SESSION, A TASK IS A TURN. The zswarm has no back-and-forth conversation: one call
+// ZSWARM'S JOBS LIVE HERE TOO (2026-10-03): ZSwarm is retired and HSwarm replaces it. `hswarm
+// import-zswarm` copied ZSwarm's job records into HSwarm's home, so this one root holds both. The
+// session source keeps its id `'zswarm'` (types.ts SessionSource): it is a frozen MCP API value
+// (server/mcp-api-levels/), so only what a person reads says HSwarm.
+//
+// A JOB IS THE SESSION, A TASK IS A TURN. HSwarm has no back-and-forth conversation: one call
 // dispatches N independent tasks (each its own prompt) and collects N independent results. This
-// reader treats one job (`~/.zswarm/jobs/<id>/job.json`) as one session and synthesizes a transcript
-// out of it - one user turn per task's prompt, one assistant turn per its result - so a zswarm run
+// reader treats one job (`~/.hswarm/jobs/<id>/job.json`) as one session and synthesizes a transcript
+// out of it - one user turn per task's prompt, one assistant turn per its result - so a swarm run
 // reads the same way every other source's transcript does, even though nothing on disk is actually
-// a dialogue. See zswarm's own `zswarm/jobstore.py` for the shapes read here; nothing is inferred.
+// a dialogue. See `hswarm/job.py` for the shapes read here; nothing is inferred.
 //
 // job.json IS PLAIN JSON (not zstd, not sqlite), so unlike dsh this store is real TEXT: an editor can
 // open it, and SOURCE_FILE_IS_TEXT (web/src/lib/session-labels.ts) says so.
 //
-// READONLY, ALWAYS. The zswarm owns these files; this reader opens them for reading and never writes,
+// READONLY, ALWAYS. HSwarm owns these files; this reader opens them for reading and never writes,
 // moves or repairs one - same contract as every other store AgentHydra reads.
 
 import { existsSync, readdirSync, readFileSync, type Stats, statSync } from 'node:fs'
@@ -58,16 +63,16 @@ function epochMs(ts: unknown): number | null {
   return Number.isFinite(ms) ? ms : null
 }
 
-// --- job.json's own shape, read defensively - a summary field the zswarm adds later must not throw
+// --- job.json's own shape, read defensively - a summary field HSwarm adds later must not throw
 // for a job written by an older version. ----------------------------------------------------------
 
-interface ZswarmTask {
+interface HSwarmTask {
   id: string
   prompt: string
   cwd?: string
 }
 
-interface ZswarmResult {
+interface HSwarmResult {
   id: string
   status: string
   answer?: string | null
@@ -77,7 +82,7 @@ interface ZswarmResult {
   finished?: string
 }
 
-interface ZswarmJobFile {
+interface HSwarmJobFile {
   summary?: {
     job_id?: string
     label?: string | null
@@ -85,13 +90,13 @@ interface ZswarmJobFile {
     created?: string
     finished?: string
   }
-  tasks?: ZswarmTask[]
-  results?: Record<string, ZswarmResult>
+  tasks?: HSwarmTask[]
+  results?: Record<string, HSwarmResult>
 }
 
 // --- session listing ---------------------------------------------------------------------------
 
-export interface ZswarmSessionRecord {
+export interface HSwarmSessionRecord {
   session_id: string
   project: string
   cwd: string
@@ -106,12 +111,12 @@ export interface ZswarmSessionRecord {
 }
 
 /** One job's session record, from its parsed job.json and the stat it was read at. */
-function zswarmSessionRecord(
+function hswarmSessionRecord(
   path: string,
   jobId: string,
-  job: ZswarmJobFile,
+  job: HSwarmJobFile,
   st: Stats,
-): ZswarmSessionRecord {
+): HSwarmSessionRecord {
   const summary = job.summary ?? {}
   const firstCwd = job.tasks?.find((t) => typeof t.cwd === 'string' && t.cwd)?.cwd ?? ''
   const created = epochMs(summary.created)
@@ -127,7 +132,7 @@ function zswarmSessionRecord(
     // The file's own mtime is kept as a floor: a job still running has no `finished` yet, and the
     // file on disk is still the freshest honest signal, same rule dsh-sessions.ts's mtime floor uses.
     last_activity_at: Math.max(st.mtimeMs, finished ?? 0),
-    archived: false, // the zswarm has no archive concept; every job stays where it finished
+    archived: false, // HSwarm has no archive concept; every job stays where it finished
     size_bytes: st.size,
     path,
   }
@@ -142,7 +147,7 @@ function zswarmSessionRecord(
  * so after the first pass a sweep is one stat per job. Each listing replaces its home's map, so a
  * deleted job leaves the cache with its directory.
  */
-const jobCache = new Map<string, Map<string, { stamp: StatStamp; record: ZswarmSessionRecord }>>()
+const jobCache = new Map<string, Map<string, { stamp: StatStamp; record: HSwarmSessionRecord }>>()
 
 /** The job ids under a home, directory-first: a job mid-run already has a directory and a partial
  *  job.json, and is found exactly like a finished one - see listDshSessions for the same rule. */
@@ -150,9 +155,9 @@ function jobIds(entries: Array<{ name: string; isDirectory(): boolean }>): strin
   return entries.filter((e) => e.isDirectory()).map((e) => e.name)
 }
 
-/** Every job under one zswarm home. A job whose job.json is missing or unreadable does not list
+/** Every job under one HSwarm home. A job whose job.json is missing or unreadable does not list
  *  yet: its directory can exist a moment before the file is written. */
-export function listZswarmSessions(root: string): ZswarmSessionRecord[] {
+export function listHSwarmSessions(root: string): HSwarmSessionRecord[] {
   const jobsRoot = join(root, 'jobs')
   if (!existsSync(jobsRoot)) return []
   let ids: string[]
@@ -162,7 +167,7 @@ export function listZswarmSessions(root: string): ZswarmSessionRecord[] {
     return []
   }
   const previous = jobCache.get(root)
-  const current = new Map<string, { stamp: StatStamp; record: ZswarmSessionRecord }>()
+  const current = new Map<string, { stamp: StatStamp; record: HSwarmSessionRecord }>()
   for (const id of ids) {
     const path = join(jobsRoot, id, 'job.json')
     try {
@@ -170,9 +175,9 @@ export function listZswarmSessions(root: string): ZswarmSessionRecord[] {
       let hit = previous?.get(id)
       if (!unchangedSince(hit?.stamp, st)) {
         const readAt = Date.now()
-        const job = readJson<ZswarmJobFile>(path)
+        const job = readJson<HSwarmJobFile>(path)
         hit = job
-          ? { stamp: stampOf(st, readAt), record: zswarmSessionRecord(path, id, job, st) }
+          ? { stamp: stampOf(st, readAt), record: hswarmSessionRecord(path, id, job, st) }
           : undefined
       }
       if (hit) current.set(id, hit)
@@ -189,7 +194,7 @@ export function listZswarmSessions(root: string): ZswarmSessionRecord[] {
  * buildTranscriptIndexAsync). Shares the cache above; only a changed job is read, and the parse
  * of each one is the longest the thread is held.
  */
-export async function listZswarmSessionsAsync(root: string): Promise<ZswarmSessionRecord[]> {
+export async function listHSwarmSessionsAsync(root: string): Promise<HSwarmSessionRecord[]> {
   const jobsRoot = join(root, 'jobs')
   let ids: string[]
   try {
@@ -199,7 +204,7 @@ export async function listZswarmSessionsAsync(root: string): Promise<ZswarmSessi
   }
   const slice = timeSlice()
   const previous = jobCache.get(root)
-  const current = new Map<string, { stamp: StatStamp; record: ZswarmSessionRecord }>()
+  const current = new Map<string, { stamp: StatStamp; record: HSwarmSessionRecord }>()
   for (const id of ids) {
     const path = join(jobsRoot, id, 'job.json')
     try {
@@ -207,9 +212,9 @@ export async function listZswarmSessionsAsync(root: string): Promise<ZswarmSessi
       let hit = previous?.get(id)
       if (!unchangedSince(hit?.stamp, st)) {
         const readAt = Date.now()
-        const job = parseJson<ZswarmJobFile>(await readFile(path, 'utf8'))
+        const job = parseJson<HSwarmJobFile>(await readFile(path, 'utf8'))
         hit = job
-          ? { stamp: stampOf(st, readAt), record: zswarmSessionRecord(path, id, job, st) }
+          ? { stamp: stampOf(st, readAt), record: hswarmSessionRecord(path, id, job, st) }
           : undefined
       }
       if (hit) current.set(id, hit)
@@ -224,15 +229,15 @@ export async function listZswarmSessionsAsync(root: string): Promise<ZswarmSessi
 
 // --- transcript ----------------------------------------------------------------------------------
 
-export interface ZswarmSessionContent {
+export interface HSwarmSessionContent {
   events: TailEvent[]
   messageCount: number
 }
 
 /** One task's prompt and its result, as the two-turn shape every session's transcript is drawn in -
  *  a SYNTHESIZED conversation (see the file docstring for why this is honest, not a decoration: the
- *  zswarm records a prompt and an answer, never a back-and-forth, so that is what is shown). */
-function taskEvents(task: ZswarmTask, result: ZswarmResult | undefined): TailEvent[] {
+ *  swarm records a prompt and an answer, never a back-and-forth, so that is what is shown). */
+function taskEvents(task: HSwarmTask, result: HSwarmResult | undefined): TailEvent[] {
   const out: TailEvent[] = []
   const promptText = compact(task.prompt ?? '')
   if (promptText)
@@ -260,10 +265,10 @@ function taskEvents(task: ZswarmTask, result: ZswarmResult | undefined): TailEve
 }
 
 /** One job's "conversation": one task's prompt + result per turn, in the job's own task order.
- *  `path` is job.json itself - the zswarm equivalent of dsh's one-file-per-session log path, so there
- *  is no id lookup to do here either. */
-export function readZswarmSession(path: string): ZswarmSessionContent | null {
-  const job = readJson<ZswarmJobFile>(path)
+ *  `path` is job.json itself - the swarm's equivalent of dsh's one-file-per-session log path, so
+ *  there is no id lookup to do here either. */
+export function readHSwarmSession(path: string): HSwarmSessionContent | null {
+  const job = readJson<HSwarmJobFile>(path)
   if (!job || !Array.isArray(job.tasks)) return null
   const events: TailEvent[] = []
   let messageCount = 0

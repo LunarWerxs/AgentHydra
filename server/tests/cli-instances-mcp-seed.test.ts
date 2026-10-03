@@ -63,20 +63,20 @@ describe('a new CLI instance inherits the user MCP servers', () => {
   test('copies every server from the user config', () => {
     withUserConfig({
       mcpServers: {
-        zswarm: { type: 'stdio', command: 'python', args: ['zswarm.py', 'mcp'] },
+        hswarm: { type: 'stdio', command: 'python', args: ['-m', 'hswarm', 'mcp'] },
         codegraph: { type: 'stdio', command: 'codegraph', args: ['mcp'] },
       },
     })
     const file = makeInstance('seeded')
     expect(existsSync(file)).toBe(true)
     const seeded = JSON.parse(readFileSync(file, 'utf8'))
-    expect(Object.keys(seeded.mcpServers).sort()).toEqual(['codegraph', 'zswarm'])
-    expect(seeded.mcpServers.zswarm.args).toEqual(['zswarm.py', 'mcp'])
+    expect(Object.keys(seeded.mcpServers).sort()).toEqual(['codegraph', 'hswarm'])
+    expect(seeded.mcpServers.hswarm.args).toEqual(['-m', 'hswarm', 'mcp'])
   })
 
   test('carries mcpServers ONLY — never logins, trust or onboarding state', () => {
     withUserConfig({
-      mcpServers: { zswarm: { type: 'stdio', command: 'python' } },
+      mcpServers: { hswarm: { type: 'stdio', command: 'python' } },
       oauthAccount: { emailAddress: 'owner@example.com' },
       projects: { 'C:/secret': { hasTrustDialogAccepted: true } },
       hasCompletedOnboarding: true,

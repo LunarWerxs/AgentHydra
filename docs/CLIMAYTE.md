@@ -24,7 +24,7 @@ instance CliMayte can use. No naming, no terminal, no `/login`.
 - **2026-10-02, Michael:** "the AI in general should know about CliMayte, being a viable option ...
   like how it knows Z Swarm is available ... it doesn't step on the toes of other accounts running
   ... the Agent Hydra client manager should handle all that stuff." CliMayte is a standing option
-  for work that needs Claude quality the zswarm cannot give (AgentHydra's MCP instructions say so),
+  for work that needs Claude quality HSwarm cannot give (AgentHydra's MCP instructions say so),
   and placement is AgentHydra's job: new work goes around an account someone else is using (see
   Placement). It runs nothing by itself: a chat or the CliMayte view still sends every task.
 - **2026-10-03:** "when a worker hits a five-hour or weekly limit, CliMayte moves it to another
@@ -145,11 +145,11 @@ computer-use and the rest) for that run only; its environment sets
 
 **A worker's MCP servers are the owner's** (2026-10-02): `--mcp-config <hooks>/<id>.mcp.json`
 gives it the servers in the owner's own user scope ([`~/.claude.json`](CLAUDE-CONFIG-LAYOUT.md)), less the two denied, so
-connections-local and zswarm are there whatever its account's `.claude.json` says. That copy is
+connections-local and hswarm are there whatever its account's `.claude.json` says. That copy is
 seeded once, when the account is made, and drifts: one of 33 accounts listed no server at all. Only
 an entry with no credential is carried: a URL and at most its `headersHelper`, the command that signs
 in at connect time through this machine's own session (connections-local's `node <loader.mjs>
---connect`, zswarm's `python <zswarm.py> connect`); never static headers, oauth, env, a query
+--connect`, hswarm's `python -m hswarm connect`); never static headers, oauth, env, a query
 string, user info or a fragment, a token-shaped path segment or host label (`/s/<key>/mcp`), or a
 helper that holds a header literal (`Bearer `, `Authorization`, an API key) or a token-shaped
 word, so no credential is written to a worker's file. A server left out for that is logged by its
@@ -1341,7 +1341,7 @@ Workers carry `wave?: string` (the wave they belong to; the manager carries it t
   the manager does the same at once.
 - **What it may call**: only the manager endpoint's tools (piece 4) and its built-in tools (to read
   the plan and run a quick look); the lean worker profile's CLAUDE.md, no skills
-  (`skills.txt` empty for `manage`), no zswarm or connections. Less to load is less to re-read.
+  (`skills.txt` empty for `manage`), no HSwarm or connections. Less to load is less to re-read.
 - **Cache**: a 1-hour prompt cache for `manage` (`CLAUDE_CODE_PROMPT_CACHE_TTL: '1h'`), where workers
   run 5 minutes (`climayte-launch.ts:431`): a wake comes about every 10 minutes (the 600 s settle),
   so with 5 minutes every wake would re-write its whole context into a cold cache. To be measured

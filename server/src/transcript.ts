@@ -2,7 +2,7 @@ import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { stat as statAsync } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { extraRootsWithFormat } from './agent-catalog'
-import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH, ZSWARM_HOME } from './config'
+import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH } from './config'
 import { codexInstanceStores } from './core/codex-instances'
 import { dshInstanceStores } from './core/dsh-instances'
 import { mapPool } from './core/map-pool'
@@ -19,6 +19,13 @@ import {
   listHermesStores,
   readHermesSession,
 } from './hermes-sessions'
+import { hswarmHome } from './hswarm'
+import {
+  type HSwarmSessionRecord,
+  listHSwarmSessions,
+  listHSwarmSessionsAsync,
+  readHSwarmSession,
+} from './hswarm-sessions'
 import { listOpenCodeSessions, readOpenCodeSession } from './opencode-sessions'
 import {
   type ContinuationLink,
@@ -29,12 +36,6 @@ import {
 } from './session-continuations'
 import { dedupeKey, makeLocator, matchesLocator, parseLocator } from './session-locator'
 import type { SessionSource, TailEvent, TailResult } from './types'
-import {
-  listZswarmSessions,
-  listZswarmSessionsAsync,
-  readZswarmSession,
-  type ZswarmSessionRecord,
-} from './zswarm-sessions'
 
 // --- cwd folder-name encoding (forward only; reverse is lossy) --------------
 
@@ -862,13 +863,14 @@ function dshRecords(root: string, tool = 'deepseek-harness'): TranscriptFile[] {
   }))
 }
 
-/** The DeepSeek zswarm's jobs, as index rows.
+/** HSwarm's jobs (ZSwarm's too, imported into HSwarm's home when ZSwarm retired, 2026-10-03), as
+ *  index rows. The source stays `'zswarm'`, a frozen MCP API value; the tool says HSwarm.
  *
- *  Unlike dshRecords above, there is only ONE root: the zswarm is not a login product with a home per
- *  account, so ZSWARM_HOME is read directly here the same way OPENCODE_DB_PATH is, rather than through
- *  an instance-store list. `path` is the job's own job.json, so - same as DSH - every row already
- *  names the exact bytes to read. */
-function zswarmRow(session: ZswarmSessionRecord): TranscriptFile {
+ *  Unlike dshRecords above, there is only ONE root: HSwarm is not a login product with a home per
+ *  account, so its home (hswarmHome()) is read directly here the same way OPENCODE_DB_PATH is,
+ *  rather than through an instance-store list. `path` is the job's own job.json, so - same as DSH -
+ *  every row already names the exact bytes to read. */
+function hswarmRow(session: HSwarmSessionRecord): TranscriptFile {
   return {
     session_id: session.session_id,
     source: 'zswarm' as const,
@@ -880,17 +882,17 @@ function zswarmRow(session: ZswarmSessionRecord): TranscriptFile {
     title: session.title,
     cwd: session.cwd,
     created_at: session.created_at,
-    tool: 'zswarm',
+    tool: 'hswarm',
   }
 }
 
-function zswarmRecords(root: string = ZSWARM_HOME): TranscriptFile[] {
-  return listZswarmSessions(root).map(zswarmRow)
+function hswarmRecords(root: string = hswarmHome()): TranscriptFile[] {
+  return listHSwarmSessions(root).map(hswarmRow)
 }
 
-/** zswarmRecords for the async sweep; see listZswarmSessionsAsync. */
-async function zswarmRecordsAsync(root: string = ZSWARM_HOME): Promise<TranscriptFile[]> {
-  return (await listZswarmSessionsAsync(root)).map(zswarmRow)
+/** hswarmRecords for the async sweep; see listHSwarmSessionsAsync. */
+async function hswarmRecordsAsync(root: string = hswarmHome()): Promise<TranscriptFile[]> {
+  return (await listHSwarmSessionsAsync(root)).map(hswarmRow)
 }
 
 /**
@@ -1157,7 +1159,7 @@ function buildTranscriptIndex(): TranscriptFile[] {
   files.push(...extra.openCodeFiles)
   files.push(...extra.hermesFiles)
   files.push(...extra.dshFiles)
-  files.push(...zswarmRecords())
+  files.push(...hswarmRecords())
   files.push(...foreignRecords())
   return finishIndex(files, claudeChildren)
 }
@@ -1281,9 +1283,9 @@ async function appendExtraAndForeignRecordsAsync(
   files.push(...extra.openCodeFiles)
   files.push(...extra.hermesFiles)
   files.push(...extra.dshFiles)
-  // Async, like the foreign listing below: the zswarm's job.json files are hundreds of MB of JSON,
-  // and reading the changed ones inline held the thread for 1.2 s (see listZswarmSessionsAsync).
-  files.push(...(await zswarmRecordsAsync()))
+  // Async, like the foreign listing below: HSwarm's job.json files are hundreds of MB of JSON,
+  // and reading the changed ones inline held the thread for 1.2 s (see listHSwarmSessionsAsync).
+  files.push(...(await hswarmRecordsAsync()))
   // The async listing, which yields while it parses.
   files.push(...(await foreignRecordsAsync()))
 }
@@ -1920,14 +1922,14 @@ function tailDshLog(
   return windowedResult(sessionId, tf, opts, content.events.filter(keep), limit)
 }
 
-function tailZswarmJob(
+function tailHSwarmJob(
   sessionId: string,
   tf: TranscriptFile,
   opts: TailOptions,
   keep: (e: TailEvent) => boolean,
   limit: number,
 ): TailResult {
-  const content = readZswarmSession(tf.path)
+  const content = readHSwarmSession(tf.path)
   if (!content) return tailResult(sessionId, tf, opts, [], 'transcript not found')
   return windowedResult(sessionId, tf, opts, content.events.filter(keep), limit)
 }
@@ -1967,7 +1969,7 @@ export async function tailTranscript(
   if (tf.source === 'hermes') return tailHermesStore(sessionId, tf, opts, keep, limit)
   if (tf.source === 'opencode') return tailOpenCodeStore(sessionId, tf, opts, keep, limit)
   if (tf.source === 'dsh') return tailDshLog(sessionId, tf, opts, keep, limit)
-  if (tf.source === 'zswarm') return tailZswarmJob(sessionId, tf, opts, keep, limit)
+  if (tf.source === 'zswarm') return tailHSwarmJob(sessionId, tf, opts, keep, limit)
 
   // Claude and Codex: a real .jsonl on disk, read from the END rather than parsed whole.
   const raw = await readTailBytes(tf.path, 6 * 1024 * 1024)

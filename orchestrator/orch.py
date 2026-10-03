@@ -396,7 +396,7 @@ def _render_lanes(s: dict, L: list[str]) -> None:
             L.append(f"                      - {t}")
     if s["lanes"].get("landNotClaude"):
         L.append(f"                 ({s['lanes']['landNotClaude']} console stray(s) left out of "
-                 "landConsole: zswarm / OpenCode / DSH sessions, not Claude chats)")
+                 "landConsole: HSwarm / OpenCode / DSH sessions, not Claude chats)")
     if not s["lanes"].get("archivingEnabled", True):
         L.append("                 ⛔ archiving is switched OFF fleet-wide (archive.enabled) - "
                  "nothing files a chat, in any lane")

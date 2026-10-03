@@ -734,9 +734,9 @@ async function scanNonClaudeAnalytics(
   if (source === 'hermes') return scanHermesAnalytics(sessionId, path, out)
   // DSH's `path` is the session's own log, and unlike the two above it records a cost per turn.
   if (source === 'dsh') return scanDshAnalytics(path, out)
-  // The zswarm's dollars are real, but they are not THIS account's tokens: a job is paid straight out
-  // of the DeepSeek balance, never against a Claude/Codex weekly cap, so it does not belong in the
-  // per-account token spend this scan builds. Its cost lives in its own source (server/src/zswarm-
+  // HSwarm's dollars are real, but they are not THIS account's tokens: a job is paid straight out of
+  // the swarm's provider keys, never against a Claude/Codex weekly cap, so it does not belong in the
+  // per-account token spend this scan builds. Its cost lives in its own source (server/src/hswarm-
   // cost.ts, summing the ledger by day/model/backend) rather than being folded in here - same
   // "listed and readable, contributes nothing to THIS chart" posture as foreign below.
   if (source === 'zswarm') return out
