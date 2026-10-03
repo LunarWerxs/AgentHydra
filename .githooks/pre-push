@@ -5,9 +5,16 @@
 # 1. Refuse a push to a PUBLIC remote unless AGENTHYDRA_PUSH_PUBLIC=1 is set for this command.
 #    The heading is printed either way; the rule is announce-then-do.
 # 2. Refuse a release tag (v*.*.*) while docs/todo/TODO.md has an open section. No override.
-# 3. Run the host-only lanes GitHub structurally cannot: `check:local` (kit drift) on every push,
-#    or the whole `check:deep` lane when a release tag is in the push, since that is the lane's
-#    stated moment ("run before a release") and it already includes the kit check.
+# 3. Run the host-only lane GitHub structurally cannot: `check:local` (kit drift), on every push.
+#    A release tag in the push also needs CI to have passed on the exact commit the tag points to:
+#    `gh` is asked for a ci.yml run on that sha whose conclusion is success. When there is one, only
+#    `check:local` runs, because every other lane of `check:deep` (Biome, i18n, every typecheck,
+#    `bun test`, orchestrator/server's tests, the orchestrator Python suite) is a ci.yml step and
+#    already passed on that very commit. Re-running them here was a duplicate 25-minute gate on
+#    every release (measured on 1.7.0, 2026-10-02), after docs/RELEASING.md had already made "push
+#    main, wait for green CI" the step before tagging. When it cannot be confirmed (no gh, not
+#    signed in, offline, a remote that is not GitHub, no run on that sha, a run still going or not
+#    green), one line says why and the whole `check:deep` runs, which includes the kit check.
 #
 # Rules 1 and 2 and their history live in .githooks/check-public-push.mjs. Git hands this hook the
 # remote's name and URL as arguments and the refs on stdin; both are passed straight through.
@@ -44,6 +51,20 @@ fi
 
 printf '%s\n' "$refs" | "$runner" .githooks/check-public-push.mjs "$remote" "$url" || exit 1
 
+# The same release-tag shape check-public-push.mjs gates on; a deleted tag (all-zero sha) is not a
+# release. An annotated tag's sha is the tag object, so it is peeled to the commit CI ran on. This
+# runs before the unset below, while git still points at the pushing checkout.
+release_commits=""
+unpeeled=""
+for sha in $(printf '%s\n' "$refs" | awk '$2 !~ /^0+$/ && $3 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+/ { print $2 }'); do
+  commit=$(git rev-parse --verify --quiet "$sha^{commit}") || commit=""
+  if [ -n "$commit" ]; then
+    release_commits="$release_commits $commit"
+  else
+    unpeeled="$sha"
+  fi
+done
+
 # Git runs this hook with GIT_DIR exported (and, from a linked worktree, GIT_WORK_TREE and
 # GIT_INDEX_FILE too). The lanes below are not git commands on this repo: their tests build
 # throwaway repos and the kit check asks the kit's own git, and every one inherited these and aimed
@@ -62,11 +83,49 @@ if ! command -v bun >/dev/null 2>&1; then
   exit 1
 fi
 
-# The same release-tag shape check-public-push.mjs gates on; a deleted tag (all-zero sha) is not a release.
-if printf '%s\n' "$refs" | awk '$2 !~ /^0+$/ && $3 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+/ { found = 1 } END { exit !found }'; then
-  echo "› check:deep (a release tag is in this push; 25+ minutes)…" >&2
-  bun run check:deep || exit 1
-else
+if [ -z "$release_commits" ] && [ -z "$unpeeled" ]; then
   echo "› check:local (kit drift)…" >&2
   bun run check:local || exit 1
+  exit 0
+fi
+
+# A release tag: has ci.yml passed on the commit it points to? `why` stays empty only when every
+# tagged commit has a ci.yml run whose conclusion is success.
+slug=$(printf '%s\n' "$url" | sed -n -e 's#/*$##' -e 's#\.git$##' -e 's#^.*github\.com[:/]\([^/][^/]*/[^/][^/]*\)$#\1#p')
+why=""
+if [ -n "$unpeeled" ]; then
+  why="the tag's sha $unpeeled does not resolve to a commit"
+elif ! command -v gh >/dev/null 2>&1; then
+  why="gh is not on PATH"
+elif [ -z "$slug" ]; then
+  why="$url is not a GitHub remote"
+else
+  for commit in $release_commits; do
+    answer=$(gh run list -R "$slug" --workflow ci.yml --commit "$commit" --limit 20 \
+      --json status,conclusion,url \
+      --jq 'if any(.[]; .conclusion == "success") then "success " + ([.[] | select(.conclusion == "success")][0].url) elif length == 0 then "none" else .[0].status + "/" + (.[0].conclusion // "") end' \
+      2>&1) || {
+      why="gh could not read ci.yml's runs (not signed in or offline?): $(printf '%s\n' "$answer" | head -n 1)"
+      break
+    }
+    case "$answer" in
+      success\ *) echo "pre-push: ci.yml passed on the tagged commit $commit: ${answer#success }" >&2 ;;
+      none)
+        why="ci.yml has no run on the tagged commit $commit"
+        break
+        ;;
+      *)
+        why="ci.yml has not passed on the tagged commit $commit (newest run: $answer)"
+        break
+        ;;
+    esac
+  done
+fi
+
+if [ -z "$why" ]; then
+  echo "› check:local (kit drift; CI already ran every other check:deep lane on this commit)…" >&2
+  bun run check:local || exit 1
+else
+  echo "pre-push: CI not confirmed, so the full check:deep runs (25+ minutes): $why." >&2
+  bun run check:deep || exit 1
 fi

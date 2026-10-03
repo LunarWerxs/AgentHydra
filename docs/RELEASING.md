@@ -10,7 +10,7 @@ every instance with auto-update enabled will fast-forward to it on its next chec
 ## The pre-push gate
 
 `.githooks/pre-push` (enabled by `core.hooksPath`, which `bun install`'s `prepare` sets) runs on
-every push and enforces two rules that used to be memory only:
+every push and enforces two rules that used to be memory only, then runs the host-only lane:
 
 1. **A public remote is announced and refused.** The hook looks the remote up on GitHub; when it
    is public, or cannot be proven private (not GitHub, a timeout, a rate limit), it prints
@@ -20,6 +20,18 @@ every push and enforces two rules that used to be memory only:
 2. **A `v*.*.*` tag is refused while `docs/todo/TODO.md` has an open section.** Nothing pending
    ships past a release. There is no override: finish the item and delete its section, or the
    owner deletes it. The queue is gitignored, so this can only fire on a machine that holds it.
+3. **The kit check runs, and a release tag needs green CI on its commit.** On a machine with the
+   private `../../lunarwerx-ui` checkout, every push runs `bun run check:local` (kit drift), the
+   one lane GitHub structurally cannot run. With a `v*.*.*` tag in the push, the hook also asks
+   `gh` for a `ci.yml` run on the exact commit the tag points to whose conclusion is success. If
+   there is one, `check:local` is all that runs locally: every other lane of `bun run check:deep`
+   (Biome, the i18n check, every typecheck, `bun test` with orchestrator/server's tests, the
+   orchestrator Python suite) is a `ci.yml` step that already passed on that commit, so re-running
+   them made every release wait on a duplicate 25-minute gate (measured on 1.7.0, 2026-10-02).
+   If it cannot be confirmed (`gh` missing or not signed in, offline, no run on that commit, a run
+   still going or not green), the hook prints one line saying why and runs the full
+   `bun run check:deep`. A tag on a docs-only commit has no CI run (`ci.yml` ignores
+   `docs/**` and `*.md`), so it takes that fallback; tag the version-bump commit, which CI runs.
 
 A commit whose subject starts with `wip: bundle` must also list every file in it under `Mine:` and
 `Swept:` (`.githooks/commit-msg`); `bun run save:bundle -- --mine <paths>` writes that message
