@@ -223,6 +223,18 @@ test('a last line with no newline yet is not sent until it ends', async () => {
   expect(b.text(chat)).toBe('{"n":1}\n{"n":2}\n')
 })
 
+test('one session filed under two visible records goes up once, through the most recently active', async () => {
+  // A chat moved between profiles keeps its session id; the second record restarted the stream
+  // at chunk 0 and stopped on 'taken' on every pass.
+  const a = pc('PC-A')
+  const older = a.add({ record: { title: 'Moved', lastActivityAt: 1 } }, '{"n":1}\n')
+  const newer = a.add({ sessionId: older.sessionId, record: { title: 'Moved', lastActivityAt: 2 } })
+  await syncChats(a.io)
+  await syncChats(a.io)
+  expect(await rowFor(older.id)).toBeUndefined()
+  expect((await rowFor(newer.id))?.meta.b).toBe(8)
+})
+
 test('a PC with a different key reports it and writes nothing', async () => {
   const a = pc('PC-A')
   const chat = a.add({}, '{"n":1}\n')

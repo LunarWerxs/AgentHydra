@@ -206,11 +206,28 @@ export async function syncChats(io: ChatIo, now = Date.now()): Promise<void> {
     if (after !== before) writeState(io.statePath, state)
   }
 
+  // One session can be filed under two visible records here (a chat moved between profiles keeps its
+  // session id). Its one stream goes up through one of them: the one already shared, else the most
+  // recently active. The other would restart the stream at chunk 0 and stop on 'taken' every pass.
+  const rank = (c: LocalChat): [number, number] => [
+    rows.has(c.id) || (state.chats[c.id]?.version ?? 0) > 0 ? 1 : 0,
+    typeof c.record.lastActivityAt === 'number' ? c.record.lastActivityAt : 0,
+  ]
+  const sharer = new Map<string, LocalChat>()
+  for (const c of local) {
+    if (c.archived) continue
+    const had = sharer.get(c.sessionId)
+    const [cs, ca] = rank(c)
+    const [hs, ha] = had ? rank(had) : [-1, -1]
+    if (!had || cs > hs || (cs === hs && ca > ha)) sharer.set(c.sessionId, c)
+  }
+
   try {
     // --- send ---
     let budget = PASS_READ_MAX
     for (const c of local) {
       if (!UUID_RE.test(c.id) || !UUID_RE.test(c.sessionId)) continue
+      if (!c.archived && sharer.get(c.sessionId) !== c) continue
       try {
         budget = await sendChat(io, state, rows, c, budget, now)
       } catch (err) {
