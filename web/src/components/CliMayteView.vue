@@ -37,6 +37,8 @@ import { toast } from 'vue-sonner'
 import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
+import SideList from '@/components/side-list/SideList.vue'
+import SideListRow from '@/components/side-list/SideListRow.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -70,6 +72,7 @@ import {
   tokenTotal,
 } from '@/lib/climayte-status'
 import { reconcileList, sameData } from '@/lib/reconcile'
+import type { SideListGroup } from '@/lib/side-list'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
@@ -117,6 +120,11 @@ const groups = computed(() => {
   }
   return [...map.entries()].map(([group, items]) => ({ group, items }))
 })
+
+/** The same groups for SideList: the hand-off as the header line, rows keyed per PC. */
+const sideGroups = computed<SideListGroup<ListRow>[]>(() =>
+  groups.value.map((g) => ({ key: g.group, label: g.group, items: g.items, keyOf: rowKey })),
+)
 
 const selectedRow = computed(() => rows.value.find((w) => rowKey(w) === selectedId.value) ?? null)
 /** The remote row that is open, shown read-only from what the row has. */
@@ -405,9 +413,14 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex flex-col gap-5 p-4">
-    <header class="flex flex-wrap items-start justify-between gap-3">
-      <div class="flex min-w-0 flex-col gap-1">
+  <div class="flex h-full min-h-0">
+    <!-- The same sidebar as the Sessions tab (SideList / SideListRow): a header that never scrolls
+         (title, counter, what works, hide finished, waves) over the task list. -->
+    <aside class="min-h-0 w-88 shrink-0 overflow-hidden border-e border-border bg-sidebar">
+      <SideList :groups="sideGroups" :empty="!groups.length">
+        <template #header>
+    <header class="flex items-start justify-between gap-2 px-3 pt-2.5 pb-2">
+      <div class="flex min-w-0 flex-1 flex-col gap-1">
         <h2 class="flex items-center gap-2 text-base font-semibold">
           <Network class="size-4.5" />
           {{ $t('climayte.title') }}
@@ -515,147 +528,129 @@ onUnmounted(() => {
       </Button>
     </header>
 
-    <p
-      v-if="loaded && unreachable"
-      role="status"
-      class="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
-    >
-      <CloudOff class="size-3.5 shrink-0" />
-      {{ $t('climayte.staleBanner') }}
-    </p>
-
-    <div v-if="!loaded && loading" class="flex flex-col gap-2 lg:max-w-80" aria-busy="true">
-      <Skeleton v-for="i in 3" :key="i" class="h-16" />
-    </div>
-
-    <div
-      v-else-if="!loaded && unreachable"
-      role="alert"
-      class="flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
-    >
-      <CloudOff class="size-7 text-muted-foreground" />
-      <p class="text-sm font-medium">{{ $t('climayte.loadFailedTitle') }}</p>
-      <p class="max-w-md text-xs text-muted-foreground">{{ $t('climayte.loadFailedBody') }}</p>
-      <Button variant="outline" class="mt-2" @click="load()">
-        <RefreshCw /> {{ $t('climayte.retry') }}
-      </Button>
-    </div>
-
-    <div
-      v-else-if="rows.length === 0"
-      class="flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
-    >
-      <Network class="size-7 text-muted-foreground" />
-      <p class="text-sm font-medium">{{ $t('climayte.emptyTitle') }}</p>
-      <p class="max-w-md text-xs text-muted-foreground">{{ $t('climayte.empty') }}</p>
-    </div>
-
-    <div
-      v-else
-      class="grid items-start gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[20rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:items-stretch"
-    >
-      <div class="flex min-h-0 flex-col gap-1.5">
-        <label class="flex cursor-pointer items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
-          <span>
-            {{ $t('climayte.hideFinished') }}
-            <span v-if="hiddenCount > 0" class="tabular-nums">· {{ $t('climayte.hiddenCount', { n: hiddenCount }) }}</span>
-          </span>
-          <Switch v-model="hideFinished" />
-        </label>
-        <CliMayteWaves
-          :waves="waves"
-          :workers="workers"
-          :now="now"
-          @select-worker="selectManager"
-        />
-        <!-- Narrow: 24 task rows (a row is 2rem, py-1.5 around a text-sm line, plus its 1px divider).
-             Wide: the height the window leaves. -->
-        <div
-          class="scroll-slim max-h-198 divide-y overflow-y-auto rounded-lg border bg-card lg:max-h-none lg:min-h-0 lg:flex-1"
-        >
-        <p v-if="!groups.length" class="px-3 py-6 text-center text-xs text-muted-foreground">
-          {{ $t('climayte.allHidden', { n: hiddenCount }) }}
-        </p>
-        <section v-for="g in groups" :key="g.group" :aria-label="g.group">
-          <h3
-            class="flex items-center justify-between gap-2 border-b bg-muted/40 px-3 py-1.5 text-2xs font-medium text-muted-foreground"
+          <p
+            v-if="loaded && unreachable"
+            role="status"
+            class="mx-3 mb-2 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
           >
-            <span class="mono truncate" :title="g.group">{{ g.group }}</span>
-            <span class="shrink-0 tabular-nums">{{ g.items.length }}</span>
-          </h3>
-          <ul class="divide-y">
-            <li v-for="w in g.items" :key="rowKey(w)">
-              <!-- One line per task (owner, 2026-09-30): the status as an icon, the title, when it
-                   started. The account and what it is doing or why it stopped ride on the hover;
-                   the detail pane has all of it. -->
-              <button
-                type="button"
-                class="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-start text-sm transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                :class="[
-                  rowKey(w) === selectedId ? 'bg-accent shadow-row-selected' : '',
-                  w.remote?.stale ? 'opacity-60' : '',
-                ]"
-                :aria-current="rowKey(w) === selectedId ? 'true' : undefined"
-                :title="rowHint(w)"
-                @click="select(w)"
-              >
-                <CliMayteStatusBadge :status="w.status" :hold="w.hold" icon-only :task="w" :tasks="workers" />
-                <span class="flex min-w-0 flex-1 items-center gap-1">
-                  <!-- Another PC's task: a small cloud, the PC on hover (the row's hover says it too). -->
-                  <Cloud
-                    v-if="w.remote"
-                    class="size-3.5 shrink-0 text-muted-foreground"
-                    :aria-label="remoteLabel(w)"
-                    :title="remoteLabel(w)"
-                  />
-                  <span class="min-w-0 truncate font-medium">{{ w.title }}</span>
-                  <!-- Its own hover (the span's title wins over the row's): who judged it and what
-                       they said. A failed check on a task still working is amber and a retry
-                       arrow, never the red cross: ten running rows with a red cross read as "lots
-                       of chats failed" (owner, 2026-10-02). -->
-                  <span
-                    v-if="verdictMark(w)"
-                    class="inline-flex shrink-0"
-                    :title="verdictMark(w)?.hint"
-                  >
-                    <Check
-                      v-if="verdictMark(w)?.kind === 'pass'"
-                      class="size-3.5 text-success"
-                      :aria-label="verdictMark(w)?.label"
-                    />
-                    <RotateCcw
-                      v-else-if="verdictMark(w)?.kind === 'retry'"
-                      class="size-3.5 text-warning"
-                      :aria-label="verdictMark(w)?.label"
-                    />
-                    <X v-else class="size-3.5 text-destructive" :aria-label="verdictMark(w)?.label" />
-                  </span>
-                </span>
-                <!-- Only a priority other than the default 0 is shown (field note 20). -->
-                <span
-                  v-if="w.priority"
-                  class="shrink-0 rounded bg-muted px-1 text-2xs font-medium tabular-nums text-muted-foreground"
-                  :title="$t('climayte.rowPriorityHint', { n: w.priority })"
-                >{{ $t('climayte.rowPriority', { n: w.priority }) }}</span>
-                <span
-                  v-if="runTag(w)"
-                  class="shrink-0 text-2xs"
-                  :class="runTag(w)?.differs ? 'text-warning' : 'text-muted-foreground'"
-                >{{ runTag(w)?.text }}</span>
-                <span class="shrink-0 text-xs text-muted-foreground tabular-nums">{{
-                  activeLabel(activeS(w))
-                }}</span>
-              </button>
-            </li>
-          </ul>
-        </section>
-        </div>
+            <CloudOff class="size-3.5 shrink-0" />
+            {{ $t('climayte.staleBanner') }}
+          </p>
+
+          <div v-if="rows.length" class="flex flex-col gap-1.5 px-3 pb-2">
+            <label class="flex cursor-pointer items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>
+                {{ $t('climayte.hideFinished') }}
+                <span v-if="hiddenCount > 0" class="tabular-nums">· {{ $t('climayte.hiddenCount', { n: hiddenCount }) }}</span>
+              </span>
+              <Switch v-model="hideFinished" />
+            </label>
+            <CliMayteWaves
+              :waves="waves"
+              :workers="workers"
+              :now="now"
+              @select-worker="selectManager"
+            />
+          </div>
+        </template>
+
+        <template #empty>
+          <div v-if="!loaded && loading" class="flex flex-col gap-2 p-3" aria-busy="true">
+            <Skeleton v-for="i in 3" :key="i" class="h-8" />
+          </div>
+          <p
+            v-else-if="loaded && rows.length"
+            class="px-3 py-6 text-center text-xs text-muted-foreground"
+          >
+            {{ $t('climayte.allHidden', { n: hiddenCount }) }}
+          </p>
+        </template>
+
+        <template #row="{ item: w }">
+          <!-- One line per task (owner, 2026-09-30): the status as an icon, the title, when it
+               started. The account and what it is doing or why it stopped ride on the hover;
+               the detail pane has all of it. -->
+          <SideListRow
+            :label="w.title"
+            :selected="rowKey(w) === selectedId"
+            :dim="!!w.remote?.stale"
+            :hint="rowHint(w)"
+            :tag="runTag(w)?.text"
+            :tag-tone="runTag(w)?.differs ? 'warning' : 'muted'"
+            :time-text="activeLabel(activeS(w))"
+            @click="select(w)"
+          >
+            <template #status>
+              <CliMayteStatusBadge :status="w.status" :hold="w.hold" icon-only :task="w" :tasks="workers" />
+            </template>
+            <!-- Another PC's task: a small cloud, the PC on hover (the row's hover says it too). -->
+            <template v-if="w.remote" #badge>
+              <Cloud
+                class="size-3.5 shrink-0 text-muted-foreground"
+                :aria-label="remoteLabel(w)"
+                :title="remoteLabel(w)"
+              />
+            </template>
+            <!-- Its own hover (the span's title wins over the row's): who judged it and what
+                 they said. A failed check on a task still working is amber and a retry
+                 arrow, never the red cross: ten running rows with a red cross read as "lots
+                 of chats failed" (owner, 2026-10-02). -->
+            <template #mark>
+              <span v-if="verdictMark(w)" class="inline-flex shrink-0" :title="verdictMark(w)?.hint">
+                <Check
+                  v-if="verdictMark(w)?.kind === 'pass'"
+                  class="size-3.5 text-success"
+                  :aria-label="verdictMark(w)?.label"
+                />
+                <RotateCcw
+                  v-else-if="verdictMark(w)?.kind === 'retry'"
+                  class="size-3.5 text-warning"
+                  :aria-label="verdictMark(w)?.label"
+                />
+                <X v-else class="size-3.5 text-destructive" :aria-label="verdictMark(w)?.label" />
+              </span>
+            </template>
+            <!-- Only a priority other than the default 0 is shown (field note 20). -->
+            <template #trailing>
+              <span
+                v-if="w.priority"
+                class="shrink-0 rounded bg-muted px-1 text-2xs font-medium tabular-nums text-muted-foreground"
+                :title="$t('climayte.rowPriorityHint', { n: w.priority })"
+              >{{ $t('climayte.rowPriority', { n: w.priority }) }}</span>
+            </template>
+          </SideListRow>
+        </template>
+      </SideList>
+    </aside>
+
+    <section class="flex min-h-0 min-w-0 flex-1 flex-col p-4">
+      <div
+        v-if="!loaded && unreachable"
+        role="alert"
+        class="m-auto flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
+      >
+        <CloudOff class="size-7 text-muted-foreground" />
+        <p class="text-sm font-medium">{{ $t('climayte.loadFailedTitle') }}</p>
+        <p class="max-w-md text-xs text-muted-foreground">{{ $t('climayte.loadFailedBody') }}</p>
+        <Button variant="outline" class="mt-2" @click="load()">
+          <RefreshCw /> {{ $t('climayte.retry') }}
+        </Button>
       </div>
 
+      <div
+        v-else-if="loaded && rows.length === 0"
+        class="m-auto flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
+      >
+        <Network class="size-7 text-muted-foreground" />
+        <p class="text-sm font-medium">{{ $t('climayte.emptyTitle') }}</p>
+        <p class="max-w-md text-xs text-muted-foreground">{{ $t('climayte.empty') }}</p>
+      </div>
+
+      <template v-else-if="loaded">
       <!-- Another PC's task is read-only: what its row has, no controls, no call for it here. -->
       <section
         v-if="selectedRemote"
-        class="flex min-w-0 flex-col gap-3 overflow-hidden rounded-lg border bg-card px-4 py-3 lg:min-h-0 lg:overflow-y-auto"
+        class="scroll-slim flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto rounded-lg border bg-card px-4 py-3"
         :aria-label="selectedRemote.title"
       >
         <div class="flex min-w-0 flex-col items-start gap-1.5">
@@ -695,13 +690,14 @@ onUnmounted(() => {
       </section>
       <CliMayteWorkerDetail
         v-else
-        class="lg:min-h-0"
+        class="min-h-0 flex-1"
         :worker="selected"
         :tasks="workers"
         :events-loading="!!selectedId && !detail"
         :now="now"
         @changed="load({ silent: true })"
       />
-    </div>
+      </template>
+    </section>
   </div>
 </template>
