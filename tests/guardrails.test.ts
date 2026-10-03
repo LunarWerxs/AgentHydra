@@ -39,6 +39,47 @@ const CMD_LINE = 'Command' + 'Line'
 // each check's own header comment documents, not a synthetic near-miss. A check that exports
 // findViolations but has no entry here fails loudly below rather than being silently skipped.
 const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = {
+  'instance-dir-route-gate.mjs': {
+    broken: [
+      // The real pre-fix shape (index.ts on 2026-09-03, routes/instances.ts until 2026-10-03): the
+      // param goes straight to the action, so `POST /api/instances/thomas/open` resolved `thomas`
+      // relative to the daemon's working directory and launched claude.exe with a --user-data-dir
+      // under System32's driver store.
+      `
+      app.post('/api/instances/:dir/open', async (c) => {
+        const dir = decodeURIComponent(c.req.param('dir'))
+        return c.json(await openInstance(dir))
+      })
+      `,
+      // instance-mode.ts's shape: the first pass at the fix wired the full daemon and left this
+      // second daemon's four routes ungated. Same paths, its own port, and an expression-bodied
+      // arrow rather than a block, so a fix that pattern-matched on `const dir = ` alone would have
+      // walked straight past it.
+      `
+      app.post('/api/instances/:dir/focus', async (c) =>
+        c.json(await focusInstance(decodeURIComponent(c.req.param('dir')))),
+      )
+      `,
+    ],
+    fixed: [
+      `
+      app.post('/api/instances/:dir/open', async (c) => {
+        const dir = await instanceDirParam(c)
+        if (dir instanceof Response) return dir
+        return c.json(await openInstance(dir))
+      })
+      `,
+      // Precision, both halves of it. An `:id` family is an identity looked up in its own store,
+      // never joined against a filesystem, so this rule does not describe it and must not fire on
+      // it. And the route files narrate this very rule in their comments: a commented-out
+      // registration cannot serve a request, and spawn-console-window.mjs already shipped once
+      // reading a sentence as a call.
+      `
+      app.post('/api/cli-instances/:id/launch', (c) => c.json(launchCliInstance(c.req.param('id'))))
+      // app.post('/api/instances/:dir/open', async (c) => openInstance(c.req.param('dir')))
+      `,
+    ],
+  },
   'ps1-read-as-ansi.mjs': {
     broken: [
       // install.ps1's canary exactly as it shipped: an em dash inside a double-quoted string, which

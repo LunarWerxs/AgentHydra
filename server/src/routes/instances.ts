@@ -31,6 +31,7 @@ import { readLoginHistory } from '../core/login-history'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from '../core/shared'
 import { createInstanceShortcut } from '../core/shortcut'
 import { app } from '../http-app'
+import { instanceDirParam } from '../instance-dir-param'
 import {
   cancelOrchestratorOperation,
   getOrchestratorOperation,
@@ -86,8 +87,15 @@ app.get('/api/desktop-install', async (c) => {
   const fresh = c.req.query('fresh')
   return c.json(await detectDesktopInstall({ fresh: fresh === '1' || fresh === 'true' }))
 })
+// Every `/api/instances/:dir/...` route takes `:dir` through instanceDirParam: it must name an
+// instance listInstances() returns - the full dir in any spelling, or a bare folder name that names
+// exactly one - and anything else is 404 before the action runs. Used as a path as given,
+// `POST /api/instances/thomas/open` launched claude.exe with a --user-data-dir under System32
+// (2026-09-03; see core/instance-dir.ts). routes/usage.ts and the lightweight instance-mode.ts
+// daemon gate theirs the same way, and scripts/checks/instance-dir-route-gate.mjs holds all three.
 app.get('/api/instances/:dir/account', async (c) => {
-  const dir = decodeURIComponent(c.req.param('dir'))
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   const noNetwork = c.req.query('noNetwork')
   const account = await resolveAccount(dir, {
     noNetwork: noNetwork === '1' || noNetwork === 'true',
@@ -96,11 +104,14 @@ app.get('/api/instances/:dir/account', async (c) => {
 })
 // Every account this profile has been signed into, newest first (core/login-history.ts): what the
 // row shows when its current account is signed out or unknown and you need to know where it went.
-app.get('/api/instances/:dir/login-history', (c) =>
-  c.json(readLoginHistory(decodeURIComponent(c.req.param('dir')))),
-)
+app.get('/api/instances/:dir/login-history', async (c) => {
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
+  return c.json(readLoginHistory(dir))
+})
 app.post('/api/instances/:dir/open', async (c) => {
-  const dir = decodeURIComponent(c.req.param('dir'))
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   const result = await openInstance(dir)
   // A banked reset or credit shows on the row now instead of at the next usage sweep.
   if (result.ok)
@@ -110,7 +121,8 @@ app.post('/api/instances/:dir/open', async (c) => {
   return c.json(result)
 })
 app.post('/api/instances/:dir/quit', async (c) => {
-  const dir = decodeURIComponent(c.req.param('dir'))
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   const body = await jsonBody(c)
   // Quitting the DEFAULT (non-isolated) Claude Desktop — the user's real chats — needs an explicit
   // opt-in from the caller (the UI shows a confirmation first); quitInstance refuses it otherwise.
@@ -121,7 +133,8 @@ app.post('/api/instances/:dir/quit', async (c) => {
 // the instance is running (see core/instance-logout.ts for why writing config.json under a live
 // Electron app is worse than not doing it at all).
 app.post('/api/instances/:dir/logout', async (c) => {
-  const dir = decodeURIComponent(c.req.param('dir'))
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   // The account it was signed in to, read before the logout removes it: login sync signs the other
   // PCs out of it too (core/desktop-login-sync.ts).
   const account = readLoginUuid(dir)
@@ -137,18 +150,21 @@ app.post('/api/instances/:dir/logout', async (c) => {
   return c.json(result)
 })
 app.post('/api/instances/:dir/focus', async (c) => {
-  const dir = decodeURIComponent(c.req.param('dir'))
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   return c.json(await focusInstance(dir))
 })
 app.post('/api/instances/:dir/reveal', async (c) => {
-  const dir = decodeURIComponent(c.req.param('dir'))
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   return c.json(await revealInstanceFolder(dir))
 })
 // Create a desktop launcher (.lnk on Windows) that opens THIS instance directly with its
 // isolated --user-data-dir; see core/shortcut.ts. Runs on the daemon's machine, matching the
 // loopback posture of /open and /reveal.
 app.post('/api/instances/:dir/shortcut', async (c) => {
-  const dir = decodeURIComponent(c.req.param('dir'))
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   return c.json(await createInstanceShortcut(dir))
 })
 // One-click shortcut for the lightweight instance-only launcher. Unlike the per-instance shortcut
@@ -219,7 +235,8 @@ app.post('/api/orchestrator/operations/:id/cancel', (c) => {
   return c.json(r, r.ok ? 200 : 404)
 })
 app.delete('/api/instances/:dir', async (c) => {
-  const dir = decodeURIComponent(c.req.param('dir'))
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   const body = await jsonBody(c)
   const confirmName = typeof body.confirmName === 'string' ? body.confirmName : undefined
   // Deleting stays on this PC: login sync leaves its account out here, so the store neither makes
@@ -234,7 +251,8 @@ app.delete('/api/instances/:dir', async (c) => {
 // A field present in the body is applied (null clears it to the default); an absent field is
 // left unchanged. Values are sanitized/validated in core/instance-meta.ts.
 app.post('/api/instances/:dir/meta', async (c) => {
-  const dir = decodeURIComponent(c.req.param('dir'))
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   const body = await jsonBody(c)
 
   const patch: Parameters<typeof setInstanceMeta>[1] = {}

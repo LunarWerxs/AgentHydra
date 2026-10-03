@@ -35,6 +35,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A per-instance route only acts on an instance it can list.** Every `/api/instances/:dir/...`
+  route (account, login-history, open, quit, logout, focus, reveal, shortcut, delete, meta, usage,
+  and the quick daemon's account/open/focus/quit) used `:dir` as a path as given, so
+  `POST /api/instances/thomas/open` - a bare name, the MCP `dir` argument's natural spelling -
+  resolved against the daemon's working directory (System32's driver store for the installed
+  service) and launched claude.exe there, and any other folder on the disk could be named the same
+  way. `:dir` now resolves against the instance list: the full dir in any spelling, or a bare folder
+  name that names exactly one instance; anything else is 404 `{ ok: false, error: 'unknown instance' }`
+  before the action runs. The fix was written 2026-09-03 and never reached main; it is ported here,
+  with `scripts/checks/instance-dir-route-gate.mjs` in CI holding every such route to the gate.
 - **A frozen daemon no longer gets a second daemon started beside it, and the MCP reads the daemon
   that serves it.** On 2026-10-02 the daemon froze for 25 s; the tray started another, which found
   no answer, hopped to port 7788 and took `runtime.json`. Two daemons then ran one store: each

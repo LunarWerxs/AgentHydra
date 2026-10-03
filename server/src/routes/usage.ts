@@ -55,6 +55,7 @@ import {
 import { db } from '../db'
 import { turnOffExtraUsage } from '../extra-usage'
 import { app } from '../http-app'
+import { instanceDirParam } from '../instance-dir-param'
 import { readLiveRegistry } from '../live-registry'
 import { jsonBody } from '../route-helpers'
 import { fileNudgeStore } from '../session-keepalive'
@@ -389,7 +390,8 @@ app.get('/api/usage/budget', async (c) => {
 // → dispatch account matching the email) lives in usage-service.ts so the routes, the MCP tools, and
 // the auto-refresh sweep all resolve it identically.
 app.get('/api/instances/:dir/usage', async (c) => {
-  const dir = decodeURIComponent(c.req.param('dir'))
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   if (!wantsRefresh(c)) {
     const key = `desktop:${dir}`
     const cached = getCachedUsage(key)

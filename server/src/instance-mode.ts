@@ -32,6 +32,7 @@ import {
 import { focusInstance, listInstances, openInstance, quitInstance } from './core/instances'
 import { findFreePort } from './find-free-port.mjs'
 import { findLiveInstance } from './instance'
+import { instanceDirParam } from './instance-dir-param'
 import {
   clearInstanceModeInfo,
   findLiveInstanceMode,
@@ -164,11 +165,16 @@ app.get('/api/health', (c) => {
 })
 
 app.get('/api/instances', async (c) => c.json(await listInstances()))
+// This daemon serves the same per-instance routes as the full one, so it takes `:dir` through the
+// same instanceDirParam gate: the param must name an instance listInstances() returns, and anything
+// else is 404 before the action runs. Not a second rule for the quick surface: the bare-name-as-path
+// bug of 2026-09-03 was reachable on both ports (see core/instance-dir.ts).
 app.get('/api/instances/:dir/account', async (c) => {
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   // Dynamic on purpose: account resolution is requested after the bare rows render, so safeStorage
   // and profile/cache machinery do not join the cold-start import graph.
   const { resolveAccount } = await import('./core/accounts')
-  const dir = decodeURIComponent(c.req.param('dir'))
   const cached = await resolveAccount(dir, { noNetwork: true })
   // The cache-only path is what keeps quick-launch off the network, but it can't SEED the cache —
   // and it now (correctly) returns nothing for an instance that was re-logged into another
@@ -208,14 +214,19 @@ app.post('/api/ui-prefs', async (c) => {
   const body = await c.req.json().catch(() => ({}))
   return c.json({ prefs: writeUiPrefs(body && typeof body === 'object' ? body : {}) })
 })
-app.post('/api/instances/:dir/open', async (c) =>
-  c.json(await openInstance(decodeURIComponent(c.req.param('dir')))),
-)
-app.post('/api/instances/:dir/focus', async (c) =>
-  c.json(await focusInstance(decodeURIComponent(c.req.param('dir')))),
-)
+app.post('/api/instances/:dir/open', async (c) => {
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
+  return c.json(await openInstance(dir))
+})
+app.post('/api/instances/:dir/focus', async (c) => {
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
+  return c.json(await focusInstance(dir))
+})
 app.post('/api/instances/:dir/quit', async (c) => {
-  const dir = decodeURIComponent(c.req.param('dir'))
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
   const body = await c.req.json().catch(() => ({}))
   return c.json(await quitInstance(dir, { confirmExternal: body.confirmExternal === true }))
 })

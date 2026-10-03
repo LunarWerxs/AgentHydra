@@ -179,6 +179,15 @@ jobs:
       - name: Guardrail (local API servers use an exact-origin allowlist)
         run: bun scripts/checks/local-api-origin-allowlist.mjs
 
+      # Fails if an `/api/instances/:dir/...` route uses its param as a path instead of resolving it
+      # against the instance list. A bare folder name then resolves RELATIVE to the daemon's working
+      # directory (System32's driver store, for the installed service), which is how
+      # `POST /api/instances/thomas/open` launched claude.exe against a profile under System32 on
+      # 2026-09-03. Scans all of server/src, because the first fix for that bug gated one daemon's
+      # routes and missed the second daemon serving the same paths.
+      - name: Guardrail (per-instance routes resolve :dir against the instance list)
+        run: bun scripts/checks/instance-dir-route-gate.mjs
+
       # Fails if install.ps1 gains non-ASCII without a UTF-8 BOM. Windows PowerShell 5.1 reads a
       # BOM-less script in the ANSI code page, where an em dash's bytes include a curly quote that
       # ends a "..." string early: `powershell -File install.ps1` could not even parse (2026-09-28).
