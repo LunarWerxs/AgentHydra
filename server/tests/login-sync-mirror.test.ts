@@ -83,3 +83,29 @@ test('an idle pass asks only for changes, and a write and a delete on one PC rea
   await b.mirror.refresh({ maxAgeMs: 20_000 })
   expect(b.requests).toEqual([])
 })
+
+test('a row whose version did not change is fetched once; a new version, a forget and a gone row fetch again', async () => {
+  const a = pc()
+  const id = randomUUID()
+  ids.add(id)
+  await store('PUT', `/v1/logins/${id}`, { version: 0, blob: 'one', meta: {} })
+  const gets = () => a.requests.filter((r) => r === `GET /v1/logins/${id}`).length
+  await a.mirror.refresh({ tables: ['logins'] })
+
+  for (let i = 0; i < 3; i++) expect((await a.mirror.getItem('logins', id)).json.blob).toBe('one')
+  expect(gets()).toBe(1)
+
+  await store('PUT', `/v1/logins/${id}`, { version: 1, blob: 'two', meta: {} })
+  await a.mirror.refresh({ tables: ['logins'] })
+  expect((await a.mirror.getItem('logins', id)).json.blob).toBe('two')
+  expect((await a.mirror.getItem('logins', id)).json.blob).toBe('two')
+  expect(gets()).toBe(2)
+
+  a.mirror.forget(`/v1/logins/${id}`) // this PC wrote the row: the kept copy is behind
+  await a.mirror.getItem('logins', id)
+  expect(gets()).toBe(3)
+
+  // A row the mirror does not list is never kept.
+  await a.mirror.getItem('chats', randomUUID())
+  expect(a.requests.filter((r) => r.startsWith('GET /v1/chats/')).length).toBe(1)
+})

@@ -8,6 +8,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 
 type Arg = string | number
+export type StatementStat = { sql: string; calls: number; rows: number; write: boolean }
 type Result = { results: any[]; meta: { changes: number; rows_read: number } }
 
 /**
@@ -18,6 +19,14 @@ type Result = { results: any[]; meta: { changes: number; rows_read: number } }
  */
 export function d1(db: Database) {
   let rowsRead = 0
+  const byStatement = new Map<string, StatementStat>()
+  const tally = (sql: string, rows: number, write: boolean) => {
+    const key = sql.replace(/\s+/g, ' ').trim().slice(0, 150)
+    const s = byStatement.get(key) ?? { sql: key, calls: 0, rows: 0, write }
+    s.calls++
+    s.rows += rows
+    byStatement.set(key, s)
+  }
   // SCAN walks a whole table or index; a SEARCH using no index (MAX of an unindexed column) does too.
   const scanned = (sql: string, args: Arg[]): number => {
     let n = 0
@@ -37,10 +46,12 @@ export function d1(db: Database) {
         ? Math.max(results.length, scanned(sql, args))
         : results.length
       rowsRead += read
+      tally(sql, read, false)
       return { results, meta: { changes: 0, rows_read: read } }
     }
     const changes = db.query(sql).run(...args).changes
     rowsRead += changes
+    tally(sql, changes, true)
     return { results: [], meta: { changes, rows_read: changes } }
   }
   const prepare = (sql: string) => {
@@ -66,7 +77,11 @@ export function d1(db: Database) {
     rowsRead: () => rowsRead,
     resetRowsRead: () => {
       rowsRead = 0
+      byStatement.clear()
     },
+    /** Every statement run since the last `resetRowsRead()`: calls, and the rows read (or, for a
+     *  write, changed), most rows first. */
+    statements: (): StatementStat[] => [...byStatement.values()].sort((a, b) => b.rows - a.rows),
   }
 }
 
@@ -77,7 +92,12 @@ const worker = (
 /** The Worker's bindings; a test may set CHAT_STORE_MB and must delete it again. */
 /** The store's D1, for counting the rows a call reads. */
 export const storeDb = d1(new Database(':memory:'))
-export const env: { DB: unknown; TOKEN_SHA256: string; CHAT_STORE_MB?: string } = {
+export const env: {
+  DB: unknown
+  TOKEN_SHA256: string
+  CHAT_STORE_MB?: string
+  HEAD_TRUST_S?: string
+} = {
   DB: storeDb,
   TOKEN_SHA256: createHash('sha256').update(token).digest('hex'),
 }
@@ -92,3 +112,18 @@ export const store = (method: string, path: string, body?: unknown) =>
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   }).then(async (r) => ({ status: r.status, json: (await r.json()) as any }))
+
+/** Delete a queue row the way a Worker delete would: bump the rev and leave a tombstone, so the Worker's
+ *  kept list and the changes feed drop it (the Worker has no queue DELETE route; a hand-run delete
+ *  moves no rev, and a list kept in the isolate would show the row for hours). */
+export async function dropQueue(pc: string) {
+  await storeDb.batch([
+    storeDb.prepare('UPDATE store_rev SET rev = rev + 1, queues_rev = rev + 1 WHERE id = 1'),
+    storeDb
+      .prepare(
+        'INSERT OR REPLACE INTO tombstones (table_name, id, rev, time) SELECT ?, ?, rev, ? FROM store_rev WHERE id = 1',
+      )
+      .bind('queues', pc, Date.now()),
+    storeDb.prepare('DELETE FROM queues WHERE pc = ?').bind(pc),
+  ])
+}

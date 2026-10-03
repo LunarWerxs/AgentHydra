@@ -8,6 +8,11 @@
 // Anything the feed cannot answer (a Worker without the route, a list without x-store-rev, a refused
 // request, {full: true}) drops the cursor and takes the first-pass path: the full lists, which is how
 // sync worked before the feed. One mirror per store; every consumer of a pass shares it.
+//
+// getItem() fetches one row's blob (GET /v1/<table>/<id>) and keeps the reply, keyed by the version the
+// mirror lists for that row: a row whose version did not change is never fetched again. D1 bills the
+// row of every fetch, and a row a PC cannot act on (a login that cannot land while a session runs, a
+// chat that diverged) was fetched again by every pass, twice a minute, for nothing new.
 
 export type Table = 'logins' | 'queues' | 'chats'
 type Reply = { status: number; json: any; rev?: number }
@@ -29,6 +34,9 @@ const KEY = { logins: 'id', queues: 'pc', chats: 'id' } as const
 /** A refresh younger than this is reused: consumers on separate timers share one request. */
 export const MIRROR_FRESH_MS = 20_000
 
+/** Replies kept by getItem, at most this many (each blob is up to 256 KB), oldest first out. */
+const ITEMS_KEPT = 64
+
 export type View = { ok: true; rows: MirrorRow[] } | { ok: false; reply: Reply }
 
 export class StoreMirror {
@@ -43,6 +51,7 @@ export class StoreMirror {
   private cursor: number | null = null
   private at = 0
   private queue: Promise<void> = Promise.resolve()
+  private items = new Map<string, { stamp: string; reply: Reply }>()
 
   constructor(private readonly call: Call) {}
 
@@ -76,6 +85,31 @@ export class StoreMirror {
     this.at = Date.now()
   }
 
+  /** One row with its blob. A 200 reply is kept while the mirror lists the row at the same version and
+   *  update time, so asking again costs nothing; any other reply, and a row the mirror does not list,
+   *  goes to the store every time. The caller still gets the store's own reply object. */
+  async getItem(table: Table, id: string): Promise<Reply> {
+    const path = `/v1/${table}/${id}`
+    const listed = this.rowsBy[table].get(id)
+    const stamp = listed ? `${listed.version}/${listed.updatedAt ?? ''}` : null
+    const kept = this.items.get(path)
+    if (kept && stamp !== null && kept.stamp === stamp) return kept.reply
+    this.items.delete(path)
+    const reply = await this.call('GET', path)
+    const j = reply.json
+    if (reply.status === 200 && typeof j?.blob === 'string' && Number.isInteger(j.version)) {
+      this.items.set(path, { stamp: `${j.version}/${j.updatedAt ?? ''}`, reply })
+      if (this.items.size > ITEMS_KEPT) this.items.delete(this.items.keys().next().value as string)
+    }
+    return reply
+  }
+
+  /** Drop the kept reply of `path` (/v1/<table>/<id>): this PC wrote or deleted that row, so what the
+   *  mirror lists for it is behind the store until the next refresh. */
+  forget(path: string): void {
+    this.items.delete(path.split('?')[0])
+  }
+
   /** The feed's answer applied; false when it gave none (the caller then reads the lists). */
   private async applyChanges(since: number): Promise<boolean> {
     let r: Reply
@@ -87,7 +121,10 @@ export class StoreMirror {
     const j = r.json
     if (r.status !== 200 || j?.full === true || !Number.isInteger(j?.rev)) return false
     for (const g of Array.isArray(j.gone) ? j.gone : [])
-      if (g?.table in KEY) this.rowsBy[g.table as Table].delete(g.id)
+      if (g?.table in KEY) {
+        this.rowsBy[g.table as Table].delete(g.id)
+        this.items.delete(`/v1/${g.table}/${g.id}`)
+      }
     for (const t of TABLES)
       for (const row of Array.isArray(j[t.name]) ? j[t.name] : [])
         this.rowsBy[t.name].set(row[t.key], row)

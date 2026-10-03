@@ -3,7 +3,7 @@
 // store is one per test process.
 
 import { afterAll, expect, test } from 'bun:test'
-import { base, store, storeDb, token } from './login-sync-store'
+import { base, dropQueue, store, storeDb, token } from './login-sync-store'
 
 const newId = () => crypto.randomUUID()
 const made = {
@@ -15,8 +15,7 @@ const made = {
 afterAll(async () => {
   for (const [id, v] of made.logins) await store('DELETE', `/v1/logins/${id}?version=${v}`)
   for (const [id, v] of made.chats) await store('DELETE', `/v1/chats/${id}?version=${v}`)
-  for (const pc of made.queues)
-    await storeDb.prepare('DELETE FROM queues WHERE pc = ?').bind(pc).run()
+  for (const pc of made.queues) await dropQueue(pc)
 })
 
 /** PUT a new row and remember it for the clean-up. */
@@ -154,7 +153,7 @@ test('rows read: an idle changes call against one full set of list calls', async
   const lists = storeDb.rowsRead()
 
   console.log(`rows_read: idle /v1/changes = ${idle}; one full set of list calls = ${lists}`)
-  expect(idle).toBe(1)
+  expect(idle).toBeLessThanOrEqual(1) // the head, or none while this isolate still trusts it
   expect(lists).toBeGreaterThanOrEqual(22)
   expect(idle).toBeLessThanOrEqual(lists * 0.05)
 })
@@ -166,12 +165,12 @@ test('rows read: a changes call reads the changed rows only, and a list nothing 
 
   storeDb.resetRowsRead()
   expect((await changes(cursor)).chats.map((r: { id: string }) => r.id)).toEqual([chat])
-  expect(storeDb.rowsRead()).toBe(3) // store_rev twice, then the one changed row
+  expect(storeDb.rowsRead()).toBe(2) // the head, then the one changed row
 
   await store('GET', '/v1/logins')
   storeDb.resetRowsRead()
   await store('GET', '/v1/logins')
-  expect(storeDb.rowsRead()).toBeLessThanOrEqual(3) // store_rev and two index tops, not the table
+  expect(storeDb.rowsRead()).toBeLessThanOrEqual(1) // the head at most, not the table
 })
 
 test('a kept list shows every write: an update, a delete below the top, a new row', async () => {

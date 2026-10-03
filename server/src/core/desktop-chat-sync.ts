@@ -38,6 +38,9 @@ export const PASS_READ_MAX = 64 * 1024 * 1024
  *  and a chat a session is working in grows on nearly every 30 s pass: 2026-10-03 measured 513 chat
  *  sends in 45 minutes. Its new turns still go one pass after it stops growing. */
 export const CHAT_PUSH_EVERY_MS = 5 * 60_000
+/** A record with no store row whose first chunk the store refused as taken waits this long to try again:
+ *  what would let it through (the other record sharing its session gone) is rare. */
+const STOPPED_RETRY_MS = 60 * 60_000
 /** One read window. A line longer than this grows the window until it ends. */
 const WINDOW = 8 * 1024 * 1024
 /** How long an archived chat stays in the store, so the other PC takes the archive first (owner,
@@ -78,6 +81,9 @@ interface ChatState {
   /** When this PC last sent it (epoch ms, this PC's clock), and the local size the last pass saw. */
   pushedAt?: number
   seen?: number
+  /** When its first chunk was last refused as already stored (a record with no store row whose
+   *  session another record already shares): it is not offered again for STOPPED_RETRY_MS. */
+  stoppedAt?: number
   /** Left the store (archived three days): never sent again, not listed. */
   gone?: boolean
 }
@@ -191,6 +197,11 @@ function sealedOk(x: any, id: string): x is Sealed {
   )
 }
 
+/** One chat record with its blob: through the mirror when there is one, which keeps it per version so a
+ *  chat that cannot be taken (diverged, waiting) is not downloaded again every pass. */
+const getRecord = (io: ChatIo, id: string) =>
+  io.mirror ? io.mirror.getItem('chats', id) : io.call('GET', `/v1/chats/${id}`)
+
 async function readRows(io: ChatIo): Promise<Map<string, StoreRow>> {
   let listed: StoreRow[]
   if (io.mirror) {
@@ -219,7 +230,7 @@ async function openFresh(
   const opened = new Map<string, Sealed>()
   const fresh = [...rows.values()].find((r) => !state.chats[r.id])
   if (!fresh) return opened
-  const r = await io.call('GET', `/v1/chats/${fresh.id}`)
+  const r = await getRecord(io, fresh.id)
   if (r.status !== 200 || typeof r.json?.blob !== 'string') return opened
   const rec = openRecord(io.key, fresh.id, r.json.blob)
   if (rec === null) throw new Error('A shared chat does not open with this PC’s key.')
@@ -435,6 +446,9 @@ async function sendChat(
   const st = sendableState(io, state, row, c)
   if (!st) return budget
   if (row && stillWriting(st, row, c, now)) return budget
+  // A clock set back since makes this negative: try again rather than wait it out.
+  const refused = st.stoppedAt === undefined ? -1 : now - st.stoppedAt
+  if (!row && refused >= 0 && refused < STOPPED_RETRY_MS) return budget
   const start = st.up ?? { bytes: st.bytes, chunks: st.chunks }
   let at = start
   let out: SendOutcome = 'done'
@@ -445,12 +459,14 @@ async function sendChat(
     at = { bytes: up.bytes, chunks: up.chunks }
   }
   const wrote = at.bytes > start.bytes
-  if (!row && at.bytes === 0) return budget // nothing complete to share yet
+  if (!row && at.bytes === 0 && out !== 'stopped') return budget // nothing complete to share yet
   if (wrote) st.up = at
   if (out === 'stopped' || !c.project) {
+    if (out === 'stopped' && !row) st.stoppedAt = now
     state.chats[c.id] = st
     return budget
   }
+  delete st.stoppedAt
   const hash = shown(c.record, c.archived)
   if (row && !wrote && !st.up && hash === st.sent) return budget
   const sealed: Sealed = {
@@ -522,7 +538,7 @@ async function takeChat(
 ): Promise<void> {
   let rec = known
   if (!rec) {
-    const r = await io.call('GET', `/v1/chats/${row.id}`)
+    const r = await getRecord(io, row.id)
     if (r.status === 404) return
     if (r.status !== 200 || typeof r.json?.blob !== 'string')
       throw chatFailure('Downloading a chat', r)

@@ -238,12 +238,15 @@ async function call(
   path: string,
   body?: unknown,
 ): Promise<{ status: number; json: any; rev?: number }> {
+  // A write moves the row on: what the mirror kept of it is not the store's copy any more.
+  if (method !== 'GET') mirror?.m.forget(path)
   const res = await fetch(new URL(path, l.url), {
     method,
     headers: { authorization: `Bearer ${l.token}`, 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(15_000),
   })
+  if (method !== 'GET') mirror?.m.forget(path)
   const text = await res.text()
   let json: any = null
   try {
@@ -577,7 +580,7 @@ async function downloadLogin(
   out: LoginSyncPassResult,
   id: string,
 ): Promise<PortableLogin | null> {
-  const r = await call(l, 'GET', `/v1/logins/${id}`)
+  const r = await mirrorFor(l).getItem('logins', id)
   if (r.status !== 200 || typeof r.json?.blob !== 'string') throw httpError('Downloading', r)
   const login = openLogin(l.key, id, r.json.blob)
   if (!login) {
@@ -631,7 +634,7 @@ async function learnAccounts(l: Live, store: Map<string, StoreRow>): Promise<voi
     if (r.kind === 'desktop' || r.acct || r.signedOut) continue
     const k = `${id}:${r.version}`
     if (!learnedAcct.has(k)) {
-      const got = await call(l, 'GET', `/v1/logins/${id}`)
+      const got = await mirrorFor(l).getItem('logins', id)
       const login =
         got.status === 200 && typeof got.json?.blob === 'string'
           ? openLogin(l.key, id, got.json.blob)
@@ -967,7 +970,7 @@ async function syncDesktopLoginsPass(
         throw httpError(`Uploading #${login.num}`, r)
       },
       download: async (id: string) => {
-        const r = await call(l, 'GET', `/v1/logins/${id}`)
+        const r = await mirrorFor(l).getItem('logins', id)
         if (r.status !== 200 || typeof r.json?.blob !== 'string') throw httpError('Downloading', r)
         const login = asDesktopLogin(openBlob(l.key, id, r.json.blob), id)
         if (!login) out.problems.push(`${id}: the store's copy does not open with this PC's key.`)
