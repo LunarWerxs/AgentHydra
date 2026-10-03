@@ -13,6 +13,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AreaLine from '@/components/charts/AreaLine.vue'
 import BarRows from '@/components/charts/BarRows.vue'
+import HSwarmModelResults from '@/components/hswarm/HSwarmModelResults.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -524,6 +525,8 @@ function formatPercent(value: number): string {
         {{ t('hswarm.v.overview.chartsEmpty') }}
       </p>
     </div>
+
+    <HSwarmModelResults />
 
     <!-- Health section -->
     <Card size="sm">

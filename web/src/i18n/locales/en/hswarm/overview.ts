@@ -69,6 +69,24 @@ export default {
   chartsEmpty:
     'Spend, failures and key health are charted here once you have a key and the swarm has run a task.',
 
+  results: {
+    title: 'Model results',
+    days: 'Last {n} days',
+    failed: 'Could not load model results:',
+    emptyTitle: 'No finished tasks in this window',
+    emptyBody:
+      'Thumbs up and down, cost and edit survival per model appear once the swarm has run tasks.',
+    outcomes: 'Thumbs up and down (ok vs failed tasks)',
+    upDown: '{ok} ok / {failed} failed',
+    costPerOk: 'Cost per successful task (cheapest first)',
+    noOk: 'No model has a successful task yet.',
+    survival: 'Edit survival after a day (share of added code still there)',
+    noSurvival: 'No model has scored edits yet. Edits are scored after a day.',
+    scored: '{n} scored tasks',
+    perDay: 'Tasks per day by model',
+    other: 'other',
+  },
+
   // Health section
   health: 'Health',
   doctor: 'Doctor',
