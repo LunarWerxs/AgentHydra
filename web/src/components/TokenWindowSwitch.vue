@@ -1,8 +1,10 @@
 <script setup lang="ts">
 // The Tokens column's 5h / Week / Total switch, one per table (composables/useTokenWindow.ts).
-import { TOKEN_WINDOWS, type TokenWindow } from '@/lib/token-window'
+import { useCliTokenWindow, useDesktopTokenWindow } from '@/composables/useTokenWindow'
+import { TOKEN_WINDOWS } from '@/lib/token-window'
 
-const model = defineModel<TokenWindow>({ required: true })
+const props = defineProps<{ kind: 'cli' | 'desktop' }>()
+const model = props.kind === 'cli' ? useCliTokenWindow() : useDesktopTokenWindow()
 const labelKey = { '5h': 'tokensWindow5h', week: 'tokensWindowWeek', total: 'tokensWindowTotal' }
 const hintKey = {
   '5h': 'tokensWindow5hHint',

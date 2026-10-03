@@ -1,30 +1,29 @@
 <script setup lang="ts">
-// The Tokens cell of the CLI and desktop tables: the signed-in account's figure for the chosen
-// span (the sum), the four kinds on hover. Figures come from core/account-tokens.ts.
-import type { AccountTokens } from '@agenthydra/server/types'
+// The Tokens cell of the CLI and desktop tables: the signed-in account's figure for the span the
+// table's switch has chosen (the sum), the four kinds on hover. Figures come from
+// core/account-tokens.ts; the row model carries the chosen span's parts.
 import { formatTokens } from '@/lib/climayte-status'
-import { partsFor, type TokenWindow } from '@/lib/token-window'
+import type { InstanceRowModel } from '@/lib/instance-table'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
-const props = defineProps<{ tokens?: AccountTokens | null; window: TokenWindow }>()
-const parts = () => (props.tokens ? partsFor(props.tokens, props.window) : null)
+defineProps<{ row: InstanceRowModel }>()
 </script>
 
 <template>
   <IconTooltip
-    v-if="parts()"
-    :label="$t('cliInstances.tokensLabel', { total: parts()!.total.toLocaleString() })"
+    v-if="row.tokens"
+    :label="$t('cliInstances.tokensLabel', { total: row.tokens.total.toLocaleString() })"
     :description="
       $t('cliInstances.tokensBreakdown', {
-        output: formatTokens(parts()!.output),
-        input: formatTokens(parts()!.input),
-        cacheRead: formatTokens(parts()!.cacheRead),
-        cacheWrite: formatTokens(parts()!.cacheWrite),
+        output: formatTokens(row.tokens.output),
+        input: formatTokens(row.tokens.input),
+        cacheRead: formatTokens(row.tokens.cacheRead),
+        cacheWrite: formatTokens(row.tokens.cacheWrite),
       })
     "
     :detail="$t('cliInstances.tokensSource')"
   >
-    <span class="font-medium tabular-nums">{{ formatTokens(parts()!.total) }}</span>
+    <span class="font-medium tabular-nums">{{ formatTokens(row.tokens.total) }}</span>
   </IconTooltip>
   <span v-else class="text-xs text-muted-foreground">—</span>
 </template>

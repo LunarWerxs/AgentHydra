@@ -77,6 +77,7 @@ import { useInstanceFilter } from '@/composables/useInstanceFilter'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
 import { useInstances } from '@/composables/useInstances'
 import { useMoveAllChats } from '@/composables/useMoveAllChats'
+import { useDesktopAccountTokens, useDesktopTokenWindow } from '@/composables/useTokenWindow'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
@@ -100,6 +101,7 @@ import type { InstanceFacts } from '@/lib/instance-filter'
 import { type InstanceRowModel, instanceColumns, nameTooltipFor } from '@/lib/instance-table'
 import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
+import { tokenPartsFor } from '@/lib/token-window'
 import { billsPastLimit, usageReasonMessageKey } from '@/lib/usage'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
 import { planSize } from '@/lib/usage-pool'
@@ -186,6 +188,9 @@ const filterFacts = (inst: CMInstance): InstanceFacts => ({
   signedIn: inst.loginUuid != null,
 })
 
+const tokenWindow = useDesktopTokenWindow()
+const accountTokens = useDesktopAccountTokens()
+
 const { toggleSort, indicatorFor, visibleRows, isDimmed } = useInstanceSource({
   rows: () => instances.value,
   rowKey: (i: CMInstance) => i.dir,
@@ -211,6 +216,12 @@ const { toggleSort, indicatorFor, visibleRows, isDimmed } = useInstanceSource({
           : i.lastRunningAt
             ? Date.parse(i.lastRunningAt)
             : undefined,
+    },
+    {
+      key: 'tokens',
+      accessor: (i: CMInstance) =>
+        tokenPartsFor(accountTokens.value[i.dir], tokenWindow.value)?.total,
+      first: 'desc',
     },
   ],
 })
@@ -450,6 +461,7 @@ function rowModel(inst: CMInstance): InstanceRowModel {
             title: lastRunningExact(inst),
           }
         : null,
+    tokens: tokenPartsFor(accountTokens.value[inst.dir], tokenWindow.value),
     menu: { name: inst.name, actions: menuActionsFor(inst) },
   }
 }

@@ -3,12 +3,15 @@
 // per instance. The Claude desktop, Claude CLI, Codex and DeepSeek tables differ only in the columns
 // they list, the rows they hand over and the menu items they slot in (owner, 2026-10-03: "identical
 // code, just different content").
-import type { Component } from 'vue'
+
+import type { TokenParts } from '@agenthydra/server/types'
+import { type Component, type FunctionalComponent, h } from 'vue'
+import AccountTokensCell from '@/components/AccountTokensCell.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
-import InstanceTokensCell from '@/components/InstanceTokensCell.vue'
 import type { Provider } from '@/components/ProviderLogo.vue'
+import TokenWindowSwitch from '@/components/TokenWindowSwitch.vue'
 import type { BadgeVariants } from '@/components/ui/badge'
-import type { CliInstance, CMInstance, UsageSnapshot } from '@/lib/api'
+import type { CMInstance, UsageSnapshot } from '@/lib/api'
 
 export type InstanceTableKind = 'desktop' | 'cli'
 
@@ -57,6 +60,14 @@ interface ColumnDef extends Omit<InstanceColumn, 'label'> {
   /** Only in process (default) or quota (usage) mode; both when omitted. */
   mode?: 'process' | 'quota'
 }
+
+// The Tokens header's 5h / Week / Total switch; each table keeps its own choice.
+const tokenSwitch = (kind: InstanceTableKind) => {
+  const f: FunctionalComponent = () => h(TokenWindowSwitch, { kind, class: 'ms-1' })
+  return f
+}
+const cliTokenSwitch = tokenSwitch('cli')
+const desktopTokenSwitch = tokenSwitch('desktop')
 
 // One list, in the order every table draws it. Columns that mean the same thing are ONE column with
 // ONE name; a column a single kind has lists only that kind.
@@ -162,14 +173,17 @@ const COLUMNS: ColumnDef[] = [
   },
   // What the account has run, from its own transcripts on this PC. The window switch and the
   // per-account totals plug in here and nowhere else: `head` and `cell` below.
-  {
-    key: 'tokens',
-    label: 'cliInstances.colTokens',
-    sortable: true,
-    kinds: ['cli'],
-    cell: InstanceTokensCell,
-    skeleton: 'h-4 w-12',
-  },
+  ...(['cli', 'desktop'] as const).map(
+    (kind): ColumnDef => ({
+      key: 'tokens',
+      label: 'cliInstances.colTokens',
+      sortable: true,
+      kinds: [kind],
+      head: kind === 'cli' ? cliTokenSwitch : desktopTokenSwitch,
+      cell: AccountTokensCell,
+      skeleton: 'h-4 w-12',
+    }),
+  ),
   { key: 'actions', label: 'instances.colActions', headClass: 'text-end', skeleton: 'h-6 w-20' },
 ]
 
@@ -250,7 +264,8 @@ export interface InstanceRowModel {
   noQuota?: string
   plan?: { label: string; plain?: boolean; title?: string } | null
   lastRunning?: { label: string; running: boolean; title?: string } | null
-  tokens?: CliInstance['tokens']
+  /** The account's tokens for the span the table's switch has chosen; null when not known. */
+  tokens?: TokenParts | null
   /** The ⋯ menu: its header's icon actions and its width. Its items come in the `menu` slot. */
   menu?: { name: string; actions: MenuIconAction[]; class?: string }
 }

@@ -62,12 +62,14 @@ import { useData } from '@/composables/useData'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
 import { useInstances } from '@/composables/useInstances'
 import { useQuickAddTarget } from '@/composables/useQuickAddTarget'
+import { useCliTokenWindow } from '@/composables/useTokenWindow'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
 import { formatUsd, timeAgo } from '@/lib/format'
 import { displayName, shortDisplayName } from '@/lib/instance-appearance'
 import { type InstanceRowModel, instanceColumns, nameTooltipFor } from '@/lib/instance-table'
+import { tokenPartsFor } from '@/lib/token-window'
 import { billsPastLimit, usageReasonMessageKey } from '@/lib/usage'
 import { planSize, pooledRemaining } from '@/lib/usage-pool'
 import { SESSION_WINDOW_MS } from '@/lib/usage-reset'
@@ -168,6 +170,8 @@ function planFor(inst: CliInstance): string | null {
  */
 const filterFacts = (inst: CliInstance) => ({ usage: usageFor(inst), signedIn: inst.loggedIn })
 
+const tokenWindow = useCliTokenWindow()
+
 const { toggleSort, indicatorFor, visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
   rows: () => cliInstances.value,
   rowKey: (i: CliInstance) => i.id,
@@ -180,7 +184,11 @@ const { toggleSort, indicatorFor, visibleRows, hiddenByFilter, isDimmed } = useI
     // By plan size (Pro 1, Max 5x 5, Max 20x 20), not the label's spelling; no plan sorts last.
     ...quotaSortColumns(usageFor, (i: CliInstance) => planSize(planFor(i)), now),
     // Biggest first: the question asked of this column is which account ran the most.
-    { key: 'tokens', accessor: (i: CliInstance) => i.tokens?.total, first: 'desc' },
+    {
+      key: 'tokens',
+      accessor: (i: CliInstance) => tokenPartsFor(i.tokens, tokenWindow.value)?.total,
+      first: 'desc',
+    },
   ],
 })
 
@@ -252,7 +260,7 @@ function rowModel(inst: CliInstance): InstanceRowModel {
       onCheck: () => void onCheckUsageFromPopover(inst),
     },
     plan: plan ? { label: plan } : null,
-    tokens: inst.tokens,
+    tokens: tokenPartsFor(inst.tokens, tokenWindow.value),
     menu: { name: inst.name, actions: menuActionsFor(inst), class: 'max-w-56' },
   }
 }
