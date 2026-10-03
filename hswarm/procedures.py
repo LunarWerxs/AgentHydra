@@ -10,7 +10,7 @@ issuing the steps plus the tool-result tokens it read back, at chars/4), never a
 Nothing leaves the machine; the default only prints the ranking, --apply writes the staging files.
 
     python -m hswarm procedures --since 30            # print the ranked candidates
-    python -m hswarm procedures --since 30 --apply    # also stage them beside distill's facts
+    python -m hswarm procedures --since 30 --apply    # also stage them in claude-memory's staging/ (hswarm triage --candidates judges them)
 
 Idea from JuliusBrussee/caveman (proxy/internal/store/detect_procedures.go); no code copied, written fresh.
 """
@@ -21,15 +21,15 @@ import json
 import re
 from pathlib import Path
 
-from .distill import default_out_dir
-from .staging import _slug
+from . import config, triage
+from .candidates import _slug
 from .transcripts import find_transcripts, redact
 
 FILE_TOOLS = {"Read", "Edit", "Write", "MultiEdit", "NotebookEdit"}
 # Programs whose first word alone says too little: `git status` and `git commit` are different steps.
 SUBCOMMAND_PROGRAMS = {"git", "gh", "npm", "pnpm", "yarn", "npx", "cargo", "go", "uv", "pip", "docker", "dotnet", "kubectl", "make"}
 PYTHONS = {"python", "python3", "py"}
-# Where `hswarm triage` moves a staged candidate once judged; a candidate there is already staged.
+# Where `hswarm triage` used to move a staged candidate once judged; a candidate there is already staged.
 TRIAGE_SUBDIRS = ("keep", "duplicate", "trivial")
 _WORD = re.compile(r"^[a-z][a-z0-9_.-]*$")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -192,8 +192,13 @@ def _candidate_doc(name: str, c: dict) -> str:
     ])
 
 
+def default_out_dir() -> Path:
+    shared = triage.MEMORY_REPO / "staging"
+    return shared if shared.parent.exists() else (config.HOME / "distill")
+
+
 def write_candidates(out_dir: Path, candidates: list[dict]) -> list[Path]:
-    """Stage each candidate as its own file beside distill's facts: write-once, secret shapes refused."""
+    """Stage each candidate as its own file in claude-memory's staging/: write-once, secret shapes refused."""
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for c in candidates:

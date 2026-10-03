@@ -335,7 +335,7 @@ def usage_report(hours: float = 24.0) -> dict:
 
 
 def batch_argparser(prog: str, doc: str | None, concurrency: int = 64) -> argparse.ArgumentParser:
-    """The argument parser every batch tool (distill, triage, indexdiet) starts from: --model and --concurrency."""
+    """The argument parser every batch tool (distill, triage) starts from: --model and --concurrency."""
     ap = argparse.ArgumentParser(prog=prog, description=doc, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default=config.DEFAULT_MODEL)
     ap.add_argument("--concurrency", type=int, default=concurrency)

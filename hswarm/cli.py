@@ -1,5 +1,5 @@
 """Command line: help · skill · doctor · web · prefix · ask · run · status · results · jobs · cost · survival · savings · usage · egress · bench · install · mcp,
-plus the memory-pipeline tools distill · triage · indexdiet and native · benchdb · filters · comply · skillbench · review · loop · optimize · procedures · replay · scripted, which own their own parsers."""
+plus the memory-pipeline tools distill · triage and native · benchdb · filters · comply · skillbench · review · loop · optimize · procedures · replay · scripted, which own their own parsers."""
 from __future__ import annotations
 
 import argparse
@@ -14,7 +14,7 @@ from .commands import COMMANDS
 from .install import cmd_install, cmd_setup
 
 # The pipeline commands own their argument parsing, so they are dispatched before argparse sees the line.
-PIPELINE = {"distill", "triage", "indexdiet", "native", "benchdb", "filters", "comply", "skillbench", "review", "loop", "optimize", "procedures", "replay", "scripted"}
+PIPELINE = {"distill", "triage", "native", "benchdb", "filters", "comply", "skillbench", "review", "loop", "optimize", "procedures", "replay", "scripted"}
 # A pipeline command whose module is named differently from the command.
 # (`review` is not review.py: that module holds the MCP review contracts, the verb lives in reviewverb.py.)
 PIPELINE_MODULE = {"filters": "outfilters", "review": "reviewverb"}
@@ -258,9 +258,9 @@ def build_parser() -> argparse.ArgumentParser:
     se.add_argument("--port", type=int, default=None, help="default 7793")
     co = sub.add_parser("connect", help="the chat's headersHelper for the shared server: ensure it is up, print the chat's X-Hswarm-* headers")
     co.add_argument("--port", type=int, default=None, help="default 7793")
-    for name, doc in (("distill", "session transcripts -> staged memory facts (dry run by default)"), ("triage", "judge staged facts against the memory index"),
+    for name, doc in (("distill", "session transcripts -> memory facts, triaged in the same run (plan only by default)"), ("triage", "judge memory candidates against the index; keep saves them tentative to the memory store"),
                       ("procedures", "mine repeated tool procedures from transcripts into staged skill candidates (no model call)"),
-                      ("indexdiet", "shorten index hooks behind a recall test"), ("native", "build | bench the Rust/Go transcript scanners"),
+                      ("native", "build | bench the Rust/Go transcript scanners"),
                       ("benchdb", "the bench results DB: every model's score on every suite, so nothing is re-measured"),
                       ("filters", "the output filters a worker's bash output passes through, and their inline tests"),
                       ("comply", "measure whether workers obey a rule .md: scenarios on cc, calls labelled, order graded, hook candidates named"),
