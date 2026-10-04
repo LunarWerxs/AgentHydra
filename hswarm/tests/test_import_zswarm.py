@@ -53,7 +53,7 @@ def _count(out: dict) -> dict:
     return {k: (v["read"], v["added"], v["already_there"]) for k, v in flat.items()}
 
 
-def test_import_is_rerunnable_dedupes_picks_up_appends_and_never_copies_secrets(tmp_path):
+def test_import_is_a_one_shot_dedupes_and_never_copies_secrets(tmp_path):
     src, dest = tmp_path / "z", tmp_path / "h"
     _zswarm(src)
     dest.mkdir()
@@ -70,15 +70,14 @@ def test_import_is_rerunnable_dedupes_picks_up_appends_and_never_copies_secrets(
     assert c.execute("SELECT tasks FROM utilizations WHERE id='u1'").fetchone() == (3,)
     c.close()
 
-    second = import_zswarm.run(src, dest)
-    assert all(v[1] == 0 for v in _count(second).values())
-    assert (dest / "ledger.jsonl").read_text().splitlines() == lines
-
+    # A one-shot: the first real run records that it ran; later runs read nothing and write nothing.
     with (src / "ledger.jsonl").open("a") as f:
         f.write(_row("t4", "2026-09-01T00:00:10+00:00") + "\n")
-    third = import_zswarm.run(src, dest)
-    assert third["ledger.jsonl"]["added"] == 1 and third["ledger.jsonl"]["read"] == 1  # only the new bytes were read
-    assert sum(1 for x in (dest / "ledger.jsonl").read_text().splitlines() if json.loads(x)["task"] == "t4") == 1
+    before = _snapshot(dest)
+    second = import_zswarm.run(src, dest)
+    assert list(second) == ["already_ran"]
+    assert _snapshot(dest) == before
+    assert "one-shot" in import_zswarm.summary_line(second)
 
     names = {p.name for p in dest.rglob("*")}
     assert not names & {"keys.json", "console-token", "vault-request.key", "egress.jsonl", "secrets", "k_api_keys", "spill", "x"}

@@ -11,8 +11,8 @@ import json
 import threading
 from pathlib import Path
 
-from . import config
-from .ledger import _window_start, money_kind
+from . import config, ledgerstore
+from .ledger import money_kind, window_lines
 
 TOP_DAILY = 6
 _CACHE: dict = {}
@@ -54,30 +54,27 @@ def compute(days: int, ledger: Path, survival_log: Path, now: dt.datetime | None
     models: dict[str, dict] = {}
     day_counts: dict[str, dict[str, int]] = {}
     rows: list[tuple[str, tuple]] = []
-    if ledger.exists():
-        with ledger.open("rb") as f:
-            f.seek(_window_start(f, since))
-            for line in f:
-                try:
-                    r = json.loads(line)
-                    at = dt.datetime.fromisoformat(r["ts"])
-                except (ValueError, KeyError, TypeError):
-                    continue
-                if at < since or r.get("cached"):
-                    continue
-                name = str(r.get("model") or "other")
-                m = models.setdefault(name, {"model": name, "tasks": 0, "ok": 0, "failed": 0, "cost_usd": 0.0, "seconds": 0.0,
-                                             "spent_usd": 0.0, "free_usd": 0.0, "unknown_usd": 0.0, "tokens": 0, "scored": 0, "_surv": 0.0})
-                m["tasks"] += 1
-                m["ok" if r.get("status") == "ok" else "failed"] += 1
-                m["cost_usd"] += float(r.get("cost_usd") or 0.0)
-                m[money_kind(r) + "_usd"] += float(r.get("cost_usd") or 0.0)
-                m["seconds"] += float(r.get("seconds") or 0.0)
-                m["tokens"] += sum(r.get(k) or 0 for k in ("in_hit", "in_miss", "out", "reasoning") if isinstance(r.get(k), int))
-                day = at.astimezone().date().isoformat()
-                day_counts.setdefault(name, {}).setdefault(day, 0)
-                day_counts[name][day] += 1
-                rows.append((name, (r.get("job"), r.get("task"))))
+    for line in window_lines(ledger, since):
+        try:
+            r = json.loads(line)
+            at = dt.datetime.fromisoformat(r["ts"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if at < since or r.get("cached"):
+            continue
+        name = str(r.get("model") or "other")
+        m = models.setdefault(name, {"model": name, "tasks": 0, "ok": 0, "failed": 0, "cost_usd": 0.0, "seconds": 0.0,
+                                     "spent_usd": 0.0, "free_usd": 0.0, "unknown_usd": 0.0, "tokens": 0, "scored": 0, "_surv": 0.0})
+        m["tasks"] += 1
+        m["ok" if r.get("status") == "ok" else "failed"] += 1
+        m["cost_usd"] += float(r.get("cost_usd") or 0.0)
+        m[money_kind(r) + "_usd"] += float(r.get("cost_usd") or 0.0)
+        m["seconds"] += float(r.get("seconds") or 0.0)
+        m["tokens"] += sum(r.get(k) or 0 for k in ("in_hit", "in_miss", "out", "reasoning") if isinstance(r.get(k), int))
+        day = at.astimezone().date().isoformat()
+        day_counts.setdefault(name, {}).setdefault(day, 0)
+        day_counts[name][day] += 1
+        rows.append((name, (r.get("job"), r.get("task"))))
     scores = _survival_1d(survival_log, since) if rows else {}
     for name, key in rows:
         if key in scores:
@@ -105,7 +102,7 @@ def model_stats(days: int = 14) -> dict:
     """compute() for the live files, cached until either file grows or changes."""
     days = max(1, min(90, int(days)))
     ledger, log = config.LEDGER, config.HOME / "survival.jsonl"
-    key = (str(ledger), str(log), days, _sig(ledger), _sig(log))
+    key = (str(ledger), str(log), days, _sig(ledger), _sig(log), tuple((m, _sig(p)) for m, p in sorted(ledgerstore.archives(ledger).items())))
     with _LOCK:
         hit = _CACHE.get(days)
         if hit and hit[0] == key:

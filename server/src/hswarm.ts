@@ -360,9 +360,10 @@ function importSummary(stdout: string): string {
 }
 
 /**
- * Bring ZSwarm's stats and history into HSwarm's own home: once shortly after the sidecar starts, then
- * hourly, for as long as ~/.zswarm exists (ZSwarm keeps running until it is retired). One run at a time,
- * hidden, unref'd. Logs counts only.
+ * Bring ZSwarm's stats and history into HSwarm's own home: once shortly after the sidecar starts. A one-shot
+ * (ZSwarm is retired and archived): after a run that exits 0 nothing is scheduled again, and the Python side
+ * records that it ran and does nothing on any later call. A failed run is retried hourly while ~/.zswarm exists.
+ * Hidden, unref'd. Logs counts only.
  */
 export function startZswarmImport(deps: {
   python: string
@@ -379,6 +380,7 @@ export function startZswarmImport(deps: {
   const tick = async () => {
     importTimer = null
     if (stopRequested) return
+    let done = false
     if (existsSync(zswarmHome) && !importRunning) {
       importRunning = true
       try {
@@ -392,6 +394,7 @@ export function startZswarmImport(deps: {
         })
         const out = await new Response(child.stdout as ReadableStream).text()
         const code = await child.exited
+        done = code === 0
         console.log(
           `[hswarm] zswarm import ${code === 0 ? importSummary(out) : `failed (exit ${code})`}`,
         )
@@ -401,7 +404,7 @@ export function startZswarmImport(deps: {
         importRunning = false
       }
     }
-    if (!stopRequested && existsSync(zswarmHome)) {
+    if (!done && !stopRequested && existsSync(zswarmHome)) {
       importTimer = setTimeout(tick, deps.everyMs ?? ZSWARM_IMPORT_EVERY_MS)
       importTimer.unref?.()
     }

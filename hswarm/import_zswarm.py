@@ -1,4 +1,7 @@
-"""`hswarm import-zswarm`: bring a ZSwarm home's stats and history into HSwarm's, re-runnable and cheap to repeat.
+"""`hswarm import-zswarm`: bring a ZSwarm home's stats and history into HSwarm's, a ONE-SHOT.
+
+The first real run records `ran_at` in import-zswarm.json; every later real run returns at once, reading and writing
+nothing (ZSwarm is retired and archived; nothing reads ~/.zswarm afterwards). --dry-run still counts.
 
 What moves: the four stats tables of zswarm.sqlite, the line files (ledger, survival, routing, savings-daily) and the
 job records and day archives. What never moves: egress logs, keys, secrets, vault files, the console token, claude-config,
@@ -405,6 +408,8 @@ def run(src_home: Path, dest_home: Path, dry: bool = False) -> dict:
             state = {}
     except (OSError, ValueError):
         state = {}
+    if state.get("ran_at") and not dry:
+        return {"already_ran": state["ran_at"]}  # a one-shot: ZSwarm is retired, nothing reads its home after the first run
     state["source"] = str(src_home.resolve())
     files = state.setdefault("files", {})
     out: dict = {"sqlite": _import_sqlite(src_home, dest_home, dry)}
@@ -415,6 +420,7 @@ def run(src_home: Path, dest_home: Path, dry: bool = False) -> dict:
     out["history"] = _copy_new(src_home / "history", dest_home / "history", dry, False)
     if not dry:
         dest_home.mkdir(parents=True, exist_ok=True)
+        state["ran_at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
         tmp = state_path.with_name(STATE_NAME + ".tmp")
         tmp.write_text(json.dumps(state), encoding="utf-8")
         os.replace(tmp, state_path)
@@ -422,6 +428,8 @@ def run(src_home: Path, dest_home: Path, dry: bool = False) -> dict:
 
 
 def summary_line(out: dict, dry: bool = False) -> str:
+    if "already_ran" in out:
+        return f"already ran at {out['already_ran']}; this import is a one-shot and does nothing more"
     parts = []
     for kind, v in out.items():
         if kind == "sqlite":

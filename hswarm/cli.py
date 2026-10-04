@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     ik = sub.add_parser("import-keys", help="import API keys from a ZSwarm clone's .secrets/ directory")
     ik.add_argument("--from", dest="source_dir", required=True, help="path to a ZSwarm clone with .secrets/")
 
-    iz = sub.add_parser("import-zswarm", help="import ZSwarm's stats and history (database, ledger and other logs, jobs, archives) into HSwarm; safe to repeat")
+    iz = sub.add_parser("import-zswarm", help="import ZSwarm's stats and history (database, ledger and other logs, jobs, archives) into HSwarm, once (later runs do nothing)")
     iz.add_argument("--from", dest="source_dir", help="the ZSwarm home (default: $ZSWARM_HOME or ~/.zswarm)")
     iz.add_argument("--dry-run", dest="dry_run", action="store_true", help="count what would be imported and write nothing")
     iz.add_argument("--json", action="store_true")

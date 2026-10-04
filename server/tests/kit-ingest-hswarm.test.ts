@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { gzipSync } from 'node:zlib'
 import { ingestHswarm } from '../src/kit/ingest-hswarm'
 import { KitStore } from '../src/kit/store'
 
@@ -158,6 +159,34 @@ describe('HSwarm ledger ingest', () => {
     expect(store.getCursor(path)?.offset).toBe(
       Buffer.byteLength(jl([line('n1', { job: 'job-b' })])),
     )
+    store.close()
+  })
+
+  test('lines appended just before a month rotation are ingested from the archive, once', () => {
+    const path = join(root, 'month.jsonl')
+    const old = [line('t1'), line('t2')]
+    writeFileSync(path, jl(old))
+    const store = new KitStore(':memory:')
+    expect(ingestHswarm(store, path)).toBe(2)
+
+    // t3 lands, then HSwarm rotates before the next sweep: t1-t3 move to the archive, the live file keeps the new month, and
+    // grows past the old cursor offset so the size alone cannot say it was replaced.
+    const t3 = line('t3')
+    writeFileSync(join(root, 'month-202609.jsonl.gz'), gzipSync(jl([...old, t3])))
+    const fresh = Array.from({ length: 6 }, (_, i) => line(`n${i}`, { job: 'job-b' }))
+    writeFileSync(path, jl(fresh))
+    expect(ingestHswarm(store, path)).toBe(9) // 3 from the archive, 6 from the live file
+    const ids = (store.db.query('select id from usage_event').all() as { id: string }[]).map(
+      (r) => r.id,
+    )
+    expect(ids).toContain('hswarm:job-a/t3/0')
+    expect(ids).toHaveLength(9) // t1 and t2 were already there under the same ids: not counted twice
+    expect(kitTotals(store, 0).calls).toBe(9)
+
+    expect(ingestHswarm(store, path)).toBeNull() // a fully read archive is skipped by size+mtime
+    appendFileSync(path, jl([line('n6', { job: 'job-b' })]))
+    expect(ingestHswarm(store, path)).toBe(1)
+    expect(kitTotals(store, 0).calls).toBe(10)
     store.close()
   })
 })

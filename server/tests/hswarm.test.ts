@@ -262,10 +262,10 @@ test('a ZSwarm home is imported into HSwarm by a hidden import-zswarm run, and t
     env: { HOME: tmp, USERPROFILE: tmp },
     spawn: importSpawn,
     firstMs: 5,
-    everyMs: 60_000,
+    everyMs: 20,
   })
-  await Bun.sleep(100)
-  expect(importCalls).toHaveLength(1)
+  await Bun.sleep(200)
+  expect(importCalls).toHaveLength(1) // a one-shot: a run that exits 0 is not scheduled again
   expect(importCalls[0].cmd.slice(1)).toEqual(['-m', 'hswarm', 'import-zswarm', '--json'])
   expect(importCalls[0].opts).toMatchObject({ cwd: tmp, windowsHide: true })
   await stopHSwarm()

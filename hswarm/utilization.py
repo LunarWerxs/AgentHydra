@@ -32,7 +32,7 @@ import statistics
 import subprocess
 from pathlib import Path
 
-from . import claude_usage, config
+from . import claude_usage, config, ledgerstore
 from .savings_view import usd
 
 REPO = Path(__file__).resolve().parent.parent
@@ -400,8 +400,9 @@ def backfill(jobs_dir: Path | None = None, ledger: Path | None = None) -> dict:
                 continue
             _store_priced(c, row, prof)
             added["jobs"] += 1
-        if ledger.exists():
-            for i, line in enumerate(ledger.read_text(encoding="utf-8").splitlines()):
+        if ledger.exists() or ledgerstore.archives(ledger):
+            # Archives first, then the live file: a line keeps the index it had before the months were rotated out.
+            for i, line in enumerate(ledgerstore.iter_lines(None, ledger)):
                 try:
                     r = json.loads(line)
                 except ValueError:

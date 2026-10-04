@@ -9,16 +9,15 @@ import json
 import os
 import threading
 
-from . import config, survival
+from . import config, ledgerstore, survival
 from .caller import ledger_fields
+from .ledgerstore import rotate  # noqa: F401 - the monthly move of finished months into ledger-YYYYMM.jsonl.gz (ledgerstore.py)
 
 
 def append_row(row: dict) -> None:
     """One ledger line. Disk errors never fail the call that produced the row."""
     try:
-        config.LEDGER.parent.mkdir(parents=True, exist_ok=True)
-        with config.LEDGER.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        ledgerstore.append_line(json.dumps(row, ensure_ascii=False) + "\n")
     except OSError:
         pass
 
@@ -56,21 +55,32 @@ def ledger_rows(days: float) -> list[dict]:
     scored carries its newest score as `survival` (survival.py): the ledger file itself stays append-only."""
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
     rows = []
-    if config.LEDGER.exists():
-        with config.LEDGER.open("rb") as f:
-            f.seek(_window_start(f, since))
-            for line in f:
-                try:
-                    r = json.loads(line)
-                    if dt.datetime.fromisoformat(r["ts"]) >= since:
-                        rows.append(r)
-                except (ValueError, KeyError):
-                    continue
+    for line in window_lines(config.LEDGER, since):
+        try:
+            r = json.loads(line)
+            if dt.datetime.fromisoformat(r["ts"]) >= since:
+                rows.append(r)
+        except (ValueError, KeyError):
+            continue
     scores = survival.latest() if rows else {}
     for r in rows:
         if (s := scores.get((r.get("job"), r.get("task")))) is not None:
             r["survival"] = s
     return rows
+
+
+def window_lines(live, since: dt.datetime):
+    """The lines a window starting at `since` can hold: the month archives it reaches (read whole), then the live ledger from
+    its window start. Callers filter by ts; this is what makes totals the same before and after a rotation."""
+    for p in ledgerstore.paths_for(since, live):
+        yield from ledgerstore.read_archive_lines(p)
+    try:
+        f = live.open("rb")
+    except OSError:
+        return
+    with f:
+        f.seek(_window_start(f, since))
+        yield from f
 
 
 def _window_start(f, since: dt.datetime) -> int:
@@ -95,6 +105,7 @@ def _window_start(f, since: dt.datetime) -> int:
     return 0
 
 
+_DAILY_ARCHIVE_DAYS = 92  # console.py caps the chart at 90 days
 _DAILY: dict = {"path": None, "offset": 0, "days": {}}
 _DAILY_LOCK = threading.Lock()  # the console reads it off the event loop; two reads must not fold one line twice
 
@@ -106,8 +117,15 @@ def daily(days: int = 14) -> list[dict]:
     path = config.LEDGER
     with _DAILY_LOCK:
         size = path.stat().st_size if path.exists() else 0
-        if _DAILY["path"] != str(path) or size < _DAILY["offset"]:
-            _DAILY.update(path=str(path), offset=0, days={})
+        ino = path.stat().st_ino if size else 0
+        if _DAILY["path"] != str(path) or size < _DAILY["offset"] or (_DAILY.get("ino") not in (None, ino) and size):
+            _DAILY.update(path=str(path), offset=0, days={}, ino=ino)
+            # The months rotated out of the live file still count: the 90 days the console can ask for.
+            for p in ledgerstore.paths_for(dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=_DAILY_ARCHIVE_DAYS), path):
+                for line in ledgerstore.read_archive_lines(p):
+                    _fold_day(line)
+        elif _DAILY.get("ino") is None:
+            _DAILY["ino"] = ino
         if size > _DAILY["offset"]:
             with path.open("rb") as f:
                 f.seek(_DAILY["offset"])
@@ -134,6 +152,14 @@ def today_spend() -> float:
     except OSError:
         return 0.0
     with f:
+        for p in ledgerstore.paths_for(stop, config.LEDGER):  # midnight (local) can fall in the month just archived
+            for line in ledgerstore.read_archive_lines(p):
+                try:
+                    r = json.loads(line)
+                    if dt.datetime.fromisoformat(r["ts"]) >= midnight and not r.get("cached"):
+                        spent += float(r.get("cost_usd") or 0.0)
+                except (ValueError, KeyError, TypeError):
+                    continue
         pos = f.seek(0, os.SEEK_END)
         while pos > 0:
             step = min(1 << 20, pos)

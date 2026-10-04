@@ -18,7 +18,9 @@
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import { hswarmHome } from './hswarm'
+import { hswarmArchivePaths } from './kit/ingest-hswarm'
 
 /** One line of `~/.hswarm/ledger.jsonl` - one entry per TASK (a job is usually several). `cost_usd`,
  *  `in_hit`/`in_miss`/`out` and `reasoning` are null when the backend reports no accounting at all
@@ -42,23 +44,33 @@ export interface HSwarmLedgerEntry {
  * in this codebase treats one bad line as a skip, not a throw.
  */
 export function readHSwarmLedger(root: string = hswarmHome()): HSwarmLedgerEntry[] {
-  let text: string
-  try {
-    text = readFileSync(join(root, 'ledger.jsonl'), 'utf8')
-  } catch {
-    return []
-  }
   const out: HSwarmLedgerEntry[] = []
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    try {
-      const rec = JSON.parse(trimmed)
-      if (rec && typeof rec === 'object' && typeof rec.ts === 'string')
-        out.push(rec as HSwarmLedgerEntry)
-    } catch {
-      // a torn final line, or a record from a newer HSwarm we cannot parse: skip it
+  const add = (text: string) => {
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        const rec = JSON.parse(trimmed)
+        if (rec && typeof rec === 'object' && typeof rec.ts === 'string')
+          out.push(rec as HSwarmLedgerEntry)
+      } catch {
+        // a torn final line, or a record from a newer HSwarm we cannot parse: skip it
+      }
     }
+  }
+  // HSwarm moves each finished month into ledger-YYYYMM.jsonl.gz (hswarm/ledgerstore.py); this sums all time,
+  // so every archive is read, oldest first, before the live file.
+  for (const ap of hswarmArchivePaths(join(root, 'ledger.jsonl'))) {
+    try {
+      add(gunzipSync(readFileSync(ap)).toString('utf8'))
+    } catch {
+      // an archive being replaced right now: skipped for this read
+    }
+  }
+  try {
+    add(readFileSync(join(root, 'ledger.jsonl'), 'utf8'))
+  } catch {
+    // no live ledger yet
   }
   return out
 }

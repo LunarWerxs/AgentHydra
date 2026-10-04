@@ -254,9 +254,9 @@ the change.
    `du -sh ~/.agenthydra/data/claude-native` (2.5 GB → ~1.2 GB).
 8. **One HSwarm home.** The server half landed with ZSwarm's retirement (2026-10-03):
    `server/src/hswarm-cost.ts` and `server/src/hswarm-sessions.ts` (were `zswarm-*.ts`) read
-   `~/.hswarm` only, with no fallback, since `~/.zswarm` is archived. Left: `hswarm/ledger.py`
-   (rotate monthly to `ledger-YYYYMM.jsonl.xz`, with readers following), `hswarm/import_zswarm.py`
-   (one-shot, then stop). Measure: `du -sh ~/.hswarm ~/.zswarm` and spend totals equal
+   `~/.hswarm` only, with no fallback, since `~/.zswarm` is archived. Landed after that:
+   `hswarm/ledgerstore.py` rotates monthly to `ledger-YYYYMM.jsonl.gz` (gzip, not xz: Bun reads gzip
+   and cannot read xz) with every reader and the kit following, and `import_zswarm.py` is a one-shot. Measure: `du -sh ~/.hswarm ~/.zswarm` and spend totals equal
    before/after.
 9. **HSwarm SQLite indexes.** Files: `hswarm/utilization.py`: `day` column filled at write
    (local date), index `(machine, day)`, index `(machine, seq)`, schema/migrate gated on

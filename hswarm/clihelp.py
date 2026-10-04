@@ -34,7 +34,7 @@ META: dict[str, dict] = {
     "import-keys": {"effect": WRITE, "guide": "Copies key files from a ZSwarm clone's .secrets into HSWARM_HOME/secrets; prints only counts, never a key or prefix.",
                     "examples": ["hswarm import-keys --from <clone>"]},
     "import-zswarm": {"effect": WRITE, "guide": "Brings a ZSwarm home's stats database, ledger/survival/routing/savings lines, job records and history archives into HSWARM_HOME; "
-                      "re-runnable (adds only what is missing), never copies keys, secrets, egress logs or the vault; prints counts only. --dry-run writes nothing.",
+                      "a one-shot (the first real run records that it ran; later runs do nothing), never copies keys, secrets, egress logs or the vault; prints counts only. --dry-run writes nothing.",
                       "examples": ["hswarm import-zswarm --dry-run --json", "hswarm import-zswarm"]},
     "doctor": {"effect": READ, "guide": "Free GETs only (balance, /models); prints key fingerprints, never key values. Run it first when anything fails."},
     "keys": {"effect": WRITE, "guide": "`keys` (list) is offline and read-only; `probe` makes one free GET per key and may return a topped-up key to the pool; "

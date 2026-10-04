@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import blobs, breaker, config, escalation, input_limit, review, scripted, survival, utilization, verify
+from . import blobs, breaker, config, escalation, input_limit, ledgerstore, review, scripted, survival, utilization, verify
 from .agent import LIVE_ROW, LIVE_SPEND, run_api_task
 from .budget import Budget
 from .caller import detect as detect_caller
@@ -1403,8 +1403,7 @@ class JobManager:
             }
             if getattr(res, "edit_snapshot", None):
                 survival.save(job.id, task.id, res.model, res.finished or now_iso(), res.edit_snapshot)
-            with config.LEDGER.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(row) + "\n")
+            ledgerstore.append_line(json.dumps(row) + "\n")
         except OSError:
             pass
 
