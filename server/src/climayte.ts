@@ -80,6 +80,7 @@ import {
   walls,
   workers,
 } from './climayte-core'
+import { validateCwd } from './climayte-cwd'
 import {
   appendJournal,
   type CliMayteJournalEntry,
@@ -2499,7 +2500,7 @@ const URGENT_PREFIX =
 export function climayteSend(
   id: string,
   text: string,
-  opts: { urgent?: boolean; model?: string; effort?: string } = {},
+  opts: { urgent?: boolean; model?: string; effort?: string; cwd?: string } = {},
 ): {
   ok: boolean
   message: string
@@ -2521,8 +2522,21 @@ export function climayteSend(
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) }
   }
+  // Another folder applies from the next launch on (climayte-cwd.ts carries the session there).
+  let cwd: string | undefined
+  if (opts.cwd !== undefined) {
+    try {
+      cwd = validateCwd(opts.cwd)
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) }
+    }
+  }
   if (model) w.model = model
   if (effort) w.effort = effort
+  if (cwd && cwd !== w.cwd) {
+    w.pendingCwd = cwd
+    journal(w, 'cwd-changed', { cwd, from: w.cwd, pending: 1 })
+  } else if (cwd) delete w.pendingCwd // back to the folder it is in
   delete w.question // a message is the answer to what the worker asked (climayteAsk)
   if (w.status === 'running' && opts.urgent) {
     w.pending.unshift(`${URGENT_PREFIX}\n\n${text}`)

@@ -35,6 +35,7 @@ import {
   transcriptFile,
   workers,
 } from './climayte-core'
+import { copySessionToCwd } from './climayte-cwd'
 import { firstLine } from './climayte-journal'
 import {
   type CliMayteAccount,
@@ -167,6 +168,38 @@ function moveTranscript(
   journal(w, 'failed', { account: acctLabel(acct), error: firstLine(w.error) })
   changed(w)
   return { copied, failed: true }
+}
+
+/** A message asked for another folder (climayteSend `cwd`): carry the session into that folder's
+ *  project dir on this account (the original stays) so `--resume` finds it there, and run there.
+ *  A fresh session has nothing to carry. A session that ran but cannot be copied stays where it is:
+ *  resuming in a folder without its transcript would start over empty. */
+export function applyPendingCwd(
+  w: CliMayteWorker,
+  acct: CliMayteAccount,
+  sessionId: string,
+  fresh: boolean,
+): void {
+  const to = w.pendingCwd
+  delete w.pendingCwd
+  if (!to || to === w.cwd) return
+  let copied: boolean | undefined
+  try {
+    if (!fresh) copied = copySessionToCwd(acct.configDir, sessionId, to)
+  } catch (err) {
+    journal(w, 'cwd-changed', {
+      cwd: to,
+      from: w.cwd,
+      error: firstLine(err instanceof Error ? err.message : String(err)),
+    })
+    return
+  }
+  if (copied === false && sessionRan(w, sessionId)) {
+    journal(w, 'cwd-changed', { cwd: to, from: w.cwd, error: 'no transcript to carry; stayed' })
+    return
+  }
+  journal(w, 'cwd-changed', { cwd: to, from: w.cwd, ...(copied === undefined ? {} : { copied }) })
+  w.cwd = to
 }
 
 /** Whether the stopped attempt's message is in the session, and the follow-up this launch
@@ -675,6 +708,7 @@ export function launch(
     if (moved.failed) return
     copied = moved.copied
   }
+  if (w.pendingCwd) applyPendingCwd(w, acct, sessionId, fresh)
   // The owner's global CLAUDE.md and skills, so a worker keeps the owner's rules (field note 5).
   if (ownerClaudeDir) syncOwnerClaude(ownerClaudeDir, acct.configDir)
   const resume = !fresh && hasTranscript(acct.configDir, sessionId)

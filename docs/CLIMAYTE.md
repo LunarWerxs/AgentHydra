@@ -778,6 +778,22 @@ on a normal install), nothing is recorded or sent, and dispatches answer `ping: 
 the file. Delete it to turn pings back on. `startCliMayte()` starts the outbox (`startCliMaytePing`
 with the real worker feed and transports) and daemon shutdown stops it (`stopCliMaytePing`).
 
+### Moving a worker to another folder (`climayte_send { cwd }`, owner, 2026-10-04)
+
+Hydra Desk moves a chat to another folder when Claude cd's out of its folder; a chat that is a worker
+kept its original `cwd`, so later turns still ran in the old one. `POST /api/corch/workers/:id/send`
+and `climayte_send` take an optional `cwd`. It is checked like a task's folder (`validateCwd`,
+`server/src/climayte-cwd.ts`): an absolute path to an existing folder on this PC; a relative path, a
+missing folder, a file, a UNC share (`\\host\share`) or a device path (`\\?\`) is refused with
+400 and nothing is queued. A good one sets `worker.pendingCwd` and journals `cwd-changed` (`pending`).
+Nothing moves until the next launch (a running worker gets the message when its task ends, or at once
+with `urgent`): `applyPendingCwd` copies the session's `.jsonl` and its sidecar folder into
+`<configDir>/projects/<encoded cwd>/` on the account the launch runs on (Claude Code resumes only from
+there), keeps the original, sets `worker.cwd`, clears `pendingCwd` and journals `cwd-changed` (`cwd`,
+`from`, `copied`). A session that ran but cannot be copied stays in its old folder (journaled with an
+error) rather than start over empty there. A fresh session just starts in the new folder.
+`climayte_status` shows `cwd` and, until the launch, `pendingCwd`.
+
 ### Questions from a worker (`climayte_ask`, owner, 2026-10-04)
 
 A headless worker could never ask, so it guessed. Owner: "all the CLI mates can ask questions
@@ -1189,7 +1205,7 @@ wrapped as `{ peerWarning, result }`, and an error carries it).
   are cut to `CLIMAYTE_MAX_WAIT_S` (45 s): an MCP client drops a call held about 60 s.
 - `climayte_log { group?, id?, since?, limit? }`: the journal as readable lines, newest last, default
   100.
-- `climayte_send { id, text, urgent?, model?, effort? }` MUTATES: a follow-up turn in the same session;
+- `climayte_send { id, text, urgent?, model?, effort?, cwd? }` MUTATES: a follow-up turn in the same session;
   `urgent` stops a running worker and delivers this first; `model`/`effort` switch them for that
   turn and later ones (e.g. escalate a stuck Sonnet worker to Opus at `max`).
 - `climayte_handoff { id }` MUTATES: a running worker writes a handoff and goes on in a fresh session.

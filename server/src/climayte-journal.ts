@@ -23,6 +23,7 @@ export type CliMayteJournalEvent =
   | 'handoff-written' // it wrote the handoff; the task goes on in a fresh session
   | 'handoff-resumed' // the fresh session started from the handoff
   | 'follow-up-queued' // climayte_send queued a message
+  | 'cwd-changed' // climayte_send asked for another folder (`cwd`, `from`; `pending`), or the launch moved there (`copied`)
   | 'follow-up-delivered' // an attempt started with that message
   | 'asked' // the worker asked a question (climayte_ask; `said`: its first line); the answer is climayte_send
   | 'retry' // the API was overloaded, or the next attempt could not start: tried again later
@@ -69,7 +70,7 @@ export interface CliMayteJournalEntry {
   said?: string // turn-end: the first line of the turn's closing text
   model?: string | null // dispatched / launched / follow-ups: the model asked for (null: the CLI's default)
   effort?: string | null // the same, for the effort level
-  cwd?: string // dispatched
+  cwd?: string // dispatched / cwd-changed: the folder
   accounts?: number // dispatched: how many accounts it is restricted to (absent: any)
   kind?: string // dispatched / verdict: the kind of work (climayte-scorecard CLIMAYTE_KINDS)
   reason?: string // dispatched with model auto: why the scorecard picked that setting
@@ -344,6 +345,10 @@ export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Da
       return describeShortLine(e, on, 'check')
     case 'verdict':
       return describeVerdictLine(e, runs)
+    case 'cwd-changed':
+      return e.pending
+        ? `asked to continue in ${e.cwd ?? '?'}${e.from ? ` (now ${e.from})` : ''}, from its next launch`
+        : `continues in ${e.cwd ?? '?'}${e.from ? ` (was ${e.from})` : ''}${e.copied === false ? ' (no transcript to carry; the session starts fresh there)' : ''}`
     case 'priority':
       return `priority set to ${e.priority ?? 0} (was ${e.was ?? 0})`
     case 'nudged':

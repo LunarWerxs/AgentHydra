@@ -218,13 +218,15 @@ app.post('/api/corch/workers/:id/send', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.text !== 'string' || !body.text.trim())
     return c.json({ error: 'text is required' }, 400)
-  return c.json(
-    climayteSend(c.req.param('id'), body.text, {
-      urgent: body.urgent === true,
-      model: body.model as string | undefined,
-      effort: body.effort as string | undefined,
-    }),
-  )
+  if (body.cwd !== undefined && typeof body.cwd !== 'string')
+    return c.json({ error: 'cwd must be a folder path' }, 400)
+  const r = climayteSend(c.req.param('id'), body.text, {
+    urgent: body.urgent === true,
+    model: body.model as string | undefined,
+    effort: body.effort as string | undefined,
+    cwd: body.cwd as string | undefined,
+  })
+  return c.json(r, r.ok || !body.cwd ? 200 : 400)
 })
 // A task's priority: queued and waiting work starts highest first (climayte_priority).
 app.post('/api/corch/workers/:id/priority', async (c) => {

@@ -1105,6 +1105,11 @@ export const TOOLS: McpEngineTool[] = [
           description:
             'Run this turn and the later ones at this thinking level: low, medium, high, xhigh or max.',
         },
+        cwd: {
+          type: 'string',
+          description:
+            "Continue the worker in this folder (absolute, existing, local; not a network path) from its next launch on: its session is copied into that folder's project dir on the account it runs on (the original stays) and resumed there. climayte_status shows `cwd` and, until then, `pendingCwd`.",
+        },
       },
       ['id', 'text'],
     ),
@@ -1117,6 +1122,7 @@ export const TOOLS: McpEngineTool[] = [
           urgent: a.urgent === true,
           model: a.model != null ? str(a.model) : undefined,
           effort: a.effort != null ? str(a.effort) : undefined,
+          cwd: a.cwd != null ? str(a.cwd) : undefined,
         }),
       }),
   },

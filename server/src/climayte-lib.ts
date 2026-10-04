@@ -176,6 +176,9 @@ export interface CliMayteWorker {
   group: string // caller-chosen or generated 'g-' + 6 hex; groups one orchestration
   title: string // short label (caller's or the first 60 chars of the prompt)
   cwd: string
+  /** A folder a message asked to move it to (climayte_send `cwd`); the next launch carries the session
+   *  there, sets `cwd` and clears this. Absent: none. */
+  pendingCwd?: string
   prompt: string // the task as given
   pending: string[] // follow-up messages not yet delivered (FIFO)
   model: string | null
