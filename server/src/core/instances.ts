@@ -55,7 +55,7 @@ import {
   listClaudeProcesses,
   scanClaudeProcesses,
 } from './process'
-import { awaitExitBounded, spawnCaptured } from './process.ts'
+import { spawnCaptured } from './process.ts'
 import type { CMActionResult, CMInstance } from './shared'
 
 /** `taskkill` signals and exits; it does not wait for the target to die. A run that has not
@@ -919,14 +919,12 @@ function anyAlive(pids: number[]): boolean {
 async function forceKillPid(pid: number): Promise<void> {
   if (process.platform === 'win32') {
     try {
-      const proc = Bun.spawn(['taskkill', '/pid', String(pid), '/f', '/t'], {
-        stdout: 'ignore',
-        stderr: 'ignore',
-        windowsHide: true,
+      // Bounded (swept 2026-09-18): an unbounded wait hangs the caller forever if taskkill itself
+      // wedges, and this sits on the quit path. On the spawn worker so the spawn cannot hold the loop.
+      await spawnCaptured(['taskkill', '/pid', String(pid), '/f', '/t'], {
+        timeoutMs: TASKKILL_TIMEOUT_MS,
+        wantStderr: false,
       })
-      // Bounded (swept 2026-09-18): `await proc.exited` with nothing racing it hangs the caller
-      // forever if taskkill itself wedges, and this sits on the quit path.
-      await awaitExitBounded(proc, TASKKILL_TIMEOUT_MS)
     } catch {
       // Best-effort; process may have already exited between scan and kill.
     }
@@ -943,14 +941,10 @@ async function gracefulKillPid(pid: number): Promise<void> {
   if (process.platform === 'win32') {
     try {
       // No /f: asks the process to close its main window first (best-effort graceful).
-      const proc = Bun.spawn(['taskkill', '/pid', String(pid), '/t'], {
-        stdout: 'ignore',
-        stderr: 'ignore',
-        windowsHide: true,
+      await spawnCaptured(['taskkill', '/pid', String(pid), '/t'], {
+        timeoutMs: TASKKILL_TIMEOUT_MS,
+        wantStderr: false,
       })
-      // Bounded (swept 2026-09-18): `await proc.exited` with nothing racing it hangs the caller
-      // forever if taskkill itself wedges, and this sits on the quit path.
-      await awaitExitBounded(proc, TASKKILL_TIMEOUT_MS)
     } catch {
       // Ignore; we'll force-kill on timeout regardless.
     }

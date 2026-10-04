@@ -25,6 +25,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { normalizePath } from './paths.ts'
 import { createScanCache } from './scan-cache.ts'
+import { captureInWorker } from './spawn-worker.ts'
 
 /** One row of the OS process table, as `ps -eo pid=,ppid=,command=` would print it. */
 export interface ProcTableRow {
@@ -203,17 +204,12 @@ export async function killProcessTreesAsync(pids: number[]): Promise<void> {
   if (!live.length) return
   if (process.platform !== 'win32') return killUnixTrees(live)
   try {
-    const proc = Bun.spawn(
-      ['taskkill', ...live.flatMap((pid) => ['/PID', String(pid)]), '/T', '/F'],
-      {
-        stdin: 'ignore',
-        stdout: 'ignore',
-        stderr: 'ignore',
-        windowsHide: true,
-      },
-    )
-    // Bounded but never killed in turn: a taskkill that hangs is left, not chased with another.
-    await Promise.race([proc.exited, Bun.sleep(30_000)])
+    // On the spawn worker (Bun.spawn holds its caller 100-280 ms here). Bounded; a taskkill that
+    // hangs past the bound is killed by the worker, not chased with another from here.
+    await spawnCaptured(['taskkill', ...live.flatMap((pid) => ['/PID', String(pid)]), '/T', '/F'], {
+      timeoutMs: 30_000,
+      wantStderr: false,
+    })
   } catch {
     // already gone
   }
@@ -369,6 +365,13 @@ export async function spawnCaptured(
     wantStderr?: boolean
   } = {},
 ): Promise<CapturedRun> {
+  // Spawned on a worker thread: Bun.spawn holds its caller for 100-280 ms on Windows, and the
+  // daemon's one thread serves every route. Inline only where no worker can run.
+  try {
+    return await captureInWorker(cmd, { timeoutMs, cwd, env, wantStderr })
+  } catch {
+    // worker unavailable or died: capture on this thread
+  }
   let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
   try {
     proc = Bun.spawn(cmd, {

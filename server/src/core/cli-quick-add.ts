@@ -28,7 +28,7 @@ import {
   listCliInstances,
   renameCliInstance,
 } from './cli-instances'
-import { killProcessTree } from './process'
+import { killProcessTree, spawnCaptured } from './process'
 import { openSigninWindow, type SigninWindow } from './signin-window'
 
 export interface QuickAddFlow {
@@ -366,22 +366,15 @@ export async function cliAuthStatus(
   configDir: string,
 ): Promise<{ loggedIn: boolean; email: string | null; plan: string | null }> {
   const none = { loggedIn: false, email: null, plan: null }
-  let proc: ReturnType<typeof Bun.spawn>
   try {
-    proc = Bun.spawn([resolveClaudeExe(), 'auth', 'status', '--json'], {
+    // On the spawn worker: the CLI's spawn held the loop ~100 ms per account at boot.
+    const run = await spawnCaptured([resolveClaudeExe(), 'auth', 'status', '--json'], {
       env: scrubbedEnv(configDir),
-      stdin: 'ignore',
-      stdout: 'pipe',
-      stderr: 'ignore',
-      windowsHide: true,
+      timeoutMs: 20_000,
+      wantStderr: false,
     })
-  } catch {
-    return none
-  }
-  const timer = setTimeout(() => killProcessTree(proc.pid), 20_000)
-  try {
-    const text = await new Response(proc.stdout as ReadableStream<Uint8Array>).text()
-    await proc.exited
+    if (run.timedOut) return none
+    const text = run.stdout
     const j = JSON.parse(text) as Record<string, unknown>
     const str = (...keys: string[]) => {
       for (const k of keys) if (typeof j[k] === 'string' && j[k]) return j[k] as string
@@ -396,7 +389,5 @@ export async function cliAuthStatus(
     }
   } catch {
     return none
-  } finally {
-    clearTimeout(timer)
   }
 }

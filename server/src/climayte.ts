@@ -155,7 +155,7 @@ import {
 import { judgeWaveTask, readWave, waveBatch, waveDone, writeWave } from './climayte-wave'
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
-import { isPidAlive, killProcessTrees } from './core/process'
+import { isPidAlive, killProcessTrees, spawnCaptured } from './core/process'
 import { POINTER_DIR } from './instance'
 import { parseResetTime } from './usage'
 
@@ -795,14 +795,11 @@ function checkRunners(): void {
   if (!runners.length) return
   runnerCheckAt = Date.now()
   runnerCheck = (async () => {
-    const proc = Bun.spawn(runnerQueryArgv(runners.map((r) => r.pid)), {
-      stdout: 'pipe',
-      stderr: 'ignore',
-      windowsHide: true,
-      timeout: RUNNER_QUERY_TIMEOUT_MS,
+    const r = await spawnCaptured(runnerQueryArgv(runners.map((p) => p.pid)), {
+      timeoutMs: RUNNER_QUERY_TIMEOUT_MS,
+      wantStderr: false,
     })
-    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
-    judgeRunners(runners, code === 0, stdout)
+    judgeRunners(runners, r.code === 0 && !r.timedOut, r.stdout)
   })()
     .catch((err) => console.error('[climayte] runner identity query failed:', err))
     .finally(() => {

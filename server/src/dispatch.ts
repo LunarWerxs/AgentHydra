@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSy
 import { join } from 'node:path'
 import { isDispatchReady } from './boot-state'
 import { RUN_LOG_DIR } from './config'
-import { killProcessTree } from './core/process'
+import { killProcessTree, spawnCaptured } from './core/process'
 import { coerceQueueItem, db } from './db'
 import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
 import { deliverIncidentNotification, recordIncident } from './incidents'
@@ -384,64 +384,34 @@ async function killTree(pid: number): Promise<void> {
  * a deadline; this one did not.
  */
 const PROBE_TIMEOUT_MS = 15_000
-/** After the probe's kill, how long its drain is given to hand back what it already read
- *  before the answer comes back empty. A stranger holding the pipe must not extend the probe. */
-const PROBE_DRAIN_GRACE_MS = 2_000
 
 async function isRunnerAlive(id: string): Promise<boolean> {
   // Item ids are uuids/simple slugs (no WQL/regex metacharacters), so the needle needs no escaping.
   const needle = `${id}.spec.json`
-  const onLeash = async (
-    proc: { exited: Promise<number>; kill: () => void },
-    read: Promise<string>,
-  ) => {
-    // ⛔ THE KILLER BOUNDS THE PROCESS, NOT THE READ (tightened 2026-09-18). `proc.kill()` makes
-    // `proc.exited` settle, but the drain finishes only when the PIPE closes - and any grandchild
-    // that inherited this child's stdout holds it open for as long as IT lives, so `Promise.all`
-    // could sit past PROBE_TIMEOUT_MS on a process that was already dead. That is the exact shape
-    // that wedged the orchestrator route for a full hour. So the read is raced too, and an
-    // unfinished drain answers empty rather than waiting on a stranger.
-    let killer: ReturnType<typeof setTimeout> | undefined
-    const givenUp = new Promise<string>((resolve) => {
-      killer = setTimeout(() => {
-        try {
-          proc.kill()
-        } catch {
-          /* already gone */
-        }
-        // A beat for the drain to hand back what it already had, then answer regardless.
-        setTimeout(() => resolve(''), PROBE_DRAIN_GRACE_MS)
-      }, PROBE_TIMEOUT_MS)
-    })
-    try {
-      return await Promise.race([Promise.all([read, proc.exited]).then(([out]) => out), givenUp])
-    } finally {
-      if (killer) clearTimeout(killer)
-    }
+  // On the spawn worker, bounded by PROBE_TIMEOUT_MS: the deadline kills the whole tree and a
+  // stranger holding the pipe cannot extend it, so a timeout answers empty (not alive-proof).
+  const probe = async (cmd: string[]): Promise<string> => {
+    const r = await spawnCaptured(cmd, { timeoutMs: PROBE_TIMEOUT_MS, wantStderr: false })
+    return r.timedOut ? '' : r.stdout
   }
   try {
     if (process.platform === 'win32') {
-      const proc = Bun.spawn(
-        [
-          'powershell',
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          // `AND ProcessId <> $PID` is load-bearing, not defensive tidiness: the needle is embedded
-          // in THIS powershell's own CommandLine (it IS the LIKE pattern), so without the exclusion
-          // the query always matches itself and the count is never zero. That made isRunnerAlive
-          // return true for every reattach on Windows — silently defeating reattachRuns's stale-pid
-          // guard AND its "runner gone, nothing to replay → fail" path. (The POSIX branch below
-          // can't self-match: `ps -eo args=` prints `ps`'s own args, which don't contain the needle.)
-          `@(Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%${needle}%' AND ProcessId <> $PID").Count`,
-        ],
-        { stdout: 'pipe', stderr: 'ignore', windowsHide: true },
-      )
-      const out = await onLeash(proc, new Response(proc.stdout).text())
+      const out = await probe([
+        'powershell',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        // `AND ProcessId <> $PID` is load-bearing, not defensive tidiness: the needle is embedded
+        // in THIS powershell's own CommandLine (it IS the LIKE pattern), so without the exclusion
+        // the query always matches itself and the count is never zero. That made isRunnerAlive
+        // return true for every reattach on Windows — silently defeating reattachRuns's stale-pid
+        // guard AND its "runner gone, nothing to replay → fail" path. (The POSIX branch below
+        // can't self-match: `ps -eo args=` prints `ps`'s own args, which don't contain the needle.)
+        `@(Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%${needle}%' AND ProcessId <> $PID").Count`,
+      ])
       return Number(out.trim()) > 0
     }
-    const proc = Bun.spawn(['ps', '-eo', 'args='], { stdout: 'pipe', stderr: 'ignore' })
-    const out = await onLeash(proc, new Response(proc.stdout).text())
+    const out = await probe(['ps', '-eo', 'args='])
     return out.split('\n').some((line) => line.includes(needle))
   } catch {
     return false
