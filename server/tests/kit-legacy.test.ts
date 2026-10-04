@@ -156,6 +156,22 @@ describe('kit legacy backfill', () => {
     store.close()
   })
 
+  test('a query grouped by hour says backfilled days sit at the first hour, only where the window reaches them', async () => {
+    const store = new KitStore(':memory:')
+    const s = statsDb()
+    put(s, 'n1', { [day(90)]: 1 }, { gone: true })
+    const q = (from: number, to: number, groupBy: ('hour' | 'day')[]) =>
+      usageQuery({ window: { from, to }, groupBy }, { store, now: NOW }).notes.filter((n) =>
+        n.includes('first hour of that local day'),
+      )
+    expect(q(NOW - 100 * D, NOW, ['hour'])).toEqual([])
+    await ingestLegacy(store, s, { now: NOW })
+    expect(q(NOW - 100 * D, NOW, ['hour'])).toHaveLength(1)
+    expect(q(NOW - 100 * D, NOW, ['day'])).toEqual([])
+    expect(q(NOW - 30 * D, NOW, ['hour'])).toEqual([])
+    store.close()
+  })
+
   test("spendReport 'all' includes the backfill: total, day and project", async () => {
     const store = new KitStore(':memory:', { now: NOW })
     const s = statsDb()

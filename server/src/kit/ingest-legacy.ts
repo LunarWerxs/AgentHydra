@@ -20,23 +20,23 @@
 //  * Idempotent: ids are `legacy:<session_key>:<day>:<model>` (claimed / replaced), progress is a
 //    session_key cursor in meta, and the done flag is tied to claude_ingest_version, because
 //    upgradeClaudeStore wipes Claude's settled rows (the backfill then simply runs again).
-//  * Sliced: about SLICE_MS of work, at most WRITE_SLICE events per write, a turn of the event loop between.
+//  * Sliced: at most ROW_MS of row work and LEGACY_WRITE events per write, a turn of the event loop after each
+//    write, and a pause every WAL_PAUSE_EVERY events that lets the WAL restart.
 import type { Database } from 'bun:sqlite'
 import { priceTokens } from '../pricing'
 import type { ModelSpend } from '../types'
 import { reweighModels } from '../usage-tokens'
-import {
-  type KitStore,
-  localDay,
-  SLICE_MS,
-  type UsageEventInput,
-  WRITE_SLICE,
-  yieldLoop,
-} from './store'
+import { type KitStore, localDay, SLICE_MS, type UsageEventInput, yieldLoop } from './store'
 
 const RAW_WINDOW_DAYS = 36
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
 const PAGE = 100
+/** Most events per write, so one commit stays a few ms of sqlite. */
+const LEGACY_WRITE = 100
+/** Events written between two pauses that let the WAL restart (see letWalRestart). */
+const WAL_PAUSE_EVERY = 6_000
+/** Row work (parse, price) between two writes: the loop yields after every write, so a turn is ROW_MS + one write. */
+const ROW_MS = 10
 const CLAUDE_SOURCES = "'cli','desktop','climayte'"
 
 interface StatsRow {
@@ -72,6 +72,30 @@ const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v)
 function dayStart(day: string): number {
   const [y, m, d] = day.split('-').map(Number) as [number, number, number]
   return new Date(y, m - 1, d).getTime()
+}
+
+/**
+ * A writer that never stops appends to the WAL for ever: the checkpoint worker is passive, and the WAL is
+ * only reused from its start once a checkpoint has caught up with it while no write is running. On the
+ * live-size store 236,000 backfilled days grew the WAL to 1.2 GB, and the commits that had to extend the
+ * file took 100-700 ms each (statements 1 ms, the commit itself the rest) on the daemon's thread. Idling
+ * for one checkpoint (the worker runs at most every 1.5 s; yieldLoop schedules it) lets the next write
+ * restart the WAL at its start: it stayed near 175 MB and no commit stalled.
+ */
+async function letWalRestart(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 1600))
+  await yieldLoop()
+  await new Promise((r) => setTimeout(r, 700))
+}
+
+const LEGACY_SPAN_META = 'legacy_backfill_span'
+
+/** [from, to] of the timestamps (local day starts) the backfill has written, or null before it wrote any. */
+export function legacySpan(store: KitStore): { from: number; to: number } | null {
+  const [from, to] = (store.getMeta(LEGACY_SPAN_META) ?? '').split(',').map(Number)
+  return Number.isFinite(from) && Number.isFinite(to) && from !== undefined && to !== undefined
+    ? { from, to }
+    : null
 }
 
 /** The events of one session_stats row for the days the kit does not hold. */
@@ -186,11 +210,20 @@ export async function ingestLegacy(
   const batch: UsageEventInput[] = []
   let lastKey = pos
   // Events per write: random claim and hour pages can be cold, so the size follows how long the last write took.
-  let chunk = 100
+  let chunk = 50
+  let walMark = 0
+  // The span of local-day starts written, for the readers that group by hour (legacySpan).
+  const prev = legacySpan(store)
+  let lo = prev?.from ?? Number.POSITIVE_INFINITY
+  let hi = prev?.to ?? Number.NEGATIVE_INFINITY
   const flush = async (): Promise<void> => {
     const have = store.db.prepare('select 1 from usage_event where id = ?')
     while (batch.length > 0) {
       const part = batch.splice(0, chunk)
+      for (const e of part) {
+        if (e.ts < lo) lo = e.ts
+        if (e.ts > hi) hi = e.ts
+      }
       const t = performance.now()
       sum.written += store.settleOld(part.filter((e) => e.ts < cut))
       const fresh = part.filter((e) => e.ts >= cut && !have.get(e.id))
@@ -198,11 +231,16 @@ export async function ingestLegacy(
       sum.written += fresh.length
       const took = performance.now() - t
       chunk =
-        took > SLICE_MS / 2
+        took > SLICE_MS / 4
           ? Math.max(10, chunk >> 1)
-          : Math.min(WRITE_SLICE, chunk + (chunk >> 2) + 1)
-      if (batch.length > 0) await yieldLoop()
+          : Math.min(LEGACY_WRITE, chunk + (chunk >> 2) + 1)
+      await yieldLoop()
+      if (store.path !== ':memory:' && sum.written - walMark >= WAL_PAUSE_EVERY) {
+        walMark = sum.written
+        await letWalRestart()
+      }
     }
+    if (lo <= hi) store.setMeta(LEGACY_SPAN_META, `${lo},${hi}`)
     store.setMeta('legacy_backfill_pos', `${tag}\u0000${lastKey}\u0000${floor ?? ''}`)
   }
   let since = performance.now()
@@ -217,9 +255,8 @@ export async function ingestLegacy(
       sum.events += evs.length
       batch.push(...evs)
       lastKey = row.session_key
-      if (batch.length >= chunk || performance.now() - since >= SLICE_MS) {
+      if (batch.length >= chunk || performance.now() - since >= ROW_MS) {
         await flush()
-        await yieldLoop()
         since = performance.now()
       }
     }

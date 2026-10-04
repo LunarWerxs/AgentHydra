@@ -7,6 +7,7 @@
 // side excluding those) for the rest, so no event is counted in both.
 import type { Database } from 'bun:sqlite'
 import { getCachedUsage } from '../usage-cache'
+import { legacySpan } from './ingest-legacy'
 import { machineId } from './machine'
 import { eventMeasureSql, KIT_SESSION_KEY } from './schema'
 import { KitStore, RAW_RETENTION_DAYS } from './store'
@@ -846,6 +847,15 @@ function* computeUsage(
     notes.push(
       'days from the hourly rollup are cut on whole UTC hours: in a zone offset by a part of an hour the first minutes of a local day can fall on the day before',
     )
+  }
+
+  if (wantHour) {
+    const legacy = legacySpan(store)
+    if (legacy && legacy.from <= win.to && legacy.to >= win.from) {
+      notes.push(
+        'days backfilled from the old per-session record (source cli or desktop, ref legacy) carry the whole day at the first hour of that local day, not spread across it',
+      )
+    }
   }
 
   if (groupBy.length === 0 && merged.size === 0) merged.set('{}', pick(emptyRow()))
