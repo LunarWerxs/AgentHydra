@@ -689,11 +689,12 @@ async function onStop() {
           @keydown.meta.enter.prevent="onSend()"
         />
         <div class="flex items-center justify-between gap-3">
+          <!-- No standing explainer under the box (owner, 2026-10-04); Stop and send now says the rest on hover. -->
           <span class="text-2xs text-muted-foreground">
-            {{
-              active ? $t('climayte.messageHint') : stuck ? $t('climayte.continueHintStuck') : $t('climayte.continueHint')
-            }}
-            <span class="hidden sm:inline">· {{ $t('climayte.sendShortcut') }}</span>
+            <template v-if="!active && stuck">{{ $t('climayte.continueHintStuck') }}</template>
+            <span class="hidden sm:inline">
+              <template v-if="!active && stuck"> · </template>{{ $t('climayte.sendShortcut') }}
+            </span>
           </span>
           <div class="flex shrink-0 items-center gap-1.5">
             <Button

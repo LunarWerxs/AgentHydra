@@ -97,7 +97,7 @@ import {
 import { logoutCliInstance } from './cli-logout'
 import { queueUploadPending, syncQueueDetail } from './climayte-queue-sync'
 import { createChatLocal } from './desktop-chat-local'
-import { chatSyncRows, syncChats } from './desktop-chat-sync'
+import { CHATS_STATE_PATH, chatSyncRows, syncChats } from './desktop-chat-sync'
 import type { ChatLocal } from './desktop-chat-types'
 import { hasOwnCliLogin } from './desktop-cli-feed'
 import {
@@ -116,7 +116,6 @@ export { IDLE_MAX_MS } from './login-sync-pace'
 /** The loop's tick, and the wait of a PC with something to do. */
 export const SYNC_EVERY_MS = BASE_MS
 const CONFIG_PATH = join(CONFIG_DIR, 'login-sync.json')
-const CHATS_STATE_PATH = join(CONFIG_DIR, 'desktop-chat-sync.json')
 const PAIRING_PREFIX = 'ahsync1:'
 const MAX_EVENTS = 30
 

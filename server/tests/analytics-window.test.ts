@@ -101,6 +101,16 @@ describe('the window cuts a session where its calls are', () => {
     const r = await report({ sinceMs: NOW - 2.5 * H, sources: ['desktop', 'climayte'] })
     expect(r.bySource.map((b) => b.key)).toEqual(['desktop'])
   })
+
+  test('a day or less is also split by the clock hour, quiet hours included', async () => {
+    const r = await report({ sinceMs: NOW - 24 * H })
+    // NOW is on the hour: the window's 24 hours and the hour now running, each its own bucket.
+    expect(r.byHour?.length).toBe(25)
+    expect(r.byHour?.at(-3)).toMatchObject({ key: new Date(NOW - 2 * H).toISOString(), costUsd: 2 })
+    expect(r.byHour?.at(-2)?.turns).toBe(0)
+    expect(r.byHour?.reduce((sum, b) => sum + b.turns, 0)).toBe(r.calls)
+    expect((await report({ sinceMs: NOW - 7 * D })).byHour).toBeUndefined()
+  })
 })
 
 describe('the totals cover every account, not desktop alone', () => {

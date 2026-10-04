@@ -8,7 +8,7 @@
 // a fragment, so the turns land in that container exactly as they did inline and `data-turn` stays
 // where the scroller and find look (a folded row carries every index it holds in `data-turns`).
 
-import { Check, ChevronRight, CircleAlert, Copy, FoldVertical } from '@lucide/vue'
+import { Check, ChevronRight, CircleAlert, Copy, FoldVertical, GitBranch } from '@lucide/vue'
 import { useNow } from '@vueuse/core'
 import { computed } from 'vue'
 import TranscriptWorkGroup from '@/components/TranscriptWorkGroup.vue'
@@ -32,6 +32,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   copy: [i: number, text: string]
   toggleExpand: [key: string]
+  /** "Copy up to here into a new chat", from the reply on this transcript line. */
+  branch: [uuid: string]
 }>()
 
 /** How recent a session's newest work must be for its row to read as still in progress. A tool
@@ -192,6 +194,16 @@ function gap(i: number): string {
         >
           <Check v-if="copiedIdx === item.index" class="text-success" />
           <Copy v-else />
+        </Button>
+        <Button
+          v-if="item.ev.uuid && !nested"
+          variant="ghost"
+          size="icon-xs"
+          :title="$t('sessions.branchHere')"
+          :aria-label="$t('sessions.branchHere')"
+          @click="emit('branch', item.ev.uuid)"
+        >
+          <GitBranch />
         </Button>
       </div>
     </div>

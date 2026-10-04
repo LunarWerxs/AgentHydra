@@ -124,7 +124,7 @@ const usageFor = (inst: CliInstance) => snapshotFor(usageKey(inst))
 // you ask of every instance at once. Here the swap trades the config-dir column — the least useful
 // thing on screen when you're asking about quota — for the two reset countdowns.
 const { usageMode, now } = useUsageMode(true)
-// The folded table's two gauges (PooledUsageGauges.vue): what is left of each window across EVERY
+// The header's two gauges (PooledUsageGauges.vue): what is left of each window across EVERY
 // CLI account, the ones linked to a desktop row included, since CliMayte runs on those too.
 const poolOf = (which: 'session' | 'weekAll') =>
   pooledRemaining(
@@ -633,8 +633,8 @@ onUnmounted(() => {
   <div>
     <!-- The shared header every instance table uses; the count says "x of y" while the filter
          sets rows aside (see headingCount). It folds the table away (owner, 2026-10-01: "the
-         list of accounts should be collapsable"), which leaves CliMayte below the whole window;
-         folded, the header carries the two pooled gauges. Its plus shows Quick add's email row. -->
+         list of accounts should be collapsable"), which leaves CliMayte below the whole window.
+         The header carries the two pooled gauges either way. Its plus shows Quick add's email row. -->
     <InstanceSectionHeader
       v-model:open="accountsOpen"
       provider="claude"
@@ -646,10 +646,10 @@ onUnmounted(() => {
       @refresh="refreshCliInstances()"
       @create="quickAdd?.focusEmail()"
     >
-      <!-- Only while folded: open, the rows say it per account. -->
+      <!-- Folded or open (owner, 2026-10-04): the pool's total is not something the rows add up. -->
       <template #summary>
         <PooledUsageGauges
-          v-if="!accountsOpen && cliInstances.length > 0"
+          v-if="cliInstances.length > 0"
           :session="sessionPool"
           :week="weekPool"
         />

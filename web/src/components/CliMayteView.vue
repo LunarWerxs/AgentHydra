@@ -25,6 +25,7 @@ import {
   PictureInPicture2,
   RefreshCw,
   RotateCcw,
+  TriangleAlert,
   UserRound,
   X,
 } from '@lucide/vue'
@@ -484,6 +485,18 @@ onUnmounted(() => {
           <!-- What CliMayte is, behind an info bubble (owner, 2026-10-01: a description is never a
                paragraph over the UI). -->
           <InfoHint :text="$t('climayte.subtitle')" />
+          <!-- Another PC on an older (or newer) AgentHydra: one yellow mark to hover, never a banner
+               that stays up (owner, 2026-10-04). -->
+          <span
+            v-if="remoteNotes.length"
+            role="img"
+            tabindex="0"
+            class="inline-flex text-warning"
+            :aria-label="`${$t('climayte.remoteVersions')}: ${remoteNotes.map((n) => $pii(n.note)).join(' ')}`"
+            :title="remoteNotes.map((n) => $pii(n.note)).join('\n')"
+          >
+            <TriangleAlert class="size-3.5" aria-hidden="true" />
+          </span>
         </h2>
       </div>
       <div class="flex gap-1">
@@ -518,16 +531,6 @@ onUnmounted(() => {
           >
             <CloudOff class="size-3.5 shrink-0" />
             {{ $t('climayte.staleBanner') }}
-          </p>
-
-          <p
-            v-for="n in remoteNotes"
-            :key="n.pc"
-            role="status"
-            class="mx-3 mb-2 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
-          >
-            <Cloud class="size-3.5 shrink-0" aria-hidden="true" />
-            {{ $pii(n.note) }}
           </p>
 
           <div v-if="rows.length" class="flex flex-col gap-1.5 px-3 pb-2">

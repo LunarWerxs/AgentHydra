@@ -26,11 +26,15 @@
 // who changed what. Failures are the chat sync's own: the caller keeps them apart from the logins'.
 
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { CONFIG_DIR } from '../config'
 import { cutChunks, openChunk, openRecord, sealRecord, shareableEnd } from './chat-sync-codec'
 import type { ChatIo, ChatSyncRow, IncomingChat, LocalChat } from './desktop-chat-types'
 import { MIRROR_FRESH_MS } from './login-sync-mirror'
+
+/** Where this PC keeps what each chat agreed with the store (cli-login-sync.ts runs the passes). */
+export const CHATS_STATE_PATH = join(CONFIG_DIR, 'desktop-chat-sync.json')
 
 /** Raw transcript bytes one pass reads in all; the rest goes on the next pass. */
 export const PASS_READ_MAX = 64 * 1024 * 1024
@@ -164,6 +168,27 @@ export function chatSyncRows(statePath: string): ChatSyncRow[] {
       note: c.note,
       at: c.at,
     }))
+}
+
+let elsewhere: { path: string; mtimeMs: number; size: number; map: Map<string, string> } | null =
+  null
+
+/** Session id -> the name of the PC a chat came from, for every chat this PC took from another one
+ *  (the Sessions list marks them). Re-read only when the state file changes. */
+export function chatsFromElsewhere(statePath: string = CHATS_STATE_PATH): Map<string, string> {
+  let st: { mtimeMs: number; size: number }
+  try {
+    st = statSync(statePath)
+  } catch {
+    return new Map()
+  }
+  const hit = elsewhere
+  if (hit && hit.path === statePath && hit.mtimeMs === st.mtimeMs && hit.size === st.size)
+    return hit.map
+  const map = new Map<string, string>()
+  for (const r of chatSyncRows(statePath)) if (!r.fromHere) map.set(r.sessionId, r.origin.name)
+  elsewhere = { path: statePath, mtimeMs: st.mtimeMs, size: st.size, map }
+  return map
 }
 
 const titleOf = (record: Record<string, unknown>): string | null =>

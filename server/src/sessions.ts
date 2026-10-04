@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { markSessionGone } from './analytics'
-import { climayteEffortBySession } from './climayte-effort'
+import { climayteEffortBySession, climayteTasksBySession } from './climayte-effort'
+import { chatsFromElsewhere } from './core/desktop-chat-sync'
 import { allInstanceNumbers, instanceRef } from './core/instance-numbers'
 import { mapPool } from './core/map-pool'
 import { defaultClaudeUserDataDir, instancesRoot } from './core/paths'
@@ -8,7 +9,7 @@ import { db } from './db'
 import { readDshSession } from './dsh-sessions'
 import { readForeignSession } from './foreign-sessions'
 import { readHermesSession } from './hermes-sessions'
-import { readHSwarmSession } from './hswarm-sessions'
+import { hswarmRunsBySessionPrefix, readHSwarmSession } from './hswarm-sessions'
 import {
   originInstances,
   resolveInstanceByOrigin,
@@ -1236,19 +1237,43 @@ function buildSessionSummary(
     ended_because: m.ended_because,
     model: m.model,
     effort: effortFor(tf, m.effort, desk, lookups.climayteEffort),
+    ...offloadsFor(tf, lookups),
+    ...fromPcFor(tf, lookups),
   }
 }
 
-/** The per-list lookups a row's instance number and effort come from, built once per call. */
+/** The per-list lookups a row's instance number, effort and offloads come from, built once per call. */
 interface RowLookups {
   numberOf: DesktopNumberLookup
   climayteEffort: Map<string, string>
+  /** HSwarm runs by the 8-character session prefix HSwarm records. */
+  hswarmRuns: Map<string, number>
+  climayteTasks: Map<string, number>
+  fromPc: Map<string, string>
 }
 
 const rowLookups = (): RowLookups => ({
   numberOf: desktopNumberLookup(),
   climayteEffort: climayteEffortBySession(),
+  hswarmRuns: hswarmRunsBySessionPrefix(),
+  climayteTasks: climayteTasksBySession(),
+  fromPc: chatsFromElsewhere(),
 })
+
+/** The PC a Desktop chat came from through the chat sync, when it was not this one. */
+function fromPcFor(tf: TranscriptFile, lookups: RowLookups): Pick<SessionSummary, 'from_pc'> {
+  const pc = tf.source === 'claude' ? lookups.fromPc.get(tf.session_id) : undefined
+  return pc ? { from_pc: pc } : {}
+}
+
+/** The work a Claude chat handed off, by the CLI session id it ran under (CliMayte's origin records
+ *  it whole, HSwarm its first 8 characters); absent when it handed off none. */
+function offloadsFor(tf: TranscriptFile, lookups: RowLookups): Pick<SessionSummary, 'offloads'> {
+  if (tf.source !== 'claude') return {}
+  const hswarm = lookups.hswarmRuns.get(tf.session_id.slice(0, 8)) ?? 0
+  const climayte = lookups.climayteTasks.get(tf.session_id) ?? 0
+  return hswarm || climayte ? { offloads: { hswarm, climayte } } : {}
+}
 
 export async function listSessions(opts: ListSessionsOptions = {}): Promise<SessionSummary[]> {
   const {
@@ -1965,5 +1990,7 @@ export async function getSession(
     ended_because: m.ended_because,
     model: m.model,
     effort: effortFor(tf, m.effort, meta, lookups.climayteEffort),
+    ...offloadsFor(tf, lookups),
+    ...fromPcFor(tf, lookups),
   }
 }

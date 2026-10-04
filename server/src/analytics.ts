@@ -1719,6 +1719,10 @@ export async function spendReport(opts: SpendReportOptions = {}): Promise<SpendR
 }
 const spendCache = new WeakMap<KitStore, { key: string; value: Promise<SpendReport> }>()
 
+const HOUR_MS = 60 * 60 * 1000
+/** The longest window that also gets `byHour`. */
+const HOURLY_MAX_MS = 48 * HOUR_MS
+
 async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> {
   const sources = opts.sources ?? null
   const measures = [
@@ -1752,6 +1756,13 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
     { window, filter, groupBy: ['session', 'model', 'source', 'account'], measures: [...measures] },
     qopts,
   )
+  // A window of two days or less is also drawn by the hour: by the day it is two bars, yesterday and
+  // today, that hardly move (owner, 2026-10-04).
+  const now = opts.now ?? Date.now()
+  const hourly = opts.sinceMs != null && now - opts.sinceMs <= HOURLY_MAX_MS
+  const hourRes = hourly
+    ? await usageQueryAsync({ window, filter, groupBy: ['hour'], measures: [...measures] }, qopts)
+    : null
   const projects = await sessionProjects()
   const projectDisplay = new Map<string, string>()
 
@@ -1882,6 +1893,30 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
   }
 
   const days = byDay.list('key')
+  let byHour: SpendBucket[] | undefined
+  if (hourRes && opts.sinceMs != null) {
+    const hours = new BucketSet()
+    for (const row of hourRes.rows) {
+      const x = read(row)
+      if (x) hours.add(row.hour as string, x.r, null)
+    }
+    const got = new Map(hours.list('key').map((b) => [b.key, b]))
+    // Every hour of the window, a quiet one as an empty bar, so the axis is the clock.
+    byHour = []
+    for (let h = Math.floor(opts.sinceMs / HOUR_MS) * HOUR_MS; h <= now; h += HOUR_MS) {
+      const key = new Date(h).toISOString()
+      byHour.push(
+        got.get(key) ?? {
+          key,
+          weighted: 0,
+          costUsd: null,
+          sessions: 0,
+          turns: 0,
+          tokens: emptyTokens(),
+        },
+      )
+    }
+  }
   return {
     from: days[0]?.key ?? null,
     to: days[days.length - 1]?.key ?? null,
@@ -1905,6 +1940,7 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
       .slice(0, 25)
       .map((b) => ({ ...b, key: projectDisplay.get(b.key) ?? b.key })),
     byDay: days,
+    ...(byHour ? { byHour } : {}),
     byAccount: byAccount.list(),
     bySource: bySource.list(),
     // A model whose provider charged for it IS priced, even without a list price.

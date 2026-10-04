@@ -92,6 +92,17 @@ export default {
   listOptionsHint: 'Filters and view toggles for the session list',
   listOptionsActive: 'Filters are active',
   archived: 'Archived',
+  // Screen-reader word before a bold title: it moved since you last opened it (useUnreadSessions).
+  unread: 'Unread',
+  // What a chat handed off, on its row and in its hover (SessionSummary.offloads).
+  offloadsHswarm: 'Handed {n} run to HSwarm | Handed {n} runs to HSwarm',
+  offloadsClimayte: 'Handed {n} task to CliMayte | Handed {n} tasks to CliMayte',
+  // A Desktop chat taken from another PC through the chat sync (SessionSummary.from_pc).
+  fromPc: 'From {pc}, through the chat sync',
+  // "Copy up to here into a new chat" on a Claude reply (useSessionBranch).
+  branchHere: 'Copy up to here into a new chat',
+  branched: 'New chat made from this point. The original is unchanged.',
+  branchFailed: 'Could not make the new chat',
   archivedActive: 'Not archived',
   archivedArchived: 'Archived',
   // --- the multi-select filter submenus: the All / None actions and the trigger summary ---

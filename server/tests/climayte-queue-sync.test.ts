@@ -164,7 +164,7 @@ describe('whether the other PC runs an older AgentHydra', () => {
     const s = buildStatus('CornuCopia', at('2026-10-02T18:40:00.000Z'), mine)
     expect(s.behind).toBe(true)
     expect(s.behindNote).toContain('abc1234, Oct 2, 18:40 UTC')
-    expect(s.behindNote).toContain('Settings -> Update on that PC')
+    expect(s.behindNote).toContain('Update it there in Settings')
   })
 
   test('a newer commit says this PC is behind, and the same hour says nothing', () => {

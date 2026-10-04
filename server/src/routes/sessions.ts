@@ -22,6 +22,7 @@ import { findDesktopChat } from '../instance-sessions'
 import { readLiveRegistry } from '../live-registry'
 import { boundedQueryInt, jsonBody } from '../route-helpers'
 import { dropSearchIndex, searchIndexStatus } from '../search-index'
+import { branchSession } from '../session-branch'
 import {
   type ExportFormat,
   exportSession,
@@ -579,6 +580,25 @@ app.get('/api/sessions/:id/file-location', async (c) => {
 // the file opens on the machine the daemon runs on). .jsonl has no OS file association, so handing
 // this to the bare default handler would pop Windows' "Pick an app" dialog instead of opening -
 // buildTranscriptOpenArgv names an editor explicitly so that never happens (transcript-open.ts).
+/**
+ * "Copy up to here into a new chat": a new Claude transcript holding this chat up to one reply
+ * (session-branch.ts). Body: `{ uuid, title }`, the reply's line and the chat's title. Answers the
+ * new session's id; the original is not touched.
+ */
+app.post('/api/sessions/:id/branch', async (c) => {
+  const locator = c.req.query('locator') || undefined
+  const tf = await findTranscriptAsync(c.req.param('id'), 'claude', locator)
+  if (!tf) return c.json({ error: 'session not found' }, 404)
+  if (tf.source !== 'claude') return c.json({ error: 'only a Claude chat can be branched' }, 409)
+  const body = await jsonBody(c)
+  const uuid = typeof body.uuid === 'string' ? body.uuid : ''
+  if (!uuid) return c.json({ error: 'uuid is required' }, 400)
+  const base = typeof body.title === 'string' ? body.title.trim().slice(0, 200) : ''
+  const made = branchSession(tf.path, uuid, base ? `${base} (branch)` : 'Branch')
+  if (!made) return c.json({ error: 'that reply is not in this chat' }, 404)
+  return c.json({ session_id: made.sessionId, source: 'claude' })
+})
+
 app.post('/api/sessions/:id/open-file', async (c) => {
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : undefined

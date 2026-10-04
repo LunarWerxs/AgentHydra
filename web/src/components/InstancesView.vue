@@ -270,8 +270,8 @@ function accountCellName(inst: CMInstance): string | null {
   return accountHandle(inst.account) ?? inst.account?.label ?? null
 }
 
-// The pill itself (hover, copy-the-full-address click) is InstanceAccountBadge, shared by every
-// provider's rows.
+// 'warning' turns the row's account yellow with a mark (InstanceRow loginStale): the live login
+// check failed and the account shown is the last known one.
 function accountBadgeVariant(inst: CMInstance) {
   switch (inst.account?.status) {
     case 'live':

@@ -43,6 +43,8 @@ export default {
   // Shown while an instance's account is still being worked out. There is no "Resolve" action
   // anymore — every instance resolves itself — so this is the whole of the unresolved state.
   resolving: 'Resolving…',
+  // The login check failed, so the account shown is the last known one (InstanceRow loginStale).
+  loginUnconfirmed: "Login couldn't be confirmed. Showing the last known account.",
   open: 'Open',
   quit: 'Quit',
   focusHint: 'Bring this instance to the foreground',

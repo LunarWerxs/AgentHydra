@@ -24,11 +24,13 @@
 // READONLY, ALWAYS. HSwarm owns these files; this reader opens them for reading and never writes,
 // moves or repairs one - same contract as every other store AgentHydra reads.
 
+import { Database } from 'bun:sqlite'
 import { existsSync, readdirSync, readFileSync, type Stats, statSync } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { timeSlice } from './core/loop-yield'
 import { type StatStamp, stampOf, unchangedSince } from './core/stat-stamp'
+import { hswarmHome } from './hswarm'
 import type { TailEvent } from './types'
 
 function readJson<T>(path: string): T | null {
@@ -226,6 +228,43 @@ export async function listHSwarmSessionsAsync(root: string): Promise<HSwarmSessi
   }
   jobCache.set(root, current)
   return [...current.values()].map((h) => h.record)
+}
+
+const RUNS_TTL_MS = 60_000
+let runs: { at: number; db: string; map: Map<string, number> } | null = null
+
+/**
+ * How many HSwarm runs each chat started, keyed by the first 8 characters of its session id: HSwarm
+ * records only that much of its caller (hswarm/caller.py `caller_session`). Read from HSwarm's own
+ * run table, which has every run; a job folder exists for only a few of them. Read-only, at most
+ * once a minute; empty when HSwarm has never run here.
+ */
+export function hswarmRunsBySessionPrefix(home: string = hswarmHome()): Map<string, number> {
+  const path = join(home, 'hswarm.sqlite')
+  const now = Date.now()
+  if (runs && runs.db === path && now - runs.at < RUNS_TTL_MS) return runs.map
+  const map = new Map<string, number>()
+  if (existsSync(path)) {
+    let con: Database | null = null
+    try {
+      con = new Database(path, { readonly: true })
+      const stmt = con.prepare(
+        "select caller_session as s, count(*) as n from utilizations where caller_session != '' group by caller_session",
+      )
+      // Finalized before the close: an open statement keeps the file locked on Windows.
+      try {
+        for (const r of stmt.all() as Array<{ s: string; n: number }>) map.set(r.s, r.n)
+      } finally {
+        stmt.finalize()
+      }
+    } catch {
+      // an older HSwarm without the table, or the file mid-write: no counts this minute
+    } finally {
+      con?.close()
+    }
+  }
+  runs = { at: now, db: path, map }
+  return map
 }
 
 // --- transcript ----------------------------------------------------------------------------------

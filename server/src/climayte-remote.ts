@@ -86,7 +86,7 @@ export function buildStatus(
     return {
       build: null,
       behind: true,
-      behindNote: `${name} runs an older AgentHydra (its build is not shown); its waits and placement can be wrong until it updates (Settings -> Update on that PC).`,
+      behindNote: `${name} runs an older AgentHydra. Update it there in Settings.`,
     }
   const t = build.date ? Date.parse(build.date) : Number.NaN
   const m = mine?.date ? Date.parse(mine.date) : Number.NaN
@@ -95,13 +95,13 @@ export function buildStatus(
     return {
       build,
       behind: true,
-      behindNote: `${name} runs an older AgentHydra (${label}); its waits and placement can be wrong until it updates (Settings -> Update on that PC).`,
+      behindNote: `${name} runs an older AgentHydra (${label}). Update it there in Settings.`,
     }
   if (t - m > BEHIND_MS)
     return {
       build,
       behind: false,
-      behindNote: `This PC is behind ${name} (${label}): update this AgentHydra (Settings -> Update).`,
+      behindNote: `This PC is behind ${name} (${label}). Update it in Settings.`,
     }
   return { build, behind: false, behindNote: null }
 }

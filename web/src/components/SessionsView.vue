@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ArrowRightLeft,
   BookOpen,
+  Bot,
   Boxes,
   Brain,
   CalendarRange,
@@ -17,6 +18,7 @@ import {
   CircleCheck,
   CircleSlash,
   ClipboardCopy,
+  Cloud,
   Coins,
   Copy,
   Download,
@@ -27,6 +29,7 @@ import {
   Hand,
   Hourglass,
   KeyRound,
+  Layers,
   Link,
   ListTodo,
   Loader2,
@@ -100,6 +103,7 @@ import { useOpenSession } from '@/composables/useOpenSession'
 import { piiName } from '@/composables/usePrivacy'
 import { useResumeInTerminal } from '@/composables/useResumeInTerminal'
 import { useSessionAccount } from '@/composables/useSessionAccount'
+import { useSessionBranch } from '@/composables/useSessionBranch'
 import { useSessionFileActions } from '@/composables/useSessionFileActions'
 import { useSessionFilters } from '@/composables/useSessionFilters'
 import { useSessionJump } from '@/composables/useSessionJump'
@@ -110,6 +114,7 @@ import { useSessionUsage } from '@/composables/useSessionUsage'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useTranscriptDisplay } from '@/composables/useTranscriptDisplay'
 import { useUiPrefs } from '@/composables/useUiPrefs'
+import { useUnreadSessions } from '@/composables/useUnreadSessions'
 import type * as api from '@/lib/api'
 // Values, not types: the export menu builds its links with these at runtime. Importing the
 // module as `import type` (2026-09-26 cleanup) left the template calling an undefined `api`.
@@ -203,6 +208,9 @@ const {
   olderLoading,
   scroller,
 } = useOpenSession({ sessions, queue, showTools, showThinking, humanOnly })
+// A session that moved since you last opened it has a bold title (owner, 2026-10-04).
+const { unread } = useUnreadSessions(selected)
+const { branchFrom } = useSessionBranch({ open: selected, refresh: refreshSessions, select })
 // An Agent step opens into the run it started, read from this same session's folder
 // (SubagentTranscript.vue), so the open session is handed down rather than threaded through props.
 provide(
@@ -464,6 +472,9 @@ function rowHintOf(s: api.SessionSummary): string {
   if (s.source === 'claude' && !s.instance) lines.push(t('sessions.instanceUnknownHint'))
   if (s.copy_count > 1) lines.push(copyWhyOf(s))
   if (s.subagent_count > 0) lines.push(t('sessions.subagentsHint', { count: s.subagent_count }))
+  if (s.offloads?.hswarm) lines.push(t('sessions.offloadsHswarm', s.offloads.hswarm))
+  if (s.from_pc) lines.push(t('sessions.fromPc', { pc: s.from_pc }))
+  if (s.offloads?.climayte) lines.push(t('sessions.offloadsClimayte', s.offloads.climayte))
   if (s.archived) lines.push(t('sessions.archived'))
   return lines.join('\n')
 }
@@ -1133,28 +1144,6 @@ function onComposerSent(mode: 'now' | 'queued') {
                   :time="timeAgo(s.last_activity_at)"
                   @click="rowClick(s, $event)"
                 >
-                  <!-- working: the spinner; done: the done mark; otherwise a quiet dot whose colour is
-                       how fresh the last turn is (the same fact as the time on the right) -->
-                  <template #status>
-                    <span class="grid size-3.5 shrink-0 place-items-center">
-                      <Loader2
-                        v-if="isLive(s)"
-                        class="size-3.5 animate-spin text-primary"
-                        :aria-label="$t('sessions.agentStatusWorking')"
-                      />
-                      <CircleCheck
-                        v-else-if="s.done"
-                        class="size-3.5 text-success"
-                        :aria-label="$t('sessions.done')"
-                      />
-                      <span
-                        v-else
-                        class="size-1.5 rounded-full"
-                        :class="ACTIVITY_CLASS[activityOf(s)]"
-                        :title="$t(ACTIVITY_LABEL[activityOf(s)])"
-                      ></span>
-                    </span>
-                  </template>
                   <template #badge>
                     <span
                       v-if="selectMode"
@@ -1168,19 +1157,49 @@ function onComposerSent(mode: 'now' | 'queued') {
                     >
                       <Check v-if="isChecked(s)" class="size-3" />
                     </span>
-                    <component
-                      :is="sessionSourceIcon(s.source, rowSourceLabel(s))"
-                      class="size-3.5 shrink-0 text-muted-foreground"
-                      :aria-label="rowSourceLabel(s)"
-                      :title="rowSourceLabel(s)"
-                    />
+                    <!-- One leading icon (owner, 2026-10-04): the tool's icon, with a green or
+                         yellow dot on its corner while the last turn is fresh (none once it is
+                         stale, the same fact as the time on the right). The spinner takes its
+                         place while it works, the done mark once it is done. -->
+                    <span class="relative grid size-3.5 shrink-0 place-items-center">
+                      <Loader2
+                        v-if="isLive(s)"
+                        class="size-3.5 animate-spin text-primary"
+                        :aria-label="$t('sessions.agentStatusWorking')"
+                      />
+                      <CircleCheck
+                        v-else-if="s.done"
+                        class="size-3.5 text-success"
+                        :aria-label="$t('sessions.done')"
+                      />
+                      <template v-else>
+                        <!-- a chat that came from another PC through the chat sync: a cloud, as
+                             CliMayte marks another PC's task (owner, 2026-10-04) -->
+                        <component
+                          :is="s.from_pc ? Cloud : sessionSourceIcon(s.source, rowSourceLabel(s))"
+                          class="size-3.5 text-muted-foreground"
+                          :aria-label="s.from_pc ? $t('sessions.fromPc', { pc: s.from_pc }) : rowSourceLabel(s)"
+                          :title="s.from_pc ? $t('sessions.fromPc', { pc: s.from_pc }) : rowSourceLabel(s)"
+                        />
+                        <span
+                          v-if="activityOf(s) !== 'stale'"
+                          class="absolute -end-0.5 -bottom-0.5 size-1.5 rounded-full ring-1 ring-background"
+                          :class="ACTIVITY_CLASS[activityOf(s)]"
+                          :title="$t(ACTIVITY_LABEL[activityOf(s)])"
+                        ></span>
+                      </template>
+                    </span>
                   </template>
                   <template #title>
-                    <!-- the search's matched characters, bolded; one plain run when not searching -->
-                    <template v-for="(run, ri) in titleRunsOf(s)" :key="ri"><span
+                    <!-- the search's matched characters, bolded; one plain run when not searching.
+                         A session that moved since you last opened it is bold all through. -->
+                    <span :class="unread(s) ? 'font-bold' : undefined"><span
+                      v-if="unread(s)"
+                      class="sr-only"
+                    >{{ $t('sessions.unread') }}: </span><template v-for="(run, ri) in titleRunsOf(s)" :key="ri"><span
                       v-if="run.hit"
                       class="font-semibold text-primary"
-                    >{{ run.text }}</span><template v-else>{{ run.text }}</template></template><!--
+                    >{{ run.text }}</span><template v-else>{{ run.text }}</template></template></span><!--
                     A title nobody chose gets a mark, and only that case: the string came out of a
                     wrapper around the first message, so it may match nothing the user has named.
                     --><span
@@ -1189,6 +1208,23 @@ function onComposerSent(mode: 'now' | 'queued') {
                     >&lt;{{ s.title_tag }}&gt;</span>
                   </template>
                   <template #mark>
+                    <!-- what this chat handed off (owner, 2026-10-04), each with its tab's icon -->
+                    <span
+                      v-if="s.offloads?.hswarm"
+                      class="inline-flex shrink-0 items-center gap-0.5 text-2xs font-normal tabular-nums text-muted-foreground"
+                      :title="$t('sessions.offloadsHswarm', s.offloads.hswarm)"
+                    >
+                      <Layers class="size-3" aria-hidden="true" />{{ s.offloads.hswarm }}
+                      <span class="sr-only">{{ $t('sessions.offloadsHswarm', s.offloads.hswarm) }}</span>
+                    </span>
+                    <span
+                      v-if="s.offloads?.climayte"
+                      class="inline-flex shrink-0 items-center gap-0.5 text-2xs font-normal tabular-nums text-muted-foreground"
+                      :title="$t('sessions.offloadsClimayte', s.offloads.climayte)"
+                    >
+                      <Bot class="size-3" aria-hidden="true" />{{ s.offloads.climayte }}
+                      <span class="sr-only">{{ $t('sessions.offloadsClimayte', s.offloads.climayte) }}</span>
+                    </span>
                     <!-- with "show archived" on, the one mark that tells an archived row from a live one -->
                     <span
                       v-if="s.archived"
@@ -1884,6 +1920,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                 :find-active="findOpen && !!findQuery"
                 @copy="copyMessage"
                 @toggle-expand="toggleExpand"
+                @branch="branchFrom"
               />
             </template>
           </div>

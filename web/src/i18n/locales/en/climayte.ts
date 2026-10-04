@@ -37,8 +37,7 @@ export default {
     'Ask any chat to climayte a task (run it on your Claude CLI accounts) and each piece shows up here.',
   loadFailed: 'Could not load the CliMayte tasks',
   loadFailedTitle: 'Could not reach AgentHydra',
-  loadFailedBody:
-    'Your tasks are not lost: they are kept on disk. Retrying by itself every 15 seconds.',
+  loadFailedBody: 'Your tasks are safe on disk. Retrying every 15 seconds.',
   retry: 'Retry',
   staleBanner: 'Cannot reach AgentHydra. Showing the last known state; retrying.',
   noAccount: 'No account yet',
@@ -70,7 +69,9 @@ export default {
   // A task from another PC that shares the queue (CliMayteView remote rows): read-only.
   remoteOn: 'On {name}',
   remoteOnStale: 'On {name}, last seen {n} min ago',
-  remoteNote: 'Running on another PC: it can only be viewed here.',
+  remoteNote: 'Runs on another PC: view only.',
+  // The header's one warning icon for the other PCs' version notes (CliMayteView remoteNotes).
+  remoteVersions: 'Version mismatch with another PC',
   // Seen from the owner's other PC: how long its task has been waiting (CliMayteView remoteWaited).
   remoteWaited: 'waiting {d}',
   // The detail header's id chip (CliMayteWorkerDetail copyId): name a task in chat by it.
@@ -121,12 +122,8 @@ export default {
   stoppedKept:
     'Task stopped. Its waiting message is kept and goes first when you continue it. | Task stopped. Its {n} waiting messages are kept and go first when you continue it.',
   messageLabel: 'Message this task',
-  messageHint:
-    'Held until the task finishes its current work, which can take a long while. To change course now, use Stop and send now.',
   continueLabel: 'Continue this task',
-  continueHint: 'Picks up the same conversation, on whichever account is free.',
-  continueHintStuck:
-    'It can only continue on the account it last ran on, once that account is free or signed in again.',
+  continueHintStuck: 'Waits for the account it last ran on.',
   messagePlaceholder: 'What should it do next?',
   send: 'Send',
   continue: 'Continue',
@@ -176,8 +173,7 @@ export default {
   scoreHint:
     'Per kind of task, every model and thinking level that got a verdict: how often it passed, and what a task cost as a share of a Pro 5-hour window. CliMayte picks the cheapest setting that keeps passing.',
   scoreNone: 'no verdicts yet',
-  scoreEmpty:
-    'No verdicts yet. Give a finished task a thumbs up or down and CliMayte starts learning which model and thinking level each kind of task needs.',
+  scoreEmpty: 'No verdicts yet. Rate a finished task to start.',
   scorePasses: '{n} passed',
   scoreFails: '{n} failed',
   scorePerTask: 'about {pct}% of a Pro window per task',

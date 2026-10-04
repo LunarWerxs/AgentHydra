@@ -3,7 +3,7 @@
 // component, drawing the cells their table's column list names (lib/instance-table.ts) from one
 // InstanceRowModel. What differs per kind comes in as slots: `name-extra` (icons after the name),
 // `account-extra` (after the account login, on the name's line), `primary` (the action buttons) and `menu` (the items under the ⋯ menu's header).
-import { EllipsisVertical } from '@lucide/vue'
+import { EllipsisVertical, TriangleAlert } from '@lucide/vue'
 import { computed, ref } from 'vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
 import InstanceGlyph from '@/components/InstanceGlyph.vue'
@@ -65,6 +65,9 @@ const account = computed(() => {
   if (text === props.row.name.shown.trim()) return null
   return { text, title: line.title ? pii(line.title) : text }
 })
+// The live login check failed and the row shows the last known account (accounts.ts 'cache' and
+// 'offline'): yellow, with a mark that stays when the account text itself is not shown.
+const loginStale = computed(() => props.row.account.variant === 'warning')
 
 // One number per window drives the bar's length; the WEEKLY one also drives its colour, and the
 // 5-hour bar is drawn `neutral` (see UsageBar's UsageBarVariant).
@@ -145,9 +148,19 @@ function onContextMenu(e: MouseEvent): void {
                2026-10-04). It gives way first: its shrink weight is far above the name's. -->
           <span
             v-if="account"
-            class="min-w-0 shrink-[8] truncate text-2xs font-normal text-muted-foreground"
-            :title="account.title"
+            class="min-w-0 shrink-[8] truncate text-2xs font-normal"
+            :class="loginStale ? 'text-warning' : 'text-muted-foreground'"
+            :title="loginStale ? `${account.title}\n${$t('instances.loginUnconfirmed')}` : account.title"
           >{{ account.text }}</span>
+          <span
+            v-if="loginStale"
+            role="img"
+            class="inline-flex shrink-0 text-warning"
+            :aria-label="$t('instances.loginUnconfirmed')"
+            :title="$t('instances.loginUnconfirmed')"
+          >
+            <TriangleAlert class="size-3.5" aria-hidden="true" />
+          </span>
           <slot name="account-extra" />
         </div>
       </TableCell>

@@ -347,6 +347,12 @@ export const resumeSessionInTerminal = (id: string, source: SessionSource, locat
     `/api/sessions/${encodeURIComponent(id)}/resume-terminal${sourceQuery(source, locator)}`,
     { method: 'POST' },
   )
+/** A new Claude chat holding this one up to the reply on line `uuid` (server/src/session-branch.ts). */
+export const branchSession = (id: string, uuid: string, title: string, locator?: string) =>
+  j<{ session_id: string; source: 'claude' }>(
+    `/api/sessions/${encodeURIComponent(id)}/branch${locator ? `?locator=${encodeURIComponent(locator)}` : ''}`,
+    { method: 'POST', body: JSON.stringify({ uuid, title }) },
+  )
 /** What credentials this session printed, as a count and a REDACTED list. There is no reveal
  *  parameter on the daemon and there should not be one — see server/src/session-export.ts. */
 export const getSessionSecrets = (id: string, source: SessionSource, locator?: string) =>

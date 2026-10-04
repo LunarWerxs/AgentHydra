@@ -4,11 +4,13 @@
 // `hswarm/job.py` writes (job.summary/tasks/results). Nothing is mocked -
 // every bug this reader can have is a bug about the shape of job.json on disk.
 
+import { Database } from 'bun:sqlite'
 import { afterAll, describe, expect, spyOn, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  hswarmRunsBySessionPrefix,
   listHSwarmSessions,
   listHSwarmSessionsAsync,
   readHSwarmSession,
@@ -182,5 +184,27 @@ describe('readHSwarmSession', () => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'job.json'), '{not json')
     expect(readHSwarmSession(join(dir, 'job.json'))).toBeNull()
+  })
+})
+
+describe('hswarmRunsBySessionPrefix', () => {
+  test('counts every run HSwarm recorded for a chat, under the 8 characters of it HSwarm keeps', () => {
+    const home = newHome()
+    // HSwarm's own run table (hswarm/utilization.py), with the column the count reads.
+    const con = new Database(join(home, 'hswarm.sqlite'))
+    con.run('create table utilizations (id text primary key, caller_session text)')
+    const add = con.prepare('insert into utilizations values (?, ?)')
+    for (const [id, caller] of [
+      ['r1', 'c0e447dd'],
+      ['r2', 'c0e447dd'],
+      ['r3', '5a1b2c3d'],
+      ['r4', ''], // a run nothing called from a chat
+    ])
+      add.run(id, caller)
+    add.finalize()
+    con.close()
+    const counts = hswarmRunsBySessionPrefix(home)
+    expect(Object.fromEntries(counts)).toEqual({ c0e447dd: 2, '5a1b2c3d': 1 })
+    expect(hswarmRunsBySessionPrefix(newHome()).size).toBe(0)
   })
 })

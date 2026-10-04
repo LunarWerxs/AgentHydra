@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Wrench,
 } from '@lucide/vue'
+import { useIntervalFn } from '@vueuse/core'
 import { computed, inject, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -69,7 +70,7 @@ import { OPEN_VIEW } from '@/lib/app-view'
 import { modelVendor, vendorLabel } from '@/lib/chart'
 import { baseName, formatCompact, formatUsd } from '@/lib/format'
 import { accountDisplay, fetchAccountNames, type HswarmAccountName } from '@/lib/hswarm-api'
-import { formatUsd as kitUsd } from '@/lib/kit'
+import { KIT_POLL_MS, formatUsd as kitUsd } from '@/lib/kit'
 import { scopeParam, summarizeSelection } from '@/lib/session-scopes'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
@@ -150,11 +151,14 @@ const allSources = computed(
   () => scopeParam(analyticsSources.value, ANALYTICS_SOURCES) === undefined,
 )
 
-/** The spend read, the only one a source change repeats. */
-async function loadSpend() {
+/** The spend read, the only one a source change repeats. `quiet`: the timed refresh, which keeps
+ *  the charts on screen instead of the skeletons. */
+async function loadSpend(quiet = false) {
   const mine = ++latestSpend
-  spendBusy = true
-  loading.value = true
+  if (!quiet) {
+    spendBusy = true
+    loading.value = true
+  }
   try {
     const s = await api.getSpend(
       analyticsPeriod.value,
@@ -163,21 +167,23 @@ async function loadSpend() {
     )
     if (mine === latestSpend) spend.value = s
   } catch {
-    if (mine === latestSpend) spend.value = null
+    if (mine === latestSpend && !quiet) spend.value = null
   } finally {
-    if (mine === latestSpend) {
+    if (mine === latestSpend && !quiet) {
       spendBusy = false
       settle()
     }
   }
 }
 
-async function load() {
+async function load(quiet = false) {
   const mine = ++latest
   const period = analyticsPeriod.value
-  pageBusy = true
-  loading.value = true
-  void loadSpend()
+  if (!quiet) {
+    pageBusy = true
+    loading.value = true
+  }
+  void loadSpend(quiet)
   try {
     // In parallel: independent reads of the same warmed table, so serialising them would just add
     // round trips to a page that is otherwise instant. The tool scan is the one that touches disk;
@@ -197,18 +203,23 @@ async function load() {
     agentTools.value = tools.tools
     sinks.value = k
   } catch {
-    if (mine === latest) activity.value = null
+    if (mine === latest && !quiet) activity.value = null
   } finally {
-    if (mine === latest) {
+    if (mine === latest && !quiet) {
       pageBusy = false
       settle()
     }
   }
 }
 
-onMounted(load)
-watch(analyticsPeriod, load)
-watch([analyticsSources, analyticsPc], loadSpend)
+onMounted(() => load())
+// The charts follow the work while the tab is open, on the same clock as the HSwarm card above
+// them; they used to be read once, when the tab opened (owner, 2026-10-04: "it doesn't even move").
+useIntervalFn(() => {
+  if (document.visibilityState === 'visible' && !loading.value && !refreshing.value) void load(true)
+}, KIT_POLL_MS)
+watch(analyticsPeriod, () => load())
+watch([analyticsSources, analyticsPc], () => loadSpend())
 onMounted(async () => {
   accountNames.value = await fetchAccountNames()
 })
@@ -334,27 +345,35 @@ const accountTokensMissing = computed(
 /** The formatter that matches the unit, handed to every chart. */
 const axisUsd = (n: number) => kitUsd(n, { style: 'axis' })
 const metricFormat = computed(() => (tokenMode.value ? formatCompact : formatUsd))
+/** Largest first in the unit on screen: the server ranks by cost, so in tokens a 2.2B row sat above a
+ *  2.4B one (owner, 2026-10-04). */
+const largestFirst = <T extends { value: number }>(rows: T[]) =>
+  [...rows].sort((a, b) => b.value - a.value)
 
 const modelBuckets = computed(() =>
-  pricedModels.value
-    .filter((b) => matchesVendor(b.key))
-    .map((b) => ({
-      key: b.key,
-      label: b.key,
-      value: metricOf(b),
-      detail: t('analytics.modelDetail', { turns: b.turns, sessions: b.sessions }),
-    })),
+  largestFirst(
+    pricedModels.value
+      .filter((b) => matchesVendor(b.key))
+      .map((b) => ({
+        key: b.key,
+        label: b.key,
+        value: metricOf(b),
+        detail: t('analytics.modelDetail', { turns: b.turns, sessions: b.sessions }),
+      })),
+  ),
 )
 const modelRows = computed(() => modelBuckets.value.slice(0, 5))
 const modelMore = computed(() => modelBuckets.value.slice(5))
 
 const projectBuckets = computed(() =>
-  (spend.value?.byProject ?? []).map((b) => ({
-    key: b.key,
-    label: baseName(b.key) || b.key,
-    value: metricOf(b),
-    detail: b.key,
-  })),
+  largestFirst(
+    (spend.value?.byProject ?? []).map((b) => ({
+      key: b.key,
+      label: baseName(b.key) || b.key,
+      value: metricOf(b),
+      detail: b.key,
+    })),
+  ),
 )
 const projectRows = computed(() => projectBuckets.value.slice(0, 8))
 const projectMore = computed(() => projectBuckets.value.slice(8))
@@ -381,12 +400,14 @@ const providerRows = computed(() =>
 )
 
 const accountRows = computed(() =>
-  (spend.value?.byAccount ?? []).map((b) => ({
-    key: b.key,
-    label: accountDisplay(b.key, accountNames.value, t).text,
-    value: metricOf(b),
-    detail: t('analytics.accountDetail', { sessions: b.sessions }),
-  })),
+  largestFirst(
+    (spend.value?.byAccount ?? []).map((b) => ({
+      key: b.key,
+      label: accountDisplay(b.key, accountNames.value, t).text,
+      value: metricOf(b),
+      detail: t('analytics.accountDetail', { sessions: b.sessions }),
+    })),
+  ),
 )
 
 /** A sink's name and fix. A switch over literal keys, like toolNoteLabel, so the i18n checker can
@@ -467,7 +488,17 @@ const groupedByMonth = computed(() => {
   return (spend.value?.byDay ?? []).length > MAX_DAY_BARS
 })
 
+/** A window of two days or less comes with every clock hour (server analytics.ts byHour): drawn by
+ *  the day it was two bars that hardly moved (owner, 2026-10-04). */
+const byHour = computed(() => spend.value?.byHour ?? null)
+
 const dayPoints = computed(() => {
+  if (byHour.value)
+    return byHour.value.map((b) => ({
+      key: b.key,
+      label: new Date(b.key).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
+      value: metricOf(b),
+    }))
   const days = spend.value?.byDay ?? []
   if (!groupedByMonth.value)
     return days.map((b) => ({
@@ -740,7 +771,11 @@ const survivalAverage = computed(() => {
         <section class="rounded-lg border border-border p-3">
           <h3 class="mb-2 flex items-center gap-1.5 text-xs font-medium">
             <Coins class="size-3.5" />{{
-              tokenMode
+              byHour
+                ? tokenMode
+                  ? $t('analytics.tokensByHour')
+                  : $t('analytics.costByHour')
+                : tokenMode
                 ? groupedByMonth
                   ? $t('analytics.tokensByMonth')
                   : $t('analytics.tokensByDay')
@@ -749,7 +784,7 @@ const survivalAverage = computed(() => {
                   : $t('analytics.costByDay')
             }}
             <!-- Pushed right and quiet: a grain switch is a preference, not a headline. -->
-            <span class="ms-auto flex items-center gap-0.5">
+            <span v-if="!byHour" class="ms-auto flex items-center gap-0.5">
               <button
                 v-for="g in (['day', 'month'] as const)"
                 :key="g"
@@ -775,7 +810,13 @@ const survivalAverage = computed(() => {
             :axis-format="tokenMode ? formatCompact : axisUsd"
             :value-label="tokenMode ? $t('analytics.tipTokens') : $t('analytics.tipCost')"
             :share-label="$t('analytics.tipShareOfWindow')"
-            :peak-label="groupedByMonth ? $t('analytics.tipBusiestMonth') : $t('analytics.tipBusiestDay')"
+            :peak-label="
+              byHour
+                ? $t('analytics.tipBusiestHour')
+                : groupedByMonth
+                  ? $t('analytics.tipBusiestMonth')
+                  : $t('analytics.tipBusiestDay')
+            "
           />
         </section>
 

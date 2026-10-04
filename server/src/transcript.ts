@@ -1868,6 +1868,9 @@ export function eventToTailEvents(ev: any, filter: TailFilter = {}): TailEvent[]
   const notice =
     ev?.isCompactSummary === true ? 'compact' : ev?.isApiErrorMessage === true ? 'error' : null
   if (notice) for (const te of out) if (te.kind === 'text') te.notice = notice
+  // A reply names its line, so the viewer can branch a new chat from it (session-branch.ts).
+  if (r === 'assistant' && !notice && typeof ev?.uuid === 'string' && ev.uuid)
+    for (const te of out) if (te.kind === 'text') te.uuid = ev.uuid
   return out
 }
 

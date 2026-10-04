@@ -19,7 +19,11 @@ const { t } = useI18n()
 const { stats, loading, offline } = useSwarmStats(props.days)
 
 const series = computed(() => sparklineSeries(stats.value?.days ?? []))
-const peak = computed(() => Math.max(1, ...series.value.map((p) => p.value ?? 0)))
+// Square-root heights: drawn straight, one record day (2026-09-23 saved $87k) flattened every
+// other day to the same sliver, and the strip looked frozen (owner, 2026-10-04).
+const peak = computed(() => Math.sqrt(Math.max(1, ...series.value.map((p) => p.value ?? 0))))
+const barHeight = (v: number | null) =>
+  v === null ? 8 : Math.max(8, (Math.sqrt(Math.max(v, 0)) / peak.value) * 100)
 const fromHistory = computed(() => stats.value?.source === 'zswarm')
 const { tiles } = useSwarmTiles(stats)
 </script>
@@ -65,7 +69,7 @@ const { tiles } = useSwarmTiles(stats)
           :key="p.day"
           class="flex-1 rounded-sm bg-primary/40"
           :class="p.value === null ? 'bg-muted' : ''"
-          :style="{ height: `${p.value === null ? 8 : Math.max(8, (Math.max(p.value, 0) / peak) * 100)}%` }"
+          :style="{ height: `${barHeight(p.value)}%` }"
           :title="`${p.day}: ${money(p.value)}`"
         />
       </div>

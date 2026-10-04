@@ -285,6 +285,12 @@ export interface SessionSummary {
   model: string | null
   /** The thinking/effort level when the transcript records one, else null. */
   effort: string | null
+  /** Work this chat handed off: HSwarm runs and CliMayte tasks it started. Claude rows only; absent
+   *  when it handed off none. */
+  offloads?: { hswarm: number; climayte: number }
+  /** The PC this Desktop chat came from through the chat sync (core/desktop-chat-sync.ts), when it
+   *  was another one; absent for this PC's own chats. */
+  from_pc?: string
 }
 
 /**
@@ -439,6 +445,9 @@ export interface SpendReport {
   byModel: SpendBucket[]
   byProject: SpendBucket[]
   byDay: SpendBucket[]
+  /** Every clock hour of a window of two days or less (key: the hour's start, ISO UTC), quiet hours
+   *  included; absent on a longer window. */
+  byHour?: SpendBucket[]
   /** Keyed by the toolkit's account id (`acct-…`). */
   byAccount: SpendBucket[]
   /** Per toolkit source (cli, desktop, climayte, codex, opencode, dsh, hermes, hswarm). */
@@ -704,6 +713,8 @@ export interface TailEvent {
    *  `compact` is the summary the CLI writes as a USER message after compacting the context,
    *  `error` the API's own notice (a usage limit, an overload) that explains why a session stopped. */
   notice?: 'compact' | 'error'
+  /** A Claude reply's transcript line, which a new chat can branch from (session-branch.ts). */
+  uuid?: string
 }
 
 export interface TailResult {
