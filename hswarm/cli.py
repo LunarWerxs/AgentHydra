@@ -126,6 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--isolated", action="store_true", default=None, help="cc: load no MCP server and none of the task folder's hooks, settings or CLAUDE.md")
     r.add_argument("--capability", help="a least-privilege grant for every task: a preset, a name under .hswarm/capabilities/, or a .json path")
     r.add_argument("--web-hosts", dest="web_hosts", help="comma list of hosts read_url (the web preset) may fetch for every task")
+    r.add_argument("--zdr", action="store_true", default=None, help="only OpenRouter models on its zero-data-retention list may serve every task")
     r.add_argument("--max-turns", dest="max_turns", type=int)
     r.add_argument("--timeout-s", dest="timeout_s", type=int)
     r.add_argument("--redact", choices=["hash", "redact", "mask", "block", "off"],

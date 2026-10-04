@@ -144,8 +144,8 @@ def _last_resort(candidates, *, excluded=(), usable=None, min_context=0, profile
 
 
 def plan(profile="general", *, tools="none", backend="api", usable=None, reasoning_effort=None,
-         thinking=None, min_scores=None, exclude_models=(), min_context=0, vision=False, purpose="production"):
-    from . import config
+         thinking=None, min_scores=None, exclude_models=(), min_context=0, vision=False, purpose="production", zdr=False):
+    from . import config, zdr as zdr_mod
 
     if profile not in PROFILES:
         raise ValueError(f"unknown capability profile {profile!r}; choose {sorted(PROFILES)}")
@@ -182,6 +182,8 @@ def plan(profile="general", *, tools="none", backend="api", usable=None, reasoni
             why = ("purpose", f"{entry['provider']}'s own terms allow evaluation only; this task's purpose is {purpose!r}")
         elif not p:
             why = ("evidence", f"no published scores for {entry['benchmark_slug']}")
+        elif zdr and (zdr_why := zdr_mod.refusal(name)):
+            why = ("zdr", zdr_why)
         elif name in excluded or p["slug"] in excluded or entry.get("api_id") in excluded:
             why = ("excluded", "named in exclude_models")
         elif any(entry.get(k) != expected.get(k) for k in identity):
@@ -216,9 +218,12 @@ def plan(profile="general", *, tools="none", backend="api", usable=None, reasoni
     # A provider whose calls cost nothing (`free_calls`, NVIDIA's trial keys) serves first; among free routes, and among
     # paid ones, the cheapest capable model still goes first, so a free route never means a bigger model than needed.
     candidates.sort(key=lambda c: (priority_rank(c["model"]), not c["free"], c["benchmark_cost_usd"], -c["score"], c["model"]))
-    candidates += _last_resort(candidates, excluded=excluded, usable=usable, min_context=min_context, profile=profile,
-                               tools=tools, backend=backend, vision=vision, strict=reasoning_effort is not None or bool(min_scores),
-                               purpose=purpose)
+    last = _last_resort(candidates, excluded=excluded, usable=usable, min_context=min_context, profile=profile,
+                        tools=tools, backend=backend, vision=vision, strict=reasoning_effort is not None or bool(min_scores),
+                        purpose=purpose)
+    if zdr:  # a backup route is picked by provider health, so the clearance is repeated here
+        last = [c for c in last if zdr_mod.cleared(c["model"])]
+    candidates += last
     return {"profile": profile, "purpose": purpose, "evidence_date": data["as_of_utc"], "candidates": candidates,
             "requirements": floors, "rejected": rejected,
             "explanation": "Cheapest observed benchmark cost among configurations meeting every task score floor; route availability is checked separately.",

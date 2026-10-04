@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 
-from . import config
+from . import config, zdr
 from .client import ChatClient
 
 PER_M = 1_000_000.0
@@ -79,12 +79,29 @@ async def refresh(provider: str = "openrouter") -> dict:
     config.CATALOGUE_FILE.parent.mkdir(parents=True, exist_ok=True)
     config.CATALOGUE_FILE.write_text(json.dumps(doc, indent=1, ensure_ascii=False), encoding="utf-8")
     config.reload()
+    zdr_note = await refresh_zdr(provider)
     priced = sum(1 for e in doc["models"].values() if e.get("price"))
     free = sum(1 for k in doc["models"] if k.endswith(":free"))
     return {"provider": provider, "models": len(doc["models"]), "priced": priced, "unpriced": len(doc["models"]) - priced,
-            "free_models": free, "file": str(config.CATALOGUE_FILE),
+            "free_models": free, "file": str(config.CATALOGUE_FILE), "zdr": zdr_note,
             "note": f"{len(doc['models'])} {provider} models addressable as 'or:<id>' ({priced} priced, {free} free); "
                     f"a price written in {config.PROVIDERS_DIR} still wins"}
+
+
+async def refresh_zdr(provider: str = "openrouter") -> str:
+    """Fetch OpenRouter's zero-data-retention list into config.HOME; the last good list stays when this fails."""
+    if provider != "openrouter":
+        return "n/a"
+    try:
+        async with ChatClient(provider=provider) as c:
+            ids = zdr.parse(await c.get_json(zdr.PATH))
+        if not ids:
+            raise ValueError("empty or unrecognised answer")
+    except Exception as e:  # noqa: BLE001 - a failed refresh must never lose the list already on disk
+        have = zdr.load()
+        return f"refresh failed ({type(e).__name__}); " + (f"kept the last good list of {len(have['models'])} models" if have["fetched_at"] else "no list on disk, zdr tasks are refused")
+    zdr.save(ids)
+    return f"{len(ids)} zero-retention models"
 
 
 def routes_view() -> dict:

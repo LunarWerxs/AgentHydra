@@ -61,6 +61,7 @@ except ImportError:  # pragma: no cover - POSIX
     import fcntl
 
 from . import anthropic_native, config, egress, faults, input_limit
+from . import zdr as zdr_mod
 from .usage import ApiError, ChatResult, Usage, request_body  # noqa: F401 - re-exported
 
 # Seconds the running task's calls spent rate-limited, from a call's first 429 to its reply or its give-up. That is
@@ -1445,13 +1446,17 @@ class ChatClient:
         except ValueError:
             return default
 
-    async def chat(self, messages: list[dict], model: str = config.DEFAULT_MODEL, tools: list[dict] | None = None, tool_choice: str | dict | None = None, max_tokens: int | None = None, thinking: bool | None = None, reasoning_effort: str | None = None, response_format: dict | None = None, temperature: float | None = None, user: str | None = None, stop: list[str] | None = None, rest_budget_s: float | None = None, last_leg: bool = False, affinity=None, cache_turns: bool = True, avoid_upstream: list[str] | None = None) -> ChatResult:
+    async def chat(self, messages: list[dict], model: str = config.DEFAULT_MODEL, tools: list[dict] | None = None, tool_choice: str | dict | None = None, max_tokens: int | None = None, thinking: bool | None = None, reasoning_effort: str | None = None, response_format: dict | None = None, temperature: float | None = None, user: str | None = None, stop: list[str] | None = None, rest_budget_s: float | None = None, last_leg: bool = False, affinity=None, cache_turns: bool = True, avoid_upstream: list[str] | None = None, zdr: bool = False) -> ChatResult:
         """One chat call. `affinity` names the conversation (one per task): a `sticky_keys` provider keeps it on one key.
         `cache_turns=False` says no turn follows this one, so the native transport writes no turn to the prompt cache.
         `avoid_upstream` names OpenRouter hosts to leave out of this call (provider.ignore); see _chat_body."""
         model = config.resolve_model(model)
         owner = config.provider_of(model)
         entry = config.MODELS[model]
+        if zdr and self.native:
+            raise ValueError("zdr task refused: the native Anthropic transport carries no zero-retention preference")
+        if zdr and (why := zdr_mod.refusal(model)):
+            raise ValueError(f"zdr task refused: {why}")  # before any request: nothing is sent
         max_tokens, thinking, reasoning_effort = _call_options(model, entry, max_tokens, thinking, reasoning_effort)
         if owner != self.provider:
             raise ValueError(f"model {model} belongs to provider {owner!r}; this client talks to {self.provider!r} (use JobManager.client_for)")
@@ -1466,13 +1471,13 @@ class ChatClient:
             r, attempts = await self._post(body, free=False, rest_budget_s=rest_budget_s, last_leg=last_leg, affinity=affinity)
             return _native_result(r, attempts, model, t0)
         body = self._chat_body(model, entry, api_id, messages, tools=tools, tool_choice=tool_choice, max_tokens=max_tokens, thinking=thinking,
-                               reasoning_effort=reasoning_effort, response_format=response_format, temperature=temperature, user=user, stop=stop, avoid_upstream=avoid_upstream)
+                               reasoning_effort=reasoning_effort, response_format=response_format, temperature=temperature, user=user, stop=stop, avoid_upstream=avoid_upstream, zdr=zdr)
         r, attempts = await self._post_chat(body, model, api_id.endswith(":free"), rest_budget_s, last_leg, affinity)
         return _chat_result(r, attempts, model, t0, self.spec.get("upstream_header"))
 
     def _chat_body(self, model: str, entry: dict, api_id: str, messages: list[dict], *, tools: list[dict] | None, tool_choice: str | dict | None,
                    max_tokens: int | None, thinking: bool | None, reasoning_effort: str | None, response_format: dict | None,
-                   temperature: float | None, user: str | None, stop: list[str] | None, avoid_upstream: list[str] | None = None) -> dict:
+                   temperature: float | None, user: str | None, stop: list[str] | None, avoid_upstream: list[str] | None = None, zdr: bool = False) -> dict:
         """The request body, with only the fields this provider's endpoint accepts."""
         allowed = set(self.spec.get("options") or ())
         # Some OpenAI-compatible endpoints reject unknown/extra top-level fields with a 422 rather than
@@ -1498,6 +1503,12 @@ class ChatClient:
             prov = dict(body.get("provider") or {})
             prov["ignore"] = list(dict.fromkeys([*(prov.get("ignore") or []), *avoid_upstream]))
             body["provider"] = prov
+        if zdr:
+            if "provider" not in allowed:
+                raise ValueError(f"zdr task refused: {self.provider} takes no provider routing preference")
+            # Merged into a pin the entry carries (`extra.provider`), never replacing it; copied so the registry is not edited.
+            body["provider"] = dict(body.get("provider") or {})
+            zdr_mod.with_preference(body)
         return body
 
     async def _post_chat(self, body: dict, model: str, free: bool, rest_budget_s: float | None, last_leg: bool,

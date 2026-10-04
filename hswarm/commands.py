@@ -118,7 +118,7 @@ def _load_tasks(path: str, a) -> list[Task]:
         raise SystemExit(f"hswarm run: {path} must be a list of tasks, or {{\"defaults\": {{...}}, \"tasks\": [...]}} "
                          "with an object and a list.")
     defaults = dict(defaults)
-    for k in ("backend", "model", "cwd", "tools", "web_hosts", "capability", "max_turns", "timeout_s", "confirm_write", "isolated", "recipe", "escalate", "redact"):
+    for k in ("backend", "model", "cwd", "tools", "web_hosts", "capability", "max_turns", "timeout_s", "confirm_write", "isolated", "recipe", "escalate", "redact", "zdr"):
         v = getattr(a, k, None)
         if v is not None:
             defaults[k] = v

@@ -155,7 +155,7 @@ async def hswarm_run(
     capability: str | dict | None = None, web_hosts: list[str] | None = None, verify: str | dict | None = None,
     resume_from_job: str | None = None, scope: str | None = None, escalate: str | None = None,
     done_when: str | None = None, envelope: dict | None = None, checkpoint_at: float | None = None,
-    scripted: bool = False, redact: str | dict | None = None, purpose: str | None = None, unbatched: bool = False,
+    scripted: bool = False, redact: str | dict | None = None, purpose: str | None = None, unbatched: bool = False, zdr: bool | None = None,
 ) -> dict:
     """Fan a batch of tasks out to swarm workers and return their results.
 
@@ -187,6 +187,7 @@ async def hswarm_run(
     Answer: summary and results [{id, status, answer or data, ...}]. Re-check first what `unverified`,
     summary.mis_scoped and summary.not_advanced list.
     An argument this tool does not take is refused with the nearest valid name, never dropped.
+    zdr=true: only OpenRouter models on its zero-data-retention list may serve the task (refused if that list is unread).
     Every other option (reasoning_effort, verify, acceptance, done_when, green, escalate, scope, capability,
     writable, inventory, recipe, scripted, redact, envelope, resume_from_job, lean, isolated, ...) and every result
     field is in docs/API.md of the hswarm repo under "hswarm_run options": read it before using one.
@@ -206,6 +207,7 @@ async def hswarm_run(
         "scripted": scripted or None,
         "redact": redact,
         "purpose": purpose,
+        "zdr": zdr,
     }
     # ⛔ A REFUSED TASK SPEC MUST SAY WHY (2026-09-19). Task validation raises ValueError with a precise
     # message ("reasoning_effort must be low|high|max"), and the MCP layer turned it into a bare

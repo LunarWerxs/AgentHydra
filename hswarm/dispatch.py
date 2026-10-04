@@ -157,7 +157,7 @@ def _files_chars(task):
 
 def _task_kw(task):
     return dict(tools=task.tools, backend=task.backend, reasoning_effort=task.reasoning_effort, thinking=task.thinking,
-                purpose=getattr(task, "purpose", "production"),
+                purpose=getattr(task, "purpose", "production"), zdr=bool(getattr(task, "zdr", False)),
                 min_scores=task.min_scores, exclude_models=task.exclude_models, vision=task.role == "vision",
                 min_context=(len(task.prompt) + len(task.system or "") + _files_chars(task)) // 3 + task.max_tokens)
 

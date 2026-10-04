@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import capability as capmod, config, redaction, review, shared, shellpolicy, verify
+from . import zdr as zdr_mod
 from .receipts import GREEN_LEVELS
 from .runtimes import parse_runtime, posix_abs
 from .scripted import SCRIPT_SCHEMA, SCRIPTED_CLAUSE
@@ -181,6 +182,9 @@ class Task:
     # readable but read-only, so a worker asked to make a test pass cannot pass by editing the test. None = no limit.
     writable: list[str] | None = None
     thinking: bool | None = None
+    # Zero data retention: only OpenRouter models on its zero-retention list may serve this task, and every request
+    # carries `provider: {zdr: true}`. Fails closed: with no list read, the task is refused (zdr.py).
+    zdr: bool = False
     reasoning_effort: str | None = None
     temperature: float | None = None
     role: str | None = None  # a kind of work (search, code, judge, ...) resolved to whatever model config.ROLES wires for it
@@ -299,6 +303,8 @@ class Task:
             raise ValueError(f"task {self.id}: backend must be one of {BACKENDS}")
         from .selection import PURPOSES
 
+        if self.zdr and self.backend != "api":
+            raise ValueError(f"task {self.id}: zdr needs backend api (the cc backend cannot carry the zero-retention preference)")
         self.purpose = (self.purpose or "production").strip().lower()
         if self.purpose not in PURPOSES:
             raise ValueError(f"task {self.id}: purpose must be one of {sorted(PURPOSES)} - "
@@ -314,15 +320,18 @@ class Task:
             self.profile = self.profile or profile_for(self.role, self.tools)
             choice = plan(self.profile, tools=self.tools, backend=self.backend, purpose=self.purpose,
                           reasoning_effort=self.reasoning_effort, thinking=self.thinking,
-                          min_scores=self.min_scores, exclude_models=self.exclude_models, vision=self.role == "vision")
+                          min_scores=self.min_scores, exclude_models=self.exclude_models, vision=self.role == "vision", zdr=self.zdr)
             if not choice["candidates"]:
-                raise ValueError(f"NoCapableSwarmRoute: no evaluated configuration meets profile {self.profile}")
+                zwhy = f" and is cleared for zero data retention ({(choice['rejected'] or [{}])[0].get('reason', '')})" if self.zdr else ""
+                raise ValueError(f"NoCapableSwarmRoute: no evaluated configuration meets profile {self.profile}{zwhy}")
             # The first leg of the plan dispatch will run, over the pools that can serve now; the evidence's own
             # cheapest only when no pool can (submit then refuses, or the run says NoCapableSwarmRoute).
             self.model = (plan_for(self)["candidates"] or choice["candidates"])[0]["model"]
         else:
             self.profile = None
             self.model = config.resolve_model(self.model)
+            if self.zdr and (why := zdr_mod.refusal(self.model)):
+                raise ValueError(f"task {self.id}: zdr task refused: {why}")
         provider = config.provider_of(self.model)
         # The same gate the router applies, on the PINNED path only (`self.profile` is None exactly when a model or a
         # role named the route, and AUTO's own plan already filtered on purpose): a provider whose own terms allow

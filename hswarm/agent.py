@@ -56,7 +56,7 @@ class _GoalGate:
         try:
             r = await self.client.chat(
                 goal.evaluator_messages(self.task.done_when or "", self.task.prompt, transcript, answer), model=self.task.model,
-                tools=[submit_result_spec(goal.SCHEMA)], tool_choice="required", max_tokens=4_000, thinking=False, user=self.user_tag,
+                tools=[submit_result_spec(goal.SCHEMA)], tool_choice="required", max_tokens=4_000, thinking=False, user=self.user_tag, zdr=self.task.zdr,
             )
         except Exception as e:  # noqa: BLE001 - an evaluator that fails hands the answer back unchecked, never loses it
             return "unchecked", f"evaluator failed: {type(e).__name__}: {e}"
@@ -323,7 +323,7 @@ async def _call_turn(client: DeepSeekClient, task: Task, res: Result, editor: Co
     max_tokens, hold = plan
     call = client.chat(
         editor.view(messages), model=task.model, tools=send_tools, max_tokens=max_tokens,
-        thinking=task.thinking if not exhausted else False, reasoning_effort=task.reasoning_effort, temperature=task.temperature, user=user_tag,
+        thinking=task.thinking if not exhausted else False, reasoning_effort=task.reasoning_effort, temperature=task.temperature, user=user_tag, zdr=task.zdr,
         # A leg with a next one leaves a rate-limited pool after slow_turn_s; the LAST leg, with nowhere to go,
         # after config.SATURATED_REST_S, as a PoolSaturated error instead of a silent wait to timeout_s
         # (client._post's rest_budget_s; job 20260924-152821-54f1).
