@@ -322,6 +322,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   opencode: 'sessions.sourceOpenCode',
   hermes: 'sessions.sourceHermes',
   dsh: 'sessions.sourceDsh',
+  zswarm: 'sessions.sourceZswarm',
 }
 /** Every provider that has usage, so "my stats only show Claude" is answerable at a glance. */
 const providerRows = computed(() =>

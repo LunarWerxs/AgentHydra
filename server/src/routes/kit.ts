@@ -7,6 +7,7 @@ import {
   type LastWindow,
   MEASURES,
   type Measure,
+  TOKEN_KIND_MEASURES,
   type UsageQueryParams,
   type UsageWindow,
   usageQuery,
@@ -67,7 +68,11 @@ export function parseKitUsageQuery(q: (k: string) => string | undefined): UsageQ
     window,
     filter,
     groupBy: oneOf<GroupBy>(list(q('groupBy')), GROUP_BYS, 'groupBy'),
-    measures: oneOf<Measure>(list(q('measures')), MEASURES, 'measures'),
+    measures: oneOf<Measure>(
+      list(q('measures')),
+      [...MEASURES, ...TOKEN_KIND_MEASURES],
+      'measures',
+    ),
     tz: q('tz'),
   }
 }
