@@ -98,7 +98,8 @@ function ensureWorker(): Worker {
   if (worker) return worker
   const w = new Worker(URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' })))
   // Never what keeps the process alive: a test run or one-shot CLI must be free to exit.
-  w.unref()
+  // Bun's Worker has unref(); the DOM Worker type this file compiles against does not list it.
+  ;(w as Worker & { unref(): void }).unref()
   w.onmessage = (e: MessageEvent<{ id: number; result: WorkerCapture }>) => {
     const p = pending.get(e.data.id)
     if (!p) return
