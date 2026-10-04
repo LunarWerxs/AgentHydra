@@ -4,6 +4,9 @@ dist/
 data/
 !/hswarm/data/
 *.log
+# Python's bytecode cache is machine-local. An untracked one reads as a dirty tree, and the live
+# checkout's updater refuses a dirty tree (hswarm/__pycache__ held every update, 2026-10-03).
+__pycache__/
 .DS_Store
 .env
 .env.local
