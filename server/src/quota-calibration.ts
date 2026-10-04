@@ -28,6 +28,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
+import { forEachCallSince } from './kit/spend'
 import { priceTokens } from './pricing'
 import type {
   BudgetConfidence,
@@ -37,7 +38,6 @@ import type {
   UsageSample,
   UsageSnapshot,
 } from './types'
-import { forEachTurnSince } from './usage-tokens'
 
 const STORE_PATH = join(DATA_DIR, 'quota-calibration.json')
 
@@ -305,7 +305,7 @@ function writeEntry(key: string, entry: AccountEntry): void {
 /** Every priced turn since `sinceMs`, as a cumulative-cost lookup over any interval. */
 function intervalCostFrom(sinceMs: number, configDirs: string[]): IntervalCost {
   const turns: { ts: number; usd: number; unpriced: boolean }[] = []
-  forEachTurnSince(new Date(sinceMs), configDirs, (ts, byModel) => {
+  forEachCallSince(new Date(sinceMs), configDirs, (ts, byModel) => {
     const priced = priceTokens(byModel, ts)
     turns.push({ ts, usd: priced.costUsd ?? 0, unpriced: priced.unpriced.length > 0 })
   })

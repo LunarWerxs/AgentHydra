@@ -16,10 +16,11 @@
 // agent that trusts an inflated budget overruns its quota mid-task, which is exactly the failure this
 // whole subsystem exists to prevent. So the caveat travels with the number, always.
 
+import { spendSince } from './kit/spend'
 import { calibrateQuotaDollars, dollarsSummary } from './quota-calibration'
 import type { BudgetConfidence, UsageBudget, UsageSnapshot } from './types'
 import { burnRateBounds, forecastUsage, usageSamples } from './usage-history'
-import { tokensPerPercent, tokensSince } from './usage-tokens'
+import { defaultConfigDir, tokensPerPercent } from './usage-tokens'
 
 /** Match the burn-rate lookback, so tokens/hour and percent/hour describe the SAME window. Comparing
  *  a 6-hour token rate against a 1-hour burn rate would silently skew tokensPerPercent. */
@@ -51,7 +52,7 @@ export function buildUsageBudget(
   const forecast = forecastUsage(snap, samples, now)
 
   const since = new Date(now.getTime() - LOOKBACK_HOURS * 3600_000)
-  const spend = tokensSince(since, opts.configDirs)
+  const spend = spendSince(since, opts.configDirs ?? [defaultConfigDir()], { now: now.getTime() })
   // Budget in WEIGHTED (meter-fitted) tokens, never the raw sum — a cached prefix is re-read every
   // turn, so a raw sum measures context size, not what fills the meter. See usage-tokens.ts.
   const weightedPerHour = spend.weighted > 0 ? spend.weighted / LOOKBACK_HOURS : null

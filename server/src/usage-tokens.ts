@@ -25,13 +25,9 @@
 //   - The corpus is large (thousands of sessions, GBs). We therefore only scan files whose mtime
 //     falls inside the window, which keeps a 5-hour lookback to a handful of files.
 
-import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ModelSpend, TokenSpend } from './types'
-
-/** A Claude config dir's transcript root. */
-const projectsDir = (configDir: string): string => join(configDir, 'projects')
 
 /** The default (non-isolated) CLI login. */
 export const defaultConfigDir = (): string => join(homedir(), '.claude')
@@ -415,101 +411,6 @@ export function mergeSpend(a: TokenSpend, b: TokenSpend): TokenSpend {
     weighted: a.weighted + b.weighted,
     turns: a.turns + b.turns,
     byModel,
-  }
-}
-
-/** How deep under `projects/` the walk goes. A subagent transcript sits at
- *  `<project>/<parent-session>/subagents/agent-<id>.jsonl` (depth 3 from the root) and a
- *  workflow's descendants one or two levels under that; six is headroom, not a target, and it
- *  bounds the walk against a pathological tree. */
-const RECENT_TRANSCRIPT_MAX_DEPTH = 6
-
-/** Every *.jsonl under a transcripts root whose mtime is at/after `sinceMs`. The mtime filter is what
- *  keeps this cheap: the corpus is thousands of files and gigabytes, but a 5-hour window touches only
- *  the handful that were actually written to.
- *
- *  RECURSIVE, for the same reason transcript.ts's discovery is (audit AH-33): a Task-tool
- *  subagent writes its OWN transcript, nested under its parent's, carrying its own usage blocks -
- *  separate API calls and separate spend. The old two-level readdir never saw them, so a window in
- *  which the work was delegated reported no token activity at all and the budget's remaining-turn
- *  estimate came out optimistic. Reproduced with a nested-only 12-token fixture: raw 0, turns 0. */
-function recentTranscripts(root: string, sinceMs: number): string[] {
-  const hits: string[] = []
-  const walk = (dir: string, depth: number): void => {
-    let entries: import('node:fs').Dirent[]
-    try {
-      entries = readdirSync(dir, { withFileTypes: true })
-    } catch {
-      return // no transcripts here (never used, not logged in, or vanished mid-scan)
-    }
-    for (const entry of entries) {
-      const p = join(dir, entry.name)
-      if (entry.isDirectory()) {
-        if (depth < RECENT_TRANSCRIPT_MAX_DEPTH) walk(p, depth + 1)
-        continue
-      }
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-      try {
-        if (statSync(p).mtimeMs >= sinceMs) hits.push(p)
-      } catch {
-        // vanished mid-scan (a session being rotated); skip
-      }
-    }
-  }
-  walk(root, 0)
-  return hits
-}
-
-/**
- * Total tokens spent since `since`, across the given Claude config dirs (default: the plain
- * `~/.claude` login). Reads only the transcripts touched inside the window.
- */
-export function tokensSince(since: Date, configDirs: string[] = [defaultConfigDir()]): TokenSpend {
-  const sinceMs = since.getTime()
-  let spend = emptySpend()
-  // Shared across every file in the window. A window is a handful of files, and a resumed session
-  // copies its parent's messages into its own transcript, so the same request can appear in two of
-  // them and was billed once.
-  const seen = newUsageSeen()
-  for (const dir of configDirs) {
-    for (const file of recentTranscripts(projectsDir(dir), sinceMs)) {
-      try {
-        spend = mergeSpend(spend, sumTranscriptTokens(readFileSync(file, 'utf8'), sinceMs, seen))
-      } catch {
-        // unreadable/locked file: skip rather than fail the whole count
-      }
-    }
-  }
-  return spend
-}
-
-/**
- * Visit every dated assistant turn spent since `since`, one turn at a time, with its own per-model
- * counts. The quota calibration (quota-calibration.ts) needs spend BETWEEN two usage readings, which
- * one lump sum from {@link tokensSince} cannot give; this walks the same files through the same
- * per-turn parser and the same request de-duplication, so a turn is never priced differently here.
- */
-export function forEachTurnSince(
-  since: Date,
-  configDirs: string[],
-  visit: (ts: number, byModel: TokenSpend['byModel']) => void,
-): void {
-  const sinceMs = since.getTime()
-  const seen = newUsageSeen()
-  for (const dir of configDirs) {
-    for (const file of recentTranscripts(projectsDir(dir), sinceMs)) {
-      let text: string
-      try {
-        text = readFileSync(file, 'utf8')
-      } catch {
-        continue // unreadable/locked file: skip rather than fail the whole walk
-      }
-      for (const line of text.split('\n')) {
-        const turn = emptySpend()
-        const ts = accumulateUsageLine(turn, line, sinceMs, seen)
-        if (ts !== null) visit(ts, turn.byModel)
-      }
-    }
   }
 }
 

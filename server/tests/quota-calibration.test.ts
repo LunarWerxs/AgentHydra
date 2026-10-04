@@ -4,13 +4,12 @@
 // Pins the three things that make the dollar figure trustworthy: jittered reset times land in ONE
 // window, a polluted window is outvoted by the median rather than averaged in, and the censoring
 // rules drop windows whose (percent, dollars) pair no longer describes the account. The last test
-// runs the disk-backed path end to end against a throwaway transcript store (tests/setup.ts points
+// runs the disk-backed path end to end against a throwaway kit store (tests/setup.ts points
 // DATA_DIR at a temp dir).
 
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { sharedKitStore } from '../src/kit/query'
+import type { UsageEventInput } from '../src/kit/store'
 import {
   calibrateQuotaDollars,
   capacityFrom,
@@ -21,6 +20,7 @@ import {
   theilSenSlope,
 } from '../src/quota-calibration'
 import type { UsageSample, UsageSnapshot } from '../src/types'
+import { defaultConfigDir } from '../src/usage-tokens'
 
 // Nothing here reads the real clock (the transcript is written now, long after every reading), so
 // every instant hangs off one fixed far-past origin and keeps its spacing whenever the suite runs.
@@ -111,13 +111,14 @@ describe('incremental folding', () => {
 })
 
 describe('calibrateQuotaDollars (disk-backed)', () => {
-  const turn = (ts: string, id: string, inputTokens: number) =>
-    JSON.stringify({
-      type: 'assistant',
-      timestamp: ts,
-      requestId: id,
-      message: { id, model: 'claude-sonnet-4-5', usage: { input_tokens: inputTokens } },
-    })
+  const turn = (ts: number, id: string, input: number): UsageEventInput => ({
+    id,
+    ts,
+    source: 'cli',
+    instance: 'default',
+    model: 'claude-sonnet-4-5',
+    input,
+  })
 
   const snap = (weekPct: number): UsageSnapshot => ({
     account: null,
@@ -128,18 +129,13 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
   })
 
   test('prices the turns between the readings of a window into dollars per percent, then re-prices', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ah-quota-dollars-'))
-    try {
-      mkdirSync(join(home, 'projects', 'p'), { recursive: true })
-      writeFileSync(
-        join(home, 'projects', 'p', 's.jsonl'),
-        [
-          // $30 at $3 per million input tokens, inside the window.
-          turn(iso(T0 + HOUR / 2), 'r1', 10_000_000),
-          // After the window's last reading: must not count.
-          turn(iso(T0 + 2 * HOUR), 'r2', 50_000_000),
-        ].join('\n'),
-      )
+    sharedKitStore().upsertEvents([
+      // $30 at $3 per million input tokens, inside the window.
+      turn(T0 + HOUR / 2, 'r1', 10_000_000),
+      // After the window's last reading: must not count.
+      turn(T0 + 2 * HOUR, 'r2', 50_000_000),
+    ])
+    {
       const samples: UsageSample[] = [
         {
           at: iso(T0),
@@ -155,7 +151,7 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
         },
       ]
       const key = 'test:quota-dollars'
-      const d = calibrateQuotaDollars(key, snap(40), samples, [home])
+      const d = calibrateQuotaDollars(key, snap(40), samples, [defaultConfigDir()])
       expect(d.weekly.usdPerPct).toBeCloseTo(3, 6)
       expect(d.weekly.capacityUsd).toBeCloseTo(300, 6)
       expect(d.weekly.dollarsLeft).toBeCloseTo(180, 6)
@@ -164,8 +160,6 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
 
       // The quick self-check path: no transcript walk, same slope, the newer reading's %.
       expect(storedQuotaDollars(key, snap(70)).weekly.dollarsLeft).toBeCloseTo(90, 6)
-    } finally {
-      rmSync(home, { recursive: true, force: true })
     }
   })
 
