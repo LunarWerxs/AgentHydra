@@ -22,6 +22,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Waves stay closed until opened** (owner, 2026-10-03: "they keep auto-expanding ... wrapping on the narrow design"). The Waves box and each wave start collapsed, remember being opened, keep their header on one line, scroll inside a set height, and say what a wave is.
 - **Sessions and CliMayte share one sidebar** (owner, 2026-10-03: "the sidebar for sessions running the same code as the sidebar in CliMayte"). `side-list/SideBar.vue` owns both: collapse, drag-resize with a remembered width per view, grouped rows. Sessions rows take the CliMayte row layout (status icon, a small source icon instead of the coloured pill, model and effort, time) and group by project.
 
+### Fixed
+
+- **HSwarm's fast transcript scanners are back** (2026-10-03). The port from ZSwarm brought `hswarm/native.py` but not the Rust and Go sources it builds or the A/B bench that chooses between them, so `hswarm native build` had nothing to compile and every savings scan ran the Python arm (about 13x slower on a 14-day window). The sources are now in `hswarm/native/` beside the module, the bench is `hswarm/native_ab.py` (`hswarm native bench`), and the winner, a measurement of one machine, is written to `~/.hswarm/native/winner.json` instead of the repo. `hswarm/tests/test_native.py` checks each built scanner against the Python reference. See hswarm/README.md "Transcript scanners".
+
 ## [1.8.0] - 2026-10-03
 
 ### Added

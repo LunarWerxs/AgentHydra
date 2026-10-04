@@ -107,6 +107,7 @@ The HSWARM_HOME directory structure:
 ├── spill/                     # Tool output overflow cache
 ├── skills/                    # Banked procedures (unreviewed .md files)
 ├── claude-config/             # Claude Code worker configuration
+├── native/                    # This machine's scanner winner and A/B reports (`hswarm native bench`)
 └── hswarm.html               # Console view (auto-generated)
 ```
 
@@ -156,6 +157,18 @@ These match ZSwarm (ported 2026-10-03; ideas from CopilotKit's OpenBot and OpenT
   alone). Nothing is staged on disk. `--dry-run` prints what would be saved. The memory kit checkout (its `global/` and
   `repos/` indexes and `home/tools/memstore.py`) is `HSWARM_MEMORY_REPO`, default `~/claude-memory`.
 - `indexdiet` and the hooks module it fed are retired along with the memory index they served.
+
+## Transcript scanners
+
+`hswarm savings` reads every Claude Code transcript on the machine. That scan exists three times with identical
+numbers: Python (the reference), Rust (`native/zscan-rs`) and Go (`native/zscan-go`).
+
+- `hswarm native build` compiles the arms whose toolchain is present (cargo, go; also found under `~/.cargo/bin` and
+  `~/go/bin` when not on PATH) into `native/bin/`, which git ignores.
+- `hswarm native bench` runs the arms interleaved on this machine's transcripts, refuses any arm whose numbers differ
+  from Python's, and writes the fastest to `HSWARM_HOME/native/winner.json`. The scan uses that winner from then on and
+  falls back to Python when its binary is missing. `HSWARM_SCANNER=python|rust|go` forces an arm.
+- `tests/test_native.py` and `tests/test_scanner_parity.py` check each built arm against Python (skipped when unbuilt).
 
 ## Development
 
