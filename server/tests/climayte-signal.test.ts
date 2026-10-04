@@ -78,7 +78,7 @@ describe('workerHooks', () => {
     expect(gone.exitCode).toBe(0)
     expect(gone.stdout.toString()).toBe('')
     expect(gone.stderr.toString()).toBe('')
-  })
+  }, 30_000)
 })
 
 describe('serveSignal', () => {

@@ -18,6 +18,8 @@
 // Imports nothing of the daemon's: the runner process loads this too.
 
 import { readFileSync, writeFileSync } from 'node:fs'
+import { Hono } from 'hono'
+import { createLoopbackGuard } from './loopback-guard.mjs'
 
 /** Longest a tool call can wait on the signal hook. The answer is one small file read; a runner that
  *  has not answered in this long is gone, and the call goes on without it. */
@@ -85,21 +87,22 @@ export function workerHooks(opts: { signalFile: string; claims: string | null })
  *  until the file is removed, as the `cat` it replaces did. Null when no port could be bound. */
 export function serveSignal(signalFile: string): { port: number; stop: () => void } | null {
   try {
-    const server = Bun.serve({
-      hostname: '127.0.0.1',
-      port: 0,
-      fetch() {
-        let body = '{}'
-        try {
-          const text = readFileSync(signalFile, 'utf8')
-          JSON.parse(text)
-          body = text
-        } catch {
-          // No signal yet, or not whole: nothing to say.
-        }
-        return new Response(body, { headers: { 'content-type': 'application/json' } })
-      },
+    // The CLI's http hook is not a browser and sends no Origin, so it passes; a web page on any
+    // local port carries an Origin that is on no list (empty allowlist) and is refused (AH-11).
+    const app = new Hono()
+    app.use('*', createLoopbackGuard({ allowedOrigins: () => [] }))
+    app.all('*', (c) => {
+      let body = '{}'
+      try {
+        const text = readFileSync(signalFile, 'utf8')
+        JSON.parse(text)
+        body = text
+      } catch {
+        // No signal yet, or not whole: nothing to say.
+      }
+      return c.body(body, 200, { 'content-type': 'application/json' })
     })
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: app.fetch })
     return { port: server.port as number, stop: () => void server.stop(true) }
   } catch {
     return null

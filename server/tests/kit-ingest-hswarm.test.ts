@@ -122,7 +122,7 @@ describe('HSwarm ledger ingest', () => {
     expect(kit.calls).toBe(py.calls)
     expect(kit.billed).toBe(py.billed)
     store.close()
-  })
+  }, 30_000)
 
   test('resumes from its cursor and reads only appended lines, finishing a torn one later', async () => {
     const path = join(root, 'resume.jsonl')

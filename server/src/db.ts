@@ -591,7 +591,13 @@ export function reclaimFreePages(maxPages = 256): number {
   }
 }
 // Idle housekeeping: a small slice every ten minutes. unref'd so it never keeps the process alive.
-setInterval(() => reclaimFreePages(), 10 * 60_000).unref()
+setInterval(() => {
+  try {
+    reclaimFreePages()
+  } catch {
+    // A failed slice is a slice skipped; the next is ten minutes away.
+  }
+}, 10 * 60_000).unref()
 
 // Every additive-migration block above has now run (schema creation, alter-table backfills, the
 // DPAPI-blob and rate-limited/overloaded repairs) - the slowest part of "db open" a corrupt or

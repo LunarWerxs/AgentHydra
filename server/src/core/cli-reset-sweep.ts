@@ -107,6 +107,12 @@ export function startCliResetSweep(): void {
   const pass = () => void runCliResetSweep()
   setTimeout(() => {
     pass()
-    setInterval(pass, PASS_EVERY_MS).unref?.()
+    setInterval(() => {
+      try {
+        pass()
+      } catch (err) {
+        console.error('[cli-reset-sweep] tick failed:', err instanceof Error ? err.message : err)
+      }
+    }, PASS_EVERY_MS).unref?.()
   }, FIRST_PASS_MS).unref?.()
 }
