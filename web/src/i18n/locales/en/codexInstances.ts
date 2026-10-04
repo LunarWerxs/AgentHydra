@@ -1,4 +1,5 @@
 export default {
+  noSessionLimitShort: 'N/A',
   noSessionLimit:
     'This account does not report a main five-hour limit. Separate model limits are listed below when available.',
   moveDescription:

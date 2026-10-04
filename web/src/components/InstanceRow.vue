@@ -173,7 +173,7 @@ function onContextMenu(e: MouseEvent): void {
             v-else-if="snapshot?.sessionLimitUnavailable"
             class="text-muted-foreground"
             :title="$t('codexInstances.noSessionLimit')"
-          >N/A</span>
+          >{{ $t('codexInstances.noSessionLimitShort') }}</span>
         </div>
         <span v-else class="text-muted-foreground" :title="row.noQuota">—</span>
       </TableCell>
