@@ -6,7 +6,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ChatManager } from '../../../src/engine/chat-manager'
-import { cleanTitle, type TitleGenerator } from '../../../src/engine/chat-title'
+import { cleanTitle, sdkTitleGenerator, type TitleGenerator } from '../../../src/engine/chat-title'
+import type { QueryImpl } from '../../../src/engine/chat-runtime'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
 import { fakeBridge, fakeQueries } from './fakes'
 
@@ -61,4 +62,16 @@ test('a new chat gets the generated title, a user rename wins, a failure keeps t
 test('cleanTitle keeps 6 words at most, drops quotes and the trailing period', () => {
   expect(cleanTitle('"crazy games resubmission readiness check for the portal."\nmore')).toBe('Crazy games resubmission readiness check for')
   expect(cleanTitle('   ')).toBeNull()
+})
+
+test('an error the model returns as its result (a signed-out account) is no title', async () => {
+  const result = (is_error: boolean, text: string) =>
+    (() =>
+      (async function* () {
+        yield { type: 'result', subtype: 'success', is_error, result: text }
+      })()) as unknown as QueryImpl
+  const signedOut = sdkTitleGenerator(result(true, 'Failed to authenticate: OAuth session expired and could not be refreshed'), {})
+  expect(await signedOut({ prompt: 'hi', cwd: '.', configDir: null })).toBeNull()
+  const ok = sdkTitleGenerator(result(false, 'Copy images with messages'), {})
+  expect(await ok({ prompt: 'hi', cwd: '.', configDir: null })).toBe('Copy images with messages')
 })

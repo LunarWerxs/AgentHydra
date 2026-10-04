@@ -61,7 +61,9 @@ export function sdkTitleGenerator(queryImpl: QueryImpl, env: Record<string, stri
       const run = (async () => {
         for await (const m of q) {
           if (m.type === 'result') {
-            if (m.subtype === 'success') text = m.result
+            // A signed-out account answers 'success' with is_error and the error as the result; that is
+            // no title (two chats were named 'Failed to authenticate: OAuth session ex...').
+            if (m.subtype === 'success' && !m.is_error) text = m.result
             break
           }
         }
