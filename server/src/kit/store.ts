@@ -4,7 +4,7 @@
 // and the query API are separate pieces.
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
 import { createHash } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DATA_DIR } from '../config'
 import {
@@ -98,14 +98,25 @@ export const hourStart = (ts: number): number => ts - (((ts % HOUR_MS) + HOUR_MS
 export const SLICE_MS = 40
 /** Rows per transaction when events are written in slices (about 10 ms of sqlite each). */
 export const WRITE_SLICE = 500
-/** A turn of the event loop: timers, I/O and the HTTP server run before the caller continues. */
+/**
+ * A turn of the event loop: timers, I/O and the HTTP server run before the caller continues. Every long
+ * sliced writer awaits this between its commits, so it is also where a store whose WAL has outgrown its
+ * limit makes the writer wait for the checkpoint worker to catch up (see KitStore.walPause).
+ */
 export const yieldLoop = (): Promise<void> => {
-  for (const s of OPEN_STORES) s.checkpointSoon()
-  return new Promise((r) => setTimeout(r, 0))
+  let pause: Promise<void> | null = null
+  for (const s of OPEN_STORES) {
+    s.checkpointSoon()
+    pause ??= s.walPause()
+  }
+  return pause ?? new Promise((r) => setTimeout(r, 0))
 }
 const OPEN_STORES = new Set<KitStore>()
-const CHECKPOINT_EVERY_MS = 1500
-/** A persistent connection that only checkpoints (passive: it never blocks the writer). */
+/** A WAL that grew past this and is not yet restarted holds the writer (a restart needs every frame checkpointed). */
+const WAL_LIMIT_BYTES = 32 * 1024 * 1024
+/** The longest a writer waits for the worker to catch up with the WAL before it carries on. */
+const WAL_PAUSE_MAX_MS = 5000
+/** A persistent connection that only checkpoints (passive: it never blocks the writer) and reports the WAL it saw. */
 const CHECKPOINT_WORKER_SOURCE = `
 const { Database } = require('bun:sqlite')
 let db = null
@@ -115,8 +126,9 @@ self.onmessage = (e) => {
       db = new Database(e.data.path)
       db.exec('pragma busy_timeout = 5000')
     }
-    db.exec('pragma wal_checkpoint(PASSIVE)')
-    self.postMessage({})
+    const page = db.query('pragma page_size').get().page_size
+    const r = db.query('pragma wal_checkpoint(PASSIVE)').get()
+    self.postMessage({ log: Math.max(0, r.log) * page, done: Math.max(0, r.checkpointed) * page })
   } catch (err) {
     self.postMessage({ error: String((err && err.message) || err) })
   }
@@ -273,7 +285,11 @@ export class KitStore {
   ) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.db = new Database(path, { create: true })
-    if (path !== ':memory:') this.db.exec('pragma journal_mode = WAL')
+    if (path !== ':memory:') {
+      this.db.exec('pragma journal_mode = WAL')
+      // A restarted WAL is cut back to this, so one long write does not leave a file of its peak size.
+      this.db.exec(`pragma journal_size_limit = ${WAL_LIMIT_BYTES}`)
+    }
     this.db.exec('pragma synchronous = NORMAL')
     // 64 MB of pages, not 2: a usage query over a week of the ledger reads tens of MB and re-reads them from the OS each time.
     this.db.exec('pragma cache_size = -65536')
@@ -317,18 +333,35 @@ export class KitStore {
   private ckptBusy = false
   private ckptAt = 0
   private ckptOff = false
+  /** Least time between two checkpoints asked for by checkpointSoon (a test shortens it). */
+  ckptEveryMs = 1500
+  /** The WAL size that makes a long writer wait for a restart (a test lowers it). */
+  walLimitBytes = WAL_LIMIT_BYTES
+  /** Waits taken for a WAL restart (a counter for tests and the bench). */
+  walPauses = 0
+  /** Frames the worker saw in the WAL at its last checkpoint, and how many of them were already in the database. */
+  private walLog = 0
+  private walDone = 0
+  /** The WAL size a pause already waited out: the same size again means no write has restarted it since. */
+  private walHandled = -1
+  private walPausing: Promise<void> | null = null
+  private walFile = 0
+  private walFileAt = 0
+  /** The WAL file size a pause already waited out (a restart the next write could not make leaves it so). */
+  private walFileHandled = -1
+  private ckptWaiters: (() => void)[] = []
 
   /**
    * A WAL checkpoint run by the commit that crosses the threshold fsyncs the database file on the daemon's
    * thread (100-500 ms on a live-size store, whichever slice happened to commit). Once a store is being
    * written in slices, checkpoints are made by a connection of a worker thread instead, at most one every
-   * CHECKPOINT_EVERY_MS, and the writer's own automatic checkpoint is switched off. Called on every turn
+   * ckptEveryMs, and the writer's own automatic checkpoint is switched off. Called on every turn
    * that long work gives back to the loop; costs nothing between checkpoints.
    */
   checkpointSoon(): void {
     if (this.path === ':memory:' || this.ckptOff || this.ckptBusy) return
     const now = Date.now()
-    if (now - this.ckptAt < CHECKPOINT_EVERY_MS) return
+    if (now - this.ckptAt < this.ckptEveryMs) return
     // The first turn of a run only starts the clock: a short run (an import, a small ingest) ends before a
     // checkpoint is worth its disk contention, which stalls the writer's next commit by 150-300 ms.
     const first = this.ckptAt === 0
@@ -338,9 +371,16 @@ export class KitStore {
         this.ckptWorker = new Worker(
           URL.createObjectURL(new Blob([CHECKPOINT_WORKER_SOURCE], { type: 'text/javascript' })),
         )
-        this.ckptWorker.onmessage = (e: MessageEvent<{ error?: string }>) => {
+        this.ckptWorker.onmessage = (
+          e: MessageEvent<{ error?: string; log?: number; done?: number }>,
+        ) => {
           this.ckptBusy = false
           if (e.data.error !== undefined) this.stopCheckpointWorker()
+          else {
+            this.walLog = e.data.log ?? 0
+            this.walDone = e.data.done ?? 0
+          }
+          for (const w of this.ckptWaiters.splice(0)) w()
         }
         this.ckptWorker.onerror = () => this.stopCheckpointWorker()
         this.ckptWorker.unref()
@@ -354,10 +394,76 @@ export class KitStore {
     }
   }
 
+  /**
+   * The WAL only restarts (is reused from its start) when a write begins while every frame is already in the
+   * database; a writer that never stops appends for ever, because the passive worker is always one commit
+   * behind. On the live-size store a continuous re-read grew the WAL to 1.25 GB and the commits that had to
+   * extend the file took 100-700 ms each on the daemon's thread. So when the worker's last report shows a
+   * WAL over walLimitBytes that no pause has handled yet, the writer waits here (no write, the loop free)
+   * until a checkpoint shows the database has caught up; its next write then restarts the WAL. Null when
+   * there is nothing to wait for, so a reader or a small write pays nothing.
+   */
+  walPause(): Promise<void> | null {
+    if (this.walPausing) return this.walPausing
+    if (this.ckptOff || !this.ckptWorker) return null
+    const file = this.walFileSize()
+    const grown = file > this.walLimitBytes && file !== this.walFileHandled
+    if (!grown && (this.walLog <= this.walLimitBytes || this.walLog === this.walHandled))
+      return null
+    this.walPauses++
+    this.walPausing = this.waitForWalCatchUp().finally(() => {
+      this.walHandled = this.walLog
+      this.walFileAt = 0
+      this.walFileHandled = this.walFileSize()
+      this.walPausing = null
+    })
+    return this.walPausing
+  }
+
+  /**
+   * The WAL file's size, read at most every 20 ms. journal_size_limit cuts the file back to the limit when a
+   * write restarts the WAL, so a file over the limit is a WAL that grew past it since: a slice that rewrites
+   * pages all over the store (a rollup, a backfill) can write 100 MB between two of the worker's reports.
+   */
+  private walFileSize(): number {
+    const now = performance.now()
+    if (now - this.walFileAt >= 20) {
+      this.walFileAt = now
+      this.walFile = statSync(`${this.path}-wal`, { throwIfNoEntry: false })?.size ?? 0
+    }
+    return this.walFile
+  }
+
+  private async waitForWalCatchUp(): Promise<void> {
+    const until = Date.now() + WAL_PAUSE_MAX_MS
+    // Only a checkpoint posted by this wait counts: one already in flight began before the latest commits,
+    // so its "caught up" leaves frames behind and the next write cannot restart the WAL.
+    let posted = false
+    while (!this.ckptOff && this.ckptWorker && Date.now() < until) {
+      if (!this.ckptBusy) {
+        this.ckptAt = Date.now()
+        this.ckptBusy = true
+        posted = true
+        try {
+          this.ckptWorker.postMessage({ path: this.path })
+        } catch {
+          this.stopCheckpointWorker()
+          return
+        }
+      }
+      await new Promise<void>((r) => {
+        this.ckptWaiters.push(r)
+        setTimeout(r, 1000)
+      })
+      if (posted && !this.ckptBusy && this.walDone >= this.walLog) return
+    }
+  }
+
   /** The worker failed: the writer's automatic checkpoint is restored and no more are tried. */
   private stopCheckpointWorker(): void {
     this.ckptOff = true
     this.ckptBusy = false
+    for (const w of this.ckptWaiters.splice(0)) w()
     this.ckptWorker?.terminate()
     this.ckptWorker = null
     try {

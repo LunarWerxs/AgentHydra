@@ -614,19 +614,39 @@ function* computeUsage(
         ).n
       : 0
     if (!have.has('usage_session_span')) {
-      for (const [from, to] of openEnded(pieces(win.from, Math.max(win.to, now), DAY_MS, sliced))) {
+      // Without the (last_ts, first_ts) index any last_ts range is a scan of the whole ledger, so it is
+      // scanned once, in pages of its key order. A statement per day of the window was a whole scan each:
+      // an all-time window walked every day since 1970 (20,000 scans, ten minutes on a live-size store).
+      const cutWhere = `${sessWhere.sql}${dim.sql} and +first_ts <= ? and +last_ts >= ? and (+first_ts < ? or +last_ts > ?)`
+      const cutArgs = [...sessWhere.args, ...dim.args, win.to, win.from, win.from, win.to]
+      const nextEdge = db.query(
+        'select session, ref from usage_session where (session, ref) >= (?, ?) order by session, ref limit 1 offset ?',
+      )
+      let after: [string, string] | null = null
+      for (;;) {
+        const edge: { session: string; ref: string } | null = sliced
+          ? (nextEdge.get(
+              after?.[0] ?? '',
+              after?.[1] ?? '',
+              after ? LEDGER_PAGE_ROWS : LEDGER_PAGE_ROWS - 1,
+            ) as {
+              session: string
+              ref: string
+            } | null)
+          : null
+        const lo = after ? '(session, ref) > (?, ?) and ' : ''
+        const hi = edge ? '(session, ref) <= (?, ?) and ' : ''
         cutRows.push(
           ...(db
-            .query(
-              `select ${cols} from usage_session
-          where ${sessWhere.sql}${dim.sql} and +first_ts <= ? and last_ts >= ? and last_ts <= ? and (first_ts < ? or last_ts > ?)`,
-            )
-            .all(...sessWhere.args, ...dim.args, win.to, from, to, win.from, win.to) as Record<
+            .query(`select ${cols} from usage_session where ${lo}${hi}${cutWhere}`)
+            .all(...(after ?? []), ...(edge ? [edge.session, edge.ref] : []), ...cutArgs) as Record<
             string,
             string | number
           >[]),
         )
-        if (sliced) yield
+        if (!edge) break
+        after = [edge.session, edge.ref]
+        yield
       }
     } else {
       if (older <= CUT_SCAN_ROWS) {

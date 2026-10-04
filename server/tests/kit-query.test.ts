@@ -556,6 +556,40 @@ describe('regressions: live rows, stale rollup, zones', () => {
     },
   )
 
+  test('an all-time window by session on a ledger without its span index is one pass, not a scan per day', async () => {
+    const st = mk().st
+    st.upsertEvents([
+      row('a1', NOW - 40 * D, { session: 'old', list_usd: 1 }),
+      row('a2', NOW - 3 * D, { session: 'old', list_usd: 2 }),
+      row('b1', NOW - D, { session: 'new', list_usd: 4 }),
+    ])
+    st.runMaintenance(NOW)
+    st.db.exec('drop index if exists usage_session_span')
+    let statements = 0
+    const query = st.db.query.bind(st.db)
+    st.db.query = ((sql: string) => {
+      const q = query(sql)
+      return new Proxy(q, {
+        get(t, k) {
+          const v = Reflect.get(t, k)
+          if (k === 'all' || k === 'get' || k === 'values') statements++
+          return typeof v === 'function' ? v.bind(t) : v
+        },
+      })
+    }) as typeof st.db.query
+    const r = await usageQueryAsync(
+      { window: { from: 0, to: NOW }, groupBy: ['session'], measures: ['calls', 'list_usd'] },
+      { store: st, now: NOW },
+    )
+    expect([...r.rows].sort((a, b) => String(a.session).localeCompare(String(b.session)))).toEqual([
+      { session: 'new', calls: 1, list_usd: 4 },
+      { session: 'old', calls: 2, list_usd: 3 },
+    ])
+    // a statement per day since 1970 was 20,000 of them
+    expect(statements).toBeLessThan(500)
+    st.close()
+  })
+
   test('a half-hour zone puts a call at 00:10 local on its own day', () => {
     const { st, run } = mk()
     st.upsertEvents([row('z1', Date.UTC(2026, 5, 14, 18, 40))])
