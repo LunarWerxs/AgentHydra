@@ -16,7 +16,11 @@
 
 export type Table = 'logins' | 'queues' | 'chats'
 type Reply = { status: number; json: any; rev?: number }
-export type Call = (method: string, path: string) => Promise<Reply>
+export type Call = (
+  method: string,
+  path: string,
+  headers?: Record<string, string>,
+) => Promise<Reply>
 export interface MirrorRow {
   version: number
   meta?: any
@@ -121,10 +125,13 @@ export class StoreMirror {
   private async applyChanges(since: number): Promise<boolean> {
     let r: Reply
     try {
-      r = await this.call('GET', `/v1/changes?since=${since}`)
+      // The cursor doubles as the ETag: an unchanged store answers 304, which costs the Worker no
+      // rows. A Worker that predates it ignores the header and answers 200 as before.
+      r = await this.call('GET', `/v1/changes?since=${since}`, { 'if-none-match': `"${since}"` })
     } catch {
       return false
     }
+    if (r.status === 304) return true
     const j = r.json
     if (r.status !== 200 || j?.full === true || !Number.isInteger(j?.rev)) return false
     for (const g of Array.isArray(j.gone) ? j.gone : [])

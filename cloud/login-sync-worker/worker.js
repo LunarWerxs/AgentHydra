@@ -634,15 +634,41 @@ const changed = (t, r) => ({
 // kept tombstones (below floor) or newer than the store (it was reset). Each query is in rev order so
 // it walks the rev index from n and reads only the changed rows; in key order D1 read the whole
 // table on every call.
-async function getChanges(db, sinceParam, trust) {
+//
+// The cursor is also the ETag ("<rev>"). A client that sends If-None-Match: "<rev>" with since=<rev> gets
+// 304 (no body) while the store is still at that rev: from the head this isolate trusts that is zero D1
+// statements, else ONE (the head row). Only a cursor behind the head reads the changed rows, in a second
+// batch; the head read first can only be older than those rows, so a cursor taken from it re-sends a
+// row at worst, never misses one. A client that sends no If-None-Match gets the same 200 bodies as ever.
+const etagOf = (rev) => `"${rev}"`
+const matchesEtag = (request, rev) =>
+  (request.headers.get('if-none-match') || '')
+    .split(',')
+    .some((v) => v.trim().replace(/^W\//, '') === etagOf(rev))
+const changesJson = (body) => {
+  const res = json(body)
+  res.headers.set('etag', etagOf(body.rev))
+  return res
+}
+const idleChanges = (request, rev) =>
+  matchesEtag(request, rev)
+    ? new Response(null, {
+        status: 304,
+        headers: { etag: etagOf(rev), 'cache-control': 'no-store' },
+      })
+    : changesJson({ rev, logins: [], queues: [], chats: [], gone: [] })
+
+async function getChanges(request, db, sinceParam, trust) {
   const since = Number(sinceParam)
   if (sinceParam === null || sinceParam === '' || !Number.isInteger(since))
     return json({ error: 'bad since' }, 400)
   const age = headKept ? Date.now() - headKept.at : -1
   if (trust > 0 && age >= 0 && age < trust && since === headKept.row.rev)
-    return json({ rev: since, logins: [], queues: [], chats: [], gone: [] })
-  const [revRes, logins, queues, chats, tombs] = await db.batch([
-    db.prepare(HEAD_SQL),
+    return idleChanges(request, since)
+  const { rev, floor } = keepHead(await db.prepare(HEAD_SQL).first())
+  if (since === rev) return idleChanges(request, rev)
+  if (since < floor || since > rev) return changesJson({ rev, full: true })
+  const [logins, queues, chats, tombs] = await db.batch([
     db
       .prepare('SELECT id, version, meta, updated_at FROM logins WHERE rev > ? ORDER BY rev')
       .bind(since),
@@ -654,10 +680,7 @@ async function getChanges(db, sinceParam, trust) {
       .bind(since),
     db.prepare('SELECT table_name, id FROM tombstones WHERE rev > ? ORDER BY rev').bind(since),
   ])
-  const { rev, floor } = keepHead(revRes.results?.[0])
-  if (since === rev) return json({ rev, logins: [], queues: [], chats: [], gone: [] })
-  if (since < floor || since > rev) return json({ rev, full: true })
-  return json({
+  return changesJson({
     rev,
     logins: (logins.results || []).map((r) => changed(LOGINS, r)),
     queues: (queues.results || []).map((r) => changed(QUEUES, r)),
@@ -700,7 +723,7 @@ function routeRow(request, db, url, match, trust) {
 
 function route(request, db, env, url, path) {
   if (path === '/v1/changes' && request.method === 'GET')
-    return getChanges(db, url.searchParams.get('since'), trustOf(env))
+    return getChanges(request, db, url.searchParams.get('since'), trustOf(env))
   if (request.method === 'GET') {
     const listed = routeList(db, path, trustOf(env))
     if (listed) return listed

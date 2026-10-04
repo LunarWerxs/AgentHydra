@@ -14,6 +14,7 @@ const tokenHash = createHash('sha256').update(token).digest('hex')
 type W = {
   fetch: (r: Request, env: unknown) => Promise<Response>
   scheduled: (e: unknown, env: unknown) => Promise<void>
+  forgetIsolate?: () => void
 }
 const load = async (tag: string) =>
   (
@@ -63,4 +64,69 @@ test('scheduled() prunes tombstones older than 30 days, raises floor, by the tim
   expect(sqlite.query('SELECT floor FROM store_rev').get()).toEqual({ floor: 5 })
   // one old row read twice (floor, delete): the index on time keeps the recent row out of it
   expect(db.rowsRead()).toBeLessThanOrEqual(4)
+})
+
+// An idle poll of GET /v1/changes. Before the ETag change it was one batch of 5 statements (the head and
+// four `WHERE rev > ?` range reads) on every cold isolate; now 1 statement (the head) on a cold isolate
+// plus the one-statement schema gate, and 0 on one that still holds the head.
+const poll = (w: W, db: ReturnType<typeof d1>, since: number, inm: boolean) =>
+  w.fetch(
+    new Request(`http://store/v1/changes?since=${since}`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(inm ? { 'if-none-match': `"${since}"` } : {}),
+      },
+    }),
+    { DB: db, TOKEN_SHA256: tokenHash },
+  )
+
+test('an idle changes poll costs one statement (plus the schema gate) cold and none warm, and answers 304 to If-None-Match', async () => {
+  const sqlite = new Database(':memory:')
+  const db = d1(sqlite)
+  await ask(await load('idle-a'), db, '/v1/logins') // migrate
+  sqlite.run('UPDATE store_rev SET rev = 7 WHERE id = 1')
+
+  const cold = await load('idle-b')
+  db.resetRowsRead()
+  const res = await poll(cold, db, 7, true)
+  const sql = db.statements().map((s) => s.sql)
+  console.log('idle poll, cold isolate: statements', sql.length, JSON.stringify(sql))
+  expect(res.status).toBe(304)
+  expect(res.headers.get('etag')).toBe('"7"')
+  expect(sql.filter((q) => !/PRAGMA user_version/.test(q)).length).toBe(1)
+  expect(db.rowsRead()).toBeLessThanOrEqual(2) // the head row, plus the PRAGMA
+
+  db.resetRowsRead()
+  expect((await poll(cold, db, 7, true)).status).toBe(304)
+  console.log('idle poll, warm isolate: statements', db.statements().length)
+  expect(db.statements().length).toBe(0)
+
+  // an old client sends no If-None-Match: the same 200 body as before
+  const old = await poll(cold, db, 7, false)
+  expect(old.status).toBe(200)
+  expect(await old.json()).toEqual({ rev: 7, logins: [], queues: [], chats: [], gone: [] })
+})
+
+test('a stale cursor still gets the changed rows, with the ETag of the head', async () => {
+  const sqlite = new Database(':memory:')
+  const db = d1(sqlite)
+  const w = await load('idle-c')
+  await ask(w, db, '/v1/logins')
+  const id = crypto.randomUUID()
+  const put = await w.fetch(
+    new Request(`http://store/v1/logins/${id}`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ version: 0, blob: 'x', meta: {} }),
+    }),
+    { DB: db, TOKEN_SHA256: tokenHash },
+  )
+  expect(put.status).toBe(200)
+  w.forgetIsolate?.()
+  const res = await poll(w, db, 0, true)
+  expect(res.status).toBe(200)
+  expect(res.headers.get('etag')).toBe('"1"')
+  const body = (await res.json()) as { rev: number; logins: Array<{ id: string }> }
+  expect(body.rev).toBe(1)
+  expect(body.logins.map((l) => l.id)).toEqual([id])
 })

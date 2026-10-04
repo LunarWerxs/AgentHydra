@@ -243,12 +243,13 @@ async function call(
   method: string,
   path: string,
   body?: unknown,
+  extra?: Record<string, string>,
 ): Promise<{ status: number; json: any; rev?: number }> {
   // A write moves the row on: what the mirror kept of it is not the store's copy any more.
   if (method !== 'GET') mirror?.m.forget(path)
   const res = await fetch(new URL(path, l.url), {
     method,
-    headers: { authorization: `Bearer ${l.token}`, 'content-type': 'application/json' },
+    headers: { authorization: `Bearer ${l.token}`, 'content-type': 'application/json', ...extra },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(15_000),
   })
@@ -1023,7 +1024,10 @@ function mirrorFor(l: Live): StoreMirror {
   const id = `${l.url}
 ${l.token}`
   if (mirror?.id !== id)
-    mirror = { id, m: new StoreMirror((method, path) => call(l, method, path)) }
+    mirror = {
+      id,
+      m: new StoreMirror((method, path, headers) => call(l, method, path, undefined, headers)),
+    }
   return mirror.m
 }
 
