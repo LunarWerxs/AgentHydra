@@ -647,7 +647,7 @@ export function voidSpec(log: string): boolean {
  *  first running worker started spent there (part of the meter's rise that is not the running
  *  work's; projectedPct). */
 export function placementState(): {
-  costOf: (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort'>) => CostEstimate
+  costOf: (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort' | 'chat'>) => CostEstimate
   running: Map<string, RunningLoad[]>
   finishedSince: Map<string, number>
 } {
@@ -661,7 +661,7 @@ export function placementState(): {
     if (w.kind === 'manage') {
       for (const a of w.attempts)
         if (a.tokens) finished.push({ kind: 'manage', model, effort: w.effort, pct: work(a) })
-    } else if (w.status === 'done' && w.tokens) {
+    } else if (w.status === 'done' && w.tokens && !w.chat) {
       // The work only: a move's re-read is what the move cost, not what the task costs.
       finished.push({
         kind: w.kind ?? null,
@@ -671,8 +671,12 @@ export function placementState(): {
       })
     }
   }
-  const costOf = (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort'>): CostEstimate =>
-    expectedCost({ kind: w.kind, model: ladderModel(w.model), effort: w.effort }, finished)
+  // A chat is the owner's conversation, not a sized task: it has no estimate, so nothing holds it
+  // for room and no overrun cap applies (notConverging).
+  const costOf = (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort' | 'chat'>): CostEstimate =>
+    w.chat
+      ? { pct: 0, basis: 'default', samples: 0 }
+      : expectedCost({ kind: w.kind, model: ladderModel(w.model), effort: w.effort }, finished)
   const running = new Map<string, RunningLoad[]>()
   const firstStart = new Map<string, number>()
   for (const w of workers.values())

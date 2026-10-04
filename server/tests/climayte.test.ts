@@ -544,6 +544,13 @@ describe('notConverging', () => {
     if (expected === null) expect(why).toBeNull()
     else expect(why).toMatch(expected)
   })
+
+  // Owner, 2026-10-04: his chat (w-da8a8b1c) was stopped at 96% of a window, 3 times its estimate.
+  test('a chat worker over the threshold keeps running; an ordinary one is stopped', () => {
+    const over = [at('a', 'quota', { input: 0, output: 50_000_000, cacheRead: 0, cacheWrite: 0 })]
+    expect(notConverging({ ...w([...over]), chat: true })).toBeNull()
+    expect(notConverging(w([...over]))).toMatch(/of a Pro window spent/)
+  })
 })
 
 describe('pickAccount', () => {

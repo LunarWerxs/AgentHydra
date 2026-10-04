@@ -1741,8 +1741,11 @@ export const TURN_CAPS = { attempts: 8, moves: 4, handoffs: 3, overrun: 3, overr
 /** Why a task should stop and ask, or null while it is converging. Pure: the attempts and the size
  *  it was dispatched at. */
 export function notConverging(
-  w: Pick<CliMayteWorker, 'attempts' | 'model'> & { size?: { expected: number } | null },
+  w: Pick<CliMayteWorker, 'attempts' | 'model' | 'chat'> & { size?: { expected: number } | null },
 ): string | null {
+  // A chat is the owner's own conversation, not a sized task: it moves accounts at a limit and
+  // hands off, but is never stopped for size, spend, moves or attempts.
+  if (w.chat) return null
   let lastDone = -1
   w.attempts.forEach((a, i) => {
     if (a.outcome === 'done') lastDone = i
