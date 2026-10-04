@@ -335,8 +335,8 @@ export function createBridge(opts: BridgeOptions = {}) {
     return [...out.values()]
   }
 
-  async function sendToWorker(id: string, text: string): Promise<void> {
-    const r = await client.sendToWorker(id, text)
+  async function sendToWorker(id: string, text: string, cwd?: string): Promise<void> {
+    const r = await client.sendToWorker(id, text, cwd)
     if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused the message to ${id}`, /no such worker/i.test(r.message) ? 404 : 400)
   }
 

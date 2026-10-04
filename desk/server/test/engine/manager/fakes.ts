@@ -135,7 +135,7 @@ export function fakeBridge(
     workers: o.workers ?? [],
     /** CliMayte: the workers started (their tasks), the messages sent, the cancels, and what workersByIds answers. */
     started: [] as StartWorker[],
-    sentToWorker: [] as { id: string; text: string }[],
+    sentToWorker: [] as { id: string; text: string; cwd?: string }[],
     cancelled: [] as string[],
     rows: [] as AhWorker[],
     /** What workerItems answers, by session id. */
@@ -154,8 +154,8 @@ export function fakeBridge(
       state.rows.push(row)
       return row
     },
-    sendToWorker: async (id, text) => {
-      state.sentToWorker.push({ id, text })
+    sendToWorker: async (id, text, cwd) => {
+      state.sentToWorker.push({ id, text, ...(cwd ? { cwd } : {}) })
     },
     cancelWorker: async (id) => {
       state.cancelled.push(id)

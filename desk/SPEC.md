@@ -192,11 +192,10 @@ becomes X, and later turns run in X with X's instructions and MCP servers.
   its sidecar folder) is copied under the new folder's name; the original stays, an older copy there (the
   chat went back) is refreshed. `buildOptions` then reads `chat.cwd` again, so `cwd`, the folder's project
   settings and the main-config MCP servers (mcp-servers.ts) are the new folder's.
-- **Worker chats.** The sidebar move happens, but AgentHydra's `POST /api/corch/workers/:id/send` takes
-  only `text`, `urgent`, `model`, `effort`: the worker keeps its own folder. A change in AgentHydra is
-  needed for later turns to run in the new one: accept an optional `cwd` there (validated like
-  `climayteRun`'s), copy the worker's session into that folder's project dir on its account (as
-  `placeInCwd` does) and start the resumed run with that cwd.
+- **Worker chats.** The sidebar move happens, and the next send to the worker passes the chat's folder as
+  `cwd` (`POST /api/corch/workers/:id/send`): AgentHydra copies the worker's session into that folder's project
+  dir on its account and resumes there. Desk remembers the folder it last started or sent the worker into
+  (`workerCwd`, else the worker's own `cwd`); only a differing chat folder is passed, once.
 
 ### Chat hosts (server/src/host)
 
@@ -409,8 +408,10 @@ the inline 'N running tasks' row and the CliMayte pane's 'only this chat' box us
 
 Hydra Desk is a viewer (Jacob, 2026-10-04): it keeps no account policy, no failover and no limit or
 login handling. A new chat (create, or a queued new chat) is a CliMayte worker: its first message calls
-`POST /api/corch/workers` (`tasks: [{ prompt, cwd, title }]`, group `hydra-desk`, model `opus` with a
-`modelWhy` so CliMayte keeps it; never Haiku); every later message goes to
+`POST /api/corch/workers` (`tasks: [{ prompt, cwd, title, chat: true }]`, group `hydra-desk`). `chat: true`
+is AgentHydra's chat mode: the worker launches like the owner's own `claude` (no worker brief, the owner's
+full instructions, skills and MCP, Opus xhigh, never auto-downgraded). Desk sends no model, effort or
+`modelWhy` of its own; an explicit owner choice would be passed through. Every later message goes to
 `POST /api/corch/workers/:id/send` (CliMayte holds one sent during a turn for the next turn of the same
 session). `ChatSummary.workerId` is the worker (`null` until it started; absent on SDK chats). CliMayte
 picks the account and moves the worker when that account hits its limit or its login dies.

@@ -220,14 +220,19 @@ export interface WorkerListQuery {
   limit?: number
 }
 
-/** POST /api/corch/workers for one task. `modelWhy` makes CliMayte keep the named model (its runSetting). */
+/**
+ * POST /api/corch/workers for one task. A Desk chat is always `chat: true` (AgentHydra launches it like the
+ * owner's own claude: Opus xhigh unless the task names more). `model` / `effort` / `modelWhy` are sent only
+ * when the owner explicitly chose one; Desk forces none.
+ */
 export interface StartWorker {
   prompt: string
   cwd: string
   title: string
   group: string
-  model: string
-  modelWhy: string
+  model?: string
+  effort?: string
+  modelWhy?: string
 }
 
 export function createClient(opts: HydraClientOptions = {}) {
@@ -306,14 +311,15 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** Starts one CliMayte worker: CliMayte picks its account and moves it when that account fails. */
     startWorker: (task: StartWorker) =>
       post<{ group: string; workers: AhWorker[] }>('/api/corch/workers', {
-        tasks: [{ prompt: task.prompt, cwd: task.cwd, title: task.title }],
+        tasks: [{ prompt: task.prompt, cwd: task.cwd, title: task.title, chat: true }],
         group: task.group,
-        model: task.model,
-        modelWhy: task.modelWhy,
+        ...(task.model ? { model: task.model, modelWhy: task.modelWhy } : {}),
+        ...(task.effort ? { effort: task.effort } : {}),
         copies: true,
       }),
-    sendToWorker: (id: string, text: string) =>
-      post<{ ok: boolean; message: string }>(`/api/corch/workers/${enc(id)}/send`, { text }),
+    /** `cwd`: the folder the chat moved to; the worker's next launch copies its session there and resumes there. */
+    sendToWorker: (id: string, text: string, cwd?: string) =>
+      post<{ ok: boolean; message: string }>(`/api/corch/workers/${enc(id)}/send`, cwd ? { text, cwd } : { text }),
   }
 }
 

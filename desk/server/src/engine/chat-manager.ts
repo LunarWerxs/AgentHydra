@@ -114,9 +114,8 @@ const IMPORT_TITLE = 'Claude Code session'
 const READ_ONLY_SOURCES: Record<'climayte' | 'codex' | 'other', string> = { climayte: 'CliMayte worker', codex: 'Codex', other: 'outside' }
 /** The CliMayte group Hydra Desk's chats run in. */
 export const WORKER_GROUP = 'hydra-desk'
-/** A chat's worker runs on a strong model, never Haiku (Jacob, 2026-10-04). */
+/** What a worker chat shows as its model: AgentHydra's chat mode launches it on Opus (xhigh), and Desk forces nothing. */
 export const WORKER_MODEL = 'opus'
-const WORKER_MODEL_WHY = 'a Hydra Desk chat: the owner talks to it directly, so it runs on a strong model'
 /** The account a chat shows before CliMayte has placed its worker. */
 export const CLIMAYTE_ACCOUNT: AccountRef = { id: 'climayte', label: 'CliMayte', configDir: null }
 
@@ -156,6 +155,8 @@ interface Entry {
   bgTasks?: Set<string>
   /** A CliMayte chat: the worker's updatedAt when its session's folder was last looked at (cwd-move). */
   cwdAt?: number
+  /** The folder the chat's worker was last started or sent into; a different chat.cwd is a move to pass on. */
+  workerCwd?: string
   /** A CliMayte chat: the messages sent that its worker's JSONL does not show yet, shown meanwhile (memory only, never in the Desk file). */
   sent?: UserItem[]
 }
@@ -459,12 +460,18 @@ export class ChatManager {
     ;(e.sent ??= []).push(standIn)
     this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: standIn })
     try {
-      if (chat.workerId) await this.bridge.sendToWorker(chat.workerId, text)
-      else {
+      if (chat.workerId) {
+        // The chat moved folders (cwd-move): the worker's next launch resumes its session there.
+        const at = e.workerCwd ?? this.bridge.lastWorkers().find((w) => w.id === chat.workerId)?.cwd ?? null
+        const moved = at !== null && at !== chat.cwd
+        await this.bridge.sendToWorker(chat.workerId, text, ...(moved ? [chat.cwd] : []))
+        e.workerCwd = chat.cwd
+      } else {
         let started!: () => void
         e.starting = new Promise<void>((r) => (started = r))
         try {
-          const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, model: WORKER_MODEL, modelWhy: WORKER_MODEL_WHY })
+          const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP })
+          e.workerCwd = chat.cwd
           chat.workerId = w.id
           chat.sessionId = w.sessionId
         } finally {
@@ -780,7 +787,7 @@ export class ChatManager {
       this.noteTask(e, item)
     }
     if (!e.workerLive) this.clearTasks(e)
-    // The worker cd'd out of the chat's folder: the sidebar follows (AgentHydra cannot move the worker itself, see SPEC "A chat moves folders").
+    // The worker cd'd out of the chat's folder: the sidebar follows (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
     if (w.sessionId && e.cwdAt !== w.updatedAt) {
       e.cwdAt = w.updatedAt
       this.noteCwd(e, findSessionJsonl(w.sessionId, this.bridge.sessionRoots(), chat.cwd))

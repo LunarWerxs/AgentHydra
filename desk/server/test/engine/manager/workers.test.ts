@@ -3,9 +3,11 @@
 // shows the worker's status, account (a move said in the transcript) and transcript.
 
 import { afterEach, expect, test } from 'bun:test'
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createClient } from '../../../src/bridge/client'
+import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
 import { ChatManager } from '../../../src/engine/chat-manager'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
 import type { ServerEvent } from '@shared/protocol'
@@ -18,7 +20,7 @@ afterEach(async () => {
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
-test('a new chat starts a worker on opus, a follow-up goes to that worker, and its status, move and transcript show', async () => {
+test('a new chat starts a worker, a follow-up goes to that worker, and its status, move and transcript show', async () => {
   const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
   temps.push(home)
   process.env.HYDRA_DESK_HOME = home
@@ -29,7 +31,7 @@ test('a new chat starts a worker on opus, a follow-up goes to that worker, and i
 
   const chat = await m.create({ cwd: home, prompt: 'reply with the word pong', model: 'haiku' })
   while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
-  expect(b.state.started).toEqual([expect.objectContaining({ prompt: 'reply with the word pong', cwd: home, group: 'hydra-desk', model: 'opus' })])
+  expect(b.state.started).toEqual([expect.objectContaining({ prompt: 'reply with the word pong', cwd: home, group: 'hydra-desk' })])
   expect(m.get(chat.id)).toMatchObject({ workerId: 'w1', sessionId: 'worker-session-1', model: 'opus' })
   expect(q.all).toEqual([])
 
@@ -146,4 +148,59 @@ paragraphs` },
   expect(m.listItems(chat.id).map((i) => i.id)).toEqual(['u-1', 'u-2'])
   const removed = events.filter((e) => e.type === 'item.removed').map((e) => e.type === 'item.removed' && e.itemId)
   expect(removed).toEqual(events.filter((e) => e.type === 'item.upsert' && e.item.id.startsWith('desk-sent:')).map((e) => e.type === 'item.upsert' && e.item.id))
+})
+
+test('a new worker chat asks for chat mode and forces no model or effort', async () => {
+  const bodies: { path: string; body: unknown }[] = []
+  const fetchImpl = (async (url: string, init?: { body?: string }) => {
+    bodies.push({ path: new URL(url).pathname, body: JSON.parse(init?.body ?? '{}') })
+    return new Response(JSON.stringify({ group: 'g', workers: [] }), { status: 200 })
+  }) as unknown as typeof fetch
+  const client = createClient({ url: 'http://127.0.0.1:1', fetch: fetchImpl })
+  await client.startWorker({ prompt: 'hi', cwd: 'C:/x', title: 't', group: 'hydra-desk' })
+  const body = bodies[0]!.body as { tasks: Record<string, unknown>[] } & Record<string, unknown>
+  expect(bodies[0]!.path).toBe('/api/corch/workers')
+  expect(body.tasks[0]).toMatchObject({ prompt: 'hi', chat: true })
+  for (const k of ['model', 'effort', 'modelWhy']) expect(k in body || k in body.tasks[0]!).toBe(false)
+
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'go', model: 'haiku', effort: 'low' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  expect(b.state.started[0]!.model).toBeUndefined()
+  expect(b.state.started[0]!.effort).toBeUndefined()
+})
+
+test('a send after the chat moved folders passes the new folder to the worker, once', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const base = mkdtempSync(join(tmpdir(), 'desk-wmove-'))
+  temps.push(base)
+  const cwd = join(base, 'A')
+  const other = join(base, 'X')
+  mkdirSync(cwd, { recursive: true })
+  mkdirSync(other, { recursive: true })
+  const root = join(base, 'projects')
+  const file = join(root, encodeProjectDir(cwd), 'worker-session-1.jsonl')
+  mkdirSync(join(root, encodeProjectDir(cwd)), { recursive: true })
+  writeFileSync(file, `${JSON.stringify({ type: 'user', uuid: 'u', cwd: other, message: { role: 'user', content: 'x' } })}
+`)
+  const b = fakeBridge({ roots: [root] })
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd, prompt: 'go' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  await m.send(chat.id, 'same folder')
+  expect(b.state.sentToWorker.at(-1)).toEqual({ id: 'w1', text: 'same folder' })
+
+  b.state.rows[0]!.updatedAt = 999
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id).cwd).toBe(other)
+  await m.send(chat.id, 'now here')
+  expect(b.state.sentToWorker.at(-1)).toEqual({ id: 'w1', text: 'now here', cwd: other })
+  await m.send(chat.id, 'and again')
+  expect(b.state.sentToWorker.at(-1)).toEqual({ id: 'w1', text: 'and again' })
 })
