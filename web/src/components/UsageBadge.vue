@@ -11,9 +11,9 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import { turnOffExtraUsage, type UsageSnapshot } from '@/lib/api'
+import { formatCredit } from '@/lib/kit'
 import {
   billsPastLimit,
-  formatMoney,
   isNoDataSnap,
   isStaleSnap,
   pctDetail,
@@ -94,8 +94,8 @@ const appCodeCredit = computed(() => {
   if (credit.state === 'unclaimed') return t('instances.usageAppCodeCreditUnclaimed')
   if (credit.state === 'locked') return t('instances.usageAppCodeCreditLocked')
   return t('instances.usageAppCodeCreditValue', {
-    remaining: formatMoney(credit.remainingUsd),
-    limit: formatMoney(credit.limitUsd),
+    remaining: formatCredit(credit.remainingUsd),
+    limit: formatCredit(credit.limitUsd),
     expires: shortDate(credit.expiresAt),
   })
 })
@@ -103,12 +103,12 @@ const appUsageCredits = computed(() => {
   const credits = app.value?.usageCredits
   if (!credits) return null
   if (!credits.enabled) return t('instances.usageAppUsageCreditsOff')
-  const used = formatMoney(credits.used, credits.currency)
+  const used = formatCredit(credits.used, credits.currency)
   return credits.limit == null
     ? t('instances.usageAppUsageCreditsOnUncapped', { used })
     : t('instances.usageAppUsageCreditsOn', {
         used,
-        limit: formatMoney(credits.limit, credits.currency),
+        limit: formatCredit(credits.limit, credits.currency),
       })
 })
 const appSplit = computed(

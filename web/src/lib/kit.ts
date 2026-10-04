@@ -217,3 +217,6 @@ export function formatUsd(n: number | null | undefined, opts: UsdOptions = {}): 
   }
   return n > 0 && n < 0.01 ? `<${usdIntl.format(0.01)}` : usdIntl.format(n)
 }
+
+/** An account's credit amount in its own currency (usage.ts's rule), as part of the one formatter set. */
+export { formatMoney as formatCredit } from './usage'
