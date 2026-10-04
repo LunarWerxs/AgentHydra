@@ -285,9 +285,10 @@ export interface OwnTranscript {
 }
 
 /** Which transcript is the CALLER's own. An explicit session id wins; otherwise the calling
- *  process chain is matched against each Claude home's live registry (`sessions/<pid>.json`,
- *  written by the engine itself), nearest ancestor first. `extraHomes` is consulted only when the
- *  default home has no match (a CLI instance keeps its registry in its own config dir). */
+ *  process chain is matched against every Claude home's live registry (`sessions/<pid>.json`,
+ *  written by the engine itself), nearest ancestor first across all of them. `extraHomes` (a CLI
+ *  instance keeps its registry in its own config dir) is consulted only when it could hold an
+ *  engine nearer the call than the default home's match. */
 export async function resolveOwnTranscript(opts: {
   sessionId?: string
   /** The calling engine's pid (MCP over HTTP), or null to walk this process's own parents (stdio). */
@@ -317,30 +318,37 @@ export async function resolveOwnTranscript(opts: {
     ? await processAncestry(opts.callerPid, { includeSelf: true })
     : await processAncestry(process.pid)
   const pids = (chain ?? []).map((p) => p.pid)
-  const match = (home: string): OwnTranscript | null => {
-    const live = readLiveRegistry(home)
-    for (const pid of pids) {
-      const reg = live.find((s) => s.pid === pid)
-      if (!reg) continue
-      const path = reg.transcriptPath ?? findTranscriptById(home, reg.sessionId)
-      if (path)
-        return {
-          sessionId: reg.sessionId,
-          path,
-          home,
-          how: `calling engine pid ${pid} is live session ${reg.sessionId} (${home}/sessions)`,
-        }
+  /** The nearest live session in `inHomes` among the first `before` processes of the chain. */
+  const nearest = (
+    inHomes: string[],
+    before: number,
+  ): { at: number; transcript: OwnTranscript } | null => {
+    const registries = inHomes.map((home) => ({ home, live: readLiveRegistry(home) }))
+    for (let at = 0; at < before; at++) {
+      for (const { home, live } of registries) {
+        const reg = live.find((s) => s.pid === pids[at])
+        if (!reg) continue
+        const path = reg.transcriptPath ?? findTranscriptById(home, reg.sessionId)
+        if (path)
+          return {
+            at,
+            transcript: {
+              sessionId: reg.sessionId,
+              path,
+              home,
+              how: `calling engine pid ${pids[at]} is live session ${reg.sessionId} (${home}/sessions)`,
+            },
+          }
+      }
     }
     return null
   }
-  for (const home of homes) {
-    const hit = match(home)
-    if (hit) return hit
-  }
-  for (const home of await moreHomes()) {
-    const hit = match(home)
-    if (hit) return hit
-  }
+  // A chat on a CLI instance that a default-home session started (a desk app launched from a chat)
+  // is still the caller: the farther session is only its ancestor.
+  const own = nearest(homes, pids.length)
+  const nearer = own?.at === 0 ? null : nearest(await moreHomes(), own?.at ?? pids.length)
+  const hit = nearer ?? own
+  if (hit) return hit.transcript
   throw new Error(
     "could not tell which Claude Code session is calling: no live session's engine is in the " +
       `calling process chain (${pids.length} processes walked). Pass session_id - your own ` +

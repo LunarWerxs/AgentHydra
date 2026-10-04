@@ -328,30 +328,80 @@ describe('resolveOwnTranscript names the Claude home it matched', () => {
   })
 })
 
+// Each case walks the real process chain, one powershell.exe per walk on Windows and two or three
+// walks a case: MEASURED alone 2026-10-04 with 8 GB free, past bun's 5 s default in the full suite.
+// The allowance is chosen, not inherited.
+const PROCESS_WALK_TEST_MS = 30_000
+
 describe('a chat registered under a CLI instance is found as the caller', () => {
   // a desktop app that runs chats through the Agent SDK on a CLI instance: the engine's registry is in that
   // instance's config dir, which the caller's own detection does not name, so its workers had no origin.
-  test('callerHomes includes every CLI instance, and the pid walk matches there', async () => {
-    const { createCliInstance, listCliInstances } = await import('../src/core/cli-instances')
-    const { callerHomes } = await import('../src/mcp-self')
-    const made = createCliInstance('origin-desk-chat')
-    expect(made.ok).toBe(true)
-    const dir = listCliInstances().find((i) => i.name === 'origin-desk-chat')!.configDir
-    const sid = '12345678-bbbb-4ccc-8ddd-1234567890ab'
-    mkdirSync(join(dir, 'sessions'), { recursive: true })
-    mkdirSync(join(dir, 'projects', 'p'), { recursive: true })
-    writeFileSync(join(dir, 'projects', 'p', `${sid}.jsonl`), '')
-    writeFileSync(
-      join(dir, 'sessions', `${process.pid}.json`),
-      JSON.stringify({ pid: process.pid, sessionId: sid, cwd: CWD }),
-    )
+  test(
+    'callerHomes includes every CLI instance, and the pid walk matches there',
+    async () => {
+      const { createCliInstance, listCliInstances } = await import('../src/core/cli-instances')
+      const { callerHomes } = await import('../src/mcp-self')
+      const made = createCliInstance('origin-desk-chat')
+      expect(made.ok).toBe(true)
+      const dir = listCliInstances().find((i) => i.name === 'origin-desk-chat')!.configDir
+      const sid = '12345678-bbbb-4ccc-8ddd-1234567890ab'
+      mkdirSync(join(dir, 'sessions'), { recursive: true })
+      mkdirSync(join(dir, 'projects', 'p'), { recursive: true })
+      writeFileSync(join(dir, 'projects', 'p', `${sid}.jsonl`), '')
+      writeFileSync(
+        join(dir, 'sessions', `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: sid, cwd: CWD }),
+      )
 
-    expect(await callerHomes(process.pid)).toContain(dir)
-    const t = await resolveOwnTranscript({
-      callerPid: process.pid,
-      extraHomes: () => callerHomes(process.pid),
-    })
-    expect(t.sessionId).toBe(sid)
-    expect(t.home).toBe(dir)
-  })
+      expect(await callerHomes(process.pid)).toContain(dir)
+      const t = await resolveOwnTranscript({
+        callerPid: process.pid,
+        extraHomes: () => callerHomes(process.pid),
+      })
+      expect(t.sessionId).toBe(sid)
+      expect(t.home).toBe(dir)
+    },
+    PROCESS_WALK_TEST_MS,
+  )
+
+  // The default home's registry used to be searched to the end of the chain before any instance's,
+  // so a chat that a default-home session started (a desk app launched from a chat) was reported as
+  // that session. Stdio here: no caller pid, so this process's parents are walked and
+  // CLAUDE_CONFIG_DIR is the default home.
+  test(
+    'the nearest engine is the caller, whichever home registered it',
+    async () => {
+      const { processAncestry } = await import('../src/core/process')
+      const chain = (await processAncestry(process.pid)) ?? []
+      expect(chain.length).toBeGreaterThanOrEqual(2)
+      const register = (home: string, pid: number, sid: string) => {
+        mkdirSync(join(home, 'sessions'), { recursive: true })
+        mkdirSync(join(home, 'projects', 'p'), { recursive: true })
+        writeFileSync(join(home, 'projects', 'p', `${sid}.jsonl`), '')
+        writeFileSync(
+          join(home, 'sessions', `${pid}.json`),
+          JSON.stringify({ pid, sessionId: sid, cwd: CWD }),
+        )
+      }
+      const instance = join(scratch, 'nearest-instance')
+      const defaultHome = join(scratch, 'nearest-default')
+      const nearSid = '12345678-cccc-4ddd-8eee-1234567890ab'
+      register(instance, chain[0]!.pid, nearSid)
+      register(defaultHome, chain[1]!.pid, '12345678-dddd-4eee-8fff-1234567890ab')
+      const before = process.env.CLAUDE_CONFIG_DIR
+      process.env.CLAUDE_CONFIG_DIR = defaultHome
+      try {
+        const t = await resolveOwnTranscript({
+          callerPid: null,
+          extraHomes: async () => [instance],
+        })
+        expect(t.sessionId).toBe(nearSid)
+        expect(t.home).toBe(instance)
+      } finally {
+        if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR
+        else process.env.CLAUDE_CONFIG_DIR = before
+      }
+    },
+    PROCESS_WALK_TEST_MS,
+  )
 })
