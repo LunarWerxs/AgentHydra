@@ -2,11 +2,10 @@
 // The one instance row: every table's rows (Claude desktop, Claude CLI, Codex, DeepSeek) are this
 // component, drawing the cells their table's column list names (lib/instance-table.ts) from one
 // InstanceRowModel. What differs per kind comes in as slots: `name-extra` (icons after the name),
-// `account-extra`, `primary` (the action buttons) and `menu` (the items under the ⋯ menu's header).
+// `account-extra` (beside the account line under the name), `primary` (the action buttons) and `menu` (the items under the ⋯ menu's header).
 import { EllipsisVertical } from '@lucide/vue'
 import { computed, ref } from 'vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
-import InstanceAccountBadge from '@/components/InstanceAccountBadge.vue'
 import InstanceGlyph from '@/components/InstanceGlyph.vue'
 import InstanceMenuHeader from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
@@ -22,7 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { TableCell, TableRow } from '@/components/ui/table'
 import { useUsageMode } from '@/composables/useUsageMode'
-import type { InstanceColumn, InstanceRowModel } from '@/lib/instance-table'
+import { accountLine, type InstanceColumn, type InstanceRowModel } from '@/lib/instance-table'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import {
   resetLabel,
@@ -49,6 +48,7 @@ function noteClip(e: PointerEvent): void {
   clipped.value = el.scrollWidth > el.clientWidth
 }
 const nameTooltip = computed(() => props.row.name.tooltip(clipped.value))
+const account = computed(() => accountLine(props.row.account, props.row.name.shown))
 
 // One number per window drives the bar's length; the WEEKLY one also drives its colour, and the
 // 5-hour bar is drawn `neutral` (see UsageBar's UsageBarVariant).
@@ -126,20 +126,12 @@ function onContextMenu(e: MouseEvent): void {
           }}</Badge>
           <slot name="name-extra" />
         </div>
-      </TableCell>
-
-      <TableCell v-else-if="col.key === 'account'">
-        <div class="flex items-center gap-1">
-          <span v-if="row.account.empty" class="text-xs text-muted-foreground">{{
-            row.account.empty
-          }}</span>
-          <InstanceAccountBadge
-            v-else
-            :email="row.account.email"
-            :profile="row.account.profile"
-            :fallback="row.account.fallback"
-            :variant="row.account.variant"
-          />
+        <!-- The signed-in account, under the name (it was its own column). -->
+        <div
+          v-if="account || $slots['account-extra']"
+          class="mt-0.5 flex min-w-0 items-center gap-1 text-2xs font-normal text-muted-foreground"
+        >
+          <span v-if="account" class="truncate" :title="account.title">{{ account.text }}</span>
           <slot name="account-extra" />
         </div>
       </TableCell>
@@ -162,37 +154,52 @@ function onContextMenu(e: MouseEvent): void {
            against a wall. The number stays inside the bar, and the countdown says when it stops
            mattering. A row with no quota (a pay-as-you-go key) says so in a dash's hover. -->
       <TableCell v-else-if="col.key === 'session'">
-        <UsageBar
-          v-if="sessionReset"
-          :fill-pct="sessionRemaining"
-          variant="neutral"
-          :label="sessionReset"
-          :aria-label="$t('instances.resetsIn', { when: sessionReset })"
-        />
-        <span
-          v-else
-          class="text-muted-foreground"
-          :title="
-            snapshot?.sessionLimitUnavailable ? $t('codexInstances.noSessionLimit') : row.noQuota
-          "
-        >{{ snapshot?.sessionLimitUnavailable ? 'N/A' : '—' }}</span>
+        <div v-if="row.usage" class="flex items-center gap-1.5">
+          <UsageBadge
+            scope="session"
+            :snapshot="row.usage.snapshot"
+            :checking="row.usage.checking"
+            :usage-key="row.usage.key"
+            @check="row.usage.onCheck()"
+          />
+          <UsageBar
+            v-if="sessionReset"
+            :fill-pct="sessionRemaining"
+            variant="neutral"
+            :label="sessionReset"
+            :aria-label="$t('instances.resetsIn', { when: sessionReset })"
+          />
+          <span
+            v-else-if="snapshot?.sessionLimitUnavailable"
+            class="text-muted-foreground"
+            :title="$t('codexInstances.noSessionLimit')"
+          >N/A</span>
+        </div>
+        <span v-else class="text-muted-foreground" :title="row.noQuota">—</span>
       </TableCell>
       <TableCell v-else-if="col.key === 'weekly'">
-        <CopyResetDate v-if="weeklyReset" :limit="snapshot?.weekAll">
-          <UsageBar
-            :fill-pct="weeklyRemaining"
-            :variant="waitSeverity(weeklyRemaining)"
-            :label="weeklyReset"
-            :aria-label="$t('instances.resetsIn', { when: weeklyReset })"
+        <div v-if="row.usage" class="flex items-center gap-1.5">
+          <UsageBadge
+            :snapshot="row.usage.snapshot"
+            :checking="row.usage.checking"
+            :usage-key="row.usage.key"
+            @check="row.usage.onCheck()"
           />
-        </CopyResetDate>
+          <CopyResetDate v-if="weeklyReset" :limit="snapshot?.weekAll">
+            <UsageBar
+              :fill-pct="weeklyRemaining"
+              :variant="waitSeverity(weeklyRemaining)"
+              :label="weeklyReset"
+              :aria-label="$t('instances.resetsIn', { when: weeklyReset })"
+            />
+          </CopyResetDate>
+        </div>
         <span v-else class="text-muted-foreground" :title="row.noQuota">—</span>
       </TableCell>
 
-      <TableCell v-else-if="col.key === 'usageSession' || col.key === 'usage'">
+      <TableCell v-else-if="col.key === 'usage'">
         <UsageBadge
           v-if="row.usage"
-          :scope="col.key === 'usageSession' ? 'session' : undefined"
           :snapshot="row.usage.snapshot"
           :checking="row.usage.checking"
           :usage-key="row.usage.key"
@@ -211,7 +218,7 @@ function onContextMenu(e: MouseEvent): void {
         <span v-else class="text-xs text-muted-foreground">—</span>
       </TableCell>
 
-      <TableCell v-else-if="col.key === 'lastRunning'">
+      <TableCell v-else-if="col.key === 'lastActive'">
         <span
           v-if="row.lastRunning"
           class="text-xs tabular-nums"

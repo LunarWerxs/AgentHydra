@@ -15,24 +15,14 @@ export default {
   colName: 'Name',
   colNameHint:
     'The label you gave this instance. If you never named it, this falls back to the account it is signed into, and then to its profile folder, so a row can be named after any of the three. Rename it from the ⋯ menu; that only changes the label, never the folder.',
-  colAccount: 'Instance account',
-  // NO literal "@" in this string. vue-i18n reads a bare @ as the start of a linked-message
-  // reference, so "before the @." threw a tokenizer SyntaxError at render time — and because the
-  // throw happened while rendering the header cell, Vue dropped the entire "Instance account"
-  // column header while leaving its body cells in place. Typecheck, Biome, the i18n key gate and
-  // the test suite were all green; only opening the page showed it.
-  colAccountHint:
-    'The Anthropic login this instance is signed into, shown as the first part of its email address. Hover a badge for the full address and the profile display name, if that account has one set.',
   colPid: 'PID',
   colUptime: 'Uptime',
   colMemory: 'Memory',
   colUsage: 'Usage',
-  colUsageSession: 'Usage 5h',
-  // The weekly figure's header when the 5-hour one stands beside it (usage mode).
-  colUsageWeek: 'Usage week',
-  // Usage-mode columns — they replace PID/Uptime/Memory, they don't add to them.
-  colSession: 'Session (5h)',
-  colWeekly: 'Weekly',
+  // Usage-mode columns — they replace PID/Uptime/Memory, they don't add to them. Each is the
+  // window's % chip and its reset bar in one cell.
+  col5h: '5h',
+  colWeek: 'Week',
   resetsIn: 'in {when}',
   // The Weekly cell copies its reset DATE AND TIME on click (the bar shows a countdown, a calendar
   // wants a date and a time).
@@ -42,9 +32,9 @@ export default {
   // time are in the message so they can still be read off the screen and typed.
   toastResetDateCopyFailed: 'Could not reach the clipboard. This limit resets {date}.',
   colPlan: 'Plan',
-  colLastRunning: 'Last running',
-  colLastRunningHint:
-    'When this instance was last open on this PC, however it was started. "Now" while it runs; a dash means it has not been seen running on this machine yet.',
+  colLastActive: 'Last active',
+  colLastActiveHint:
+    'When this instance was last used on this PC. Desktop: last seen running ("Now" while it runs). CLI: the newest prompt or keepalive nudge on that login. A dash means none is known yet.',
   lastRunningNow: 'Now',
   colActions: 'Actions',
   running: 'Running',

@@ -38,7 +38,6 @@ export function quotaSortColumns<Row>(
         return snap ? (bindingWeeklyPct(snap) ?? undefined) : undefined
       },
     },
-    { key: 'usageSession', accessor: (r) => usageOf(r)?.session?.pct ?? undefined },
     { key: 'plan', accessor: planOf },
   ]
 }

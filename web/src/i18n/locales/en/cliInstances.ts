@@ -36,7 +36,6 @@ export default {
   tokensWindowTotalHint: 'All time on this PC',
   loggedIn: 'Logged in',
   loggedOut: 'Not logged in',
-  noAccount: 'No account',
   // The heading's count while the usage filter sets rows aside: "3 of 5", not a bare "3".
   countOfTotal: '{shown} of {total}',
   // The chip beside a linked login's name: which desktop row it is the same account as.

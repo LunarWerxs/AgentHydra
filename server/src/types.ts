@@ -1382,6 +1382,9 @@ export interface CliInstance {
   /** Claude sessions running on this account now (its live registry, CliMayte workers included). Set by
    *  GET /api/cli-instances only; absent elsewhere. */
   liveSessions?: number
+  /** When this login was last used on this PC (ms): its newest prompt or keepalive nudge. Set by GET
+   *  /api/cli-instances only; null when neither is known. */
+  lastActiveAt?: number | null
   /** What the account signed in here now has run on this PC (core/account-tokens.ts). Set by GET
    *  /api/cli-instances only; null when signed out, and until the first sweep after a daemon start. */
   tokens?: AccountTokens | null

@@ -1,3 +1,5 @@
+import { statSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Context } from 'hono'
 import { climayteLimitWalls, climayteLiveReadings } from '../climayte'
 import { accountTokens, cliAccountUuid, resetsOf } from '../core/account-tokens'
@@ -109,6 +111,14 @@ function resolveAccountParam(param: string): { id: string; label: string } | nul
       )
       .get(param) ?? null
   )
+}
+
+function historyMtimeMs(configDir: string): number {
+  try {
+    return statSync(join(configDir, 'history.jsonl')).mtimeMs
+  } catch {
+    return 0
+  }
 }
 
 const wantsRefresh = (c: Context): boolean => {
@@ -443,6 +453,9 @@ app.get('/api/cli-instances', (c) => {
         ...i,
         lastNudge: nudges[i.id] ?? null,
         liveSessions: readLiveRegistry(i.configDir).length,
+        // The last prompt typed on this login (the CLI appends to history.jsonl) or the last
+        // keepalive nudge, whichever is newer: one stat, no transcript walk.
+        lastActiveAt: Math.max(historyMtimeMs(i.configDir), nudges[i.id]?.at ?? 0) || null,
         // The account signed in here now, not this folder: a re-login shows the new account's.
         tokens: accountTokens(cliAccountUuid(i.configDir, i.loggedIn), resetsOf(lastUsageCheck)),
         lastUsageCheck,

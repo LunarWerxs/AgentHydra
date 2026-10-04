@@ -214,11 +214,6 @@ const { visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
         `${desktopEnabled.value && instance.isDesktopRunning ? '0' : '1'}:${cliEnabled.value && instance.loggedIn ? '0' : '1'}`,
     },
     { key: 'name', accessor: (instance: CodexInstance) => instance.name },
-    {
-      key: 'account',
-      accessor: (instance: CodexInstance) =>
-        instance.account?.email ?? instance.account?.name ?? undefined,
-    },
     { key: 'pid', accessor: (instance: CodexInstance) => instance.desktopPid ?? undefined },
     ...quotaSortColumns(
       usageFor,

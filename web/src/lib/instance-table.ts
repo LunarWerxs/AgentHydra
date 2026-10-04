@@ -18,17 +18,15 @@ export type InstanceTableKind = 'desktop' | 'cli'
 export type InstanceColumnKey =
   | 'status'
   | 'name'
-  | 'account'
   | 'configDir'
   | 'pid'
   | 'uptime'
   | 'memory'
   | 'session'
   | 'weekly'
-  | 'usageSession'
   | 'usage'
   | 'plan'
-  | 'lastRunning'
+  | 'lastActive'
   | 'tokens'
   | 'actions'
 
@@ -53,8 +51,6 @@ export interface InstanceColumn {
 
 interface ColumnDef extends Omit<InstanceColumn, 'label'> {
   label: string
-  /** Header text in usage (quota) mode, when it differs. */
-  quotaLabel?: string
   /** Which tables carry the column; every table when omitted. */
   kinds?: InstanceTableKind[]
   /** Only in process (default) or quota (usage) mode; both when omitted. */
@@ -92,14 +88,6 @@ const COLUMNS: ColumnDef[] = [
     skeleton: 'h-4 w-28',
   },
   {
-    key: 'account',
-    label: 'instances.colAccount',
-    hint: 'instances.colAccountHint',
-    sortable: true,
-    headClass: 'whitespace-normal',
-    skeleton: 'h-5 w-20',
-  },
-  {
     key: 'configDir',
     label: 'cliInstances.colConfigDir',
     sortable: true,
@@ -131,44 +119,35 @@ const COLUMNS: ColumnDef[] = [
     mode: 'process',
     skeleton: 'h-3 w-14',
   },
+  // Each quota window is ONE cell: the % chip (the colour and the popover) and the reset bar.
   {
     key: 'session',
-    label: 'instances.colSession',
+    label: 'instances.col5h',
     sortable: true,
     mode: 'quota',
-    skeleton: 'h-8 w-16',
+    skeleton: 'h-5 w-32',
   },
   {
     key: 'weekly',
-    label: 'instances.colWeekly',
+    label: 'instances.colWeek',
     sortable: true,
     mode: 'quota',
-    skeleton: 'h-8 w-16',
+    skeleton: 'h-5 w-32',
   },
-  {
-    key: 'usageSession',
-    label: 'instances.colUsageSession',
-    sortable: true,
-    headClass: 'whitespace-normal',
-    mode: 'quota',
-    skeleton: 'h-5 w-14',
-  },
+  // Process mode keeps the one weekly % chip.
   {
     key: 'usage',
     label: 'instances.colUsage',
-    quotaLabel: 'instances.colUsageWeek',
     sortable: true,
-    headClass: 'whitespace-normal',
+    mode: 'process',
     skeleton: 'h-5 w-14',
   },
   { key: 'plan', label: 'instances.colPlan', sortable: true, skeleton: 'h-5 w-14' },
   {
-    key: 'lastRunning',
-    label: 'instances.colLastRunning',
-    hint: 'instances.colLastRunningHint',
+    key: 'lastActive',
+    label: 'instances.colLastActive',
+    hint: 'instances.colLastActiveHint',
     sortable: true,
-    headClass: 'whitespace-normal',
-    kinds: ['desktop'],
     skeleton: 'h-3 w-14',
   },
   // What the account has run, from its own transcripts on this PC. The window switch and the
@@ -190,17 +169,31 @@ const COLUMNS: ColumnDef[] = [
 /** The columns one table draws, in order, for the tab's column mode. */
 export function instanceColumns(
   kind: InstanceTableKind,
-  opts: { usageMode: boolean; account?: boolean },
+  opts: { usageMode: boolean },
 ): InstanceColumn[] {
   return COLUMNS.filter(
     (c) =>
-      (!c.kinds || c.kinds.includes(kind)) &&
-      (!c.mode || (c.mode === 'quota') === opts.usageMode) &&
-      (c.key !== 'account' || opts.account !== false),
-  ).map(({ quotaLabel, kinds: _k, mode: _m, ...c }) => ({
-    ...c,
-    label: opts.usageMode && quotaLabel ? quotaLabel : c.label,
-  }))
+      (!c.kinds || c.kinds.includes(kind)) && (!c.mode || (c.mode === 'quota') === opts.usageMode),
+  ).map(({ kinds: _k, mode: _m, ...c }) => c)
+}
+
+/** The Name cell's second line: the signed-in account, as the email handle (the address is the hover). */
+export function accountLine(
+  account: InstanceRowModel['account'],
+  name: string,
+): { text: string; title?: string } | null {
+  const email = account.email?.trim() || null
+  const text = email?.split('@')[0]?.trim() || account.fallback?.trim() || account.empty || null
+  // A CLI row is named after its account: say it once.
+  if (!text || text === name.trim() || (email && email === name.trim())) return null
+  return { text, title: email ?? undefined }
+}
+
+/** A CLI login is named "<email> (<plan>)" by quick add; the plan has its own column. */
+export function withoutPlanSuffix(name: string, plan: string | null | undefined): string {
+  const t = name.trim()
+  const suffix = plan ? ` (${plan})`.toLowerCase() : ''
+  return suffix && t.toLowerCase().endsWith(suffix) ? t.slice(0, -suffix.length).trimEnd() : t
 }
 
 export interface InstanceNameTooltip {
@@ -263,6 +256,7 @@ export interface InstanceRowModel {
   }
   noQuota?: string
   plan?: { label: string; plain?: boolean; title?: string } | null
+  /** The Last active cell: "Now" while running, else how long ago. */
   lastRunning?: { label: string; running: boolean; title?: string } | null
   /** The account's tokens for the span the table's switch has chosen; null when not known. */
   tokens?: TokenParts | null

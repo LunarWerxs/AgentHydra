@@ -201,7 +201,6 @@ const { toggleSort, indicatorFor, visibleRows, isDimmed } = useInstanceSource({
     // sort by what the cell actually shows (the display label, falling back to folder name)
     { key: 'name', accessor: (i: CMInstance) => displayName(i) },
     // Sort by what the cell actually shows (see accountCellName).
-    { key: 'account', accessor: (i: CMInstance) => accountCellName(i) },
     { key: 'pid', accessor: (i: CMInstance) => i.pid ?? undefined },
     { key: 'uptime', accessor: (i: CMInstance) => (i.isRunning ? i.startTime : null) },
     { key: 'memory', accessor: (i: CMInstance) => i.memoryBytes ?? undefined },
@@ -209,7 +208,7 @@ const { toggleSort, indicatorFor, visibleRows, isDimmed } = useInstanceSource({
     ...quotaSortColumns(usageFor, (i: CMInstance) => planSize(i.account?.planLabel), now),
     // By the instant, not the "3h ago" text, so the order is true across units.
     {
-      key: 'lastRunning',
+      key: 'lastActive',
       accessor: (i: CMInstance) =>
         i.isRunning
           ? Number.MAX_SAFE_INTEGER

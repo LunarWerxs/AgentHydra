@@ -68,7 +68,12 @@ import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
 import { formatUsd, timeAgo } from '@/lib/format'
 import { displayName, shortDisplayName } from '@/lib/instance-appearance'
-import { type InstanceRowModel, instanceColumns, nameTooltipFor } from '@/lib/instance-table'
+import {
+  type InstanceRowModel,
+  instanceColumns,
+  nameTooltipFor,
+  withoutPlanSuffix,
+} from '@/lib/instance-table'
 import { tokenPartsFor } from '@/lib/token-window'
 import { billsPastLimit, usageReasonMessageKey } from '@/lib/usage'
 import { planSize, pooledRemaining } from '@/lib/usage-pool'
@@ -179,8 +184,8 @@ const { toggleSort, indicatorFor, visibleRows, hiddenByFilter, isDimmed } = useI
   columns: [
     { key: 'status', accessor: (i: CliInstance) => i.loggedIn },
     { key: 'name', accessor: (i: CliInstance) => i.name },
-    { key: 'account', accessor: (i: CliInstance) => i.associatedAccountLabel ?? null },
     { key: 'configDir', accessor: (i: CliInstance) => i.configDir },
+    { key: 'lastActive', accessor: (i: CliInstance) => i.lastActiveAt ?? undefined },
     // By plan size (Pro 1, Max 5x 5, Max 20x 20), not the label's spelling; no plan sorts last.
     ...quotaSortColumns(usageFor, (i: CliInstance) => planSize(planFor(i)), now),
     // Biggest first: the question asked of this column is which account ran the most.
@@ -192,12 +197,8 @@ const { toggleSort, indicatorFor, visibleRows, hiddenByFilter, isDimmed } = useI
   ],
 })
 
-/** The Account column names a legacy pasted credential. With none in use (the norm: a login comes
- *  from signing the instance in) every row would read "No account" beside a name that is an email,
- *  so the column is left out and the name gets its width (SUE round, 2026-10-01). */
-const showAccountColumn = computed(() => cliInstances.value.some((i) => !!i.associatedAccountLabel))
-/** How much of a name the row shows: the default beside the Account column, more without it. */
-const nameMax = computed(() => (showAccountColumn.value ? undefined : 36))
+/** How much of a name the row shows (a CLI name is an email address). */
+const nameMax = 36
 /** There ARE CLI instances, the filter just took all of them. */
 const allHiddenByFilter = computed(
   () => cliInstances.value.length > 0 && visibleRows.value.length === 0,
@@ -220,13 +221,19 @@ const headingCount = computed(() =>
         }),
 )
 
-const columns = computed(() =>
-  instanceColumns('cli', { usageMode: usageMode.value, account: showAccountColumn.value }),
-)
+const columns = computed(() => instanceColumns('cli', { usageMode: usageMode.value }))
+
+/** "3h ago", reading the shared clock so the cell ticks. */
+function lastActiveLabel(at: number): string {
+  void now.value
+  return timeAgo(at)
+}
 
 /** What the shared row draws for one CLI login (components/InstanceRow.vue). */
 function rowModel(inst: CliInstance): InstanceRowModel {
   const plan = planFor(inst)
+  // The plan has its own column, so it stays out of the name.
+  const name = withoutPlanSuffix(inst.name, plan)
   return {
     id: inst.id,
     num: inst.num,
@@ -236,22 +243,22 @@ function rowModel(inst: CliInstance): InstanceRowModel {
       title: inst.loggedIn ? t('cliInstances.loggedIn') : t('cliInstances.loggedOut'),
     },
     name: {
-      shown: shortDisplayName(inst.name, nameMax.value),
+      shown: shortDisplayName(name, nameMax),
       tooltip: (clipped) =>
         nameTooltipFor(
-          {
-            full: inst.name,
-            shown: shortDisplayName(inst.name, nameMax.value),
-            folder: inst.configDir,
-          },
+          { full: name, shown: shortDisplayName(name, nameMax), folder: inst.configDir },
           clipped,
         ),
     },
-    account: {
-      fallback: inst.associatedAccountLabel,
-      variant: 'outline',
-      empty: inst.associatedAccountLabel ? undefined : t('cliInstances.noAccount'),
-    },
+    // The name IS the account here; only a legacy pasted credential adds a second line.
+    account: { fallback: inst.associatedAccountLabel },
+    lastRunning: inst.lastActiveAt
+      ? {
+          label: lastActiveLabel(inst.lastActiveAt),
+          running: (inst.liveSessions ?? 0) > 0,
+          title: new Date(inst.lastActiveAt).toLocaleString(),
+        }
+      : null,
     configDir: inst.configDir,
     usage: {
       snapshot: usageFor(inst),
