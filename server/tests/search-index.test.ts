@@ -8,7 +8,7 @@
 // Fixtures are hand-written JSONL in a temp dir: no real session data, no secrets.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import { join } from 'node:path'
 import {
@@ -317,5 +317,25 @@ describe('segmented bodies', () => {
     expect(segs.every((s) => s.length <= SEGMENT_CHARS)).toBe(true)
     expect(segs.some((s) => s.includes('lastonly'))).toBe(true)
     expect(segs.some((s) => s.includes('needle word'))).toBe(true)
+  })
+})
+
+describe('incremental append', () => {
+  test('a grown transcript is extended from its indexed offset; a rewritten one is rebuilt', async () => {
+    const f1 = session('grow', [turn('user', 'alphaonly'), turn('assistant', 'reply')])
+    await refreshSearchIndex([f1])
+    appendFileSync(f1.path, `${turn('assistant', 'betaappended')}\n`)
+    const st = statSync(f1.path)
+    const f2 = { ...f1, mtime_ms: st.mtimeMs, size_bytes: st.size }
+    const r = await refreshSearchIndex([f2])
+    expect(r.indexed).toBe(1)
+    expect(searchIndexCandidates('betaappended')?.has(claudeKey('grow'))).toBe(true)
+    expect(searchIndexCandidates('alphaonly')?.has(claudeKey('grow'))).toBe(true)
+    // Same size or smaller is not an append: the old words must go.
+    writeFileSync(f1.path, `${turn('user', 'gammarewritten')}\n`)
+    const st2 = statSync(f1.path)
+    await refreshSearchIndex([{ ...f1, mtime_ms: st2.mtimeMs + 1, size_bytes: st2.size }])
+    expect(searchIndexCandidates('alphaonly')?.has(claudeKey('grow')) ?? false).toBe(false)
+    expect(searchIndexCandidates('gammarewritten')?.has(claudeKey('grow'))).toBe(true)
   })
 })

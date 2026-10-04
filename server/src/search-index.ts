@@ -36,6 +36,7 @@
 
 import { Database, type Statement } from 'bun:sqlite'
 import { existsSync, rmSync, statSync } from 'node:fs'
+import { open as open_ } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
 import { dedupeKey } from './session-locator'
@@ -48,7 +49,7 @@ let indexPath = join(DATA_DIR, 'search-index.db')
 export const searchIndexPath = (): string => indexPath
 
 /** Bump to force a rebuild when the extraction or schema changes meaning. */
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 /**
  * A session's identity, store included (audit AH-35).
@@ -118,15 +119,24 @@ function open(): Database | null {
     // One file, always: a WAL sidecar would make "just delete search-index.db" a corruption bug.
     db.exec('pragma journal_mode = delete')
     db.exec('pragma synchronous = normal')
+    db.exec('create table if not exists meta (k text primary key, v text not null)')
+    const version = Number(
+      (db.query('select v from meta where k = ?').get('schema') as { v?: string } | null)?.v ?? 0,
+    )
+    // A version bump rebuilds everything, and the doc table's shape is part of it (v4 added the
+    // incremental-update columns), so it is dropped rather than emptied.
+    if (version !== SCHEMA_VERSION) db.exec('drop table if exists doc')
+    // done_bytes: end of the last complete transcript line already indexed; nseg: FTS segments held.
     db.exec(`
-      create table if not exists meta (k text primary key, v text not null);
       create table if not exists doc (
         rowid      integer primary key,
         key        text    not null unique,
         source     text    not null,
         path       text    not null,
         mtime_ms   real    not null,
-        size_bytes integer not null
+        size_bytes integer not null,
+        done_bytes integer not null default 0,
+        nseg       integer not null default 0
       );
     `)
     // contentless_delete=1 is what makes this incremental: a changed transcript can be dropped by
@@ -134,11 +144,7 @@ function open(): Database | null {
     db.exec(
       "create virtual table if not exists conv using fts5(body, tokenize='unicode61', content='', contentless_delete=1)",
     )
-    const version = Number(
-      (db.query('select v from meta where k = ?').get('schema') as { v?: string } | null)?.v ?? 0,
-    )
     if (version !== SCHEMA_VERSION) {
-      db.exec('delete from doc')
       db.exec('delete from conv')
       db.query('insert or replace into meta (k, v) values (?, ?)').run(
         'schema',
@@ -287,6 +293,9 @@ interface StaleFileStatements {
   dropRow: Statement
   insertDoc: Statement
   insertFts: Statement
+  markDone: Statement
+  /** Run plain SQL (begin / commit / rollback) on the index connection. */
+  exec: (sql: string) => void
   /** Delete FTS rows with rowid in [lo, hi). */
   dropFtsRange: Statement
   topFtsRow: Statement
@@ -305,39 +314,138 @@ async function dropSegments(stmts: StaleFileStatements, docRowid: number): Promi
   }
 }
 
+const NL = String.fromCharCode(10)
+const READ_CHUNK = 4 * 1024 * 1024
+/** Past this many segments an appended-to session is rebuilt from scratch instead of growing one
+ *  tiny segment per append (the rowid stride allows 65536). */
+const MAX_APPEND_SEGMENTS = 512
+
+/**
+ * The conversation text of `path` from byte `start`, read in READ_CHUNK pieces and handing the loop
+ * back every ~15 ms. The whole-file `Bun.file().text()` + `split` this replaces held the loop
+ * ~250 ms on a 429 MB transcript (CPU profile: String.prototype.split, then JSON.parse).
+ * `end` is the byte after the last COMPLETE line, so a later call can resume there.
+ */
+async function conversationTextFrom(
+  path: string,
+  start: number,
+): Promise<{ text: string; end: number }> {
+  const fh = await open_(path, 'r')
+  try {
+    const out: string[] = []
+    let pos = start
+    let carry: Buffer = Buffer.alloc(0)
+    let slice = performance.now()
+    const eat = async (region: Buffer) => {
+      for (const line of region.toString('utf8').split(NL)) {
+        pushConversationLine(line, out)
+        if (performance.now() - slice > 15) {
+          await new Promise<void>((r) => setImmediate(r))
+          slice = performance.now()
+        }
+      }
+    }
+    for (;;) {
+      const chunk = Buffer.allocUnsafe(READ_CHUNK)
+      const { bytesRead } = await fh.read(chunk, 0, READ_CHUNK, pos)
+      if (bytesRead === 0) break
+      pos += bytesRead
+      const got = chunk.subarray(0, bytesRead)
+      const buf = carry.length ? Buffer.concat([carry, got]) : got
+      const nl = buf.lastIndexOf(10)
+      if (nl < 0) {
+        carry = Buffer.from(buf)
+        continue
+      }
+      await eat(buf.subarray(0, nl))
+      carry = Buffer.from(buf.subarray(nl + 1))
+    }
+    const end = pos - carry.length
+    // A complete last line with no newline yet: indexed now, re-read next time.
+    if (carry.length) await eat(carry)
+    return { text: out.join(NL), end }
+  } finally {
+    await fh.close()
+  }
+}
+
+/** True when the byte before `offset` is a newline: the indexed prefix still ends a whole line. */
+async function prefixIntact(path: string, offset: number): Promise<boolean> {
+  if (offset <= 0) return false
+  const fh = await open_(path, 'r')
+  try {
+    const b = Buffer.alloc(1)
+    const { bytesRead } = await fh.read(b, 0, 1, offset - 1)
+    return bytesRead === 1 && b[0] === 10
+  } finally {
+    await fh.close()
+  }
+}
+
+type KnownDoc = {
+  rowid: number
+  mtime_ms: number
+  size_bytes: number
+  done_bytes: number
+  nseg: number
+}
+
 /** Index (or reindex) one stale file, split out of refreshSearchIndex so the pass loop reads as
- *  the schedule and this reads as the per-file work. Never throws — an unreadable or
+ *  the schedule and this reads as the per-file work. A session that only grew is extended from its
+ *  last indexed byte as new segments; anything else is rebuilt. Never throws — an unreadable or
  *  unindexable file just stays stale and is retried on the next pass. */
 async function indexOneStaleFile(
   f: IndexableFile,
-  known: Map<string, { rowid: number; mtime_ms: number; size_bytes: number }>,
+  known: Map<string, KnownDoc>,
   stmts: StaleFileStatements,
   result: IndexRefreshResult,
 ): Promise<void> {
   const key = docKey(f)
-  let text: string
-  try {
-    text = await conversationTextAsync(await Bun.file(f.path).text())
-  } catch {
-    return // vanished or unreadable mid-pass; it stays stale and is retried next time
-  }
   const existing = known.get(key)
-  const rowid = existing?.rowid ?? stmts.nextRowId()
+  let inTx = false
   try {
-    if (existing) {
+    const append =
+      existing !== undefined &&
+      f.size_bytes > existing.size_bytes &&
+      existing.nseg > 0 &&
+      existing.nseg < MAX_APPEND_SEGMENTS &&
+      existing.done_bytes <= f.size_bytes &&
+      (await prefixIntact(f.path, existing.done_bytes))
+    const from = append ? existing.done_bytes : 0
+    const { text, end } = await conversationTextFrom(f.path, from)
+    const rowid = existing?.rowid ?? stmts.nextRowId()
+    let first = 0
+    // One transaction per file: every autocommit statement is its own journal fsync, and on Windows
+    // those commits (not the FTS work) were the statements that stalled the loop past 100 ms.
+    stmts.exec('begin')
+    inTx = true
+    if (append) {
+      first = existing.nseg
+    } else if (existing) {
       await dropSegments(stmts, rowid)
       stmts.dropRow.run(rowid)
       result.replaced++
     }
-    stmts.insertDoc.run(rowid, key, f.source, f.path, f.mtime_ms, f.size_bytes)
-    const segments = segmentBody(text)
+    if (!append) stmts.insertDoc.run(rowid, key, f.source, f.path, f.mtime_ms, f.size_bytes)
+    const segments = text ? segmentBody(text) : []
     for (const [n, seg] of segments.entries()) {
-      stmts.insertFts.run(rowid * SEGMENT_STRIDE + n, seg)
+      stmts.insertFts.run(rowid * SEGMENT_STRIDE + first + n, seg)
       if (segments.length > 1) await new Promise<void>((r) => setImmediate(r))
     }
+    stmts.markDone.run(f.mtime_ms, f.size_bytes, end, first + segments.length, rowid)
+    if (append) result.replaced++
+    stmts.exec('commit')
+    inTx = false
     result.indexed++
   } catch {
-    // One unindexable session must not abort the pass.
+    if (inTx) {
+      try {
+        stmts.exec('rollback')
+      } catch {
+        /* nothing open */
+      }
+    }
+    // vanished or unreadable mid-pass, or one unindexable session: it stays stale, retried next time
   }
 }
 
@@ -414,10 +522,10 @@ export async function refreshSearchIndex(
 
   refreshing = true
   try {
-    const known = new Map<string, { rowid: number; mtime_ms: number; size_bytes: number }>()
+    const known = new Map<string, KnownDoc>()
     for (const row of conn
-      .query('select rowid, key, mtime_ms, size_bytes from doc')
-      .all() as Array<{ rowid: number; key: string; mtime_ms: number; size_bytes: number }>)
+      .query('select rowid, key, mtime_ms, size_bytes, done_bytes, nseg from doc')
+      .all() as Array<KnownDoc & { key: string }>)
       known.set(row.key, row)
 
     const wanted = new Set<string>()
@@ -440,12 +548,17 @@ export async function refreshSearchIndex(
       'insert into doc (rowid, key, source, path, mtime_ms, size_bytes) values (?, ?, ?, ?, ?, ?)',
     )
     const insertFts = conn.query('insert into conv (rowid, body) values (?, ?)')
+    const markDone = conn.query(
+      'update doc set mtime_ms = ?, size_bytes = ?, done_bytes = ?, nseg = ? where rowid = ?',
+    )
     const stmts: StaleFileStatements = {
       dropRow,
       dropFtsRange,
       topFtsRow,
       insertDoc,
       insertFts,
+      markDone,
+      exec: (sql) => conn.exec(sql),
       nextRowId,
     }
 
