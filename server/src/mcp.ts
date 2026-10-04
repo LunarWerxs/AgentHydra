@@ -812,6 +812,11 @@ export const TOOLS: McpEngineTool[] = [
                 description:
                   '`auto` (default): refused with `split needed` when it is expected to use more than half of the biggest window it may use. `whole`: run it as it is anyway.',
               },
+              chat: {
+                type: 'boolean',
+                description:
+                  "Default false. true only for one of the OWNER'S OWN interactive chats run headless (a chat front end sends each later message with climayte_send): it launches like his own `claude` in that folder, with no worker brief, his full CLAUDE.md, skills, MCP servers and connectors, and Opus xhigh unless the task names its own (no modelWhy needed; the scorecard never picks for it). Never for a delegated task: the workers a chat dispatches are ordinary.",
+              },
             },
             required: ['prompt', 'cwd'],
           },

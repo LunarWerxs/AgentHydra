@@ -1870,6 +1870,8 @@ function assertRunnable(t: RunTask, i: number): void {
     (typeof t.check !== 'string' || t.check.length > 2000)
   )
     throw new Error(`task ${i + 1}: check must be one shell command (at most 2000 characters)`)
+  if (t.chat !== undefined && typeof t.chat !== 'boolean')
+    throw new Error(`task ${i + 1}: chat must be true or false`)
 }
 
 /** One task's model, effort, kind and priority. Auto unless the task (or its run) names a model or
@@ -1886,6 +1888,7 @@ function runSetting(
 ): RunSetting {
   const kind = climayteKind(t.kind) ?? defaults.kind
   const priority = climaytePriority(t.priority) ?? defaults.priority
+  if (t.chat === true) return chatSetting(t, defaults, kind, priority)
   const autoAsked = isAutoSetting(t.model) || (isBlank(t.model) && defaults.auto)
   const model = autoAsked ? null : (climayteModel(t.model) ?? defaults.model)
   // Haiku runs with no effort level, as on the ladder, whatever the run's default says.
@@ -1909,6 +1912,24 @@ function runSetting(
 
 const isBlank = (v: unknown): boolean => v === undefined || v === null || v === ''
 
+/** A chat task's setting: the model and effort it (or its run) names, else Opus at xhigh. Never the
+ *  scorecard's: a person talks to it, and a chat the scorecard moved to a cheaper setting could not
+ *  hold the conversation it was in (owner, 2026-10-04). A named value needs no `modelWhy` here. */
+function chatSetting(
+  t: RunTask,
+  defaults: RunDefaults,
+  kind: CliMayteKind | null,
+  priority: number,
+): RunSetting {
+  const named = (v: unknown): boolean => !isBlank(v) && !isAutoSetting(v)
+  const model = (named(t.model) ? climayteModel(t.model) : defaults.model) ?? climayteModel('opus')
+  const effort =
+    model === HAIKU
+      ? null
+      : ((named(t.effort) ? climayteEffort(t.effort) : defaults.effort) ?? 'xhigh')
+  return { model, effort, kind, auto: false, reason: 'a chat: Opus xhigh unless named', priority }
+}
+
 /** A queued worker for one task of a run. */
 function newWorker(
   t: RunTask,
@@ -1929,6 +1950,7 @@ function newWorker(
     effort: setting?.effort ?? null,
     kind: setting?.kind ?? null,
     ...(setting?.auto ? { auto: true } : {}),
+    ...(t.chat === true ? { chat: true } : {}),
     ...(t.check?.trim() ? { check: t.check.trim() } : {}),
     ...(size ? { size } : {}),
     priority: setting?.priority ?? 0,
@@ -2065,6 +2087,8 @@ export function climayteRun(input: {
     check?: string
     priority?: number
     size?: string
+    /** One of the owner's own chats, not a delegated task (CliMayteWorker.chat). */
+    chat?: boolean
   }>
   group?: string
   accounts?: string[]
@@ -2256,8 +2280,12 @@ function sizeTasks(
     )
     const n = numbers[i] ?? i + 1
     // A manager's cost is per wake (expectedCost) and it never splits: its wave does the work.
+    // Nor does a chat: a person's message is not a task to cut into pieces.
     const whole =
-      s.kind === 'manage' || sizeOf(t.size, `task ${n}: `) === 'whole' || groupSize === 'whole'
+      s.kind === 'manage' ||
+      t.chat === true ||
+      sizeOf(t.size, `task ${n}: `) === 'whole' ||
+      groupSize === 'whole'
     const title = t.title?.trim() || firstLine(t.prompt, 60)
     if (fit.split && !whole)
       tooBig.push({

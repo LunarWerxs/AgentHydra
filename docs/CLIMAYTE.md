@@ -430,6 +430,37 @@ that folder as `ownerDir`, makes the account folder match:
   that file, so the step holds through retries, moves to another account and compaction with no
   special casing; the 658805b prompt-preamble setting did the same job and was taken back out.
 
+### Chat workers (`chat: true`, owner, 2026-10-04)
+
+A chat front end can run each of the owner's interactive chats as a CliMayte worker (dispatched
+once, then every later message by `/send`). An ordinary worker is framed as a delegated task, and on
+2026-10-04 a chat asked to answer an outside company drafted the email and handed it back because
+its brief said to report, not act. A task with `chat: true` (the task field on `climayteRun`,
+`POST /api/corch/workers` and the `climayte_run` MCP tool; default false) makes a chat worker. The
+flag is on the worker record (`CliMayteWorker.chat`), so it holds through moves, resends and
+revives; workers a chat dispatches with `climayte_run` are ordinary unless they say otherwise.
+
+| | Ordinary worker | Chat worker |
+| --- | --- | --- |
+| Appended prompt | `WORKER_BRIEF` (`--append-system-prompt`) | `CHAT_NOTE`, one line saying it runs headless, then the owner's `~/.claude/CLAUDE.md` unless the CLI's own walk already reads it from the chat's folder (`--append-system-prompt-file <hooks>/<id>.chat.md`) |
+| Account folder's CLAUDE.md (the lean worker profile) | loaded | left out with `claudeMdExcludes` in its `--settings` |
+| Skills | the lean profile's | also every owner skill, command and agent, through `--add-dir <home>` |
+| MCP servers | the owner's less AgentHydra's and magnific; `deniedMcpServers` | all the owner's, AgentHydra's included; no denial |
+| claude.ai connectors and synced skills | off (`ENABLE_CLAUDEAI_MCP_SERVERS=false`, `syncClaudeAiSkills: false`, humanizer off) | on, as in his own `claude` |
+| Prompt cache | 5 minutes | 1 hour (a person's next message is often more than 5 minutes away) |
+| Model and effort | the scorecard's pick unless named with `modelWhy` | Opus xhigh unless the task (or its run) names its own; no `modelWhy` needed; never `auto`, never split by sizing |
+| Hooks | edit claims and the wind-down signal | the same two: edit claims protects files other sessions edit, and the wind-down signal is how a session hands off and moves at a usage limit |
+
+The account folder's CLAUDE.md is shared by every worker on the account, so it is never swapped
+per launch: an ordinary worker's launch is byte for byte what it was. Both mechanisms were checked
+on CLI 2.1.286 (2026-10-04): `claudeMdExcludes` applies to the User memory type, so the account's
+lean file is not loaded, and `--add-dir` loads the added folder's `.claude/skills` with no hook or
+settings from it. Auto-memory stays off for both (the owner's own settings have it off).
+
+Measured 2026-10-04, the first request of a one-line prompt on one account in this repo (Haiku
+tokenizer): ordinary 27,864 tokens, chat 28,844 (+980; 124 tools against 33, 66 skills against 23;
+MCP tools are deferred, so they cost a name each).
+
 ### Scorecard (`server/src/climayte-scorecard.ts`, `5710553`)
 
 Owner, 2026-09-30: "the AI can try a model, and if it works, it gives it a thumbs up ... if it

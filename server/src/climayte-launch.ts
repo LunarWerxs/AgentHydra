@@ -13,7 +13,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import {
   acctLabel,
   changed,
@@ -305,10 +305,12 @@ const WORKER_DENIED_MCP: readonly string[] = [MCP_SERVER_KEY, 'magnific']
  *  another name (2026-10-02). */
 const WORKER_DENIED_MCP_URL = `*://*${MCP_PATH}*`
 
-/** A worker's files here: its settings (writeWorkerSettings) and its MCP servers (writeWorkerMcp). */
-const workerFiles = (id: string): [settings: string, mcp: string] => [
+/** A worker's files here: its settings (writeWorkerSettings), its MCP servers (writeWorkerMcp) and,
+ *  for a chat, its appended prompt (writeChatPrompt). */
+const workerFiles = (id: string): [settings: string, mcp: string, chatPrompt: string] => [
   join(HOOKS, `${id}.json`),
   join(HOOKS, `${id}.mcp.json`),
+  join(HOOKS, `${id}.chat.md`),
 ]
 
 /** Remove a worker's settings and MCP files: once its CLI has ended (the next launch writes them
@@ -328,7 +330,7 @@ export function workerFileIds(): string[] {
   }
   const ids = new Set<string>()
   for (const name of names) {
-    const id = /^(w-[0-9a-f]+)(?:\.mcp)?\.json$/.exec(name)?.[1]
+    const id = /^(w-[0-9a-f]+)(?:(?:\.mcp)?\.json|\.chat\.md)$/.exec(name)?.[1]
     if (id) ids.add(id)
   }
   return [...ids]
@@ -343,9 +345,9 @@ export function workerFileIds(): string[] {
  *  For `manage` kind workers, also includes the manager endpoint for wave control. */
 function writeWorkerMcp(w: CliMayteWorker): string | null {
   const file = workerFiles(w.id)[1]
-  const servers = ownerClaudeDir
-    ? ownerMcpServers(ownerClaudeDir, { names: WORKER_DENIED_MCP, paths: [MCP_PATH] })
-    : {}
+  // A chat has the owner's servers with none left out: his own `claude` has AgentHydra's too.
+  const deny = w.chat ? { names: [], paths: [] } : { names: WORKER_DENIED_MCP, paths: [MCP_PATH] }
+  const servers = ownerClaudeDir ? ownerMcpServers(ownerClaudeDir, deny) : {}
 
   // For managers, add the manager endpoint (piece 4). The URL uses the manager's own worker ID.
   // The daemon listens on 127.0.0.1; the id is not a secret (piece 4, docs/CLIMAYTE.md).
@@ -381,7 +383,7 @@ function writeWorkerMcp(w: CliMayteWorker): string | null {
  *  for this run only and moves nothing in the account's folder (the CLI's own settings schema,
  *  2.1.286). The owner's skills, synced into the account by syncOwnerClaude, still load.
  *  Returns the settings file, with any signal left from an earlier attempt removed. */
-function writeWorkerSettings(w: CliMayteWorker): string {
+function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
   mkdirSync(HOOKS, { recursive: true })
   const hookFile = workerFiles(w.id)[0]
   // The owner's edit_claims hook, when installed: before an edit it records the file under this
@@ -392,14 +394,7 @@ function writeWorkerSettings(w: CliMayteWorker): string {
   writeFileSync(
     hookFile,
     JSON.stringify({
-      deniedMcpServers: [
-        ...WORKER_DENIED_MCP.map((serverName) => ({ serverName })),
-        { serverUrl: WORKER_DENIED_MCP_URL },
-      ],
-      syncClaudeAiSkills: false,
-      // One account's claude.ai-synced humanizer plugin still listed `humanizer:humanizer` in every
-      // request after the line above (3 of 14 starts, 2026-10-02); no worker ever invoked it.
-      enabledPlugins: { 'humanizer@synced': false },
+      ...(w.chat ? chatSettings(acct) : WORKER_ONLY_SETTINGS),
       // The signal hook is written in its shell form here; the worker's runner answers it over http
       // instead, before the CLI starts (climayte-signal.ts, RunnerSpec.signal).
       hooks: workerHooks({
@@ -412,7 +407,82 @@ function writeWorkerSettings(w: CliMayteWorker): string {
   return hookFile
 }
 
-function cliArgv(
+/** What only an ordinary worker's settings carry: no denied MCP servers, no claude.ai skills, no
+ *  humanizer plugin (writeWorkerSettings). A chat has the owner's own (chatSettings). */
+const WORKER_ONLY_SETTINGS = {
+  deniedMcpServers: [
+    ...WORKER_DENIED_MCP.map((serverName) => ({ serverName })),
+    { serverUrl: WORKER_DENIED_MCP_URL },
+  ],
+  syncClaudeAiSkills: false,
+  // One account's claude.ai-synced humanizer plugin still listed `humanizer:humanizer` in every
+  // request after the line above (3 of 14 starts, 2026-10-02); no worker ever invoked it.
+  enabledPlugins: { 'humanizer@synced': false },
+}
+
+/** A chat's settings: the account folder's CLAUDE.md left out. syncOwnerClaude fills that file with
+ *  the lean worker profile for every worker on the account, so it is never swapped per launch; a
+ *  chat skips it (`claudeMdExcludes` applies to the User memory type, CLI 2.1.286, measured
+ *  2026-10-04) and gets the owner's own CLAUDE.md instead (chatPromptText). */
+function chatSettings(acct: CliMayteAccount): { claudeMdExcludes: string[] } {
+  return { claudeMdExcludes: [slashed(join(acct.configDir, 'CLAUDE.md'))] }
+}
+
+/** The one line a chat is told on top of the CLI's own prompt: it runs headless. */
+export const CHAT_NOTE =
+  'This session runs headless through AgentHydra: no one sees a terminal, so nothing that waits for an interactive prompt or a permission dialog can be answered.'
+
+/** Whether the CLI's own CLAUDE.md walk, which reads `.claude/CLAUDE.md` in every folder above the
+ *  working folder, already reaches the owner's (`~/.claude/CLAUDE.md`) from `cwd`. */
+function walkReachesOwnerMd(cwd: string, ownerDir: string): boolean {
+  if (basename(ownerDir) !== '.claude') return false
+  const rel = relative(dirname(ownerDir), cwd)
+  return !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+/** A chat's appended prompt: CHAT_NOTE, then the owner's global CLAUDE.md unless the CLI's own
+ *  walk reads it already from the chat's folder (so it is never in a request twice). */
+function chatPromptText(w: CliMayteWorker): string {
+  if (!ownerClaudeDir || walkReachesOwnerMd(w.cwd, ownerClaudeDir)) return CHAT_NOTE
+  const md = join(ownerClaudeDir, 'CLAUDE.md')
+  let owner = ''
+  try {
+    owner = readFileSync(md, 'utf8').trim()
+  } catch {
+    return CHAT_NOTE
+  }
+  return owner
+    ? `${CHAT_NOTE}\n\nContents of ${slashed(md)} (the owner's global instructions):\n\n${owner}`
+    : CHAT_NOTE
+}
+
+/** Write a chat's appended prompt (`--append-system-prompt-file`): a file, so the owner's CLAUDE.md
+ *  never meets the Windows command line's length limit. */
+function writeChatPrompt(w: CliMayteWorker): string {
+  const file = workerFiles(w.id)[2]
+  mkdirSync(HOOKS, { recursive: true })
+  writeFileSync(file, chatPromptText(w))
+  return file
+}
+
+/** The owner's home, whose `.claude` holds his skills, commands and agents: a chat is given it with
+ *  `--add-dir`, which loads them beside the account's lean set (measured 2026-10-04: 38 of the
+ *  owner's skills more, and no hook or settings from that folder). Null when the owner dir is not
+ *  a `.claude` folder (tests). */
+function ownerHome(): string | null {
+  return ownerClaudeDir && basename(ownerClaudeDir) === '.claude' ? dirname(ownerClaudeDir) : null
+}
+
+/** What tells the CLI who it is: an ordinary worker's WORKER_BRIEF, or a chat's prompt file and the
+ *  owner's skills. */
+function briefArgs(w: CliMayteWorker): string[] {
+  if (!w.chat) return ['--append-system-prompt', WORKER_BRIEF]
+  const home = ownerHome()
+  // --add-dir is variadic: the option after it ends its list.
+  return [...(home ? ['--add-dir', home] : []), '--append-system-prompt-file', writeChatPrompt(w)]
+}
+
+export function cliArgv(
   w: CliMayteWorker,
   sessionId: string,
   resume: boolean,
@@ -433,10 +503,12 @@ function cliArgv(
     ...(mcpFile ? ['--mcp-config', mcpFile] : []),
     '--settings',
     hookFile,
-    '--append-system-prompt',
-    WORKER_BRIEF,
+    ...briefArgs(w),
   ]
 }
+
+/** The prompt cache an attempt runs with: 1 hour for a manager and a chat, else 5 minutes. */
+const cacheTtl = (w: CliMayteWorker): '1h' | '5m' => (w.kind === 'manage' || w.chat ? '1h' : '5m')
 
 /** Start the CLI under a runner (climayte-runner.ts), launched outside the daemon: a daemon restart
  *  leaves the CLI running and the next daemon reads it on from its files (owner, 2026-09-30).
@@ -481,10 +553,13 @@ function startRunner(
         // every login shell runs aliases.sh's seven `$(type -p X.exe)` subshells for winpty
         // aliases; a worker runs its Bash commands as login shells whenever its 10 s shell
         // snapshot timed out (94% of them on 2026-10-04). Measured: 1.8 s -> 1.1 s a login shell.
+        // A chat keeps the claude.ai connectors (his own `claude` has them: a chat asked to answer
+        // a company sends the mail) and the 1-hour cache, since a person's next message is often
+        // more than 5 minutes away.
         env: {
           ...scrubbedEnv(acct.configDir, w.id),
-          ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
-          CLAUDE_CODE_PROMPT_CACHE_TTL: w.kind === 'manage' ? '1h' : '5m',
+          ...(w.chat ? {} : { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
+          CLAUDE_CODE_PROMPT_CACHE_TTL: cacheTtl(w),
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
           TERM: 'dumb',
         },
@@ -614,7 +689,7 @@ export function launch(
   writeFileSync(promptFile, text)
   const log = join(LOGS, `${w.id}-${n}.jsonl`)
   const errLog = join(LOGS, `${w.id}-${n}.err.log`)
-  const hookFile = writeWorkerSettings(w)
+  const hookFile = writeWorkerSettings(w, acct)
   const argv = cliArgv(w, sessionId, resume, hookFile, writeWorkerMcp(w))
   const runner = startRunner(w, acct, argv, { promptFile, log, errLog })
   if (!runner) return
@@ -629,7 +704,7 @@ export function launch(
     notice: null,
     resumed: resume,
     sessionId,
-    cacheTtl: w.kind === 'manage' ? '1h' : '5m',
+    cacheTtl: cacheTtl(w),
     startPct: acct.sessionPct,
     daemonPid: process.pid,
     runner,

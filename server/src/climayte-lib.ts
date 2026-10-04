@@ -218,6 +218,10 @@ export interface CliMayteWorker {
   kind?: string | null
   /** CliMayte chose `model` and `effort` from the scorecard (dispatched with model `auto`). */
   auto?: boolean
+  /** One of the owner's own interactive chats, run headless (docs/CLIMAYTE.md, "Chat workers"):
+   *  launched like his own `claude` in the folder, with no worker brief, his full instructions and
+   *  skills, and Opus xhigh unless the task names its own. Absent: an ordinary delegated worker. */
+  chat?: boolean
   /** Each judgement of its result, oldest first (climayteVerdict). */
   verdicts?: CliMayteVerdict[]
   /** A shell command that proves the task is done (exit 0). CliMayte runs it in `cwd` after the worker
