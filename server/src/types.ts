@@ -697,6 +697,9 @@ export interface TailEvent {
   timestamp: string | null
   /** A tool_result the transcript itself marked failed (Claude's `is_error`). Absent otherwise. */
   error?: boolean
+  /** A Claude tool_use's own id, which names the subagent run an Agent call started (see
+   *  tailSubagent in server/src/transcript.ts). Absent for other kinds and other tools. */
+  tool_use_id?: string
   /** A message neither side wrote, which the viewer shows as a divider rather than a turn:
    *  `compact` is the summary the CLI writes as a USER message after compacting the context,
    *  `error` the API's own notice (a usage limit, an overload) that explains why a session stopped. */

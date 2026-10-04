@@ -22,9 +22,10 @@ import {
 } from '@lucide/vue'
 import { useNow } from '@vueuse/core'
 import type { Component } from 'vue'
-import { computed, watch } from 'vue'
+import { computed, defineAsyncComponent, inject, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
+import { OPEN_TRANSCRIPT } from '@/composables/openTranscript'
 import type { TranscriptTurn } from '@/composables/useTranscriptDisplay'
 import {
   formatElapsed,
@@ -43,6 +44,9 @@ const props = defineProps<{
   live: boolean
   isStepOpen: (step: WorkStep<TranscriptTurn>) => boolean
   copiedIdx: number | null
+  /** Drawn inside a subagent's run: carries no data-turn marks, which belong to the open
+   *  session's own turns (the find bar and the search landing look them up). */
+  nested?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -52,6 +56,18 @@ const emit = defineEmits<{
 }>()
 
 const { t, locale } = useI18n()
+
+// Loaded on first use, and it renders turns that may hold work rows of their own (this component),
+// so the import is lazy rather than a cycle at module load.
+const SubagentTranscript = defineAsyncComponent(() => import('@/components/SubagentTranscript.vue'))
+const openTranscript = inject(OPEN_TRANSCRIPT, null)
+
+/** The call id whose subagent run an Agent step can open into. Claude keeps those runs; the other
+ *  tools' agents leave nothing to open. */
+function agentRunOf(step: WorkStep<TranscriptTurn>): string | null {
+  if (step.category !== 'agent' || openTranscript?.value?.source !== 'claude') return null
+  return step.call?.tool_use_id ?? null
+}
 
 const ICONS: Record<ToolCategory, Component> = {
   read: FileText,
@@ -151,7 +167,7 @@ const showElapsed = computed(() => !!elapsed.value && (props.live || !props.grou
 </script>
 
 <template>
-  <div class="min-w-0" :data-turns="group.indices.join(' ')">
+  <div class="min-w-0" :data-turns="nested ? undefined : group.indices.join(' ')">
     <button
       type="button"
       class="group/work flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 text-start text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -180,7 +196,7 @@ const showElapsed = computed(() => !!elapsed.value && (props.live || !props.grou
         <li
           v-for="step in group.steps"
           :key="step.key"
-          :data-turn="step.index"
+          :data-turn="nested ? undefined : step.index"
           class="group/step min-w-0"
         >
           <button
@@ -258,6 +274,20 @@ const showElapsed = computed(() => !!elapsed.value && (props.live || !props.grou
                   v-html="step.call.html"
                 ></pre>
               </section>
+              <!-- an Agent call: the run it started, nested here the way the desktop app shows it -->
+              <section
+                v-if="agentRunOf(step)"
+                class="rounded-md border border-border/60 bg-background/40"
+              >
+                <header
+                  class="px-2.5 pt-1 text-2xs font-semibold tracking-wide text-muted-foreground uppercase"
+                >
+                  {{ $t('sessions.work.agentRun') }}
+                </header>
+                <div class="px-2.5 pt-1 pb-2">
+                  <SubagentTranscript :tool-use-id="agentRunOf(step) ?? ''" :live="live" />
+                </div>
+              </section>
               <section
                 class="relative rounded-md border bg-muted/30"
                 :class="step.failed ? 'border-destructive/40' : 'border-border/60'"
@@ -282,7 +312,7 @@ const showElapsed = computed(() => !!elapsed.value && (props.live || !props.grou
                 <!-- eslint-disable-next-line vue/no-v-html -- escaped, see the note above -->
                 <pre
                   v-if="step.result"
-                  :data-turn="step.resultIndex ?? undefined"
+                  :data-turn="nested ? undefined : (step.resultIndex ?? undefined)"
                   class="scroll-slim max-h-72 overflow-auto px-2.5 pb-2 font-mono text-2xs whitespace-pre-wrap wrap-break-word"
                   v-html="step.result.html"
                 ></pre>

@@ -42,7 +42,7 @@ import {
   Wrench,
   X,
 } from '@lucide/vue'
-import { type Component, type ComponentPublicInstance, computed, ref, watch } from 'vue'
+import { type Component, type ComponentPublicInstance, computed, provide, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MultiSelectSubmenu from '@/components/MultiSelectSubmenu.vue'
 import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
@@ -91,6 +91,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import { OPEN_TRANSCRIPT } from '@/composables/openTranscript'
 import { useBodySearch } from '@/composables/useBodySearch'
 import { useData } from '@/composables/useData'
 import { useDoneMarks } from '@/composables/useDoneMarks'
@@ -201,6 +202,21 @@ const {
   olderLoading,
   scroller,
 } = useOpenSession({ sessions, queue, showTools, showThinking, humanOnly })
+// An Agent step opens into the run it started, read from this same session's folder
+// (SubagentTranscript.vue), so the open session is handed down rather than threaded through props.
+provide(
+  OPEN_TRANSCRIPT,
+  computed(() =>
+    selectedId.value && selectedSource.value
+      ? {
+          id: selectedId.value,
+          source: selectedSource.value,
+          locator: selectedLocator.value ?? undefined,
+          thinking: showThinking.value,
+        }
+      : null,
+  ),
+)
 // Top-level refs so the template unwraps them (a ref inside a returned object would not be).
 const { pending: scrollPending, atBottom: chatAtBottom, unseen: unseenTurns } = scroller
 

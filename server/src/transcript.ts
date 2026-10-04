@@ -1700,6 +1700,7 @@ function blockToTailEvent(
       text: input,
       tool_name: block.name ?? 'tool',
       timestamp: ts,
+      ...(typeof block.id === 'string' && block.id ? { tool_use_id: block.id } : {}),
     }
   }
   if (bt === 'tool_result') {
@@ -2082,4 +2083,74 @@ function tailFromJsonl(
     events,
     has_more: more,
   }
+}
+
+/**
+ * A Task-tool subagent's own run, found from the call that started it. Claude writes each run to
+ * `<project>/<session>/subagents/agent-<id>.jsonl` (a level deeper for workflows) beside an
+ * `agent-<id>.meta.json` naming the `toolUseId` of that call, so the viewer can open an Agent step
+ * into what the agent did. Only that one session's subagents folder is searched, and the id must
+ * look like an id, so a request names a call, never a file.
+ */
+export async function tailSubagent(
+  sessionId: string,
+  toolUseId: string,
+  opts: TailOptions = {},
+  locator?: string,
+): Promise<TailResult> {
+  const nothing = (error: string): TailResult => ({
+    session_id: sessionId,
+    source: 'claude',
+    title: opts.title ?? sessionId,
+    cwd: opts.cwd ?? '',
+    events: [],
+    error,
+  })
+  if (!TOOL_CALL_ID.test(toolUseId)) return nothing('not a tool call id')
+  const tf = await findTranscriptAsync(sessionId, 'claude', locator)
+  if (tf?.source !== 'claude') return nothing('transcript not found')
+  const run = await findSubagentRun(
+    join(dirname(tf.path), basename(tf.path, '.jsonl'), 'subagents'),
+    toolUseId,
+  )
+  if (!run) return nothing('no transcript of that agent')
+  return tailFromJsonl(
+    sessionId,
+    { ...tf, path: run.path },
+    { ...opts, title: run.title || opts.title },
+    await readTailBytes(run.path, 6 * 1024 * 1024),
+    {
+      filter: { thinking: opts.thinking ?? false },
+      keep: tailKeeper(opts),
+      limit: opts.limit ?? 40,
+    },
+  )
+}
+
+const TOOL_CALL_ID = /^[A-Za-z0-9_-]{1,128}$/
+
+/** The run a call started, by its meta file. One session's folder holds its own agents (dozens,
+ *  not thousands), so reading those small files on demand beats keeping an index of them. */
+async function findSubagentRun(
+  dir: string,
+  toolUseId: string,
+): Promise<{ path: string; title: string } | null> {
+  try {
+    for await (const rel of new Bun.Glob('**/*.meta.json').scan({ cwd: dir, onlyFiles: true })) {
+      const metaPath = join(dir, rel)
+      let meta: { toolUseId?: unknown; description?: unknown }
+      try {
+        meta = JSON.parse(await Bun.file(metaPath).text())
+      } catch {
+        continue
+      }
+      if (meta?.toolUseId !== toolUseId) continue
+      const path = `${metaPath.slice(0, -'.meta.json'.length)}.jsonl`
+      if (!(await Bun.file(path).exists())) continue
+      return { path, title: typeof meta.description === 'string' ? meta.description : '' }
+    }
+  } catch {
+    // no subagents folder: the session never started an agent
+  }
+  return null
 }

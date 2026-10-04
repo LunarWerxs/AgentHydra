@@ -229,6 +229,9 @@ export default {
     failed: 'This step failed',
     showSteps: 'Show steps',
     hideSteps: 'Hide steps',
+    agentRun: 'What the agent did',
+    agentRunLoading: "Reading the agent's run…",
+    agentRunMissing: "No record of this agent's run was found",
   },
   // A message neither side wrote, shown as a divider: the summary the CLI writes after compacting
   // the context, or the API's own notice (a usage limit, an overload).

@@ -24,6 +24,9 @@ const props = defineProps<{
   /** A find is running: rows and steps holding a match open on their own, so the match is on
    *  screen for the find bar to scroll to. */
   findActive: boolean
+  /** A subagent's run drawn inside its Agent step: no data-turn marks, which name the open
+   *  session's own turns. */
+  nested?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -70,6 +73,7 @@ function gap(i: number): string {
       :group="item"
       :open="groupOpen(item.key, item.hits)"
       :live="item.key === liveKey"
+      :nested="nested"
       :is-step-open="stepOpen"
       :copied-idx="copiedIdx"
       @toggle="emit('toggleExpand', item.key)"
@@ -80,7 +84,7 @@ function gap(i: number): string {
     <!-- a message neither side wrote: a divider, not a turn -->
     <div
       v-else-if="item.ev.notice"
-      :data-turn="item.index"
+      :data-turn="nested ? undefined : item.index"
       class="flex flex-col items-center"
       :class="i ? 'mt-4' : ''"
     >
@@ -125,7 +129,7 @@ function gap(i: number): string {
     <!-- what you typed: a raised bubble on the right, copy on its left -->
     <div
       v-else-if="item.ev.role === 'user'"
-      :data-turn="item.index"
+      :data-turn="nested ? undefined : item.index"
       class="group flex items-end justify-end gap-1.5"
       :class="gap(i)"
     >
@@ -170,7 +174,7 @@ function gap(i: number): string {
     </div>
 
     <!-- the model's reply: prose across the column, no bubble; copy underneath on hover -->
-    <div v-else :data-turn="item.index" class="group min-w-0" :class="gap(i)">
+    <div v-else :data-turn="nested ? undefined : item.index" class="group min-w-0" :class="gap(i)">
       <!-- eslint-disable-next-line vue/no-v-html -- escaped, see the note above -->
       <div
         class="wrap-break-word text-sm leading-relaxed"

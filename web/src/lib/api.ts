@@ -371,6 +371,19 @@ export const getTail = (
       `${locator ? `&locator=${encodeURIComponent(locator)}` : ''}`,
   )
 }
+/** A subagent's own run, by the id of the Agent call that started it (Claude only). The whole run
+ *  up to the route's 200-message ceiling: a nested view has no "load older". */
+export const getSubagentTail = (
+  id: string,
+  toolUseId: string,
+  opts: { thinking?: boolean } = {},
+  locator?: string,
+) =>
+  j<TailResult>(
+    `/api/sessions/${encodeURIComponent(id)}/subagents/${encodeURIComponent(toolUseId)}/tail` +
+      `?limit=200&thinking=${opts.thinking ? '1' : '0'}` +
+      `${locator ? `&locator=${encodeURIComponent(locator)}` : ''}`,
+  )
 /** Advanced BODY search: streams every transcript's raw content server-side (substring or
  *  regex, optionally case-sensitive). Deliberately separate from getSessions() above (slower,
  *  opt-in, and never used by the default fast client-side filter).

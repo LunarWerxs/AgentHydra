@@ -86,7 +86,9 @@ The open session's work rows (`web/src/lib/transcript-groups.ts`,
 `web/src/components/TranscriptWorkGroup.vue`) and its compaction and usage-limit dividers take
 their ideas from <https://github.com/pingdotgg/t3code> (MIT, T3 Tools Inc.: one row per run of work
 with a sentence summary, a live shimmer and a system divider), <https://github.com/getpaseo/paseo>
-(Apache-2.0: folding a run of tool calls into one row) and <https://github.com/omnigent-ai/omnigent>
+(Apache-2.0: folding a run of tool calls into one row, and finding a Claude subagent's run from the
+call that started it, which `tailSubagent` in `server/src/transcript.ts` does) and
+<https://github.com/omnigent-ai/omnigent>
 (Apache-2.0: verb-based labels, a tool's input one argument a line), all read on 2026-10-04. Ideas,
 not code, were taken; no source was copied.
 

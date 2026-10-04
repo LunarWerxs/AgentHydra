@@ -39,7 +39,7 @@ import {
   listSessions,
   sessionMarkKey,
 } from '../sessions'
-import { findTranscriptAsync, tailTranscript } from '../transcript'
+import { findTranscriptAsync, tailSubagent, tailTranscript } from '../transcript'
 import { buildTranscriptOpenArgv } from '../transcript-open'
 import {
   isSessionPeriod,
@@ -48,6 +48,7 @@ import {
   type SessionPeriod,
   type SessionSource,
   type SessionSummary,
+  type TailResult,
 } from '../types'
 import { renameChatDiscoveringRenderedTitle } from '../ui-archive'
 
@@ -711,15 +712,32 @@ app.get('/api/sessions/:id/tail', async (c) => {
     source,
     locator,
   )
-  // The open chat polls this every 4 s and the answer is usually the one it already has. An ETag
-  // over the body lets the browser's own cache revalidate it: an unchanged window answers 304 with
-  // no body, and fetch hands the page the cached copy as an ordinary 200, so no client code changes.
+  return tailResponse(c, result)
+})
+// A subagent's own run, opened from the Agent step that started it (Claude only; see tailSubagent).
+app.get('/api/sessions/:id/subagents/:toolUseId/tail', async (c) => {
+  const thinking = c.req.query('thinking')
+  const result = await tailSubagent(
+    c.req.param('id'),
+    c.req.param('toolUseId'),
+    {
+      limit: boundedQueryInt(c.req.query('limit'), 40, 200),
+      thinking: thinking === '1' || thinking === 'true',
+    },
+    c.req.query('locator') || undefined,
+  )
+  return tailResponse(c, result)
+})
+/** The open chat polls a tail every 4 s and the answer is usually the one it already has. An ETag
+ *  over the body lets the browser's own cache revalidate it: an unchanged window answers 304 with no
+ *  body, and fetch hands the page the cached copy as an ordinary 200, so no client code changes. */
+function tailResponse(c: Context, result: TailResult) {
   const body = JSON.stringify(result)
   const etag = `W/"${Bun.hash(body).toString(36)}"`
   const headers = { etag, 'cache-control': 'no-cache' }
   if (c.req.header('if-none-match') === etag) return c.body(null, 304, headers)
   return c.body(body, 200, { ...headers, 'content-type': 'application/json; charset=utf-8' })
-})
+}
 // What this one session spent: token totals and a dollar cost at published list prices, computed
 // from the analytics kit (subagent calls included; see server/src/session-usage.ts).
 // Answers 200 with a `status` rather than an error for a source that records no per-turn usage, so
