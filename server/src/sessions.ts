@@ -545,6 +545,8 @@ const RESUME_CHECK_BYTES = 64
 // ~1,200 transcripts on a busy machine; past this the oldest-touched states are dropped and those
 // transcripts parse from scratch on their next change.
 const MAX_PARSE_STATES = 4000
+// How long one slice of a transcript fold may run before the event loop gets a turn.
+const FOLD_SLICE_MS = 8
 
 interface ParseState {
   /** Bytes before this offset are folded into acc and limits. */
@@ -656,7 +658,7 @@ async function foldAppended(tf: TranscriptFile, key: string): Promise<ParseState
   const lastNl = bytes.lastIndexOf(0x0a)
   let end = from
   if (lastNl >= from) {
-    foldLines(state, tf, utf8.decode(bytes.subarray(from, lastNl + 1)))
+    await foldLines(state, tf, utf8.decode(bytes.subarray(from, lastNl + 1)))
     end = lastNl + 1
   }
   if (end < bytes.length) {
@@ -691,7 +693,11 @@ async function foldAppended(tf: TranscriptFile, key: string): Promise<ParseState
  *  the cheapest exact way to recognise them as each other. acc.ending: why this transcript stopped
  *  — the last meaningful record wins, because that is the one that ended it. See
  *  session-ending.ts for what the answers mean. */
-function foldLines(state: ParseState, tf: TranscriptFile, text: string): void {
+async function foldLines(state: ParseState, tf: TranscriptFile, text: string): Promise<void> {
+  // A 12 MB transcript is ~100k JSON.parse calls; folded in one go they hold the daemon for as long
+  // as it takes, so the loop hands the thread back every FOLD_SLICE_MS and the daemon's other
+  // requests are answered between slices.
+  let sliceStart = performance.now()
   // Walked by index rather than `text.split('\n')`: on a 12 MB transcript that split materialises
   // ~100k line strings and holds every one of them alive for the whole loop, roughly doubling the
   // peak for a file we only ever look at one line at a time.
@@ -709,6 +715,10 @@ function foldLines(state: ParseState, tf: TranscriptFile, text: string): void {
       continue
     }
     applyMetaLine(state.acc, tf, ev, state.limits)
+    if (performance.now() - sliceStart > FOLD_SLICE_MS) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      sliceStart = performance.now()
+    }
   }
 }
 
@@ -1363,9 +1373,49 @@ export function titleMatchTier(
   return rest.some(inOrder) ? 3 : null
 }
 
-/** The title-search path of listSessions: parse every candidate in batches (the event loop gets a
- *  turn between them), keep the matches, and return the best `limit` of them, best tier first and
- *  most recent first within a tier. */
+/** What a title search may wait for transcripts nobody has parsed yet before it answers with what
+ *  it has. The parse carries on in the background and the next search sees its result. */
+const TITLE_SCAN_BUDGET_MS = 400
+
+// Narrow on purpose: every parse in flight takes its slices in the same turn of the event loop, so
+// the width is what the daemon's other requests wait behind.
+const MISS_WARM_CONCURRENCY = 2
+
+let missWarm: Promise<void> | null = null
+
+/** Parse the transcripts the scan cache has no title for, newest first, at a narrow width,
+ *  one sweep at a time machine-wide. Resolves when the sweep is done, which may be long after the
+ *  request that started it answered. */
+function warmMissingTitles(misses: TranscriptFile[]): Promise<void> {
+  if (!missWarm) {
+    const todo = [...misses].sort((a, b) => b.mtime_ms - a.mtime_ms)
+    missWarm = mapPool(todo, MISS_WARM_CONCURRENCY, async (tf) => {
+      try {
+        await scanMeta(tf)
+      } catch {
+        // An unreadable transcript stays uncached, as everywhere else.
+      }
+    })
+      .then(() => undefined)
+      .finally(() => {
+        missWarm = null
+      })
+  }
+  return missWarm
+}
+
+const selectTitles = db.query<{ cache_key: string; title: string; cwd: string }, [number]>(
+  'select cache_key, title, cwd from session_scan_cache where scan_version >= ?',
+)
+
+/** The title-search path of listSessions.
+ *
+ *  The match runs on what the scan cache already knows (one sqlite read, then a pass over the
+ *  candidates that parses nothing), and only the best `limit` hits are built into rows. A
+ *  transcript the cache has no title for is matched on its index fields meanwhile and parsed in
+ *  the background; the request waits for that at most TITLE_SCAN_BUDGET_MS. Every step is short
+ *  and the event loop gets a turn between batches, so a search over thousands of sessions never
+ *  holds the daemon. */
 async function rankedTitleMatches(
   files: TranscriptFile[],
   needle: string,
@@ -1373,14 +1423,52 @@ async function rankedTitleMatches(
   offset: number,
   limit: number,
 ): Promise<SessionSummary[]> {
+  const readCache = () => {
+    const known = new Map<string, { title: string; cwd: string }>()
+    for (const r of selectTitles.all(SCAN_VERSION)) known.set(r.cache_key, r)
+    return known
+  }
+  const turn = () => new Promise<void>((resolve) => setImmediate(resolve))
+  let known = readCache()
+  await turn()
+  const misses = files.filter((f) => !known.has(cacheKey(f)))
+  if (misses.length) {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const budget = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, TITLE_SCAN_BUDGET_MS)
+    })
+    await Promise.race([warmMissingTitles(misses), budget])
+    clearTimeout(timer)
+    known = readCache()
+  }
+  const candidates: Array<{ tf: TranscriptFile; tier: number }> = []
+  for (const tf of files) {
+    const row = known.get(cacheKey(tf))
+    const tier = titleMatchTier(needle, {
+      title: row?.title ?? tf.title ?? '',
+      cwd: row?.cwd ?? tf.cwd ?? decodeProjectKey(tf.project),
+      session_id: tf.session_id,
+    })
+    if (tier !== null) candidates.push({ tf, tier })
+  }
+  candidates.sort((a, b) => a.tier - b.tier || b.tf.mtime_ms - a.tf.mtime_ms)
+  await turn()
+  // Rows are built only for the best candidates, a page's worth at a time: a parsed row can still
+  // drop out (a stub, a scope the parse settles), and the fresh title is what finally ranks it.
+  const wanted = offset + limit
   const hits: Array<{ row: SessionSummary; tier: number }> = []
-  const BATCH = SCAN_CONCURRENCY * 8
-  for (let cursor = 0; cursor < files.length; cursor += BATCH) {
-    const scanned = await mapPool(files.slice(cursor, cursor + BATCH), SCAN_CONCURRENCY, toSummary)
-    for (const row of scanned) {
+  for (let cursor = 0; cursor < candidates.length && hits.length < wanted; ) {
+    const batch = candidates.slice(
+      cursor,
+      cursor + Math.max(wanted - hits.length, SCAN_CONCURRENCY),
+    )
+    cursor += batch.length
+    const rows = await mapPool(batch, SCAN_CONCURRENCY, (c) => toSummary(c.tf))
+    for (const row of rows) {
       const tier = row ? titleMatchTier(needle, row) : null
       if (row && tier !== null) hits.push({ row, tier })
     }
+    await turn()
   }
   hits.sort((a, b) => a.tier - b.tier || b.row.last_activity_at - a.row.last_activity_at)
   const out = hits.slice(offset, offset + limit).map((h) => h.row)
