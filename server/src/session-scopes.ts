@@ -57,13 +57,31 @@ function parseScope<T extends string>(
   return recognised ? out : undefined
 }
 
-/** `undefined` means every source, so the 'foreign' reader is not dropped by an "all ticked" client. */
+const EVERY_SOURCE: readonly SessionSource[] = [
+  'claude',
+  'codex',
+  'opencode',
+  'hermes',
+  'dsh',
+  'zswarm',
+  'foreign',
+]
+
+/** `undefined` means every source, so the 'foreign' reader is not dropped by an "all ticked" client.
+ *  A `-name` token is an exclusion ("everything but HSwarm" is `-zswarm`), which keeps 'foreign'
+ *  rows that a ticked list of named sources cannot express. */
 export function parseSourceScope(input: ScopeInput): Set<SessionSource> | undefined {
   const toks = tokens(input)
   if (!toks) return undefined
   if (toks.length === 1 && toks[0] === NONE_TOKEN) return new Set()
   if (toks.includes('all')) return undefined
-  const out = new Set(toks.filter(isSessionSource))
+  const excluded = toks.filter((t) => t.startsWith('-')).map((t) => t.slice(1))
+  const named = toks.filter(isSessionSource)
+  if (excluded.some(isSessionSource) && named.length === 0) {
+    const out = new Set(EVERY_SOURCE.filter((s) => !excluded.includes(s)))
+    return out.size ? out : undefined
+  }
+  const out = new Set(named)
   return out.size ? out : undefined
 }
 

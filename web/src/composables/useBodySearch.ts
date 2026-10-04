@@ -14,11 +14,12 @@ import type {
   SessionSummary,
 } from '@/lib/api'
 import * as api from '@/lib/api'
+import type { ListScopes } from '@/lib/session-scopes'
 
 export function useBodySearch(deps: {
   sessions: Ref<SessionSummary[]>
-  sessionInstanceFilter: Ref<string[] | null>
-  sessionSourceFilter: Ref<SessionSource[]>
+  /** The filters this text is searched under: everything, or the sidebar's own (see effectiveScopes). */
+  scopesFor: (text: string) => ListScopes
   advancedCaseSensitive: Ref<boolean>
   selectedId: Ref<string | null>
   selectedSource: Ref<SessionSource | null>
@@ -45,18 +46,13 @@ export function useBodySearch(deps: {
     if (!q) return
     bodySearching.value = true
     try {
+      const scopes = deps.scopesFor(q)
       const r = await api.searchSessionBodies(q, {
         regex: advancedRegex.value,
         caseSensitive: deps.advancedCaseSensitive.value,
         // Body search takes one source / one instance: narrow only when exactly one is ticked.
-        instance:
-          deps.sessionInstanceFilter.value?.length === 1
-            ? deps.sessionInstanceFilter.value[0]
-            : undefined,
-        source:
-          deps.sessionSourceFilter.value.length === 1
-            ? deps.sessionSourceFilter.value[0]
-            : undefined,
+        instance: scopes.instance?.length === 1 ? scopes.instance[0] : undefined,
+        source: scopes.source.length === 1 ? scopes.source[0] : undefined,
         everything: opts.everything,
       })
       bodyResults.value = r.results

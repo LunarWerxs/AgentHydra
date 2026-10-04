@@ -6,7 +6,7 @@
 // live near each other.
 
 import type { Ref } from 'vue'
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, onScopeDispose, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useInstances } from '@/composables/useInstances'
 import type { SessionPeriod, SessionSource } from '@/lib/api'
@@ -22,9 +22,12 @@ import {
 import {
   ARCHIVED_VALUES,
   type ArchivedValue,
+  DEFAULT_ARCHIVED,
+  DEFAULT_SOURCES,
   DISPATCHED_VALUES,
   type DispatchedValue,
   isAllSelected,
+  type ListScopes,
   RATE_LIMIT_VALUES,
   type RateLimitValue,
   SHAPE_VALUES,
@@ -43,8 +46,14 @@ export interface SessionFilterRefs {
   sessionDispatchedScope: Ref<DispatchedValue[]>
   sessionRateLimitScope: Ref<RateLimitValue[]>
   sessionShapeScope: Ref<SessionShape[]>
+  /** The scopes the list is fetched with right now: the view's, or the wide ones while searching. */
+  activeScopes: Ref<ListScopes>
+  /** True while a search runs over everything. */
+  searchIsWide: Ref<boolean>
   refreshSessions: () => void | Promise<void>
 }
+
+const WIDE_DEBOUNCE_MS = 300
 
 export function useSessionFilters(refs: SessionFilterRefs) {
   const { t } = useI18n()
@@ -56,6 +65,8 @@ export function useSessionFilters(refs: SessionFilterRefs) {
     sessionDispatchedScope,
     sessionRateLimitScope,
     sessionShapeScope,
+    activeScopes,
+    searchIsWide,
     refreshSessions,
   } = refs
 
@@ -78,18 +89,25 @@ export function useSessionFilters(refs: SessionFilterRefs) {
   // toggle belongs to a different view entirely.
   onMounted(() => void refreshInstances({ silent: true }))
 
-  // Every scope is applied server-side except shape, so any of them changing needs a refetch.
+  // Every scope is applied server-side except shape, so any of them changing needs a refetch. This
+  // watches the scopes IN FORCE, not the view's: while a search runs over everything, a sidebar
+  // change moves nothing, and typing never changes them (the wide scopes are one fixed value), so the
+  // wide list is fetched once when the search starts, not per keystroke. Starting a search waits a
+  // beat, so a fast typist asking and clearing does not cost the daemon the wide read.
+  let widePending: ReturnType<typeof setTimeout> | null = null
+  const cancelWide = () => {
+    if (widePending !== null) clearTimeout(widePending)
+    widePending = null
+  }
   watch(
-    [
-      sessionInstanceFilter,
-      sessionArchivedScope,
-      sessionPeriod,
-      sessionSourceFilter,
-      sessionDispatchedScope,
-      sessionRateLimitScope,
-    ],
-    () => refreshSessions(),
+    () => JSON.stringify(activeScopes.value),
+    () => {
+      cancelWide()
+      if (!searchIsWide.value) return void refreshSessions()
+      widePending = setTimeout(() => void refreshSessions(), WIDE_DEBOUNCE_MS)
+    },
   )
+  onScopeDispose(cancelWide)
 
   // Instance, queued work and usage wall describe CLAUDE sessions only, so their submenus are
   // available exactly while Claude is among the ticked sources.
@@ -154,14 +172,19 @@ export function useSessionFilters(refs: SessionFilterRefs) {
           sessionRateLimitScope.value.length === 0)),
   )
 
+  /** Differs from what the menu starts at, which is the owner's baseline (HSwarm and archived are
+   *  off), so only a CHANGE lights the trigger. */
+  const sameSelection = (a: readonly string[], b: readonly string[]) =>
+    a.length === b.length && b.every((v) => a.includes(v))
+
   /** The ⋯ trigger reports "something is narrowing this list". Otherwise a filter set once and
    *  forgotten reads as an empty/short list with no visible cause, now that the controls are a
    *  menu rather than a row of lit-up buttons. */
   const filtersActive = computed(
     () =>
       sessionInstanceFilter.value !== null ||
-      !isAllSelected(sessionArchivedScope.value, ARCHIVED_VALUES) ||
-      !isAllSelected(sessionSourceFilter.value, SOURCE_VALUES) ||
+      !sameSelection(sessionArchivedScope.value, DEFAULT_ARCHIVED) ||
+      !sameSelection(sessionSourceFilter.value, DEFAULT_SOURCES) ||
       !isAllSelected(sessionDispatchedScope.value, DISPATCHED_VALUES) ||
       !isAllSelected(sessionRateLimitScope.value, RATE_LIMIT_VALUES) ||
       !isAllSelected(sessionShapeScope.value, SHAPE_VALUES) ||

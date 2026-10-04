@@ -5,7 +5,7 @@
 // the empty list. Nothing here touches Vue or i18n, so the all / none / toggle / label rules are
 // plain functions that can be tested directly.
 
-import type { SessionSource } from '@/lib/api'
+import type { SessionPeriod, SessionSource } from '@/lib/api'
 import type { SessionShape } from '@/lib/session-shape'
 
 /** The providers the menu offers. 'foreign' (other tools) has no entry: ticking everything sends no
@@ -70,6 +70,53 @@ export function scopeParam(
 ): string | undefined {
   if (isAllSelected(selected, universe)) return undefined
   return selected.length === 0 ? NONE_TOKEN : selected.join(',')
+}
+
+/** What the sidebar shows until its owner picks otherwise: every source but HSwarm (its workers are
+ *  noise in "what am I working on"), and live sessions only. */
+export const DEFAULT_SOURCES: readonly SessionSource[] = SOURCE_VALUES.filter((v) => v !== 'zswarm')
+export const DEFAULT_ARCHIVED: readonly ArchivedValue[] = ['active']
+
+/** The source query value. Like scopeParam, but "every source except HSwarm" is spelled `-zswarm`
+ *  rather than as a list, because a list leaves out the 'foreign' tools that have no menu entry. */
+export function sourceParam(selected: readonly SessionSource[]): string | undefined {
+  const all = scopeParam(selected, SOURCE_VALUES)
+  if (all === undefined) return undefined
+  if (isAllSelected(selected, DEFAULT_SOURCES) && selected.length === DEFAULT_SOURCES.length)
+    return '-zswarm'
+  return all
+}
+
+/** Every filter the list is fetched with. */
+export interface ListScopes {
+  instance: string[] | null
+  archived: readonly ArchivedValue[]
+  period: SessionPeriod
+  source: readonly SessionSource[]
+  dispatched: readonly DispatchedValue[]
+  rateLimit: readonly RateLimitValue[]
+  shape: readonly SessionShape[]
+}
+
+/** No narrowing at all: every source (HSwarm too), archived too, every instance, all time. */
+export const WIDE_SCOPES: ListScopes = {
+  instance: null,
+  archived: ARCHIVED_VALUES,
+  period: 'all',
+  source: SOURCE_VALUES,
+  dispatched: DISPATCHED_VALUES,
+  rateLimit: RATE_LIMIT_VALUES,
+  shape: SHAPE_VALUES,
+}
+
+/** Which filters the list uses right now. While the search box has text it looks at everything,
+ *  unless the owner asked to search only what the sidebar shows; an empty box is the view's own. */
+export function effectiveScopes(
+  view: ListScopes,
+  search: string,
+  onlyThisView: boolean,
+): ListScopes {
+  return search.trim() && !onlyThisView ? WIDE_SCOPES : view
 }
 
 /** The trigger's right-hand text: All, None, the one name, or the first name and a count. */

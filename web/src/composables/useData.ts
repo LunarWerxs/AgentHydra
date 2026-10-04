@@ -12,11 +12,17 @@ import type {
 import * as api from '@/lib/api'
 import {
   ARCHIVED_VALUES,
+  DEFAULT_ARCHIVED,
+  DEFAULT_SOURCES,
   DISPATCHED_VALUES,
+  effectiveScopes,
+  type ListScopes,
   RATE_LIMIT_VALUES,
   SHAPE_VALUES,
   SOURCE_VALUES,
   scopeParam,
+  sourceParam,
+  WIDE_SCOPES,
 } from '@/lib/session-scopes'
 import { registerSharedPref } from './useSharedPrefs'
 import { storedSelection } from './useStoredSelection'
@@ -40,14 +46,22 @@ const sessionInstanceFilter = ref<string[] | null>(null)
 // default; untick one half to narrow to only live or only archived chats.
 // All scopes are applied server-side BEFORE the newest-N cap, so a quiet corner of the list can't
 // be starved out of the window by rows it was never going to show.
-const sessionArchivedScope = storedSelection('agenthydra.sessions.archivedScope', ARCHIVED_VALUES)
+//
+// `.archivedScope2` / `.source2`, not the old keys: the owner's stored value was the old all-ticked
+// default (useStorage writes its default on first read), so changing the default alone would reach
+// nobody. A new key applies the new defaults once and, after that, his own choices persist. Same
+// versioning idiom as useUsageMode's `.usageMode2`.
+const ARCHIVED_KEY = 'agenthydra.sessions.archivedScope2'
+const SOURCE_KEY = 'agenthydra.sessions.source2'
+const sessionArchivedScope = storedSelection(ARCHIVED_KEY, ARCHIVED_VALUES, DEFAULT_ARCHIVED)
 // How far back the list reaches, by last activity. Defaults to the last 24 hours: this list
 // answers "what am I working on", and a store that has been accumulating transcripts for months
 // answers it worse the further back it goes. Applied server-side before the cap, like the scopes
 // above, so a widened window genuinely reaches further rather than reshuffling the same 200 rows.
 const sessionPeriod = useStorage<SessionPeriod>('agenthydra.sessions.period', '24h')
 // Provider scope for the unified local conversation list.
-const sessionSourceFilter = storedSelection('agenthydra.sessions.source', SOURCE_VALUES)
+// Every source but HSwarm until the owner ticks it.
+const sessionSourceFilter = storedSelection(SOURCE_KEY, SOURCE_VALUES, DEFAULT_SOURCES)
 // Work AgentHydra queued vs work driven by hand. Everything ticked by default and never narrowed on
 // our own initiative — same rule the `done` mark carries: this list may be narrowed on request,
 // never pruned behind the user's back. Applied server-side before the cap, like the scopes above.
@@ -69,12 +83,35 @@ const sessionRateLimitScope = storedSelection('agenthydra.sessions.rateLimited',
 // declares its value set, because the store is a plain file and an unknown scope would reach a
 // control that has no such option.
 const SESSION_PERIODS: readonly SessionPeriod[] = ['24h', '7d', '30d', 'all']
-registerSharedPref('agenthydra.sessions.archivedScope', sessionArchivedScope, ARCHIVED_VALUES)
+registerSharedPref(ARCHIVED_KEY, sessionArchivedScope, ARCHIVED_VALUES)
 registerSharedPref('agenthydra.sessions.period', sessionPeriod, SESSION_PERIODS)
-registerSharedPref('agenthydra.sessions.source', sessionSourceFilter, SOURCE_VALUES)
+registerSharedPref(SOURCE_KEY, sessionSourceFilter, SOURCE_VALUES)
 registerSharedPref('agenthydra.sessions.dispatched', sessionDispatchedScope, DISPATCHED_VALUES)
 registerSharedPref('agenthydra.sessions.shape', sessionShapeScope, SHAPE_VALUES)
 registerSharedPref('agenthydra.sessions.rateLimited', sessionRateLimitScope, RATE_LIMIT_VALUES)
+
+// The sidebar's search box lives here, not in the view, because it decides WHICH list is fetched:
+// while it has text the list is the wide one (every source, archived, instance and period), unless
+// "Only this view" is ticked, in which case the sidebar's own filters still apply to the search.
+const sessionSearch = ref('')
+const searchOnlyThisView = useStorage('agenthydra.sessions.searchOnlyView', false)
+registerSharedPref('agenthydra.sessions.searchOnlyView', searchOnlyThisView)
+const viewScopes = computed<ListScopes>(() => ({
+  instance: sessionInstanceFilter.value,
+  archived: sessionArchivedScope.value,
+  period: sessionPeriod.value,
+  source: sessionSourceFilter.value,
+  dispatched: sessionDispatchedScope.value,
+  rateLimit: sessionRateLimitScope.value,
+  shape: sessionShapeScope.value,
+}))
+/** The scopes in force right now: the view's, or everything while a search is running. */
+const activeScopes = computed(() =>
+  effectiveScopes(viewScopes.value, sessionSearch.value, searchOnlyThisView.value),
+)
+const searchIsWide = computed(() => activeScopes.value === WIDE_SCOPES)
+// The daemon caps a page at 500; the wide list asks for all of them, the view's for 200.
+const WIDE_LIMIT = 500
 // true once the first queue fetch has settled — gates the queue's first-load skeletons
 const queueLoaded = ref(false)
 
@@ -127,8 +164,7 @@ function guard<T>(p: Promise<T>, status: ResourceStatus): Promise<T | undefined>
 
 /** The instance scope as a query value: '' (no narrowing) when null, else the ticked names. The
  *  named-instance universe is dynamic, so "all ticked" is the null state rather than a full list. */
-function sessionInstanceParam(): string {
-  const picked = sessionInstanceFilter.value
+function sessionInstanceParam(picked: string[] | null): string {
   if (picked === null) return ''
   return picked.length ? picked.join(',') : 'none'
 }
@@ -161,17 +197,18 @@ async function refreshSessions() {
   try {
     // Instance, queued work and usage wall are facts about Claude sessions. With Claude unticked
     // their submenus are disabled, so whatever they hold must not reach the server.
-    const claude = sessionSourceFilter.value.includes('claude')
+    const sc = activeScopes.value
+    const claude = sc.source.includes('claude')
     const r = await guard(
       api.getSessions(
-        200,
-        claude ? sessionInstanceParam() : '',
+        sc === WIDE_SCOPES ? WIDE_LIMIT : 200,
+        claude ? sessionInstanceParam(sc.instance) : '',
         // Always sent: the server's own default for an absent archived scope is "active only".
-        sessionArchivedScope.value.length ? sessionArchivedScope.value.join(',') : 'none',
-        sessionPeriod.value,
-        scopeParam(sessionSourceFilter.value, SOURCE_VALUES),
-        claude ? scopeParam(sessionDispatchedScope.value, DISPATCHED_VALUES) : undefined,
-        claude ? scopeParam(sessionRateLimitScope.value, RATE_LIMIT_VALUES) : undefined,
+        sc.archived.length ? sc.archived.join(',') : 'none',
+        sc.period,
+        sourceParam(sc.source),
+        claude ? scopeParam(sc.dispatched, DISPATCHED_VALUES) : undefined,
+        claude ? scopeParam(sc.rateLimit, RATE_LIMIT_VALUES) : undefined,
         true,
       ),
       sessionsStatus,
@@ -296,6 +333,11 @@ export function useData() {
     sessionDispatchedScope,
     sessionRateLimitScope,
     sessionShapeScope,
+    sessionSearch,
+    searchOnlyThisView,
+    viewScopes,
+    activeScopes,
+    searchIsWide,
     queueLoaded,
     sessionsStatus,
     queueStatus,

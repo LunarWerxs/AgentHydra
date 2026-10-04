@@ -100,6 +100,8 @@ export default {
   selectionMore: '{first} +{n}',
   filtersHideEverything: 'The list filters hide every session.',
   filtersReset: 'Show everything again',
+  searchOnlyView: 'Only this view',
+  searchOnlyViewHint: 'Search only the sessions the sidebar filters show',
   period: 'Time period',
   period24h: 'Last 24 hours',
   period7d: 'Last 7 days',

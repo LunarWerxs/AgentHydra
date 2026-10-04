@@ -128,6 +128,7 @@ import {
   type ArchivedValue,
   DISPATCHED_VALUES,
   type DispatchedValue,
+  effectiveScopes,
   isAllSelected,
   RATE_LIMIT_VALUES,
   type RateLimitValue,
@@ -156,6 +157,11 @@ const {
   sessionDispatchedScope,
   sessionRateLimitScope,
   sessionShapeScope,
+  sessionSearch: search,
+  searchOnlyThisView,
+  viewScopes,
+  activeScopes,
+  searchIsWide,
 } = useData()
 
 // Verbose mode, the sidebar width and the body-search case flag are persisted AND mirrored through
@@ -334,6 +340,8 @@ const {
   sessionDispatchedScope,
   sessionRateLimitScope,
   sessionShapeScope,
+  activeScopes,
+  searchIsWide,
   refreshSessions,
 })
 
@@ -450,14 +458,13 @@ const { openFile, copyingFile, copyFile, copyFileLocation } = useSessionFileActi
 })
 const { resuming, resumeInTerminal } = useResumeInTerminal()
 
-const search = ref('')
-
 // The search box is an fzf-style fuzzy filter (lib/fuzzy.ts): 'cdxsess' finds 'Codex session', and
 // the best match sorts first instead of wherever recency put it. Matched title characters are kept
 // per row so the list can bold them.
 const searchRanked = computed(() => {
   const q = search.value.trim()
-  const shapes = sessionShapeScope.value
+  // Shape is a view filter like the rest: a search over everything ignores it.
+  const shapes = activeScopes.value.shape
   let rows = sessions.value
   // Applied in the browser, unlike the scopes the daemon owns, so it narrows the window that was
   // fetched rather than reaching further back. Said plainly in the menu, because "no marathons in
@@ -557,8 +564,7 @@ const {
   selectFromBodyResult,
 } = useBodySearch({
   sessions,
-  sessionInstanceFilter,
-  sessionSourceFilter,
+  scopesFor: (text: string) => effectiveScopes(viewScopes.value, text, searchOnlyThisView.value),
   advancedCaseSensitive,
   selectedId,
   selectedSource,
@@ -729,6 +735,17 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <RefreshCw :class="sessionsLoading ? 'animate-spin' : ''" />
                     {{ $t('sessions.refresh') }}
                   </DropdownMenuItem>
+
+                  <!-- search scope: while the box has text it reads every session; this keeps the
+                       sidebar's filters on it instead -->
+                  <DropdownMenuCheckboxItem
+                    v-model="searchOnlyThisView"
+                    :title="$t('sessions.searchOnlyViewHint')"
+                    @select.prevent
+                  >
+                    <Search />
+                    {{ $t('sessions.searchOnlyView') }}
+                  </DropdownMenuCheckboxItem>
 
                   <DropdownMenuSeparator />
 
