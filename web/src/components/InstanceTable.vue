@@ -51,14 +51,15 @@ const { enabled: tooltipsEnabled } = useTooltipConfig()
         >
           <span v-if="!col.sortable" class="inline-flex items-center gap-0.5">{{ $t(col.label) }}</span>
           <span v-else class="inline-flex items-center gap-0.5">
-            <SortButton
-              :direction="indicatorFor(col.key)"
-              :quiet="col.key === 'status'"
-              @sort="emit('sort', col.key)"
-            >
-              {{ col.label ? $t(col.label) : '●' }}
-            </SortButton>
-            <component :is="col.head" v-if="col.head" />
+            <component :is="col.flyout ?? 'span'" v-bind="col.flyoutProps">
+              <SortButton
+                :direction="indicatorFor(col.key)"
+                :quiet="col.key === 'status'"
+                @sort="emit('sort', col.key)"
+              >
+                {{ col.label ? $t(col.label) : '●' }}
+              </SortButton>
+            </component>
             <InfoHint v-if="col.hint" :text="$t(col.hint)" />
           </span>
         </TableHead>

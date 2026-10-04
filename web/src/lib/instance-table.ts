@@ -5,11 +5,11 @@
 // code, just different content").
 
 import type { TokenParts } from '@agenthydra/server/types'
-import { type Component, type FunctionalComponent, h } from 'vue'
+import type { Component } from 'vue'
 import AccountTokensCell from '@/components/AccountTokensCell.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import type { Provider } from '@/components/ProviderLogo.vue'
-import TokenWindowSwitch from '@/components/TokenWindowSwitch.vue'
+import TokenWindowFlyout from '@/components/TokenWindowFlyout.vue'
 import type { BadgeVariants } from '@/components/ui/badge'
 import type { CMInstance, UsageSnapshot } from '@/lib/api'
 
@@ -43,8 +43,10 @@ export interface InstanceColumn {
   title?: string
   /** Classes of this column's first-load skeleton block. */
   skeleton: string
-  /** A control drawn beside the header text (the tokens window switch plugs in here). */
-  head?: Component
+  /** Wraps the sort button: opens a hover flyout under the header text (the tokens window choice
+   *  plugs in here). Receives `flyoutProps`; the sort button is its default slot. */
+  flyout?: Component
+  flyoutProps?: Record<string, unknown>
   /** Replaces the built-in cell; receives `{ row: InstanceRowModel }`. */
   cell?: Component
 }
@@ -56,14 +58,6 @@ interface ColumnDef extends Omit<InstanceColumn, 'label'> {
   /** Only in process (default) or quota (usage) mode; both when omitted. */
   mode?: 'process' | 'quota'
 }
-
-// The Tokens header's 5h / Week / Total switch; each table keeps its own choice.
-const tokenSwitch = (kind: InstanceTableKind) => {
-  const f: FunctionalComponent = () => h(TokenWindowSwitch, { kind, class: 'ms-1' })
-  return f
-}
-const cliTokenSwitch = tokenSwitch('cli')
-const desktopTokenSwitch = tokenSwitch('desktop')
 
 // One list, in the order every table draws it. Columns that mean the same thing are ONE column with
 // ONE name; a column a single kind has lists only that kind.
@@ -150,15 +144,16 @@ const COLUMNS: ColumnDef[] = [
     sortable: true,
     skeleton: 'h-3 w-14',
   },
-  // What the account has run, from its own transcripts on this PC. The window switch and the
-  // per-account totals plug in here and nowhere else: `head` and `cell` below.
+  // What the account has run, from its own transcripts on this PC. The window flyout and the
+  // per-account totals plug in here and nowhere else: `flyout` and `cell` below.
   ...(['cli', 'desktop'] as const).map(
     (kind): ColumnDef => ({
       key: 'tokens',
       label: 'cliInstances.colTokens',
       sortable: true,
       kinds: [kind],
-      head: kind === 'cli' ? cliTokenSwitch : desktopTokenSwitch,
+      flyout: TokenWindowFlyout,
+      flyoutProps: { kind },
       cell: AccountTokensCell,
       skeleton: 'h-4 w-12',
     }),
