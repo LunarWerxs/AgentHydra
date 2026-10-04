@@ -43,8 +43,6 @@ def _pid_alive(pid: int) -> bool:
     """Is that process still running? A stale record outlives its session by design - the
     registry is written on start, not cleaned on crash - so liveness is checked, never assumed."""
     if os.name == "nt":
-        import subprocess
-
         try:
             out = clilib.run_text(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
                                  timeout=20)
@@ -77,7 +75,27 @@ def _session_alive(rec: dict, pid: int) -> bool:
     sock = rec.get("messagingSocketPath")
     if not isinstance(sock, str) or not sock:
         return True
-    return os.path.exists(sock)
+    return _socket_present(sock)
+
+
+#: Where Windows keeps named pipes: a session's socket there is `\\.\pipe\LOCAL\cc-msg-<hash>`.
+PIPE_ROOT = "\\\\.\\pipe\\"
+
+
+def _socket_present(sock: str) -> bool:
+    """Does a session's own messaging socket exist? A Windows named pipe is looked up in the
+    pipe listing and NEVER opened (2026-10-03): os.path.exists on a pipe CONNECTS to it, taking
+    one of the session's listening instances, and answers False even for a pipe that is there,
+    free or busy - so every live Windows session read as dead. A listing that cannot be read is
+    unknown, which falls back to the pid's verdict: never "gone", the verdict something acts on."""
+    path = sock.replace("/", "\\")
+    if not path.lower().startswith(PIPE_ROOT):
+        return os.path.exists(sock)
+    try:
+        names = {n.lower() for n in os.listdir(PIPE_ROOT)}
+    except OSError:
+        return True
+    return path[len(PIPE_ROOT):].lower() in names
 
 
 def live_sessions(config_dir: str | Path, check_alive: bool = True) -> list[dict]:

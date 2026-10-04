@@ -91,7 +91,8 @@ class PeerChannelTest(unittest.TestCase):
         """Publish one registry record. `socket` is the session's own messaging socket:
         "live" writes a path that EXISTS (a live session's pipe answers), "dead" writes one
         that does not (the session crashed and only its record survives), None omits the field
-        entirely (a record from a CLI too old to carry one)."""
+        entirely (a record from a CLI too old to carry one), and any other string is a real
+        socket the test opened itself, written verbatim."""
         d = self.cfg / "sessions"
         rec = {"pid": str(pid), "sessionId": sid, "cwd": "D:/x", "startedAt": "1"}
         if socket == "live":
@@ -101,6 +102,8 @@ class PeerChannelTest(unittest.TestCase):
             rec["messagingSocketPath"] = str(sock)
         elif socket == "dead":
             rec["messagingSocketPath"] = str(self.cfg / f"gone-{pid}")
+        elif socket:
+            rec["messagingSocketPath"] = socket
         (d / f"{pid}.json").write_text(json.dumps(rec), encoding="utf-8")
         if token:
             (d / f"{pid}.hash.key").write_text(json.dumps({"peerToken": token}),
@@ -127,6 +130,19 @@ class PeerChannelTest(unittest.TestCase):
         self._publish(4242, "s-1", socket="dead")
         with mock.patch.object(peerlib, "_pid_alive", return_value=True):
             self.assertEqual(peerlib.live_sessions(self.cfg), [])
+
+    @unittest.skipUnless(os.name == "nt", "named pipes are a Windows socket")
+    def test_a_session_whose_named_pipe_exists_is_live(self):
+        # A file only stands in for a socket on POSIX. On Windows the socket is a named pipe,
+        # and os.path.exists answers False for every pipe, free or busy (measured 2026-10-03),
+        # so every live Windows session read as dead. This one is a real pipe.
+        from multiprocessing.connection import Listener
+
+        address = rf"\\.\pipe\ah-peerlib-test-{os.getpid()}-{time.time_ns()}"
+        with Listener(address, family="AF_PIPE"):
+            self._publish(4242, "s-1", socket=address)
+            with mock.patch.object(peerlib, "_pid_alive", return_value=True):
+                self.assertEqual(len(peerlib.live_sessions(self.cfg)), 1)
 
     def test_a_record_too_old_to_carry_a_socket_falls_back_to_the_pid(self):
         # Narrowing liveness must not blind the fleet to an older CLI's sessions.

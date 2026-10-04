@@ -85,3 +85,38 @@ describe('readLiveRegistry: a live pid is not a live session', () => {
     }
   })
 })
+
+// A working engine's messaging pipe is often BUSY: no instance free, because a peer holds it.
+// Opening a pipe to test for it fails exactly then, so on 2026-10-03 a working chat read as dead
+// and its move plan said "no live engine - the import would post at once". This pipe's only
+// instance is held by the helper, which is that state on demand.
+const BUSY_PIPE_SCRIPT = (name: string) => `
+$s = [System.IO.Pipes.NamedPipeServerStream]::new('${name}', 'InOut', 1, 'Byte', 'Asynchronous')
+$w = $s.WaitForConnectionAsync()
+$c = [System.IO.Pipes.NamedPipeClientStream]::new('.', '${name}', 'InOut')
+$c.Connect(10000)
+'busy'
+Start-Sleep -Seconds 60`
+
+describe.skipIf(process.platform !== 'win32')('readLiveRegistry: a Windows named pipe', () => {
+  test('a session whose pipe has no free instance is still live', async () => {
+    const name = `ah-busy-pipe-${process.pid}-${Date.now()}`
+    const helper = Bun.spawn(
+      ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', BUSY_PIPE_SCRIPT(name)],
+      { stdout: 'pipe', stderr: 'ignore', windowsHide: true },
+    )
+    try {
+      const reader = helper.stdout.getReader()
+      let said = ''
+      while (!said.includes('busy')) {
+        const { value, done } = await reader.read()
+        if (done) throw new Error(`the pipe helper exited before holding the pipe: ${said}`)
+        said += new TextDecoder().decode(value)
+      }
+      const dir = home([record({ messagingSocketPath: `\\\\.\\pipe\\${name}` })])
+      expect(readLiveRegistry(dir).map((s) => s.pid)).toEqual([process.pid])
+    } finally {
+      helper.kill()
+    }
+  }, 30_000)
+})

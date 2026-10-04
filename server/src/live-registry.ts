@@ -49,11 +49,46 @@ function pidAlive(pid: number): boolean {
  *  never a substitute: on POSIX a crash can leave the socket file on disk, so the pid check still
  *  carries the verdict there and this only narrows it. A record too old to carry a socket path
  *  falls back to the pid alone, which is exactly what every record used to get. */
-function sessionAlive(reg: { pid: number; messagingSocketPath?: unknown }): boolean {
+function sessionAlive(
+  reg: { pid: number; messagingSocketPath?: unknown },
+  pipes: () => Set<string> | null,
+): boolean {
   if (!pidAlive(reg.pid)) return false
   const sock = reg.messagingSocketPath
   if (typeof sock !== 'string' || sock === '') return true
-  return existsSync(sock)
+  return socketPresent(sock, pipes)
+}
+
+/** Where Windows keeps named pipes: a session's socket there is `\\.\pipe\LOCAL\cc-msg-<hash>`. */
+const PIPE_ROOT = '\\\\.\\pipe\\'
+
+/** Does a session's own messaging socket exist? A Windows named pipe is looked up in the pipe
+ *  listing and NEVER opened (2026-10-03): `existsSync` on a pipe CONNECTS to it, taking one of the
+ *  session's listening instances, and answers false whenever no instance is free - so a busy chat
+ *  read as dead (a working chat's move plan said "no live engine - the import would post at once")
+ *  and every scan knocked on every engine's pipe, CliMayte's pool every few seconds. A listing that
+ *  cannot be read is unknown, which falls back to the pid's verdict: never "gone", the verdict
+ *  something acts on. */
+function socketPresent(sock: string, pipes: () => Set<string> | null): boolean {
+  const path = sock.replace(/\//g, '\\')
+  if (!path.toLowerCase().startsWith(PIPE_ROOT)) return existsSync(sock)
+  const names = pipes()
+  return names === null || names.has(path.slice(PIPE_ROOT.length).toLowerCase())
+}
+
+/** The pipe listing for ONE scan, read on first use: one directory read answers every record. */
+function pipeListing(): () => Set<string> | null {
+  let names: Set<string> | null | undefined
+  return () => {
+    if (names === undefined) {
+      try {
+        names = new Set(readdirSync(PIPE_ROOT).map((n) => n.toLowerCase()))
+      } catch {
+        names = null
+      }
+    }
+    return names
+  }
 }
 
 /** The CLI's transcript-store encoding of a cwd: every non-alphanumeric character becomes '-'. */
@@ -95,11 +130,12 @@ export function readOrphanedRegistry(claudeHome: string): OrphanSession[] {
     return []
   }
   const out: OrphanSession[] = []
+  const pipes = pipeListing()
   for (const f of files) {
     try {
       const reg = JSON.parse(readFileSync(join(dir, f), 'utf8'))
       if (typeof reg?.sessionId !== 'string' || typeof reg?.cwd !== 'string') continue
-      if (typeof reg.pid !== 'number' || sessionAlive(reg)) continue
+      if (typeof reg.pid !== 'number' || sessionAlive(reg, pipes)) continue
       out.push({
         pid: reg.pid,
         sessionId: reg.sessionId,
@@ -140,11 +176,12 @@ export function liveSessionIds(claudeHome: string): string[] {
     return []
   }
   const ids: string[] = []
+  const pipes = pipeListing()
   for (const f of files) {
     try {
       const reg = JSON.parse(readFileSync(join(claudeHome, 'sessions', f), 'utf8'))
       if (typeof reg?.sessionId !== 'string' || typeof reg.pid !== 'number') continue
-      if (sessionAlive(reg)) ids.push(reg.sessionId)
+      if (sessionAlive(reg, pipes)) ids.push(reg.sessionId)
     } catch {
       // One unreadable registry entry must not hide the others.
     }
@@ -161,12 +198,13 @@ export function readLiveRegistry(claudeHome: string): LiveSession[] {
     return []
   }
   const live: LiveSession[] = []
+  const pipes = pipeListing()
   for (const f of files) {
     try {
       const reg = JSON.parse(readFileSync(join(dir, f), 'utf8'))
       if (typeof reg?.sessionId !== 'string' || typeof reg?.cwd !== 'string') continue
       if (typeof reg.pid !== 'number') continue
-      if (!sessionAlive(reg)) continue
+      if (!sessionAlive(reg, pipes)) continue
       live.push({
         pid: reg.pid,
         sessionId: reg.sessionId,
