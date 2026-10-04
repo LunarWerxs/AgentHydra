@@ -2,7 +2,7 @@ import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from 'hono'
 import { climayteLimitWalls, climayteLiveReadings } from '../climayte'
-import { accountTokens, cliAccountUuid, resetsOf } from '../core/account-tokens'
+import { cliAccountUuid } from '../core/account-tokens'
 import {
   associateCliInstance,
   createCliInstance,
@@ -61,6 +61,8 @@ import { turnOffExtraUsage } from '../extra-usage'
 import { deepseekBalance } from '../hswarm-cost'
 import { app } from '../http-app'
 import { instanceDirParam } from '../instance-dir-param'
+import { accountTokenWindows } from '../kit/account-windows'
+import type { QuotaReset } from '../kit/query'
 import { readLiveRegistry } from '../live-registry'
 import { jsonBody } from '../route-helpers'
 import { fileNudgeStore } from '../session-keepalive'
@@ -97,6 +99,7 @@ import {
   desktopKey,
   surveyUsage,
 } from '../usage-service'
+import { hswarmAccountId } from './hswarm'
 
 /** Resolve an `account` query param that may be an account id OR a free-text label. */
 function resolveAccountParam(param: string): { id: string; label: string } | null {
@@ -419,6 +422,33 @@ app.get('/api/instances/:dir/usage', async (c) => {
   return c.json(await checkUsageForDesktop(dir))
 })
 
+/** Token windows by account uuid for a set of rows, from the kit: each account's window is cut at
+ *  the reset its row shows (a null uuid is a signed-out row and gets nothing). */
+function kitTokensFor(
+  rows: { uuid: string | null; snapshot: UsageSnapshot | null | undefined }[],
+): Map<string, AccountTokens> {
+  const resets = new Map<string, QuotaReset>()
+  const idOf = new Map<string, string>()
+  for (const r of rows) {
+    if (!r.uuid) continue
+    const uuid = r.uuid.toLowerCase()
+    const id = hswarmAccountId(uuid)
+    idOf.set(uuid, id)
+    const q = {
+      sessionResetsAt: r.snapshot?.session?.resetsAt ?? null,
+      weekResetsAt: r.snapshot?.weekAll?.resetsAt ?? null,
+    }
+    if (!resets.has(id) || q.sessionResetsAt || q.weekResetsAt) resets.set(id, q)
+  }
+  const byId = accountTokenWindows([...idOf.values()], { quota: (id) => resets.get(id) ?? null })
+  const out = new Map<string, AccountTokens>()
+  for (const [uuid, id] of idOf) {
+    const t = byId.get(id)
+    if (t) out.set(uuid, t)
+  }
+  return out
+}
+
 // --- CLI instances (Feature A) ----------------------------------------------
 // Reconcile associations against the live account table before listing: this is where a record that
 // went dangling before the delete route learned to clean up (or via a hand-edited db) heals itself,
@@ -438,43 +468,53 @@ app.get('/api/cli-instances', (c) => {
   // The keepalive's last nudge per account (session-keepalive.ts), for the row's note.
   const nudges = fileNudgeStore.read()
   const cleared = usageClearedAt()
+  const rows = listCliInstances().map((i) => ({
+    i,
+    uuid: cliAccountUuid(i.configDir, i.loggedIn),
+    lastUsageCheck: shownUsage(
+      cliKey(i.id),
+      withLimitWall(
+        withLiveReading(i.lastUsageCheck, live.get(i.id), i.name),
+        limits.get(i.id),
+        i.name,
+      ),
+      cleared,
+    ),
+  }))
+  // One grouped read per window for every row (kit/account-windows.ts), cut at each account's own
+  // quota reset as the row shows it.
+  const windows = kitTokensFor(rows.map((r) => ({ uuid: r.uuid, snapshot: r.lastUsageCheck })))
   return c.json(
-    listCliInstances().map((i) => {
-      const lastUsageCheck = shownUsage(
-        cliKey(i.id),
-        withLimitWall(
-          withLiveReading(i.lastUsageCheck, live.get(i.id), i.name),
-          limits.get(i.id),
-          i.name,
-        ),
-        cleared,
-      )
-      return {
-        ...i,
-        lastNudge: nudges[i.id] ?? null,
-        liveSessions: readLiveRegistry(i.configDir).length,
-        // The last prompt typed on this login (the CLI appends to history.jsonl) or the last
-        // keepalive nudge, whichever is newer: one stat, no transcript walk.
-        lastActiveAt: Math.max(historyMtimeMs(i.configDir), nudges[i.id]?.at ?? 0) || null,
-        // The account signed in here now, not this folder: a re-login shows the new account's.
-        tokens: accountTokens(cliAccountUuid(i.configDir, i.loggedIn), resetsOf(lastUsageCheck)),
-        lastUsageCheck,
-      }
-    }),
+    rows.map(({ i, uuid, lastUsageCheck }) => ({
+      ...i,
+      lastNudge: nudges[i.id] ?? null,
+      liveSessions: readLiveRegistry(i.configDir).length,
+      // The last prompt typed on this login (the CLI appends to history.jsonl) or the last
+      // keepalive nudge, whichever is newer: one stat, no transcript walk.
+      lastActiveAt: Math.max(historyMtimeMs(i.configDir), nudges[i.id]?.at ?? 0) || null,
+      // The account signed in here now, not this folder: a re-login shows the new account's.
+      tokens: uuid ? (windows.get(uuid) ?? null) : null,
+      lastUsageCheck,
+    })),
   )
 })
-// What the account signed in to each desktop instance has run (core/account-tokens.ts), by instance
+// What the account signed in to each desktop instance has run (kit/account-windows.ts), by instance
 // dir, for the desktop table's Tokens column. A signed-out profile is null.
 app.get('/api/desktop-instance-tokens', (c) => {
-  const out: Record<string, AccountTokens | null> = {}
+  const dirs: { dir: string; uuid: string | null; snapshot: UsageSnapshot | null | undefined }[] =
+    []
   for (const ref of Object.keys(allInstanceNumbers())) {
     const parsed = parseInstanceRef(ref)
     if (parsed?.kind !== 'desktop') continue
-    out[parsed.id] = accountTokens(
-      readLoginUuid(parsed.id),
-      resetsOf(getCachedUsage(desktopKey(parsed.id))),
-    )
+    dirs.push({
+      dir: parsed.id,
+      uuid: readLoginUuid(parsed.id),
+      snapshot: getCachedUsage(desktopKey(parsed.id)),
+    })
   }
+  const windows = kitTokensFor(dirs)
+  const out: Record<string, AccountTokens | null> = {}
+  for (const d of dirs) out[d.dir] = d.uuid ? (windows.get(d.uuid) ?? null) : null
   return c.json(out)
 })
 app.post('/api/cli-instances', async (c) => {

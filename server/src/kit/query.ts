@@ -41,11 +41,13 @@ export const MEASURES = [
   'failed',
   'seconds',
 ] as const
+/** Token kinds, opt-in: `tokens` stays the sum, these split it (`cache_write` = 5m + 1h writes). */
+export const TOKEN_KIND_MEASURES = ['input', 'output', 'cache_read', 'cache_write'] as const
 export const LAST_WINDOWS = ['5h', '24h', '7d', '30d', 'all'] as const
 
 export type FilterKey = (typeof FILTER_KEYS)[number]
 export type GroupBy = (typeof GROUP_BYS)[number]
-export type Measure = (typeof MEASURES)[number]
+export type Measure = (typeof MEASURES)[number] | (typeof TOKEN_KIND_MEASURES)[number]
 export type LastWindow = (typeof LAST_WINDOWS)[number]
 type One<T> = T | T[]
 
@@ -127,7 +129,7 @@ export function sharedKitStore(): KitStore {
  * An account's latest quota snapshot: the usage cache entry of an instance the account's calls came
  * from (usage_event.instance is the cache key), newest reading first.
  */
-function cachedQuota(db: Database): (account: string) => QuotaReset | null {
+export function cachedQuota(db: Database): (account: string) => QuotaReset | null {
   return (account) => {
     const insts = db
       .query(
@@ -234,6 +236,10 @@ interface RawRow {
   ok: number
   failed: number
   seconds: number | null
+  input: number
+  output: number
+  cache_read: number
+  cache_write: number
   [dim: string]: string | number | null
 }
 
@@ -266,7 +272,9 @@ function selectRows(
     : `sum(${TOKEN_SUM}) as tokens, sum(list_usd) as list_usd, sum(billed_usd) as billed_usd,
        sum(weighted) as weighted, sum(calls) as calls, sum(ok_calls) as ok,
        sum(failed_calls) as failed, sum(seconds) as seconds`
-  const sql = `select ${[hourSel, ...dimSel].join(', ')}, ${measures} from ${table} where ${where.sql}${group ? ` group by ${group}` : ''}`
+  const kinds =
+    'sum(input) as input, sum(output) as output, sum(cache_read) as cache_read, sum(cache_write_5m + cache_write_1h) as cache_write'
+  const sql = `select ${[hourSel, ...dimSel].join(', ')}, ${measures}, ${kinds} from ${table} where ${where.sql}${group ? ` group by ${group}` : ''}`
   return db.query(sql).all(...where.args) as RawRow[]
 }
 
@@ -298,7 +306,7 @@ export function usageQuery(params: UsageQueryParams = {}, opts: UsageQueryOpts =
   const win = resolveWindow(params.window, now, opts.quota ?? cachedQuota(db))
   const filter = params.filter ?? {}
   const groupBy = params.groupBy ?? []
-  const measures = params.measures ?? [...MEASURES]
+  const measures: Measure[] = params.measures ?? [...MEASURES]
   const notes: string[] = []
 
   const dims = [...new Set(groupBy.filter((g): g is DimCol => g !== 'day' && g !== 'hour'))]
@@ -356,6 +364,7 @@ export function usageQuery(params: UsageQueryParams = {}, opts: UsageQueryOpts =
       merged.set(id, { ...key, ...pick(r) })
     } else {
       cur.tokens = (cur.tokens as number) + r.tokens
+      for (const k of TOKEN_KIND_MEASURES) cur[k] = (cur[k] as number) + r[k]
       cur.list_usd = addNullable(cur.list_usd as number | null, r.list_usd)
       cur.billed_usd = addNullable(cur.billed_usd as number | null, r.billed_usd)
       cur.weighted = (cur.weighted as number) + r.weighted
@@ -414,9 +423,17 @@ const emptyRow = (): RawRow => ({
   ok: 0,
   failed: 0,
   seconds: null,
+  input: 0,
+  output: 0,
+  cache_read: 0,
+  cache_write: 0,
 })
 
 const pick = (r: RawRow): UsageRow => ({
+  input: r.input,
+  output: r.output,
+  cache_read: r.cache_read,
+  cache_write: r.cache_write,
   tokens: r.tokens ?? 0,
   list_usd: r.list_usd,
   billed_usd: r.billed_usd,

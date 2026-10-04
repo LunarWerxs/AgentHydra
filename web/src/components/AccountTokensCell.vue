@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The Tokens cell of the CLI and desktop tables: the signed-in account's figure for the span the
 // table's switch has chosen (the sum), the four kinds on hover. Figures come from
-// core/account-tokens.ts; the row model carries the chosen span's parts.
+// the analytics kit (kit/account-windows.ts); the row model carries the chosen span's parts.
 import { formatTokens } from '@/lib/climayte-status'
 import type { InstanceRowModel } from '@/lib/instance-table'
 import IconTooltip from '@/shell/IconTooltip.vue'
