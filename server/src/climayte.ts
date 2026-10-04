@@ -71,7 +71,6 @@ import {
   settleSpends,
   signalPath,
   slashed,
-  spendRecord,
   spentOf,
   storeLoaded,
   tailText,
@@ -93,7 +92,6 @@ import { removeWorkerFiles, workerFileIds } from './climayte-launch'
 import {
   aboutToBill,
   addResults,
-  addTokens,
   atCeiling,
   type CliMayteAccount,
   type CliMayteLiveUsage,

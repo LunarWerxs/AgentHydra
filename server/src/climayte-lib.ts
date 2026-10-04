@@ -194,7 +194,7 @@ export interface CliMayteWorker {
   message?: string
   error: string | null
   lastActivity: string | null // one line: the newest event summarised (summarizeEvent)
-  costUsd: number // summed over every attempt's own spend (attemptSpend), from the transcript
+  costUsd: number // summed over every attempt's own spend (attemptSpend), from the kit
   tokens?: CliMayteTokens // summed the same way; absent on tasks recorded before 2026-09-30
   turns: number // summed `result.num_turns`
   moves: number // how many times the session changed account
