@@ -67,6 +67,7 @@ import { forgetOwnerSync, ownerMcpServers, syncOwnerClaude } from '../src/climay
 import { waitsForHome } from '../src/climayte-placement'
 import { clearRemote, setRemote } from '../src/climayte-remote'
 import { isPidAlive, killProcessTree } from '../src/core/process'
+import { KitStore } from '../src/kit/store'
 import { setProviderSettings } from '../src/provider-settings'
 import { parseResetTime } from '../src/usage'
 
@@ -1329,6 +1330,21 @@ describe('integration: paid extra usage is never spent', () => {
       workers.delete('w-arrived')
       workers.delete('w-climbed')
     }
+  })
+})
+
+describe('the totals read tokens and $ from the kit', () => {
+  test("CliMayte's calls in the kit are the counter, whatever the attempts recorded", () => {
+    const store = new KitStore(':memory:')
+    const ts = Date.now() - 60_000
+    store.upsertEvents([
+      { id: 'k1', ts, source: 'climayte', model: 'm', input: 100, output: 50, list_usd: 1.5 },
+      { id: 'k2', ts, source: 'climayte', model: 'm', input: 10, output: 5, list_usd: 0.25 },
+      { id: 'k3', ts, source: 'cli', model: 'm', input: 9_999, output: 1, list_usd: 99 },
+    ])
+    const totals = climayteTotals(0, { store })
+    expect(totals.tokens).toEqual({ input: 110, output: 55, cacheRead: 0, cacheWrite: 0 })
+    expect(totals.costUsd).toBeCloseTo(1.75, 6)
   })
 })
 

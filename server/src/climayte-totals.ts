@@ -4,6 +4,8 @@
 import { acctLabel, lastThatRan, load, pct1, workers } from './climayte-core'
 import { addTokens, type CliMayteTokens, type CliMayteWorker, noTokens } from './climayte-lib'
 import { attemptUnits, rereadUnits } from './climayte-scorecard'
+import { sharedKitStore, usageQuery } from './kit/query'
+import type { KitStore } from './kit/store'
 
 type TotalsAttempt = CliMayteWorker['attempts'][number]
 
@@ -71,6 +73,48 @@ interface TotalsTally {
   peaks: Map<string, WindowPeak>
   runsByOutcome: Partial<Record<TotalsAttempt['outcome'] | 'ceiling', number>>
   distinct: Set<string>
+}
+
+/** What CliMayte's calls cost since a moment, from the analytics kit: tokens, list $ and weighted
+ *  units in one ungrouped query (whole hours come from the hourly rollup, so it is cheap on the
+ *  live store). Calls carry source 'climayte' when their session belongs to a CliMayte attempt.
+ *  null when the kit holds none, so the caller keeps the figures the attempts recorded. */
+export function kitSpend(
+  since: number,
+  store?: KitStore,
+): { tokens: CliMayteTokens; costUsd: number; weighted: number } | null {
+  const r = usageQuery(
+    {
+      window: { from: since },
+      filter: { source: 'climayte' },
+      measures: ['input', 'output', 'cache_read', 'cache_write', 'list_usd', 'weighted', 'calls'],
+    },
+    { store },
+  )
+  const t = r.totals
+  if (!t.calls) return null
+  return {
+    tokens: {
+      input: t.input ?? 0,
+      output: t.output ?? 0,
+      cacheRead: t.cache_read ?? 0,
+      cacheWrite: t.cache_write ?? 0,
+    },
+    costUsd: t.list_usd ?? 0,
+    weighted: t.weighted ?? 0,
+  }
+}
+
+/** Which of `ids` the kit holds CliMayte calls for: the per-session ledger's key, one seek each. */
+function kitSessions(ids: string[], store?: KitStore): Set<string> {
+  if (!ids.length) return new Set()
+  const db = (store ?? sharedKitStore()).db
+  const rows = db
+    .query(
+      `select distinct session from usage_session where source = 'climayte' and session in (${ids.map(() => '?').join(',')})`,
+    )
+    .all(...ids) as { session: string }[]
+  return new Set(rows.map((r) => r.session))
 }
 
 /** How many runs were on an account at a moment, the one that asks included. */
@@ -243,7 +287,10 @@ function sizingOf(sized: SizedTask[]): ReturnType<typeof climayteTotals>['sizing
 /** What CliMayte has taken off the chats that handed it work: tasks, the CLI sessions they ran
  *  (attempts), their tokens and cost (the CliMayte view's counter), over every task on record, or
  *  with `since` over the runs that ended after it (a night's re-read share, not the record's). */
-export function climayteTotals(since = 0): {
+export function climayteTotals(
+  since = 0,
+  opts: { store?: KitStore } = {},
+): {
   tasks: number
   /** Attempts ("runs"): every start of the CLI, retries, resumes and handoffs included. */
   sessions: number
@@ -343,6 +390,32 @@ export function climayteTotals(since = 0): {
     for (const at of w.attempts) tallyAttempt(tally, w, at)
   }
   const sized = sizedTasks(since)
+  // Tokens, $ and weighted units are the kit's: one query, not a transcript read per attempt.
+  const kit = kitSpend(since, opts.store)
+  if (kit) {
+    tally.tokens = kit.tokens
+    tally.costUsd = kit.costUsd
+    tally.used = kit.weighted
+    // Attempts whose session the kit never saw (its transcript was gone before the kit existed)
+    // keep the figures recorded when they ended: nothing else holds them.
+    const known = kitSessions(
+      [...workers.values()].flatMap((w) =>
+        w.attempts.flatMap((at) => {
+          const sid = at.sessionId === undefined ? w.sessionId : at.sessionId
+          return sid ? [sid] : []
+        }),
+      ),
+      opts.store,
+    )
+    for (const w of workers.values())
+      for (const at of w.attempts) {
+        const sid = at.sessionId === undefined ? w.sessionId : at.sessionId
+        if (!at.tokens || (sid && known.has(sid)) || (at.endedAt ?? Date.now()) < since) continue
+        tally.tokens = addTokens(tally.tokens, at.tokens)
+        tally.costUsd += at.spend?.costUsd ?? 0
+        tally.used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
+      }
+  }
   return {
     tasks: tally.tasksInScope.size,
     sessions: tally.sessions,
