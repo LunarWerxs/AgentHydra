@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-04
+
 ### Added
 
 - **A worker can be moved to another folder** (owner, 2026-10-04: Hydra Desk moves a chat when Claude cd's out of its folder). `climayte_send` and `POST /api/corch/workers/:id/send` take an optional `cwd` (absolute, existing, local; a relative, missing, UNC or device path is refused). From the worker's next launch its session is copied into that folder's project dir on the account it runs on (the original stays) and resumed there; the change is journaled (`cwd-changed`) and `climayte_status` shows `cwd` and `pendingCwd`. See docs/CLIMAYTE.md, Moving a worker to another folder.
