@@ -6,7 +6,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { shortUsd } from '@/lib/chart'
 import { accountDisplay, type HswarmAccountName, useHswarmApi } from '@/lib/hswarm-api'
-import { formatTokens, formatUsd } from '@/lib/kit'
+import { fetchKitUsage, formatTokens, formatUsd } from '@/lib/kit'
 import InfoHint from '@/shell/InfoHint.vue'
 
 type Row = Record<string, any>
@@ -63,8 +63,55 @@ async function load() {
     loading.value = false
   }
 }
+
+// The Claude side of the per-machine table is the usage kit's, per PC: its Claude Code calls (cli and
+// desktop) over all time, the same span as HSwarm's own per-machine totals. Not the Python scanner's.
+const kitClaude = ref<Row[]>([])
+async function loadKitClaude() {
+  try {
+    const r = await fetchKitUsage({
+      source: ['cli', 'desktop'],
+      last: 'all',
+      groupBy: 'pc',
+      measures: ['tokens', 'cost_usd'],
+    })
+    kitClaude.value = r.rows
+  } catch {
+    kitClaude.value = []
+  }
+}
+
+/** HSwarm's own per-machine rows with the kit's Claude tokens and $ beside them, matched on the machine
+ *  name; a PC the kit knows and HSwarm does not still gets its row. */
+const machineRows = computed<Row[]>(() => {
+  const f = F.value
+  const kit = new Map(kitClaude.value.map((r) => [String(r.pc ?? ''), r]))
+  const seen = new Set<string>()
+  const withClaude = (m: Row, k: Row | undefined): Row => {
+    const usd = k ? Number(k.cost_usd ?? 0) : null
+    const claude = usd === null ? null : plan.value ? (m.rate == null ? null : usd * m.rate) : usd
+    const est = m[f.est]
+    return {
+      ...m,
+      claude_tokens: k ? Number(k.tokens ?? 0) : null,
+      claude_cost: claude,
+      share: est == null || claude === null || est + claude <= 0 ? null : est / (est + claude),
+    }
+  }
+  const rows = (stats.value?.by_machine ?? []).map((m) => {
+    const name = String(m.machine ?? '')
+    seen.add(name)
+    return withClaude(m, kit.get(name))
+  })
+  for (const [pc, k] of kit) {
+    if (!seen.has(pc)) rows.push(withClaude({ machine: pc || null }, k))
+  }
+  return rows
+})
+
 onMounted(() => {
   load()
+  loadKitClaude()
   fetchAccountNames().then((n) => {
     names.value = n
   })
@@ -288,7 +335,7 @@ const tables = computed<Table[]>(() => {
       id: 'machines',
       title: t('hswarm.v.savings.tMachines'),
       hint: t('hswarm.v.savings.tMachinesHint'),
-      rows: s.by_machine,
+      rows: machineRows.value,
       cols: [
         { key: 'machine', label: t('hswarm.v.savings.cMachine') },
         { key: 'n', label: t('hswarm.v.savings.cRuns'), num: true, fmt: int as any },
@@ -296,7 +343,24 @@ const tables = computed<Table[]>(() => {
         { key: f.est, label: t('hswarm.v.savings.cEst'), num: true, fmt: money(f.est) },
         { key: f.worker, label: t('hswarm.v.savings.cWorker'), num: true, fmt: money(f.worker) },
         { key: f.saved, label: t('hswarm.v.savings.cSaved'), num: true, fmt: money(f.saved) },
-        { key: 'share', label: t('hswarm.v.savings.cShare'), num: true, fmt: pct as any },
+        {
+          key: 'claude_cost',
+          label: t('hswarm.v.savings.cClaude'),
+          num: true,
+          fmt: money('claude_cost'),
+        },
+        {
+          key: 'claude_tokens',
+          label: t('hswarm.v.savings.cClaudeTokens'),
+          num: true,
+          fmt: ((v: number | null) => (v == null ? '—' : compact(v))) as any,
+        },
+        {
+          key: 'share',
+          label: t('hswarm.v.savings.cShare'),
+          num: true,
+          fmt: ((v: number | null) => (v == null ? '—' : pct(v))) as any,
+        },
       ],
     },
     {

@@ -42,8 +42,16 @@ registerSharedPref('agenthydra.analytics.tokenMode', analyticsTokenMode)
 const analyticsSources = storedSelection('agenthydra.analytics.sources', ANALYTICS_SOURCES)
 registerSharedPref('agenthydra.analytics.sources', analyticsSources, ANALYTICS_SOURCES)
 
+export type AnalyticsPc = 'all' | 'self'
+const PC_CHOICES: readonly AnalyticsPc[] = ['all', 'self']
+
+/** Whose calls count: every PC's (the default) or only this machine's (`pc=self` on the kit query). */
+const analyticsPc = useStorage<AnalyticsPc>('agenthydra.analytics.pc', 'all')
+registerSharedPref('agenthydra.analytics.pc', analyticsPc, PC_CHOICES)
+
 export function useAnalyticsPrefs() {
   return {
+    analyticsPc,
     analyticsPeriod,
     analyticsTokenMode,
     analyticsSources,

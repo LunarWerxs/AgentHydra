@@ -85,6 +85,8 @@ export default {
   showLess: 'Show fewer',
   allVendors: 'All providers',
   sourceFilter: 'Sources',
+  pcAll: 'All PCs',
+  pcSelf: 'This PC',
   sourceCli: 'Claude CLI',
   sourceDesktop: 'Claude Desktop',
   sourceClimayte: 'CliMayte',

@@ -11,6 +11,8 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { spendReport } from '../src/analytics'
 import { db } from '../src/db'
+import { machineId } from '../src/kit/machine'
+import { usageQuery } from '../src/kit/query'
 import { KitStore, type UsageEventInput } from '../src/kit/store'
 
 const H = 3_600_000
@@ -184,6 +186,28 @@ describe('history past the raw window survives in the rollup', () => {
     expect(b).toEqual(a)
     expect(a.byDay.reduce((s, d) => s + d.turns, 0)).toBe(a.calls)
     expect(a.byProject.reduce((s, d) => s + d.turns, 0)).toBe(a.calls)
+  })
+})
+
+describe('the This PC choice', () => {
+  test('pc=self counts only this machine, and grouping by pc keeps every machine apart', () => {
+    const s = new KitStore(':memory:', { now: NOW })
+    s.upsertEvents([
+      call(2 * H, { id: 'pc1', pc: machineId() }),
+      call(3 * H, { id: 'pc2', pc: 'other-pc' }),
+      call(4 * H, { id: 'pc3', pc: 'other-pc' }),
+    ])
+    expect(spendReport({ store: s, now: NOW }).calls).toBe(3)
+    expect(spendReport({ store: s, now: NOW, pc: 'self' }).calls).toBe(1)
+    const byPc = usageQuery(
+      { window: { last: 'all' }, groupBy: ['pc'], measures: ['calls'] },
+      { store: s, now: NOW },
+    )
+    expect(Object.fromEntries(byPc.rows.map((r) => [r.pc, r.calls]))).toEqual({
+      [machineId()]: 1,
+      'other-pc': 2,
+    })
+    s.close()
   })
 })
 

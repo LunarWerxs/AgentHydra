@@ -67,6 +67,7 @@ export default {
   cDays: 'Days',
   cClaude: 'Claude',
   cTokens: 'Tokens',
+  cClaudeTokens: 'Claude tokens',
   cLast: 'Last',
   cDay: 'Day',
   cWhen: 'When',

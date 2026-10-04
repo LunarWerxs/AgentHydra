@@ -77,7 +77,7 @@ const { t } = useI18n()
 const openView = inject(OPEN_VIEW, () => {})
 // The header's full-width toggle lifts this page's own reading cap too.
 const { fullWidth } = useShellWidth()
-const { analyticsPeriod, analyticsTokenMode, analyticsSources, toggleTokenMode } =
+const { analyticsPeriod, analyticsTokenMode, analyticsSources, analyticsPc, toggleTokenMode } =
   useAnalyticsPrefs()
 
 /** acct id -> who it is, for the per-account rows (empty when the daemon cannot say). */
@@ -158,6 +158,7 @@ async function loadSpend() {
     const s = await api.getSpend(
       analyticsPeriod.value,
       scopeParam(analyticsSources.value, ANALYTICS_SOURCES),
+      analyticsPc.value === 'self' ? 'self' : undefined,
     )
     if (mine === latestSpend) spend.value = s
   } catch {
@@ -206,7 +207,7 @@ async function load() {
 
 onMounted(load)
 watch(analyticsPeriod, load)
-watch(analyticsSources, loadSpend)
+watch([analyticsSources, analyticsPc], loadSpend)
 onMounted(async () => {
   accountNames.value = await fetchAccountNames()
 })
@@ -580,6 +581,19 @@ const survivalAverage = computed(() => {
               @all="analyticsSources = [...ANALYTICS_SOURCES]"
               @none="analyticsSources = []"
             />
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger as-child>
+            <Button :variant="analyticsPc === 'all' ? 'outline' : 'secondary'" size="sm">
+              {{ analyticsPc === 'all' ? $t('analytics.pcAll') : $t('analytics.pcSelf') }}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" class="max-w-48">
+            <DropdownMenuRadioGroup v-model="analyticsPc">
+              <DropdownMenuRadioItem value="all">{{ $t('analytics.pcAll') }}</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="self">{{ $t('analytics.pcSelf') }}</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
         <DropdownMenu v-if="vendors.length > 1">

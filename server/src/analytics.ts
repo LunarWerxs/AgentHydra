@@ -1633,6 +1633,8 @@ export interface SpendReportOptions {
   sinceMs?: number | null
   /** Kit sources to count (cli, desktop, climayte, codex, ...); absent = all. */
   sources?: readonly string[] | null
+  /** `self` = only this machine's calls (the kit's pc=self); absent = every PC. */
+  pc?: 'self' | null
   /** Test seams: the kit store to read and the clock. */
   store?: KitStore
   now?: number
@@ -1655,7 +1657,7 @@ export function spendReport(opts: SpendReportOptions = {}): SpendReport {
   // The same question again within the minute, with nothing written since, is the last answer (the
   // kit's own cache hands back a copy of thousands of rows each time).
   const store = opts.store ?? sharedKitStore()
-  const key = `${storeGeneration(store.db)}|${Math.floor((opts.sinceMs ?? 0) / 60_000)}|${Math.floor((opts.now ?? Date.now()) / 60_000)}|${opts.sources ? [...opts.sources].sort().join(',') : '*'}`
+  const key = `${storeGeneration(store.db)}|${Math.floor((opts.sinceMs ?? 0) / 60_000)}|${Math.floor((opts.now ?? Date.now()) / 60_000)}|${opts.sources ? [...opts.sources].sort().join(',') : '*'}|${opts.pc ?? ''}`
   const hit = spendCache.get(store)
   if (hit && hit.key === key) return hit.value
   const value = buildSpendReport({ ...opts, store })
@@ -1681,7 +1683,10 @@ function buildSpendReport(opts: SpendReportOptions): SpendReport {
   // To the minute, so a window cut from the clock (now - 30d) asks the same question for a minute and
   // the kit's result cache answers repeats.
   const window = { from: Math.floor((opts.sinceMs ?? 0) / 60_000) * 60_000 }
-  const filter = sources ? { source: [...sources] } : undefined
+  const filter =
+    sources || opts.pc
+      ? { ...(sources ? { source: [...sources] } : {}), ...(opts.pc ? { pc: opts.pc } : {}) }
+      : undefined
   const qopts = { store: opts.store, now: opts.now }
   // Two queries, because a session in the grouping makes the kit read every raw row of a window: the
   // figures (by day, model, source, account) come whole from the hourly rollup, and the sessions

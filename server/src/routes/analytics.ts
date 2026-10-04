@@ -44,7 +44,11 @@ const spendSources = (raw: string | undefined): string[] | null => {
 }
 app.get('/api/analytics/spend', (c) =>
   c.json(
-    spendReport({ sinceMs: analyticsPeriod(c), sources: spendSources(c.req.query('source')) }),
+    spendReport({
+      sinceMs: analyticsPeriod(c),
+      sources: spendSources(c.req.query('source')),
+      pc: c.req.query('pc') === 'self' ? 'self' : null,
+    }),
   ),
 )
 app.get('/api/analytics/activity', (c) => {
