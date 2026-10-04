@@ -1715,10 +1715,15 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
     w.error =
       `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
   journalFinish(w, at, v, spent)
+  // A worker that asked (climayteAsk) ended its turn to wait for the answer: nothing is judged, no
+  // check runs and no wave batch is woken until the answer resumes it. A question left when the
+  // turn went on (a message was already queued) is answered.
+  const asking = w.status === 'done' && !!w.question
+  if (w.question && !asking) delete w.question
   // A wave task with no check is judged now; with one, when its check ends (judgeCheck).
-  const judged = w.status === 'done' && !w.check && judgeInWave(w, null)
-  if (w.status === 'done' && w.check) startCheck(w)
-  if (!judged && w.status !== 'checking') addToWaveBatch(w, now)
+  const judged = !asking && w.status === 'done' && !w.check && judgeInWave(w, null)
+  if (!asking && w.status === 'done' && w.check) startCheck(w)
+  if (!asking && !judged && w.status !== 'checking') addToWaveBatch(w, now)
 
   changed(w)
   schedule(50)
@@ -2518,6 +2523,7 @@ export function climayteSend(
   }
   if (model) w.model = model
   if (effort) w.effort = effort
+  delete w.question // a message is the answer to what the worker asked (climayteAsk)
   if (w.status === 'running' && opts.urgent) {
     w.pending.unshift(`${URGENT_PREFIX}\n\n${text}`)
     journal(w, 'follow-up-queued', {
@@ -2569,6 +2575,47 @@ export function climayteSend(
     message: 'Queued as the next turn of the same session.',
     model: w.model,
     effort: w.effort,
+  }
+}
+
+const QUESTION_MAX = 2000
+const OPTION_MAX = 200
+const OPTIONS_MAX = 8
+
+/** A worker's question (the climayte_ask tool, climayte-ask-mcp.ts): recorded on it, journaled and
+ *  pinged to whoever started it (climayte-ping.ts 'asking'). The worker ends its turn after asking;
+ *  the answer is climayteSend, which resumes the same session and clears the question. Nothing
+ *  waits inside the call. Only a running worker can ask. */
+export function climayteAsk(
+  id: string,
+  input: { question?: unknown; options?: unknown; context?: unknown },
+): { ok: boolean; message: string } {
+  load()
+  const w = workers.get(id)
+  if (!w) return { ok: false, message: 'No such worker.' }
+  if (w.status !== 'running')
+    return { ok: false, message: `This worker is ${w.status}, not running: it cannot ask.` }
+  const text = typeof input.question === 'string' ? input.question.trim() : ''
+  if (!text) return { ok: false, message: 'The question is empty.' }
+  const options = Array.isArray(input.options)
+    ? input.options
+        .filter((o): o is string => typeof o === 'string' && !!o.trim())
+        .slice(0, OPTIONS_MAX)
+        .map((o) => o.trim().slice(0, OPTION_MAX))
+    : []
+  const context = typeof input.context === 'string' ? input.context.trim() : ''
+  w.question = {
+    text: text.slice(0, QUESTION_MAX),
+    ...(options.length ? { options } : {}),
+    ...(context ? { context: context.slice(0, QUESTION_MAX) } : {}),
+    at: Date.now(),
+  }
+  journal(w, 'asked', { said: firstLine(text).slice(0, 160) })
+  changed(w)
+  return {
+    ok: true,
+    message:
+      'Your question is recorded and sent to whoever started you. End your turn now with one line saying what you asked and what you did so far (do not wait inside this call); the answer arrives as a message that resumes this same session. Until then, do only work that does not depend on the answer.',
   }
 }
 
@@ -3134,6 +3181,7 @@ export function climayteCancel(filter: { id?: string; group?: string }): {
     const at = w.attempts[w.attempts.length - 1]
     w.status = 'cancelled'
     w.error = null
+    delete w.question
     delete w.revived
     if (w.pending.length) keptMessages[w.id] = w.pending.length
     journal(w, 'cancelled', {
@@ -3327,7 +3375,7 @@ export function climaytePing(): CliMaytePing | null {
  *  with them, so no test ever reaches a real chat. */
 export function setCliMaytePingDeps(deps: Partial<CliMaytePingDeps> | null): void {
   pingOverrides = deps
-  if (!ping) return
+  if (!ping && !(started && deps)) return
   stopCliMaytePing()
   startPing()
 }

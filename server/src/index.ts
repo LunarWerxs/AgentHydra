@@ -24,6 +24,7 @@ import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
 import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayte'
+import { registerAskMcpRoute } from './climayte-ask-mcp'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
 import {
   APP_ROOT,
@@ -427,6 +428,8 @@ app.get('/api/mcp', (c) =>
 // --- manager MCP endpoint: `/api/corch/mcp/:managerId` gives a manager its wave's tools
 // (climayte-manager-mcp.ts; docs/CLIMAYTE.md, "Scope and identity of the manager endpoint").
 registerManagerMcpRoute(app, callerPidOf)
+// --- worker MCP endpoint: `/api/corch/ask/:workerId` gives a worker climayte_ask (climayte-ask-mcp.ts).
+registerAskMcpRoute(app, callerPidOf)
 
 // --- self-update (source: git engine; compiled: GitHub Releases — see server/src/updater.ts) --
 app.get('/api/update', async (c) => {

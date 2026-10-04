@@ -24,6 +24,7 @@ export type CliMayteJournalEvent =
   | 'handoff-resumed' // the fresh session started from the handoff
   | 'follow-up-queued' // climayte_send queued a message
   | 'follow-up-delivered' // an attempt started with that message
+  | 'asked' // the worker asked a question (climayte_ask; `said`: its first line); the answer is climayte_send
   | 'retry' // the API was overloaded, or the next attempt could not start: tried again later
   | 'interrupted' // the CLI was killed from outside (a daemon restart); resumed
   | 'cleaned' // its attempt ended and what the session left running was ended (`notice`: which)
@@ -321,6 +322,8 @@ export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Da
       return describeFollowUpQueuedLine(e, runs)
     case 'follow-up-delivered':
       return `follow-up delivered${on} ${pick}${runs}`
+    case 'asked':
+      return `asked${on}${e.said ? `: ${e.said}` : ''}`
     case 'retry':
       return describeRetryLine(e, on)
     case 'cleaned':

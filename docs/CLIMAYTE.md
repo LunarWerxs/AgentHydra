@@ -778,6 +778,44 @@ on a normal install), nothing is recorded or sent, and dispatches answer `ping: 
 the file. Delete it to turn pings back on. `startCliMayte()` starts the outbox (`startCliMaytePing`
 with the real worker feed and transports) and daemon shutdown stops it (`stopCliMaytePing`).
 
+### Questions from a worker (`climayte_ask`, owner, 2026-10-04)
+
+A headless worker could never ask, so it guessed. Owner: "all the CLI mates can ask questions
+themselves properly. Those questions should be handled by the AI that started them, not me. Only if
+the question is confusing or needs me should it ask me."
+
+**The tool.** `climayte_ask { question: string, options?: string[], context?: string }`, on a
+per-worker MCP server named `climayte-worker` (`server/src/climayte-ask-mcp.ts`). Workers are denied
+AgentHydra's own MCP, so every worker's settings carry an http server at
+`/api/corch/ask/<workerId>` (written by `writeWorkerMcp`, only when the account has an owner Claude
+dir). The route answers only when the caller's socket pid is the worker's latest attempt pid; any other
+caller gets 403, so a worker can ask only for itself.
+
+**What it does.** Only a running worker can ask. `climayteAsk` records `worker.question`
+(`{ text, options?, context?, at }`), journals `asked`, and answers "End your turn": the CLI process is
+never held open. The turn that ends after it is not a finish: `finish()` leaves the worker `done` with
+its question set, and does not judge it, start a check or add it to a wave batch.
+
+**Where it shows.** `climayte_status { id }` and the report/brief rows carry `question` (the first 400
+characters in a report), the CliMayte worker detail has an "Asking" block (question, options,
+context), and the origin gets a ping.
+
+**Routing to the origin.** The ping kind `asking` (key `<id>:asking:<question.at>`) flushes urgently and
+names the worker and the question text (the one exception to "no worker text in pings"); it is not a
+"needs your verdict" and a group with a questioning worker is not settled. A chat origin gets the
+peer ping (composer fallback, then the unread pings); a worker origin gets it through `climayteSend`
+as its next message. With no reachable origin the question shows in the CliMayte view and in
+`climayte_status` for the owner. The ping ends with: answer it yourself from the task context with
+`climayte_send { id, text }`; ask the owner only when it needs a decision only they can make.
+
+**The answer.** The existing `climayte_send { id, text }`: it resumes the same session with the text and
+deletes `worker.question`. `climayteCancel` clears it too.
+
+**The contract.** `WORKER_BRIEF` tells a worker to use `climayte_ask` only when blocked on a real
+decision, and otherwise to make the reasonable call and say which.
+
+Tests: `server/tests/climayte-ask.test.ts`.
+
 ### API (what routes and MCP call)
 
 ```ts

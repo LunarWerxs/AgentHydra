@@ -23,7 +23,9 @@
 //
 // WHAT A PING CARRIES: ids, titles, groups, statuses, accounts by instance number and reasons in
 // CliMayte's own words (failedReason). Never a prompt, a report, a follow-up, a verdict note, an
-// error a worker wrote or its stderr, so worker text never enters the chat.
+// error a worker wrote or its stderr, so worker text never enters the chat. The one exception is an
+// 'asking' ping, which carries the worker's question (cut), because the question is what the chat
+// has to answer (climayte_ask; owner, 2026-10-04).
 //
 // Kill switch: the file `<dir>/ping-off`. While it exists nothing is recorded or sent.
 //
@@ -60,6 +62,7 @@ export const PEER_CONFIRM_MS = 45_000
 const MAX_BULLETS = 15
 const TITLE_MAX = 80
 const REASON_MAX = 160
+const QUESTION_MAX = 600
 const DELIVERED_KEYS_MAX = 5000
 const UNREAD_MAX = 20
 const FORGET_ORIGIN_MS = 7 * 24 * 3_600_000
@@ -96,6 +99,8 @@ export interface PingWorker {
   verdicts?: Array<{ verdict: 'pass' | 'fail'; by?: string }>
   error: string | null
   origin?: CliMayteOrigin
+  /** The question it waits on (climayteAsk): while set, its ended turn is no finish. */
+  question?: { text: string; options?: string[]; at: number }
 }
 
 export type PingKind =
@@ -104,6 +109,7 @@ export type PingKind =
   | 'check-failed' // its check failed; sent back one rung
   | 'failed' // includes a notConverging stop
   | 'cancelled'
+  | 'asking' // the worker asked a question (climayte_ask) and waits for the answer (climayte_send)
   | 'group-done' // every worker of this origin in that group has ended
   | 'limited-moved' // information only: hit a 5-hour or weekly limit, resumed on another account
   | 'stuck' // information only: waiting longer than STUCK_AFTER_MS
@@ -135,6 +141,8 @@ export interface PingSnapshot {
   verdicts: number
   /** When it started waiting, while it waits (for `stuck`). */
   waitingSince: number | null
+  /** `at` of the question it waits on, null when none (for `asking`). */
+  question: number | null
 }
 
 const NEW_WORKER: PingSnapshot = {
@@ -144,6 +152,7 @@ const NEW_WORKER: PingSnapshot = {
   checkRunner: false,
   verdicts: 0,
   waitingSince: null,
+  question: null,
 }
 
 export function snapshotOf(w: PingWorker, prev: PingSnapshot | null, now: number): PingSnapshot {
@@ -153,6 +162,7 @@ export function snapshotOf(w: PingWorker, prev: PingSnapshot | null, now: number
     attempts: w.attempts.length,
     checkRunner: !!w.checkRunner,
     verdicts: w.verdicts?.length ?? 0,
+    question: w.question?.at ?? null,
     waitingSince:
       w.status !== 'waiting'
         ? null
@@ -255,9 +265,19 @@ export function pingEvents(prev: PingSnapshot | null, w: PingWorker, now: number
     const back = w.status === 'queued' || w.status === 'running' || w.status === 'waiting'
     add('check-failed', `${who}: check failed, ${back ? 'sent back' : 'not sent back'}.`)
   }
-  if (w.status === 'done' && check === 'pass')
+  if (w.question && w.question.at !== p.question) {
+    const opts = w.question.options?.length ? ` Options: ${w.question.options.join(' | ')}.` : ''
+    add(
+      'asking',
+      `${who}: asks: ${cut(w.question.text.replace(/\s+/g, ' '), QUESTION_MAX)}${opts}`,
+      w.question.at,
+    )
+  }
+  // A worker that asked ended its turn on purpose: that is no finish until it is answered.
+  const asking = !!w.question
+  if (w.status === 'done' && check === 'pass' && !asking)
     add('finished', `${who}: done on ${accountLabel(last)}, check passed.`)
-  else if (w.status === 'done' && entered)
+  else if (w.status === 'done' && entered && !asking)
     add('needs-verdict', `${who}: done on ${accountLabel(last)}, needs your verdict.`)
   if (w.status === 'failed' && entered)
     add('failed', `${who}: failed: ${failedReason(w)}; details in climayte_status.`)
@@ -282,7 +302,10 @@ export function hhmm(ms: number): string {
 
 /** The text of one ping. `workers`: the origin's workers now, for the group tally. */
 export function pingMessage(
-  events: ReadonlyArray<Pick<QueuedPing, 'seq' | 'at' | 'group' | 'line'>>,
+  events: ReadonlyArray<
+    Pick<QueuedPing, 'seq' | 'at' | 'group' | 'line'> &
+      Partial<Pick<QueuedPing, 'kind' | 'workerId'>>
+  >,
   workers: readonly PingWorker[],
 ): string {
   const seqs = events.map((e) => e.seq)
@@ -310,6 +333,15 @@ export function pingMessage(
           .map((g) => `"${g}"`)
           .join(', ')})`
       : ''
+  const asking = events.filter((e) => e.kind === 'asking' && e.workerId)
+  if (asking.length) {
+    // The question is the worker's; the answer is yours to give from the task context.
+    const to = asking.map((e) => e.workerId).join(', ')
+    lines.push(
+      `Answer ${asking.length === 1 ? 'it' : 'each'} yourself from the task context with climayte_send {id, text} (${to}): the worker resumes its same session with your text. Ask the owner only when it needs a decision only they can make.`,
+    )
+    if (asking.length === n) return lines.join('\n')
+  }
   lines.push(
     `Next: climayte_status {group:"${groups[0] ?? ''}", report:true}${also}, then climayte_verdict.`,
   )
@@ -510,7 +542,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
   }
 
   const noLive = (o: CliMayteOrigin, latest?: PingWorker) =>
-    workersOf(o, latest).every((x) => TERMINAL.has(x.status))
+    workersOf(o, latest).every((x) => TERMINAL.has(x.status) && !x.question)
 
   const observe = (w: PingWorker) => {
     if (stopped) return
@@ -523,7 +555,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     const box = boxFor(origin)
     if (TERMINAL.has(w.status)) {
       const group = workersOf(origin, w).filter((x) => x.group === w.group)
-      if (group.every((x) => TERMINAL.has(x.status))) {
+      if (group.every((x) => TERMINAL.has(x.status) && !x.question)) {
         const attempts = group.reduce((s, x) => s + x.attempts.length, 0)
         events.push({
           key: `${w.group}:group-done:${attempts}`,
@@ -537,7 +569,11 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     }
     if (!enqueue(box, events)) return
     const waking = events.some((e) => !INFO_KINDS.has(e.kind))
-    if (events.some((e) => e.kind === 'group-done') || (waking && noLive(origin, w)))
+    // A question is waited on by the worker: it goes out at once, not after a quiet window.
+    if (
+      events.some((e) => e.kind === 'group-done' || e.kind === 'asking') ||
+      (waking && noLive(origin, w))
+    )
       box.urgentAt ??= now
     save()
     arm()
@@ -564,7 +600,10 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     box.retry = null
     box.urgentAt = null
     const waking = box.pending.some((p) => !INFO_KINDS.has(p.kind))
-    if (box.pending.some((p) => p.kind === 'group-done') || (waking && noLive(box.origin)))
+    if (
+      box.pending.some((p) => p.kind === 'group-done' || p.kind === 'asking') ||
+      (waking && noLive(box.origin))
+    )
       box.urgentAt = clock.now()
   }
 
@@ -600,7 +639,9 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     }
     fail(box, batch, 'peer', r.reason)
     if (!retryOrGiveUp(box)) return
-    const settles = batch.some((e) => e.kind === 'group-done' || e.kind === 'failed')
+    const settles = batch.some(
+      (e) => e.kind === 'group-done' || e.kind === 'failed' || e.kind === 'asking',
+    )
     if (settles && deps.composer) {
       const ok = await deps.composer.eligible(o).catch(() => false)
       if (ok) {

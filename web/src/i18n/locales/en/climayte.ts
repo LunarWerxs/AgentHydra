@@ -58,6 +58,8 @@ export default {
   modelAskedRan: 'asked {asked}, ran {ran}',
   rowRunHint: 'Model {model}, thinking {effort}',
   rowRanHint: 'The CLI ran {ran}',
+  question: 'Asking',
+  questionHint: 'The chat that started it is told; the answer goes back with climayte_send.',
   // The row's time: how long the task has been active, not since it was queued (CliMayteView activeS).
   activeSeconds: '{s}s',
   activeMinutes: '{m}m',

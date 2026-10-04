@@ -604,6 +604,22 @@ async function onStop() {
           <pre class="mono scroll-slim mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap wrap-break-word">{{ $pii(r.results.join('\n\n')) }}</pre>
         </details>
 
+        <!-- A worker's question (climayte_ask): its turn ended waiting for an answer, which goes
+             back with climayte_send. -->
+        <div v-if="worker.question" class="flex flex-col gap-1.5">
+          <h4 class="text-xs font-medium text-warning">{{ $t('climayte.question') }}</h4>
+          <div class="flex flex-col gap-1 rounded-md bg-muted p-2.5 text-xs">
+            <p class="wrap-break-word whitespace-pre-wrap">{{ $pii(worker.question.text) }}</p>
+            <ul v-if="worker.question.options?.length" class="list-disc pl-4">
+              <li v-for="(o, i) in worker.question.options" :key="i">{{ $pii(o) }}</li>
+            </ul>
+            <p v-if="worker.question.context" class="wrap-break-word text-muted-foreground">
+              {{ $pii(worker.question.context) }}
+            </p>
+            <p class="text-2xs text-muted-foreground">{{ $t('climayte.questionHint') }}</p>
+          </div>
+        </div>
+
         <div v-if="worker.result" class="flex flex-col gap-1.5 lg:min-h-20 lg:flex-2">
           <h4 class="text-xs font-medium">{{ $t('climayte.result') }}</h4>
           <!-- One bounded box for the whole report, every turn in it, so the panel never grows a

@@ -1059,6 +1059,8 @@ export interface CliMayteWorkerView {
   /** Earlier messages' reports, oldest first (a delivered follow-up starts a new `results`). */
   reports?: Array<{ at: number; message: string; results: string[] }>
   error: string | null
+  /** What it asked with climayte_ask and is waiting on; cleared by the answer (climayte_send). */
+  question?: { text: string; options?: string[]; context?: string; at: number }
   lastActivity: string | null
   costUsd: number
   /** Tokens its CLI sessions ran, summed over every attempt (absent on tasks recorded earlier). */

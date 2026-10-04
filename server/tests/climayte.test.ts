@@ -983,7 +983,7 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
       const init = events.find((e) => e.subtype === 'init')
       expect([id, init?.mcp_servers?.map((s) => s.name)]).toEqual([
         id,
-        ['connections-local', 'hswarm'],
+        ['climayte-worker', 'connections-local', 'hswarm'],
       ])
       // 440 settings files and 18 MCP files were left behind on the owner's machine (2026-10-02).
       expect([

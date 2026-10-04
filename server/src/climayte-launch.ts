@@ -349,13 +349,19 @@ function writeWorkerMcp(w: CliMayteWorker): string | null {
   const deny = w.chat ? { names: [], paths: [] } : { names: WORKER_DENIED_MCP, paths: [MCP_PATH] }
   const servers = ownerClaudeDir ? ownerMcpServers(ownerClaudeDir, deny) : {}
 
+  // The port this daemon actually bound (index.ts tells the orchestrator module at boot); PORT
+  // is only the preferred one and the daemon hops off it when it is busy.
+  const base = getOrchestratorDaemonUrl() ?? `http://127.0.0.1:${PORT}`
+  // Every worker may ask its origin a question (climayte_ask, climayte-ask-mcp.ts); the endpoint
+  // refuses a caller that is not this worker's CLI. Only under a real owner dir, so a test with no
+  // owner dir still writes no config.
+  if (ownerClaudeDir)
+    servers['climayte-worker'] = { type: 'http', url: `${base}/api/corch/ask/${w.id}` }
+
   // For managers, add the manager endpoint (piece 4). The URL uses the manager's own worker ID.
   // The daemon listens on 127.0.0.1; the id is not a secret (piece 4, docs/CLIMAYTE.md).
   if (w.kind === 'manage') {
     // The manager's MCP config lists the manager endpoint with only a URL (no header, no token).
-    // The port this daemon actually bound (index.ts tells the orchestrator module at boot); PORT
-    // is only the preferred one and the daemon hops off it when it is busy.
-    const base = getOrchestratorDaemonUrl() ?? `http://127.0.0.1:${PORT}`
     servers['climayte-manager'] = {
       type: 'http',
       url: `${base}/api/corch/mcp/${w.id}`,

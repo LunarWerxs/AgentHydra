@@ -260,8 +260,19 @@ export interface CliMayteWorker {
    *  the MCP route resolved it, or the worker that dispatched it. Absent: nobody is pinged (work
    *  dispatched before 2026-10-03, a wave task, or `notify: false`). */
   origin?: CliMayteOrigin
+  /** What it asked with climayte_ask and waits on (its turn ends after asking). Cleared when the
+   *  answer arrives through climayteSend. Absent: it asks nothing. */
+  question?: CliMayteQuestion
   createdAt: number
   updatedAt: number
+}
+
+/** A worker's question to the one that started it (docs/CLIMAYTE.md, "Questions from a worker"). */
+export interface CliMayteQuestion {
+  text: string
+  options?: string[]
+  context?: string
+  at: number
 }
 
 export interface CliMayteWave {
@@ -482,6 +493,8 @@ export interface CliMayteWorkerReport {
   lastActivity: string | null
   waitUntil?: string | null
   error: string | null
+  /** The question it waits on (its text, cut), answered with climayte_send. Absent: none. */
+  question?: string
   judged: boolean
   /** Its newest verdict and who gave it; null when it has none. */
   verdict: 'pass' | 'fail' | null
@@ -524,6 +537,7 @@ export function toReport(v: CliMayteWorkerView, chars = REPORT_CHARS): CliMayteW
     lastActivity: v.lastActivity ? v.lastActivity.slice(0, 120) : null,
     ...(v.waitUntil !== undefined ? { waitUntil: v.waitUntil } : {}),
     error: v.error,
+    ...(v.question ? { question: v.question.text.slice(0, 400) } : {}),
     judged: v.judged,
     verdict: last?.verdict ?? null,
     by: last?.by ?? null,
@@ -583,7 +597,7 @@ export function climayteEffort(v: unknown): string | null {
 }
 
 export const WORKER_BRIEF =
-  "You are a CliMayte worker: a Claude Code CLI session that AgentHydra started on one of the owner's accounts, at the owner's request, to do one delegated task for an orchestrating chat. Do the whole task yourself, in this session. Nobody is watching to answer questions, so make the reasonable call and say which call you made. Follow the repository's own rules. Commit only the files you changed, and push if the repository's rules say to. Never read or print a secret value. Do not deploy, publish or release unless the task says to: the orchestrator ships finished work. If a hook in the repository asks about deploying, answer in one line that the orchestrator deploys, and do not explain how. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
+  "You are a CliMayte worker: a Claude Code CLI session that AgentHydra started on one of the owner's accounts, at the owner's request, to do one delegated task for an orchestrating chat. Do the whole task yourself, in this session. Nobody is watching live: make the reasonable call and say which call you made. Only when you are blocked on a real decision that the task does not settle and a wrong guess would cost real work, call the climayte_ask tool (question, options, context), then end your turn: the chat or worker that started you answers by message, and this same session resumes with the answer. Never ask what you can find out or decide yourself. Follow the repository's own rules. Commit only the files you changed, and push if the repository's rules say to. Never read or print a secret value. Do not deploy, publish or release unless the task says to: the orchestrator ships finished work. If a hook in the repository asks about deploying, answer in one line that the orchestrator deploys, and do not explain how. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
 
 export const HANDOFF_PROMPT =
   'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.'
