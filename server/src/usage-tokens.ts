@@ -210,6 +210,48 @@ export interface UsageLine {
   usage: TurnUsage
 }
 
+/** A line longer than this (UTF-16 units) is parsed with its giant strings stubbed out. */
+const HUGE_LINE = 200_000
+/** A string value longer than this is stubbed out on a huge line: no id, model or time is that long. */
+const GIANT_STRING = 4096
+/** What a stubbed string parses to (the stub as written into the JSON spells the control char as an escape). */
+const GIANT = '\u0001giant'
+const GIANT_JSON = '\\u0001giant'
+
+/**
+ * `line` with every string longer than GIANT_STRING replaced by the stub `"\u0001giant"`. Lines that
+ * carry a base64 image or a giant tool result are many MB, and one JSON.parse of them holds the event
+ * loop for 100+ ms; the usage reader needs none of those strings. Walks quote to quote with indexOf
+ * (native), never a character at a time, so its cost is the number of strings, not their length. Every
+ * other byte is kept, so JSON.parse still rejects a truncated or malformed line exactly as before.
+ */
+function withoutGiantStrings(line: string): string {
+  const parts: string[] = []
+  let copied = 0
+  let i = 0
+  for (;;) {
+    const open = line.indexOf('"', i)
+    if (open < 0) break
+    let close = line.indexOf('"', open + 1)
+    // A quote after an odd run of backslashes is an escaped one, part of the string.
+    while (close >= 0) {
+      let k = close - 1
+      while (k > open && line.charCodeAt(k) === 92) k--
+      if ((close - 1 - k) % 2 === 0) break
+      close = line.indexOf('"', close + 1)
+    }
+    if (close < 0) break // unterminated: leave it for JSON.parse to reject
+    if (close - open - 1 > GIANT_STRING) {
+      parts.push(line.slice(copied, open + 1), GIANT_JSON)
+      copied = close
+    }
+    i = close + 1
+  }
+  if (copied === 0) return line
+  parts.push(line.slice(copied))
+  return parts.join('')
+}
+
 /**
  * Parse ONE transcript line: the assistant turn's usage, model, ids and time, or null when the line
  * is anything else (not JSON, a partial trailing write, a user turn or tool result, which can echo
@@ -220,18 +262,30 @@ export function parseUsageLine(line: string): UsageLine | null {
   if (line?.charCodeAt(0) !== 123 /* '{' */) return null
   // Cheap pre-filter: skip the ~90% of lines that cannot contribute, before paying for JSON.parse.
   if (!line.includes('"usage"')) return null
-  let rec: {
+  type Rec = {
     type?: string
     timestamp?: string
     requestId?: string
     message?: { id?: string; model?: string; usage?: RawUsage }
   }
+  let rec: Rec
   try {
-    rec = JSON.parse(line)
+    rec = JSON.parse(line.length > HUGE_LINE ? withoutGiantStrings(line) : line)
   } catch {
     return null
   }
   if (rec?.type !== 'assistant') return null
+  if (
+    line.length > HUGE_LINE &&
+    [rec.timestamp, rec.requestId, rec.message?.id, rec.message?.model].includes(GIANT)
+  ) {
+    // A giant string stood where a field is read from: nothing to shortcut, parse the line whole.
+    try {
+      rec = JSON.parse(line)
+    } catch {
+      return null
+    }
+  }
   const usage = readTurnUsage(rec.message?.usage)
   if (!usage) return null
   return {

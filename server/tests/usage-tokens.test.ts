@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import {
+  parseUsageLine,
   sumTranscriptTokens,
   tokensPerPercent,
   W_CACHE_READ,
@@ -346,5 +347,47 @@ describe('one API response is charged once, however many records it was split ac
     const spend = sumTranscriptTokens([bare(10), bare(20)].join('\n'), 0)
     expect(spend.output).toBe(30)
     expect(spend.turns).toBe(2)
+  })
+})
+
+describe('parseUsageLine on a huge line', () => {
+  const huge = (extra: object = {}) =>
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-08-09T07:24:13.537Z',
+      requestId: 'req_1',
+      message: {
+        id: 'msg_1',
+        model: 'claude-sonnet-5-5',
+        // Quotes, backslashes and a stray "usage" inside giant strings must not fool the stub walk.
+        content: [
+          { type: 'text', text: 'a\\"b\\'.repeat(60_000) + '"usage":{"output_tokens":999}' },
+          { type: 'tool_use', input: { data: 'x'.repeat(300_000) } },
+        ],
+        usage: { input_tokens: 3, output_tokens: 7, cache_read_input_tokens: 11 },
+        ...extra,
+      },
+    })
+
+  test('reads the same fields a whole JSON.parse reads', () => {
+    const line = huge()
+    expect(line.length).toBeGreaterThan(200_000)
+    const turn = parseUsageLine(line)
+    expect(turn).toMatchObject({
+      model: 'claude-sonnet-5-5',
+      messageId: 'msg_1',
+      requestId: 'req_1',
+    })
+    expect(turn?.usage).toMatchObject({ input: 3, output: 7, cacheRead: 11 })
+    expect(turn?.ts).toBe(Date.parse('2026-08-09T07:24:13.537Z'))
+  })
+
+  test('a giant string where a field is read from falls back to the whole parse', () => {
+    const model = 'm'.repeat(10_000)
+    expect(parseUsageLine(huge({ model }))?.model).toBe(model)
+  })
+
+  test('a truncated huge line is still rejected', () => {
+    expect(parseUsageLine(huge().slice(0, -3))).toBeNull()
   })
 })

@@ -1551,6 +1551,22 @@ function compact(s: string): string {
   return s.replace(/\s+/g, ' ').trim()
 }
 
+/**
+ * `truncate(compact(s), n)`, byte for byte, without collapsing the whole of a multi-MB string to keep
+ * its first n characters (that held the event loop 100+ ms). The first n+1 characters of compact(s)
+ * are fixed by a prefix of s; only the prefix's last character can differ (a space that the rest of s
+ * extends or trims), so a prefix whose collapsed form is n+2 characters long settles them. A string
+ * too short or too whitespace-heavy for that grows the prefix 4x until it does, up to s itself.
+ */
+function compactTo(s: string, n: number): string {
+  if (s.length <= 65_536) return truncate(compact(s), n)
+  for (let k = Math.max(n * 8, 4096); k < s.length; k *= 4) {
+    const head = s.slice(0, k).replace(/\s+/g, ' ').trimStart()
+    if (head.length >= n + 2) return `${head.slice(0, n)}…`
+  }
+  return truncate(compact(s), n)
+}
+
 function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n)}…` : s
 }
@@ -1600,12 +1616,12 @@ function codexMessageEvents(payload: any, timestamp: string | null): TailEvent[]
     if (block.type !== 'input_text' && block.type !== 'output_text') continue
     if (typeof block.text !== 'string') continue
     if (role === 'user' && isCodexInjectedUserText(block.text)) continue
-    const text = compact(block.text)
+    const text = compactTo(block.text, 6000)
     if (!text) continue
     out.push({
       role,
       kind: 'text',
-      text: truncate(text, 6000),
+      text,
       tool_name: null,
       timestamp,
     })
@@ -1615,12 +1631,12 @@ function codexMessageEvents(payload: any, timestamp: string | null): TailEvent[]
 
 /** `function_call` / `custom_tool_call` payload handler for {@link codexEventToTailEvents}. */
 function codexToolCallEvent(payload: any, timestamp: string | null): TailEvent[] {
-  const input = compact(stringifyToolResult(payload.arguments ?? payload.input))
+  const input = compactTo(stringifyToolResult(payload.arguments ?? payload.input), 1200)
   return [
     {
       role: 'assistant',
       kind: 'tool_use',
-      text: truncate(input, 1200),
+      text: input,
       tool_name: payload.name ?? 'tool',
       timestamp,
     },
@@ -1630,13 +1646,13 @@ function codexToolCallEvent(payload: any, timestamp: string | null): TailEvent[]
 /** `function_call_output` / `custom_tool_call_output` payload handler for
  * {@link codexEventToTailEvents}. */
 function codexToolResultEvent(payload: any, timestamp: string | null): TailEvent[] {
-  const output = compact(stringifyToolResult(payload.output))
+  const output = compactTo(stringifyToolResult(payload.output), 2000)
   return output
     ? [
         {
           role: 'user',
           kind: 'tool_result',
-          text: truncate(output, 2000),
+          text: output,
           tool_name: null,
           timestamp,
         },
@@ -1783,25 +1799,23 @@ function blockToTailEvent(
     // <- the filter. `redacted_thinking` carries an encrypted `data` field and no readable
     // text, so asking for thinking still shows nothing for it: there is nothing to show.
     if (!filter.thinking) return null
-    const t = compact(typeof block.thinking === 'string' ? block.thinking : '')
+    const t = compactTo(typeof block.thinking === 'string' ? block.thinking : '', 6000)
     return t
       ? {
           role: 'assistant',
           kind: 'thinking',
-          text: truncate(t, 6000),
+          text: t,
           tool_name: null,
           timestamp: ts,
         }
       : null
   }
   if (bt === 'text' && typeof block.text === 'string') {
-    const t = compact(block.text)
-    return t
-      ? { role: r, kind: 'text', text: truncate(t, 6000), tool_name: null, timestamp: ts }
-      : null
+    const t = compactTo(block.text, 6000)
+    return t ? { role: r, kind: 'text', text: t, tool_name: null, timestamp: ts } : null
   }
   if (bt === 'tool_use') {
-    const input = block.input ? truncate(compact(JSON.stringify(block.input)), 1200) : ''
+    const input = block.input ? compactTo(JSON.stringify(block.input), 1200) : ''
     return {
       role: 'assistant',
       kind: 'tool_use',
@@ -1812,12 +1826,12 @@ function blockToTailEvent(
     }
   }
   if (bt === 'tool_result') {
-    const t = compact(stringifyToolResult(block.content))
+    const t = compactTo(stringifyToolResult(block.content), 2000)
     return t
       ? {
           role: 'user',
           kind: 'tool_result',
-          text: truncate(t, 2000),
+          text: t,
           tool_name: null,
           timestamp: ts,
           // The CLI's own verdict, so the viewer can mark a failed step without guessing from text.
@@ -1841,9 +1855,8 @@ export function eventToTailEvents(ev: any, filter: TailFilter = {}): TailEvent[]
   const out: TailEvent[] = []
 
   if (typeof content === 'string') {
-    const t = compact(content)
-    if (t)
-      out.push({ role: r, kind: 'text', text: truncate(t, 6000), tool_name: null, timestamp: ts })
+    const t = compactTo(content, 6000)
+    if (t) out.push({ role: r, kind: 'text', text: t, tool_name: null, timestamp: ts })
   } else if (Array.isArray(content)) {
     for (const block of content) {
       const te = blockToTailEvent(block, r, ts, filter)
