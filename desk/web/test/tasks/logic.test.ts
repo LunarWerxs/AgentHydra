@@ -3,11 +3,13 @@ import type { CliMayteWorker, TranscriptItem } from '@shared/protocol'
 import {
   FINISHED_CAP,
   agentState,
+  finishedCount,
   formatElapsed,
   formatTokens,
   openPhase,
   panelLists,
   phaseSquares,
+  rowLabel,
   runningLabel,
   workerUnits
 } from '../../src/components/tasks/logic'
@@ -132,6 +134,30 @@ describe('panelLists', () => {
     expect(finished).toHaveLength(FINISHED_CAP)
     expect(finished[0]!.id).toBe('worker:d28')
   })
+})
+
+test("the row and the panel count the same units, finished background tasks included", () => {
+  // two worker groups plus 14 finished background commands: the row once said '16 finished' from a different sum than the panel
+  const workers = [done('a', { group: 'g1' }), done('b', { group: 'g1' }), done('c', { group: 'g2' })]
+  const items = Array.from({ length: 14 }, (_, i) => task(`t${i}`, 'completed', { ts: 3_000 + i }))
+  const lists = panelLists({ workers, items, sessionId: 'chat-1' })
+  expect(lists.finished).toHaveLength(16)
+  expect(lists.finished.some((u) => u.id === 'task:t0')).toBe(true)
+  expect(rowLabel(lists)).toBe('16 finished tasks')
+  // clearing hides units from both, because both read the same lists
+  const cleared = panelLists({ workers, items, sessionId: 'chat-1', cleared: new Set(['task:t0', 'task:t1']) })
+  expect(cleared.finished).toHaveLength(14)
+  expect(rowLabel(cleared)).toBe('14 finished tasks')
+  // past the cap both show '25+'
+  const lots = panelLists({ workers: [], items: Array.from({ length: 40 }, (_, i) => task(`x${i}`, 'completed')), sessionId: null })
+  expect(finishedCount(lots.finished.length)).toBe('25+')
+  expect(rowLabel(lots)).toBe('25+ finished tasks')
+  expect(rowLabel(panelLists({ workers, items: [task('r', 'running')], sessionId: 'chat-1' }))).toBe('1 running task · 2 finished')
+})
+
+test('a failed finished unit is marked failed', () => {
+  expect(workerUnits([done('a', { status: 'failed' })])[0]!.failed).toBe(true)
+  expect(workerUnits([done('a')])[0]!.failed).toBe(false)
 })
 
 test('labels and formats', () => {

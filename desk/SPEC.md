@@ -546,7 +546,10 @@ unread/needs attention = solid `#2a78d6` (Hydra Desk: orange, see the table abov
 
 **Transcript** (`components/transcript/TranscriptView.vue`, props `{ chatId: string, items:
 TranscriptItem[], readOnly?: boolean }`): centered column, max width 780px, auto-scroll that stops when
-Jacob scrolls up (a "Jump to latest" button appears). User messages in a rounded `--bg-elev` box;
+Jacob scrolls up (a "Jump to latest" button appears). A chat opens at its bottom and stays pinned there while
+content arrives late (history, the worker sync, images, highlighting: a ResizeObserver on the column follows
+it down). Only Jacob's own input (wheel up, touch, PageUp/Up/Home, dragging the scrollbar) lets go of the
+bottom; the layout clamping scrollTop while rows are measured never does (`lib/pin.ts`, tested). User messages in a rounded `--bg-elev` box;
 assistant text as markdown (markdown-it + shiki, dark theme, copy button on code blocks); thinking as a
 collapsed "Thinking" row (expands to the text); tool calls as compact rows like Claude Code: icon, tool
 name, the key argument (Bash command, file path, pattern, URL), a status spinner/tick/cross, click to
@@ -691,7 +694,15 @@ top, align end, at most 480 high with scrolling. Top to bottom:
 *Tray* (`composer/QueueTray.vue`): inside the box, above the text, only while this chat has queue items. At
 most 3 rows (h-6, 13px, truncated, with a badge; an images-only item says so) plus "+N more". Every row opens
 the popover. While a request card hides the box, a dock chip "N queued" (`composer/QueueChip.vue`) opens the
-same popover. The WorkerDock's own "N queued" chip (the SDK's queue) is unchanged.
+same popover. The WorkerDock's own "N queued" chip (the SDK's queue) is unchanged. The WorkerDock no longer
+has an agents chip ("3 agents done"): workers show only in the tasks row under the last message and in the
+Background tasks panel.
+
+*Task counts* (`tasks/logic.ts`): the inline row ("2 running tasks · 16 finished") and the panel ("Finished
+16") both come from `panelLists`: one unit per CliMayte group (or lone worker) and per background task item of
+the chat, running or finished, minus the ones cleared with the trash, finished capped at `FINISHED_CAP` (25,
+shown "25+"). `rowLabel(lists)` and `finishedCount` are the only formatters, so the two never disagree; the
+panel's Finished list shows finished background commands/tasks too.
 
 *Store* (`stores/desk.ts`): `queue: Ref<QueueState | null>`. `hello.queue` replaces it whole (null when hello
 has none); `queue.update` replaces it unless its `rev` is lower. Actions: `queueAdd` (POST /api/queue),

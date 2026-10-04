@@ -10,6 +10,7 @@ import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { buildRows, estimateHeight } from './lib/rows'
 import { groupRows, rowGap, type DisplayRow } from './lib/groups'
+import { nextPinned } from './lib/pin'
 import { prefixOffsets, rowAt, visibleRange } from './lib/window'
 import { provideTranscript } from './context'
 import TranscriptRow from './TranscriptRow.vue'
@@ -99,13 +100,29 @@ function scrollToBottom() {
   lastTop = el.scrollTop
 }
 
+// Only Jacob's own input may let go of the bottom (see lib/pin.ts): the layout clamping scrollTop while
+// rows are measured must not. `userDriven` is true while he drags the scrollbar, touches, or just pressed a key.
+let userDriven = false
+let userTimer: ReturnType<typeof setTimeout> | null = null
+function driveUser(ms: number) {
+  userDriven = true
+  if (userTimer) clearTimeout(userTimer)
+  if (ms > 0) userTimer = setTimeout(() => (userDriven = false), ms)
+}
+const stopDriving = () => driveUser(600)
+const onPointerDown = (e: PointerEvent) => {
+  // a press on the scroller itself is the scrollbar; a press on a row is not a scroll
+  if (e.target === scroller.value) driveUser(0)
+}
+const onKey = (e: KeyboardEvent) => {
+  if (['PageUp', 'ArrowUp', 'Home', ' '].includes(e.key)) driveUser(400)
+}
+
 function onScroll() {
   const el = scroller.value
   if (!el) return
   const top = el.scrollTop
-  const distance = el.scrollHeight - top - el.clientHeight
-  if (distance <= 24) pinned.value = true
-  else if (top < lastTop - 1) pinned.value = false
+  pinned.value = nextPinned({ pinned: pinned.value, top, lastTop, distance: el.scrollHeight - top - el.clientHeight, userDriven })
   lastTop = top
   scrollTop.value = top
 }
@@ -123,6 +140,8 @@ function jumpToLatest() {
 
 let rowObserver: ResizeObserver | null = null
 let viewObserver: ResizeObserver | null = null
+let contentObserver: ResizeObserver | null = null
+const content = ref<HTMLElement | null>(null)
 
 // A row's height includes its gap (padding-bottom), which changes when a row is appended under it: watch the border box.
 const vMeasure: Directive<HTMLElement> = {
@@ -168,6 +187,13 @@ onMounted(() => {
     viewObserver.observe(scroller.value)
     viewHeight.value = scroller.value.clientHeight
   }
+  // Anything that grows the column while pinned (an image loading, highlighting, a footer row, the
+  // history sync) follows to the bottom, not only what the row measuring sees.
+  contentObserver = new ResizeObserver(() => {
+    if (pinned.value) scrollToBottom()
+  })
+  if (content.value) contentObserver.observe(content.value)
+  window.addEventListener('pointerup', stopDriving)
   // The rows mounted before the observer existed.
   scroller.value?.querySelectorAll<HTMLElement>('[data-id]').forEach((el) => rowObserver!.observe(el, { box: 'border-box' }))
   scrollToBottom()
@@ -176,6 +202,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   rowObserver?.disconnect()
   viewObserver?.disconnect()
+  contentObserver?.disconnect()
+  window.removeEventListener('pointerup', stopDriving)
+  if (userTimer) clearTimeout(userTimer)
 })
 
 // Follow new items, streaming growth and re-measured rows while pinned.
@@ -209,9 +238,13 @@ watch(
       data-transcript-scroller
       @scroll.passive="onScroll"
       @wheel.passive="onWheel"
+      @pointerdown="onPointerDown"
+      @touchstart.passive="driveUser(0)"
+      @touchend.passive="stopDriving"
+      @keydown="onKey"
     >
       <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane); the last line sits 114px above the composer strip (whole-window.png) -->
-      <div class="mx-auto w-full max-w-[840px] px-9 pb-[86px] pt-5 @max-[560px]:px-4">
+      <div ref="content" class="mx-auto w-full max-w-[840px] px-9 pb-[86px] pt-5 @max-[560px]:px-4">
         <div v-if="!items.length && !showWorking" class="py-16 text-center text-[14px] text-text-muted">No messages yet</div>
         <div :style="{ height: `${padTop}px` }" />
         <div v-for="({ r, gap }, k) in visible" :key="r.id" v-measure :data-id="r.id" :style="{ paddingBottom: `${gap}px` }">

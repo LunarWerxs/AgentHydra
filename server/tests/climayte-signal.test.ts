@@ -142,6 +142,32 @@ describe('serveSignal', () => {
     }
   })
 
+  // A worker's sub-agents (Agent tool) run in the same CLI and fire its PostToolUse hook too. The
+  // handoff belongs to the worker: a sub-agent told to write it quits mid-task and overwrites the
+  // worker's own (2026-10-04: every visitor of a SUE run did both). The CLI sends `agent_id` only
+  // inside a sub-agent.
+  test('a tool call made inside a sub-agent never sees the signal', async () => {
+    const file = join(tmp(), 'w-6.json')
+    writeFileSync(file, SIGNAL)
+    const s = serveSignal(file)!
+    try {
+      const fromSubagent = await fetch(`http://127.0.0.1:${s.port}/signal`, {
+        method: 'POST',
+        body: JSON.stringify({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Bash',
+          agent_id: 'a1b2c3',
+          agent_type: 'sue-driver',
+        }),
+      })
+      expect(fromSubagent.status).toBe(200)
+      expect(await fromSubagent.json()).toEqual({})
+      expect(await (await post(s.port)).text()).toBe(SIGNAL)
+    } finally {
+      s.stop()
+    }
+  })
+
   test('stop closes the port', async () => {
     const s = serveSignal(join(tmp(), 'w-3.json'))!
     s.stop()

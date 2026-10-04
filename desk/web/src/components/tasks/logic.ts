@@ -41,6 +41,8 @@ export interface TaskUnit {
   description: string
   account: string | null // '#68', or '#68, #41' when its workers ran on several
   phases: TaskPhase[]
+  /** Finished badly: a failed or cancelled worker, a failed task. */
+  failed: boolean
   /** Active worker ids, for Stop. Empty for a transcript task (Hydra Desk cannot stop those). */
   stoppable: string[]
   /** The ids the trash button hides: its workers, or the task item. */
@@ -118,6 +120,7 @@ function workerUnit(id: string, name: string, workers: CliMayteWorker[]): TaskUn
     description: firstLine(oldest.description) || (workers.length > 1 ? '' : firstLine(oldest.lastActivity)),
     account: accounts.length ? accounts.join(', ') : null,
     phases: phasesOf(workers),
+    failed: workers.some((w) => agentState(w) === 'failed'),
     stoppable: workers.filter((w) => w.active).map((w) => w.id),
     keys: workers.map((w) => w.id)
   }
@@ -144,6 +147,7 @@ function taskUnit(t: TaskItem): TaskUnit {
     description: firstLine(t.summary),
     account: null,
     phases: [],
+    failed: t.status === 'failed',
     stoppable: [],
     keys: [`task:${t.id}`]
   }
@@ -180,7 +184,7 @@ export function panelLists(o: {
   cleared?: ReadonlySet<string>
 }): PanelLists {
   const scoped = o.all ? o.workers : chatWorkers(o.workers, o.sessionId, o.workerIds)
-  const tasks = (o.items ?? []).filter((i): i is TaskItem => i.kind === 'task' && i.status === 'running').map(taskUnit)
+  const tasks = (o.items ?? []).filter((i): i is TaskItem => i.kind === 'task').map(taskUnit)
   const units = [...workerUnits(scoped), ...tasks]
   const cleared = o.cleared ?? new Set<string>()
   const running = units.filter((u) => u.running).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
@@ -191,12 +195,20 @@ export function panelLists(o: {
   return { running, finished }
 }
 
+/** A finished count as shown: '3', and '25+' once the list is cut at FINISHED_CAP. Row and panel both use it. */
+export const finishedCount = (n: number): string => `${n}${n >= FINISHED_CAP ? '+' : ''}`
+
 /** The inline row under the last message: '1 running task', '3 running tasks · 2 finished', '4 finished tasks', '' when none. */
 export function runningLabel(n: number, finished = 0): string {
-  const done = finished > 0 ? `${finished}${finished >= FINISHED_CAP ? '+' : ''} finished` : ''
+  const done = finished > 0 ? `${finishedCount(finished)} finished` : ''
   if (n <= 0) return done ? `${done} ${finished === 1 ? 'task' : 'tasks'}` : ''
   const running = `${n} running ${n === 1 ? 'task' : 'tasks'}`
   return done ? `${running} · ${done}` : running
+}
+
+/** The inline row's text for a chat, from the very lists the panel renders: the two can never disagree. */
+export function rowLabel(lists: PanelLists): string {
+  return runningLabel(lists.running.length, lists.finished.length)
 }
 
 /** '11m 06s', '45s', '1h 02m'. */

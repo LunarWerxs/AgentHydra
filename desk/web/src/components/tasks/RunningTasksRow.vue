@@ -6,19 +6,17 @@
 import { computed } from 'vue'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
-import { openBackgroundTasks } from './api'
-import { panelLists, runningLabel } from './logic'
+import { cleared, openBackgroundTasks } from './api'
+import { panelLists, rowLabel } from './logic'
 
 const props = defineProps<{ chat: ChatSummary; items: TranscriptItem[] }>()
 const src = useShellSource()
 
-// Running and finished, as the Background tasks panel lists them for this chat (its CliMayte workers and
-// its own background tasks); a task the chat finished counts as finished.
-const label = computed(() => {
-  const lists = panelLists({ workers: src.workers.value, items: props.items, sessionId: props.chat.sessionId, workerIds: props.chat.workerIds })
-  const tasksDone = props.items.filter((i) => i.kind === 'task' && i.status !== 'running').length
-  return runningLabel(lists.running.length, lists.finished.length + tasksDone)
-})
+// The panel's own lists for this chat (its CliMayte worker groups and its background tasks, minus the
+// cleared), so the row and the panel's 'Finished N' always count the same units.
+const label = computed(() =>
+  rowLabel(panelLists({ workers: src.workers.value, items: props.items, sessionId: props.chat.sessionId, workerIds: props.chat.workerIds, cleared: cleared.value }))
+)
 </script>
 
 <template>

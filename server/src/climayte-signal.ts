@@ -81,18 +81,33 @@ export function workerHooks(opts: { signalFile: string; claims: string | null })
   }
 }
 
+/** True when the hook input came from a tool call inside a sub-agent: the CLI sends `agent_id` only
+ *  there. */
+async function fromSubagent(req: { text: () => Promise<string> }): Promise<boolean> {
+  try {
+    const input = JSON.parse(await req.text()) as { agent_id?: unknown }
+    return typeof input.agent_id === 'string' && input.agent_id.trim() !== ''
+  } catch {
+    return false
+  }
+}
+
 /** A loopback server that answers every request with the signal file's JSON, or `{}` when there is
  *  none (or it is half written: the daemon writes it in one call, but a read can still land inside
  *  it). Read afresh each time, so the signal shows on every call from the moment it is written
- *  until the file is removed, as the `cat` it replaces did. Null when no port could be bound. */
+ *  until the file is removed, as the `cat` it replaces did. A tool call inside one of the worker's
+ *  sub-agents always gets `{}`: the handoff is the worker's to write, and a sub-agent told to write
+ *  it quits mid-task and overwrites the worker's own (2026-10-04). Null when no port could be
+ *  bound. */
 export function serveSignal(signalFile: string): { port: number; stop: () => void } | null {
   try {
     // The CLI's http hook is not a browser and sends no Origin, so it passes; a web page on any
     // local port carries an Origin that is on no list (empty allowlist) and is refused (AH-11).
     const app = new Hono()
     app.use('*', createLoopbackGuard({ allowedOrigins: () => [] }))
-    app.all('*', (c) => {
+    app.all('*', async (c) => {
       let body = '{}'
+      if (await fromSubagent(c.req)) return c.body(body, 200, { 'content-type': 'application/json' })
       try {
         const text = readFileSync(signalFile, 'utf8')
         JSON.parse(text)

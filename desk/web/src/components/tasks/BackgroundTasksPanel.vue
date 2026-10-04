@@ -12,7 +12,7 @@ import { useShellSource } from '@/components/shell/source'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Tip } from '@/components/ui/tooltip'
 import { cleared, clearFinished } from './api'
-import { elapsedOf, formatTokens, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskUnit } from './logic'
+import { elapsedOf, finishedCount, formatTokens, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskUnit } from './logic'
 
 const props = defineProps<{
   sessionId: string | null | undefined
@@ -248,7 +248,7 @@ const ICON_BTN =
           :aria-expanded="finishedOpen"
           @click="finishedOpen = !finishedOpen"
         >
-          Finished {{ lists.finished.length }}
+          Finished {{ finishedCount(lists.finished.length) }}
           <ChevronRight class="size-3 transition-transform duration-150" :class="finishedOpen ? 'rotate-90' : ''" :stroke-width="1.5" />
         </button>
         <Tip v-if="lists.finished.length" label="Clear finished" side="left">
@@ -270,7 +270,7 @@ const ICON_BTN =
           :data-unit="u.id"
           class="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[var(--text-muted)] hover:bg-[var(--fill-5)]"
         >
-          <Check v-if="u.phases.every((p) => p.agents.every((a) => a.state === 'done'))" class="size-3 shrink-0" :stroke-width="1.5" />
+          <Check v-if="!u.failed" class="size-3 shrink-0" :stroke-width="1.5" />
           <X v-else class="size-3 shrink-0 text-[var(--danger-text)]" :stroke-width="1.5" />
           <span class="min-w-0 flex-1 truncate text-[var(--text-2)]">{{ u.name }}</span>
           <span v-if="u.agents > 1" class="tnum shrink-0">{{ u.agents }} agents</span>
