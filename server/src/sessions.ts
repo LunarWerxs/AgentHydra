@@ -211,9 +211,10 @@ function cacheKey(tf: TranscriptFile): string {
 /** Persisted parse for this exact file revision, or null. Size joins mtime in the check because a
  *  rewrite that preserves mtime still changes length, and reading a stale title is worse than a
  *  re-parse. */
-function readScanCache(tf: TranscriptFile, key: string): ScannedMeta | null {
+function readScanCache(tf: TranscriptFile, key: string, allowStale = false): ScannedMeta | null {
   const row = selectScan.get(key)
-  if (!row || row.mtime_ms !== tf.mtime_ms || row.size_bytes !== tf.size_bytes) return null
+  if (!row) return null
+  if (!allowStale && (row.mtime_ms !== tf.mtime_ms || row.size_bytes !== tf.size_bytes)) return null
   // A row this scanner is older than cannot answer the fields it never learned to fill, and its
   // NULLs would read as real answers rather than as absences. Treat it as a miss — see SCAN_VERSION.
   if ((row.scan_version ?? 1) < SCAN_VERSION) return null
@@ -240,6 +241,7 @@ function readScanCache(tf: TranscriptFile, key: string): ScannedMeta | null {
 }
 
 function rememberScan(tf: TranscriptFile, key: string, meta: ScannedMeta): ScannedMeta {
+  titles?.set(key, { title: meta.title, cwd: meta.cwd })
   metaCache.set(key, { mtimeMs: tf.mtime_ms, sizeBytes: tf.size_bytes, meta })
   try {
     upsertScan.run(
@@ -281,6 +283,50 @@ function rememberScan(tf: TranscriptFile, key: string, meta: ScannedMeta): Scann
 // shared their work.
 const inFlight = new Map<string, Promise<ScannedMeta | null>>()
 
+/** This exact file revision's parse if memory or the scan table already holds it, else null. Never
+ *  reads the transcript. */
+function peekMeta(tf: TranscriptFile): ScannedMeta | null {
+  const key = cacheKey(tf)
+  const cached = metaCache.get(key)
+  if (cached && cached.mtimeMs === tf.mtime_ms && cached.sizeBytes === tf.size_bytes)
+    return cached.meta
+  const persisted = readScanCache(tf, key)
+  if (persisted)
+    metaCache.set(key, { mtimeMs: tf.mtime_ms, sizeBytes: tf.size_bytes, meta: persisted })
+  return persisted
+}
+
+/** What a row shows for a transcript that has not been parsed yet: the last parse of an earlier
+ *  revision when there is one, else only what the index knows. Title is the index's own (the
+ *  first prompt, where its store records one) or the file name; model, status, counts and the
+ *  rest stay blank until the parse lands. Never cached, so the real parse replaces it. */
+function provisionalMeta(tf: TranscriptFile): ScannedMeta {
+  const earlier = metaCache.get(cacheKey(tf))?.meta ?? readScanCache(tf, cacheKey(tf), true)
+  if (earlier) return earlier
+  const fileStem = /\.jsonl?$/i.test(tf.path)
+    ? (tf.path.split(/[\\/]/).pop() ?? '').replace(/\.jsonl?$/i, '')
+    : tf.session_id
+  return {
+    title: oneLine(tf.title || fileStem || tf.session_id, 120),
+    cwd: tf.cwd || decodeProjectKey(tf.project),
+    git_branch: null,
+    message_count: 0,
+    created_at: tf.created_at ?? null,
+    last_activity_at: tf.mtime_ms,
+    last_role: null,
+    last_text_preview: null,
+    // Unknown, not zero: zero would drop the row as a stub before anyone has looked.
+    substantive_turns: 1,
+    limit_stop: null,
+    title_source: tf.title ? 'store' : 'id',
+    title_tag: null,
+    thread_key: null,
+    ended_because: null,
+    model: null,
+    effort: null,
+  }
+}
+
 /** Null when the transcript vanished mid-scan; see parseMeta. Callers must omit the row rather
  *  than treat it as an empty session, and the type is what forces them to.
  *
@@ -288,14 +334,8 @@ const inFlight = new Map<string, Promise<ScannedMeta | null>>()
  *  miss is survivable. Nothing else imports it. */
 export function scanMeta(tf: TranscriptFile): Promise<ScannedMeta | null> {
   const key = cacheKey(tf)
-  const cached = metaCache.get(key)
-  if (cached && cached.mtimeMs === tf.mtime_ms && cached.sizeBytes === tf.size_bytes)
-    return Promise.resolve(cached.meta)
-  const persisted = readScanCache(tf, key)
-  if (persisted) {
-    metaCache.set(key, { mtimeMs: tf.mtime_ms, sizeBytes: tf.size_bytes, meta: persisted })
-    return Promise.resolve(persisted)
-  }
+  const known = peekMeta(tf)
+  if (known) return Promise.resolve(known)
   // Keyed by file revision, so a transcript that gains a turn mid-flight starts a fresh scan rather
   // than joining the one that is already reading the previous revision.
   const revision = `${key}@${tf.mtime_ms}:${tf.size_bytes}`
@@ -1316,8 +1356,25 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   const dmap = doneMarkMap()
   const lookups = rowLookups()
 
+  const budget = scanBudget()
+  // The usage-wall scope needs the parsed verdict, so it keeps waiting for the parse; every other
+  // list answers within the budget and shows an unparsed row from what the index knows.
+  const metaOf = async (tf: TranscriptFile): Promise<ScannedMeta | null> => {
+    if (rateLimitNarrows) return scanMeta(tf)
+    const known = peekMeta(tf)
+    if (known) return known
+    const outcome: { parsed?: boolean } = {}
+    await budget.wait(
+      queueParse(tf).then((ok) => {
+        outcome.parsed = ok
+      }),
+    )
+    // Gone between the listing and the read: there is no row, same as a direct parse.
+    if (outcome.parsed === false) return null
+    return peekMeta(tf) ?? provisionalMeta(tf)
+  }
   const toSummary = async (tf: TranscriptFile): Promise<SessionSummary | null> => {
-    const m = await scanMeta(tf)
+    const m = await metaOf(tf)
     // Gone between the listing and the read, so there is no row to show. This is the path that
     // used to take the daemon down with it.
     if (!m) return null
@@ -1342,7 +1399,7 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   const wanted = offset + limit
   const out: SessionSummary[] = []
   const needle = opts.title?.trim().toLowerCase()
-  if (needle) return rankedTitleMatches(files, needle, toSummary, offset, limit)
+  if (needle) return rankedTitleMatches(files, needle, toSummary, offset, limit, budget)
   for (let cursor = 0; cursor < files.length && out.length < wanted; ) {
     const batch = files.slice(cursor, cursor + (wanted - out.length))
     cursor += batch.length
@@ -1373,47 +1430,116 @@ export function titleMatchTier(
   return rest.some(inOrder) ? 3 : null
 }
 
-/** What a title search may wait for transcripts nobody has parsed yet before it answers with what
- *  it has. The parse carries on in the background and the next search sees its result. */
-const TITLE_SCAN_BUDGET_MS = 400
+/** How long one list may wait for transcripts nobody has parsed yet before it answers with what
+ *  it has. The parse carries on in the background and the next request sees its result. */
+const SCAN_BUDGET_MS = 400
 
 // Narrow on purpose: every parse in flight takes its slices in the same turn of the event loop, so
 // the width is what the daemon's other requests wait behind.
-const MISS_WARM_CONCURRENCY = 2
+const PARSE_QUEUE_CONCURRENCY = 2
 
-let missWarm: Promise<void> | null = null
+interface QueuedParse {
+  tf: TranscriptFile
+  /** True when the transcript parsed, false when it could not be read (gone, unreadable). */
+  done: Promise<boolean>
+  finish: (parsed: boolean) => void
+}
+const parseQueue = new Map<string, QueuedParse>()
+let draining = false
 
-/** Parse the transcripts the scan cache has no title for, newest first, at a narrow width,
- *  one sweep at a time machine-wide. Resolves when the sweep is done, which may be long after the
- *  request that started it answered. */
-function warmMissingTitles(misses: TranscriptFile[]): Promise<void> {
-  if (!missWarm) {
-    const todo = [...misses].sort((a, b) => b.mtime_ms - a.mtime_ms)
-    missWarm = mapPool(todo, MISS_WARM_CONCURRENCY, async (tf) => {
+const takeNewestQueued = (): QueuedParse | null => {
+  let best: [string, QueuedParse] | null = null
+  for (const entry of parseQueue)
+    if (!best || entry[1].tf.mtime_ms > best[1].tf.mtime_ms) best = entry
+  if (!best) return null
+  parseQueue.delete(best[0])
+  return best[1]
+}
+
+function drainParseQueue(): Promise<void> {
+  const worker = async () => {
+    for (let item = takeNewestQueued(); item; item = takeNewestQueued()) {
       try {
-        await scanMeta(tf)
+        item.finish((await scanMeta(item.tf)) !== null)
       } catch {
         // An unreadable transcript stays uncached, as everywhere else.
+        item.finish(false)
       }
-    })
-      .then(() => undefined)
-      .finally(() => {
-        missWarm = null
-      })
+    }
   }
-  return missWarm
+  return Promise.all(Array.from({ length: PARSE_QUEUE_CONCURRENCY }, worker))
+    .then(() => undefined)
+    .finally(() => {
+      draining = parseQueue.size > 0
+      if (draining) void drainParseQueue()
+    })
 }
+
+/** Ask for a transcript to be parsed in the background, newest first, a couple at a time machine-
+ *  wide. The promise settles when that parse is done, which may be long after the request that
+ *  asked has answered. */
+function queueParse(tf: TranscriptFile): Promise<boolean> {
+  const key = cacheKey(tf)
+  const queued = parseQueue.get(key)
+  if (queued) {
+    if (tf.mtime_ms > queued.tf.mtime_ms) queued.tf = tf
+    return queued.done
+  }
+  let finish!: (parsed: boolean) => void
+  const done = new Promise<boolean>((resolve) => {
+    finish = resolve
+  })
+  parseQueue.set(key, { tf, done, finish })
+  if (!draining) {
+    draining = true
+    void drainParseQueue()
+  }
+  return done
+}
+
+/** One list's allowance for waiting on parses, shared by everything that waits in it. */
+function scanBudget(ms = SCAN_BUDGET_MS) {
+  const deadline = performance.now() + ms
+  let expired: Promise<void> | null = null
+  return {
+    async wait(work: Promise<unknown>): Promise<void> {
+      const left = deadline - performance.now()
+      if (left <= 0) return
+      expired ??= new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, left)
+        timer.unref?.()
+      })
+      await Promise.race([work, expired])
+    },
+  }
+}
+type ScanBudget = ReturnType<typeof scanBudget>
 
 const selectTitles = db.query<{ cache_key: string; title: string; cwd: string }, [number]>(
   'select cache_key, title, cwd from session_scan_cache where scan_version >= ?',
 )
+
+// Every cached title and folder by cache key, read from the scan table once and kept current by
+// rememberScan, so a search never re-reads thousands of rows. A row the table later drops stays
+// here harmlessly: matching walks the live index and only looks keys up.
+let titles: Map<string, { title: string; cwd: string }> | null = null
+function titleIndex(): Map<string, { title: string; cwd: string }> {
+  if (!titles) {
+    titles = new Map()
+    for (const r of selectTitles.all(SCAN_VERSION)) titles.set(r.cache_key, r)
+  }
+  return titles
+}
+
+// How many candidates one match pass looks at before the event loop gets a turn.
+const MATCH_SLICE = 800
 
 /** The title-search path of listSessions.
  *
  *  The match runs on what the scan cache already knows (one sqlite read, then a pass over the
  *  candidates that parses nothing), and only the best `limit` hits are built into rows. A
  *  transcript the cache has no title for is matched on its index fields meanwhile and parsed in
- *  the background; the request waits for that at most TITLE_SCAN_BUDGET_MS. Every step is short
+ *  the background; the request waits for that at most SCAN_BUDGET_MS. Every step is short
  *  and the event loop gets a turn between batches, so a search over thousands of sessions never
  *  holds the daemon. */
 async function rankedTitleMatches(
@@ -1422,34 +1548,27 @@ async function rankedTitleMatches(
   toSummary: (tf: TranscriptFile) => Promise<SessionSummary | null>,
   offset: number,
   limit: number,
+  budget: ScanBudget,
 ): Promise<SessionSummary[]> {
-  const readCache = () => {
-    const known = new Map<string, { title: string; cwd: string }>()
-    for (const r of selectTitles.all(SCAN_VERSION)) known.set(r.cache_key, r)
-    return known
-  }
   const turn = () => new Promise<void>((resolve) => setImmediate(resolve))
-  let known = readCache()
+  const known = titleIndex()
   await turn()
   const misses = files.filter((f) => !known.has(cacheKey(f)))
   if (misses.length) {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const budget = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, TITLE_SCAN_BUDGET_MS)
-    })
-    await Promise.race([warmMissingTitles(misses), budget])
-    clearTimeout(timer)
-    known = readCache()
+    await budget.wait(Promise.all(misses.map(queueParse)))
   }
   const candidates: Array<{ tf: TranscriptFile; tier: number }> = []
-  for (const tf of files) {
-    const row = known.get(cacheKey(tf))
-    const tier = titleMatchTier(needle, {
-      title: row?.title ?? tf.title ?? '',
-      cwd: row?.cwd ?? tf.cwd ?? decodeProjectKey(tf.project),
-      session_id: tf.session_id,
-    })
-    if (tier !== null) candidates.push({ tf, tier })
+  for (let from = 0; from < files.length; from += MATCH_SLICE) {
+    for (const tf of files.slice(from, from + MATCH_SLICE)) {
+      const row = known.get(cacheKey(tf))
+      const tier = titleMatchTier(needle, {
+        title: row?.title ?? tf.title ?? '',
+        cwd: row?.cwd ?? tf.cwd ?? decodeProjectKey(tf.project),
+        session_id: tf.session_id,
+      })
+      if (tier !== null) candidates.push({ tf, tier })
+    }
+    await turn()
   }
   candidates.sort((a, b) => a.tier - b.tier || b.tf.mtime_ms - a.tf.mtime_ms)
   await turn()
