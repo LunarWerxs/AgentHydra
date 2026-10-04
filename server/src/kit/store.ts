@@ -13,6 +13,7 @@ import {
   KIT_MEASURES,
   KIT_SESSION_KEY,
   migrateKitSchema,
+  SOURCE_TS_INDEX_SQL,
   sessionAddSql,
   sessionAggSql,
 } from './schema'
@@ -70,6 +71,108 @@ export function localDay(ts: number): string {
 
 export const hourStart = (ts: number): number => ts - (((ts % HOUR_MS) + HOUR_MS) % HOUR_MS)
 
+/**
+ * bun:sqlite is synchronous: a statement or transaction that runs for a second holds the whole daemon for
+ * that second (HTTP, MCP, CliMayte placement). Long store work is therefore cut into slices of about
+ * SLICE_MS, each its own transaction, with a turn of the event loop between them.
+ */
+export const SLICE_MS = 40
+/** Rows per transaction when events are written in slices (about 10 ms of sqlite each). */
+export const WRITE_SLICE = 500
+/** A turn of the event loop: timers, I/O and the HTTP server run before the caller continues. */
+export const yieldLoop = (): Promise<void> => {
+  for (const s of OPEN_STORES) s.checkpointSoon()
+  return new Promise((r) => setTimeout(r, 0))
+}
+const OPEN_STORES = new Set<KitStore>()
+const CHECKPOINT_EVERY_MS = 1500
+/** A persistent connection that only checkpoints (passive: it never blocks the writer). */
+const CHECKPOINT_WORKER_SOURCE = `
+const { Database } = require('bun:sqlite')
+let db = null
+self.onmessage = (e) => {
+  try {
+    if (!db) {
+      db = new Database(e.data.path)
+      db.exec('pragma busy_timeout = 5000')
+    }
+    db.exec('pragma wal_checkpoint(PASSIVE)')
+    self.postMessage({})
+  } catch (err) {
+    self.postMessage({ error: String((err && err.message) || err) })
+  }
+}
+`
+
+/** Long store work is written once as a generator that yields between slices; these two run it. */
+type Steps<T> = Generator<void, T>
+
+function runSteps<T>(g: Steps<T>): T {
+  for (;;) {
+    const r = g.next()
+    if (r.done) return r.value
+  }
+}
+
+async function runStepsAsync<T>(g: Steps<T>): Promise<T> {
+  for (;;) {
+    const r = g.next()
+    if (r.done) return r.value
+    await yieldLoop()
+  }
+}
+
+/**
+ * Walks [lo, hi) in hour-aligned slices, `step(a, b)` run for each. The slice grows while a step is quick
+ * and shrinks when it runs over, so a sparse store takes few slices and a dense hour still stays short.
+ */
+export function* hourSlices(
+  lo: number,
+  hi: number,
+  step: (a: number, b: number) => void,
+): Steps<void> {
+  let span = 12
+  for (let a = hourStart(lo); a < hi; ) {
+    const b = Math.min(a + span * HOUR_MS, hi)
+    const t = performance.now()
+    step(a, b)
+    const took = performance.now() - t
+    if (took < SLICE_MS / 3) span = Math.min(span * 2, 24 * 90)
+    else if (took > SLICE_MS) span = Math.max(1, span >> 1)
+    a = b
+    yield
+  }
+}
+
+/** Raw rows per slice of usage_event work (about 20-40 ms of sqlite whatever the density of the hour). */
+export const SLICE_ROWS = 1000
+/** Deleting a raw row also maintains every index, so the prune takes fewer per slice. */
+const PRUNE_ROWS = 400
+/** Raw rows of one session added up per transaction when its usage_session row is rebuilt. */
+const SESSION_CHUNK_ROWS = 1500
+
+/**
+ * Walks [lo, hi) in slices that hold about `rows` raw events each, `step(a, b)` run for each. The first
+ * slice starts on the hour of `lo`, so a step that treats "the hours that start in [a, b)" as its own sees
+ * every hour exactly once. A dense hour is cut into several slices, a sparse month is one.
+ */
+export function* eventSlices(
+  db: Database,
+  lo: number,
+  hi: number,
+  step: (a: number, b: number) => void,
+  rows: number = SLICE_ROWS,
+): Steps<void> {
+  const edge = db.prepare('select ts from usage_event where ts >= $a order by ts limit 1 offset $n')
+  for (let a = hourStart(lo); a < hi; ) {
+    const r = edge.get({ $a: a, $n: rows }) as { ts: number } | null
+    const b = Math.min(r ? Math.max(r.ts, a + 1) : hi, hi)
+    step(a, b)
+    a = b
+    yield
+  }
+}
+
 const EVENT_COLS = [
   'id',
   'ts',
@@ -99,17 +202,39 @@ const EVENT_COLS = [
 
 const num = (v: number | undefined): number => (Number.isFinite(v) ? (v as number) : 0)
 
+/** Runs one statement on a connection of its own, off the daemon's thread (like core/sqlite-worker.ts). */
+const EXEC_WORKER_SOURCE = `
+const { Database } = require('bun:sqlite')
+self.onmessage = (e) => {
+  const { path, sql } = e.data
+  let db = null
+  try {
+    db = new Database(path)
+    db.exec('pragma busy_timeout = 30000')
+    db.exec(sql)
+    self.postMessage({})
+  } catch (err) {
+    self.postMessage({ error: String((err && err.message) || err) })
+  } finally {
+    if (db) db.close()
+  }
+}
+`
+
 export class KitStore {
   readonly db: Database
   private readonly upsertStmt
+  /** Bumped when every cursor is dropped, so a cache of cursors held by an ingest knows it is stale. */
+  cursorEpoch = 0
 
-  constructor(path: string = kitDbPath()) {
+  constructor(readonly path: string = kitDbPath()) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.db = new Database(path, { create: true })
     if (path !== ':memory:') this.db.exec('pragma journal_mode = WAL')
     this.db.exec('pragma synchronous = NORMAL')
     migrateKitSchema(this.db)
     this.upsertStmt = this.prepareUpsert()
+    if (path !== ':memory:') OPEN_STORES.add(this)
   }
 
   private prepareUpsert() {
@@ -119,7 +244,95 @@ export class KitStore {
   }
 
   close(): void {
+    OPEN_STORES.delete(this)
+    this.ckptWorker?.terminate()
+    this.ckptWorker = null
     this.db.close()
+  }
+
+  private ckptWorker: Worker | null = null
+  private ckptBusy = false
+  private ckptAt = 0
+  private ckptOff = false
+
+  /**
+   * A WAL checkpoint run by the commit that crosses the threshold fsyncs the database file on the daemon's
+   * thread (100-500 ms on a live-size store, whichever slice happened to commit). Once a store is being
+   * written in slices, checkpoints are made by a connection of a worker thread instead, at most one every
+   * CHECKPOINT_EVERY_MS, and the writer's own automatic checkpoint is switched off. Called on every turn
+   * that long work gives back to the loop; costs nothing between checkpoints.
+   */
+  checkpointSoon(): void {
+    if (this.path === ':memory:' || this.ckptOff || this.ckptBusy) return
+    const now = Date.now()
+    if (now - this.ckptAt < CHECKPOINT_EVERY_MS) return
+    this.ckptAt = now
+    try {
+      if (!this.ckptWorker) {
+        this.ckptWorker = new Worker(
+          URL.createObjectURL(new Blob([CHECKPOINT_WORKER_SOURCE], { type: 'text/javascript' })),
+        )
+        this.ckptWorker.onmessage = (e: MessageEvent<{ error?: string }>) => {
+          this.ckptBusy = false
+          if (e.data.error !== undefined) this.stopCheckpointWorker()
+        }
+        this.ckptWorker.onerror = () => this.stopCheckpointWorker()
+        this.ckptWorker.unref()
+        this.db.exec('pragma wal_autocheckpoint = 0')
+      }
+      this.ckptBusy = true
+      this.ckptWorker.postMessage({ path: this.path })
+    } catch {
+      this.stopCheckpointWorker()
+    }
+  }
+
+  /** The worker failed: the writer's automatic checkpoint is restored and no more are tried. */
+  private stopCheckpointWorker(): void {
+    this.ckptOff = true
+    this.ckptBusy = false
+    this.ckptWorker?.terminate()
+    this.ckptWorker = null
+    try {
+      this.db.exec('pragma wal_autocheckpoint = 1000')
+    } catch {
+      // closed
+    }
+  }
+
+  /**
+   * Builds the indexes that migrateKitSchema leaves out of a big table, on a worker thread: the build
+   * takes seconds and would hold the daemon for all of them on this one. Where a worker cannot be
+   * started (an in-memory store, no Worker) it is built here. Call it before the first write of a sweep.
+   */
+  async ensureIndexes(): Promise<void> {
+    const have = this.db
+      .query(
+        "select 1 as x from sqlite_master where type = 'index' and name = 'usage_event_source_ts'",
+      )
+      .get()
+    if (have) return
+    if (this.path !== ':memory:') {
+      try {
+        const w = new Worker(
+          URL.createObjectURL(new Blob([EXEC_WORKER_SOURCE], { type: 'text/javascript' })),
+        )
+        try {
+          await new Promise<void>((resolve, reject) => {
+            w.onmessage = (e: MessageEvent<{ error?: string }>) =>
+              e.data.error === undefined ? resolve() : reject(new Error(e.data.error))
+            w.onerror = (e) => reject(new Error(e.message))
+            w.postMessage({ path: this.path, sql: SOURCE_TS_INDEX_SQL })
+          })
+          return
+        } finally {
+          w.terminate()
+        }
+      } catch {
+        // fall through to building it here
+      }
+    }
+    this.db.exec(SOURCE_TS_INDEX_SQL)
   }
 
   /**
@@ -169,6 +382,16 @@ export class KitStore {
     })
     tx(events)
     return events.length
+  }
+
+  /** upsertEvents in slices of WRITE_SLICE rows, each its own transaction, with a turn of the loop between. */
+  async upsertEventsAsync(input: readonly UsageEventInput[]): Promise<number> {
+    let n = 0
+    for (let i = 0; i < input.length; i += WRITE_SLICE) {
+      n += this.upsertEvents(input.slice(i, i + WRITE_SLICE))
+      await yieldLoop()
+    }
+    return n
   }
 
   /**
@@ -244,6 +467,17 @@ export class KitStore {
       this.addToSessions(fresh)
     })()
     return fresh.length
+  }
+
+  /** settleOld in slices of WRITE_SLICE calls. Each slice is atomic with its claims, so a cut-short run
+   *  is finished by the next one without counting a call twice. */
+  async settleOldAsync(events: readonly UsageEventInput[]): Promise<number> {
+    let n = 0
+    for (let i = 0; i < events.length; i += WRITE_SLICE) {
+      n += this.settleOld(events.slice(i, i + WRITE_SLICE))
+      await yieldLoop()
+    }
+    return n
   }
 
   /** Add events to usage_session and usage_session_settled (both keep them forever). */
@@ -330,6 +564,11 @@ export class KitStore {
   }
 
   // ---- rollup, pruning, rebuild ----
+  //
+  // Each of these is written once as a generator (…Steps) that yields between slices; the plain method runs
+  // it to the end, the …Async one gives the event loop a turn between slices (see SLICE_MS). Every slice is
+  // a transaction of its own, so a rollup or prune that is cut short leaves a store that the next run
+  // finishes: both are idempotent per hour / per session, and pruneRaw raises raw_cut slice by slice.
 
   /**
    * Recompute usage_hour for every hour from `fromTs` (default: the oldest stale hour) to the newest
@@ -338,49 +577,98 @@ export class KitStore {
    * raw rows left and are never touched. Returns the number of hourly rows written.
    */
   rollup(fromTs?: number): number {
+    return runSteps(this.rollupSteps(fromTs))
+  }
+
+  rollupAsync(fromTs?: number): Promise<number> {
+    return runStepsAsync(this.rollupSteps(fromTs))
+  }
+
+  private *rollupSteps(fromTs?: number): Steps<number> {
     const dirty = this.getMeta('dirty_from')
-    let from = fromTs !== undefined ? hourStart(fromTs) : dirty !== null ? Number(dirty) : null
+    const from = fromTs !== undefined ? hourStart(fromTs) : dirty !== null ? Number(dirty) : null
     if (from === null) return 0
+    const written = yield* this.rollupRange(from, Infinity)
+    if (dirty === null || Math.max(from, this.rawCut() ?? -Infinity) <= Number(dirty)) {
+      this.db.query("delete from meta where key = 'dirty_from'").run()
+    }
+    return written
+  }
+
+  /** usage_hour for the hours in [from, to) and usage_session for each session with a raw event there. */
+  private *rollupRange(from: number, to: number): Steps<number> {
     from = Math.max(from, this.rawCut() ?? -Infinity)
     const dims = KIT_HOUR_DIMS.map((d) => `coalesce(${d}, '')`).join(', ')
     const sums = KIT_MEASURES.filter((m) => m !== 'weighted')
       .map((m) => `sum(${m})`)
       .join(', ')
+    // Hours that exist in usage_hour but have no raw event any more still have to be cleared.
+    // Index seeks (a min() over a union scans the range, which is seconds on a live-size store).
+    const edgeOf = (table: string, col: string, dir: 'asc' | 'desc'): number | null =>
+      (
+        this.db
+          .query(
+            `select ${col} as t from ${table} where ${col} >= $from order by ${col} ${dir} limit 1`,
+          )
+          .get({ $from: from }) as { t: number } | null
+      )?.t ?? null
+    const lows = [edgeOf('usage_event', 'ts', 'asc'), edgeOf('usage_hour', 'hour', 'asc')].filter(
+      (v): v is number => v !== null,
+    )
+    const highs = [
+      edgeOf('usage_event', 'ts', 'desc'),
+      edgeOf('usage_hour', 'hour', 'desc'),
+    ].filter((v): v is number => v !== null)
+    if (lows.length === 0 || highs.length === 0) return 0
+    const edge = { lo: Math.min(...lows), hi: Math.max(...highs) }
+    const hi = Math.min(hourStart(edge.hi) + HOUR_MS, to)
+    // An hour's row is deleted by the slice its first millisecond falls in; every slice of the hour adds.
+    const del = this.db.prepare('delete from usage_hour where hour >= $a and hour < $b')
+    const cols = KIT_MEASURES.map((m) => m)
+    const nullable = new Set(['list_usd', 'billed_usd', 'seconds'])
+    const ins = this.db.prepare(
+      `insert into usage_hour (hour, day, ${KIT_HOUR_DIMS.join(', ')}, calls, ok_calls, failed_calls,
+         ${KIT_MEASURES.filter((m) => m !== 'weighted').join(', ')}, weighted)
+       select (ts - (ts % ${HOUR_MS})) as h, min(day), ${dims}, count(*),
+         sum(case when ok = 1 then 1 else 0 end), sum(case when ok = 0 then 1 else 0 end),
+         ${sums}, sum(weighted)
+       from usage_event where ts >= $a and ts < $b
+       group by h, ${dims}
+       on conflict (hour, pc, account, instance, agent, source, model, provider) do update set
+         calls = calls + excluded.calls, ok_calls = ok_calls + excluded.ok_calls,
+         failed_calls = failed_calls + excluded.failed_calls,
+         ${cols.map((c) => (nullable.has(c) ? `${c} = case when ${c} is null and excluded.${c} is null then null else coalesce(${c}, 0) + coalesce(excluded.${c}, 0) end` : `${c} = ${c} + excluded.${c}`)).join(', ')}`,
+    )
+    const pairsOf = this.db.prepare(
+      "select distinct coalesce(session, '') as s, coalesce(ref, '') as r from usage_event where ts >= $a and ts < $b",
+    )
     let written = 0
-    this.db.transaction(() => {
-      this.db.query('delete from usage_hour where hour >= ?').run(from)
-      written = this.db
-        .query(
-          `insert into usage_hour (hour, day, ${KIT_HOUR_DIMS.join(', ')}, calls, ok_calls, failed_calls,
-             ${KIT_MEASURES.filter((m) => m !== 'weighted').join(', ')}, weighted)
-           select (ts - (ts % ${HOUR_MS})) as h, min(day), ${dims}, count(*),
-             sum(case when ok = 1 then 1 else 0 end), sum(case when ok = 0 then 1 else 0 end),
-             ${sums}, sum(weighted)
-           from usage_event where ts >= ?
-           group by h, ${dims}`,
-        )
-        .run(from).changes
-      this.rollupSessions(from)
-      if (dirty === null || from <= Number(dirty)) {
-        this.db.query("delete from meta where key = 'dirty_from'").run()
-      }
-    })()
+    const pairs = new Map<string, { s: string; r: string }>()
+    yield* eventSlices(this.db, Math.max(from, hourStart(edge.lo)), hi, (a, b) => {
+      this.db.transaction(() => {
+        del.run({ $a: a, $b: b })
+        written += ins.run({ $a: a, $b: b }).changes
+      })()
+      for (const p of pairsOf.all({ $a: a, $b: b }) as { s: string; r: string }[])
+        pairs.set(`${p.s}\u0000${p.r}`, p)
+    })
+    yield* this.rollupSessions([...pairs.values()])
     return written
   }
 
-  /** Rebuild the usage_session rows of every (session, ref) with a raw event at or after `from`. */
-  private rollupSessions(from: number): void {
-    const pairs = this.db
-      .query(
-        "select distinct coalesce(session, '') as s, coalesce(ref, '') as r from usage_event where ts >= ?",
-      )
-      .all(from) as { s: string; r: string }[]
+  /** Rebuild the usage_session rows of the given (session, ref) pairs. */
+  private *rollupSessions(pairs: readonly { s: string; r: string }[]): Steps<void> {
     const del = this.db.prepare('delete from usage_session where session = $s and ref = $r')
+    const mine = "coalesce(session, '') = $s and coalesce(ref, '') = $r"
     const fresh = this.db.prepare(
-      sessionAddSql(
-        'usage_session',
-        sessionAggSql("coalesce(session, '') = $s and coalesce(ref, '') = $r"),
-      ),
+      sessionAddSql('usage_session', sessionAggSql(`${mine} and rowid > $lo and rowid <= $hi`)),
+    )
+    const freshRest = this.db.prepare(
+      sessionAddSql('usage_session', sessionAggSql(`${mine} and rowid > $lo`)),
+    )
+    // The rowid of the row that ends a chunk of this session's raw rows (an index walk).
+    const chunkEnd = this.db.prepare(
+      `select rowid as r from usage_event where ${mine} and rowid > $lo order by rowid limit 1 offset ${SESSION_CHUNK_ROWS}`,
     )
     const settled = this.db.prepare(
       sessionAddSql(
@@ -388,11 +676,31 @@ export class KitStore {
         'select * from usage_session_settled where session = $s and ref = $r',
       ),
     )
-    for (const { s, r } of pairs) {
-      const a = { $s: s, $r: r }
-      del.run(a)
-      fresh.run(a)
-      settled.run(a)
+    let since = performance.now()
+    for (let i = 0; i < pairs.length; i++) {
+      const a = { $s: (pairs[i] as { s: string }).s, $r: (pairs[i] as { r: string }).r }
+      // A session with a great many raw rows is added up a chunk of rows at a time, each its own
+      // transaction (the sums are additive); the first one also clears the old row and adds the settled part.
+      let lo = 0
+      for (let first = true; ; first = false) {
+        const end = (chunkEnd.get({ ...a, $lo: lo }) as { r: number } | null)?.r
+        this.db.transaction(() => {
+          if (first) {
+            del.run(a)
+            settled.run(a)
+          }
+          if (end === undefined) freshRest.run({ ...a, $lo: lo })
+          else fresh.run({ ...a, $lo: lo, $hi: end })
+        })()
+        if (end === undefined) break
+        lo = end
+        since = performance.now()
+        yield
+      }
+      if (performance.now() - since >= SLICE_MS) {
+        since = performance.now()
+        yield
+      }
     }
   }
 
@@ -401,20 +709,47 @@ export class KitStore {
    * rolled up). Rolls the doomed hours up first, so the hourly rows always survive. Returns rows deleted.
    */
   pruneRaw(now: number = Date.now(), days: number = RAW_RETENTION_DAYS): number {
+    return runSteps(this.pruneRawSteps(now, days))
+  }
+
+  pruneRawAsync(now: number = Date.now(), days: number = RAW_RETENTION_DAYS): Promise<number> {
+    return runStepsAsync(this.pruneRawSteps(now, days))
+  }
+
+  private *pruneRawSteps(now: number, days: number): Steps<number> {
     const cutoff = hourStart(now - days * DAY_MS)
-    const oldest = this.db.query('select min(ts) as t from usage_event').get() as {
+    const oldest = this.db.query('select ts as t from usage_event order by ts limit 1').get() as {
       t: number | null
-    }
-    if (oldest.t === null || oldest.t >= cutoff) return 0
-    const oldestTs = oldest.t
+    } | null
+    if (!oldest || oldest.t === null || oldest.t >= cutoff) return 0
+    const oldestHour = hourStart(oldest.t)
+    // Only the doomed hours are rolled up; whatever was stale at or after the cut stays stale.
+    const dirty = this.getMeta('dirty_from')
+    yield* this.rollupRange(Math.min(oldestHour, Number(dirty ?? Infinity)), cutoff)
+    if (dirty !== null && Number(dirty) < cutoff) this.setMeta('dirty_from', String(cutoff))
     let deleted = 0
-    this.db.transaction(() => {
-      this.rollup(Math.min(hourStart(oldestTs), Number(this.getMeta('dirty_from') ?? Infinity)))
-      // The sessions' totals do not change: the doomed rows move from raw into the settled part.
-      this.db.exec(sessionAddSql('usage_session_settled', sessionAggSql(`ts < ${cutoff}`)))
-      deleted = this.db.query('delete from usage_event where ts < ?').run(cutoff).changes
-      this.setMeta('raw_cut', String(Math.max(cutoff, this.rawCut() ?? cutoff)))
-    })()
+    // The sessions' totals do not change: the doomed rows move from raw into the settled part.
+    const fold = this.db.prepare(
+      sessionAddSql('usage_session_settled', sessionAggSql('ts >= $a and ts < $b')),
+    )
+    const drop = this.db.prepare('delete from usage_event where ts >= $a and ts < $b')
+    // A slice can end inside an hour. Every doomed hour was rolled up above, so raw_cut is raised to the end
+    // of the hour the slice reaches: a run cut short here is never followed by a rollup of the hour's
+    // remaining raw rows over its complete usage_hour row.
+    yield* eventSlices(
+      this.db,
+      oldestHour,
+      cutoff,
+      (a, b) => {
+        this.db.transaction(() => {
+          fold.run({ $a: a, $b: b })
+          deleted += drop.run({ $a: a, $b: b }).changes
+          const reached = hourStart(b - 1) + HOUR_MS
+          this.setMeta('raw_cut', String(Math.max(reached, this.rawCut() ?? reached)))
+        })()
+      },
+      PRUNE_ROWS,
+    )
     return deleted
   }
 
@@ -425,12 +760,21 @@ export class KitStore {
     return { rolledUp, pruned }
   }
 
+  async runMaintenanceAsync(
+    now: number = Date.now(),
+  ): Promise<{ rolledUp: number; pruned: number }> {
+    const rolledUp = await this.rollupAsync()
+    const pruned = await this.pruneRawAsync(now)
+    return { rolledUp, pruned }
+  }
+
   /**
    * Drop every table and recreate it empty (cursors included, so the next ingest re-reads every source
    * file). Pass a price version to record the one the rebuild will use.
    */
   dropAndRebuild(priceVer?: string): void {
     dropKitSchema(this.db)
+    this.cursorEpoch++
     migrateKitSchema(this.db)
     if (priceVer !== undefined) this.setMeta('price_ver', priceVer)
   }

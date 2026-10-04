@@ -159,6 +159,60 @@ describe('session ledger and the raw cut', () => {
     expect((ledger(s)[0] as { input: number }).input).toBe(27)
   })
 
+  test('a rollup and prune cut into slices count every call once, over a dense hour and many days', async () => {
+    const s = new KitStore(':memory:')
+    const evs: Array<{
+      id: string
+      ts: number
+      session: string
+      model: string
+      source: string
+      input: number
+    }> = []
+    // 2500 calls inside one hour (more than a slice holds, with shared timestamps), then one a day for 50 days
+    for (let i = 0; i < 2500; i++)
+      evs.push({
+        id: `dense${i}`,
+        ts: T0 + Math.floor(i / 3),
+        session: `s${i % 7}`,
+        model: i % 5 ? 'm1' : 'm2',
+        source: 'cli',
+        input: i,
+      })
+    for (let d = 1; d <= 50; d++)
+      evs.push({
+        id: `day${d}`,
+        ts: T0 + d * D,
+        session: `s${d % 3}`,
+        model: 'm1',
+        source: 'cli',
+        input: d,
+      })
+    s.upsertEvents(evs)
+    await s.runMaintenanceAsync(NOW)
+
+    const want = new Map<string, { calls: number; input: number }>()
+    for (const e of evs) {
+      const k = `${e.ts - (e.ts % H)}|${e.model}`
+      const w = want.get(k) ?? { calls: 0, input: 0 }
+      w.calls++
+      w.input += e.input
+      want.set(k, w)
+    }
+    const got = new Map<string, { calls: number; input: number }>()
+    for (const r of s.db.query('select hour, model, calls, input from usage_hour').all() as Array<{
+      hour: number
+      model: string
+      calls: number
+      input: number
+    }>)
+      got.set(`${r.hour}|${r.model}`, { calls: r.calls, input: r.input })
+    expect(got).toEqual(want)
+    const total = s.db.query('select sum(calls) as c, sum(input) as i from usage_session').get()
+    expect(total).toEqual({ c: evs.length, i: evs.reduce((a, e) => a + e.input, 0) })
+    expect(count(s, 'usage_event')).toBeLessThan(evs.length) // the old calls were pruned
+    expect(s.rawCut()).toBe(Math.floor((NOW - 35 * D) / H) * H)
+  })
   test('a v1 file is migrated to v2 with its surviving raw rows in the ledger', () => {
     const s = new KitStore(':memory:')
     s.upsertEvents([{ id: 'a', ts: T0, session: 's', source: 'cli', input: 5 }])

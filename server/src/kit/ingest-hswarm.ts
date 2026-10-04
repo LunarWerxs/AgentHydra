@@ -11,16 +11,20 @@
 //  * A file smaller than the saved offset was rotated: the cursor starts again from byte 0.
 //  * HSwarm moves finished months into ledger-YYYYMM.jsonl.gz beside it; each archive is read once (cursor per
 //    archive path, skipped while its size+mtime are unchanged), so nothing appended before a rotation is lost.
-import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
+import { open, readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { gunzipSync } from 'node:zlib'
+import { promisify } from 'node:util'
+import { gunzip } from 'node:zlib'
 import { hswarmHome } from '../hswarm'
-import type { KitStore, UsageEventInput } from './store'
+import { type KitStore, type UsageEventInput, yieldLoop } from './store'
+
+const gunzipAsync = promisify(gunzip)
 
 /** Bump to make the cursor read the ledger again (a parser fix that changes what is extracted). */
 export const HSWARM_INGEST_VERSION = 1
-const BATCH = 5000
-const CHUNK = 16 * 1024 * 1024
+const BATCH = 500
+const CHUNK = 2 * 1024 * 1024
 
 export const hswarmLedgerPath = (): string => join(hswarmHome(), 'ledger.jsonl')
 
@@ -112,11 +116,11 @@ export function hswarmArchivePaths(path: string = hswarmLedgerPath()): string[] 
  * boundary gets its ordinals in order when all archives are read in one sweep (the first one after the upgrade);
  * a later single archive restarts them at 0. Returns events written, or null when nothing changed.
  */
-export function ingestHswarm(
+export async function ingestHswarm(
   store: KitStore,
   path: string = hswarmLedgerPath(),
   opts: { pc?: string | null } = {},
-): number | null {
+): Promise<number | null> {
   const seen = new Map<string, number>()
   let written = 0
   let changed = false
@@ -134,11 +138,11 @@ export function ingestHswarm(
       continue
     let data: Buffer
     try {
-      data = gunzipSync(readFileSync(ap))
+      data = await gunzipAsync(await readFile(ap))
     } catch {
       continue // unreadable now (being replaced); the cursor is not set, so the next sweep reads it
     }
-    const r = consume(store, data, 0, seen, opts.pc ?? null)
+    const r = await consume(store, data, 0, seen, opts.pc ?? null)
     written += r.written
     store.setCursor({
       path: ap,
@@ -173,36 +177,36 @@ export function ingestHswarm(
   if (offset > size || archivesRead) offset = 0 // shrank (rotated), or an archive just changed
 
   let end = offset
-  const fd = openSync(path, 'r')
+  const fh = await open(path, 'r')
   try {
     const buf = Buffer.allocUnsafe(CHUNK)
     let carry: Buffer = Buffer.alloc(0)
     let pos = offset
     for (;;) {
-      const n = readSync(fd, buf, 0, CHUNK, pos)
+      const { bytesRead: n } = await fh.read(buf, 0, CHUNK, pos)
       if (n === 0) break
       pos += n
       const data = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n)
-      const r = consume(store, data, offset, seen, opts.pc ?? null)
+      const r = await consume(store, data, offset, seen, opts.pc ?? null)
       written += r.written
       end += r.consumed
       carry = Buffer.from(data.subarray(r.consumed)) // a line still being written waits for the next sweep
     }
   } finally {
-    closeSync(fd)
+    await fh.close()
   }
   store.setCursor({ path, size, mtime, offset: end, version: HSWARM_INGEST_VERSION })
   return written
 }
 
 /** Parses the whole lines of `data` into usage events. `consumed` is the bytes up to the last newline. */
-function consume(
+async function consume(
   store: KitStore,
   data: Buffer,
   offset: number,
   seen: Map<string, number>,
   pc: string | null,
-): { written: number; consumed: number } {
+): Promise<{ written: number; consumed: number }> {
   const lastAttempt = store.db.prepare(
     'select count(*) as n from usage_event where id >= $lo and id < $hi',
   )
@@ -220,12 +224,14 @@ function consume(
   }
   let written = 0
   let batch: UsageEventInput[] = []
-  const flush = () => {
+  const flush = async () => {
     if (batch.length === 0) return
-    store.upsertEvents(batch)
-    written += batch.length
+    const rows = batch
     batch = []
+    await store.upsertEventsAsync(rows)
+    written += rows.length
   }
+  let lines = 0
   let from = 0
   let nl = data.indexOf(0x0a, from)
   while (nl >= 0) {
@@ -233,6 +239,7 @@ function consume(
     from = nl + 1
     nl = data.indexOf(0x0a, from)
     if (!text) continue
+    if (++lines % 1000 === 0) await yieldLoop()
     let r: LedgerLine
     try {
       r = JSON.parse(text) as LedgerLine
@@ -243,8 +250,8 @@ function consume(
     if (r.job == null || r.task == null) continue
     const ev = ledgerEvent(r, nextAttempt(r), pc)
     if (ev) batch.push(ev)
-    if (batch.length >= BATCH) flush()
+    if (batch.length >= BATCH) await flush()
   }
-  flush()
+  await flush()
   return { written, consumed: from }
 }

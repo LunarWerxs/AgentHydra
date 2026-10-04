@@ -39,7 +39,17 @@ import { pricesAsOf, priceTokens } from '../pricing'
 import { hswarmAccountId } from '../routes/hswarm'
 import { accumulateUsageLine, defaultConfigDir, emptySpend } from '../usage-tokens'
 import { sessionAddSql, sessionAggSql } from './schema'
-import { hourStart, type KitStore, RAW_RETENTION_DAYS, type UsageEventInput } from './store'
+import {
+  eventSlices,
+  hourSlices,
+  hourStart,
+  type IngestCursor,
+  type KitStore,
+  RAW_RETENTION_DAYS,
+  type UsageEventInput,
+  WRITE_SLICE,
+  yieldLoop,
+} from './store'
 
 /**
  * Bump to make every cursor read its file again (a parser fix that changes what is extracted). The next
@@ -48,7 +58,9 @@ import { hourStart, type KitStore, RAW_RETENTION_DAYS, type UsageEventInput } fr
 export const CLAUDE_INGEST_VERSION = 2
 
 /** Bytes read per step; each step ends in a yield to the event loop. */
-const READ_CHUNK = 4 * 1024 * 1024
+const READ_CHUNK = 2 * 1024 * 1024
+/** Rows per page when a table is walked or deleted from in pieces. */
+const PAGE = 100
 /** The store is committed (and the cursor saved) after this many bytes of one file. */
 const FLUSH_BYTES = 64 * 1024 * 1024
 /**
@@ -243,18 +255,103 @@ interface Candidate {
   owner: ClaudeFileOwner
 }
 
-async function jsonlUnder(dir: string, out: string[]): Promise<void> {
-  let entries: import('node:fs').Dirent[]
-  try {
-    entries = await readdir(dir, { withFileTypes: true })
-  } catch {
-    return
+/** One folder as last listed: its mtime, its subfolders and the transcripts in it that are ours. */
+interface DirNode {
+  mtimeMs: number
+  dirs: string[]
+  files: { path: string; session: string; agent: 'main' | 'subagent' }[]
+}
+
+/**
+ * What a store's sweeps remember between passes: every folder's listing and every cursor. Walking 12k
+ * folders and loading 63k cursors costs seconds, so a warm pass reuses both; a folder is listed again
+ * only when its mtime moved (a file created or removed in it; on Windows a file that merely grows does
+ * not move it, which is why recently written files are stat'd every pass and every file every Nth).
+ */
+interface SweepMemory {
+  epoch: number
+  cursors: Map<string, IngestCursor>
+  loaded: Set<string>
+  trees: Map<string, Map<string, DirNode>>
+}
+const memories = new WeakMap<KitStore, SweepMemory>()
+
+function memoryOf(store: KitStore): SweepMemory {
+  let m = memories.get(store)
+  if (!m || m.epoch !== store.cursorEpoch) {
+    m = { epoch: store.cursorEpoch, cursors: new Map(), loaded: new Set(), trees: new Map() }
+    memories.set(store, m)
   }
-  for (const e of entries) {
-    const p = join(dir, e.name)
-    if (e.isDirectory()) await jsonlUnder(p, out)
-    else if (e.name.endsWith('.jsonl')) out.push(p)
+  return m
+}
+
+/** Every cursor under `dir`, read a page at a time into the memory (once per store and root). */
+async function loadCursors(store: KitStore, mem: SweepMemory, dir: string): Promise<void> {
+  if (mem.loaded.has(dir)) return
+  const page = store.db.prepare(
+    'select * from ingest_cursor where path >= $lo and path < $hi order by path limit 2000',
+  )
+  const hi = `${dir}￿`
+  for (let lo = dir; ; ) {
+    const rows = page.all({ $lo: lo, $hi: hi }) as IngestCursor[]
+    for (const r of rows) mem.cursors.set(r.path, r)
+    if (rows.length < 2000) break
+    lo = (rows[rows.length - 1] as IngestCursor).path
+    await yieldLoop()
   }
+  mem.loaded.add(dir)
+}
+
+async function pool<T>(items: readonly T[], fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.min(STAT_WORKERS, items.length) }, async () => {
+      while (next < items.length) await fn(items[next++] as T)
+    }),
+  )
+}
+
+/**
+ * The folder tree under `root`, level by level. A folder whose mtime is what the previous listing saw is
+ * not listed again unless `relist` is set. The mtime is read BEFORE the listing, so a file created while
+ * it runs moves the mtime past the one saved and is caught by the next pass.
+ */
+async function walkRoot(
+  root: string,
+  old: Map<string, DirNode> | undefined,
+  relist: boolean,
+): Promise<Map<string, DirNode>> {
+  const tree = new Map<string, DirNode>()
+  for (let level = [root]; level.length > 0; ) {
+    const next: string[] = []
+    await pool(level, async (dir) => {
+      const st = await stat(dir).catch(() => null)
+      if (!st) return
+      const mtimeMs = Math.floor(st.mtimeMs)
+      let node = old?.get(dir)
+      if (!node || relist || node.mtimeMs !== mtimeMs) {
+        let entries: import('node:fs').Dirent[]
+        try {
+          entries = await readdir(dir, { withFileTypes: true })
+        } catch {
+          return
+        }
+        node = { mtimeMs, dirs: [], files: [] }
+        for (const e of entries) {
+          const p = join(dir, e.name)
+          if (e.isDirectory()) node.dirs.push(p)
+          else if (e.name.endsWith('.jsonl')) {
+            const c = classify(root, p)
+            if (c) node.files.push({ path: p, ...c })
+          }
+        }
+      }
+      tree.set(dir, node)
+      for (const d of node.dirs) next.push(d)
+    })
+    level = next
+  }
+  return tree
 }
 
 /** `<project>/<session>.jsonl` or `<project>/<session>/subagents/<agent>.jsonl`. Anything else is not ours. */
@@ -294,29 +391,87 @@ const CLAUDE_SOURCES = ['cli', 'desktop', 'climayte']
  * the cursors under `roots`; the live session ledger is rebuilt from the raw rows that remain. Raw rows,
  * HSwarm rows and the foreign sources are not touched. A sweep after it counts each old call once.
  */
-export function upgradeClaudeStore(
+export async function upgradeClaudeStore(
   store: KitStore,
   roots: readonly ClaudeRoot[],
   now: number,
-): void {
+): Promise<void> {
   const have = store.getMeta('claude_ingest_version')
   if (have === String(CLAUDE_INGEST_VERSION)) return
   const cut = hourStart(now - RAW_RETENTION_DAYS * DAY_MS)
   const list = CLAUDE_SOURCES.map((s) => `'${s}'`).join(',')
-  store.db.transaction(() => {
-    // Fold doomed raw rows first, so nothing below the cut is left half raw, half settled.
-    store.pruneRaw(now)
-    store.db.query(`delete from usage_hour where hour < ? and source in (${list})`).run(cut)
-    store.db.exec(`delete from usage_session_settled where source in (${list})`)
-    store.db.exec(`delete from usage_session where source in (${list})`)
-    store.db.exec(sessionAddSql('usage_session', sessionAggSql(`source in (${list})`)))
-    store.db.exec('delete from settled_claim')
-    for (const r of roots)
-      store.db
-        .query('delete from ingest_cursor where path >= ? and path < ?')
-        .run(r.dir, `${r.dir}￿`)
-    store.setMeta('claude_ingest_version', String(CLAUDE_INGEST_VERSION))
-  })()
+  const db = store.db
+  // On a live-size store every step below is millions of rows, so each is a run of short transactions
+  // with a turn of the event loop between them. The order is the old single transaction's, the version
+  // is written last, and every step can be run again, so a restart half way simply starts over.
+  // Fold doomed raw rows first, so nothing below the cut is left half raw, half settled.
+  await store.pruneRawAsync(now)
+  const oldest = db.query('select min(hour) as h from usage_hour').get() as { h: number | null }
+  if (oldest.h !== null) {
+    const drop = db.prepare(
+      `delete from usage_hour where hour >= $a and hour < $b and source in (${list})`,
+    )
+    for (const _ of hourSlices(oldest.h, cut, (a, b) => {
+      drop.run({ $a: a, $b: b })
+    }))
+      await yieldLoop()
+  }
+  for (const table of ['usage_session_settled', 'usage_session']) {
+    // The key starts with the session id: delete a run of sessions at a time, walking up the key.
+    const page = db.prepare(
+      `select session as s from ${table} where session > $lo order by session limit 1 offset ${PAGE - 1}`,
+    )
+    const drop = db.prepare(
+      `delete from ${table} where session > $lo and session <= $hi and source in (${list})`,
+    )
+    const dropRest = db.prepare(`delete from ${table} where session > $lo and source in (${list})`)
+    for (let lo = ''; ; ) {
+      const hi = (page.get({ $lo: lo }) as { s: string } | null)?.s
+      if (hi === undefined) {
+        dropRest.run({ $lo: lo })
+        break
+      }
+      drop.run({ $lo: lo, $hi: hi })
+      lo = hi
+      await yieldLoop()
+    }
+    // A session with an empty id sorts below every `> ''` bound.
+    db.query(`delete from ${table} where session = '' and source in (${list})`).run()
+    await yieldLoop()
+  }
+  // The live session ledger again, from the raw rows that remain (added a slice of time at a time).
+  const ts = (dir: 'asc' | 'desc') =>
+    (
+      db.query(`select ts from usage_event order by ts ${dir} limit 1`).get() as {
+        ts: number
+      } | null
+    )?.ts
+  const lo = ts('asc')
+  const hi = ts('desc')
+  if (lo != null && hi != null) {
+    const add = db.prepare(
+      sessionAddSql('usage_session', sessionAggSql(`source in (${list}) and ts >= $a and ts < $b`)),
+    )
+    for (const _ of eventSlices(db, lo, hi + 1, (a, b) => {
+      add.run({ $a: a, $b: b })
+    }))
+      await yieldLoop()
+  }
+  for (;;) {
+    const n = db
+      .query('delete from settled_claim where h in (select h from settled_claim limit 20000)')
+      .run()
+    if (n.changes === 0) break
+    await yieldLoop()
+  }
+  for (const r of roots) {
+    const drop = db.prepare(
+      'delete from ingest_cursor where path in (select path from ingest_cursor where path >= $a and path < $b limit 1000)',
+    )
+    while (drop.run({ $a: r.dir, $b: `${r.dir}￿` }).changes > 0) await yieldLoop()
+  }
+  store.cursorEpoch++
+  store.setMeta('claude_ingest_version', String(CLAUDE_INGEST_VERSION))
 }
 
 /** One sweep over every root. Only bytes that arrived since the last sweep are read. */
@@ -333,7 +488,8 @@ export async function ingestClaude(
   const throttle = makeThrottle(opts.maxBytesPerSec ?? DEFAULT_MAX_BYTES_PER_SEC)
   const priceVer = pricesAsOf()
   const rawCutoff = hourStart(now - RAW_RETENTION_DAYS * DAY_MS)
-  upgradeClaudeStore(store, roots, now)
+  await upgradeClaudeStore(store, roots, now)
+  const mem = memoryOf(store)
   const accountIds = new Map<string, string>()
   const accountId = (uuid: string | null): string | null => {
     if (!uuid) return null
@@ -345,31 +501,28 @@ export async function ingestClaude(
   }
 
   // 1. Which files exist, and which have something new.
-  const cursors = new Map<string, ReturnType<KitStore['getCursor']>>()
-  const candidates: Candidate[] = []
-  for (const root of roots) {
-    for (const row of store.db
-      .query('select * from ingest_cursor where path >= ? and path < ?')
-      .all(root.dir, `${root.dir}￿`) as NonNullable<ReturnType<KitStore['getCursor']>>[])
-      cursors.set(row.path, row)
-    const paths: string[] = []
-    await jsonlUnder(root.dir, paths)
-    const owners = new Map<string, ClaudeFileOwner | null>()
-    for (const path of paths) {
-      const c = classify(root.dir, path)
-      if (!c) continue
-      if (!owners.has(c.session)) owners.set(c.session, root.owner(c.session))
-      const owner = owners.get(c.session)
-      if (owner) candidates.push({ path, ...c, owner })
-    }
-  }
+  const cursors = mem.cursors
   const stats = new Map<string, { size: number; mtimeMs: number }>()
   const todo: Candidate[] = []
-  for (const c of candidates) {
-    const cur = cursors.get(c.path)
-    if (cur && cur.version === CLAUDE_INGEST_VERSION && cur.mtime < now - QUIET_MS && !fullPass)
-      sum.unchanged++
-    else todo.push(c)
+  let seen = 0
+  for (const root of roots) {
+    await loadCursors(store, mem, root.dir)
+    // The first pass over a root, and every full pass, lists every folder again.
+    const tree = await walkRoot(root.dir, mem.trees.get(root.dir), fullPass)
+    mem.trees.set(root.dir, tree)
+    const owners = new Map<string, ClaudeFileOwner | null>()
+    for (const node of tree.values()) {
+      for (const f of node.files) {
+        if (++seen % 2000 === 0) await yieldLoop()
+        if (!owners.has(f.session)) owners.set(f.session, root.owner(f.session))
+        const owner = owners.get(f.session)
+        if (!owner) continue
+        const cur = cursors.get(f.path)
+        if (cur && cur.version === CLAUDE_INGEST_VERSION && cur.mtime < now - QUIET_MS && !fullPass)
+          sum.unchanged++
+        else todo.push({ ...f, owner })
+      }
+    }
   }
   let next = 0
   await Promise.all(
@@ -411,7 +564,9 @@ export async function ingestClaude(
       accountId,
     }
     try {
-      const r = await readFileInto(store, c.path, start, st, ctx, rawCutoff, throttle)
+      const r = await readFileInto(store, c.path, start, st, ctx, rawCutoff, throttle, (cur) =>
+        cursors.set(cur.path, cur),
+      )
       sum.files++
       sum.bytes += r.bytes
       sum.events += r.events
@@ -432,6 +587,7 @@ async function readFileInto(
   ctx: Parameters<typeof claudeLineEvent>[2],
   rawCutoff: number,
   throttle: (n: number) => Promise<void>,
+  saved: (cursor: IngestCursor) => void,
 ): Promise<{ bytes: number; events: number; hourly: number }> {
   const fh = await open(path, 'r')
   const out = { bytes: 0, events: 0, hourly: 0 }
@@ -450,21 +606,29 @@ async function readFileInto(
         const have = owner.get(e.id) as { instance: string | null; session: string | null } | null
         return !have || (have.instance === e.instance && have.session === e.session)
       })
-    const commit = (offset: number, size: number) => {
-      store.db.transaction(() => {
-        out.events += store.upsertEvents(unclaimed([...raw.values()]))
-        out.hourly += store.settleOld([...old.values()])
-        store.setCursor({
-          path,
-          size,
-          mtime: st.mtimeMs,
-          offset,
-          version: CLAUDE_INGEST_VERSION,
-        })
-      })()
+    // A commit is a run of short transactions (a flush of 64 MB is some 100k calls), the cursor last: a
+    // run cut short re-reads the file from the old cursor, and both writes tolerate seeing a call twice
+    // (a raw row is replaced by id, an old call is dropped by its claim).
+    const commit = async (offset: number, size: number) => {
+      const rows = [...raw.values()]
+      const olds = [...old.values()]
       raw = new Map()
       old = new Map()
       sinceFlush = 0
+      for (let i = 0; i < rows.length; i += WRITE_SLICE) {
+        out.events += store.upsertEvents(unclaimed(rows.slice(i, i + WRITE_SLICE)))
+        await yieldLoop()
+      }
+      out.hourly += await store.settleOldAsync(olds)
+      const cursor = {
+        path,
+        size,
+        mtime: st.mtimeMs,
+        offset,
+        version: CLAUDE_INGEST_VERSION,
+      }
+      store.setCursor(cursor)
+      saved(cursor)
     }
     const buf = Buffer.allocUnsafe(READ_CHUNK)
     for (;;) {
@@ -486,10 +650,10 @@ async function readFileInto(
         }
         carry = Buffer.from(data.subarray(nl + 1))
       }
-      if (sinceFlush >= FLUSH_BYTES) commit(pos - carry.length, pos)
+      if (sinceFlush >= FLUSH_BYTES) await commit(pos - carry.length, pos)
       await throttle(bytesRead)
     }
-    commit(pos - carry.length, pos)
+    await commit(pos - carry.length, pos)
   } finally {
     await fh.close()
   }

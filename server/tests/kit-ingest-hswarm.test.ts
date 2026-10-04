@@ -62,14 +62,14 @@ function kitTotals(store: KitStore, since: number) {
 }
 
 describe('HSwarm ledger ingest', () => {
-  test('maps a ledger line to a usage_event', () => {
+  test('maps a ledger line to a usage_event', async () => {
     const path = join(root, 'map.jsonl')
     writeFileSync(
       path,
       jl([line('t1'), line('t2', { billed: false }), line('t3', { billed: undefined })]),
     )
     const store = new KitStore(':memory:')
-    expect(ingestHswarm(store, path, { pc: 'pc1' })).toBe(3)
+    expect(await ingestHswarm(store, path, { pc: 'pc1' })).toBe(3)
     const rows = store.db.query('select * from usage_event order by id').all() as Record<
       string,
       unknown
@@ -100,11 +100,11 @@ describe('HSwarm ledger ingest', () => {
     store.close()
   })
 
-  test('calls and billed_usd equal HSwarm model stats on the same lines', () => {
+  test('calls and billed_usd equal HSwarm model stats on the same lines', async () => {
     const path = join(root, 'parity.jsonl')
     writeFileSync(path, jl(FIXTURE))
     const store = new KitStore(':memory:')
-    ingestHswarm(store, path)
+    await ingestHswarm(store, path)
     const kit = kitTotals(store, NOW - 30 * 86_400_000)
 
     const code = [
@@ -124,18 +124,18 @@ describe('HSwarm ledger ingest', () => {
     store.close()
   })
 
-  test('resumes from its cursor and reads only appended lines, finishing a torn one later', () => {
+  test('resumes from its cursor and reads only appended lines, finishing a torn one later', async () => {
     const path = join(root, 'resume.jsonl')
     writeFileSync(path, jl([line('t1'), line('t2')]))
     const store = new KitStore(':memory:')
-    expect(ingestHswarm(store, path)).toBe(2)
-    expect(ingestHswarm(store, path)).toBeNull() // nothing new
+    expect(await ingestHswarm(store, path)).toBe(2)
+    expect(await ingestHswarm(store, path)).toBeNull() // nothing new
 
     const torn = JSON.stringify(line('t3'))
     appendFileSync(path, `${torn.slice(0, 40)}`)
-    expect(ingestHswarm(store, path)).toBe(0)
+    expect(await ingestHswarm(store, path)).toBe(0)
     appendFileSync(path, `${torn.slice(40)}\n${JSON.stringify(line('t1'))}\n`)
-    expect(ingestHswarm(store, path)).toBe(2)
+    expect(await ingestHswarm(store, path)).toBe(2)
     const ids = (
       store.db.query('select id from usage_event order by id').all() as { id: string }[]
     ).map((r) => r.id)
@@ -148,13 +148,13 @@ describe('HSwarm ledger ingest', () => {
     store.close()
   })
 
-  test('a file that shrank is read again from byte 0', () => {
+  test('a file that shrank is read again from byte 0', async () => {
     const path = join(root, 'rotate.jsonl')
     writeFileSync(path, jl([line('t1'), line('t2'), line('t3')]))
     const store = new KitStore(':memory:')
-    ingestHswarm(store, path)
+    await ingestHswarm(store, path)
     writeFileSync(path, jl([line('n1', { job: 'job-b' })])) // rotated: a new, shorter ledger
-    expect(ingestHswarm(store, path)).toBe(1)
+    expect(await ingestHswarm(store, path)).toBe(1)
     expect(kitTotals(store, 0).calls).toBe(4)
     expect(store.getCursor(path)?.offset).toBe(
       Buffer.byteLength(jl([line('n1', { job: 'job-b' })])),
@@ -162,12 +162,12 @@ describe('HSwarm ledger ingest', () => {
     store.close()
   })
 
-  test('lines appended just before a month rotation are ingested from the archive, once', () => {
+  test('lines appended just before a month rotation are ingested from the archive, once', async () => {
     const path = join(root, 'month.jsonl')
     const old = [line('t1'), line('t2')]
     writeFileSync(path, jl(old))
     const store = new KitStore(':memory:')
-    expect(ingestHswarm(store, path)).toBe(2)
+    expect(await ingestHswarm(store, path)).toBe(2)
 
     // t3 lands, then HSwarm rotates before the next sweep: t1-t3 move to the archive, the live file keeps the new month, and
     // grows past the old cursor offset so the size alone cannot say it was replaced.
@@ -175,7 +175,7 @@ describe('HSwarm ledger ingest', () => {
     writeFileSync(join(root, 'month-202609.jsonl.gz'), gzipSync(jl([...old, t3])))
     const fresh = Array.from({ length: 6 }, (_, i) => line(`n${i}`, { job: 'job-b' }))
     writeFileSync(path, jl(fresh))
-    expect(ingestHswarm(store, path)).toBe(9) // 3 from the archive, 6 from the live file
+    expect(await ingestHswarm(store, path)).toBe(9) // 3 from the archive, 6 from the live file
     const ids = (store.db.query('select id from usage_event').all() as { id: string }[]).map(
       (r) => r.id,
     )
@@ -183,9 +183,9 @@ describe('HSwarm ledger ingest', () => {
     expect(ids).toHaveLength(9) // t1 and t2 were already there under the same ids: not counted twice
     expect(kitTotals(store, 0).calls).toBe(9)
 
-    expect(ingestHswarm(store, path)).toBeNull() // a fully read archive is skipped by size+mtime
+    expect(await ingestHswarm(store, path)).toBeNull() // a fully read archive is skipped by size+mtime
     appendFileSync(path, jl([line('n6', { job: 'job-b' })]))
-    expect(ingestHswarm(store, path)).toBe(1)
+    expect(await ingestHswarm(store, path)).toBe(1)
     expect(kitTotals(store, 0).calls).toBe(10)
     store.close()
   })

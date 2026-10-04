@@ -34,11 +34,10 @@ import {
   weighTurnCounts,
 } from '../usage-foreign'
 import { hswarmLedgerPath, ingestHswarm } from './ingest-hswarm'
-import type { KitStore, UsageEventInput } from './store'
+import { type KitStore, type UsageEventInput, yieldLoop } from './store'
 
 /** Bump to make every cursor read its file again (a parser fix that changes what is extracted). */
 export const FOREIGN_INGEST_VERSION = 1
-const BATCH = 5000
 
 export interface ForeignSources {
   /** Rollout roots (`sessions/`, `archived_sessions/`) with the instance that owns them, if any. */
@@ -110,12 +109,15 @@ export async function ingestForeign(
     for (const path of codexRollouts(r.root))
       done('codex', path, await ingestCodexFile(store, path, r.instance, opts, touched))
   await reconcileCodex(store, touched, opts)
-  for (const o of sources.opencode) done('opencode', o.dbPath, ingestOpenCode(store, o, opts))
-  for (const h of sources.hermes) done('hermes', h.dbPath, ingestHermes(store, h, opts))
+  for (const o of sources.opencode) done('opencode', o.dbPath, await ingestOpenCode(store, o, opts))
+  for (const h of sources.hermes) done('hermes', h.dbPath, await ingestHermes(store, h, opts))
   for (const d of sources.dsh)
-    for (const s of listDshSessions(d.home))
-      done('dsh', s.path, ingestDshSession(store, s, d.instance, opts))
-  for (const p of sources.hswarm ?? []) done('hswarm', p, ingestHswarm(store, p, { pc: opts.pc }))
+    for (const s of listDshSessions(d.home)) {
+      done('dsh', s.path, await ingestDshSession(store, s, d.instance, opts))
+      await yieldLoop()
+    }
+  for (const p of sources.hswarm ?? [])
+    done('hswarm', p, await ingestHswarm(store, p, { pc: opts.pc }))
   return sum
 }
 
@@ -144,8 +146,8 @@ function listUsd(model: string, c: Counts, at: number): number | null {
   return p.unpriced.length > 0 ? null : p.costUsd
 }
 
-function flush(store: KitStore, events: UsageEventInput[]): void {
-  for (let i = 0; i < events.length; i += BATCH) store.upsertEvents(events.slice(i, i + BATCH))
+async function flush(store: KitStore, events: UsageEventInput[]): Promise<void> {
+  await store.upsertEventsAsync(events)
 }
 
 const cursorUnchanged = (
@@ -374,7 +376,7 @@ async function ingestCodexFile(
     store.setCursor({ path, ...st0, offset: 0, version: FOREIGN_INGEST_VERSION })
     return 0
   }
-  flush(store, events)
+  await flush(store, events)
   const next: CodexFileState = { session, ref, total, n, reader: reader.state(), pending }
   store.setMeta(stateKey(path), JSON.stringify(next))
   store.setMeta(totalKey(session, ref), String(total))
@@ -434,17 +436,17 @@ async function reconcileCodex(
       await ingestCodexFile(store, path, inst, opts, again)
     }
   }
-  if (oldest !== Infinity) store.rollup(oldest)
+  if (oldest !== Infinity) await store.rollupAsync(oldest)
 }
 
 // ---- DSH ----
 
-function ingestDshSession(
+async function ingestDshSession(
   store: KitStore,
   s: { session_id: string; path: string; last_activity_at: number },
   instance: string,
   opts: ForeignIngestOptions,
-): number | null {
+): Promise<number | null> {
   const st = stat(s.path)
   if (!st) return null
   const cur = store.getCursor(s.path)
@@ -485,7 +487,7 @@ function ingestDshSession(
       weighted: weighTurnCounts(model, c),
     })
   }
-  flush(store, events)
+  await flush(store, events)
   store.setCursor({
     path: s.path,
     ...st,
@@ -520,11 +522,11 @@ function providerOfOpenCode(raw: string | null): string {
   return 'opencode'
 }
 
-function ingestOpenCode(
+async function ingestOpenCode(
   store: KitStore,
   o: { dbPath: string; tool: string },
   opts: ForeignIngestOptions,
-): number | null {
+): Promise<number | null> {
   const stamp = dbStamp(o.dbPath)
   if (!stamp) return null
   const cur = store.getCursor(o.dbPath)
@@ -587,18 +589,18 @@ function ingestOpenCode(
       weighted: m.weighted,
     })
   }
-  flush(store, events)
+  await flush(store, events)
   store.setCursor({ path: o.dbPath, ...stamp, offset: newest, version: FOREIGN_INGEST_VERSION })
   return events.length
 }
 
 // ---- Hermes ----
 
-function ingestHermes(
+async function ingestHermes(
   store: KitStore,
   h: { dbPath: string; profile: string | null },
   opts: ForeignIngestOptions,
-): number | null {
+): Promise<number | null> {
   const stamp = dbStamp(h.dbPath)
   if (!stamp) return null
   const cur = store.getCursor(h.dbPath)
@@ -645,7 +647,7 @@ function ingestHermes(
       })
     }
   }
-  flush(store, events)
+  await flush(store, events)
   store.setCursor({ path: h.dbPath, ...stamp, offset: newest, version: FOREIGN_INGEST_VERSION })
   return events.length
 }

@@ -337,6 +337,25 @@ describe('ingestClaude', () => {
     expect(claude()).toEqual({ calls: 2, output: 100 })
   })
 
+  test('a warm pass that skips unchanged folders still reads a new file, a new folder and a file that grew', async () => {
+    const f = fixture()
+    const opts = { maxBytesPerSec: Number.POSITIVE_INFINITY }
+    const roots = [rootOf(f.dir, () => cliOwner(() => UUID_A))]
+    f.file('p1/a.jsonl', reply('a1', NOW - 5000))
+    f.file('p2/b.jsonl', reply('b1', NOW - 4000))
+    await ingestClaude(f.store, roots, { ...opts, fullPass: true })
+    expect(events(f.store).length).toBe(2)
+    // the folder listings are remembered now; a pass over unchanged folders reads nothing
+    expect((await ingestClaude(f.store, roots, { ...opts, fullPass: false })).events).toBe(0)
+
+    await new Promise((r) => setTimeout(r, 30)) // a folder's mtime must move past the remembered one
+    f.file('p1/c.jsonl', reply('c1', NOW - 3000))
+    f.file('p3/d.jsonl', reply('d1', NOW - 2000))
+    appendFileSync(join(f.dir, 'p2/b.jsonl'), reply('b2', NOW - 1000))
+    await ingestClaude(f.store, roots, { ...opts, fullPass: false })
+    expect(events(f.store).map((r) => r.id.slice(-2))).toEqual(['a1', 'b1', 'c1', 'd1', 'b2'])
+  })
+
   test('a session copied into another instance keeps its calls with the first account that ran them', async () => {
     const f = fixture()
     const text = reply('x1', NOW - 9000) + reply('x2', NOW - 8000)

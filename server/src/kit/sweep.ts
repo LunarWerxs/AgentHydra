@@ -16,8 +16,11 @@ import { sharedKitStore } from './query'
 import type { KitStore } from './store'
 
 const EVERY_MS = 60_000
-/** Every this-many-th sweep stats every transcript; the sweeps between skip those quiet for an hour. */
-const FULL_PASS_EVERY = 5
+/**
+ * Every this-many-th sweep lists every folder and stats every transcript; the sweeps between list only the
+ * folders whose mtime moved and stat only the transcripts written within the last hour.
+ */
+const FULL_PASS_EVERY = 10
 
 /** This machine's id, the way HSwarm names it (hswarm/vault.py machine_name). */
 export function machineId(): string {
@@ -46,6 +49,11 @@ async function sweepOnce(store: KitStore): Promise<string> {
       parts.push(`${name} FAILED: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
+  try {
+    await store.ensureIndexes()
+  } catch (err) {
+    parts.push(`indexes FAILED: ${err instanceof Error ? err.message : String(err)}`)
+  }
   await guarded('claude', async () => {
     const s: ClaudeIngestSummary = await ingestClaude(store, await discoverClaudeRoots(), {
       pc,
@@ -60,10 +68,10 @@ async function sweepOnce(store: KitStore): Promise<string> {
   })
   await guarded(
     'hswarm',
-    () => `hswarm events=${ingestHswarm(store, hswarmLedgerPath(), { pc }) ?? 0}`,
+    async () => `hswarm events=${(await ingestHswarm(store, hswarmLedgerPath(), { pc })) ?? 0}`,
   )
-  await guarded('maintenance', () => {
-    const m = store.runMaintenance()
+  await guarded('maintenance', async () => {
+    const m = await store.runMaintenanceAsync()
     return `rolled=${m.rolledUp} pruned=${m.pruned}`
   })
   return `[kit] sweep ${parts.join(' | ')} ms=${Math.round(performance.now() - t0)}`

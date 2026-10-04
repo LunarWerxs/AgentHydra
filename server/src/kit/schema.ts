@@ -224,6 +224,14 @@ function backfillV2(db: Exec): void {
   }
 }
 
+export const SOURCE_TS_INDEX_SQL =
+  'create index if not exists usage_event_source_ts on usage_event (source, ts)'
+
+/** True when usage_event holds more rows than an index can be built over without a noticeable pause. */
+function hasManyEvents(db: Exec): boolean {
+  return db.query('select 1 as x from usage_event limit 1 offset 50000').get() != null
+}
+
 /** Bring the file to KIT_SCHEMA_VERSION. Throws on a file written by a newer build. */
 export function migrateKitSchema(db: Exec): void {
   const row = db.query('pragma user_version').get() as { user_version: number }
@@ -236,8 +244,9 @@ export function migrateKitSchema(db: Exec): void {
     db.exec(KIT_DDL_V2)
     if (have >= 1) backfillV2(db)
   }
-  // Covers the per-source coverage summary; idempotent, so a file at any version gets it.
-  db.exec('create index if not exists usage_event_source_ts on usage_event (source, ts)')
+  // Covers the per-source coverage summary. Building it over a live-size table takes seconds on the
+  // thread that runs the daemon, so a big table gets it from KitStore.ensureIndexes (a worker thread).
+  if (!hasManyEvents(db)) db.exec(SOURCE_TS_INDEX_SQL)
   if (have < 3) db.exec(KIT_DDL_V3)
   if (have !== KIT_SCHEMA_VERSION) db.exec(`pragma user_version = ${KIT_SCHEMA_VERSION}`)
 }
