@@ -2,7 +2,10 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "types": ["bun"],
-    "lib": ["ESNext"]
+    // DOM gives Response, Headers and Request their body methods. bun-types declares a global
+    // onmessage, which @types/node 26 reads as "DOM is loaded" and then leaves its own Response
+    // empty, so without DOM every res.json() / res.status failed to typecheck.
+    "lib": ["ESNext", "DOM"]
   },
   "include": ["src", "test"]
 }
