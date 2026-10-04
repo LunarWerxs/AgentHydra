@@ -439,13 +439,26 @@ export interface SpendReport {
   byModel: SpendBucket[]
   byProject: SpendBucket[]
   byDay: SpendBucket[]
+  /** Keyed by the toolkit's account id (`acct-…`). */
   byAccount: SpendBucket[]
+  /** Per toolkit source (cli, desktop, climayte, codex, opencode, dsh, hermes, hswarm). */
+  bySource: SpendBucket[]
+  /** Model calls counted, rollup hours included (`sessions` counts raw rows only). */
+  calls: number
   unpricedModels: string[]
   /** The date the prices behind every dollar figure here were last known good. */
   pricesAsOf: string
   /** 'catalog' = downloaded rates; 'bundled' = the table this build shipped with. */
   priceSource: 'catalog' | 'bundled'
   coverage: AnalyticsCoverage
+  /** What the toolkit has ingested, per source, so a low figure can be told from a partial one. */
+  kitCoverage: {
+    sources: Record<string, { events: number; firstTs: number; lastTs: number }>
+    cursors: { files: number; newestMtime: number | null }
+    dirtyFrom: number | null
+  }
+  /** Places the answer is narrower than asked (the toolkit's own notes). */
+  notes: string[]
 }
 
 export interface SessionHealthRow {

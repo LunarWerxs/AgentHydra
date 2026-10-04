@@ -200,8 +200,10 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
 // Read-only aggregates over the per-session totals the daemon warms in the background. Every one
 // carries a `coverage` block; the view shows it rather than drawing a chart that quietly describes
 // half the store.
-export const getSpend = (period: SessionPeriod = '30d') =>
-  j<SpendReport>(`/api/analytics/spend?period=${period}`)
+export const getSpend = (period: SessionPeriod = '30d', source?: string) =>
+  j<SpendReport>(
+    `/api/analytics/spend?period=${period}${source ? `&source=${encodeURIComponent(source)}` : ''}`,
+  )
 export const getActivity = (period: SessionPeriod = '30d') =>
   j<ActivityReport>(`/api/analytics/activity?period=${period}`)
 /** Where the tokens went and why: dead skill/MCP load, deep context, subagents, cache writes. */

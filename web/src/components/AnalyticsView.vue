@@ -35,6 +35,7 @@ import EditsFeed from '@/components/charts/EditsFeed.vue'
 import HourGrid from '@/components/charts/HourGrid.vue'
 import TimeBars from '@/components/charts/TimeBars.vue'
 import TokenSplit from '@/components/charts/TokenSplit.vue'
+import MultiSelectSubmenu from '@/components/MultiSelectSubmenu.vue'
 import SwarmStatsCard from '@/components/swarm-stats/SwarmStatsCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -48,6 +49,11 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAnalyticsPrefs } from '@/composables/useAnalyticsPrefs'
 import { useShellWidth } from '@/composables/useShellWidth'
+import {
+  ANALYTICS_SOURCE_LABEL_KEY,
+  ANALYTICS_SOURCES,
+  type AnalyticsSource,
+} from '@/lib/analytics-sources'
 import type {
   ActivityReport,
   AgentPresence,
@@ -62,6 +68,8 @@ import * as api from '@/lib/api'
 import { OPEN_VIEW } from '@/lib/app-view'
 import { modelVendor, shortUsd, vendorLabel } from '@/lib/chart'
 import { baseName, formatCompact, formatUsd } from '@/lib/format'
+import { accountDisplay, fetchAccountNames, type HswarmAccountName } from '@/lib/hswarm-api'
+import { scopeParam, summarizeSelection } from '@/lib/session-scopes'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -69,7 +77,37 @@ const { t } = useI18n()
 const openView = inject(OPEN_VIEW, () => {})
 // The header's full-width toggle lifts this page's own reading cap too.
 const { fullWidth } = useShellWidth()
-const { analyticsPeriod, analyticsTokenMode, toggleTokenMode } = useAnalyticsPrefs()
+const { analyticsPeriod, analyticsTokenMode, analyticsSources, toggleTokenMode } =
+  useAnalyticsPrefs()
+
+/** acct id -> who it is, for the per-account rows (empty when the daemon cannot say). */
+const accountNames = ref<Record<string, HswarmAccountName>>({})
+
+function sourceLabel(value: string): string {
+  const key = ANALYTICS_SOURCE_LABEL_KEY[value as AnalyticsSource]
+  return key ? t(key) : value
+}
+/** The menu lists the sources that have data; before the first answer, every known one. */
+const sourceItems = computed(() => {
+  const present = spend.value ? Object.keys(spend.value.kitCoverage.sources) : []
+  const known = ANALYTICS_SOURCES.filter((s) => !spend.value || present.includes(s))
+  const extra = present.filter((s) => !(ANALYTICS_SOURCES as readonly string[]).includes(s))
+  return [...known, ...extra].map((value) => ({ value, label: sourceLabel(value) }))
+})
+const sourceSummary = computed(() =>
+  summarizeSelection(analyticsSources.value, ANALYTICS_SOURCES, {
+    all: t('sessions.selectionAll'),
+    none: t('sessions.selectionNone'),
+    label: sourceLabel,
+    more: (first, n) => t('sessions.selectionMore', { first, n }),
+  }),
+)
+function toggleSource(value: string) {
+  const v = value as AnalyticsSource
+  analyticsSources.value = analyticsSources.value.includes(v)
+    ? analyticsSources.value.filter((s) => s !== v)
+    : ANALYTICS_SOURCES.filter((s) => s === v || analyticsSources.value.includes(s))
+}
 
 /** Narrow every cost/model chart to one vendor. Client-side over the report already fetched: the
  *  vendor is derived from the model id, so the daemon has nothing extra to compute. */
@@ -104,7 +142,7 @@ async function load() {
     // round trips to a page that is otherwise instant. The tool scan is the one that touches disk;
     // it is capped and cached server-side, and its failure must not take the charts with it.
     const [s, a, c, e, tools, k] = await Promise.all([
-      api.getSpend(period),
+      api.getSpend(period, scopeParam(analyticsSources.value, ANALYTICS_SOURCES)),
       api.getActivity(period),
       api.getConcurrency(period, period === '24h' ? 60 : 180),
       api.getRecentEdits(120),
@@ -128,7 +166,10 @@ async function load() {
 }
 
 onMounted(load)
-watch(analyticsPeriod, load)
+watch([analyticsPeriod, analyticsSources], load)
+onMounted(async () => {
+  accountNames.value = await fetchAccountNames()
+})
 
 async function rescan() {
   refreshing.value = true
@@ -298,7 +339,7 @@ const providerRows = computed(() =>
 const accountRows = computed(() =>
   (spend.value?.byAccount ?? []).map((b) => ({
     key: b.key,
-    label: b.key,
+    label: accountDisplay(b.key, accountNames.value, t).text,
     value: metricOf(b),
     detail: t('analytics.accountDetail', { sessions: b.sessions }),
   })),
@@ -482,6 +523,24 @@ const survivalAverage = computed(() => {
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger as-child>
+            <Button variant="outline" size="sm">
+              {{ $t('analytics.sourceFilter') }}: {{ sourceSummary }}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" class="max-w-52">
+            <MultiSelectSubmenu
+              :label="$t('analytics.sourceFilter')"
+              :summary="sourceSummary"
+              :items="sourceItems"
+              :selected="analyticsSources"
+              @toggle="toggleSource"
+              @all="analyticsSources = [...ANALYTICS_SOURCES]"
+              @none="analyticsSources = []"
+            />
+          </DropdownMenuContent>
+        </DropdownMenu>
         <DropdownMenu v-if="vendors.length > 1">
           <DropdownMenuTrigger as-child>
             <Button :variant="vendorFilter === 'all' ? 'outline' : 'secondary'" size="sm">
@@ -536,13 +595,14 @@ const survivalAverage = computed(() => {
         <Skeleton class="h-44 w-full" />
       </template>
 
-      <template v-else-if="!spend || spend.sessions === 0">
+      <template v-else-if="!spend || spend.calls === 0">
         <div class="rounded-lg border border-border p-6 text-center text-xs text-muted-foreground">
           {{ $t('analytics.empty') }}
         </div>
       </template>
 
       <template v-else>
+        <p v-for="note in spend.notes" :key="note" class="text-3xs text-muted-foreground">{{ note }}</p>
         <!-- the headline: three numbers, no plot. A stat tile is the right form when the answer is
              one number, and dressing it as a chart would add nothing to read. -->
         <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">

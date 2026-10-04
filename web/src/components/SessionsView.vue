@@ -44,6 +44,7 @@ import {
 } from '@lucide/vue'
 import { type Component, type ComponentPublicInstance, computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import MultiSelectSubmenu from '@/components/MultiSelectSubmenu.vue'
 import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
 import SessionComposer, { type ComposerTarget } from '@/components/SessionComposer.vue'
 import SessionSettings from '@/components/SessionSettings.vue'
@@ -115,8 +116,25 @@ import { modelName } from '@/lib/climayte-status'
 import { baseName, queueStatusMeta, shortId, timeAgo } from '@/lib/format'
 import { highlightRuns, rankByQuery, sessionSearchFields, type TextRun } from '@/lib/fuzzy'
 import { groupByProject } from '@/lib/session-groups'
-import { isAllSelected, SHAPE_VALUES } from '@/lib/session-scopes'
-import { sessionShape } from '@/lib/session-shape'
+import {
+  ARCHIVED_LABEL,
+  DISPATCHED_LABEL,
+  RATE_LIMIT_LABEL,
+  SHAPE_LABEL,
+  SOURCE_LABEL,
+} from '@/lib/session-labels'
+import {
+  ARCHIVED_VALUES,
+  type ArchivedValue,
+  DISPATCHED_VALUES,
+  type DispatchedValue,
+  isAllSelected,
+  RATE_LIMIT_VALUES,
+  type RateLimitValue,
+  SHAPE_VALUES,
+  SOURCE_VALUES,
+} from '@/lib/session-scopes'
+import { type SessionShape, sessionShape } from '@/lib/session-shape'
 import { sessionSourceIcon } from '@/lib/session-source-icon'
 import type { SideListGroup } from '@/lib/side-list'
 import { modelEffortTag } from '@/lib/side-list'
@@ -318,6 +336,15 @@ const {
   sessionShapeScope,
   refreshSessions,
 })
+
+// The entries of each multi-select submenu, labelled in the active language.
+const menuItems = <T extends string>(values: readonly T[], labels: Record<T, string>) =>
+  computed(() => values.map((value) => ({ value, label: t(labels[value]) })))
+const sourceItems = menuItems(SOURCE_VALUES, SOURCE_LABEL)
+const dispatchedItems = menuItems(DISPATCHED_VALUES, DISPATCHED_LABEL)
+const rateLimitItems = menuItems(RATE_LIMIT_VALUES, RATE_LIMIT_LABEL)
+const shapeItems = menuItems(SHAPE_VALUES, SHAPE_LABEL)
+const archivedItems = menuItems(ARCHIVED_VALUES, ARCHIVED_LABEL)
 
 // --- per-row labels, badges and tooltips -----------------------------------------------------
 const {
@@ -717,62 +744,16 @@ function onComposerSent(mode: 'now' | 'queued') {
                   </DropdownMenuCheckboxItem>
                   <DropdownMenuSeparator />
 
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>
-                      <MessagesSquare />
-                      {{ $t('sessions.filterSource') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
-                        {{ sourceFilterLabel }}
-                      </span>
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="max-w-52">
-                      <DropdownMenuItem @select.prevent="sourceAll">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
-                      <DropdownMenuItem @select.prevent="sourceNone">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionSourceFilter.includes('claude')"
-                        @select.prevent
-                        @update:model-value="sourceToggle('claude')"
-                      >
-                        {{ $t('sessions.sourceClaude') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionSourceFilter.includes('codex')"
-                        @select.prevent
-                        @update:model-value="sourceToggle('codex')"
-                      >
-                        {{ $t('sessions.sourceCodex') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionSourceFilter.includes('opencode')"
-                        @select.prevent
-                        @update:model-value="sourceToggle('opencode')"
-                      >
-                        {{ $t('sessions.sourceOpenCode') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionSourceFilter.includes('hermes')"
-                        @select.prevent
-                        @update:model-value="sourceToggle('hermes')"
-                      >
-                        {{ $t('sessions.sourceHermes') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionSourceFilter.includes('dsh')"
-                        @select.prevent
-                        @update:model-value="sourceToggle('dsh')"
-                      >
-                        {{ $t('sessions.sourceDsh') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionSourceFilter.includes('zswarm')"
-                        @select.prevent
-                        @update:model-value="sourceToggle('zswarm')"
-                      >
-                        {{ $t('sessions.sourceZswarm') }}
-                      </DropdownMenuCheckboxItem>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
+                  <MultiSelectSubmenu
+                    :icon="MessagesSquare"
+                    :label="$t('sessions.filterSource')"
+                    :summary="sourceFilterLabel"
+                    :items="sourceItems"
+                    :selected="sessionSourceFilter"
+                    @toggle="(v) => sourceToggle(v as api.SessionSource)"
+                    @all="sourceAll"
+                    @none="sourceNone"
+                  />
 
                   <DropdownMenuSub :disabled="!claudeTicked">
                     <DropdownMenuSubTrigger>
@@ -819,163 +800,69 @@ function onComposerSent(mode: 'now' | 'queued') {
                        command line; a usage wall is judged from a Claude transcript), and the
                        hand-written "codex or opencode" list silently went stale twice as sources
                        were added. -->
-                  <DropdownMenuSub :disabled="!claudeTicked">
-                    <DropdownMenuSubTrigger>
-                      <ListTodo />
-                      {{ $t('sessions.dispatched') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
-                        {{ dispatchedScopeLabel }}
-                      </span>
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="max-w-52">
-                      <DropdownMenuItem @select.prevent="dispatchedAll">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
-                      <DropdownMenuItem @select.prevent="dispatchedNone">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionDispatchedScope.includes('queued')"
-                        @select.prevent
-                        @update:model-value="dispatchedToggle('queued')"
-                      >
-                        {{ $t('sessions.dispatchedQueued') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionDispatchedScope.includes('manual')"
-                        @select.prevent
-                        @update:model-value="dispatchedToggle('manual')"
-                      >
-                        {{ $t('sessions.dispatchedManual') }}
-                      </DropdownMenuCheckboxItem>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
+                  <MultiSelectSubmenu
+                    :icon="ListTodo"
+                    :label="$t('sessions.dispatched')"
+                    :summary="dispatchedScopeLabel"
+                    :items="dispatchedItems"
+                    :selected="sessionDispatchedScope"
+                    :disabled="!claudeTicked"
+                    @toggle="(v) => dispatchedToggle(v as DispatchedValue)"
+                    @all="dispatchedAll"
+                    @none="dispatchedNone"
+                  />
 
                   <!-- sessions a usage wall cut off. Server-side like the scopes above it, but
                        the verdict comes from the transcript parse rather than the mtime index, so
                        the first use after an upgrade is slow while the scan cache refills. -->
-                  <DropdownMenuSub :disabled="!claudeTicked">
-                    <DropdownMenuSubTrigger>
-                      <CircleAlert />
-                      {{ $t('sessions.rateLimited') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
-                        {{ rateLimitScopeLabel }}
-                      </span>
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="max-w-64">
-                      <DropdownMenuItem @select.prevent="rateLimitAll">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
-                      <DropdownMenuItem @select.prevent="rateLimitNone">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionRateLimitScope.includes('clear')"
-                        @select.prevent
-                        @update:model-value="rateLimitToggle('clear')"
-                      >
-                        {{ $t('sessions.rateLimitedClear') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionRateLimitScope.includes('resolved')"
-                        @select.prevent
-                        @update:model-value="rateLimitToggle('resolved')"
-                      >
-                        {{ $t('sessions.rateLimitedResolved') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionRateLimitScope.includes('pending')"
-                        @select.prevent
-                        @update:model-value="rateLimitToggle('pending')"
-                      >
-                        {{ $t('sessions.rateLimitedPending') }}
-                      </DropdownMenuCheckboxItem>
-                      <p class="px-2 py-1.5 text-2xs leading-snug text-muted-foreground">
-                        {{ $t('sessions.rateLimitedNote') }}
-                      </p>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
+                  <MultiSelectSubmenu
+                    :icon="CircleAlert"
+                    :label="$t('sessions.rateLimited')"
+                    :summary="rateLimitScopeLabel"
+                    :items="rateLimitItems"
+                    :selected="sessionRateLimitScope"
+                    :disabled="!claudeTicked"
+                    content-class="max-w-64"
+                    @toggle="(v) => rateLimitToggle(v as RateLimitValue)"
+                    @all="rateLimitAll"
+                    @none="rateLimitNone"
+                  >
+                    <p class="px-2 py-1.5 text-2xs leading-snug text-muted-foreground">
+                      {{ $t('sessions.rateLimitedNote') }}
+                    </p>
+                  </MultiSelectSubmenu>
 
                   <!-- shape: derived in the browser from the two numbers already on every row, so
                        unlike the scopes around it this one narrows what was FETCHED rather than
                        reaching further back. The note in the submenu says so. -->
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>
-                      <Hourglass />
-                      {{ $t('sessions.shape') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
-                        {{ shapeScopeLabel }}
-                      </span>
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="max-w-60">
-                      <DropdownMenuItem @select.prevent="shapeAll">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
-                      <DropdownMenuItem @select.prevent="shapeNone">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionShapeScope.includes('quick')"
-                        @select.prevent
-                        @update:model-value="shapeToggle('quick')"
-                      >
-                        {{ $t('sessions.shapeQuick') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionShapeScope.includes('standard')"
-                        @select.prevent
-                        @update:model-value="shapeToggle('standard')"
-                      >
-                        {{ $t('sessions.shapeStandard') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionShapeScope.includes('deep')"
-                        @select.prevent
-                        @update:model-value="shapeToggle('deep')"
-                      >
-                        {{ $t('sessions.shapeDeep') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionShapeScope.includes('marathon')"
-                        @select.prevent
-                        @update:model-value="shapeToggle('marathon')"
-                      >
-                        {{ $t('sessions.shapeMarathon') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionShapeScope.includes('automation')"
-                        @select.prevent
-                        @update:model-value="shapeToggle('automation')"
-                      >
-                        {{ $t('sessions.shapeAutomation') }}
-                      </DropdownMenuCheckboxItem>
-                      <p class="px-2 py-1.5 text-2xs leading-snug text-muted-foreground">
-                        {{ $t('sessions.shapeNote') }}
-                      </p>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
+                  <MultiSelectSubmenu
+                    :icon="Hourglass"
+                    :label="$t('sessions.shape')"
+                    :summary="shapeScopeLabel"
+                    :items="shapeItems"
+                    :selected="sessionShapeScope"
+                    content-class="max-w-60"
+                    @toggle="(v) => shapeToggle(v as SessionShape)"
+                    @all="shapeAll"
+                    @none="shapeNone"
+                  >
+                    <p class="px-2 py-1.5 text-2xs leading-snug text-muted-foreground">
+                      {{ $t('sessions.shapeNote') }}
+                    </p>
+                  </MultiSelectSubmenu>
 
                   <!-- two boxes: ticking only "Archived" is the way to go back and find one, since archived
                        is the large majority of the store. -->
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>
-                      <Archive />
-                      {{ $t('sessions.archived') }}
-                      <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">
-                        {{ archivedScopeLabel }}
-                      </span>
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="max-w-52">
-                      <DropdownMenuItem @select.prevent="archivedAll">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
-                      <DropdownMenuItem @select.prevent="archivedNone">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionArchivedScope.includes('active')"
-                        @select.prevent
-                        @update:model-value="archivedToggle('active')"
-                      >
-                        {{ $t('sessions.archivedActive') }}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        :model-value="sessionArchivedScope.includes('archived')"
-                        @select.prevent
-                        @update:model-value="archivedToggle('archived')"
-                      >
-                        {{ $t('sessions.archivedArchived') }}
-                      </DropdownMenuCheckboxItem>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
+                  <MultiSelectSubmenu
+                    :icon="Archive"
+                    :label="$t('sessions.archived')"
+                    :summary="archivedScopeLabel"
+                    :items="archivedItems"
+                    :selected="sessionArchivedScope"
+                    @toggle="(v) => archivedToggle(v as ArchivedValue)"
+                    @all="archivedAll"
+                    @none="archivedNone"
+                  />
 
                   <!-- how far back the list reaches. Applied server-side before the newest-N cap,
                        so widening the window genuinely reaches further back rather than

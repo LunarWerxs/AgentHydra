@@ -10,8 +10,10 @@
 // contract asks for.
 
 import { useStorage } from '@vueuse/core'
+import { ANALYTICS_SOURCES } from '@/lib/analytics-sources'
 import type { SessionPeriod } from '@/lib/api'
 import { registerSharedPref } from './useSharedPrefs'
+import { storedSelection } from './useStoredSelection'
 
 const PERIODS: readonly SessionPeriod[] = ['24h', '7d', '30d', 'all']
 
@@ -36,10 +38,15 @@ registerSharedPref('agenthydra.analytics.period', analyticsPeriod, PERIODS)
 const analyticsTokenMode = useStorage('agenthydra.analytics.tokenMode', false)
 registerSharedPref('agenthydra.analytics.tokenMode', analyticsTokenMode)
 
+/** Which sources count toward every spend figure; all ticked by default, [] is none. */
+const analyticsSources = storedSelection('agenthydra.analytics.sources', ANALYTICS_SOURCES)
+registerSharedPref('agenthydra.analytics.sources', analyticsSources, ANALYTICS_SOURCES)
+
 export function useAnalyticsPrefs() {
   return {
     analyticsPeriod,
     analyticsTokenMode,
+    analyticsSources,
     toggleTokenMode: () => {
       analyticsTokenMode.value = !analyticsTokenMode.value
     },

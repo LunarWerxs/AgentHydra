@@ -13,13 +13,13 @@ import * as api from '@/lib/api'
 import {
   ARCHIVED_VALUES,
   DISPATCHED_VALUES,
-  parseStoredSelection,
   RATE_LIMIT_VALUES,
   SHAPE_VALUES,
   SOURCE_VALUES,
   scopeParam,
 } from '@/lib/session-scopes'
 import { registerSharedPref } from './useSharedPrefs'
+import { storedSelection } from './useStoredSelection'
 
 const sessions = ref<SessionSummary[]>([])
 const queue = ref<QueueItem[]>([])
@@ -36,23 +36,6 @@ const sessionsLoading = ref(false)
 // those ticked, with [] meaning none. Session-only, like the single value it replaces.
 const sessionInstanceFilter = ref<string[] | null>(null)
 
-// The sidebar scopes below are each the list of values that are TICKED (lib/session-scopes.ts);
-// "all" is every value ticked and is the default, "none" is []. A stored value that is not a list
-// of known values falls back to everything ticked — the old single-string form included.
-function storedSelection<T extends string>(key: string, universe: readonly T[]) {
-  return useStorage<T[]>(key, [...universe], undefined, {
-    serializer: {
-      read: (raw) => {
-        try {
-          return parseStoredSelection(JSON.parse(raw), universe) ?? [...universe]
-        } catch {
-          return [...universe]
-        }
-      },
-      write: (value) => JSON.stringify(value),
-    },
-  })
-}
 // Archived sessions (Claude's own `isArchived` flag) are shown alongside live sessions by
 // default; untick one half to narrow to only live or only archived chats.
 // All scopes are applied server-side BEFORE the newest-N cap, so a quiet corner of the list can't

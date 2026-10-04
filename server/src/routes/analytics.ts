@@ -37,7 +37,16 @@ function cachedAgentTools(): AgentPresence[] {
   return tools
 }
 
-app.get('/api/analytics/spend', (c) => c.json(spendReport({ sinceMs: analyticsPeriod(c) })))
+// `source` is a comma list of toolkit sources; absent = all, and `none` = nothing ticked.
+const spendSources = (raw: string | undefined): string[] | null => {
+  if (raw === undefined || raw === '') return null
+  return raw === 'none' ? [] : raw.split(',').map((s) => s.trim())
+}
+app.get('/api/analytics/spend', (c) =>
+  c.json(
+    spendReport({ sinceMs: analyticsPeriod(c), sources: spendSources(c.req.query('source')) }),
+  ),
+)
 app.get('/api/analytics/activity', (c) => {
   const report = activityReport({ sinceMs: analyticsPeriod(c) })
   // Edit survival comes due hours after a session stops, and the boot warm has long finished by

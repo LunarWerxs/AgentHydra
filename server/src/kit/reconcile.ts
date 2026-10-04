@@ -119,8 +119,7 @@ export async function reconcile(
   // P1 spendReport
   const spend = await old.spend(win.from)
   const claudeCov = cov(base, CLAUDE_SOURCES)
-  const p1 =
-    'P1 spendReport claude (counts desktop chats only: CLI and CliMayte sessions are not in it)'
+  const p1 = 'P1 spendReport claude (now read from the kit itself, so it should match)'
   rows.push(
     pair('claude tokens', base.totals.tokens ?? 0, num(spend?.claude.tokens), claudeCov, p1),
   )

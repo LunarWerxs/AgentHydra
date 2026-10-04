@@ -134,7 +134,7 @@ export function moneyLine(
 }
 
 /** acct id (as hswarm's report names it) -> the instance signed in as it (or `former` ones); empty when the daemon cannot say. */
-async function fetchAccountNames(): Promise<Record<string, HswarmAccountName>> {
+export async function fetchAccountNames(): Promise<Record<string, HswarmAccountName>> {
   try {
     const response = await fetch('/api/hswarm-accounts')
     return response.ok ? await response.json() : {}

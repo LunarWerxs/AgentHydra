@@ -15,22 +15,10 @@
 // spend is the whole file. This streams the file end to end, like server/src/session-usage.ts does
 // for one session on demand, and runs as a background warm so nobody waits for it.
 //
-// THE ONE APPROXIMATION, stated plainly because it shows up in a chart: a session's cost is exact,
-// and its cost ON A GIVEN DAY is apportioned across the days it touched in proportion to the
-// weighted tokens spent on each. For a session that ran inside one day (the common case) that is
-// exact. For one spanning midnight it splits the session's own total the same way the tokens split,
-// which is the closest thing to the truth that a per-model price table can give without storing a
-// price-weighted figure per day per model.
-//
-// AND THAT APPROXIMATION IS NOW WHAT SCOPES A TIME PERIOD TOO (see windowShare). It used to be
-// applied per SESSION, on `last_ts`, so a session whose final turn landed inside the window
-// contributed its whole life and one that ended a day earlier contributed nothing — not even the
-// part that WAS inside. Every panel now takes the same day-proportioned slice, so the headline, the
-// per-model split and the day chart cannot disagree about how much of a session belongs in view.
-// The residual limit is resolution: a stored row knows which DAY its tokens were spent on and not
-// which hour, so a sub-day window ("last 24 hours") is answered at day granularity — it covers the
-// days those 24 hours touch. No arrangement of this data can do better; the old rule was not more
-// precise, only differently wrong.
+// SPEND IS NOT READ FROM THESE ROWS. spendReport asks the analytics toolkit (kit/query.ts), which
+// holds one row per model call with its own timestamp, so a window is exact to the hour and covers
+// every account and tool the toolkit ingests. What stays here is per-SESSION analysis (tools, edits,
+// sinks, hour-of-week), windowed by a session's last turn.
 
 import { createHash } from 'node:crypto'
 import { timeSlice } from './core/loop-yield'
@@ -44,6 +32,8 @@ import {
 } from './edit-survival'
 import { readHermesUsage } from './hermes-sessions'
 import { findDesktopChat, instanceSessionMap } from './instance-sessions'
+import { usageQuery } from './kit/query'
+import type { KitStore } from './kit/store'
 import { readOpenCodeUsage } from './opencode-sessions'
 import { priceSource, pricesAsOf, priceTokens } from './pricing'
 import { streamLines } from './session-search'
@@ -1170,29 +1160,6 @@ const upsertPermanentStats = db.query(
     'last_scanned_at = excluded.last_scanned_at, gone_at = null',
 )
 
-/** The permanent rows whose transcript is gone — the history the cache can no longer hold. Read
- *  back into spendReport so a total does not shrink when a file is deleted. */
-const selectGoneStats = db.query<
-  {
-    session_key: string
-    session_id: string
-    source: string
-    project: string | null
-    cwd: string | null
-    tokens_json: string | null
-    days_json: string | null
-    edit_count: number | null
-    active_ms: number | null
-    first_ts: number | null
-    last_ts: number | null
-    last_scanned_at: number | null
-  },
-  []
->(
-  'select session_key, session_id, source, project, cwd, tokens_json, days_json, edit_count, ' +
-    'active_ms, first_ts, last_ts, last_scanned_at from session_stats where gone_at is not null',
-)
-
 /** Stamp a session as no longer on disk, keeping every number it ever had. Called by the prune in
  *  sessions.ts INSTEAD of forgetting the chat. */
 export const markSessionGone = db.query(
@@ -1568,105 +1535,6 @@ function projectKeyOf(path: string): string {
   return key
 }
 
-function addTo(
-  map: Map<string, SpendBucket>,
-  key: string,
-  weighted: number,
-  cost: number | null,
-  /** Raw four-way split to fold in as well. Supplied by every caller that has one, so the UI's
-   *  money/tokens switch can redraw the same chart in either unit instead of some panels going
-   *  blank in one of the two modes. */
-  tokens?: TokenBreakdown,
-) {
-  const b = map.get(key) ?? {
-    key,
-    weighted: 0,
-    costUsd: cost === null ? null : 0,
-    sessions: 0,
-    turns: 0,
-  }
-  b.weighted += weighted
-  if (cost !== null && b.costUsd !== null) b.costUsd += cost
-  if (tokens) {
-    if (!b.tokens) b.tokens = emptyTokens()
-    const into = b.tokens
-    into.input += tokens.input
-    into.cacheRead += tokens.cacheRead
-    into.cacheWrite += tokens.cacheWrite
-    into.output += tokens.output
-    into.total += tokens.total
-  }
-  map.set(key, b)
-  return b
-}
-
-/**
- * How much of a session's work falls inside the requested window, as a fraction of its weighted
- * tokens.
- *
- * ⛔ WHY THIS EXISTS. The window used to be applied per SESSION, on `last_ts`: a session whose last
- * turn landed inside the window contributed its ENTIRE life to the totals, and one that ended a day
- * before it contributed nothing at all — including the part that WAS inside. So "last 7 days" on a
- * machine that runs marathon sessions was neither the last 7 days nor anything else you could name,
- * and it silently disagreed with the day chart drawn right below it, which was always day-accurate.
- *
- * The per-day weighted map is the only per-day fact a stored row has, so it is what scopes the
- * window: the share of a session's weighted tokens spent on days inside it. That is the SAME
- * approximation the day chart has always used for cost (documented at the top of this file), now
- * applied consistently instead of only in one panel.
- *
- * Returns null when the row carries no day data at all — an old row, or one whose turns had no
- * timestamps. Null means "cannot answer from days", and the caller falls back to the `last_ts` test
- * rather than dropping the session, because silently omitting real spend is worse than including a
- * little of it at the wrong end of a boundary.
- */
-export function windowShare(days: Record<string, number>, sinceDay: string | null): number | null {
-  if (sinceDay === null) return 1
-  let total = 0
-  let inWindow = 0
-  for (const [day, weighted] of Object.entries(days)) {
-    total += weighted
-    if (day >= sinceDay) inWindow += weighted
-  }
-  if (total <= 0) return null
-  return inWindow / total
-}
-
-/** One model's counts scaled by `share`. Turns are rounded because a turn is a count; the token
- *  figures are left fractional here and rounded once, at the point they are reported. */
-export function scaleModelSpend(
-  tokens: Record<string, ModelSpend>,
-  share: number,
-): Record<string, ModelSpend> {
-  if (share >= 1) return tokens
-  const out: Record<string, ModelSpend> = {}
-  for (const [model, m] of Object.entries(tokens)) {
-    out[model] = {
-      weighted: m.weighted * share,
-      output: m.output * share,
-      turns: Math.round(m.turns * share),
-      input: m.input * share,
-      cacheRead: m.cacheRead * share,
-      cacheCreation5m: m.cacheCreation5m * share,
-      cacheCreation1h: m.cacheCreation1h * share,
-    }
-  }
-  return out
-}
-
-/** Every category of one breakdown scaled by `share`, for the per-day apportionment. Rounded,
- *  because a token count is a count: the day rows are an approximation of WHEN the tokens were
- *  spent (see foldDaySpend), not a licence to report 1.7 of one. */
-function scaleTokens(t: TokenBreakdown, share: number): TokenBreakdown {
-  return {
-    input: Math.round(t.input * share),
-    cacheRead: Math.round(t.cacheRead * share),
-    cacheWrite: Math.round(t.cacheWrite * share),
-    output: Math.round(t.output * share),
-    total: Math.round(t.total * share),
-  }
-}
-
 /** The four categories, zeroed. */
 function emptyTokens(): TokenBreakdown {
   return { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0 }
@@ -1684,307 +1552,227 @@ function addTokens(into: TokenBreakdown, m: ModelSpend): void {
   into.total += m.input + m.cacheRead + write + m.output
 }
 
-const sortBuckets = (m: Map<string, SpendBucket>) =>
-  [...m.values()].sort((a, b) => (b.costUsd ?? b.weighted) - (a.costUsd ?? a.weighted))
+/** The kit's `source` as the provider key this report has always grouped by. All three Claude
+ *  sources are the one provider; HSwarm's workers are the successor of the zswarm key. */
+const KIT_PROVIDER: Record<string, SessionSource> = {
+  cli: 'claude',
+  desktop: 'claude',
+  climayte: 'claude',
+  codex: 'codex',
+  opencode: 'opencode',
+  dsh: 'dsh',
+  hermes: 'hermes',
+  hswarm: 'zswarm',
+}
+
+/** cwd (else the decoded store folder) of every session either stored table knows, by session id. */
+function sessionProjects(): Map<string, string> {
+  const out = new Map<string, string>()
+  const read = (sql: string) => {
+    try {
+      for (const r of db
+        .query<{ session_id: string; cwd: string | null; project: string | null }, []>(sql)
+        .all()) {
+        const path = r.cwd || (r.project ? decodeProjectKey(r.project) : '')
+        if (r.session_id && path) out.set(r.session_id, path)
+      }
+    } catch {
+      // A store without these tables simply attributes nothing to a project.
+    }
+  }
+  read('select session_id, cwd, project from session_stats')
+  read('select session_id, cwd, project from session_scan_cache where analytics_at is not null')
+  return out
+}
+
+/** A set of buckets keyed by name, counting each session once per bucket however many rows it has. */
+class BucketSet {
+  private readonly rows = new Map<string, { b: SpendBucket; sessions: Set<string> }>()
+
+  add(
+    key: string,
+    r: { weighted: number; cost: number | null; calls: number; tokens: TokenBreakdown },
+    session: string | null,
+  ): void {
+    let e = this.rows.get(key)
+    if (!e) {
+      e = {
+        b: { key, weighted: 0, costUsd: null, sessions: 0, turns: 0, tokens: emptyTokens() },
+        sessions: new Set(),
+      }
+      this.rows.set(key, e)
+    }
+    e.b.weighted += r.weighted
+    if (r.cost !== null) e.b.costUsd = (e.b.costUsd ?? 0) + r.cost
+    e.b.turns += r.calls
+    const t = e.b.tokens ?? emptyTokens()
+    t.input += r.tokens.input
+    t.cacheRead += r.tokens.cacheRead
+    t.cacheWrite += r.tokens.cacheWrite
+    t.output += r.tokens.output
+    t.total += r.tokens.total
+    if (session) e.sessions.add(session)
+  }
+
+  /** The buckets, most expensive first, with their session counts filled in. */
+  list(order: 'spend' | 'key' = 'spend'): SpendBucket[] {
+    const out = [...this.rows.values()].map((e) => ({ ...e.b, sessions: e.sessions.size }))
+    return order === 'key'
+      ? out.sort((a, b) => a.key.localeCompare(b.key))
+      : out.sort((a, b) => (b.costUsd ?? b.weighted) - (a.costUsd ?? a.weighted))
+  }
+}
+
+export interface SpendReportOptions {
+  /** Window start (epoch ms); null = everything. */
+  sinceMs?: number | null
+  /** Kit sources to count (cli, desktop, climayte, codex, ...); absent = all. */
+  sources?: readonly string[] | null
+  /** Test seams: the kit store to read and the clock. */
+  store?: KitStore
+  now?: number
+}
 
 /**
- * The whole spend report in one pass over the stored rows.
+ * The whole spend report, read from the analytics toolkit (kit/query.ts) in one query so every
+ * breakdown sums to the same total.
  *
- * One pass rather than four queries because the rows are small and already in this process, and
- * because every breakdown has to agree with every other one: a "by project" total that does not sum
- * to the "by model" total is worse than either on its own.
- */
-/** Mutable accumulators threaded through foldSpendRow, one instance per spendReport() call. */
-interface SpendAccumulator {
-  byModel: Map<string, SpendBucket>
-  byProject: Map<string, SpendBucket>
-  byDay: Map<string, SpendBucket>
-  byAccount: Map<string, SpendBucket>
-  byProvider: Map<
-    SessionSource,
-    { key: SessionSource; tokens: TokenBreakdown; sessions: number; costUsd: number | null }
-  >
-  unpriced: Set<string>
-  tokenTotals: TokenBreakdown
-  totalCost: number
-  anyPriced: boolean
-  totalWeighted: number
-  sessions: number
-  from: string | null
-  to: string | null
-}
-
-/**
- * Fold one session's per-model spend into `acc.byModel`/`acc.tokenTotals`, returning the
- * session's total weighted tokens (needed by the caller for the project/account buckets).
- * Pure aside from mutating `acc` — split out of foldSpendRow, which was carrying this loop
- * inline, so the per-row function reads as a sequence of named folds instead of one block.
+ * What a row costs: what a provider actually charged (`billed_usd`: OpenCode, HSwarm) when it
+ * reported one, else the list-price value (`list_usd`). A subscription call has only the latter.
  *
- * When the PROVIDER priced the session, its models are priced too — split proportionally, the
- * same way the day chart splits a session across days. Without this, "cost by model" showed a
- * dash for every OpenCode model while "cost by provider" showed real money for the same
- * sessions, which is two answers to one question.
+ * Projects: a kit row names its session, and the session's cwd comes from the per-session tables.
+ * Past the kit's raw window (35 days) only the hourly rollup remains and it keeps no session, so
+ * that spend is in every other breakdown but lands under the project "unknown" (the result's
+ * `notes` say so). Sessions are counted from raw rows only for the same reason; `calls` counts
+ * every call, rollup included.
  */
-function foldModelSpend(
-  tokens: Record<string, ModelSpend>,
-  hasOwnCost: boolean,
-  sessionCost: number | null,
-  at: number,
-  acc: SpendAccumulator,
-): number {
-  const totalWeightedInSession = Object.values(tokens).reduce((n, m) => n + m.weighted, 0)
-  let sessionWeighted = 0
-  for (const [model, spend] of Object.entries(tokens)) {
-    sessionWeighted += spend.weighted
-    const share =
-      hasOwnCost && totalWeightedInSession > 0 ? spend.weighted / totalWeightedInSession : 0
-    const modelCost = hasOwnCost
-      ? (sessionCost ?? 0) * share
-      : priceTokens({ [model]: spend }, at).costUsd
-    const b = addTo(acc.byModel, model, spend.weighted, modelCost)
-    b.sessions++
-    b.turns += spend.turns
-    b.tokens = b.tokens ?? emptyTokens()
-    addTokens(b.tokens, spend)
-    addTokens(acc.tokenTotals, spend)
-  }
-  return sessionWeighted
-}
-
-/**
- * Fold one session's tokens/cost into `acc.byProvider`. Split out of foldSpendRow for the same
- * reason as foldModelSpend — "my statistics only show Claude" is exactly the question this
- * answers, and it is a self-contained accumulation over `tokens`.
- */
-function foldProviderSpend(
-  provider: SessionSource,
-  tokens: Record<string, ModelSpend>,
-  sessionCost: number | null,
-  acc: SpendAccumulator,
-): void {
-  const pv = acc.byProvider.get(provider) ?? {
-    key: provider,
-    tokens: emptyTokens(),
-    sessions: 0,
-    costUsd: null as number | null,
-  }
-  for (const spend of Object.values(tokens)) addTokens(pv.tokens, spend)
-  pv.sessions++
-  if (sessionCost !== null) pv.costUsd = (pv.costUsd ?? 0) + sessionCost
-  acc.byProvider.set(provider, pv)
-}
-
-/**
- * Fold one session's per-day split into `acc.byDay` (and the `from`/`to` range). Split out of
- * foldSpendRow — the one approximation documented at the top of this file: a session's cost is
- * split across the days it touched in proportion to the weighted tokens spent on each.
- */
-function foldDaySpend(
-  days: Record<string, number>,
-  sessionCost: number | null,
-  sessionTokens: TokenBreakdown,
-  acc: SpendAccumulator,
-): void {
-  const dayTotal = Object.values(days).reduce((n, v) => n + v, 0)
-  for (const [day, weighted] of Object.entries(days)) {
-    const share = dayTotal > 0 ? weighted / dayTotal : 0
-    // Raw tokens ride on the SAME share as the cost, for the same reason and with the same caveat:
-    // a transcript records what a session spent, not what each of its days spent, so both are an
-    // apportionment by the one thing that IS known per day (weighted tokens). Splitting them
-    // differently would let the two series on one chart disagree about the same session.
-    const db_ = addTo(
-      acc.byDay,
-      day,
-      weighted,
-      sessionCost === null ? null : sessionCost * share,
-      scaleTokens(sessionTokens, share),
-    )
-    db_.sessions++
-    if (acc.from === null || day < acc.from) acc.from = day
-    if (acc.to === null || day > acc.to) acc.to = day
-  }
-}
-
-/**
- * Fold one analytics_row into the running spendReport accumulators. Pure aside from mutating
- * `acc`'s maps/sets/totals — no I/O, no awaits — split out of spendReport's per-row loop where
- * it was inline before, so the loop itself stays a plain `for (const row of rows) foldSpendRow(...)`.
- */
-function foldSpendRow(
-  row: AnalyticsRow,
-  since: number | null,
-  sinceDay: string | null,
-  accounts: Map<string, string>,
-  acc: SpendAccumulator,
-): void {
-  if (row.analytics_version !== ANALYTICS_VERSION) return
-  const allDays = parseJson<Record<string, number>>(row.days_json, {})
-
-  // Scope the session to the window BEFORE anything is folded, by scaling its own token counts.
-  // One multiplication point rather than one per panel: cost, weighted, the raw split, per model,
-  // per provider, per project and per account all derive from `tokens` below, so they cannot end up
-  // disagreeing about how much of this session belongs in the window. See windowShare.
-  const share = windowShare(allDays, sinceDay)
-  if (share === null) {
-    // No day data to scope by — fall back to the old whole-session test rather than dropping it.
-    if (since !== null && (row.last_ts ?? 0) < since) return
-  } else if (share <= 0) {
-    return
-  }
-  const scale = share ?? 1
-  const tokens = scaleModelSpend(storedModelSpend(row.tokens_json), scale)
-  const days =
-    sinceDay === null
-      ? allDays
-      : Object.fromEntries(Object.entries(allDays).filter(([day]) => day >= sinceDay))
-  const modelKeys = Object.keys(tokens)
-  if (modelKeys.length === 0) return
-  acc.sessions++
-
-  // Priced at the session's own newest turn, matching what the session header shows, so the two
-  // surfaces cannot disagree about the same session.
-  const at = row.last_ts ?? Date.now()
-  const priced = priceTokens(tokens, at)
-  // A cost the provider computed itself wins over our table: OpenCode routes to models this repo
-  // has no prices for, and its own figure is the real one rather than a gap we would report as
-  // unpriced. Only its models are then left out of the unpriced list, since they ARE priced.
-  // Scaled by the same share as the tokens — it is a whole-session figure like they are.
-  const ownCost = row.provider_cost_usd
-  const hasOwnCost = typeof ownCost === 'number' && Number.isFinite(ownCost)
-  if (!hasOwnCost) for (const m of priced.unpriced) acc.unpriced.add(m)
-  const sessionCost = hasOwnCost ? (ownCost as number) * scale : priced.costUsd
-  if (sessionCost !== null) {
-    acc.totalCost += sessionCost
-    acc.anyPriced = true
-  }
-
-  const sessionWeighted = foldModelSpend(tokens, hasOwnCost, sessionCost, at, acc)
-  acc.totalWeighted += sessionWeighted
-
-  // Per provider, because "my statistics only show Claude" is exactly the question this answers.
-  const provider = (row.source as SessionSource) ?? 'claude'
-  foldProviderSpend(provider, tokens, sessionCost, acc)
-
-  // Decoded, not the raw key. A row whose scan never filled in `cwd` falls back to the transcript
-  // store's own folder name (`d--NEWProjects-shared-Connections`), and leaving that undecoded put
-  // the SAME project on the chart twice under two spellings — caught on real data, and the kind of
-  // error a chart states with total confidence.
-  const project = row.cwd || (row.project ? decodeProjectKey(row.project) : '') || 'unknown'
-  // The session's own four-way split, folded into every bucket it belongs to so the money/tokens
-  // switch can redraw project and account the same way it redraws model.
-  const sessionTokens = emptyTokens()
-  for (const spend of Object.values(tokens)) addTokens(sessionTokens, spend)
-
-  const pb = addTo(
-    acc.byProject,
-    projectKeyOf(project),
-    sessionWeighted,
-    sessionCost,
-    sessionTokens,
+export function spendReport(opts: SpendReportOptions = {}): SpendReport {
+  const sources = opts.sources ?? null
+  const res = usageQuery(
+    {
+      window: { from: opts.sinceMs ?? 0 },
+      filter: sources ? { source: [...sources] } : undefined,
+      groupBy: ['day', 'session', 'model', 'source', 'account'],
+      measures: [
+        'tokens',
+        'weighted',
+        'calls',
+        'list_usd',
+        'billed_usd',
+        'input',
+        'output',
+        'cache_read',
+        'cache_write',
+      ],
+    },
+    { store: opts.store, now: opts.now },
   )
-  pb.sessions++
-
-  const account = accounts.get(row.session_id)
-  if (account) {
-    const ab = addTo(acc.byAccount, account, sessionWeighted, sessionCost, sessionTokens)
-    ab.sessions++
-  }
-
-  foldDaySpend(days, sessionCost, sessionTokens, acc)
-}
-
-export function spendReport(opts: { sinceMs?: number | null } = {}): SpendReport {
-  const since = opts.sinceMs ?? null
-  const rows = selectRows.all()
-  const accounts = accountBySession()
+  const projects = sessionProjects()
   projectDisplay.clear()
 
-  const acc: SpendAccumulator = {
-    byModel: new Map<string, SpendBucket>(),
-    byProject: new Map<string, SpendBucket>(),
-    byDay: new Map<string, SpendBucket>(),
-    byAccount: new Map<string, SpendBucket>(),
-    byProvider: new Map<
-      SessionSource,
-      { key: SessionSource; tokens: TokenBreakdown; sessions: number; costUsd: number | null }
-    >(),
-    unpriced: new Set<string>(),
-    tokenTotals: emptyTokens(),
-    totalCost: 0,
-    anyPriced: false,
-    totalWeighted: 0,
-    sessions: 0,
-    from: null,
-    to: null,
+  const byModel = new BucketSet()
+  const byProject = new BucketSet()
+  const byDay = new BucketSet()
+  const byAccount = new BucketSet()
+  const bySource = new BucketSet()
+  const byProvider = new Map<
+    SessionSource,
+    { tokens: TokenBreakdown; sessions: Set<string>; costUsd: number | null }
+  >()
+  const sessions = new Set<string>()
+  const billedModels = new Set<string>()
+  const totals = { weighted: 0, cost: null as number | null, calls: 0, tokens: emptyTokens() }
+
+  for (const row of res.rows) {
+    const model = (row.model as string | null) ?? 'unknown'
+    const weighted = Number(row.weighted ?? 0)
+    const tokens: TokenBreakdown = {
+      input: Number(row.input ?? 0),
+      cacheRead: Number(row.cache_read ?? 0),
+      cacheWrite: Number(row.cache_write ?? 0),
+      output: Number(row.output ?? 0),
+      total: Number(row.tokens ?? 0),
+    }
+    // The CLI's own notices ride on a pseudo-model with no tokens: not a model, not a row.
+    if (NON_MODELS.has(model) && weighted <= 0 && tokens.total === 0) continue
+    const billed = row.billed_usd as number | null
+    const cost = billed ?? (row.list_usd as number | null)
+    if (billed !== null) billedModels.add(model)
+    const calls = Number(row.calls ?? 0)
+    const session = (row.session as string | null) ?? null
+    const source = (row.source as string | null) ?? 'unknown'
+    const r = { weighted, cost, calls, tokens }
+
+    byModel.add(model, r, session)
+    bySource.add(source, r, session)
+    byDay.add(row.day as string, r, session)
+    const account = row.account as string | null
+    if (account) byAccount.add(account, r, session)
+    const path = (session && projects.get(session)) || 'unknown'
+    byProject.add(projectKeyOf(path), r, session)
+
+    const provider = KIT_PROVIDER[source] ?? 'claude'
+    const pv = byProvider.get(provider) ?? {
+      tokens: emptyTokens(),
+      sessions: new Set<string>(),
+      costUsd: null,
+    }
+    pv.tokens.input += tokens.input
+    pv.tokens.cacheRead += tokens.cacheRead
+    pv.tokens.cacheWrite += tokens.cacheWrite
+    pv.tokens.output += tokens.output
+    pv.tokens.total += tokens.total
+    if (session) pv.sessions.add(session)
+    if (cost !== null) pv.costUsd = (pv.costUsd ?? 0) + cost
+    byProvider.set(provider, pv)
+
+    if (session) sessions.add(session)
+    totals.weighted += weighted
+    totals.calls += calls
+    if (cost !== null) totals.cost = (totals.cost ?? 0) + cost
+    totals.tokens.input += tokens.input
+    totals.tokens.cacheRead += tokens.cacheRead
+    totals.tokens.cacheWrite += tokens.cacheWrite
+    totals.tokens.output += tokens.output
+    totals.tokens.total += tokens.total
   }
 
-  // The window as a LOCAL day key, because that is the resolution a stored row records (dayKey()).
-  // Same clock the day buckets were written on, so the comparison is apples to apples.
-  const sinceDay = since === null ? null : dayKey(since)
-  for (const row of rows) foldSpendRow(row, since, sinceDay, accounts, acc)
-
-  // …and the chats whose transcripts are GONE. Their cache rows were deleted with the files, so
-  // without this the totals silently shrink as Claude Code's 30-day cleanup runs and "all time"
-  // quietly becomes "the last month". The permanent record keeps their numbers (db.ts
-  // session_stats); `gone_at is not null` is what makes double counting impossible, since the
-  // prune stamps that flag and deletes the cache row in ONE transaction — a session is in exactly
-  // one of the two sets, never both.
-  for (const g of selectGoneStats.all()) {
-    foldSpendRow(
-      {
-        cache_key: g.session_key,
-        session_id: g.session_id,
-        source: g.source,
-        project: g.project ?? '',
-        cwd: g.cwd ?? '',
-        analytics_at: g.last_scanned_at,
-        analytics_version: ANALYTICS_VERSION,
-        tokens_json: g.tokens_json,
-        days_json: g.days_json,
-        hours_json: null,
-        tools_json: null,
-        tool_errors: 0,
-        tool_error_streak: 0,
-        edit_count: g.edit_count,
-        compactions: 0,
-        active_ms: g.active_ms,
-        first_ts: g.first_ts,
-        last_ts: g.last_ts,
-        provider_cost_usd: null,
-        edit_survival: null,
-        edit_survival_n: null,
-        edit_survival_due_at: null,
-        sinks_json: null,
-      },
-      since,
-      sinceDay,
-      accounts,
-      acc,
-    )
-  }
-
+  const days = byDay.list('key')
   return {
-    from: acc.from,
-    to: acc.to,
-    totalCostUsd: acc.anyPriced ? acc.totalCost : null,
-    totalWeighted: acc.totalWeighted,
-    tokens: acc.tokenTotals,
-    byProvider: [...acc.byProvider.values()].sort((a, b) => b.tokens.total - a.tokens.total),
-    sessions: acc.sessions,
-    byModel: sortBuckets(acc.byModel),
+    from: days[0]?.key ?? null,
+    to: days[days.length - 1]?.key ?? null,
+    totalCostUsd: totals.cost,
+    totalWeighted: totals.weighted,
+    tokens: totals.tokens,
+    byProvider: [...byProvider.entries()]
+      .map(([key, p]) => ({
+        key,
+        tokens: p.tokens,
+        sessions: p.sessions.size,
+        costUsd: p.costUsd,
+      }))
+      .sort((a, b) => b.tokens.total - a.tokens.total),
+    sessions: sessions.size,
+    calls: totals.calls,
+    byModel: byModel.list(),
     // Re-labelled with the spelling the reader will recognise, now that grouping is done.
-    byProject: sortBuckets(acc.byProject)
+    byProject: byProject
+      .list()
       .slice(0, 25)
       .map((b) => ({ ...b, key: projectDisplay.get(b.key) ?? b.key })),
-    byDay: [...acc.byDay.values()].sort((a, b) => a.key.localeCompare(b.key)),
-    byAccount: sortBuckets(acc.byAccount),
-    unpricedModels: [...acc.unpriced].sort(),
+    byDay: days,
+    byAccount: byAccount.list(),
+    bySource: bySource.list(),
+    // A model whose provider charged for it IS priced, even without a list price.
+    unpricedModels: res.unpriced.filter((m) => !billedModels.has(m)),
     // Where these dollars came from and how old that source is. A cost figure without its price
     // date is a number nobody can audit, and "downloaded" versus "shipped with the build" is the
     // difference between last week's rate card and this release's.
     pricesAsOf: pricesAsOf(),
     priceSource: priceSource(),
     coverage: analyticsCoverage(),
+    kitCoverage: res.coverage,
+    notes: res.notes,
   }
 }
 
@@ -2131,14 +1919,14 @@ const rankLoad = (m: Map<string, LoadAcc>) =>
 /**
  * Where the window's tokens went, ranked.
  *
- * Windowed the same way spendReport is (windowShare scales each session's own totals), so the
- * total here and the spend panel's agree. Dead load is an ESTIMATE: the injected text's length at
+ * Windowed per session, on its last turn (like the activity report): a session counts whole when
+ * it was active inside the window. The spend panel reads the toolkit per call instead, so the two
+ * totals can differ at the window's edge. Dead load is an ESTIMATE: the injected text's length at
  * four characters a token, re-read on every call at the cache-read rate of the model that made the
  * call. The rest is measured off recorded usage.
  */
 export function sinkReport(opts: { sinceMs?: number | null } = {}): TokenSinkReport {
   const since = opts.sinceMs ?? null
-  const sinceDay = since === null ? null : dayKey(since)
   const listings = new Map<string, Record<string, number>>()
   const listing = (hash: string): Record<string, number> => {
     let entries = listings.get(hash)
@@ -2174,8 +1962,8 @@ export function sinkReport(opts: { sinceMs?: number | null } = {}): TokenSinkRep
   }
 
   for (const row of selectRows.all()) {
-    const windowed = sinkRowInWindow(row, since, sinceDay)
-    if (windowed) foldSinkRow(row, windowed.scale, windowed.tokens, acc, lookups)
+    const tokens = sinkRowTokens(row, since)
+    if (tokens) foldSinkRow(row, tokens, acc, lookups)
   }
 
   return sinkReportOf(acc)
@@ -2205,27 +1993,17 @@ interface SinkLookups {
   instances: Map<string, string>
 }
 
-/** The row's window share with its per-model spend scaled to it, or null when the row is out. */
-function sinkRowInWindow(
-  row: AnalyticsRow,
-  since: number | null,
-  sinceDay: string | null,
-): { scale: number; tokens: Record<string, ModelSpend> } | null {
+/** The row's per-model spend, or null when the row is out of the window or has no sink data. */
+function sinkRowTokens(row: AnalyticsRow, since: number | null): Record<string, ModelSpend> | null {
   if (row.analytics_version !== ANALYTICS_VERSION || !row.sinks_json) return null
-  const share = windowShare(parseJson<Record<string, number>>(row.days_json, {}), sinceDay)
-  if (share === null) {
-    if (since !== null && (row.last_ts ?? 0) < since) return null
-  } else if (share <= 0) return null
-  const scale = share ?? 1
-  const tokens = scaleModelSpend(storedModelSpend(row.tokens_json), scale)
-  if (Object.keys(tokens).length === 0) return null
-  return { scale, tokens }
+  if (since !== null && (row.last_ts ?? 0) < since) return null
+  const tokens = storedModelSpend(row.tokens_json)
+  return Object.keys(tokens).length === 0 ? null : tokens
 }
 
 /** Fold one in-window session into every sink total. */
 function foldSinkRow(
   row: AnalyticsRow,
-  scale: number,
   tokens: Record<string, ModelSpend>,
   acc: SinkAcc,
   lookups: SinkLookups,
@@ -2240,11 +2018,11 @@ function foldSinkRow(
   const tools = parseJson<Record<string, number>>(row.tools_json, {})
   foldMcpSinks(s, tools, sessionCalls, prefixRate, acc)
 
-  acc.deepCalls += (s.deepCalls ?? 0) * scale
-  acc.deepWeighted += (s.deepWeighted ?? 0) * scale
-  acc.subWeighted += (s.subWeighted ?? 0) * scale
+  acc.deepCalls += s.deepCalls ?? 0
+  acc.deepWeighted += s.deepWeighted ?? 0
+  acc.subWeighted += s.subWeighted ?? 0
   // Task is the older name of the Agent tool; both spawn a subagent.
-  acc.spawns += ((tools.Task ?? 0) + (tools.Agent ?? 0)) * scale
+  acc.spawns += (tools.Task ?? 0) + (tools.Agent ?? 0)
 
   const account =
     lookups.accounts.get(row.session_id) ?? lookups.instances.get(row.session_id) ?? null

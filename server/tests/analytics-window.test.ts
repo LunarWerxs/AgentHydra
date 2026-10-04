@@ -1,109 +1,181 @@
-// server/tests/analytics-window.test.ts — what a time period on the Analytics tab actually means.
+// server/tests/analytics-window.test.ts — what the Analytics tab's spend report counts, and over
+// which window, now that it reads the analytics toolkit instead of per-session totals.
 //
-// THE BUG THIS PINS. The window used to be applied per SESSION, on `last_ts`: a session whose last
-// turn landed inside the window contributed its ENTIRE life to the totals, and one that ended a day
-// before it contributed NOTHING — including the part that really was inside. On a machine that runs
-// marathon sessions "last 7 days" was therefore neither the last 7 days nor anything else you could
-// name, and it silently disagreed with the day chart drawn directly below it, which had always been
-// day-accurate. Both failures are invisible: every number still renders, just wrong.
-//
-// The per-day weighted map is the only per-day fact a stored row has, so it is what scopes the
-// window now. These tests are about that scoping rule and the scaling that follows from it.
+// THE FAILURES THESE PIN. (1) A window used to be applied per SESSION, with a day-proportioned
+// approximation, so "last 7 days" on a machine that runs marathon sessions was neither the last 7
+// days nor anything you could name. The toolkit has one row per call with its own timestamp, so a
+// window must cut a session exactly where the calls are. (2) The tab counted desktop chats only:
+// every CLI account's spend was missing from the totals and `byAccount` was always empty.
+// (3) The source filter has to narrow EVERY figure, not just one panel.
 
-import { describe, expect, test } from 'bun:test'
-import { scaleModelSpend, windowShare } from '../src/analytics'
-import type { ModelSpend } from '../src/types'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { spendReport } from '../src/analytics'
+import { db } from '../src/db'
+import { KitStore, type UsageEventInput } from '../src/kit/store'
 
-/** A session that spent evenly across four days. */
-const FOUR_DAYS = {
-  '2026-09-01': 100,
-  '2026-09-02': 100,
-  '2026-09-03': 100,
-  '2026-09-04': 100,
-}
+const H = 3_600_000
+const D = 24 * H
+const NOW = Date.UTC(2026, 5, 15, 12, 0, 0)
 
-describe('windowShare', () => {
-  test('no window means the whole session counts', () => {
-    expect(windowShare(FOUR_DAYS, null)).toBe(1)
+const store = new KitStore(':memory:')
+afterAll(() => store.close())
+
+let n = 0
+const call = (ago: number, e: Partial<UsageEventInput>): UsageEventInput => ({
+  id: `w${++n}`,
+  ts: NOW - ago,
+  source: 'cli',
+  model: 'claude-opus-5',
+  provider: 'anthropic',
+  input: 100,
+  output: 50,
+  cache_read: 1000,
+  list_usd: 1,
+  weighted: 10,
+  ...e,
+})
+
+const report = (o: { sinceMs?: number | null; sources?: string[] } = {}) =>
+  spendReport({ store, now: NOW, ...o })
+
+// A marathon CLI session: one call 8 days ago, one yesterday.
+// A desktop chat and a CliMayte call on another account, both inside the last day.
+// An OpenCode call the provider billed itself, and an unpriced model.
+db.query(
+  'insert or replace into session_stats (session_key, session_id, source, cwd, first_seen_at, last_scanned_at) values (?, ?, ?, ?, 1, 2)',
+).run('claude:win-marathon', 'win-marathon', 'claude', 'D:\\work\\Alpha')
+store.upsertEvents([
+  call(8 * D, { account: 'acct-a', instance: 'cli:1', session: 'win-marathon' }),
+  call(1 * D, { account: 'acct-a', instance: 'cli:1', session: 'win-marathon' }),
+  call(2 * H, {
+    source: 'desktop',
+    account: 'acct-b',
+    instance: 'desktop:x',
+    session: 'win-desk',
+    list_usd: 2,
+    weighted: 20,
+  }),
+  call(3 * H, {
+    source: 'climayte',
+    account: 'acct-a',
+    instance: 'cli:1',
+    session: 'win-cm',
+    model: 'claude-sonnet-5-5',
+    list_usd: 4,
+    weighted: 5,
+  }),
+  call(4 * H, {
+    source: 'opencode',
+    session: 'win-oc',
+    model: 'some-routed-model',
+    list_usd: null,
+    billed_usd: 0.5,
+    weighted: 1,
+  }),
+  call(5 * H, {
+    source: 'codex',
+    session: 'win-cx',
+    model: 'no-price-model',
+    list_usd: null,
+    weighted: 1,
+  }),
+])
+
+describe('the window cuts a session where its calls are', () => {
+  test('only the marathon session’s in-window call counts, not its whole life', () => {
+    const r = report({ sinceMs: NOW - 7 * D, sources: ['cli'] })
+    expect(r.calls).toBe(1)
+    expect(r.totalCostUsd).toBe(1)
+    expect(r.tokens.total).toBe(1150)
   })
 
-  test('a session entirely inside the window counts in full', () => {
-    expect(windowShare(FOUR_DAYS, '2026-09-01')).toBe(1)
-    expect(windowShare(FOUR_DAYS, '2026-08-01')).toBe(1)
+  test('no window counts every call', () => {
+    expect(report().calls).toBe(6)
   })
 
-  test('a session STRADDLING the window contributes only its inside part', () => {
-    // The old rule gave this session's whole life to a two-day window, or nothing at all to one
-    // that ended a day early. Two of four days in range is a half.
-    expect(windowShare(FOUR_DAYS, '2026-09-03')).toBeCloseTo(0.5, 10)
-    expect(windowShare(FOUR_DAYS, '2026-09-04')).toBeCloseTo(0.25, 10)
-  })
-
-  test('a session entirely BEFORE the window contributes nothing', () => {
-    expect(windowShare(FOUR_DAYS, '2026-09-05')).toBe(0)
-  })
-
-  test('the share follows the weight, not the number of days', () => {
-    // One heavy day and three trivial ones: a day count would call this 25%, which is the whole
-    // reason the map stores weighted tokens rather than a tally of dates.
-    const lopsided = { '2026-09-01': 1, '2026-09-02': 1, '2026-09-03': 1, '2026-09-04': 997 }
-    expect(windowShare(lopsided, '2026-09-04')).toBeCloseTo(0.997, 10)
-  })
-
-  test('a row with no usable day data answers null, so the caller can fall back', () => {
-    // Null is "cannot answer from days", NOT "nothing in range". An old row, or one whose turns
-    // carried no timestamps, must fall back to the last_ts test — silently omitting real spend is
-    // worse than counting a little of it at the wrong end of a boundary.
-    expect(windowShare({}, '2026-09-01')).toBeNull()
-    expect(windowShare({ '2026-09-01': 0 }, '2026-09-01')).toBeNull()
-  })
-
-  test('the boundary day itself is INSIDE the window', () => {
-    // `>=`, not `>`: the cutoff day is the first day of the period, not the last excluded one.
-    expect(windowShare({ '2026-09-03': 10 }, '2026-09-03')).toBe(1)
-    expect(windowShare({ '2026-09-02': 10 }, '2026-09-03')).toBe(0)
+  test('the window is exact to the hour, not to the day', () => {
+    // 2.5 h back: the desktop call (2 h) is in, the CliMayte call (3 h) is out.
+    const r = report({ sinceMs: NOW - 2.5 * H, sources: ['desktop', 'climayte'] })
+    expect(r.bySource.map((b) => b.key)).toEqual(['desktop'])
   })
 })
 
-const SPEND: Record<string, ModelSpend> = {
-  'claude-opus-5': {
-    weighted: 1000,
-    output: 200,
-    turns: 10,
-    input: 300,
-    cacheRead: 5000,
-    cacheCreation5m: 40,
-    cacheCreation1h: 20,
-  },
-}
+describe('the totals cover every account, not desktop alone', () => {
+  const r = report({ sinceMs: NOW - 7 * D })
 
-describe('scaleModelSpend', () => {
-  test('a full share is the same object, untouched', () => {
-    // Identity on the common path: no window, no allocation, and no chance of a rounding drift
-    // creeping into an all-time total.
-    expect(scaleModelSpend(SPEND, 1)).toBe(SPEND)
+  test('CLI, desktop and CliMayte spend are all in the total', () => {
+    expect(r.bySource.map((b) => b.key).sort()).toEqual(
+      ['climayte', 'cli', 'codex', 'desktop', 'opencode'].sort(),
+    )
+    // 1 (cli) + 2 (desktop) + 4 (climayte) list-priced, + 0.5 the provider billed.
+    expect(r.totalCostUsd).toBeCloseTo(7.5, 9)
   })
 
-  test('every count scales together, so the four-way split still sums correctly', () => {
-    const half = scaleModelSpend(SPEND, 0.5)['claude-opus-5']
-    expect(half).toBeDefined()
-    expect(half?.weighted).toBe(500)
-    expect(half?.input).toBe(150)
-    expect(half?.cacheRead).toBe(2500)
-    expect(half?.cacheCreation5m).toBe(20)
-    expect(half?.cacheCreation1h).toBe(10)
-    expect(half?.output).toBe(100)
+  test('byAccount is filled, per account, from the calls', () => {
+    expect(r.byAccount.map((b) => b.key).sort()).toEqual(['acct-a', 'acct-b'])
+    const a = r.byAccount.find((b) => b.key === 'acct-a')
+    expect(a?.costUsd).toBe(5)
+    expect(a?.sessions).toBe(2)
   })
 
-  test('turns are rounded, because a turn is a count and not a quantity', () => {
-    expect(scaleModelSpend(SPEND, 0.5)['claude-opus-5']?.turns).toBe(5)
-    expect(scaleModelSpend(SPEND, 0.25)['claude-opus-5']?.turns).toBe(3)
+  test('the four-way token split is kept and sums to the total', () => {
+    expect(r.tokens.input + r.tokens.output + r.tokens.cacheRead + r.tokens.cacheWrite).toBe(
+      r.tokens.total,
+    )
+    expect(r.tokens.cacheRead).toBe(5000)
   })
 
-  test('every model in the session is scaled, not just the first', () => {
-    const two = scaleModelSpend({ a: SPEND['claude-opus-5']!, b: SPEND['claude-opus-5']! }, 0.5)
-    expect(Object.keys(two)).toEqual(['a', 'b'])
-    expect(two.a?.weighted).toBe(500)
-    expect(two.b?.weighted).toBe(500)
+  test('a provider-billed cost wins and its model is not listed as unpriced', () => {
+    expect(r.unpricedModels).toEqual(['no-price-model'])
+    expect(r.byModel.find((b) => b.key === 'some-routed-model')?.costUsd).toBe(0.5)
+  })
+
+  test('byProvider groups the three Claude sources as one', () => {
+    expect(r.byProvider.map((p) => p.key).sort()).toEqual(['claude', 'codex', 'opencode'])
+  })
+
+  test('a session’s project is its cwd; a session nobody knows is "unknown"', () => {
+    const all = report()
+    expect(all.byProject.find((b) => b.key === 'D:\\work\\Alpha')?.costUsd).toBe(2)
+    expect(all.byProject.find((b) => b.key === 'unknown')).toBeDefined()
+  })
+})
+
+describe('the source filter narrows every figure', () => {
+  test('one source leaves only that source in every breakdown and total', () => {
+    const r = report({ sources: ['desktop'] })
+    expect(r.totalCostUsd).toBe(2)
+    expect(r.totalWeighted).toBe(20)
+    expect(r.sessions).toBe(1)
+    expect(r.byProvider.map((p) => p.key)).toEqual(['claude'])
+    expect(r.byModel.map((b) => b.key)).toEqual(['claude-opus-5'])
+    expect(r.byAccount.map((b) => b.key)).toEqual(['acct-b'])
+    expect(r.bySource.map((b) => b.key)).toEqual(['desktop'])
+    expect(r.byDay.reduce((s, b) => s + (b.costUsd ?? 0), 0)).toBe(2)
+  })
+
+  test('an empty list is nothing ticked: zero, not everything', () => {
+    const r = report({ sources: [] })
+    expect(r.calls).toBe(0)
+    expect(r.totalCostUsd).toBeNull()
+  })
+
+  test('the toolkit’s coverage rides along, so a partial figure can say so', () => {
+    expect(Object.keys(report().kitCoverage.sources)).toContain('desktop')
+  })
+})
+
+describe('history past the raw window survives in the rollup', () => {
+  test('a 60-day-old call still counts, but has no session, so no project', () => {
+    const old = new KitStore(':memory:')
+    old.upsertEvents([call(60 * D, { account: 'acct-a', session: 'gone-session' })])
+    old.runMaintenance(NOW)
+    const r = spendReport({ store: old, now: NOW })
+    old.close()
+    expect(r.calls).toBe(1)
+    expect(r.totalCostUsd).toBe(1)
+    expect(r.sessions).toBe(0)
+    expect(r.byProject.map((b) => b.key)).toEqual(['unknown'])
+    expect(r.notes.join(' ')).toContain('no session')
   })
 })
