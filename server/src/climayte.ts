@@ -2620,6 +2620,18 @@ function sendBack(
  *  setting that produced the result and what that work cost, and the scorecard learns from it. A
  *  fail (with `note`, required: the worker gets it) sends the task back to the same session one
  *  rung up the ladder unless `retry` is false. `kind` tags a task dispatched without one. */
+/** The longest verdict note kept. The note is the fix instruction a worker receives with a fail, so a
+ *  longer one is refused, never cut (three fail notes reached their workers cut mid-word, 2026-10-04). */
+export const VERDICT_NOTE_MAX = 8000
+
+/** The refusal for a note over the limit (its length and the limit), else null. */
+export function verdictNoteTooLong(note: unknown): string | null {
+  const n = typeof note === 'string' ? note.trim().length : 0
+  return n > VERDICT_NOTE_MAX
+    ? `The note is ${n} characters; the limit is ${VERDICT_NOTE_MAX}. Shorten it: it is not cut.`
+    : null
+}
+
 export function climayteVerdict(
   id: string,
   input: {
@@ -2638,8 +2650,9 @@ export function climayteVerdict(
     return { ok: false, message: "verdict must be 'pass' or 'fail'." }
   if (isActive(w))
     return { ok: false, message: 'It is still working: judge its result once it has finished.' }
-  const note =
-    typeof input.note === 'string' && input.note.trim() ? input.note.trim().slice(0, 1000) : null
+  const tooLong = verdictNoteTooLong(input.note)
+  if (tooLong) return { ok: false, message: tooLong }
+  const note = typeof input.note === 'string' && input.note.trim() ? input.note.trim() : null
   if (input.verdict === 'fail' && !note)
     return { ok: false, message: 'Say what was wrong (note): the worker gets it with the retry.' }
   const badKind = tagKind(w, input.kind)
@@ -2889,10 +2902,10 @@ export function climayteWaveStart(input: {
   }
 }
 
-/** The note a wave verification records: the orchestrator's own (trimmed, at most 1000 chars), else
+/** The note a wave verification records: the orchestrator's own (trimmed; one over VERDICT_NOTE_MAX is refused before this), else
  *  none for an accepted wave and a stock line for a rejected one. */
 function waveVerifyNote(note: unknown, accepted: boolean): string | null {
-  if (typeof note === 'string' && note.trim()) return note.trim().slice(0, 1000)
+  if (typeof note === 'string' && note.trim()) return note.trim()
   return accepted ? null : 'The orchestrator rejected the wave.'
 }
 
@@ -2947,6 +2960,8 @@ export function climayteWaveVerify(
       status: 409,
       message: `Wave ${id} is ${wave.status}: only a reported wave can be verified.`,
     }
+  const tooLong = verdictNoteTooLong(input.note)
+  if (tooLong) return { ok: false, status: 400, message: tooLong }
   const accepted = input.ok === true
   const note = waveVerifyNote(input.note, accepted)
   const confirmed = accepted ? confirmWavePasses(wave) : 0

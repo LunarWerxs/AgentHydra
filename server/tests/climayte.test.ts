@@ -58,6 +58,7 @@ import {
   setCliMayteOwnerDir,
   startCliMayte,
   sweepWorkerFiles,
+  VERDICT_NOTE_MAX,
   wallUntil,
   windDownAt,
 } from '../src/climayte'
@@ -1745,6 +1746,21 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     expect(climayteList({ id })[0]?.judged).toBe(true)
     climayteSend(id, 'one more thing')
     expect((await settle(id, 15_000))?.judged).toBe(false)
+  }, 40_000)
+
+  test('a verdict note over the limit is refused whole and records nothing; one just under it is kept whole', async () => {
+    const id = await start('verdict-note', 'slow-1')
+    climayteCancel({ id }) // a stopped worker can be judged; the fake CLI would run 30 s otherwise
+    expect(climayteList({ id })[0]?.status).not.toBe('running')
+    const over = 'x'.repeat(VERDICT_NOTE_MAX + 1)
+    const refused = climayteVerdict(id, { verdict: 'fail', note: over, retry: false })
+    expect(refused.ok).toBe(false)
+    expect(refused.message).toContain(String(VERDICT_NOTE_MAX + 1))
+    expect(refused.message).toContain(String(VERDICT_NOTE_MAX))
+    expect(climayteGet(id)?.verdicts ?? []).toEqual([])
+    const fits = 'y'.repeat(VERDICT_NOTE_MAX - 1)
+    expect(climayteVerdict(id, { verdict: 'fail', note: fits, retry: false }).ok).toBe(true)
+    expect(climayteGet(id)?.verdicts?.map((v) => v.note)).toEqual([fits])
   }, 40_000)
 
   test('a cancel keeps queued messages and delivers them when the worker is continued', async () => {

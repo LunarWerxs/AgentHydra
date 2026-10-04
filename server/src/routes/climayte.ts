@@ -33,6 +33,7 @@ import {
   climayteWaveStart,
   climayteWaves,
   climayteWaveVerify,
+  verdictNoteTooLong,
 } from '../climayte'
 import type { CliMayteOrigin } from '../climayte-ping'
 import { buildStatus, remoteSnapshots } from '../climayte-remote'
@@ -251,6 +252,8 @@ app.post('/api/corch/verdicts', async (c) => {
     ? body.ids.filter((x): x is string => typeof x === 'string')
     : []
   if (!ids.length) return c.json({ error: 'ids is required' }, 400)
+  const tooLong = verdictNoteTooLong(body.note)
+  if (tooLong) return c.json({ error: tooLong }, 400)
   return c.json(
     climayteVerdicts(ids, {
       verdict: body.verdict,
