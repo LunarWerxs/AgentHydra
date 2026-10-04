@@ -3,7 +3,7 @@
 // Kept separate from usage.ts so Quick Instances can read colored usage chips without importing
 // the live quota probe, token resolution, transcript helpers, or any database-backed services.
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
 import type { UsageSnapshot } from './types'
@@ -17,13 +17,39 @@ const LAST_KNOWN_PATH = join(DATA_DIR, 'usage-last-known.json')
 const CLEARED_PATH = join(DATA_DIR, 'usage-cleared.json')
 type UsageCache = Record<string, UsageSnapshot>
 
-function readUsageCache(): UsageCache {
+/** The parsed file, kept in memory and re-read only when its (mtime, size) moved. The file stays on
+ *  disk because other processes read it (hswarm, scripts/climayte-live.ts); this daemon no longer
+ *  re-parses it on every table render. Callers get a copy, so mutating it never edits the memo. */
+let memo: { stamp: string; cache: UsageCache } | null = null
+
+function fileStamp(path: string): string {
   try {
-    const parsed = JSON.parse(readFileSync(USAGE_CACHE_PATH, 'utf8'))
-    return parsed && typeof parsed === 'object' ? (parsed as UsageCache) : {}
+    const st = statSync(path)
+    return `${st.mtimeMs}:${st.size}`
   } catch {
-    return {}
+    return 'absent'
   }
+}
+
+function readUsageCache(): UsageCache {
+  const stamp = fileStamp(USAGE_CACHE_PATH)
+  if (!memo || memo.stamp !== stamp) {
+    let cache: UsageCache = {}
+    try {
+      const parsed = JSON.parse(readFileSync(USAGE_CACHE_PATH, 'utf8'))
+      if (parsed && typeof parsed === 'object') cache = parsed as UsageCache
+    } catch {
+      // absent or unreadable: an empty cache
+    }
+    memo = { stamp, cache }
+  }
+  return { ...memo.cache }
+}
+
+function writeUsageCache(cache: UsageCache): void {
+  mkdirSync(DATA_DIR, { recursive: true })
+  writeFileSync(USAGE_CACHE_PATH, JSON.stringify(cache, null, 2))
+  memo = { stamp: fileStamp(USAGE_CACHE_PATH), cache: { ...cache } }
 }
 
 /** The whole cache, keyed by caller key — used to bulk-hydrate instance lists on load. */
@@ -75,8 +101,7 @@ export function dropCachedUsage(key: string, opts: { keepLastKnown?: boolean } =
       writeLastKnown(kept)
     }
     delete cache[key]
-    mkdirSync(DATA_DIR, { recursive: true })
-    writeFileSync(USAGE_CACHE_PATH, JSON.stringify(cache, null, 2))
+    writeUsageCache(cache)
   } catch {
     // Best-effort: a surviving entry is only ever read for a key nothing asks about anymore.
   }
@@ -147,10 +172,9 @@ export function shownUsageMap(
  *  A live reading supersedes a kept one: the account is signed in again. */
 export function setCachedUsage(key: string, snap: UsageSnapshot): void {
   try {
-    mkdirSync(DATA_DIR, { recursive: true })
     const cache = readUsageCache()
     cache[key] = snap
-    writeFileSync(USAGE_CACHE_PATH, JSON.stringify(cache, null, 2))
+    writeUsageCache(cache)
     const kept = readLastKnown()
     if (key in kept) {
       delete kept[key]

@@ -16,16 +16,18 @@
 //
 // The pure math is separated from the storage so it is unit-testable without touching the disk.
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
+import { db, getSetting, setSetting } from './db'
 import type { UsageForecast, UsageSample, UsageSnapshot } from './types'
 
-const HISTORY_PATH = join(DATA_DIR, 'usage-history.json')
+/** The legacy store. Read once for the import below and never written again; left in place. */
+const LEGACY_PATH = join(DATA_DIR, 'usage-history.json')
 
-/** Keep ~5 days of 15-minute samples per key. Enough for a weekly trend, small enough to stay a
- *  few hundred KB of JSON. */
-const MAX_SAMPLES_PER_KEY = 500
+/** Samples live in the usage_samples table for this long (the old file kept 500 per key, ~5 days). */
+export const RETENTION_DAYS = 90
+const RETENTION_MS = RETENTION_DAYS * 86_400_000
 
 /**
  * Ignore a burn rate measured over less than this.
@@ -46,66 +48,123 @@ const MIN_SPAN_MIN = 45
 const DEFAULT_LOOKBACK_HOURS = 6
 
 type History = Record<string, UsageSample[]>
-
-function readHistory(): History {
-  try {
-    const parsed = JSON.parse(readFileSync(HISTORY_PATH, 'utf8'))
-    return parsed && typeof parsed === 'object' ? (parsed as History) : {}
-  } catch {
-    return {}
-  }
+type Row = {
+  at: string
+  session_pct: number | null
+  week_pct: number
+  week_resets_at: string | null
+  session_resets_at: string | null
 }
 
-function writeHistory(h: History): void {
+const insertRow = db.query(
+  'insert or ignore into usage_samples (key, at, at_ms, session_pct, week_pct, week_resets_at, session_resets_at) values (?, ?, ?, ?, ?, ?, ?)',
+)
+
+function insertSample(key: string, s: UsageSample): boolean {
+  const ms = Date.parse(s.at)
+  if (!Number.isFinite(ms) || typeof s.weekAllPct !== 'number') return false
+  const r = insertRow.run(
+    key,
+    s.at,
+    ms,
+    s.sessionPct ?? null,
+    s.weekAllPct,
+    s.weekResetsAt ?? null,
+    s.sessionResetsAt ?? null,
+  )
+  return Number(r.changes ?? 0) > 0
+}
+
+/** Delete samples older than the retention window. Returns the rows removed. */
+export function pruneUsageSamples(now = Date.now()): number {
+  const r = db.query('delete from usage_samples where at_ms < ?').run(now - RETENTION_MS)
+  return Number(r.changes ?? 0)
+}
+
+/**
+ * One-time import of usage-history.json into the table. Idempotent (insert-or-ignore on the primary
+ * key) and flagged in settings so a started daemon does not re-parse the file. The file is left
+ * alone. `force` re-runs it regardless of the flag. Returns the rows added.
+ */
+export function importLegacyUsageHistory(path = LEGACY_PATH, force = false): number {
+  if (!force && getSetting('usage_history_imported') === '1') return 0
+  let added = 0
+  if (existsSync(path)) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(readFileSync(path, 'utf8'))
+    } catch {
+      return 0 // unreadable now: leave the flag unset so a later start retries
+    }
+    if (parsed && typeof parsed === 'object') {
+      db.transaction(() => {
+        for (const [key, list] of Object.entries(parsed as History))
+          if (Array.isArray(list)) for (const s of list) if (s && insertSample(key, s)) added++
+      })()
+    }
+  }
+  pruneUsageSamples()
+  setSetting('usage_history_imported', '1')
+  return added
+}
+importLegacyUsageHistory()
+
+let lastPrune = Date.now()
+
+/** Record one reading. Called on every successful check (manual or from the background sweep). */
+export function recordUsageSample(key: string, snap: UsageSnapshot): void {
+  if (!snap.weekAll) return // nothing to trend
   try {
-    mkdirSync(DATA_DIR, { recursive: true })
-    writeFileSync(HISTORY_PATH, JSON.stringify(h))
+    // A replayed snapshot (same `at`) hits the primary key and is ignored.
+    insertSample(key, {
+      at: snap.capturedAt,
+      sessionPct: snap.session?.pct ?? null,
+      weekAllPct: snap.weekAll.pct,
+      weekResetsAt: snap.weekAll.resetsAt ?? null,
+      // Keys the 5-hour windows for the dollar calibration (quota-calibration.ts).
+      sessionResetsAt: snap.session?.resetsAt ?? null,
+    })
+    if (Date.now() - lastPrune > 3600_000) {
+      lastPrune = Date.now()
+      pruneUsageSamples()
+    }
   } catch {
     // best-effort: losing history costs us a forecast, never a usage reading
   }
 }
 
-/** Record one reading. Called on every successful check (manual or from the background sweep). */
-export function recordUsageSample(key: string, snap: UsageSnapshot): void {
-  if (!snap.weekAll) return // nothing to trend
-  const h = readHistory()
-  const list = h[key] ?? []
-  const sample: UsageSample = {
-    at: snap.capturedAt,
-    sessionPct: snap.session?.pct ?? null,
-    weekAllPct: snap.weekAll.pct,
-    weekResetsAt: snap.weekAll.resetsAt ?? null,
-    // Keys the 5-hour windows for the dollar calibration (quota-calibration.ts).
-    sessionResetsAt: snap.session?.resetsAt ?? null,
-  }
-  // Don't store a duplicate reading (the cache can replay the same snapshot).
-  const last = list[list.length - 1]
-  if (last && last.at === sample.at) return
-  list.push(sample)
-  h[key] = list.slice(-MAX_SAMPLES_PER_KEY)
-  writeHistory(h)
-}
-
 /** Drop a key's whole series — for when its subject is gone (a deleted dispatch account). Nothing
- *  can ever ask for that key again, and the file is capped per key but not per KEY COUNT, so
- *  without this every deleted account leaves up to 500 samples behind forever. */
+ *  can ever ask for that key again. */
 export function dropUsageHistory(key: string): void {
-  const h = readHistory()
-  if (!(key in h)) return
-  delete h[key]
-  writeHistory(h)
+  db.query('delete from usage_samples where key = ?').run(key)
 }
 
 /** Every key with a stored series. */
 export function usageHistoryKeys(): string[] {
-  return Object.keys(readHistory())
+  return db
+    .query<{ key: string }, []>('select distinct key from usage_samples')
+    .all()
+    .map((r) => r.key)
+}
+
+function toSample(r: Row): UsageSample {
+  return {
+    at: r.at,
+    sessionPct: r.session_pct,
+    weekAllPct: r.week_pct,
+    weekResetsAt: r.week_resets_at,
+    sessionResetsAt: r.session_resets_at,
+  }
 }
 
 /** A key's last recorded reading as a snapshot marked `signedOutAt` (its own time), or null: what a
  *  table shows for an account that signed out before kept readings existed (usage-cache.ts). */
 export function lastSampleSnapshot(key: string): UsageSnapshot | null {
-  const last = readHistory()[key]?.at(-1)
-  if (!last) return null
+  const row = db
+    .query<Row, [string]>('select * from usage_samples where key = ? order by at_ms desc limit 1')
+    .get(key)
+  if (!row) return null
+  const last = toSample(row)
   const limit = (pct: number | null, resetsAt: string | null | undefined) =>
     pct === null ? null : { pct, resets: '', resetsAt: resetsAt ?? null }
   return {
@@ -120,7 +179,10 @@ export function lastSampleSnapshot(key: string): UsageSnapshot | null {
 
 /** Every stored sample for a key, oldest first. */
 export function usageSamples(key: string): UsageSample[] {
-  return readHistory()[key] ?? []
+  return db
+    .query<Row, [string]>('select * from usage_samples where key = ? order by at_ms')
+    .all(key)
+    .map(toSample)
 }
 
 // --- the math (pure, tested) --------------------------------------------------

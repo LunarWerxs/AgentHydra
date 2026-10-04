@@ -515,7 +515,7 @@ create table if not exists skill_listings (
 // --- indexes and file size (docs/STORAGE-PLAN.md piece 10) -----------------------------------------
 // Gated on `pragma user_version`. Every step is idempotent and user_version is written LAST, so a
 // daemon that dies half-way simply repeats the step on its next start.
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 if ((db.query<{ user_version: number }, []>('pragma user_version').get()?.user_version ?? 0) < 1) {
   db.transaction(() => {
     // The sessions list reads these two with `scan_version >= ?`; a partial index holds only the
@@ -532,6 +532,23 @@ if ((db.query<{ user_version: number }, []>('pragma user_version').get()?.user_v
     // Nothing reads session_stats by gone_at through this index (no INDEXED BY anywhere) and ~66%
     // of rows match, so the planner scans regardless.
     db.exec('drop index if exists session_stats_gone')
+    db.exec('pragma user_version = 1')
+  })()
+}
+// Piece 12: usage readings live here instead of usage-history.json (rewritten whole per sample).
+// `at` is the reading's own ISO stamp, `at_ms` its parsed form for ordering and retention.
+if ((db.query<{ user_version: number }, []>('pragma user_version').get()?.user_version ?? 0) < 2) {
+  db.transaction(() => {
+    db.exec(`create table if not exists usage_samples (
+      key                text    not null,
+      at                 text    not null,
+      at_ms              integer not null,
+      session_pct        real,
+      week_pct           real    not null,
+      week_resets_at     text,
+      session_resets_at  text,
+      primary key (key, at)
+    ) without rowid`)
     db.exec(`pragma user_version = ${SCHEMA_VERSION}`)
   })()
 }
