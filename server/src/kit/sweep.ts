@@ -12,6 +12,7 @@ import {
 } from './ingest-claude'
 import { discoverForeignSources, ingestForeign } from './ingest-foreign'
 import { hswarmLedgerPath, ingestHswarm } from './ingest-hswarm'
+import { ingestLegacy } from './ingest-legacy'
 import { sharedKitStore } from './query'
 import type { KitStore } from './store'
 
@@ -73,6 +74,13 @@ async function sweepOnce(store: KitStore): Promise<string> {
   await guarded('maintenance', async () => {
     const m = await store.runMaintenanceAsync()
     return `rolled=${m.rolledUp} pruned=${m.pruned}`
+  })
+  // Once, after the first full ingest and the prune: the history session_stats holds and the kit cannot see.
+  await guarded('legacy', async () => {
+    if (parts.some((p) => p.startsWith('claude FAILED')))
+      return 'legacy waits for a clean claude ingest'
+    const s = await ingestLegacy(store, (await import('../db')).db, { pc })
+    return s.skipped ? 'legacy done' : `legacy sessions=${s.sessions} written=${s.written}`
   })
   return `[kit] sweep ${parts.join(' | ')} ms=${Math.round(performance.now() - t0)}`
 }

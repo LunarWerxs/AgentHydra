@@ -1680,6 +1680,7 @@ export function spendReport(opts: SpendReportOptions = {}): SpendReport {
     { tokens: TokenBreakdown; sessions: Set<string>; costUsd: number | null }
   >()
   const sessions = new Set<string>()
+  const allTime = !opts.sinceMs
   const billedModels = new Set<string>()
   const totals = { weighted: 0, cost: null as number | null, calls: 0, tokens: emptyTokens() }
 
@@ -1708,8 +1709,10 @@ export function spendReport(opts: SpendReportOptions = {}): SpendReport {
     byDay.add(row.day as string, r, session)
     const account = row.account as string | null
     if (account) byAccount.add(account, r, session)
-    const path = (session && projects.get(session)) || 'unknown'
-    byProject.add(projectKeyOf(path), r, session)
+    if (!allTime) {
+      const path = (session && projects.get(session)) || 'unknown'
+      byProject.add(projectKeyOf(path), r, session)
+    }
 
     const provider = KIT_PROVIDER[source] ?? 'claude'
     const pv = byProvider.get(provider) ?? {
@@ -1735,6 +1738,54 @@ export function spendReport(opts: SpendReportOptions = {}): SpendReport {
     totals.tokens.cacheWrite += tokens.cacheWrite
     totals.tokens.output += tokens.output
     totals.tokens.total += tokens.total
+  }
+
+  // All time: projects come from the session ledger, which keeps a session past the raw window (the day
+  // rows above cannot name one), so the history older than that is not all 'unknown'.
+  if (allTime) {
+    const ledger = usageQuery(
+      {
+        window: { from: 0 },
+        filter: sources ? { source: [...sources] } : undefined,
+        groupBy: ['session', 'model'],
+        measures: [
+          'tokens',
+          'weighted',
+          'calls',
+          'list_usd',
+          'billed_usd',
+          'input',
+          'output',
+          'cache_read',
+          'cache_write',
+        ],
+      },
+      { store: opts.store, now: opts.now },
+    )
+    for (const row of ledger.rows) {
+      const model = (row.model as string | null) ?? 'unknown'
+      const weighted = Number(row.weighted ?? 0)
+      const tokens: TokenBreakdown = {
+        input: Number(row.input ?? 0),
+        cacheRead: Number(row.cache_read ?? 0),
+        cacheWrite: Number(row.cache_write ?? 0),
+        output: Number(row.output ?? 0),
+        total: Number(row.tokens ?? 0),
+      }
+      if (NON_MODELS.has(model) && weighted <= 0 && tokens.total === 0) continue
+      const session = (row.session as string | null) ?? null
+      const path = (session && projects.get(session)) || 'unknown'
+      byProject.add(
+        projectKeyOf(path),
+        {
+          weighted,
+          cost: (row.billed_usd as number | null) ?? (row.list_usd as number | null),
+          calls: Number(row.calls ?? 0),
+          tokens,
+        },
+        session,
+      )
+    }
   }
 
   const days = byDay.list('key')
