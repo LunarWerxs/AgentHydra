@@ -296,14 +296,20 @@ function Get-Roots([int]$procId, $mainHwnd) {
 # From a matched card-text element: walk UP until an ancestor holds exactly one enabled, on-screen
 # Allow button, then return that button. Several in one ancestor is ambiguous - refused, not
 # guessed. (This is the "up to the card container, then down to its button".)
+# ⛔ The walk stops at an ancestor with more than $CARD_MAX_BUTTONS buttons of any kind: a card
+# holds a handful, a chat pane holds dozens. Without the stop, chat text that merely starts with a
+# card phrase could climb to the pane and press the lone Allow once of a different permission card.
+$CARD_MAX_BUTTONS = 8
 function Find-AllowButton($start) {
   $node = $start
   for ($depth = 0; $depth -lt 12; $depth++) {
     try { $node = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($node) } catch { $node = $null }
     if (-not $node) { break }
     try { if ($node.Current.BoundingRectangle.IsEmpty) { continue } } catch { break }
+    $all = $node.FindAll($TREE, $btnCond)
+    if ($all.Count -gt $CARD_MAX_BUTTONS) { return @{ Button = $null; Card = $null; Why = 'too-wide'; Count = $all.Count } }
     $btns = @()
-    foreach ($b in $node.FindAll($TREE, $btnCond)) {
+    foreach ($b in $all) {
       try {
         $n = $b.Current.Name
         if (-not $n) { continue }
@@ -353,7 +359,7 @@ function Find-Card($root, $phrases) {
   foreach ($c in $candidates) {
     $found = Find-AllowButton $c.El
     if ($found.Button) { return @{ Header = $c.Name; Button = $found.Button; Why = 'ok' } }
-    if ($found.Why -eq 'ambiguous') { $last = @{ Header = $c.Name; Button = $null; Why = 'ambiguous' } }
+    if ($found.Why -in 'ambiguous', 'too-wide') { $last = @{ Header = $c.Name; Button = $null; Why = $found.Why; Count = $found.Count } }
     elseif (-not $last) { $last = @{ Header = $c.Name; Button = $null; Why = 'no-button' } }
   }
   return $last
@@ -365,6 +371,7 @@ $script:Attempts = 0
 $script:LastPressAt = [DateTime]::MinValue
 $script:LoggedDisabled = $false
 $script:GaveUpLogged = $false
+$script:LastRefusal = ''
 
 Write-Log ("watcher start: pid $($proc.ProcId) hwnd $hwnd, every ${IntervalSecs}s, card text " +
            ($CARD_PHRASES | ForEach-Object { "'$_'" }) + ", button '" + ($ALLOW_NAMES -join "'/'") + "', log '$LogPath'" + $(if ($Once) { ' (once)' } else { '' }))
@@ -402,6 +409,10 @@ try {
         if ($card -and $card.Why -eq 'ambiguous') {
           $script:OnceCardSeen = $true; $script:OnceUnpressable = "the card '$($card.Header)' holds more than one Allow button - refused"
           if (-not $script:CardVisible) { Write-Log "REFUSED: '$($card.Header)' is a container with more than one Allow button - not guessing" }
+        } elseif ($card -and $card.Why -eq 'too-wide') {
+          $script:OnceCardSeen = $true; $script:OnceUnpressable = "'$($card.Header)' reached a container of $($card.Count) buttons before any Allow - refused"
+          $msg = "REFUSED: '$($card.Header)' reached a container of $($card.Count) buttons (over $CARD_MAX_BUTTONS) before any Allow - chat text, not a card"
+          if ($msg -ne $script:LastRefusal) { Write-Log $msg; $script:LastRefusal = $msg }
         } elseif ($card -and $card.Why -eq 'no-button') {
           $script:OnceCardSeen = $true; $script:OnceUnpressable = "the card '$($card.Header)' has no enabled Allow once"
           if (-not $script:CardVisible) { Write-Log "card '$($card.Header)' is showing but no enabled '$AllowName' is inside it" }
