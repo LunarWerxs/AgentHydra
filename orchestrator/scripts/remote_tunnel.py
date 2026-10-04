@@ -31,6 +31,7 @@ Usage: python scripts/remote_tunnel.py --status
        python scripts/remote_tunnel.py --provision --name orch-michael [--hostname H] [--dry-run]
        python scripts/remote_tunnel.py --provision --name orch-jacob --no-install   (the sibling's)
        python scripts/remote_tunnel.py --install-token --name orch-michael
+       python scripts/remote_tunnel.py --rotate --name orch-michael [--no-install]   (a leaked token)
        python scripts/remote_tunnel.py --export-token <file> --name orch-jacob
        python scripts/remote_tunnel.py --import-token <file>
 Exit:  0 ok - 1 a Cloudflare call failed - 2 no API token in the environment -
@@ -50,6 +51,7 @@ never imported simply sits there: a machine that can reach the Cloudflare API sh
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -363,6 +365,36 @@ def cmd_install_token(name: str) -> int:
     return 0
 
 
+def cmd_rotate(name: str, install: bool = True) -> int:
+    """A new tunnel secret, so every copy of the old connector token stops working: the command for
+    a token that leaked (a log, a chat transcript, an export file that went somewhere). Cloudflare
+    drops connectors still holding the old token, so the machine that runs the tunnel takes the new
+    one here (`--no-install` for the sibling's tunnel: that machine runs --install-token)."""
+    tunnel = find_tunnel(name)
+    if not tunnel:
+        print(f"no tunnel named {name!r} on this account - run --provision first", file=sys.stderr)
+        return 4
+    tid = tunnel["id"]
+    before = fingerprint(tunnel_token(tid))
+    # Generated here and sent once; like the token it becomes, it is never printed.
+    secret = base64.b64encode(_secrets.token_bytes(32)).decode()
+    _api("PATCH", f"/accounts/{_account()}/cfd_tunnel/{tid}", {"tunnel_secret": secret})
+    tok = tunnel_token(tid)
+    if fingerprint(tok) == before:
+        print(f"Cloudflare still hands out the old token for {name}: nothing was rotated", file=sys.stderr)
+        return 1
+    print(f"rotated {name}: the old token (sha256:{before}) no longer works")
+    if not install:
+        print(f"  new token NOT stored here - on that machine: python scripts/remote_tunnel.py --install-token --name {name}")
+        return 0
+    cfg = load_config()
+    host = (cfg.get("tunnel") or {}).get("hostname") or f"{name}.{_zone_name()}"
+    _write_tunnel(host, tok, tid, name)
+    print(f"  new token stored in {_config_path()}  (sha256:{fingerprint(tok)}, never printed)")
+    print("  restart the gateway (the tray icon's 'Restart remote access') so the connector uses it.")
+    return 0
+
+
 def _refuse_committable(path: Path) -> str | None:
     """Why this path must not receive a credential, or None if it may.
 
@@ -486,6 +518,11 @@ def main(argv: list[str]) -> int:
                 print("--install-token needs --name", file=sys.stderr)
                 return 3
             return cmd_install_token(name)
+        if "--rotate" in argv:
+            if not name:
+                print("--rotate needs --name", file=sys.stderr)
+                return 3
+            return cmd_rotate(name, install="--no-install" not in argv)
         if "--export-token" in argv:
             target = opt("--export-token")
             if not target or not name:

@@ -29,7 +29,7 @@
     "check:kit": "node ../../../lunarwerx-ui/sync.mjs --check --app orchestrator"
   },
   "config": {
-    "//remotePort": "THE remote gateway's loopback port, written only here. server/src/config.ts, scripts/remote.py, scripts/remote_tunnel.py (the named tunnels' Cloudflare ingress), scripts/tray.ps1 and web/vite.config.ts all read it; ORCH_REMOTE_PORT overrides it for one run. 7790 was ZSwarm's MCP server (retired 2026-10-03) and 7787-7789 are the AgentHydra daemon's port hops. Changing it means re-running remote_tunnel.py --provision for BOTH tunnels, or their ingress keeps pointing at the old port.",
-    "remotePort": 7793
+    "//remotePort": "THE remote gateway's loopback port, written only here. server/src/config.ts, scripts/remote.py, scripts/remote_tunnel.py (the named tunnels' Cloudflare ingress), scripts/tray.ps1 and web/vite.config.ts all read it; ORCH_REMOTE_PORT overrides it for one run. 7790 was ZSwarm's MCP server (retired 2026-10-03; chats started before then still knock on it), 7791 is the Connections local MCP, 7793 is HSwarm's shared MCP server (the gateway sat there until 2026-10-04 and could not bind it) and 7787-7789 are the AgentHydra daemon's port hops. Changing it means re-running remote_tunnel.py --provision for BOTH tunnels, or their ingress keeps pointing at the old port.",
+    "remotePort": 7794
   }
 }

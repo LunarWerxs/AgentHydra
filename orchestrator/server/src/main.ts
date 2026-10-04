@@ -1,7 +1,7 @@
 /**
  * The remote gateway. `bun run remote` from the repo root.
  *
- *   loopback :7793  ->  this gateway  ->  scripts/dashboard.py :7799 (data, read-only)
+ *   loopback :7794  ->  this gateway  ->  scripts/dashboard.py :7799 (data, read-only)
  *   cloudflared     ->  https://<quick>.trycloudflare.com  ->  this gateway (owner session required)
  *   app.repoyeti.com/r/<id>  ->  the permanent address, and the OAuth return route
  *

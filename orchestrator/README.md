@@ -445,7 +445,7 @@ is necessarily outside the auth gate (a sign-in cannot require a session), so pl
 ownership would hand the install - and the arm switch - to whoever reached the URL first. A URL
 is not a secret: it is in DNS, in certificate-transparency logs, in browser history, in any link
 ever pasted. A remote sign-in against an unclaimed gateway is refused; claim it once from
-`http://127.0.0.1:7793` on the machine, after which remote sign-in is ordinary.
+`http://127.0.0.1:7794` on the machine, after which remote sign-in is ordinary.
 
 Auth covers **`/api/*`**, not the whole surface: the static dashboard shell, `/assets/*` and the
 `/oauth/*` routes are public by necessity, and `/api/health`, `/api/auth/status` and
@@ -473,13 +473,16 @@ registered "Orchestrator" app (public, client id in `server/src/config.ts`; redi
 the relay callback + loopback, which the IdP accepts on any port).
 
 **A stable address on your own domain** (optional): create a Cloudflare named tunnel, point its
-public hostname at `http://localhost:7793`, put `{"tunnel":{"hostname":"orch.example.com","token":"..."}}`
+public hostname at `http://localhost:7794`, put `{"tunnel":{"hostname":"orch.example.com","token":"..."}}`
 in `state/remote/config.json` (or `CF_TUNNEL_TOKEN` in the env), and add
 `https://orch.example.com/oauth/callback` to the OAuth app's redirect URIs. `ORCH_NO_TUNNEL=1`
-serves loopback only. The port is written once, in `package.json` `config.remotePort` (7793;
-7790 was ZSwarm's MCP server, retired 2026-10-03), and `ORCH_REMOTE_PORT` overrides it for one
-run. Moving it means re-running `scripts/remote_tunnel.py --provision` for both named tunnels,
-whose Cloudflare ingress names the port.
+serves loopback only. The port is written once, in `package.json` `config.remotePort` (7794;
+7793 is HSwarm's shared MCP server and 7790 was ZSwarm's, retired 2026-10-03), and
+`ORCH_REMOTE_PORT` overrides it for one run. Moving it means re-running
+`scripts/remote_tunnel.py --provision` for both named tunnels, whose Cloudflare ingress names the
+port. A connector token that leaked (a log, a chat, a file that went somewhere) is retired with
+`scripts/remote_tunnel.py --rotate --name <tunnel>`: a new tunnel secret, so the old token stops
+working, and the new token stored here.
 
 The Python toolbox stays stdlib-only; `web/` + `server/` are the ONE TypeScript surface, because
 the auth stack (jose, hono, cloudflared) is RepoYeti's and lives there.
