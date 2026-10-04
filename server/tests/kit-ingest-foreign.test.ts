@@ -281,4 +281,65 @@ describe('foreign ingest into the kit store', () => {
     expect(totals(s2).codex).toMatchObject({ calls: 2, input: 9000, output: 90 })
     s2.close()
   })
+
+  test('a session that resumes after its row was pruned adds only what is new', async () => {
+    const dbPath = join(root, 'opencode-resume.db')
+    const db = new Database(dbPath)
+    db.exec(`create table session (
+      id text primary key, project_id text, directory text, title text, model text,
+      tokens_input integer, tokens_output integer, tokens_reasoning integer,
+      tokens_cache_read integer, tokens_cache_write integer, cost real,
+      time_created integer, time_updated integer, time_archived integer)`)
+    const put = (input: number, at: number) =>
+      db
+        .query('insert or replace into session values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(
+          's1',
+          'p',
+          '/w',
+          't',
+          '{"id":"glm-5","providerID":"zhipu"}',
+          input,
+          10,
+          0,
+          0,
+          0,
+          0,
+          at,
+          at,
+          null,
+        )
+    const src: ForeignSources = {
+      codex: [],
+      opencode: [{ dbPath, tool: 'opencode' }],
+      hermes: [],
+      dsh: [],
+    }
+    const st = new KitStore(':memory:')
+    const total = () =>
+      (
+        st.db
+          .query("select coalesce(sum(input), 0) as n from usage_hour where source = 'opencode'")
+          .get() as { n: number }
+      ).n
+    put(1000, NOW - 40 * 86_400_000)
+    await ingestForeign(st, src)
+    st.runMaintenance(NOW) // the 40-day-old row is folded into the hours and deleted
+    expect(
+      st.db.query("select count(*) as n from usage_event where source = 'opencode'").get(),
+    ).toEqual({ n: 0 })
+    expect(total()).toBe(1000)
+
+    put(1500, NOW) // the session resumes: its row now holds the running total, 1500
+    await ingestForeign(st, src)
+    st.runMaintenance(NOW)
+    expect(total()).toBe(1500)
+
+    put(1800, NOW + 1000) // and carries on while its new row is still raw
+    await ingestForeign(st, src)
+    st.runMaintenance(NOW + 1000)
+    expect(total()).toBe(1800)
+    db.close()
+    st.close()
+  })
 })

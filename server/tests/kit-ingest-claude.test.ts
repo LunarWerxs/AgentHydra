@@ -1,9 +1,15 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { type ClaudeFileOwner, type ClaudeRoot, ingestClaude } from '../src/kit/ingest-claude'
-import { KitStore } from '../src/kit/store'
+import { createCliInstance, deleteCliInstance } from '../src/core/cli-instances'
+import {
+  type ClaudeFileOwner,
+  type ClaudeRoot,
+  discoverClaudeRoots,
+  ingestClaude,
+} from '../src/kit/ingest-claude'
+import { hourStart, KitStore } from '../src/kit/store'
 import { hswarmAccountId } from '../src/routes/hswarm'
 
 const root = mkdtempSync(join(tmpdir(), 'kit-claude-'))
@@ -255,8 +261,9 @@ describe('ingestClaude', () => {
     const opts = { maxBytesPerSec: Number.POSITIVE_INFINITY, now: NOW }
     const oldTs = NOW - 60 * DAY
     const text = reply('c1', oldTs) + reply('c2', NOW - 9000)
-    f.file('orig/p/s.jsonl', text)
+    const orig = f.file('orig/p/s.jsonl', text)
     f.file('copy/p/s.jsonl', text + reply('c3', oldTs + 1000)) // the copy carries on with one more old call
+    utimesSync(orig, new Date(NOW - 5000), new Date(NOW - 5000)) // the original is the older file
     const roots = [
       rootOf(join(f.dir, 'orig'), () => cliOwner(() => UUID_A, 'one')),
       rootOf(join(f.dir, 'copy'), () => cliOwner(() => UUID_B, 'two')),
@@ -305,7 +312,9 @@ describe('ingestClaude', () => {
     f.store.addToHourly([
       { id: 'dup', ts: oldTs, source: 'cli', instance: 'cli:inst1', output: 50 },
     ])
-    f.store.db.exec("delete from meta where key = 'claude_ingest_version'")
+    f.store.db.exec(
+      "delete from meta where key in ('claude_ingest_version', 'claude_settled_tags')",
+    ) // a store from before the tags
     f.store.db.exec('update ingest_cursor set version = 1')
     f.store.db.exec('delete from settled_claim')
 
@@ -359,7 +368,8 @@ describe('ingestClaude', () => {
   test('a session copied into another instance keeps its calls with the first account that ran them', async () => {
     const f = fixture()
     const text = reply('x1', NOW - 9000) + reply('x2', NOW - 8000)
-    f.file('orig/p/s.jsonl', text)
+    const orig = f.file('orig/p/s.jsonl', text)
+    utimesSync(orig, new Date(NOW - 5000), new Date(NOW - 5000)) // the original is the older file
     f.file('copy/p/s.jsonl', text + reply('x3', NOW - 1000)) // the handoff target carries on from the copy
     const roots = [
       rootOf(join(f.dir, 'orig'), () => cliOwner(() => UUID_A, 'one')),
@@ -372,5 +382,121 @@ describe('ingestClaude', () => {
       ['x2', 'cli:one'],
       ['x3', 'cli:two'],
     ])
+  })
+
+  test('an upgrade keeps the history of a transcript that is gone and re-reads the one that remains', async () => {
+    const f = fixture()
+    const opts = { maxBytesPerSec: Number.POSITIVE_INFINITY, now: NOW }
+    const roots = [rootOf(f.dir, () => cliOwner(() => UUID_A))]
+    const oldTs = NOW - 60 * DAY
+    const gone = f.file('p/gone.jsonl', reply('g1', oldTs) + reply('g2', NOW - 1000))
+    f.file('p/kept.jsonl', reply('k1', oldTs) + reply('k2', NOW - 2000))
+    await ingestClaude(f.store, roots, opts)
+    f.store.runMaintenance(NOW)
+    const totals = () => ({
+      old: f.store.db
+        .query('select sum(calls) as c from usage_hour where hour < ?')
+        .get(hourStart(NOW - 35 * DAY)),
+      all: f.store.db.query('select sum(calls) as c from usage_hour').get(),
+      sessions: f.store.db
+        .query(
+          'select session, sum(calls) as c from usage_session group by session order by session',
+        )
+        .all(),
+    })
+    expect(totals()).toEqual({
+      old: { c: 2 },
+      all: { c: 4 },
+      sessions: [
+        { session: 'gone', c: 2 },
+        { session: 'kept', c: 2 },
+      ],
+    })
+
+    rmSync(gone)
+    f.store.setMeta('claude_ingest_version', '2') // the previous version
+    await ingestClaude(f.store, roots, opts)
+    f.store.runMaintenance(NOW)
+    // the gone transcript's old call survives, the kept one is re-read and counted once
+    expect(totals()).toEqual({
+      old: { c: 2 },
+      all: { c: 4 },
+      sessions: [
+        { session: 'gone', c: 2 },
+        { session: 'kept', c: 2 },
+      ],
+    })
+  })
+
+  test('a handoff copy that keeps the original mtime does not take the first account calls', async () => {
+    const f = fixture()
+    const text = reply('y1', NOW - 9000) + reply('y2', NOW - 8000) + reply('y3', NOW - 100)
+    const a = f.file('A/p/s.jsonl', reply('y1', NOW - 9000) + reply('y2', NOW - 8000))
+    const b = f.file('B/p/s.jsonl', text)
+    // the copy keeps the original's mtime (cpSync preserveTimestamps), and B comes first in the roots
+    for (const p of [a, b]) utimesSync(p, new Date(NOW - 5000), new Date(NOW - 5000))
+    const roots = [
+      rootOf(join(f.dir, 'B'), () => cliOwner(() => UUID_B, 'bee')),
+      rootOf(join(f.dir, 'A'), () => cliOwner(() => UUID_A, 'ay')),
+    ]
+    // attempt 1 ran in A, a handoff attempt 2 started after y2 and ran in B
+    const attempts = new Map([
+      [
+        's',
+        [
+          { startedAt: NOW - 20_000, configDir: join(f.dir, 'A') },
+          { startedAt: NOW - 5000, configDir: join(f.dir, 'B') },
+        ],
+      ],
+    ])
+    await ingestClaude(f.store, roots, { maxBytesPerSec: Number.POSITIVE_INFINITY, attempts })
+    expect(events(f.store).map((r) => [r.id.slice(-2), r.instance, r.source])).toEqual([
+      ['y1', 'cli:ay', 'climayte'],
+      ['y2', 'cli:ay', 'climayte'],
+      ['y3', 'cli:bee', 'climayte'],
+    ])
+  })
+
+  test('without attempt records, equal mtimes are broken by path, not by the order of the roots', async () => {
+    const f = fixture()
+    const text = reply('z1', NOW - 9000)
+    const a = f.file('A/p/s.jsonl', text)
+    const b = f.file('B/p/s.jsonl', text)
+    for (const p of [a, b]) utimesSync(p, new Date(NOW - 5000), new Date(NOW - 5000))
+    const mk = (order: string[]) =>
+      order.map((n) => rootOf(join(f.dir, n), () => cliOwner(() => UUID_A, n)))
+    await ingestClaude(f.store, mk(['B', 'A']), { maxBytesPerSec: Number.POSITIVE_INFINITY })
+    expect(events(f.store).map((r) => r.instance)).toEqual(['cli:A'])
+  })
+
+  test('a CLI instance signed in to another account between two sweeps is attributed to it from then on', async () => {
+    const name = `kit-holder-${crypto.randomUUID().slice(0, 8)}`
+    const made = createCliInstance(name)
+    expect(made.ok).toBe(true)
+    try {
+      const dir = made.dir as string
+      writeFileSync(join(dir, '.credentials.json'), '{}')
+      const signIn = (uuid: string, at: number) => {
+        const p = join(dir, '.claude.json')
+        writeFileSync(p, JSON.stringify({ oauthAccount: { accountUuid: uuid } }))
+        utimesSync(p, new Date(at), new Date(at)) // the cache revalidates by mtime
+      }
+      const ownerOf = async () => {
+        const r = (await discoverClaudeRoots()).find((x) => x.dir === join(dir, 'projects'))
+        return r?.owner('x') as ClaudeFileOwner
+      }
+      signIn(UUID_A, NOW - 10_000)
+      const first = await ownerOf()
+      const t1 = Date.now()
+      expect(first.accountAt(t1)).toBe(UUID_A)
+
+      await new Promise((r) => setTimeout(r, 5))
+      signIn(UUID_B, NOW - 5000)
+      const second = await ownerOf()
+      expect(second.accountAt(Date.now() + 1)).toBe(UUID_B)
+      expect(second.accountAt(t1)).toBe(UUID_A) // what ran before the switch stays with A
+    } finally {
+      deleteCliInstance(made.data?.id as string, name)
+    }
   })
 })

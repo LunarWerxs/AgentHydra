@@ -29,9 +29,15 @@
 //    committed every FLUSH_BYTES, so a restart continues at the last commit.
 import { createHash } from 'node:crypto'
 import { open, readdir, readFile, stat } from 'node:fs/promises'
-import { basename, join, relative, sep } from 'node:path'
+import { basename, join, relative, resolve, sep } from 'node:path'
 import { CLAUDE_PROJECTS_ROOT } from '../config'
-import { cliAccountUuid, holderAt, readHolders } from '../core/account-tokens'
+import {
+  accountUuidOfClaudeJson,
+  holderAt,
+  noteHolder,
+  readHolders,
+  writeHolders,
+} from '../core/account-tokens'
 import { collectChatsAsync, lineageIdsOf } from '../core/chat-store-scan'
 import { listCliInstances } from '../core/cli-instances'
 import { POINTER_DIR } from '../instance'
@@ -39,6 +45,7 @@ import { pricesAsOf, priceTokens } from '../pricing'
 import { hswarmAccountId } from '../routes/hswarm'
 import { accumulateUsageLine, defaultConfigDir, emptySpend } from '../usage-tokens'
 import { sessionAddSql, sessionAggSql } from './schema'
+import { CLAUDE_SOURCES, ensureSettledPart, subtractFromHour } from './settled-part'
 import {
   eventSlices,
   hourSlices,
@@ -53,14 +60,18 @@ import {
 
 /**
  * Bump to make every cursor read its file again (a parser fix that changes what is extracted). The next
- * sweep also drops Claude's old part of the store (upgradeClaudeStore), so the re-read cannot double it.
+ * sweep also drops the part of Claude's old store that the transcripts still on disk give (upgradeClaudeStore),
+ * so the re-read cannot double it; history whose transcript is gone stays. Version 3 is the first that keeps
+ * settled_part, so the upgrade to it is the one that cannot tell what a gone transcript gave (a legacy store).
  */
-export const CLAUDE_INGEST_VERSION = 2
+export const CLAUDE_INGEST_VERSION = 3
 
 /** Bytes read per step; each step ends in a yield to the event loop. */
 const READ_CHUNK = 2 * 1024 * 1024
 /** Rows per page when a table is walked or deleted from in pieces. */
 const PAGE = 100
+/** Sessions per transaction when a tagged upgrade takes their settled part back (each session is up to a few hundred hour rows). */
+const TAKE_BACK_PAGE = 25
 /** The store is committed (and the cursor saved) after this many bytes of one file. */
 const FLUSH_BYTES = 64 * 1024 * 1024
 /**
@@ -87,10 +98,18 @@ export interface ClaudeRoot {
   owner: (sessionId: string) => ClaudeFileOwner | null
 }
 
+/** One CliMayte attempt: when it started and the config dir it ran in (null: not recorded). */
+export interface AttemptRun {
+  startedAt: number
+  configDir: string | null
+}
+
 export interface ClaudeIngestOptions {
   pc?: string | null
   /** Session ids that belong to a CliMayte attempt. */
   climayte?: ReadonlySet<string>
+  /** Who ran each CliMayte session, by when (climayteAttemptRuns): the copy that ran a call claims it. */
+  attempts?: ReadonlyMap<string, readonly AttemptRun[]>
   /** Read-rate cap in bytes per second (Infinity: none). */
   maxBytesPerSec?: number
   /** False: a file already read and untouched for an hour is not even stat'd (the warm sweeps). */
@@ -116,26 +135,57 @@ export interface ClaudeIngestSummary {
 
 // --- discovery ---------------------------------------------------------------------------------
 
-/** Every sweep target on this PC: each CLI instance's `projects`, and the shared store. */
+/** The account each `.claude.json` named when last read, revalidated by its size and mtime. */
+const accountFiles = new Map<string, { mtimeMs: number; size: number; uuid: string | null }>()
+
+/** The account a config folder is signed in as, read without blocking and only when its file changed. */
+async function accountUuidOf(configDir: string): Promise<string | null> {
+  const path = join(configDir, '.claude.json')
+  try {
+    const st = await stat(path)
+    const hit = accountFiles.get(path)
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.uuid
+    const uuid = accountUuidOfClaudeJson(await readFile(path, 'utf8'))
+    accountFiles.set(path, { mtimeMs: st.mtimeMs, size: st.size, uuid })
+    return uuid
+  } catch {
+    accountFiles.delete(path)
+    return null
+  }
+}
+
+/**
+ * Every sweep target on this PC: each CLI instance's `projects`, and the shared store. Each sweep first records
+ * who holds every CLI instance now (account-holders.json), so a re-login between two sweeps is attributed from
+ * the moment it is seen, not frozen at the daemon's boot; the work is a stat per instance, a read only when its
+ * `.claude.json` changed, and a turn of the event loop between instances.
+ */
 export async function discoverClaudeRoots(): Promise<ClaudeRoot[]> {
   const roots: ClaudeRoot[] = []
   const holders = readHolders()
+  let holdersChanged = false
+  const at = Date.now()
   for (const inst of listCliInstances()) {
     const history = holders[inst.configDir] ?? []
-    const now = cliAccountUuid(inst.configDir, inst.loggedIn)
+    holders[inst.configDir] = history
+    const uuid = inst.loggedIn ? await accountUuidOf(inst.configDir) : null
+    if (noteHolder(history, uuid, at)) holdersChanged = true
     const owner: ClaudeFileOwner = {
       instance: `cli:${inst.id}`,
       source: 'cli',
-      // A holder history only exists once account-tokens has swept this instance.
-      accountAt: history.length ? (ts) => holderAt(history, ts) : () => now,
+      accountAt: (ts) => holderAt(history, ts),
     }
     roots.push({ dir: join(inst.configDir, 'projects'), owner: () => owner })
+    await yieldLoop()
   }
+  if (holdersChanged) writeHolders(holders)
 
   // The shared store: desktop chats write here. A chat record names the profile and the account (the
   // folder it is filed in); the newest non-archived record wins, as in account-tokens.
   const chats = new Map<string, { rank: string; owner: ClaudeFileOwner }>()
+  let seen = 0
   for (const c of await collectChatsAsync()) {
+    if (++seen % 300 === 0) await yieldLoop()
     if (!c.accountUuid) continue
     const uuid = c.accountUuid.toLowerCase()
     const owner: ClaudeFileOwner = {
@@ -147,7 +197,7 @@ export async function discoverClaudeRoots(): Promise<ClaudeRoot[]> {
     for (const id of lineageIdsOf(c))
       if (rank >= (chats.get(id)?.rank ?? '')) chats.set(id, { rank, owner })
   }
-  const defaultUuid = cliAccountUuid(defaultConfigDir(), true)
+  const defaultUuid = await accountUuidOf(defaultConfigDir())
   const fallback: ClaudeFileOwner = {
     instance: 'default',
     source: 'cli',
@@ -157,14 +207,17 @@ export async function discoverClaudeRoots(): Promise<ClaudeRoot[]> {
   return roots
 }
 
-const climayteFiles = new Map<string, { mtimeMs: number; size: number; ids: string[] }>()
+const climayteFiles = new Map<
+  string,
+  { mtimeMs: number; size: number; runs: { id: string; run: AttemptRun }[] }
+>()
 
-/** Session ids of every CliMayte attempt: in-flight work in workers.json, finished work in done/*.json.
+/** Every CliMayte attempt: in-flight work in workers.json, finished work in done/*.json, by session id.
  *  Each file is parsed again only when its size or mtime moves. */
-export async function climayteSessionIds(
+export async function climayteAttemptRuns(
   corchDir: string = join(POINTER_DIR, 'corch'),
-): Promise<Set<string>> {
-  const out = new Set<string>()
+): Promise<Map<string, AttemptRun[]>> {
+  const out = new Map<string, AttemptRun[]>()
   const paths = [join(corchDir, 'workers.json')]
   try {
     for (const n of await readdir(join(corchDir, 'done')))
@@ -179,20 +232,42 @@ export async function climayteSessionIds(
       let rec = climayteFiles.get(p)
       if (!rec || rec.mtimeMs !== st.mtimeMs || rec.size !== st.size) {
         const parsed = JSON.parse(await readFile(p, 'utf8'))
-        const ids: string[] = []
+        const runs: { id: string; run: AttemptRun }[] = []
         for (const w of Array.isArray(parsed?.workers) ? parsed.workers : [parsed])
           for (const a of Array.isArray(w?.attempts) ? w.attempts : [])
-            if (typeof a?.sessionId === 'string' && a.sessionId) ids.push(a.sessionId)
-        rec = { mtimeMs: st.mtimeMs, size: st.size, ids }
+            if (typeof a?.sessionId === 'string' && a.sessionId)
+              runs.push({
+                id: a.sessionId,
+                run: {
+                  startedAt: typeof a.startedAt === 'number' ? a.startedAt : 0,
+                  configDir:
+                    typeof a.account?.configDir === 'string' && a.account.configDir
+                      ? a.account.configDir
+                      : null,
+                },
+              })
+        rec = { mtimeMs: st.mtimeMs, size: st.size, runs }
         climayteFiles.set(p, rec)
       }
-      for (const id of rec.ids) out.add(id)
+      for (const { id, run } of rec.runs) {
+        const list = out.get(id) ?? []
+        list.push(run)
+        out.set(id, list)
+      }
     } catch {
       // missing or half-written: the next sweep reads it again
     }
   }
   for (const p of climayteFiles.keys()) if (!live.has(p)) climayteFiles.delete(p)
+  for (const list of out.values()) list.sort((x, y) => x.startedAt - y.startedAt)
   return out
+}
+
+/** Session ids of every CliMayte attempt. */
+export async function climayteSessionIds(
+  corchDir: string = join(POINTER_DIR, 'corch'),
+): Promise<Set<string>> {
+  return new Set((await climayteAttemptRuns(corchDir)).keys())
 }
 
 // --- one line -> one event -----------------------------------------------------------------------
@@ -209,6 +284,8 @@ export function claudeLineEvent(
     agent: 'main' | 'subagent'
     owner: ClaudeFileOwner
     source: string
+    /** Who ran the call, when records say: `other` (a copy of the session in another dir ran it), else not. */
+    ran?: (ts: number) => 'self' | 'other' | 'unknown'
     pc: string | null
     priceVer: string
     accountId: (uuid: string | null) => string | null
@@ -253,6 +330,7 @@ interface Candidate {
   session: string
   agent: 'main' | 'subagent'
   owner: ClaudeFileOwner
+  rootDir: string
 }
 
 /** One folder as last listed: its mtime, its subfolders and the transcripts in it that are ours. */
@@ -382,14 +460,30 @@ function makeThrottle(maxBytesPerSec: number) {
   }
 }
 
-/** The sources this ingest writes; HSwarm and the foreign ingest use others. */
-const CLAUDE_SOURCES = ['cli', 'desktop', 'climayte']
+/** Session ids of every transcript that still exists under `roots` (an owner of it is known). */
+async function liveSessionIds(roots: readonly ClaudeRoot[]): Promise<string[]> {
+  const ids = new Set<string>()
+  for (const r of roots) {
+    const known = new Map<string, boolean>()
+    for (const node of (await walkRoot(r.dir, undefined, true)).values())
+      for (const f of node.files) {
+        if (!known.has(f.session)) known.set(f.session, r.owner(f.session) !== null)
+        if (known.get(f.session)) ids.add(f.session)
+      }
+    await yieldLoop()
+  }
+  return [...ids].sort()
+}
 
 /**
- * Once per CLAUDE_INGEST_VERSION: forget Claude's old part so it is read again under the current rules.
- * Drops Claude's usage_hour rows below the raw window, its settled session rows and settled claims, and
- * the cursors under `roots`; the live session ledger is rebuilt from the raw rows that remain. Raw rows,
- * HSwarm rows and the foreign sources are not touched. A sweep after it counts each old call once.
+ * Once per CLAUDE_INGEST_VERSION: forget the part of Claude's old store that the transcripts still on disk give,
+ * so it is read again under the current rules, and keep the rest. settled_part says which session and hour each
+ * settled call went to, so for every session that still has a transcript the part is taken back out of
+ * usage_hour, usage_session_settled and usage_session (the live ledger is re-added from the raw rows), while a
+ * session whose transcript is gone keeps its kept-forever history. Every settled claim and every cursor under
+ * `roots` goes, so the transcripts are read whole. A store that predates settled_part (no `claude_settled_tags`
+ * mark) cannot tell what a gone transcript gave: it is dropped whole, once, as before. Raw rows, HSwarm rows
+ * and the foreign sources are not touched. A sweep after it counts each old call once.
  */
 export async function upgradeClaudeStore(
   store: KitStore,
@@ -402,10 +496,66 @@ export async function upgradeClaudeStore(
   const list = CLAUDE_SOURCES.map((s) => `'${s}'`).join(',')
   const db = store.db
   // On a live-size store every step below is millions of rows, so each is a run of short transactions
-  // with a turn of the event loop between them. The order is the old single transaction's, the version
-  // is written last, and every step can be run again, so a restart half way simply starts over.
+  // with a turn of the event loop between them. The version is written last and every step can be run
+  // again, so a restart half way simply starts over.
   // Fold doomed raw rows first, so nothing below the cut is left half raw, half settled.
   await store.pruneRawAsync(now)
+  const tagged =
+    store.getMeta('claude_settled_tags') === '1' ||
+    !db
+      .query(
+        `select 1 from usage_session_settled where source in (${list}) union all select 1 from settled_claim limit 1`,
+      )
+      .get()
+  if (tagged) await dropTaggedPart(store, roots)
+  else await dropWholePart(store, cut)
+  for (;;) {
+    const n = db
+      .query('delete from settled_claim where h in (select h from settled_claim limit 20000)')
+      .run()
+    if (n.changes === 0) break
+    await yieldLoop()
+  }
+  for (const r of roots) {
+    const drop = db.prepare(
+      'delete from ingest_cursor where path in (select path from ingest_cursor where path >= $a and path < $b limit 1000)',
+    )
+    while (drop.run({ $a: r.dir, $b: `${r.dir}￿` }).changes > 0) await yieldLoop()
+  }
+  store.cursorEpoch++
+  store.setMeta('claude_settled_tags', '1')
+  store.setMeta('claude_ingest_version', String(CLAUDE_INGEST_VERSION))
+}
+
+/** The live ledger again from the raw rows `where` selects, a slice of time at a time. */
+async function readdLedger(store: KitStore, where: string): Promise<void> {
+  const db = store.db
+  const list = CLAUDE_SOURCES.map((s) => `'${s}'`).join(',')
+  const ts = (dir: 'asc' | 'desc') =>
+    (
+      db.query(`select ts from usage_event order by ts ${dir} limit 1`).get() as {
+        ts: number
+      } | null
+    )?.ts
+  const lo = ts('asc')
+  const hi = ts('desc')
+  if (lo == null || hi == null) return
+  const add = db.prepare(
+    sessionAddSql(
+      'usage_session',
+      sessionAggSql(`source in (${list}) and ${where} and ts >= $a and ts < $b`),
+    ),
+  )
+  for (const _ of eventSlices(db, lo, hi + 1, (a, b) => {
+    add.run({ $a: a, $b: b })
+  }))
+    await yieldLoop()
+}
+
+/** The legacy upgrade: every Claude row below the raw window, settled or live, goes; the ledger is rebuilt from raw. */
+async function dropWholePart(store: KitStore, cut: number): Promise<void> {
+  const db = store.db
+  const list = CLAUDE_SOURCES.map((s) => `'${s}'`).join(',')
   const oldest = db.query('select min(hour) as h from usage_hour').get() as { h: number | null }
   if (oldest.h !== null) {
     const drop = db.prepare(
@@ -439,39 +589,49 @@ export async function upgradeClaudeStore(
     db.query(`delete from ${table} where session = '' and source in (${list})`).run()
     await yieldLoop()
   }
-  // The live session ledger again, from the raw rows that remain (added a slice of time at a time).
-  const ts = (dir: 'asc' | 'desc') =>
-    (
-      db.query(`select ts from usage_event order by ts ${dir} limit 1`).get() as {
-        ts: number
-      } | null
-    )?.ts
-  const lo = ts('asc')
-  const hi = ts('desc')
-  if (lo != null && hi != null) {
-    const add = db.prepare(
-      sessionAddSql('usage_session', sessionAggSql(`source in (${list}) and ts >= $a and ts < $b`)),
-    )
-    for (const _ of eventSlices(db, lo, hi + 1, (a, b) => {
-      add.run({ $a: a, $b: b })
-    }))
-      await yieldLoop()
-  }
-  for (;;) {
-    const n = db
-      .query('delete from settled_claim where h in (select h from settled_claim limit 20000)')
-      .run()
-    if (n.changes === 0) break
+  // Nothing says what the old settled calls were; the re-read tags them again.
+  db.exec('drop table if exists settled_part')
+  ensureSettledPart(db)
+  await readdLedger(store, '1')
+}
+
+/** The tagged upgrade: only the sessions whose transcript still exists are taken back, from their settled_part. */
+async function dropTaggedPart(store: KitStore, roots: readonly ClaudeRoot[]): Promise<void> {
+  const db = store.db
+  const list = CLAUDE_SOURCES.map((s) => `'${s}'`).join(',')
+  const sessions = await liveSessionIds(roots)
+  const subtract = subtractFromHour(db)
+  const ids = '(select value from json_each($ids))'
+  const parts = db.prepare(`select * from settled_part where session in ${ids}`)
+  const dropPart = db.prepare(`delete from settled_part where session in ${ids}`)
+  const dropSettled = db.prepare(
+    `delete from usage_session_settled where session in ${ids} and source in (${list})`,
+  )
+  const dropLive = db.prepare(
+    `delete from usage_session where session in ${ids} and source in (${list})`,
+  )
+  for (let i = 0; i < sessions.length; i += TAKE_BACK_PAGE) {
+    const $ids = JSON.stringify(sessions.slice(i, i + TAKE_BACK_PAGE))
+    db.transaction(() => {
+      for (const row of parts.all({ $ids }) as Record<string, unknown>[]) subtract(row)
+      dropPart.run({ $ids })
+      dropSettled.run({ $ids })
+      dropLive.run({ $ids })
+    })()
     await yieldLoop()
   }
-  for (const r of roots) {
-    const drop = db.prepare(
-      'delete from ingest_cursor where path in (select path from ingest_cursor where path >= $a and path < $b limit 1000)',
-    )
-    while (drop.run({ $a: r.dir, $b: `${r.dir}￿` }).changes > 0) await yieldLoop()
+  // Their live ledger again, from the raw rows that remain.
+  db.exec('drop table if exists temp.upgrade_sessions')
+  db.exec('create temp table upgrade_sessions (session text primary key) without rowid')
+  const put = db.prepare('insert or ignore into temp.upgrade_sessions values (?)')
+  for (let i = 0; i < sessions.length; i += 500) {
+    db.transaction(() => {
+      for (const s of sessions.slice(i, i + 500)) put.run(s)
+    })()
+    await yieldLoop()
   }
-  store.cursorEpoch++
-  store.setMeta('claude_ingest_version', String(CLAUDE_INGEST_VERSION))
+  await readdLedger(store, "coalesce(session, '') in (select session from temp.upgrade_sessions)")
+  db.exec('drop table if exists temp.upgrade_sessions')
 }
 
 /** One sweep over every root. Only bytes that arrived since the last sweep are read. */
@@ -484,7 +644,10 @@ export async function ingestClaude(
   const now = opts.now ?? Date.now()
   const fullPass = opts.fullPass ?? true
   const pc = opts.pc ?? null
-  const climayte = opts.climayte ?? new Set<string>()
+  const attempts = opts.attempts ?? new Map<string, readonly AttemptRun[]>()
+  const climayte = opts.climayte ?? new Set<string>(attempts.keys())
+  const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p))
+  const rootDirs = new Set(roots.map((r) => norm(r.dir)))
   const throttle = makeThrottle(opts.maxBytesPerSec ?? DEFAULT_MAX_BYTES_PER_SEC)
   const priceVer = pricesAsOf()
   const rawCutoff = hourStart(now - RAW_RETENTION_DAYS * DAY_MS)
@@ -520,10 +683,13 @@ export async function ingestClaude(
         const cur = cursors.get(f.path)
         if (cur && cur.version === CLAUDE_INGEST_VERSION && cur.mtime < now - QUIET_MS && !fullPass)
           sum.unchanged++
-        else todo.push({ ...f, owner })
+        else todo.push({ ...f, owner, rootDir: root.dir })
       }
     }
   }
+  const runDir = (run: AttemptRun | undefined) =>
+    run?.configDir ? norm(join(run.configDir, 'projects')) : null
+  const ranFirstIn = (c: Candidate) => runDir(attempts.get(c.session)?.[0]) === norm(c.rootDir)
   let next = 0
   await Promise.all(
     Array.from({ length: STAT_WORKERS }, async () => {
@@ -543,7 +709,13 @@ export async function ingestClaude(
       if (same) sum.unchanged++
       return !same
     })
-    .sort((a, b) => (stats.get(a.path)?.mtimeMs ?? 0) - (stats.get(b.path)?.mtimeMs ?? 0))
+    .sort(
+      (a, b) =>
+        (stats.get(a.path)?.mtimeMs ?? 0) - (stats.get(b.path)?.mtimeMs ?? 0) ||
+        // equal mtimes (a copy keeps the original's): the dir the session first ran in goes first, then by path
+        Number(ranFirstIn(b)) - Number(ranFirstIn(a)) ||
+        (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
+    )
 
   // 2. Read them, oldest first.
   for (const c of work) {
@@ -559,6 +731,17 @@ export async function ingestClaude(
       agent: c.agent,
       owner: c.owner,
       source: climayte.has(c.session) ? 'climayte' : c.owner.source,
+      ran: attempts.get(c.session)
+        ? (ts: number) => {
+            // the attempt that was running at `ts` is the latest one started by then
+            let run: AttemptRun | undefined
+            for (const r of attempts.get(c.session) ?? []) if (r.startedAt <= ts) run = r
+            const dir = runDir(run)
+            if (!dir) return 'unknown' as const
+            if (dir === norm(c.rootDir)) return 'self' as const
+            return rootDirs.has(dir) ? ('other' as const) : ('unknown' as const)
+          }
+        : undefined,
       pc,
       priceVer,
       accountId,
@@ -601,10 +784,14 @@ async function readFileInto(
     // dirs under the same ids, and only the first dir's account ran them. The first to claim an id keeps
     // it; the same instance and session writing it again replaces it (last write wins).
     const owner = store.db.prepare('select instance, session from usage_event where id = ?')
+    // The exception: a call the CliMayte records say THIS dir's attempt ran replaces the other copy's row.
+    const ran = new Set<string>()
     const unclaimed = (evs: UsageEventInput[]) =>
       evs.filter((e) => {
         const have = owner.get(e.id) as { instance: string | null; session: string | null } | null
-        return !have || (have.instance === e.instance && have.session === e.session)
+        return (
+          !have || ran.has(e.id) || (have.instance === e.instance && have.session === e.session)
+        )
       })
     // A commit is a run of short transactions (a flush of 64 MB is some 100k calls), the cursor last: a
     // run cut short re-reads the file from the old cursor, and both writes tolerate seeing a call twice
@@ -646,7 +833,11 @@ async function readFileInto(
       } else {
         for (const line of data.toString('utf8', 0, nl).split('\n')) {
           const ev = claudeLineEvent(line, st.mtimeMs, ctx)
-          if (ev) (ev.ts >= rawCutoff ? raw : old).set(ev.id, ev)
+          if (!ev) continue
+          const who = ctx.ran?.(ev.ts)
+          if (who === 'other') continue // a copy of the session in another dir ran this call
+          if (who === 'self') ran.add(ev.id)
+          ;(ev.ts >= rawCutoff ? raw : old).set(ev.id, ev)
         }
         carry = Buffer.from(data.subarray(nl + 1))
       }

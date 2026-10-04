@@ -6,7 +6,7 @@
 import { hostname } from 'node:os'
 import {
   type ClaudeIngestSummary,
-  climayteSessionIds,
+  climayteAttemptRuns,
   discoverClaudeRoots,
   ingestClaude,
 } from './ingest-claude'
@@ -58,7 +58,7 @@ async function sweepOnce(store: KitStore): Promise<string> {
   await guarded('claude', async () => {
     const s: ClaudeIngestSummary = await ingestClaude(store, await discoverClaudeRoots(), {
       pc,
-      climayte: await climayteSessionIds(),
+      attempts: await climayteAttemptRuns(),
       fullPass: sweepNo % FULL_PASS_EVERY === 1,
     })
     return `claude files=${s.files} unchanged=${s.unchanged} bytes=${s.bytes} events=${s.events} old=${s.hourly}`

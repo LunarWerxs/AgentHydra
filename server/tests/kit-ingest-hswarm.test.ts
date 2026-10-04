@@ -189,4 +189,30 @@ describe('HSwarm ledger ingest', () => {
     expect(kitTotals(store, 0).calls).toBe(10)
     store.close()
   })
+
+  test('an archive written before the live file was replaced does not count its month twice', async () => {
+    const path = join(root, 'pending.jsonl')
+    const month = (ms: number) => iso(ms).slice(0, 7).replace('-', '')
+    const lastMonth = new Date(NOW)
+    lastMonth.setUTCDate(1)
+    lastMonth.setUTCMonth(lastMonth.getUTCMonth() - 1)
+    const old = [
+      line('t1', { ts: iso(lastMonth.getTime()) }),
+      line('t2', { ts: iso(lastMonth.getTime() + 1000) }),
+    ]
+    const fresh = line('t3')
+    writeFileSync(path, jl([...old, fresh]))
+    const store = new KitStore(':memory:')
+    expect(await ingestHswarm(store, path)).toBe(3)
+
+    // Rotation: the archive exists, the swap of the live file failed, so the live file still holds the moved lines.
+    writeFileSync(join(root, `pending-${month(lastMonth.getTime())}.jsonl.gz`), gzipSync(jl(old)))
+    await ingestHswarm(store, path)
+    expect(kitTotals(store, 0).calls).toBe(3)
+
+    writeFileSync(path, jl([fresh])) // the swap goes through later
+    await ingestHswarm(store, path)
+    expect(kitTotals(store, 0).calls).toBe(3)
+    store.close()
+  })
 })

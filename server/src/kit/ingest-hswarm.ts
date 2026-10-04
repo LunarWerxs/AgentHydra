@@ -90,6 +90,12 @@ export function ledgerEvent(
 
 const ARCHIVE = /^(.+)-(\d{6})\.jsonl\.gz$/
 
+/** The UTC month (YYYYMM) HSwarm files a line under (ledgerstore.month_of); null for a line without a usable ts. */
+const lineMonth = (r: LedgerLine): string | null => {
+  const ts = typeof r.ts === 'string' ? Date.parse(r.ts) : Number.NaN
+  return Number.isFinite(ts) ? new Date(ts).toISOString().slice(0, 7).replace('-', '') : null
+}
+
 /** The month archives beside the live ledger (hswarm/ledgerstore.py), oldest month first. */
 export function hswarmArchivePaths(path: string = hswarmLedgerPath()): string[] {
   const live = basename(path)
@@ -122,6 +128,9 @@ export async function ingestHswarm(
   opts: { pc?: string | null } = {},
 ): Promise<number | null> {
   const seen = new Map<string, number>()
+  const archived = new Set(
+    hswarmArchivePaths(path).map((p) => ARCHIVE.exec(basename(p))?.[2] ?? ''),
+  )
   let written = 0
   let changed = false
   let archivesRead = false
@@ -142,7 +151,7 @@ export async function ingestHswarm(
     } catch {
       continue // unreadable now (being replaced); the cursor is not set, so the next sweep reads it
     }
-    const r = await consume(store, data, 0, seen, opts.pc ?? null)
+    const r = await consume(store, data, 0, seen, opts.pc ?? null, null)
     written += r.written
     store.setCursor({
       path: ap,
@@ -187,7 +196,7 @@ export async function ingestHswarm(
       if (n === 0) break
       pos += n
       const data = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n)
-      const r = await consume(store, data, offset, seen, opts.pc ?? null)
+      const r = await consume(store, data, offset, seen, opts.pc ?? null, archived)
       written += r.written
       end += r.consumed
       carry = Buffer.from(data.subarray(r.consumed)) // a line still being written waits for the next sweep
@@ -206,6 +215,7 @@ async function consume(
   offset: number,
   seen: Map<string, number>,
   pc: string | null,
+  skipMonths: Set<string> | null,
 ): Promise<{ written: number; consumed: number }> {
   const lastAttempt = store.db.prepare(
     'select count(*) as n from usage_event where id >= $lo and id < $hi',
@@ -248,6 +258,9 @@ async function consume(
     }
     if (!r || typeof r !== 'object' || r.cached) continue
     if (r.job == null || r.task == null) continue
+    // A month with an archive is final there: a live line of it is a rotation whose file swap has not gone
+    // through yet (the archive is written first). Reading it too would give it a second ordinal, a second id.
+    if (skipMonths?.size && skipMonths.has(lineMonth(r) ?? '')) continue
     const ev = ledgerEvent(r, nextAttempt(r), pc)
     if (ev) batch.push(ev)
     if (batch.length >= BATCH) await flush()

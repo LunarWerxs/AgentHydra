@@ -17,6 +17,7 @@ import {
   sessionAddSql,
   sessionAggSql,
 } from './schema'
+import { ensureSettledPart, tagRawRange, tagSettledCalls } from './settled-part'
 
 export const RAW_RETENTION_DAYS = 35
 const HOUR_MS = 3_600_000
@@ -233,6 +234,7 @@ export class KitStore {
     if (path !== ':memory:') this.db.exec('pragma journal_mode = WAL')
     this.db.exec('pragma synchronous = NORMAL')
     migrateKitSchema(this.db)
+    ensureSettledPart(this.db)
     this.upsertStmt = this.prepareUpsert()
     if (path !== ':memory:') OPEN_STORES.add(this)
   }
@@ -465,6 +467,7 @@ export class KitStore {
       )
       this.addToHourly(fresh)
       this.addToSessions(fresh)
+      tagSettledCalls(this.db, fresh) // so a version upgrade can take back what a transcript still on disk gave
     })()
     return fresh.length
   }
@@ -743,6 +746,7 @@ export class KitStore {
       (a, b) => {
         this.db.transaction(() => {
           fold.run({ $a: a, $b: b })
+          tagRawRange(this.db, a, b)
           deleted += drop.run({ $a: a, $b: b }).changes
           const reached = hourStart(b - 1) + HOUR_MS
           this.setMeta('raw_cut', String(Math.max(reached, this.rawCut() ?? reached)))
@@ -773,9 +777,11 @@ export class KitStore {
    * file). Pass a price version to record the one the rebuild will use.
    */
   dropAndRebuild(priceVer?: string): void {
+    this.db.exec('drop table if exists settled_part')
     dropKitSchema(this.db)
     this.cursorEpoch++
     migrateKitSchema(this.db)
+    ensureSettledPart(this.db)
     if (priceVer !== undefined) this.setMeta('price_ver', priceVer)
   }
 }

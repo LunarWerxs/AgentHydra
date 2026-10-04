@@ -150,6 +150,70 @@ async function flush(store: KitStore, events: UsageEventInput[]): Promise<void> 
   await store.upsertEventsAsync(events)
 }
 
+// An OpenCode or Hermes event is a session's running TOTAL, rewritten by id on every change. Once its row is
+// older than the raw window the prune folds it into the rollups and deletes it, so a session that resumes would
+// write its full total again on top of what is settled. Per cumulative id the total last written is kept in
+// meta (`cum:`), and a row that is gone since then moves it to the base (`cumbase:`): the new row holds only
+// what came after it.
+const CUM_FIELDS = [
+  'input',
+  'output',
+  'cache_read',
+  'cache_write_5m',
+  'reasoning',
+  'list_usd',
+  'billed_usd',
+  'weighted',
+] as const
+type CumField = (typeof CUM_FIELDS)[number]
+type CumTotals = Partial<Record<CumField, number | null>>
+const CUM_SLICE = 500
+
+const parseTotals = (v: string | null): CumTotals | null => {
+  if (v === null) return null
+  try {
+    return JSON.parse(v) as CumTotals
+  } catch {
+    return null
+  }
+}
+
+/** Writes cumulative events as the part of each total that is not settled already (see above). */
+async function flushCumulative(store: KitStore, events: UsageEventInput[]): Promise<void> {
+  const exists = store.db.prepare('select 1 from usage_event where id = ?')
+  for (let i = 0; i < events.length; i += CUM_SLICE) {
+    const out: UsageEventInput[] = []
+    const metas: [string, string][] = []
+    for (const ev of events.slice(i, i + CUM_SLICE)) {
+      const total: CumTotals = {}
+      for (const f of CUM_FIELDS) total[f] = ev[f] ?? null
+      let base = parseTotals(store.getMeta(`cumbase:${ev.id}`))
+      const written = parseTotals(store.getMeta(`cum:${ev.id}`))
+      if (written && !exists.get(ev.id)) {
+        base = written // the row was pruned into the rollups with exactly this total
+        metas.push([`cumbase:${ev.id}`, JSON.stringify(written)])
+      }
+      metas.push([`cum:${ev.id}`, JSON.stringify(total)])
+      if (!base) {
+        out.push(ev)
+        continue
+      }
+      const delta: UsageEventInput = { ...ev }
+      for (const f of CUM_FIELDS) {
+        const b = base[f]
+        const t = total[f]
+        if (typeof b !== 'number' || typeof t !== 'number') continue
+        delta[f] = Math.max(0, t - b)
+      }
+      out.push(delta)
+    }
+    await store.upsertEventsAsync(out)
+    store.db.transaction(() => {
+      for (const [k, v] of metas) store.setMeta(k, v)
+    })()
+  }
+}
+
 const cursorUnchanged = (
   c: ReturnType<KitStore['getCursor']>,
   size: number,
@@ -589,7 +653,7 @@ async function ingestOpenCode(
       weighted: m.weighted,
     })
   }
-  await flush(store, events)
+  await flushCumulative(store, events)
   store.setCursor({ path: o.dbPath, ...stamp, offset: newest, version: FOREIGN_INGEST_VERSION })
   return events.length
 }
@@ -647,7 +711,7 @@ async function ingestHermes(
       })
     }
   }
-  await flush(store, events)
+  await flushCumulative(store, events)
   store.setCursor({ path: h.dbPath, ...stamp, offset: newest, version: FOREIGN_INGEST_VERSION })
   return events.length
 }

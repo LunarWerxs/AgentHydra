@@ -123,7 +123,7 @@ export function readHolders(): Holders {
   }
 }
 
-function writeHolders(holders: Holders): void {
+export function writeHolders(holders: Holders): void {
   try {
     const dir = appDataDir()
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
@@ -141,8 +141,16 @@ function writeHolders(holders: Holders): void {
 export function cliAccountUuid(configDir: string, loggedIn: boolean): string | null {
   if (!loggedIn) return null // logging out removes the credentials but leaves oauthAccount behind
   try {
-    const uuid = JSON.parse(readFileSync(join(configDir, '.claude.json'), 'utf8'))?.oauthAccount
-      ?.accountUuid
+    return accountUuidOfClaudeJson(readFileSync(join(configDir, '.claude.json'), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/** The account uuid a `.claude.json` names (its oauthAccount), null when absent or unreadable. */
+export function accountUuidOfClaudeJson(text: string): string | null {
+  try {
+    const uuid = JSON.parse(text)?.oauthAccount?.accountUuid
     return typeof uuid === 'string' && UUID.test(uuid) ? uuid.toLowerCase() : null
   } catch {
     return null
