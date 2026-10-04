@@ -15,6 +15,7 @@ import { ingestLegacy } from './ingest-legacy'
 import { machineId } from './machine'
 import { sharedKitStore } from './query'
 import type { KitStore } from './store'
+import { runKitSync } from './sync'
 
 export { machineId }
 
@@ -68,6 +69,17 @@ async function sweepOnce(store: KitStore): Promise<string> {
     const n = (await ingestHswarm(store, hswarmLedgerPath(), { pc })) ?? 0
     await store.rollupAsync()
     return `hswarm events=${n}`
+  })
+  // Other PCs' usage: at most every 15 minutes, a no-op that says so when HSWARM_SYNC_REPO is unset.
+  await guarded('sync', async () => {
+    const r = await runKitSync(store, { pc })
+    if (!r) return 'sync waits'
+    if (!r.on) return r.notes[0] ?? 'sync is off'
+    return `sync exported=${r.exported} imported=${
+      Object.entries(r.imported)
+        .map(([k, v]) => `${k}:${v}`)
+        .join(',') || 0
+    } pushed=${r.pushed}${r.notes.length ? ` notes=${r.notes.join('; ')}` : ''}`
   })
   await guarded('maintenance', async () => {
     const m = await store.runMaintenanceAsync()

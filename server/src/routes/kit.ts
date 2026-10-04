@@ -106,3 +106,15 @@ app.get('/api/kit/usage', (c) => {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
   }
 })
+
+// Cross-PC usage on demand (kit/sync.ts); the sweep runs the same pass every 15 minutes.
+app.post('/api/kit/sync', async (c) => {
+  try {
+    const { sharedKitStore } = await import('../kit/query')
+    const { runKitSync } = await import('../kit/sync')
+    const report = await runKitSync(sharedKitStore(), { force: true })
+    return c.json(report)
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+  }
+})

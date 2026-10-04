@@ -22,7 +22,8 @@ const NEVER = 8.64e15
 /**
  * Token sums per account from each account's own start to now, in one statement: whole hours from
  * the hourly rollup (every hour below the first stale one), raw rows only for the partial hour at
- * the start and for the stale tail. `starts` maps account to start; 0 reads all time.
+ * the start and for the stale tail. Other PCs' imported hours (kit/sync.ts) have no raw rows here, so their
+ * stale-tail hours are read from the rollup too. `starts` maps account to start; 0 reads all time.
  */
 function windowSums(
   db: Database,
@@ -41,8 +42,15 @@ function windowSums(
         union all
         select e.account, e.input, e.output, e.cache_read, e.cache_write_5m + e.cache_write_1h
           from w join usage_event e on e.account = w.account and e.ts >= max(w.fc, ?)
+        union all
+        select h.account, h.input, h.output, h.cache_read, h.cache_write_5m + h.cache_write_1h
+          from w join usage_hour h on h.account = w.account and h.hour >= max(w.fc, ?)
+            and h.pc in (select pc from imported_pc)
       ) group by account`
-  const res = db.query(sql).all(...rows.flat(), split, split) as Record<string, string | number>[]
+  const res = db.query(sql).all(...rows.flat(), split, split, split) as Record<
+    string,
+    string | number
+  >[]
   const out = new Map<string, TokenParts>()
   for (const r of res) {
     const input = Number(r.input)

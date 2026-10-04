@@ -22,6 +22,16 @@ import {
 } from './schema'
 import { ensureSettledPart, tagRawRange, tagSettledCalls } from './settled-part'
 
+/**
+ * The PCs whose usage_hour rows were imported from a shard (kit/sync.ts), not rolled up from this store's
+ * usage_event. The rollup and the backfill leave their rows alone: there is no raw row behind them to rebuild
+ * from, so a rollup would delete them. `sig` is the hash of the shard last imported ('' while one is half done).
+ */
+export const IMPORTED_PC_DDL = `create table if not exists imported_pc (
+  pc text primary key, sig text not null default '', rows integer not null default 0, at integer not null default 0
+) without rowid`
+const NOT_IMPORTED = 'pc not in (select pc from imported_pc)'
+
 export const RAW_RETENTION_DAYS = 35
 const HOUR_MS = 3_600_000
 const DAY_MS = 86_400_000
@@ -252,6 +262,7 @@ export class KitStore {
     this.db.exec('pragma cache_size = -65536')
     migrateKitSchema(this.db)
     ensureSettledPart(this.db)
+    this.db.exec(IMPORTED_PC_DDL)
     this.openNow = opts.now
     this.initRawCut(this.openNow)
     this.upsertStmt = this.prepareUpsert()
@@ -301,6 +312,9 @@ export class KitStore {
     if (this.path === ':memory:' || this.ckptOff || this.ckptBusy) return
     const now = Date.now()
     if (now - this.ckptAt < CHECKPOINT_EVERY_MS) return
+    // The first turn of a run only starts the clock: a short run (an import, a small ingest) ends before a
+    // checkpoint is worth its disk contention, which stalls the writer's next commit by 150-300 ms.
+    const first = this.ckptAt === 0
     this.ckptAt = now
     try {
       if (!this.ckptWorker) {
@@ -315,6 +329,7 @@ export class KitStore {
         this.ckptWorker.unref()
         this.db.exec('pragma wal_autocheckpoint = 0')
       }
+      if (first) return
       this.ckptBusy = true
       this.ckptWorker.postMessage({ path: this.path })
     } catch {
@@ -729,7 +744,9 @@ export class KitStore {
     noData.run({ $a: from, $b: Math.min(hourStart(edge.lo), to) })
     const hi = Math.min(hourStart(edge.hi) + HOUR_MS, to)
     // An hour's row is deleted by the slice its first millisecond falls in; every slice of the hour adds.
-    const del = this.db.prepare('delete from usage_hour where hour >= $a and hour < $b')
+    const del = this.db.prepare(
+      `delete from usage_hour where hour >= $a and hour < $b and ${NOT_IMPORTED}`,
+    )
     const cols = KIT_MEASURES.map((m) => m)
     const nullable = new Set(['list_usd', 'billed_usd', 'seconds'])
     const ins = this.db.prepare(
@@ -900,7 +917,9 @@ export class KitStore {
         hi: number | null
       }
       if (edge.lo !== null && edge.hi !== null) {
-        const upd = this.db.prepare(`update usage_hour set ${from} where hour >= $a and hour < $b`)
+        const upd = this.db.prepare(
+          `update usage_hour set ${from} where hour >= $a and hour < $b and ${NOT_IMPORTED}`,
+        )
         yield* hourSlices(edge.lo, Math.min(floor, edge.hi + HOUR_MS), (a, b) => {
           upd.run({ $a: a, $b: b })
         })
@@ -955,10 +974,12 @@ export class KitStore {
    */
   dropAndRebuild(priceVer?: string): void {
     this.db.exec('drop table if exists settled_part')
+    this.db.exec('drop table if exists imported_pc')
     dropKitSchema(this.db)
     this.cursorEpoch++
     migrateKitSchema(this.db)
     ensureSettledPart(this.db)
+    this.db.exec(IMPORTED_PC_DDL)
     this.initRawCut(this.openNow)
     if (priceVer !== undefined) this.setMeta('price_ver', priceVer)
   }
