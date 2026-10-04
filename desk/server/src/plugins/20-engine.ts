@@ -132,9 +132,14 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     answer(c, async () => {
       // The Desk file answers at once; the worker's live JSONL is read behind it and its new items come over /ws.
       void manager.syncWorkers(c.req.param('id'))
-      return manager.listItems(c.req.param('id'))
+      const from = Date.now()
+      const items = manager.listItems(c.req.param('id'))
+      manager.timings.span({ stage: 'chat_open', ms: Date.now() - from, chatId: c.req.param('id'), n: items.length })
+      return items
     }),
   )
+  // The warm start (SPEC "Speed (timings)"): the window asks when the owner begins typing in a closed chat.
+  app.post('/api/chats/:id/warm', (c) => answer(c, () => manager.warm(c.req.param('id'))))
   // The chat's whole record, oldest first, for other programs: JSON items, or one per line with ?format=jsonl.
   app.get('/api/chats/:id/transcript', async (c) => {
     const id = c.req.param('id')

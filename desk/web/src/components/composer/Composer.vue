@@ -55,6 +55,8 @@ import {
 } from './logic'
 import { dataUrlToFile, parseCopiedImages } from '@/lib/clipboard-images'
 import { holdFocus } from '@/lib/hold-focus'
+import { warmChat } from '@/lib/timing'
+import { isExternalChatId } from '@/components/external/logic'
 import { draftImages, draftImagesReady, saveDraftImages, type DraftImage } from './draft-images'
 import { HEADER, ITEM, MENU, MENU_GLYPH, SEPARATOR, SHORTCUT, SUB_TRIGGER, TOOL_ICON, TOOL_VALUE } from './menu'
 import SendSplit from './SendSplit.vue'
@@ -427,6 +429,9 @@ watch(text, (t) => {
     syncCaret()
   })
   if (props.demo) return
+  // The warm start: typing in a closed SDK chat starts its process now, so its start and hooks are over by Send.
+  const c = props.chat
+  if (c && t.trim() && c.status === 'closed' && c.workerId === undefined && !isExternalChatId(c.id) && document.activeElement === textarea.value) warmChat(c.id)
   if (draftTimer) clearTimeout(draftTimer)
   const s = slot.value
   draftTimer = setTimeout(() => saveDraft(storage, s, t), 250)

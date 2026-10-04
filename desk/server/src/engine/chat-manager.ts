@@ -51,6 +51,7 @@ import { SessionMetaStore } from './session-meta'
 import { ChatStore } from './store'
 import { classifyFailure, FailureLedger, type FailureInput } from './failures'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
+import { Timings } from './timings'
 
 export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalItems' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
@@ -206,6 +207,8 @@ export class ChatManager {
   readonly sessionMeta: SessionMetaStore
   /** Every failure, appended as it happens (SPEC "Failure ledger"). */
   readonly failures: FailureLedger
+  /** How long every stage took (SPEC "Speed (timings)"). */
+  readonly timings: Timings
   private readonly chats = new Map<string, Entry>()
   private readonly emitEvent: (event: ServerEvent) => void
   private readonly settingsOf: () => DeskSettings
@@ -224,6 +227,7 @@ export class ChatManager {
   constructor(o: ChatManagerOptions) {
     this.store = new ChatStore(o.home, { debounceMs: o.storeDebounceMs })
     this.failures = new FailureLedger(o.home, o.now)
+    this.timings = Timings.for(o.home, o.now)
     this.sessionMeta = new SessionMetaStore(o.home)
     this.emitEvent = o.emit
     this.settingsOf = o.settings
@@ -438,10 +442,13 @@ export class ChatManager {
     const first = e.chat.title
     void (async () => {
       let title: string | null = null
+      const from = this.now()
       try {
         title = await gen({ prompt, cwd: e.chat.cwd, configDir: e.chat.account.configDir })
       } catch {
         return
+      } finally {
+        this.timings.span({ stage: 'title', ms: this.now() - from, chatId: e.chat.id, ok: !!title })
       }
       const chat = e.chat
       if (!title || e.titled || chat.title !== first || this.chats.get(chat.id) !== e) return
@@ -461,7 +468,22 @@ export class ChatManager {
     }
     if (opts.onlyIfReady && busy(e.chat)) throw new ChatBusyError()
     e.moved = undefined // a new message starts its own tries
+    this.timings.sdkSent(e.chat, e.runtime?.running === true)
     return this.runtimeOf(e).send(text, images?.length ? images : undefined, opts.messageId)
+  }
+
+  /**
+   * The warm start (SPEC "Speed (timings)"): the owner began typing in a closed SDK chat, so its process starts
+   * now and its start, hooks and MCP servers are over by the time the message is sent. A chat that is running,
+   * a worker's, or one whose session cannot resume is left as it is.
+   */
+  warm(id: string): { started: boolean } {
+    const e = this.entry(id)
+    if (e.chat.workerId !== undefined || e.runtime?.running || e.chat.archived) return { started: false }
+    if (this.seedResume(e)) return { started: false }
+    const started = this.runtimeOf(e).warm()
+    if (started) this.timings.sdkWarmed(id)
+    return { started }
   }
 
   /**
@@ -483,6 +505,7 @@ export class ChatManager {
     const standIn: UserItem = { kind: 'user', id: `desk-sent:${ts}:${randomUUID()}`, ts, text, ...(shown ? { images: shown } : {}), ...(queued ? { queued } : {}) }
     ;(e.sent ??= []).push(standIn)
     this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: standIn })
+    const sentAt = this.now()
     try {
       if (chat.workerId) {
         // The chat moved folders (cwd-move): the worker's next launch resumes its session there.
@@ -509,6 +532,7 @@ export class ChatManager {
       throw new ChatError(502,`CliMayte did not take the message: ${err instanceof Error ? err.message : String(err)}`)
     }
     if (this.chats.get(chat.id) !== e) return { queued }
+    this.timings.workerSent(chat, this.now() - sentAt)
     e.workerLive = true
     if (!queued) {
       chat.status = 'starting'
@@ -762,12 +786,14 @@ export class ChatManager {
   private async syncWorkersNow(only?: string): Promise<void> {
     const entries = [...this.chats.values()].filter((e) => e.chat.workerId && (only ? e.chat.id === only : e.workerLive !== false))
     if (!entries.length) return
+    const from = this.now()
     const raw = await this.bridge.workersByIds(entries.map((e) => e.chat.workerId as string))
     const byId = new Map(raw.map((w) => [w.id, w]))
     for (const e of entries) {
       const w = byId.get(e.chat.workerId as string)
       if (w && this.chats.get(e.chat.id) === e) await this.applyWorker(e, w)
     }
+    this.timings.poll(this.now() - from)
   }
 
   /** The chat as its worker stands: status, account (a move is said in the transcript), model, transcript. */
@@ -778,6 +804,7 @@ export class ChatManager {
     if (w.accountId && w.accountId !== chat.account.id) {
       const from = chat.account.id === CLIMAYTE_ACCOUNT.id ? null : chat.account
       chat.account = workerAccount(w)
+      if (from) this.timings.workerMoved(chat, `${accountName(from)}>${accountName(chat.account)}`)
       if (from && e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
       if (from) this.systemLine(chat.id, 'moved', 'info', `CliMayte moved this chat from ${from.label} to ${chat.account.label}.`)
     }
@@ -801,9 +828,11 @@ export class ChatManager {
     if (this.chats.get(chat.id) !== e) return
     e.readAccount = w.accountId
     const emitted = e.emitted!
+    let newReply = false
     for (const item of items) {
       const sig = JSON.stringify(item)
       if (emitted.get(item.id) === sig) continue
+      if (!emitted.has(item.id) && (item.kind === 'assistant_text' || item.kind === 'thinking' || item.kind === 'tool_use')) newReply = true
       emitted.set(item.id, sig)
       if (item.kind === 'user' && e.sent?.length) {
         const i = standInFor(e.sent, item)
@@ -813,6 +842,7 @@ export class ChatManager {
       this.emitEvent({ type: 'item.upsert', chatId: chat.id, item })
       this.noteTask(e, item)
     }
+    this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive, newReply, ok: next.status !== 'error' })
     if (!e.workerLive) this.clearTasks(e)
     // The worker cd'd out of the chat's folder: the sidebar follows (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
     if (w.sessionId && e.cwdAt !== w.updatedAt) {
@@ -933,8 +963,10 @@ export class ChatManager {
         const q = this.queryImpl(params)
         const cur = this.chats.get(chatId)
         if (cur) cur.query = q
+        this.timings.sdkStarted(e.chat, q, { attach: !!params.attach })
         return q
       },
+      onMessage: (msg) => this.timings.sdkMessage(e.chat, msg),
       env: this.env,
       settings: this.settingsOf,
       agentHydraMcp: this.agentHydraMcp,
@@ -943,6 +975,7 @@ export class ChatManager {
       onClosed: () => {
         const cur = this.chats.get(chatId)
         if (cur) cur.query = null
+        this.timings.sdkClosed(chatId)
       },
       forkAt: () => this.chats.get(chatId)?.forkAt ?? null,
       onTurnEnd: () => this.checkMoved(chatId),

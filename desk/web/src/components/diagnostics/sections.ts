@@ -3,6 +3,7 @@
 // that loads its own data through usePaneApi().diagnostics(name, params) and draws it.
 import type { Component } from 'vue'
 import FailuresSection from './FailuresSection.vue'
+import SpeedSection from './SpeedSection.vue'
 
 export interface DiagnosticsSection {
   id: string
@@ -10,7 +11,10 @@ export interface DiagnosticsSection {
   component: Component
 }
 
-export const DIAGNOSTICS_SECTIONS: DiagnosticsSection[] = [{ id: 'failures', label: 'Failures', component: FailuresSection }]
+export const DIAGNOSTICS_SECTIONS: DiagnosticsSection[] = [
+  { id: 'failures', label: 'Failures', component: FailuresSection },
+  { id: 'speed', label: 'Speed', component: SpeedSection }
+]
 
 /** Adds (or replaces, by id) a section. */
 export function registerDiagnosticsSection(s: DiagnosticsSection): void {

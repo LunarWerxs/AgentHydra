@@ -34,6 +34,7 @@ import { saveDraft } from '@/components/composer/logic'
 import { reloadIfStale, watchBundle } from '@/lib/stale-bundle'
 import { rememberView, restoreView } from '@/lib/view-memory'
 import { wantsDesktopNotice } from './notify'
+import { reportAtPaint, reportTiming } from '@/lib/timing'
 
 const BASE_URL = '/api'
 
@@ -128,6 +129,9 @@ function scheduleReconnect() {
 /** Items streamed for chats whose history is not loaded yet; the load takes them in (keepNewer). */
 const unloadedUpserts = new Map<string, TranscriptItem[]>()
 
+/** Speed tracking: when Send was clicked in a chat whose bubble has not shown yet (performance.now()). */
+const sendClicks = new Map<string, number>()
+
 /** The chat's history with what streamed before and while it was fetched, now its whole cached transcript. */
 function landItems(id: string, snapshot: TranscriptItem[]): TranscriptItem[] {
   const since = [...(unloadedUpserts.get(id) ?? []), ...(store.itemsByChat.get(id) ?? [])]
@@ -171,6 +175,12 @@ function handleServerEvent(event: ServerEvent) {
       break
 
     case 'item.upsert': {
+      // Speed tracking: the sent message's bubble is drawn at the next frame.
+      const clicked = event.item.kind === 'user' ? sendClicks.get(event.chatId) : undefined
+      if (clicked !== undefined) {
+        sendClicks.delete(event.chatId)
+        reportAtPaint('click_to_bubble', clicked, event.chatId)
+      }
       // A chat whose history is not loaded keeps what streams aside: put in the cache, it would stand for
       // the whole transcript and opening the chat would never fetch its history.
       let items = store.itemsByChat.get(event.chatId)
@@ -525,11 +535,15 @@ export function useDesk() {
 
     async send(chatId: string, message: SendMessageRequest): Promise<{ queued: boolean }> {
       if (isExternalChatId(chatId)) return resumeExternal(sessionOfChatId(chatId), message)
-      return fetchJson(`/chats/${chatId}/messages`, {
+      const clicked = performance.now()
+      sendClicks.set(chatId, clicked)
+      const sent = await fetchJson<{ queued: boolean }>(`/chats/${chatId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(message)
       })
+      reportTiming('click_to_server', performance.now() - clicked, chatId)
+      return sent
     },
 
     async interrupt(chatId: string): Promise<{ ok: boolean }> {
@@ -678,7 +692,10 @@ export function useDesk() {
     },
 
     async loadItems(chatId: string): Promise<TranscriptItem[]> {
-      return landItems(chatId, await fetchJson<TranscriptItem[]>(`/chats/${chatId}/items`))
+      const opened = performance.now()
+      const items = landItems(chatId, await fetchJson<TranscriptItem[]>(`/chats/${chatId}/items`))
+      reportAtPaint('open_to_paint', opened, chatId)
+      return items
     },
 
     async loadExternalItems(sessionId: string): Promise<TranscriptItem[]> {

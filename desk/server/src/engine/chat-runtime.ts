@@ -84,6 +84,8 @@ export interface ChatRuntimeDeps {
   forkAt?(): string | null
   /** A turn ended and the chat is idle: the manager looks where the session's folder is now (a cd moves the chat). */
   onTurnEnd?(): void
+  /** Every live SDK message, before it is handled (speed tracking); never one replayed from a host's journal. */
+  onMessage?(msg: SDKMessage): void
 }
 
 type PermissionItem = Extract<TranscriptItem, { kind: 'permission' }>
@@ -204,6 +206,7 @@ export class ChatRuntime {
   private readonly onFailure?: (f: { message: string; durationMs: number | null }) => void
   private readonly forkAt?: () => string | null
   private readonly onTurnEnd?: () => void
+  private readonly onMessage?: (msg: SDKMessage) => void
 
   private q: Query | null = null
   /** The account the process was started under; kept after it ends (the account the chat last ran on). */
@@ -269,6 +272,7 @@ export class ChatRuntime {
     this.onFailure = deps.onFailure
     this.forkAt = deps.forkAt
     this.onTurnEnd = deps.onTurnEnd
+    this.onMessage = deps.onMessage
   }
 
   get running(): boolean {
@@ -374,6 +378,20 @@ ${swap.real}` }
     this.q = q
     if (attach) this.adopt(q, attach, carry)
     this.loop = this.consume(q)
+  }
+
+  /**
+   * The warm start (SPEC "Speed (timings)"): the process is started ahead of the message, so its start, its
+   * SessionStart hooks and its MCP servers run while the owner still types. The chat reads idle, so the send
+   * that follows is a turn of a running chat, not one queued behind a start. True when it started one.
+   */
+  warm(): boolean {
+    if (this.q) return false
+    this.start()
+    this.dispatch({ type: 'init', now: this.now() })
+    this.publishChat()
+    this.armIdleTimer()
+    return true
   }
 
   /**
@@ -802,6 +820,7 @@ ${swap.real}` }
 
   /** One SDK message: status first, then the transcript, then the after-turn work. */
   handle(msg: SDKMessage): void {
+    if (!this.replaying) this.onMessage?.(msg)
     const now = this.clock()
     const m = msg as { type: string; subtype?: string }
     if (m.type === 'system' && m.subtype === 'session_state_changed') this.sawSessionState = true

@@ -330,6 +330,7 @@ chat is created at once, ignoring `maxNewChats` and the wait for room (Auto may 
 | `POST /api/chats` (CreateChatRequest) | `ChatSummary` (409 when the named account is signed out: "<label> is signed out"; the same applies to `PATCH /api/chats/:id` with `accountId`) |
 | `GET /api/chats/:id` | `ChatSummary` |
 | `GET /api/chats/:id/items` | `TranscriptItem[]` (a CliMayte chat answers from its Desk file at once; the worker's JSONL is read behind it and new items arrive over `/ws`) |
+| `POST /api/chats/:id/warm` | `{ started: boolean }` (the warm start, see "Speed (timings)": starts a closed SDK chat's process ahead of its message; false for a worker chat, a running or archived one) |
 | `GET /api/chats/:id/transcript` (`?format=jsonl`) | The chat's whole record, oldest first, across every session: `TranscriptItem[]`, or one item per line (`application/x-ndjson`); refreshed from the worker first |
 | `POST /api/chats/:id/messages` (SendMessageRequest) | `{ queued: boolean }` |
 | `POST /api/chats/:id/interrupt` | `{ ok: true }` |
@@ -774,7 +775,7 @@ to the shell task; each other area owns its own folder under `web/src/components
 `web/src/dev/sections/<Area>Section.vue` (the Gallery loads every file in `sections/` with
 `import.meta.glob`, so adding a section never touches another file).
 
-## Diagnostics (failures; the Speed section is the timing worker's)
+## Diagnostics (failures and speed)
 
 One place for what went wrong and what was slow. Settings > Diagnostics (`web/src/components/diagnostics/`) is a
 container: `sections.ts` lists its sections (`DIAGNOSTICS_SECTIONS`, or `registerDiagnosticsSection`), each a component
@@ -807,6 +808,64 @@ AgentHydra incidents: not fed from here. `server/src/routes/incidents.ts` only l
 (`GET /api/incidents`, `/:id`, `POST /:id/ack`, `/:id/resolve`); incidents are created in-process by `recordIncident`
 (dispatch, usage, loop detection), so no existing one-call route takes a Desk failure. Sending them would need a new
 create route in AgentHydra, which is its owner's call.
+
+### Speed (timings) (server/src/engine/timings.ts, shared/timings.ts)
+
+`<home>/timings.jsonl`, one line per measured stage (`JsonlLog`, rolled like the failure ledger): `ts` (when the stage
+ended), `stage`, `ms`, and as they apply `chatId, turnId, name, kind ('sdk'|'worker'), accountId, accountNumber (never
+an email), model, cwd, cold, ok`; a `turn` line adds `stages` (ms per part of the turn), a `sync_poll` line `n` and `max`.
+Taking a timing never breaks a chat: every entry point swallows its own error and no timer holds the process open.
+An SDK chat is timed from the SDK's own messages against the server clock (`ChatRuntime`'s `onMessage`, live messages
+only, never a replayed journal); a worker chat from what the 3 s poll sees, so its stages are accurate to one poll.
+
+Every stage (`TIMING_STAGES`):
+
+| Stage | What it measures | Clock |
+| --- | --- | --- |
+| `click_to_server` | Send clicked -> `POST /messages` answered | window (`performance.now()`) |
+| `click_to_bubble` | Send clicked -> the user bubble drawn (next frame after its `item.upsert`) | window |
+| `open_to_paint` | a chat opened -> its history fetched and painted | window |
+| `chat_open` | `GET /api/chats/:id/items` from request to items served (`n` = items) | server |
+| `process_start` | the SDK process started -> its first message | server |
+| `hook` | one hook, `hook_started` -> `hook_response`; `name` is `Event:script.mjs` when the hook's output names its file, else the SDK's `hook_name` (`SessionStart:startup`) | server, SDK messages |
+| `session_start_hooks` | the SessionStart group: first hook started -> last ended (they run in parallel), `name` = startup / resume | server, SDK messages |
+| `mcp_connect` | the process start -> each MCP server's first status other than pending (`mcpServerStatus()`, read every 500 ms for 30 s), `name` = server, `ok` = connected | server |
+| `ready` | the message sent -> `system/init`; `cold` says how the process stood: `new`, `resume`, `warm`; none for a running chat | server |
+| `warm` | a warm start's process start -> `system/init` (no one waited on it) | server |
+| `queue_wait` | a message sent during a turn -> the turn it waited behind ended | server |
+| `first_token` | the later of the turn's start and ready -> the first streamed delta or assistant message | server |
+| `tool` | one tool call, `tool_use` -> its `tool_result`, `name` = tool, `ok` | server, SDK messages |
+| `api` | the result's `duration_api_ms` (the model's own time) | CLI |
+| `turn` | sent -> `result`; `stages` = `{ hooks, ready, first_token, tools, api, queue_wait }` | server |
+| `worker_accept` | Desk's send -> CliMayte accepted the message | server |
+| `worker_queue` | accepted -> the worker seen running (or replying, or done) | server, poll |
+| `worker_first_item` | sent -> the first new assistant item synced | server, poll |
+| `worker_turn` | sent -> the worker no longer at work; `stages` = the four worker stages | server, poll |
+| `account_move` | sent -> CliMayte moved the worker to another account, `name` = `#126>#61` | server, poll |
+| `sync_poll` | one read of the workers' status and transcripts; one line per minute (mean `ms`, `n` polls, `max`) | server |
+| `title` | the generated title's request -> answer, `ok` = a title came | server |
+
+`GET /api/diagnostics/timings` (`TimingsResponse`, over the last 7 days): `today` and `week` (per stage: count, p50,
+p90 by nearest rank, max, total ms, the most total first), `slowestTurns` (20, each with its stage breakdown, account,
+model, cold kind), `coldStart` (process start, each SessionStart hook and group, each MCP server), `ready` by cold kind,
+`hooks` and `tools` by name, `workers` (accept, queue, first item, moves), `slowNow` (today's waits per stage and name,
+ranked by total time lost; a whole turn, the model's time and the background poll are not waits), and turns `byAccount`
+('#126' or id), `byModel`, `byFolder`. `POST /api/diagnostics/timings/client` (`{ stage, ms, chatId? }`) takes the
+window's own stages only, `ms` 0 to 600000; anything else 400.
+
+The Speed section (`SpeedSection.vue`, `speed.ts`) shows what is slow right now, per-stage p50/p90 bars for today or 7
+days, the slowest turns (each opens its chat), the cold start breakdown and send -> ready by cold kind, the worker
+waits, and turns by account, model and folder.
+
+The warm start: typing in a closed SDK chat (the composer focused, text not empty) calls `POST /api/chats/:id/warm`,
+which starts its process with its session (`ChatRuntime.warm()`: started, idle, the idle timer armed), so the process
+start and the SessionStart hooks run while the owner types and the turn's `ready` is the `warm` kind. A worker chat,
+a running, archived or outside chat is never warmed. An idle-closed chat's next message otherwise costs a whole
+`resume` start (process plus SessionStart hooks); a longer `idleCloseMinutes` also avoids it.
+
+The SessionStart hooks are the owner's own Claude Code settings, loaded into Desk's SDK chats as into any CLI session;
+Desk does not skip them (the only switch, `disableAllHooks`, would drop the safety hooks too). Their cost shows by
+name in the cold start breakdown.
 
 ## Parallel workers and ports
 
