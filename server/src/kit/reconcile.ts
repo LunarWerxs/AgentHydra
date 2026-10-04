@@ -2,7 +2,9 @@
 // next to each old producer's number, so every migration piece can show it moved nothing.
 // One row per pair: { name, kit, old, gapPct, note } plus the kit's coverage of that source. A gap on a
 // source the kit has not fully ingested is marked `partial`, not read as a disagreement.
+
 import { type LastWindow, type UsageQueryOpts, type UsageResult, usageQuery } from './query'
+import { type OldTotals, oldClimayte, oldCliTokens, oldHswarm, oldSpend } from './reconcile-old'
 
 export interface ReconcileRow {
   name: string
@@ -17,23 +19,21 @@ export interface ReconcileRow {
 
 type Awaitable<T> = T | Promise<T>
 
-export interface OldTotals {
-  tokens: number
-  usd: number | null
-}
+export type { OldTotals }
 
 /** What each old producer says for the window. A reader that has no answer returns null (its row says so). */
 export interface OldReaders {
-  /** P1 spendReport, from `sinceMs`: overall and per provider key. */
+  /** P1 session_stats (what the pre-kit spendReport summed), from `sinceMs`: Claude overall and per provider key. */
   spend(
     sinceMs: number,
   ): Awaitable<{ claude: OldTotals; byProvider: Record<string, OldTotals> } | null>
-  /** P4 / account-tokens: tokens per CLI instance name and per account uuid, for 5h, 7d or all time only. */
+  /** P4 / account-tokens: tokens per CLI instance (id, as the kit's `cli:<id>`, and display name) and per
+   *  account uuid, for 5h, 7d or all time only. reconcile keys both the kit's way. */
   cliTokens(last: LastWindow | null): Awaitable<{
-    byInstance: Record<string, number>
+    byInstance: Array<{ id: string; name: string; tokens: number }>
     byAccount: Record<string, number>
   } | null>
-  /** P5 climayteTotals(since). */
+  /** P5 the per-attempt transcript re-read (pre-kit attemptSpend) over attempts ending after `sinceMs`. */
   climayte(sinceMs: number): Awaitable<OldTotals | null>
   /** P15 model-stats over `days` whole days: tasks, billed $ and list $. */
   hswarm(days: number): Awaitable<{ calls: number; billedUsd: number; listUsd: number } | null>
@@ -119,31 +119,15 @@ export async function reconcile(
   // P1 spendReport
   const spend = await old.spend(win.from)
   const claudeCov = cov(base, CLAUDE_SOURCES)
-  const p1 = 'P1 spendReport claude (now read from the kit itself, so it should match)'
+  const p1 = 'P1 session_stats claude'
   rows.push(
     pair('claude tokens', base.totals.tokens ?? 0, num(spend?.claude.tokens), claudeCov, p1),
   )
   rows.push(pair('claude list $', base.totals.list_usd ?? 0, num(spend?.claude.usd), claudeCov, p1))
-  const desk = q({ source: ['desktop'] })
-  const deskCov = cov(desk, ['desktop'])
-  rows.push(
-    pair(
-      'claude desktop tokens',
-      desk.totals.tokens ?? 0,
-      num(spend?.claude.tokens),
-      deskCov,
-      'P1 spendReport claude',
-    ),
+  notes.push(
+    'P1 has no desktop-only figure (session_stats holds all Claude sessions), so the claude rows compare the kit cli+desktop+climayte total',
   )
-  rows.push(
-    pair(
-      'claude desktop list $',
-      desk.totals.list_usd ?? 0,
-      num(spend?.claude.usd),
-      deskCov,
-      'P1 spendReport claude',
-    ),
-  )
+  notes.push('P1 is day-granular: a window starting mid-day differs from the kit by that part-day')
   for (const src of ['codex', 'opencode', 'dsh']) {
     const r = q({ source: [src] })
     const c = cov(r, [src])
@@ -178,27 +162,30 @@ export async function reconcile(
     )
   } else {
     const byInst = new Map(cliKit.rows.map((r) => [String(r.instance), r.tokens as number]))
-    for (const k of new Set([...byInst.keys(), ...Object.keys(cli.byInstance)]))
+    const oldInst = new Map(cli.byInstance.map((i) => [`cli:${i.id}`, i]))
+    for (const k of new Set([...byInst.keys(), ...oldInst.keys()]))
       rows.push(
         pair(
-          `cli instance ${k} tokens`,
+          `cli instance ${oldInst.get(k)?.name ?? k} tokens`,
           byInst.get(k) ?? 0,
-          cli.byInstance[k] ?? null,
+          oldInst.get(k)?.tokens ?? null,
           cliCov,
           'P4 account-tokens by instance',
         ),
       )
     const acctKit = q({ source: CLAUDE_SOURCES }, ['account'])
-    const byAcct = new Map(
-      acctKit.rows.map((r) => [String(r.account ?? '').toLowerCase(), r.tokens as number]),
+    const byAcct = new Map(acctKit.rows.map((r) => [String(r.account ?? ''), r.tokens as number]))
+    const { hswarmAccountId } = await import('../routes/hswarm')
+    const oldAcct = new Map(
+      Object.entries(cli.byAccount).map(([uuid, t]) => [hswarmAccountId(uuid), t]),
     )
-    for (const k of new Set([...byAcct.keys(), ...Object.keys(cli.byAccount)]))
+    for (const k of new Set([...byAcct.keys(), ...oldAcct.keys()]))
       if (k)
         rows.push(
           pair(
             `account ${k} tokens`,
             byAcct.get(k) ?? 0,
-            cli.byAccount[k] ?? null,
+            oldAcct.get(k) ?? null,
             claudeCov,
             'account-tokens by account',
           ),
@@ -210,10 +197,22 @@ export async function reconcile(
   const cmKit = q({ source: ['climayte'] })
   const cmCov = cov(cmKit, ['climayte'])
   rows.push(
-    pair('climayte tokens', cmKit.totals.tokens ?? 0, num(cm?.tokens), cmCov, 'P5 attemptSpend'),
+    pair(
+      'climayte tokens',
+      cmKit.totals.tokens ?? 0,
+      num(cm?.tokens),
+      cmCov,
+      'P5 transcript re-read',
+    ),
   )
   rows.push(
-    pair('climayte list $', cmKit.totals.list_usd ?? 0, num(cm?.usd), cmCov, 'P5 attemptSpend'),
+    pair(
+      'climayte list $',
+      cmKit.totals.list_usd ?? 0,
+      num(cm?.usd),
+      cmCov,
+      'P5 transcript re-read',
+    ),
   )
 
   // P15 model-stats (whole days)
@@ -229,62 +228,11 @@ export async function reconcile(
   return { window: win, rows, notes: [...notes, ...base.notes] }
 }
 
-// ---- the real producers ----
-
-const sumTokens = (t: { input: number; output: number; cacheRead: number; cacheWrite: number }) =>
-  t.input + t.output + t.cacheRead + t.cacheWrite
+// ---- the real producers: independent of the kit, see reconcile-old.ts ----
 
 export const liveReaders: OldReaders = {
-  async spend(sinceMs) {
-    const { spendReport } = await import('../analytics')
-    const r = spendReport({ sinceMs: sinceMs > 0 ? sinceMs : null })
-    const byProvider: Record<string, OldTotals> = {}
-    for (const p of r.byProvider) byProvider[p.key] = { tokens: p.tokens.total, usd: p.costUsd }
-    return { claude: byProvider.claude ?? { tokens: 0, usd: null }, byProvider }
-  },
-  async cliTokens(last) {
-    if (last !== '5h' && last !== '7d' && last !== 'all') return null
-    const { accountTokens, cliAccountUuid } = await import('../core/account-tokens')
-    const { listCliInstances } = await import('../core/cli-instances')
-    const pick = (uuid: string) => {
-      const t = accountTokens(uuid)
-      return t ? (last === '5h' ? t.fiveHour : last === '7d' ? t.week : t.total).total : null
-    }
-    const byInstance: Record<string, number> = {}
-    const byAccount: Record<string, number> = {}
-    for (const i of listCliInstances()) {
-      const uuid = cliAccountUuid(i.configDir, i.loggedIn)
-      const t = uuid ? pick(uuid) : null
-      if (uuid && t !== null) {
-        byInstance[i.name] = t
-        byAccount[uuid.toLowerCase()] = t
-      }
-    }
-    return { byInstance, byAccount }
-  },
-  async climayte(sinceMs) {
-    const { climayteTotals } = await import('../climayte-totals')
-    const t = climayteTotals(sinceMs)
-    return { tokens: sumTokens(t.tokens), usd: t.costUsd }
-  },
-  async hswarm(days) {
-    const { getHSwarmStatus } = await import('../hswarm')
-    const st = getHSwarmStatus()
-    if (!st.running || !st.port) return null
-    try {
-      const res = await fetch(`http://127.0.0.1:${st.port}/model-stats?days=${Math.min(90, days)}`)
-      if (!res.ok) return null
-      const j = (await res.json()) as {
-        models?: Array<{ tasks: number; spent_usd: number; cost_usd: number }>
-      }
-      const m = j.models ?? []
-      return {
-        calls: m.reduce((s, x) => s + x.tasks, 0),
-        billedUsd: m.reduce((s, x) => s + x.spent_usd, 0),
-        listUsd: m.reduce((s, x) => s + x.cost_usd, 0),
-      }
-    } catch {
-      return null
-    }
-  },
+  spend: oldSpend,
+  cliTokens: oldCliTokens,
+  climayte: oldClimayte,
+  hswarm: oldHswarm,
 }
