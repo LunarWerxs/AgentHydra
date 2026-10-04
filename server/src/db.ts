@@ -442,6 +442,13 @@ create table if not exists skill_listings (
   // the UI so "the app went and found this one" never masquerades as something the user queued.
   if (!cols.includes('discovered'))
     db.exec('alter table monitor_state add column discovered integer not null default 0')
+  // The re-wake cooldown (rewake-cooldown.ts): the transcript's real-turn count when this row's
+  // resume was scheduled, and how many resumes in a row before it added none. Nullable mark: a row
+  // written before these columns has no reading, which the streak treats as "no proof, no hold".
+  if (!cols.includes('progress_mark'))
+    db.exec('alter table monitor_state add column progress_mark integer')
+  if (!cols.includes('empty_streak'))
+    db.exec('alter table monitor_state add column empty_streak integer not null default 0')
 }
 
 // --- one-time repair: rate_limited rows the old over-eager detector invented ---

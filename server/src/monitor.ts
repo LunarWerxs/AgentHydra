@@ -32,6 +32,7 @@ import { LANDING_OVERFLOW_PCT } from './fleet-usage'
 import { sessionMetaMap } from './instance-sessions'
 import { pathKey } from './path-key'
 import { discoverPendingStops, type RateLimitedStop } from './rate-limit-discovery'
+import { nextEmptyStreak, readProgressMark, rewakeCooldownMs } from './rewake-cooldown'
 import { isSessionSuperseded } from './session-launch'
 import type {
   MonitorSettings,
@@ -59,6 +60,12 @@ export interface MonitorDeps {
    * `keep` names the sessions parked at a weekly wall, which must be found however old they are.
    */
   discoverStops: (keep: ReadonlySet<string>) => Promise<RateLimitedStop[]>
+  /**
+   * The session's real-turn count right now (rewake-cooldown.ts), or null when unreadable. Behind
+   * the seam for the same reason as discoverStops: the real one reads the transcript off disk.
+   * Optional: deps that leave it out read no mark, which never builds a hold.
+   */
+  progressMark?: (sessionId: string) => Promise<number | null>
 }
 
 const defaultDeps: MonitorDeps = {
@@ -81,6 +88,7 @@ const defaultDeps: MonitorDeps = {
           .get(sessionId)?.n,
       keep,
     }),
+  progressMark: (sessionId) => readProgressMark(sessionId, getMonitorSettings().resumePrompt),
 }
 
 /** The locked resume prompt — a code constant, not a field users casually edit (an advanced
@@ -170,6 +178,10 @@ interface MonitorStateRow {
   /** Set for discovered stops, which have no queue_items row to join a title out of. */
   title: string | null
   discovered: number
+  /** Real-turn count when this row's resume was scheduled (rewake-cooldown.ts); null = unread. */
+  progress_mark: number | null
+  /** Resumes in a row before this one that added no real turn. */
+  empty_streak: number
 }
 
 function getState(itemId: string): MonitorStateRow | null {
@@ -188,13 +200,18 @@ function upsertState(
     resumeItemId: string | null
     attempts: number
     nextCheckAt?: string | null
+    /** Only a scheduled resume carries these; see rewake-cooldown.ts. */
+    progressMark?: number | null
+    emptyStreak?: number
   },
 ): void {
   db.query(
     `insert into monitor_state
-       (item_id, session_id, account_id, resume_attempts, state, resume_item_id, message, next_check_at, updated_at, title, discovered)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (item_id, session_id, account_id, resume_attempts, state, resume_item_id, message, next_check_at, updated_at, title, discovered, progress_mark, empty_streak)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      on conflict(item_id) do update set
+       progress_mark = excluded.progress_mark,
+       empty_streak = excluded.empty_streak,
        resume_attempts = excluded.resume_attempts,
        state = excluded.state,
        resume_item_id = excluded.resume_item_id,
@@ -219,7 +236,27 @@ function upsertState(
     // stand on its own.
     item.title,
     item.discovered ? 1 : 0,
+    fields.progressMark ?? null,
+    fields.emptyStreak ?? 0,
   )
+}
+
+/**
+ * The most recent resume this monitor scheduled for a session, other than `excludeItemId`'s own
+ * row: its progress mark and empty streak are what the next resume's cooldown is judged against.
+ */
+function lastScheduledResume(
+  sessionId: string,
+  excludeItemId: string,
+): { mark: number | null; streak: number } | null {
+  const row = db
+    .query<{ progress_mark: number | null; empty_streak: number }, [string, string]>(
+      `select progress_mark, empty_streak from monitor_state
+        where session_id = ? and item_id != ? and resume_item_id is not null
+        order by updated_at desc limit 1`,
+    )
+    .get(sessionId, excludeItemId)
+  return row ? { mark: row.progress_mark, streak: row.empty_streak } : null
 }
 
 /** The most resume attempts already spent on this session (the cap is per session, not per stop). */
@@ -777,14 +814,30 @@ async function processOneRateLimitedStop(
       : sessIso
         ? new Date(sessIso)
         : new Date(Date.now() + 5 * 3600 * 1000)
-  const notBefore = new Date(base.getTime() + settings.resumeBufferMin * 60_000).toISOString()
+  // The re-wake cooldown: resumes that keep adding no real turn are held back by a doubling delay
+  // (rewake-cooldown.ts), so a session looping on empty wakes stops burning quota at full speed.
+  // A real turn since the last resume, the model's or a person's, resets the streak to zero.
+  const progressMark = deps.progressMark
+    ? await deps.progressMark(item.session_id).catch(() => null)
+    : null
+  const prior = lastScheduledResume(item.session_id, item.id)
+  const emptyStreak = nextEmptyStreak(prior, progressMark)
+  const holdMs = rewakeCooldownMs(emptyStreak)
+  const wakeAt = base.getTime() + settings.resumeBufferMin * 60_000 + holdMs
+  const notBefore = new Date(wakeAt).toISOString()
   const resumeId = enqueueResume(item, notBefore)
   upsertState(item, {
     state: 'scheduled',
-    message: `resumes ~${fmtLocalTime(notBefore)}`,
+    message:
+      `resumes ~${fmtLocalTime(notBefore)}` +
+      (holdMs > 0
+        ? ` (held ${Math.round(holdMs / 60_000)}m: the last ${emptyStreak} resumes added no turns)`
+        : ''),
     resumeItemId: resumeId,
     attempts: priorAttempts + 1,
     nextCheckAt: null,
+    progressMark,
+    emptyStreak,
   })
 }
 

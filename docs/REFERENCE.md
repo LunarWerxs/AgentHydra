@@ -172,6 +172,14 @@ but not in a form worth trusting, and a false claim here would be worse than a m
 lives in one place (`createLimitStopTracker` in `server/src/rate-limit-signal.ts`) and is shared with
 the auto-resume monitor, so the badge and the resume queue cannot disagree.
 
+**Empty re-wakes are held back.** When the auto-resume monitor schedules a resume it notes how many
+real turns the transcript holds (model turns and typed messages; not bookkeeping, the wall notice or
+its own `resume` prompt). If two resumes in a row added none, the next one waits an extra 2 minutes
+on top of the reset, doubling for each further empty resume up to 30 minutes, and the resume list
+says so ("held 4m: the last 3 resumes added no turns"). Any real turn, the model's or yours, resets
+it. The per-session resume cap still applies; this only slows an empty loop down
+(`server/src/rewake-cooldown.ts`).
+
 ### Working, waiting on you, or done
 
 `agent_status { session? }` (and `GET /api/agent-status[/:sessionId]`) answers what a Claude Code

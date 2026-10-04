@@ -7,6 +7,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Auto-resume holds back re-wakes that produce nothing** (`server/src/rewake-cooldown.ts`,
+  `server/src/monitor.ts`, `server/src/db.ts`). After two resumes of a session in a row that added
+  no real turn, the next scheduled resume waits an extra 2 minutes, doubling per further empty
+  resume up to 30 minutes; a model turn or a typed message resets it. The idea comes from
+  paperclipai/paperclip's re-wake throttle (MIT).
+
 ## [1.9.0] - 2026-10-04
 
 ### Added
