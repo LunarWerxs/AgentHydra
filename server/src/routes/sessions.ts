@@ -670,7 +670,7 @@ app.get('/api/sessions/:id/tail', async (c) => {
   )
 })
 // What this one session spent: token totals and a dollar cost at published list prices, computed
-// on demand from the transcript itself (no table, nothing stored — see server/src/session-usage.ts).
+// from the analytics kit (subagent calls included; see server/src/session-usage.ts).
 // Answers 200 with a `status` rather than an error for a source that records no per-turn usage, so
 // the UI can explain the gap instead of showing a zero it cannot justify.
 app.get('/api/sessions/:id/usage', async (c) => {
@@ -679,7 +679,7 @@ app.get('/api/sessions/:id/usage', async (c) => {
   const locator = c.req.query('locator') || undefined
   const tf = await findTranscriptAsync(c.req.param('id'), source, locator)
   if (!tf) return c.json({ error: 'session not found' }, 404)
-  return c.json(await sessionUsage(tf))
+  return c.json(sessionUsage(tf))
 })
 // The conversation index behind the fast search path. It holds no text of its own and rebuilds
 // itself from the transcripts, so deleting it costs nothing but the time to build it again — which

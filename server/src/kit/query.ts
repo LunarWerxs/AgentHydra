@@ -81,6 +81,9 @@ export interface UsageQueryOpts {
   now?: number
   /** Where an account's latest quota snapshot comes from. Defaults to the daemon's usage cache. */
   quota?: (account: string) => QuotaReset | null
+  /** `false` leaves `coverage` empty: for a caller that never reads it, since computing it after each
+   *  store write costs ~100 ms on the live store. */
+  coverage?: boolean
 }
 
 export interface ResolvedWindow {
@@ -360,6 +363,7 @@ export function usageQuery(params: UsageQueryParams = {}, opts: UsageQueryOpts =
     params,
     opts.now ?? Math.floor(Date.now() / CACHE_BUCKET_MS),
     win.basis === 'snapshot' ? win.from : null,
+    opts.coverage === false,
   ])
   const cache = cacheFor(store.db, gen)
   const hit = cache.results.get(key)
@@ -405,21 +409,14 @@ function computeUsage(
   // Sessions mode: (session, ref) pairs wholly inside the window come from the ledger.
   const inSessions = sessionLike && !okVals && !withHour
   const sessWhere = sessionWhere(filter)
+  // The (session, ref) pairs the window covers whole, as a subquery (no temp table: a query must not
+  // write, or it moves the store generation and is never served from cache).
   let whole: Where | null = null
   if (inSessions) {
-    const pairs = db
-      .query(
-        `select session, ref from usage_session where ${sessWhere.sql} group by session, ref
-         having min(first_ts) >= ? and max(last_ts) <= ?`,
-      )
-      .all(...sessWhere.args, win.from, win.to) as { session: string; ref: string }[]
-    db.exec('create temp table if not exists kit_whole (session text, ref text)')
-    db.exec('delete from kit_whole')
-    const ins = db.prepare('insert into kit_whole values (?, ?)')
-    for (const p of pairs) ins.run(p.session, p.ref)
     whole = {
-      sql: ` and (coalesce(session, ''), coalesce(ref, '')) not in (select session, ref from kit_whole)`,
-      args: [],
+      sql: `select session, ref from usage_session where ${sessWhere.sql}${dim.sql} group by session, ref
+            having min(first_ts) >= ? and max(last_ts) <= ?`,
+      args: [...sessWhere.args, ...dim.args, win.from, win.to],
     }
   }
 
@@ -452,16 +449,16 @@ function computeUsage(
   }
   const rawRows = rawRanges.flatMap(([from, to]) =>
     selectRows(db, 'usage_event', dims, withHour, {
-      sql: `ts >= ? and ts <= ?${dim.sql}${rawExtra(filter)}${whole?.sql ?? ''}`,
-      args: [from, to, ...dim.args, ...rawExtraArgs(filter)],
+      sql: `ts >= ? and ts <= ?${dim.sql}${rawExtra(filter)}${whole ? ` and (coalesce(session, ''), coalesce(ref, '')) not in (${whole.sql})` : ''}`,
+      args: [from, to, ...dim.args, ...rawExtraArgs(filter), ...(whole?.args ?? [])],
     }),
   )
 
   let rollRows: RawRow[] = []
   if (inSessions) {
     rollRows = selectRows(db, 'usage_session', dims, false, {
-      sql: `${sessWhere.sql}${dim.sql} and (session, ref) in (select session, ref from kit_whole)`,
-      args: [...sessWhere.args, ...dim.args],
+      sql: `${sessWhere.sql}${dim.sql} and (session, ref) in (${whole?.sql})`,
+      args: [...sessWhere.args, ...dim.args, ...(whole?.args ?? [])],
     })
     // Sessions the window cuts through, reaching back past the raw cut: their older part is in
     // usage_hour, which cannot attribute it.
@@ -470,9 +467,9 @@ function computeUsage(
         .query(
           `select 1 from usage_session where ${sessWhere.sql} and first_ts < ?
              and last_ts >= ? and (first_ts < ? or last_ts > ?)
-             and (session, ref) not in (select session, ref from kit_whole) limit 1`,
+             and (session, ref) not in (${whole?.sql}) limit 1`,
         )
-        .get(...sessWhere.args, cutoff, win.from, win.from, win.to)
+        .get(...sessWhere.args, cutoff, win.from, win.from, win.to, ...(whole?.args ?? []))
       if (cut) {
         notes.push(
           `sessions the window does not cover whole count only their usage since ${new Date(cutoff).toISOString()}`,
@@ -542,9 +539,20 @@ function computeUsage(
   return {
     rows,
     totals,
-    unpriced: unpricedModels(db, rawRanges, rollRanges, dim, filter, inSessions ? sessWhere : null),
+    unpriced: unpricedModels(
+      db,
+      rawRanges,
+      rollRanges,
+      dim,
+      filter,
+      inSessions ? sessWhere : null,
+      whole,
+    ),
     priceVer: store.getMeta('price_ver'),
-    coverage: coverage(store),
+    coverage:
+      opts.coverage === false
+        ? { sources: {}, cursors: { files: 0, newestMtime: null }, dirtyFrom: null }
+        : coverage(store),
     window: win,
     notes,
   }
@@ -554,13 +562,15 @@ type Range = [from: number, to: number]
 const hourCeil = (ts: number): number => hourStart(ts + HOUR_MS - 1)
 const hourStart = (ts: number): number => ts - (((ts % HOUR_MS) + HOUR_MS) % HOUR_MS)
 
-/** Raw-only filters: usage_event has the columns the rollup lacks (session, ok). */
+/** Raw-only filters: usage_event has the columns the rollup lacks (session, ok). Session and ref are
+ *  written as the expression usage_event_session indexes, or SQLite scans every raw row in the window. */
 function rawExtra(filter: NonNullable<UsageQueryParams['filter']>): string {
   const parts: string[] = []
   const sess = toList(filter.session)
-  if (sess) parts.push(sess.length ? `session in (${sess.map(() => '?').join(',')})` : '0')
+  if (sess)
+    parts.push(sess.length ? `coalesce(session, '') in (${sess.map(() => '?').join(',')})` : '0')
   const ref = toList(filter.ref)
-  if (ref) parts.push(ref.length ? `ref in (${ref.map(() => '?').join(',')})` : '0')
+  if (ref) parts.push(ref.length ? `coalesce(ref, '') in (${ref.map(() => '?').join(',')})` : '0')
   const ok = toList(filter.ok)
   if (ok) parts.push(ok.length ? `ok in (${ok.map(() => '?').join(',')})` : '0')
   return parts.length ? ` and ${parts.join(' and ')}` : ''
@@ -638,6 +648,7 @@ function unpricedModels(
   dim: Where,
   filter: NonNullable<UsageQueryParams['filter']>,
   sessions: Where | null,
+  whole: Where | null,
 ): string[] {
   const out = new Set<string>()
   for (const [from, to] of rawRanges) {
@@ -652,9 +663,9 @@ function unpricedModels(
     const rows = db
       .query(
         `select distinct model from usage_session where ${sessions.sql}${dim.sql} and list_usd is null and model != ''
-           and (session, ref) in (select session, ref from kit_whole)`,
+           and (session, ref) in (${whole?.sql})`,
       )
-      .all(...sessions.args, ...dim.args) as { model: string }[]
+      .all(...sessions.args, ...dim.args, ...(whole?.args ?? [])) as { model: string }[]
     for (const r of rows) out.add(r.model)
     return [...out].sort()
   }

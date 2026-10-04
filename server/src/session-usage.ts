@@ -1,191 +1,127 @@
-// server/src/session-usage.ts — tokens and dollars for ONE open session.
+// server/src/session-usage.ts — tokens and dollars for ONE session, read from the analytics kit.
 //
-// The whole feature is "read a file the user already asked us to open, and add up a column that was
-// always there": zero new tables, zero new columns, nothing written to disk. It exists because the
-// numbers were being parsed and thrown away — usage-tokens.ts reads every assistant turn's usage
-// block already, but only for files inside a quota lookback window, and only to derive a
-// denominator. Point the same parser at one transcript with no window and you get that session's
-// real spend.
-//
-// COST, not just size. A transcript's line count says nothing about what it cost: one 40-turn Opus
-// session with a large cached prefix outspends a thousand Haiku turns. pricing.ts does the money.
-//
-// Streamed, not slurped. The largest transcript on a real machine is ~40 MB and this runs on a
-// request the UI makes whenever a session is opened, so it uses session-search.ts's constant-memory
-// line reader rather than reading the file into a string.
-//
-// Cached by (mtime, size). Opening the same finished session twice, or re-opening it after a tool
-// toggle, must not re-stream 40 MB — and a transcript that HAS grown is a cache key that changed,
-// so a live session still reports fresh numbers with no invalidation logic of its own.
+// The kit's per-session ledger (docs/ANALYTICS-PLAN.md §4) already holds every Claude call of a
+// session, its subagents' calls included, priced at the rate in force when each call ran. This file
+// only reshapes a `usageQuery` answer into the two response shapes the Sessions chip and the run-cost
+// endpoint have always returned. A session the kit has not swept yet (brand new, before the next
+// ingest pass) has no rows and answers a real zero, the same as an empty transcript always did.
 
-import { statSync } from 'node:fs'
-import { pricesAsOf, priceTokens } from './pricing'
-import { streamLines } from './session-search'
-import { findTranscriptAsync, type TranscriptFile } from './transcript'
-import type { RunCost, SessionUsage, SessionUsageStatus } from './types'
-import { accumulateUsageLine, emptySpend, mergeSpend, newUsageSeen } from './usage-tokens'
+import { type UsageQueryOpts, usageQuery } from './kit/query'
+import { pricesAsOf } from './pricing'
+import type { TranscriptFile } from './transcript'
+import type { RunCost, SessionUsage } from './types'
 
-/** Small on purpose: a user opens a handful of sessions in a sitting, and each entry is a dozen
- *  numbers. Oldest-first eviction, which for this access pattern is close enough to LRU. */
-const CACHE_MAX = 32
-const cache = new Map<string, { mtimeMs: number; size: number; value: SessionUsage }>()
+/** Kit sources that are Claude calls. HSwarm workers a session spawned are billed elsewhere and, on a
+ *  busy session, number in the tens of thousands: this chip and a run's cost are Claude spend. */
+const CLAUDE_SOURCES = ['cli', 'desktop', 'climayte']
 
-function remember(path: string, mtimeMs: number, size: number, value: SessionUsage): SessionUsage {
-  cache.delete(path)
-  cache.set(path, { mtimeMs, size, value })
-  while (cache.size > CACHE_MAX) {
-    const oldest = cache.keys().next().value
-    if (oldest === undefined) break
-    cache.delete(oldest)
-  }
-  return value
-}
+type Tokens = SessionUsage['tokens']
 
-function blank(tf: TranscriptFile, status: SessionUsageStatus): SessionUsage {
-  return {
-    session_id: tf.session_id,
-    source: tf.source,
-    status,
-    tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0, turns: 0 },
-    costUsd: null,
-    pricedModels: [],
-    unpricedModels: [],
-    pricesAsOf: pricesAsOf(),
-  }
-}
+const num = (v: unknown): number => (typeof v === 'number' ? v : 0)
 
-/**
- * Tokens and cost for one session's transcript.
- *
- * Claude only: a Codex rollout and an OpenCode row record their own token counts in their own
- * shapes, and inventing a second parser for each is how the two numbers start disagreeing. Those
- * sources answer `source-unsupported` so the UI can say why rather than showing a silent zero.
- */
-export async function sessionUsage(tf: TranscriptFile): Promise<SessionUsage> {
-  if (tf.source !== 'claude') return blank(tf, 'source-unsupported')
-
-  let stat: { mtimeMs: number; size: number }
-  try {
-    stat = statSync(tf.path)
-  } catch {
-    return blank(tf, 'unreadable') // rotated or deleted between the index sweep and this request
-  }
-  const hit = cache.get(tf.path)
-  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.value
-
-  const spend = emptySpend()
-  // The newest turn we counted, used as the pricing instant: a model on an introductory rate must
-  // be billed at the rate that applied WHEN the session ran, not at today's.
-  let newestTurnMs = 0
-  const seen = newUsageSeen()
-  try {
-    for await (const line of streamLines(tf.path)) {
-      const at = accumulateUsageLine(spend, line, 0 /* no cutoff: the whole session */, seen)
-      if (at !== null && at > newestTurnMs) newestTurnMs = at
-    }
-  } catch {
-    return blank(tf, 'unreadable')
-  }
-
-  const priced = priceTokens(spend.byModel, newestTurnMs || stat.mtimeMs)
-  return remember(tf.path, stat.mtimeMs, stat.size, {
-    session_id: tf.session_id,
-    source: tf.source,
-    status: 'ok',
-    tokens: {
-      input: spend.input,
-      output: spend.output,
-      cacheRead: spend.cacheRead,
-      cacheCreation: spend.cacheCreation,
-      total: spend.raw,
-      turns: spend.turns,
+/** Sums of one session's (optionally windowed) kit rows, split by model so priced and unpriced
+ *  models can be named. */
+function spend(
+  session: string,
+  window: { from: number; to?: number } | { last: 'all' },
+  opts: UsageQueryOpts,
+): { tokens: Tokens; costUsd: number | null; priced: string[]; unpriced: string[] } {
+  const res = usageQuery(
+    {
+      window,
+      filter: { session: [session], source: CLAUDE_SOURCES },
+      groupBy: ['model'],
+      measures: ['tokens', 'input', 'output', 'cache_read', 'cache_write', 'calls', 'list_usd'],
     },
-    costUsd: priced.costUsd,
-    pricedModels: priced.priced,
-    unpricedModels: priced.unpriced,
-    pricesAsOf: pricesAsOf(),
-  })
+    { ...opts, coverage: false },
+  )
+  const priced: string[] = []
+  const unpriced = new Set(res.unpriced)
+  for (const r of res.rows) {
+    const model = r.model
+    if (typeof model !== 'string' || model === '') continue
+    if (r.list_usd === null && num(r.tokens) > 0) unpriced.add(model)
+    else if (r.list_usd !== null) priced.push(model)
+  }
+  const t = res.totals
+  return {
+    tokens: {
+      input: num(t.input),
+      output: num(t.output),
+      cacheRead: num(t.cache_read),
+      cacheCreation: num(t.cache_write),
+      total: num(t.tokens),
+      turns: num(t.calls),
+    },
+    costUsd: t.list_usd ?? null,
+    priced: priced.sort(),
+    unpriced: [...unpriced].sort(),
+  }
 }
 
-// --- what ONE queued run cost -------------------------------------------------------------------
+/**
+ * Tokens and cost for one session, subagents included.
+ *
+ * Claude only: a Codex rollout and an OpenCode row answer `source-unsupported` so the UI can say
+ * why rather than showing a silent zero.
+ */
+export function sessionUsage(tf: TranscriptFile, opts: UsageQueryOpts = {}): SessionUsage {
+  const base = {
+    session_id: tf.session_id,
+    source: tf.source,
+    pricesAsOf: pricesAsOf(),
+  }
+  if (tf.source !== 'claude') {
+    return {
+      ...base,
+      status: 'source-unsupported',
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0, turns: 0 },
+      costUsd: null,
+      pricedModels: [],
+      unpricedModels: [],
+    }
+  }
+  const s = spend(tf.session_id, { last: 'all' }, opts)
+  return {
+    ...base,
+    status: 'ok',
+    tokens: s.tokens,
+    costUsd: s.costUsd,
+    pricedModels: s.priced,
+    unpricedModels: s.unpriced,
+  }
+}
 
 /**
- * Attribute spend to one queued run.
- *
- * AgentsView structurally cannot do this: it never dispatched the work, so it does not know which
- * run a stretch of a transcript belongs to. We do — the queue row carries the session id and the
- * exact instants the run started and finished — so the run's cost is simply the session's own
- * per-turn usage restricted to that window.
- *
- * Computed, never stored. A stored figure would be a second number for the same tokens, free to
- * drift from what the session header reports; recomputing means the two can only ever agree.
- *
- * The window is closed at BOTH ends deliberately. Using only a start would hand a run every turn
- * typed by hand after it finished, which on a session someone kept working in is not a small error.
+ * What one queued run cost: the session's calls inside the run's own window (start to finish; an
+ * unfinished run is open-ended, since it is still spending). Closed at both ends so turns typed by
+ * hand after the run finished are not charged to it. Computed, never stored.
  */
-export async function runCost(item: {
-  id: string
-  session_id: string
-  status: string
-  started_at: string | null
-  finished_at: string | null
-}): Promise<RunCost> {
-  const blankTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0, turns: 0 }
+export function runCost(
+  item: {
+    id: string
+    session_id: string
+    status: string
+    started_at: string | null
+    finished_at: string | null
+  },
+  opts: UsageQueryOpts = {},
+): RunCost {
   const base: RunCost = {
     id: item.id,
     session_id: item.session_id,
     status: item.status,
     startedAt: item.started_at,
     finishedAt: item.finished_at,
-    tokens: blankTokens,
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0, turns: 0 },
     costUsd: null,
     unpricedModels: [],
     pricesAsOf: pricesAsOf(),
     status_reason: 'ok',
   }
-
   const from = item.started_at ? Date.parse(item.started_at) : Number.NaN
   if (!Number.isFinite(from)) return { ...base, status_reason: 'no-window' }
-  // An unfinished run is open-ended, which is correct: it is still spending.
-  const to = item.finished_at ? Date.parse(item.finished_at) : Number.POSITIVE_INFINITY
-  const until = Number.isFinite(to) ? to : Number.POSITIVE_INFINITY
-
-  const tf = await findTranscriptAsync(item.session_id, 'claude')
-  if (!tf) return { ...base, status_reason: 'unreadable' }
-  if (tf.source !== 'claude') return { ...base, status_reason: 'source-unsupported' }
-
-  let spend = emptySpend()
-  let newestTurnMs = 0
-  // Shared across the whole file, not per line: a request Claude Code split into several records
-  // must be charged once, and the run window is a slice of the same transcript. See newUsageSeen.
-  const seen = newUsageSeen()
-  try {
-    for await (const line of streamLines(tf.path)) {
-      // One turn at a time into a scratch, merged only if it falls inside the window. The parser
-      // has no "peek the timestamp" entry point and adding one would put a second notion of what a
-      // turn costs into the codebase; an empty spend is a handful of zeros, so this is cheap.
-      const turn = emptySpend()
-      const at = accumulateUsageLine(turn, line, from, seen)
-      if (at === null || at > until) continue
-      spend = mergeSpend(spend, turn)
-      if (at > newestTurnMs) newestTurnMs = at
-    }
-  } catch {
-    return { ...base, status_reason: 'unreadable' }
-  }
-
-  const priced = priceTokens(spend.byModel, newestTurnMs || Date.now())
-  return {
-    ...base,
-    tokens: {
-      input: spend.input,
-      output: spend.output,
-      cacheRead: spend.cacheRead,
-      cacheCreation: spend.cacheCreation,
-      total: spend.raw,
-      turns: spend.turns,
-    },
-    costUsd: priced.costUsd,
-    unpricedModels: priced.unpriced,
-  }
+  const to = item.finished_at ? Date.parse(item.finished_at) : Number.NaN
+  const s = spend(item.session_id, Number.isFinite(to) ? { from, to } : { from }, opts)
+  return { ...base, tokens: s.tokens, costUsd: s.costUsd, unpricedModels: s.unpriced }
 }

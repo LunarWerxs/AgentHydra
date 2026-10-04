@@ -103,15 +103,15 @@ function listAccounts(): Account[] {
 /**
  * Cost of ONE queued run.
  *
- * Not stored, and deliberately: a run is a time window on a session that already has per-turn usage
- * in its transcript, so the honest number is the one computed by re-reading that window. Storing it
- * would add a second figure that can disagree with the session's own.
+ * Not stored, and deliberately: a run is a time window on a session whose calls the analytics kit
+ * already holds, so the honest number is that window of the session's own rows. Storing it would add
+ * a second figure that can disagree with the session's own.
  */
-app.get('/api/queue/:id/cost', async (c) => {
+app.get('/api/queue/:id/cost', (c) => {
   const id = c.req.param('id')
   const item = db.query<QueueItem, [string]>('select * from queue_items where id = ?').get(id)
   if (!item) return c.json({ error: 'run not found' }, 404)
-  return c.json(await runCost(coerceQueueItem(item)))
+  return c.json(runCost(coerceQueueItem(item)))
 })
 
 // --- accounts ---------------------------------------------------------------
