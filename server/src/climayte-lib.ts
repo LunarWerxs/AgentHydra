@@ -94,6 +94,11 @@ export interface CliMayteAttempt {
   /** Set when the attempt was charged before the analytics kit had ingested all of its transcript:
    *  the cost charged then. settleSpends reads it again once the kit catches up, then clears this. */
   spendOpen?: number
+  /** When settleSpends last read the kit for this open attempt (it reads at most once a minute). */
+  spendReadAt?: number
+  /** True when the kit never covered this attempt's files within SPEND_SETTLE_CAP_MS: its spend is
+   *  whatever the kit held then and may be short. */
+  spendCapped?: true
   /** The session this attempt ran in. A planned handoff starts a new one, so the worker's current
    *  `sessionId` is not every attempt's. null: the log names none (the CLI never started). */
   sessionId?: string | null

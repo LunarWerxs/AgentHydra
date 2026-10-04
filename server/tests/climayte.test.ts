@@ -370,14 +370,60 @@ describe('attemptSpend', () => {
       // The sweep reaches the end of the file.
       store.upsertEvents([call('last', iso(9.5))])
       store.setCursor({ path: file, size: statSync(file).size, mtime: end, offset: 0, version: 3 })
-      expect(settleSpends(end + 10_000)).toBe(true)
+      expect(settleSpends(end + 61_000)).toBe(true)
       expect(at.spendOpen).toBeUndefined()
       expect(at.tokens).toEqual({ input: 20, output: 2_000, cacheRead: 40_000, cacheWrite: 0 })
       expect(at.spend).toMatchObject({ costUsd: 1, turns: 2 })
       // The task holds exactly the attempt's figures: the late part added, the early part not twice.
       expect(w.costUsd).toBeCloseTo(1, 10)
       expect(w.tokens).toEqual(at.tokens)
-      expect(settleSpends(end + 20_000)).toBe(false)
+      expect(settleSpends(end + 80_000)).toBe(false)
+    } finally {
+      setSpendKit(harnessKit)
+      workers.delete(w.id)
+    }
+  })
+
+  test('a kit stuck in a long sweep is waited for, queried once a minute, and the spend ends exact', () => {
+    const store = new KitStore(':memory:')
+    write([turn(iso(5), 'b'), turn(iso(9.5), 'last')])
+    store.upsertEvents([call('b', iso(5))])
+    const w = {
+      id: 'w-longsweep',
+      costUsd: 0,
+      tokens: undefined,
+      sessionId: 'S',
+      attempts: [
+        {
+          account: { id: 'a', configDir: dir },
+          startedAt: start,
+          endedAt: end,
+          outcome: 'done',
+          sessionId: 'S',
+        },
+      ],
+    } as any
+    const at = w.attempts[0]
+    workers.set(w.id, w)
+    let queries = 0
+    setSpendKit({ store, refresh: () => void queries++ })
+    try {
+      chargeAttempt(w, at, spentOf(w, at))
+      queries = 0
+      // 15 minutes of 5 s ticks with the kit behind: nothing settles, no give-up.
+      for (let t = 5_000; t <= 15 * 60_000; t += 5_000) {
+        expect(settleSpends(end + t)).toBe(false)
+      }
+      expect(queries).toBeLessThanOrEqual(15)
+      expect(at.spendOpen).toBeDefined()
+      expect(at.spendCapped).toBeUndefined()
+      // The sweep finishes.
+      store.upsertEvents([call('last', iso(9.5))])
+      store.setCursor({ path: file, size: statSync(file).size, mtime: end, offset: 0, version: 3 })
+      expect(settleSpends(end + 15 * 60_000 + 65_000)).toBe(true)
+      expect(at.spend).toMatchObject({ costUsd: 1, turns: 2 })
+      expect(w.costUsd).toBeCloseTo(1, 10)
+      expect(w.tokens).toEqual(at.tokens)
     } finally {
       setSpendKit(harnessKit)
       workers.delete(w.id)

@@ -894,9 +894,15 @@ function readSpend(
   return attemptSpend(dir, instance, session, startedAt, endedAt, spendKit?.store)
 }
 
-/** How long after an attempt ended the kit gets to catch up before its figures are taken as they are
- *  (a sweep is every 60 s; a first sweep after a restart can take longer). */
-const SPEND_SETTLE_MS = 10 * 60_000
+/** Safety cap: how long after an attempt ended the kit may stay behind before its figures are taken as
+ *  they are (flagged `spendCapped`). A sweep is every 60 s, but a sweep after a schema migration or on
+ *  a fresh store can run for 20+ minutes with nothing ingested, so only a file the kit never covers
+ *  reaches this. */
+export const SPEND_SETTLE_CAP_MS = 24 * 3_600_000
+
+/** An open attempt is read again at most this often: each read is a kit query, and the kit changes
+ *  once per sweep. */
+export const SPEND_REREAD_MS = 60_000
 
 /** Charge an ended attempt's spend, and remember when the kit was still behind: `spendOpen` holds
  *  the cost charged so far (the task's tokens and cost already include it). */
@@ -915,7 +921,7 @@ export function chargeAttempt(
 /** The kit reads transcripts on a 60 s sweep, so an attempt charged the moment it ended can be short
  *  of its last minute of calls. Rather than make that sync path wait on an ingest, it is charged
  *  from what the kit has and marked `spendOpen`; once the kit's ingest cursors cover the attempt's
- *  files (or SPEND_SETTLE_MS has passed) it is read again and the difference goes to the attempt and
+ *  files (or SPEND_SETTLE_CAP_MS has passed) it is read again, at most once per SPEND_REREAD_MS, and the difference goes to the attempt and
  *  to its task, so the task's totals end equal to what the transcripts hold. Does nothing, and
  *  reads nothing, with no open attempt. True when any record changed. */
 export function settleSpends(now: number = Date.now()): boolean {
@@ -931,12 +937,18 @@ export function settleSpends(now: number = Date.now()): boolean {
       a.spendOpen = undefined
       continue
     }
+    if (a.spendReadAt !== undefined && now - a.spendReadAt < SPEND_REREAD_MS) continue
+    a.spendReadAt = now
     const spent = readSpend(dir, `cli:${a.account.id}`, session, a.startedAt, a.endedAt)
     if (!spent.found) {
       a.spendOpen = undefined // the transcript is gone: what was charged stands
+      a.spendReadAt = undefined
       continue
     }
-    if (!spent.settled && now - a.endedAt < SPEND_SETTLE_MS) continue
+    if (!spent.settled) {
+      if (now - a.endedAt < SPEND_SETTLE_CAP_MS) continue
+      a.spendCapped = true // the kit never covered its files: taken as it is, and said so
+    }
     const was = a.tokens ?? noTokens()
     w.costUsd += spent.costUsd - (a.spendOpen ?? 0)
     w.tokens = addTokens(w.tokens, {
@@ -948,6 +960,7 @@ export function settleSpends(now: number = Date.now()): boolean {
     a.tokens = spent.tokens
     a.spend = spendRecord(w, a, spent)
     a.spendOpen = undefined
+    a.spendReadAt = undefined
     dirty.add(w.id)
     any = true
   }
