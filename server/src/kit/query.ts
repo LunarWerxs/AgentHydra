@@ -9,7 +9,7 @@ import type { Database } from 'bun:sqlite'
 import { getCachedUsage } from '../usage-cache'
 import { legacySpan } from './ingest-legacy'
 import { machineId } from './machine'
-import { eventMeasureSql, KIT_SESSION_KEY } from './schema'
+import { eventMeasureSql, KIT_SESSION_KEY, LAZY_INDEX_NAMES } from './schema'
 import { KitStore, RAW_RETENTION_DAYS } from './store'
 
 const HOUR_MS = 3_600_000
@@ -214,6 +214,8 @@ const toList = <T>(v: One<T> | undefined): T[] | null =>
 interface Where {
   sql: string
   args: (string | number)[]
+  /** The calls this reads all lie in [first, last] (a ledger row's span): a range is cut to it. */
+  span?: Range
 }
 
 /** `col in (...)` clauses for the dimension filters both tables share. `nul` maps the rollup's '' back. */
@@ -485,6 +487,15 @@ function* computeUsage(
 ): Generator<void, UsageResult, void> {
   const db = store.db
   const now = opts.now ?? Date.now()
+  const have = new Set(
+    (
+      db
+        .query(
+          `select name from sqlite_master where type = 'index' and name in (${LAZY_INDEX_NAMES.map((n) => `'${n}'`).join(', ')})`,
+        )
+        .all() as { name: string }[]
+    ).map((r) => r.name),
+  )
   if (params.tz) new Intl.DateTimeFormat('en-CA', { timeZone: params.tz }) // throws RangeError on a bad zone
   const win = resolveWindow(params.window, now, opts.quota ?? cachedQuota(db))
   const filter = params.filter ?? {}
@@ -591,19 +602,78 @@ function* computeUsage(
     }
     const unsettledKeys = new Set(unsettled.map((x) => `${x.s}${x.r}`))
     const cutRows: Record<string, string | number>[] = []
-    for (const [from, to] of openEnded(pieces(win.from, Math.max(win.to, now), DAY_MS, sliced))) {
+    const cols = `${KIT_SESSION_KEY.join(', ')}, first_ts, last_ts`
+    // Rows that begin before the window and reach into it. When few rows begin before it they are an
+    // index range on first_ts; otherwise the rows still active at its start are read from the (last_ts,
+    // first_ts) index, a day of it at a time. Planned by hand: left to itself SQLite scans the whole ledger.
+    const older = have.has('usage_session_span')
+      ? (
+          db
+            .query(
+              'select count(*) as n from (select 1 from usage_session indexed by usage_session_ts where first_ts < ? limit ?)',
+            )
+            .get(win.from, CUT_SCAN_ROWS + 1) as { n: number }
+        ).n
+      : 0
+    if (!have.has('usage_session_span')) {
+      for (const [from, to] of openEnded(pieces(win.from, Math.max(win.to, now), DAY_MS, sliced))) {
+        cutRows.push(
+          ...(db
+            .query(
+              `select ${cols} from usage_session
+          where ${sessWhere.sql}${dim.sql} and +first_ts <= ? and last_ts >= ? and last_ts <= ? and (first_ts < ? or last_ts > ?)`,
+            )
+            .all(...sessWhere.args, ...dim.args, win.to, from, to, win.from, win.to) as Record<
+            string,
+            string | number
+          >[]),
+        )
+        if (sliced) yield
+      }
+    } else {
+      if (older <= CUT_SCAN_ROWS) {
+        cutRows.push(
+          ...(db
+            .query(
+              `select ${cols} from usage_session indexed by usage_session_ts
+          where ${sessWhere.sql}${dim.sql} and first_ts < ? and last_ts >= ? and first_ts <= ?`,
+            )
+            .all(...sessWhere.args, ...dim.args, win.from, win.from, win.to) as Record<
+            string,
+            string | number
+          >[]),
+        )
+        if (sliced) yield
+      } else {
+        for (const [from, to] of openEnded(
+          pieces(win.from, Math.max(win.to, now), DAY_MS, sliced),
+        )) {
+          cutRows.push(
+            ...(db
+              .query(
+                `select ${cols} from usage_session indexed by usage_session_span
+            where ${sessWhere.sql}${dim.sql} and last_ts >= ? and last_ts <= ? and first_ts < ? and first_ts <= ?`,
+              )
+              .all(...sessWhere.args, ...dim.args, from, to, win.from, win.to) as Record<
+              string,
+              string | number
+            >[]),
+          )
+          if (sliced) yield
+        }
+      }
+      // Rows that begin inside it and run past its end.
       cutRows.push(
         ...(db
           .query(
-            `select ${KIT_SESSION_KEY.join(', ')}, first_ts, last_ts from usage_session
-          where ${sessWhere.sql}${dim.sql} and +first_ts <= ? and last_ts >= ? and last_ts <= ? and (first_ts < ? or last_ts > ?)`,
+            `select ${cols} from usage_session indexed by usage_session_span
+          where ${sessWhere.sql}${dim.sql} and last_ts > ? and first_ts >= ? and first_ts <= ?`,
           )
-          .all(...sessWhere.args, ...dim.args, win.to, from, to, win.from, win.to) as Record<
+          .all(...sessWhere.args, ...dim.args, win.to, win.from, win.to) as Record<
           string,
           string | number
         >[]),
       )
-      if (sliced) yield
     }
     const cut = cutRows.filter((r) => !unsettledKeys.has(`${r.session}${r.ref}`))
     if (unsettled.length) {
@@ -663,7 +733,10 @@ function* computeUsage(
         sql: " and coalesce(session, '') = ? and coalesce(ref, '') = ?",
         args: [x.s, x.r],
       })),
-      ...direct.map(keyScope),
+      ...direct.map((r) => ({
+        ...keyScope(r),
+        span: [r.first_ts as number, r.last_ts as number] as Range,
+      })),
     ]
     if (scopes.length > MAX_PAIR_SEEKS) {
       scopes = scopes.slice(0, MAX_PAIR_SEEKS)
@@ -699,10 +772,18 @@ function* computeUsage(
     }
   }
   // A seek per scope is cheap; a thousand of them cut into pieces each is not worth the statements.
-  const rawStep = scopes.length <= 100 ? 6 * HOUR_MS : Number.POSITIVE_INFINITY
+  // With the (session, ref, ts) index a scope's calls are one seek however long its span, so only a
+  // store still without it reads in pieces; each scope reads no further than its own first and last call.
+  const rawStep =
+    scopes.length <= 100 && !have.has('usage_event_session_ts')
+      ? 6 * HOUR_MS
+      : Number.POSITIVE_INFINITY
   for (const [rangeFrom, rangeTo] of rawRanges) {
     for (const scope of scopes) {
-      for (const [from, to] of pieces(rangeFrom, rangeTo, rawStep, sliced)) {
+      const lo = Math.max(rangeFrom, scope.span?.[0] ?? rangeFrom)
+      const hi = Math.min(rangeTo, scope.span?.[1] ?? rangeTo)
+      if (lo > hi) continue
+      for (const [from, to] of pieces(lo, hi, rawStep, sliced)) {
         take(
           selectRows(
             db,
@@ -1037,6 +1118,8 @@ const LEDGER_BAND_ROWS = 3000
 const LEDGER_PAGE_ROWS = 4000
 /** Most raw rows read to find the sessions with calls newer than the last rollup. */
 const MAX_FRESH_ROWS = 30_000
+/** Ledger rows that begin before a window up to which they are read by first_ts instead of by last_ts. */
+const CUT_SCAN_ROWS = 5000
 
 function* coverage(
   store: KitStore,

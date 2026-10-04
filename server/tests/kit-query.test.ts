@@ -508,6 +508,54 @@ describe('regressions: live rows, stale rollup, zones', () => {
     st.close()
   })
 
+  const indexCases: [string, string[]][] = [
+    ['with the ledger indexes', []],
+    ['without them', ['usage_session_span', 'usage_event_session_ts']],
+  ]
+  test.each(indexCases)(
+    'a window cut at either end counts each session only inside it, %s',
+    async (_name, drop) => {
+      const rows = (st: KitStore) => {
+        st.upsertEvents([
+          row('h1', NOW - 8 * D, { session: 'head', list_usd: 1 }),
+          row('h2', NOW - 6 * D, { session: 'head', list_usd: 2 }),
+          row('h3', NOW - 5 * D, { session: 'head', list_usd: 4 }),
+          row('t1', NOW - 4 * D, { session: 'tail', list_usd: 8 }),
+          row('t2', NOW - 3 * D, { session: 'tail', list_usd: 16 }),
+          row('t3', NOW - D, { session: 'tail', list_usd: 32 }),
+          row('w1', NOW - 30 * D, { session: 'wide', list_usd: 64 }),
+          row('w2', NOW - 4 * D - 6 * H, { session: 'wide', list_usd: 128 }),
+          row('w3', NOW - D, { session: 'wide', list_usd: 256 }),
+          row('i1', NOW - 4 * D - H, { session: 'inside', list_usd: 512 }),
+          row('o1', NOW - D, { session: 'outside', list_usd: 1024 }),
+        ])
+        st.runMaintenance(NOW)
+        for (const index of drop) st.db.exec(`drop index if exists ${index}`)
+      }
+      const params: UsageQueryParams = {
+        window: { from: NOW - 7 * D, to: NOW - 2 * D },
+        groupBy: ['session'],
+        measures: ['calls', 'list_usd'],
+      }
+      const expected = [
+        { session: 'head', calls: 2, list_usd: 6 },
+        { session: 'inside', calls: 1, list_usd: 512 },
+        { session: 'tail', calls: 2, list_usd: 24 },
+        { session: 'wide', calls: 1, list_usd: 128 },
+      ]
+      const bySession = (r: { rows: Record<string, unknown>[] }) =>
+        [...r.rows].sort((a, b) => String(a.session).localeCompare(String(b.session)))
+      const a = mk().st
+      const b = mk().st
+      rows(a)
+      rows(b)
+      expect(bySession(usageQuery(params, { store: a, now: NOW }))).toEqual(expected)
+      expect(bySession(await usageQueryAsync(params, { store: b, now: NOW }))).toEqual(expected)
+      a.close()
+      b.close()
+    },
+  )
+
   test('a half-hour zone puts a call at 00:10 local on its own day', () => {
     const { st, run } = mk()
     st.upsertEvents([row('z1', Date.UTC(2026, 5, 14, 18, 40))])
