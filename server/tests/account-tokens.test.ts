@@ -1,10 +1,11 @@
 // Tokens per ACCOUNT (core/account-tokens.ts): a message is credited to the account signed in to
 // its instance when it was written, one usage per reply, and a window counts only what is inside it.
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { accountTokens, refreshAccountTokens } from '../src/core/account-tokens'
 import { createCliInstance, deleteCliInstance } from '../src/core/cli-instances'
+import type { TokenParts } from '../src/types'
 
 const created: { id: string; name: string }[] = []
 afterAll(() => {
@@ -74,6 +75,36 @@ describe('accountTokens', () => {
     await refreshAccountTokens()
     expect(accountTokens(ACCOUNT_B)?.total.total).toBe(8)
     expect(accountTokens(ACCOUNT_A)?.total.total).toBe(360)
+  })
+
+  test('a transcript that grows gives the totals of reading it whole, a reply split by the append included', async () => {
+    const now = Date.now()
+    const first = Array.from({ length: 12 }, (_, i) =>
+      reply(`g${i}`, now - (i < 3 ? 20 * 24 : 1) * HOUR + i, 10 + i, 1, 5, 2),
+    ).join('')
+    // The last reply of `first` streams on after the append boundary with a larger usage; a new
+    // reply follows, and an unfinished line (no newline yet) is completed by the second append.
+    const unfinished = reply('g20', now, 3, 1, 0, 0)
+    const cut = unfinished.length - 9
+    const second =
+      reply('g11', now, 99, 1, 5, 2) + reply('g12', now, 4, 1, 0, 0) + unfinished.slice(0, cut)
+    const third = unfinished.slice(cut) + reply('g20', now, 6, 1, 0, 0)
+
+    const grown = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    const whole = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const dir = instanceHolding(grown, first)
+    const file = join(dir, 'projects', 'p', 's1.jsonl')
+    await refreshAccountTokens()
+    appendFileSync(file, second)
+    await refreshAccountTokens()
+    appendFileSync(file, third)
+    instanceHolding(whole, first + second + third)
+    await refreshAccountTokens()
+
+    const expected = accountTokens(whole)?.total
+    expect(expected?.output).toBe(10 + 11 + 12 + 13 + 14 + 15 + 16 + 17 + 18 + 19 + 20 + 99 + 4 + 6)
+    expect(accountTokens(grown)?.total).toEqual(expected as TokenParts)
+    expect(accountTokens(grown)?.week).toEqual(accountTokens(whole)?.week as TokenParts)
   })
 
   test('the 5-hour window counts only messages since it began', async () => {

@@ -32,9 +32,15 @@
 // Counting lines read 2.2 times too high on a real orchestrator chat (2026-10-01).
 //
 // Served stale-while-revalidate: routes answer from memory and a sweep older than a minute starts
-// another in the background. A sweep re-reads only transcripts whose size or mtime moved (a first
-// one read ~600 MB across ten instances in 1.3 s, 2026-10-01); everything else is a stat.
+// another in the background. A sweep re-reads only transcripts whose size or mtime moved, and a
+// transcript that only GREW is read from where it left off (transcripts are append-only): the cached
+// entry keeps the byte where the last HOLD_BACK replies begin, those replies are parsed again with
+// the new bytes so a reply streamed across the append is replaced, not added twice. A shrunk or
+// rewritten file (the bytes just before the offset differ) is read whole. Everything else is a stat,
+// and a transcript untouched for an hour is stat'd on every QUIET_PASS-th sweep only. A warm sweep
+// on a PC with 50k transcripts went from 31-35 s to ~2.5 s (2026-10-03).
 
+import type { Stats } from 'node:fs'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -52,12 +58,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** Flat message rows, `STRIDE` numbers each: time (ms), input, output, cache read, cache write. */
 const STRIDE = 5
 
-/** One transcript's messages: one usage per message id, the last one written. `fallbackTs` stamps a
- *  line that carries no timestamp (the file's own mtime). */
-export function messagesInTranscript(text: string, fallbackTs: number): number[] {
-  const byMessage = new Map<string, number[]>()
+/** One transcript's messages, in order of first appearance, with the line each first appeared on. */
+function parseMessages(
+  text: string,
+  fallbackTs: number,
+): { rows: number[]; firstLine: number[]; lines: string[] } {
+  const byMessage = new Map<string, { row: number[]; line: number }>()
   let unnamed = 0
-  for (const line of text.split('\n')) {
+  const lines = text.split('\n')
+  for (let n = 0; n < lines.length; n++) {
+    const line = lines[n] as string
     if (!line.includes('"usage"')) continue
     let entry: {
       type?: string
@@ -72,15 +82,26 @@ export function messagesInTranscript(text: string, fallbackTs: number): number[]
     const usage = entry?.message?.usage
     if (entry?.type !== 'assistant' || !usage) continue
     const ts = Date.parse(entry.timestamp ?? '')
-    byMessage.set(entry.message?.id ?? `line-${unnamed++}`, [
-      Number.isFinite(ts) ? ts : fallbackTs,
-      Number(usage.input_tokens) || 0,
-      Number(usage.output_tokens) || 0,
-      Number(usage.cache_read_input_tokens) || 0,
-      Number(usage.cache_creation_input_tokens) || 0,
-    ])
+    const id = entry.message?.id ?? `line-${unnamed++}`
+    byMessage.set(id, {
+      row: [
+        Number.isFinite(ts) ? ts : fallbackTs,
+        Number(usage.input_tokens) || 0,
+        Number(usage.output_tokens) || 0,
+        Number(usage.cache_read_input_tokens) || 0,
+        Number(usage.cache_creation_input_tokens) || 0,
+      ],
+      line: byMessage.get(id)?.line ?? n,
+    })
   }
-  return [...byMessage.values()].flat()
+  const all = [...byMessage.values()]
+  return { rows: all.flatMap((m) => m.row), firstLine: all.map((m) => m.line), lines }
+}
+
+/** One transcript's messages: one usage per message id, the last one written. `fallbackTs` stamps a
+ *  line that carries no timestamp (the file's own mtime). */
+export function messagesInTranscript(text: string, fallbackTs: number): number[] {
+  return parseMessages(text, fallbackTs).rows
 }
 
 // --- who held each CLI instance, and since when -----------------------------------------------
@@ -175,10 +196,34 @@ interface FileEntry {
   old: Record<string, number[]>
   /** The rest, flat rows (see STRIDE), holder not yet applied. */
   recent: number[]
+  /** Incremental reads: the byte where the next read starts, a line start at or before the first
+   *  line of the last HOLD_BACK replies, so a reply streamed across an append is seen whole. Absent
+   *  in entries cached before this existed: those are re-read whole when they change. */
+  offset?: number
+  /** The ANCHOR bytes before `offset` (base64): the check that the file only grew. */
+  anchor?: string
+  /** Messages from `offset` on (flat rows), derived again by each incremental read. */
+  tail?: number[]
 }
+
+const HOLD_BACK = 4
+const ANCHOR = 64
+/** A first sweep reads this many files, then yields, so the daemon stays responsive. */
+const READS_PER_YIELD = 4
+const STAT_WORKERS = 32
+const QUIET_MS = 3_600_000
+const QUIET_PASS = 5
+let sweepNo = 0
+/** Every QUIET_PASS-th sweep (the first included) stats every transcript; the sweeps between stat
+ *  only the live ones. */
+const fullSweep = () => sweepNo % QUIET_PASS === 1
+let readsSinceYield = 0
 const cliFiles = new Map<string, FileEntry>()
 const desktopFiles = new Map<string, FileEntry>()
 let cacheDirty = false
+let savedAt = 0
+/** Saving rewrites the whole cache (tens of MB); a crash only costs re-reading what grew since. */
+const SAVE_EVERY_MS = 300_000
 
 async function transcriptsUnder(dir: string): Promise<string[]> {
   let entries: import('node:fs').Dirent[]
@@ -196,39 +241,154 @@ async function transcriptsUnder(dir: string): Promise<string[]> {
   return out
 }
 
-/** The file's entry, re-read only when its size or mtime moved. `holder` names the account a message
- *  at that time belongs to (null: nobody); `OWNER` marks "the file's owner". */
+/** The shared store's transcripts that belong to a known desktop chat, with that chat's session id:
+ *  `<project>/<session>.jsonl` and `<project>/<session>/subagents/<agent>.jsonl`. Folders of chats
+ *  nobody has a record of are never opened (most of a big store), and projects are listed together. */
+async function desktopTranscripts(
+  root: string,
+  known: (sid: string) => boolean,
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>()
+  const list = (dir: string) =>
+    readdir(dir, { withFileTypes: true }).catch(() => [] as import('node:fs').Dirent[])
+  await Promise.all(
+    (await list(root))
+      .filter((p) => p.isDirectory())
+      .map(async (project) => {
+        const dir = join(root, project.name)
+        for (const e of await list(dir)) {
+          if (e.isDirectory()) {
+            if (!known(e.name)) continue
+            for (const path of await transcriptsUnder(join(dir, e.name))) found.set(path, e.name)
+          } else if (e.name.endsWith('.jsonl')) {
+            const sid = e.name.slice(0, -'.jsonl'.length)
+            if (known(sid)) found.set(join(dir, e.name), sid)
+          }
+        }
+      }),
+  )
+  return found
+}
+
+/** Put message rows into an entry: older than the horizon into the per-holder sums, the rest kept. */
+function fold(
+  entry: FileEntry,
+  rows: number[],
+  horizon: number,
+  holder: (ts: number) => string | null,
+): void {
+  for (let i = 0; i < rows.length; i += STRIDE) {
+    const ts = rows[i] as number
+    if (ts >= horizon) {
+      for (let k = 0; k < STRIDE; k++) entry.recent.push(rows[i + k] as number)
+      continue
+    }
+    const who = holder(ts)
+    if (who === null) continue
+    const sum = entry.old[who] ?? [0, 0, 0, 0]
+    entry.old[who] = sum
+    for (let k = 0; k < 4; k++) sum[k] = (sum[k] as number) + (rows[i + 1 + k] as number)
+  }
+}
+
+/** `stat` for many paths at once (a PC has tens of thousands of transcripts; one at a time that is
+ *  seconds of waiting). A path that cannot be read maps to null. */
+async function statAll(
+  files: Map<string, FileEntry>,
+  paths: Iterable<string>,
+): Promise<{ stats: Map<string, Stats | null>; quiet: Set<string> }> {
+  // A transcript untouched for QUIET_MS is looked at again only on a full sweep: a chat
+  // picked up again after a long rest is noticed within minutes, and a warm sweep stats the few
+  // thousand live files instead of every one of the tens of thousands.
+  const quiet = new Set<string>()
+  const todo: string[] = []
+  const cutoff = Date.now() - QUIET_MS
+  for (const path of paths) {
+    const known = files.get(path)
+    if (known && known.mtimeMs < cutoff && !fullSweep()) quiet.add(path)
+    else todo.push(path)
+  }
+  const stats = new Map<string, Stats | null>()
+  let next = 0
+  const worker = async () => {
+    for (; next < todo.length; ) {
+      const path = todo[next++] as string
+      stats.set(path, await stat(path).catch(() => null))
+    }
+  }
+  await Promise.all(Array.from({ length: STAT_WORKERS }, worker))
+  return { stats, quiet }
+}
+
+/** The file's entry, re-read only when its size or mtime moved, and only from where it left off when
+ *  the file merely grew. `holder` names the account a message at that time belongs to (null: nobody);
+ *  `OWNER` marks "the file's owner". */
 async function entryOf(
   files: Map<string, FileEntry>,
   path: string,
+  s: Stats | null,
   holder: (ts: number) => string | null,
 ): Promise<FileEntry | null> {
   try {
-    const s = await stat(path)
+    if (!s) return null
     const known = files.get(path)
     if (known && known.mtimeMs === s.mtimeMs && known.size === s.size) return known
-    const messages = messagesInTranscript(await Bun.file(path).text(), s.mtimeMs)
-    const horizon = Date.now() - RECENT_MS
-    const entry: FileEntry = { mtimeMs: s.mtimeMs, size: s.size, old: {}, recent: [] }
-    for (let i = 0; i < messages.length; i += STRIDE) {
-      const ts = messages[i] as number
-      if (ts >= horizon) {
-        for (let k = 0; k < STRIDE; k++) entry.recent.push(messages[i + k] as number)
-        continue
-      }
-      const who = holder(ts)
-      if (who === null) continue
-      const sum = entry.old[who] ?? [0, 0, 0, 0]
-      entry.old[who] = sum
-      for (let k = 0; k < 4; k++) sum[k] = (sum[k] as number) + (messages[i + 1 + k] as number)
+    if (++readsSinceYield % READS_PER_YIELD === 0) await new Promise((r) => setTimeout(r, 1))
+    const file = Bun.file(path)
+
+    // Grown only: read from just before the saved offset, and check those bytes are unchanged.
+    if (known && known.offset !== undefined && s.size > known.size && known.offset <= known.size) {
+      const from = Math.max(0, known.offset - ANCHOR)
+      const bytes = Buffer.from(await file.slice(from, s.size).arrayBuffer())
+      const kept = known.offset - from
+      if (bytes.subarray(0, kept).toString('base64') === (known.anchor ?? ''))
+        return settle(files, path, s.mtimeMs, bytes, kept, from, known, holder)
     }
-    files.set(path, entry)
-    cacheDirty = true
-    return entry
+    const bytes = Buffer.from(await file.slice(0, s.size).arrayBuffer())
+    return settle(files, path, s.mtimeMs, bytes, 0, 0, null, holder)
   } catch {
     // Gone or locked since the folder was listed; the next sweep reads it again.
     return null
   }
+}
+
+/** Parse `bytes` (the file from byte `start`; its first `skip` bytes are already counted in `prefix`),
+ *  settle every reply but the last HOLD_BACK into the entry and keep those as the tail. */
+function settle(
+  files: Map<string, FileEntry>,
+  path: string,
+  mtimeMs: number,
+  bytes: Buffer,
+  skip: number,
+  start: number,
+  prefix: FileEntry | null,
+  holder: (ts: number) => string | null,
+): FileEntry {
+  const { rows, firstLine, lines } = parseMessages(bytes.subarray(skip).toString('utf8'), mtimeMs)
+  const count = firstLine.length
+  // The tail begins at the first line of the HOLD_BACK-th reply from the end, never past a trailing
+  // line with no newline yet (it is read again once finished).
+  let lineAt = count > HOLD_BACK ? (firstLine[count - HOLD_BACK] as number) : 0
+  const last = lines.length - 1
+  if ((lines[last] as string) !== '') lineAt = Math.min(lineAt, last)
+  const settled = count > HOLD_BACK ? (count - HOLD_BACK) * STRIDE : 0
+  const offset = start + bytes.length - Buffer.byteLength(lines.slice(lineAt).join('\n'))
+  const entry: FileEntry = {
+    mtimeMs,
+    size: start + bytes.length,
+    old: prefix ? structuredClone(prefix.old) : {},
+    recent: [],
+    offset,
+    anchor: bytes.subarray(Math.max(0, offset - start - ANCHOR), offset - start).toString('base64'),
+  }
+  const horizon = Date.now() - RECENT_MS
+  // Rows kept earlier age too: those now past the horizon fold into the sums.
+  if (prefix) fold(entry, prefix.recent, horizon, holder)
+  fold(entry, rows.slice(0, settled), horizon, holder)
+  entry.tail = rows.slice(settled)
+  files.set(path, entry)
+  cacheDirty = true
+  return entry
 }
 
 // What was read survives a restart: reading tens of gigabytes of transcripts again costs minutes.
@@ -263,6 +423,7 @@ function saveCache(): void {
     )
     renameSync(tmp, file)
     cacheDirty = false
+    savedAt = Date.now()
   } catch {
     // Best effort.
   }
@@ -301,6 +462,7 @@ function ledgerOf(old: number[], rows: number[]): Ledger {
 }
 
 async function sweep(): Promise<void> {
+  sweepNo++
   if (!cacheLoaded) {
     cacheLoaded = true
     loadCache()
@@ -329,15 +491,20 @@ async function sweep(): Promise<void> {
     holders[inst.configDir] = history
     holdersChanged =
       noteHolder(history, cliAccountUuid(inst.configDir, inst.loggedIn), now) || holdersChanged
-    for (const path of await transcriptsUnder(join(inst.configDir, 'projects'))) {
+    const paths = await transcriptsUnder(join(inst.configDir, 'projects'))
+    const { stats, quiet } = await statAll(cliFiles, paths)
+    for (const path of paths) {
       seenCli.add(path)
-      const entry = await entryOf(cliFiles, path, (ts) => holderAt(history, ts))
+      const entry = quiet.has(path)
+        ? cliFiles.get(path)
+        : await entryOf(cliFiles, path, stats.get(path) ?? null, (ts) => holderAt(history, ts))
       if (!entry) continue
       for (const [who, sum] of Object.entries(entry.old)) creditOld(who, sum)
-      for (let i = 0; i < entry.recent.length; i += STRIDE) {
-        const who = holderAt(history, entry.recent[i] as number)
-        if (who) creditRecent(who, entry.recent, i)
-      }
+      for (const rows of [entry.recent, entry.tail ?? []])
+        for (let i = 0; i < rows.length; i += STRIDE) {
+          const who = holderAt(history, rows[i] as number)
+          if (who) creditRecent(who, rows, i)
+        }
     }
   }
   if (holdersChanged) writeHolders(holders)
@@ -356,17 +523,18 @@ async function sweep(): Promise<void> {
     }
   }
   if (accountOf.size) {
-    for (const path of await transcriptsUnder(CLAUDE_PROJECTS_ROOT)) {
-      // `<project>/<session>.jsonl`, or `<project>/<session>/subagents/<agent>.jsonl`.
-      const parts = path.slice(CLAUDE_PROJECTS_ROOT.length).split(/[\\/]/)
-      const sid = parts.map((p) => p.replace(/\.jsonl$/, '')).find((p) => accountOf.has(p))
-      if (!sid) continue // not a desktop chat's: nothing is read for it
+    const chatFiles = await desktopTranscripts(CLAUDE_PROJECTS_ROOT, (sid) => accountOf.has(sid))
+    const { stats, quiet } = await statAll(desktopFiles, chatFiles.keys())
+    for (const [path, sid] of chatFiles) {
       seenDesktop.add(path)
-      const entry = await entryOf(desktopFiles, path, () => OWNER)
+      const entry = quiet.has(path)
+        ? desktopFiles.get(path)
+        : await entryOf(desktopFiles, path, stats.get(path) ?? null, () => OWNER)
       if (!entry) continue
       const owner = accountOf.get(sid) as string
       for (const sum of Object.values(entry.old)) creditOld(owner, sum)
-      for (let i = 0; i < entry.recent.length; i += STRIDE) creditRecent(owner, entry.recent, i)
+      for (const rows of [entry.recent, entry.tail ?? []])
+        for (let i = 0; i < rows.length; i += STRIDE) creditRecent(owner, rows, i)
     }
   }
 
@@ -382,7 +550,7 @@ async function sweep(): Promise<void> {
         files.delete(path)
         cacheDirty = true
       }
-  if (cacheDirty) saveCache()
+  if (cacheDirty && Date.now() - savedAt > SAVE_EVERY_MS) saveCache()
   sweptAt = Date.now()
 }
 
