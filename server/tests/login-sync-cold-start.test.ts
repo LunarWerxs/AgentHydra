@@ -23,6 +23,7 @@ type Env = {
   DB: ReturnType<typeof d1>
   TOKEN_SHA256: string
   HEAD: ReturnType<typeof headNamespace>
+  CHAT_STORE_MB?: string
 }
 /** The bindings of one store: its D1 and its StoreHead Durable Object, which runs in an isolate of its
  *  own (its own module copy, so its schema check is its own too). */
@@ -101,7 +102,8 @@ const poll = (w: W, e: Env, since: number, inm: boolean, pc = thisPc) =>
   )
 const putLogin = (w: W, e: Env, id: string) =>
   ask(w, e, `/v1/logins/${id}`, 'PUT', { version: 0, blob: 'x', meta: {} })
-const HEAD_READ = 'SELECT rev, floor, logins_rev, queues_rev, chats_rev FROM store_rev WHERE id = 1'
+const HEAD_READ =
+  'SELECT rev, floor, logins_rev, queues_rev, chats_rev, gone_rev FROM store_rev WHERE id = 1'
 
 test('an idle changes poll from a cold isolate runs no D1 statement and answers 304 with the other PCs in x-seen', async () => {
   const sqlite = new Database(':memory:')
@@ -187,4 +189,137 @@ test('a write whose head update is lost is still in the next poll, and idle poll
   } finally {
     Date.now = realNow
   }
+})
+
+// What a PC's pass costs the store, statement by statement and row by row, for the four cases of an
+// active hour: nothing changed, one chat written, one login written, and a burst of chunk uploads.
+// Before the per-table revs in the head, every write made each PC's next poll run all four table
+// queries plus the tombstones one (4 statements); a chunk write read the chat_usage row each time.
+const uuid = () => crypto.randomUUID()
+const putChat = (w: W, e: Env, id: string, version: number) =>
+  ask(w, e, `/v1/chats/${id}`, 'PUT', { version, blob: 'x', meta: { s: id } })
+const putChunk = (w: W, e: Env, chat: string, seq: number, blob: string) =>
+  ask(w, e, `/v1/chats/${chat}/chunks/${seq}`, 'PUT', { blob, by: 'pc' })
+const cost = (db: ReturnType<typeof d1>) => ({
+  statements: db.statements().reduce((n, s) => n + s.calls, 0),
+  rows: db.rowsRead(),
+  sql: db.statements().map((s) => s.sql),
+})
+const shape = { rev: expect.any(Number), logins: [], queues: [], chats: [], gone: [] }
+
+test('a poll after one chat write runs the chats query only; an idle poll runs none', async () => {
+  const db = d1(new Database(':memory:'))
+  const e = await storeEnv(db, 'cost-chat')
+  const w = await load('cost-chat')
+  await putLogin(w, e, uuid())
+  const chat = uuid()
+  await putChat(w, e, chat, 0)
+  const cursor = 2
+
+  db.resetRowsRead()
+  expect((await poll(w, e, cursor, true)).status).toBe(304)
+  const idle = cost(db)
+  expect(idle.statements).toBe(0)
+
+  await putChat(w, e, chat, 1)
+  db.resetRowsRead()
+  const res = await poll(w, e, cursor, true)
+  const after = cost(db)
+  console.log('poll after one chat write:', JSON.stringify(after), '(was 4 statements)')
+  const body = (await res.json()) as any
+  expect(body).toEqual({ ...shape, rev: 3, chats: [expect.objectContaining({ id: chat })] })
+  expect(after.sql).toHaveLength(1)
+  expect(after.sql[0]).toMatch(/FROM chats WHERE rev > \?/)
+  expect(after.rows).toBe(1)
+})
+
+test('a poll after one login write runs the logins query only', async () => {
+  const db = d1(new Database(':memory:'))
+  const e = await storeEnv(db, 'cost-login')
+  const w = await load('cost-login')
+  await putChat(w, e, uuid(), 0)
+  const login = uuid()
+  await putLogin(w, e, login)
+  db.resetRowsRead()
+  const res = await poll(w, e, 1, true)
+  const after = cost(db)
+  console.log('poll after one login write:', JSON.stringify(after), '(was 4 statements)')
+  expect(await res.json()).toEqual({
+    ...shape,
+    rev: 2,
+    logins: [expect.objectContaining({ id: login })],
+  })
+  expect(after.sql).toHaveLength(1)
+  expect(after.sql[0]).toMatch(/FROM logins WHERE rev > \?/)
+})
+
+test('a delete is still answered with its tombstone, and a poll past it reads nothing', async () => {
+  const db = d1(new Database(':memory:'))
+  const e = await storeEnv(db, 'cost-gone')
+  const w = await load('cost-gone')
+  const chat = uuid()
+  await putChat(w, e, chat, 0)
+  expect((await ask(w, e, `/v1/chats/${chat}?version=1`, 'DELETE')).status).toBe(200)
+  const res = await poll(w, e, 1, true)
+  expect(await res.json()).toEqual({
+    ...shape,
+    rev: 2,
+    chats: [],
+    gone: [{ table: 'chats', id: chat }],
+  })
+  db.resetRowsRead()
+  expect((await poll(w, e, 2, true)).status).toBe(304)
+  expect(db.statements()).toEqual([])
+})
+
+test('a database one schema version behind gets gone_rev from its tombstones, and its old PCs still see them', async () => {
+  const sqlite = new Database(':memory:')
+  const db = d1(sqlite)
+  const e = await storeEnv(db, 'mig-a')
+  await ask(await load('mig-a'), e, '/v1/logins') // migrates to the current schema
+  const gone = uuid()
+  sqlite.run('ALTER TABLE store_rev DROP COLUMN gone_rev')
+  sqlite.run('PRAGMA user_version = 1')
+  sqlite.run('UPDATE store_rev SET rev = 9, logins_rev = 4 WHERE id = 1')
+  sqlite.run(`INSERT INTO tombstones VALUES ('logins', '${gone}', 7, ${Date.now()})`)
+
+  const e2 = await storeEnv(db, 'mig-b') // a new Durable Object and a new Worker isolate
+  const res = await poll(await load('mig-b'), e2, 3, false)
+  expect(await res.json()).toEqual({ ...shape, rev: 9, gone: [{ table: 'logins', id: gone }] })
+  expect(sqlite.query('SELECT gone_rev FROM store_rev').get()).toEqual({ gone_rev: 7 })
+})
+
+test('chunk uploads read no chat_usage row, keep it equal to the chunks, and the room limit survives a restart', async () => {
+  const sqlite = new Database(':memory:')
+  const db = d1(sqlite)
+  const e = await storeEnv(db, 'cost-usage')
+  const w = await load('cost-usage')
+  const chat = uuid()
+  await putChunk(w, e, chat, 0, 'a'.repeat(10)) // the first read of the total, after which it is kept
+  db.resetRowsRead()
+  for (let seq = 1; seq <= 10; seq++)
+    expect((await putChunk(w, e, chat, seq, 'b'.repeat(10))).status).toBe(200)
+  const after = cost(db)
+  console.log(
+    '10 chunk uploads:',
+    after.statements,
+    'statements,',
+    after.rows,
+    'rows (was 40 statements, 30 rows)',
+  )
+  expect(after.sql.some((q) => /SELECT chars FROM chat_usage/.test(q))).toBe(false)
+  const total = sqlite.query('SELECT SUM(length(blob)) AS n FROM chat_chunks').get() as {
+    n: number
+  }
+  expect(sqlite.query('SELECT chars FROM chat_usage').get()).toEqual({ chars: total.n })
+
+  // a repeated seq changes nothing, and the Durable Object evicted still knows the total
+  expect((await putChunk(w, e, chat, 3, 'c'.repeat(10))).status).toBe(409)
+  e.HEAD.evict()
+  expect(sqlite.query('SELECT chars FROM chat_usage').get()).toEqual({ chars: 110 })
+  e.CHAT_STORE_MB = String(125 / 1048576)
+  expect((await putChunk(w, e, chat, 11, 'd'.repeat(10))).status).toBe(200) // 120 of 125
+  expect((await putChunk(w, e, chat, 12, 'd'.repeat(10))).status).toBe(507)
+  e.HEAD.evict()
+  expect((await putChunk(w, e, chat, 12, 'd'.repeat(10))).status).toBe(507)
 })

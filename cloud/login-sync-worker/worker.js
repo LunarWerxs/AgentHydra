@@ -66,7 +66,7 @@ const chatRoom = (env) => {
 }
 
 // Bump when the schema below changes: a database at this PRAGMA user_version is not migrated again.
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 let schemaReady = false
 async function ensureSchema(db) {
   if (schemaReady) return
@@ -103,7 +103,7 @@ async function ensureSchema(db) {
   await db.prepare('CREATE INDEX IF NOT EXISTS tombstones_rev ON tombstones(rev)').run()
   await db
     .prepare(
-      'CREATE TABLE IF NOT EXISTS store_rev (id INTEGER PRIMARY KEY CHECK (id = 1), rev INTEGER NOT NULL, floor INTEGER NOT NULL, logins_rev INTEGER NOT NULL DEFAULT 0, queues_rev INTEGER NOT NULL DEFAULT 0, chats_rev INTEGER NOT NULL DEFAULT 0)',
+      'CREATE TABLE IF NOT EXISTS store_rev (id INTEGER PRIMARY KEY CHECK (id = 1), rev INTEGER NOT NULL, floor INTEGER NOT NULL, logins_rev INTEGER NOT NULL DEFAULT 0, queues_rev INTEGER NOT NULL DEFAULT 0, chats_rev INTEGER NOT NULL DEFAULT 0, gone_rev INTEGER NOT NULL DEFAULT 0)',
     )
     .run()
   await db.prepare('INSERT OR IGNORE INTO store_rev (id, rev, floor) VALUES (1, 0, 0)').run()
@@ -119,6 +119,18 @@ async function ensureSchema(db) {
       .prepare(
         'UPDATE store_rev SET logins_rev = COALESCE((SELECT MAX(rev) FROM logins), 0), queues_rev = COALESCE((SELECT MAX(rev) FROM queues), 0), chats_rev = COALESCE((SELECT MAX(rev) FROM chats), 0)',
       )
+      .run()
+  }
+  // The rev of the newest tombstone, so a changes poll reads the tombstones only when one is past its
+  // cursor. A store_rev without it gets the column, set once from the tombstones.
+  if (
+    !(await db.prepare('PRAGMA table_info(store_rev)').all()).results?.some(
+      (c) => c.name === 'gone_rev',
+    )
+  ) {
+    await db.prepare('ALTER TABLE store_rev ADD COLUMN gone_rev INTEGER NOT NULL DEFAULT 0').run()
+    await db
+      .prepare('UPDATE store_rev SET gone_rev = COALESCE((SELECT MAX(rev) FROM tombstones), 0)')
       .run()
   }
   await db
@@ -227,10 +239,26 @@ const row = (t, r) =>
 // A failed `begin` refuses the write (500), so no write runs without its token. Rejected alternative: re-reading D1 when the copy is older than a few
 // minutes, which costs idle polls rows forever and still shows a change minutes late. A rev moved by
 // hand-run SQL is not seen until the next write; reset the Durable Object with the database.
-const HEAD_SQL = 'SELECT rev, floor, logins_rev, queues_rev, chats_rev FROM store_rev WHERE id = 1'
-const HEAD_FIELDS = ['rev', 'floor', 'logins_rev', 'queues_rev', 'chats_rev']
-const NO_HEAD = { rev: 0, floor: 0, logins_rev: 0, queues_rev: 0, chats_rev: 0 }
+const HEAD_SQL =
+  'SELECT rev, floor, logins_rev, queues_rev, chats_rev, gone_rev FROM store_rev WHERE id = 1'
+const HEAD_FIELDS = ['rev', 'floor', 'logins_rev', 'queues_rev', 'chats_rev', 'gone_rev']
+const NO_HEAD = { rev: 0, floor: 0, logins_rev: 0, queues_rev: 0, chats_rev: 0, gone_rev: 0 }
 const PENDING_MAX_MS = 2 * 60 * 1000
+
+// The characters the chat chunks hold (the chat_usage row), kept in the Durable Object too so a chunk
+// write checks the room without reading D1. D1 stays the truth: each write's batch returns the new
+// total and hands it back (usageSet), and a copy older than USAGE_KEEP_MS, or none, is read from D1
+// once. A lost usageSet leaves the copy short until then; the room check is a limit, not a ledger.
+const USAGE_KEEP_MS = 60 * 60 * 1000
+const usageUsed = async (env, db) => {
+  const kept = await askHead(env, 'usage').catch(() => null)
+  if (Number.isFinite(kept?.chars)) return kept.chars
+  const chars = (await db.prepare('SELECT chars FROM chat_usage WHERE id = 1').first())?.chars ?? 0
+  await askHead(env, 'usageSet', { chars }).catch(() => {})
+  return chars
+}
+const usageNow = (env, chars) =>
+  Number.isFinite(chars) ? askHead(env, 'usageSet', { chars }).catch(() => {}) : undefined
 
 // LIVENESS: each PC names itself on every /v1/changes poll (x-agenthydra-pc, its queue id). The Durable
 // Object stamps lastSeen[pc] in memory on every poll and saves it to its storage when that PC's saved
@@ -264,14 +292,16 @@ export class StoreHead {
   }
 
   async load() {
-    const [head, pending, seen] = await Promise.all([
+    const [head, pending, seen, usage] = await Promise.all([
       this.storage.get('head'),
       this.storage.get('pending'),
       this.storage.get('seen'),
+      this.storage.get('usage'),
     ])
     this.head = isHead(head) ? head : null
     this.pending = new Map(Object.entries(pending ?? {}))
     this.seen = seen ?? {}
+    this.usage = usage ?? null
     this.savedSeen = { ...this.seen }
   }
 
@@ -299,6 +329,18 @@ export class StoreHead {
         await this.storage.put('head', this.head)
         this.pending.delete(body.token)
         await this.savePending()
+      }
+      return json({ ok: true })
+    }
+    if (op === 'usage') {
+      const u = this.usage
+      const fresh = u && Date.now() - u.at >= 0 && Date.now() - u.at < USAGE_KEEP_MS
+      return json({ chars: fresh ? u.chars : null })
+    }
+    if (op === 'usageSet') {
+      if (Number.isFinite(body?.chars) && body.chars >= 0) {
+        this.usage = { chars: body.chars, at: Date.now() }
+        await this.storage.put('usage', this.usage)
       }
       return json({ ok: true })
     }
@@ -521,7 +563,7 @@ async function deleteRow(env, db, t, id, version) {
     const results = await db.batch([
       db
         .prepare(
-          `UPDATE store_rev SET rev = rev + 1, ${t.table}_rev = rev + 1 WHERE id = 1 AND ${has}`,
+          `UPDATE store_rev SET rev = rev + 1, ${t.table}_rev = rev + 1, gone_rev = rev + 1 WHERE id = 1 AND ${has}`,
         )
         .bind(id, version),
       db
@@ -571,10 +613,11 @@ async function deleteChat(env, db, id, version) {
     .first()
   await db.prepare('DELETE FROM chat_chunks WHERE chat = ?').bind(session).run()
   takenKept.delete(session)
-  await db
-    .prepare('UPDATE chat_usage SET chars = MAX(0, chars - ?) WHERE id = 1')
+  const left = await db
+    .prepare('UPDATE chat_usage SET chars = MAX(0, chars - ?) WHERE id = 1 RETURNING chars')
     .bind(freed?.n ?? 0)
-    .run()
+    .first()
+  await usageNow(env, left?.chars)
   return json({ ok: true })
 }
 
@@ -640,17 +683,24 @@ async function putChunk(request, db, env, id, seq) {
     .bind(id, seq)
     .first()
   if (stored) return takenAnswer(db, id, seq)
-  const used = (await db.prepare('SELECT chars FROM chat_usage WHERE id = 1').first())?.chars ?? 0
+  const used = await usageUsed(env, db)
   const room = chatRoom(env)
   if (used + blob.length > room) return json({ error: 'no room for more chats', used, room }, 507)
-  const result = await db
-    .prepare(
-      'INSERT INTO chat_chunks (chat, seq, blob, by, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(chat, seq) DO NOTHING',
-    )
-    .bind(id, seq, blob, by, Date.now())
-    .run()
+  // The insert and the counter are one batch: the counter moves only when the chunk was stored.
+  const [result, total] = await db.batch([
+    db
+      .prepare(
+        'INSERT INTO chat_chunks (chat, seq, blob, by, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(chat, seq) DO NOTHING',
+      )
+      .bind(id, seq, blob, by, Date.now()),
+    db
+      .prepare(
+        'UPDATE chat_usage SET chars = chars + ? WHERE id = 1 AND changes() = 1 RETURNING chars',
+      )
+      .bind(blob.length),
+  ])
   if ((result?.meta?.changes ?? 0) === 1) {
-    await db.prepare('UPDATE chat_usage SET chars = chars + ? WHERE id = 1').bind(blob.length).run()
+    await usageNow(env, total?.results?.[0]?.chars)
     takenKept.delete(id)
     return json({ seq })
   }
@@ -753,29 +803,36 @@ async function getChanges(request, env, db, sinceParam) {
   const { rev, floor } = head
   if (since === rev) return idleChanges(request, rev, seen)
   if (since < floor || since > rev) return changesJson({ rev, full: true }, seen)
-  await ensureSchema(db)
-  const [logins, queues, chats, tombs] = await db.batch([
-    db
-      .prepare('SELECT id, version, meta, updated_at FROM logins WHERE rev > ? ORDER BY rev')
-      .bind(since),
-    db
-      .prepare('SELECT pc, version, meta, updated_at FROM queues WHERE rev > ? ORDER BY rev')
-      .bind(since),
-    db
-      .prepare('SELECT id, version, meta, updated_at FROM chats WHERE rev > ? ORDER BY rev')
-      .bind(since),
-    db.prepare('SELECT table_name, id FROM tombstones WHERE rev > ? ORDER BY rev').bind(since),
-  ])
-  return changesJson(
-    {
-      rev,
-      logins: (logins.results || []).map((r) => changed(LOGINS, r)),
-      queues: (queues.results || []).map((r) => changed(QUEUES, r)),
-      chats: (chats.results || []).map((r) => changed(CHATS, r)),
-      gone: (tombs.results || []).map((r) => ({ table: r.table_name, id: r.id })),
-    },
-    seen,
-  )
+  // A table is read only when its rev in the head is past the cursor: after one chat write the poll
+  // runs the chats query, not all four. A table not read answers [] exactly as an empty read would.
+  const wanted = [
+    [LOGINS, 'logins', head.logins_rev],
+    [QUEUES, 'queues', head.queues_rev],
+    [CHATS, 'chats', head.chats_rev],
+  ].filter(([, , at]) => at > since)
+  const goneNew = head.gone_rev > since
+  const out = { rev, logins: [], queues: [], chats: [], gone: [] }
+  if (wanted.length || goneNew) {
+    await ensureSchema(db)
+    const stmts = wanted.map(([t]) =>
+      db
+        .prepare(
+          `SELECT ${t.key}, version, meta, updated_at FROM ${t.table} WHERE rev > ? ORDER BY rev`,
+        )
+        .bind(since),
+    )
+    if (goneNew)
+      stmts.push(
+        db.prepare('SELECT table_name, id FROM tombstones WHERE rev > ? ORDER BY rev').bind(since),
+      )
+    const res = await db.batch(stmts)
+    wanted.forEach(([t, name], i) => {
+      out[name] = (res[i].results || []).map((r) => changed(t, r))
+    })
+    if (goneNew)
+      out.gone = (res[wanted.length].results || []).map((r) => ({ table: r.table_name, id: r.id }))
+  }
+  return changesJson(out, seen)
 }
 
 function routeList(env, db, path) {

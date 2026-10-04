@@ -38,6 +38,10 @@ export const PASS_READ_MAX = 64 * 1024 * 1024
  *  and a chat a session is working in grows on nearly every 30 s pass: 2026-10-03 measured 513 chat
  *  sends in 45 minutes. Its new turns still go one pass after it stops growing. */
 export const CHAT_PUSH_EVERY_MS = 5 * 60_000
+/** Whatever the chat is doing, two sends of it are at least this far apart (a chat that grows, stops
+ *  for one pass and grows again would otherwise go up about every minute: each send is a few D1 writes
+ *  and a read of the changes on every other PC). The last change still goes up once it has passed. */
+export const CHAT_MIN_GAP_MS = 2 * 60_000
 /** A record with no store row whose first chunk the store refused as taken waits this long to try again:
  *  what would let it through (the other record sharing its session gone) is rare. */
 const STOPPED_RETRY_MS = 60 * 60_000
@@ -422,20 +426,21 @@ function sendableState(
 }
 
 /** A shared chat that grew since the last pass and went up less than CHAT_PUSH_EVERY_MS ago is
- *  still being written in: it waits. It goes once it stops growing or the interval is up; an archive
- *  change, an unfinished upload or a backlog still catching up goes at once. Notes the size seen. */
+ *  still being written in: it waits. It goes once it stops growing or the interval is up, and never
+ *  sooner than CHAT_MIN_GAP_MS after its last send. An archive change (how a move to the other PC is
+ *  asked), a first share, an unfinished upload or a backlog still catching up goes at once. Notes the
+ *  size seen. */
 function stillWriting(st: ChatState, row: StoreRow, c: LocalChat, now: number): boolean {
   const grew = st.seen !== undefined && c.size !== st.seen
   st.seen = c.size
   // A clock set back since the last send makes this negative: send, rather than wait it out.
   const since = st.pushedAt === undefined ? -1 : now - st.pushedAt
   return (
-    grew &&
     c.archived === (row.meta?.a === 1) &&
     !st.up &&
     st.state === 'synced' &&
     since >= 0 &&
-    since < CHAT_PUSH_EVERY_MS
+    (since < CHAT_MIN_GAP_MS || (grew && since < CHAT_PUSH_EVERY_MS))
   )
 }
 

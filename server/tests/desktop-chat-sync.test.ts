@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ARCHIVED_KEEP_MS,
+  CHAT_MIN_GAP_MS,
   CHAT_PUSH_EVERY_MS,
   chatSyncRows,
   syncChats,
@@ -287,11 +288,13 @@ test('a chat still being written in goes up when it stops growing or every few m
   await syncChats(a.io, t + CHAT_PUSH_EVERY_MS)
   expect((await rowFor(chat.id)).meta.b).toBe(32)
 
-  // A turn that ends goes on the pass after, without waiting out the interval.
+  // A turn that ends goes on the first pass at least CHAT_MIN_GAP_MS after the last send, without
+  // waiting out the longer interval.
   a.extend(chat, '{"n":5}\n')
   await syncChats(a.io, t + CHAT_PUSH_EVERY_MS + 30_000)
-  expect((await rowFor(chat.id)).meta.b).toBe(32)
   await syncChats(a.io, t + CHAT_PUSH_EVERY_MS + 60_000)
+  expect((await rowFor(chat.id)).meta.b).toBe(32)
+  await syncChats(a.io, t + CHAT_PUSH_EVERY_MS + CHAT_MIN_GAP_MS)
   expect((await rowFor(chat.id)).meta.b).toBe(40)
 
   // A clock set back an hour since that send does not hold the chat for the hour.
@@ -330,4 +333,25 @@ test('a PC with a different key reports it and writes nothing', async () => {
   expect(other.text(chat)).toBe('')
   expect(existsSync(other.io.statePath)).toBe(false)
   expect(await rowFor(own.id)).toBeUndefined()
+})
+
+test('a burst of edits to one chat within two minutes goes up once, and the last change is not lost', async () => {
+  const a = pc('PC-A')
+  const chat = a.add({}, '{"n":0}\n')
+  const t = Date.now()
+  await syncChats(a.io, t)
+  const first = (await rowFor(chat.id)).version
+
+  // ten edits, one per pass, 10 s apart: some stop growing for a pass, none is sent
+  for (let i = 1; i <= 10; i++) {
+    if (i % 3 !== 0) a.extend(chat, `{"n":${i}}\n`)
+    await syncChats(a.io, t + i * 10_000)
+  }
+  expect((await rowFor(chat.id)).version).toBe(first)
+
+  // the first pass past the gap sends everything the burst wrote, in one record write
+  await syncChats(a.io, t + CHAT_MIN_GAP_MS)
+  const sent = await rowFor(chat.id)
+  expect(sent.version).toBe(first + 1)
+  expect(sent.meta.b).toBe(a.text(chat).length)
 })

@@ -183,7 +183,9 @@ export async function dropQueue(pc: string) {
       .then((r) => r.json() as Promise<any>)
   const { token: held } = await askHead('begin')
   const done = await storeDb.batch([
-    storeDb.prepare('UPDATE store_rev SET rev = rev + 1, queues_rev = rev + 1 WHERE id = 1'),
+    storeDb.prepare(
+      'UPDATE store_rev SET rev = rev + 1, queues_rev = rev + 1, gone_rev = rev + 1 WHERE id = 1',
+    ),
     storeDb
       .prepare(
         'INSERT OR REPLACE INTO tombstones (table_name, id, rev, time) SELECT ?, ?, rev, ? FROM store_rev WHERE id = 1',
@@ -191,7 +193,7 @@ export async function dropQueue(pc: string) {
       .bind('queues', pc, Date.now()),
     storeDb.prepare('DELETE FROM queues WHERE pc = ?').bind(pc),
     storeDb.prepare(
-      'SELECT rev, floor, logins_rev, queues_rev, chats_rev FROM store_rev WHERE id = 1',
+      'SELECT rev, floor, logins_rev, queues_rev, chats_rev, gone_rev FROM store_rev WHERE id = 1',
     ),
   ])
   await askHead('end', { token: held, head: done[3]!.results[0] })
