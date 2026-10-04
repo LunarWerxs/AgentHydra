@@ -812,6 +812,7 @@ app.post('/api/settings/sync/logout', async (c) => {
 // original file's registration order is reproduced exactly, group by group.
 await import('./routes/sessions')
 await import('./routes/analytics')
+await import('./routes/kit')
 await import('./routes/queue')
 await import('./routes/incidents')
 await import('./routes/agent-status')

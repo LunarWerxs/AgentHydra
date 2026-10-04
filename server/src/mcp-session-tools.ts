@@ -501,6 +501,66 @@ export const SESSION_TOOLS: McpEngineTool[] = [
     run: (a) => api(`/api/analytics/spend${qs({ period: a.period })}`),
   },
   {
+    name: 'usage_query',
+    description:
+      'Usage from the analytics store, one record per model call across every source (Claude CLI ' +
+      'and desktop, Codex, OpenCode, HSwarm and more). Pick ONE window: last=5h|24h|7d|30d|all, ' +
+      "from/to (epoch ms), or kind=5h|week with windowAccount (an account id): that account's " +
+      'current quota window, cut from its latest quota snapshot, else rolling. The answer carries ' +
+      'the resolved `window`. Filters take a value or a comma list. `unpriced` lists models whose ' +
+      'tokens count but whose dollars do not (the dollar total is a floor). `coverage` says which ' +
+      'sources are ingested up to when, so a low figure can be told from a partial one.',
+    inputSchema: S({
+      last: { type: 'string', enum: ['5h', '24h', '7d', '30d', 'all'] },
+      from: { type: 'number', description: 'Window start, epoch ms.' },
+      to: { type: 'number', description: 'Window end, epoch ms (default now).' },
+      kind: { type: 'string', enum: ['5h', 'week'], description: 'Account quota window.' },
+      windowAccount: { type: 'string', description: 'Account id for kind (default: account).' },
+      account: { type: 'string' },
+      instance: { type: 'string' },
+      pc: { type: 'string' },
+      source: { type: 'string', description: 'cli, desktop, climayte, hswarm, codex, ...' },
+      model: { type: 'string' },
+      provider: { type: 'string' },
+      session: { type: 'string' },
+      agent: { type: 'string' },
+      ok: { type: 'string', description: 'true or false (worker outcome).' },
+      groupBy: {
+        type: 'string',
+        description:
+          'Comma list of day, hour, account, instance, pc, source, model, provider, session.',
+      },
+      measures: {
+        type: 'string',
+        description:
+          'Comma list of tokens, list_usd, billed_usd, weighted, calls, ok, failed, seconds (default all).',
+      },
+      tz: { type: 'string', description: 'IANA zone for day buckets.' },
+    }),
+    run: (a) =>
+      api(
+        `/api/kit/usage${qs({
+          last: a.last,
+          from: a.from,
+          to: a.to,
+          kind: a.kind,
+          windowAccount: a.windowAccount,
+          account: a.account,
+          instance: a.instance,
+          pc: a.pc,
+          source: a.source,
+          model: a.model,
+          provider: a.provider,
+          session: a.session,
+          agent: a.agent,
+          ok: a.ok,
+          groupBy: a.groupBy,
+          measures: a.measures,
+          tz: a.tz,
+        })}`,
+      ),
+  },
+  {
     name: 'get_activity',
     description:
       'When work happens and what it uses: an hour-of-week histogram, the tool mix, total ' +
