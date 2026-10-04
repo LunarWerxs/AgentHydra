@@ -561,7 +561,7 @@ the click would otherwise put the old number back until a reload.
 The kit (`server/src/kit/`) is the one store of model-call usage: every source (Claude CLI and
 desktop, CliMayte, HSwarm, Codex, OpenCode and more) is ingested as one record per call and rolled
 up per hour. Its routes live in `server/src/routes/kit.ts`; the MCP tool `usage_query` is the same
-query. The one-off `GET /api/kit/reconcile` (kit against the old producers) is gone with those
+query. The temporary comparison route that set the kit beside the old producers is gone with those
 producers.
 
 | Route | What it does |
