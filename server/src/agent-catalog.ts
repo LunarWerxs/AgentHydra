@@ -249,8 +249,10 @@ export const AGENT_TOOLS: AgentTool[] = [
   },
   {
     // HSwarm replaced ZSwarm on 2026-10-03 (ZSwarm is retired; its jobs were imported into HSwarm's
-    // home). The format keeps the id `zswarm`: it is the session source, a frozen MCP API value.
-    id: 'hswarm',
+    // home). The format and the id both keep `zswarm`: the format is the session source, a frozen
+    // MCP API value, and the id is every job row's `tool` (transcript.ts hswarmRow), half of its
+    // done-mark key and locator, so renaming it orphans marks already set. The name says HSwarm.
+    id: 'zswarm',
     name: 'HSwarm',
     vendor: 'AgentHydra',
     // hswarm/config.py: Path(os.environ.get("HSWARM_HOME") or (Path.home() / ".hswarm")).
@@ -822,11 +824,11 @@ export const BUILT_IN_TOOL_IDS = new Set([
   // per account, and the set of them is core/dsh-instances.ts's dshInstanceStores(), which the
   // indexer asks directly. Leaving this row out of that set would index the default home twice.
   'deepseek-harness',
-  // Joined 2026-09-15 (as `zswarm`; `hswarm` since ZSwarm retired, 2026-10-03): the swarm's one home
-  // is read directly by transcript.ts (hswarmRecords()), the same way it reads OPENCODE_DB_PATH -
-  // not through extraRootsWithFormat. Leaving this row out of BUILT_IN_TOOL_IDS would make the
-  // catalog walk index that one root a second time.
-  'hswarm',
+  // Joined 2026-09-15: the swarm's one home (HSwarm's since ZSwarm retired, 2026-10-03; the row id
+  // stays `zswarm`, see its row above) is read directly by transcript.ts (hswarmRecords()), the same
+  // way it reads OPENCODE_DB_PATH - not through extraRootsWithFormat. Leaving this row out of
+  // BUILT_IN_TOOL_IDS would make the catalog walk index that one root a second time.
+  'zswarm',
 ])
 
 /** Catalog roots for a format, EXCLUDING the three the indexer already handles by constant. */

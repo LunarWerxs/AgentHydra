@@ -7,8 +7,12 @@
 // the same id. sessionMarkKey now keys on the locator's storeKey (session-locator.ts's
 // storeKeyOf) instead, and legacyMarkKey preserves read access to marks written before this fix.
 import { expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { db } from '../src/db'
-import { legacyMarkKey, sessionMarkKey } from '../src/sessions'
+import { getSession, legacyMarkKey, sessionMarkKey } from '../src/sessions'
+import { listTranscriptFiles } from '../src/transcript'
 
 function writeMark(key: string, done: boolean): void {
   db.query(
@@ -89,3 +93,53 @@ test('a caller with no resolved row falls back to the plain source:id key, uncha
   expect(sessionMarkKey('claude', sid)).toBe(sid)
   expect(sessionMarkKey('claude', sid, { tool: 'claude-code', path: '/x.jsonl' })).toBe(sid)
 })
+
+// Regression (2026-10-03): when HSwarm replaced ZSwarm, each swarm job row's tool id was renamed
+// from `zswarm` to `hswarm`, which moved its mark key from `zswarm:<id>` to `zswarm:hswarm:<id>`
+// (the legacy read built the same new key), so a job a person had marked done read as not done.
+// The row keeps tool `zswarm` (transcript.ts hswarmRow). Read through getSession, the same index
+// row and mark lookup the Sessions view uses, on a scratch HSWARM_HOME holding one real job.json.
+test('a swarm job marked done under its zswarm:<id> key still reads as done', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'ah-swarm-mark-'))
+  const jobId = `swarm-mark-${crypto.randomUUID().slice(0, 8)}`
+  mkdirSync(join(home, 'jobs', jobId), { recursive: true })
+  writeFileSync(
+    join(home, 'jobs', jobId, 'job.json'),
+    JSON.stringify({
+      summary: {
+        job_id: jobId,
+        label: 'mark-check',
+        state: 'done',
+        created: '2024-07-15T05:16:22+00:00',
+        finished: '2024-07-15T05:16:25+00:00',
+      },
+      tasks: [{ id: 't', prompt: 'Say ok.', cwd: home }],
+      results: {
+        t: {
+          id: 't',
+          status: 'ok',
+          answer: 'ok',
+          started: '2024-07-15T05:16:22+00:00',
+          finished: '2024-07-15T05:16:25+00:00',
+        },
+      },
+    }),
+  )
+  const previousHome = process.env.HSWARM_HOME
+  process.env.HSWARM_HOME = home
+  // The key every swarm job's mark was written under before the rename.
+  const key = `zswarm:${jobId}`
+  writeMark(key, true)
+  try {
+    listTranscriptFiles(true)
+    const session = await getSession(jobId, 'zswarm')
+    expect(session).not.toBeNull()
+    expect(session?.done).toBe(true)
+  } finally {
+    db.query('delete from session_marks where session_id = ?').run(key)
+    if (previousHome === undefined) delete process.env.HSWARM_HOME
+    else process.env.HSWARM_HOME = previousHome
+    listTranscriptFiles(true)
+    rmSync(home, { recursive: true, force: true })
+  }
+}, 60_000)

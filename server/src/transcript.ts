@@ -864,7 +864,11 @@ function dshRecords(root: string, tool = 'deepseek-harness'): TranscriptFile[] {
 }
 
 /** HSwarm's jobs (ZSwarm's too, imported into HSwarm's home when ZSwarm retired, 2026-10-03), as
- *  index rows. The source stays `'zswarm'`, a frozen MCP API value; the tool says HSwarm.
+ *  index rows. The source AND the tool stay `'zswarm'`: the source is a frozen MCP API value, and
+ *  the tool is half of every job's identity (the done-mark key `zswarm:<id>` in session_marks, the
+ *  locator, the search index's docKey), so renaming it would orphan the marks people already set
+ *  (2026-10-03). Only what a person reads says HSwarm: TOOL_NAME.zswarm in
+ *  web/src/lib/session-labels.ts, and agent-catalog.ts's row name.
  *
  *  Unlike dshRecords above, there is only ONE root: HSwarm is not a login product with a home per
  *  account, so its home (hswarmHome()) is read directly here the same way OPENCODE_DB_PATH is,
@@ -882,7 +886,8 @@ function hswarmRow(session: HSwarmSessionRecord): TranscriptFile {
     title: session.title,
     cwd: session.cwd,
     created_at: session.created_at,
-    tool: 'hswarm',
+    // An identity key, never a display name; see the docstring above.
+    tool: 'zswarm',
   }
 }
 

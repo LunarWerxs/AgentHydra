@@ -73,7 +73,9 @@ export const TOOL_NAME: Record<string, string> = {
   icodemate: 'IcodeMate',
   hermes: 'Hermes',
   'deepseek-harness': 'DeepSeek',
-  hswarm: 'HSwarm',
+  // A swarm job's tool id stays `zswarm` (an identity key: its done mark and locator are built on
+  // it); since ZSwarm retired (2026-10-03) those jobs are HSwarm's, so that is the name shown.
+  zswarm: 'HSwarm',
   grok: 'Grok',
   kimi: 'Kimi',
   zed: 'Zed',

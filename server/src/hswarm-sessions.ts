@@ -8,7 +8,8 @@
 // ZSWARM'S JOBS LIVE HERE TOO (2026-10-03): ZSwarm is retired and HSwarm replaces it. `hswarm
 // import-zswarm` copied ZSwarm's job records into HSwarm's home, so this one root holds both. The
 // session source keeps its id `'zswarm'` (types.ts SessionSource): it is a frozen MCP API value
-// (server/mcp-api-levels/), so only what a person reads says HSwarm.
+// (server/mcp-api-levels/). Each row's tool id stays `'zswarm'` too (transcript.ts hswarmRow): it is
+// half of a job's done-mark key and locator. Only what a person reads says HSwarm.
 //
 // A JOB IS THE SESSION, A TASK IS A TURN. HSwarm has no back-and-forth conversation: one call
 // dispatches N independent tasks (each its own prompt) and collects N independent results. This

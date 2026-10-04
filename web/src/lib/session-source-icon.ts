@@ -11,6 +11,7 @@ const BY_SOURCE: Record<string, Component> = {
   zswarm: Network,
 }
 const BY_LABEL: Record<string, Component> = {
+  // A swarm job's label is TOOL_NAME.zswarm, 'HSwarm' (session-labels.ts).
   hswarm: Network,
 }
 
