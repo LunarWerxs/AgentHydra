@@ -2,7 +2,7 @@
 // The one instance row: every table's rows (Claude desktop, Claude CLI, Codex, DeepSeek) are this
 // component, drawing the cells their table's column list names (lib/instance-table.ts) from one
 // InstanceRowModel. What differs per kind comes in as slots: `name-extra` (icons after the name),
-// `account-extra` (beside the account line under the name), `primary` (the action buttons) and `menu` (the items under the ⋯ menu's header).
+// `account-extra` (after the account login, on the name's line), `primary` (the action buttons) and `menu` (the items under the ⋯ menu's header).
 import { EllipsisVertical } from '@lucide/vue'
 import { computed, ref } from 'vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
@@ -125,13 +125,13 @@ function onContextMenu(e: MouseEvent): void {
             row.badge.label
           }}</Badge>
           <slot name="name-extra" />
-        </div>
-        <!-- The signed-in account, under the name (it was its own column). -->
-        <div
-          v-if="account || $slots['account-extra']"
-          class="mt-0.5 flex min-w-0 items-center gap-1 text-2xs font-normal text-muted-foreground"
-        >
-          <span v-if="account" class="truncate" :title="account.title">{{ account.text }}</span>
+          <!-- The signed-in account, after the name on the same line (one-line rows, owner
+               2026-10-04). It gives way first: its shrink weight is far above the name's. -->
+          <span
+            v-if="account"
+            class="min-w-0 shrink-[8] truncate text-2xs font-normal text-muted-foreground"
+            :title="account.title ?? account.text"
+          >{{ account.text }}</span>
           <slot name="account-extra" />
         </div>
       </TableCell>
