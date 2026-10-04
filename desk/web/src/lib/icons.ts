@@ -195,12 +195,13 @@ export const sidebarIcons = {
 } as const
 
 // Settings dialog nav, as the real Settings nav draws them: 16px outline glyphs.
-import { CircleUserRound, Info } from '@lucide/vue'
+import { Activity, CircleUserRound, Info } from '@lucide/vue'
 
 export const settingsIcons = {
   general: Settings,
   accounts: CircleUserRound,
   climayte: Bot,
+  diagnostics: Activity,
   about: Info,
   search: Search
 } as const

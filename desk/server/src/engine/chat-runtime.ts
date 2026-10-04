@@ -75,6 +75,8 @@ export interface ChatRuntimeDeps {
    * the account's login failed (expired, revoked) rather than its usage running out.
    */
   onLimited?(window: string | null, signIn?: boolean): boolean
+  /** A failure for the ledger: a turn's error result, a crash, a hook that failed. `durationMs` is the turn's age, when one was running. */
+  onFailure?(f: { message: string; durationMs: number | null }): void
   /**
    * A fork's cut: the uuid of the source session's last entry when the fork was made. Its first start
    * resumes the source only up to there, not as the source stands at that start.
@@ -199,6 +201,7 @@ export class ChatRuntime {
   private readonly now: () => number
   private readonly onClosed?: () => void
   private readonly onLimited?: (window: string | null, signIn?: boolean) => boolean
+  private readonly onFailure?: (f: { message: string; durationMs: number | null }) => void
   private readonly forkAt?: () => string | null
   private readonly onTurnEnd?: () => void
 
@@ -263,6 +266,7 @@ export class ChatRuntime {
     this.now = deps.now ?? Date.now
     this.onClosed = deps.onClosed
     this.onLimited = deps.onLimited
+    this.onFailure = deps.onFailure
     this.forkAt = deps.forkAt
     this.onTurnEnd = deps.onTurnEnd
   }
@@ -807,7 +811,14 @@ ${swap.real}` }
     let limitFromResult = false
     let signIn = false
     let reportedQueued: number | undefined
+    const turnStartedAt = this.chat.turnStartedAt
+    if (m.type === 'system' && m.subtype === 'hook_response' && (msg as { outcome?: string }).outcome === 'error') {
+      const h = msg as { hook_name?: unknown; hook_event?: unknown; exit_code?: unknown; stderr?: unknown; output?: unknown; stdout?: unknown }
+      const why = String(h.stderr || h.output || h.stdout || '').split(/\r?\n/).find((l) => l.trim()) ?? ''
+      this.failed(`Hook ${String(h.hook_name ?? '')} (${String(h.hook_event ?? '')}) failed${typeof h.exit_code === 'number' ? ` (exit ${h.exit_code})` : ''}${why ? `: ${why}` : ''}`, null)
+    }
     for (let e of statusEventsFor(msg, now)) {
+      if (e.type === 'turnError' && !this.replaying) this.failed(e.message, turnStartedAt)
       // An assistant 'rate_limit' error is a usage limit only when it says so; a 429 that passes in a
       // minute ends as a plain error (its result follows).
       if (e.type === 'usageLimit' && m.type === 'assistant' && !isUsageLimitText(assistantText(msg))) continue
@@ -1053,10 +1064,20 @@ ${swap.real}` }
     }
   }
 
+  private failed(message: string, startedAt: number | null): void {
+    if (!this.onFailure || this.replaying) return
+    try {
+      this.onFailure({ message, durationMs: startedAt === null ? null : Math.max(0, this.now() - startedAt) })
+    } catch {
+      // the ledger never breaks a chat
+    }
+  }
+
   /** The SDK process died: status error with the real message, the stderr tail as a system item. */
   private crash(err: unknown): void {
     const message = err instanceof Error ? err.message : String(err)
     const now = this.now()
+    this.failed(message, this.chat.turnStartedAt)
     this.q = null
     this.input?.close()
     this.expirePending(false)

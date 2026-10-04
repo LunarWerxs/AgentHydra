@@ -26,7 +26,7 @@ describe('settings search', () => {
 
 describe('settings nav keys', () => {
   it('moves through the rows with the arrows, wrapping, and jumps with Home and End', () => {
-    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['general', 'accounts', 'climayte', 'about'])
+    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['general', 'accounts', 'climayte', 'diagnostics', 'about'])
     expect(stepSection('general', 'ArrowDown')).toBe('accounts')
     expect(stepSection('general', 'ArrowUp')).toBe('about')
     expect(stepSection('about', 'ArrowRight')).toBe('general')

@@ -28,6 +28,7 @@ import {
   parseSend,
   parseSessionMeta,
 } from '../engine/chat-manager'
+import { diagnosticsRoute, sinceParam } from '../engine/diagnostics'
 import { checkLocalPath, isRemotePath, localFolder, type OpenFolder, revealFolder } from '../engine/reveal'
 import { nativeFolderPicker, PickError, type PickFolder } from '../folders/pick'
 import { RecentFolders } from '../folders/recent'
@@ -108,6 +109,16 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   )
   app.post('/api/queue/:id/send-now', (c) => answer(c, () => queue.sendNow(c.req.param('id'))))
   app.post('/api/queue/:id/retry', (c) => answer(c, () => queue.retry(c.req.param('id'))))
+
+  // Diagnostics (SPEC "Diagnostics"): ?since= (epoch ms or a date), ?cause=, ?limit= (default 100, at most 1000).
+  diagnosticsRoute(app, 'failures', (c) => {
+    const limit = Number(c.req.query('limit'))
+    return manager.failures.read({
+      since: sinceParam(c.req.query('since')),
+      cause: c.req.query('cause') || undefined,
+      limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 1000) : 100,
+    })
+  })
 
   app.get('/api/chats', (c) => {
     const flag = c.req.query('archived')

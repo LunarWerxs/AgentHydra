@@ -3,12 +3,13 @@
 // account, and read-outs of CliMayte and this install.
 import type { DeskSettings } from '@shared/protocol'
 
-export type SettingsSection = 'general' | 'accounts' | 'climayte' | 'about'
+export type SettingsSection = 'general' | 'accounts' | 'climayte' | 'diagnostics' | 'about'
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; caption: string }[] = [
   { id: 'general', label: 'General', caption: 'Settings' },
   { id: 'accounts', label: 'Accounts', caption: 'Settings' },
   { id: 'climayte', label: 'CliMayte', caption: 'Settings' },
+  { id: 'diagnostics', label: 'Diagnostics', caption: 'This computer' },
   { id: 'about', label: 'About', caption: 'This computer' }
 ]
 

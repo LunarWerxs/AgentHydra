@@ -5,6 +5,7 @@ import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/
 import { useShellSource } from '@/components/shell/source'
 import AccountsList from '@/components/accounts/AccountsList.vue'
 import PaneSwitch from './PaneSwitch.vue'
+import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
 import { ITEM, MENU } from '@/components/composer/menu'
 import { EFFORTS, PERMISSION_MODES } from '@/components/composer/logic'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -249,6 +250,8 @@ onBeforeUnmount(() => {
       </div>
 
       <p v-else-if="searching && !groups.length" class="text-[13px] leading-[19px] text-text-muted">No settings match</p>
+
+      <DiagnosticsView v-else-if="section === 'diagnostics' && !searching" />
 
       <template v-else>
         <div v-for="(g, gi) in groups" :key="g.heading" role="group" :aria-label="g.heading" :class="gi ? 'mt-8' : ''">

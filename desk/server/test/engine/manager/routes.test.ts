@@ -11,6 +11,7 @@ import type { ChatSummary, ExternalSession, ServerEvent, SessionMeta, Transcript
 import { createServer, type DeskServer } from '../../../src/index'
 import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
 import { titleFrom } from '../../../src/engine/chat-manager'
+import { FailureLedger } from '../../../src/engine/failures'
 import { explorerArg } from '../../../src/engine/reveal'
 import { STATIC_COMMANDS, STATIC_MODELS } from '../../../src/engine/models'
 import { ACCOUNT_68, fakeBridge, fakeQueries, worker, type FakeQuery } from './fakes'
@@ -572,4 +573,17 @@ describe('the row menu routes', () => {
     expect(explorerArg('C:\\Users\\me\\a,b c')).toBe('"C:\\Users\\me\\a,b c"')
     expect(explorerArg('C:\\')).toBe('"C:\\\\"')
   })
+})
+
+test('GET /api/diagnostics/failures answers the ledger rows with counts, filtered by cause', async () => {
+  const { desk, home } = await boot()
+  const ledger = new FailureLedger(home)
+  const base = { chatId: 'c1', title: 't', cwd: home, kind: 'sdk' as const, accountId: 'acct-1', accountNumber: 126, model: null, sessionId: null }
+  ledger.record({ ...base, message: 'Failed to authenticate: OAuth session expired' })
+  ledger.record({ ...base, message: 'fetch failed' })
+  const all = await call(desk, 'GET', '/api/diagnostics/failures')
+  expect(all.status).toBe(200)
+  expect(all.body).toMatchObject({ total: 2, byCause: { auth_expired: 1, network: 1 }, byAccount: { '#126': 2 } })
+  const one = await call(desk, 'GET', '/api/diagnostics/failures?cause=network&limit=5')
+  expect(one.body.rows.map((r: { cause: string }) => r.cause)).toEqual(['network'])
 })

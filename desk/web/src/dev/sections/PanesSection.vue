@@ -93,7 +93,8 @@ const fixtureApi: PaneApi = {
     }
   ],
   pickAccount: async () => accountFixtures[1],
-  externalItems: async () => []
+  externalItems: async () => [],
+  diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never
 }
 
 provide(PANE_API, fixtureApi)

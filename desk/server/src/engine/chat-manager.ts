@@ -49,6 +49,7 @@ import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } fro
 import { mediaCache, toStoredImage } from '../media/cache'
 import { SessionMetaStore } from './session-meta'
 import { ChatStore } from './store'
+import { classifyFailure, FailureLedger, type FailureInput } from './failures'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 
 export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalItems' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
@@ -160,6 +161,10 @@ interface Entry {
   workerCwd?: string
   /** A CliMayte chat: the messages sent that its worker's JSONL does not show yet, shown meanwhile (memory only, never in the Desk file). */
   sent?: UserItem[]
+  /** The ledger id of the chat's latest failure: a move to another account marks it recovered. */
+  lastFailure?: string
+  /** A CliMayte chat: the worker error already in the ledger, so a re-read of the same failure adds no row. */
+  workerErrorSeen?: string | null
 }
 
 type UserItem = Extract<TranscriptItem, { kind: 'user' }>
@@ -199,6 +204,8 @@ export class ChatManager {
   readonly store: ChatStore
   /** Hydra Desk's marks on outside sessions (pin, archive, unread, title, group). */
   readonly sessionMeta: SessionMetaStore
+  /** Every failure, appended as it happens (SPEC "Failure ledger"). */
+  readonly failures: FailureLedger
   private readonly chats = new Map<string, Entry>()
   private readonly emitEvent: (event: ServerEvent) => void
   private readonly settingsOf: () => DeskSettings
@@ -216,6 +223,7 @@ export class ChatManager {
 
   constructor(o: ChatManagerOptions) {
     this.store = new ChatStore(o.home, { debounceMs: o.storeDebounceMs })
+    this.failures = new FailureLedger(o.home, o.now)
     this.sessionMeta = new SessionMetaStore(o.home)
     this.emitEvent = o.emit
     this.settingsOf = o.settings
@@ -413,7 +421,11 @@ export class ChatManager {
       prompt || req.images?.length
         ? this.send(chat.id, prompt ?? '', req.images, { messageId }).then(
             () => null,
-            (err: unknown) => (err instanceof Error ? err.message : String(err)),
+            (err: unknown) => {
+              const message = err instanceof Error ? err.message : String(err)
+              this.fail(entry, { message, fallback: 'refused_send' })
+              return message
+            },
           )
         : Promise.resolve(null)
     return { chat: { ...chat }, firstSend }
@@ -766,12 +778,15 @@ export class ChatManager {
     if (w.accountId && w.accountId !== chat.account.id) {
       const from = chat.account.id === CLIMAYTE_ACCOUNT.id ? null : chat.account
       chat.account = workerAccount(w)
+      if (from && e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
       if (from) this.systemLine(chat.id, 'moved', 'info', `CliMayte moved this chat from ${from.label} to ${chat.account.label}.`)
     }
     const next = workerChatStatus(w)
     chat.status = next.status
     chat.activity = next.activity
     chat.lastError = next.status === 'error' ? (w.error ?? 'The worker failed.') : null
+    if (chat.lastError && (was !== 'error' || chat.lastError !== e.workerErrorSeen)) this.fail(e, { message: chat.lastError, fallback: 'worker_failed' })
+    e.workerErrorSeen = chat.lastError
     if (LIVE_STATUSES.has(next.status)) chat.turnStartedAt ??= this.now()
     else chat.turnStartedAt = null
     if (LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(next.status)) chat.unread = true
@@ -885,6 +900,22 @@ export class ChatManager {
 
   // Internals
 
+  /** One ledger row for a failure of chat `e`; remembered so a later move can mark it recovered. */
+  private fail(e: Entry, f: Pick<FailureInput, 'message' | 'fallback' | 'cause' | 'durationMs'>): void {
+    const c = e.chat
+    e.lastFailure = this.failures.record({
+      chatId: c.id,
+      title: c.title,
+      cwd: c.cwd,
+      kind: c.workerId !== undefined ? 'worker' : 'sdk',
+      accountId: c.account.id,
+      accountNumber: c.account.number ?? null,
+      model: c.model ?? null,
+      sessionId: c.sessionId,
+      ...f,
+    })
+  }
+
   private entry(id: string): Entry {
     const e = this.chats.get(id)
     if (!e) throw new ChatError(404, `no chat ${id}`)
@@ -915,6 +946,10 @@ export class ChatManager {
       },
       forkAt: () => this.chats.get(chatId)?.forkAt ?? null,
       onTurnEnd: () => this.checkMoved(chatId),
+      onFailure: (f) => {
+        const cur = this.chats.get(chatId)
+        if (cur) this.fail(cur, f)
+      },
       onLimited: (window, signIn) => this.carryToAnotherAccount(chatId, signIn === true, window),
     })
     return e.runtime
@@ -988,6 +1023,7 @@ export class ChatManager {
       return
     }
     this.systemLine(chat.id, 'moved', 'info', `Moved from ${accountName(from)} (${signIn ? 'signed out' : window ? `${window} limit` : 'limit reached'}) to ${accountName(chat.account)}.`)
+    if (e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
     await rt.close()
     if (this.chats.get(chat.id) !== e) return
     this.changed(chat)
@@ -998,6 +1034,7 @@ export class ChatManager {
   private moveFailed(e: Entry, rt: ChatRuntime, text: string): void {
     const chat = e.chat
     this.systemLine(chat.id, 'move-failed', 'warn', text)
+    this.fail(e, { message: text, cause: 'move_failed' })
     rt.rearmLimit()
     chat.lastError = text
     this.emitEvent({ type: 'notify', chatId: chat.id, reason: 'error', title: chat.title, body: text })

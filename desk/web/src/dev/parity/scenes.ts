@@ -228,6 +228,7 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     putSettings: async (p) => ({ ...settingsFixtures, ...p }),
     accounts: async () => sceneAccounts(scene),
     pickAccount: async () => scenePick(scene),
-    externalItems: async () => scene.items()
+    externalItems: async () => scene.items(),
+    diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never
   }
 }

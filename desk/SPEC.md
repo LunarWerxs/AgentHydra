@@ -774,6 +774,40 @@ to the shell task; each other area owns its own folder under `web/src/components
 `web/src/dev/sections/<Area>Section.vue` (the Gallery loads every file in `sections/` with
 `import.meta.glob`, so adding a section never touches another file).
 
+## Diagnostics (failures; the Speed section is the timing worker's)
+
+One place for what went wrong and what was slow. Settings > Diagnostics (`web/src/components/diagnostics/`) is a
+container: `sections.ts` lists its sections (`DIAGNOSTICS_SECTIONS`, or `registerDiagnosticsSection`), each a component
+that reads its data with `usePaneApi().diagnostics(name, params)` (GET `/api/diagnostics/<name>`). Failures is the
+first; a Speed section adds one entry. Shared server helpers live in `server/src/engine/diagnostics.ts`:
+`maskEmails`/`safeText`, `JsonlLog` (append-only `<home>/<name>.jsonl`, rolled to `<name>-YYYY-MM[-n].jsonl` at a new
+month or 5 MB, a failed write only logged), `dayKey`, `sinceParam`, and `diagnosticsRoute(app, name, handler)`, which
+registers `GET /api/diagnostics/<name>` behind the server's loopback guard (every route has it).
+
+### Failure ledger (server/src/engine/failures.ts)
+
+`<home>/failures.jsonl`, one line per failure: `id, ts, chatId, title, cwd, kind ('sdk'|'worker'), accountId,
+accountNumber (never an email), model, cause, message (500 chars, emails masked), durationMs, sessionId`. A recovery is a
+later line `{ event: 'recovered', failureId, movedToAccountId }` that readers fold into the row (`recovered`,
+`movedToAccountId`). `classifyFailure(text, fallback)` is the one classifier: `auth_expired, org_disabled, usage_limit,
+interrupted, refused_send, worker_failed, hook_timeout, hook_failed, move_failed, network, unknown`.
+
+Written from every failure path, by `ChatManager.fail`: an SDK turn's error result or a crash and a failed hook
+(`ChatRuntime.onFailure`, not while replaying a journal), a refused first message (`open`, which covers the queue's
+chats too), a worker that turned to error (`applyWorker`, once per distinct error), and a failed account move
+(`moveFailed`, cause `move_failed`). A move that went through (`moveChat`, or CliMayte's move seen in `applyWorker`)
+marks the chat's latest failure recovered.
+
+`GET /api/diagnostics/failures?since=&cause=&limit=` (since: epoch ms or a date; limit default 100, max 1000):
+`{ rows: FailureRow[] (newest first), total, byCause, byAccount ('#126' or id), byDay ('YYYY-MM-DD') }`, the counts over
+every match, not just the returned rows. `since` also reads the rolled files. The Failures section shows counts by
+cause for today and 7 days, by account over 7 days, and the latest rows, each opening its chat.
+
+AgentHydra incidents: not fed from here. `server/src/routes/incidents.ts` only lists, reads, acks and resolves
+(`GET /api/incidents`, `/:id`, `POST /:id/ack`, `/:id/resolve`); incidents are created in-process by `recordIncident`
+(dispatch, usage, loop detection), so no existing one-call route takes a Desk failure. Sending them would need a new
+create route in AgentHydra, which is its owner's call.
+
 ## Parallel workers and ports
 
 Several workers run at once in this one folder. Vite dev ports are assigned per worker so they never

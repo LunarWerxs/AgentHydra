@@ -510,3 +510,50 @@ export type ServerEvent =
   | { type: 'settings.update'; settings: DeskSettings }
 
 export type ClientEvent = { type: 'ping' }
+
+// Failure ledger (SPEC "Failure ledger"): <home>/failures.jsonl, GET /api/failures
+
+export type FailureCause =
+  | 'auth_expired'
+  | 'org_disabled'
+  | 'usage_limit'
+  | 'interrupted'
+  | 'refused_send'
+  | 'worker_failed'
+  | 'hook_timeout'
+  | 'hook_failed'
+  | 'move_failed'
+  | 'network'
+  | 'unknown'
+
+/** One failure event. Never an email: the account is its number or id. */
+export interface FailureRow {
+  id: string
+  ts: number
+  chatId: string
+  title: string
+  cwd: string
+  kind: 'sdk' | 'worker'
+  accountId: string
+  accountNumber: number | null
+  model: string | null
+  cause: FailureCause
+  /** The error text, cut to 500 characters, emails masked. */
+  message: string
+  /** ms from the turn's start, null when unknown. */
+  durationMs: number | null
+  sessionId: string | null
+  /** Desk moved the chat to another account and sent again. */
+  recovered: boolean
+  movedToAccountId: string | null
+}
+
+export interface FailuresResponse {
+  rows: FailureRow[]
+  total: number
+  byCause: Record<string, number>
+  /** Keyed by account number ('#126') else id. */
+  byAccount: Record<string, number>
+  /** Keyed by local day, YYYY-MM-DD. */
+  byDay: Record<string, number>
+}

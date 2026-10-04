@@ -21,6 +21,8 @@ export interface PaneApi {
   accounts(): Promise<AccountInfo[]>
   pickAccount(): Promise<AccountRef>
   externalItems(sessionId: string): Promise<TranscriptItem[]>
+  /** GET /api/diagnostics/<name>?<params>: every Diagnostics section reads its data through this. */
+  diagnostics<T>(name: string, params?: Record<string, string | number | undefined>): Promise<T>
 }
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
@@ -55,7 +57,12 @@ export const httpPaneApi: PaneApi = {
     }),
   accounts: () => json('/accounts'),
   pickAccount: () => json('/accounts/pick'),
-  externalItems: (sessionId) => json(`/external/sessions/${encodeURIComponent(sessionId)}/items`)
+  externalItems: (sessionId) => json(`/external/sessions/${encodeURIComponent(sessionId)}/items`),
+  diagnostics: (name, params = {}) => {
+    const q = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) if (v !== undefined) q.set(k, String(v))
+    return json(`/diagnostics/${encodeURIComponent(name)}${q.size ? `?${q}` : ''}`)
+  }
 }
 
 export const PANE_API: InjectionKey<PaneApi> = Symbol('paneApi')
