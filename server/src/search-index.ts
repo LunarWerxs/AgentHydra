@@ -48,7 +48,7 @@ let indexPath = join(DATA_DIR, 'search-index.db')
 export const searchIndexPath = (): string => indexPath
 
 /** Bump to force a rebuild when the extraction or schema changes meaning. */
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 /**
  * A session's identity, store included (audit AH-35).
@@ -62,6 +62,39 @@ const SCHEMA_VERSION = 2
  * new formats silently.
  */
 const docKey = (f: IndexableFile) => dedupeKey(f)
+
+/**
+ * One FTS insert of a huge body holds the daemon's loop (bun:sqlite is synchronous), so a body is
+ * stored as several rows of at most SEGMENT_CHARS. FTS rowid = docRowid * SEGMENT_STRIDE + n, so
+ * `rowid / SEGMENT_STRIDE` maps a hit back to its document. Consecutive segments overlap by
+ * SEGMENT_OVERLAP chars so a phrase that straddles a cut is still found. Queries only need the set
+ * of documents, so several hits in one document collapse in the Set.
+ */
+export const SEGMENT_CHARS = 256 * 1024
+const SEGMENT_OVERLAP = 512
+const SEGMENT_STRIDE = 65536
+const DELETE_CHUNK = 4
+
+/** Split on whitespace boundaries into overlapping pieces of at most `max` chars. */
+export function segmentBody(text: string, max = SEGMENT_CHARS): string[] {
+  if (text.length <= max) return [text]
+  const out: string[] = []
+  let start = 0
+  while (start < text.length) {
+    let end = Math.min(start + max, text.length)
+    if (end < text.length) {
+      const ws = Math.max(text.lastIndexOf(' ', end), text.lastIndexOf('\n', end))
+      if (ws > start + SEGMENT_OVERLAP * 2) end = ws
+    }
+    out.push(text.slice(start, end))
+    if (end >= text.length) break
+    let next = end - SEGMENT_OVERLAP
+    const ws = Math.max(text.indexOf(' ', next), text.indexOf('\n', next))
+    next = ws >= 0 && ws < end ? ws : end
+    start = next
+  }
+  return out
+}
 
 let db: Database | null = null
 
@@ -252,10 +285,24 @@ export const isRefreshing = () => refreshing
  */
 interface StaleFileStatements {
   dropRow: Statement
-  dropFts: Statement
   insertDoc: Statement
   insertFts: Statement
+  /** Delete FTS rows with rowid in [lo, hi). */
+  dropFtsRange: Statement
+  topFtsRow: Statement
   nextRowId: () => number
+}
+
+/** Delete every FTS segment of one document, a few at a time so no statement is long. */
+async function dropSegments(stmts: StaleFileStatements, docRowid: number): Promise<void> {
+  const lo = docRowid * SEGMENT_STRIDE
+  const hi = lo + SEGMENT_STRIDE
+  const top = (stmts.topFtsRow.get(lo, hi) as { n: number | null } | null)?.n
+  if (top == null) return
+  for (let at = lo; at <= top; at += DELETE_CHUNK) {
+    stmts.dropFtsRange.run(at, Math.min(at + DELETE_CHUNK, hi))
+    if (top - lo >= DELETE_CHUNK) await new Promise<void>((r) => setImmediate(r))
+  }
 }
 
 /** Index (or reindex) one stale file, split out of refreshSearchIndex so the pass loop reads as
@@ -278,12 +325,16 @@ async function indexOneStaleFile(
   const rowid = existing?.rowid ?? stmts.nextRowId()
   try {
     if (existing) {
-      stmts.dropFts.run(rowid)
+      await dropSegments(stmts, rowid)
       stmts.dropRow.run(rowid)
       result.replaced++
     }
     stmts.insertDoc.run(rowid, key, f.source, f.path, f.mtime_ms, f.size_bytes)
-    stmts.insertFts.run(rowid, text)
+    const segments = segmentBody(text)
+    for (const [n, seg] of segments.entries()) {
+      stmts.insertFts.run(rowid * SEGMENT_STRIDE + n, seg)
+      if (segments.length > 1) await new Promise<void>((r) => setImmediate(r))
+    }
     result.indexed++
   } catch {
     // One unindexable session must not abort the pass.
@@ -378,21 +429,9 @@ export async function refreshSearchIndex(
       if (!have || have.mtime_ms !== f.mtime_ms || have.size_bytes !== f.size_bytes) stale.push(f)
     }
 
-    // Sessions the index holds that are no longer on disk.
     const dropRow = conn.query('delete from doc where rowid = ?')
-    const dropFts = conn.query('delete from conv where rowid = ?')
-    let dropSlice = performance.now()
-    for (const [key, row] of known) {
-      if (wanted.has(key)) continue
-      dropRow.run(row.rowid)
-      dropFts.run(row.rowid)
-      result.removed++
-      if (performance.now() - dropSlice > 15) {
-        await new Promise<void>((r) => setImmediate(r))
-        dropSlice = performance.now()
-      }
-    }
-
+    const dropFtsRange = conn.query('delete from conv where rowid >= ? and rowid < ?')
+    const topFtsRow = conn.query('select max(rowid) as n from conv where rowid >= ? and rowid < ?')
     const nextRowId = () =>
       Number(
         (conn.query('select coalesce(max(rowid), 0) + 1 as n from doc').get() as { n: number }).n,
@@ -401,11 +440,31 @@ export async function refreshSearchIndex(
       'insert into doc (rowid, key, source, path, mtime_ms, size_bytes) values (?, ?, ?, ?, ?, ?)',
     )
     const insertFts = conn.query('insert into conv (rowid, body) values (?, ?)')
+    const stmts: StaleFileStatements = {
+      dropRow,
+      dropFtsRange,
+      topFtsRow,
+      insertDoc,
+      insertFts,
+      nextRowId,
+    }
+
+    // Sessions the index holds that are no longer on disk.
+    let dropSlice = performance.now()
+    for (const [key, row] of known) {
+      if (wanted.has(key)) continue
+      dropRow.run(row.rowid)
+      await dropSegments(stmts, row.rowid)
+      result.removed++
+      if (performance.now() - dropSlice > 15) {
+        await new Promise<void>((r) => setImmediate(r))
+        dropSlice = performance.now()
+      }
+    }
 
     // Newest first: if a budget cuts the pass short, the sessions someone is most likely to search
     // for are the ones already covered.
     stale.sort((a, b) => b.mtime_ms - a.mtime_ms)
-    const stmts: StaleFileStatements = { dropRow, dropFts, insertDoc, insertFts, nextRowId }
     for (const [i, f] of stale.entries()) {
       if (performance.now() > deadline) {
         result.remaining = stale.length - i
@@ -447,8 +506,8 @@ export function searchIndexCandidates(
     const rows = conn
       .query(
         opts.source
-          ? 'select d.key as key from conv c join doc d on d.rowid = c.rowid where conv match ? and d.source = ?'
-          : 'select d.key as key from conv c join doc d on d.rowid = c.rowid where conv match ?',
+          ? 'select d.key as key from conv c join doc d on d.rowid = c.rowid / 65536 where conv match ? and d.source = ?'
+          : 'select d.key as key from conv c join doc d on d.rowid = c.rowid / 65536 where conv match ?',
       )
       .all(...(opts.source ? [match, opts.source] : [match])) as Array<{ key: string }>
     return new Set(rows.map((r) => r.key))

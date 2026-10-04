@@ -17,10 +17,12 @@ import {
   type IndexableFile,
   queryUsableByIndex,
   refreshSearchIndex,
+  SEGMENT_CHARS,
   searchIndexCandidates,
   searchIndexCoverage,
   searchIndexPath,
   searchIndexStatus,
+  segmentBody,
   setSearchIndexClockForTests,
   setSearchIndexPathForTests,
   toMatchExpression,
@@ -304,5 +306,16 @@ describe('status and deletion', () => {
     const r = await refreshSearchIndex([])
     expect(r.indexed).toBe(0)
     expect(searchIndexCoverage([])).toEqual({ covered: 0, stale: 0 })
+  })
+})
+
+describe('segmented bodies', () => {
+  test('a body over the segment size is found by words in any segment, including across a cut', () => {
+    const filler = 'alpha '.repeat(Math.ceil((SEGMENT_CHARS * 2.5) / 6))
+    const segs = segmentBody(`first ${filler} middle needle word ${filler} lastonly`)
+    expect(segs.length).toBeGreaterThan(2)
+    expect(segs.every((s) => s.length <= SEGMENT_CHARS)).toBe(true)
+    expect(segs.some((s) => s.includes('lastonly'))).toBe(true)
+    expect(segs.some((s) => s.includes('needle word'))).toBe(true)
   })
 })
