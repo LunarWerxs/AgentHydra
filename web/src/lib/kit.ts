@@ -198,6 +198,8 @@ export type UsdStyle =
   | 'fine'
   /** "$1,235" from $100, else "$12.34", with a true minus sign (savings tables). */
   | 'whole'
+  /** "$1.2k", "$12", "$0.42", "<$0.01", "$0": compact, for an axis or a chip. */
+  | 'axis'
 
 export interface UsdOptions {
   style?: UsdStyle
@@ -218,6 +220,12 @@ export function formatUsd(n: number | null | undefined, opts: UsdOptions = {}): 
   if (opts.exact === false) return t(NO_EXACT_PRICE_KEY)
   if (n == null || !Number.isFinite(n)) return UNPRICED
   const style = opts.style ?? 'standard'
+  if (style === 'axis') {
+    if (n >= 1000) return `$${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
+    if (n >= 10) return `$${n.toFixed(0)}`
+    if (n >= 0.01) return `$${n.toFixed(2)}`
+    return n === 0 ? '$0' : '<$0.01'
+  }
   if (style === 'whole') {
     const a = Math.abs(n)
     const s = a >= 100 ? Math.round(a).toLocaleString('en-US') : a.toFixed(2)

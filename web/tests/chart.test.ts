@@ -12,7 +12,6 @@ import {
   linePath,
   niceStep,
   seriesColor,
-  shortUsd,
   ticks,
   topNWithOther,
 } from '../src/lib/chart'
@@ -110,16 +109,5 @@ describe('folding the tail into Other', () => {
     expect(out).toHaveLength(3)
     expect(out[2]?.key).toBe('other')
     expect(out[2]?.v).toBe(4)
-  })
-})
-
-describe('compact money', () => {
-  test('reads at a glance across four orders of magnitude', () => {
-    expect(shortUsd(0)).toBe('$0')
-    expect(shortUsd(0.004)).toBe('<$0.01')
-    expect(shortUsd(1.5)).toBe('$1.50')
-    expect(shortUsd(42)).toBe('$42')
-    expect(shortUsd(2500)).toBe('$2.5k')
-    expect(shortUsd(135000)).toBe('$135k')
   })
 })

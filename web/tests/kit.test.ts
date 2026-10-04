@@ -82,3 +82,14 @@ test('the day list steps calendar dates, so a daylight-saving change skips no da
     '2026-03-09',
   ])
 })
+
+test('the axis style reads at a glance across four orders of magnitude', () => {
+  const axis = (n: number) => formatUsd(n, { style: 'axis' })
+  expect(axis(0)).toBe('$0')
+  expect(axis(0.004)).toBe('<$0.01')
+  expect(axis(1.5)).toBe('$1.50')
+  expect(axis(42)).toBe('$42')
+  expect(axis(2500)).toBe('$2.5k')
+  expect(axis(135000)).toBe('$135k')
+  expect(axis(Number.NaN)).toBe('—')
+})

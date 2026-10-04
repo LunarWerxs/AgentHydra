@@ -5,7 +5,8 @@
 
 import { useI18n } from 'vue-i18n'
 import type { CMInstance, UsageSnapshot } from '@/lib/api'
-import { flaggedCodeCredit, formatMoney, shortDate, usageCheckedAgo } from '@/lib/usage'
+import { formatCredit } from '@/lib/kit'
+import { flaggedCodeCredit, shortDate, usageCheckedAgo } from '@/lib/usage'
 
 export function useClaudeAppHints(usageFor: (inst: CMInstance) => UsageSnapshot | undefined) {
   const { t } = useI18n()
@@ -27,8 +28,8 @@ export function useClaudeAppHints(usageFor: (inst: CMInstance) => UsageSnapshot 
     if (credit?.state === 'unclaimed') return t('instances.codeCreditUnclaimed')
     if (credit?.state === 'locked') return t('instances.codeCreditLocked')
     return t('instances.codeCredit', {
-      remaining: formatMoney(credit?.remainingUsd),
-      limit: formatMoney(credit?.limitUsd),
+      remaining: formatCredit(credit?.remainingUsd),
+      limit: formatCredit(credit?.limitUsd),
     })
   }
 
@@ -50,13 +51,13 @@ export function useClaudeAppHints(usageFor: (inst: CMInstance) => UsageSnapshot 
   function usageCreditsHint(inst: CMInstance): string {
     const credits = usageCreditsOnFor(inst)
     if (!credits) return t('instances.extraUsageOnHint')
-    const used = formatMoney(credits?.used, credits?.currency ?? null)
+    const used = formatCredit(credits?.used, credits?.currency ?? null)
     const checked = appCheckedAgo(inst)
     return credits?.limit == null
       ? t('instances.usageCreditsOnHintUncapped', { used, checked })
       : t('instances.usageCreditsOnHint', {
           used,
-          limit: formatMoney(credits.limit, credits.currency),
+          limit: formatCredit(credits.limit, credits.currency),
           checked,
         })
   }

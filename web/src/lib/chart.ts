@@ -104,15 +104,6 @@ export function topNWithOther<T extends { key: string }>(
   return [...head, makeOther(total, tail.length)]
 }
 
-/** Compact money for an axis or a chip. Full precision belongs in the tooltip, not the axis. */
-export function shortUsd(n: number): string {
-  if (!Number.isFinite(n)) return '—'
-  if (n >= 1000) return `$${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
-  if (n >= 10) return `$${n.toFixed(0)}`
-  if (n >= 0.01) return `$${n.toFixed(2)}`
-  return n === 0 ? '$0' : '<$0.01'
-}
-
 /**
  * Who actually makes a model, from its id.
  *

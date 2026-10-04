@@ -66,9 +66,10 @@ import type {
 } from '@/lib/api'
 import * as api from '@/lib/api'
 import { OPEN_VIEW } from '@/lib/app-view'
-import { modelVendor, shortUsd, vendorLabel } from '@/lib/chart'
+import { modelVendor, vendorLabel } from '@/lib/chart'
 import { baseName, formatCompact, formatUsd } from '@/lib/format'
 import { accountDisplay, fetchAccountNames, type HswarmAccountName } from '@/lib/hswarm-api'
+import { formatUsd as kitUsd } from '@/lib/kit'
 import { scopeParam, summarizeSelection } from '@/lib/session-scopes'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
@@ -331,6 +332,7 @@ const accountTokensMissing = computed(
   () => tokenMode.value && !hasTokens(spend.value?.byAccount ?? []),
 )
 /** The formatter that matches the unit, handed to every chart. */
+const axisUsd = (n: number) => kitUsd(n, { style: 'axis' })
 const metricFormat = computed(() => (tokenMode.value ? formatCompact : formatUsd))
 
 const modelBuckets = computed(() =>
@@ -770,7 +772,7 @@ const survivalAverage = computed(() => {
             v-else
             :points="dayPoints"
             :format="metricFormat"
-            :axis-format="tokenMode ? formatCompact : shortUsd"
+            :axis-format="tokenMode ? formatCompact : axisUsd"
             :value-label="tokenMode ? $t('analytics.tipTokens') : $t('analytics.tipCost')"
             :share-label="$t('analytics.tipShareOfWindow')"
             :peak-label="groupedByMonth ? $t('analytics.tipBusiestMonth') : $t('analytics.tipBusiestDay')"

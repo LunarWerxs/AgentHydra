@@ -4,7 +4,6 @@
 // every table column sortable and sized to its content, explanations behind info bubbles.
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { shortUsd } from '@/lib/chart'
 import { accountDisplay, type HswarmAccountName, useHswarmApi } from '@/lib/hswarm-api'
 import { fetchKitUsage, formatTokens, formatUsd } from '@/lib/kit'
 import InfoHint from '@/shell/InfoHint.vue'
@@ -135,6 +134,7 @@ const F = computed(() =>
 const totals = computed(() => (plan.value ? (stats.value?.plan ?? {}) : (stats.value?.total ?? {})))
 
 const usd = (n: number | null | undefined) => formatUsd(n, { style: 'whole' })
+const axisUsd = (n: number) => formatUsd(n, { style: 'axis' })
 const compact = (n: number | null | undefined) => formatTokens(Number(n) || 0)
 const int = (n: number | null | undefined) => Math.round(Number(n) || 0).toLocaleString('en-US')
 const pct = (n: number | null | undefined) => `${Math.round((Number(n) || 0) * 100)}%`
@@ -556,8 +556,8 @@ const ariaSort = (tid: string, key: string) => {
           <template v-else>
             <div class="flex gap-1.5">
               <div class="flex w-10 shrink-0 flex-col justify-between text-end text-[10px] leading-none text-muted-foreground tabular-nums">
-                <span>{{ shortUsd(g.top) }}</span>
-                <span v-if="g.bottom < 0">{{ g.bottom < 0 ? `−${shortUsd(-g.bottom)}` : '' }}</span>
+                <span>{{ axisUsd(g.top) }}</span>
+                <span v-if="g.bottom < 0">{{ g.bottom < 0 ? `−${axisUsd(-g.bottom)}` : '' }}</span>
                 <span v-else>$0</span>
               </div>
               <svg :viewBox="`0 0 ${g.W} 100`" preserveAspectRatio="none" class="h-20 min-w-0 flex-1" role="img" :aria-label="c.title">
