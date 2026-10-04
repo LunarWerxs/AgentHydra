@@ -76,3 +76,25 @@ test('whole hours of a rolled-up store come from the hourly rollup, stamped at t
   ])
   s.close()
 })
+
+test('each group carries the kit cost (billed where known, else list) and flags a call with no list price', async () => {
+  const s = new KitStore(':memory:', { now: NOW })
+  s.upsertEvents([
+    { ...ev('default', 'cli', 3 * H, 1), list_usd: 5, billed_usd: 2 },
+    { ...ev('default', 'cli', 2 * H, 1), list_usd: 4 },
+    { ...ev('default', 'cli', H, 1), model: 'mystery-model' },
+  ])
+  const seen: [number, number, boolean][] = []
+  await forEachCallSince(
+    new Date(NOW - 6 * H),
+    [defaultConfigDir()],
+    (ts, _m, c) => seen.push([ts, c.usd, c.unpriced]),
+    { store: s, now: NOW, quota: () => null },
+  )
+  expect(seen).toEqual([
+    [NOW - 3 * H, 2, false],
+    [NOW - 2 * H, 4, false],
+    [NOW - H, 0, true],
+  ])
+  s.close()
+})

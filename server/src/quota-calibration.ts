@@ -29,7 +29,6 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
 import { forEachCallSince } from './kit/spend'
-import { priceTokens } from './pricing'
 import type {
   BudgetConfidence,
   QuotaCapacity,
@@ -302,12 +301,11 @@ function writeEntry(key: string, entry: AccountEntry): void {
   }
 }
 
-/** Every priced turn since `sinceMs`, as a cumulative-cost lookup over any interval. */
+/** Every turn's kit cost (billed where known, else list) since `sinceMs`, as a cumulative-cost lookup over any interval. */
 async function intervalCostFrom(sinceMs: number, configDirs: string[]): Promise<IntervalCost> {
   const turns: { ts: number; usd: number; unpriced: boolean }[] = []
-  await forEachCallSince(new Date(sinceMs), configDirs, (ts, byModel) => {
-    const priced = priceTokens(byModel, ts)
-    turns.push({ ts, usd: priced.costUsd ?? 0, unpriced: priced.unpriced.length > 0 })
+  await forEachCallSince(new Date(sinceMs), configDirs, (ts, _byModel, cost) => {
+    turns.push({ ts, ...cost })
   })
   turns.sort((a, b) => a.ts - b.ts)
   const cum: number[] = [0]

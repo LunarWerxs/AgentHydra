@@ -118,6 +118,7 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
     instance: 'default',
     model: 'claude-sonnet-4-5',
     input,
+    list_usd: (input / 1_000_000) * 3,
   })
 
   const snap = (weekPct: number): UsageSnapshot => ({

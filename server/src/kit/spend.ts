@@ -8,6 +8,7 @@ import { listCliInstances } from '../core/cli-instances'
 import type { TokenSpend } from '../types'
 import { defaultConfigDir, emptySpend } from '../usage-tokens'
 import { sharedKitStore, type UsageQueryOpts, usageQuery } from './query'
+import { eventMeasureSql } from './schema'
 
 const sameDir = (a: string, b: string): boolean =>
   resolve(a).toLowerCase() === resolve(b).toLowerCase()
@@ -95,18 +96,32 @@ export function spendSince(
 
 const HOUR = 3_600_000
 const MINUTE_SLICE = 10 * 60_000
-type CallRow = [number, string | null, number, number, number, number, number, number, number]
+type CallRow = [
+  number,
+  string | null,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+]
+/** What a group cost: the kit's cost_usd (billed where known, else list), and whether any call in it has no list price. */
+export type GroupCost = { usd: number; unpriced: boolean }
 
 /**
  * The calls since `since` under the config dirs, summed per model: per minute for the last one to two hours and
  * the first partial hour, per hour (stamped at its middle) in between. Each synchronous step reads a slice (10 minutes or a day) and yields to the event loop after it. The calibration prices intervals
  * between quota readings, and a 7-day window of raw calls is too many rows to hand to JS one by one.
- * `ts` is the group's time.
+ * `ts` is the group's time; `cost` is the group's kit cost (calls of an unpriced model add 0 and set `unpriced`).
  */
 export async function forEachCallSince(
   since: Date,
   configDirs: string[],
-  visit: (ts: number, byModel: TokenSpend['byModel']) => void,
+  visit: (ts: number, byModel: TokenSpend['byModel'], cost: GroupCost) => void,
   opts: UsageQueryOpts = {},
 ): Promise<void> {
   const sinceMs = since.getTime()
@@ -124,23 +139,40 @@ export async function forEachCallSince(
   const yieldLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
   const emit = (rows: CallRow[]): void => {
     rows.sort((x, y) => x[0] - y[0])
-    for (const [ts, model, turns, input, output, cacheRead, w5, w1, weighted] of rows) {
-      visit(ts, {
-        [model ?? 'unknown']: {
-          weighted,
-          output,
-          turns,
-          input,
-          cacheRead,
-          cacheCreation5m: w5,
-          cacheCreation1h: w1,
+    for (const [
+      ts,
+      model,
+      turns,
+      input,
+      output,
+      cacheRead,
+      w5,
+      w1,
+      weighted,
+      usd,
+      noList,
+    ] of rows) {
+      visit(
+        ts,
+        {
+          [model ?? 'unknown']: {
+            weighted,
+            output,
+            turns,
+            input,
+            cacheRead,
+            cacheCreation5m: w5,
+            cacheCreation1h: w1,
+          },
         },
-      })
+        { usd, unpriced: noList > 0 },
+      )
     }
   }
   const minuteQuery = db.query(
     `select cast(ts / 60000 as integer) * 60000 as m, model, count(*), sum(input), sum(output), sum(cache_read),
-            sum(cache_write_5m), sum(cache_write_1h), sum(weighted)
+            sum(cache_write_5m), sum(cache_write_1h), sum(weighted), ${eventMeasureSql('cost_usd')},
+            sum(case when list_usd is null then 1 else 0 end)
        from usage_event where ts >= ? and ts < ? and instance in (${marks}) and source in ('cli', 'desktop')
        group by m, model`,
   )
@@ -155,7 +187,8 @@ export async function forEachCallSince(
   }
   const hourQuery = db.query(
     `select hour + ${HOUR / 2}, model, sum(calls), sum(input), sum(output), sum(cache_read),
-            sum(cache_write_5m), sum(cache_write_1h), sum(weighted)
+            sum(cache_write_5m), sum(cache_write_1h), sum(weighted), sum(cost_usd),
+            sum(case when list_usd is null then 1 else 0 end)
        from usage_hour where hour >= ? and hour < ? and instance in (${marks}) and source in ('cli', 'desktop')
        group by hour, model`,
   )
