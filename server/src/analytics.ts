@@ -1962,8 +1962,8 @@ export function sinkReport(opts: { sinceMs?: number | null } = {}): TokenSinkRep
   }
 
   for (const row of selectRows.all()) {
-    const tokens = sinkRowTokens(row, since)
-    if (tokens) foldSinkRow(row, tokens, acc, lookups)
+    const windowed = sinkRowInWindow(row, since)
+    if (windowed) foldSinkRow(row, windowed.scale, windowed.tokens, acc, lookups)
   }
 
   return sinkReportOf(acc)
@@ -1993,17 +1993,55 @@ interface SinkLookups {
   instances: Map<string, string>
 }
 
-/** The row's per-model spend, or null when the row is out of the window or has no sink data. */
-function sinkRowTokens(row: AnalyticsRow, since: number | null): Record<string, ModelSpend> | null {
+/** The share of the session's weighted tokens spent on days inside the window (null: no day data). */
+function sinkDayShare(daysJson: string | null, since: number | null): number | null {
+  if (since === null) return 1
+  const sinceDay = dayKey(since)
+  let total = 0
+  let inWindow = 0
+  for (const [day, weighted] of Object.entries(parseJson<Record<string, number>>(daysJson, {}))) {
+    total += weighted
+    if (day >= sinceDay) inWindow += weighted
+  }
+  return total > 0 ? inWindow / total : null
+}
+
+/** The row's in-window share with its per-model spend scaled to it, or null when the row is out of
+ *  the window or has no sink data. A row without day data falls back to its last turn. */
+function sinkRowInWindow(
+  row: AnalyticsRow,
+  since: number | null,
+): { scale: number; tokens: Record<string, ModelSpend> } | null {
   if (row.analytics_version !== ANALYTICS_VERSION || !row.sinks_json) return null
-  if (since !== null && (row.last_ts ?? 0) < since) return null
-  const tokens = storedModelSpend(row.tokens_json)
-  return Object.keys(tokens).length === 0 ? null : tokens
+  const share = sinkDayShare(row.days_json, since)
+  if (share === null) {
+    if (since !== null && (row.last_ts ?? 0) < since) return null
+  } else if (share <= 0) return null
+  const scale = share ?? 1
+  const stored = storedModelSpend(row.tokens_json)
+  if (Object.keys(stored).length === 0) return null
+  const tokens: Record<string, ModelSpend> = {}
+  for (const [model, m] of Object.entries(stored))
+    tokens[model] =
+      scale >= 1
+        ? m
+        : {
+            ...m,
+            weighted: m.weighted * scale,
+            output: m.output * scale,
+            turns: Math.round(m.turns * scale),
+            input: m.input * scale,
+            cacheRead: m.cacheRead * scale,
+            cacheCreation5m: m.cacheCreation5m * scale,
+            cacheCreation1h: m.cacheCreation1h * scale,
+          }
+  return { scale, tokens }
 }
 
 /** Fold one in-window session into every sink total. */
 function foldSinkRow(
   row: AnalyticsRow,
+  scale: number,
   tokens: Record<string, ModelSpend>,
   acc: SinkAcc,
   lookups: SinkLookups,
@@ -2018,11 +2056,11 @@ function foldSinkRow(
   const tools = parseJson<Record<string, number>>(row.tools_json, {})
   foldMcpSinks(s, tools, sessionCalls, prefixRate, acc)
 
-  acc.deepCalls += s.deepCalls ?? 0
-  acc.deepWeighted += s.deepWeighted ?? 0
-  acc.subWeighted += s.subWeighted ?? 0
+  acc.deepCalls += (s.deepCalls ?? 0) * scale
+  acc.deepWeighted += (s.deepWeighted ?? 0) * scale
+  acc.subWeighted += (s.subWeighted ?? 0) * scale
   // Task is the older name of the Agent tool; both spawn a subagent.
-  acc.spawns += (tools.Task ?? 0) + (tools.Agent ?? 0)
+  acc.spawns += ((tools.Task ?? 0) + (tools.Agent ?? 0)) * scale
 
   const account =
     lookups.accounts.get(row.session_id) ?? lookups.instances.get(row.session_id) ?? null

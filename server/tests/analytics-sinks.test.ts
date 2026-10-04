@@ -219,3 +219,48 @@ describe('the sink report ranks dead load across sessions', () => {
     expect(deadSkills?.fix.length).toBeGreaterThan(0)
   })
 })
+
+describe('a sink figure is scoped to the window like spend', () => {
+  test('a three-week session in a 24h window contributes only its in-window share', async () => {
+    const deep = {
+      input_tokens: 10,
+      cache_read_input_tokens: DEEP_CONTEXT_TOKENS,
+      output_tokens: 5,
+    }
+    const now = Date.now()
+    const old = new Date(now - 20 * 86_400_000).toISOString()
+    const recent = new Date(now - 60_000).toISOString()
+    // Three deep calls three weeks ago and one just now: a quarter of the session is in the window.
+    const path = transcript([
+      assistant(old, deep, { id: 'm1', requestId: 'r1' }),
+      assistant(old, deep, { id: 'm2', requestId: 'r2' }),
+      assistant(old, deep, { id: 'm3', requestId: 'r3' }),
+      assistant(recent, deep, { id: 'm4', requestId: 'r4' }),
+    ])
+    const r = await refreshAnalytics(
+      [
+        {
+          source: 'claude' as const,
+          session_id: 'cccccccc-0000-4000-8000-000000000001',
+          path,
+          project: 'sink-window',
+          cwd: 'D:/sink',
+          mtime_ms: now,
+          size_bytes: 4000,
+          title: '',
+          archived: false,
+          created_at: null,
+        },
+      ] as never,
+      { budgetMs: 5_000, concurrency: 1 },
+    )
+    expect(r.failed).toBe(0)
+    const whole = sinkReport({ sinceMs: now - 30 * 86_400_000 })
+    const day = sinkReport({ sinceMs: now - 86_400_000 })
+    expect(whole.deepContext.calls).toBe(4)
+    expect(day.deepContext.calls).toBe(1)
+    expect(day.subagents.spawns).toBeLessThanOrEqual(whole.subagents.spawns)
+    expect(day.deepContext.weighted).toBeLessThan(whole.deepContext.weighted / 2)
+    expect(day.deepContext.weighted).toBeLessThanOrEqual(day.totalWeighted)
+  })
+})

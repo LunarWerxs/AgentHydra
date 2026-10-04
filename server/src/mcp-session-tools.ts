@@ -5,6 +5,15 @@ import { api, JSON_HEADERS, normalizeInstanceRef, qs, S, str } from './mcp-clien
 import { ownTranscript } from './mcp-self'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
+/** Adds the readable account label (the one /api/hswarm-accounts gives the web) to each `byAccount`
+ *  entry of a spend answer; an id the map does not know keeps its key alone. */
+export function labelSpendAccounts(spend: unknown, accounts: unknown): unknown {
+  const s = spend as { byAccount?: Array<{ key: string }> } | null
+  if (!s || !Array.isArray(s.byAccount)) return spend
+  const names = (accounts ?? {}) as Record<string, { label?: string } | undefined>
+  return { ...s, byAccount: s.byAccount.map((b) => ({ ...b, label: names[b.key]?.label ?? null })) }
+}
+
 export const SESSION_TOOLS: McpEngineTool[] = [
   // --- sessions (read-only) ---------------------------------------------------
   {
@@ -485,12 +494,15 @@ export const SESSION_TOOLS: McpEngineTool[] = [
   {
     name: 'get_spend',
     description:
-      'Token and dollar totals across sessions, broken down by model, project, day and dispatching ' +
-      'account. Read `coverage`: the totals come from a background scan, so sessions/total tells ' +
-      'you how much of the store it has reached, and a chart drawn from a half-warmed store is not ' +
-      'wrong so much as partial. Costs use published list prices; a subscription plan is not billed ' +
-      'per token. `unpricedModels` means those tokens counted but their money did not, so the ' +
-      'total is a floor.',
+      'Token and dollar totals across sessions, broken down by model, project, day, source and ' +
+      'account (`byAccount` entries carry an opaque `key` plus a readable `label` when the account ' +
+      'is known). Read `coverage` and `notes` in the answer: `kitCoverage.sources` says, per source, ' +
+      'how many events are ingested and up to when, `dirtyFrom` (non-null) means recent hours are ' +
+      'still being rolled up, and `notes` names any place the answer is narrower than asked; a low ' +
+      'figure with a lagging source is partial, not true. (`coverage` is the older per-session scan ' +
+      'and says how much of the session store it has reached.) Costs use published list prices; a ' +
+      'subscription plan is not billed per token. `unpricedModels` means those tokens counted but ' +
+      'their money did not, so the total is a floor.',
     inputSchema: S({
       period: {
         type: 'string',
@@ -498,7 +510,11 @@ export const SESSION_TOOLS: McpEngineTool[] = [
         description: 'How far back to total. Default 30d.',
       },
     }),
-    run: (a) => api(`/api/analytics/spend${qs({ period: a.period })}`),
+    run: async (a) =>
+      labelSpendAccounts(
+        await api(`/api/analytics/spend${qs({ period: a.period })}`),
+        await api('/api/hswarm-accounts').catch(() => ({})),
+      ),
   },
   {
     name: 'usage_query',

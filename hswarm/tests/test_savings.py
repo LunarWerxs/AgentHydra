@@ -5,6 +5,7 @@ import datetime as dt
 import json
 import sys
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -141,9 +142,10 @@ def test_too_few_subagents_is_not_measured_never_zero(home):
     assert "-" in savings_view.render(s)
 
 
-def _kit_answer(events: int, rows: list[dict]) -> dict:
+def _kit_answer(events: int, rows: list[dict], last_ts: int | None = None) -> dict:
     first = int(dt.datetime.combine(YESTERDAY - dt.timedelta(30), dt.time.min).timestamp() * 1000)
-    sources = {"cli": {"events": events, "firstTs": first, "lastTs": first}} if events else {}
+    last = int(time.time() * 1000) if last_ts is None else last_ts  # by default the kit has caught up
+    sources = {"cli": {"events": events, "firstTs": first, "lastTs": last}} if events else {}
     return {"rows": rows, "totals": {}, "coverage": {"sources": sources}}
 
 
@@ -165,3 +167,13 @@ def test_claude_side_comes_from_the_kit_when_it_has_claude_events_else_from_the_
 
     s = savings.report(days=1, include_today=False, today=TODAY)  # nothing recorded yet: the report names its source
     assert s["claude_source"] == "scan"
+
+
+def test_a_kit_that_lags_the_window_end_is_not_trusted_for_the_day(kit_daemon, home):
+    _write(home / "projects" / "p" / "s.jsonl", _req("r1", YESTERDAY, output_tokens=1_000_000))  # the scan says $10
+    rows = [{"day": YESTERDAY.isoformat(), "model": "claude-sonnet-5", "tokens": 5, "list_usd": 0.01}]
+    # Old events exist (so the window start is covered) but the newest is two days old: the daemon was down.
+    stale = int((time.time() - 2 * 86400) * 1000)
+    kit_daemon["answer"] = _kit_answer(events=4, rows=rows, last_ts=stale)
+    day = savings.measure(YESTERDAY, YESTERDAY, TODAY)[YESTERDAY.isoformat()]
+    assert (day["claude_source"], day["claude_usd"]) == ("scan", pytest.approx(10.0))

@@ -15,6 +15,7 @@ import datetime as dt
 import json
 import os
 import statistics
+import time
 import traceback
 import urllib.error
 import urllib.parse
@@ -58,11 +59,14 @@ def lower_priority() -> None:
         os.nice(10)
 
 
+KIT_CURRENT_SLACK_MS = 5 * 60_000  # a few of the daemon's one-minute sweeps
+
+
 def kit_claude_by_day(since: dt.date, end: dt.date) -> dict[str, dict] | None:
     """Claude's per-day USD and tokens on this PC from the AgentHydra analytics kit, or None when the kit cannot say.
 
     None means the daemon does not answer (AGENTHYDRA_URL, else the default port; empty disables it) OR the kit has
-    ingested no Claude events yet or none old enough for the window, so a low figure would pass for a true one.
+    ingested no Claude events yet, none old enough for the window, or has not caught up to the window's end, so a low figure would pass for a true one.
     The caller then runs the transcript scan (claude_usage.py): that is HSwarm's own path when it runs without
     AgentHydra, not a fallback for old builds. Asking by the machine's own day buckets (no tz) with pc=self keeps
     it this PC's usage, as the scan is.
@@ -78,6 +82,13 @@ def kit_claude_by_day(since: dt.date, end: dt.date) -> dict[str, dict] | None:
             data = json.load(resp)
         seen = [v for k, v in data["coverage"]["sources"].items() if k in KIT_SOURCES.split(",") and v.get("events")]
         if not seen or min(v["firstTs"] for v in seen) > ms(since):
+            return None
+        # Caught up to the window's end too: a daemon stopped overnight (or mid first sweep) has the old events but
+        # not the recent ones, and a low day stored now would never be re-measured. The newest event (or transcript
+        # mtime the sweep has read) must reach the window end, less a few sweep intervals, capped at now.
+        target = min(ms(end + dt.timedelta(1)) - 1, int(time.time() * 1000)) - KIT_CURRENT_SLACK_MS
+        newest = max([v["lastTs"] for v in seen] + [data["coverage"].get("cursors", {}).get("newestMtime") or 0])
+        if newest < target:
             return None
         out: dict[str, dict] = {}
         for r in data["rows"]:

@@ -63,6 +63,7 @@ import { app } from '../http-app'
 import { instanceDirParam } from '../instance-dir-param'
 import { accountTokenWindows } from '../kit/account-windows'
 import type { QuotaReset } from '../kit/query'
+import type { KitStore } from '../kit/store'
 import { readLiveRegistry } from '../live-registry'
 import { jsonBody } from '../route-helpers'
 import { fileNudgeStore } from '../session-keepalive'
@@ -424,23 +425,44 @@ app.get('/api/instances/:dir/usage', async (c) => {
 
 /** Token windows by account uuid for a set of rows, from the kit: each account's window is cut at
  *  the reset its row shows (a null uuid is a signed-out row and gets nothing). */
-function kitTokensFor(
+export function kitTokensFor(
   rows: { uuid: string | null; snapshot: UsageSnapshot | null | undefined }[],
+  opts: { store?: KitStore; now?: number } = {},
 ): Map<string, AccountTokens> {
-  const resets = new Map<string, QuotaReset>()
+  const now = opts.now ?? Date.now()
+  const snaps = new Map<string, UsageSnapshot[]>()
   const idOf = new Map<string, string>()
   for (const r of rows) {
     if (!r.uuid) continue
-    const uuid = r.uuid.toLowerCase()
-    const id = hswarmAccountId(uuid)
-    idOf.set(uuid, id)
-    const q = {
-      sessionResetsAt: r.snapshot?.session?.resetsAt ?? null,
-      weekResetsAt: r.snapshot?.weekAll?.resetsAt ?? null,
-    }
-    if (!resets.has(id) || q.sessionResetsAt || q.weekResetsAt) resets.set(id, q)
+    // Keyed by the caller's own spelling (the id hashes the lowercase one), so a lookup by it hits.
+    const id = hswarmAccountId(r.uuid.toLowerCase())
+    idOf.set(r.uuid, id)
+    if (r.snapshot) snaps.set(id, [...(snaps.get(id) ?? []), r.snapshot])
   }
-  const byId = accountTokenWindows([...idOf.values()], { quota: (id) => resets.get(id) ?? null })
+  // Rows sharing an account merge per window kind: the newest reset still ahead, else the newest
+  // snapshot's own (a stale row must not drag the other row's window off its usage bar).
+  const mergeReset = (list: UsageSnapshot[], kind: 'session' | 'weekAll'): string | null => {
+    const seen = list
+      .map((s) => ({ at: s[kind]?.resetsAt ?? null, taken: Date.parse(s.capturedAt) || 0 }))
+      .filter((x): x is { at: string; taken: number } => !!x.at)
+    const ahead = seen.filter((x) => Date.parse(x.at) > now)
+    const pool = ahead.length ? ahead : seen
+    const pick = ahead.length
+      ? pool.reduce((m, x) => (Date.parse(x.at) > Date.parse(m.at) ? x : m))
+      : pool.reduce((m, x) => (x.taken > m.taken ? x : m), pool[0])
+    return pick?.at ?? null
+  }
+  const resets = new Map<string, QuotaReset>()
+  for (const [id, list] of snaps)
+    resets.set(id, {
+      sessionResetsAt: mergeReset(list, 'session'),
+      weekResetsAt: mergeReset(list, 'weekAll'),
+    })
+  const byId = accountTokenWindows([...idOf.values()], {
+    quota: (id) => resets.get(id) ?? null,
+    store: opts.store,
+    now: opts.now,
+  })
   const out = new Map<string, AccountTokens>()
   for (const [uuid, id] of idOf) {
     const t = byId.get(id)
