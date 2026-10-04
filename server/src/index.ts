@@ -95,6 +95,7 @@ import {
   writeInstanceInfo,
 } from './instance'
 import { warmSessionMetaIndex } from './instance-sessions'
+import { startKitSweep } from './kit/sweep'
 import { initFileLogging, logFilePath } from './log-file.mjs'
 import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
 import {
@@ -1482,6 +1483,9 @@ startCliResetSweep()
 startLoginSync()
 startDesktopCliFeed()
 void refreshAccountTokens()
+// The analytics store's ingest: Claude transcripts, the foreign stores and the HSwarm ledger into
+// analytics.db, on boot and every minute after (kit/sweep.ts). The first sweep is long and resumable.
+startKitSweep()
 
 // Paid extra usage is never billed unless Settings allows it: on an account that has it switched
 // on, every Claude session is stopped as the account reaches its limit (server/src/extra-usage.ts).

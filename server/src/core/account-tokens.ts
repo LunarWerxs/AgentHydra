@@ -106,13 +106,13 @@ export function messagesInTranscript(text: string, fallbackTs: number): number[]
 
 // --- who held each CLI instance, and since when -----------------------------------------------
 
-interface Holder {
+export interface Holder {
   uuid: string | null
   since: number
 }
-type Holders = Record<string, Holder[]>
+export type Holders = Record<string, Holder[]>
 
-function readHolders(): Holders {
+export function readHolders(): Holders {
   try {
     const file = accountHoldersFile()
     if (!existsSync(file)) return {}

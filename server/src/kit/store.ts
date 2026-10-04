@@ -169,6 +169,58 @@ export class KitStore {
     return events.length
   }
 
+  /**
+   * Add events straight to usage_hour, never to usage_event: for calls already older than the raw window,
+   * which would only be pruned again. Additive (not idempotent), so the caller must write the file's
+   * cursor in the same transaction and never feed the same call twice. Returns events added.
+   */
+  addToHourly(events: readonly UsageEventInput[]): number {
+    if (events.length === 0) return 0
+    const groups = new Map<
+      string,
+      { e: UsageEventInput; n: Record<string, number>; calls: number }
+    >()
+    for (const e of events) {
+      const hour = hourStart(e.ts)
+      const key = [hour, ...KIT_HOUR_DIMS.map((d) => e[d] ?? '')].join('\u0000')
+      let g = groups.get(key)
+      if (!g) {
+        g = { e: { ...e, ts: hour }, n: {}, calls: 0 }
+        groups.set(key, g)
+      }
+      g.calls++
+      for (const m of KIT_MEASURES) {
+        const v = e[m]
+        if (v != null) g.n[m] = (g.n[m] ?? 0) + v
+      }
+    }
+    const nullable = new Set(['list_usd', 'billed_usd', 'seconds'])
+    const cols = KIT_MEASURES.map((m) => m)
+    const stmt = this.db.prepare(
+      `insert into usage_hour (hour, day, ${KIT_HOUR_DIMS.join(', ')}, calls, ok_calls, failed_calls, ${cols.join(', ')})
+       values ($hour, $day, ${KIT_HOUR_DIMS.map((d) => `$${d}`).join(', ')}, $calls, $ok, $failed, ${cols.map((c) => `$${c}`).join(', ')})
+       on conflict (hour, pc, account, instance, agent, source, model, provider) do update set
+         calls = calls + excluded.calls, ok_calls = ok_calls + excluded.ok_calls,
+         failed_calls = failed_calls + excluded.failed_calls,
+         ${cols.map((c) => (nullable.has(c) ? `${c} = case when ${c} is null and excluded.${c} is null then null else coalesce(${c}, 0) + coalesce(excluded.${c}, 0) end` : `${c} = ${c} + excluded.${c}`)).join(', ')}`,
+    )
+    this.db.transaction(() => {
+      for (const g of groups.values()) {
+        const p: Record<string, string | number | null> = {
+          $hour: g.e.ts,
+          $day: g.e.day ?? localDay(g.e.ts),
+          $calls: g.calls,
+          $ok: 0,
+          $failed: 0,
+        }
+        for (const d of KIT_HOUR_DIMS) p[`$${d}`] = g.e[d] ?? ''
+        for (const c of cols) p[`$${c}`] = g.n[c] ?? (nullable.has(c) ? null : 0)
+        stmt.run(p)
+      }
+    })()
+    return events.length
+  }
+
   // ---- meta ----
 
   /** Hour below which raw events were pruned (so no new one is taken), or null before the first prune. */
