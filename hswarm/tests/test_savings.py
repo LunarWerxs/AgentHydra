@@ -51,8 +51,9 @@ def kit_daemon(home, monkeypatch):
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            box["asked"].append(urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query))
-            body = json.dumps(box["answer"]).encode()
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            box["asked"].append(q)
+            body = json.dumps(box.get("sub_answer", box["answer"]) if "agent" in q else box["answer"]).encode()
             self.send_response(200)
             self.end_headers()
             self.wfile.write(body)
@@ -157,7 +158,7 @@ def test_claude_side_comes_from_the_kit_when_it_has_claude_events_else_from_the_
     kit_daemon["answer"] = _kit_answer(events=4, rows=rows)
     day = savings.measure(YESTERDAY, YESTERDAY, TODAY)[YESTERDAY.isoformat()]
     assert (day["claude_usd"], day["claude_tokens"], day["claude_source"]) == (1.75, 1000, "kit")
-    asked = kit_daemon["asked"][-1]
+    asked = kit_daemon["asked"][0]
     assert asked["pc"] == ["self"] and asked["source"] == ["cli,desktop,climayte"] and asked["groupBy"] == ["day,model"]
 
     kit_daemon["answer"] = _kit_answer(events=0, rows=[])  # the kit answers but has seen no Claude yet: not a zero
@@ -177,3 +178,13 @@ def test_a_kit_that_lags_the_window_end_is_not_trusted_for_the_day(kit_daemon, h
     kit_daemon["answer"] = _kit_answer(events=4, rows=rows, last_ts=stale)
     day = savings.measure(YESTERDAY, YESTERDAY, TODAY)[YESTERDAY.isoformat()]
     assert (day["claude_source"], day["claude_usd"]) == ("scan", pytest.approx(10.0))
+
+
+def test_the_main_sub_agent_split_comes_from_a_second_kit_request_filtered_to_sub_agents(kit_daemon, home):
+    _write(home / "projects" / "p" / "s.jsonl", _req("r1", YESTERDAY, output_tokens=1_000_000))  # the scan would say $10 main
+    day_s = YESTERDAY.isoformat()
+    kit_daemon["answer"] = _kit_answer(events=4, rows=[{"day": day_s, "model": "claude-sonnet-5", "tokens": 700, "list_usd": 2.0}])
+    kit_daemon["sub_answer"] = {"rows": [{"day": day_s, "list_usd": 0.5}]}
+    day = savings.measure(YESTERDAY, YESTERDAY, TODAY)[day_s]
+    assert (day["claude_usd"], day["claude_sub_usd"], day["claude_main_usd"]) == (2.0, 0.5, 1.5)
+    assert len(kit_daemon["asked"]) == 2 and kit_daemon["asked"][-1]["agent"] == ["subagent"]
