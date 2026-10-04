@@ -18,6 +18,7 @@ import {
 } from './search-index'
 import { dedupeKey } from './session-locator'
 import {
+  ensureTranscriptIndex,
   eventToTailEventsForSource,
   instanceScopeMatches,
   listTranscriptFiles,
@@ -689,6 +690,7 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
   const budgetMs = opts.budgetMs ?? DEFAULT_BUDGET_MS
   const deadline = performance.now() + budgetMs
 
+  await ensureTranscriptIndex() // so the sync lookups below never meet a cold cache
   const files = resolveSearchFiles(opts)
 
   const found: SessionSearchResult[] = []

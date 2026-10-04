@@ -333,6 +333,7 @@ export function originInstances(): Set<string> {
  *  (dispatch.ts) consults this map on a hot path, so the TTL is not something to shorten. A
  *  background refresh already under way is disowned too: it began before the write. */
 export function invalidateSessionMetaCache(): void {
+  booting = false // a caller that invalidates wants fresh data now: keep the sync rescan
   cache = null
   generation++
 }
@@ -367,9 +368,20 @@ function scanAll(): ScanIndex {
     void refreshInBackground()
     return cache
   }
+  if (booting) {
+    // Daemon boot (warmSessionMetaIndex was called), before the first index exists: the sync scan holds the loop ~2 s. Answer "unknown"
+    // (empty, not cached) while the async build runs; every caller already treats a miss as unknown.
+    void refreshInBackground()
+    return EMPTY_INDEX
+  }
   cache = indexOf(collectChats(), now)
   return cache
 }
+
+/** True from the boot warm until its async build lands; only the daemon sets it, so a bare call
+ *  (tests, scripts) still gets the synchronous scan. */
+let booting = false
+const EMPTY_INDEX: ScanIndex = indexOf([], 0)
 
 let refreshing: Promise<void> | null = null
 /** Bumped by invalidateSessionMetaCache, so a refresh that began before it never lands after it. */
@@ -381,7 +393,9 @@ let generation = 0
  * and at boot the first asker was the analytics warm, one lookup per session it stores.
  */
 export function warmSessionMetaIndex(): Promise<void> {
-  return cache ? Promise.resolve() : refreshInBackground()
+  if (cache) return Promise.resolve()
+  booting = true
+  return refreshInBackground()
 }
 
 function refreshInBackground(): Promise<void> {
@@ -397,6 +411,7 @@ function refreshInBackground(): Promise<void> {
       /* keep the index we have; the next expiry tries again */
     })
     .finally(() => {
+      booting = false
       refreshing = null
     })
   return refreshing

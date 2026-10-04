@@ -1905,6 +1905,7 @@ export async function getSession(
   // Deleted between finding it and reading it, which answers the caller's question the same way a
   // miss above does: there is no such session.
   if (!m) return null
+  await ensureTranscriptIndex()
   const qmap = queueStatusMap()
   const dmap = doneMarkMap()
   // Same resolution the list uses, so a row does not change its account when you click it.

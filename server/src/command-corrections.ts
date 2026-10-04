@@ -18,7 +18,7 @@
 import { readOpenCodeToolParts } from './opencode-sessions'
 import { redactSecrets } from './secrets'
 import { streamLines } from './session-search'
-import { listTranscriptFiles, type TranscriptFile } from './transcript'
+import { ensureTranscriptIndex, type TranscriptFile } from './transcript'
 import type {
   CommandErrorKind,
   CorrectionExample,
@@ -509,7 +509,7 @@ export async function mineCommandCorrections(
   opts: { limit?: number; budgetMs?: number; files?: TranscriptFile[] } = {},
 ): Promise<CorrectionReport> {
   const deadline = Date.now() + (opts.budgetMs ?? 15_000)
-  const candidates = (opts.files ?? listTranscriptFiles()).filter((f) =>
+  const candidates = (opts.files ?? (await ensureTranscriptIndex())).filter((f) =>
     MINED_SOURCES.has(f.source),
   )
   const queue = [...candidates]

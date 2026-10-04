@@ -13,7 +13,7 @@ import {
 import { mineCommandCorrections } from '../command-corrections'
 import { app } from '../http-app'
 import { boundedQueryInt } from '../route-helpers'
-import { listTranscriptFiles } from '../transcript'
+import { ensureTranscriptIndex } from '../transcript'
 import { isSessionPeriod, periodCutoffMs, type SessionPeriod } from '../types'
 
 /** Read-only analytics/agent-tools routes. See index.ts for the app-wide middleware these routes
@@ -95,7 +95,7 @@ app.get('/api/agent-tools', (c) => c.json({ tools: cachedAgentTools() }))
 // wedge the daemon on a store with thousands of transcripts in it.
 app.post('/api/analytics/refresh', async (c) =>
   c.json(
-    await refreshAnalytics(listTranscriptFiles(), {
+    await refreshAnalytics(await ensureTranscriptIndex(), {
       budgetMs: boundedQueryInt(c.req.query('budgetMs'), 30_000, 120_000),
     }),
   ),

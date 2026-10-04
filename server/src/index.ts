@@ -146,6 +146,7 @@ import { isRelaunchSuccessor, skipSingleInstanceGuard } from './single-instance'
 import { startStallSentinel, stopStallSentinel } from './stall-sentinel'
 import { syncStatusHooks } from './status-hooks'
 import { startTitleSweep } from './title-sweep'
+import { forbidSyncIndexBuild } from './transcript'
 import { resolveEditor } from './transcript-open'
 import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
 import { startTrayInvariant } from './tray-invariant'
@@ -161,6 +162,9 @@ import {
 import { checkUsageForCliInstance, checkUsageForDesktop } from './usage-service'
 import { startVersionDriftWatch } from './version-drift'
 import { WINDOW_SIZE_HINT_PARAM, windowSizeHintFor } from './window-size'
+
+// The daemon never runs the blocking cold index build; see forbidSyncIndexBuild.
+forbidSyncIndexBuild()
 
 // Persist console output to <CONFIG_DIR>/logs/daemon.log BEFORE anything else can throw, so the
 // crash reason logged just below actually survives the process (the tray runs us with a hidden

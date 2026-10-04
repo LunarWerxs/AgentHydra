@@ -22,7 +22,7 @@
 import { instanceRefForSession } from './instance-sessions'
 import { createLimitStopTracker } from './rate-limit-signal'
 import { getSession } from './sessions'
-import { listTranscriptFiles } from './transcript'
+import { ensureTranscriptIndex } from './transcript'
 import type { QueueItem } from './types'
 
 /**
@@ -125,7 +125,7 @@ export async function discoverPendingStops(
   // Auto-resume is a Claude-only feature. Codex/OpenCode transcripts share the unified session
   // index for viewing, but neither can be resumed by the Claude dispatcher and OpenCode's virtual
   // transcript path points at its SQLite store rather than a JSONL event stream.
-  const recent = listTranscriptFiles().filter(
+  const recent = (await ensureTranscriptIndex()).filter(
     (f) =>
       f.source === 'claude' && (now - f.mtime_ms <= windowMs || !!opts.keep?.has(f.session_id)),
   )

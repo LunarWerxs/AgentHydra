@@ -37,7 +37,12 @@ import type { KitStore } from './kit/store'
 import { readOpenCodeUsage } from './opencode-sessions'
 import { priceSource, pricesAsOf, priceTokens } from './pricing'
 import { streamLines } from './session-search'
-import { decodeProjectKey, listTranscriptFiles, type TranscriptFile } from './transcript'
+import {
+  decodeProjectKey,
+  ensureTranscriptIndex,
+  listTranscriptFiles,
+  type TranscriptFile,
+} from './transcript'
 import type {
   ActivityReport,
   AnalyticsCoverage,
@@ -1461,7 +1466,7 @@ export function warmAnalyticsInBackground(budgetMs = 120_000): void {
   warming = (async () => {
     try {
       for (;;) {
-        const r = await refreshAnalytics(listTranscriptFiles(), { budgetMs })
+        const r = await refreshAnalytics(await ensureTranscriptIndex(), { budgetMs })
         if (!r.budgetExhausted || r.scanned === 0) break
         await new Promise((resolve) => setTimeout(resolve, WARM_CHUNK_GAP_MS))
       }

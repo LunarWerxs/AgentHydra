@@ -1,5 +1,6 @@
+import type { Dirent } from 'node:fs'
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
-import { stat as statAsync } from 'node:fs/promises'
+import { readdir as readdirAsync, stat as statAsync } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { extraRootsWithFormat } from './agent-catalog'
 import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH } from './config'
@@ -439,7 +440,21 @@ export function listTranscriptFiles(force = false): TranscriptFile[] {
     if (now - cache.at >= TTL_MS) void startIndexBuild()
     return cache.files
   }
-  return buildTranscriptIndex()
+  return coldIndexFallback()
+}
+
+let syncIndexBuildAllowed = true
+/** The daemon calls this once at boot. A cold-cache sync build is 25-54 s of the event loop on a big
+ *  store, so with it off a sync caller that finds no snapshot gets an empty list ("nothing yet")
+ *  while the async build starts. Scripts and tests keep the default: the one-shot sync build. */
+export function forbidSyncIndexBuild(): void {
+  syncIndexBuildAllowed = false
+}
+
+function coldIndexFallback(): TranscriptFile[] {
+  if (syncIndexBuildAllowed) return buildTranscriptIndex()
+  void startIndexBuild().catch(noop)
+  return []
 }
 
 let lastMissSweepAt = Number.NEGATIVE_INFINITY
@@ -474,7 +489,7 @@ function claimMissSweep(): boolean {
  */
 export function listTranscriptFilesAfterMiss(): TranscriptFile[] {
   if (claimMissSweep()) void startFreshIndexBuild()
-  return cache?.files ?? buildTranscriptIndex()
+  return cache?.files ?? coldIndexFallback()
 }
 
 /**
@@ -521,18 +536,61 @@ function scanRootSync(glob: Bun.Glob, cwd: string): string[] {
   }
 }
 
+/** A `**` + name-pattern glob (`**\/*.jsonl`, `**\/rollout-*.jsonl`) as a plain name test, so the
+ *  walk below does not run the glob engine on every one of 60,000 entries; anything else keeps
+ *  the glob's own matcher. */
+function nameMatcher(pattern: string): (rel: string, name: string) => boolean {
+  const m = /^\*\*\/([^*/{}?[\]]*)\*([^*/{}?[\]]*)$/.exec(pattern)
+  if (m) {
+    const head = m[1] as string
+    const tail = m[2] as string
+    return (_rel, name) =>
+      name.length >= head.length + tail.length && name.startsWith(head) && name.endsWith(tail)
+  }
+  const glob = new Bun.Glob(pattern)
+  return (rel) => glob.match(rel)
+}
+
 /** Async twin of {@link scanRootSync}, with the same "a missing root is an empty one" contract.
- *  The iterator throws lazily too, so the `for await` has to be INSIDE the try. */
-async function scanRootAsync(glob: Bun.Glob, cwd: string): Promise<string[]> {
+ *
+ *  A single Bun glob scan held the loop ~270 ms on a 60,000-file Claude store, and scanning one
+ *  folder at a time still did on a folder of 28,000 subagent files. So a `**` pattern is walked
+ *  here a level at a time with pooled readdirs, which are real I/O and a turn of the loop apiece.
+ *  A pattern that does not start with `**` is scanned whole, as before. */
+async function scanRootAsync(pattern: string, cwd: string): Promise<string[]> {
   const out: string[] = []
-  try {
-    // See scanRootSync: a dot directory can hold real transcripts.
-    for await (const rel of glob.scan({ cwd, onlyFiles: true, dot: true })) out.push(rel)
-  } catch {
+  if (!pattern.startsWith('**/')) {
+    try {
+      // See scanRootSync: a dot directory can hold real transcripts.
+      for await (const rel of new Bun.Glob(pattern).scan({ cwd, onlyFiles: true, dot: true }))
+        out.push(rel)
+    } catch {
+      // A missing root is an empty one.
+    }
     return out
+  }
+  const matches = nameMatcher(pattern)
+  let level: string[] = ['']
+  while (level.length) {
+    const next: string[] = []
+    await mapPool(level, SCAN_READDIR_WIDTH, async (rel) => {
+      let entries: Dirent[]
+      try {
+        entries = await readdirAsync(rel ? join(cwd, rel) : cwd, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const e of entries) {
+        const child = rel ? `${rel}/${e.name}` : e.name
+        if (e.isDirectory()) next.push(child)
+        else if (e.isFile() && matches(child, e.name)) out.push(child)
+      }
+    })
+    level = next
   }
   return out
 }
+const SCAN_READDIR_WIDTH = 4
 
 /**
  * Every JSONL under a Claude store, not just the top level.
@@ -552,7 +610,7 @@ const CLAUDE_TRANSCRIPT_GLOB = '**/*.jsonl'
 const CODEX_ROLLOUT_GLOB = '**/rollout-*.jsonl'
 /** How many files the async build stats/reads at once. Wide enough to keep the disk busy, bounded
  *  so a huge store cannot open thousands of handles at once. */
-const INDEX_SCAN_WIDTH = 24
+const INDEX_SCAN_WIDTH = 6
 
 /**
  * The last stat of every Claude transcript, so a sweep re-stats only what can have moved. Measured
@@ -1197,7 +1255,7 @@ async function buildClaudeRecordsAsync(
   statSeen: Set<string>,
 ): Promise<void> {
   for (const store of claudeStores()) {
-    const claudeRels = await scanRootAsync(new Bun.Glob(store.glob), store.root)
+    const claudeRels = await scanRootAsync(store.glob, store.root)
     const scanned = await mapPool(claudeRels, INDEX_SCAN_WIDTH, async (rel) => {
       const path = join(store.root, rel)
       statSeen.add(path)
@@ -1252,7 +1310,7 @@ async function buildCodexRecordsAsync(files: TranscriptFile[]): Promise<void> {
   for (const store of codexStoreRoots()) {
     // Same per-store sidebar read as the sync builder.
     const codexSessionIndex = readCodexSessionIndex(store.indexPath)
-    const rels = await scanRootAsync(new Bun.Glob(CODEX_ROLLOUT_GLOB), store.root)
+    const rels = await scanRootAsync(CODEX_ROLLOUT_GLOB, store.root)
     const records = await mapPool(rels, INDEX_SCAN_WIDTH, async (rel) => {
       const path = join(store.root, rel)
       try {
