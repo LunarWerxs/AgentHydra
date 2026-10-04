@@ -53,6 +53,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useCliMayteFloat } from '@/composables/useCliMayteFloat'
+import { pii } from '@/composables/usePrivacy'
 import type {
   CliMayteRemotePc,
   CliMayteRemoteWorker,
@@ -394,8 +395,13 @@ function remoteWaited(w: ListRow): string | null {
 }
 
 /** The row's hover: the title in full, its account, and the one line that needs attention (a
- *  failure's reason, what a waiting or re-queued task waits for, what a running one is doing). */
+ *  failure's reason, what a waiting or re-queued task waits for, what a running one is doing).
+ *  Masked whole in privacy mode: a server's reason can name an account too. */
 function rowHint(w: ListRow): string {
+  return pii(rowHintText(w))
+}
+
+function rowHintText(w: ListRow): string {
   const note = climayteQueuedNote(w, now.value)
   const line =
     (w.status === 'failed' || w.status === 'waiting') && w.error
@@ -521,7 +527,7 @@ onUnmounted(() => {
             class="mx-3 mb-2 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
           >
             <Cloud class="size-3.5 shrink-0" aria-hidden="true" />
-            {{ n.note }}
+            {{ $pii(n.note) }}
           </p>
 
           <div v-if="rows.length" class="flex flex-col gap-1.5 px-3 pb-2">
@@ -653,7 +659,7 @@ onUnmounted(() => {
           <CliMayteStatusBadge :status="selectedRemote.status" />
           <Badge variant="outline" class="max-w-56" :title="$t('climayte.detailAccount')">
             <UserRound aria-hidden="true" />
-            <span class="truncate text-2xs">{{ selectedRemote.account ?? $t('climayte.noAccount') }}</span>
+            <span class="truncate text-2xs">{{ selectedRemote.account ? $pii(selectedRemote.account) : $t('climayte.noAccount') }}</span>
           </Badge>
           <Badge variant="muted" :title="$t('climayte.detailRan')">
             <span class="text-2xs tabular-nums">{{ activeLabel(selectedRemote.ranS) }}</span>
@@ -666,7 +672,7 @@ onUnmounted(() => {
           </Badge>
         </div>
         <p v-if="selectedRemote.lastActivity" class="wrap-break-word text-xs text-muted-foreground">
-          {{ selectedRemote.lastActivity }}
+          {{ $pii(selectedRemote.lastActivity) }}
         </p>
         <p v-if="remoteWaited(selectedRemote)" class="text-xs text-warning">
           {{ remoteWaited(selectedRemote) }}
@@ -674,7 +680,7 @@ onUnmounted(() => {
         <pre
           v-if="selectedRemote.error"
           class="mono scroll-slim max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-2.5 text-xs text-muted-foreground"
-        >{{ selectedRemote.error }}</pre>
+        >{{ $pii(selectedRemote.error) }}</pre>
         <p class="text-2xs text-muted-foreground">{{ $t('climayte.remoteNote') }}</p>
       </section>
       <CliMayteWorkerDetail

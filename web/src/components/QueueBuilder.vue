@@ -27,10 +27,10 @@ import { useBuilder } from '@/composables/useBuilder'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
 import { useInstances } from '@/composables/useInstances'
+import { pii, piiDisplayName } from '@/composables/usePrivacy'
 import * as api from '@/lib/api'
 import { EFFORTS, MODELS, PERMISSION_MODES } from '@/lib/format'
 import { HEADLESS_QUEUEING_ENABLED } from '@/lib/headless'
-import { displayName } from '@/lib/instance-appearance'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -209,17 +209,17 @@ const resolvedAccountOptions = computed<
     .filter((i) => i.account?.email)
     .map((i) => ({
       value: `desktop:${i.dir}`,
-      label: `${displayName(i)} · ${t('builder.accountDesktopInstance')}`,
+      label: `${piiDisplayName(i)} · ${t('builder.accountDesktopInstance')}`,
     })),
   ...cliInstances.value
     .filter((c) => c.loggedIn && !c.associatedDesktopDir)
     .map((c) => ({
       value: `cli:${c.id}`,
-      label: `${c.name} · ${t('builder.accountCliInstance')}`,
+      label: `${pii(c.name)} · ${t('builder.accountCliInstance')}`,
     })),
   ...accounts.value.map((a) => ({
     value: a.id,
-    label: `${a.label} · ${a.auth_type === 'api_key' ? t('builder.accountAuthApiKey') : t('builder.accountAuthOauth')}`,
+    label: `${pii(a.label)} · ${a.auth_type === 'api_key' ? t('builder.accountAuthApiKey') : t('builder.accountAuthOauth')}`,
   })),
 ])
 

@@ -582,10 +582,10 @@ onBeforeUnmount(() => {
                   <button
                     type="button"
                     class="cursor-pointer underline-offset-2 transition-colors hover:text-foreground hover:underline"
-                    :title="`Click to copy ${instance.account.email}`"
-                    :aria-label="`Copy the account address ${instance.account.email}`"
+                    :title="`Click to copy ${$pii(instance.account.email)}`"
+                    :aria-label="`Copy the account address ${$pii(instance.account.email)}`"
                     @click="copyEmail(instance.dir, instance.account.email)"
-                  >{{ copiedEmailDir === instance.dir ? 'Copied' : instance.account.email }}</button>
+                  >{{ copiedEmailDir === instance.dir ? 'Copied' : $pii(instance.account.email) }}</button>
                   ·
                 </template>
                 <template v-else-if="resolvingAccounts.has(instance.dir)">Account resolving… · </template>

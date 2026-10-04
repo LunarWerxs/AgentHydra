@@ -13,10 +13,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
+import { piiDisplayName } from '@/composables/usePrivacy'
 import type { ChatListResult, ChatListRow, CMInstance } from '@/lib/api'
 import { getInstanceChats } from '@/lib/api'
 import { baseName, timeAgo } from '@/lib/format'
-import { displayName } from '@/lib/instance-appearance'
 
 // --- what chats are ON this account --------------------------------------------------------------
 // The read that used to require opening the account (owner, 2026-09-07). The move submenu answers
@@ -55,7 +55,7 @@ const CHATS_PAGE = 200
 // disagrees with the checkbox. A monotonic id means only the newest load may write.
 let request = 0
 
-const instLabel = (i: CMInstance) => displayName(i)
+const instLabel = (i: CMInstance) => piiDisplayName(i)
 
 async function loadChats(inst: CMInstance) {
   const seq = ++request

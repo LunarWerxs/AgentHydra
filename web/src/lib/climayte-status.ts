@@ -14,6 +14,7 @@ import {
   Network,
 } from '@lucide/vue'
 import type { BadgeVariants } from '@/components/ui/badge/badge-variants'
+import { pii, piiName } from '@/composables/usePrivacy'
 import type {
   CliMayteAttemptOutcome,
   CliMayteStatus,
@@ -147,9 +148,11 @@ export const isCliMayteActive = (w: Pick<CliMayteWorkerView, 'status'>): boolean
   w.status === 'waiting' ||
   w.status === 'checking'
 
-/** `#68 Darragh (CLI)`, or the bare name when the account has no instance number. */
+/** `#68 Darragh (CLI)`, or the bare name when the account has no instance number. Privacy mode
+ *  masks it: a numbered instance's name may be the account's address, and a bare name IS the
+ *  account's. */
 export const climayteAccountLabel = (a: { num: number | null; name: string }): string =>
-  a.num === null ? a.name : `#${a.num} ${a.name}`
+  a.num === null ? piiName(a.name) : `#${a.num} ${pii(a.name)}`
 
 /** Every token a session ran (cache reads included: real traffic, a tenth of the price). */
 export const tokenTotal = (t: CliMayteTokens): number =>

@@ -1,4 +1,5 @@
 import { createApp } from 'vue'
+import { installPrivacy } from './composables/usePrivacy'
 import { hydrateSharedPrefs } from './composables/useSharedPrefs'
 import { appModeForPath } from './lib/app-mode'
 import { installImeCompositionGuard } from './lib/ime-composition-guard'
@@ -23,7 +24,9 @@ async function mountApp(): Promise<void> {
   const quick = appModeForPath(window.location.pathname) === 'instances'
   if (quick) {
     const { default: QuickInstancesApp } = await import('./QuickInstancesApp.vue')
-    createApp(QuickInstancesApp).mount('#app')
+    const app = createApp(QuickInstancesApp)
+    installPrivacy(app)
+    app.mount('#app')
   } else {
     // Keep the full manager and its i18n/toast/component graph out of the quick-mode request. Vite
     // emits this branch as separate chunks, so `/instances` does not merely hide heavyweight UI —
@@ -38,7 +41,9 @@ async function mountApp(): Promise<void> {
       // vue-sonner v2 ships its toast styling separately. It is needed only by the full manager.
       import('vue-sonner/style.css'),
     ])
-    createApp(App).use(i18n).mount('#app')
+    const app = createApp(App).use(i18n)
+    installPrivacy(app)
+    app.mount('#app')
   }
 
   // Pull the cross-window preferences (usage mode + usage filter). AFTER the mount above, and it

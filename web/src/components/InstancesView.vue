@@ -77,6 +77,7 @@ import { useInstanceFilter } from '@/composables/useInstanceFilter'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
 import { useInstances } from '@/composables/useInstances'
 import { useMoveAllChats } from '@/composables/useMoveAllChats'
+import { piiDisplayName, piiName } from '@/composables/usePrivacy'
 import { useDesktopAccountTokens, useDesktopTokenWindow } from '@/composables/useTokenWindow'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
@@ -259,7 +260,7 @@ const editError = ref<string | null>(null)
 // Sorting, filtering, the move submenu and every dialog keep using displayName() — the cut is for
 // this one cell, and a truncated name must never become a value anything acts on.
 function nameCellText(inst: CMInstance): string {
-  return shortDisplayName(displayName(inst))
+  return shortDisplayName(piiDisplayName(inst))
 }
 
 // The account cell identifies the LOGIN, so it shows the email handle and nothing else — see
@@ -421,7 +422,7 @@ function rowModel(inst: CMInstance): InstanceRowModel {
       tooltip: (clipped) =>
         nameTooltipFor(
           {
-            full: displayName(inst),
+            full: piiDisplayName(inst),
             shown,
             folder: inst.dir,
             hint: inst.isRunning ? t('instances.focusHint') : undefined,
@@ -1201,7 +1202,7 @@ onUnmounted(() => {
                 :description="
                   $t('instances.labelStaleHint', {
                     label: inst.label ?? '',
-                    account: accountDisplayName(inst.account) ?? '',
+                    account: piiName(accountDisplayName(inst.account)),
                   })
                 "
               >
@@ -1557,7 +1558,7 @@ onUnmounted(() => {
     />
     <QuitExternalInstanceDialog
       v-model:open="quitExternalOpen"
-      :instance-name="quitExternalTarget ? displayName(quitExternalTarget) : null"
+      :instance-name="quitExternalTarget ? piiDisplayName(quitExternalTarget) : null"
       :submitting="quittingExternal"
       @confirm="onQuitExternalConfirm"
     />
@@ -1567,14 +1568,14 @@ onUnmounted(() => {
          actually gets you. The folder name is the fallback, same as displayName's. -->
     <LogoutInstanceDialog
       v-model:open="logoutOpen"
-      :instance-name="logoutTarget ? displayName(logoutTarget) : null"
+      :instance-name="logoutTarget ? piiDisplayName(logoutTarget) : null"
       :account-email="accountEmail(logoutTarget?.account)"
       :submitting="loggingOut"
       @confirm="onLogoutConfirm"
     />
     <EditInstanceDialog
       v-model:open="editOpen"
-      :instance-name="accountDisplayName(editTarget?.account) ?? editTarget?.name ?? null"
+      :instance-name="editTarget ? piiName(accountDisplayName(editTarget.account)) || editTarget.name : null"
       :dir="editTarget?.dir ?? null"
       :current-label="editTarget?.label ?? null"
       :current-icon="editTarget?.icon ?? null"

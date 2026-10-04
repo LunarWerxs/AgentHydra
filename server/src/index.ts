@@ -97,6 +97,7 @@ import {
 import { warmSessionMetaIndex } from './instance-sessions'
 import { startKitSweep } from './kit/sweep'
 import { initFileLogging, logFilePath } from './log-file.mjs'
+import { startLoopDetector } from './loop-detector'
 import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
 import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
@@ -1448,6 +1449,10 @@ startImportSweep()
 // sweep above, not here), gates each on the weekly cap via checkUsage, and schedules a
 // `claude --resume` for just after the 5-hour reset.
 startMonitor()
+// --- loop detector (ALWAYS ON; see server/src/loop-detector.ts) ------------------------------
+// A session that runs the same failing tool call five times in a row becomes an incident, once
+// per loop. It only reads transcripts; it never stops or touches the session.
+startLoopDetector()
 // Keeps every imported chat's bypassPermissions stamp true on disk across the running app's
 // re-saves, so the app's next boot makes it permanent - the durable half of the migrate fix.
 // See automation-stamp-sweep.ts for why the per-import watcher alone could not do this.

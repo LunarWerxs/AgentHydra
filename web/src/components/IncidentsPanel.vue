@@ -120,7 +120,7 @@ const STATE_VARIANT: Record<Incident['state'], 'warning' | 'secondary' | 'succes
               </Badge>
               <Badge variant="outline">{{ t('incidents.occurrences', { n: incident.count }) }}</Badge>
             </div>
-            <p class="mt-1 truncate text-muted-foreground" :title="incident.error">{{ incident.error }}</p>
+            <p class="mt-1 truncate text-muted-foreground" :title="$pii(incident.error)">{{ $pii(incident.error) }}</p>
             <p class="mt-0.5 text-2xs text-muted-foreground/70">
               {{ t('incidents.lastSeen', { time: timeAgo(incident.last_seen_at) }) }}
             </p>

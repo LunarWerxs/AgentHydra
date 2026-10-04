@@ -23,8 +23,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { piiDisplayName } from '@/composables/usePrivacy'
 import type { CMInstance } from '@/lib/api'
-import { displayName } from '@/lib/instance-appearance'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const open = defineModel<boolean>('open', { default: false })
@@ -49,7 +49,10 @@ watch(open, (isOpen) => {
 
 const options = computed(() => [
   { value: '', label: null as string | null },
-  ...props.desktopInstances.map((i) => ({ value: i.dir, label: displayName(i) as string | null })),
+  ...props.desktopInstances.map((i) => ({
+    value: i.dir,
+    label: piiDisplayName(i) as string | null,
+  })),
 ])
 
 function handleSubmit() {

@@ -177,7 +177,7 @@ const strays = (w: CliMayteWave) =>
                   <span v-if="k.proof.commits.length" class="mono">{{
                     k.proof.commits.map(short).join(' ')
                   }}</span>
-                  <span v-if="k.proof.note" class="min-w-0 wrap-break-word">{{ k.proof.note }}</span>
+                  <span v-if="k.proof.note" class="min-w-0 wrap-break-word">{{ $pii(k.proof.note) }}</span>
                 </div>
                 <p
                   v-for="(e, i) in escalationsOf(w, k.key)"
@@ -185,7 +185,7 @@ const strays = (w: CliMayteWave) =>
                   class="flex items-start gap-1 text-2xs text-warning"
                 >
                   <CircleAlert class="mt-px size-3 shrink-0" aria-hidden="true" />
-                  <span class="wrap-break-word">{{ e.reason }}</span>
+                  <span class="wrap-break-word">{{ $pii(e.reason) }}</span>
                 </p>
               </li>
             </ul>
@@ -195,7 +195,7 @@ const strays = (w: CliMayteWave) =>
               class="flex items-start gap-1 text-2xs text-warning"
             >
               <CircleAlert class="mt-px size-3 shrink-0" aria-hidden="true" />
-              <span class="wrap-break-word"><span class="mono">{{ e.key }}</span>: {{ e.reason }}</span>
+              <span class="wrap-break-word"><span class="mono">{{ e.key }}</span>: {{ $pii(e.reason) }}</span>
             </p>
             <Collapsible
               v-if="w.report"
@@ -217,7 +217,7 @@ const strays = (w: CliMayteWave) =>
               <CollapsibleContent>
                 <pre
                   class="mono scroll-slim mt-1 max-h-60 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-2.5 text-xs text-muted-foreground"
-                >{{ w.report }}</pre>
+                >{{ $pii(w.report) }}</pre>
               </CollapsibleContent>
             </Collapsible>
           </div>

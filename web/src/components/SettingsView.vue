@@ -21,6 +21,7 @@ import {
   Repeat,
   Timer,
   User,
+  VenetianMask,
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -31,6 +32,8 @@ import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useAppSettings } from '@/composables/useAppSettings'
 import { usePanels } from '@/composables/usePanels'
+import { piiName } from '@/composables/usePrivacy'
+import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import type { MonitorStateName, SearchIndexStatus, SyncStatus } from '@/lib/api'
 import * as api from '@/lib/api'
@@ -50,6 +53,7 @@ const { t } = useI18n()
 // ⋯ menu, the CLI table's gear, and the queue drawer's scheduler button. A deep link (the header's
 // update dot) scrolls to a section and pulses it.
 const { enabled: showTooltips } = useTooltipConfig()
+const { privacyMode } = useUiPrefs()
 
 const sectionEls = ref<Record<string, HTMLElement | null>>({})
 function setSectionEl(id: string, el: unknown) {
@@ -597,6 +601,14 @@ async function toggleAutoUpdate(enabled: boolean) {
           <Switch v-model="showTooltips" />
         </template>
       </SettingsRow>
+      <SettingsRow :icon="VenetianMask" :label="$t('settings.privacyModeLabel')">
+        <template #info>
+          <InfoHint :text="$t('settings.privacyModeHint')" />
+        </template>
+        <template #control>
+          <Switch v-model="privacyMode" />
+        </template>
+      </SettingsRow>
     </SettingsGroup>
 
     <!-- MCP: the agent-facing half of the app. On by default, because the alternative was a
@@ -986,7 +998,7 @@ async function toggleAutoUpdate(enabled: boolean) {
             <Switch :model-value="syncStatus.enabled" @update:model-value="onToggleSyncEnable" />
           </template>
         </SettingsRow>
-        <SettingsRow v-if="syncStatus.enabled" :label="syncStatus.name || syncStatus.email || ''">
+        <SettingsRow v-if="syncStatus.enabled" :label="piiName(syncStatus.name || syncStatus.email || '')">
           <template #icon>
             <img
               v-if="syncStatus.picture"

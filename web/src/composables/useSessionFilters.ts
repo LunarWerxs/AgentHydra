@@ -9,8 +9,8 @@ import type { Ref } from 'vue'
 import { computed, onMounted, onScopeDispose, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useInstances } from '@/composables/useInstances'
+import { piiDisplayName } from '@/composables/usePrivacy'
 import type { SessionPeriod, SessionSource } from '@/lib/api'
-import { displayName } from '@/lib/instance-appearance'
 import {
   ARCHIVED_LABEL,
   DISPATCHED_LABEL,
@@ -81,7 +81,7 @@ export function useSessionFilters(refs: SessionFilterRefs) {
   // own as each account resolves. A failed load just leaves the named entries out.
   const { instances: desktopInstances, refreshInstances } = useInstances()
   const namedInstances = computed(() =>
-    desktopInstances.value.map((i) => ({ name: i.name, label: displayName(i) })),
+    desktopInstances.value.map((i) => ({ name: i.name, label: piiDisplayName(i) })),
   )
   const instanceLabelFor = (folder: string) =>
     namedInstances.value.find((i) => i.name === folder)?.label ?? folder

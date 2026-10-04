@@ -9,7 +9,9 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { TailEvent, TailResult } from '@/lib/api'
 import { highlightHtml } from '@/lib/find'
 import { escapeHtml, looksLikeMarkdown, renderMarkdown } from '@/lib/markdown'
+import { maskEmails } from '@/lib/privacy'
 import { buildDisplayItems, formatToolInput } from '@/lib/transcript-groups'
+import { privacyMode } from './useUiPrefs'
 
 const LONG_CHARS = 1000
 const LONG_LINES = 16
@@ -37,7 +39,8 @@ export function useTranscriptDisplay(deps: {
   // "drop the oldest" a matter of deleting its first key.
   const renderCache = new Map<string, RenderedBody>()
   function renderBody(ev: TailEvent): RenderedBody {
-    const key = `${ev.kind}\u0000${ev.text}`
+    const masked = privacyMode.value
+    const key = `${masked ? '1' : '0'}\u0000${ev.kind}\u0000${ev.text}`
     const hit = renderCache.get(key)
     if (hit) return hit
     // Prose (messages and reasoning) may be markdown; a tool's input is laid out one argument a
@@ -45,7 +48,10 @@ export function useTranscriptDisplay(deps: {
     const prose = ev.kind === 'text' || ev.kind === 'thinking'
     const md = prose && looksLikeMarkdown(ev.text) ? renderMarkdown(ev.text) : null
     const plain = ev.kind === 'tool_use' ? formatToolInput(ev.text) : ev.text
-    const body = { long: isLong(ev.text), html: md ?? escapeHtml(plain), pre: md === null }
+    const html = md ?? escapeHtml(plain)
+    // Masking the escaped HTML is safe: an address holds no '<', '>' or '&', so no tag or entity
+    // can be cut. ev.text, which Copy takes, stays unmasked.
+    const body = { long: isLong(ev.text), html: masked ? maskEmails(html) : html, pre: md === null }
     renderCache.set(key, body)
     if (renderCache.size > RENDER_CACHE_MAX) renderCache.delete(renderCache.keys().next().value!)
     return body

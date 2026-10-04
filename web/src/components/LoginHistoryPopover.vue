@@ -11,6 +11,7 @@ import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { pii, piiName } from '@/composables/usePrivacy'
 import { type CMLoginHistory, type CMLoginHistoryEntry, getInstanceLoginHistory } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 import IconTooltip from '@/shell/IconTooltip.vue'
@@ -34,7 +35,9 @@ async function load(open: boolean) {
 
 /** The address when this machine ever identified the account; its short id when it never did. */
 function who(e: CMLoginHistoryEntry): string {
-  return e.email ?? e.name ?? t('instances.loginHistoryUnknown', { id: e.accountUuid.slice(0, 8) })
+  if (e.email) return pii(e.email)
+  if (e.name) return piiName(e.name)
+  return t('instances.loginHistoryUnknown', { id: e.accountUuid.slice(0, 8) })
 }
 
 function detail(e: CMLoginHistoryEntry): string {
@@ -104,7 +107,7 @@ function isLastSignedIn(index: number): boolean {
                   <div class="flex items-center gap-2">
                     <span
                       class="min-w-0 flex-1 truncate text-sm text-foreground"
-                      :title="e.name && e.email ? `${e.name} <${e.email}>` : e.accountUuid"
+                      :title="e.name && e.email ? `${piiName(e.name)} <${$pii(e.email)}>` : e.accountUuid"
                     >
                       {{ who(e) }}
                     </span>

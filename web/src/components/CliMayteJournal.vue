@@ -187,9 +187,9 @@ const rows = computed(() =>
         >{{ r.time.toLocaleTimeString() }}</time>
         <span class="flex min-w-0 flex-col">
           <span class="wrap-break-word" :class="r.bad ? 'text-warning' : ''">
-            <span v-if="r.who" class="font-medium">{{ r.who }}: </span>{{ r.text }}
+            <span v-if="r.who" class="font-medium">{{ r.who }}: </span>{{ $pii(r.text) }}
           </span>
-          <span v-if="r.detail" class="truncate text-muted-foreground" :title="r.detail">{{ r.detail }}</span>
+          <span v-if="r.detail" class="truncate text-muted-foreground" :title="$pii(r.detail)">{{ $pii(r.detail) }}</span>
         </span>
       </li>
     </ol>

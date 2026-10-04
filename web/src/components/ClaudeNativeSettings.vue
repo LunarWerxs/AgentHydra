@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { useInstances } from '@/composables/useInstances'
+import { piiDisplayName } from '@/composables/usePrivacy'
 import {
   type ClaudeNativeSettings,
   getClaudeNativeSettings,
@@ -22,7 +23,6 @@ import {
   automaticClaudeNativeConfig,
   normalizeClaudeNativeProfileKey,
 } from '@/lib/claude-native-settings'
-import { displayName } from '@/lib/instance-appearance'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 import SettingsRow from '@/shell/SettingsRow.vue'
@@ -59,7 +59,7 @@ const automaticProfiles = computed(() =>
       const instance = profiles.value.find(
         (item) => normalizeClaudeNativeProfileKey(item.dir) === profile,
       )
-      return instance ? `#${instance.num} ${displayName(instance)}` : profile
+      return instance ? `#${instance.num} ${piiDisplayName(instance)}` : profile
     }),
 )
 const status = computed(() => {
@@ -110,7 +110,7 @@ async function save(automatic: boolean | null) {
         : automaticClaudeNativeConfig(current, instance.dir, automatic, 19300 + instance.num)
     settings.value = (await setClaudeNativeProfileConfig(instance.dir, next)).settings
     toast.success(
-      t('settings.claudeNativeSaved', { account: `#${instance.num} ${displayName(instance)}` }),
+      t('settings.claudeNativeSaved', { account: `#${instance.num} ${piiDisplayName(instance)}` }),
     )
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -141,7 +141,7 @@ onMounted(load)
         </SelectTrigger>
         <SelectContent>
           <SelectItem v-for="instance in profiles" :key="instance.dir" :value="instance.dir">
-            {{ $t('settings.claudeNativeAccountLabel', { n: instance.num, name: displayName(instance) }) }}
+            {{ $t('settings.claudeNativeAccountLabel', { n: instance.num, name: piiDisplayName(instance) }) }}
           </SelectItem>
         </SelectContent>
       </Select>

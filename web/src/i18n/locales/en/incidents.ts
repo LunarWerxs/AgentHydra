@@ -4,7 +4,8 @@ export default {
     'A run that fails is grouped with earlier failures of the same project that hit the same ' +
     'error, instead of each one paging separately. The count is how many times it has happened; ' +
     'acknowledge to say you have seen it, resolve to close it out. If the same error comes back ' +
-    'after that, the incident reopens.',
+    'after that, the incident reopens. A session that runs the same failing tool call five times ' +
+    'in a row is an incident too, filed under its project.',
   openCount: '{n} open',
   ack: 'Ack',
   resolve: 'Resolve',

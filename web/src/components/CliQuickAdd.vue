@@ -276,7 +276,7 @@ onUnmounted(() => {
           class="size-3.5 shrink-0 animate-spin text-muted-foreground"
           aria-hidden="true"
         />
-        <span class="shrink-0 font-medium">{{ flow.email }}</span>
+        <span class="shrink-0 font-medium">{{ $pii(flow.email) }}</span>
         <span
           role="status"
           class="min-w-0 flex-1"
@@ -291,8 +291,8 @@ onUnmounted(() => {
           }}</template>
           <template v-else-if="flow.state === 'signed-in'">{{
             flow.account?.plan
-              ? $t('climayte.qaSignedIn', { email: flow.account?.email ?? flow.email, plan: flow.account.plan })
-              : $t('climayte.qaSignedInNoPlan', { email: flow.account?.email ?? flow.email })
+              ? $t('climayte.qaSignedIn', { email: $pii(flow.account?.email ?? flow.email), plan: flow.account.plan })
+              : $t('climayte.qaSignedInNoPlan', { email: $pii(flow.account?.email ?? flow.email) })
           }}</template>
           <template v-else-if="flow.state === 'failed'">{{ $t('climayte.qaFailed', { reason: flow.message }) }}</template>
           <template v-else>{{ $t('climayte.qaCancelled') }}</template>

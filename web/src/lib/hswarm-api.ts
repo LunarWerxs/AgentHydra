@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import { pii, piiName } from '@/composables/usePrivacy'
 import { formatUsd as kitUsd, readShared } from '@/lib/kit'
 import { loadStats, statsKey } from '@/lib/swarm-stats'
 
@@ -84,7 +85,9 @@ export interface HswarmAccountName {
   former?: boolean
 }
 
-/** How one acct id reads in a table: former accounts say so, an id nobody knows stays raw with a hint. */
+/** How one acct id reads in a table: former accounts say so, an id nobody knows stays raw with a hint.
+ *  Privacy mode masks the label: an instance name may be the account's address, and a former account
+ *  with no number is named by its profile name or address alone. */
 export function accountDisplay(
   id: string,
   names: Record<string, HswarmAccountName>,
@@ -92,11 +95,11 @@ export function accountDisplay(
 ): { text: string; muted: boolean; title?: string } {
   const n = names[id]
   if (!n) return { text: id, muted: false, title: t('swarmStats.accountUnknown') }
-  if (!n.former) return { text: `#${n.num} ${n.label}`, muted: false }
+  if (!n.former) return { text: `#${n.num} ${pii(n.label)}`, muted: false }
   const text =
     n.num != null
-      ? t('swarmStats.accountWas', { name: n.label, num: n.num })
-      : t('swarmStats.accountSignedOut', { name: n.label })
+      ? t('swarmStats.accountWas', { name: pii(n.label), num: n.num })
+      : t('swarmStats.accountSignedOut', { name: piiName(n.label) })
   return { text, muted: true }
 }
 

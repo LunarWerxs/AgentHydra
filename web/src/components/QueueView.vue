@@ -12,10 +12,10 @@ import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
 import { useInstances } from '@/composables/useInstances'
 import { usePanels } from '@/composables/usePanels'
+import { pii, piiDisplayName } from '@/composables/usePrivacy'
 import type { QueueItem } from '@/lib/api'
 import * as api from '@/lib/api'
 import { HEADLESS_QUEUEING_ENABLED } from '@/lib/headless'
-import { displayName } from '@/lib/instance-appearance'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -82,12 +82,12 @@ function accountLabel(item: QueueItem): string | null {
     if (ref.startsWith('desktop:')) {
       const dir = ref.slice('desktop:'.length)
       const inst = instances.value.find((i) => i.dir === dir)
-      return inst ? displayName(inst) : t('queue.deletedInstance')
+      return inst ? piiDisplayName(inst) : t('queue.deletedInstance')
     }
     if (ref.startsWith('cli:')) {
       const id = ref.slice('cli:'.length)
       const inst = cliInstances.value.find((c) => c.id === id)
-      return inst ? inst.name : t('queue.deletedInstance')
+      return inst ? pii(inst.name) : t('queue.deletedInstance')
     }
     return t('queue.deletedInstance')
   }

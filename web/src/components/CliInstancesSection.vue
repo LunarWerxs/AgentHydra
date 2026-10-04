@@ -61,13 +61,14 @@ import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
 import { useInstances } from '@/composables/useInstances'
+import { pii, piiDisplayName } from '@/composables/usePrivacy'
 import { useQuickAddTarget } from '@/composables/useQuickAddTarget'
 import { useCliTokenWindow } from '@/composables/useTokenWindow'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
 import { formatUsd, timeAgo } from '@/lib/format'
-import { displayName, shortDisplayName } from '@/lib/instance-appearance'
+import { shortDisplayName } from '@/lib/instance-appearance'
 import {
   type InstanceRowModel,
   instanceColumns,
@@ -242,10 +243,10 @@ function rowModel(inst: CliInstance): InstanceRowModel {
       title: inst.loggedIn ? t('cliInstances.loggedIn') : t('cliInstances.loggedOut'),
     },
     name: {
-      shown: shortDisplayName(name, nameMax),
+      shown: shortDisplayName(pii(name), nameMax),
       tooltip: (clipped) =>
         nameTooltipFor(
-          { full: name, shown: shortDisplayName(name, nameMax), folder: inst.configDir },
+          { full: name, shown: shortDisplayName(pii(name), nameMax), folder: inst.configDir },
           clipped,
         ),
     },
@@ -274,7 +275,7 @@ function rowModel(inst: CliInstance): InstanceRowModel {
 const linkedLabel = (inst: CliInstance) =>
   t('cliInstances.linkedTo', {
     num: linkedDesktop(inst)?.num,
-    name: linkedDesktop(inst) ? displayName(linkedDesktop(inst)!) : '',
+    name: linkedDesktop(inst) ? piiDisplayName(linkedDesktop(inst)!) : '',
   })
 
 /** What the table says when it has no rows: the filter took them all, or there are none yet. */

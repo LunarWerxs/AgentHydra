@@ -15,9 +15,9 @@ import type { ComputedRef } from 'vue'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { piiDisplayName } from '@/composables/usePrivacy'
 import type { SessionSummary } from '@/lib/api'
 import * as api from '@/lib/api'
-import { displayName } from '@/lib/instance-appearance'
 import { profileLabel, stillShownLine, stoppedServers, warnOnUnloadWhile } from '@/lib/move-chats'
 
 export interface MigrateTarget {
@@ -186,7 +186,7 @@ export function useSessionMigration(deps: {
           dir: i.dir,
           // The name the Instances table shows (label, else account name, else folder), not the
           // folder name a row's label happened to fall through to.
-          name: displayName(i),
+          name: piiDisplayName(i),
           account: snap?.account ?? null,
           // Claude rows only: `instance` also carries a CODEX instance's name now, and a Codex
           // account that happens to share a name with a desktop folder must not mark that folder

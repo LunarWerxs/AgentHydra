@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { TableCell, TableRow } from '@/components/ui/table'
+import { pii, piiName } from '@/composables/usePrivacy'
 import { useUsageMode } from '@/composables/useUsageMode'
 import { accountLine, type InstanceColumn, type InstanceRowModel } from '@/lib/instance-table'
 import { useTooltipConfig } from '@/lib/tooltip-config'
@@ -47,8 +48,23 @@ function noteClip(e: PointerEvent): void {
   const el = e.currentTarget as HTMLElement
   clipped.value = el.scrollWidth > el.clientWidth
 }
-const nameTooltip = computed(() => props.row.name.tooltip(clipped.value))
-const account = computed(() => accountLine(props.row.account, props.row.name.shown))
+// A CLI row is named after its account, and its folder can carry the address too.
+const nameTooltip = computed(() => {
+  const tip = props.row.name.tooltip(clipped.value)
+  return {
+    label: pii(tip.label),
+    description: tip.description && pii(tip.description),
+    detail: tip.detail && pii(tip.detail),
+  }
+})
+// The builders mask the name in privacy mode, so the "say it once" check compares masked forms too.
+const account = computed(() => {
+  const line = accountLine(props.row.account, props.row.name.shown)
+  if (!line) return null
+  const text = piiName(line.text)
+  if (text === props.row.name.shown.trim()) return null
+  return { text, title: line.title ? pii(line.title) : text }
+})
 
 // One number per window drives the bar's length; the WEEKLY one also drives its colour, and the
 // 5-hour bar is drawn `neutral` (see UsageBar's UsageBarVariant).
@@ -115,10 +131,10 @@ function onContextMenu(e: MouseEvent): void {
               @pointerenter="noteClip"
               @click="row.name.onClick"
             >
-              {{ row.name.shown }}
+              {{ $pii(row.name.shown) }}
             </button>
             <span v-else class="min-w-0 cursor-default truncate" @pointerenter="noteClip">{{
-              row.name.shown
+              $pii(row.name.shown)
             }}</span>
           </IconTooltip>
           <Badge v-if="row.badge" variant="outline" :title="row.badge.title">{{
@@ -130,7 +146,7 @@ function onContextMenu(e: MouseEvent): void {
           <span
             v-if="account"
             class="min-w-0 shrink-[8] truncate text-2xs font-normal text-muted-foreground"
-            :title="account.title ?? account.text"
+            :title="account.title"
           >{{ account.text }}</span>
           <slot name="account-extra" />
         </div>

@@ -17,13 +17,9 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { useInstances } from '@/composables/useInstances'
+import { pii, piiDisplayName } from '@/composables/usePrivacy'
 import type { CMInstance, SessionSummary } from '@/lib/api'
-import {
-  accountEmail,
-  accountHandle,
-  displayName,
-  instanceForSessionLabel,
-} from '@/lib/instance-appearance'
+import { accountEmail, accountHandle, instanceForSessionLabel } from '@/lib/instance-appearance'
 
 export interface SessionAccount {
   /** The instance LABEL the session carries: a dir name, or 'default' for the non-isolated install. */
@@ -53,7 +49,7 @@ export function useSessionAccount(deps: {
    *  than shown raw — the row chip says "Default", and a header reading the bare word "default"
    *  beside it would look like a different thing. */
   function unresolvedName(inst: CMInstance | null, label: string): string {
-    if (inst) return displayName(inst)
+    if (inst) return piiDisplayName(inst)
     return label === 'default' ? t('sessions.instanceDefault') : deps.instanceLabelFor(label)
   }
 
@@ -126,7 +122,7 @@ export function useSessionAccount(deps: {
     const email = sessionAccount.value?.email
     if (!email) return
     navigator.clipboard?.writeText(email).catch(() => {})
-    toast.success(t('instances.toastEmailCopied', { email }))
+    toast.success(t('instances.toastEmailCopied', { email: pii(email) }))
   }
 
   return { sessionAccount, openingInstance, openSessionInstance, copySessionAccountEmail }

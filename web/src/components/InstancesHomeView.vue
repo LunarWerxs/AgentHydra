@@ -26,6 +26,7 @@ import SwarmStatsCard from '@/components/swarm-stats/SwarmStatsCard.vue'
 import { Button } from '@/components/ui/button'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useInstances } from '@/composables/useInstances'
+import { pii } from '@/composables/usePrivacy'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import {
@@ -179,16 +180,19 @@ const headroom = computed(() => {
     week: usedPct(snap?.weekAll, at),
     to,
   })
+  // A CLI instance is usually named by its account's address: masked in privacy mode.
   return sortHeadroom([
     ...cliInstances.value
       .filter((i) => i.loggedIn)
-      .map((i) => row(`cli:${i.id}`, `#${i.num} ${i.name}`, snapshotFor(`cli:${i.id}`), 'cli')),
+      .map((i) =>
+        row(`cli:${i.id}`, `#${i.num} ${pii(i.name)}`, snapshotFor(`cli:${i.id}`), 'cli'),
+      ),
     ...desktopInstances.value
       .filter((i) => i.account)
       .map((i) =>
         row(
           `desktop:${i.dir}`,
-          `#${i.num} ${i.name}`,
+          `#${i.num} ${pii(i.name)}`,
           snapshotFor(`desktop:${i.dir}`),
           'instances',
         ),

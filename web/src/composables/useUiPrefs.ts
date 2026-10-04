@@ -103,6 +103,9 @@ const compactTranscript = useStorage('agenthydra.sessions.compact', false)
 /** Case sensitivity for the opt-in body search. */
 const advancedCaseSensitive = useStorage('agenthydra.sessions.advancedCaseSensitive', false)
 
+/** Mask account e-mail addresses across the UI, for screenshots and screen-shares. */
+const privacyMode = useStorage('agenthydra.privacyMode', false)
+
 // --- "Copy session file location": what actually lands on the clipboard -------------------------
 //
 // The bare path is what this action always copied, and on its own it is not much use for the thing
@@ -147,6 +150,7 @@ registerSharedPref('agenthydra.sessions.workRowsOn', workRowsOn)
 registerSharedPref('agenthydra.sessions.humanOnly', humanOnly)
 registerSharedPref('agenthydra.sessions.compact', compactTranscript)
 registerSharedPref('agenthydra.sessions.advancedCaseSensitive', advancedCaseSensitive)
+registerSharedPref('agenthydra.privacyMode', privacyMode)
 registerSharedPref('agenthydra.sessions.sidebarWidth', sidebarWidth)
 registerSharedPref('agenthydra.sessions.copyPathIncludeName', copyPathIncludeName)
 registerSharedPref('agenthydra.sessions.copyPathIncludePrompt', copyPathIncludePrompt)
@@ -167,5 +171,9 @@ export function useUiPrefs() {
     copyPathIncludeName,
     copyPathIncludePrompt,
     copyPathPrompt,
+    privacyMode,
   }
 }
+
+// usePrivacy.ts reads it at module scope, outside any setup.
+export { privacyMode }

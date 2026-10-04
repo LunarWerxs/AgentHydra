@@ -89,8 +89,11 @@ with a sentence summary, a live shimmer and a system divider), <https://github.c
 (Apache-2.0: folding a run of tool calls into one row, and finding a Claude subagent's run from the
 call that started it, which `tailSubagent` in `server/src/transcript.ts` does) and
 <https://github.com/omnigent-ai/omnigent>
-(Apache-2.0: verb-based labels, a tool's input one argument a line), all read on 2026-10-04. Ideas,
-not code, were taken; no source was copied.
+(Apache-2.0: verb-based labels, a tool's input one argument a line), all read on 2026-10-04. The
+loop detector (`server/src/loop-detector.ts`: a session repeating one failing tool call becomes an
+incident) is Omnigent's idea, and privacy mode (`web/src/lib/privacy.ts`,
+`web/src/composables/usePrivacy.ts`: account addresses masked on screen) is T3 Code's. Ideas, not
+code, were taken; no source was copied.
 
 ## junegunn/fzf and microsoft/terminal
 

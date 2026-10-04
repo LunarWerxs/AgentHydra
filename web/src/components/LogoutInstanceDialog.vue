@@ -50,7 +50,7 @@ const emit = defineEmits<{
       </DialogHeader>
 
       <p v-if="accountEmail" class="mono mt-2 truncate text-xs text-muted-foreground">
-        {{ accountEmail }}
+        {{ $pii(accountEmail) }}
       </p>
 
       <DialogFooter class="mt-4">

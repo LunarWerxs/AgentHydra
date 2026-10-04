@@ -44,6 +44,7 @@ import {
 import { useAppSettings } from '@/composables/useAppSettings'
 import { useCodexInstances } from '@/composables/useCodexInstances'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
+import { pii } from '@/composables/usePrivacy'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
@@ -234,7 +235,7 @@ function rowModel(instance: CodexInstance): InstanceRowModel {
     status: { on: !!statusOn(instance), title: statusTitle(instance) },
     glyph: { dir: instance.codexHome, running: !!statusOn(instance) },
     name: {
-      shown: shortDisplayName(instance.name),
+      shown: shortDisplayName(pii(instance.name)),
       tooltip: () => ({ label: instance.name, description: instance.codexHome }),
     },
     badge: instance.isExternal ? { label: t('instances.external') } : undefined,

@@ -21,9 +21,9 @@ import type { Ref } from 'vue'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { piiDisplayName } from '@/composables/usePrivacy'
 import type { ChatListRow, CMInstance } from '@/lib/api'
 import { getInstanceChats, getSession, migrateSession, settleMovedChat } from '@/lib/api'
-import { displayName } from '@/lib/instance-appearance'
 import {
   type MovableChat,
   type MovePlan,
@@ -206,7 +206,7 @@ export function useMoveAllChats(deps: {
   const moveShowClosed = ref(false)
   // The same name the table shows: label, else the account's name, else the folder. `label ?? name`
   // skipped the middle step and offered "5claude" for the row everyone knows as apebrain.
-  const instLabel = (i: CMInstance) => displayName(i)
+  const instLabel = (i: CMInstance) => piiDisplayName(i)
   /** A server profile path, named the way the table names its row. */
   const profileName = (profile: string) => profileLabel(profile, deps.instances.value, instLabel)
   const moveTargetsFor = (from: CMInstance) =>

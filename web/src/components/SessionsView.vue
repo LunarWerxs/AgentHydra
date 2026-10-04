@@ -97,6 +97,7 @@ import { useData } from '@/composables/useData'
 import { useDoneMarks } from '@/composables/useDoneMarks'
 import { useMultiSelect } from '@/composables/useMultiSelect'
 import { useOpenSession } from '@/composables/useOpenSession'
+import { piiName } from '@/composables/usePrivacy'
 import { useResumeInTerminal } from '@/composables/useResumeInTerminal'
 import { useSessionAccount } from '@/composables/useSessionAccount'
 import { useSessionFileActions } from '@/composables/useSessionFileActions'
@@ -564,6 +565,10 @@ const {
 // --- which ACCOUNT the open chat is talking to ---------------------------------------------------
 const { sessionAccount, openingInstance, openSessionInstance, copySessionAccountEmail } =
   useSessionAccount({ selected, instanceLabelFor })
+/** The account's name as shown: the handle (the address's local part) is masked in privacy mode;
+ *  an instance label, the fallback when no address is known, is not PII and stays. */
+const accountShown = (a: { name: string; email: string | null }) =>
+  a.email ? piiName(a.name) : a.name
 
 // --- advanced (body) search: server-side, streams every transcript's raw content ------------------
 const {
@@ -1449,14 +1454,14 @@ function onComposerSent(mode: 'now' | 'queued') {
                   v-if="sessionAccount"
                   :label="$t('sessions.accountLabel')"
                   :description="
-                    sessionAccount.email ??
+                    (sessionAccount.email ? $pii(sessionAccount.email) : null) ??
                     (sessionAccount.instance
                       ? $t('sessions.accountAddressUnknown')
                       : $t('sessions.accountUnresolved'))
                   "
                 >
                   <span class="inline-flex items-center gap-1">
-                    <UserRound class="size-3" />{{ sessionAccount.name }}
+                    <UserRound class="size-3" />{{ accountShown(sessionAccount) }}
                   </span>
                 </IconTooltip>
                 <span class="inline-flex items-center gap-1"><FolderGit2 class="size-3" />{{ selected.cwd }}</span>
@@ -1565,7 +1570,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                         <DropdownMenuLabel>
                           <span class="flex items-center gap-2">
                             <UserRound class="size-3.5 shrink-0" />
-                            <span class="truncate">{{ sessionAccount.name }}</span>
+                            <span class="truncate">{{ accountShown(sessionAccount) }}</span>
                           </span>
                         </DropdownMenuLabel>
                         <!-- Unresolvable is a real state, not a blank: the instance folder may be

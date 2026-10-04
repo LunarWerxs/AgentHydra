@@ -14,6 +14,9 @@ export default {
   shutdownToastFailed: 'Failed to shut down.',
   showTooltipsLabel: 'Show tooltips',
   showTooltipsHint: 'Hover help on buttons and controls. Info icons stay on.',
+  privacyModeLabel: 'Privacy mode',
+  privacyModeHint:
+    'For screenshots and screen-shares: account e-mail addresses, handles and profile names are masked wherever they are shown: instance lists, the home page, menus and dialogs, the session list and header, incidents and the open transcript. Copy still copies the real address.',
   portableModeLabel: 'Portable window',
   portableModeHint:
     'Opens AgentHydra in its own window (no tabs or address bar) instead of a browser tab. The desktop launcher and tray icon follow this setting too.',

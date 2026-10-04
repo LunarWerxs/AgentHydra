@@ -22,6 +22,7 @@ import InstanceRow from '@/components/InstanceRow.vue'
 import { Button } from '@/components/ui/button'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { useDshInstances } from '@/composables/useDshInstances'
+import { pii } from '@/composables/usePrivacy'
 import {
   createDshInstance,
   type DshInstance,
@@ -115,7 +116,7 @@ function rowModel(inst: DshInstance): InstanceRowModel {
     // The home and its chat count are the hover, the same place the Claude rows keep their profile
     // folder, so every row is one line tall.
     name: {
-      shown: shortDisplayName(inst.name),
+      shown: shortDisplayName(pii(inst.name)),
       tooltip: () => ({
         label: inst.name,
         description: inst.home,

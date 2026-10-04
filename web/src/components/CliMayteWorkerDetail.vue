@@ -371,10 +371,10 @@ async function onStop() {
             <Badge
               variant="outline"
               class="max-w-56"
-              :title="`${$t('climayte.detailAccount')}: ${worker.account ?? $t('climayte.noAccount')}`"
+              :title="`${$t('climayte.detailAccount')}: ${worker.account ? $pii(worker.account) : $t('climayte.noAccount')}`"
             >
               <UserRound aria-hidden="true" />
-              <span class="truncate text-2xs">{{ worker.account ?? $t('climayte.noAccount') }}</span>
+              <span class="truncate text-2xs">{{ worker.account ? $pii(worker.account) : $t('climayte.noAccount') }}</span>
             </Badge>
             <Badge variant="muted" :title="$t('climayte.detailRan')">
               <Timer aria-hidden="true" />
@@ -535,7 +535,7 @@ async function onStop() {
                           </span>
                         </template>
                       </span>
-                      <span v-if="v.note" class="whitespace-pre-wrap wrap-break-word text-muted-foreground">{{ v.note }}</span>
+                      <span v-if="v.note" class="whitespace-pre-wrap wrap-break-word text-muted-foreground">{{ $pii(v.note) }}</span>
                     </li>
                   </ol>
                 </div>
@@ -587,7 +587,7 @@ async function onStop() {
               v-for="(m, i) in worker.pending"
               :key="i"
               class="whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-2"
-            >{{ m }}</li>
+            >{{ $pii(m) }}</li>
           </ol>
         </div>
 
@@ -601,7 +601,7 @@ async function onStop() {
           <summary class="cursor-pointer truncate text-muted-foreground">
             {{ $t('climayte.earlierReport', { message: r.message }) }}
           </summary>
-          <pre class="mono scroll-slim mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap wrap-break-word">{{ r.results.join('\n\n') }}</pre>
+          <pre class="mono scroll-slim mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap wrap-break-word">{{ $pii(r.results.join('\n\n')) }}</pre>
         </details>
 
         <div v-if="worker.result" class="flex flex-col gap-1.5 lg:min-h-20 lg:flex-2">
@@ -616,10 +616,10 @@ async function onStop() {
               <span class="text-2xs text-muted-foreground">
                 {{ $t('climayte.resultTurn', { n: i + 1, total: turnResults.length }) }}
               </span>
-              <pre class="mono whitespace-pre-wrap wrap-break-word text-xs">{{ text }}</pre>
+              <pre class="mono whitespace-pre-wrap wrap-break-word text-xs">{{ $pii(text) }}</pre>
             </div>
           </div>
-          <pre v-else class="mono scroll-slim max-h-96 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-2.5 text-xs lg:max-h-none lg:min-h-0 lg:flex-1">{{ worker.result }}</pre>
+          <pre v-else class="mono scroll-slim max-h-96 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-2.5 text-xs lg:max-h-none lg:min-h-0 lg:flex-1">{{ $pii(worker.result) }}</pre>
         </div>
 
         <!-- A stopped or waiting task keeps the reason it could not go on in `error`. Only a real
@@ -631,7 +631,7 @@ async function onStop() {
           <pre
             class="mono scroll-slim max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md p-2.5 text-xs"
             :class="failed ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground'"
-          >{{ worker.error }}</pre>
+          >{{ $pii(worker.error) }}</pre>
         </div>
 
         <div class="flex flex-col gap-1.5 lg:min-h-20 lg:flex-1">
@@ -642,7 +642,7 @@ async function onStop() {
             class="mono scroll-slim max-h-72 overflow-auto rounded-md bg-muted p-2.5 text-xs lg:max-h-none lg:min-h-0 lg:flex-1"
             @scroll.passive="onEventsScroll"
           >
-            <li v-for="(e, i) in worker.events" :key="i" class="whitespace-pre-wrap wrap-break-word">{{ e }}</li>
+            <li v-for="(e, i) in worker.events" :key="i" class="whitespace-pre-wrap wrap-break-word">{{ $pii(e) }}</li>
           </ul>
           <p v-else class="text-xs text-muted-foreground">
             {{ eventsLoading ? $t('climayte.loadingEvents') : $t('climayte.noEvents') }}
