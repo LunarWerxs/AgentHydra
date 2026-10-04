@@ -18,6 +18,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { chatMatches, collectChats, type DossierChat, lineageIdsOf } from './core/chat-store-scan'
+import { processImagePath } from './core/process-image'
 import { db } from './db'
 import { readLiveRegistry } from './live-registry'
 
@@ -43,19 +44,46 @@ export interface DossierDeps {
    *  holds the daemon's thread; omitted, the scan runs synchronously on `roots`. */
   chats?: DossierChat[]
   markFor?: (ids: string[]) => { done: boolean; updatedAt: string } | null
-  liveFor?: (ids: string[], chatId?: string | null) => DossierMatch['live']
+  liveFor?: (
+    ids: string[],
+    chatId?: string | null,
+    metaPath?: string | null,
+  ) => DossierMatch['live']
 }
 
 /** Does a live engine belong to THIS copy of the chat? A moved chat keeps its sessionId on the
  *  source and the target alike, so a sessionId match alone lit the SOURCE row with the target's
  *  engine (2026-09-26: a moved chat read `live` on its source while its only engine ran on the
  *  target, so migrate_reconcile called it "source-writing" and --finish would never settle it). The
- *  engine's hostSessionId names the desktop chat hosting it; when it is known it must match. */
+ *  engine's hostSessionId names the desktop chat hosting it; when it is known it must match.
+ *
+ *  That alone is not enough: an import that keeps the chat id leaves the same `local_...` on both
+ *  accounts (2026-10-03: two archived chats on the source read live off the engines running their
+ *  moved copies). A desktop engine runs the binary its own profile downloaded, so the engine's
+ *  image names the profile hosting it; when it and the record's profile are both known they must
+ *  match too. */
 export function engineHostedBy(
-  host: string | undefined,
-  chatId: string | null | undefined,
+  engine: { hostSessionId?: string; image?: string | null },
+  chat: { chatId: string | null; metaPath?: string | null },
 ): boolean {
-  return host === undefined || chatId == null || host === chatId
+  const { hostSessionId } = engine
+  if (hostSessionId !== undefined && chat.chatId != null && hostSessionId !== chat.chatId) {
+    return false
+  }
+  const runs = profileOf(engine.image, 'claude-code')
+  const holds = profileOf(chat.metaPath, 'claude-code-sessions')
+  return runs === null || holds === null || runs === holds
+}
+
+/** The desktop profile a path sits in: everything before its innermost `segment` folder
+ *  (`claude-code` holds an engine's binary, `claude-code-sessions` a chat record), compared
+ *  case-blind with one separator. Null when there is no such folder (a CLI engine, a record
+ *  outside a profile): unknown, never a mismatch. */
+function profileOf(path: string | null | undefined, segment: string): string | null {
+  if (!path) return null
+  const norm = path.replace(/\\/g, '/').toLowerCase()
+  const at = norm.lastIndexOf(`/${segment}/`)
+  return at > 0 ? norm.slice(0, at) : null
 }
 
 function defaultMarkFor(ids: string[]): { done: boolean; updatedAt: string } | null {
@@ -71,11 +99,20 @@ function defaultMarkFor(ids: string[]): { done: boolean; updatedAt: string } | n
   return null
 }
 
-function defaultLiveFor(ids: string[], chatId?: string | null): DossierMatch['live'] {
+function defaultLiveFor(
+  ids: string[],
+  chatId?: string | null,
+  metaPath?: string | null,
+): DossierMatch['live'] {
   try {
     const live = readLiveRegistry(join(homedir(), '.claude'))
     const hit = live.find(
-      (s) => ids.includes(s.sessionId) && engineHostedBy(s.hostSessionId, chatId),
+      (s) =>
+        ids.includes(s.sessionId) &&
+        engineHostedBy(
+          { hostSessionId: s.hostSessionId, image: processImagePath(s.pid) },
+          { chatId: chatId ?? null, metaPath },
+        ),
     )
     if (!hit) return null
     return { pid: hit.pid, name: hit.name, startedAt: iso(hit.startedAt) ?? '', cwd: hit.cwd }
@@ -100,7 +137,7 @@ export function chatDossier(q: string, deps: DossierDeps = {}): { matches: Dossi
       ...c,
       lineageIds,
       doneMark: markFor(lineageIds),
-      live: liveFor(lineageIds, c.chatId),
+      live: liveFor(lineageIds, c.chatId, c.metaPath),
     })
   }
   // Newest activity first — the chat being asked about is almost always the recent one.
@@ -209,34 +246,54 @@ export function liveLineage(
   return new Map([...out].map(([id, aliases]) => [id, [...aliases]]))
 }
 
-/** Session ids with a live engine, read ONCE. The dossier's per-chat liveFor re-reads the
- *  registry for every chat it returns, which is right for one chat and quadratic for 206. */
-function liveIndex(): { pids: Map<string, number>; hosts: Map<string, string> } {
-  const pids = new Map<string, number>()
-  const hosts = new Map<string, string>()
+interface LiveEngine {
+  pid: number
+  hostSessionId?: string
+  image?: string | null
+}
+
+/** Every live engine by session id, read ONCE. The dossier's per-chat liveFor re-reads the
+ *  registry for every chat it returns, which is right for one chat and quadratic for 206. A list
+ *  per id, because one id can have two engines at once (a moved chat whose source engine still
+ *  runs), and each copy is live only off its own. */
+function liveIndex(): Map<string, LiveEngine[]> {
+  const engines = new Map<string, LiveEngine[]>()
   try {
     for (const s of readLiveRegistry(join(homedir(), '.claude'))) {
-      pids.set(s.sessionId, s.pid)
-      if (s.hostSessionId) hosts.set(s.sessionId, s.hostSessionId)
+      const engine = { pid: s.pid, hostSessionId: s.hostSessionId, image: processImagePath(s.pid) }
+      engines.set(s.sessionId, [...(engines.get(s.sessionId) ?? []), engine])
     }
   } catch {
     /* no registry: every chat reports live:false, which is what "unknown" already looked like */
   }
-  return { pids, hosts }
+  return engines
 }
 
 export function listChats(
   opts: ListChatsOptions = {},
-  deps: DossierDeps & { liveIds?: Map<string, number>; liveHosts?: Map<string, string> } = {},
+  deps: DossierDeps & {
+    liveIds?: Map<string, number>
+    liveHosts?: Map<string, string>
+    liveImages?: Map<string, string>
+  } = {},
 ): ChatListResult {
   const chats = deps.chats ?? collectChats(deps.roots)
-  const index = deps.liveIds ? null : liveIndex()
-  const live = deps.liveIds ?? index?.pids ?? new Map<string, number>()
-  const hosts = deps.liveHosts ?? index?.hosts ?? new Map<string, string>()
-  const livePidOf = (c: DossierChat): number | undefined =>
-    lineageIdsOf(c)
-      .map((id) => (engineHostedBy(hosts.get(id), c.chatId) ? live.get(id) : undefined))
-      .find((p) => p !== undefined)
+  const { liveIds, liveHosts, liveImages } = deps
+  const engines = liveIds
+    ? new Map(
+        [...liveIds].map(([id, pid]) => [
+          id,
+          [{ pid, hostSessionId: liveHosts?.get(id), image: liveImages?.get(id) }],
+        ]),
+      )
+    : liveIndex()
+  const livePidOf = (c: DossierChat): number | undefined => {
+    for (const id of lineageIdsOf(c)) {
+      const engine = engines.get(id)?.find((e) => engineHostedBy(e, c))
+      if (engine) return engine.pid
+    }
+    return undefined
+  }
   const markFor = deps.markFor ?? defaultMarkFor
   const scope = opts.archived ?? 'hide'
   const wanted = opts.instances?.length ? new Set(opts.instances) : null

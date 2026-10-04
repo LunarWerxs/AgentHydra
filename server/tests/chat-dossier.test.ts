@@ -192,6 +192,30 @@ describe('listChats', () => {
     expect(here.rows.find((r) => r.title === 'Rolling thread')?.livePid).toBe(4242)
   })
 
+  test('a moved copy that kept its chat id is told apart by the profile its engine runs from', () => {
+    // 2026-10-03: an import kept `local_<id>` on both accounts, so the hostSessionId matched the
+    // archived source copy as well, and two archived chats on the source read live off the engines
+    // running their moved copies. A desktop engine runs the binary its own profile downloaded.
+    const binaryIn = (profile: string) =>
+      join(profile, 'claude-code', '2.1.286', '635c1867224a', 'claude.exe')
+    const engine = (image: string) => ({
+      ...opts,
+      liveIds: new Map([['prior-id-b', 4242]]),
+      liveHosts: new Map([['prior-id-b', 'local_chat-one']]),
+      liveImages: new Map([['prior-id-b', image]]),
+    })
+
+    const elsewhere = listChats(
+      { archived: 'include' },
+      engine(binaryIn(join(tmpdir(), 'the-profile-the-chat-moved-to'))),
+    )
+    expect(elsewhere.rows.find((r) => r.title === 'Rolling thread')?.live).toBe(false)
+    expect(elsewhere.counts.live).toBe(0)
+
+    const here = listChats({ archived: 'include' }, engine(binaryIn(root.dir)))
+    expect(here.rows.find((r) => r.title === 'Rolling thread')?.livePid).toBe(4242)
+  })
+
   test('an unknown instance label returns nothing but names the labels that do exist', () => {
     const got = listChats({ instances: ['typo'], archived: 'include' }, opts)
     expect(got.rows).toEqual([])
