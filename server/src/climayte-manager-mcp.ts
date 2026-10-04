@@ -14,6 +14,7 @@ import {
   climayteWave,
   climayteWaveEdit,
 } from './climayte'
+import { attemptCliPid, CALLER_REFUSED } from './climayte-ask-mcp'
 import { load, workers } from './climayte-core'
 import type { CliMayteWave } from './climayte-lib'
 import { waveStateText } from './climayte-wave'
@@ -290,11 +291,13 @@ export function registerManagerMcpRoute(
     load()
     const manager = workers.get(managerId)
     const attempt = manager?.attempts[manager.attempts.length - 1]
+    // 404, never 401/403, and the runner's pid file read before the daemon's poll: as the ask
+    // endpoint (climayte-ask-mcp.ts, CALLER_REFUSED and attemptCliPid).
     if (!manager || manager.kind !== 'manage' || !manager.wave || !attempt)
-      return c.json({ error: 'Not a valid manager of a running wave' }, 403)
+      return c.json({ error: 'Not a valid manager of a running wave' }, CALLER_REFUSED)
     const callerPid = await callerPidOf(c)
-    if (callerPid === null || attempt.pid !== callerPid)
-      return c.json({ error: "Caller is not the manager's CLI process" }, 403)
+    if (callerPid === null || attemptCliPid(attempt) !== callerPid)
+      return c.json({ error: "Caller is not the manager's CLI process" }, CALLER_REFUSED)
     const ctx = {
       serverInfo: { name: 'climayte-manager', version: VERSION },
       tools: managerTools(managerId),

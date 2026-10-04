@@ -1087,6 +1087,41 @@ describe("the owner's MCP servers a worker is given (ownerMcpServers)", () => {
     expect(logged).not.toContain('shortfake')
   })
 
+  test('a stdio server carries with a mode-flag env; one whose env, args or flags look secret does not', () => {
+    const stdio = (more: Record<string, unknown>) => ({
+      type: 'stdio',
+      command: 'node',
+      args: ['C:/Users/someone/.claude/tools/connections/server.mjs'],
+      ...more,
+    })
+    const refused = {
+      'env-name': stdio({ env: { GITHUB_TOKEN: 'short' } }),
+      'env-value': stdio({ env: { MODE: SECRET } }),
+      'env-prefix': stdio({ env: { MODE: 'sk-shortfake1' } }),
+      'arg-flag': stdio({ args: ['server.mjs', '--token', 'shortfake'] }),
+      'arg-value': stdio({ args: ['server.mjs', `ghp_shortfake0`] }),
+    }
+    const { names, file, logged } = carry(
+      JSON.stringify({
+        mcpServers: {
+          connections: stdio({ env: { CONNECTIONS_ELICITATION: 'form' } }),
+          bare: { command: 'python', args: ['-m', 'hswarm'] },
+          ...refused,
+        },
+      }),
+    )
+    expect(names).toEqual(['bare', 'connections'])
+    expect(JSON.parse(file).connections).toEqual(
+      stdio({ env: { CONNECTIONS_ELICITATION: 'form' } }),
+    )
+    for (const name of Object.keys(refused)) expect(logged).toContain(`"${name}"`)
+    expect(logged).toContain('GITHUB_TOKEN')
+    for (const value of [SECRET, 'shortfake']) {
+      expect(file).not.toContain(value)
+      expect(logged).not.toContain(value)
+    }
+  })
+
   test("an owner config that does not parse is said without the parser's quote of it", () => {
     const { names, logged } = carry(
       `{"mcpServers": {"x": {"headers": {"Authorization": ${SECRET}}}}}`,

@@ -152,8 +152,16 @@ in at connect time through this machine's own session (connections-local's `node
 --connect`, hswarm's `python -m hswarm connect`); never static headers, oauth, env, a query
 string, user info or a fragment, a token-shaped path segment or host label (`/s/<key>/mcp`), or a
 helper that holds a header literal (`Bearer `, `Authorization`, an API key) or a token-shaped
-word, so no credential is written to a worker's file. A server left out for that is logged by its
-name only, and an owner config that does not parse is logged without the parser's message (it
+word, so no credential is written to a worker's file. **A stdio server is carried too**
+(2026-10-04: the owner's `connections` is stdio, and a chat worker on an account whose
+`.claude.json` listed no servers had no Connections at all): its `command`, `args`, `env` and `cwd`,
+unless an env key or a flag is named like a secret (`key`, `token`, `secret`, `passw`, `auth`,
+`bearer`, `credential`, `cookie`, `private`), or the command, cwd, an env value or an argument holds a
+well-known key prefix (`sk-`, `ghp_`, `github_pat_`, `xoxb-`, `glpat-`, `AKIA`, `eyJ`) or a
+token-shaped word; such a server is left out whole, never carried stripped of its key.
+`CONNECTIONS_ELICITATION` is a mode flag and carries. A server left out for that is logged by its
+name and where the secret would be (an env key's name, an argument's place), never a value, and an
+owner config that does not parse is logged without the parser's message (it
 quotes the text). AgentHydra's own server is denied by name and by its endpoint (`/api/mcp`), so a
 second PC's daemon under another name is left out too; the worker settings also deny the endpoint
 by URL (`deniedMcpServers: [{ "serverUrl": "*://*/api/mcp*" }]`, any scheme, host and port), so
@@ -804,8 +812,18 @@ the question is confusing or needs me should it ask me."
 per-worker MCP server named `climayte-worker` (`server/src/climayte-ask-mcp.ts`). Workers are denied
 AgentHydra's own MCP, so every worker's settings carry an http server at
 `/api/corch/ask/<workerId>` (written by `writeWorkerMcp`, only when the account has an owner Claude
-dir). The route answers only when the caller's socket pid is the worker's latest attempt pid; any other
-caller gets 403, so a worker can ask only for itself.
+dir). The route answers only when the caller's socket pid is the worker's latest attempt's CLI
+(`attemptCliPid`: the attempt's pid, or the `child` pid its runner wrote, read on the spot because the
+CLI connects to its MCP servers a second or two after it starts, before the daemon's poll takes that
+pid); any other caller gets **404**, so a worker can ask only for itself. Never 401 or 403: Claude Code
+(2.1.286) reads both from an http MCP server as "needs authorization" and caches that in the
+account's `mcp-needs-auth-cache.json` for 15 minutes, keyed by server name. Measured 2026-10-04: a 403
+while the attempt's pid was still unread marked `climayte-worker` needing sign-in on account #35 and
+on another account 2 to 5 s after their workers started, and every worker on those accounts in the
+next 15 minutes skipped it without connecting; a real `claude -p` against a probe server showed a 403
+server as `needs-auth` (and cached) and a 404 one as `failed` (not cached). Each launch also takes
+`climayte-worker` and `climayte-manager` off the account's cache (`forgetOwnNeedsAuth`). The manager
+endpoint answers the same way.
 
 **What it does.** Only a running worker can ask. `climayteAsk` records `worker.question`
 (`{ text, options?, context?, at }`), journals `asked`, and answers "End your turn": the CLI process is

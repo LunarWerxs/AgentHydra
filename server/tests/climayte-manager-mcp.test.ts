@@ -121,12 +121,12 @@ describe('manager MCP endpoint', () => {
     const { wave, managerId } = newWave()
     const [plain] = climayteRun({ tasks: [{ prompt: 'x', cwd: repo }], group: 'plain-g' }).workers
     groups.push('plain-g')
-    expect((await call(plain?.id as string, 'wave_state')).status).toBe(403)
-    expect((await call('w-nonexistent', 'wave_state')).status).toBe(403)
+    expect((await call(plain?.id as string, 'wave_state')).status).toBe(404)
+    expect((await call('w-nonexistent', 'wave_state')).status).toBe(404)
     callerPid = CALLER + 1
-    expect((await call(managerId, 'wave_state')).status).toBe(403)
+    expect((await call(managerId, 'wave_state')).status).toBe(404)
     callerPid = null
-    expect((await call(managerId, 'wave_state')).status).toBe(403)
+    expect((await call(managerId, 'wave_state')).status).toBe(404)
     callerPid = CALLER
     const ok = await call(managerId, 'wave_state')
     expect(ok.status).toBe(200)

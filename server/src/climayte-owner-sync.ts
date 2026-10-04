@@ -260,16 +260,81 @@ export interface McpUrlEntry {
   headersHelper?: string
 }
 
+/** A local server the CLI starts itself. Carried only when nothing in it looks like a secret
+ *  (carryStdio). */
+export interface McpStdioEntry {
+  type?: 'stdio'
+  command: string
+  args?: string[]
+  env?: Record<string, string>
+  cwd?: string
+}
+
+export type McpEntry = McpUrlEntry | McpStdioEntry
+
 /** A word shaped like a key or token: 24 or more characters of a token's alphabet with letters and
  *  digits both. Path segments, flags and file names (`connections-local`, `loader.mjs`) are not. */
 const TOKEN_LIKE = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_\-+.~]{24,}$/
 
+/** The prefixes well-known keys are issued with, at any length: OpenAI/Anthropic `sk-`, GitHub
+ *  `ghp_`/`gho_`/`github_pat_`, Slack `xoxb-`, GitLab `glpat-`, AWS `AKIA`, and a JWT's `eyJ`. */
+const KEY_PREFIX =
+  /(^|[^A-Za-z0-9])(sk-[A-Za-z0-9_-]{6,}|gh[pousr]_[A-Za-z0-9]{6,}|github_pat_|xox[abposr]-|glpat-|AKIA[0-9A-Z]{8,}|eyJ[A-Za-z0-9_-]{8,})/
+
 /** Text that may hold a credential: a scheme or header name that announces one (`Bearer `,
- *  `Authorization`, an API key header), or a token-like word once quotes, separators and path
- *  slashes are split off. */
+ *  `Authorization`, an API key header), a well-known key prefix, or a token-like word once quotes,
+ *  separators and path slashes are split off. */
 function holdsCredential(text: string): boolean {
   if (/\b(bearer|basic)\s|authorization|api[-_]?key|x-auth/i.test(text)) return true
+  if (KEY_PREFIX.test(text)) return true
   return text.split(/[\s"'`=:,;/\\]+/).some((word) => TOKEN_LIKE.test(word))
+}
+
+/** A name (an env key, a command-line flag) that says its value is a secret. `CONNECTIONS_ELICITATION`
+ *  is a mode flag and is not. */
+const SECRET_NAME = /key|token|secret|passw|auth|bearer|credential|cookie|private|signature/i
+
+/** Why a stdio entry may hold a credential (an env key's or flag's NAME, or an argument's place,
+ *  never a value), or null when it holds none. */
+function stdioSecret(
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+  cwd: string | undefined,
+): string | null {
+  if (holdsCredential(command)) return 'its command'
+  if (cwd !== undefined && holdsCredential(cwd)) return 'its cwd'
+  for (const [key, value] of Object.entries(env)) {
+    if (SECRET_NAME.test(key)) return `env ${key}`
+    if (holdsCredential(value)) return `the value of env ${key}`
+  }
+  for (const [i, arg] of args.entries()) {
+    const flag = /^--?([A-Za-z][\w.-]*)/.exec(arg)?.[1]
+    // `--token=x` and `--token x` alike: the flag names a secret, whatever follows it.
+    if (flag && SECRET_NAME.test(flag)) return `argument ${i} (${flag})`
+    if (holdsCredential(arg)) return `argument ${i}`
+  }
+  return null
+}
+
+/** A stdio entry to carry, `credential` when it holds or may hold one (stdioSecret), or `other`
+ *  when it is not a stdio entry this code understands. */
+function carryStdio(entry: Record<string, unknown>): Carry {
+  const { type, command, args = [], env = {}, cwd, ...rest } = entry
+  if ((type !== undefined && type !== 'stdio') || typeof command !== 'string') return 'other'
+  if (!Array.isArray(args) || !args.every((a) => typeof a === 'string')) return 'other'
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return 'other'
+  if (!Object.values(env).every((v) => typeof v === 'string')) return 'other'
+  if (cwd !== undefined && typeof cwd !== 'string') return 'other'
+  // Anything else an entry can carry (a timeout, a header block) may be a credential's place too.
+  if (Object.keys(rest).length > 0) return { credential: `its ${Object.keys(rest).join(', ')}` }
+  const why = stdioSecret(command, args as string[], env as Record<string, string>, cwd)
+  if (why) return { credential: why }
+  const out: McpStdioEntry = { type: 'stdio', command }
+  if ((args as string[]).length > 0) out.args = args as string[]
+  if (Object.keys(env).length > 0) out.env = env as Record<string, string>
+  if (cwd !== undefined) out.cwd = cwd
+  return { entry: out }
 }
 
 /** A URL with no credential in it: no user info, query or fragment, and no token-like host label
@@ -286,12 +351,13 @@ function credentialFreeUrl(u: URL): boolean {
   return ![...u.hostname.split('.'), ...segments].some((part) => holdsCredential(part))
 }
 
-/** What an owner entry is to a worker: the entry to carry, `credential` when it holds or may hold
- *  one, or `other` (a stdio server, or not an MCP entry at all), which the account's own copy
- *  serves. */
-type Carry = { entry: McpUrlEntry } | 'credential' | 'other'
+/** What an owner entry is to a worker: the entry to carry, `credential` (with where, never what)
+ *  when it holds or may hold one, or `other` (not an MCP entry this code understands), which the
+ *  account's own copy serves. */
+type Carry = { entry: McpEntry } | { credential: string } | 'other'
 
-/** An entry is carried only when it holds no credential: a URL, and at most a `headersHelper`, the
+/** An entry is carried only when it holds no credential. A stdio server goes to carryStdio. A URL
+ *  server is a URL, and at most a `headersHelper`, the
  *  command the CLI runs at connect time to sign in through this machine's session (the owner's
  *  connections-local is `node <loader.mjs> --connect`, hswarm `python -m hswarm connect`), which
  *  holds no secret itself. Static `headers`, `oauth` and `env` can each hold one, and so can the URL
@@ -300,17 +366,19 @@ type Carry = { entry: McpUrlEntry } | 'credential' | 'other'
 function carryEntry(entry: unknown): Carry {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return 'other'
   const { type, url, headersHelper, ...rest } = entry as Record<string, unknown>
-  if ((type !== 'http' && type !== 'sse') || typeof url !== 'string') return 'other'
-  if (Object.keys(rest).length > 0) return 'credential'
+  if (type !== 'http' && type !== 'sse') return carryStdio(entry as Record<string, unknown>)
+  if (typeof url !== 'string') return 'other'
+  if (Object.keys(rest).length > 0) return { credential: `its ${Object.keys(rest).join(', ')}` }
   if (headersHelper !== undefined && typeof headersHelper !== 'string') return 'other'
-  if (headersHelper !== undefined && holdsCredential(headersHelper)) return 'credential'
+  if (headersHelper !== undefined && holdsCredential(headersHelper))
+    return { credential: 'its headersHelper' }
   let u: URL
   try {
     u = new URL(url)
   } catch {
     return 'other'
   }
-  if (!credentialFreeUrl(u)) return 'credential'
+  if (!credentialFreeUrl(u)) return { credential: 'its URL' }
   return { entry: headersHelper === undefined ? { type, url } : { type, url, headersHelper } }
 }
 
@@ -332,14 +400,16 @@ const saidLeftOut = new Set<string>()
  *  second PC's AgentHydra is the same server under another name). Only an entry that holds no
  *  credential is carried (carryEntry): the owner's local servers (connections-local, hswarm) sign
  *  in through this machine's own session, and no credential is ever copied into a worker's file;
- *  one left out for that is said by its name only. Any other entry is left to the account's own
+ *  one left out for that is said by its name and where the secret would be (an env key's name),
+ *  never a value. A stdio server is carried too (2026-10-04: the owner's `connections` is stdio,
+ *  and a worker whose account's `.claude.json` had no copy of it had no Connections at all). Any other entry is left to the account's own
  *  `.claude.json`, which still loads beside these. No owner config is no servers; one that cannot
  *  be read is said, never with the parser's message (it quotes the text, which can be a token), and
  *  also no servers: the launch goes on with the account's own. */
 export function ownerMcpServers(
   ownerDir: string,
   deny: { names: readonly string[]; paths: readonly string[] },
-): Record<string, McpUrlEntry> {
+): Record<string, McpEntry> {
   const file = join(dirname(resolve(ownerDir)), '.claude.json')
   if (!existsSync(file)) return {}
   let servers: unknown
@@ -350,7 +420,7 @@ export function ownerMcpServers(
     console.error(`[climayte] could not read the owner's MCP servers from ${file}: ${why}`)
     return {}
   }
-  const out: Record<string, McpUrlEntry> = {}
+  const out: Record<string, McpEntry> = {}
   if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return out
   const deniedPaths = deny.paths.map((p) => p.replace(/\/+$/, '').toLowerCase())
   for (const [name, entry] of Object.entries(servers)) {
@@ -359,10 +429,10 @@ export function ownerMcpServers(
     if (typeof url === 'string' && deniedPaths.includes(urlPath(url) ?? '')) continue
     const carry = carryEntry(entry)
     if (carry === 'other') continue
-    if (carry === 'credential') {
+    if ('credential' in carry) {
       if (!saidLeftOut.has(name))
         console.error(
-          `[climayte] the owner's MCP server ${JSON.stringify(name)} holds or may hold a credential; workers get only their account's copy of it`,
+          `[climayte] the owner's MCP server ${JSON.stringify(name)} holds or may hold a credential (${carry.credential}); workers get only their account's copy of it`,
         )
       saidLeftOut.add(name)
       continue

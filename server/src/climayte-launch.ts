@@ -369,6 +369,28 @@ export function workerFileIds(): string[] {
   return [...ids]
 }
 
+/** The servers this daemon gives a worker itself (writeWorkerMcp). */
+const OWN_WORKER_MCP = ['climayte-worker', 'climayte-manager'] as const
+
+/** Take this daemon's own servers off the account's `mcp-needs-auth-cache.json`, the CLI's record of
+ *  servers that answered 401 or 403 (it skips each for 15 minutes without connecting). A refusal
+ *  there before 2026-10-04 (a 403 while the attempt's pid was still unread, climayte-ask-mcp.ts)
+ *  left every worker on that account without climayte_ask for that window; measured that day on
+ *  account #35 and on another account two seconds after its workers started. These servers never
+ *  ask anyone to sign in, so an entry for one is always stale. Other servers' entries are kept. */
+export function forgetOwnNeedsAuth(configDir: string): void {
+  const file = join(configDir, 'mcp-needs-auth-cache.json')
+  try {
+    const cache = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    if (!cache || typeof cache !== 'object' || Array.isArray(cache)) return
+    if (!OWN_WORKER_MCP.some((name) => name in cache)) return
+    for (const name of OWN_WORKER_MCP) delete cache[name]
+    writeFileSync(file, JSON.stringify(cache))
+  } catch {
+    // No cache, or one the CLI is writing: nothing of ours to take off.
+  }
+}
+
 /** The owner's MCP servers for `--mcp-config` (ownerMcpServers: entries with no credential),
  *  so a worker has what a desktop session on this machine has whatever its account's `.claude.json`
  *  says; the account's own servers still load beside them, and a name in both is one server.
@@ -730,6 +752,7 @@ export function launch(
   const log = join(LOGS, `${w.id}-${n}.jsonl`)
   const errLog = join(LOGS, `${w.id}-${n}.err.log`)
   const hookFile = writeWorkerSettings(w, acct)
+  forgetOwnNeedsAuth(acct.configDir)
   const argv = cliArgv(w, sessionId, resume, hookFile, writeWorkerMcp(w))
   const runner = startRunner(w, acct, argv, { promptFile, log, errLog })
   if (!runner) return
