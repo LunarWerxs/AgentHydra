@@ -178,7 +178,7 @@ export {
 export const API_BASE =
   import.meta.env.VITE_API_BASE ?? (import.meta.env.PROD ? '' : 'http://localhost:7787')
 
-async function j<T>(path: string, init?: RequestInit): Promise<T> {
+export async function j<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(API_BASE + path, {
     ...init,
     headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },

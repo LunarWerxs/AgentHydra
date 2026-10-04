@@ -11,7 +11,8 @@ import CliMayteScoreList from '@/components/CliMayteScoreList.vue'
 import PassFailBars from '@/components/charts/PassFailBars.vue'
 import { Badge } from '@/components/ui/badge'
 import type { CliMayteScorecard, CliMayteTotals } from '@/lib/api'
-import { CLIMAYTE_OUTCOME, formatTokens, modelName, tokenTotal } from '@/lib/climayte-status'
+import { CLIMAYTE_OUTCOME, modelName, tokenTotal } from '@/lib/climayte-status'
+import { formatTokens, formatUsd, useKitSourceTokens } from '@/lib/kit'
 import { useSwarmStats } from '@/lib/swarm-stats'
 import { useSwarmTiles } from '@/lib/swarm-tiles'
 
@@ -21,6 +22,11 @@ defineEmits<{ open: [] }>()
 const { t } = useI18n()
 const { stats, loading, offline } = useSwarmStats(14)
 const { tiles } = useSwarmTiles(stats)
+const kitTokens = useKitSourceTokens('climayte')
+/** The kit's all-time CliMayte tokens; the totals feed's sum until the kit has them. */
+const tokensShown = computed(
+  () => kitTokens.value ?? (props.totals ? tokenTotal(props.totals.tokens) : 0),
+)
 const fromHistory = computed(() => stats.value?.source === 'zswarm')
 
 /** "39 done, 23 handed off, ...": a run is any start of the CLI, so the count alone read as that
@@ -46,7 +52,7 @@ const totalsHint = computed(() => {
       output: formatTokens(x.tokens.output),
       cacheRead: formatTokens(x.tokens.cacheRead),
       cacheWrite: formatTokens(x.tokens.cacheWrite),
-      cost: `$${x.costUsd.toFixed(2)}`,
+      cost: formatUsd(x.costUsd),
     }) +
     (x.rereadShare
       ? ` ${t('climayte.offloadedReread', { share: x.rereadShare, pct: x.rereadPct })}`
@@ -93,11 +99,11 @@ const listOpen = ref(false)
             <span class="ms-1 text-muted-foreground">{{ $t('climayte.offloadedSessions', totals.sessions) }}</span>
           </span>
           <span class="whitespace-nowrap">
-            <span class="font-semibold tabular-nums">{{ formatTokens(tokenTotal(totals.tokens)) }}</span>
+            <span class="font-semibold tabular-nums">{{ formatTokens(tokensShown) }}</span>
             <span class="ms-1 text-muted-foreground">{{ $t('climayte.offloadedTokens') }}</span>
           </span>
           <span class="whitespace-nowrap">
-            <span class="font-semibold tabular-nums">${{ totals.costUsd.toFixed(2) }}</span>
+            <span class="font-semibold tabular-nums">{{ formatUsd(totals.costUsd) }}</span>
             <span class="ms-1 text-muted-foreground">{{ $t('climayte.offloadedCost') }}</span>
           </span>
         </p>

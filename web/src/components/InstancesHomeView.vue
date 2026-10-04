@@ -37,8 +37,7 @@ import {
   type SessionSummary,
 } from '@/lib/api'
 import { seriesColor } from '@/lib/chart'
-import { formatTokens, isCliMayteActive, modelName } from '@/lib/climayte-status'
-import { formatUsd } from '@/lib/format'
+import { isCliMayteActive, modelName, tokenTotal } from '@/lib/climayte-status'
 import {
   countPerHour,
   type HeadroomRow,
@@ -49,7 +48,8 @@ import {
   workersPerHour,
 } from '@/lib/home-charts'
 import { accountDisplay, type HswarmAccountName, useHswarmApi } from '@/lib/hswarm-api'
-import { useSwarmStats } from '@/lib/swarm-stats'
+import { formatTokens, formatUsd, useKitSourceTokens } from '@/lib/kit'
+import { accountSaved, useSwarmStats } from '@/lib/swarm-stats'
 import { pooledRemaining } from '@/lib/usage-pool'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
@@ -69,6 +69,7 @@ const { now } = useUsageMode(true)
 
 const { fetchAccountNames } = useHswarmApi()
 const { stats: swarmStats } = useSwarmStats(14)
+const kitTokens = useKitSourceTokens('climayte')
 const accountNames = ref<Record<string, HswarmAccountName>>({})
 onMounted(async () => {
   accountNames.value = await fetchAccountNames()
@@ -86,7 +87,7 @@ const swarmRows = computed(() =>
         title: shown.title,
         runs: r.runs,
         tasks: r.tasks,
-        saved: formatUsd(r.est_usd - r.worker_usd),
+        saved: formatUsd(accountSaved(r)),
         last: r.last ? String(r.last).slice(0, 10) : '–',
       }
     }),
@@ -251,6 +252,7 @@ const tiles = computed<Tile[]>(() => {
   const signedDesktop = desktopInstances.value.filter((i) => i.account).length
   const signedCli = cliInstances.value.filter((i) => i.loggedIn).length
   const tk = totals.value?.tokens
+  const tokens = kitTokens.value ?? (tk ? tokenTotal(tk) : null)
   return [
     {
       key: 'desktop',
@@ -271,7 +273,7 @@ const tiles = computed<Tile[]>(() => {
     {
       key: 'tokens',
       icon: Coins,
-      value: tk ? formatTokens(tk.input + tk.output + tk.cacheRead + tk.cacheWrite) : '–',
+      value: tokens === null ? '–' : formatTokens(tokens),
       label: t('instances.home.climayteTokens'),
       sub: totals.value
         ? t('instances.home.climayteTokensSub', { tasks: totals.value.tasks })

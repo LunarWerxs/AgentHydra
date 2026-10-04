@@ -6,6 +6,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { shortUsd } from '@/lib/chart'
 import { accountDisplay, type HswarmAccountName, useHswarmApi } from '@/lib/hswarm-api'
+import { formatTokens, formatUsd } from '@/lib/kit'
 import InfoHint from '@/shell/InfoHint.vue'
 
 type Row = Record<string, any>
@@ -86,25 +87,8 @@ const F = computed(() =>
 )
 const totals = computed(() => (plan.value ? (stats.value?.plan ?? {}) : (stats.value?.total ?? {})))
 
-function usd(n: number | null | undefined): string {
-  const v = Number(n)
-  if (!Number.isFinite(v)) return '—'
-  const a = Math.abs(v)
-  const s = a >= 100 ? Math.round(a).toLocaleString('en-US') : a.toFixed(2)
-  return `${v < 0 ? '−' : ''}$${s}`
-}
-function compact(n: number | null | undefined): string {
-  const v = Number(n) || 0
-  const units: [number, string][] = [
-    [1e12, 'T'],
-    [1e9, 'B'],
-    [1e6, 'M'],
-    [1e3, 'K'],
-  ]
-  for (const [d, u] of units)
-    if (Math.abs(v) >= d) return `${(v / d).toFixed(v / d >= 100 ? 0 : 1)}${u}`
-  return String(Math.round(v))
-}
+const usd = (n: number | null | undefined) => formatUsd(n, { style: 'whole' })
+const compact = (n: number | null | undefined) => formatTokens(Number(n) || 0)
 const int = (n: number | null | undefined) => Math.round(Number(n) || 0).toLocaleString('en-US')
 const pct = (n: number | null | undefined) => `${Math.round((Number(n) || 0) * 100)}%`
 const dayOf = (iso: string | undefined) => (iso ? iso.slice(0, 10) : '—')

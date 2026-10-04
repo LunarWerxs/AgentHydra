@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import type { CliMayteJournalEntry } from '@/lib/api'
 import { getCliMayteJournal } from '@/lib/api'
 import { modelName } from '@/lib/climayte-status'
+import { formatUsd } from '@/lib/kit'
 
 /** `fill`: the box takes the height its parent gives it on a wide screen (CliMayteWorkerDetail). */
 const props = defineProps<{ workerId: string; group: string; updatedAt: number; fill?: boolean }>()
@@ -68,7 +69,7 @@ onUnmounted(() => {
 })
 
 const pct = (v: number | null | undefined) => (typeof v === 'number' ? `${Math.round(v)}%` : '?')
-const usd = (v: number | undefined) => `$${(v ?? 0).toFixed(2)}`
+const usd = (v: number | undefined) => formatUsd(v ?? 0)
 const clock = (iso: string | undefined) => (iso ? new Date(iso).toLocaleString() : '?')
 
 /** The sentence for one entry. */

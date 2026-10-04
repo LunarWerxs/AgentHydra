@@ -20,7 +20,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import type { HswarmMoney, HswarmState } from '@/lib/hswarm-api'
 import { moneyLine, useHswarmApi } from '@/lib/hswarm-api'
-import { fetchKitUsage, localDaysFrom, localTz } from '@/lib/kit-usage'
+import { fetchKitUsage, formatTokens, formatUsd, localDaysFrom, localTz } from '@/lib/kit'
 
 /** One day of HSwarm's work, read from the toolkit (`source=hswarm`, groupBy day). */
 interface UsageDay {
@@ -263,9 +263,9 @@ const moneyData = computed(() => {
   const list = (usage.value?.providers ?? []).filter((p) => p.tokens > 0)
   const row = (name: string, value: number, usd: number) => ({
     key: name,
-    label: `${name} · ${formatUSD(usd)}`,
+    label: `${name} · ${fineUsd(usd)}`,
     value,
-    detail: formatUSD(usd),
+    detail: fineUsd(usd),
   })
   if (list.length <= 8) return list.map((p) => row(p.name, p.tokens, p.usd))
 
@@ -324,20 +324,8 @@ onMounted(async () => {
   await loadClients()
 })
 
-// Format currency
-function formatUSD(value: number): string {
-  if (value === 0) return '$0.00'
-  if (value < 0.01) return `$${value.toFixed(4)}`
-  return `$${value.toFixed(2)}`
-}
-
-// Tokens, compact: 1.2K, 3.4M, 5.6B.
-function formatTokens(value: number): string {
-  if (value < 1000) return String(Math.round(value))
-  if (value < 1e6) return `${Number((value / 1e3).toFixed(1))}K`
-  if (value < 1e9) return `${Number((value / 1e6).toFixed(1))}M`
-  return `${Number((value / 1e9).toFixed(1))}B`
-}
+// Money and tokens: the kit's formatters (lib/kit.ts).
+const fineUsd = (value: number) => formatUsd(value, { style: 'fine' })
 
 // Format compact number
 function formatNumber(value: number): string {
@@ -495,7 +483,7 @@ function formatPercent(value: number): string {
                 <tr v-for="d in [...spendDays].reverse()" :key="d.date" class="border-t hover:bg-muted/50">
                   <td class="px-2 py-1">{{ d.date }}</td>
                   <td class="px-2 py-1 text-right">{{ formatTokens(d.tokens) }}</td>
-                  <td class="px-2 py-1 text-right">{{ formatUSD(d.cost) }}</td>
+                  <td class="px-2 py-1 text-right">{{ fineUsd(d.cost) }}</td>
                   <td class="px-2 py-1 text-right">{{ d.tasks }}</td>
                   <td class="px-2 py-1 text-right">{{ d.error }}</td>
                 </tr>
@@ -670,7 +658,7 @@ function formatPercent(value: number): string {
           </div>
           <pre class="text-xs overflow-auto max-h-40" :class="ask.error && !ask.answer ? 'text-destructive' : ''">{{ ask.answer || ask.error || JSON.stringify(ask, null, 2) }}</pre>
           <div v-if="ask.model" class="text-xs text-muted-foreground mt-2">
-            {{ ask.model }} {{ t('hswarm.v.overview.separator') }} {{ ask.seconds }}{{ t('hswarm.v.overview.timeUnit') }} {{ t('hswarm.v.overview.separator') }} {{ formatUSD(ask.cost_usd || 0) }}
+            {{ ask.model }} {{ t('hswarm.v.overview.separator') }} {{ ask.seconds }}{{ t('hswarm.v.overview.timeUnit') }} {{ t('hswarm.v.overview.separator') }} {{ fineUsd(ask.cost_usd || 0) }}
           </div>
         </div>
       </CardContent>

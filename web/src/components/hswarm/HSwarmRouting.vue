@@ -20,6 +20,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import type { HswarmState } from '@/lib/hswarm-api'
 import { useHswarmApi } from '@/lib/hswarm-api'
+import { formatUsd } from '@/lib/kit'
 
 const props = defineProps<{ state: HswarmState }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -125,12 +126,6 @@ async function handlePreview() {
   } finally {
     previewLoading.value = false
   }
-}
-
-function formatMoney(value: number | null | undefined): string {
-  if (value == null) return '–'
-  if (value < 0.01) return `$${Number(value).toFixed(4)}`
-  return `$${Number(value).toFixed(2)}`
 }
 </script>
 
@@ -320,7 +315,7 @@ function formatMoney(value: number | null | undefined): string {
                 </td>
                 <td class="text-left py-2 px-2">{{ candidate.provider }}</td>
                 <td class="text-right py-2 px-2 font-mono text-xs">
-                  {{ formatMoney(candidate.benchmark_cost_usd) }}
+                  {{ formatUsd(candidate.benchmark_cost_usd, { style: 'fine' }) }}
                 </td>
               </tr>
             </tbody>

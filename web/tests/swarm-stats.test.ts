@@ -2,6 +2,7 @@
 // shared poll. The feed's `days` is OLDEST FIRST (the newest day is last), like the real answer.
 import { afterEach, beforeEach, expect, jest, test } from 'bun:test'
 import { effectScope } from 'vue'
+import { API_BASE } from '../src/lib/api'
 import {
   lastDaysSaved,
   POLL_MS,
@@ -87,7 +88,7 @@ test('two users of useSwarmStats(14) share ONE fetch, and the poll stops after t
   const first = a.run(() => useSwarmStats(14))
   const second = b.run(() => useSwarmStats(14))
   await flush()
-  expect(calls).toEqual(['/api/hswarm/api/stats?days=14'])
+  expect(calls).toEqual([`${API_BASE}/api/hswarm/api/stats?days=14`])
   expect(first?.stats.value?.total.saved_usd).toBe(100)
   expect(second?.stats.value).toBe(first?.stats.value ?? null)
 

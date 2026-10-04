@@ -11,8 +11,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { seriesColor } from '@/lib/chart'
 import type { HswarmMoney } from '@/lib/hswarm-api'
-import { formatUsd, moneyLine, useHswarmApi } from '@/lib/hswarm-api'
-import { fetchKitUsage, localTz, rollingDaysFrom } from '@/lib/kit-usage'
+import { moneyLine, useHswarmApi } from '@/lib/hswarm-api'
+import { fetchKitUsage, formatTokens, formatUsd, localTz, rollingDaysFrom } from '@/lib/kit'
 
 interface ModelRow {
   model: string
@@ -136,12 +136,7 @@ const models = computed<ModelRow[]>(() =>
 )
 const order = computed(() => models.value.map((m) => m.model))
 const pct = (n: number) => `${Math.round(n * 100)}%`
-const tokenFmt = (n: number) =>
-  n < 1e3
-    ? String(Math.round(n))
-    : n < 1e6
-      ? `${Number((n / 1e3).toFixed(1))}K`
-      : `${Number((n / 1e6).toFixed(1))}M`
+const tokenFmt = formatTokens
 
 const outcomeMax = computed(() => Math.max(1, ...models.value.map((m) => m.tasks)))
 // Tokens per successful task lead; the list-price value of the same task is its secondary figure.
@@ -155,7 +150,7 @@ const tokenRows = computed(() =>
       value: m.tokens_per_ok ?? 0,
       detail:
         m.cost_per_ok != null
-          ? `${formatUsd(m.cost_per_ok)} ${t('hswarm.v.money.atListPrice')}`
+          ? `${formatUsd(m.cost_per_ok, { style: 'fine' })} ${t('hswarm.v.money.atListPrice')}`
           : undefined,
     })),
 )

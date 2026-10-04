@@ -77,6 +77,7 @@ import {
   firstLine,
   isCliMayteActive,
 } from '@/lib/climayte-status'
+import { formatUsd } from '@/lib/kit'
 import { reconcileList, sameData } from '@/lib/reconcile'
 import type { SideListGroup } from '@/lib/side-list'
 import InfoHint from '@/shell/InfoHint.vue'
@@ -658,7 +659,7 @@ onUnmounted(() => {
             <span class="text-2xs tabular-nums">{{ activeLabel(selectedRemote.ranS) }}</span>
           </Badge>
           <Badge variant="muted" :title="$t('climayte.detailCost')">
-            <span class="text-2xs tabular-nums">${{ selectedRemote.costUsd.toFixed(2) }}</span>
+            <span class="text-2xs tabular-nums">{{ formatUsd(selectedRemote.costUsd) }}</span>
           </Badge>
           <Badge v-if="selectedRemote.kind" variant="muted" :title="$t('climayte.detailKind')">
             <span class="text-2xs">{{ selectedRemote.kind }}</span>

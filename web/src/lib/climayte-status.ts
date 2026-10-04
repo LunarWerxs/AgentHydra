@@ -155,9 +155,8 @@ export const climayteAccountLabel = (a: { num: number | null; name: string }): s
 export const tokenTotal = (t: CliMayteTokens): number =>
   t.input + t.output + t.cacheRead + t.cacheWrite
 
-const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
-/** "85.3M": token counts are read at a glance, not to the unit. */
-export const formatTokens = (n: number): string => compact.format(n)
+/** "85.3M": token counts are read at a glance, not to the unit (the kit's formatter). */
+export { formatTokens } from './kit'
 
 /** The first line of a multi-line message, for a one-line row. */
 export const firstLine = (s: string): string => s.split('\n', 1)[0] ?? s

@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/table'
 import type { HswarmState } from '@/lib/hswarm-api'
 import { useHswarmApi } from '@/lib/hswarm-api'
+import { formatUsd } from '@/lib/kit'
 
 const { t } = useI18n()
 const { apiCall } = useHswarmApi()
@@ -99,10 +100,7 @@ function formatDate(dateStr: string): string {
   }
 }
 
-function formatCost(cost: number): string {
-  if (cost == null) return '–'
-  return `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`
-}
+const costText = (cost: number) => formatUsd(cost, { style: 'fine' })
 
 function formatTokens(value: number | undefined): string {
   if (value == null) return '–'
@@ -285,7 +283,7 @@ onMounted(async () => {
                 </TableCell>
                 <TableCell class="text-right font-mono text-sm">
                   {{ formatTokens(job.tokens) }}
-                  <div v-if="job.tokens != null" class="text-xs text-muted-foreground">{{ formatCost(job.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
+                  <div v-if="job.tokens != null" class="text-xs text-muted-foreground">{{ costText(job.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
                 </TableCell>
                 <TableCell class="text-sm text-muted-foreground">
                   {{ formatDate(job.created) }}
@@ -352,7 +350,7 @@ onMounted(async () => {
                 </TableCell>
                 <TableCell class="text-right font-mono text-sm">
                   {{ formatTokens(job.tokens) }}
-                  <div v-if="job.tokens != null" class="text-xs text-muted-foreground">{{ formatCost(job.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
+                  <div v-if="job.tokens != null" class="text-xs text-muted-foreground">{{ costText(job.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
                 </TableCell>
                 <TableCell class="text-sm text-muted-foreground">
                   {{ formatDate(job.created) }}
@@ -423,7 +421,7 @@ onMounted(async () => {
             <div>
               <span class="text-muted-foreground">{{ t('hswarm.v.jobs.table.cost') }}:</span>
               <div class="font-mono mt-1">{{ formatTokens(jobDetail.status.tokens) }}</div>
-              <div v-if="jobDetail.status.tokens != null" class="text-xs text-muted-foreground">{{ formatCost(jobDetail.status.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
+              <div v-if="jobDetail.status.tokens != null" class="text-xs text-muted-foreground">{{ costText(jobDetail.status.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
             </div>
             <div>
               <span class="text-muted-foreground">{{ t('hswarm.v.jobs.table.tasks') }}:</span>
@@ -499,7 +497,7 @@ onMounted(async () => {
                     </TableCell>
                     <TableCell class="text-right font-mono text-xs">
                       {{ formatTokens(usageTokens(result.usage)) }}
-                      <div v-if="usageTokens(result.usage) != null" class="text-muted-foreground">{{ formatCost(result.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
+                      <div v-if="usageTokens(result.usage) != null" class="text-muted-foreground">{{ costText(result.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
                     </TableCell>
                     <TableCell class="text-xs max-w-xs truncate">
                       {{ result.answer || result.error || (result.data ? JSON.stringify(result.data).substring(0, 50) : '–') }}

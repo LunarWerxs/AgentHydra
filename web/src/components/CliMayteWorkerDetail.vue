@@ -52,6 +52,7 @@ import {
   modelName,
   tokenTotal,
 } from '@/lib/climayte-status'
+import { formatUsd } from '@/lib/kit'
 import { formatAgo } from '@/lib/relativeTime'
 
 const props = defineProps<{
@@ -439,9 +440,9 @@ async function onStop() {
                     <span class="text-base font-semibold leading-none">{{ formatTokens(tokenTotal(worker.tokens)) }}</span>
                     <span class="text-xs text-muted-foreground">{{ $t('climayte.offloadedTokens') }}</span>
                     <span aria-hidden="true" class="text-xs text-muted-foreground">·</span>
-                    <span class="text-xs text-muted-foreground">${{ worker.costUsd.toFixed(2) }}</span>
+                    <span class="text-xs text-muted-foreground">{{ formatUsd(worker.costUsd) }}</span>
                   </template>
-                  <span v-else class="text-base font-semibold leading-none">${{ worker.costUsd.toFixed(2) }}</span>
+                  <span v-else class="text-base font-semibold leading-none">{{ formatUsd(worker.costUsd) }}</span>
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom" align="end">
@@ -456,7 +457,7 @@ async function onStop() {
                       })
                     }}
                   </span>
-                  <span>{{ $t('climayte.detailCost') }} ${{ worker.costUsd.toFixed(2) }}: {{ $t('climayte.detailCostHint') }}</span>
+                  <span>{{ $t('climayte.detailCost') }} {{ formatUsd(worker.costUsd) }}: {{ $t('climayte.detailCostHint') }}</span>
                 </div>
               </TooltipContent>
             </Tooltip>

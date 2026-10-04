@@ -135,20 +135,8 @@ export function formatCompact(n: number): string {
   )
 }
 
-/** A dollar figure for display. Deliberately locked to USD: these are Anthropic's published list
- *  prices, not an amount converted into the reader's currency. A non-zero amount under a cent
- *  reads "<$0.01" rather than "$0.00", which would look like the feature is broken. */
-export function formatUsd(n: number): string {
-  if (!Number.isFinite(n)) return '—'
-  const money = (v: number) =>
-    new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(v)
-  return n > 0 && n < 0.01 ? `<${money(0.01)}` : money(n)
-}
+/** A dollar figure for display: the kit's formatter (lib/kit.ts). */
+export { formatUsd } from './kit'
 
 /** Format an ISO start-time string as a short elapsed-time string ("3m", "2h 14m").
  *  Null/invalid -> "—". */

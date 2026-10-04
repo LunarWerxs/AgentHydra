@@ -1,4 +1,6 @@
 import { computed, ref } from 'vue'
+import { formatUsd as kitUsd, readShared } from '@/lib/kit'
+import { loadStats, statsKey } from '@/lib/swarm-stats'
 
 interface HswarmStatus {
   running: boolean
@@ -68,8 +70,10 @@ async function fetchState() {
   }
 }
 
-async function fetchStats(days: number) {
-  return apiCall(`stats?days=${days}`)
+/** The stats feed for a window, through the shared poll: no request of its own when a card already
+ *  polls the same window. */
+async function fetchStats<T = any>(days: number): Promise<T> {
+  return (await readShared(statsKey(days), () => loadStats(days))) as T
 }
 
 export interface HswarmAccountName {
@@ -107,11 +111,7 @@ export interface HswarmMoney {
   unknown_usd?: number
 }
 
-export function formatUsd(value: number): string {
-  if (value === 0) return '$0.00'
-  if (value < 0.01) return `$${value.toFixed(4)}`
-  return `$${value.toFixed(2)}`
-}
+const formatUsd = (value: number): string => kitUsd(value, { style: 'fine' })
 
 /**
  * The secondary money line under a token headline: "$X spent · $Y value at list price", where spending is known.
