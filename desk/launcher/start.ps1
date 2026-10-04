@@ -131,8 +131,18 @@ function Focus-Window([int]$browserPid) {
   return $true
 }
 
+# The bun that cmd.exe can run: bun.exe, else a .cmd/.bat shim. An npm-installed bun puts bun.ps1 first
+# on PATH, and `Get-Command bun` returned it; cmd /c cannot run a .ps1, so the server never started
+# (2026-10-04: AppData\Roaming\npm\bun.ps1 ahead of bun.cmd on the second PC).
+function Find-Bun {
+  $exe = Get-Command bun.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($exe) { return $exe }
+  return Get-Command bun -CommandType Application -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -in '.exe', '.cmd', '.bat' } | Select-Object -First 1
+}
+
 function Start-Server {
-  $bun = Get-Command bun -ErrorAction SilentlyContinue
+  $bun = Find-Bun
   if (-not $bun) { Fail "Hydra Desk could not start: bun is not on PATH.`n`nInstall it from https://bun.sh and try again." }
   $entry = Join-Path $DeskRoot 'server\src\index.ts'
   if (-not (Test-Path $entry)) { Fail "Hydra Desk could not start: $entry is missing." }
@@ -198,7 +208,7 @@ if ($DryRun) {
   if ($up) { Say 'server already up: would not start another' }
   elseif (Get-LauncherServer) { Say "a server this launcher started is still booting (pid file $PidFile): would wait for it, not start another" }
   else {
-    $bun = Get-Command bun -ErrorAction SilentlyContinue
+    $bun = Find-Bun
     Say "would start hidden: $(if ($bun) { $bun.Source } else { 'bun (NOT ON PATH: would fail)' }) server\src\index.ts (cwd $DeskRoot, HYDRA_DESK_PORT=$Port)"
     Say "would append stdout+stderr to $ServerLog and write pids to $PidFile"
     Say "would wait up to $HealthTimeoutSec s for health, else show an error box"
