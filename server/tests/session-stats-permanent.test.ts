@@ -14,7 +14,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { markSessionGone, scanSessionAnalytics } from '../src/analytics'
+import { markSessionGone, refreshAnalytics, scanSessionAnalytics } from '../src/analytics'
 import { db } from '../src/db'
 
 const dir = mkdtempSync(join(tmpdir(), 'ah-permanent-'))
@@ -145,5 +145,50 @@ describe('the record survives the transcript', () => {
       )
       .get('claude:gone-2')
     expect(row?.gone_at).toBe(1000)
+  })
+})
+
+describe('the record holds no tokens and no money', () => {
+  test('a scan keeps the shape of the chat and leaves every token and cost column unwritten', async () => {
+    // Tokens and cost are the kit's (per call). A row that also carried them would be a second,
+    // diverging answer to "what did this chat cost"; the columns stay only for the history the
+    // kit's legacy ingest read.
+    const path = transcript([
+      assistant('2024-09-01T10:00:00.000Z', U),
+      assistant('2024-09-01T10:05:00.000Z', U),
+    ])
+    const tf = {
+      session_id: 'nomoney-1',
+      source: 'claude' as const,
+      path,
+      project: 'D--work-Alpha',
+      mtime_ms: 1,
+      size_bytes: 2,
+      archived: false,
+      cwd: 'D:workAlpha',
+      title: 'A chat',
+    }
+    await refreshAnalytics([tf as never], { budgetMs: 5_000, concurrency: 1 })
+    const row = db
+      .query<Record<string, number | string | null>, [string]>(
+        'select * from session_stats where session_key = ?',
+      )
+      .get('claude:nomoney-1')
+    expect(row?.title).toBe('A chat')
+    expect(row?.cwd).toBe('D:workAlpha')
+    expect(row?.turns).toBe(2)
+    expect(row?.first_ts).toBeGreaterThan(0)
+    expect(row?.gone_at).toBeNull()
+    for (const col of [
+      'input_tokens',
+      'cache_read',
+      'cache_write',
+      'output_tokens',
+      'weighted',
+      'cost_usd',
+      'tokens_json',
+      'days_json',
+    ])
+      expect(row?.[col]).toBeNull()
   })
 })

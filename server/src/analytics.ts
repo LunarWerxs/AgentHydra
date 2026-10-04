@@ -35,7 +35,7 @@ import { findDesktopChat, instanceSessionMap } from './instance-sessions'
 import { sharedKitStore, storeGeneration, type UsageRow, usageQueryAsync } from './kit/query'
 import type { KitStore } from './kit/store'
 import { readOpenCodeUsage } from './opencode-sessions'
-import { priceSource, pricesAsOf, priceTokens } from './pricing'
+import { priceSource, pricesAsOf } from './pricing'
 import { streamLines } from './session-search'
 import {
   decodeProjectKey,
@@ -485,8 +485,8 @@ async function scanOpenCodeAnalytics(
 /**
  * Hermes has already totalled its own session, by model, in `session_model_usage` — nothing to
  * stream, same as OpenCode above. `providerCostUsd` is deliberately left null: unlike OpenCode's own
- * passthrough cost, Hermes' totals are priced through THIS repo's catalog (foldSpendRow's generic
- * `priceTokens` pass, in server/src/pricing.ts) so a model the catalog has no price for is flagged
+ * passthrough cost, Hermes' totals are priced through THIS repo's catalog (the kit's per-call
+ * pricing, in server/src/pricing.ts) so a model the catalog has no price for is flagged
  * unpriced rather than taken on Hermes' own estimated/actual cost for a provider we cannot verify.
  * See the header of server/src/hermes-sessions.ts.
  */
@@ -1140,28 +1140,28 @@ const selectRows = db.query<AnalyticsRow, []>(
  * The permanent per-session record (db.ts session_stats). Upsert on a stable session key, never a
  * file key: one row per conversation for its whole life.
  *
+ * It holds no tokens and no money: those are the kit's (kit/), per call. The token, weighted, cost
+ * and per-day columns stay in the table for the history the kit's legacy ingest read, and are no
+ * longer written.
+ *
  * `first_seen_at` is written only on INSERT (the excluded value is ignored on conflict), so it keeps
  * meaning "when this machine first saw this chat" rather than drifting forward on every rescan.
  */
 const upsertPermanentStats = db.query(
   'insert into session_stats (session_key, session_id, source, tool, project, cwd, title, ' +
-    'instance, first_ts, last_ts, turns, input_tokens, cache_read, cache_write, output_tokens, ' +
-    'weighted, cost_usd, active_ms, tool_calls, tool_errors, compactions, edit_count, ' +
-    'files_touched, lines_added, lines_removed, size_bytes, tokens_json, days_json, ' +
+    'instance, first_ts, last_ts, turns, active_ms, tool_calls, tool_errors, compactions, ' +
+    'edit_count, files_touched, lines_added, lines_removed, size_bytes, ' +
     'first_seen_at, last_scanned_at, gone_at) ' +
-    'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null) ' +
+    'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null) ' +
     'on conflict(session_key) do update set ' +
     'tool = excluded.tool, project = excluded.project, cwd = excluded.cwd, title = excluded.title, ' +
     'instance = coalesce(excluded.instance, session_stats.instance), ' +
     'first_ts = excluded.first_ts, last_ts = excluded.last_ts, turns = excluded.turns, ' +
-    'input_tokens = excluded.input_tokens, cache_read = excluded.cache_read, ' +
-    'cache_write = excluded.cache_write, output_tokens = excluded.output_tokens, ' +
-    'weighted = excluded.weighted, cost_usd = excluded.cost_usd, active_ms = excluded.active_ms, ' +
+    'active_ms = excluded.active_ms, ' +
     'tool_calls = excluded.tool_calls, tool_errors = excluded.tool_errors, ' +
     'compactions = excluded.compactions, edit_count = excluded.edit_count, ' +
     'files_touched = excluded.files_touched, lines_added = excluded.lines_added, ' +
     'lines_removed = excluded.lines_removed, size_bytes = excluded.size_bytes, ' +
-    'tokens_json = excluded.tokens_json, days_json = excluded.days_json, ' +
     'last_scanned_at = excluded.last_scanned_at, gone_at = null',
 )
 
@@ -1308,12 +1308,7 @@ function persist(tf: TranscriptFile, a: SessionAnalytics): void {
  */
 function recordPermanentStats(tf: TranscriptFile, a: SessionAnalytics): void {
   projectsCache = null
-  const totals = emptyTokens()
-  for (const spend of Object.values(a.tokens)) addTokens(totals, spend)
-  const weighted = Object.values(a.tokens).reduce((n, m) => n + m.weighted, 0)
   const turns = Object.values(a.tokens).reduce((n, m) => n + m.turns, 0)
-  const priced = priceTokens(a.tokens, a.lastTs ?? Date.now())
-  const cost = a.providerCostUsd ?? priced.costUsd
   const toolCalls = Object.values(a.tools).reduce((n, v) => n + v, 0)
   upsertPermanentStats.run(
     `${tf.source}:${tf.session_id}`,
@@ -1329,12 +1324,6 @@ function recordPermanentStats(tf: TranscriptFile, a: SessionAnalytics): void {
     a.firstTs,
     a.lastTs,
     turns,
-    totals.input,
-    totals.cacheRead,
-    totals.cacheWrite,
-    totals.output,
-    weighted,
-    cost,
     a.activeMs,
     toolCalls,
     a.toolErrors,
@@ -1344,8 +1333,6 @@ function recordPermanentStats(tf: TranscriptFile, a: SessionAnalytics): void {
     a.linesAdded,
     a.linesRemoved,
     tf.size_bytes ?? null,
-    JSON.stringify(a.tokens),
-    JSON.stringify(a.days),
     Date.now(),
     Date.now(),
   )
