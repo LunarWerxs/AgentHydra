@@ -45,7 +45,8 @@ import { movedOutOf } from './cwd-move'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
 import { ChatRuntime, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
-import { ElicitationAnswerError, QuestionPictureError } from './requests'
+import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } from './requests'
+import { mediaCache, toStoredImage } from '../media/cache'
 import { SessionMetaStore } from './session-meta'
 import { ChatStore } from './store'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
@@ -332,7 +333,15 @@ export class ChatManager {
   async create(req: CreateChatRequest): Promise<ChatSummary> {
     const made = await this.openNew(req)
     void made.firstSend.then((err) => {
-      if (err) console.warn(`[desk] chat ${made.chat.id}: the first message could not be sent: ${err}`)
+      if (!err) return
+      console.warn(`[desk] chat ${made.chat.id}: the first message could not be sent: ${err}`)
+      // Never silent: the chat says why and keeps the words, which otherwise vanish with the stand-in.
+      const e = this.chats.get(made.chat.id)
+      if (!e) return
+      if (req.prompt?.trim()) this.systemLine(e.chat.id, 'first-send', 'warn', `Your message was not sent: ${err}\n\n${req.prompt}`)
+      e.chat.status = 'error'
+      e.chat.lastError = err
+      this.changed(e.chat)
     })
     return made.chat
   }
@@ -448,7 +457,10 @@ export class ChatManager {
    * holds one sent while a turn runs and delivers it as the next turn of the same session). Text only.
    */
   private async sendToWorker(e: Entry, text: string, images: ImageRef[] | undefined, opts: SendOptions): Promise<{ queued: boolean }> {
-    if (images?.length) throw new ChatError(400, 'This chat runs as a CliMayte worker, which takes text only: pictures cannot be sent to it.')
+    // A worker takes text: each picture is saved in the media cache and named by a line
+    // `[Image: source: <path>]` (the form Claude Code uses, so the model opens it with Read).
+    const shown = images?.length ? images.map((img) => toStoredImage(img, mediaCache(this.store.home))) : undefined
+    if (images?.length) text = answersWithPictures({ m: text }, { m: images }, mediaCache(this.store.home)).m!
     while (e.starting) await e.starting
     const chat = e.chat
     if (this.chats.get(chat.id) !== e) throw new ChatError(404, `no chat ${chat.id}`)
@@ -456,7 +468,7 @@ export class ChatManager {
     const queued = busy(chat)
     // The message shows at once: the worker's JSONL has it only once its CLI runs and the poll reads it.
     const ts = this.now()
-    const standIn: UserItem = { kind: 'user', id: `desk-sent:${ts}:${randomUUID()}`, ts, text, ...(queued ? { queued } : {}) }
+    const standIn: UserItem = { kind: 'user', id: `desk-sent:${ts}:${randomUUID()}`, ts, text, ...(shown ? { images: shown } : {}), ...(queued ? { queued } : {}) }
     ;(e.sent ??= []).push(standIn)
     this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: standIn })
     try {

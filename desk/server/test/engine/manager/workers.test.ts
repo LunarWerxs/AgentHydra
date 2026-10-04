@@ -204,3 +204,28 @@ test('a send after the chat moved folders passes the new folder to the worker, o
   await m.send(chat.id, 'and again')
   expect(b.state.sentToWorker.at(-1)).toEqual({ id: 'w1', text: 'and again' })
 })
+
+test('a worker chat takes a picture as a saved file named in the message, and a refused first message says why', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const chat = await m.create({ cwd: home, prompt: 'what is this?', images: [{ mediaType: 'image/png', dataBase64: png, name: 'shot.png' }] })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  const sent = b.state.started[0]!.prompt
+  expect(sent).toStartWith('what is this?\n[Image: source: ')
+  const path = /\[Image: source: (.+)\]/.exec(sent)![1]!
+  expect(readFileSync(path).length).toBeGreaterThan(0)
+
+  const failing = fakeBridge()
+  failing.bridge.startWorker = async () => {
+    throw new Error('AgentHydra is not running')
+  }
+  const m2 = newManager(home, failing)
+  const c2 = await m2.create({ cwd: home, prompt: 'keep these words' })
+  while (m2.get(c2.id).status !== 'error') await new Promise((r) => setTimeout(r, 5))
+  const note = m2.listItems(c2.id).find((i) => i.kind === 'system' && /was not sent/.test(i.text))
+  expect(note && 'text' in note && note.text).toContain('keep these words')
+})
