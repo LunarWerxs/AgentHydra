@@ -596,7 +596,22 @@ function unpricedModels(
   return [...out].sort()
 }
 
+// Coverage scans every raw row (1.6 s on 1.6M rows, measured 2026-10-04), so it is kept until the store
+// changes: total_changes() moves on a write through this connection, data_version on one through another.
+const coverageCache = new WeakMap<KitStore, { key: string; value: UsageResult['coverage'] }>()
+
 function coverage(store: KitStore): UsageResult['coverage'] {
+  const t = store.db.query('select total_changes() as t').get() as { t: number }
+  const v = store.db.query('pragma data_version').get() as { data_version: number }
+  const key = `${v.data_version}:${t.t}`
+  const hit = coverageCache.get(store)
+  if (hit && hit.key === key) return hit.value
+  const value = scanCoverage(store)
+  coverageCache.set(store, { key, value })
+  return value
+}
+
+function scanCoverage(store: KitStore): UsageResult['coverage'] {
   const sources: UsageResult['coverage']['sources'] = {}
   const raw = store.db
     .query(
