@@ -11,7 +11,7 @@ import { test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { initFileLogging, restoreFileLogging, logFilePath } from "../../src/log-file.mjs";
 
 // The true native console methods, snapshotted before any test patches them. initFileLogging
@@ -74,24 +74,59 @@ test("tees console.log/warn/error to logs/daemon.log with level tags, while the 
   console.log = realLog;
 });
 
-test("rotates to daemon.log.1.gz once the existing log exceeds the size cap", () => {
+// The roll size the daemon ships with: the log rolls past 20 MiB into gzipped generations.
+const CAP = 20 * 1024 * 1024;
+const gunzip = (p: string) => gunzipSync(readFileSync(p)).toString("utf8");
+
+test("rolls an oversized log into daemon.log.1.gz at start, shifting older generations and keeping three", () => {
   const home = tempHome();
   const logsDir = join(home, "logs");
   const path = join(logsDir, "daemon.log");
   mkdirSync(logsDir, { recursive: true });
-  // Seed an oversized previous log (> the 20 MiB cap) with a marker we can look for after rotation.
-  writeFileSync(path, `OLD-MARKER\n${"x".repeat(21 * 1024 * 1024)}`);
+  // A previous log over the cap, three older generations, and the plain `.1` the single-generation
+  // rotation used to leave behind.
+  writeFileSync(path, `OLD-MARKER\n${"x".repeat(CAP)}`);
+  writeFileSync(`${path}.1`, "LEGACY-PLAIN");
+  for (const n of [1, 2, 3]) writeFileSync(`${path}.${n}.gz`, gzipSync(`GEN-${n}`));
 
   initFileLogging(home);
 
-  // Old generations are gzipped since 2026-10-03 (3f394c98); no plain .1 is left behind.
-  const rolled = `${path}.1.gz`;
-  expect(existsSync(rolled)).toBe(true);
+  expect(gunzip(`${path}.1.gz`).startsWith("OLD-MARKER\n")).toBe(true);
+  expect(gunzip(`${path}.2.gz`)).toBe("GEN-1");
+  expect(gunzip(`${path}.3.gz`)).toBe("GEN-2");
+  // Three kept: the oldest is dropped rather than spilling into a fourth, and the legacy `.1` goes.
+  expect(existsSync(`${path}.4.gz`)).toBe(false);
   expect(existsSync(`${path}.1`)).toBe(false);
-  expect(gunzipSync(readFileSync(rolled)).toString("utf8")).toContain("OLD-MARKER");
   // The fresh log is small (just the boot marker) and does NOT carry the old content.
   const fresh = readFileSync(path, "utf8");
   expect(fresh).not.toContain("OLD-MARKER");
+  expect(statSync(path).size).toBeLessThan(64 * 1024);
+});
+
+test("rolls while running once the log passes the cap, so a daemon that stays up stays bounded", () => {
+  const home = tempHome();
+  const logsDir = join(home, "logs");
+  const path = join(logsDir, "daemon.log");
+  mkdirSync(logsDir, { recursive: true });
+  // Just under the cap: the start-up check leaves it in place, and this run's own lines push it over.
+  writeFileSync(path, `PREVIOUS-RUN\n${"x".repeat(CAP - 32 * 1024)}`);
+  // Keep the filler off the test output; the tee still writes every line to the file.
+  console.log = () => {};
+
+  initFileLogging(home);
+  expect(existsSync(`${path}.1.gz`)).toBe(false);
+  for (let i = 0; i < 64; i++) console.log(`FILLER-${i} ${"y".repeat(1024)}`);
+
+  // Rolled exactly once, mid-run: the old content and the first lines are in the newest generation,
+  // the live file holds only what came after.
+  const rolled = gunzip(`${path}.1.gz`);
+  expect(rolled.startsWith("PREVIOUS-RUN\n")).toBe(true);
+  expect(rolled).toContain("FILLER-0 ");
+  expect(existsSync(`${path}.2.gz`)).toBe(false);
+  const live = readFileSync(path, "utf8");
+  expect(live).toContain("FILLER-63 ");
+  expect(live).not.toContain("PREVIOUS-RUN");
+  expect(live).not.toContain("FILLER-0 ");
   expect(statSync(path).size).toBeLessThan(64 * 1024);
 });
 

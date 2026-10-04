@@ -13,5 +13,5 @@ export function rotateLog(path: string, keep?: number): void;
 /** The current log-file path, or `null` if file logging isn't active. */
 export function logFilePath(): string | null;
 
-/** Undo the console patch and close the file. For tests; the daemon never calls this. */
+/** Undo the console patch, close the file and put back the default roll size. For tests; the daemon never calls this. */
 export function restoreFileLogging(): void;

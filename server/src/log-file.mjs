@@ -27,7 +27,8 @@ import { gzipSync } from "node:zlib";
 import { inspect } from "node:util";
 
 /** Roll the log over at this size, at start and while running; old generations are gzipped. */
-let MAX_BYTES = 20 * 1024 * 1024;
+const DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
+let MAX_BYTES = DEFAULT_MAX_BYTES;
 /** Old generations kept: daemon.log.1.gz (newest) .. daemon.log.<KEEP>.gz. */
 const KEEP = 3;
 
@@ -147,8 +148,10 @@ export function logFilePath() {
   return currentPath;
 }
 
-/** Undo the console patch and close the file. For tests; the daemon never calls this. */
+/** Undo the console patch, close the file and put back the default roll size (a test's lowered
+ *  `maxBytes` must not outlive it). For tests; the daemon never calls this. */
 export function restoreFileLogging() {
+  MAX_BYTES = DEFAULT_MAX_BYTES;
   for (const m of CONSOLE_METHODS) {
     const orig = original[m];
     if (orig) console[m] = orig;
