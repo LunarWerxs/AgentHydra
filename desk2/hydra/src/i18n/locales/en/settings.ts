@@ -1,0 +1,258 @@
+// SettingsView strings: scheduler controls and account credential management.
+export default {
+  // appearance section
+  appearance: 'Appearance',
+  themeLabel: 'Theme',
+  themeLight: 'Light',
+  themeDark: 'Dark',
+  themeSystem: 'System',
+  // header controls (theme + shut down now live as icons in the settings panel header; the theme
+  // trigger reuses `themeLabel` above)
+  shutdownTooltip: 'Shut down AgentHydra (closes the app and its tray icon)',
+  shutdownConfirmTooltip: 'Click again to shut down',
+  shutdownToast: 'Shutting down…',
+  shutdownToastFailed: 'Failed to shut down.',
+  showTooltipsLabel: 'Show tooltips',
+  showTooltipsHint: 'Hover help on buttons and controls. Info icons stay on.',
+  privacyModeLabel: 'Privacy mode',
+  privacyModeHint:
+    'For screenshots and screen-shares: account e-mail addresses, handles and profile names are masked wherever they are shown: instance lists, the home page, menus and dialogs, the session list and header, incidents and the open transcript. Copy still copies the real address.',
+  portableModeLabel: 'Portable window',
+  portableModeHint:
+    'Opens AgentHydra in its own window (no tabs or address bar) instead of a browser tab. The desktop launcher and tray icon follow this setting too.',
+  portableModeToastOpened: 'Opened in portable window - you can close this tab.',
+  portableModeToastNoBrowser: 'No Edge or Chrome install found to open a portable window.',
+  portableModeToastFailed: 'Failed to save portable window setting.',
+  instanceModeShortcutLabel: 'Quick Instances shortcut',
+  instanceModeShortcutHint:
+    'Adds a lightweight launcher to your Desktop that only loads the instance chooser.',
+  instanceModeShortcutCreate: 'Add to Desktop',
+  instanceModeShortcutCreating: 'Adding…',
+  instanceModeShortcutCreated: 'Quick Instances shortcut added to your Desktop.',
+  instanceModeShortcutFailed: 'Failed to create the Quick Instances shortcut.',
+  hideTrayIconLabel: 'Hide tray icon',
+  hideTrayIconHint:
+    'Removes the AgentHydra icon from the notification area. AgentHydra keeps running in the background - launch the shortcut again to reopen the UI, or come back here to turn the icon back on. Only applies when AgentHydra was started from its tray shortcut: the icon comes from that launcher, so if you ran the executable directly there is no icon for this to affect.',
+  hideTrayIconToastFailed: 'Failed to save hide tray icon setting.',
+  // --- what "copy session file location" puts on the clipboard ---
+  copyPathLabel: 'Copying a session file location',
+  copyPathHint:
+    'What lands on the clipboard when you copy a session file location. With both off it is just the path, exactly as before.',
+  copyPathIncludeNameLabel: 'Include the session name',
+  copyPathIncludePromptLabel: 'Include a prompt',
+  copyPathPromptLabel: 'The prompt',
+  copyPathPromptPlaceholder: 'Resume where we left off',
+  copyPathPreviewLabel: 'What gets copied',
+  transcriptEditorLabel: 'Transcript editor',
+  transcriptEditorHint:
+    'Absolute path to the editor "Open the session file" opens .jsonl transcripts with. Empty auto-detects VS Code, Cursor, Notepad++ or Sublime Text (in that order), falling back to Notepad - never the OS "pick an app" dialog.',
+  transcriptEditorPlaceholder: 'Auto-detect',
+  transcriptEditorToastFailed: 'Failed to save transcript editor setting.',
+  transcriptEditorResolved: 'Opens with {editor}',
+  transcriptEditorNotFound: "That path doesn't exist. Using {editor}",
+  transcriptEditorCustomBadge: 'Custom',
+  // --- search index (the conversation index behind fast content search) ---
+  searchIndexLabel: 'Search index',
+  searchIndexHint:
+    'Makes searching session content instant. It holds the words of your conversations, not the file contents or command output, and rebuilds itself from your transcripts whenever it is missing.',
+  searchIndexBuilt: '{size}, covering {n} sessions',
+  searchIndexAbsent:
+    'Not built yet. It is created in the background the first time you search session content.',
+  searchIndexDelete: 'Delete',
+  searchIndexDeleted: 'Search index deleted. It will rebuild on your next content search.',
+  searchIndexDeleteFailed: "Couldn't delete the search index",
+  transcriptEditorReset: 'Back to auto-detect',
+
+  // usage section
+  usageAutoRefreshLabel: 'Auto-refresh usage',
+  usageAutoRefreshHint:
+    "Keep every instance's quota numbers up to date in the background, so the Instances table is never stale. Checking your quota does not use any of it, and each check takes about a third of a second, so this costs you nothing. Turn it off to only ever check when you click Refresh.",
+  usageIntervalLabel: 'Refresh every',
+  usageIntervalHint:
+    'How often to re-check. Quota moves over hours, not seconds, so there is little reason to go below 15 minutes.',
+  usageIntervalMinutes: '{minutes} min',
+  usageToastFailed: 'Failed to save usage setting.',
+
+  // provider surfaces
+  claudeNativeTitle: 'Claude native control',
+  claudeNativeHint:
+    'A direct local connection for archiving chats and cleaning up the source after a move. Other migration steps may still use desktop controls.',
+  claudeNativeAccount: 'Account',
+  claudeNativeAccountLabel: '#{n} {name}',
+  claudeNativeRefresh: 'Refresh native control settings',
+  claudeNativeLoading: 'Loading accounts…',
+  claudeNativeNoAccounts: 'No Windows Claude Desktop accounts found',
+  claudeNativeAutoLabel: 'Start debugger automatically',
+  claudeNativeAutoHint:
+    'Opens this Claude Desktop account with a local debugger connection, so AgentHydra can archive chats and clean up after a move directly instead of clicking through the app. Takes effect the next time you open the account from AgentHydra.',
+  claudeNativeAutomaticStatus: 'On. Ready the next time you open it from AgentHydra.',
+  claudeNativeManualStatus: 'Off. Native control needs a debugger you start yourself.',
+  claudeNativeStandardStatus: 'Off. This account uses standard desktop controls.',
+  claudeNativeDetails: 'Details',
+  claudeNativeNextOpen:
+    'Saved changes apply the next time you open this account from AgentHydra. Running desktops are not restarted.',
+  claudeNativePort: 'Local connection: 127.0.0.1:{port}',
+  claudeNativeReset: 'Use standard controls',
+  claudeNativeEnabledAccounts: 'Starts automatically: {accounts}',
+  claudeNativeNoAutomaticAccounts: 'Automatic startup is not enabled for any account.',
+  claudeNativeSupport:
+    'Automatic startup uses a separate managed copy of Claude, rebuilt from whatever Windows Claude is installed. An executable it cannot verify is refused.',
+  claudeNativeSaving: 'Saving…',
+  claudeNativeSaved: 'Native control settings saved for {account}.',
+  claudeNativeSaveFailed: 'Could not save native control settings.',
+  providersTitle: 'Providers',
+  providersHint:
+    'Choose which desktop, CLI, and external AI surfaces AgentHydra shows. Disabling a surface hides its controls; it does not uninstall the provider or delete an account.',
+  claudeDesktopProviderLabel: 'Claude Desktop',
+  claudeDesktopProviderHint: 'Show and manage isolated Claude Desktop instances.',
+  claudeCliProviderLabel: 'Claude CLI',
+  claudeCliProviderHint: 'Show and manage isolated Claude CLI logins.',
+  codexDesktopProviderLabel: 'Codex Desktop',
+  codexDesktopProviderHint: 'Show desktop launch, focus, quit, and running status for Codex.',
+  codexCliProviderLabel: 'Codex CLI',
+  codexCliProviderHint: 'Show Codex CLI launch and login actions.',
+  dshProviderLabel: 'DeepSeek',
+  dshProviderHint: 'Show the DeepSeek Harness instances table.',
+  // ⛔ THE ONLY SETTING ON THIS SCREEN THAT SPENDS QUOTA. Say so plainly: a toggle whose cost you
+  // discover later is a toggle that should not have existed.
+  keepaliveFloorLabel: 'Leave alone above (weekly %)',
+  keepaliveFloorHint:
+    'Accounts at or above this share of their WEEKLY cap are skipped. The weekly window is the one that matters. A 5-hour window refills the same day, so spending the last of a weekly allowance to start one is a bad trade. Set 0 to stop the keepalive spending on anything.',
+  // ⛔ SPENDS MONEY: paid extra usage is billed. Off by default, and the hint says what off does.
+  extraUsageLabel: 'Allow paid extra usage',
+  extraUsageHint:
+    'Off by default. Some Claude accounts keep working past their limits on paid extra usage (usage credits) instead of stopping. With this off, nothing AgentHydra manages is allowed to bill it: CliMayte moves a task to an account with free quota before its account would bill, and any Claude session on an account that has extra usage switched on is stopped as that account nears its limit. The chat itself is kept and can carry on later or on another account. Turn it on only if you want work to spend those credits.',
+  chatGptHandoffLabel: 'ChatGPT handoff',
+  chatGptHandoffHint:
+    'Adds a composer action that downloads a bounded, secret-screened repository context file, copies the task prompt, and opens ChatGPT. You still review and submit everything manually.',
+  providerToastFailed: 'Failed to save provider setting.',
+
+  // updates section: the version number itself is the status + control now (see the tips below),
+  // so the old standalone "Check for updates" / "Update available" / "Update blocked" / "Up to
+  // date" strings are gone.
+  updates: 'Updates',
+  currentVersion: 'Current version',
+  noUpdateSourceHint:
+    'This install is not linked to a Git remote, so there is nowhere to pull new versions ' +
+    'from. Link one (git remote add origin <url>) or set AGENTHYDRA_UPDATE_REPO, and the ' +
+    'update check and auto-update come to life.',
+  restartGuidance: ' Restart AgentHydra from the tray icon to run the new code.',
+  // the version number itself is the status indicator now: green = up to date, amber = update
+  // available (click to apply), red = blocked / no source. Tooltip spells out the state + action.
+  versionUpToDateTip: 'Up to date. Click to check again.',
+  versionCheckingTip: 'Checking for updates…',
+  versionUpdateAvailableTip: 'Update available. Click to update and restart.',
+  versionUpdateBlockedTip: 'Update available but blocked. Click to re-check.',
+  versionNoSourceTip: "Updates can't be checked from this install.",
+
+  // auto-update section
+  autoUpdate: 'Auto-update',
+  autoUpdateDescription:
+    'Off by default. When on, AgentHydra periodically checks for a newer version and, if there are no uncommitted local changes, pulls it, reinstalls, rebuilds, and restarts the daemon on its own - no prompt. A dirty working tree is never touched; updates only apply on a clean checkout.',
+  autoUpdateToastEnabled: 'Auto-update enabled.',
+  autoUpdateToastDisabled: 'Auto-update disabled.',
+  autoUpdateToastFailed: 'Failed to save auto-update settings.',
+  toastSchedulerFailed: 'Failed to update scheduler settings.',
+
+  // cloud sync section ("Sync my settings with Connections")
+  cloudSyncTitle: 'Cloud sync',
+  cloudSyncConnectButton: 'Sync settings with Connections',
+  cloudSyncEnableToggle: 'Sync settings',
+  cloudSyncHint:
+    'Syncs scheduler preferences and appearance (theme) to your Connections account, so they follow you to AgentHydra on another machine. Optional; never syncs accounts, secrets, or queue data.',
+  cloudSyncSyncNow: 'Sync now',
+  cloudSyncSyncing: 'Syncing…',
+  cloudSyncSyncedToast: 'Settings synced.',
+  cloudSyncSyncedNow: 'Synced - just now',
+  cloudSyncSyncedAgo: 'Synced - {when}',
+  cloudSyncSecondsAgo: '{n}s ago',
+  cloudSyncMinutesAgo: '{n}m ago',
+  cloudSyncHoursAgo: '{n}h ago',
+  cloudSyncNeverSynced: 'Not synced yet',
+  cloudSyncDisconnect: 'Disconnect',
+  cloudSyncConfirmDisconnect: 'Click again to confirm',
+  cloudSyncConnectFailed: "Couldn't connect to Connections. Try again.",
+
+  // scheduler section
+  scheduler: 'Scheduler',
+  schedulerHint:
+    "When enabled, the scheduler automatically spawns real claude runs for queued items; this spends the selected account's quota and acts on real repositories. Leave it off to dispatch items manually with the Run button.",
+  // AH-12: AgentHydra never runs a chat nobody can see (headless-policy.ts's headlessRunsAllowed()
+  // is hardcoded false). It exists to spawn those runs automatically, so it can never
+  // actually dispatch anything in this build. Read alongside web/src/lib/headless.ts's
+  // HEADLESS_QUEUEING_ENABLED, which is what the panel below branches on to disable these controls
+  // rather than leave them offering a toggle that would only fail moments after flipping.
+  schedulerUnavailable: 'Can’t dispatch in this build.',
+  schedulerUnavailableHint:
+    'Disabled: the scheduler exists to automatically spawn real claude runs for queued items, but AgentHydra never runs a chat nobody can see, so it can never dispatch one in this build. Reply straight into the session’s own desktop chat, use fan_out from an MCP client, or import the session into a desktop app to get work done instead.',
+  schedulerEnabledLabel: 'Enabled',
+  running: 'running',
+  queued: 'queued',
+  advanced: 'Advanced',
+  tomorrowTimeLabel: 'Tomorrow preset time',
+  tomorrowTimeHint:
+    'The time of day the composer\'s "Tomorrow …" quick option schedules for. Saved immediately.',
+  spacingLabel: 'Spacing (s)',
+  pollLabel: 'Poll (s)',
+  maxConcurrentLabel: 'Max concurrent',
+
+  // auto-resume monitor section
+  monitorTitle: 'Auto-resume monitor',
+  monitorHint:
+    'Watches sessions that stopped on a rate limit and, once the 5-hour window resets, resumes them automatically. Off by default; it prompts sessions while you are away, so review the settings below before turning it on.',
+  monitorEnabledLabel: 'Enabled',
+  monitorMaxAttemptsLabel: 'Max resume attempts',
+  monitorBufferLabel: 'Resume buffer (min)',
+  monitorEmpty: 'Nothing to resume right now.',
+  monitorEmptyHint:
+    'A session appears here once it stops on a rate limit, whether the app ran it or you started it yourself in a terminal, which the monitor finds by checking recent transcripts. The monitor then tracks it until the window resets and resumes it. An empty list means nothing is currently waiting on a limit, not that monitoring is off.',
+  monitorAttempts: '{n} attempts',
+  monitorDiscovered: 'Found',
+  monitorDiscoveredHint:
+    'The monitor found this session stopped at a rate limit on disk. You started it outside the app, so there was no queued run to watch.',
+  monitorStateScheduled: 'Scheduled',
+  monitorStateBlockedWeekly: 'Blocked (weekly limit)',
+  monitorStateNeedsHuman: 'Needs you',
+  monitorStateDone: 'Done',
+  monitorAccountOverridesLabel: 'Per-account overrides',
+  monitorToastEnabled: 'Auto-resume monitor enabled.',
+  monitorToastDisabled: 'Auto-resume monitor disabled.',
+  monitorToastFailed: 'Failed to save auto-resume monitor settings.',
+
+  // The MCP server group. See server/src/mcp-register.ts for what the switch actually does and
+  // why it defaults to ON: before 2026-09-07 the only way to get these tools was a documented
+  // command that assumed a source checkout, so every downloaded install silently had none of them.
+  mcpTitle: 'MCP server',
+  mcpHint:
+    'AgentHydra’s whole API is available to AI agents over MCP: moving chats between accounts, the fleet, the queue, the quota reads. A client only sees the tools once it has been told where the server is.',
+  mcpRegisterLabel: 'Register with Claude Code',
+  mcpRegisterHint:
+    'Keeps an “agenthydra” entry in Claude Code’s user-scope config pointing at this daemon, refreshed on every start so it survives a port change. It writes that one key and nothing else, and turning this off removes it. A Claude Code session already open keeps the tool list it started with; start a new one.',
+  // The switch says what SHOULD be true; this line says what the config file actually says. They
+  // can disagree (a read-only file, a hand-written entry), and only the second one is the truth.
+  mcpRegisteredYes: 'Registered at {url}',
+  mcpRegisteredNo: 'Not registered yet.',
+  mcpRegisteredOff: 'Not registered, the switch is off.',
+  mcpConfigPath: 'Config: {path}',
+  mcpRegisterToastFailed: 'Failed to change the MCP registration.',
+  // The other half of "the MCP server works": the Python toolbox every chat-moving tool runs
+  // through. Named here rather than left to a tool error, because a caller only ever sees "no
+  // orch.py under <dir>" after asking for a move, which reads as the feature being broken.
+  mcpToolboxMissing:
+    'Moving chats between accounts will not work: this install is missing {names}. Everything else keeps working.',
+  // The same gap when it is NOT the toolbox, a missing misc/ costs the tray icon, not the chat
+  // moves, and saying "moving chats will not work" there would be a false alarm.
+  mcpComponentsMissing:
+    'This install is missing {names}, which the release ships beside the executable.',
+  mcpToolboxMissingWhy:
+    'Releases ship these folders beside the executable, and an update applied by a build older than 0.39.0 replaced only the executable. Re-applying the current version restores them.',
+  mcpRepair: 'Repair install',
+  mcpRepairing: 'Repairing…',
+  // Toasted at the button, because the update row's own message renders far down the page.
+  mcpRepairDone: 'Repaired. The missing files are installed.',
+  mcpRepairFailed: 'The missing files are still not installed.',
+
+  // The accounts section's strings are gone with the section itself: it only ever listed legacy
+  // pasted credentials, so in practice it rendered as an empty box telling you to go to the
+  // Instances tab. Accounts are added by signing an instance in there.
+}

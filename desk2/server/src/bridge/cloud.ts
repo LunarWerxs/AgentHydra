@@ -26,6 +26,8 @@ export interface AhCloudRow {
   archived?: boolean
   from_pc?: string
   model?: string | null
+  instance_num?: number | null
+  effort?: string | null
 }
 
 /** AgentHydra's query string for the scopes the window asked for; anything else it sent is dropped. */
@@ -53,6 +55,8 @@ export function toCloudSession(r: AhCloudRow): CloudSession {
     archived: r.archived === true,
     fromPc: r.from_pc || null,
     model: r.model ?? null,
+    effort: r.effort ?? null,
+    instanceNum: typeof r.instance_num === 'number' ? r.instance_num : null,
   }
 }
 

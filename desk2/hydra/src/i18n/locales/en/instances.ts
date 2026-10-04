@@ -1,0 +1,476 @@
+// Instances view — sortable instance table, toolbar, row actions, create dialog.
+export default {
+  title: 'Instances',
+  settingsTitle: 'Instances settings',
+  refresh: 'Refresh',
+  refreshHint: 'Reload every instance list and re-check the Claude Desktop install',
+  createInstance: 'Create instance',
+  // The + menu: one item per provider switched on in Settings → Providers.
+  createClaude: 'New Claude instance',
+  createCodex: 'New Codex instance',
+  createDeepseek: 'New DeepSeek instance',
+  empty: 'No instances found.',
+  emptyHint: 'Create your first instance with the + button to get started.',
+  sortByStatus: 'Sort by status',
+  colName: 'Name',
+  colNameHint:
+    'The label you gave this instance. If you never named it, this falls back to the account it is signed into, and then to its profile folder, so a row can be named after any of the three. Rename it from the ⋯ menu; that only changes the label, never the folder.',
+  colPid: 'PID',
+  colUptime: 'Uptime',
+  colMemory: 'Memory',
+  colUsage: 'Usage',
+  // Usage-mode columns — they replace PID/Uptime/Memory, they don't add to them. Each is the
+  // window's % chip and its reset bar in one cell.
+  col5h: '5h',
+  colWeek: 'Week',
+  resetsIn: 'in {when}',
+  // The Weekly cell copies its reset DATE AND TIME on click (the bar shows a countdown, a calendar
+  // wants a date and a time).
+  resetDateCopyHint: 'Resets {date}. Click to copy the date and time.',
+  toastResetDateCopied: 'Copied {date}, when this weekly limit resets.',
+  // Said only when the write actually failed (no secure context, or permission refused): the date and
+  // time are in the message so they can still be read off the screen and typed.
+  toastResetDateCopyFailed: 'Could not reach the clipboard. This limit resets {date}.',
+  colPlan: 'Plan',
+  colLastActive: 'Last active',
+  colLastActiveHint:
+    'When this instance was last used on this PC. Desktop: last seen running ("Now" while it runs). CLI: the newest prompt or keepalive nudge on that login. A dash means none is known yet.',
+  lastRunningNow: 'Now',
+  colActions: 'Actions',
+  running: 'Running',
+  stopped: 'Stopped',
+  external: 'External',
+  // Shown while an instance's account is still being worked out. There is no "Resolve" action
+  // anymore — every instance resolves itself — so this is the whole of the unresolved state.
+  resolving: 'Resolving…',
+  // The login check failed, so the account shown is the last known one (InstanceRow loginStale).
+  loginUnconfirmed: "Login couldn't be confirmed. Showing the last known account.",
+  open: 'Open',
+  quit: 'Quit',
+  focusHint: 'Bring this instance to the foreground',
+  focusShort: 'Focus',
+  delete: 'Delete',
+  edit: 'Edit',
+  moreActions: 'More actions',
+  // The instance number chip. Deliberately explicit about WHAT the number is for: it is the only
+  // handle that survives being spoken to an AI or pasted into an MCP call, and it is permanent, so
+  // an old note that says "instance 7" still points at the same account.
+  numberTooltipTitle: 'Instance #{num}',
+  numberTooltipBody:
+    'Permanent number for this instance: unique across Claude Desktop, Claude CLI and Codex, and never reused. Say “instance {num}” to an AI, or pass instance: {num} to the MCP tools. Click to copy.',
+  numberCopyAria: 'Copy instance number {num}',
+  // Owner spec (2026-09-07): drop the word "Instance" - the menu is already open on one row,
+  // so the number alone is the identifier and the label stops competing with the icon row.
+  numberMenuLabel: '#{num}',
+  copyNumber: 'Copy instance number',
+  toastNumberCopied: 'Copied “{num}”. Refer to this instance by that number.',
+  // Account-column hover. The handle is on the badge; this is where the full address and the
+  // Anthropic profile display name live, so the column itself stays one comparable thing per row.
+  accountTitleWithProfile: '{email}\nAnthropic profile name: {profile}',
+  // …and the badge copies that full address, because the handle it shows is not one: two accounts
+  // on different domains render the same chip, so the short form is for reading and the long form
+  // is for pasting.
+  accountCopyHint: 'Click to copy the full address.',
+  // The account cell's history flyout (LoginHistoryPopover): every account the profile has been
+  // signed into, read from the chats each one left there.
+  loginHistoryTitle: 'Accounts signed in on #{num}',
+  loginHistoryHint: 'Every account this profile has been signed into, newest first.',
+  loginHistoryNow: 'Now',
+  loginHistoryLast: 'Last signed in',
+  loginHistorySignedOut: 'Nobody is signed in to this profile right now.',
+  loginHistoryUnknown: 'Unidentified account {id}',
+  loginHistoryLastUsed:
+    'last used {when} · {count} chat here | last used {when} · {count} chats here',
+  loginHistoryNoChats: 'signed in, no chats here yet',
+  loginHistoryChatsMoved: 'no chats left here (moved to another instance)',
+  loginHistorySignedInOn: 'Signed in on {nums} now',
+  loginHistoryUsedOn: 'Also used on {nums} before',
+  loginHistoryEmpty: 'No account has used this profile yet.',
+  loginHistoryFailed: 'Could not read this profile’s login history.',
+  loginHistoryFootnote:
+    'Read from the chats each account left in this profile. Names come from every account AgentHydra has identified on this PC; one it never saw with a working login stays unidentified, and the instances it passed through are listed so you can find it.',
+  // A name you typed once overrides everything and nothing ever re-checked it, so an instance
+  // signed into a different account keeps the old account's name for good. The marker reports it;
+  // the ⋯ menu clears it. Deliberately not automatic — the override is still the user's choice.
+  labelStale: 'This name does not match the account',
+  labelStaleHint:
+    'You named this instance “{label}”, but it is signed into {account}. Names you type are kept until you change them, so this one stayed behind when the account did. Use “Name it after the account” in the ⋯ menu to drop it.',
+  // A banked Claude usage-limit reset (claude.ai Settings -> Usage -> Resets) not yet spent.
+  resetBanked: 'Banked usage resets: {count}',
+  resetBankedHint:
+    'Unused until {expires}. Spend it from Claude: Settings → Usage → Resets. Checked {checked}.',
+  // claude.ai's one-time "Claude Code and Cowork credit" (read from the running app).
+  codeCredit: 'Claude Code & Cowork credit: {remaining} of {limit} left',
+  codeCreditHint:
+    'A one-time credit from claude.ai, spent before the plan limits. Its claim is named a cloud credit, and desktop sessions have not been seen drawing from it. Expires {expires}. Checked {checked}.',
+  codeCreditUnclaimed: 'Claude Code & Cowork credit not claimed',
+  codeCreditUnclaimedHint:
+    'claude.ai offers this account a one-time credit it has not claimed, and it cannot be spent until it is. Claim it in Claude. Expires {expires}. Checked {checked}.',
+  codeCreditLocked: 'Claude Code & Cowork credit held back',
+  codeCreditLockedHint:
+    'Claimed, but claude.ai is holding it back ({reason}). Expires {expires}. Checked {checked}.',
+  // claude.ai "usage credits": usage past the plan limits is billed to the account.
+  usageCreditsOn: 'Usage credits on: usage past the plan limits is billed',
+  usageCreditsOnHint:
+    '{used} spent of a {limit} monthly cap. Turn it off from the usage chip on this row. Checked {checked}.',
+  usageCreditsOnHintUncapped:
+    '{used} spent, with no monthly cap. Turn it off from the usage chip on this row. Checked {checked}.',
+  extraUsageOnHint:
+    'Past its limits this account keeps working and bills you. While "Allow paid extra usage" is off, AgentHydra stops its sessions near the limit. Turn extra usage off for good from the usage chip on this row.',
+  useAccountName: 'Name it after the account',
+  toastUsingAccountName: 'Cleared the typed name. This instance is called “{name}” again.',
+  copyAccountEmailAria: 'Copy the account address {email}',
+  toastEmailCopied: 'Copied {email}: the account this instance is signed into.',
+  // Sign a profile out. Removes the stored login ONLY: history, settings and the folder stay.
+  // Disabled while the instance runs, because the server refuses it then (Claude Desktop holds
+  // config.json open and would undo or corrupt the write) and a dead click is worse than a
+  // greyed one.
+  logout: 'Log out of this account',
+  logoutDialogTitle: 'Log {name} out?',
+  logoutDialogDescription:
+    'Removes the stored login from this instance. Its chats, settings and folder are untouched, and it will ask for a sign-in the next time it starts. Signing back in needs the other instances quit first (the “Browser Dance”).',
+  logoutDialogSubmit: 'Log out',
+  logoutDialogWorking: 'Logging out…',
+  toastLoggedOut: 'Signed out. That instance will ask for a login next time it starts.',
+  toastLogoutFailed: 'Could not sign that instance out.',
+  openFolder: 'Open folder',
+  createShortcut: 'Create desktop shortcut',
+  checkUsage: 'Check usage',
+  launchCli: 'Launch CLI',
+  loginCli: 'Sign in CLI',
+  // Deliberately NOT "Sign in CLI": on a row with no CLI login yet this creates a whole new managed
+  // CLI instance and links it to this account before opening the terminal. Labelling that the same
+  // as the plain sign-in made a linked instance appear out of nowhere, which then showed up as the
+  // unexplained "CLI instances (0 of 1)" shortfall in the CLI table (which then hid linked logins).
+  addCli: 'Add a CLI login…',
+  unlinkCli: 'Unlink CLI instance',
+  // The row badge that makes a linked CLI login visible without opening the actions menu.
+  linkedCliBadge: 'Has a linked CLI login',
+  linkedCliTooltip: 'Claude CLI: {name}',
+  linkedCliSignedIn: 'Signed in. Launch it from this row’s ⋯ menu.',
+  linkedCliSignedOut: 'Needs sign-in. Open this row’s ⋯ menu to finish it.',
+  toastCliLaunched: 'Opened a terminal for the linked CLI instance.',
+  toastCliLaunchFailed: 'Failed to launch the linked CLI instance.',
+  // Both "added" toasts say where the login went: on this row (⌨) and in the CLI tab's table,
+  // marked as linked (owner, 2026-10-03: "I need to see it over there").
+  toastCliLoginOpened:
+    'Opened a terminal. Run /login there to sign “{name}” in. It shows on this account’s row (the ⌨ icon) and in the CLI tab’s list, marked as linked.',
+  toastCliLoginOpenedNoDesktop:
+    'Opened a terminal. Run /login there. This desktop instance has no Claude Code sign-in to share yet; using its Code tab once creates one, and the CLI login then follows it.',
+  toastCliSignedInFromDesktop:
+    'CLI login “{name}” added, signed in with this account’s desktop sign-in. It shows on this row (the ⌨ icon) and in the CLI tab’s list, marked as linked, since it is the same account.',
+  toastCliLoginFailed: 'Failed to open a terminal for the CLI sign-in.',
+  toastCliUnlinked: 'Unlinked. It stays in the CLI tab’s instances table, no longer linked.',
+  toastCliUnlinkFailed: 'Failed to unlink the CLI instance.',
+  toastCliCreateFailed: 'Failed to create a CLI instance for this account.',
+  quitExternalDialogTitle: 'Quit your regular Claude Desktop?',
+  quitExternalDialogDescription:
+    'This is your real, non-isolated Claude Desktop, not an instance created here. Quitting it closes any conversation in progress.',
+  quitExternalDialogSubmit: 'Quit it anyway',
+  quitExternalDialogQuitting: 'Quitting…',
+  usageModeOn: 'Show usage columns',
+  usageModeOff: 'Show process columns',
+  usageModeHint:
+    'Swap PID, uptime and memory for what is left of each quota window and how long until it resets.',
+  // The Filter flyout (toolbar) — three facets, OR-ed. See composables/useInstanceFilter.ts.
+  filterTitle: 'Filter',
+  filterHint:
+    'Narrow these tables to the accounts you are after: whether the app is open, which plan it is on, and how much quota is left.',
+  filterEnable: 'Filter instances',
+  filterThreshold: 'Threshold',
+  filterThresholdValue: '{pct}%',
+  filterHide: 'Hide instead of dim',
+  filterHideHint:
+    'Matching instances leave the table entirely. The section heading still says how many are hidden.',
+  filterNothingSelected:
+    'The filter is on but nothing is selected, so nothing is being filtered. Pick a status, a plan, or a quota window.',
+  // Section captions inside the flyout.
+  filterProvider: 'Provider',
+  filterStatusSection: 'Status',
+  filterPlanSection: 'Plan',
+  filterWindows: 'Quota windows',
+  filterDisplay: 'Display behaviour',
+  // Provider choice: which providers' rows the table lists. Not a facet of the filter: it acts
+  // whether the filter is on or off, and it leaves rows out rather than dimming them.
+  filterProviderHint:
+    'Which providers the table lists. This applies whether or not the filter below is on.',
+  providerClaude: 'Claude',
+  providerCodex: 'Codex',
+  providerDeepseek: 'DeepSeek',
+  // Status facet: is the instance's app open?
+  filterStatusAny: 'Any',
+  filterStatusOpen: 'Open',
+  filterStatusClosed: 'Closed',
+  filterStatusHint:
+    'Whether an instance is running right now. Rows that cannot be open or closed, a CLI login has no window of its own, are never set aside by this.',
+  // Plan facet: which account types to keep.
+  filterPlanAll: 'Any plan',
+  filterPlanHint:
+    'Keep only the accounts on the plans you pick; picking none means every plan. An account whose plan has not been read yet is never set aside. An unknown plan is not a different one.',
+  filterPlanEmpty: 'No plans read yet. They appear here as accounts resolve.',
+  // One switch + one threshold per quota window; an instance is set aside when it crosses either.
+  filterWeek: 'Weekly usage',
+  filterWeekHint:
+    'The Usage column: the cap that decides whether an account is worth starting on at all. Instances at or above the threshold are set aside. Instances that have never been checked are never filtered: an unknown reading is not a full one.',
+  filterWeekThresholdLabel: 'Weekly usage threshold, percent',
+  filterSession: 'Also 5-hour usage',
+  filterSessionHint:
+    'Also set an instance aside when its 5-hour session window is at or above its own threshold, even if there is weekly quota left: a spent session means you cannot use the account right now. Off by default: this window refills the same day, so instances leave the table and come back over an afternoon.',
+  filterSessionThresholdLabel: '5-hour usage threshold, percent',
+  filterNoWindows: 'Both quota windows are off, so quota is not part of the filter.',
+  filterQuotaNeedsUsageMode:
+    'Quota filtering waits for the usage columns. Turn them on with the stopwatch button, and these thresholds start applying again.',
+  // Compact form of the rule, on the toolbar button. A bare percentage is the weekly cap.
+  filterChipWeek: '{pct}%',
+  filterChipSession: '5h {pct}%',
+  filterChipBoth: '{week}% · 5h {session}%',
+  filterChipPlans: '{count} plans',
+  filterChipProviders: '{count} providers',
+  filterChipNone: 'Off',
+  filterHiddenCount: '{count} hidden',
+  filterAllHidden: 'Every instance is filtered out.',
+  filterAllHiddenHint:
+    'Loosen the filter in the toolbar, or turn it off. The button says what it is filtering on.',
+  // "x of y" for a heading whose table is showing fewer rows than it has.
+  countOfTotal: '{shown} of {total}',
+  // Small-caps heading over the auto-refresh rows inside the usage flyout.
+  usageDataTitle: 'Usage data',
+  refreshAllUsage: 'Refresh all usage',
+  refreshAllUsageHint:
+    'Re-check every instance now. Reading your quota does not use any of it, and takes about a third of a second per instance.',
+  usageNotChecked: 'Not checked yet.',
+  usageReasonLoggedOut:
+    'Not signed in. Open this instance and sign in to Claude, then check again.',
+  usageReasonNoToken: 'Signed in, but no usage-capable token for this instance.',
+  usageReasonNotLoggedIn: 'No login yet. Use the Log in helper, or associate a dispatch account.',
+  usageReasonCheckFailed:
+    'Claude returned no usage numbers for this instance. Try again in a moment.',
+  // Says what to DO, because "try again in a moment" is false here: a closed instance's stored
+  // login is only refreshed by the app itself, so retrying can never succeed while it is shut.
+  // Retrying is the one thing that cannot help, so this says to wait where every other reason says
+  // to act. It deliberately does NOT promise recovery: one account here has answered 429 on every
+  // read for twelve days straight, so "it will come back shortly" would have been a lie told once
+  // per refresh. State the fact, name the one check that distinguishes a passing limit from a stuck
+  // account, and let the number in `detail` speak for the window.
+  usageReasonRateLimited:
+    'Anthropic is rate-limiting usage checks for this account. Refreshing cannot help and signing in again does not either - the window can run for hours, and it clears on its own.',
+  usageReasonAppClosed:
+    'This account is closed, so its saved login is too old to read usage. Open it and check again.',
+  usageSession: 'Session (5h)',
+  usageWeekAll: 'Week (all models)',
+  usageWeekModel: 'Week ({model})',
+  usageSessionResetsIn: 'Session resets in',
+  usageWeekResetsIn: 'Week resets in',
+  usageCheckedAgo: 'Checked {when}',
+  // A signed-out account's last reading, kept (usage-cache.ts lastKnownUsage).
+  usageSignedOutKept: 'Last reading before it signed out, checked {when}',
+  // The popover's section of facts only the running Claude app serves (claude-app-usage.ts).
+  usageAppResets: 'Banked resets',
+  usageAppResetsValue: '{count} · until {expires}',
+  usageAppCodeCredit: 'Code & Cowork credit',
+  usageAppCodeCreditValue: '{remaining} of {limit} · until {expires}',
+  usageAppCodeCreditUnclaimed: 'Not claimed',
+  usageAppCodeCreditLocked: 'Held back',
+  usageAppUsageCredits: 'Usage credits',
+  usageAppUsageCreditsOn: 'On · {used} of {limit}',
+  usageAppUsageCreditsOnUncapped: 'On · {used}, no cap',
+  usageAppUsageCreditsOff: 'Off',
+  usageExtraUsageOn:
+    'Paid extra usage is on: past its limits this account bills instead of stopping',
+  usageExtraUsageTurnOff: 'Turn off extra usage',
+  usageAppWeeklySplit: 'This week',
+  usageAppCheckedAgo: 'From the Claude app, {when}',
+  usageChecking: 'Checking…',
+  usageCheckNow: 'Check now',
+  toastUsageCheckFailed: 'Failed to check usage.',
+  // The row menu's Clear usage stats: blanks a row's old numbers until its next reading, deleting
+  // nothing (owner, 2026-10-02: "clear the old 5hour and usage stats in the ui").
+  clearUsage: 'Clear usage stats',
+  toastUsageCleared: 'Usage stats cleared. The next check shows new numbers; nothing was deleted.',
+  toastUsageClearFailed: 'Could not clear the usage stats.',
+  deleteDialogTitle: 'Delete instance',
+  deleteDialogDescription:
+    'This permanently removes the instance profile and all its local data. This cannot be undone.',
+  deleteDialogPlaceholder: 'Instance name',
+  deleteDialogTypeName: 'Type this name to confirm. Click it to copy.',
+  copyName: 'Copy the name',
+  toastNameCopied: 'Copied "{name}"',
+  deleteDialogSubmit: 'Delete instance',
+  deleteDialogDeleting: 'Deleting…',
+  deleteDialogMismatch: "Name doesn't match.",
+  createDialogTitle: 'Create instance',
+  createDialogDescription: 'Create a new isolated Claude Desktop instance.',
+  createDialogLabel: 'Instance name',
+  createDialogPlaceholder: 'e.g. work, personal, client-a',
+  createDialogSubmit: 'Create',
+  createDialogCreating: 'Creating…',
+  editDialogTitle: 'Edit instance',
+  editDialogNameLabel: 'Display name',
+  editDialogIconLabel: 'Icon',
+  editDialogColorLabel: 'Color',
+  // "Done", not "Save": every edit persists as it is made, so this button only closes the dialog.
+  editDialogDone: 'Done',
+  editDialogSaving: 'Saving…',
+  desktopMsixTitle: 'Claude Desktop is installed as the MSIX (Windows Apps) build',
+  desktopMsixBody:
+    'The MSIX package cannot be launched with an isolated profile, so instances cannot be ' +
+    'created or opened from this tab. Install the classic Windows installer (~217 MB) instead; ' +
+    'the regular download page serves a small ~7 MB ClaudeSetup.exe that reinstalls the MSIX build.',
+  desktopNoneTitle: 'No launchable Claude Desktop installation found',
+  desktopNoneBody:
+    'Instances need the classic Claude Desktop for Windows installer (~217 MB). Install it, then refresh this tab.',
+  desktopWarnDownload: 'Download the classic installer',
+  desktopWarnAllDownloads: 'All downloads',
+  // Names ISOLATED instances explicitly: the old copy said "every other running instance", and a
+  // user dutifully following it one-click-quit their REAL (External) Claude Desktop mid-chat.
+  browserDanceTitle: 'One-time sign-in required',
+  browserDanceBody:
+    'Before signing in for the first time, quit the other ISOLATED instances created here (the login can attach to the wrong isolated profile). Your regular Claude Desktop is not affected, so leave it open.',
+  toastOpened: 'Instance opened.',
+  toastOpenFailed: 'Failed to open instance.',
+  toastQuit: 'Instance quit.',
+  toastQuitFailed: 'Failed to quit instance.',
+  toastFocused: 'Instance focused.',
+  toastFocusFailed: 'Failed to focus instance window.',
+  toastRevealFailed: 'Failed to open folder.',
+  toastCreated: 'Instance created.',
+  toastCreateFailed: 'Failed to create instance.',
+  toastDeleted: 'Instance deleted.',
+  toastDeleteFailed: 'Failed to delete instance.',
+  toastSaveFailed: 'Failed to save changes.',
+  toastShortcutCreated: 'Desktop shortcut created.',
+  toastShortcutFailed: 'Failed to create desktop shortcut.',
+
+  // "Move chats to account" on a row's menu (the kebab, or right-click on the row): every active
+  // chat on this instance, one hop to another. A closed target is NOT opened - the server writes
+  // the chat straight into that account's store and the app finds it there when it next starts
+  // (desktop-sessions.ts, the 'cold' landing). The line that used to sit here said the opposite,
+  // and it outlived the code by a release.
+  //
+  // Short on purpose (owner, 2026-09-07). It used to read "Move all chats to another account",
+  // which is a sentence, and it sits one line BELOW the new "Chats" item in the same menu, the
+  // long form made the two look unrelated when they are the two things you do with an account's
+  // chats. The submenu that opens names the destination, so "to account" is not a promise the
+  // menu has to keep by itself.
+  moveChats: 'Move chats to account',
+  moveChatsNoTargets: 'No other instances',
+  // The heading above the destination list. It exists because the submenu is ALL about accounts
+  // and never said so: with a switch reading "Show not running" directly under "Move chats to
+  // account", the natural reading is that the move filters CHATS by whether they are running
+  // (owner, 2026-09-09, asking exactly that). It does not - see moveChatsConfirmBody. Naming the
+  // list is what makes the switch below it unambiguous.
+  moveChatsTargetsLabel: 'Move to which account?',
+  // The submenu lists RUNNING destinations only, one line each with a green dot, until this is
+  // switched on (owner, 2026-09-08: on a fleet of twenty accounts the old two-line rows - name,
+  // then "Not running - lands in its store, ready when it starts" - made the list a scroll, and
+  // said nothing the dot's absence does not). Off by default, every time the page loads.
+  //
+  // It reads "accounts" now for the reason above: the word the switch was missing is the noun it
+  // acts on. A closed account is a perfectly good destination - the chat lands in its store and is
+  // waiting when the app opens - so this hides a longer list, never an unsupported one.
+  moveChatsShowNotRunning: 'Show accounts that are not running',
+  moveChatsNoRunningTargets: 'No other running instances',
+  moveChatsCounting: 'Counting chats to move…',
+  moveChatsNone: 'No chats to move from {from}.',
+  moveChatsFailed: "Couldn't list the chats on {from}.",
+  moveChatsConfirmTitle: 'Move {n} chats from {from} to {to}?',
+  // Leads with "running or not" on purpose (owner, 2026-09-09, who read the submenu's old "Show
+  // not running" switch as a filter on CHATS and asked whether a live chat is left behind). It is
+  // not: a live chat's engine is stopped and the chat moves. That is the one fact this dialog has
+  // to state before the click, so it states it first.
+  moveChatsConfirmBody:
+    'Every chat on {from} that is not archived and not marked done moves - running or not. A chat with a live engine is stopped first, then imported into {to}, then archived on {from} once it is confirmed there. They move one at a time; this cannot be undone in one step.',
+  // What the plan leaves behind, and why, so a count that is smaller than the account is never a
+  // silent one: a chat with no transcript has nothing to import; a done-marked one is refused.
+  moveChatsSkipped: '{n} chat(s) stay on {from}: no transcript to import, or already handed off.',
+  moveChatsCancel: 'Cancel',
+  moveChatsConfirmSubmit: 'Move {n} chats',
+  moveChatsProgress: 'Moving chat {done} of {n}…',
+  moveChatsDone: 'Moved {ok} of {n} chats to {to}.',
+  moveChatsSomeFailed: '{failed} could not be moved; details are in the browser console.',
+  // Pass two of a move: the moved chats' old copies, archived through the old account's own app.
+  moveChatsSettling: 'Archiving the old copies, {done} of {n}…',
+  // Moved and verified on the new account, but an old account's app still lists them: its own
+  // archive refused, or it has no native control. The first chat follows, with the account it is
+  // still on and the server's reason, which says what to do.
+  moveChatsStillShown: '{n} still listed on an old account:',
+  moveChatsStoppedServers:
+    '{account} was at its usage limit, so archiving there stopped {n} preview server(s) other chats were using.',
+  // The chat list inside the move dialog: grouped by project, each row opens that chat in Sessions.
+  moveChatsGroupCount: '{n} chat(s)',
+  moveChatsRowHint: 'Grouped by project. Click a chat to open it in Sessions.',
+
+  // "Chats" on the same row menu, one item above the move submenu: WHICH chats are on THIS
+  // account, without moving anything (owner, 2026-09-07: "so you can just easily figure out which
+  // one has which chats"). It reads the account's own chat store, not the session list, so a chat
+  // with no recent transcript activity is still here, see getInstanceChats in web/src/lib/api.ts.
+  chats: 'Chats',
+  // The number beside "Chats" in the row menu: the dialog's default list, counted.
+  chatsActiveCount: '{n} active (not archived) chats',
+  chatsTitle: 'Chats on {name}',
+  chatsLoading: 'Reading this account’s chats…',
+  // The counts describe the WHOLE account, deliberately not narrowed by the archived toggle: "3
+  // shown, 206 total" is what stops a filtered list reading as an empty account.
+  chatsCounts: '{unarchived} active · {archived} archived · {all} total',
+  chatsLiveCount: '{n} running now',
+  chatsShowArchived: 'Include archived',
+  chatsEmpty: 'No active chats on this account.',
+  chatsEmptyArchived: 'No chats on this account at all.',
+  chatsFailed: 'Couldn’t read the chats on {name}.',
+  chatsTruncated: 'Showing the {shown} most recent of {total}.',
+  // A chat whose engine is running right now. Same fact the move refuses on, so seeing it here
+  // explains a refusal before it happens rather than after.
+  chatsLive: 'Running',
+  chatsArchivedBadge: 'Archived',
+  // A chat filed under an account this profile is no longer signed into: its record is on disk,
+  // but the app shows only the signed-in account's chats, so the owner cannot see it (2026-09-18).
+  chatsStaleLoginCount: '{n} hidden by a re-login',
+  chatsStaleLoginBadge: 'Hidden (old login)',
+  chatsStaleLoginHint:
+    'Filed under the account this app was signed into before. The app only shows the current account’s chats, so this one is invisible there. Move it to this same account to bring it back.',
+  chatsNoTitle: '(untitled chat)',
+  chatsNeverActive: 'No recorded activity',
+  // Only a chat with a CLI transcript can be opened in Sessions; one without is a Desktop-only
+  // row, so the button is absent rather than present and broken.
+  chatsOpen: 'Open in Sessions',
+  chatsClose: 'Close',
+  // The landing page's stat tiles (InstancesHomeView): the quick look; Analytics is the advanced page.
+  home: {
+    title: 'At a glance',
+    refresh: 'Refresh',
+    refreshHint:
+      'Numbers refresh on their own every 20 seconds while this page is showing. The 5-hour and week figures are what is left, pooled across the signed-in accounts by plan size.',
+    sessionsLocalOnly:
+      'Sessions are the ones on this PC. The daemon has no cloud-session source, so there is no cloud split.',
+    open: 'Open {name}',
+    desktopTitle: 'Desktop accounts',
+    desktopSignedIn: '{n} signed in',
+    cliTitle: 'CLI accounts',
+    cliSignedIn: '{n} signed in',
+    poolLine: '5h {session} · week {week}',
+    poolNone: 'n/a',
+    climayteTokens: 'Tokens through CliMayte',
+    climayteTokensSub: '{tasks} tasks so far',
+    climayteRunning: 'CliMayte tasks running',
+    climayteDone: 'Finished in the last hour',
+    climayteSessions: 'CliMayte sessions, last hour',
+    sessionsNow: 'Sessions active now',
+    sessionsNowSub: 'touched in the last 5 minutes',
+    sessionsHour: 'Sessions, last hour',
+    sessionsDay: 'Sessions, last 24 hours',
+    loadFailed: 'Some numbers could not be read; showing the last good ones.',
+    chartHeadroom: 'Account usage (5h / week)',
+    chart5h: '5h',
+    chartWeek: 'week',
+    chartHeadroomEmpty: 'No usage readings yet.',
+    chartWorkers: 'CliMayte tasks started per hour, 24h',
+    chartSessions: 'Sessions per hour, 24h',
+    chartModels: 'CliMayte tasks by model',
+    outDone: 'done',
+    outFailed: 'failed',
+    outRunning: 'active',
+    sessionsUnit: 'sessions',
+    modelDefault: 'Default',
+    modelOther: 'Other',
+  },
+}

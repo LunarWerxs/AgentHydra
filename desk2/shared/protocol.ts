@@ -279,6 +279,8 @@ export interface CloudSession {
   archived: boolean
   fromPc: string | null
   model: string | null
+  effort: string | null
+  instanceNum: number | null // AgentHydra's instance number, the #37 its rows show
 }
 
 export interface CloudList {

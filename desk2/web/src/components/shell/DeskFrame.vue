@@ -12,7 +12,7 @@ import SettingsView from '@/components/panes/SettingsView.vue'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import ExternalSessionView from '@/components/external/ExternalSessionView.vue'
 import HydraPane from '@/components/hydra/HydraPane.vue'
-import { OPEN_HYDRA_EVENT } from '@/components/hydra/api'
+import { OPEN_HYDRA_EVENT, hydraOpen } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
 import BackgroundTasksPanel from '@/components/tasks/BackgroundTasksPanel.vue'
 import { OPEN_TASKS_EVENT, type OpenTasksDetail } from '@/components/tasks/api'
@@ -222,16 +222,33 @@ function setShowThinking(show: boolean) {
 const openThinking = computed(() => (showThinking.value ? items.value.filter((i) => i.kind === 'thinking').map((i) => i.id) : undefined))
 
 // Hydra Desk 2: AgentHydra slides in over the chat side (the sidebar stays), pushing the chat out to the
-// left; the same button or the pane's own "← Desk" button slides the chat back. The cloud button
-// turns the sidebar's list into every session of both PCs (components/cloud).
-const hydraOpen = ref(false)
+// left; the same button or the pane's own "← Desk" button slides the chat back. While it is open the
+// sidebar is AgentHydra's session list (the cloud list, turned on for it and off again after unless it
+// was already on), and a session clicked there opens in AgentHydra. Picking anything of Desk's own in
+// the sidebar slides the chat back. The cloud button turns the sidebar's list into every session of
+// both PCs on its own too (components/cloud).
+const cloud = useCloud()
+let cloudForHydra = false
 function toggleHydra(open = !hydraOpen.value) {
+  if (open === hydraOpen.value) return
   hydraOpen.value = open
+  if (open) {
+    cloudForHydra = !cloud.on.value
+    cloud.on.value = true
+    toggleSidebar(true)
+  } else if (cloudForHydra) {
+    cloudForHydra = false
+    cloud.on.value = false
+  }
 }
 const onOpenHydra = () => toggleHydra(true)
-const cloud = useCloud()
+watch(
+  () => src.selected.value,
+  () => hydraOpen.value && toggleHydra(false)
+)
 function toggleCloud() {
   cloud.on.value = !cloud.on.value
+  cloudForHydra = false
   if (cloud.on.value) toggleSidebar(true)
 }
 

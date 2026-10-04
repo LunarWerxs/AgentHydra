@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ChatSummary, ExternalSession, SessionMetaPatch } from '@shared/protocol'
+import type { ChatSummary, CloudSession, ExternalSession, SessionMetaPatch } from '@shared/protocol'
 import { icons, shellGlyphs, sidebarIcons } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -9,6 +9,7 @@ import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import { useShellSource } from '@/components/shell/source'
 import CloudList from '@/components/cloud/CloudList.vue'
 import { useCloud } from '@/components/cloud/store'
+import { hydraOpen, hydraShowing, openInHydra } from '@/components/hydra/api'
 import ChatRow from './ChatRow.vue'
 import SidebarTools from './SidebarTools.vue'
 import ExternalRow from './ExternalRow.vue'
@@ -105,11 +106,17 @@ const searchText = computed({
     else query.value = v
   }
 })
+// A cloud row opens in AgentHydra while it is open (the sidebar is its session list then), else as an
+// outside session on Desk's side.
+function openCloud(r: CloudSession) {
+  if (hydraOpen.value) openInHydra(r.id, r.source)
+  else src.select({ kind: 'external', id: r.id })
+}
 function onCloudSearchKey(e: KeyboardEvent) {
   if (e.isComposing) return
   if (e.key === 'Enter') {
     const first = cloud.groups.value[0]?.rows[0]
-    if (first) src.select({ kind: 'external', id: first.id })
+    if (first) openCloud(first)
   } else if (e.key === 'Escape') {
     if (searchEscape(e, cloud.search.value) === 'clear') cloud.search.value = ''
     else closeSearch()
@@ -406,7 +413,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </button>
         </div>
 
-        <CloudList v-if="cloud.on.value" :selected-id="selectedExternalId" @open="(id: string) => src.select({ kind: 'external', id })">
+        <CloudList v-if="cloud.on.value" :selected-id="hydraOpen ? hydraShowing : selectedExternalId" @open="openCloud">
           <template #tools>
             <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
           </template>

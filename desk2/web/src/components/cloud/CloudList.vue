@@ -10,10 +10,11 @@ import { useCloud } from './store'
 
 // Hydra Desk 2's cloud list, in the sidebar in place of the desk list: every session AgentHydra knows,
 // both PCs' (a chat from the other PC carries its name), grouped by folder like the desk list. A row
-// opens the session the way an outside session opens; in select mode it ticks instead. The header's
+// opens the session (Sidebar decides where: the outside-session view, or AgentHydra while it is open); in
+// select mode it ticks instead. The header's
 // right end holds the search and filter buttons (the `tools` slot).
 const props = defineProps<{ selectedId: string | null }>()
-const emit = defineEmits<{ open: [id: string] }>()
+const emit = defineEmits<{ open: [row: CloudSession] }>()
 
 const cloud = useCloud()
 const collapsed = ref(new Set<string>())
@@ -36,10 +37,16 @@ const summary = computed(() => {
   return `${n} session${n === 1 ? '' : 's'} · ${PERIOD_LABELS[cloud.scopes.value.period].replace('Last ', '')}`
 })
 const sourceName = (s: string) => SOURCE_LABELS[s as CloudSource] ?? s
+/** claude-opus-5-5 -> Opus 5.5, the way AgentHydra's rows name it; any other model as it is. */
+const modelName = (m: string | null) => {
+  const hit = m?.match(/^claude-([a-z]+)-(\d+)-(\d+)/)
+  return hit ? `${hit[1]!.charAt(0).toUpperCase()}${hit[1]!.slice(1)} ${hit[2]}.${hit[3]}` : m
+}
 function tooltip(r: CloudSession): string {
   return [
     r.title,
-    [sourceName(r.source), r.instance, `on ${pcOf(r, thisPc.value)}`].filter(Boolean).join(' · '),
+    [sourceName(r.source), r.instanceNum !== null ? `#${r.instanceNum}` : r.instance, `on ${pcOf(r, thisPc.value)}`].filter(Boolean).join(' · '),
+    [modelName(r.model), r.effort].filter(Boolean).join(' · '),
     `${SHAPE_LABELS[sessionShape(r)]} · ${r.messageCount} messages${r.archived ? ' · archived' : ''}`,
     r.cwd
   ]
@@ -48,7 +55,7 @@ function tooltip(r: CloudSession): string {
 }
 function onRow(r: CloudSession) {
   if (cloud.selectMode.value) cloud.toggleSelected(r.id)
-  else emit('open', r.id)
+  else emit('open', r)
 }
 
 const copied = ref(false)
@@ -131,6 +138,7 @@ const ROW =
             </span>
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
             <span v-if="r.fromPc && r.fromPc !== thisPc" class="max-w-24 shrink-0 truncate rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-accent-text">{{ r.fromPc }}</span>
+            <span v-if="r.instanceNum !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
             <span class="shrink-0 pr-1 text-[12px] leading-4 text-text-muted tnum">{{ relativeTime(r.lastActivityAt, now) }}</span>
           </div>
         </Tip>

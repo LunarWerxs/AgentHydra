@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "incremental": true,
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "useDefineForClassFields": true,
+    "strict": true,
+    "jsx": "preserve",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    // "bun" for web/tests/**, which run on bun:test like every other test in the repo. Declared as
+    // a real devDependency here rather than reached for across the workspace, so it resolves by the
+    // normal ancestor walk and doesn't break the day bun's hoisting changes.
+    "types": ["vite/client", "bun"],
+    "baseUrl": ".",
+    // @agenthydra/server: AgentHydra's own server types, the contract with the daemon this copy talks to.
+    "paths": { "@/*": ["./src/*"], "@agenthydra/server/*": ["../../server/src/*"] }
+  },
+  "include": ["src", "vite.config.ts", "env.d.ts"]
+}

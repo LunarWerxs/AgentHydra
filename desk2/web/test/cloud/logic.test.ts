@@ -43,7 +43,9 @@ describe('groupCloud', () => {
     dispatched: false,
     archived: false,
     fromPc: null,
-    model: null
+    model: null,
+    effort: null,
+    instanceNum: null
   })
   const rows = [row('old-match', 'D:/a', 1), row('new-match', 'D:/b', 3), row('mid-match', 'D:/a', 2)]
   const all = { shape: DEFAULT_SCOPES.shape, pcs: null }

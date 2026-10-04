@@ -1,0 +1,619 @@
+/* App entry stylesheet — the two kit imports plus genuinely app-specific rules only.
+   Tokens, dark mode and shared utilities all come from the kit; Inter is served locally
+   from this app (see the @font-face block below). */
+@import "./styles/kit-base.css";
+@import "./styles/kit-accent.css";
+
+/* ---------------------------------------------------------------------------
+   Inter, SELF-HOSTED — replaces the kit's Google Fonts CDN @import.
+
+   THE PROBLEM. styles/kit-base.css opens with
+
+     @import url('https://fonts.googleapis.com/css2?family=Inter:...&display=swap');
+
+   and a remote @import at the top of a render-blocking stylesheet is itself
+   render-blocking: the browser will not paint until it has been to
+   fonts.googleapis.com and back. On a warm HTTP cache that is free, which is why it
+   went unnoticed — but on a first run, after a cache eviction, or on a slow or absent
+   network it is dead time on the startup path of a LOCAL DESKTOP APP that has no other
+   reason to touch the internet at all. Measured 2026-08-06 at ~150ms on this machine
+   with warm DNS and good bandwidth; the offline case is bounded only by Chromium's
+   stylesheet timeout.
+
+   THE FIX. The two Latin subsets of Inter's variable woff2 are vendored under
+   web/public/fonts/ (Vite copies public/ verbatim into dist/, and the daemon serves
+   dist/), and declared here. Same typeface, same rendering, zero network, no
+   flash-of-fallback-text, and it works with the machine offline.
+
+   WHY NOT IN THE KIT, where the offending @import actually lives: sync.mjs's copyFile
+   is TEXT-ONLY by construction — it compares and rewrites synced files as utf8 and
+   normalises their line endings, which would corrupt a woff2 byte-for-byte. Carrying
+   font binaries in the kit therefore means reworking the sync tool that five sibling
+   apps depend on, which is a great deal more risk than a ~150ms cold-start win is
+   worth. The kit's remote @import is stripped from THIS app's CSS at build time
+   instead (web/vite.config.ts, `stripRemoteFontImport`), so kit-base.css stays
+   byte-identical to the kit and `bun run check:kit` stays green. Any sibling app can
+   adopt the same two files plus this block; if they all do, that is the moment to
+   teach sync.mjs about binaries and promote it.
+
+   The subsets are latin + latin-ext only: every app in this family ships English UI
+   copy, and latin alone already covers all of Latin-1, so latin-ext is here purely so
+   accented names in USER data (session titles, folder names) don't drop to a fallback
+   face mid-word. unicode-range values are Google's own, copied verbatim from the css2
+   response so the browser downloads latin-ext only when a page actually needs it.
+   --------------------------------------------------------------------------- */
+/* Both files must exist under web/public/fonts/. If either goes missing the UI silently drops to
+   the next family in --font-sans (ui-sans-serif / Segoe UI) rather than breaking — so a missing
+   font shows up as "the app looks slightly off", not as an error anywhere. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ---------------------------------------------------------------------------
+   AgentHydra "Claude" theme layer — app-local on purpose.
+
+   This app is the Claude Code manager, so it uses Claude's own surface values,
+   taken from their site and applied verbatim as hex rather than re-derived: three
+   near-neutral dark greys plus a dusty-rose accent. They are deliberately NOT hex
+   approximations of an oklch guess — a previous revision did exactly that and put a
+   visible brown cast on every surface.
+
+   This lives here, after both kit imports, so it wins the cascade and stays SCOPED
+   TO THIS APP — kit-base.css is shared across every LunarWerx app (warming it there
+   would drag DevWebUI / RēDesign / RepoYeti along), and kit-accent.css is a synced
+   file we must not edit in-app. An app-owned override is the one place a per-app
+   look belongs, and it survives `bun run check:kit`.
+
+   The neutrals must stay neutral (R≈G≈B). Any real chroma on these greys reads as a
+   colour cast across the whole window, which is the failure mode this file exists to
+   avoid. --primary / --ring also override the accent file's magenta with the rose.
+   --------------------------------------------------------------------------- */
+:root {
+  /* Light: the same near-neutral family, inverted. Greys stay grey (R≈G≈B) — no ivory/brown cast.
+     Sidebar recesses below the page; cards lift above it. */
+  --background: #f7f7f5;
+  --foreground: #1a1a19;
+  --card: #ffffff;
+  --card-foreground: #1a1a19;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a19;
+  --secondary: #efefed;
+  --secondary-foreground: #232321;
+  --muted: #efefed;
+  --muted-foreground: #6b6b68;
+  --accent: #e7e7e4;
+  --accent-foreground: #232321;
+  --border: #e2e2df;
+  --input: #e2e2df;
+  --primary: #d06c74;
+  --primary-foreground: #ffffff;
+  --ring: #d06c74;
+  --sidebar: #efefed;
+  --sidebar-foreground: #1a1a19;
+  --sidebar-primary: #d06c74;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e7e7e4;
+  --sidebar-accent-foreground: #232321;
+  --sidebar-border: #e2e2df;
+  --sidebar-ring: #d06c74;
+}
+.dark {
+  /* Dark: Claude's own values, sampled from their site, used VERBATIM. These are near-neutral
+     greys (#232321 is R35 G35 B33 — R=G, B one lower), NOT warm/brown. An earlier pass here
+     invented an oklch palette at hue ~70-85 / chroma ~0.007, which is a brown tint on every
+     surface; that was the bug. Keep chroma at essentially zero.
+
+       chrome  #181817   header + session list (darkest)
+       ground  #1a1a19   the working area
+       raised  #232321   cards, popovers, table headers, hover
+       accent  #d06c74   dusty rose */
+  --background: #1a1a19;
+  --foreground: #ededeb;
+  --card: #232321;
+  --card-foreground: #ededeb;
+  --popover: #232321;
+  --popover-foreground: #ededeb;
+  --secondary: #232321;
+  --secondary-foreground: #ededeb;
+  --muted: #232321;
+  --muted-foreground: #9a9a97;
+  /* #2c2c2b is Claude's value for the raised interactive surface: the text input/composer box
+     and the row-hover tone. It replaces a lighter grey that had been guessed at here. */
+  --accent: #2c2c2b;
+  --accent-foreground: #ededeb;
+  --border: #2e2e2c;
+  --input: #2c2c2b;
+  --primary: #d06c74;
+  --primary-foreground: #ffffff;
+  --ring: #d06c74;
+  --sidebar: #181817;
+  --sidebar-foreground: #ededeb;
+  --sidebar-primary: #d06c74;
+  --sidebar-primary-foreground: #ffffff;
+  /* hover inside the sidebar rises to the raised tone, not past it */
+  --sidebar-accent: #232321;
+  --sidebar-accent-foreground: #ededeb;
+  --sidebar-border: #2e2e2c;
+  --sidebar-ring: #d06c74;
+}
+
+/* Text fields paint their token SOLID.
+   The kit ships text fields at `bg-input/30`, so --input only ever rendered at 30% over whatever
+   sat behind it and the box never actually reached its token value (on the sidebar it came out
+   ~#1f1f1e instead of #2c2c2b). The search/composer box is a real raised surface in Claude, so the
+   text-field family paints the token outright. Deliberately scoped to text fields by data-slot:
+   outline buttons and outline badges also use bg-input/30 and should KEEP the translucent
+   treatment, or every secondary control would turn into a filled block.
+
+   `:not(.bg-transparent)` matters: the session composer deliberately makes its Textarea transparent
+   and lets the WRAPPER be the box. Without the exclusion this rule out-specifies that opt-out and
+   paints a solid field inside an already-solid box, which reads as a double outline. */
+.dark [data-slot="input"]:not(.bg-transparent),
+.dark [data-slot="textarea"]:not(.bg-transparent),
+.dark [data-slot="select-trigger"]:not(.bg-transparent) {
+  background-color: var(--input);
+  border-color: var(--border);
+}
+
+/* Deep-link landing flash.
+   A deep link into Settings (the queue drawer's scheduler indicator, the header's scheduler chip,
+   the composer's tomorrow gear) scrolls a section into view — but on a long settings page a scroll
+   that lands mid-page leaves you asking which of the visible cards you were actually sent to. This
+   pulses a ring around the target for a beat, so arriving somewhere answers that question instead
+   of posing it. Twice, then it stops: it is a pointer, not an alarm.
+
+   App-local on purpose: kit-base.css is synced from the shared kit (bun run check:kit) and must not
+   grow app-specific rules. */
+@keyframes settings-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  25%,
+  75% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 45%, transparent);
+  }
+}
+
+.settings-flash {
+  border-radius: var(--radius-xl);
+  animation: settings-flash 0.9s ease-in-out 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-flash {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 45%, transparent);
+  }
+}
+
+/* --- rendered transcript markdown (lib/markdown.ts) -------------------------------------------
+   Scoped under .md so it can only ever affect a rendered message body, never the app chrome. The
+   type scale stays close to the surrounding chat text: a transcript is a conversation being read
+   back, not a document, so headings mark structure without turning a reply into a web page. */
+.md {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.md .md-h {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.3;
+  font-size: 1em;
+}
+.md h1.md-h,
+.md h2.md-h {
+  font-size: 1.08em;
+}
+.md .md-list {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.md ul.md-list {
+  list-style: disc;
+}
+.md ol.md-list {
+  list-style: decimal;
+}
+.md .md-quote {
+  margin: 0;
+  padding-inline-start: 0.75rem;
+  border-inline-start: 2px solid var(--color-border);
+  color: var(--color-muted-foreground);
+}
+.md .md-hr {
+  margin: 0.25rem 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+}
+.md .md-link {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md .md-code {
+  padding: 0.05em 0.3em;
+  border-radius: 0.25rem;
+  background: color-mix(in oklab, var(--color-foreground) 8%, transparent);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.92em;
+}
+.md .md-pre {
+  position: relative;
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--color-foreground) 6%, transparent);
+  border: 1px solid var(--color-border);
+  /* wide code scrolls inside its own box; the transcript column must never scroll sideways */
+  overflow-x: auto;
+}
+.md .md-block {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.86em;
+  line-height: 1.5;
+  white-space: pre;
+}
+.md .md-lang {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.5rem;
+  font-size: 0.68em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted-foreground);
+  user-select: none;
+}
+
+/* Syntax colours (lib/highlight.ts). Deliberately few: four token classes reading clearly on both
+   themes beats a rainbow that fights the surrounding UI. */
+.md .hl-keyword {
+  color: var(--color-primary);
+}
+.md .hl-string {
+  color: var(--color-success, #2f855a);
+}
+.md .hl-number {
+  color: var(--color-warning, #b7791f);
+}
+.md .hl-comment {
+  color: var(--color-muted-foreground);
+  font-style: italic;
+}
+
+/* --- find within the open session (lib/find.ts) ------------------------------------------------
+   <mark> is the only tag find.ts inserts. The active hit has to be findable at a glance while
+   scrolling, so it gets the accent; the rest stay a quiet wash. */
+.find-hit {
+  border-radius: 0.2rem;
+  padding: 0 0.05em;
+  background: color-mix(in oklab, var(--color-warning, #b7791f) 35%, transparent);
+  color: inherit;
+}
+.find-hit-active {
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
+}
+
+/* --- compact transcript ------------------------------------------------------------------------
+   The same turns, denser. Scoped to one class on the scroll container so the layout has exactly
+   one switch rather than a conditional class on every element inside it. */
+.transcript-compact {
+  font-size: 0.92em;
+}
+.transcript-compact .rounded-2xl {
+  padding: 0.3rem 0.65rem;
+}
+.transcript-compact .mt-4 {
+  margin-top: 0.5rem;
+}
+.transcript-compact .mt-1\.5 {
+  margin-top: 0.2rem;
+}
+.transcript-compact .mt-6 {
+  margin-top: 0.85rem;
+}
+.transcript-compact .mt-2 {
+  margin-top: 0.25rem;
+}
+.transcript-compact .md-pre {
+  padding: 0.4rem 0.5rem;
+}
+
+/* --- folded transcript work (components/TranscriptWorkGroup.vue) --------------------------------
+   A clipped long message fades out instead of stopping mid-line, so it reads as "there is more"
+   rather than as a rendering fault. */
+.transcript-fade {
+  mask-image: linear-gradient(to bottom, black calc(100% - 2.5rem), transparent);
+}
+/* The newest work row of a session still running: a highlight sweeps across its label, the way the
+   Claude and T3 Code apps mark the step in hand. Text-clipped; the base is named rather than
+   currentColor, because `color: transparent` below would make currentColor transparent too. */
+.work-shimmer {
+  background: linear-gradient(
+      90deg,
+      var(--color-muted-foreground) 0%,
+      var(--color-muted-foreground) 40%,
+      var(--color-foreground) 50%,
+      var(--color-muted-foreground) 60%,
+      var(--color-muted-foreground) 100%
+    )
+    0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: work-shimmer 2.2s linear infinite;
+}
+@keyframes work-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-shimmer {
+    animation: none;
+    color: var(--color-foreground);
+    -webkit-text-fill-color: currentColor;
+    background: none;
+  }
+}
+
+/* --- width-animated bars (UsageBar, charts/BarRows) --------------------------------------------
+   Tailwind ships no named transition for width, and width is a layout property, so transition-all
+   would also animate everything else on the element. A real utility (not a plain class) so it sits
+   in the utilities layer and still reads the duration-* / ease-* set beside it, exactly as
+   Tailwind's own transition-* utilities do. */
+@utility transition-width {
+  transition-property: width;
+  transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+  transition-duration: var(--tw-duration, var(--default-transition-duration));
+}
+
+/* The same, for the app shell (App.vue): its max-width eases out when a view asks for the wide cap,
+   and the header and main column ease their padding when a push-in panel opens beside them. */
+@utility transition-max-width {
+  transition-property: max-width;
+  transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+  transition-duration: var(--tw-duration, var(--default-transition-duration));
+}
+@utility transition-padding {
+  transition-property: padding;
+  transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+  transition-duration: var(--tw-duration, var(--default-transition-duration));
+}
+
+/* --- view switch (App.vue's <Transition name="view-fade">) ------------------------------------- */
+.view-fade-enter-active,
+.view-fade-leave-active {
+  transition: opacity 150ms ease;
+}
+.view-fade-enter-from,
+.view-fade-leave-to {
+  opacity: 0;
+}
+
+/* --- ExpandArea (components/ExpandArea.vue) ----------------------------------------------------
+   Animated expand/collapse that keeps `position: sticky` working inside it; the header comment in
+   ExpandArea.vue explains why it exists beside the kit's ExpandTransition.
+
+   minmax(0, 1fr), not the implicit `auto` column: a grid item's minimum width defaults to its
+   content, so a table wider than the view stretched this wrapper past its parent and the WHOLE
+   page scrolled sideways, cutting off the icon column on the left (owner, 2026-09-26). Pinned to
+   the parent's width, anything too wide scrolls inside its own box instead. */
+.expand-area-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 1fr;
+}
+
+/* See "THE TABLE'S OWN BOX BROKE STICKY TOO" in ExpandArea.vue. */
+.expand-area-fits [data-slot='table-container'] {
+  overflow-x: visible;
+}
+
+/* Only while the transition runs — see ExpandArea.vue's header comment. */
+.expand-area-enter-active .expand-area-clip,
+.expand-area-leave-active .expand-area-clip {
+  overflow: hidden;
+}
+
+/* 0.22s ease-out matches the kit's --animate-collapsible-down, so a section that opens here and a
+   reka Collapsible elsewhere in the same view move at the same speed. The opacity ramp is shorter
+   than the height one and eased out, so the content has arrived before the box stops growing —
+   the difference between "it slid in" and "it stretched". */
+.expand-area-enter-active,
+.expand-area-leave-active {
+  transition:
+    grid-template-rows 0.22s ease-out,
+    opacity 0.16s ease-out;
+}
+
+.expand-area-enter-from,
+.expand-area-leave-to {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+/* The app already honours this for theme swaps (styles/kit-base.css); motion added here has to
+   honour it too. Not `none` — a 0.01ms transition still fires transitionend, so nothing that
+   waits on the animation completing can hang. */
+@media (prefers-reduced-motion: reduce) {
+  .expand-area-enter-active,
+  .expand-area-leave-active {
+    transition-duration: 0.01ms;
+  }
+}
+
+/* --- sessions sidebar width (SessionsView) ------------------------------------------------------
+   The dragged width arrives as --sidebar-w on the aside and is inherited by its content column, so
+   both read one number. Never wider than the viewport allows: a 340px sidebar on a 390px phone
+   would crush the transcript. */
+.sessions-sidebar-w {
+  width: min(var(--sidebar-w), calc(100vw - 56px));
+}
+
+/* --- instance rows arriving and leaving (InstancesView's <TransitionGroup name="row-fade">) ----- */
+.row-fade-enter-active,
+.row-fade-leave-active {
+  transition:
+    opacity 200ms ease,
+    transform 200ms ease;
+}
+.row-fade-enter-from {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+.row-fade-leave-to {
+  opacity: 0;
+}
+.row-fade-leave-active {
+  position: relative;
+}
+.row-fade-move {
+  transition: transform 200ms ease;
+}
+
+/* --- usage threshold slider (UsageFilterWindow.vue) --------------------------------------------
+   A bare range input, styled here rather than vendored as a ui/ component: the kit owns
+   components/ui and shell/ (check:kit fails on a single byte of drift), and this is the only
+   slider in the app. Both vendor prefixes because the track/thumb pseudo-elements cannot be
+   combined into one rule — a selector list containing an unknown pseudo-element is dropped whole.
+   The thumb has no transition: its focus ring is a box-shadow and must be there on the first frame. */
+:root {
+  --color-rgb-0-0-0-a0_4: rgb(0 0 0 / 0.4);
+}
+.usage-range {
+  width: 100%;
+  height: 0.75rem;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.usage-range:focus-visible {
+  outline: none;
+}
+
+.usage-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--primary) var(--usage-fill),
+    var(--border) var(--usage-fill)
+  );
+}
+.usage-range::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--primary) var(--usage-fill),
+    var(--border) var(--usage-fill)
+  );
+}
+
+.usage-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: 9999px;
+  background: var(--primary);
+  box-shadow: 0 1px 3px var(--color-rgb-0-0-0-a0_4);
+}
+.usage-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 9999px;
+  background: var(--primary);
+  box-shadow: 0 1px 3px var(--color-rgb-0-0-0-a0_4);
+}
+
+.usage-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 40%, transparent);
+}
+.usage-range:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 40%, transparent);
+}
+
+/* --- chart palette (used by the Analytics view) ------------------------------------------------
+   NOT the kit's own --chart-1..5. That set fails a colourblind-safety check in light mode: its
+   slots 4 and 5 (#ffb900 and #fe9a00) sit ΔE 7.4 apart for NORMAL vision and 5.6 under deuteranopia,
+   which is two series a reader cannot tell apart, and two of the five also fall below 3:1 against a
+   white surface. kit-base.css is vendored from the shared kit and `bun run check:kit` fails on any
+   drift, so the fix belongs here rather than there.
+
+   These six were re-stepped at the same hues and validated: lightness band, chroma floor, adjacent
+   CVD separation (deutan/protan/tritan), normal-vision separation, and contrast against the real
+   surface — all pass in both modes. Light steps are validated against #ffffff, dark against the
+   dark card #171717, because a dark palette is a different set of steps, not an inverted one.
+
+   Assigned in FIXED ORDER and keyed by the entity (model id), never by rank: filtering the chart
+   must not repaint the series that survive. */
+:root {
+  --viz-1: #e8590c;
+  --viz-2: #099268;
+  --viz-3: #3b5bdb;
+  --viz-4: #c2255c;
+  --viz-5: #7048e8;
+  --viz-6: #6d6a00;
+  /* Sequential ramp for the hour-of-week grid: ONE hue, light to dark. A heatmap is magnitude, and
+     magnitude never gets a rainbow. */
+  --viz-seq: #3b5bdb;
+}
+.dark {
+  --viz-1: #dd5409;
+  --viz-2: #0b9e71;
+  --viz-3: #5379fd;
+  --viz-4: #f20d6e;
+  --viz-5: #8566fd;
+  --viz-6: #8f8b0e;
+  --viz-seq: #5379fd;
+}
+
+/* --- provider marks and the selected task row ---------------------------------------------------
+   App tokens the kit does not carry. The brand colours are their owners' (ProviderLogo.vue) and
+   stay the same in both themes. --shadow-row-selected is the 3px primary bar down the leading edge
+   of the selected CliMayte task (CliMayteView.vue): an inset shadow, so the row's text does not
+   shift when it is picked. */
+@theme inline {
+  --color-brand-claude: #d97757;
+  --color-brand-deepseek: #4d6bfe;
+  --color-brand-codex-tile: #fff;
+  --shadow-row-selected: inset 3px 0 0 var(--color-primary);
+}
