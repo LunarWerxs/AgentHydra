@@ -2334,13 +2334,21 @@ describe('integration: the five-minute rule (owner, 2026-10-03)', () => {
     planFactor,
   })
 
-  afterAll(() => {
+  afterAll(async () => {
+    // The folder goes once the cancelled workers' processes have exited: on Windows one still
+    // running holds it open (EBUSY, 2026-10-03).
+    const pids = [...workers.values()]
+      .filter((w) => groups.includes(w.group))
+      .flatMap((w) => w.attempts.flatMap((a) => [a.pid, a.runner?.pid ?? null]))
+      .filter((p): p is number => p !== null)
     for (const group of groups) climayteCancel({ group })
+    const gone = Date.now() + 10_000
+    while (pids.some((p) => isPidAlive(p)) && Date.now() < gone) await Bun.sleep(200)
     clearRemote()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
-  })
+  }, 15_000)
 
   const fake = () =>
     setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
