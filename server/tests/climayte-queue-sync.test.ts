@@ -10,9 +10,10 @@
 // an older Worker (no queue routes) is a tiny stand-in server.
 
 import { afterAll, describe, expect, test } from 'bun:test'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createCipheriv, randomBytes, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gzipSync } from 'node:zlib'
 import { Hono } from 'hono'
 import { MAX_PER_ACCOUNT, pickAccount } from '../src/climayte'
 import { liveByAccount, workers } from '../src/climayte-core'
@@ -42,6 +43,7 @@ import {
   sealQueue,
   syncQueue,
 } from '../src/core/climayte-queue-sync'
+import { StoreMirror } from '../src/core/login-sync-mirror'
 import { app } from '../src/http-app'
 import '../src/routes/climayte'
 import { base, store, token } from './login-sync-store'
@@ -86,6 +88,29 @@ describe('the queue snapshot', () => {
     // Passed off as another PC's, or opened with another key: refused.
     expect(openQueue(key, randomUUID(), blob)).toBeNull()
     expect(openQueue(randomBytes(32), pc, blob)).toBeNull()
+  })
+
+  test('still opens a blob of the first format (gzip, JSON inside base64), which an old PC uploaded', () => {
+    const pc = randomUUID()
+    const snap = snapshot(pc, [rw({ title: 'from an old PC' })])
+    const iv = randomBytes(12)
+    const cipher = createCipheriv('aes-256-gcm', key, iv)
+    cipher.setAAD(Buffer.from(`climayte-queue:${pc}`))
+    const data = Buffer.concat([cipher.update(gzipSync(JSON.stringify(snap))), cipher.final()])
+    const old = Buffer.from(
+      JSON.stringify({
+        v: 1,
+        iv: iv.toString('base64'),
+        tag: cipher.getAuthTag().toString('base64'),
+        data: data.toString('base64'),
+      }),
+    ).toString('base64')
+    expect(openQueue(key, pc, old)).toEqual(snap)
+    // The new format is smaller than the old for the same snapshot, and an old reader's JSON parse of
+    // it fails (it reports "does not open", it does not throw out of its pass).
+    const fresh = sealQueue(key, snap)
+    expect(fresh.length).toBeLessThan(old.length)
+    expect(() => JSON.parse(Buffer.from(fresh, 'base64').toString('utf8'))).toThrow()
   })
 
   test('carries the sender’s build through the seal, and an old snapshot without one still opens', () => {
@@ -310,6 +335,52 @@ describe('a pass through the store', () => {
       disconnectLoginSync()
     }
   }, 20_000)
+})
+
+describe('downloading the other PC’s queue', () => {
+  test('goes through the mirror: one GET per remote version, none when the same version is read again', async () => {
+    clearRemote()
+    resetQueueSync()
+    const other = randomUUID()
+    let version = 1
+    let blob = sealQueue(key, snapshot(other, [rw({ title: 'their task' })]))
+    let gets = 0
+    const call = async (_method: string, path: string) => {
+      if (path === '/v1/queues')
+        return { status: 200, json: { queues: [{ pc: other, version, updatedAt: version }] } }
+      if (path === `/v1/queues/${other}`) {
+        gets++
+        return { status: 200, json: { pc: other, version, blob, updatedAt: version } }
+      }
+      return { status: 200, json: { version: 1 } }
+    }
+    const mirror = new StoreMirror(call)
+    const io = { mirror, call, key, pc: randomUUID(), name: 'THIS-PC' }
+    const pass = async () => {
+      await mirror.refresh({ tables: ['queues'], full: true })
+      await syncQueue(io)
+    }
+    try {
+      await pass()
+      expect(gets).toBe(1)
+      expect(remoteSnapshots()[0].workers[0].title).toBe('their task')
+      // Remembered remote state gone (as when the other PC's snapshot is dropped): the version is read
+      // again, and the mirror answers it without asking the store.
+      clearRemote()
+      await pass()
+      expect(gets).toBe(1)
+      expect(remoteSnapshots()).toHaveLength(1)
+      // A new version costs exactly one more GET.
+      version = 2
+      blob = sealQueue(key, snapshot(other, [rw({ title: 'their next task' })]))
+      await pass()
+      expect(gets).toBe(2)
+      expect(remoteSnapshots()[0].workers[0].title).toBe('their next task')
+    } finally {
+      clearRemote()
+      resetQueueSync()
+    }
+  })
 })
 
 describe('when this PC uploads', () => {

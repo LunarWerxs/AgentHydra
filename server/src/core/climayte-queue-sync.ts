@@ -23,7 +23,7 @@
 // caller keeps them in `queueError` and never in the logins' status.
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
-import { gunzipSync, gzipSync } from 'node:zlib'
+import { gunzipSync } from 'node:zlib' // the first format
 import { liveByAccount, workers } from '../climayte-core'
 import { type CliMayteWorker, ranSeconds } from '../climayte-lib'
 import {
@@ -91,39 +91,55 @@ export function buildSnapshot(pc: string, name: string, now = Date.now()): Queue
   return { pc, name, at: now, workers: list, live, build: ownBuild() }
 }
 
-/** The encrypted blob for a snapshot: base64 of {v, iv, tag, data}, `data` the gzipped JSON. */
+/** Marks the zstd format: `Z2:` then base64 of iv (12 bytes), GCM tag (16) and the encrypted zstd JSON.
+ *  The first format (gzip, base64 of a JSON {v, iv, tag, data}) has no prefix and is still read; an
+ *  AgentHydra that only knows it fails to open a `Z2:` blob and reports that, nothing worse. */
+const FORMAT_2 = 'Z2:'
+
+/** The encrypted blob for a snapshot, in the zstd format. */
 export function sealQueue(key: Buffer, snap: QueueSnapshot): string {
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', key, iv)
   cipher.setAAD(aad(snap.pc))
-  const data = Buffer.concat([cipher.update(gzipSync(JSON.stringify(snap))), cipher.final()])
-  return Buffer.from(
-    JSON.stringify({
-      v: 1,
-      iv: iv.toString('base64'),
-      tag: cipher.getAuthTag().toString('base64'),
-      data: data.toString('base64'),
-    }),
-  ).toString('base64')
+  const data = Buffer.concat([
+    cipher.update(Bun.zstdCompressSync(Buffer.from(JSON.stringify(snap)), { level: 12 })),
+    cipher.final(),
+  ])
+  return FORMAT_2 + Buffer.concat([iv, cipher.getAuthTag(), data]).toString('base64')
 }
 
-/** A snapshot from the store's blob for PC `pc`, or null (wrong key, another PC's blob, damage). */
+/** A snapshot from the store's blob for PC `pc`, or null (wrong key, another PC's blob, damage). Reads
+ *  both formats. */
 export function openQueue(key: Buffer, pc: string, blob: string): QueueSnapshot | null {
   try {
-    const b = JSON.parse(Buffer.from(blob, 'base64').toString('utf8')) as {
-      v: number
-      iv: string
-      tag: string
-      data: string
+    let iv: Buffer
+    let tag: Buffer
+    let data: Buffer
+    let inflate: (b: Uint8Array) => Uint8Array
+    if (blob.startsWith(FORMAT_2)) {
+      const raw = Buffer.from(blob.slice(FORMAT_2.length), 'base64')
+      iv = raw.subarray(0, 12)
+      tag = raw.subarray(12, 28)
+      data = raw.subarray(28)
+      inflate = Bun.zstdDecompressSync
+    } else {
+      const b = JSON.parse(Buffer.from(blob, 'base64').toString('utf8')) as {
+        v: number
+        iv: string
+        tag: string
+        data: string
+      }
+      if (b.v !== 1) return null
+      iv = Buffer.from(b.iv, 'base64')
+      tag = Buffer.from(b.tag, 'base64')
+      data = Buffer.from(b.data, 'base64')
+      inflate = gunzipSync
     }
-    if (b.v !== 1) return null
-    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(b.iv, 'base64'))
+    const decipher = createDecipheriv('aes-256-gcm', key, iv)
     decipher.setAAD(aad(pc))
-    decipher.setAuthTag(Buffer.from(b.tag, 'base64'))
-    const plain = gunzipSync(
-      Buffer.concat([decipher.update(Buffer.from(b.data, 'base64')), decipher.final()]),
-    )
-    const snap = JSON.parse(plain.toString('utf8')) as QueueSnapshot
+    decipher.setAuthTag(tag)
+    const plain = inflate(Buffer.concat([decipher.update(data), decipher.final()]))
+    const snap = JSON.parse(Buffer.from(plain).toString('utf8')) as QueueSnapshot
     return snap?.pc === pc &&
       Array.isArray(snap.workers) &&
       snap.live &&
@@ -323,7 +339,10 @@ export async function syncQueue(io: QueueIo, now = Date.now()): Promise<boolean>
   for (const row of others) {
     if (remoteVersion(row.pc) === row.version) continue
     try {
-      const r = await io.call('GET', `/v1/queues/${row.pc}`)
+      // Through the mirror: a version it already holds is not fetched again.
+      const r = io.mirror
+        ? await io.mirror.getItem('queues', row.pc)
+        : await io.call('GET', `/v1/queues/${row.pc}`)
       if (r.status !== 200 || typeof r.json?.blob !== 'string')
         throw queueFailure('Downloading the other PC’s queue', r)
       const snap = openQueue(io.key, row.pc, r.json.blob)
