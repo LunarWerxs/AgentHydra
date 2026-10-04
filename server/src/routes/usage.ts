@@ -382,7 +382,7 @@ app.get('/api/usage/budget', async (c) => {
       ? [hit.configDir]
       : undefined
 
-  const budget = buildUsageBudget(result.snapshot, result.key, { configDirs: spendDirs })
+  const budget = await buildUsageBudget(result.snapshot, result.key, { configDirs: spendDirs })
   return c.json({
     snapshot: result.snapshot,
     reason: result.reason,

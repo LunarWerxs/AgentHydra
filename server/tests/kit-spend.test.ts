@@ -30,7 +30,7 @@ store.upsertEvents([
   ev('default', 'cli', 7 * H, 5),
 ])
 
-test('the default login counts its shared store (default and desktop chats), inside the window only', () => {
+test('the default login counts its shared store (default and desktop chats), inside the window only', async () => {
   const dirs = [defaultConfigDir()]
   const spend = spendSince(new Date(NOW - 6 * H), dirs, { store, now: NOW, quota: () => null })
   expect(spend.turns).toBe(2)
@@ -38,7 +38,7 @@ test('the default login counts its shared store (default and desktop chats), ins
   expect(spend.cacheCreation).toBe(14)
   expect(spend.weighted).toBe(120)
   const turns: number[] = []
-  forEachCallSince(new Date(NOW - 6 * H), dirs, (ts) => turns.push(ts), {
+  await forEachCallSince(new Date(NOW - 6 * H), dirs, (ts) => turns.push(ts), {
     store,
     now: NOW,
     quota: () => null,
@@ -55,7 +55,7 @@ test('an unknown config dir reads as no spend', () => {
   expect(spend.turns).toBe(0)
 })
 
-test('whole hours of a rolled-up store come from the hourly rollup, stamped at the hour middle', () => {
+test('whole hours of a rolled-up store come from the hourly rollup, stamped at the hour middle', async () => {
   const s = new KitStore(':memory:')
   s.upsertEvents([
     ev('default', 'cli', 5 * H + 10 * 60_000, 7),
@@ -63,7 +63,7 @@ test('whole hours of a rolled-up store come from the hourly rollup, stamped at t
   ])
   s.rollup()
   const seen: [number, number][] = []
-  forEachCallSince(
+  await forEachCallSince(
     new Date(NOW - 8 * H),
     [defaultConfigDir()],
     (ts, m) => seen.push([ts, m['claude-sonnet-5-5']?.turns ?? 0]),

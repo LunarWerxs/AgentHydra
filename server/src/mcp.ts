@@ -631,7 +631,7 @@ export const TOOLS: McpEngineTool[] = [
                     }
                   })()
           if (!result) throw new Error(`instance #${hit?.num} could not be checked`)
-          const budget = buildUsageBudget(result.snapshot, result.key, {
+          const budget = await buildUsageBudget(result.snapshot, result.key, {
             configDirs: spendDirs.length
               ? spendDirs
               : hit?.kind === 'cli'

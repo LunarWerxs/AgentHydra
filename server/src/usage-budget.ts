@@ -42,11 +42,11 @@ export interface BudgetOpts {
  * has no history), every derived field is null and `confidence` is 'none' with a caveat explaining
  * what is missing. A null is honest; a fabricated number is not.
  */
-export function buildUsageBudget(
+export async function buildUsageBudget(
   snap: UsageSnapshot,
   key: string,
   opts: BudgetOpts = {},
-): UsageBudget {
+): Promise<UsageBudget> {
   const now = opts.now ?? new Date()
   const samples = usageSamples(key)
   const forecast = forecastUsage(snap, samples, now)
@@ -116,7 +116,7 @@ export function buildUsageBudget(
     // The same transcripts, priced, against whole quota windows: the percentage in dollars. Only the
     // caller's own dirs, never the ~/.claude fallback: another login's turns would inflate the
     // figure, and calibrateQuotaDollars refuses (with a caveat) when none are given or for Codex.
-    dollars: calibrateQuotaDollars(key, snap, samples, opts.configDirs, now),
+    dollars: await calibrateQuotaDollars(key, snap, samples, opts.configDirs, now),
   }
 }
 

@@ -303,9 +303,9 @@ function writeEntry(key: string, entry: AccountEntry): void {
 }
 
 /** Every priced turn since `sinceMs`, as a cumulative-cost lookup over any interval. */
-function intervalCostFrom(sinceMs: number, configDirs: string[]): IntervalCost {
+async function intervalCostFrom(sinceMs: number, configDirs: string[]): Promise<IntervalCost> {
   const turns: { ts: number; usd: number; unpriced: boolean }[] = []
-  forEachCallSince(new Date(sinceMs), configDirs, (ts, byModel) => {
+  await forEachCallSince(new Date(sinceMs), configDirs, (ts, byModel) => {
     const priced = priceTokens(byModel, ts)
     turns.push({ ts, usd: priced.costUsd ?? 0, unpriced: priced.unpriced.length > 0 })
   })
@@ -343,13 +343,13 @@ function intervalCostFrom(sinceMs: number, configDirs: string[]): IntervalCost {
  * turns fitted against this quota would overstate what is left. Never throws: a failure reads as
  * "not calibrated", with every figure null.
  */
-export function calibrateQuotaDollars(
+export async function calibrateQuotaDollars(
   key: string,
   snap: UsageSnapshot,
   samples: UsageSample[],
   configDirs: string[] | undefined,
   now: Date = new Date(),
-): QuotaDollars {
+): Promise<QuotaDollars> {
   if (key.startsWith('codex:')) return uncalibratedDollars(CODEX_NOT_CALIBRATED)
   if (!configDirs?.length) return uncalibratedDollars(FOREIGN_DIRS_NOT_CALIBRATED)
   try {
@@ -357,7 +357,7 @@ export function calibrateQuotaDollars(
     const grouped = groupedReadings(samples)
     const scanFrom = pruneToScanFloor(grouped, entry.windows)
     const cost: IntervalCost = Number.isFinite(scanFrom)
-      ? intervalCostFrom(scanFrom, configDirs)
+      ? await intervalCostFrom(scanFrom, configDirs)
       : () => ({ usd: 0, unpriced: false })
     const windows = foldWindows(grouped, cost, entry.windows)
 

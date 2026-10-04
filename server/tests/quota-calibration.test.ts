@@ -128,7 +128,7 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
     capturedAt: iso(T0 + HOUR),
   })
 
-  test('prices the turns between the readings of a window into dollars per percent, then re-prices', () => {
+  test('prices the turns between the readings of a window into dollars per percent, then re-prices', async () => {
     sharedKitStore().upsertEvents([
       // $30 at $3 per million input tokens, inside the window.
       turn(T0 + HOUR / 2, 'r1', 10_000_000),
@@ -151,7 +151,7 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
         },
       ]
       const key = 'test:quota-dollars'
-      const d = calibrateQuotaDollars(key, snap(40), samples, [defaultConfigDir()])
+      const d = await calibrateQuotaDollars(key, snap(40), samples, [defaultConfigDir()])
       expect(d.weekly.usdPerPct).toBeCloseTo(3, 6)
       expect(d.weekly.capacityUsd).toBeCloseTo(300, 6)
       expect(d.weekly.dollarsLeft).toBeCloseTo(180, 6)
@@ -166,7 +166,7 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
   // Contract: only an account's own config dirs are priced, and never for Codex. Regression: the
   // budget used to fall back to ~/.claude (another login) and to price Claude turns against a
   // Codex window, persisting an inflated dollarsLeft that check_my_usage replayed.
-  test('refuses to calibrate a Codex account or an account with no config dir of its own', () => {
+  test('refuses to calibrate a Codex account or an account with no config dir of its own', async () => {
     const samples: UsageSample[] = [
       {
         at: iso(T0),
@@ -186,7 +186,7 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
       ['desktop:x', undefined],
       ['desktop:y', []],
     ] as const) {
-      const d = calibrateQuotaDollars(key, snap(40), samples, dirs ? [...dirs] : undefined)
+      const d = await calibrateQuotaDollars(key, snap(40), samples, dirs ? [...dirs] : undefined)
       expect(d.calibratedAt).toBeNull()
       expect(d.weekly.dollarsLeft).toBeNull()
       expect(d.caveat).toStartWith('Not calibrated:')
