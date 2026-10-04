@@ -1,5 +1,9 @@
+import { join } from 'node:path'
 import { markSessionGone } from './analytics'
+import { climayteEffortBySession } from './climayte-effort'
+import { allInstanceNumbers, instanceRef } from './core/instance-numbers'
 import { mapPool } from './core/map-pool'
+import { defaultClaudeUserDataDir, instancesRoot } from './core/paths'
 import { db } from './db'
 import { readDshSession } from './dsh-sessions'
 import { readForeignSession } from './foreign-sessions'
@@ -58,8 +62,10 @@ import type {
  * 3 → adds thread_key, the first message's uuid, which identifies the CONVERSATION.
  * 4 → adds ended_because, why the transcript stopped.
  * 5 → adds model and effort, the newest assistant turn's model and the recorded effort level.
+ * 6 → effort also reads the `effort` / `perTurnEffort` Claude stamps on every assistant event; rows
+ *     cached at 5 answered NULL for transcripts that do carry it.
  */
-const SCAN_VERSION = 5
+const SCAN_VERSION = 6
 
 function toEpoch(ts: unknown): number | null {
   if (typeof ts !== 'string') return null
@@ -450,11 +456,15 @@ function applyMetaLine(
 }
 
 // The model and effort the transcript records: Claude stamps the model on each assistant message
-// (`<synthetic>` is the CLI's own notice, not a model), Codex writes both on every turn_context.
+// (`<synthetic>` is the CLI's own notice, not a model) and the effort it ran that turn at as a
+// top-level `effort` (or `perTurnEffort`, which the CLI writes alone on some turns); Codex writes
+// both on every turn_context. A subagent's own turns are skipped: they run at their own effort.
 function applyRunSettings(acc: MetaAccumulator, ev: any): void {
-  const m = ev.message?.role === 'assistant' ? ev.message.model : ev.payload?.model
+  const assistant = ev.message?.role === 'assistant'
+  const m = assistant ? ev.message.model : ev.payload?.model
   if (typeof m === 'string' && m && m !== '<synthetic>') acc.model = m
-  const e = ev.effortLevel ?? ev.payload?.effort
+  const stamped = assistant && !ev.isSidechain ? (ev.effort ?? ev.perTurnEffort) : undefined
+  const e = ev.effortLevel ?? ev.payload?.effort ?? stamped
   if (typeof e === 'string' && e) acc.effort = e
 }
 
@@ -1120,6 +1130,7 @@ function buildSessionSummary(
   qmap: Map<string, QueueStatus>,
   dmap: Map<string, boolean>,
   collapsed: { counts: Map<string, number> },
+  lookups: RowLookups,
 ): SessionSummary {
   return {
     session_id: tf.session_id,
@@ -1138,7 +1149,7 @@ function buildSessionSummary(
     size_bytes: tf.size_bytes,
     transcript_path: tf.path,
     queue_status: tf.source === 'claude' ? (qmap.get(tf.session_id) ?? null) : null,
-    ...instanceFieldsFor(tf, desk),
+    ...instanceFieldsFor(tf, desk, lookups.numberOf),
     archived: tf.archived || (desk?.archived ?? false),
     done:
       dmap.get(sessionMarkKey(tf.source, tf.session_id, tf)) ??
@@ -1153,9 +1164,20 @@ function buildSessionSummary(
     copy_count: 1,
     ended_because: m.ended_because,
     model: m.model,
-    effort: m.effort,
+    effort: effortFor(tf, m.effort, desk, lookups.climayteEffort),
   }
 }
+
+/** The per-list lookups a row's instance number and effort come from, built once per call. */
+interface RowLookups {
+  numberOf: DesktopNumberLookup
+  climayteEffort: Map<string, string>
+}
+
+const rowLookups = (): RowLookups => ({
+  numberOf: desktopNumberLookup(),
+  climayteEffort: climayteEffortBySession(),
+})
 
 export async function listSessions(opts: ListSessionsOptions = {}): Promise<SessionSummary[]> {
   const {
@@ -1274,6 +1296,7 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   }
   files = files.sort((a, b) => b.mtime_ms - a.mtime_ms)
   const dmap = doneMarkMap()
+  const lookups = rowLookups()
 
   const toSummary = async (tf: TranscriptFile): Promise<SessionSummary | null> => {
     const m = await scanMeta(tf)
@@ -1288,7 +1311,7 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
     // ONCE here and used for both the chip and the filter below, so the two cannot disagree.
     const desk = deskMetaFor(tf, m, idsOf(tf), mmap)
     if (applies && instanceExcludesRow(tf, instances, desk)) return null
-    return buildSessionSummary(tf, m, desk, qmap, dmap, collapsed)
+    return buildSessionSummary(tf, m, desk, qmap, dmap, collapsed, lookups)
   }
 
   // Batched so a run of stubs costs extra parses only when it actually occurs: a store with no
@@ -1460,6 +1483,7 @@ function deskMetaFor(
 function instanceFieldsFor(
   tf: TranscriptFile,
   desk: SessionMeta | null,
+  numberOf: DesktopNumberLookup,
 ): Pick<SessionSummary, 'instance' | 'instance_ref' | 'instance_num'> {
   const own = tf.instance
   if (own)
@@ -1468,11 +1492,41 @@ function instanceFieldsFor(
       instance_ref: own.ref,
       instance_num: own.num > 0 ? own.num : null,
     }
+  const instance = tf.source === 'claude' ? (desk?.instance ?? null) : null
   return {
-    instance: tf.source === 'claude' ? (desk?.instance ?? null) : null,
+    instance,
     instance_ref: null,
-    instance_num: null,
+    instance_num: instance === null ? null : numberOf(instance),
   }
+}
+
+type DesktopNumberLookup = (label: string) => number | null
+
+/**
+ * Label (`default` or a dir name under the instances root) -> that Desktop profile's permanent
+ * number, from the registry list_instance_numbers reads. One file read per list call, then a map
+ * lookup per row. Null for a label with no registry entry: the registry numbers a profile when
+ * AgentHydra first lists it, and this never assigns one, so a list call cannot mint numbers.
+ */
+function desktopNumberLookup(): DesktopNumberLookup {
+  const numbers = allInstanceNumbers()
+  return (label) => {
+    const dir = label === 'default' ? defaultClaudeUserDataDir() : join(instancesRoot(), label)
+    return numbers[instanceRef('desktop', dir)] ?? null
+  }
+}
+
+/** What a Claude row's effort is, most specific record first: the effort CliMayte launched the
+ *  session at, the effort its own newest turn was stamped with, then the effort the Desktop app
+ *  keeps for the chat. Null when none of them wrote one down. */
+function effortFor(
+  tf: TranscriptFile,
+  scanned: string | null,
+  desk: SessionMeta | null,
+  climayte: Map<string, string>,
+): string | null {
+  if (tf.source !== 'claude') return scanned
+  return climayte.get(tf.session_id) ?? scanned ?? desk?.effort ?? null
 }
 
 /**
@@ -1594,6 +1648,7 @@ export async function getSession(
   const dmap = doneMarkMap()
   // Same resolution the list uses, so a row does not change its account when you click it.
   const meta = deskMetaFor(tf, m, [tf.session_id], sessionMetaMap())
+  const lookups = rowLookups()
   return {
     session_id: tf.session_id,
     source: tf.source,
@@ -1611,7 +1666,7 @@ export async function getSession(
     size_bytes: tf.size_bytes,
     transcript_path: tf.path,
     queue_status: tf.source === 'claude' ? (qmap.get(tf.session_id) ?? null) : null,
-    ...instanceFieldsFor(tf, meta),
+    ...instanceFieldsFor(tf, meta, lookups.numberOf),
     archived: tf.archived || (meta?.archived ?? false),
     done:
       dmap.get(sessionMarkKey(tf.source, sessionId, tf)) ??
@@ -1634,6 +1689,6 @@ export async function getSession(
     copy_count: 1,
     ended_because: m.ended_because,
     model: m.model,
-    effort: m.effort,
+    effort: effortFor(tf, m.effort, meta, lookups.climayteEffort),
   }
 }

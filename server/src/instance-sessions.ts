@@ -57,6 +57,9 @@ export interface SessionMeta {
    *  the archived tombstone the migration left behind, which is why retired claims are collected
    *  from EVERY file, not only the winner of setPreferred). */
   priorCliSessionIds: string[]
+  /** The effort the app runs this chat at (`effort` in the record), null when it keeps none. A
+   *  per-session setting the user can change in the app, so it is the app's own word on the chat. */
+  effort: string | null
 }
 
 /** One retired-id claim: the transcript it rolled onto, and whether the row that said so is a
@@ -87,6 +90,7 @@ interface OriginRow {
   archived: boolean
   cwd: string
   createdAt: number
+  effort: string | null
 }
 
 /**
@@ -148,12 +152,13 @@ function metaOf(c: DossierChat): { entry: SessionMeta; origin: OriginRow | null 
     chatId: c.chatId,
     cliSessionId: id,
     priorCliSessionIds: c.priorCliSessionIds.filter((p) => !!p && p !== id),
+    effort: c.effort,
   }
   // Back to the record's own epoch ms: chat-store-scan carries it as ISO, which is exact to the ms.
   const createdAt = c.createdAt ? Date.parse(c.createdAt) : Number.NaN
   const origin =
     c.cwd && Number.isFinite(createdAt)
-      ? { instance: c.instance, archived: c.archived, cwd: c.cwd, createdAt }
+      ? { instance: c.instance, archived: c.archived, cwd: c.cwd, createdAt, effort: c.effort }
       : null
   return { entry, origin }
 }
@@ -267,6 +272,9 @@ export function resolveInstanceByOrigin(cwd: string, createdAt: number | null): 
     // A second candidate naming a DIFFERENT instance makes this ambiguous, and an ambiguous
     // account is worse than no account: the whole point of the chip is knowing whose quota paid.
     if (found && found.instance !== row.instance) return null
+    // Two chats of one account born together may sit at different efforts: then neither is this
+    // transcript's, and null is the honest answer (the join names the account, not the setting).
+    if (found && found.effort !== row.effort) found.effort = null
     // The origin join answers WHOSE account ran this, from (cwd, created-instant) alone; it
     // never sees a metadata row for this session, so the automation posture is genuinely
     // unknown here rather than absent.
@@ -279,6 +287,7 @@ export function resolveInstanceByOrigin(cwd: string, createdAt: number | null): 
       chatId: null,
       cliSessionId: null,
       priorCliSessionIds: [],
+      effort: row.effort,
     }
   }
   return found
