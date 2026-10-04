@@ -3,7 +3,7 @@
 
 import { Database } from 'bun:sqlite'
 import { afterAll, describe, expect, test } from 'bun:test'
-import { spendReport } from '../src/analytics'
+import { dropAnalytics, spendReport } from '../src/analytics'
 import { db } from '../src/db'
 import { ingestLegacy } from '../src/kit/ingest-legacy'
 import { usageQuery } from '../src/kit/query'
@@ -179,6 +179,7 @@ describe('kit legacy backfill', () => {
     db.query(
       'insert or replace into session_stats (session_key, session_id, source, cwd, first_seen_at, last_scanned_at) values (?, ?, ?, ?, 1, 2)',
     ).run('claude:rep-gone', 'rep-gone', 'claude', 'D:/work/Legacy')
+    dropAnalytics() // forgets the minute-old session -> project map an earlier test file may have left
     const before = await spendReport({ store, now: NOW })
     await ingestLegacy(store, s, { now: NOW })
     const after = await spendReport({ store, now: NOW })
