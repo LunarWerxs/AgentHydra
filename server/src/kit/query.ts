@@ -213,6 +213,16 @@ function dimWhere(filter: NonNullable<UsageQueryParams['filter']>): Where {
       parts.push('0')
       continue
     }
+    // `pc=self`: this machine's own events. The local ingest leaves pc empty (the rollup stores ''),
+    // so "self" is the empty pc, alone or alongside named PCs.
+    if (k === 'pc') {
+      const named = vals.filter((v) => v !== 'self')
+      const clause = named.length ? [`pc in (${named.map(() => '?').join(',')})`] : []
+      if (named.length !== vals.length) clause.push("(pc is null or pc = '')")
+      parts.push(`(${clause.join(' or ')})`)
+      args.push(...named)
+      continue
+    }
     parts.push(`${k} in (${vals.map(() => '?').join(',')})`)
     args.push(...vals)
   }

@@ -16,10 +16,16 @@ import json
 import os
 import statistics
 import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from . import claude_usage, config
 from .ledger import ledger_rows
 
+DEFAULT_AGENTHYDRA_URL = "http://127.0.0.1:7787"
+KIT_SOURCES = "cli,desktop,climayte"  # the analytics kit's Claude sources (sessions of this PC's Claude Code)
+KIT_TIMEOUT_S = 5
 BACKFILL_DAYS = 7
 POOL_DAYS = 14
 MIN_POOL = 5
@@ -52,6 +58,37 @@ def lower_priority() -> None:
         os.nice(10)
 
 
+def kit_claude_by_day(since: dt.date, end: dt.date) -> dict[str, dict] | None:
+    """Claude's per-day USD and tokens on this PC from the AgentHydra analytics kit, or None when the kit cannot say.
+
+    None means the daemon does not answer (AGENTHYDRA_URL, else the default port; empty disables it) OR the kit has
+    ingested no Claude events yet or none old enough for the window, so a low figure would pass for a true one.
+    The caller then runs the transcript scan (claude_usage.py): that is HSwarm's own path when it runs without
+    AgentHydra, not a fallback for old builds. Asking by the machine's own day buckets (no tz) with pc=self keeps
+    it this PC's usage, as the scan is.
+    """
+    base = os.environ.get("AGENTHYDRA_URL", DEFAULT_AGENTHYDRA_URL).rstrip("/")
+    if not base:
+        return None
+    ms = lambda d: int(dt.datetime.combine(d, dt.time.min).astimezone().timestamp() * 1000)  # noqa: E731
+    query = urllib.parse.urlencode({"source": KIT_SOURCES, "groupBy": "day,model", "pc": "self",
+                                    "from": ms(since), "to": ms(end + dt.timedelta(1)) - 1, "measures": "tokens,list_usd"})
+    try:
+        with urllib.request.urlopen(f"{base}/api/kit/usage?{query}", timeout=KIT_TIMEOUT_S) as resp:
+            data = json.load(resp)
+        seen = [v for k, v in data["coverage"]["sources"].items() if k in KIT_SOURCES.split(",") and v.get("events")]
+        if not seen or min(v["firstTs"] for v in seen) > ms(since):
+            return None
+        out: dict[str, dict] = {}
+        for r in data["rows"]:
+            d = out.setdefault(r["day"], {"claude_usd": 0.0, "claude_tokens": 0})
+            d["claude_usd"] += r.get("list_usd") or 0.0
+            d["claude_tokens"] += int(r.get("tokens") or 0)
+        return out
+    except (OSError, ValueError, KeyError, TypeError):  # URLError is an OSError; a bad body or shape is not the kit's answer
+        return None
+
+
 def hswarm_by_day(since: dt.date, today: dt.date) -> dict[str, dict]:
     """Ledger rows grouped by local day: tasks, distinct jobs, DeepSeek USD (tasks with no cost counted apart)."""
     out: dict[str, dict] = {}
@@ -69,11 +106,19 @@ def hswarm_by_day(since: dt.date, today: dt.date) -> dict[str, dict]:
     return {k: v | {"jobs": len(v["jobs"]), "deepseek_usd": round(v["deepseek_usd"], 6)} for k, v in out.items()}
 
 
-def day_row(day: str, claude: dict | None, swarm: dict | None) -> dict:
+def day_row(day: str, claude: dict | None, swarm: dict | None, kit: dict | None = None) -> dict:
+    """`kit` is the kit's {day: {claude_usd, claude_tokens}} when it answered for the window, else None (then the
+    scan's own totals stand). The scan still supplies what the kit has no field for: the per-sub-agent costs the
+    counterfactual is measured from, and the per-session token split the per-account view is built from."""
     c, s = claude or claude_usage.empty_day(), swarm or {}
+    if kit is None:
+        used = {"claude_usd": c["claude_usd"], "claude_tokens": sum(c.get("tokens", {}).values()), "claude_source": "scan"}
+    else:
+        used = {"claude_usd": round(kit.get(day, {}).get("claude_usd", 0.0), 6), "claude_tokens": kit.get(day, {}).get("claude_tokens", 0),
+                "claude_source": "kit"}
     return {"day": day, "deepseek_usd": s.get("deepseek_usd", 0.0), "hswarm_tasks": s.get("tasks", 0),
             "hswarm_jobs": s.get("jobs", 0), "hswarm_cost_unknown_tasks": s.get("cost_unknown_tasks", 0),
-            "claude_usd": c["claude_usd"], "claude_main_usd": c["main_usd"], "claude_sub_usd": c["sub_usd"],
+            **used, "claude_main_usd": c["main_usd"], "claude_sub_usd": c["sub_usd"],
             "claude_requests": c["requests"], "claude_unpriced_requests": c["unpriced_requests"], "subagent_usd": c["agents"],
             "agent_tokens": c.get("agent_tokens", {}), "by_model": c.get("by_model", {}),
             # The day's own token buckets, and the same split per session: what the per-account view is built from.
@@ -81,9 +126,9 @@ def day_row(day: str, claude: dict | None, swarm: dict | None) -> dict:
 
 
 def measure(start: dt.date, end: dt.date, today: dt.date) -> dict[str, dict]:
-    claude, swarm = claude_usage.collect(start, end), hswarm_by_day(start, today)
+    claude, swarm, kit = claude_usage.collect(start, end), hswarm_by_day(start, today), kit_claude_by_day(start, end)
     days = [(start + dt.timedelta(n)).isoformat() for n in range((end - start).days + 1)]
-    return {d: day_row(d, claude.get(d), swarm.get(d)) for d in days}
+    return {d: day_row(d, claude.get(d), swarm.get(d), kit) for d in days}
 
 
 def load_rows() -> dict[str, dict]:
@@ -178,6 +223,9 @@ def _share(avoided: float, used: float) -> float:
 
 def saving(r: dict, per_agent: float | None) -> dict:
     out = {k: r[k] for k in ("day", "deepseek_usd", "hswarm_tasks", "hswarm_jobs", "claude_usd", "claude_sub_usd")}
+    out["claude_source"] = r.get("claude_source", "scan")  # rows recorded before the kit existed came from the scan
+    if "claude_tokens" in r:
+        out["claude_tokens"] = r["claude_tokens"]
     out["claude_subagents"] = sum(len(v) for v in r["subagent_usd"].values())
     if r.get("partial"):
         out["partial"] = True
@@ -214,4 +262,4 @@ def report(days: int = 14, include_today: bool = True, today: dt.date | None = N
         utilization.record_claude_days([rows[-1]], partial=True)  # today's live figure feeds the share too
     cf = counterfactual([r for r in rows if not r.get("partial")] or rows)
     shown = [saving(r, cf["usd"]) for r in rows[-days:]]
-    return {"running_total": utilization.summary(10), "per_subagent": cf, "days": shown, "totals": totals(shown), "month": month(shown), "note": NOTE, "file": str(daily_path())}
+    return {"running_total": utilization.summary(10), "per_subagent": cf, "days": shown, "claude_source": shown[-1]["claude_source"] if shown else "scan", "totals": totals(shown), "month": month(shown), "note": NOTE, "file": str(daily_path())}

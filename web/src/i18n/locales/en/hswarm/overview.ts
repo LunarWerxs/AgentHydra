@@ -51,6 +51,7 @@ export default {
   showNumbers: 'Show the numbers',
   tokensIn14Days: 'tokens in 14 days',
   cachedInput: 'of it cached input',
+  otherProviders: '{n} others',
   tokens: 'Tokens',
   day: 'Day',
   cost: 'Value at list price',

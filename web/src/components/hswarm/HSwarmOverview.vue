@@ -20,30 +20,30 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import type { HswarmMoney, HswarmState } from '@/lib/hswarm-api'
 import { moneyLine, useHswarmApi } from '@/lib/hswarm-api'
+import { fetchKitUsage, localDaysFrom, localTz } from '@/lib/kit-usage'
 
+/** One day of HSwarm's work, read from the toolkit (`source=hswarm`, groupBy day). */
 interface UsageDay {
   date: string
-  cost_usd: number
-  value_usd?: number
-  spent_usd?: number
-  free_usd?: number
-  unknown_usd?: number
-  tokens_in?: number
-  tokens_out?: number
-  tokens_cached?: number
-  provider_tokens?: Record<string, number>
+  tokens: number
+  cost: number
   tasks: number
   ok: number
   error: number
-  providers?: Record<string, number>
-  models?: Record<string, number>
+}
+
+/** Per provider over the same window: tokens first, the list-price value beside them. */
+interface UsageProvider {
+  name: string
+  tokens: number
+  usd: number
 }
 
 interface UsageData {
   days: UsageDay[]
+  providers: UsageProvider[]
+  totals: Record<string, number | null>
   error?: string
-  stale?: boolean
-  at?: number
 }
 
 interface DoctorResult {
@@ -83,10 +83,39 @@ const askModel = ref('auto')
 const askRunning = ref(false)
 
 // Load additional data
+const USAGE_DAYS = 14
+
+// The spend by day and by provider, and the task counts, are the toolkit's answers for HSwarm's own calls.
 async function loadUsage() {
+  const base = {
+    source: 'hswarm',
+    from: localDaysFrom(USAGE_DAYS),
+    tz: localTz(),
+    measures: ['tokens', 'cache_read', 'list_usd', 'billed_usd', 'calls', 'ok', 'failed'],
+  }
   try {
-    const data = await apiCall('usage?days=14')
-    usage.value = data
+    const [byDay, byProvider] = await Promise.all([
+      fetchKitUsage({ ...base, groupBy: 'day' }),
+      fetchKitUsage({ ...base, groupBy: 'provider' }),
+    ])
+    usage.value = {
+      days: byDay.rows.map((r) => ({
+        date: String(r.day),
+        tokens: Number(r.tokens),
+        cost: Number(r.list_usd ?? 0),
+        tasks: Number(r.calls),
+        ok: Number(r.ok),
+        error: Number(r.failed),
+      })),
+      providers: byProvider.rows
+        .map((r) => ({
+          name: r.provider === null ? 'other' : String(r.provider),
+          tokens: Number(r.tokens),
+          usd: Number(r.list_usd ?? 0),
+        }))
+        .sort((a, b) => b.tokens - a.tokens),
+      totals: byDay.totals,
+    }
   } catch (err) {
     console.error('Failed to load usage:', err)
   }
@@ -142,36 +171,21 @@ const autoModels = computed(() => {
   )
 })
 
-const totalTokens = computed(() => {
-  return (
-    usage.value?.days.reduce(
-      (sum: number, d: any) => sum + (d.tokens_in || 0) + (d.tokens_out || 0),
-      0,
-    ) || 0
-  )
-})
+const totalTokens = computed(() => usage.value?.totals.tokens ?? 0)
 
-const totalCachedTokens = computed(() => {
-  return usage.value?.days.reduce((sum: number, d: any) => sum + (d.tokens_cached || 0), 0) || 0
-})
+const totalCachedTokens = computed(() => usage.value?.totals.cache_read ?? 0)
 
-// The money under the token headline: list-price value of every call, and the part known to be billed. Days from before
-// the ledger recorded billing count as unknown (their value is in value_usd, never in spent_usd).
+// The money under the token headline: list-price value of every call, and the part known to be billed. A window whose
+// calls carry no billing flag (written before the ledger recorded it) reads null here and counts as unknown, not spent.
 const money = computed<HswarmMoney>(() => {
-  const m = { value_usd: 0, spent_usd: 0, free_usd: 0, unknown_usd: 0 }
-  for (const d of usage.value?.days ?? []) {
-    m.value_usd += d.value_usd ?? d.cost_usd ?? 0
-    m.spent_usd += d.spent_usd ?? 0
-    m.free_usd += d.free_usd ?? 0
-    m.unknown_usd += d.unknown_usd ?? (d.value_usd == null ? (d.cost_usd ?? 0) : 0)
-  }
-  return m
+  const t = usage.value?.totals
+  const value = t?.list_usd ?? 0
+  const spent = t?.billed_usd ?? null
+  return { value_usd: value, spent_usd: spent ?? 0, unknown_usd: spent === null ? value : 0 }
 })
 const moneyText = computed(() => moneyLine(money.value, t))
 
-const totalTasks = computed(() => {
-  return usage.value?.days.reduce((sum: number, d: any) => sum + (d.tasks || 0), 0) || 0
-})
+const totalTasks = computed(() => usage.value?.totals.calls ?? 0)
 
 const registeredClient = computed(() => {
   return clients.value?.some((c: any) => c.registered) || false
@@ -212,18 +226,7 @@ const isFresh = computed(() => {
 })
 
 // Chart data
-const spendDays = computed(() => {
-  if (!usage.value?.days) return []
-  return usage.value.days.map((d) => ({
-    date: d.date,
-    cost: d.cost_usd || 0,
-    tokens: (d.tokens_in || 0) + (d.tokens_out || 0),
-    cached: d.tokens_cached || 0,
-    tasks: d.tasks || 0,
-    ok: d.ok || 0,
-    error: d.error || 0,
-  }))
-})
+const spendDays = computed(() => usage.value?.days ?? [])
 
 const spendChartData = computed(() => {
   return spendDays.value.map((d) => ({
@@ -256,53 +259,25 @@ const healthData = computed(() => {
   }))
 })
 
-const costByProvider = computed(() => {
-  const m = new Map<string, number>()
-  usage.value?.days.forEach((d) => {
-    Object.entries(d.providers || {}).forEach(([k, v]) => {
-      m.set(k, (m.get(k) || 0) + (v || 0))
-    })
-  })
-  return m
-})
-
 const moneyData = computed(() => {
-  const byProvider = new Map<string, number>()
-  usage.value?.days.forEach((d) => {
-    Object.entries(d.provider_tokens || {}).forEach(([k, v]) => {
-      byProvider.set(k, (byProvider.get(k) || 0) + (v || 0))
-    })
-  })
-
-  const list = Array.from(byProvider.entries())
-    .filter(([, v]) => v > 0)
-    .sort((a, b) => b[1] - a[1])
-
-  if (list.length <= 8) {
-    return list.map(([name, value]) => ({
-      key: name,
-      label: `${name} · ${formatUSD(costByProvider.value.get(name) || 0)}`,
-      value,
-      detail: formatUSD(costByProvider.value.get(name) || 0),
-    }))
-  }
-
-  const shown = list.slice(0, 7)
-  const othersValue = list.slice(7).reduce((sum, [, v]) => sum + v, 0)
-  const othersCost = list.slice(7).reduce((sum, [k]) => sum + (costByProvider.value.get(k) || 0), 0)
-  const rows = shown.map(([name, value]) => ({
+  const list = (usage.value?.providers ?? []).filter((p) => p.tokens > 0)
+  const row = (name: string, value: number, usd: number) => ({
     key: name,
-    label: `${name} · ${formatUSD(costByProvider.value.get(name) || 0)}`,
+    label: `${name} · ${formatUSD(usd)}`,
     value,
-    detail: formatUSD(costByProvider.value.get(name) || 0),
-  }))
-  rows.push({
-    key: `${list.length - 7} others`,
-    label: `${list.length - 7} others · ${formatUSD(othersCost)}`,
-    value: othersValue,
-    detail: formatUSD(othersCost),
+    detail: formatUSD(usd),
   })
-  return rows
+  if (list.length <= 8) return list.map((p) => row(p.name, p.tokens, p.usd))
+
+  const rest = list.slice(7)
+  return [
+    ...list.slice(0, 7).map((p) => row(p.name, p.tokens, p.usd)),
+    row(
+      t('hswarm.v.overview.otherProviders', { n: rest.length }),
+      rest.reduce((sum, p) => sum + p.tokens, 0),
+      rest.reduce((sum, p) => sum + p.usd, 0),
+    ),
+  ]
 })
 
 // Doctor run

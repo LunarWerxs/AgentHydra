@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // "Model results" on the HSwarm overview: which models got a thumbs up or down, what a successful task cost on each,
-// whether their edits survived a day, and how many tasks each ran per day. All from one `model-stats` call.
+// whether their edits survived a day, and how many tasks each ran per day. Volume, tokens, outcomes, seconds and money
+// per model are the analytics toolkit's (`source=hswarm`, groupBy model); only the edit-survival scoring is HSwarm's own
+// (`model-stats`), joined by model name once it answers, so the page paints without waiting for it.
 import { ThumbsDown, ThumbsUp } from '@lucide/vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -10,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { seriesColor } from '@/lib/chart'
 import type { HswarmMoney } from '@/lib/hswarm-api'
 import { formatUsd, moneyLine, useHswarmApi } from '@/lib/hswarm-api'
+import { fetchKitUsage, localTz, rollingDaysFrom } from '@/lib/kit-usage'
 
 interface ModelRow {
   model: string
@@ -17,51 +20,120 @@ interface ModelRow {
   ok: number
   failed: number
   success_rate: number
-  cost_usd: number
-  value_usd?: number
-  spent_usd?: number
-  free_usd?: number
-  unknown_usd?: number
   cost_per_ok: number | null
-  tokens_per_ok?: number | null
-  avg_seconds: number
+  tokens_per_ok: number | null
   tokens: number
   scored: number
   survival: number | null
 }
 
-interface Stats {
-  days: number
-  models: ModelRow[]
-  daily: {
-    top: string[]
-    days: Array<{ date: string; models: Record<string, number>; other: number }>
-  }
+interface DailyDay {
+  date: string
+  models: Record<string, number>
+  other: number
 }
+
+interface Kit {
+  models: Array<Omit<ModelRow, 'scored' | 'survival'>>
+  totals: HswarmMoney
+  dayModel: Array<{ date: string; model: string; calls: number }>
+}
+
+/** HSwarm's own scoring per model: how many tasks were scored and the mean 1-day edit survival. */
+interface Scores {
+  [model: string]: { scored: number; survival: number | null }
+}
+
+const TOP_DAILY = 6
 
 const { t } = useI18n()
 const { apiCall } = useHswarmApi()
 
 const range = ref(14)
-const stats = ref<Stats | null>(null)
+const kit = ref<Kit | null>(null)
+const scores = ref<Scores>({})
 const error = ref('')
 const loading = ref(false)
+let latest = 0
 
 async function load() {
+  const mine = ++latest
   loading.value = true
   error.value = ''
+  scores.value = {}
+  const base = { source: 'hswarm', from: rollingDaysFrom(range.value), tz: localTz() }
   try {
-    stats.value = await apiCall(`model-stats?days=${range.value}`)
+    const [byModel, byDayModel] = await Promise.all([
+      fetchKitUsage({
+        ...base,
+        groupBy: 'model',
+        measures: ['tokens', 'list_usd', 'billed_usd', 'calls', 'ok', 'failed', 'seconds'],
+      }),
+      fetchKitUsage({ ...base, groupBy: ['day', 'model'], measures: ['calls'] }),
+    ])
+    if (mine !== latest) return
+    const listUsd = byModel.totals.list_usd ?? 0
+    const billed = byModel.totals.billed_usd ?? null
+    kit.value = {
+      models: byModel.rows
+        .map((r) => {
+          const ok = Number(r.ok)
+          const tasks = Number(r.calls)
+          const tokens = Number(r.tokens)
+          return {
+            model: String(r.model ?? 'other'),
+            tasks,
+            ok,
+            failed: Number(r.failed),
+            success_rate: tasks ? Math.round((ok / tasks) * 10000) / 10000 : 0,
+            cost_per_ok: ok && r.list_usd !== null ? Number(r.list_usd) / ok : null,
+            tokens_per_ok: ok ? Math.round(tokens / ok) : null,
+            tokens,
+          }
+        })
+        .sort((a, b) => b.tasks - a.tasks || a.model.localeCompare(b.model)),
+      totals: {
+        value_usd: listUsd,
+        spent_usd: billed ?? 0,
+        unknown_usd: billed === null ? listUsd : 0,
+      },
+      dayModel: byDayModel.rows.map((r) => ({
+        date: String(r.day),
+        model: String(r.model ?? 'other'),
+        calls: Number(r.calls),
+      })),
+    }
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    if (mine === latest) error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    loading.value = false
+    if (mine === latest) loading.value = false
+  }
+  if (mine === latest && !error.value) await loadScores(mine)
+}
+
+// Thumbs scoring and edit survival stay HSwarm's: slow to compute, so they join in after the page has painted.
+async function loadScores(mine: number) {
+  try {
+    const stats: { models: Array<{ model: string; scored: number; survival: number | null }> } =
+      await apiCall(`model-stats?days=${range.value}`)
+    if (mine !== latest) return
+    scores.value = Object.fromEntries(
+      stats.models.map((m) => [m.model, { scored: m.scored, survival: m.survival }]),
+    )
+  } catch {
+    // Without HSwarm's scoring the survival panel simply stays empty.
   }
 }
 onMounted(load)
 watch(range, load)
 
-const models = computed(() => stats.value?.models ?? [])
+const models = computed<ModelRow[]>(() =>
+  (kit.value?.models ?? []).map((m) => ({
+    ...m,
+    scored: scores.value[m.model]?.scored ?? 0,
+    survival: scores.value[m.model]?.survival ?? null,
+  })),
+)
 const order = computed(() => models.value.map((m) => m.model))
 const pct = (n: number) => `${Math.round(n * 100)}%`
 const tokenFmt = (n: number) =>
@@ -88,16 +160,7 @@ const tokenRows = computed(() =>
     })),
 )
 // What the shown models moved and what it was worth, spent apart from value.
-const totals = computed<HswarmMoney>(() => {
-  const m = { value_usd: 0, spent_usd: 0, free_usd: 0, unknown_usd: 0 }
-  for (const r of models.value) {
-    m.value_usd += r.value_usd ?? r.cost_usd ?? 0
-    m.spent_usd += r.spent_usd ?? 0
-    m.free_usd += r.free_usd ?? 0
-    m.unknown_usd += r.unknown_usd ?? (r.value_usd == null ? (r.cost_usd ?? 0) : 0)
-  }
-  return m
-})
+const totals = computed<HswarmMoney>(() => kit.value?.totals ?? {})
 const totalsText = computed(() => moneyLine(totals.value, t))
 const survivalRows = computed(() =>
   models.value
@@ -111,10 +174,24 @@ const survivalRows = computed(() =>
     })),
 )
 
-const daily = computed(() => stats.value?.daily.days ?? [])
-const dailyTop = computed(() => stats.value?.daily.top ?? [])
-const dayTotal = (d: { models: Record<string, number>; other: number }) =>
-  Object.values(d.models).reduce((a, b) => a + b, 0) + d.other
+// The last `range` local days, the busiest models by name and everything else lumped as "other".
+const dailyTop = computed(() => models.value.slice(0, TOP_DAILY).map((m) => m.model))
+const daily = computed<DailyDay[]>(() => {
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: localTz() })
+  const byDay = new Map<string, DailyDay>()
+  for (let i = range.value - 1; i >= 0; i--) {
+    const date = fmt.format(Date.now() - i * 86_400_000)
+    byDay.set(date, { date, models: {}, other: 0 })
+  }
+  for (const r of kit.value?.dayModel ?? []) {
+    const day = byDay.get(r.date)
+    if (!day) continue
+    if (dailyTop.value.includes(r.model)) day.models[r.model] = r.calls
+    else day.other += r.calls
+  }
+  return [...byDay.values()]
+})
+const dayTotal = (d: DailyDay) => Object.values(d.models).reduce((a, b) => a + b, 0) + d.other
 const dayMax = computed(() => Math.max(1, ...daily.value.map(dayTotal)))
 const colorOf = (name: string) => seriesColor(name, dailyTop.value)
 </script>
@@ -137,7 +214,7 @@ const colorOf = (name: string) => seriesColor(name, dailyTop.value)
     </CardHeader>
     <CardContent>
       <p v-if="error" class="text-xs text-destructive">{{ t('hswarm.v.overview.results.failed') }} {{ error }}</p>
-      <p v-else-if="!stats && loading" class="py-4 text-center text-xs text-muted-foreground">{{ t('hswarm.v.overview.loading') }}</p>
+      <p v-else-if="!kit && loading" class="py-4 text-center text-xs text-muted-foreground">{{ t('hswarm.v.overview.loading') }}</p>
       <div v-else-if="models.length === 0" class="py-4 text-center">
         <div class="text-sm font-medium">{{ t('hswarm.v.overview.results.emptyTitle') }}</div>
         <p class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.emptyBody') }}</p>

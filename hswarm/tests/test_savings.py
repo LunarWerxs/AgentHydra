@@ -4,6 +4,9 @@ from __future__ import annotations
 import datetime as dt
 import json
 import sys
+import threading
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
@@ -36,7 +39,31 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "hswarm")
     monkeypatch.setattr(config, "LEDGER", tmp_path / "hswarm" / "ledger.jsonl")
     monkeypatch.setattr(claude_usage, "PROJECTS", tmp_path / "projects")
+    monkeypatch.setenv("AGENTHYDRA_URL", "")  # no daemon: the scan runs, whatever else is listening on this machine
     return tmp_path
+
+
+@pytest.fixture
+def kit_daemon(home, monkeypatch):
+    """A real HTTP server standing in for AgentHydra's /api/kit/usage; `answer` is its JSON, `asked` the queries it got."""
+    box: dict = {"answer": {}, "asked": []}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            box["asked"].append(urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query))
+            body = json.dumps(box["answer"]).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("AGENTHYDRA_URL", f"http://127.0.0.1:{server.server_port}")
+    yield box
+    server.shutdown()
 
 
 def test_price_request_uses_list_rates_and_cache_multipliers():
@@ -112,3 +139,29 @@ def test_too_few_subagents_is_not_measured_never_zero(home):
     assert "avoided_low_usd" not in s["days"][-1]
     assert s["totals"]["avoided_low_usd"] is None
     assert "-" in savings_view.render(s)
+
+
+def _kit_answer(events: int, rows: list[dict]) -> dict:
+    first = int(dt.datetime.combine(YESTERDAY - dt.timedelta(30), dt.time.min).timestamp() * 1000)
+    sources = {"cli": {"events": events, "firstTs": first, "lastTs": first}} if events else {}
+    return {"rows": rows, "totals": {}, "coverage": {"sources": sources}}
+
+
+def test_claude_side_comes_from_the_kit_when_it_has_claude_events_else_from_the_scan(kit_daemon, home):
+    _write(home / "projects" / "p" / "s.jsonl", _req("r1", YESTERDAY, output_tokens=1_000_000))  # the scan would say $10
+    rows = [{"day": YESTERDAY.isoformat(), "model": "claude-sonnet-5", "tokens": 700, "list_usd": 1.25},
+            {"day": YESTERDAY.isoformat(), "model": "claude-opus-5", "tokens": 300, "list_usd": 0.5}]
+
+    kit_daemon["answer"] = _kit_answer(events=4, rows=rows)
+    day = savings.measure(YESTERDAY, YESTERDAY, TODAY)[YESTERDAY.isoformat()]
+    assert (day["claude_usd"], day["claude_tokens"], day["claude_source"]) == (1.75, 1000, "kit")
+    asked = kit_daemon["asked"][-1]
+    assert asked["pc"] == ["self"] and asked["source"] == ["cli,desktop,climayte"] and asked["groupBy"] == ["day,model"]
+
+    kit_daemon["answer"] = _kit_answer(events=0, rows=[])  # the kit answers but has seen no Claude yet: not a zero
+    day = savings.measure(YESTERDAY, YESTERDAY, TODAY)[YESTERDAY.isoformat()]
+    assert (day["claude_usd"], day["claude_source"]) == (pytest.approx(10.0), "scan")
+    assert day["claude_tokens"] == 1_000_000
+
+    s = savings.report(days=1, include_today=False, today=TODAY)  # nothing recorded yet: the report names its source
+    assert s["claude_source"] == "scan"

@@ -108,6 +108,8 @@ describe('filters', () => {
     ['account', { account: 'acct-b' }, 3],
     ['instance', { instance: 'cli:1' }, 2],
     ['pc', { pc: 'p2' }, 2],
+    ['pc self is the empty pc', { pc: 'self' }, 1],
+    ['pc self beside a named pc', { pc: ['self', 'p2'] }, 3],
     ['source', { source: 'hswarm' }, 2],
     ['model', { model: 'opus' }, 2],
     ['provider', { provider: 'deepseek' }, 2],
