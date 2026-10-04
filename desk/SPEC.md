@@ -386,6 +386,11 @@ chat is created at once, ignoring `maxNewChats` and the wait for room (Auto may 
 | `GET /api/climayte/workers?all=1` | `CliMayteWorker[]` (active + the last 20 finished; all with the flag) |
 | `POST /api/climayte/workers/:id/cancel` | `{ ok: true }` |
 | `POST /api/climayte/workers/:id/send` (`{ text }`) | `{ ok: true }` |
+| `GET /api/localhost?folder=&all=1` | `LocalhostState` (see "Localhost": the dev servers listening on this machine, what `folder` can start, DevWebUI's status; `all=1` adds Desk's, AgentHydra's, system and service ports) |
+| `POST /api/localhost/start` (`{ folder, id }`) | `{ ok: true, id, pid, log }` (starts a `StartableServer` hidden, or through DevWebUI; 404 unknown id) |
+| `POST /api/localhost/stop` (`{ folder, id }` or `{ pid }`) | `{ ok: true, by: 'desk' \| 'devwebui' }` (409 "not started by Desk" for any process Desk did not start; nothing is killed) |
+| `POST /api/localhost/restart` (`{ folder, id }`) | `{ ok: true, id }` (Desk-managed: stop then start; DevWebUI: its restart) |
+| `GET /api/localhost/log?folder=&id=&lines=` | `{ id, lines, source }` (the last 1-400 lines, 80 by default, of `<home>/localhost/<folder>-<id>.log` or DevWebUI's log) |
 
 Errors answer `{ error: string }` with a 4xx/5xx status, the real reason in the text.
 
@@ -781,6 +786,52 @@ queue actions (*Send queue: the window*).
 Reconnects `/ws` with backoff and reloads on reconnect. A new build reloads the window onto it, back on
 the chat it showed (see "Launcher").
 
+## Localhost (server/src/localhost, web/src/components/localhost)
+
+The real app's top-right browser button lists your localhost servers; Desk's is the header's globe
+button (`aria-label="Localhost servers"`), a popover with `LocalhostPanel` for the chat's folder.
+
+**Listing** (`GET /api/localhost`, `Localhost.state`): every TCP port LISTENING on an address loopback
+reaches (127.0.0.1, ::1, 0.0.0.0, ::). Windows reads `netstat -ano -p TCP` (fast) and falls back to
+`Get-NetTCPConnection -State Listen` as JSON; elsewhere `lsof -iTCP -sTCP:LISTEN`. One CIM
+`Win32_Process` query adds each pid's name, command line, parent and start time. Windows does not expose
+another process's cwd, so `cwd` is known only for servers Desk or DevWebUI started. `project` is the
+longest known folder (the chats' folders and Recent) named by the cwd or the command's arguments. Each
+port gets one HTTP GET (800 ms, first 64 KB) for its status and `<title>`. Every listener gets a kind and
+only `dev` shows by default (`hidden` counts the rest; `all=1` shows them): `desk` (this server's pid or
+port, 7795, a chat host), `agenthydra` (its process or 7787), `system` (pid 0/4, svchost,
+lsass and the like, anything run from C:\Windows), `service` (MCP servers, swarm daemons, hook hosts, and an ephemeral port >= 49152
+that does not answer HTTP), `dev` (node, bun, deno, python, vite, dotnet, java, php, ruby, go and other
+runtimes) and `app` (anything else).
+
+**Startable** for the folder (`startable.ts`): package.json `dev`, `start` and `preview` scripts, run with
+the lockfile's package manager (bun.lock/bun.lockb, pnpm-lock.yaml, yarn.lock, else npm), the port read
+from `--port`/`PORT=` when the script names one; and every process in a `.devwebui` or `*.devwebui` file
+in the folder. Ids: `script:<name>`, `devwebui-file:<id>`, and `devwebui:<id>` for DevWebUI's own list.
+
+**Starting and stopping** (`managed.ts`): Desk starts a server with no window (Windows: WMI
+`Win32_Process.Create` of `cmd.exe /d /s /c "<command> >> <log> 2>&1"` hidden, `Start-Process
+-WindowStyle Hidden` as fallback; elsewhere a detached spawn), its output appended to
+`<home>/localhost/<folder>-<id>.log`, and records pid and OS start time in `<home>/localhost/managed.json`.
+Stop and restart act ONLY on that record: the pid must still exist with the same start time (within 2 s)
+or be its descendant, then the whole tree is killed (`taskkill /T /F`). A pid Desk did not start, or one
+reused by another process, answers 409 "not started by Desk" and nothing is killed. Restart = stop, then
+start.
+
+**DevWebUI** (Michael's daemon, github.com/LunarWerxs/DevWebUI): when `DEVWEBUI_URL` (default
+`http://127.0.0.1:4000`) answers `/api/health` with `{ ok, service: 'devwebui' }`, its processes
+(`GET /api/processes`: status, port, CPU, memory) merge into the list and the startable list, and start,
+stop, restart and the log tail of those go through `POST /api/processes/:id/:action` and
+`GET /api/processes/:id/logs`. Down, refused or behind sign-in = `devwebui.up: false` with the reason,
+never an error.
+
+**The panel**: Running (port, title or process, project, uptime; a click opens `http://localhost:<port>`
+in a new tab, which from Desk's app window is the system browser; Stop and Restart on Desk- or
+DevWebUI-managed rows), an "All ports (n hidden)" toggle, Startable for this chat's folder (Start, or
+Stop/Restart/Log when running), a log tail (refreshed with the list, every 4 s while open), and a status
+line: "DevWebUI connected · n processes" or "DevWebUI not running (127.0.0.1:4000)" with the hint that
+Desk starts servers itself, hidden, and DevWebUI is what manages `.devwebui` projects. Its fixtures are in the Gallery (`web/src/dev/sections/LocalhostSection.vue`).
+
 ## Server wiring (so workers never edit the same file)
 
 `server/src/index.ts` (written once by the scaffold task) loads every file in `server/src/plugins/`
@@ -788,7 +839,7 @@ in filename order; each exports `default async function plugin(app: Hono, ctx: S
 `server/src/context.ts` exports `ctx`: `{ home, broadcast(event: ServerEvent), settings(),
 registerHello(fn) }`. Plugins: `10-bridge.ts` (bridge routes and poller), `20-engine.ts` (chat manager,
 chat routes, models, commands, folders/recent and folders/pick, registers the `hello` provider), `30-git.ts` (git and
-folders/browse). Each plugin imports what it needs from its own folder; the bridge is a lazy singleton
+folders/browse), `45-localhost.ts` (the Localhost routes). Each plugin imports what it needs from its own folder; the bridge is a lazy singleton
 exported as `bridge()` from `server/src/bridge/index.ts`, so the engine calls `bridge().placeAccount()`
 directly. Nobody edits `index.ts`, `context.ts` or another worker's plugin.
 

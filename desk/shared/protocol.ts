@@ -558,3 +558,77 @@ export interface FailuresResponse {
   /** Keyed by local day, YYYY-MM-DD. */
   byDay: Record<string, number>
 }
+
+// Localhost (SPEC "Localhost"): GET /api/localhost, POST /api/localhost/start|stop|restart, GET /api/localhost/log
+
+/** Who looks after a server: Desk started it, DevWebUI runs it, or nobody we know (never stopped from Desk). */
+export type LocalManager = 'desk' | 'devwebui' | null
+
+/** What a listening process is, for the default filter: only 'dev' shows without ?all=1. */
+export type LocalServerKind = 'dev' | 'desk' | 'agenthydra' | 'service' | 'system' | 'app'
+
+export interface LocalServer {
+  port: number
+  /** The bound address: 127.0.0.1, ::1, or a wildcard (0.0.0.0, ::) that loopback reaches too. */
+  address: string
+  pid: number
+  /** Image name without .exe, null when the process could not be read. */
+  process: string | null
+  command: string | null
+  /** The working folder when known (Desk- or DevWebUI-started); Windows does not expose another process's. */
+  cwd: string | null
+  /** The known project folder (a chat's or Recent folder) it runs from, when the command line or cwd names one. */
+  project: string | null
+  url: string
+  /** null = did not answer HTTP within the probe's timeout. */
+  http: { status: number; title: string | null } | null
+  kind: LocalServerKind
+  /** Epoch ms the process (or its managed root) started; null when unknown. */
+  startedAt: number | null
+  managed: LocalManager
+  /** The start id to stop or restart it with (a StartableServer id), when managed. */
+  managedId: string | null
+  /** DevWebUI's status and samples for the process it manages. */
+  status?: string
+  cpu?: number | null
+  memory?: number | null
+}
+
+export interface StartableServer {
+  /** 'script:<name>' (package.json), 'devwebui-file:<id>' (a .devwebui file), 'devwebui:<id>' (DevWebUI's daemon). */
+  id: string
+  name: string
+  command: string
+  cwd: string
+  source: 'package.json' | '.devwebui' | 'devwebui'
+  port: number | null
+  /** Running now: Desk's record, or DevWebUI's status. */
+  running: { pid: number | null; port: number | null; startedAt: number | null; status: string } | null
+  managed: LocalManager
+}
+
+export interface DevWebUIStatus {
+  up: boolean
+  url: string
+  /** Why it is not usable (not running, refused, needs auth). */
+  error: string | null
+  processes: number
+}
+
+export interface LocalhostState {
+  servers: LocalServer[]
+  /** Listeners left out by the default filter (shown with ?all=1). */
+  hidden: number
+  folder: string | null
+  startable: StartableServer[]
+  devwebui: DevWebUIStatus
+  /** A scan problem worth showing (the port list could not be read). */
+  error: string | null
+  scannedAt: number
+}
+
+export interface LocalhostLog {
+  id: string
+  lines: string[]
+  source: 'desk' | 'devwebui'
+}

@@ -4,6 +4,8 @@ import type { AccountInfo, ChatSummary, ExternalSession } from '@shared/protocol
 import { icons, shellGlyphs, shellIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import LocalhostPanel from '@/components/localhost/LocalhostPanel.vue'
 import { chatRow, elapsedLabel, folderLabel, glyphDotClass, resetClock, rowMenu, statusGlyph, type RowMenuItem } from '@/components/sidebar/logic'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
@@ -41,6 +43,9 @@ const emit = defineEmits<{
   account: [id: string]
   'update:showThinking': [show: boolean]
 }>()
+
+// The globe button: the localhost servers popover (SPEC "Localhost").
+const localhostOpen = ref(false)
 
 const menu = computed(() => (props.chat ? rowMenu(chatRow(props.chat), props.groups) : []))
 
@@ -200,10 +205,26 @@ const PANE_BTN =
           <component :is="shellGlyphs.changes" class="size-4" />
         </button>
       </Tip>
-      <Tip label="Browser (not in Hydra Desk)">
-        <button type="button" :class="PANE_BTN" aria-label="Browser" aria-disabled="true">
-          <component :is="shellGlyphs.browser" class="size-4" />
-        </button>
+      <!-- The Popover sits inside the Tip's span: outside it, the trigger's anchor lands on the tooltip's popper
+           and the popover never gets a position (it stays parked off screen). -->
+      <Tip label="Localhost servers">
+        <span class="inline-flex">
+          <Popover v-model:open="localhostOpen">
+            <PopoverTrigger as-child>
+              <button type="button" :class="PANE_BTN" aria-label="Localhost servers" :aria-expanded="localhostOpen">
+                <component :is="shellGlyphs.browser" class="size-4" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              :side-offset="6"
+              flush
+              class="w-auto rounded-[var(--radius-10)] border-0 bg-[var(--bg-popover)] shadow-(--shadow-menu-ringed) ring-0"
+            >
+              <LocalhostPanel :folder="chat.cwd" />
+            </PopoverContent>
+          </Popover>
+        </span>
       </Tip>
       <Tip label="View options">
         <span class="inline-flex">
