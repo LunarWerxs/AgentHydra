@@ -264,9 +264,14 @@ describe('raw / rollup split at the 35-day line', () => {
     expect(
       q({ window: old, filter: { instance: 'nope' }, measures: ['tokens'] }).totals.tokens,
     ).toBe(0)
+    // A session the window covers whole is answered from the per-session ledger.
     const r = q({ window: old, filter: { session: 's0' }, measures: ['tokens'] })
-    expect(r.totals.tokens).toBe(0)
-    expect(r.notes[0]).toContain('session filter cannot be applied')
+    expect(r.totals.tokens).toBe(1000)
+    expect(r.notes).toEqual([])
+    // An ok filter still cannot reach the rollup.
+    const k = q({ window: old, filter: { ok: true }, measures: ['tokens'] })
+    expect(k.totals.tokens).toBe(0)
+    expect(k.notes[0]).toContain('ok filter cannot be applied')
   })
 })
 
@@ -317,5 +322,66 @@ describe('GET /api/kit/usage parameters', () => {
     expect(() => parse('last=3y')).toThrow('last must be one of')
     expect(() => parse('groupBy=planet')).toThrow('groupBy "planet"')
     expect(() => parse('kind=5h')).toThrow('kind needs')
+  })
+})
+
+describe('session and ref totals at any age', () => {
+  const sx = new KitStore(':memory:')
+  afterAll(() => sx.close())
+  let m = 0
+  const e = (ago: number, o: Partial<UsageEventInput>): UsageEventInput => ({
+    id: `x${++m}`,
+    ts: NOW - ago,
+    source: 'cli',
+    ...o,
+  })
+  // s1 spans the raw line (50 days and 2 days old); s2 and attempt r1 are 60 days old, all pruned.
+  sx.upsertEvents([
+    e(50 * D, { session: 's1', input: 100, list_usd: 1, ok: true }),
+    e(2 * D, { session: 's1', input: 10, list_usd: 0.5, ok: false }),
+    e(60 * D, { session: 's2', ref: 'r1', input: 7, list_usd: 2 }),
+    e(60 * D + H, { session: 's2', ref: 'r1', input: 3, list_usd: 1 }),
+    e(1 * H, { input: 1000 }),
+  ])
+  sx.runMaintenance(NOW)
+  const qs = (p: UsageQueryParams) => usageQuery(p, { store: sx, now: NOW, quota: () => null })
+
+  test('a pruned session answers for last: all, and a pruned ref too', () => {
+    const r = qs({
+      window: { last: 'all' },
+      groupBy: ['session'],
+      measures: ['tokens', 'list_usd'],
+    })
+    expect(r.rows).toEqual([
+      { session: 's1', tokens: 110, list_usd: 1.5 },
+      { session: 's2', tokens: 10, list_usd: 3 },
+      { session: null, tokens: 1000, list_usd: null },
+    ])
+    expect(r.notes).toEqual([])
+    const ref = qs({
+      window: { last: 'all' },
+      filter: { ref: 'r1' },
+      measures: ['calls', 'tokens'],
+    })
+    expect(ref.totals).toEqual({ calls: 2, tokens: 10 })
+  })
+
+  test('an explicit window that covers the session whole is answered the same, with no double count', () => {
+    const r = qs({
+      window: { from: NOW - 61 * D, to: NOW },
+      filter: { session: ['s1', 's2'] },
+      measures: ['calls', 'tokens'],
+    })
+    expect(r.totals).toEqual({ calls: 4, tokens: 120 })
+  })
+
+  test('a window that cuts a session keeps reading raw rows, and says what it misses', () => {
+    const r = qs({
+      window: { from: NOW - 40 * D, to: NOW },
+      filter: { session: 's1' },
+      measures: ['calls', 'tokens'],
+    })
+    expect(r.totals).toEqual({ calls: 1, tokens: 10 })
+    expect(r.notes[0]).toContain('does not cover whole')
   })
 })

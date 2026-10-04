@@ -1,12 +1,19 @@
 // Analytics toolkit store: DATA_DIR/analytics.db (docs/ANALYTICS-PLAN.md §4.2-4.3).
 // One row per model call in usage_event (kept RAW_RETENTION_DAYS), an hourly rollup in usage_hour
-// (kept forever), per-file ingest cursors and a meta table. Nothing here reads a source file; ingest
+// (kept forever), a per-session ledger in usage_session (kept forever), per-file ingest cursors and a meta table. Nothing here reads a source file; ingest
 // and the query API are separate pieces.
 import { Database } from 'bun:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DATA_DIR } from '../config'
-import { dropKitSchema, KIT_HOUR_DIMS, KIT_MEASURES, migrateKitSchema } from './schema'
+import {
+  dropKitSchema,
+  KIT_HOUR_DIMS,
+  KIT_MEASURES,
+  migrateKitSchema,
+  sessionAddSql,
+  sessionAggSql,
+} from './schema'
 
 export const RAW_RETENTION_DAYS = 35
 const HOUR_MS = 3_600_000
@@ -113,8 +120,17 @@ export class KitStore {
     this.db.close()
   }
 
-  /** Insert or replace by id: the last write wins, matching accumulateUsageLine. Returns rows written. */
-  upsertEvents(events: readonly UsageEventInput[]): number {
+  /**
+   * Insert or replace by id: the last write wins, matching accumulateUsageLine. Returns rows written.
+   *
+   * An event older than the raw cut (the last prune's cutoff) is dropped: its raw row is gone and its
+   * usage is already counted in usage_hour and usage_session, so taking it again (a source file re-read
+   * from byte 0 after a cursor reset) would double it there, or make the next rollup rewrite hours that
+   * no raw row backs any more.
+   */
+  upsertEvents(input: readonly UsageEventInput[]): number {
+    const cut = this.rawCut()
+    const events = cut === null ? input : input.filter((e) => e.ts >= cut)
     if (events.length === 0) return 0
     let minTs = Infinity
     const tx = this.db.transaction((rows: readonly UsageEventInput[]) => {
@@ -155,6 +171,12 @@ export class KitStore {
 
   // ---- meta ----
 
+  /** Hour below which raw events were pruned (so no new one is taken), or null before the first prune. */
+  rawCut(): number | null {
+    const v = this.getMeta('raw_cut')
+    return v === null ? null : Number(v)
+  }
+
   getMeta(key: string): string | null {
     const r = this.db.query('select value from meta where key = ?').get(key) as {
       value: string
@@ -194,12 +216,15 @@ export class KitStore {
 
   /**
    * Recompute usage_hour for every hour from `fromTs` (default: the oldest stale hour) to the newest
-   * raw event, from usage_event. Idempotent. Returns the number of hourly rows written.
+   * raw event, from usage_event, and usage_session for every session with a raw event in that range
+   * (its settled, already pruned part plus its raw rows). Idempotent. Hours below the raw cut have no
+   * raw rows left and are never touched. Returns the number of hourly rows written.
    */
   rollup(fromTs?: number): number {
     const dirty = this.getMeta('dirty_from')
-    const from = fromTs !== undefined ? hourStart(fromTs) : dirty !== null ? Number(dirty) : null
+    let from = fromTs !== undefined ? hourStart(fromTs) : dirty !== null ? Number(dirty) : null
     if (from === null) return 0
+    from = Math.max(from, this.rawCut() ?? -Infinity)
     const dims = KIT_HOUR_DIMS.map((d) => `coalesce(${d}, '')`).join(', ')
     const sums = KIT_MEASURES.filter((m) => m !== 'weighted')
       .map((m) => `sum(${m})`)
@@ -218,11 +243,40 @@ export class KitStore {
            group by h, ${dims}`,
         )
         .run(from).changes
+      this.rollupSessions(from)
       if (dirty === null || from <= Number(dirty)) {
         this.db.query("delete from meta where key = 'dirty_from'").run()
       }
     })()
     return written
+  }
+
+  /** Rebuild the usage_session rows of every (session, ref) with a raw event at or after `from`. */
+  private rollupSessions(from: number): void {
+    const pairs = this.db
+      .query(
+        "select distinct coalesce(session, '') as s, coalesce(ref, '') as r from usage_event where ts >= ?",
+      )
+      .all(from) as { s: string; r: string }[]
+    const del = this.db.prepare('delete from usage_session where session = $s and ref = $r')
+    const fresh = this.db.prepare(
+      sessionAddSql(
+        'usage_session',
+        sessionAggSql("coalesce(session, '') = $s and coalesce(ref, '') = $r"),
+      ),
+    )
+    const settled = this.db.prepare(
+      sessionAddSql(
+        'usage_session',
+        'select * from usage_session_settled where session = $s and ref = $r',
+      ),
+    )
+    for (const { s, r } of pairs) {
+      const a = { $s: s, $r: r }
+      del.run(a)
+      fresh.run(a)
+      settled.run(a)
+    }
   }
 
   /**
@@ -235,8 +289,16 @@ export class KitStore {
       t: number | null
     }
     if (oldest.t === null || oldest.t >= cutoff) return 0
-    this.rollup(Math.min(hourStart(oldest.t), Number(this.getMeta('dirty_from') ?? Infinity)))
-    return this.db.query('delete from usage_event where ts < ?').run(cutoff).changes
+    const oldestTs = oldest.t
+    let deleted = 0
+    this.db.transaction(() => {
+      this.rollup(Math.min(hourStart(oldestTs), Number(this.getMeta('dirty_from') ?? Infinity)))
+      // The sessions' totals do not change: the doomed rows move from raw into the settled part.
+      this.db.exec(sessionAddSql('usage_session_settled', sessionAggSql(`ts < ${cutoff}`)))
+      deleted = this.db.query('delete from usage_event where ts < ?').run(cutoff).changes
+      this.setMeta('raw_cut', String(Math.max(cutoff, this.rawCut() ?? cutoff)))
+    })()
+    return deleted
   }
 
   /** The hourly job: roll up what changed, then prune. */

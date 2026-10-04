@@ -216,7 +216,10 @@ task line).
 Size estimate: this PC made about 0.78 M Claude turns in 30 days and about 0.23 M HSwarm tasks, so
 roughly 12 M rows a year. Raw rows are kept for **35 days**, longer than any weekly window plus a
 margin. An **hourly rollup** `usage_hour` (same dimensions minus `session`/`ref`, summed measures)
-is kept forever. Both are a few hundred MB a year at most.
+is kept forever. A per-session ledger `usage_session` (keyed by session, ref and the other
+dimensions, with first/last timestamps and the same measures) is kept forever too, so a session's or a
+CliMayte attempt's total survives raw pruning. Events older than the last prune's cut are not taken
+again, so a source re-read from byte 0 cannot double either rollup. All are a few hundred MB a year at most.
 
 ### 4.3 Store
 

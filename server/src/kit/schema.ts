@@ -2,7 +2,7 @@
 // Gated on PRAGMA user_version: a file with a lower version is migrated step by step, a higher one is
 // refused. The store is an index over the sources' own files, so a drop and rebuild is always safe.
 
-export const KIT_SCHEMA_VERSION = 1
+export const KIT_SCHEMA_VERSION = 2
 
 /** Measures summed by the hourly rollup (tokens by kind, money, quota units, counts). */
 export const KIT_MEASURES = [
@@ -29,7 +29,32 @@ export const KIT_HOUR_DIMS = [
   'provider',
 ] as const
 
-export const KIT_TABLES = ['usage_event', 'usage_hour', 'ingest_cursor', 'meta'] as const
+/**
+ * Key of the per-session rollup. NULL is stored as ''. A row with session '' is usage that carries no
+ * session, so the table is a complete ledger: its sum over every row is every event ever ingested.
+ */
+export const KIT_SESSION_KEY = [
+  'session',
+  'ref',
+  'source',
+  'account',
+  'instance',
+  'model',
+  'provider',
+  'pc',
+  'agent',
+] as const
+
+const NULLABLE_MEASURES: readonly string[] = ['list_usd', 'billed_usd', 'seconds']
+
+export const KIT_TABLES = [
+  'usage_event',
+  'usage_hour',
+  'usage_session',
+  'usage_session_settled',
+  'ingest_cursor',
+  'meta',
+] as const
 
 export const KIT_DDL_V1 = `
 create table if not exists usage_event (
@@ -103,7 +128,91 @@ create table if not exists meta (
 );
 `
 
-type Exec = { exec(sql: string): unknown; query(sql: string): { get(): unknown } }
+function sessionTableDdl(name: string): string {
+  const measures = KIT_MEASURES.map((m) =>
+    NULLABLE_MEASURES.includes(m)
+      ? `${m} real`
+      : m === 'weighted'
+        ? 'weighted real not null default 0'
+        : `${m} integer not null default 0`,
+  ).join(', ')
+  return `create table if not exists ${name} (
+  ${KIT_SESSION_KEY.map((k) => `${k} text not null default ''`).join(', ')},
+  first_ts integer not null,
+  last_ts integer not null,
+  calls integer not null default 0,
+  ok_calls integer not null default 0,
+  failed_calls integer not null default 0,
+  ${measures},
+  primary key (${KIT_SESSION_KEY.join(', ')})
+) without rowid;`
+}
+
+/**
+ * v2: usage_session is the per-session ledger, kept forever. usage_session_settled holds the part of it
+ * that came from raw events already pruned (folded in by pruneRaw), so the rollup can rebuild a session
+ * as settled + whatever raw rows remain.
+ */
+export const KIT_DDL_V2 = `
+${sessionTableDdl('usage_session')}
+create index if not exists usage_session_ts on usage_session (first_ts, last_ts);
+${sessionTableDdl('usage_session_settled')}
+create index if not exists usage_event_session on usage_event (coalesce(session, ''), coalesce(ref, ''));
+`
+
+/** SELECT of usage_event rows (optionally filtered) aggregated to usage_session's key and columns. */
+export function sessionAggSql(where = '1'): string {
+  const sums = KIT_MEASURES.map((m) => `sum(${m})`).join(', ')
+  const key = KIT_SESSION_KEY.map((k) => `coalesce(${k}, '')`).join(', ')
+  return `select ${key}, min(ts), max(ts), count(*), sum(case when ok = 1 then 1 else 0 end),
+    sum(case when ok = 0 then 1 else 0 end), ${sums} from usage_event where ${where} group by ${key}`
+}
+
+/** `insert ... select ... on conflict do update` that ADDS the selected rows onto existing ones. */
+export function sessionAddSql(table: string, select: string): string {
+  const add = (c: string) =>
+    NULLABLE_MEASURES.includes(c)
+      ? `${c} = case when ${table}.${c} is null then excluded.${c} when excluded.${c} is null then ${table}.${c} else ${table}.${c} + excluded.${c} end`
+      : `${c} = ${table}.${c} + excluded.${c}`
+  const sets = [
+    `first_ts = min(${table}.first_ts, excluded.first_ts)`,
+    `last_ts = max(${table}.last_ts, excluded.last_ts)`,
+    ...['calls', 'ok_calls', 'failed_calls', ...KIT_MEASURES].map(add),
+  ]
+  const cols = [
+    ...KIT_SESSION_KEY,
+    'first_ts',
+    'last_ts',
+    'calls',
+    'ok_calls',
+    'failed_calls',
+    ...KIT_MEASURES,
+  ]
+  return `insert into ${table} (${cols.join(', ')}) ${select} on conflict (${KIT_SESSION_KEY.join(', ')}) do update set ${sets.join(', ')}`
+}
+
+type Exec = {
+  exec(sql: string): unknown
+  query(sql: string): { get(): unknown; run(...a: unknown[]): unknown }
+}
+
+/**
+ * A v1 file has no session ledger: build it from the raw rows that survive (older sessions were pruned
+ * with nothing to keep, so their totals start from the raw cut). When pruning evidently happened (rollup
+ * hours older than the oldest raw row), record that row's hour as the raw cut, so a re-read of the old
+ * events cannot rewrite the hours that no raw row backs any more.
+ */
+function backfillV2(db: Exec): void {
+  db.exec(sessionAddSql('usage_session', sessionAggSql()))
+  const r = db
+    .query(`select (select min(ts) from usage_event) as t, (select min(hour) from usage_hour) as h`)
+    .get() as { t: number | null; h: number | null }
+  if (r.t !== null && r.h !== null && r.h < r.t - (r.t % 3_600_000)) {
+    db.query("insert or replace into meta (key, value) values ('raw_cut', ?)").run(
+      String(r.t - (r.t % 3_600_000)),
+    )
+  }
+}
 
 /** Bring the file to KIT_SCHEMA_VERSION. Throws on a file written by a newer build. */
 export function migrateKitSchema(db: Exec): void {
@@ -113,6 +222,10 @@ export function migrateKitSchema(db: Exec): void {
     throw new Error(`analytics.db is schema ${have}, this build understands ${KIT_SCHEMA_VERSION}`)
   }
   if (have < 1) db.exec(KIT_DDL_V1)
+  if (have < 2) {
+    db.exec(KIT_DDL_V2)
+    if (have >= 1) backfillV2(db)
+  }
   if (have !== KIT_SCHEMA_VERSION) db.exec(`pragma user_version = ${KIT_SCHEMA_VERSION}`)
 }
 

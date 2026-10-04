@@ -2,6 +2,9 @@
 // Inside the raw retention period it reads usage_event; older hours read the hourly rollup usage_hour.
 // The two ranges are disjoint (cut at an hour boundary, the same one pruneRaw uses), so a window that
 // straddles the line never counts a call twice.
+// A query on a session or ref (filter or group) cannot use usage_hour, which has neither. It reads the
+// per-session ledger usage_session for every (session, ref) the window covers whole, and raw rows (this
+// side excluding those) for the rest, so no event is counted in both.
 import type { Database } from 'bun:sqlite'
 import { getCachedUsage } from '../usage-cache'
 import { KitStore, RAW_RETENTION_DAYS } from './store'
@@ -17,6 +20,7 @@ export const FILTER_KEYS = [
   'model',
   'provider',
   'session',
+  'ref',
   'agent',
   'ok',
 ] as const
@@ -30,6 +34,7 @@ export const GROUP_BYS = [
   'model',
   'provider',
   'session',
+  'ref',
 ] as const
 export const MEASURES = [
   'tokens',
@@ -222,6 +227,7 @@ const DIM_COLS: Record<Exclude<GroupBy, 'day' | 'hour'>, string> = {
   model: 'model',
   provider: 'provider',
   session: 'session',
+  ref: 'ref',
 }
 
 const TOKEN_SUM = 'input + output + cache_read + cache_write_5m + cache_write_1h'
@@ -247,21 +253,24 @@ type DimCol = Exclude<GroupBy, 'day' | 'hour'>
 
 function selectRows(
   db: Database,
-  table: 'usage_event' | 'usage_hour',
+  table: 'usage_event' | 'usage_hour' | 'usage_session',
   dims: DimCol[],
   withHour: boolean,
   where: Where,
 ): RawRow[] {
   const raw = table === 'usage_event'
+  // The hourly rollup keeps no session or ref; both rollups store NULL as ''.
+  const noSess = table === 'usage_hour'
   const dimSel = dims.map((d) => {
     if (raw) return DIM_COLS[d]
-    // The rollup keeps no session and stores NULL as ''.
-    return d === 'session' ? `null as session` : `nullif(${DIM_COLS[d]}, '') as ${d}`
+    return noSess && (d === 'session' || d === 'ref')
+      ? `null as ${d}`
+      : `nullif(${DIM_COLS[d]}, '') as ${d}`
   })
   const hourSel = withHour ? (raw ? `ts - (ts % ${HOUR_MS}) as h` : 'hour as h') : 'null as h'
   const group = [
     withHour ? 'h' : null,
-    ...dims.filter((d) => raw || d !== 'session').map((d) => DIM_COLS[d]),
+    ...dims.filter((d) => !noSess || (d !== 'session' && d !== 'ref')).map((d) => DIM_COLS[d]),
   ]
     .filter(Boolean)
     .join(', ')
@@ -318,33 +327,84 @@ export function usageQuery(params: UsageQueryParams = {}, opts: UsageQueryOpts =
   const dim = dimWhere(filter)
   const okVals = toList(filter.ok)
   const sessVals = toList(filter.session)
+  const refVals = toList(filter.ref)
+  const sessionLike = Boolean(
+    sessVals || refVals || dims.includes('session') || dims.includes('ref'),
+  )
+  const hourFilter = okVals ? 'ok' : sessVals ? 'session' : refVals ? 'ref' : null
+
+  // Sessions mode: (session, ref) pairs wholly inside the window come from the ledger.
+  const inSessions = sessionLike && !okVals && !withHour
+  const sessWhere = sessionWhere(filter)
+  let whole: Where | null = null
+  if (inSessions) {
+    const pairs = db
+      .query(
+        `select session, ref from usage_session where ${sessWhere.sql} group by session, ref
+         having min(first_ts) >= ? and max(last_ts) <= ?`,
+      )
+      .all(...sessWhere.args, win.from, win.to) as { session: string; ref: string }[]
+    db.exec('create temp table if not exists kit_whole (session text, ref text)')
+    db.exec('delete from kit_whole')
+    const ins = db.prepare('insert into kit_whole values (?, ?)')
+    for (const p of pairs) ins.run(p.session, p.ref)
+    whole = {
+      sql: ` and (coalesce(session, ''), coalesce(ref, '')) not in (select session, ref from kit_whole)`,
+      args: [],
+    }
+  }
 
   // raw range: [max(from, cutoff), to]
   const rawFrom = Math.max(win.from, cutoff)
   const rawRows =
     rawFrom <= win.to
       ? selectRows(db, 'usage_event', dims, withHour, {
-          sql: `ts >= ? and ts <= ?${dim.sql}${rawExtra(filter)}`,
+          sql: `ts >= ? and ts <= ?${dim.sql}${rawExtra(filter)}${whole?.sql ?? ''}`,
           args: [rawFrom, win.to, ...dim.args, ...rawExtraArgs(filter)],
         })
       : []
 
-  // rollup range: whole hours below the cutoff that overlap the window
   let rollRows: RawRow[] = []
-  const rollFrom = hourStart(win.from)
-  const rollTo = Math.min(cutoff - 1, win.to)
-  if (win.from < cutoff && rollFrom <= rollTo) {
-    if (okVals || sessVals) {
-      notes.push(
-        `${okVals ? 'ok' : 'session'} filter cannot be applied to hourly rollups: usage before ${new Date(cutoff).toISOString()} is not included`,
-      )
-    } else {
-      rollRows = selectRows(db, 'usage_hour', dims, withHour, {
-        sql: `hour >= ? and hour <= ?${dim.sql}`,
-        args: [rollFrom, rollTo, ...dim.args],
-      })
-      if (dims.includes('session')) {
-        notes.push('usage before the raw retention line has no session: it groups under null')
+  if (inSessions) {
+    rollRows = selectRows(db, 'usage_session', dims, false, {
+      sql: `${sessWhere.sql}${dim.sql} and (session, ref) in (select session, ref from kit_whole)`,
+      args: [...sessWhere.args, ...dim.args],
+    })
+    // Sessions the window cuts through, reaching back past the raw cut: their older part is in
+    // usage_hour, which cannot attribute it.
+    if (win.from < cutoff) {
+      const cut = db
+        .query(
+          `select 1 from usage_session where ${sessWhere.sql} and first_ts < ?
+             and last_ts >= ? and (first_ts < ? or last_ts > ?)
+             and (session, ref) not in (select session, ref from kit_whole) limit 1`,
+        )
+        .get(...sessWhere.args, cutoff, win.from, win.from, win.to)
+      if (cut) {
+        notes.push(
+          `sessions the window does not cover whole count only their usage since ${new Date(cutoff).toISOString()}`,
+        )
+      }
+    }
+  } else {
+    // rollup range: whole hours below the cutoff that overlap the window
+    const rollFrom = hourStart(win.from)
+    const rollTo = Math.min(cutoff - 1, win.to)
+    if (win.from < cutoff && rollFrom <= rollTo) {
+      if (hourFilter) {
+        notes.push(
+          `${hourFilter} filter cannot be applied to hourly rollups: usage before ${new Date(cutoff).toISOString()} is not included`,
+        )
+      } else {
+        rollRows = selectRows(db, 'usage_hour', dims, withHour, {
+          sql: `hour >= ? and hour <= ?${dim.sql}`,
+          args: [rollFrom, rollTo, ...dim.args],
+        })
+        if (sessionLike) {
+          notes.push(
+            'usage before the raw retention line has no session or ref: it groups under null',
+          )
+        }
       }
     }
   }
@@ -390,7 +450,15 @@ export function usageQuery(params: UsageQueryParams = {}, opts: UsageQueryOpts =
   return {
     rows,
     totals,
-    unpriced: unpricedModels(db, win, cutoff, dim, filter, !okVals && !sessVals),
+    unpriced: unpricedModels(
+      db,
+      win,
+      cutoff,
+      dim,
+      filter,
+      !hourFilter,
+      inSessions ? sessWhere : null,
+    ),
     priceVer: store.getMeta('price_ver'),
     coverage: coverage(store),
     window: win,
@@ -405,12 +473,31 @@ function rawExtra(filter: NonNullable<UsageQueryParams['filter']>): string {
   const parts: string[] = []
   const sess = toList(filter.session)
   if (sess) parts.push(sess.length ? `session in (${sess.map(() => '?').join(',')})` : '0')
+  const ref = toList(filter.ref)
+  if (ref) parts.push(ref.length ? `ref in (${ref.map(() => '?').join(',')})` : '0')
   const ok = toList(filter.ok)
   if (ok) parts.push(ok.length ? `ok in (${ok.map(() => '?').join(',')})` : '0')
   return parts.length ? ` and ${parts.join(' and ')}` : ''
 }
 function rawExtraArgs(filter: NonNullable<UsageQueryParams['filter']>): (string | number)[] {
-  return [...(toList(filter.session) ?? []), ...(toList(filter.ok) ?? []).map((v) => (v ? 1 : 0))]
+  return [
+    ...(toList(filter.session) ?? []),
+    ...(toList(filter.ref) ?? []),
+    ...(toList(filter.ok) ?? []).map((v) => (v ? 1 : 0)),
+  ]
+}
+
+/** The session / ref filters as usage_session sees them (its columns are never null). */
+function sessionWhere(filter: NonNullable<UsageQueryParams['filter']>): Where {
+  const parts: string[] = []
+  const args: string[] = []
+  for (const k of ['session', 'ref'] as const) {
+    const vals = toList(filter[k])
+    if (!vals) continue
+    parts.push(vals.length ? `${k} in (${vals.map(() => '?').join(',')})` : '0')
+    args.push(...vals)
+  }
+  return { sql: parts.length ? parts.join(' and ') : '1', args }
 }
 
 const emptyRow = (): RawRow => ({
@@ -465,6 +552,7 @@ function unpricedModels(
   dim: Where,
   filter: NonNullable<UsageQueryParams['filter']>,
   withRollup: boolean,
+  sessions: Where | null,
 ): string[] {
   const out = new Set<string>()
   const rawFrom = Math.max(win.from, cutoff)
@@ -475,6 +563,16 @@ function unpricedModels(
       )
       .all(rawFrom, win.to, ...dim.args, ...rawExtraArgs(filter)) as { model: string }[]
     for (const r of rows) out.add(r.model)
+  }
+  if (sessions) {
+    const rows = db
+      .query(
+        `select distinct model from usage_session where ${sessions.sql}${dim.sql} and list_usd is null and model != ''
+           and (session, ref) in (select session, ref from kit_whole)`,
+      )
+      .all(...sessions.args, ...dim.args) as { model: string }[]
+    for (const r of rows) out.add(r.model)
+    return [...out].sort()
   }
   const rollTo = Math.min(cutoff - 1, win.to)
   if (withRollup && win.from < cutoff && hourStart(win.from) <= rollTo) {

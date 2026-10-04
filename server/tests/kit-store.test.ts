@@ -114,3 +114,57 @@ describe('kit store', () => {
     expect(() => migrateKitSchema(s.db)).toThrow()
   })
 })
+
+describe('session ledger and the raw cut', () => {
+  const NOW = T0 + 60 * D
+  const ledger = (s: KitStore) =>
+    s.db
+      .query(
+        'select session, ref, calls, first_ts, last_ts, input, list_usd from usage_session order by session, ref',
+      )
+      .all()
+  const hourSum = (s: KitStore) =>
+    s.db.query('select sum(calls) as c, sum(input) as i from usage_hour').get()
+
+  test('totals equal every event once across pruning, re-upserts and a re-read of old events', () => {
+    const s = new KitStore(':memory:')
+    const old = [
+      { id: 'o1', ts: T0, session: 'a', ref: 'r', source: 'cli', input: 3, list_usd: 1 },
+      { id: 'o2', ts: T0 + 10, session: 'a', ref: 'r', source: 'cli', input: 4, list_usd: 2 },
+    ]
+    const fresh = [{ id: 'n1', ts: NOW - D, session: 'a', ref: 'r', source: 'cli', input: 9 }]
+    s.upsertEvents([...old, ...fresh])
+    s.runMaintenance(NOW)
+    // o1 and o2 are pruned; one fresh event is still raw. The session total spans both.
+    expect(count(s, 'usage_event')).toBe(1)
+    const want = [
+      { session: 'a', ref: 'r', calls: 3, first_ts: T0, last_ts: NOW - D, input: 16, list_usd: 3 },
+    ]
+    expect(ledger(s)).toEqual(want)
+    const hours = hourSum(s)
+
+    // the fresh event is re-upserted (last write wins), the old ones are read again from byte 0
+    s.upsertEvents([{ ...fresh[0], input: 9 }])
+    expect(s.upsertEvents(old)).toBe(0)
+    s.runMaintenance(NOW)
+    s.runMaintenance(NOW + H)
+    expect(ledger(s)).toEqual(want)
+    expect(hourSum(s)).toEqual(hours)
+    expect(count(s, 'usage_event')).toBe(1)
+
+    // a changed fresh event replaces its old value in the total
+    s.upsertEvents([{ ...fresh[0], input: 20 }])
+    s.runMaintenance(NOW)
+    expect((ledger(s)[0] as { input: number }).input).toBe(27)
+  })
+
+  test('a v1 file is migrated to v2 with its surviving raw rows in the ledger', () => {
+    const s = new KitStore(':memory:')
+    s.upsertEvents([{ id: 'a', ts: T0, session: 's', source: 'cli', input: 5 }])
+    s.db.exec('drop table usage_session; drop table usage_session_settled; pragma user_version = 1')
+    const { migrateKitSchema } = require('../src/kit/schema')
+    migrateKitSchema(s.db)
+    expect(s.db.query('pragma user_version').get()).toEqual({ user_version: 2 })
+    expect(ledger(s)).toMatchObject([{ session: 's', calls: 1, input: 5 }])
+  })
+})
