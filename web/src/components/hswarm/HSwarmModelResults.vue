@@ -12,7 +12,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { seriesColor } from '@/lib/chart'
 import type { HswarmMoney } from '@/lib/hswarm-api'
 import { moneyLine, useHswarmApi } from '@/lib/hswarm-api'
-import { fetchKitUsage, formatTokens, formatUsd, localTz, rollingDaysFrom } from '@/lib/kit'
+import {
+  fetchKitUsage,
+  formatTokens,
+  formatUsd,
+  localDaysList,
+  localTz,
+  rollingDaysFrom,
+} from '@/lib/kit'
 
 interface ModelRow {
   model: string
@@ -172,12 +179,8 @@ const survivalRows = computed(() =>
 // The last `range` local days, the busiest models by name and everything else lumped as "other".
 const dailyTop = computed(() => models.value.slice(0, TOP_DAILY).map((m) => m.model))
 const daily = computed<DailyDay[]>(() => {
-  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: localTz() })
   const byDay = new Map<string, DailyDay>()
-  for (let i = range.value - 1; i >= 0; i--) {
-    const date = fmt.format(Date.now() - i * 86_400_000)
-    byDay.set(date, { date, models: {}, other: 0 })
-  }
+  for (const date of localDaysList(range.value)) byDay.set(date, { date, models: {}, other: 0 })
   for (const r of kit.value?.dayModel ?? []) {
     const day = byDay.get(r.date)
     if (!day) continue

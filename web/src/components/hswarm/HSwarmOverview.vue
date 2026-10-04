@@ -20,7 +20,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import type { HswarmMoney, HswarmState } from '@/lib/hswarm-api'
 import { moneyLine, useHswarmApi } from '@/lib/hswarm-api'
-import { fetchKitUsage, formatTokens, formatUsd, localDaysFrom, localTz } from '@/lib/kit'
+import {
+  fetchKitUsage,
+  formatTokens,
+  formatUsd,
+  localDaysFrom,
+  localDaysList,
+  localTz,
+} from '@/lib/kit'
 
 /** One day of HSwarm's work, read from the toolkit (`source=hswarm`, groupBy day). */
 interface UsageDay {
@@ -98,15 +105,21 @@ async function loadUsage() {
       fetchKitUsage({ ...base, groupBy: 'day' }),
       fetchKitUsage({ ...base, groupBy: 'provider' }),
     ])
+    // groupBy=day only returns days with rows: every local date of the window is filled in, so the
+    // charts keep adjacent days adjacent and the table lists the quiet ones.
+    const rowsByDate = new Map(byDay.rows.map((r) => [String(r.day), r]))
     usage.value = {
-      days: byDay.rows.map((r) => ({
-        date: String(r.day),
-        tokens: Number(r.tokens),
-        cost: Number(r.list_usd ?? 0),
-        tasks: Number(r.calls),
-        ok: Number(r.ok),
-        error: Number(r.failed),
-      })),
+      days: localDaysList(USAGE_DAYS).map((date) => {
+        const r = rowsByDate.get(date)
+        return {
+          date,
+          tokens: Number(r?.tokens ?? 0),
+          cost: Number(r?.list_usd ?? 0),
+          tasks: Number(r?.calls ?? 0),
+          ok: Number(r?.ok ?? 0),
+          error: Number(r?.failed ?? 0),
+        }
+      }),
       providers: byProvider.rows
         .map((r) => ({
           name: r.provider === null ? 'other' : String(r.provider),
@@ -118,6 +131,12 @@ async function loadUsage() {
     }
   } catch (err) {
     console.error('Failed to load usage:', err)
+    usage.value = {
+      days: [],
+      providers: [],
+      totals: {},
+      error: err instanceof Error ? err.message : String(err),
+    }
   }
 }
 
@@ -227,6 +246,8 @@ const isFresh = computed(() => {
 
 // Chart data
 const spendDays = computed(() => usage.value?.days ?? [])
+// The window is zero-filled, so "has data" means some day had a call, not that the list is non-empty.
+const hasDays = computed(() => spendDays.value.some((d) => d.tasks > 0 || d.tokens > 0))
 
 const spendChartData = computed(() => {
   return spendDays.value.map((d) => ({
@@ -439,7 +460,7 @@ function formatPercent(value: number): string {
     </div>
 
     <!-- Charts section -->
-    <div v-if="!isFresh && usage?.days && usage.days.length > 0" class="grid items-start gap-2 sm:grid-cols-2">
+    <div v-if="!isFresh && hasDays" class="grid items-start gap-2 sm:grid-cols-2">
       <!-- Spend chart -->
       <Card size="sm">
         <CardHeader>
@@ -547,7 +568,7 @@ function formatPercent(value: number): string {
     </div>
 
     <!-- Charts empty state -->
-    <div v-else-if="!isFresh && (!usage?.days || usage.days.length === 0)" class="text-center py-4">
+    <div v-else-if="!isFresh && !usage?.error" class="text-center py-4">
       <p class="text-sm text-muted-foreground">
         {{ t('hswarm.v.overview.chartsEmpty') }}
       </p>

@@ -134,15 +134,53 @@ function toolNoteLabel(note: string | undefined): string {
 const loading = ref(true)
 const refreshing = ref(false)
 
-async function load() {
+// Request tokens, like HSwarmModelResults' `latest`: only the newest request of each kind may land,
+// and `loading` clears only when nothing newer is still in flight. `latest` guards the period-wide
+// reads, `latestSpend` the one read that also depends on the source selection.
+let latest = 0
+let latestSpend = 0
+let pageBusy = false
+let spendBusy = false
+const settle = () => {
+  loading.value = pageBusy || spendBusy
+}
+
+const allSources = computed(
+  () => scopeParam(analyticsSources.value, ANALYTICS_SOURCES) === undefined,
+)
+
+/** The spend read, the only one a source change repeats. */
+async function loadSpend() {
+  const mine = ++latestSpend
+  spendBusy = true
   loading.value = true
+  try {
+    const s = await api.getSpend(
+      analyticsPeriod.value,
+      scopeParam(analyticsSources.value, ANALYTICS_SOURCES),
+    )
+    if (mine === latestSpend) spend.value = s
+  } catch {
+    if (mine === latestSpend) spend.value = null
+  } finally {
+    if (mine === latestSpend) {
+      spendBusy = false
+      settle()
+    }
+  }
+}
+
+async function load() {
+  const mine = ++latest
   const period = analyticsPeriod.value
+  pageBusy = true
+  loading.value = true
+  void loadSpend()
   try {
     // In parallel: independent reads of the same warmed table, so serialising them would just add
     // round trips to a page that is otherwise instant. The tool scan is the one that touches disk;
     // it is capped and cached server-side, and its failure must not take the charts with it.
-    const [s, a, c, e, tools, k] = await Promise.all([
-      api.getSpend(period, scopeParam(analyticsSources.value, ANALYTICS_SOURCES)),
+    const [a, c, e, tools, k] = await Promise.all([
       api.getActivity(period),
       api.getConcurrency(period, period === '24h' ? 60 : 180),
       api.getRecentEdits(120),
@@ -150,23 +188,25 @@ async function load() {
       // An addition to the page: a daemon without the route must not blank every chart.
       api.getSinks(period).catch(() => null),
     ])
-    if (analyticsPeriod.value !== period) return // the window moved on while we were fetching
-    spend.value = s
+    if (mine !== latest) return // the window moved on while we were fetching
     activity.value = a
     concurrency.value = c.buckets
     edits.value = e.edits
     agentTools.value = tools.tools
     sinks.value = k
   } catch {
-    spend.value = null
-    activity.value = null
+    if (mine === latest) activity.value = null
   } finally {
-    loading.value = false
+    if (mine === latest) {
+      pageBusy = false
+      settle()
+    }
   }
 }
 
 onMounted(load)
-watch([analyticsPeriod, analyticsSources], load)
+watch(analyticsPeriod, load)
+watch(analyticsSources, loadSpend)
 onMounted(async () => {
   accountNames.value = await fetchAccountNames()
 })
@@ -596,13 +636,22 @@ const survivalAverage = computed(() => {
         <Skeleton class="h-44 w-full" />
       </template>
 
-      <template v-else-if="!spend || spend.calls === 0">
+      <template v-else-if="!spend || (spend.calls === 0 && allSources)">
         <div class="rounded-lg border border-border p-6 text-center text-xs text-muted-foreground">
           {{ $t('analytics.empty') }}
         </div>
       </template>
 
       <template v-else>
+        <!-- A source filter with no calls empties the spend area only: activity, concurrency, edits
+             and the tool list below do not depend on it. -->
+        <div
+          v-if="spend.calls === 0"
+          class="rounded-lg border border-border p-6 text-center text-xs text-muted-foreground"
+        >
+          {{ $t('analytics.emptySources') }}
+        </div>
+        <template v-else>
         <p v-for="note in spend.notes" :key="note" class="text-3xs text-muted-foreground">{{ note }}</p>
         <!-- the headline: three numbers, no plot. A stat tile is the right form when the answer is
              one number, and dressing it as a chart would add nothing to read. -->
@@ -771,6 +820,7 @@ const survivalAverage = computed(() => {
           >{{ $t('analytics.noTokenData') }}</p>
           <BarRows v-else :rows="accountRows" :format="metricFormat" mono />
         </section>
+        </template>
 
         <!-- Token sinks: WHY the spend above happened. Structural sinks are configuration (a skill
              or MCP server loaded into every prompt and never used), behavioral ones are how the

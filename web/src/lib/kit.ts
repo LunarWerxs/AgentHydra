@@ -2,6 +2,7 @@
 // GET /api/kit/usage), a shared ref-counted poll, and the one token and USD formatter set.
 // docs/ANALYTICS-PLAN.md section 4.7 and piece 16.
 import { computed, getCurrentScope, onScopeDispose, reactive } from 'vue'
+import { t } from '@/i18n'
 import { j } from '@/lib/api'
 
 // ---- the query -----------------------------------------------------------------------------------
@@ -35,6 +36,17 @@ const DAY_MS = 86_400_000
 export function localDaysFrom(days: number, now = new Date()): number {
   const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1))
   return d.getTime()
+}
+
+/** The `days` local calendar dates (YYYY-MM-DD) ending today, oldest first. Steps calendar dates, not
+ *  24 h, so a daylight-saving change never skips or repeats a day. */
+export function localDaysList(days: number, now = new Date()): string[] {
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: localTz() })
+  const out: string[] = []
+  for (let i = days - 1; i >= 0; i--) {
+    out.push(fmt.format(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 12)))
+  }
+  return out
 }
 
 /** `days` rolling days ending now. */
@@ -171,8 +183,8 @@ export function useKitSourceTokens(source: string) {
 /** The marker for a figure that is not there (the sentinel the tiles and tables already use). */
 export const UNPRICED = '—'
 /** What a figure reads when its price is not exact (a model without a published price, or a cache
- *  price that is a guess): never a made-up $0.00. */
-export const NO_EXACT_PRICE = 'no exact price'
+ *  price that is a guess): never a made-up $0.00. This is the i18n key; formatUsd translates it. */
+export const NO_EXACT_PRICE_KEY = 'analytics.noExactPrice'
 
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 /** "85.3M": token counts are read at a glance, not to the unit. */
@@ -189,7 +201,7 @@ export type UsdStyle =
 
 export interface UsdOptions {
   style?: UsdStyle
-  /** false when the price is not exact: the figure reads NO_EXACT_PRICE instead of a dollar amount. */
+  /** false when the price is not exact: the figure reads "no exact price" instead of a dollar amount. */
   exact?: boolean
 }
 
@@ -201,9 +213,9 @@ const usdIntl = new Intl.NumberFormat(undefined, {
 })
 
 /** A dollar figure. Locked to USD: these are list prices, not an amount converted into the reader's
- *  currency. A missing figure reads UNPRICED and an inexact one NO_EXACT_PRICE, never $0.00. */
+ *  currency. A missing figure reads UNPRICED and an inexact one the translated "no exact price", never $0.00. */
 export function formatUsd(n: number | null | undefined, opts: UsdOptions = {}): string {
-  if (opts.exact === false) return NO_EXACT_PRICE
+  if (opts.exact === false) return t(NO_EXACT_PRICE_KEY)
   if (n == null || !Number.isFinite(n)) return UNPRICED
   const style = opts.style ?? 'standard'
   if (style === 'whole') {

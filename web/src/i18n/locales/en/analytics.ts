@@ -8,6 +8,8 @@ export default {
   partial: 'Totals cover {n} of {total} sessions scanned so far.',
   complete: 'Totals cover all {n} scanned sessions.',
   empty: 'Nothing scanned yet. The totals build in the background shortly after the app starts.',
+  emptySources: 'No usage for the selected sources in this period.',
+  noExactPrice: 'no exact price',
   rescan: 'Rescan now',
   rescanHint: 'Read any transcript that changed since the last scan',
   rescanDone: 'Scanned {n} session(s).',

@@ -2,7 +2,15 @@
 // one request and one timer; the timer stops with the last unsubscribe.
 import { afterEach, beforeEach, expect, jest, test } from 'bun:test'
 import { effectScope } from 'vue'
-import { formatUsd, KIT_POLL_MS, kitQueryString, NO_EXACT_PRICE, useKit } from '../src/lib/kit'
+import { t } from '../src/i18n'
+import {
+  formatUsd,
+  KIT_POLL_MS,
+  kitQueryString,
+  localDaysList,
+  NO_EXACT_PRICE_KEY,
+  useKit,
+} from '../src/lib/kit'
 
 const realFetch = globalThis.fetch
 let calls: string[] = []
@@ -61,5 +69,16 @@ test('the query string is canonical', () => {
 
 test('a missing price is the marker and an inexact one says so, never $0.00', () => {
   expect(formatUsd(null)).toBe('—')
-  expect(formatUsd(3.2, { exact: false })).toBe(NO_EXACT_PRICE)
+  expect(formatUsd(3.2, { exact: false })).toBe(t(NO_EXACT_PRICE_KEY))
+  expect(formatUsd(0, { exact: false })).not.toContain('$0.00')
+})
+
+test('the day list steps calendar dates, so a daylight-saving change skips no day', () => {
+  // 8 March 2026 is a spring-forward day in the US zones (23 h long): stepping 24 h would skip it.
+  expect(localDaysList(4, new Date(2026, 2, 9, 0, 30))).toEqual([
+    '2026-03-06',
+    '2026-03-07',
+    '2026-03-08',
+    '2026-03-09',
+  ])
 })
