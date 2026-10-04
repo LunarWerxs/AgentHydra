@@ -26,7 +26,14 @@ import {
   setRemote,
 } from '../src/climayte-remote'
 import { localWorkPending } from '../src/core/cli-login-sync'
-import { LIVE_GATE_MS, resetQueueSync, sealQueue, syncQueue } from '../src/core/climayte-queue-sync'
+import {
+  LIVE_GATE_MS,
+  QUEUE_SHAPE_GAP_MS,
+  resetQueueSync,
+  sealQueue,
+  syncQueue,
+  syncQueueDetail,
+} from '../src/core/climayte-queue-sync'
 import { syncChats } from '../src/core/desktop-chat-sync'
 import type { ChatIo, ChatLocal, LocalChat } from '../src/core/desktop-chat-types'
 import { StoreMirror } from '../src/core/login-sync-mirror'
@@ -467,16 +474,16 @@ async function tickPc(p: PacedPc, now: number, local = false): Promise<boolean> 
   if (!p.pace.due(now)) return false
   p.passes++ // a free-plan isolate that never saw the head
   freshIsolate() // a free-plan isolate that never saw the head
-  const before = p.io.mirror.changesIn(['logins', 'chats'])
   await p.io.mirror.refresh({ tables: ['logins', 'queues'] })
   // Both PCs share this process's remote-queue map, which one PC per process never does: each keeps
   // its own copy of what it downloaded.
   clearRemote()
   for (const [snap, v] of p.remote) setRemote(snap, v)
-  const moved = await syncQueue(p.io, now)
+  const { uploaded } = await syncQueueDetail(p.io, now)
   p.remote = remoteSnapshots().map((s) => [s, remoteVersion(s.pc) ?? 0])
-  p.pace.afterPass(!moved && p.io.mirror.changesIn(['logins', 'chats']) === before, now)
-  return moved
+  // as cli-login-sync.ts pass(): only this PC's own upload is work; news that came down is not
+  p.pace.afterPass(!uploaded, now)
+  return uploaded
 }
 
 async function pacedHour(paced: boolean) {
@@ -516,6 +523,139 @@ test('a quiet hour of two PCs on short-lived isolates polls adaptively and reads
   for (const n of hour.passes) expect(n).toBeLessThanOrEqual(20) // not 120
   // liveness rides the polls: an idle PC still polls well inside the other PC's stale window
   expect(IDLE_MAX_MS * 2).toBeLessThan(REMOTE_STALE_MS)
+})
+
+// THE ACTIVE HOUR (owner, 2026-10-04: a busy hour read 2,100 to 2,900 rows against a ~60 an hour budget,
+// two busy PCs keeping each other polling every 30 s, and every worker shape change uploading at once).
+// PC A runs CliMayte all hour: 10 workers, each queued, running, checking, done with a verdict (40 shape
+// changes, one every 90 s), activity and cost changing on every pass while one runs, and 4 login-file
+// refreshes. PC B is idle and polling. Both run the real syncQueue and SyncPace. A shape change is
+// uploaded at most once per QUEUE_SHAPE_GAP_MS, and news from the store does not hold the pace at 30 s.
+test('an active hour of a CliMayte PC with an idle PC polling reads at most 300 rows', async () => {
+  resetQueueSync()
+  await sweep()
+  clock = realNow()
+  const savedWorkers = new Map(workers)
+  const savedLive = new Map(liveByAccount)
+  workers.clear()
+  liveByAccount.clear()
+  const logins: string[] = []
+  const versions = new Map<string, number>()
+  for (let i = 0; i < 55; i++) {
+    const id = randomUUID()
+    await store('PUT', `/v1/logins/${id}`, { version: 0, blob: 'b', meta: { num: i } })
+    logins.push(id)
+    versions.set(id, 1)
+    made.logins.push(id)
+  }
+  const a = pacedPc(0)
+  const b = pacedPc(1)
+  const t0 = clock
+  const STEPS = ['queued', 'running', 'checking', 'done'] as const
+  const step = (k: number) => {
+    const id = `w-${Math.floor(k / 4)}`
+    const status = STEPS[k % 4]
+    workers.set(id, {
+      id,
+      group: 'g-active',
+      title: id,
+      pending: [],
+      status,
+      attempts:
+        status === 'queued'
+          ? []
+          : [{ account: { id: 'acct-a', num: 7, name: 'a' }, startedAt: t0, endedAt: null }],
+      accountId: status === 'queued' ? undefined : 'acct-a',
+      verdicts: status === 'done' ? [{ verdict: 'pass' }] : undefined,
+      lastActivity: 'start',
+      error: null,
+      costUsd: 0,
+      createdAt: t0,
+      updatedAt: clock,
+    } as any)
+  }
+  // Both PCs share this process's `workers` map, which a real B does not: B holds none of A's.
+  const asB = async <T>(run: () => Promise<T>): Promise<T> => {
+    const mine = new Map(workers)
+    workers.clear()
+    try {
+      return await run()
+    } finally {
+      workers.clear()
+      for (const [k, v] of mine) workers.set(k, v)
+    }
+  }
+  const finalStatus = () =>
+    [...workers.values()]
+      .map((w) => `${w.id}:${w.status}`)
+      .sort()
+      .join()
+  const bSees = () =>
+    b.remote
+      .find(([s]) => s.pc === a.io.pc)?.[0]
+      .workers.map((w) => `${w.id}:${w.status}`)
+      .sort()
+      .join()
+  try {
+    for (const p of [a, b]) await tickPc(p, clock, p === a) // start-up reads: the full lists, once
+    storeDb.resetRowsRead()
+    const start = clock
+    let tick = 0
+    let lastChangeAt = 0
+    let k = 0
+    let activity = 0
+    while (clock - start < HOUR) {
+      clock += TICK
+      tick++
+      if (tick % 3 === 1 && k < 40) {
+        step(k++)
+        lastChangeAt = clock
+      }
+      // a running worker's activity and cost move on every pass: volatile, not a shape change
+      for (const w of workers.values())
+        if (w.status === 'running') {
+          w.lastActivity = `tool call ${++activity}`
+          w.costUsd = activity / 100
+          w.updatedAt = clock
+        }
+      if (tick % 30 === 5) {
+        // a login file refreshed here: pushed to the store, and the loop nudged
+        const id = logins[(tick / 30) | 0]
+        const put = await store('PUT', `/v1/logins/${id}`, {
+          version: versions.get(id) ?? 1,
+          blob: 'new',
+          meta: { num: 1 },
+        })
+        if (put.status === 200) versions.set(id, put.json.version)
+        a.pace.nudge()
+      }
+      await tickPc(a, clock, true)
+      await asB(() => tickPc(b, clock))
+    }
+    const stats = storeDb.statements()
+    const total = reads(stats)
+    report('active hour', { stats, reads: total })
+    // B keeps polling after the hour until it holds A's last state
+    const want = finalStatus()
+    while (bSees() !== want && clock - lastChangeAt < 30 * 60_000) {
+      clock += TICK
+      await tickPc(a, clock, true)
+      await asB(() => tickPc(b, clock))
+    }
+    const delay = clock - lastChangeAt
+    console.log(`active hour: B saw A's last shape change after ${Math.round(delay / 1000)} s`)
+    expect(bSees()).toBe(want)
+    expect(total).toBeLessThanOrEqual(300) // measured 79 (176 before the gap: 40 uploads)
+    // one upload per gap at most, not one per shape change (40)
+    const uploads = stats.find((x) => x.sql.startsWith('UPDATE queues SET'))?.calls ?? 0
+    expect(uploads).toBeLessThanOrEqual(HOUR / QUEUE_SHAPE_GAP_MS)
+    expect(delay).toBeLessThanOrEqual(5 * 60_000 + IDLE_MAX_MS)
+  } finally {
+    workers.clear()
+    for (const [k, v] of savedWorkers) workers.set(k, v)
+    liveByAccount.clear()
+    for (const [k, v] of savedLive) liveByAccount.set(k, v)
+  }
 })
 
 test('a worker queued mid-hour on a backed-off PC is uploaded within one 30 s tick', async () => {

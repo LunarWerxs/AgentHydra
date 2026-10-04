@@ -93,7 +93,7 @@ import {
   readText,
 } from './cli-login-move'
 import { logoutCliInstance } from './cli-logout'
-import { queueUploadPending, syncQueue } from './climayte-queue-sync'
+import { queueUploadPending, syncQueueDetail } from './climayte-queue-sync'
 import { createChatLocal } from './desktop-chat-local'
 import { chatSyncRows, syncChats } from './desktop-chat-sync'
 import type { ChatLocal } from './desktop-chat-types'
@@ -1126,7 +1126,7 @@ async function queuePass(l: Live, c: SyncConfig, by: string): Promise<boolean> {
   }
   c.pcId ??= randomUUID()
   try {
-    const moved = await syncQueue({
+    const { uploaded } = await syncQueueDetail({
       call: (method, path, body) => call(l, method, path, body),
       mirror: mirrorFor(l),
       key: l.key,
@@ -1134,7 +1134,7 @@ async function queuePass(l: Live, c: SyncConfig, by: string): Promise<boolean> {
       name: by,
     })
     queueError = null
-    return moved
+    return uploaded
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     if (msg !== queueError) note(c, null, 'error', `CliMayte queue: ${msg}`)
@@ -1212,17 +1212,12 @@ async function pass(): Promise<LoginSyncPassResult> {
   const by = hostname()
   // Every changes poll names this PC, so the other PC reads it as alive (climayte-remote.ts).
   mirrorFor(l).pc = c.pcId ??= randomUUID()
-  // The queue's own news is judged by queuePass.
-  const seen = mirrorFor(l).changesIn(['logins', 'chats'])
+  // Quiet means this PC has no work of its own left: news that only came down from the store (the
+  // other PC's queue, a remote login row) is not work and does not hold the 30 s pace.
   await executeSyncPass(l, c, out, excluded, by)
-  const queueMoved = await queuePass(l, c, by)
+  const queueUploaded = await queuePass(l, c, by)
   const quiet =
-    out.ok &&
-    out.problems.length === 0 &&
-    out.pushed === 0 &&
-    out.landed === 0 &&
-    !queueMoved &&
-    mirrorFor(l).changesIn(['logins', 'chats']) === seen
+    out.ok && out.problems.length === 0 && out.pushed === 0 && out.landed === 0 && !queueUploaded
   c.lastSyncAt = Date.now()
   // Re-read what another call changed meanwhile (an exclusion, a pause) and keep it.
   const now = readConfig()

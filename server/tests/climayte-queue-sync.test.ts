@@ -39,6 +39,8 @@ import {
   fitSnapshot,
   LIVE_GATE_MS,
   openQueue,
+  QUEUE_SHAPE_GAP_MS,
+  queueUploadPending,
   resetQueueSync,
   sealQueue,
   syncQueue,
@@ -459,7 +461,7 @@ describe('when this PC uploads', () => {
       t += LIVE_GATE_MS
       await syncQueue(io, t)
       expect(puts).toHaveLength(3)
-      // A worker change goes at once, gate or not.
+      // A worker change right after an upload waits for the shape gap, then goes up (below).
       workers.set('w-gate', {
         id: 'w-gate',
         group: 'g-gate',
@@ -472,6 +474,9 @@ describe('when this PC uploads', () => {
         updatedAt: t,
       } as any)
       t += 1000
+      await syncQueue(io, t)
+      expect(puts).toHaveLength(3)
+      t += QUEUE_SHAPE_GAP_MS
       await syncQueue(io, t)
       expect(puts).toHaveLength(4)
       // Nothing changed: no upload, however long (the 15-minute heartbeat is gone).
@@ -602,13 +607,17 @@ describe('when this PC uploads', () => {
       }
     })
 
-    test('finishing goes up at once', async () => {
+    test('finishing goes up at once after a quiet spell, and inside the shape gap waits for it', async () => {
       begin()
       try {
         run({})
         await syncQueue(io, t0)
         run({ status: 'done', lastActivity: 'Edit b.ts', costUsd: 0.25, updatedAt: t0 + 60_000 })
-        expect(await syncQueue(io, t0 + 60_000)).toBe(true)
+        expect(await syncQueue(io, t0 + 60_000)).toBe(false)
+        expect(queueUploadPending(pc, t0 + 60_000)).toBe(false)
+        expect(puts).toHaveLength(1)
+        expect(queueUploadPending(pc, t0 + QUEUE_SHAPE_GAP_MS)).toBe(true)
+        expect(await syncQueue(io, t0 + QUEUE_SHAPE_GAP_MS)).toBe(true)
         expect(puts).toHaveLength(2)
       } finally {
         end()

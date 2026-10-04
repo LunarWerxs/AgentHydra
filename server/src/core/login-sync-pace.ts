@@ -11,6 +11,14 @@
 // file moved). Back to BASE_MS at once after a pass that was not quiet, after nudge() (a local change:
 // nudgeLoginSync) and after a manual sync or a launch.
 //
+// QUIET MEANS NO WORK OF THIS PC'S OWN (2026-10-04): news that only came DOWN from the store (the other
+// PC's queue moved, a remote login row changed) is not work and does not hold the 30 s pace. Measured
+// 2026-10-04: two busy PCs kept each other at 30 s all day (a busy hour read 2,100 to 2,900 rows). Not
+// quiet: a pending upload (this PC's queue snapshot went up with news), a login pushed or landed, a
+// failed pass, a moved login file (nudge), a manual sync or a launch. News that arrives is read on the
+// next due pass, at most IDLE_MAX_MS later. Active-hour test (login-sync-quiet-hour.test.ts: 40 worker
+// shape changes, 4 login refreshes, the other PC idle): 79 rows read an hour, 176 before this.
+//
 // LIVENESS RIDES THE POLLS: every changes poll names this PC, the store's Worker stamps it seen, and
 // the other PC treats it as gone after REMOTE_STALE_MS (20 min, climayte-remote.ts) without a stamp.
 // IDLE_MAX_MS (5 min) is well inside that: a pass, and so a poll, is due at least every 5 minutes.

@@ -19,6 +19,13 @@
 // running workers toward each account's cap and takes their newer usage readings; the CliMayte view
 // lists them apart (GET /api/corch/remote). Nothing of theirs is written to this PC's workers.json.
 //
+// WHEN IT UPLOADS (measured 2026-10-04: ~117 uploads an hour, each costing 2 writes and about 7 rows
+// the other PC reads): the first shape change after a quiet spell goes up at once; after that the
+// snapshot goes up at most once per QUEUE_SHAPE_GAP_MS (3 min) with the newest state, so the other PC
+// sees every shape change within 3 min plus its own poll wait (at most 5 min). Volatile fields and live
+// readings keep their LIVE_GATE_MS gate; an unchanged queue is never uploaded. Active-hour test
+// (40 shape changes in an hour, login-sync-quiet-hour.test.ts): 20 uploads, not 40.
+//
 // Failures here (a Worker without the queue routes, a conflict, the network) are the queue's own: the
 // caller keeps them in `queueError` and never in the logins' status.
 
@@ -48,6 +55,12 @@ export const FINISHED_KEEP_MS = 24 * 60 * 60_000
  *  Worker's x-seen, climayte-remote.ts), not from a heartbeat upload (one every 15 min cost ~50 of the
  *  store's 60 rows an hour). */
 export const LIVE_GATE_MS = 10 * 60_000
+/** A shape change (status, account, verdict, ...) uploads at once after a quiet spell, but this PC's
+ *  snapshot goes up at most once per this gap, with the newest state, however many changes came in
+ *  between. 3 minutes: a busy hour then makes at most 20 uploads (2 writes plus about 5 rows the other
+ *  PC reads each) instead of one per change, while the other PC still sees every change within
+ *  3 minutes plus its own poll wait (at most IDLE_MAX_MS), 8 minutes in all. */
+export const QUEUE_SHAPE_GAP_MS = 3 * 60_000
 /** sessionPct and weekPct count as changed only when they cross a step of this many points. */
 export const LIVE_BUCKET = 5
 
@@ -264,13 +277,14 @@ const livePrint = (snap: QueueSnapshot): string =>
   )
 
 /** Whether a pass run at `now` would upload this PC's snapshot for news: nothing sent yet, a worker's
- *  shape changed, or a live bucket moved and LIVE_GATE_MS has passed. Local and free (no store call).
+ *  shape changed and QUEUE_SHAPE_GAP_MS has passed since the last upload (a change inside the gap waits
+ *  for it, and the tick that finds the gap over makes the pass due), or a live bucket moved and LIVE_GATE_MS has passed. Local and free (no store call).
  *  A running worker's activity and cost alone are not news, so they do not make a pass due. */
 export function queueUploadPending(pc: string, now = Date.now()): boolean {
   const sent = sentBy.get(pc)
   if (!sent) return true
   const snap = buildSnapshot(pc, '', now)
-  if (shapePrint(snap) !== sent.shape) return true
+  if (shapePrint(snap) !== sent.shape) return now - sent.at >= QUEUE_SHAPE_GAP_MS
   return now - sent.at >= LIVE_GATE_MS && livePrint(snap) !== sent.live
 }
 
@@ -283,10 +297,11 @@ async function upload(io: QueueIo, own: number, now: number): Promise<boolean> {
   const v = volatilePrint(snap)
   const l = livePrint(snap)
   const sent = sentBy.get(io.pc)
-  // A shape change goes at once; a live-bucket or volatile change only after LIVE_GATE_MS; else nothing.
+  // A shape change goes at once after a quiet spell, else when QUEUE_SHAPE_GAP_MS is up; a live-bucket
+  // or volatile change only after LIVE_GATE_MS; else nothing.
   if (sent && sent.shape === s) {
     if ((sent.live === l && sent.volatile === v) || now - sent.at < LIVE_GATE_MS) return false
-  }
+  } else if (sent && now - sent.at < QUEUE_SHAPE_GAP_MS) return false
   const body = (version: number) => ({
     version,
     blob,
@@ -322,12 +337,24 @@ async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: numb
  *  volatile-only change is no news; it is still stored). The sync loop polls less often when
  *  nothing moved. */
 export async function syncQueue(io: QueueIo, now = Date.now()): Promise<boolean> {
+  return (await syncQueueDetail(io, now)).moved
+}
+
+/** syncQueue, and whether this PC's snapshot went up with news in it (a shape or live-bucket change): the
+ *  sync loop's pace counts that as work this PC did (login-sync-pace.ts); another PC's news that came
+ *  down is `moved` but no work of this PC's own. */
+export async function syncQueueDetail(
+  io: QueueIo,
+  now = Date.now(),
+): Promise<{ moved: boolean; uploaded: boolean }> {
   let moved = false
+  let uploaded = false
   const rows = await queueRows(io)
   const own = rows.find((r) => r.pc === io.pc)?.version ?? 0
   let problem: Error | null = null
   try {
-    moved = await upload(io, own, now)
+    uploaded = await upload(io, own, now)
+    moved = uploaded
   } catch (err) {
     problem = err instanceof Error ? err : new Error(String(err))
   }
@@ -353,5 +380,5 @@ export async function syncQueue(io: QueueIo, now = Date.now()): Promise<boolean>
     }
   }
   if (problem) throw problem
-  return moved
+  return { moved, uploaded }
 }
