@@ -2,9 +2,9 @@
 //!
 //! Same algorithm, same numbers as hswarm/claude_usage.py (the reference): walk a projects tree, take
 //! every .jsonl written since the window opened (main transcripts before sub-agent ones), look only at
-//! the lines carrying "usage", skip a requestId already seen without parsing it, count each request
-//! once, bucket by LOCAL day, price at the table read from stdin, and report per day the USD split
-//! main loop vs sub-agents plus every sub-agent's USD and token buckets. Nothing is rounded here: the
+//! the lines carrying "usage", skip a requestId an earlier file counted without parsing it, count each request
+//! once at its fullest line (the largest output_tokens of its streamed lines), bucket by LOCAL day, price
+//! at the table read from stdin, and report per day the USD split main loop vs sub-agents plus every sub-agent's USD and token buckets. Nothing is rounded here: the
 //! Python side rounds, so every arm prints the same digits.
 //!
 //!   zscan --root <dir> --since YYYY-MM-DD --until YYYY-MM-DD [--threads N]  < prices.json
@@ -294,7 +294,6 @@ struct Collector {
     days: BTreeMap<String, Day>,
     agents: Vec<Agent>,
     agent_idx: HashMap<String, usize>,
-    day_cache: HashMap<String, Option<String>>,
     stats: Stats,
 }
 
@@ -374,33 +373,18 @@ impl Collector {
         }
     }
 
-    /// The single-threaded scan: the global seen-set skips replayed lines before they are parsed.
+    /// The single-threaded scan: one file at a time through the same extraction the parallel arm uses, the
+    /// global seen-set (requests earlier files counted) skipping replayed lines before they are parsed.
     fn read_file(&mut self, path: &Path, agent: Option<&str>, session: &str) {
-        self.stats.files += 1;
-        let f = match File::open(path) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        let mut rd = BufReader::with_capacity(1 << 20, f);
-        let mut buf: Vec<u8> = Vec::with_capacity(1 << 16);
-        loop {
-            buf.clear();
-            match rd.read_until(b'\n', &mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-            if memmem::find(&buf, USAGE_NEEDLE).is_none() {
-                continue;
-            }
-            self.stats.candidates += 1;
-            if let Some(q) = quick_rid(&buf) {
-                if self.seen.contains(q) {
-                    continue;
-                }
-            }
-            if let Some(raw) = parse_candidate(&buf, &mut self.day_cache, &mut self.stats) {
-                self.apply(raw, agent, session);
-            }
+        let raws = extract_file(
+            path,
+            &self.since,
+            &self.until,
+            Some(&self.seen),
+            &mut self.stats,
+        );
+        for r in raws {
+            self.apply(r, agent, session);
         }
     }
 
@@ -458,23 +442,34 @@ impl Collector {
     }
 }
 
-/// The parallel arm's per-file pass: local dedupe only, the global fold happens in file order on the main thread.
+/// One file's requests, each at its fullest line. A streamed request is several lines with one requestId: the
+/// first is written when the reply starts and carries a placeholder output_tokens (8, say), the last the final
+/// count, so a request is billed at its largest output (as the reference, usage-tokens.ts and the analytics kit
+/// count it) and the whole file is read before anything is counted. `global` holds the requests earlier files
+/// counted (the fold in file order; None for the parallel arm, which folds afterwards): a replayed line is
+/// skipped before it is parsed.
 ///
-/// The window is applied HERE as well, because the local dedupe must see exactly what the serial arm's global
-/// one does: a record outside the window is dropped by the fold without marking its id as seen, so if it were
-/// allowed to claim the id here, a LATER line replaying that same request inside the window would be skipped
-/// before it was ever parsed and the request would vanish from the parallel arm only. That cost 3 requests and
-/// $1.83 of a real day, deterministically, and both native arms had it (found by the A/B, 2026-09-17).
-fn extract_file(path: &Path, since: &str, until: &str, stats: &mut Stats) -> Vec<Raw> {
+/// The window is applied HERE as well, because the local dedupe must see exactly what the global one does: a
+/// record outside the window is dropped by the fold without marking its id as seen, so if it were allowed to
+/// claim the id here, a LATER line replaying that same request inside the window would be skipped before it was
+/// ever parsed and the request would vanish from the parallel arm only. That cost 3 requests and $1.83 of a
+/// real day, deterministically, and both native arms had it (found by the A/B, 2026-09-17).
+fn extract_file(
+    path: &Path,
+    since: &str,
+    until: &str,
+    global: Option<&HashSet<Vec<u8>>>,
+    stats: &mut Stats,
+) -> Vec<Raw> {
     stats.files += 1;
-    let mut out = Vec::new();
+    let mut out: Vec<Raw> = Vec::new();
     let f = match File::open(path) {
         Ok(f) => f,
         Err(_) => return out,
     };
     let mut rd = BufReader::with_capacity(1 << 20, f);
     let mut buf: Vec<u8> = Vec::with_capacity(1 << 16);
-    let mut seen: HashSet<Vec<u8>> = HashSet::new();
+    let mut at: HashMap<String, usize> = HashMap::new(); // request id -> its place in `out`
     let mut day_cache = HashMap::new();
     loop {
         buf.clear();
@@ -486,8 +481,8 @@ fn extract_file(path: &Path, since: &str, until: &str, stats: &mut Stats) -> Vec
             continue;
         }
         stats.candidates += 1;
-        if let Some(q) = quick_rid(&buf) {
-            if seen.contains(q) {
+        if let (Some(g), Some(q)) = (global, quick_rid(&buf)) {
+            if g.contains(q) {
                 continue;
             }
         }
@@ -496,8 +491,16 @@ fn extract_file(path: &Path, since: &str, until: &str, stats: &mut Stats) -> Vec
             if !in_window {
                 continue; // the fold will drop it too, and it must not claim the id a later replay needs
             }
-            if seen.insert(raw.rid.clone().into_bytes()) {
-                out.push(raw);
+            match at.get(&raw.rid) {
+                Some(&i) => {
+                    if raw.toks.output > out[i].toks.output {
+                        out[i] = raw;
+                    }
+                }
+                None => {
+                    at.insert(raw.rid.clone(), out.len());
+                    out.push(raw);
+                }
             }
         }
     }
@@ -558,7 +561,7 @@ fn scan_parallel(coll: &mut Collector, files: &[(PathBuf, bool)], threads: usize
                 i
             };
             let mut st = Stats::default();
-            let raws = extract_file(&paths[i], &since, &until, &mut st);
+            let raws = extract_file(&paths[i], &since, &until, None, &mut st);
             if tx.send((i, raws, st)).is_err() {
                 break;
             }
@@ -629,7 +632,6 @@ fn main() {
         days: BTreeMap::new(),
         agents: Vec::new(),
         agent_idx: HashMap::new(),
-        day_cache: HashMap::new(),
         stats: Stats::default(),
     };
     if threads <= 1 {

@@ -106,6 +106,25 @@ def test_collect_counts_each_request_once_and_splits_main_from_subagents(home):
     assert d["agents"] == {"sonnet": [1.0], "opus": [2.5]}
 
 
+def test_a_streamed_request_is_billed_at_its_final_output_not_the_placeholder_its_first_line_carries(home):
+    """Claude Code writes a streamed reply's first line with a placeholder output_tokens (8) and a later line, same
+    requestId, with the real count. The scan used to keep the first, pricing a sub-agent's replies 20-35% under the
+    analytics kit (which keeps the last), and a replay in a later file must still count nothing."""
+    root = home / "projects" / "proj"
+    _write(root / "sess.jsonl", _req("r1", YESTERDAY, output_tokens=2_000_000))
+    _write(root / "sess" / "subagents" / "agent-a.jsonl",
+           _req("r1", YESTERDAY, output_tokens=2_000_000),  # the parent's request, replayed: counted once, in the parent
+           _req("s1", YESTERDAY, output_tokens=8), _req("s1", YESTERDAY, output_tokens=1_000_000),
+           _req("s2", YESTERDAY, output_tokens=3), _req("s3", YESTERDAY, output_tokens=500_000), _req("s2", YESTERDAY, output_tokens=300_000))
+
+    d = claude_usage.collect(YESTERDAY, YESTERDAY)[YESTERDAY.isoformat()]
+
+    assert d["requests"] == 4
+    assert d["main_usd"] == pytest.approx(20.0)
+    assert d["sub_usd"] == pytest.approx(10.0 + 5.0 + 3.0)
+    assert d["tokens"]["output"] == 2_000_000 + 1_000_000 + 500_000 + 300_000
+
+
 def _ledger(home: Path, rows: list[tuple[str, float | None]]) -> None:
     ts = dt.datetime.combine(YESTERDAY, dt.time(12)).astimezone().isoformat()
     lines = [json.dumps({"ts": ts, "job": job, "task": f"t{i}", "cost_usd": cost}) for i, (job, cost) in enumerate(rows)]

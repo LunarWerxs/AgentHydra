@@ -336,8 +336,8 @@ func forEachLine(path string, handle func(line []byte)) {
 	}
 }
 
-// scanFile walks one transcript, using seen for the dedupe that needs no parse, counting into st, and
-// handing every accepted record to emit.
+// scanFile walks one transcript, using seen (the requests earlier files counted; nil: none) for the dedupe
+// that needs no parse, counting into st, and handing every accepted record to emit.
 func scanFile(path string, seen map[string]struct{}, cache map[string]dayValue, st *stats, emit func(raw)) {
 	st.files++
 	forEachLine(path, func(line []byte) {
@@ -437,9 +437,16 @@ func (c *collector) apply(r raw, agent *string, session string) {
 	a.requests++
 }
 
-// The single-threaded scan: the global seen-set skips replayed lines before they are parsed.
+// The single-threaded scan: one file at a time through the same extraction the parallel arm uses, the global
+// seen-set (requests earlier files counted) skipping replayed lines before they are parsed.
 func (c *collector) readFile(path string, agent *string, session string) {
-	scanFile(path, c.seen, c.dayCache, &c.stats, func(r raw) { c.apply(r, agent, session) })
+	raws, st := extractFile(path, c.since, c.until, c.seen, c.dayCache)
+	c.stats.files += st.files
+	c.stats.candidates += st.candidates
+	c.stats.parsed += st.parsed
+	for _, r := range raws {
+		c.apply(r, agent, session)
+	}
 }
 
 // finish hangs each sub-agent off the day it started, in first-seen order.
@@ -588,27 +595,34 @@ func listFiles(root string, sinceTs int64) []fileInfo {
 	return append(main, sub...)
 }
 
-// The parallel arm's per-file pass: local dedupe only, the global fold happens in file order on the
-// main goroutine.
+// One file's requests, each at its fullest line. A streamed request is several lines with one requestId: the
+// first is written when the reply starts and carries a placeholder output_tokens (8, say), the last the final
+// count, so a request is billed at its largest output (as the reference, usage-tokens.ts and the analytics kit
+// count it) and the whole file is read before anything is counted. `global` holds the requests earlier files
+// counted (the serial arm's fold in file order; nil for the parallel arm, which folds afterwards): a replayed
+// line is skipped before it is parsed.
 //
-// The window is applied HERE as well, because the local dedupe must see exactly what the serial arm's
-// global one does: a record outside the window is dropped by the fold without marking its id as seen, so
-// if it were allowed to claim the id here, a LATER line replaying that same request inside the window
-// would be skipped before it was ever parsed and the request would vanish from the parallel arm only.
-// That cost 3 requests and $1.83 of a real day, deterministically, in both native arms (A/B, 2026-09-17).
-func extractFile(path, since, until string) ([]raw, stats) {
+// The window is applied HERE as well, because the local dedupe must see exactly what the global one does: a
+// record outside the window is dropped by the fold without marking its id as seen, so if it were allowed to
+// claim the id here, a LATER line replaying that same request inside the window would be skipped before it
+// was ever parsed and the request would vanish from the parallel arm only. That cost 3 requests and $1.83 of
+// a real day, deterministically, in both native arms (A/B, 2026-09-17).
+func extractFile(path, since, until string, global map[string]struct{}, cache map[string]dayValue) ([]raw, stats) {
 	var st stats
 	var out []raw
-	seen := make(map[string]struct{})
-	cache := make(map[string]dayValue)
-	scanFile(path, seen, cache, &st, func(r raw) {
+	at := make(map[string]int) // request id -> its place in out
+	scanFile(path, global, cache, &st, func(r raw) {
 		if !r.dayOK || r.day < since || r.day > until {
 			return // the fold will drop it too, and it must not claim the id a later replay needs
 		}
-		if _, dup := seen[r.rid]; !dup {
-			seen[r.rid] = struct{}{}
-			out = append(out, r)
+		if i, dup := at[r.rid]; dup {
+			if r.toks.output > out[i].toks.output {
+				out[i] = r
+			}
+			return
 		}
+		at[r.rid] = len(out)
+		out = append(out, r)
 	})
 	return out, st
 }
@@ -639,7 +653,7 @@ func (c *collector) scanParallel(files []fileInfo, n int) {
 				i := next
 				next++
 				mu.Unlock()
-				raws, st := extractFile(files[i].path, c.since, c.until)
+				raws, st := extractFile(files[i].path, c.since, c.until, nil, make(map[string]dayValue))
 				ch <- job{idx: i, raws: raws, st: st}
 			}
 		}()

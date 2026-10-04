@@ -142,13 +142,25 @@ class _Collector:
     def read(self, path: str) -> None:
         agent = path if SUBAGENT_DIR in path else None
         session = session_of(path)
+        # A streamed request is several lines with one requestId: the first is written when the reply starts and
+        # carries a placeholder output_tokens (8, say), the last the final count. The request is billed at its
+        # largest output, as usage-tokens.ts and the analytics kit count it, so the file is read whole and each
+        # request keeps its fullest line before anything is counted.
+        latest: dict[str, tuple] = {}
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
                 for line in f:
-                    if '"usage"' in line and _quick_request_id(line) not in self.seen:
-                        self.record(line, agent, session)
+                    if '"usage"' not in line or _quick_request_id(line) in self.seen:
+                        continue
+                    parsed = self.parse(line)
+                    if parsed is not None and (parsed[0] not in latest or parsed[4]["output"] > latest[parsed[0]][4]["output"]):
+                        latest[parsed[0]] = parsed
         except OSError:
-            return
+            pass
+        for rid, day, model, ts, t in latest.values():
+            if rid not in self.seen:  # the same request in a LATER file is a replay of this one
+                self.seen.add(rid)
+                self.add(day, model, t, agent, ts, session)
 
     def local_day(self, ts: str) -> str | None:
         key = ts[:16]  # parsing every timestamp is the hot path; a minute always maps to one local day
@@ -159,29 +171,28 @@ class _Collector:
                 self.local_days[key] = None
         return self.local_days[key]
 
-    def record(self, line: str, agent: str | None, session: str = "") -> None:
+    def parse(self, line: str) -> tuple | None:
+        """(request id, local day, model, timestamp, token buckets) of one transcript line in the window, else None."""
         try:
             rec = json.loads(line)
         except ValueError:
-            return
+            return None
         msg = rec.get("message") if isinstance(rec, dict) else None
         usage = msg.get("usage") if isinstance(msg, dict) else None
         rid = rec.get("requestId") or (msg or {}).get("id") if isinstance(usage, dict) else None
         if not rid or rid in self.seen or not any(_n(usage, k) for k in TOKEN_FIELDS):
-            return
+            return None
         ts = str(rec.get("timestamp") or "")
         day = self.local_day(ts)
         if day is None or not self.since <= day <= self.until:
-            return
-        self.seen.add(rid)
-        self.add(day, str(msg.get("model") or ""), usage, agent, ts, session)
+            return None
+        return rid, day, str(msg.get("model") or ""), ts, split_tokens(usage)
 
-    def add(self, day: str, model: str, usage: dict, agent: str | None, ts: str = "", session: str = "") -> None:
+    def add(self, day: str, model: str, t: dict, agent: str | None, ts: str = "", session: str = "") -> None:
         d = self.days.setdefault(day, empty_day())
         d["requests"] += 1
         m = d["by_model"].setdefault(model, empty_model())
         m["requests"] += 1
-        t = split_tokens(usage)
         s = d["by_session"].setdefault(session, empty_session()) if session else None
         if s is not None:
             s["requests"] += 1

@@ -69,3 +69,23 @@ def test_every_arm_agrees_including_the_threaded_ones(tree):
             ran += 1
     if not ran:
         pytest.skip("no native scanner built: run `hswarm native build`")
+
+
+def test_a_streamed_request_counts_at_its_fullest_line_in_every_arm(tmp_path):
+    """A streamed reply is several lines with one requestId; the first carries a placeholder output_tokens. Every arm
+    bills the largest, from the earliest file that has the request, and none counts a later replay."""
+    root = tmp_path / "projects" / "proj"
+    (root / "sess" / "subagents").mkdir(parents=True)
+    (root / "sess.jsonl").write_text(_req("s0", DAY, output_tokens=40), encoding="utf-8")
+    (root / "sess" / "subagents" / "agent-a.jsonl").write_text(
+        _req("s0", DAY, output_tokens=40_000)  # a replay of the parent's request: ignored
+        + _req("s1", DAY, output_tokens=8) + _req("s2", DAY, output_tokens=500) + _req("s1", DAY, output_tokens=1_000)
+        + _req("s2", DAY, output_tokens=2), encoding="utf-8")
+    tree = tmp_path / "projects"
+    want = _shape(claude_usage.collect_python(DAY, DAY, tree))
+    assert want[DAY.isoformat()]["tokens"]["output"] == 40 + 1_000 + 500
+    for lang in native.LANGS:
+        if native.binary(lang) is None:
+            continue
+        for threads in (1, 4):
+            assert _shape(native.scan(lang, tree, DAY, DAY, threads)["days"]) == want, f"{lang}@{threads} disagrees with Python"
