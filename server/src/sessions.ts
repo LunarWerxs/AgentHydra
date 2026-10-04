@@ -587,6 +587,8 @@ const RESUME_CHECK_BYTES = 64
 const MAX_PARSE_STATES = 4000
 // How long one slice of a transcript fold may run before the event loop gets a turn.
 const FOLD_SLICE_MS = 8
+/** Bytes decoded to text at once (then cut at the next newline). */
+const DECODE_SLICE_BYTES = 512 * 1024
 
 interface ParseState {
   /** Bytes before this offset are folded into acc and limits. */
@@ -698,7 +700,18 @@ async function foldAppended(tf: TranscriptFile, key: string): Promise<ParseState
   const lastNl = bytes.lastIndexOf(0x0a)
   let end = from
   if (lastNl >= from) {
-    await foldLines(state, tf, utf8.decode(bytes.subarray(from, lastNl + 1)))
+    // Decoded a slice at a time, each ending on a newline: decoding a 12 MB window whole is a
+    // block of its own (80-100 ms), and a newline byte never sits inside a UTF-8 sequence.
+    for (let at = from; at <= lastNl; ) {
+      let stop = at + DECODE_SLICE_BYTES
+      if (stop > lastNl) stop = lastNl + 1
+      else {
+        const nlAt = bytes.indexOf(0x0a, stop)
+        stop = nlAt === -1 || nlAt > lastNl ? lastNl + 1 : nlAt + 1
+      }
+      await foldLines(state, tf, utf8.decode(bytes.subarray(at, stop)))
+      at = stop
+    }
     end = lastNl + 1
   }
   if (end < bytes.length) {

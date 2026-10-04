@@ -367,13 +367,13 @@ function memoryOf(store: KitStore): SweepMemory {
 async function loadCursors(store: KitStore, mem: SweepMemory, dir: string): Promise<void> {
   if (mem.loaded.has(dir)) return
   const page = store.db.prepare(
-    'select * from ingest_cursor where path >= $lo and path < $hi order by path limit 2000',
+    'select * from ingest_cursor where path >= $lo and path < $hi order by path limit 300',
   )
   const hi = `${dir}￿`
   for (let lo = dir; ; ) {
     const rows = page.all({ $lo: lo, $hi: hi }) as IngestCursor[]
     for (const r of rows) mem.cursors.set(r.path, r)
-    if (rows.length < 2000) break
+    if (rows.length < 300) break
     lo = (rows[rows.length - 1] as IngestCursor).path
     await yieldLoop()
   }
@@ -832,7 +832,14 @@ async function readFileInto(
       if (nl < 0) {
         carry = Buffer.from(data) // one long line still arriving
       } else {
+        let t0 = performance.now()
+        let n = 0
         for (const line of data.toString('utf8', 0, nl).split('\n')) {
+          // 2 MB of lines is tens of ms of JSON.parse: hand the loop back every ~15 ms of it.
+          if (++n % 64 === 0 && performance.now() - t0 > 15) {
+            await new Promise<void>((r) => setImmediate(r))
+            t0 = performance.now()
+          }
           const ev = claudeLineEvent(line, st.mtimeMs, ctx)
           if (!ev) continue
           const who = ctx.ran?.(ev.ts)

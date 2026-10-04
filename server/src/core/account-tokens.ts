@@ -42,7 +42,7 @@
 
 import type { Stats } from 'node:fs'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
+import { readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CLAUDE_PROJECTS_ROOT } from '../config'
 import type { AccountTokens, TokenParts, UsageSnapshot } from '../types'
@@ -59,31 +59,40 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** Flat message rows, `STRIDE` numbers each: time (ms), input, output, cache read, cache write. */
 const STRIDE = 5
 
-/** One transcript's messages, in order of first appearance, with the line each first appeared on. */
-function parseMessages(
-  text: string,
+/** Lines parsed between clock checks, and the longest the loop is held before it is given back. */
+const PARSE_SLICE = 200
+const SLICE_BUDGET_MS = 15
+
+interface ParseState {
+  byMessage: Map<string, { row: number[]; line: number }>
+  unnamed: number
+}
+
+/** Parse lines [from, to) into `st`. One usage per reply, as usage-tokens counts it: a repeat is
+ *  dropped, and a record with more output than the one kept is that reply's finished form, so only
+ *  its output replaces. */
+function parseSlice(
+  lines: string[],
+  from: number,
+  to: number,
   fallbackTs: number,
-): { rows: number[]; firstLine: number[]; lines: string[] } {
-  const byMessage = new Map<string, { row: number[]; line: number }>()
-  let unnamed = 0
-  const lines = text.split('\n')
-  for (let n = 0; n < lines.length; n++) {
+  st: ParseState,
+): void {
+  for (let n = from; n < to; n++) {
     const turn = parseUsageLine(lines[n] as string)
     if (!turn) continue
     const u = turn.usage
-    // One usage per reply, as usage-tokens counts it: a repeat is dropped, and a record with more
-    // output than the one kept is that reply's finished form, so only its output replaces.
     const id = turn.messageId
       ? turn.requestId
         ? `${turn.messageId}|${turn.requestId}`
         : turn.messageId
-      : `line-${unnamed++}`
-    const kept = byMessage.get(id)
+      : `line-${st.unnamed++}`
+    const kept = st.byMessage.get(id)
     if (kept) {
       if (u.output > (kept.row[2] as number)) kept.row[2] = u.output
       continue
     }
-    byMessage.set(id, {
+    st.byMessage.set(id, {
       row: [
         Number.isFinite(turn.ts) ? turn.ts : fallbackTs,
         u.input,
@@ -94,8 +103,46 @@ function parseMessages(
       line: n,
     })
   }
-  const all = [...byMessage.values()]
-  return { rows: all.flatMap((m) => m.row), firstLine: all.map((m) => m.line), lines }
+}
+
+function parsedOf(
+  st: ParseState,
+  lines: string[],
+): { rows: number[]; firstLine: number[]; lines: string[] } {
+  const all = [...st.byMessage.values()]
+  const rows: number[] = []
+  for (const m of all) for (const v of m.row) rows.push(v)
+  return { rows, firstLine: all.map((m) => m.line), lines }
+}
+
+/** One transcript's messages, in order of first appearance, with the line each first appeared on. */
+function parseMessages(
+  text: string,
+  fallbackTs: number,
+): { rows: number[]; firstLine: number[]; lines: string[] } {
+  const st: ParseState = { byMessage: new Map(), unnamed: 0 }
+  const lines = text.split('\n')
+  parseSlice(lines, 0, lines.length, fallbackTs, st)
+  return parsedOf(st, lines)
+}
+
+/** The same, parsed in slices with a turn of the loop between them, so a transcript of tens of MB
+ *  never holds the daemon's thread. */
+async function parseMessagesAsync(
+  text: string,
+  fallbackTs: number,
+): Promise<{ rows: number[]; firstLine: number[]; lines: string[] }> {
+  const st: ParseState = { byMessage: new Map(), unnamed: 0 }
+  const lines = text.split('\n')
+  let t0 = performance.now()
+  for (let n = 0; n < lines.length; n += PARSE_SLICE) {
+    parseSlice(lines, n, Math.min(lines.length, n + PARSE_SLICE), fallbackTs, st)
+    if (performance.now() - t0 > SLICE_BUDGET_MS) {
+      await new Promise<void>((r) => setImmediate(r))
+      t0 = performance.now()
+    }
+  }
+  return parsedOf(st, lines)
 }
 
 /** One transcript's messages: one usage per message id, the last one written. `fallbackTs` stamps a
@@ -350,10 +397,10 @@ async function entryOf(
       const bytes = Buffer.from(await file.slice(from, s.size).arrayBuffer())
       const kept = known.offset - from
       if (bytes.subarray(0, kept).toString('base64') === (known.anchor ?? ''))
-        return settle(files, path, s.mtimeMs, bytes, kept, from, known, holder)
+        return await settle(files, path, s.mtimeMs, bytes, kept, from, known, holder)
     }
     const bytes = Buffer.from(await file.slice(0, s.size).arrayBuffer())
-    return settle(files, path, s.mtimeMs, bytes, 0, 0, null, holder)
+    return await settle(files, path, s.mtimeMs, bytes, 0, 0, null, holder)
   } catch {
     // Gone or locked since the folder was listed; the next sweep reads it again.
     return null
@@ -362,7 +409,7 @@ async function entryOf(
 
 /** Parse `bytes` (the file from byte `start`; its first `skip` bytes are already counted in `prefix`),
  *  settle every reply but the last HOLD_BACK into the entry and keep those as the tail. */
-function settle(
+async function settle(
   files: Map<string, FileEntry>,
   path: string,
   mtimeMs: number,
@@ -371,8 +418,11 @@ function settle(
   start: number,
   prefix: FileEntry | null,
   holder: (ts: number) => string | null,
-): FileEntry {
-  const { rows, firstLine, lines } = parseMessages(bytes.subarray(skip).toString('utf8'), mtimeMs)
+): Promise<FileEntry> {
+  const { rows, firstLine, lines } = await parseMessagesAsync(
+    bytes.subarray(skip).toString('utf8'),
+    mtimeMs,
+  )
   const count = firstLine.length
   // The tail begins at the first line of the HOLD_BACK-th reply from the end, never past a trailing
   // line with no newline yet (it is read again once finished).
@@ -400,13 +450,35 @@ function settle(
 }
 
 // What was read survives a restart: reading tens of gigabytes of transcripts again costs minutes.
-const CACHE_VERSION = 1
-function loadCache(): void {
+// Version 2 is one JSON line per file ("c" or "d", path, entry) behind a header line, so the 35 MB
+// cache is parsed and written a slice at a time with the loop free between slices. Version 1 (one
+// object) is still read, whole, once; the next save rewrites it as version 2.
+const CACHE_VERSION = 2
+const CACHE_LEGACY_VERSION = 1
+const CACHE_HEADER = JSON.stringify({ version: CACHE_VERSION })
+
+async function loadCache(): Promise<void> {
   try {
     const file = accountTokensCacheFile()
     if (!existsSync(file)) return
-    const raw = JSON.parse(readFileSync(file, 'utf8'))
-    if (raw?.version !== CACHE_VERSION) return
+    const text = await readFile(file, 'utf8')
+    if (text.startsWith(CACHE_HEADER)) {
+      const lines = text.split('\n')
+      let t0 = performance.now()
+      for (let n = 1; n < lines.length; n++) {
+        const line = lines[n] as string
+        if (!line) continue
+        const [kind, path, e] = JSON.parse(line)
+        ;(kind === 'c' ? cliFiles : desktopFiles).set(path, e as FileEntry)
+        if (n % 64 === 0 && performance.now() - t0 > SLICE_BUDGET_MS) {
+          await new Promise<void>((r) => setImmediate(r))
+          t0 = performance.now()
+        }
+      }
+      return
+    }
+    const raw = JSON.parse(text)
+    if (raw?.version !== CACHE_LEGACY_VERSION) return
     for (const [path, e] of Object.entries(raw.cli ?? {})) cliFiles.set(path, e as FileEntry)
     for (const [path, e] of Object.entries(raw.desktop ?? {}))
       desktopFiles.set(path, e as FileEntry)
@@ -414,26 +486,32 @@ function loadCache(): void {
     // Unreadable cache: everything is read again.
   }
 }
-function saveCache(): void {
+async function saveCache(): Promise<void> {
   try {
     const dir = appDataDir()
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     const file = accountTokensCacheFile()
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-    writeFileSync(
-      tmp,
-      JSON.stringify({
-        version: CACHE_VERSION,
-        cli: Object.fromEntries(cliFiles),
-        desktop: Object.fromEntries(desktopFiles),
-      }),
-      { mode: 0o600 },
-    )
-    renameSync(tmp, file)
+    // Snapshot before the first await: the sweep goes on while this writes.
+    const all: Array<[string, string, FileEntry]> = []
+    for (const [path, e] of cliFiles) all.push(['c', path, e])
+    for (const [path, e] of desktopFiles) all.push(['d', path, e])
     cacheDirty = false
+    const out: string[] = [CACHE_HEADER]
+    let t0 = performance.now()
+    for (let n = 0; n < all.length; n++) {
+      out.push(JSON.stringify(all[n]))
+      if (n % 64 === 63 && performance.now() - t0 > SLICE_BUDGET_MS) {
+        await new Promise<void>((r) => setImmediate(r))
+        t0 = performance.now()
+      }
+    }
+    out.push('')
+    await writeFile(tmp, out.join('\n'), { mode: 0o600 })
+    await rename(tmp, file)
     savedAt = Date.now()
   } catch {
-    // Best effort.
+    cacheDirty = true // Best effort: the next sweep tries again.
   }
 }
 
@@ -469,11 +547,21 @@ function ledgerOf(old: number[], rows: number[]): Ledger {
   return { old, ts, cum }
 }
 
+/** A turn of the loop once the caller has held it past the budget. */
+let heldSince = 0
+async function giveBack(): Promise<void> {
+  const now = performance.now()
+  if (now - heldSince < SLICE_BUDGET_MS) return
+  await new Promise<void>((r) => setImmediate(r))
+  heldSince = performance.now()
+}
+
 async function sweep(): Promise<void> {
   sweepNo++
+  heldSince = performance.now()
   if (!cacheLoaded) {
     cacheLoaded = true
-    loadCache()
+    await loadCache()
   }
   const seenCli = new Set<string>()
   const seenDesktop = new Set<string>()
@@ -507,6 +595,7 @@ async function sweep(): Promise<void> {
         ? cliFiles.get(path)
         : await entryOf(cliFiles, path, stats.get(path) ?? null, (ts) => holderAt(history, ts))
       if (!entry) continue
+      await giveBack()
       for (const [who, sum] of Object.entries(entry.old)) creditOld(who, sum)
       for (const rows of [entry.recent, entry.tail ?? []])
         for (let i = 0; i < rows.length; i += STRIDE) {
@@ -539,6 +628,7 @@ async function sweep(): Promise<void> {
         ? desktopFiles.get(path)
         : await entryOf(desktopFiles, path, stats.get(path) ?? null, () => OWNER)
       if (!entry) continue
+      await giveBack()
       const owner = accountOf.get(sid) as string
       for (const sum of Object.values(entry.old)) creditOld(owner, sum)
       for (const rows of [entry.recent, entry.tail ?? []])
@@ -558,7 +648,7 @@ async function sweep(): Promise<void> {
         files.delete(path)
         cacheDirty = true
       }
-  if (cacheDirty && Date.now() - savedAt > SAVE_EVERY_MS) saveCache()
+  if (cacheDirty && Date.now() - savedAt > SAVE_EVERY_MS) await saveCache()
   sweptAt = Date.now()
 }
 

@@ -139,10 +139,9 @@ function close() {
  * `tool_result` is a copy of a file the user already has, and indexing it is what turns a 12 MB
  * index into a 200 MB one.
  */
-export function conversationText(jsonl: string): string {
-  const out: string[] = []
-  for (const line of jsonl.split('\n')) {
-    if (line.charCodeAt(0) !== 123 /* '{' */) continue
+function pushConversationLine(line: string, out: string[]): void {
+  {
+    if (line.charCodeAt(0) !== 123 /* '{' */) return
     let ev: {
       type?: string
       message?: { content?: unknown }
@@ -150,19 +149,39 @@ export function conversationText(jsonl: string): string {
     try {
       ev = JSON.parse(line)
     } catch {
-      continue // partial trailing write, or a record we do not understand
+      return // partial trailing write, or a record we do not understand
     }
-    if (ev.type !== 'user' && ev.type !== 'assistant') continue
+    if (ev.type !== 'user' && ev.type !== 'assistant') return
     const content = ev.message?.content
     if (typeof content === 'string') {
       out.push(content)
-      continue
+      return
     }
-    if (!Array.isArray(content)) continue
+    if (!Array.isArray(content)) return
     for (const block of content) {
       // `text` only: thinking is filtered out of the transcript view too, and tool_use/tool_result
       // are the bulk this index exists to skip.
       if (block?.type === 'text' && typeof block.text === 'string') out.push(block.text)
+    }
+  }
+}
+
+export function conversationText(jsonl: string): string {
+  const out: string[] = []
+  for (const line of jsonl.split('\n')) pushConversationLine(line, out)
+  return out.join('\n')
+}
+
+/** conversationText for a big transcript on the daemon's loop: same result, but it hands the loop
+ *  back every ~15 ms so a 100 MB session parse never freezes every route. */
+export async function conversationTextAsync(jsonl: string): Promise<string> {
+  const out: string[] = []
+  let slice = performance.now()
+  for (const line of jsonl.split('\n')) {
+    pushConversationLine(line, out)
+    if (performance.now() - slice > 15) {
+      await new Promise<void>((r) => setImmediate(r))
+      slice = performance.now()
     }
   }
   return out.join('\n')
@@ -251,7 +270,7 @@ async function indexOneStaleFile(
   const key = docKey(f)
   let text: string
   try {
-    text = conversationText(await Bun.file(f.path).text())
+    text = await conversationTextAsync(await Bun.file(f.path).text())
   } catch {
     return // vanished or unreadable mid-pass; it stays stale and is retried next time
   }
@@ -362,11 +381,16 @@ export async function refreshSearchIndex(
     // Sessions the index holds that are no longer on disk.
     const dropRow = conn.query('delete from doc where rowid = ?')
     const dropFts = conn.query('delete from conv where rowid = ?')
+    let dropSlice = performance.now()
     for (const [key, row] of known) {
       if (wanted.has(key)) continue
       dropRow.run(row.rowid)
       dropFts.run(row.rowid)
       result.removed++
+      if (performance.now() - dropSlice > 15) {
+        await new Promise<void>((r) => setImmediate(r))
+        dropSlice = performance.now()
+      }
     }
 
     const nextRowId = () =>

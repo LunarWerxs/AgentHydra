@@ -9,7 +9,7 @@ import { readForeignSession } from './foreign-sessions'
 import { listHermesSearchEvents } from './hermes-sessions'
 import { readHSwarmSession } from './hswarm-sessions'
 import { instanceSessionMap } from './instance-sessions'
-import { listOpenCodeSearchEvents } from './opencode-sessions'
+import { listOpenCodeSearchEventsAsync } from './opencode-sessions'
 import {
   isRefreshing,
   refreshSearchIndex,
@@ -358,18 +358,20 @@ export async function searchOneFile(
  * these stores can share a session id (Kilo and MiMo Code are both `source: 'opencode'`), and a
  * bare-id key would let the second store's events silently merge into the first's result.
  */
-function searchOpenCode(
+async function searchOpenCode(
   matcher: Matcher,
   perFileLimit: number,
   limit: number,
-): SessionSearchResult[] {
+): Promise<SessionSearchResult[]> {
   const stores = new Map<string, string>() // dbPath -> tool (e.g. 'opencode', 'kilo', 'mimocode')
   for (const f of listTranscriptFiles())
     if (f.source === 'opencode') stores.set(f.path, f.tool ?? 'opencode')
 
   const found = new Map<string, SessionSearchResult>()
   for (const [dbPath, tool] of stores) {
-    for (const event of listOpenCodeSearchEvents(dbPath)) {
+    let seen = 0
+    for (const event of await listOpenCodeSearchEventsAsync(dbPath)) {
+      if (++seen % 400 === 0) await new Promise<void>((r) => setImmediate(r))
       const idx = matcher(event.text)
       if (idx === -1) continue
       const key = dedupeKey({
@@ -695,7 +697,7 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
 
   const found: SessionSearchResult[] = []
   const includeOpenCode = (!opts.source || opts.source === 'opencode') && !opts.instance
-  if (includeOpenCode) found.push(...searchOpenCode(matcher, perFileLimit, limit))
+  if (includeOpenCode) found.push(...(await searchOpenCode(matcher, perFileLimit, limit)))
   const includeHermes = (!opts.source || opts.source === 'hermes') && !opts.instance
   if (includeHermes) found.push(...searchHermes(matcher, perFileLimit, limit))
 

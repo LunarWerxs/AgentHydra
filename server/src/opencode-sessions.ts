@@ -429,34 +429,55 @@ interface OpenCodeSearchRow {
  * payloads contain far more noise than useful conversation text. Filter/extract in SQLite so a
  * search does not first materialize every tool payload in the (potentially hundreds-of-MiB) DB.
  */
+const SEARCH_EVENTS_SQL = `select p.session_id, s.directory as cwd, s.project_id as project,
+          case when json_valid(p.data) then json_extract(p.data, '$.text') end as text
+   from part p join session s on s.id = p.session_id
+   where case when json_valid(p.data) then json_extract(p.data, '$.type') end = 'text'
+   order by s.time_updated desc, p.time_created`
+
+function searchEventOf(row: OpenCodeSearchRow): OpenCodeSearchEvent | null {
+  if (typeof row.text !== 'string' || !row.text.trim()) return null
+  return {
+    session_id: row.session_id,
+    cwd: row.cwd || '',
+    project: row.project || 'opencode',
+    text: row.text,
+  }
+}
+
 export function listOpenCodeSearchEvents(path = OPENCODE_DB_PATH): OpenCodeSearchEvent[] {
   const db = openDb(path)
   if (!db) return []
   try {
-    const rows = db
-      .query<OpenCodeSearchRow, []>(
-        `select p.session_id, s.directory as cwd, s.project_id as project,
-                case when json_valid(p.data) then json_extract(p.data, '$.text') end as text
-         from part p join session s on s.id = p.session_id
-         where case when json_valid(p.data) then json_extract(p.data, '$.type') end = 'text'
-         order by s.time_updated desc, p.time_created`,
-      )
-      .all()
     const out: OpenCodeSearchEvent[] = []
-    for (const row of rows) {
-      if (typeof row.text !== 'string' || !row.text.trim()) continue
-      out.push({
-        session_id: row.session_id,
-        cwd: row.cwd || '',
-        project: row.project || 'opencode',
-        text: row.text,
-      })
+    for (const row of db.query<OpenCodeSearchRow, []>(SEARCH_EVENTS_SQL).all()) {
+      const ev = searchEventOf(row)
+      if (ev) out.push(ev)
     }
     return out
   } catch {
     return []
   } finally {
     db.close()
+  }
+}
+
+/** Same events, but the query (json_extract over every part of a store that can be gigabytes) runs
+ *  on the sqlite worker, never the daemon's thread. The daemon's search path uses this one. */
+export async function listOpenCodeSearchEventsAsync(
+  path = OPENCODE_DB_PATH,
+): Promise<OpenCodeSearchEvent[]> {
+  if (!existsSync(path)) return []
+  try {
+    const rows = await queryInWorker<OpenCodeSearchRow>(path, SEARCH_EVENTS_SQL)
+    const out: OpenCodeSearchEvent[] = []
+    for (const row of rows) {
+      const ev = searchEventOf(row)
+      if (ev) out.push(ev)
+    }
+    return out
+  } catch {
+    return []
   }
 }
 
