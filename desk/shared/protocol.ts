@@ -382,6 +382,7 @@ export interface ChatPatch {
   delegateToCliMayte?: boolean
   accountId?: string // takes effect at the next runtime start
   group?: string | null // 1-60 chars after trimming; null = back to its folder's group
+  cwd?: string // put the chat in another folder (an existing local directory); its next turn resumes there
 }
 
 export interface ImportSessionRequest {

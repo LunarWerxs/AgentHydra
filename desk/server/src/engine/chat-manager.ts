@@ -40,8 +40,8 @@ import type { AhWorker } from '../bridge/client'
 import { isActiveWorkerStatus, workerAccountLabel, workersOfChat } from '../bridge/climayte'
 import { isLongLived } from './long-lived'
 import { forkPoint, placeInCwd, projectsRoot, seedSession } from '../bridge/seed-session'
-import { findSessionJsonl, lastCwd } from '../bridge/session-jsonl'
-import { movedOutOf } from './cwd-move'
+import { findSessionJsonl, firstCwdFrom, lastCwd } from '../bridge/session-jsonl'
+import { askedToMove, isUncOrDevicePath, movedOutOf } from './cwd-move'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
 import { ChatRuntime, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
@@ -156,8 +156,10 @@ interface Entry {
   titled?: boolean
   /** The ids of its own background tasks still running that count toward backgroundActive (long-lived ones do not). */
   bgTasks?: Set<string>
-  /** A CliMayte chat: the worker's updatedAt when its session's folder was last looked at (cwd-move). */
-  cwdAt?: number
+  /** A folder the session ended its last turn in, outside the chat's own (cwd-move): the move happens only if the next turn begins and ends there. `offset` is the transcript's size at that turn end. */
+  cwdPending?: { target: string; file: string; offset: number }
+  /** The owner's latest message (cwd-move: a move it asked for needs no second turn). */
+  lastAsk?: string
   /** The folder the chat's worker was last started or sent into; a different chat.cwd is a move to pass on. */
   workerCwd?: string
   /** A CliMayte chat: the messages sent that its worker's JSONL does not show yet, shown meanwhile (memory only, never in the Desk file). */
@@ -461,6 +463,7 @@ export class ChatManager {
   async send(id: string, text: string, images?: ImageRef[], opts: SendOptions = {}): Promise<{ queued: boolean }> {
     const e = this.entry(id)
     if (!text.trim() && !images?.length) throw new ChatError(400, 'text is required')
+    e.lastAsk = text
     if (e.chat.workerId !== undefined) return this.sendToWorker(e, text, images, opts)
     if (!e.runtime?.running) {
       const cannot = this.seedResume(e)
@@ -587,6 +590,12 @@ export class ChatManager {
     if (p.pinned !== undefined) chat.pinned = p.pinned
     if (p.archived !== undefined) chat.archived = p.archived
     if (p.group !== undefined) chat.group = p.group
+    // Put in another folder by hand: the next turn resumes the session there (seedResume / the worker's next send).
+    const relocated = p.cwd !== undefined && p.cwd.toLowerCase() !== chat.cwd.toLowerCase()
+    if (p.cwd !== undefined) {
+      chat.cwd = p.cwd
+      e.cwdPending = undefined
+    }
     if (p.delegateToCliMayte !== undefined) chat.delegateToCliMayte = p.delegateToCliMayte
     // An account takes effect at the next runtime start (buildOptions reads chat.account); see below.
     if (resolved) {
@@ -610,7 +619,7 @@ export class ChatManager {
     if (p.permissionMode !== undefined) await this.runtimeOf(e).setPermissionMode(p.permissionMode)
     // The process keeps the login it started under: it ends once its turn is over (a limited or idle
     // one at once), so the next send starts under the chosen account and resumes the session there.
-    if (live?.startedAs && live.startedAs.id !== chat.account.id) await live.closeWhenIdle()
+    if (live && (relocated || (live.startedAs && live.startedAs.id !== chat.account.id))) await live.closeWhenIdle()
     chat.updatedAt = this.now()
     this.changed(chat)
     this.accountNote(id, resolved?.note ?? null)
@@ -844,9 +853,8 @@ export class ChatManager {
     }
     this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive, newReply, ok: next.status !== 'error' })
     if (!e.workerLive) this.clearTasks(e)
-    // The worker cd'd out of the chat's folder: the sidebar follows (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
-    if (w.sessionId && e.cwdAt !== w.updatedAt) {
-      e.cwdAt = w.updatedAt
+    // A worker's turn ended in another folder: the sidebar follows once the move holds (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
+    if (w.sessionId && LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(next.status)) {
       this.noteCwd(e, findSessionJsonl(w.sessionId, this.bridge.sessionRoots(), chat.cwd))
     }
     if (JSON.stringify(chat) === before) return
@@ -1001,17 +1009,41 @@ export class ChatManager {
     if (this.noteCwd(e, findSessionJsonl(e.chat.sessionId, [root, ...this.bridge.sessionRoots()], e.chat.cwd))) void e.runtime?.closeWhenIdle()
   }
 
-  /** Moves the chat to the folder `file` (its session's transcript) says it is in, when that is outside its own: stored cwd, one muted line, the sidebar update. */
+  /**
+   * A turn ended: moves the chat to the folder `file` (its session's transcript) says it ended in, when that
+   * is a folder a chat can live in outside its own (movedOutOf) AND either the owner's message asked for that
+   * move or the previous turn also ended there and this one began there (its first line's cwd). Otherwise the
+   * folder is only remembered as pending. Moving: stored cwd, one muted line, the sidebar update.
+   */
   private noteCwd(e: Entry, file: string | null): boolean {
+    const pending = e.cwdPending
+    const ask = e.lastAsk
+    e.cwdPending = undefined
+    e.lastAsk = undefined
     if (!file) return false
     let observed: string | null
+    let size: number
     try {
       observed = lastCwd(file)
+      size = statSync(file).size
     } catch {
       return false
     }
     const target = movedOutOf(e.chat.cwd, observed)
     if (!target) return false
+    let held = false
+    if (pending && pending.file === file && pending.target.toLowerCase() === target.toLowerCase()) {
+      try {
+        const began = firstCwdFrom(file, pending.offset)
+        held = began !== null && resolve(began).toLowerCase() === target.toLowerCase()
+      } catch {
+        held = false
+      }
+    }
+    if (!held && !askedToMove(ask, target)) {
+      e.cwdPending = { target, file, offset: size }
+      return false
+    }
     e.chat.cwd = target
     this.systemLine(e.chat.id, 'cwd', 'info', `Moved this chat to ${target}.`)
     this.changed(e.chat)
@@ -1453,7 +1485,7 @@ function optGroup(b: Json): string | null | undefined {
   return name
 }
 
-const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group']
+const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group', 'cwd']
 
 export function parsePatch(body: unknown): ChatPatch {
   const b = obj(body)
@@ -1482,6 +1514,11 @@ export function parsePatch(body: unknown): ChatPatch {
   }
   const group = optGroup(b)
   if (group !== undefined) p.group = group
+  const cwd = optString(b, 'cwd')
+  if (cwd !== undefined) {
+    if (isUncOrDevicePath(cwd)) throw new ChatError(400, `cwd must be a local folder, not a share or device path: ${JSON.stringify(cwd)}`)
+    p.cwd = checkCwd(cwd)
+  }
   return p
 }
 

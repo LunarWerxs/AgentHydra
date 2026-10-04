@@ -178,10 +178,21 @@ becomes X, and later turns run in X with X's instructions and MCP servers.
 - **Detect.** Claude Code writes the Bash tool's working directory as `cwd` on every transcript line.
   When an SDK chat's turn ends and the chat is idle (ChatRuntime `onTurnEnd`), the manager reads the
   `cwd` of the newest line of the session's .jsonl (`lastCwd`, the file's tail only). A CliMayte-worker
-  chat is checked in `applyWorker` whenever its worker's `updatedAt` changed.
-- **Only a move out counts** (`movedOutOf`): the observed folder must be an absolute, existing local
-  directory (never a UNC or device path) that is not the chat's folder or inside it (compared
-  case-insensitively). A cd into `A\web\src`, or into a repo nested in A, moves nothing.
+  chat is checked in `applyWorker` when its worker's turn ends (a live status turning not live).
+- **Only a real relocation counts** (owner, 2026-10-04: a worker that read a session file under
+  ~/.agenthydra and then cd'd home moved its chat twice, unasked). When unsure, the chat stays.
+  - The folder (`movedOutOf`) must be an absolute, existing local directory (never UNC or device) outside
+    the chat's folder tree (case-insensitive; a cd into `A\web\src` moves nothing), and a place a chat
+    lives: a project folder (`.git`, `package.json`, `.devwebui`, `CLAUDE.md` or `AGENTS.md` in it) or a
+    sibling of the chat's folder. Never a drive root, the home folder or above it, a parent of the chat's
+    folder, anything under a `.claude*`, `.agenthydra`, `.hydra-desk`, `node_modules` or `.git` folder, nor
+    AppData or Temp unless the chat already lives there.
+  - AND either the owner's latest message asked for it (`askedToMove`: says move, relocate or switch and
+    names the folder by path or as a whole word), or it held across a turn boundary: the previous turn
+    ended there and this one began there (`firstCwdFrom` the transcript's size at that turn end) and ended
+    there. Otherwise the folder is only remembered as pending.
+- **Put back by hand:** `PATCH /api/chats/:id { "cwd": "<folder>" }` (an existing local directory, never
+  UNC or device) moves a chat; a live process ends once idle and the next turn resumes there.
 - **On a move:** the chat's stored `cwd` changes (chats.json), one muted system line `Moved this chat to
   <folder>.` is added, and `chat.upsert` goes out, so the sidebar puts the chat in that folder's group
   (creating the group as for any new folder).
