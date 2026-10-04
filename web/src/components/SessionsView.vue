@@ -161,7 +161,6 @@ const {
   searchOnlyThisView,
   viewScopes,
   activeScopes,
-  searchIsWide,
 } = useData()
 
 // Verbose mode, the sidebar width and the body-search case flag are persisted AND mirrored through
@@ -341,7 +340,7 @@ const {
   sessionRateLimitScope,
   sessionShapeScope,
   activeScopes,
-  searchIsWide,
+  search,
   refreshSessions,
 })
 

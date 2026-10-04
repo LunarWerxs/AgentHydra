@@ -36,6 +36,9 @@ export interface SearchOptions {
   instance?: string
   /** Scope to one provider. Omitted means all supported stores. */
   source?: SessionSource
+  /** Only these sessions, as `${source}:${session_id}` keys: the list's own answer for a set of
+   *  scopes (the sidebar's "Only this view"). Applied on top of `instance` / `source`. */
+  allow?: ReadonlySet<string>
   /** Max sessions returned, newest-first. */
   limit?: number
   /** Max snippets collected per session before moving on. */
@@ -545,6 +548,8 @@ function resolveSearchFiles(opts: SearchOptions): TranscriptFile[] {
         : f.source === 'claude' && imap.get(f.session_id) === scope
     })
   }
+  const allow = opts.allow
+  if (allow) files = files.filter((f) => allow.has(`${f.source}:${f.session_id}`))
   return files.slice().sort((a, b) => b.mtime_ms - a.mtime_ms)
 }
 
@@ -691,6 +696,13 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
   if (includeOpenCode) found.push(...searchOpenCode(matcher, perFileLimit, limit))
   const includeHermes = (!opts.source || opts.source === 'hermes') && !opts.instance
   if (includeHermes) found.push(...searchHermes(matcher, perFileLimit, limit))
+
+  if (opts.allow) {
+    const allow = opts.allow
+    const kept = found.filter((r) => allow.has(`${r.source}:${r.session_id}`))
+    found.length = 0
+    found.push(...kept)
+  }
 
   const indexResult = await searchViaIndex(
     opts,

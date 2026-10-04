@@ -48,12 +48,12 @@ export interface SessionFilterRefs {
   sessionShapeScope: Ref<SessionShape[]>
   /** The scopes the list is fetched with right now: the view's, or the wide ones while searching. */
   activeScopes: Ref<ListScopes>
-  /** True while a search runs over everything. */
-  searchIsWide: Ref<boolean>
+  /** The sidebar search text; the daemon matches it over every session in scope. */
+  search: Ref<string>
   refreshSessions: () => void | Promise<void>
 }
 
-const WIDE_DEBOUNCE_MS = 300
+const SEARCH_DEBOUNCE_MS = 300
 
 export function useSessionFilters(refs: SessionFilterRefs) {
   const { t } = useI18n()
@@ -66,7 +66,7 @@ export function useSessionFilters(refs: SessionFilterRefs) {
     sessionRateLimitScope,
     sessionShapeScope,
     activeScopes,
-    searchIsWide,
+    search,
     refreshSessions,
   } = refs
 
@@ -91,23 +91,23 @@ export function useSessionFilters(refs: SessionFilterRefs) {
 
   // Every scope is applied server-side except shape, so any of them changing needs a refetch. This
   // watches the scopes IN FORCE, not the view's: while a search runs over everything, a sidebar
-  // change moves nothing, and typing never changes them (the wide scopes are one fixed value), so the
-  // wide list is fetched once when the search starts, not per keystroke. Starting a search waits a
-  // beat, so a fast typist asking and clearing does not cost the daemon the wide read.
-  let widePending: ReturnType<typeof setTimeout> | null = null
-  const cancelWide = () => {
-    if (widePending !== null) clearTimeout(widePending)
-    widePending = null
+  // change moves nothing. The search TEXT is matched by the daemon over every session in scope
+  // before its row cap, so it is part of the request; it is debounced, so typing costs one request
+  // per pause rather than one per keystroke. Clearing the box goes straight back to the view's list.
+  let searchPending: ReturnType<typeof setTimeout> | null = null
+  const cancelPending = () => {
+    if (searchPending !== null) clearTimeout(searchPending)
+    searchPending = null
   }
   watch(
-    () => JSON.stringify(activeScopes.value),
+    () => `${JSON.stringify(activeScopes.value)}|${search.value.trim()}`,
     () => {
-      cancelWide()
-      if (!searchIsWide.value) return void refreshSessions()
-      widePending = setTimeout(() => void refreshSessions(), WIDE_DEBOUNCE_MS)
+      cancelPending()
+      if (!search.value.trim()) return void refreshSessions()
+      searchPending = setTimeout(() => void refreshSessions(), SEARCH_DEBOUNCE_MS)
     },
   )
-  onScopeDispose(cancelWide)
+  onScopeDispose(cancelPending)
 
   // Instance, queued work and usage wall describe CLAUDE sessions only, so their submenus are
   // available exactly while Claude is among the ticked sources.

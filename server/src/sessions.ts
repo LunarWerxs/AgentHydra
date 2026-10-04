@@ -1012,6 +1012,14 @@ export interface ListSessionsOptions {
    *  trailing one. Null means "up to now". */
   untilMs?: number | null
   source?: ScopeInput
+  /**
+   * Keep only rows whose title, folder or id contains the text, or holds its letters in order (the
+   * sidebar's fuzzy rule, minus the scoring). Decided over EVERY session in scope BEFORE the cap, so
+   * the `limit` rows returned are the best matches rather than the newest rows that happen to match.
+   * That needs each candidate's title, i.e. a (cached) transcript scan for all of them, so only a
+   * caller that is actually searching should set it.
+   */
+  title?: string
   dispatched?: ScopeInput
   rateLimited?: ScopeInput
   /** The sidebar's contract: instance, dispatched and rate-limited are facts about CLAUDE sessions,
@@ -1323,6 +1331,8 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   // Fetching offset+limit and slicing is the only way to keep the pages contiguous.
   const wanted = offset + limit
   const out: SessionSummary[] = []
+  const needle = opts.title?.trim().toLowerCase()
+  if (needle) return rankedTitleMatches(files, needle, toSummary, offset, limit)
   for (let cursor = 0; cursor < files.length && out.length < wanted; ) {
     const batch = files.slice(cursor, cursor + (wanted - out.length))
     cursor += batch.length
@@ -1332,6 +1342,50 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   out.sort((a, b) => b.last_activity_at - a.last_activity_at)
   labelCopies(out, files)
   return offset > 0 ? out.slice(offset) : out
+}
+
+/** How well `needle` (lower-case) matches a row, 0 best; null when it does not. Substring beats
+ *  letters-in-order, and the title beats the folder and id. */
+export function titleMatchTier(
+  needle: string,
+  row: { title: string; cwd: string; session_id: string },
+): number | null {
+  const title = row.title.toLowerCase()
+  const rest = [row.cwd.toLowerCase(), row.session_id.toLowerCase()]
+  if (title.includes(needle)) return 0
+  if (rest.some((f) => f.includes(needle))) return 1
+  const inOrder = (text: string) => {
+    let at = 0
+    for (const ch of text) if (ch === needle[at] && ++at === needle.length) return true
+    return false
+  }
+  if (inOrder(title)) return 2
+  return rest.some(inOrder) ? 3 : null
+}
+
+/** The title-search path of listSessions: parse every candidate in batches (the event loop gets a
+ *  turn between them), keep the matches, and return the best `limit` of them, best tier first and
+ *  most recent first within a tier. */
+async function rankedTitleMatches(
+  files: TranscriptFile[],
+  needle: string,
+  toSummary: (tf: TranscriptFile) => Promise<SessionSummary | null>,
+  offset: number,
+  limit: number,
+): Promise<SessionSummary[]> {
+  const hits: Array<{ row: SessionSummary; tier: number }> = []
+  const BATCH = SCAN_CONCURRENCY * 8
+  for (let cursor = 0; cursor < files.length; cursor += BATCH) {
+    const scanned = await mapPool(files.slice(cursor, cursor + BATCH), SCAN_CONCURRENCY, toSummary)
+    for (const row of scanned) {
+      const tier = row ? titleMatchTier(needle, row) : null
+      if (row && tier !== null) hits.push({ row, tier })
+    }
+  }
+  hits.sort((a, b) => a.tier - b.tier || b.row.last_activity_at - a.row.last_activity_at)
+  const out = hits.slice(offset, offset + limit).map((h) => h.row)
+  labelCopies(out, files)
+  return out
 }
 
 /**

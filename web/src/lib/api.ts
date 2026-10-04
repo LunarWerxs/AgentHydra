@@ -250,6 +250,8 @@ export const getSessions = (
   dispatched = 'all',
   rateLimited = 'all',
   othersPass = false,
+  /** Search text: the daemon keeps only matching sessions, over everything in scope before the cap. */
+  title = '',
 ) =>
   j<SessionSummary[]>(
     `/api/sessions?limit=${limit}${instance ? `&instance=${encodeURIComponent(instance)}` : ''}` +
@@ -257,7 +259,8 @@ export const getSessions = (
       `${source === 'all' ? '' : `&source=${encodeURIComponent(source)}`}` +
       `${dispatched === 'all' ? '' : `&dispatched=${encodeURIComponent(dispatched)}`}` +
       `${rateLimited === 'all' ? '' : `&ratelimited=${encodeURIComponent(rateLimited)}`}` +
-      `${othersPass ? '&othersPass=1' : ''}`,
+      `${othersPass ? '&othersPass=1' : ''}` +
+      `${title ? `&title=${encodeURIComponent(title)}` : ''}`,
   )
 /** Every folder with conversations in it, for a "where has work happened" overview. */
 export const getSessionProjects = () => j<ProjectSummary[]>('/api/sessions/projects')
@@ -381,6 +384,9 @@ export const searchSessionBodies = (
     caseSensitive?: boolean
     instance?: string
     source?: SessionSource
+    /** The list's own scope params (see sessionScopeQuery): narrows the search to what those
+     *  filters show, period and archived included. Replaces `instance` and `source`. */
+    view?: Record<string, string | undefined>
     /** Force the exhaustive scan: every transcript in full, tool output included. Slower, and the
      *  only way to match text inside a tool result or in the middle of a word. */
     everything?: boolean
@@ -392,8 +398,14 @@ export const searchSessionBodies = (
       `${opts.caseSensitive ? '&case=1' : ''}` +
       `${opts.instance ? `&instance=${encodeURIComponent(opts.instance)}` : ''}` +
       `${opts.source ? `&source=${opts.source}` : ''}` +
+      `${opts.view ? `&view=1${queryPairs(opts.view)}` : ''}` +
       `${opts.everything ? '&everything=1' : ''}`,
   )
+const queryPairs = (q: Record<string, string | undefined>) =>
+  Object.entries(q)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `&${k}=${encodeURIComponent(v as string)}`)
+    .join('')
 
 // --- search index -----------------------------------------------------------
 /** The conversation index behind the fast search path. It stores no text of its own and rebuilds

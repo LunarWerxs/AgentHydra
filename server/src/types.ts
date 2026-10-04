@@ -719,6 +719,14 @@ export interface SessionSearchResult {
   /** True when match_count hit the per-file cap; there may be more matches not shown. */
   truncated: boolean
   snippets: string[]
+  /** The row's shape inputs, present on a scoped (`view=1`) search so the sidebar can apply its
+   *  browser-side shape filter to the hits. */
+  shape_of?: {
+    message_count: number
+    created_at: number | null
+    last_activity_at: number
+    dispatched: boolean
+  }
 }
 
 /**

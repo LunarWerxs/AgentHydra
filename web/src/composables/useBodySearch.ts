@@ -14,7 +14,14 @@ import type {
   SessionSummary,
 } from '@/lib/api'
 import * as api from '@/lib/api'
-import type { ListScopes } from '@/lib/session-scopes'
+import {
+  isAllSelected,
+  type ListScopes,
+  SHAPE_VALUES,
+  sessionScopeQuery,
+  WIDE_SCOPES,
+} from '@/lib/session-scopes'
+import { sessionShape } from '@/lib/session-shape'
 
 export function useBodySearch(deps: {
   sessions: Ref<SessionSummary[]>
@@ -47,14 +54,22 @@ export function useBodySearch(deps: {
     bodySearching.value = true
     try {
       const scopes = deps.scopesFor(q)
+      // Everything unless "Only this view" kept the sidebar's filters: then the daemon gets the very
+      // scope params the list takes, so period, archived and every source or instance ticked apply.
+      const narrowed = scopes !== WIDE_SCOPES
       const r = await api.searchSessionBodies(q, {
         regex: advancedRegex.value,
         caseSensitive: deps.advancedCaseSensitive.value,
-        // Body search takes one source / one instance: narrow only when exactly one is ticked.
-        instance: scopes.instance?.length === 1 ? scopes.instance[0] : undefined,
-        source: scopes.source.length === 1 ? scopes.source[0] : undefined,
+        view: narrowed ? sessionScopeQuery(scopes) : undefined,
         everything: opts.everything,
       })
+      // Shape is the one view filter the daemon cannot judge (it is a browser-side classification),
+      // so the hits arrive with its inputs and are narrowed here.
+      const shapes = scopes.shape
+      const keepShape = !narrowed || isAllSelected(shapes, SHAPE_VALUES)
+      r.results = keepShape
+        ? r.results
+        : r.results.filter((hit) => !hit.shape_of || shapes.includes(sessionShape(hit.shape_of)))
       bodyResults.value = r.results
       bodySearchResponse.value = r
       bodySearchQueryUsed.value = q

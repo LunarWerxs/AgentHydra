@@ -20,8 +20,7 @@ import {
   RATE_LIMIT_VALUES,
   SHAPE_VALUES,
   SOURCE_VALUES,
-  scopeParam,
-  sourceParam,
+  sessionScopeQuery,
   WIDE_SCOPES,
 } from '@/lib/session-scopes'
 import { registerSharedPref } from './useSharedPrefs'
@@ -109,7 +108,6 @@ const viewScopes = computed<ListScopes>(() => ({
 const activeScopes = computed(() =>
   effectiveScopes(viewScopes.value, sessionSearch.value, searchOnlyThisView.value),
 )
-const searchIsWide = computed(() => activeScopes.value === WIDE_SCOPES)
 // The daemon caps a page at 500; the wide list asks for all of them, the view's for 200.
 const WIDE_LIMIT = 500
 // true once the first queue fetch has settled — gates the queue's first-load skeletons
@@ -162,13 +160,6 @@ function guard<T>(p: Promise<T>, status: ResourceStatus): Promise<T | undefined>
   )
 }
 
-/** The instance scope as a query value: '' (no narrowing) when null, else the ticked names. The
- *  named-instance universe is dynamic, so "all ticked" is the null state rather than a full list. */
-function sessionInstanceParam(picked: string[] | null): string {
-  if (picked === null) return ''
-  return picked.length ? picked.join(',') : 'none'
-}
-
 // A slow store can make /api/sessions take longer than the interval that asks for it. Without a
 // guard the timer keeps firing anyway and the requests stack up, so the server answers a queue of
 // identical questions whose results are all thrown away except the last.
@@ -198,18 +189,18 @@ async function refreshSessions() {
     // Instance, queued work and usage wall are facts about Claude sessions. With Claude unticked
     // their submenus are disabled, so whatever they hold must not reach the server.
     const sc = activeScopes.value
-    const claude = sc.source.includes('claude')
+    const q = sessionScopeQuery(sc)
     const r = await guard(
       api.getSessions(
         sc === WIDE_SCOPES ? WIDE_LIMIT : 200,
-        claude ? sessionInstanceParam(sc.instance) : '',
-        // Always sent: the server's own default for an absent archived scope is "active only".
-        sc.archived.length ? sc.archived.join(',') : 'none',
+        q.instance ?? '',
+        q.archived,
         sc.period,
-        sourceParam(sc.source),
-        claude ? scopeParam(sc.dispatched, DISPATCHED_VALUES) : undefined,
-        claude ? scopeParam(sc.rateLimit, RATE_LIMIT_VALUES) : undefined,
+        q.source,
+        q.dispatched,
+        q.ratelimited,
         true,
+        sessionSearch.value.trim(),
       ),
       sessionsStatus,
     )
@@ -337,7 +328,6 @@ export function useData() {
     searchOnlyThisView,
     viewScopes,
     activeScopes,
-    searchIsWide,
     queueLoaded,
     sessionsStatus,
     queueStatus,

@@ -119,6 +119,23 @@ export function effectiveScopes(
   return search.trim() && !onlyThisView ? WIDE_SCOPES : view
 }
 
+/** The scopes as the daemon's query params; undefined = not sent. The Claude-only ones (instance,
+ *  queued work, usage wall) are left out unless Claude is ticked, since their menus are disabled. */
+export function sessionScopeQuery(sc: ListScopes) {
+  const claude = sc.source.includes('claude')
+  return {
+    instance:
+      claude && sc.instance ? (sc.instance.length ? sc.instance.join(',') : 'none') : undefined,
+    // Always sent: the server's own default for an absent archived scope is "active only".
+    archived: sc.archived.length ? sc.archived.join(',') : 'none',
+    period: sc.period,
+    source: sourceParam(sc.source),
+    dispatched: claude ? scopeParam(sc.dispatched, DISPATCHED_VALUES) : undefined,
+    ratelimited: claude ? scopeParam(sc.rateLimit, RATE_LIMIT_VALUES) : undefined,
+    othersPass: '1',
+  }
+}
+
 /** The trigger's right-hand text: All, None, the one name, or the first name and a count. */
 export function summarizeSelection<T extends string>(
   selected: readonly T[],

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
+import type { Context } from 'hono'
 import {
   chatDossier,
   countChatsByProfile,
@@ -31,7 +32,13 @@ import { makeLocator } from '../session-locator'
 import { resumeSessionInTerminal } from '../session-resume'
 import { searchSessionBodies } from '../session-search'
 import { sessionUsage } from '../session-usage'
-import { getSession, listProjects, listSessions, sessionMarkKey } from '../sessions'
+import {
+  getSession,
+  type ListSessionsOptions,
+  listProjects,
+  listSessions,
+  sessionMarkKey,
+} from '../sessions'
 import { findTranscriptAsync, tailTranscript } from '../transcript'
 import { buildTranscriptOpenArgv } from '../transcript-open'
 import {
@@ -40,6 +47,7 @@ import {
   periodCutoffMs,
   type SessionPeriod,
   type SessionSource,
+  type SessionSummary,
 } from '../types'
 import { renameChatDiscoveringRenderedTitle } from '../ui-archive'
 
@@ -124,10 +132,10 @@ function projectSessionRows(
   }
 }
 // --- sessions -----------------------------------------------------------------
-app.get('/api/sessions', async (c) => {
-  const limit = c.req.query('limit')
-  // Every scope below is a comma list (a UNION) and 'none' is the empty one; the old single
-  // spellings still parse. See session-scopes.ts for the value sets and the fall-back rules.
+/** The list scopes a request carries, parsed the same way for the list and for a scoped body search. */
+function listScopeOptions(c: Context): Omit<ListSessionsOptions, 'limit' | 'offset'> {
+  // Every scope below is a comma list (a UNION) and 'none' is the empty one; the old
+  // single spellings still parse. See session-scopes.ts for the value sets and the fall-back rules.
   // Anything unrecognized falls back to the default: a typo'd scope should show the live list,
   // never silently bury it under the archived majority or hide sessions.
   // Same defensive read as the scope above: an unrecognized period falls back to the default
@@ -140,9 +148,7 @@ app.get('/api/sessions', async (c) => {
   // filter client-side is how a 1,200-session store gets streamed to answer a 20-row question.
   const since = queryEpoch(c.req.query('since'))
   const until = queryEpoch(c.req.query('until'))
-  const rows = await listSessions({
-    limit: boundedQueryInt(limit, 200, 500),
-    offset: boundedQueryInt(c.req.query('offset'), 0, 100_000, 0),
+  return {
     instance: c.req.query('instance'),
     archived: c.req.query('archived'),
     sinceMs: since ?? periodCutoffMs(period),
@@ -154,6 +160,16 @@ app.get('/api/sessions', async (c) => {
     // (instance, queued, usage wall) to narrow Claude rows and leave the others alone rather than
     // empty them. MCP and other callers keep the exclusive reading: "pending" means only those.
     scopesNarrowClaudeOnly: c.req.query('othersPass') === '1',
+  }
+}
+app.get('/api/sessions', async (c) => {
+  const limit = c.req.query('limit')
+  const rows = await listSessions({
+    ...listScopeOptions(c),
+    limit: boundedQueryInt(limit, 200, 500),
+    offset: boundedQueryInt(c.req.query('offset'), 0, 100_000, 0),
+    // `title=` searches EVERY session in scope before the cap (see ListSessionsOptions.title).
+    title: c.req.query('title') || undefined,
     project: c.req.query('project') || undefined,
   })
   // ⛔ PROJECTED AFTER listSessions, never inside it. listSessions owns the paging contract -
@@ -189,12 +205,41 @@ app.get('/api/sessions/search', async (c) => {
   // included. The index answers faster and completely, but only over what was SAID, so the way
   // past its two limits is an explicit parameter rather than a hidden heuristic.
   const mode = c.req.query('everything') === '1' ? 'scan' : 'auto'
+  // `view=1`: the caller is the sidebar's "Only this view" search, so the SAME scope params the list
+  // route takes (source list or -name, instance list, period, archived, dispatched, ratelimited,
+  // othersPass) narrow the search too. The allowed sessions are decided by the list itself, so the
+  // two cannot disagree about what a filter means.
+  let allow: ReadonlySet<string> | undefined
+  let viewRows: Map<string, SessionSummary> | undefined
+  if (c.req.query('view') === '1') {
+    const rows = await listSessions({ ...listScopeOptions(c), limit: 1_000_000 })
+    viewRows = new Map(rows.map((r) => [`${r.source}:${r.session_id}`, r]))
+    allow = new Set(viewRows.keys())
+  }
   try {
     // A blank query returns the same SHAPE as a real search rather than an empty array — a caller
     // that has to special-case "did I get results or a response object?" will get it wrong.
-    return c.json(
-      await searchSessionBodies({ query, regex, caseSensitive, instance, source, limit, mode }),
-    )
+    const answer = await searchSessionBodies({
+      query,
+      regex,
+      caseSensitive,
+      instance: allow ? undefined : instance,
+      source: allow ? undefined : source,
+      limit,
+      mode,
+      allow,
+    })
+    for (const r of answer.results) {
+      const row = viewRows?.get(`${r.source}:${r.session_id}`)
+      if (row)
+        r.shape_of = {
+          message_count: row.message_count,
+          created_at: row.created_at,
+          last_activity_at: row.last_activity_at,
+          dispatched: row.dispatched,
+        }
+    }
+    return c.json(answer)
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
   }
