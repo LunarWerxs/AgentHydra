@@ -327,3 +327,31 @@ describe('resolveOwnTranscript names the Claude home it matched', () => {
     expect(t.path).toBe(TRANSCRIPT)
   })
 })
+
+describe('a chat registered under a CLI instance is found as the caller', () => {
+  // a desktop app that runs chats through the Agent SDK on a CLI instance: the engine's registry is in that
+  // instance's config dir, which the caller's own detection does not name, so its workers had no origin.
+  test('callerHomes includes every CLI instance, and the pid walk matches there', async () => {
+    const { createCliInstance, listCliInstances } = await import('../src/core/cli-instances')
+    const { callerHomes } = await import('../src/mcp-self')
+    const made = createCliInstance('origin-desk-chat')
+    expect(made.ok).toBe(true)
+    const dir = listCliInstances().find((i) => i.name === 'origin-desk-chat')!.configDir
+    const sid = '12345678-bbbb-4ccc-8ddd-1234567890ab'
+    mkdirSync(join(dir, 'sessions'), { recursive: true })
+    mkdirSync(join(dir, 'projects', 'p'), { recursive: true })
+    writeFileSync(join(dir, 'projects', 'p', `${sid}.jsonl`), '')
+    writeFileSync(
+      join(dir, 'sessions', `${process.pid}.json`),
+      JSON.stringify({ pid: process.pid, sessionId: sid, cwd: CWD }),
+    )
+
+    expect(await callerHomes(process.pid)).toContain(dir)
+    const t = await resolveOwnTranscript({
+      callerPid: process.pid,
+      extraHomes: () => callerHomes(process.pid),
+    })
+    expect(t.sessionId).toBe(sid)
+    expect(t.home).toBe(dir)
+  })
+})

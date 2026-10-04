@@ -146,11 +146,23 @@ export async function ownTranscript(a: Record<string, unknown>) {
   return resolveOwnTranscript({
     sessionId: typeof a.session_id === 'string' ? a.session_id : undefined,
     callerPid: callerPid ?? null,
-    extraHomes: async () => {
-      const dir = (await detectSelf(false, callerPid)).configDir
-      return dir ? [dir] : []
-    },
+    extraHomes: () => callerHomes(callerPid),
   })
+}
+
+/** Where a calling engine's live registry can be: its detected config dir, then every CLI instance's.
+ *  The detection misses an engine started by another program (a desktop app that runs chats
+ *  through the Agent SDK on a CLI instance), and the pid walk only matches in the home that holds its registry. */
+export async function callerHomes(callerPid: number | null | undefined): Promise<string[]> {
+  const dir = (await detectSelf(false, callerPid)).configDir
+  const { listCliInstances } = await import('./core/cli-instances')
+  let cli: string[] = []
+  try {
+    cli = listCliInstances().map((i) => i.configDir)
+  } catch {
+    // no CLI registry: the detected dir is all there is
+  }
+  return [...new Set([...(dir ? [dir] : []), ...cli])]
 }
 
 /** The chat CliMayte pings about work this call dispatches (climayte-ping.ts). */
@@ -184,10 +196,7 @@ export async function callerOrigin(
           const { resolveOwnTranscript } = await import('./compaction-history')
           return resolveOwnTranscript({
             callerPid: callerPid ?? null,
-            extraHomes: async () => {
-              const dir = (await detectSelf(false, callerPid)).configDir
-              return dir ? [dir] : []
-            },
+            extraHomes: () => callerHomes(callerPid),
           })
         })()
     return {
