@@ -205,7 +205,38 @@ export default {
   showThinking: 'Show reasoning',
   humanOnly: 'Only what I typed',
   compactLayout: 'Compact layout',
-  thinkingLabel: 'Reasoning',
+  // --- work rows: a run of tool calls and reasoning between two messages, folded into one line ---
+  // The parts join into one sentence ("Read 3 files, ran 2 commands and 4 more"); every part after
+  // the first is lower-cased at its first letter by the component, so write them as sentence starts.
+  work: {
+    read: 'Read {n} file | Read {n} files',
+    edit: 'Edited {n} file | Edited {n} files',
+    command: 'Ran {n} command | Ran {n} commands',
+    search: 'Searched the code | Searched the code {n} times',
+    web: 'Looked something up online | Looked things up online {n} times',
+    agent: 'Delegated to an agent | Delegated to {n} agents',
+    plan: 'Updated the plan | Updated the plan {n} times',
+    mcp: 'Used {names}',
+    other: 'Used {n} tool | Used {n} tools',
+    more: 'and {n} more',
+    thought: 'Thought',
+    thoughtFor: 'Thought for {time}',
+    working: 'Working',
+    toolResult: 'Result',
+    input: 'Input',
+    output: 'Output',
+    noOutput: 'No output recorded',
+    failed: 'This step failed',
+    showSteps: 'Show steps',
+    hideSteps: 'Hide steps',
+  },
+  // A message neither side wrote, shown as a divider: the summary the CLI writes after compacting
+  // the context, or the API's own notice (a usage limit, an overload).
+  notice: {
+    compacted: 'Context compacted',
+    showSummary: 'Show the summary the session continued from',
+    hideSummary: 'Hide the summary',
+  },
   // --- find within the open session ---
   findInSession: 'Find in session',
   findInSessionHint: 'Search the transcript on screen (Ctrl+F)',

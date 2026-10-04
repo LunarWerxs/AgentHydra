@@ -6,12 +6,24 @@
 
 import type { ComponentPublicInstance, Ref } from 'vue'
 import { computed, nextTick, ref, watch } from 'vue'
-import type { TailResult } from '@/lib/api'
+import type { TailEvent, TailResult } from '@/lib/api'
 import { highlightHtml } from '@/lib/find'
 import { escapeHtml, looksLikeMarkdown, renderMarkdown } from '@/lib/markdown'
+import { buildDisplayItems, formatToolInput } from '@/lib/transcript-groups'
 
 const LONG_CHARS = 1000
 const LONG_LINES = 16
+
+/** How many rendered turns to remember across polls. A window is at most a few hundred events
+ *  (TAIL_MAX turns plus the tool traffic between them), so this holds a couple of sessions' worth
+ *  and the oldest fall out first. */
+const RENDER_CACHE_MAX = 1500
+
+interface RenderedBody {
+  long: boolean
+  html: string
+  pre: boolean
+}
 
 export function useTranscriptDisplay(deps: {
   tail: Ref<TailResult | null>
@@ -19,8 +31,28 @@ export function useTranscriptDisplay(deps: {
 }) {
   const isLong = (text: string) => text.length > LONG_CHARS || text.split('\n').length > LONG_LINES
 
+  // The open chat re-reads its tail every 4 s and almost every turn in the answer is one it already
+  // rendered, so the markdown pass is remembered by what it depends on (the kind and the text) and
+  // a poll that brings one new turn renders one turn. A Map keeps insertion order, which makes
+  // "drop the oldest" a matter of deleting its first key.
+  const renderCache = new Map<string, RenderedBody>()
+  function renderBody(ev: TailEvent): RenderedBody {
+    const key = `${ev.kind}\u0000${ev.text}`
+    const hit = renderCache.get(key)
+    if (hit) return hit
+    // Prose (messages and reasoning) may be markdown; a tool's input is laid out one argument a
+    // line; its output stays verbatim. Copy still takes ev.text, the input exactly as sent.
+    const prose = ev.kind === 'text' || ev.kind === 'thinking'
+    const md = prose && looksLikeMarkdown(ev.text) ? renderMarkdown(ev.text) : null
+    const plain = ev.kind === 'tool_use' ? formatToolInput(ev.text) : ev.text
+    const body = { long: isLong(ev.text), html: md ?? escapeHtml(plain), pre: md === null }
+    renderCache.set(key, body)
+    if (renderCache.size > RENDER_CACHE_MAX) renderCache.delete(renderCache.keys().next().value!)
+    return body
+  }
+
   /**
-   * Every turn as HTML, ONCE per tail load.
+   * Every turn as HTML, ONCE per tail load (and, through the cache above, once per distinct turn).
    *
    * Both branches escape the text before anything else looks at it, so nothing below can carry a
    * tag the transcript wrote. `pre` records which branch ran, because the two want different
@@ -30,10 +62,7 @@ export function useTranscriptDisplay(deps: {
    * every message's markdown on each keystroke.
    */
   const rendered = computed(() =>
-    (deps.tail.value?.events ?? []).map((ev) => {
-      const md = ev.kind === 'text' && looksLikeMarkdown(ev.text) ? renderMarkdown(ev.text) : null
-      return { ...ev, long: isLong(ev.text), html: md ?? escapeHtml(ev.text), pre: md === null }
-    }),
+    (deps.tail.value?.events ?? []).map((ev) => ({ ...ev, ...renderBody(ev) })),
   )
 
   // --- find within the open session (client-side; the loaded window, no server round-trip) -----
@@ -61,6 +90,10 @@ export function useTranscriptDisplay(deps: {
   })
 
   const findTotal = computed(() => events.value.reduce((n, ev) => n + ev.hits, 0))
+
+  /** The turns as the viewer lays them out: messages on their own, and each run of tool calls and
+   *  reasoning between two messages folded into one collapsible work row (lib/transcript-groups). */
+  const items = computed(() => buildDisplayItems(events.value))
 
   /** Clamp into range and scroll the current hit into view. Wraps at both ends, like every find
    *  bar. */
@@ -103,6 +136,7 @@ export function useTranscriptDisplay(deps: {
   return {
     rendered,
     events,
+    items,
     findTotal,
     findOpen,
     findQuery,

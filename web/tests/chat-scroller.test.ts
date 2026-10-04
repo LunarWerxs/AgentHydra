@@ -200,7 +200,8 @@ describe('useOpenSession pages older turns in', () => {
     open.anchorNextOpen('NEEDLE')
     open.select(session('s1'))
     await settle()
-    expect(asked).toEqual(['[data-turn="1"]'])
+    // turn 1 itself, or the folded work row that holds it
+    expect(asked).toEqual(['[data-turn="1"], [data-turns~="1"]'])
     expect(p.scrollTop).toBe(0)
 
     // Consumed by that open: the next one lands at the end again.

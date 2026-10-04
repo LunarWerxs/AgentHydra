@@ -338,8 +338,56 @@
 .transcript-compact .mt-1\.5 {
   margin-top: 0.2rem;
 }
+.transcript-compact .mt-6 {
+  margin-top: 0.85rem;
+}
+.transcript-compact .mt-2 {
+  margin-top: 0.25rem;
+}
 .transcript-compact .md-pre {
   padding: 0.4rem 0.5rem;
+}
+
+/* --- folded transcript work (components/TranscriptWorkGroup.vue) --------------------------------
+   A clipped long message fades out instead of stopping mid-line, so it reads as "there is more"
+   rather than as a rendering fault. */
+.transcript-fade {
+  mask-image: linear-gradient(to bottom, black calc(100% - 2.5rem), transparent);
+}
+/* The newest work row of a session still running: a highlight sweeps across its label, the way the
+   Claude and T3 Code apps mark the step in hand. Text-clipped; the base is named rather than
+   currentColor, because `color: transparent` below would make currentColor transparent too. */
+.work-shimmer {
+  background: linear-gradient(
+      90deg,
+      var(--color-muted-foreground) 0%,
+      var(--color-muted-foreground) 40%,
+      var(--color-foreground) 50%,
+      var(--color-muted-foreground) 60%,
+      var(--color-muted-foreground) 100%
+    )
+    0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: work-shimmer 2.2s linear infinite;
+}
+@keyframes work-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-shimmer {
+    animation: none;
+    color: var(--color-foreground);
+    -webkit-text-fill-color: currentColor;
+    background: none;
+  }
 }
 
 /* --- width-animated bars (UsageBar, charts/BarRows) --------------------------------------------

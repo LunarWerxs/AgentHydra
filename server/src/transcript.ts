@@ -1711,6 +1711,8 @@ function blockToTailEvent(
           text: truncate(t, 2000),
           tool_name: null,
           timestamp: ts,
+          // The CLI's own verdict, so the viewer can mark a failed step without guessing from text.
+          ...(block.is_error === true ? { error: true } : {}),
         }
       : null
   }
@@ -1733,15 +1735,17 @@ export function eventToTailEvents(ev: any, filter: TailFilter = {}): TailEvent[]
     const t = compact(content)
     if (t)
       out.push({ role: r, kind: 'text', text: truncate(t, 6000), tool_name: null, timestamp: ts })
-    return out
-  }
-
-  if (Array.isArray(content)) {
+  } else if (Array.isArray(content)) {
     for (const block of content) {
       const te = blockToTailEvent(block, r, ts, filter)
       if (te) out.push(te)
     }
   }
+  // The compaction summary is filed as a user message, so without this it reads as something the
+  // person typed; the API notice is the one synthetic message kept (see isCliBookkeeping).
+  const notice =
+    ev?.isCompactSummary === true ? 'compact' : ev?.isApiErrorMessage === true ? 'error' : null
+  if (notice) for (const te of out) if (te.kind === 'text') te.notice = notice
   return out
 }
 
@@ -1754,8 +1758,9 @@ export function eventToTailEventsForSource(
 }
 
 export interface TailOptions {
+  /** How many MESSAGES the window holds; tool traffic and reasoning ride along (see tailEventCap). */
   limit?: number
-  /** When true, drop tool_use/tool_result and only count text-bearing turns toward the limit. */
+  /** When true, drop tool_use/tool_result. */
   textOnly?: boolean
   /** Include the model's reasoning blocks (see TailFilter). */
   thinking?: boolean
@@ -1770,18 +1775,35 @@ export interface TailOptions {
 /** The display filter, as one predicate, so the two source paths below cannot drift apart.
  *  Exported for server/tests/tail-filter.test.ts, which pins the rules rather than the callers. */
 export function tailKeeper(opts: TailOptions): (e: TailEvent) => boolean {
-  if (opts.humanOnly) return (e) => e.kind === 'text' && e.role === 'user'
+  if (opts.humanOnly) return (e) => e.kind === 'text' && e.role === 'user' && !e.notice
   if (opts.textOnly) return (e) => e.kind === 'text' || e.kind === 'thinking'
   return () => true
 }
 
-/** Parse a raw transcript tail newest-line-first into up to `limit` filtered event groups, plus
- *  whatever cwd the scanned lines revealed. Pulled out of tailTranscript's default (non-foreign,
- *  non-opencode) path so the byte-tail parsing loop isn't nested inside the source-branch chain.
+/**
+ * The window counts MESSAGES, and tool traffic and reasoning ride along with the messages around
+ * them. The viewer folds a run of tool calls into one work row (web/src/lib/transcript-groups.ts),
+ * so counting each call as a turn would spend a 40-turn window on one busy stretch of work and show
+ * three messages; counted this way, 40 turns is 40 messages and the work between them.
  *
- *  `more` says whether an older kept turn exists above the window. It is found by reading ONE group
- *  past the limit and dropping it, not by asking "were there lines left": a session_meta header or
- *  a filtered-out tool turn is a line, and a "Load older turns" button that loads nothing is a lie.
+ * Unbounded, a session that ran 500 tools between two messages would ship all of them on every 4 s
+ * poll, so the events in one window are capped as well. Hitting the cap ends the window like the
+ * limit does: `more` is true and the next page reaches further back.
+ */
+export function tailEventCap(limit: number): number {
+  return Math.min(1500, Math.max(200, limit * 10))
+}
+
+const isMessage = (e: TailEvent) => e.kind === 'text'
+
+/** Parse a raw transcript tail newest-line-first into up to `limit` messages (with the tool and
+ *  reasoning events between them, see tailEventCap), plus whatever cwd the scanned lines revealed.
+ *  Pulled out of tailTranscript's default (non-foreign, non-opencode) path so the byte-tail parsing
+ *  loop isn't nested inside the source-branch chain.
+ *
+ *  `more` says whether an older kept message exists above the window. It is found by reaching ONE
+ *  message past the limit, not by asking "were there lines left": a session_meta header or a
+ *  filtered-out tool turn is a line, and a "Load older turns" button that loads nothing is a lie.
  *  Exported for server/tests/tail-filter.test.ts. */
 export function collectTailEventsFromRaw(
   raw: string,
@@ -1792,7 +1814,11 @@ export function collectTailEventsFromRaw(
 ): { events: TailEvent[]; cwd: string; more: boolean } {
   const lines = raw.split('\n')
   const collected: TailEvent[][] = []
+  const cap = tailEventCap(limit)
   let cwd = ''
+  let messages = 0
+  let total = 0
+  let more = false
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim()
     if (!line) continue
@@ -1806,20 +1832,42 @@ export function collectTailEventsFromRaw(
     if (!cwd && typeof ev?.payload?.cwd === 'string') cwd = ev.payload.cwd
     const tes = eventToTailEventsForSource(source, ev, filter).filter(keep)
     if (tes.length === 0) continue
+    const message = tes.some(isMessage)
+    if ((message && messages === limit) || total + tes.length > cap) {
+      more = true
+      break
+    }
     collected.push(tes)
-    if (collected.length > limit) break
+    total += tes.length
+    if (message) messages++
   }
-  const more = collected.length > limit
-  if (more) collected.pop()
-  return { events: collected.reverse().flat(), cwd, more }
+  const events = collected.reverse().flat()
+  return { events: more ? dropOrphanWork(events) : events, cwd, more }
 }
 
-/** The last `limit` kept turns of a store read whole, and whether anything older was cut off. */
+/** A window cut off above opens on whatever survived the cut. Work that sits above YOUR message
+ *  belongs to the reply before it, which the window left out, so it would open the transcript as a
+ *  work row answering nothing; it goes. Work above a reply is that reply's own lead-in and stays. */
+function dropOrphanWork(events: TailEvent[]): TailEvent[] {
+  const first = events.findIndex(isMessage)
+  return first > 0 && events[first].role === 'user' ? events.slice(first) : events
+}
+
+/** The last `limit` kept messages of a store read whole (with the work between them, as above),
+ *  and whether anything older was cut off. */
 export function lastTurns(
   events: TailEvent[],
   limit: number,
 ): { events: TailEvent[]; more: boolean } {
-  return { events: events.slice(-limit), more: events.length > limit }
+  const cap = tailEventCap(limit)
+  let messages = 0
+  for (let i = events.length - 1; i >= 0; i--) {
+    const message = isMessage(events[i])
+    if ((message && messages === limit) || events.length - i > cap)
+      return { events: dropOrphanWork(events.slice(i + 1)), more: true }
+    if (message) messages++
+  }
+  return { events, more: false }
 }
 
 /**
@@ -1977,12 +2025,53 @@ export async function tailTranscript(
   if (tf.source === 'zswarm') return tailHSwarmJob(sessionId, tf, opts, keep, limit)
 
   // Claude and Codex: a real .jsonl on disk, read from the END rather than parsed whole.
-  const raw = await readTailBytes(tf.path, 6 * 1024 * 1024)
+  //
+  // The open chat asks this every 4 s, and almost every time the file has not changed since the
+  // last ask. The answer depends on nothing but the file's bytes and the options, so it is
+  // remembered by the file's size and mtime: an idle open session costs a stat, not a 6 MB read
+  // and a JSON parse of every line back to the window's start.
+  const st = await statAsync(tf.path).catch(() => null)
+  const sig = st ? `${st.size}:${st.mtimeMs}` : null
+  const memoKey = [
+    tf.path,
+    sessionId,
+    limit,
+    `${opts.textOnly ? 1 : 0}${opts.thinking ? 1 : 0}${opts.humanOnly ? 1 : 0}`,
+    opts.title ?? '',
+    opts.cwd ?? '',
+  ].join('\u0000')
+  const hit = sig ? tailMemo.get(memoKey) : undefined
+  if (hit && hit.sig === sig) return hit.result
+  const result = tailFromJsonl(sessionId, tf, opts, await readTailBytes(tf.path, 6 * 1024 * 1024), {
+    filter,
+    keep,
+    limit,
+  })
+  if (sig) {
+    tailMemo.delete(memoKey)
+    tailMemo.set(memoKey, { sig, result })
+    if (tailMemo.size > TAIL_MEMO_MAX) tailMemo.delete(tailMemo.keys().next().value!)
+  }
+  return result
+}
+
+/** The last few JSONL tail answers, newest last (a Map keeps insertion order, so the oldest is the
+ *  first key). A handful covers every open window and the session a reader flips back to. */
+const TAIL_MEMO_MAX = 24
+const tailMemo = new Map<string, { sig: string; result: TailResult }>()
+
+function tailFromJsonl(
+  sessionId: string,
+  tf: TranscriptFile,
+  opts: TailOptions,
+  raw: string,
+  w: { filter: TailFilter; keep: (e: TailEvent) => boolean; limit: number },
+): TailResult {
   const {
     events,
     cwd: rawCwd,
     more,
-  } = collectTailEventsFromRaw(raw, tf.source, filter, keep, limit)
+  } = collectTailEventsFromRaw(raw, tf.source, w.filter, w.keep, w.limit)
   const title = opts.title || sessionId
   const cwd = opts.cwd || rawCwd
   return {

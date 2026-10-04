@@ -13,6 +13,7 @@ import {
   collectTailEventsFromRaw,
   eventToTailEvents,
   lastTurns,
+  tailEventCap,
   tailKeeper,
 } from '../src/transcript'
 import type { TailEvent } from '../src/types'
@@ -92,6 +93,41 @@ describe('which turns survive the display filter', () => {
   })
 })
 
+// After a compaction the CLI files its summary as a USER message, and a usage limit arrives as an
+// assistant message the API wrote. Neither is a turn either side took, so both carry a notice the
+// viewer draws as a divider, and "only what I typed" leaves the summary out.
+describe('messages neither side wrote', () => {
+  const summary = {
+    type: 'user',
+    isCompactSummary: true,
+    timestamp: null,
+    message: { role: 'user', content: 'This session is being continued from a previous one.' },
+  }
+  const limit = {
+    type: 'assistant',
+    isApiErrorMessage: true,
+    timestamp: null,
+    message: {
+      role: 'assistant',
+      model: '<synthetic>',
+      content: [{ type: 'text', text: "You've hit your session limit · resets 5:40am" }],
+    },
+  }
+
+  test('carry a notice instead of passing as a turn', () => {
+    expect(eventToTailEvents(summary).map((e) => [e.role, e.notice])).toEqual([['user', 'compact']])
+    expect(eventToTailEvents(limit).map((e) => [e.role, e.notice])).toEqual([
+      ['assistant', 'error'],
+    ])
+  })
+
+  test('the compaction summary is not something a person typed', () => {
+    const typed = eventToTailEvents({ ...summary, isCompactSummary: undefined })
+    const events = [...eventToTailEvents(summary), ...typed]
+    expect(events.filter(tailKeeper({ humanOnly: true }))).toEqual(typed)
+  })
+})
+
 describe('the other block types are unaffected by the new flag', () => {
   test('tool_use still collapses to a named tool event', () => {
     const events = eventToTailEvents(
@@ -151,5 +187,62 @@ describe('whether older turns exist above the window', () => {
     const evs = eventToTailEvents(assistant({ type: 'text', text: 'a' }))
     expect(lastTurns([...evs, ...evs, ...evs], 2).more).toBe(true)
     expect(lastTurns([...evs, ...evs], 2)).toEqual({ events: [...evs, ...evs], more: false })
+  })
+})
+
+// The window counts MESSAGES. The viewer folds the tool calls between two messages into one work
+// row, so a window that spent a turn per tool line showed a busy session as three messages and a
+// wall of work; now the work rides along, bounded by an event cap so one huge run cannot ship
+// hundreds of tool results on every 4 s poll.
+describe('tool traffic rides along with the messages it sits between', () => {
+  const said = (role: 'user' | 'assistant', text: string) =>
+    JSON.stringify({
+      type: role,
+      timestamp: null,
+      message: { role, content: [{ type: 'text', text }] },
+    })
+  const tool = JSON.stringify(
+    assistant({ type: 'tool_use', name: 'Bash', input: { command: 'ls' } }),
+  )
+  const collect = (lines: string[], limit: number) =>
+    collectTailEventsFromRaw(lines.join('\n'), 'claude', { thinking: false }, tailKeeper({}), limit)
+  const shape = (events: TailEvent[]) => events.map((e) => (e.kind === 'text' ? e.text : '·'))
+
+  test('the window holds `limit` messages and the work between and before them', () => {
+    const r = collect(
+      [
+        said('assistant', 'one'),
+        tool,
+        tool,
+        said('assistant', 'two'),
+        tool,
+        tool,
+        said('assistant', 'three'),
+      ],
+      2,
+    )
+    expect(r.more).toBe(true)
+    expect(shape(r.events)).toEqual(['·', '·', 'two', '·', '·', 'three'])
+  })
+
+  test('work above a window that opens on your message belonged to the reply it cut, so it goes', () => {
+    const r = collect(
+      [said('user', 'q1'), tool, tool, said('user', 'q2'), tool, said('assistant', 'a2')],
+      2,
+    )
+    expect(shape(r.events)).toEqual(['q2', '·', 'a2'])
+    // a store read whole cuts the same way
+    const older = [said('user', 'q1'), tool].flatMap((l) => eventToTailEvents(JSON.parse(l)))
+    expect(lastTurns([...older, ...r.events], 2)).toEqual({ events: r.events, more: true })
+  })
+
+  test('a run of work too long to ship whole stops at the cap and says there is more', () => {
+    const r = collect(
+      [said('assistant', 'one'), ...Array(400).fill(tool), said('assistant', 'two')],
+      2,
+    )
+    expect(r.more).toBe(true)
+    expect(r.events).toHaveLength(tailEventCap(2))
+    expect(r.events.at(-1)?.text).toBe('two')
   })
 })

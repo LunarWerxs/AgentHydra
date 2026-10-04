@@ -20,7 +20,8 @@ migrateLegacyStorageKeys()
 migrateLegacyUsageFilterScope()
 
 async function mountApp(): Promise<void> {
-  if (appModeForPath(window.location.pathname) === 'instances') {
+  const quick = appModeForPath(window.location.pathname) === 'instances'
+  if (quick) {
     const { default: QuickInstancesApp } = await import('./QuickInstancesApp.vue')
     createApp(QuickInstancesApp).mount('#app')
   } else {
@@ -49,7 +50,15 @@ async function mountApp(): Promise<void> {
   // on a round trip would trade a visible delay for a correction almost nobody needs; this lands a
   // beat later and fixes up the case that motivated it — the quick window running on its own port,
   // with its own empty storage. See composables/useSharedPrefs.ts.
-  void hydrateSharedPrefs()
+  //
+  // The one-time switch-on of folded tool calls and reasoning rides on it, because the store wins
+  // on hydrate: run before, and the store's old `false` lands on top. The full manager only; the
+  // dynamic import is the module App.vue already loaded, so it costs no request.
+  void hydrateSharedPrefs().then(async () => {
+    if (quick) return
+    const { switchOnWorkRowsOnce } = await import('./composables/useUiPrefs')
+    switchOnWorkRowsOnce()
+  })
 }
 
 // Counts one session for the Connections sign-in prompt. Here, not in SettingsView, because that

@@ -224,6 +224,7 @@ const { secrets, secretsOpen, secretsDetail } = useSessionSecrets({
 
 const {
   events,
+  items,
   findTotal,
   findOpen,
   findQuery,
@@ -236,10 +237,11 @@ const {
   copyMessage,
 } = useTranscriptDisplay({ tail, chatEl })
 
-/** Whether the transcript is showing anything other than its default. Drives the pressed state on
- *  the controls button, so "why am I not seeing tool calls" is answerable at a glance. */
+/** Whether the transcript is showing anything other than its default (tool calls and reasoning on,
+ *  folded into work rows). Drives the pressed state on the controls button, so "why am I not
+ *  seeing tool calls" is answerable at a glance. */
 const displayFiltered = computed(
-  () => showTools.value || showThinking.value || humanOnly.value || compactTranscript.value,
+  () => !showTools.value || !showThinking.value || humanOnly.value || compactTranscript.value,
 )
 
 // Closing the session closes the find bar and the secrets dialog with it; a match count or a
@@ -1816,7 +1818,8 @@ function onComposerSent(mode: 'now' | 'queued') {
           </Button>
         </div>
 
-        <!-- transcript, styled as a chat: user right / assistant left, tool events as log lines.
+        <!-- transcript, styled as a chat: user bubbles right, replies as prose, tool calls and
+             reasoning folded into one work row per run (SessionTranscriptTurns).
              role=log + aria-relevant=additions: a screen reader hears turns as they arrive, not
              the whole pane again. data-pending-scroll holds until the opening position is set. -->
         <div
@@ -1854,9 +1857,10 @@ function onComposerSent(mode: 'now' | 'queued') {
                 </Button>
               </div>
               <SessionTranscriptTurns
-                :events="events"
+                :items="items"
                 :copied-idx="copiedIdx"
                 :is-expanded="isExpanded"
+                :find-active="findOpen && !!findQuery"
                 @copy="copyMessage"
                 @toggle-expand="toggleExpand"
               />

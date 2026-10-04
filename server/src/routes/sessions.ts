@@ -700,19 +700,25 @@ app.get('/api/sessions/:id/tail', async (c) => {
     const v = c.req.query(name)
     return v === '1' || v === 'true'
   }
-  return c.json(
-    await tailTranscript(
-      c.req.param('id'),
-      {
-        limit: boundedQueryInt(limit, 40, 200),
-        textOnly: flag('textOnly'),
-        thinking: flag('thinking'),
-        humanOnly: flag('humanOnly'),
-      },
-      source,
-      locator,
-    ),
+  const result = await tailTranscript(
+    c.req.param('id'),
+    {
+      limit: boundedQueryInt(limit, 40, 200),
+      textOnly: flag('textOnly'),
+      thinking: flag('thinking'),
+      humanOnly: flag('humanOnly'),
+    },
+    source,
+    locator,
   )
+  // The open chat polls this every 4 s and the answer is usually the one it already has. An ETag
+  // over the body lets the browser's own cache revalidate it: an unchanged window answers 304 with
+  // no body, and fetch hands the page the cached copy as an ordinary 200, so no client code changes.
+  const body = JSON.stringify(result)
+  const etag = `W/"${Bun.hash(body).toString(36)}"`
+  const headers = { etag, 'cache-control': 'no-cache' }
+  if (c.req.header('if-none-match') === etag) return c.body(null, 304, headers)
+  return c.body(body, 200, { ...headers, 'content-type': 'application/json; charset=utf-8' })
 })
 // What this one session spent: token totals and a dollar cost at published list prices, computed
 // from the analytics kit (subagent calls included; see server/src/session-usage.ts).

@@ -68,11 +68,32 @@ const desktopSortDirection = useStorage('agenthydra.instances.desktopSortDirecti
 
 // --- Sessions: transcript verbosity, search case, sidebar width ---------------------------------
 
-/** Verbose mode: also show tool_use / tool_result events (off = responses only). */
-const showTools = useStorage('agenthydra.sessions.showTools', false)
-/** Show the model's reasoning blocks. Off by default, and deliberately so: they are the bulkiest
- *  part of a transcript and the least useful part to skim. */
-const showThinking = useStorage('agenthydra.sessions.showThinking', false)
+/** Also show tool_use / tool_result events (off = responses only). They are folded into one work
+ *  row per run between two messages (components/TranscriptWorkGroup.vue), so on costs one line. */
+const showTools = useStorage('agenthydra.sessions.showTools', true)
+/** Show the model's reasoning blocks, folded into the same work rows. Off by default until
+ *  2026-10-04, when they were the bulkiest part of a transcript; folded, they are one line. */
+const showThinking = useStorage('agenthydra.sessions.showThinking', true)
+/** Whether the one-time switch-on below has run. Shared like the toggles it guards, so a window on
+ *  a hopped port (an empty localStorage) does not run it again over the reader's own choice. */
+const workRowsOn = useStorage('agenthydra.sessions.workRowsOn', false)
+
+/**
+ * Turn tool calls and reasoning on once for readers who had them stored as off. useStorage writes
+ * its default on first use, so every existing install holds an explicit `false` from the days when
+ * each tool call and each reasoning block was a full log block; the owner asked (2026-10-04) for
+ * the work to be folded instead of hidden. After this runs the two toggles are the reader's again.
+ *
+ * Called by main.ts once the shared preferences have hydrated: the store wins on hydrate
+ * (composables/useSharedPrefs.ts), so run any earlier and the store's old `false` would land on
+ * top a beat later; run after, and the change is pushed to the store like any other.
+ */
+export function switchOnWorkRowsOnce(): void {
+  if (workRowsOn.value) return
+  showTools.value = true
+  showThinking.value = true
+  workRowsOn.value = true
+}
 /** Only what a person typed. The tail's turn window is applied AFTER this filter on the daemon, so
  *  turning it on genuinely reaches back through a long session rather than thinning 40 turns. */
 const humanOnly = useStorage('agenthydra.sessions.humanOnly', false)
@@ -122,6 +143,7 @@ registerSharedPref('agenthydra.instances.desktopSortDirection', desktopSortDirec
 ])
 registerSharedPref('agenthydra.sessions.showTools', showTools)
 registerSharedPref('agenthydra.sessions.showThinking', showThinking)
+registerSharedPref('agenthydra.sessions.workRowsOn', workRowsOn)
 registerSharedPref('agenthydra.sessions.humanOnly', humanOnly)
 registerSharedPref('agenthydra.sessions.compact', compactTranscript)
 registerSharedPref('agenthydra.sessions.advancedCaseSensitive', advancedCaseSensitive)

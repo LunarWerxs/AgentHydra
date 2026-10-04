@@ -68,21 +68,25 @@ export function useOpenSession(deps: {
     if (!needle) return false
     const events = tail.value?.events ?? []
     for (let i = events.length - 1; i >= 0; i--) {
+      // A tool call or result may sit inside a collapsed work row, which carries every index it
+      // folds in `data-turns`; the row is the place to land on then.
       if (events[i].text.toLowerCase().includes(needle))
-        return scroller.anchorTo(`[data-turn="${i}"]`)
+        return scroller.anchorTo(`[data-turn="${i}"], [data-turns~="${i}"]`)
     }
     return false
   }
   const canLoadOlder = computed(() => !!tail.value?.has_more && tailLimit.value < TAIL_MAX)
 
-  // Long-message expand state resets on every deliberate reload (a fresh view of the transcript
-  // starts collapsed again), so it lives beside the load rather than beside the render pass.
-  const expandedMsgs = ref<Set<number>>(new Set())
-  const isExpanded = (i: number) => expandedMsgs.value.has(i)
-  function toggleExpand(i: number) {
+  // Expand state (long messages, work rows and their steps) resets on every deliberate reload (a
+  // fresh view of the transcript starts collapsed again), so it lives beside the load rather than
+  // beside the render pass. Keyed by lib/transcript-groups' stable keys, not by index: the 4 s poll
+  // slides the window as turns arrive, and an index would hand one row's open state to its neighbour.
+  const expandedMsgs = ref<Set<string>>(new Set())
+  const isExpanded = (key: string) => expandedMsgs.value.has(key)
+  function toggleExpand(key: string) {
     const next = new Set(expandedMsgs.value)
-    if (next.has(i)) next.delete(i)
-    else next.add(i)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
     expandedMsgs.value = next
   }
 

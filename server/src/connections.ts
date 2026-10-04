@@ -171,6 +171,10 @@ export const NEVER_SYNCED = [
   // Syncing it would also be half-applied: applyPrefs writes the settings row and nothing more, so
   // a synced-down OFF would leave the live entry in ~/.claude.json until the next daemon restart.
   'mcp_register_claude_code',
+  // Whether THIS machine's usage-history.json has been copied into its own database
+  // (usage-history.ts). A fact about one disk: synced, a second PC would believe its file already
+  // imported and never read it.
+  'usage_history_imported',
 ] as const
 
 // ── persisted state (db.ts settings table, key = 'connections_sync', JSON-serialized) ──────────

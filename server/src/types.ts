@@ -695,6 +695,12 @@ export interface TailEvent {
   text: string
   tool_name: string | null
   timestamp: string | null
+  /** A tool_result the transcript itself marked failed (Claude's `is_error`). Absent otherwise. */
+  error?: boolean
+  /** A message neither side wrote, which the viewer shows as a divider rather than a turn:
+   *  `compact` is the summary the CLI writes as a USER message after compacting the context,
+   *  `error` the API's own notice (a usage limit, an overload) that explains why a session stopped. */
+  notice?: 'compact' | 'error'
 }
 
 export interface TailResult {
