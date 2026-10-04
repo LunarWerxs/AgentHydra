@@ -60,6 +60,7 @@ import { getCliInstance, listCliInstances } from './core/cli-instances'
 import { handsOnAgoMs } from './core/hands-on'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
 import { POINTER_DIR } from './instance'
+import type { KitStore } from './kit/store'
 import { liveSessionIds } from './live-registry'
 import { getProviderSettings } from './provider-settings'
 import type { CliInstance, UsageSnapshot } from './types'
@@ -866,9 +867,92 @@ export function spentOf(w: CliMayteWorker, at: CliMayteWorker['attempts'][number
   const dir = at.account.configDir ?? getCliInstance(at.account.id)?.configDir
   // null: its log names no session, the CLI never started, so it spent nothing.
   const session = at.sessionId === undefined ? w.sessionId : at.sessionId
-  if (!dir) return { costUsd: 0, tokens: noTokens(), turns: 0, first: null, found: false }
-  if (!session) return { costUsd: 0, tokens: noTokens(), turns: 0, first: null, found: true }
-  return attemptSpend(dir, session, at.startedAt, at.endedAt ?? Date.now())
+  const none = { costUsd: 0, tokens: noTokens(), turns: 0, first: null, settled: true }
+  if (!dir) return { ...none, found: false }
+  if (!session) return { ...none, found: true }
+  return readSpend(dir, `cli:${at.account.id}`, session, at.startedAt, at.endedAt ?? Date.now())
+}
+
+/** Test seam: a scratch kit store to read instead of the daemon's, and what runs before each read
+ *  (a test has no sweep, so it ingests the fake transcripts there). null: the daemon's own. */
+let spendKit: {
+  store: KitStore
+  refresh?: (configDir: string, instance: string, session: string) => void
+} | null = null
+export function setSpendKit(k: typeof spendKit): void {
+  spendKit = k
+}
+
+function readSpend(
+  dir: string,
+  instance: string,
+  session: string,
+  startedAt: number,
+  endedAt: number,
+): AttemptSpend {
+  spendKit?.refresh?.(dir, instance, session)
+  return attemptSpend(dir, instance, session, startedAt, endedAt, spendKit?.store)
+}
+
+/** How long after an attempt ended the kit gets to catch up before its figures are taken as they are
+ *  (a sweep is every 60 s; a first sweep after a restart can take longer). */
+const SPEND_SETTLE_MS = 10 * 60_000
+
+/** Charge an ended attempt's spend, and remember when the kit was still behind: `spendOpen` holds
+ *  the cost charged so far (the task's tokens and cost already include it). */
+export function chargeAttempt(
+  w: CliMayteWorker,
+  at: CliMayteWorker['attempts'][number],
+  spent: AttemptSpend,
+): void {
+  at.tokens = spent.tokens
+  at.spend = spendRecord(w, at, spent)
+  w.costUsd += spent.costUsd
+  w.tokens = addTokens(w.tokens, spent.tokens)
+  if (spent.found && !spent.settled) at.spendOpen = spent.costUsd
+}
+
+/** The kit reads transcripts on a 60 s sweep, so an attempt charged the moment it ended can be short
+ *  of its last minute of calls. Rather than make that sync path wait on an ingest, it is charged
+ *  from what the kit has and marked `spendOpen`; once the kit's ingest cursors cover the attempt's
+ *  files (or SPEND_SETTLE_MS has passed) it is read again and the difference goes to the attempt and
+ *  to its task, so the task's totals end equal to what the transcripts hold. Does nothing, and
+ *  reads nothing, with no open attempt. True when any record changed. */
+export function settleSpends(now: number = Date.now()): boolean {
+  const open = [...workers.values()].flatMap((w) =>
+    w.attempts.filter((a) => a.spendOpen !== undefined).map((a) => ({ w, a })),
+  )
+  if (!open.length) return false
+  let any = false
+  for (const { w, a } of open) {
+    const dir = a.account.configDir ?? getCliInstance(a.account.id)?.configDir
+    const session = a.sessionId === undefined ? w.sessionId : a.sessionId
+    if (!dir || !session || a.endedAt === null) {
+      a.spendOpen = undefined
+      continue
+    }
+    const spent = readSpend(dir, `cli:${a.account.id}`, session, a.startedAt, a.endedAt)
+    if (!spent.found) {
+      a.spendOpen = undefined // the transcript is gone: what was charged stands
+      continue
+    }
+    if (!spent.settled && now - a.endedAt < SPEND_SETTLE_MS) continue
+    const was = a.tokens ?? noTokens()
+    w.costUsd += spent.costUsd - (a.spendOpen ?? 0)
+    w.tokens = addTokens(w.tokens, {
+      input: spent.tokens.input - was.input,
+      output: spent.tokens.output - was.output,
+      cacheRead: spent.tokens.cacheRead - was.cacheRead,
+      cacheWrite: spent.tokens.cacheWrite - was.cacheWrite,
+    })
+    a.tokens = spent.tokens
+    a.spend = spendRecord(w, a, spent)
+    a.spendOpen = undefined
+    dirty.add(w.id)
+    any = true
+  }
+  if (any) save()
+  return any
 }
 
 /** The last attempt before `at` that made a model request (spent tokens), or undefined. One that

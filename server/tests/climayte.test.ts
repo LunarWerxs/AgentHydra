@@ -62,7 +62,15 @@ import {
   wallUntil,
   windDownAt,
 } from '../src/climayte'
-import { HOOKS, load, workers } from '../src/climayte-core'
+import {
+  chargeAttempt,
+  HOOKS,
+  load,
+  setSpendKit,
+  settleSpends,
+  spentOf,
+  workers,
+} from '../src/climayte-core'
 import { attemptCause, type CliMayteWorker } from '../src/climayte-lib'
 import { forgetOwnerSync, ownerMcpServers, syncOwnerClaude } from '../src/climayte-owner-sync'
 import { waitsForHome } from '../src/climayte-placement'
@@ -71,6 +79,9 @@ import { isPidAlive, killProcessTree } from '../src/core/process'
 import { KitStore } from '../src/kit/store'
 import { setProviderSettings } from '../src/provider-settings'
 import { parseResetTime } from '../src/usage'
+import { harnessKit } from './mocks/climayte-kit'
+
+setSpendKit(harnessKit)
 
 const NOTICE = "You've hit your session limit · resets 4am"
 const init = { type: 'system', subtype: 'init', model: 'fake-model' }
@@ -256,6 +267,12 @@ describe('copySessionTranscript', () => {
 describe('attemptSpend', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ah-climayte-spend-'))
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
+  // Recent, so the kit still holds these calls raw (a session read over part of a span older than its
+  // raw window comes from the hourly rollup, which has no session to filter on).
+  const start = Math.floor((Date.now() - 3 * 3_600_000) / 60_000) * 60_000
+  const end = start + 10 * 60_000
+  const iso = (min: number) => new Date(start + min * 60_000).toISOString()
+  const file = join(dir, 'projects', 'p', 'S.jsonl')
   const turn = (iso: string, id: string) =>
     JSON.stringify({
       type: 'assistant',
@@ -264,54 +281,107 @@ describe('attemptSpend', () => {
       message: {
         id: `msg_${id}`,
         model: 'claude-opus-5-5',
-        usage: { input_tokens: 10, output_tokens: 1_000, cache_read_input_tokens: 20_000 },
+        usage: { input_tokens: 10, output_tokens: 1_000, cache_creation_input_tokens: 300 },
       },
     })
   const write = (lines: string[]) => {
     mkdirSync(join(dir, 'projects', 'p'), { recursive: true })
-    writeFileSync(join(dir, 'projects', 'p', 'S.jsonl'), lines.join('\n'))
+    writeFileSync(file, lines.join('\n'))
   }
-
-  test("an attempt is charged for its own turns only, never the session's earlier or later ones", () => {
-    const start = Date.parse('2024-10-02T12:00:00Z')
-    const end = Date.parse('2024-10-02T12:10:00Z')
-    write([turn('2024-10-02T12:05:00Z', 'b')])
-    const own = attemptSpend(dir, 'S', start, end)
-    expect(own.costUsd).toBeGreaterThan(0)
-    // Its tokens are the one turn's, counted once (owner, 2026-09-30: each session's tokens kept).
-    expect(own.tokens).toEqual({ input: 10, output: 1_000, cacheRead: 20_000, cacheWrite: 0 })
-    // The same turn (logged twice, one record per content block), a turn copied in from before the
-    // attempt started, and one from a later attempt on the same account.
-    write([
-      turn('2024-10-02T11:00:00Z', 'a'),
-      turn('2024-10-02T12:05:00Z', 'b'),
-      turn('2024-10-02T12:05:00Z', 'b'),
-      turn('2024-10-02T13:00:00Z', 'c'),
-    ])
-    const again = attemptSpend(dir, 'S', start, end)
-    expect(again.costUsd).toBeCloseTo(own.costUsd, 10)
-    expect(again.tokens).toEqual(own.tokens)
-    expect(attemptSpend(dir, 'missing', start, end).costUsd).toBe(0)
+  // One kit call: 10 in, 1000 out, 20000 read, $0.5.
+  const call = (id: string, at: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    ts: Date.parse(at),
+    source: 'climayte',
+    model: 'claude-opus-5-5',
+    instance: 'cli:a',
+    session: 'S',
+    input: 10,
+    output: 1_000,
+    cache_read: 20_000,
+    list_usd: 0.5,
+    ...extra,
   })
 
-  test("a subagent's requests in the attempt's window are the attempt's too", () => {
-    const start = Date.parse('2024-10-02T12:00:00Z')
-    const end = Date.parse('2024-10-02T12:10:00Z')
-    write([turn('2024-10-02T12:05:00Z', 'b')])
-    const subs = join(dir, 'projects', 'p', 'S', 'subagents')
-    mkdirSync(subs, { recursive: true })
-    // One request inside the window, one copied in with the session from before it started.
-    writeFileSync(
-      join(subs, 'agent-x.jsonl'),
-      [turn('2024-10-02T12:06:00Z', 's'), turn('2024-10-02T11:00:00Z', 'old')].join('\n'),
-    )
-    expect(attemptSpend(dir, 'S', start, end).tokens).toEqual({
-      input: 20,
-      output: 2_000,
-      cacheRead: 40_000,
-      cacheWrite: 0,
+  test("an attempt is charged for the kit's calls on its session and instance in its window only", () => {
+    const store = new KitStore(':memory:')
+    store.upsertEvents([
+      call('a', iso(-60)), // copied in from before the attempt started
+      call('b', iso(5)),
+      call('s', iso(6), { agent: 'subagent' }), // a subagent: the parent's session
+      call('c', iso(60)), // a later attempt on the same account
+      call('o', iso(5.5), { instance: 'cli:b' }), // a copy in another account's dir
+      call('x', iso(5.7), { session: 'T' }), // another session
+    ])
+    write([turn(iso(5), 'b')])
+    const own = attemptSpend(dir, 'cli:a', 'S', start, end, store)
+    expect(own.tokens).toEqual({ input: 20, output: 2_000, cacheRead: 40_000, cacheWrite: 0 })
+    expect(own.turns).toBe(2)
+    expect(own.costUsd).toBeCloseTo(1, 10)
+    // The first request is the one thing the kit cannot give: it comes from the transcript.
+    expect(own.first).toEqual({ input: 10, output: 1_000, cacheRead: 0, cacheWrite: 300 })
+    expect(attemptSpend(dir, 'cli:a', 'missing', start, end, store)).toMatchObject({
+      found: false,
+      costUsd: 0,
     })
-    rmSync(join(dir, 'projects', 'p', 'S'), { recursive: true, force: true })
+  })
+
+  test("the kit's sweep lag is seen: an attempt is settled only once the kit has read its files", () => {
+    const store = new KitStore(':memory:')
+    write([turn(iso(5), 'b')])
+    const size = statSync(file).size
+    const settled = () => attemptSpend(dir, 'cli:a', 'S', start, end, store).settled
+    expect(settled()).toBe(false) // never swept
+    store.setCursor({ path: file, size: size - 10, mtime: start, offset: size - 10, version: 3 })
+    expect(settled()).toBe(false) // swept up to before the last line, before the attempt ended
+    store.setCursor({ path: file, size: size - 10, mtime: end, offset: size - 10, version: 3 })
+    expect(settled()).toBe(true) // swept after it ended, though the file has grown since
+    store.setCursor({ path: file, size, mtime: start, offset: size, version: 3 })
+    expect(settled()).toBe(true) // swept to the end of the file
+  })
+
+  test('an attempt charged short is made right once the kit catches up, in the task too', () => {
+    const store = new KitStore(':memory:')
+    write([turn(iso(5), 'b'), turn(iso(9.5), 'last')])
+    store.upsertEvents([call('b', iso(5))]) // the sweep is a call behind
+    const w = {
+      id: 'w-settle',
+      costUsd: 0,
+      tokens: undefined,
+      sessionId: 'S',
+      attempts: [
+        {
+          account: { id: 'a', configDir: dir },
+          startedAt: start,
+          endedAt: end,
+          outcome: 'done',
+          sessionId: 'S',
+        },
+      ],
+    } as any
+    const at = w.attempts[0]
+    workers.set(w.id, w)
+    setSpendKit({ store })
+    try {
+      chargeAttempt(w, at, spentOf(w, at))
+      expect(at.spendOpen).toBeCloseTo(0.5, 10) // charged short, and says so
+      expect(settleSpends(end + 1_000)).toBe(false) // the kit is still behind: wait
+      expect(w.costUsd).toBeCloseTo(0.5, 10)
+      // The sweep reaches the end of the file.
+      store.upsertEvents([call('last', iso(9.5))])
+      store.setCursor({ path: file, size: statSync(file).size, mtime: end, offset: 0, version: 3 })
+      expect(settleSpends(end + 10_000)).toBe(true)
+      expect(at.spendOpen).toBeUndefined()
+      expect(at.tokens).toEqual({ input: 20, output: 2_000, cacheRead: 40_000, cacheWrite: 0 })
+      expect(at.spend).toMatchObject({ costUsd: 1, turns: 2 })
+      // The task holds exactly the attempt's figures: the late part added, the early part not twice.
+      expect(w.costUsd).toBeCloseTo(1, 10)
+      expect(w.tokens).toEqual(at.tokens)
+      expect(settleSpends(end + 20_000)).toBe(false)
+    } finally {
+      setSpendKit(harnessKit)
+      workers.delete(w.id)
+    }
   })
 })
 

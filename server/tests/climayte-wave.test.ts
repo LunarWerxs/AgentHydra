@@ -18,11 +18,14 @@ import {
   setCliMayteClaudeCommand,
   startCliMayte,
 } from '../src/climayte'
-import { workers as liveWorkers } from '../src/climayte-core'
+import { workers as liveWorkers, setSpendKit } from '../src/climayte-core'
 import { MANAGER_CONTEXT_TOKENS } from '../src/climayte-launch'
 import type { CliMayteWave, CliMayteWorker } from '../src/climayte-lib'
 import { OPUS } from '../src/climayte-scorecard'
 import { readWave, waveBatch, waveDone, waveStateText, writeWave } from '../src/climayte-wave'
+import { harnessKit } from './mocks/climayte-kit'
+
+setSpendKit(harnessKit)
 
 /** The scorecard row of the rung these tests launch (`model: 'opus'`, `effort: 'high'`). Bun runs
  *  every test file in one process, in directory order, which differs by platform: matching on effort

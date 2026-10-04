@@ -38,6 +38,7 @@ import {
   acctLabel,
   basisText,
   changed,
+  chargeAttempt,
   configDirOf,
   freshRead,
   HOOKS,
@@ -67,6 +68,7 @@ import {
   SIGNALS,
   save,
   saveWalls,
+  settleSpends,
   signalPath,
   slashed,
   spendRecord,
@@ -946,6 +948,9 @@ function killRunners(runners: { pid: number; log: string }[]): void {
   killProcessTrees(ours)
 }
 
+/** When the tick last looked for attempts whose spend the kit had not caught up with (every 5 s). */
+let lastSettle = 0
+
 function schedule(delay?: number): void {
   if (timer) clearTimeout(timer)
   // poll() runs every tick, so the overage stop is only as fast as the tick, and each second of
@@ -980,6 +985,10 @@ async function tick(): Promise<void> {
     const accounts = tickAccounts()
     checkRunners()
     pollRunning()
+    if (now - lastSettle >= 5_000) {
+      lastSettle = now
+      settleSpends(now)
+    }
     killLateStarts()
     saveLive()
     pollChecks()
@@ -1806,10 +1815,7 @@ function journalFinish(
 /** Charge an ended attempt to its task: its own cost and tokens. Returns the cost. */
 function charge(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): number {
   const spent = spentOf(w, at)
-  at.tokens = spent.tokens
-  at.spend = spendRecord(w, at, spent)
-  w.costUsd += spent.costUsd
-  w.tokens = addTokens(w.tokens, spent.tokens)
+  chargeAttempt(w, at, spent)
   return spent.costUsd
 }
 

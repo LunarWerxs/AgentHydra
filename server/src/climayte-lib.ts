@@ -24,7 +24,8 @@ import {
   rereadUnits,
   UNITS_PER_PRO_PERCENT,
 } from './climayte-scorecard'
-import { priceTokens } from './pricing'
+import { sharedKitStore, usageQuery } from './kit/query'
+import type { KitStore } from './kit/store'
 import {
   classifyLimit,
   compactNotice,
@@ -32,7 +33,7 @@ import {
   isApiErrorEvent,
   limitEventText,
 } from './rate-limit-signal'
-import { contextOf, parseUsageLine, readTurnUsage, sumTranscriptTokens } from './usage-tokens'
+import { contextOf, parseUsageLine, readTurnUsage } from './usage-tokens'
 
 export type CliMayteStatus =
   | 'queued'
@@ -90,6 +91,9 @@ export interface CliMayteAttempt {
    *  read again into a cold cache after a move, a limit, a handoff or a gap. That is restart
    *  overhead, not work (rereadUnits). null: its transcript could not be read. Absent until set. */
   spend?: { costUsd: number; turns: number; reread: CliMayteTokens | null } | null
+  /** Set when the attempt was charged before the analytics kit had ingested all of its transcript:
+   *  the cost charged then. settleSpends reads it again once the kit catches up, then clears this. */
+  spendOpen?: number
   /** The session this attempt ran in. A planned handoff starts a new one, so the worker's current
    *  `sessionId` is not every attempt's. null: the log names none (the CLI never started). */
   sessionId?: string | null
@@ -1126,26 +1130,35 @@ export function wallUntil(
   return at > now ? at + WALL_MARGIN_MS : now + WALL_RETRY_MS
 }
 
-/** What one attempt spent: the turns its session transcript recorded on that attempt's account
- *  between its start and its end, priced through the product's one per-turn parser. This is the
- *  only pricing CliMayte uses. The CLI's `result.total_cost_usd` cannot be: on a resumed session it is
+/** What one attempt spent: the analytics kit's figures (tokens, calls, cost_usd) for the attempt's
+ *  session on the instance it ran on between its start and its end. The kit prices every call, so
+ *  CliMayte prices nothing itself. The CLI's `result.total_cost_usd` cannot be: on a resumed session it is
  *  the WHOLE session's cost so far (measured 2026-09-30: a one-turn follow-up after a $4.67 turn
  *  reported $6.44 = $4.67 + $1.77), so adding it per attempt counted every earlier turn again on
  *  every follow-up, handoff and resume. A killed or stopped attempt writes no result at all, and
- *  its stream-json log under-reports output; the transcript has both right (this reproduces the
- *  CLI's own figures to the cent). Turns copied in from another account keep their older
+ *  its stream-json log under-reports output; the transcript, which the kit ingests, has both right
+ *  (this reproduces the CLI's own figures to the cent). Turns copied in from another account keep their older
  *  timestamps, so they are not counted again. 0 when the transcript is not there. A subagent's
  *  requests bill the same account and sit in their own files under `<session>/subagents/`, so
  *  those are counted too. */
 export function attemptSpend(
   configDir: string,
+  instance: string,
   sessionId: string,
   startedAt: number,
   endedAt: number,
+  store?: KitStore,
 ): AttemptSpend {
   const root = join(configDir, 'projects')
   let files: string[] = []
-  const none: AttemptSpend = { costUsd: 0, tokens: noTokens(), turns: 0, first: null, found: false }
+  const none: AttemptSpend = {
+    costUsd: 0,
+    tokens: noTokens(),
+    turns: 0,
+    first: null,
+    found: false,
+    settled: true,
+  }
   try {
     for (const d of readdirSync(root)) {
       const file = join(root, d, `${sessionId}.jsonl`)
@@ -1158,46 +1171,71 @@ export function attemptSpend(
     return none
   }
   if (!files.length) return none
-  let costUsd = 0
-  let tokens = noTokens()
-  let turns = 0
-  let first: CliMayteTokens | null = null
-  for (const [i, file] of files.entries()) {
-    let text = ''
-    try {
-      text = readFileSync(file, 'utf8')
-    } catch {
-      continue
-    }
-    // Everything from the start, minus everything after the end: pricing is linear per model.
-    const from = sumTranscriptTokens(text, startedAt)
-    const after = sumTranscriptTokens(text, endedAt + 1)
-    const cost = (s: typeof from) => priceTokens(s.byModel, startedAt).costUsd ?? 0
-    const less = (a: number, b: number) => Math.max(0, a - b)
-    costUsd += less(cost(from), cost(after))
-    turns += less(from.turns, after.turns)
-    tokens = addTokens(tokens, {
-      input: less(from.input, after.input),
-      output: less(from.output, after.output),
-      cacheRead: less(from.cacheRead, after.cacheRead),
-      cacheWrite: less(from.cacheCreation, after.cacheCreation),
-    })
-    if (i === 0) first = firstRequest(text, startedAt, endedAt)
+  // One query on the session (a subagent's calls carry its parent's session) and the instance it ran
+  // on, over the attempt's window, both ends in. Turns copied in from another account keep their
+  // older timestamps and a copy of the session in another dir does not own the call, so neither counts.
+  const t = usageQuery(
+    {
+      window: { from: startedAt, to: endedAt },
+      filter: { session: sessionId, instance },
+      measures: ['input', 'output', 'cache_read', 'cache_write', 'calls', 'cost_usd'],
+    },
+    { store, coverage: false },
+  ).totals
+  const tokens: CliMayteTokens = {
+    input: t.input ?? 0,
+    output: t.output ?? 0,
+    cacheRead: t.cache_read ?? 0,
+    cacheWrite: t.cache_write ?? 0,
   }
-  return { costUsd, tokens, turns, first, found: true }
+  // The kit has no per-call read, so the first request is the one thing still read from the file.
+  let first: CliMayteTokens | null = null
+  try {
+    first = firstRequest(readFileSync(files[0] as string, 'utf8'), startedAt, endedAt)
+  } catch {
+    // unreadable: no first request
+  }
+  return {
+    costUsd: t.cost_usd ?? 0,
+    tokens,
+    turns: t.calls ?? 0,
+    first,
+    found: true,
+    settled: kitHolds(store ?? sharedKitStore(), files, endedAt),
+  }
 }
 
-/** What attemptSpend read from an attempt's transcript. */
+/** Whether the kit has read all of an attempt's transcript files. It reads them on a 60 s sweep, so
+ *  one that just ended can be a minute short. Each file's ingest cursor says how far the sweep got:
+ *  it holds the file when it reached the file's size now, or when it was taken at or after `endedAt`
+ *  (a session that went on in a later attempt has grown since, but every line up to `endedAt` was
+ *  already there). No cursor, or a cursor that stopped short, means not yet. */
+function kitHolds(store: KitStore, files: string[], endedAt: number): boolean {
+  try {
+    return files.every((file) => {
+      const cur = store.getCursor(file)
+      return cur !== null && (cur.size >= statSync(file).size || cur.mtime >= endedAt)
+    })
+  } catch {
+    return false
+  }
+}
+
+/** What attemptSpend read: the kit's figures for an attempt's session, and its first request. */
 export interface AttemptSpend {
   costUsd: number
   tokens: CliMayteTokens
   /** Model requests in the attempt, its sub-agents' included. */
   turns: number
   /** The session's first request in the attempt: on any attempt after the task's first, the whole
-   *  conversation read again into a cache that does not hold it. null with no request. */
+   *  conversation read again into a cache that does not hold it. null with no request. It stays a
+   *  transcript read: the kit holds no per-call rows to ask for it. */
   first: CliMayteTokens | null
   /** False when no transcript was there: nothing measured, which is not a measured zero. */
   found: boolean
+  /** True when the kit had ingested every transcript file of the attempt (kitHolds), so the figures
+   *  are final. False: the sweep is behind and the attempt is charged again once it catches up. */
+  settled: boolean
 }
 
 /** The first assistant request's usage in [startedAt, endedAt] of a transcript, or null. */
