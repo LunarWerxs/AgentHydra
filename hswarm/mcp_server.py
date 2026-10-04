@@ -189,7 +189,7 @@ async def hswarm_run(
     An argument this tool does not take is refused with the nearest valid name, never dropped.
     Every other option (reasoning_effort, verify, acceptance, done_when, green, escalate, scope, capability,
     writable, inventory, recipe, scripted, redact, envelope, resume_from_job, lean, isolated, zdr, ...) and every result
-    field is in docs/API.md of the hswarm repo under "hswarm_run options": read it before using one.
+    field is in docs/HSWARM-API.md in the AgentHydra repo: read it before using one.
     """
     defaults = {
         "backend": backend, "model": model, "cwd": cwd, "tools": tools, "system": system, "max_turns": max_turns,

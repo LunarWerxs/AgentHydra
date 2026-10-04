@@ -2,7 +2,7 @@
 
 GET /ui is the console, one self-contained page (ui/console.html). /api/* is JSON: the same calls the page makes,
 so a script or another agent can drive hswarm without MCP. Send the token from <home>/console-token as the
-X-Hswarm-Token header (docs/API.md lists every route).
+X-Hswarm-Token header (docs/HSWARM-API.md in the AgentHydra repo lists every route).
 
 The server can spend money and runs workers with file and shell tools, so two locks stand in front of it:
 - the Host header must name this machine. A page on another origin that rebinds its DNS name to 127.0.0.1 still

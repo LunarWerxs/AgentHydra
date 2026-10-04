@@ -39,7 +39,7 @@ def test_the_instructions_reach_a_claude_code_chat_whole():
 
 def test_hswarm_run_description_stays_under_3000_characters():
     # 13,564 characters before: once a chat loads the tool, it re-reads them on every turn. The per-option
-    # reference lives in docs/API.md ("hswarm_run options"); a new option is documented there, not here.
+    # reference lives in docs/HSWARM-API.md ("hswarm_run options"); a new option is documented there, not here.
     served = {t.name: t for t in asyncio.run(mcp_server.mcp.list_tools())}
     assert len(served["hswarm_run"].description) <= 3000
 
