@@ -244,15 +244,17 @@ function storyRun(
   return { values, keys }
 }
 
-const STORY_VERDICT = {
+const STORY_VERDICT: Record<'pass' | 'fail', Record<Exclude<VerdictBy, 'check'>, string>> = {
   pass: {
     owner: 'climayte.failedAcceptedOwner',
     orchestrator: 'climayte.failedAcceptedOrchestrator',
+    wave: 'climayte.failedAcceptedWave',
     unknown: 'climayte.failedAccepted',
   },
   fail: {
     owner: 'climayte.failedRejectedOwner',
     orchestrator: 'climayte.failedRejectedOrchestrator',
+    wave: 'climayte.failedRejectedWave',
     unknown: 'climayte.failedRejected',
   },
 }
@@ -321,9 +323,10 @@ export function climayteFailedStory(
   // verdict, so the verdict is not what happened next.
   const last = w.verdicts?.[w.verdicts.length - 1]
   let accepted = false
-  if (last && last.by !== 'check' && w.judged) {
+  const lastBy = last ? verdictBy(last.by) : 'unknown'
+  if (last && lastBy !== 'check' && w.judged) {
     accepted = last.verdict === 'pass'
-    next.push({ key: STORY_VERDICT[last.verdict][last.by ?? 'unknown'] })
+    next.push({ key: STORY_VERDICT[last.verdict][lastBy] })
     if (last.note) next.push({ key: 'climayte.failedNote', values: { note: firstLine(last.note) } })
   }
   // Started again: the newest later task with the same title in the same folder.
@@ -387,9 +390,9 @@ export function climayteVerdictMark(
   const v = verdicts[verdicts.length - 1]
   if (!v) return null
   const note = v.note ? firstLine(v.note) : ''
-  const by = v.by ?? 'unknown'
+  const by = verdictBy(v.by)
   if (v.verdict === 'pass') return { kind: 'pass', key: VERDICT_PASS[by], values: { n: 0 }, note }
-  const n = verdicts.filter((x) => x.verdict === 'fail' && (x.by ?? 'unknown') === by).length
+  const n = verdicts.filter((x) => x.verdict === 'fail' && verdictBy(x.by) === by).length
   return isCliMayteActive(w)
     ? { kind: 'retry', key: VERDICT_RETRY[by], values: { n }, note }
     : { kind: 'fail', key: VERDICT_FAIL[by], values: { n }, note }
@@ -399,17 +402,27 @@ const VERDICT_PASS: Record<VerdictBy, string> = {
   check: 'climayte.verdictPassCheck',
   orchestrator: 'climayte.verdictPassOrchestrator',
   owner: 'climayte.verdictPassOwner',
+  wave: 'climayte.verdictPassWave',
   unknown: 'climayte.verdictPassed',
 }
 const VERDICT_FAIL: Record<VerdictBy, string> = {
   check: 'climayte.verdictFailCheck',
   orchestrator: 'climayte.verdictFailOrchestrator',
   owner: 'climayte.verdictFailOwner',
+  wave: 'climayte.verdictFailWave',
   unknown: 'climayte.verdictFailed',
 }
 const VERDICT_RETRY: Record<VerdictBy, string> = {
   check: 'climayte.verdictRetryCheck',
   orchestrator: 'climayte.verdictRetrySentBack',
   owner: 'climayte.verdictRetrySentBack',
+  wave: 'climayte.verdictRetrySentBack',
   unknown: 'climayte.verdictRetrySentBack',
+}
+/** Who judged, as the tables above name them. The server records `by` and the tables only know
+ *  the recorders this build was written for: one it does not know reads as 'unknown' (plain
+ *  "Passed" / "Failed"), never as a missing key. vue-i18n throws on an undefined key, and the
+ *  manager's `wave` verdicts did exactly that inside the CliMayte list (2026-10-04). */
+function verdictBy(by: string | undefined): VerdictBy {
+  return by !== undefined && Object.hasOwn(VERDICT_PASS, by) ? (by as VerdictBy) : 'unknown'
 }

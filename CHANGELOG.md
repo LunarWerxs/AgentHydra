@@ -15,6 +15,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   resume up to 30 minutes; a model turn or a typed message resets it. The idea comes from
   paperclipai/paperclip's re-wake throttle (MIT).
 
+### Fixed
+
+- **The CliMayte list no longer throws on a manager wave's verdicts** (`web/src/lib/climayte-status.ts`).
+  A verdict recorded by a manager wave (`by: 'wave'`) had no line in the row's verdict mark or the
+  failure story, so vue-i18n threw `SyntaxError: 17` for each such row (53 errors in the live
+  list's console, 2026-10-04). Wave verdicts now read "Its wave manager accepted / rejected the result", and a
+  recorder this build does not know reads as plain "Passed" / "Failed".
+
 ## [1.9.0] - 2026-10-04
 
 ### Added

@@ -290,3 +290,31 @@ test('a failed check on a task still working is a retry, on a stopped one a fail
   })
   expect(climayteVerdictMark({ status: 'done', verdicts: [] })).toBeNull()
 })
+
+// Every recorder the server writes reads as a real line. The manager's `wave` verdicts had no key in
+// these tables and the CliMayte list threw on each one (vue-i18n SyntaxError 17, 2026-10-04); a
+// recorder this build does not know yet reads as plain "Passed" / "Failed".
+test('a wave verdict and an unknown recorder both read as real lines', () => {
+  const i18n = createI18n({ legacy: false, locale: 'en', messages: { en: { climayte } } })
+  const robot = 'robot' as unknown as CliMayteVerdict['by']
+  const marks = [
+    climayteVerdictMark({ status: 'done', verdicts: [verdict('pass', 'wave')] }),
+    climayteVerdictMark({ status: 'failed', verdicts: [verdict('fail', 'wave')] }),
+    climayteVerdictMark({ status: 'running', verdicts: [verdict('fail', 'wave')] }),
+    climayteVerdictMark({ status: 'done', verdicts: [verdict('pass', robot)] }),
+    climayteVerdictMark({ status: 'failed', verdicts: [verdict('fail', robot)] }),
+  ]
+  for (const mark of marks) expect(i18n.global.te(mark?.key ?? '')).toBe(true)
+  expect(marks[3]?.key).toBe('climayte.verdictPassed')
+  for (const by of ['wave', robot] as const) {
+    const task = failed({
+      attempts: attempts('error'),
+      verdicts: [verdict('fail', by)],
+      judged: true,
+    })
+    const story = climayteFailedStory(task, [task])
+    if (!story) throw new Error('a failed task has a story')
+    expect(story.next.length).toBeGreaterThan(0)
+    for (const line of story.next) expect(i18n.global.te(line.key)).toBe(true)
+  }
+})
