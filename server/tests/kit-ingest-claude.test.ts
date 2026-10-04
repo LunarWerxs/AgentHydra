@@ -6,6 +6,7 @@ import { createCliInstance, deleteCliInstance } from '../src/core/cli-instances'
 import {
   type ClaudeFileOwner,
   type ClaudeRoot,
+  classify,
   discoverClaudeRoots,
   ingestClaude,
 } from '../src/kit/ingest-claude'
@@ -75,6 +76,22 @@ const rootOf = (dir: string, owner: (sid: string) => ClaudeFileOwner | null): Cl
 const events = (store: KitStore) =>
   store.db.query('select * from usage_event order by ts, id').all() as Array<Record<string, any>>
 
+describe('classify', () => {
+  const at = (rel: string) => classify(join('r', 'projects'), join('r', 'projects', rel))
+  test('a sub-agent id is the file under subagents/ without its extension, folders kept', () => {
+    expect(at('p/s1.jsonl')).toEqual({ session: 's1', agent: 'main', agentId: null })
+    expect(at('p/s1/subagents/agent-ab12.jsonl')).toEqual({
+      session: 's1',
+      agent: 'subagent',
+      agentId: 'agent-ab12',
+    })
+    expect(at('p/s1/subagents/workflows/wf_1/agent-b.jsonl')?.agentId).toBe(
+      'workflows/wf_1/agent-b',
+    )
+    expect(at('p/s1/other/agent-b.jsonl')).toBeNull()
+  })
+})
+
 describe('ingestClaude', () => {
   test('attributes instance, source, session, agent and tokens; repeated block lines are one call', async () => {
     const f = fixture()
@@ -125,7 +142,13 @@ describe('ingestClaude', () => {
     expect(by.a.list_usd).toBeGreaterThan(0)
     expect(by.a.price_ver).toBeTruthy()
     expect(by.a.weighted).toBeGreaterThan(0)
-    expect(by.c).toMatchObject({ agent: 'subagent', session: 's1', source: 'cli' })
+    expect(by.c).toMatchObject({
+      agent: 'subagent',
+      agent_id: 'agent-x',
+      session: 's1',
+      source: 'cli',
+    })
+    expect(by.a.agent_id).toBeNull()
     expect(by.d).toMatchObject({
       instance: 'desktop:3claude',
       source: 'desktop',

@@ -282,6 +282,8 @@ export function claudeLineEvent(
   ctx: {
     session: string
     agent: 'main' | 'subagent'
+    /** The sub-agent file's id (`agent` is `subagent`), else null. */
+    agentId?: string | null
     owner: ClaudeFileOwner
     source: string
     /** Who ran the call, when records say: `other` (a copy of the session in another dir ran it), else not. */
@@ -309,6 +311,7 @@ export function claudeLineEvent(
     instance: ctx.owner.instance,
     session: ctx.session,
     agent: ctx.agent,
+    agent_id: ctx.agentId ?? null,
     source: ctx.source,
     model,
     provider: 'anthropic',
@@ -329,6 +332,7 @@ interface Candidate {
   path: string
   session: string
   agent: 'main' | 'subagent'
+  agentId: string | null
   owner: ClaudeFileOwner
   rootDir: string
 }
@@ -337,7 +341,12 @@ interface Candidate {
 interface DirNode {
   mtimeMs: number
   dirs: string[]
-  files: { path: string; session: string; agent: 'main' | 'subagent' }[]
+  files: {
+    path: string
+    session: string
+    agent: 'main' | 'subagent'
+    agentId: string | null
+  }[]
 }
 
 /**
@@ -432,15 +441,27 @@ async function walkRoot(
   return tree
 }
 
-/** `<project>/<session>.jsonl` or `<project>/<session>/subagents/<agent>.jsonl`. Anything else is not ours. */
-function classify(
+/**
+ * `<project>/<session>.jsonl` or `<project>/<session>/subagents/<agent>.jsonl`. Anything else is not ours.
+ * A sub-agent's id is its file's path under `subagents/` without the extension (`<agent>`; a file nested in
+ * a folder, such as a workflow's, keeps the folders so two files never share an id).
+ */
+export function classify(
   root: string,
   path: string,
-): { session: string; agent: 'main' | 'subagent' } | null {
+): { session: string; agent: 'main' | 'subagent'; agentId: string | null } | null {
   const parts = relative(root, path).split(sep)
-  if (parts.length === 2) return { session: basename(parts[1] as string, '.jsonl'), agent: 'main' }
+  if (parts.length === 2)
+    return { session: basename(parts[1] as string, '.jsonl'), agent: 'main', agentId: null }
   if (parts.length >= 4 && parts[2] === 'subagents')
-    return { session: parts[1] as string, agent: 'subagent' }
+    return {
+      session: parts[1] as string,
+      agent: 'subagent',
+      agentId: parts
+        .slice(3)
+        .join('/')
+        .replace(/\.jsonl$/, ''),
+    }
   return null
 }
 
@@ -729,6 +750,7 @@ export async function ingestClaude(
     const ctx = {
       session: c.session,
       agent: c.agent,
+      agentId: c.agentId,
       owner: c.owner,
       source: climayte.has(c.session) ? 'climayte' : c.owner.source,
       ran: attempts.get(c.session)

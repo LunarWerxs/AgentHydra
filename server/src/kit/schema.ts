@@ -2,7 +2,7 @@
 // Gated on PRAGMA user_version: a file with a lower version is migrated step by step, a higher one is
 // refused. The store is an index over the sources' own files, so a drop and rebuild is always safe.
 
-export const KIT_SCHEMA_VERSION = 4
+export const KIT_SCHEMA_VERSION = 5
 
 /** Measures every source reports per call (what usage_event stores). */
 export const KIT_BASE_MEASURES = [
@@ -213,6 +213,14 @@ export const KIT_DDL_V4 = `
 create table if not exists dirty_hour (hour integer primary key);
 `
 
+/**
+ * v5: usage_event gains agent_id, the id of the sub-agent transcript a call was read from (the `<agent>` of
+ * `<session>/subagents/<agent>.jsonl`; NULL for every other call). Raw rows only: neither rollup keeps it.
+ * The column is added empty and instantly; no stored row says which file it came from, so KitStore.backfillAsync
+ * makes the sweep read the recent sub-agent files again (see AGENT_ID_BACKFILL_META).
+ */
+export const AGENT_ID_BACKFILL_META = 'backfill_v5'
+
 /** SELECT of usage_event rows (optionally filtered) aggregated to usage_session's key and columns. */
 export function sessionAggSql(where = '1'): string {
   const sums = KIT_MEASURES.map(eventMeasureSql).join(', ')
@@ -317,6 +325,7 @@ export function migrateKitSchema(db: Exec): void {
     addDerivedColumns(db)
     migrateV4(db, have)
   }
+  if (have < 5) migrateV5(db, have)
   if (have !== KIT_SCHEMA_VERSION) db.exec(`pragma user_version = ${KIT_SCHEMA_VERSION}`)
 }
 
@@ -359,6 +368,22 @@ function migrateV4(db: Exec, have: number): void {
   const anyRaw = db.query('select 1 as x from usage_event limit 1').get()
   if (any || anyRaw) {
     db.exec("insert or replace into meta (key, value) values ('backfill_v4', 'a')")
+  }
+}
+
+/** v4 -> v5: the agent_id column, and a marker for the sliced re-read that fills it (nothing to fill in a store that has read no file). */
+function migrateV5(db: Exec, have: number): void {
+  const cols = db.query("select name from pragma_table_info('usage_event')") as unknown as {
+    all(): { name: string }[]
+  }
+  if (!cols.all().some((c) => c.name === 'agent_id')) {
+    db.exec('alter table usage_event add column agent_id text')
+  }
+  if (have >= 1 && db.query('select 1 as x from ingest_cursor limit 1').get()) {
+    db.query('insert or replace into meta (key, value) values (?, ?)').run(
+      AGENT_ID_BACKFILL_META,
+      'a',
+    )
   }
 }
 

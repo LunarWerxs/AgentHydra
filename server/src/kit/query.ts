@@ -25,6 +25,7 @@ export const FILTER_KEYS = [
   'session',
   'ref',
   'agent',
+  'agent_id',
   'ok',
 ] as const
 export const GROUP_BYS = [
@@ -38,6 +39,7 @@ export const GROUP_BYS = [
   'provider',
   'session',
   'ref',
+  'agent_id',
 ] as const
 export const MEASURES = [
   'tokens',
@@ -51,8 +53,15 @@ export const MEASURES = [
   'failed',
   'seconds',
 ] as const
-/** Token kinds, opt-in: `tokens` stays the sum, these split it (`cache_write` = 5m + 1h writes). */
-export const TOKEN_KIND_MEASURES = ['input', 'output', 'cache_read', 'cache_write'] as const
+/** Token kinds, opt-in: `tokens` stays the sum, these split it (`cache_write` = 5m + 1h writes, which are also given apart). */
+export const TOKEN_KIND_MEASURES = [
+  'input',
+  'output',
+  'cache_read',
+  'cache_write',
+  'cache_write_5m',
+  'cache_write_1h',
+] as const
 export const LAST_WINDOWS = ['5h', '24h', '7d', '30d', 'all'] as const
 
 export type FilterKey = (typeof FILTER_KEYS)[number]
@@ -257,6 +266,7 @@ const DIM_COLS: Record<Exclude<GroupBy, 'day' | 'hour'>, string> = {
   provider: 'provider',
   session: 'session',
   ref: 'ref',
+  agent_id: 'agent_id',
 }
 
 const TOKEN_SUM = 'input + output + cache_read + cache_write_5m + cache_write_1h'
@@ -277,6 +287,8 @@ interface RawRow {
   output: number
   cache_read: number
   cache_write: number
+  cache_write_5m: number
+  cache_write_1h: number
   [dim: string]: string | number | null
 }
 
@@ -292,19 +304,17 @@ function selectRows(
   flagUnpriced = false,
 ): RawRow[] {
   const raw = table === 'usage_event'
-  // The hourly rollup keeps no session or ref; both rollups store NULL as ''.
+  // The hourly rollup keeps no session or ref, and neither rollup an agent_id (a query that asks for it
+  // reads raw rows only); both rollups store NULL as ''.
   const noSess = table === 'usage_hour'
+  const noCol = (d: DimCol) =>
+    (!raw && d === 'agent_id') || (noSess && (d === 'session' || d === 'ref'))
   const dimSel = dims.map((d) => {
     if (raw) return DIM_COLS[d]
-    return noSess && (d === 'session' || d === 'ref')
-      ? `null as ${d}`
-      : `nullif(${DIM_COLS[d]}, '') as ${d}`
+    return noCol(d) ? `null as ${d}` : `nullif(${DIM_COLS[d]}, '') as ${d}`
   })
   const hourSel = withHour ? (raw ? `ts - (ts % ${bucketMs}) as h` : 'hour as h') : 'null as h'
-  const group = [
-    withHour ? 'h' : null,
-    ...dims.filter((d) => !noSess || (d !== 'session' && d !== 'ref')).map((d) => DIM_COLS[d]),
-  ]
+  const group = [withHour ? 'h' : null, ...dims.filter((d) => !noCol(d)).map((d) => DIM_COLS[d])]
     .filter(Boolean)
     .join(', ')
   const measures = raw
@@ -317,7 +327,7 @@ function selectRows(
        sum(weighted) as weighted, sum(calls) as calls, sum(ok_calls) as ok,
        sum(failed_calls) as failed, sum(seconds) as seconds`
   const kinds =
-    'sum(input) as input, sum(output) as output, sum(cache_read) as cache_read, sum(cache_write_5m + cache_write_1h) as cache_write'
+    'sum(input) as input, sum(output) as output, sum(cache_read) as cache_read, sum(cache_write_5m + cache_write_1h) as cache_write, sum(cache_write_5m) as cache_write_5m, sum(cache_write_1h) as cache_write_1h'
   // The unpriced models ride on the same pass: a second read of the same rows costs as much again.
   const unp = flagUnpriced
     ? `, sum(case when list_usd is null and ${raw ? 'model is not null' : "model != ''"} then 1 else 0 end) as unpriced_calls`
@@ -363,6 +373,8 @@ const NEGATED = [
   'output',
   'cache_read',
   'cache_write',
+  'cache_write_5m',
+  'cache_write_1h',
 ] as const
 
 const addNullable = (a: number | null, b: number | null): number | null =>
@@ -519,12 +531,24 @@ function* computeUsage(
   const sessionLike = Boolean(
     sessVals || refVals || dims.includes('session') || dims.includes('ref'),
   )
-  const hourFilter = okVals ? 'ok' : sessVals ? 'session' : refVals ? 'ref' : null
+  // agent_id is a raw-only dimension like ok: neither rollup keeps it, so a query that filters or groups
+  // on it reads usage_event alone (the hours older than the raw cut are left out, with a note).
+  const agentIdOn = Boolean(toList(filter.agent_id) || dims.includes('agent_id'))
+  const rawOnly = Boolean(okVals) || agentIdOn
+  const hourFilter = okVals
+    ? 'ok'
+    : agentIdOn
+      ? 'agent_id'
+      : sessVals
+        ? 'session'
+        : refVals
+          ? 'ref'
+          : null
 
   // Sessions mode: a ledger row (one per session, ref, source, account, instance, model, ...) whose
   // whole span lies inside the window comes from usage_session; the raw rows of the rows the window
   // cuts through, and of any session with calls newer than the last rollup, are counted instead.
-  const inSessions = sessionLike && !okVals && !withHour
+  const inSessions = sessionLike && !rawOnly && !withHour
   const sessWhere = sessionWhere(filter)
   const inside: Where = {
     sql: `${sessWhere.sql}${dim.sql} and first_ts >= ? and last_ts <= ?`,
@@ -788,8 +812,9 @@ function* computeUsage(
   // A seek per scope is cheap; a thousand of them cut into pieces each is not worth the statements.
   // With the (session, ref, ts) index a scope's calls are one seek however long its span, so only a
   // store still without it reads in pieces; each scope reads no further than its own first and last call.
+  // A read of the window's raw rows with no key to seek (no sessions mode) is cut into pieces too.
   const rawStep =
-    scopes.length <= 100 && !have.has('usage_event_session_ts')
+    !inSessions || (scopes.length <= 100 && !have.has('usage_event_session_ts'))
       ? 6 * HOUR_MS
       : Number.POSITIVE_INFINITY
   for (const [rangeFrom, rangeTo] of rawRanges) {
@@ -996,7 +1021,7 @@ type Range = [from: number, to: number]
 const hourCeil = (ts: number): number => hourStart(ts + HOUR_MS - 1)
 const hourStart = (ts: number): number => ts - (((ts % HOUR_MS) + HOUR_MS) % HOUR_MS)
 
-/** Raw-only filters: usage_event has the columns the rollup lacks (session, ok). Session and ref are
+/** Raw-only filters: usage_event has the columns the rollup lacks (session, ref, agent_id, ok). Session and ref are
  *  written as the expression usage_event_session indexes, or SQLite scans every raw row in the window. */
 function rawExtra(filter: NonNullable<UsageQueryParams['filter']>): string {
   const parts: string[] = []
@@ -1005,6 +1030,11 @@ function rawExtra(filter: NonNullable<UsageQueryParams['filter']>): string {
     parts.push(sess.length ? `coalesce(session, '') in (${sess.map(() => '?').join(',')})` : '0')
   const ref = toList(filter.ref)
   if (ref) parts.push(ref.length ? `coalesce(ref, '') in (${ref.map(() => '?').join(',')})` : '0')
+  const agentId = toList(filter.agent_id)
+  if (agentId)
+    parts.push(
+      agentId.length ? `coalesce(agent_id, '') in (${agentId.map(() => '?').join(',')})` : '0',
+    )
   const ok = toList(filter.ok)
   if (ok) parts.push(ok.length ? `ok in (${ok.map(() => '?').join(',')})` : '0')
   return parts.length ? ` and ${parts.join(' and ')}` : ''
@@ -1013,6 +1043,7 @@ function rawExtraArgs(filter: NonNullable<UsageQueryParams['filter']>): (string 
   return [
     ...(toList(filter.session) ?? []),
     ...(toList(filter.ref) ?? []),
+    ...(toList(filter.agent_id) ?? []),
     ...(toList(filter.ok) ?? []).map((v) => (v ? 1 : 0)),
   ]
 }
@@ -1046,6 +1077,8 @@ const emptyRow = (): RawRow => ({
   output: 0,
   cache_read: 0,
   cache_write: 0,
+  cache_write_5m: 0,
+  cache_write_1h: 0,
 })
 
 const pick = (r: RawRow): UsageRow => ({
@@ -1053,6 +1086,8 @@ const pick = (r: RawRow): UsageRow => ({
   output: r.output,
   cache_read: r.cache_read,
   cache_write: r.cache_write,
+  cache_write_5m: r.cache_write_5m,
+  cache_write_1h: r.cache_write_1h,
   tokens: r.tokens ?? 0,
   list_usd: r.list_usd,
   billed_usd: r.billed_usd,

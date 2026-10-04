@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { KIT_SCHEMA_VERSION } from '../src/kit/schema'
+import { KIT_SCHEMA_VERSION, migrateKitSchema } from '../src/kit/schema'
 import { KitStore, localDay } from '../src/kit/store'
 
 const H = 3_600_000
@@ -409,4 +409,49 @@ describe('settled calls, the raw cut and the hour rollup', () => {
       }
     }
   }, 30_000)
+})
+
+describe('sub-agent id (schema 5)', () => {
+  const cursor = (path: string, mtime: number) =>
+    ({ path, size: 10, mtime, offset: 10, version: 3 }) as const
+  const paths = (s: KitStore) =>
+    (s.db.query('select path from ingest_cursor order by path').all() as { path: string }[]).map(
+      (r) => r.path,
+    )
+
+  test('a v4 file gets the column, and a marker only when it has read files', () => {
+    for (const read of [true, false]) {
+      const s = new KitStore(':memory:', { now: T0 })
+      if (read) s.setCursor(cursor('/p/s/subagents/agent-a.jsonl', T0))
+      s.db.exec('alter table usage_event drop column agent_id')
+      s.db.exec("delete from meta where key = 'backfill_v5'")
+      s.db.exec('pragma user_version = 4')
+      migrateKitSchema(s.db)
+      s.upsertEvents([{ id: 'a', ts: T0, source: 'cli', agent_id: 'agent-a' }])
+      expect(s.db.query('select agent_id from usage_event').get()).toEqual({ agent_id: 'agent-a' })
+      expect(s.getMeta('backfill_v5')).toBe(read ? 'a' : null)
+    }
+  })
+
+  test('the backfill forgets the cursors of recent sub-agent files only, in slices, once', async () => {
+    const s = new KitStore(':memory:', { now: T0 })
+    const cut = s.rawCut() as number
+    const sub = (i: number) => `/p/s/subagents/agent-${i}.jsonl`
+    for (let i = 0; i < 1300; i++) s.setCursor(cursor(sub(i), cut + 1000))
+    s.setCursor(cursor('C:\\p\\s\\subagents\\agent-win.jsonl', cut + 1000))
+    s.setCursor(cursor('/p/s/subagents/agent-old.jsonl', cut - 1000)) // only calls past the raw cut
+    s.setCursor(cursor('/p/main.jsonl', cut + 1000))
+    s.setMeta('backfill_v5', 'a')
+    const epoch = s.cursorEpoch
+    const steps = (s as unknown as { backfillSteps(): Generator<void> }).backfillSteps()
+    let slices = 0
+    while (!steps.next().done) slices++
+    expect(slices).toBeGreaterThan(1)
+    expect(paths(s)).toEqual(['/p/main.jsonl', '/p/s/subagents/agent-old.jsonl'])
+    expect(s.cursorEpoch).toBe(epoch + 1)
+    expect(s.getMeta('backfill_v5')).toBeNull()
+    s.setCursor(cursor(sub(1), cut + 1000))
+    await s.backfillAsync() // nothing left to do: a later cursor is kept
+    expect(paths(s)).toContain(sub(1))
+  })
 })

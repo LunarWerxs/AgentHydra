@@ -8,6 +8,7 @@ import { mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DATA_DIR } from '../config'
 import {
+  AGENT_ID_BACKFILL_META,
   dropKitSchema,
   eventMeasure,
   eventMeasureSql,
@@ -48,6 +49,8 @@ export interface UsageEventInput {
   instance?: string | null
   session?: string | null
   agent?: string | null
+  /** The sub-agent transcript the call was read from (`agent` is `subagent`); null for any other call. */
+  agent_id?: string | null
   source: string
   model?: string | null
   provider?: string | null
@@ -248,6 +251,7 @@ const EVENT_COLS = [
   'ok',
   'seconds',
   'ref',
+  'agent_id',
 ] as const
 
 const num = (v: number | undefined): number => (Number.isFinite(v) ? (v as number) : 0)
@@ -563,6 +567,7 @@ export class KitStore {
           $ok: e.ok == null ? null : e.ok ? 1 : 0,
           $seconds: e.seconds ?? null,
           $ref: e.ref ?? null,
+          $agent_id: e.agent_id ?? null,
         })
       }
       for (const h of hours) mark.run(h)
@@ -1088,6 +1093,7 @@ export class KitStore {
   }
 
   private *backfillSteps(): Steps<void> {
+    yield* this.agentIdBackfillSteps()
     const phase = this.getMeta('backfill_v4')
     if (phase === null) return
     const oldest = (
@@ -1117,6 +1123,40 @@ export class KitStore {
     }
     if (Number.isFinite(floor)) yield* this.rollupRange(floor, Infinity)
     this.db.query("delete from meta where key = 'backfill_v4'").run()
+  }
+
+  /**
+   * Fills agent_id for the raw rows written before schema 5. Nothing stored says which transcript a row came
+   * from, so the cursors of the sub-agent files written since the raw cut are forgotten, a slice at a time:
+   * the next Claude sweep reads those files again, and the upsert by call id puts the id on the rows (older
+   * files hold only calls past the raw cut, which have no raw row to fill). Does nothing once done.
+   */
+  private *agentIdBackfillSteps(): Steps<void> {
+    if (this.getMeta(AGENT_ID_BACKFILL_META) === null) return
+    const sep = 'char(92)' // a backslash, for the path of a Windows machine
+    const cut = this.rawCut() ?? 0
+    // One pass finds the paths (the table has no index on them); the slices then delete by key.
+    const paths = (
+      this.db
+        .query(
+          `select path from ingest_cursor where mtime >= $cut
+             and (path like '%/subagents/%' or path like '%' || ${sep} || 'subagents' || ${sep} || '%')`,
+        )
+        .all({ $cut: cut }) as { path: string }[]
+    ).map((r) => r.path)
+    yield
+    const drop = this.db.prepare('delete from ingest_cursor where path = ?')
+    const first = 40 // the first deletes read cold pages: a small slice, grown while the slices stay quick
+    let n = first
+    for (let at = 0; at < paths.length; ) {
+      const t = performance.now()
+      const end = Math.min(paths.length, at + n)
+      for (; at < end; at++) drop.run(paths[at])
+      n = tuneRows(n, performance.now() - t, first)
+      yield
+    }
+    this.cursorEpoch++ // an ingest holding the cursors in memory must read them again
+    this.db.query('delete from meta where key = ?').run(AGENT_ID_BACKFILL_META)
   }
 
   /** The hourly job: roll up what changed, then prune. */

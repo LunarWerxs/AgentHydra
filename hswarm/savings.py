@@ -62,24 +62,66 @@ def lower_priority() -> None:
 KIT_CURRENT_SLACK_MS = 5 * 60_000  # a few of the daemon's one-minute sweeps
 
 
-def kit_claude_by_day(since: dt.date, end: dt.date) -> dict[str, dict] | None:
-    """Claude's per-day USD and tokens on this PC from the AgentHydra analytics kit, or None when the kit cannot say.
+def _kit_get(base: str, window: dict, **extra) -> dict:
+    with urllib.request.urlopen(f"{base}/api/kit/usage?{urllib.parse.urlencode(window | extra)}", timeout=KIT_TIMEOUT_S) as resp:
+        return json.load(resp)
+
+
+def _local_day(hour: str) -> str:
+    return dt.datetime.fromisoformat(hour.replace("Z", "+00:00")).astimezone().date().isoformat()
+
+
+def _kit_tokens(r: dict) -> dict:
+    """The five billable buckets of a kit row, named the way claude_usage.TOKEN_KEYS names them."""
+    return {"input": int(r.get("input") or 0), "cache_read": int(r.get("cache_read") or 0), "cache_5m": int(r.get("cache_write_5m") or 0),
+            "cache_1h": int(r.get("cache_write_1h") or 0), "output": int(r.get("output") or 0)}
+
+
+def _add_tokens(into: dict, t: dict) -> None:
+    for k in claude_usage.TOKEN_KEYS:
+        into[k] += t[k]
+
+
+def _kit_agents(days: dict[str, dict], rows: list[dict], unpriced: set[str]) -> None:
+    """Fold the kit's per-sub-agent hours into `days` the way claude_usage's scan files them: a sub-agent belongs to the day
+    (and model) of its first priced hour, and counts priced requests only."""
+    agents: dict[str, dict] = {}
+    for r in sorted(rows, key=lambda r: (r.get("hour") or "", -(r.get("list_usd") or 0.0))):
+        model, usd, aid = r.get("model") or "", r.get("list_usd"), r.get("agent_id")
+        if usd is None or model in unpriced or not aid or not r.get("hour"):
+            continue
+        a = agents.setdefault(aid, {"hour": r["hour"], "model": model, "session": str(r.get("session") or ""), "usd": 0.0,
+                                    "tokens": claude_usage.empty_tokens(), "requests": 0})
+        a["usd"] += usd
+        a["requests"] += int(r.get("calls") or 0)
+        _add_tokens(a["tokens"], _kit_tokens(r))
+    for aid, a in agents.items():
+        d = days.setdefault(_local_day(a["hour"]), claude_usage.empty_day())
+        fam = claude_usage.family(a["model"])
+        d["agents"].setdefault(fam, []).append(round(a["usd"], 4))
+        d["agent_tokens"].setdefault(fam, []).append(a["tokens"] | {"requests": a["requests"], "model": a["model"], "session": a["session"][:8],
+                                                                    "started": a["hour"], "workflow": aid.startswith("workflows/"), "usd": round(a["usd"], 4)})
+        d["by_model"].setdefault(a["model"], claude_usage.empty_model())["agents"] += 1
+
+
+def kit_claude_days(since: dt.date, end: dt.date) -> dict[str, dict] | None:
+    """Everything claude_usage.collect() returns, per local day in the window, from the AgentHydra analytics kit; None when the kit cannot say.
 
     None means the daemon does not answer (AGENTHYDRA_URL, else the default port; empty disables it) OR the kit has
     ingested no Claude events yet, none old enough for the window, or has not caught up to the window's end, so a low figure would pass for a true one.
     The caller then runs the transcript scan (claude_usage.py): that is HSwarm's own path when it runs without
     AgentHydra, not a fallback for old builds. Asking by the machine's own day buckets (no tz) with pc=self keeps
-    it this PC's usage, as the scan is.
+    it this PC's usage, as the scan is. Four requests a run, whatever the window: per day and model (all calls, then the sub-agent
+    ones), per day and session, and the sub-agent hours per sub-agent (the one query that reads raw rows).
     """
     base = os.environ.get("AGENTHYDRA_URL", DEFAULT_AGENTHYDRA_URL).rstrip("/")
     if not base:
         return None
     ms = lambda d: int(dt.datetime.combine(d, dt.time.min).astimezone().timestamp() * 1000)  # noqa: E731
-    window = {"source": KIT_SOURCES, "pc": "self", "from": ms(since), "to": ms(end + dt.timedelta(1)) - 1, "measures": "tokens,list_usd"}
-    query = urllib.parse.urlencode(window | {"groupBy": "day,model"})
+    kinds = "input,output,cache_read,cache_write_5m,cache_write_1h"
+    window = {"source": KIT_SOURCES, "pc": "self", "from": ms(since), "to": ms(end + dt.timedelta(1)) - 1}
     try:
-        with urllib.request.urlopen(f"{base}/api/kit/usage?{query}", timeout=KIT_TIMEOUT_S) as resp:
-            data = json.load(resp)
+        data = _kit_get(base, window, measures=f"tokens,list_usd,calls,{kinds}", groupBy="day,model")
         seen = [v for k, v in data["coverage"]["sources"].items() if k in KIT_SOURCES.split(",") and v.get("events")]
         if not seen or min(v["firstTs"] for v in seen) > ms(since):
             return None
@@ -90,17 +132,49 @@ def kit_claude_by_day(since: dt.date, end: dt.date) -> dict[str, dict] | None:
         newest = max([v["lastTs"] for v in seen] + [data["coverage"].get("cursors", {}).get("newestMtime") or 0])
         if newest < target:
             return None
-        out: dict[str, dict] = {}
+        unpriced = set(data.get("unpriced") or [])
+        days: dict[str, dict] = {}
         for r in data["rows"]:
-            d = out.setdefault(r["day"], {"claude_usd": 0.0, "claude_tokens": 0})
-            d["claude_usd"] += r.get("list_usd") or 0.0
-            d["claude_tokens"] += int(r.get("tokens") or 0)
-        # The sub-agent share of the same calls (the kit tells main from sub-agent calls, not one sub-agent from another).
-        sub_query = urllib.parse.urlencode(window | {"groupBy": "day", "agent": "subagent"})
-        with urllib.request.urlopen(f"{base}/api/kit/usage?{sub_query}", timeout=KIT_TIMEOUT_S) as resp:
-            for r in json.load(resp)["rows"]:
-                out.setdefault(r["day"], {"claude_usd": 0.0, "claude_tokens": 0})["claude_sub_usd"] = r.get("list_usd") or 0.0
-        return out
+            d = days.setdefault(r["day"], claude_usage.empty_day())
+            model = r.get("model") or ""
+            m = d["by_model"].setdefault(model, claude_usage.empty_model())
+            t, usd, calls = _kit_tokens(r), r.get("list_usd") or 0.0, int(r.get("calls") or 0)
+            d["claude_usd"] += usd
+            d["requests"] += calls
+            d["unpriced_requests"] += calls if model in unpriced else 0
+            m["requests"] += calls
+            m["usd"] += usd
+            _add_tokens(d["tokens"], t)
+            _add_tokens(m["tokens"], t)
+        # The sub-agent share of the same calls; the main share is what remains.
+        for r in _kit_get(base, window, measures="list_usd", groupBy="day,model", agent="subagent")["rows"]:
+            d = days.setdefault(r["day"], claude_usage.empty_day())
+            usd = r.get("list_usd") or 0.0
+            d["sub_usd"] += usd
+            d["by_model"].setdefault(r.get("model") or "", claude_usage.empty_model())["sub_usd"] += usd
+        for d in days.values():
+            d["main_usd"] = d["claude_usd"] - d["sub_usd"]
+            for m in d["by_model"].values():
+                m["main_usd"] = m["usd"] - m["sub_usd"]
+        for r in _kit_get(base, window, measures=f"calls,list_usd,{kinds}", groupBy="day,session")["rows"]:
+            if r.get("session"):
+                s = days.setdefault(r["day"], claude_usage.empty_day())["by_session"].setdefault(r["session"], claude_usage.empty_session())
+                s["usd"] += r.get("list_usd") or 0.0
+                s["requests"] += int(r.get("calls") or 0)
+                _add_tokens(s["tokens"], _kit_tokens(r))
+        sub = _kit_get(base, window, measures=f"calls,list_usd,{kinds}", groupBy="hour,agent_id,model,session", agent="subagent")
+        if any("agent_id" in str(n) for n in sub.get("notes") or []):
+            return None  # the window reaches past the raw calls the sub-agent ids live on: a partial list would pass for the whole
+        _kit_agents(days, sub["rows"], unpriced)
+        for d in days.values():
+            for k in ("claude_usd", "main_usd", "sub_usd"):
+                d[k] = round(d[k], 4)
+            for m in d["by_model"].values():
+                for k in ("usd", "main_usd", "sub_usd"):
+                    m[k] = round(m[k], 4)
+            for s in d["by_session"].values():
+                s["usd"] = round(s["usd"], 4)
+        return days
     except (OSError, ValueError, KeyError, TypeError):  # URLError is an OSError; a bad body or shape is not the kit's answer
         return None
 
@@ -122,21 +196,13 @@ def hswarm_by_day(since: dt.date, today: dt.date) -> dict[str, dict]:
     return {k: v | {"jobs": len(v["jobs"]), "deepseek_usd": round(v["deepseek_usd"], 6)} for k, v in out.items()}
 
 
-def day_row(day: str, claude: dict | None, swarm: dict | None, kit: dict | None = None) -> dict:
-    """`kit` is the kit's {day: {claude_usd, claude_tokens}} when it answered for the window, else None (then the
-    scan's own totals stand). The kit also gives the main/sub-agent dollar split. The scan still supplies what the kit has no field for: the per-sub-agent costs the
-    counterfactual is measured from, and the per-session token split the per-account view is built from."""
+def day_row(day: str, claude: dict | None, swarm: dict | None, source: str = "scan") -> dict:
+    """`claude` is the day's claude_usage.collect()-shaped dict, from the kit or the scan (`source` says which)."""
     c, s = claude or claude_usage.empty_day(), swarm or {}
-    if kit is None:
-        used = {"claude_usd": c["claude_usd"], "claude_tokens": sum(c.get("tokens", {}).values()), "claude_source": "scan"}
-    else:
-        used = {"claude_usd": round(kit.get(day, {}).get("claude_usd", 0.0), 6), "claude_tokens": kit.get(day, {}).get("claude_tokens", 0),
-                "claude_source": "kit"}
-        sub = round(kit.get(day, {}).get("claude_sub_usd", 0.0), 6)
-        used |= {"claude_sub_usd": sub, "claude_main_usd": round(used["claude_usd"] - sub, 6)}
     return {"day": day, "deepseek_usd": s.get("deepseek_usd", 0.0), "hswarm_tasks": s.get("tasks", 0),
             "hswarm_jobs": s.get("jobs", 0), "hswarm_cost_unknown_tasks": s.get("cost_unknown_tasks", 0),
-            "claude_main_usd": c["main_usd"], "claude_sub_usd": c["sub_usd"], **used,
+            "claude_main_usd": c["main_usd"], "claude_sub_usd": c["sub_usd"], "claude_usd": c["claude_usd"],
+            "claude_tokens": sum(c.get("tokens", {}).values()), "claude_source": source,
             "claude_requests": c["requests"], "claude_unpriced_requests": c["unpriced_requests"], "subagent_usd": c["agents"],
             "agent_tokens": c.get("agent_tokens", {}), "by_model": c.get("by_model", {}),
             # The day's own token buckets, and the same split per session: what the per-account view is built from.
@@ -144,9 +210,12 @@ def day_row(day: str, claude: dict | None, swarm: dict | None, kit: dict | None 
 
 
 def measure(start: dt.date, end: dt.date, today: dt.date) -> dict[str, dict]:
-    claude, swarm, kit = claude_usage.collect(start, end), hswarm_by_day(start, today), kit_claude_by_day(start, end)
+    claude, source = kit_claude_days(start, end), "kit"
+    if claude is None:  # no daemon (HSwarm on its own), or a kit that cannot vouch for the window: read the transcripts
+        claude, source = claude_usage.collect(start, end), "scan"
+    swarm = hswarm_by_day(start, today)
     days = [(start + dt.timedelta(n)).isoformat() for n in range((end - start).days + 1)]
-    return {d: day_row(d, claude.get(d), swarm.get(d), kit) for d in days}
+    return {d: day_row(d, claude.get(d), swarm.get(d), source) for d in days}
 
 
 def load_rows() -> dict[str, dict]:

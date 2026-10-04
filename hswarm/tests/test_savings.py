@@ -47,13 +47,20 @@ def home(tmp_path, monkeypatch):
 @pytest.fixture
 def kit_daemon(home, monkeypatch):
     """A real HTTP server standing in for AgentHydra's /api/kit/usage; `answer` is its JSON, `asked` the queries it got."""
-    box: dict = {"answer": {}, "asked": []}
+    box: dict = {"answer": {}, "asked": [], "sub_answer": {"rows": []}, "sessions": {"rows": []}, "agents": {"rows": []}}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             box["asked"].append(q)
-            body = json.dumps(box.get("sub_answer", box["answer"]) if "agent" in q else box["answer"]).encode()
+            group = q.get("groupBy", [""])[0]
+            if "agent_id" in group:
+                answer = box["agents"]
+            elif group == "day,session":
+                answer = box["sessions"]
+            else:
+                answer = box["sub_answer"] if "agent" in q else box["answer"]
+            body = json.dumps(answer).encode()
             self.send_response(200)
             self.end_headers()
             self.wfile.write(body)
@@ -152,8 +159,8 @@ def _kit_answer(events: int, rows: list[dict], last_ts: int | None = None) -> di
 
 def test_claude_side_comes_from_the_kit_when_it_has_claude_events_else_from_the_scan(kit_daemon, home):
     _write(home / "projects" / "p" / "s.jsonl", _req("r1", YESTERDAY, output_tokens=1_000_000))  # the scan would say $10
-    rows = [{"day": YESTERDAY.isoformat(), "model": "claude-sonnet-5", "tokens": 700, "list_usd": 1.25},
-            {"day": YESTERDAY.isoformat(), "model": "claude-opus-5", "tokens": 300, "list_usd": 0.5}]
+    rows = [{"day": YESTERDAY.isoformat(), "model": "claude-sonnet-5", "tokens": 700, "input": 700, "list_usd": 1.25},
+            {"day": YESTERDAY.isoformat(), "model": "claude-opus-5", "tokens": 300, "input": 300, "list_usd": 0.5}]
 
     kit_daemon["answer"] = _kit_answer(events=4, rows=rows)
     day = savings.measure(YESTERDAY, YESTERDAY, TODAY)[YESTERDAY.isoformat()]
@@ -180,11 +187,56 @@ def test_a_kit_that_lags_the_window_end_is_not_trusted_for_the_day(kit_daemon, h
     assert (day["claude_source"], day["claude_usd"]) == ("scan", pytest.approx(10.0))
 
 
-def test_the_main_sub_agent_split_comes_from_a_second_kit_request_filtered_to_sub_agents(kit_daemon, home):
+def test_the_main_sub_agent_split_comes_from_a_kit_request_filtered_to_sub_agents(kit_daemon, home):
     _write(home / "projects" / "p" / "s.jsonl", _req("r1", YESTERDAY, output_tokens=1_000_000))  # the scan would say $10 main
     day_s = YESTERDAY.isoformat()
     kit_daemon["answer"] = _kit_answer(events=4, rows=[{"day": day_s, "model": "claude-sonnet-5", "tokens": 700, "list_usd": 2.0}])
-    kit_daemon["sub_answer"] = {"rows": [{"day": day_s, "list_usd": 0.5}]}
+    kit_daemon["sub_answer"] = {"rows": [{"day": day_s, "model": "claude-sonnet-5", "list_usd": 0.5}]}
     day = savings.measure(YESTERDAY, YESTERDAY, TODAY)[day_s]
     assert (day["claude_usd"], day["claude_sub_usd"], day["claude_main_usd"]) == (2.0, 0.5, 1.5)
-    assert len(kit_daemon["asked"]) == 2 and kit_daemon["asked"][-1]["agent"] == ["subagent"]
+    assert kit_daemon["asked"][1]["agent"] == ["subagent"]
+
+
+def test_every_claude_field_comes_from_a_few_kit_requests_and_the_scan_never_runs(kit_daemon, home, monkeypatch):
+    def scan(*a, **k):
+        raise AssertionError("the transcript scan must not run when the kit answers")
+
+    monkeypatch.setattr(claude_usage, "collect", scan)
+    day_s = YESTERDAY.isoformat()
+    hour = dt.datetime.combine(YESTERDAY, dt.time(12)).astimezone().astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:00:00.000Z")
+    kit_daemon["answer"] = _kit_answer(events=9, rows=[
+        {"day": day_s, "model": "claude-sonnet-5", "tokens": 90, "input": 10, "output": 20, "cache_read": 30, "cache_write_5m": 20, "cache_write_1h": 10,
+         "calls": 6, "list_usd": 3.0},
+        {"day": day_s, "model": "claude-mystery-1", "tokens": 5, "input": 5, "calls": 3, "list_usd": None}])
+    kit_daemon["answer"]["unpriced"] = ["claude-mystery-1"]
+    kit_daemon["sub_answer"] = {"rows": [{"day": day_s, "model": "claude-sonnet-5", "list_usd": 1.0}]}
+    kit_daemon["sessions"] = {"rows": [{"day": day_s, "session": "sess-1234567890", "calls": 6, "list_usd": 3.0, "input": 10, "output": 20,
+                                        "cache_read": 30, "cache_write_5m": 20, "cache_write_1h": 10}, {"day": day_s, "session": None, "calls": 3}]}
+    agent = {"hour": hour, "model": "claude-sonnet-5", "session": "sess-1234567890", "output": 100, "cache_write_1h": 7}
+    kit_daemon["agents"] = {"rows": [
+        {**agent, "agent_id": "agent-a", "calls": 2, "list_usd": 0.4},
+        {**agent, "agent_id": "agent-a", "hour": hour, "calls": 1, "list_usd": 0.1},
+        {**agent, "agent_id": "workflows/wf_1/agent-b", "calls": 1, "list_usd": 0.5},
+        {**agent, "agent_id": "agent-c", "model": "claude-mystery-1", "calls": 4, "list_usd": None}]}
+
+    day = savings.measure(YESTERDAY, YESTERDAY, TODAY)[day_s]
+
+    assert len(kit_daemon["asked"]) == 4  # a few requests a run, never one per day, session or sub-agent
+    assert day["claude_source"] == "kit"
+    assert (day["claude_usd"], day["claude_sub_usd"], day["claude_main_usd"]) == (3.0, 1.0, 2.0)
+    assert (day["claude_requests"], day["claude_unpriced_requests"], day["claude_tokens"]) == (9, 3, 95)
+    assert day["tokens"] == {"input": 15, "cache_read": 30, "cache_5m": 20, "cache_1h": 10, "output": 20}
+    assert day["by_session"] == {"sess-1234567890": {"usd": 3.0, "requests": 6, "tokens": {"input": 10, "cache_read": 30, "cache_5m": 20, "cache_1h": 10, "output": 20}}}
+    assert day["subagent_usd"] == {"sonnet": [0.5, 0.5]}  # the unpriced sub-agent is not one the counterfactual is measured from
+    a = next(t for t in day["agent_tokens"]["sonnet"] if not t["workflow"])
+    assert (a["requests"], a["usd"], a["model"], a["session"], a["output"], a["cache_1h"]) == (3, 0.5, "claude-sonnet-5", "sess-123", 200, 14)
+    assert day["by_model"]["claude-sonnet-5"]["agents"] == 2 and day["by_model"]["claude-sonnet-5"]["sub_usd"] == 1.0
+    assert sum(t["workflow"] for t in day["agent_tokens"]["sonnet"]) == 1
+
+
+def test_a_kit_listing_that_leaves_sub_agent_hours_out_falls_back_to_the_scan(kit_daemon, home):
+    _write(home / "projects" / "p" / "s.jsonl", _req("r1", YESTERDAY, output_tokens=1_000_000))
+    kit_daemon["answer"] = _kit_answer(events=4, rows=[{"day": YESTERDAY.isoformat(), "model": "claude-sonnet-5", "tokens": 5, "list_usd": 0.01}])
+    kit_daemon["agents"] = {"rows": [], "notes": ["agent_id filter cannot be applied to hourly rollups: usage before 2026-09-01 is not included"]}
+    day = savings.measure(YESTERDAY, YESTERDAY, TODAY)[YESTERDAY.isoformat()]
+    assert (day["claude_source"], day["claude_usd"]) == ("scan", pytest.approx(10.0))

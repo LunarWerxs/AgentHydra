@@ -755,3 +755,128 @@ describe('usageQueryAsync answers what usageQuery does, in slices', () => {
     st.close()
   })
 })
+
+describe('agent_id', () => {
+  // Two sub-agents of session s1 (one on two models), a main call, a call without an agent, and a
+  // call from before the raw cut that the hourly rollup holds.
+  const fixtureStore = () => {
+    const st = new KitStore(':memory:', { now: NOW - 45 * D })
+    const mk = (id: string, ago: number, e: Partial<UsageEventInput>): UsageEventInput => ({
+      id,
+      ts: NOW - ago,
+      source: 'cli',
+      session: 's1',
+      provider: 'anthropic',
+      ...e,
+    })
+    st.upsertEvents([
+      mk('a1', 2 * H, {
+        agent: 'subagent',
+        agent_id: 'agent-a',
+        model: 'sonnet',
+        input: 10,
+        list_usd: 1,
+      }),
+      mk('a2', 3 * H, {
+        agent: 'subagent',
+        agent_id: 'agent-a',
+        model: 'opus',
+        input: 20,
+        list_usd: 2,
+      }),
+      mk('b1', 2 * H, {
+        agent: 'subagent',
+        agent_id: 'agent-b',
+        model: 'sonnet',
+        input: 40,
+        list_usd: 4,
+      }),
+      mk('m1', 1 * H, { agent: 'main', model: 'sonnet', input: 80, list_usd: 8 }),
+      mk('h1', 1 * H, { source: 'hswarm', session: null, input: 160, list_usd: 16 }),
+      mk('old', 40 * D, {
+        agent: 'subagent',
+        agent_id: 'agent-a',
+        model: 'sonnet',
+        input: 320,
+        list_usd: 32,
+      }),
+    ])
+    st.runMaintenance(NOW)
+    return st
+  }
+  const run = (st: KitStore, p: UsageQueryParams) => usageQuery(p, { store: st, now: NOW })
+
+  test('groups by sub-agent id and filters on it, reading raw rows only', () => {
+    const st = fixtureStore()
+    const by = run(st, {
+      window: { last: '7d' },
+      filter: { agent: 'subagent' },
+      groupBy: ['agent_id', 'model'],
+      measures: ['calls', 'list_usd', 'input', 'cache_write_5m', 'cache_write_1h'],
+    })
+    const row = (
+      agent_id: string,
+      model: string,
+      calls: number,
+      list_usd: number,
+      input: number,
+    ) => ({
+      agent_id,
+      model,
+      calls,
+      list_usd,
+      input,
+      cache_write_5m: 0,
+      cache_write_1h: 0,
+    })
+    expect(by.rows).toEqual([
+      row('agent-a', 'opus', 1, 2, 20),
+      row('agent-a', 'sonnet', 1, 1, 10),
+      row('agent-b', 'sonnet', 1, 4, 40),
+    ])
+    const one = run(st, {
+      window: { last: '7d' },
+      filter: { agent_id: 'agent-a' },
+      measures: ['list_usd'],
+    })
+    expect(one.totals.list_usd).toBe(3)
+    // grouping shows the calls that carry no id (main, hswarm) under null
+    const all = run(st, { window: { last: '7d' }, groupBy: ['agent_id'], measures: ['calls'] })
+    expect(all.rows.map((r) => [r.agent_id, r.calls])).toEqual([
+      ['agent-a', 2],
+      ['agent-b', 1],
+      [null, 2],
+    ])
+    st.close()
+  })
+
+  test('the hours older than the raw cut are left out with a note, and the async path agrees', async () => {
+    const st = fixtureStore()
+    const p: UsageQueryParams = {
+      window: { last: '30d' },
+      filter: { agent_id: 'agent-a' },
+      groupBy: ['day', 'agent_id'],
+      measures: ['list_usd'],
+    }
+    const sync = run(st, p)
+    expect(sync.totals.list_usd).toBe(3)
+    expect(sync.notes.some((x) => x.includes('agent_id'))).toBe(false)
+    const wide = run(st, { ...p, window: { last: 'all' } })
+    expect(wide.totals.list_usd).toBe(3)
+    expect(wide.notes.some((x) => x.startsWith('agent_id filter'))).toBe(true)
+    expect((await usageQueryAsync(p, { store: st, now: NOW })).rows).toEqual(sync.rows)
+    st.close()
+  })
+
+  test('the route accepts agent_id as a filter and a groupBy, and the 5m / 1h write kinds as measures', () => {
+    const asked: Record<string, string> = {
+      agent_id: 'agent-a,agent-b',
+      groupBy: 'agent_id',
+      measures: 'cache_write_5m,cache_write_1h',
+    }
+    const p = parseKitUsageQuery((k) => asked[k])
+    expect(p.filter?.agent_id).toEqual(['agent-a', 'agent-b'])
+    expect(p.groupBy).toEqual(['agent_id'])
+    expect(p.measures).toEqual(['cache_write_5m', 'cache_write_1h'])
+  })
+})
