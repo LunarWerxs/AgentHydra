@@ -187,9 +187,8 @@ async def hswarm_run(
     Answer: summary and results [{id, status, answer or data, ...}]. Re-check first what `unverified`,
     summary.mis_scoped and summary.not_advanced list.
     An argument this tool does not take is refused with the nearest valid name, never dropped.
-    zdr=true: only OpenRouter models on its zero-data-retention list may serve the task (refused if that list is unread).
     Every other option (reasoning_effort, verify, acceptance, done_when, green, escalate, scope, capability,
-    writable, inventory, recipe, scripted, redact, envelope, resume_from_job, lean, isolated, ...) and every result
+    writable, inventory, recipe, scripted, redact, envelope, resume_from_job, lean, isolated, zdr, ...) and every result
     field is in docs/API.md of the hswarm repo under "hswarm_run options": read it before using one.
     """
     defaults = {
