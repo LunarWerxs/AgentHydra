@@ -122,6 +122,26 @@ describe('serveSignal', () => {
     }
   })
 
+  // The CLI's http hook sends no Origin. A browser always does, and no page has any business here:
+  // one on another local port (or a rebinding site) must not read a worker's signal.
+  test('a request from a browser page is refused, and never sees the signal', async () => {
+    const file = join(tmp(), 'w-5.json')
+    writeFileSync(file, SIGNAL)
+    const s = serveSignal(file)!
+    try {
+      const fromPage = await fetch(`http://127.0.0.1:${s.port}/signal`, {
+        method: 'POST',
+        headers: { origin: 'http://127.0.0.1:5173' },
+        body: '{}',
+      })
+      expect(fromPage.status).toBe(403)
+      expect(await fromPage.text()).not.toContain('WIND DOWN NOW')
+      expect(await (await post(s.port)).text()).toBe(SIGNAL)
+    } finally {
+      s.stop()
+    }
+  })
+
   test('stop closes the port', async () => {
     const s = serveSignal(join(tmp(), 'w-3.json'))!
     s.stop()
