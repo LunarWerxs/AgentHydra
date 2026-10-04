@@ -119,11 +119,7 @@ export async function forEachCallSince(
   // Whole hours from the rollup: from the first hour boundary after `since` up to the hour before the last full one.
   const hourFrom = Math.ceil(sinceMs / HOUR) * HOUR
   // ...and never past the first hour whose rollup may be stale.
-  const dirty = store.dirtyFrom()
-  const hourTo = Math.min(
-    Math.floor((now - HOUR) / HOUR) * HOUR,
-    dirty === null ? Number.POSITIVE_INFINITY : Math.floor(dirty / HOUR) * HOUR,
-  )
+  const hourTo = Math.min(Math.floor((now - HOUR) / HOUR) * HOUR, store.readSplit(now))
   const useHours = hourTo > hourFrom
   const yieldLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
   const emit = (rows: CallRow[]): void => {

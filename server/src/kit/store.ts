@@ -2,7 +2,7 @@
 // One row per model call in usage_event (kept RAW_RETENTION_DAYS), an hourly rollup in usage_hour
 // (kept forever), a per-session ledger in usage_session (kept forever), per-file ingest cursors and a meta table. Nothing here reads a source file; ingest
 // and the query API are separate pieces.
-import { Database } from 'bun:sqlite'
+import { Database, type SQLQueryBindings } from 'bun:sqlite'
 import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -163,19 +163,33 @@ export function* hourSlices(
   }
 }
 
-/** Raw rows per slice of usage_event work (about 20-40 ms of sqlite whatever the density of the hour). */
+/** Raw rows in the first slice of usage_event work (the size then follows how long a slice takes). */
 export const SLICE_ROWS = 1000
-/** Deleting a raw row also maintains every index, so the prune takes fewer per slice. */
+/** Deleting a raw row also maintains every index, so the prune starts with fewer rows per slice. */
 const PRUNE_ROWS = 400
-/** Raw rows of one session added up per transaction when its usage_session row is rebuilt. */
+/** Raw rows of one session added up per transaction when its usage_session row is rebuilt, to start with. */
 const SESSION_CHUNK_ROWS = 500
-/** Ledger rows updated per slice of the schema-4 backfill. */
+/** Ledger rows updated per slice of the schema-4 backfill, to start with. */
 const LEDGER_PAGE = 500
+/** No slice is cut smaller than this many rows, and none grows past this many times its starting size. */
+const MIN_SLICE_ROWS = 20
+const MAX_SLICE_GROWTH = 4
 
 /**
- * Walks [lo, hi) in slices that hold about `rows` raw events each, `step(a, b)` run for each. The first
- * slice starts on the hour of `lo`, so a step that treats "the hours that start in [a, b)" as its own sees
- * every hour exactly once. A dense hour is cut into several slices, a sparse month is one.
+ * The row count for the next slice, from how long the last one took: halved when it ran over half of
+ * SLICE_MS (the rest is headroom for a cold page cache), doubled when it took under a sixth. Row counts alone are not a time box (a cold page cache or a
+ * wide row makes a slice ten times slower), so every sliced walk is tuned by the clock.
+ */
+function tuneRows(rows: number, took: number, start: number): number {
+  if (took > SLICE_MS / 2) return Math.max(MIN_SLICE_ROWS, rows >> 1)
+  if (took < SLICE_MS / 6) return Math.min(start * MAX_SLICE_GROWTH, rows * 2)
+  return rows
+}
+
+/**
+ * Walks [lo, hi) in slices that hold about `rows` raw events each (tuned to take about a third of SLICE_MS), `step(a, b)`
+ * run for each. The first slice starts on the hour of `lo`, so a step that treats "the hours that start in
+ * [a, b)" as its own sees every hour exactly once. A dense hour is cut into several slices, a sparse month is one.
  */
 export function* eventSlices(
   db: Database,
@@ -185,10 +199,13 @@ export function* eventSlices(
   rows: number = SLICE_ROWS,
 ): Steps<void> {
   const edge = db.prepare('select ts from usage_event where ts >= $a order by ts limit 1 offset $n')
+  let n = rows
   for (let a = hourStart(lo); a < hi; ) {
-    const r = edge.get({ $a: a, $n: rows }) as { ts: number } | null
+    const t = performance.now()
+    const r = edge.get({ $a: a, $n: n }) as { ts: number } | null
     const b = Math.min(r ? Math.max(r.ts, a + 1) : hi, hi)
     step(a, b)
+    n = tuneRows(n, performance.now() - t, rows)
     a = b
     yield
   }
@@ -652,6 +669,34 @@ export class KitStore {
     return r.h
   }
 
+  /** Most raw rows a reader may be sent to for the hours the rollup has not caught up with (see readSplit). */
+  rawTailRows = 20_000
+
+  /**
+   * Where a reader switches from the rollup to raw rows: usage_hour / usage_session serve every hour below
+   * the result, usage_event serves the hours from it. The first dirty hour while the raw rows from it are
+   * few (a normal write, a small ingest): the answer is exact. When they are more than rawTailRows (a long
+   * ingest or a re-read marked hours near the raw cut dirty, and reading those raw is 100k-1M rows in one
+   * synchronous statement): the hour before the current one, so a read scans the newest two hours at most.
+   * The price then: a dirty hour older than that is read as its row stood at the last rollup. The rollup
+   * (rollupSoon, every few seconds while writes arrive) rebuilds dirty hours oldest first, so such a row is
+   * stale for seconds to tens of seconds, and during a re-read (dropAndRebuild, the v3 upgrade) it lacks the
+   * calls the re-read has not reached yet. Infinity when no hour is dirty: the rollup is complete.
+   */
+  readSplit(now: number = Date.now()): number {
+    const dirty = this.dirtyFrom()
+    if (dirty === null) return Number.POSITIVE_INFINITY
+    const exact = hourStart(dirty)
+    const recent = hourStart(now) - HOUR_MS
+    if (exact >= recent) return exact
+    const tail = this.db
+      .query(
+        'select count(*) as n from (select 1 from usage_event indexed by usage_event_ts where ts >= ? limit ?)',
+      )
+      .get(exact, this.rawTailRows + 1) as { n: number }
+    return tail.n > this.rawTailRows ? recent : exact
+  }
+
   // ---- ingest cursors ----
 
   getCursor(path: string): IngestCursor | null {
@@ -795,7 +840,7 @@ export class KitStore {
     )
     // The rowid of the row that ends a chunk of this session's raw rows (an index walk).
     const chunkEnd = this.db.prepare(
-      `select rowid as r from usage_event where ${mine} and rowid > $lo order by rowid limit 1 offset ${SESSION_CHUNK_ROWS}`,
+      `select rowid as r from usage_event where ${mine} and rowid > $lo order by rowid limit 1 offset $n`,
     )
     const settled = this.db.prepare(
       sessionAddSql(
@@ -804,13 +849,15 @@ export class KitStore {
       ),
     )
     let since = performance.now()
+    let chunk = SESSION_CHUNK_ROWS
     for (let i = 0; i < pairs.length; i++) {
       const a = { $s: (pairs[i] as { s: string }).s, $r: (pairs[i] as { r: string }).r }
       // A session with a great many raw rows is added up a chunk of rows at a time, each its own
       // transaction (the sums are additive); the first one also clears the old row and adds the settled part.
       let lo = 0
       for (let first = true; ; first = false) {
-        const end = (chunkEnd.get({ ...a, $lo: lo }) as { r: number } | null)?.r
+        const began = performance.now()
+        const end = (chunkEnd.get({ ...a, $lo: lo, $n: chunk }) as { r: number } | null)?.r
         this.db.transaction(() => {
           if (first) {
             del.run(a)
@@ -820,6 +867,8 @@ export class KitStore {
           else fresh.run({ ...a, $lo: lo, $hi: end })
         })()
         if (end === undefined) break
+        // Only a full chunk says how long a chunk takes (a small session's time is its own).
+        chunk = tuneRows(chunk, performance.now() - began, SESSION_CHUNK_ROWS)
         lo = end
         since = performance.now()
         yield
@@ -885,6 +934,38 @@ export class KitStore {
   }
 
   /**
+   * `update table set <set>` on every row, a page of primary keys at a time (about SLICE_MS each, the page size
+   * follows the clock). The pages are cut on the whole key: a session can have tens of thousands of ledger
+   * rows (a model and a ref each), so a page that ended on a session id would not be bounded.
+   */
+  private *updateByKey(table: string, set: string): Steps<void> {
+    const key: readonly string[] =
+      table === 'settled_part' ? [...KIT_SESSION_KEY, 'hour'] : KIT_SESSION_KEY
+    const cols = key.join(', ')
+    const tuple = `(${key.map(() => '?').join(', ')})`
+    let lo: unknown[] = []
+    let n = LEDGER_PAGE
+    for (;;) {
+      const t = performance.now()
+      const above = lo.length ? `(${cols}) > ${tuple}` : '1'
+      // The key of the last row of the page (an index walk), or none when the rest fits in one page.
+      const edge = this.db
+        .query(
+          `select ${cols} from ${table} where ${above} order by ${cols} limit 1 offset ${n - 1}`,
+        )
+        .get(...(lo as SQLQueryBindings[])) as Record<string, unknown> | null
+      const hi = edge ? key.map((k) => edge[k]) : null
+      this.db
+        .query(`update ${table} set ${set} where ${above}${hi ? ` and (${cols}) <= ${tuple}` : ''}`)
+        .run(...([...lo, ...(hi ?? [])] as SQLQueryBindings[]))
+      if (!hi) return
+      n = tuneRows(n, performance.now() - t, LEDGER_PAGE)
+      lo = hi
+      yield
+    }
+  }
+
+  /**
    * Fills unbilled_usd and cost_usd for the rows written before schema 4 (the migration only adds the
    * columns). Phase a: from the sums a row already has (billed where it has a billed sum, else list), which
    * is exact unless one row mixes billed and unbilled calls, for every usage_hour row older than the oldest
@@ -924,29 +1005,8 @@ export class KitStore {
           upd.run({ $a: a, $b: b })
         })
       }
-      for (const table of ['usage_session_settled', 'usage_session', 'settled_part']) {
-        // The key starts with the session id: a run of sessions at a time, walking up the key.
-        const page = this.db.prepare(
-          `select session as s from ${table} where session > $lo order by session limit 1 offset ${LEDGER_PAGE - 1}`,
-        )
-        const upd = this.db.prepare(
-          `update ${table} set ${from} where session > $lo and session <= $hi`,
-        )
-        const rest = this.db.prepare(`update ${table} set ${from} where session > $lo`)
-        for (let lo = ''; ; ) {
-          const hi = (page.get({ $lo: lo }) as { s: string } | null)?.s
-          if (hi === undefined) {
-            rest.run({ $lo: lo })
-            break
-          }
-          upd.run({ $lo: lo, $hi: hi })
-          lo = hi
-          yield
-        }
-        // A session with an empty id sorts below every `> ''` bound.
-        this.db.query(`update ${table} set ${from} where session = ''`).run()
-        yield
-      }
+      for (const table of ['usage_session_settled', 'usage_session', 'settled_part'])
+        yield* this.updateByKey(table, from)
       this.setMeta('backfill_v4', 'b')
     }
     if (Number.isFinite(floor)) yield* this.rollupRange(floor, Infinity)

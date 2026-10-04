@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { accountTokenWindows } from '../src/kit/account-windows'
+import { accountTokenWindows, accountTokenWindowsAsync } from '../src/kit/account-windows'
 import { KitStore, type UsageEventInput } from '../src/kit/store'
 
 const H = 3_600_000
@@ -45,6 +45,14 @@ store.upsertEvents([
 
 describe('accountTokenWindows', () => {
   const out = accountTokenWindows(['acct-a', 'acct-b', 'acct-none'], { store, now: NOW, quota })
+
+  test('the async read, a turn of the loop between accounts, gives the same answer', async () => {
+    const ids = ['acct-a', 'acct-b', 'acct-none']
+    const sync = accountTokenWindows(ids, { store, now: NOW, quota })
+    // reversed: a different cache key, so the read really runs
+    const asynced = await accountTokenWindowsAsync([...ids].reverse(), { store, now: NOW, quota })
+    for (const id of ids) expect(asynced.get(id)).toEqual(sync.get(id))
+  })
 
   test('a snapshot cuts the 5h and week windows at the reset minus the span', () => {
     const a = out.get('acct-a')
@@ -125,6 +133,56 @@ describe('accountTokenWindows during a long ingest', () => {
     // tamper with the raw rows: a reader that still used them for the rolled hours would see it
     s.db.exec('update usage_event set input = 5')
     expect(read()?.total.input).toBe(1100)
+    s.close()
+  })
+})
+
+describe('accountTokenWindows with an old dirty hour', () => {
+  test('a dirty hour near the raw cut with a great many raw rows after it does not send the reader to them, the newest two hours still come from them', () => {
+    const s = new KitStore(':memory:', { now: NOW })
+    s.rawTailRows = 2
+    const at = (ago: number, input: number, id: string) => ({
+      id,
+      ts: NOW - ago,
+      source: 'cli',
+      account: 'acct-d',
+      input,
+    })
+    s.upsertEvents([at(30 * 24 * H, 1, 'old'), at(3 * H, 2, 'mid'), at(30 * 60_000, 4, 'new')])
+    s.runMaintenance(NOW)
+    // a long ingest left the oldest hour dirty
+    s.db
+      .query('insert or ignore into dirty_hour (hour) values (?)')
+      .run(Math.floor((NOW - 30 * 24 * H) / H) * H)
+    // the raw rows now say something else: only the rows the reader still reads raw show it
+    s.db.exec('update usage_event set input = input * 100')
+    const read = () =>
+      accountTokenWindows(['acct-d'], { store: s, now: NOW, quota: () => null }).get('acct-d')
+    // old and mid from the rollup (1 + 2), the half hour old call from raw (4 * 100)
+    expect(read()?.total.input).toBe(1 + 2 + 400)
+    s.close()
+  })
+
+  test('a dirty hour with few raw rows after it is read from them, exactly', () => {
+    const s = new KitStore(':memory:', { now: NOW })
+    const at = (ago: number, input: number, id: string) => ({
+      id,
+      ts: NOW - ago,
+      source: 'cli',
+      account: 'acct-d',
+      input,
+    })
+    s.upsertEvents([at(30 * 24 * H, 1, 'old'), at(3 * H, 2, 'mid'), at(30 * 60_000, 4, 'new')])
+    s.runMaintenance(NOW)
+    // a long ingest left the oldest hour dirty
+    s.db
+      .query('insert or ignore into dirty_hour (hour) values (?)')
+      .run(Math.floor((NOW - 30 * 24 * H) / H) * H)
+    // the raw rows now say something else: only the rows the reader still reads raw show it
+    s.db.exec('update usage_event set input = input * 100')
+    const read = () =>
+      accountTokenWindows(['acct-d'], { store: s, now: NOW, quota: () => null }).get('acct-d')
+    expect(read()?.total.input).toBe(700)
     s.close()
   })
 })

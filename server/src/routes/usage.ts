@@ -61,8 +61,8 @@ import { turnOffExtraUsage } from '../extra-usage'
 import { deepseekBalance } from '../hswarm-cost'
 import { app } from '../http-app'
 import { instanceDirParam } from '../instance-dir-param'
-import { accountTokenWindows } from '../kit/account-windows'
-import type { QuotaReset } from '../kit/query'
+import { accountTokenWindows, accountTokenWindowsAsync } from '../kit/account-windows'
+import type { QuotaReset, UsageQueryOpts } from '../kit/query'
 import type { KitStore } from '../kit/store'
 import { readLiveRegistry } from '../live-registry'
 import { jsonBody } from '../route-helpers'
@@ -425,10 +425,10 @@ app.get('/api/instances/:dir/usage', async (c) => {
 
 /** Token windows by account uuid for a set of rows, from the kit: each account's window is cut at
  *  the reset its row shows (a null uuid is a signed-out row and gets nothing). */
-export function kitTokensFor(
+function kitTokenQuery(
   rows: { uuid: string | null; snapshot: UsageSnapshot | null | undefined }[],
-  opts: { store?: KitStore; now?: number } = {},
-): Map<string, AccountTokens> {
+  opts: { store?: KitStore; now?: number },
+) {
   const now = opts.now ?? Date.now()
   const snaps = new Map<string, UsageSnapshot[]>()
   const idOf = new Map<string, string>()
@@ -458,17 +458,38 @@ export function kitTokensFor(
       sessionResetsAt: mergeReset(list, 'session'),
       weekResetsAt: mergeReset(list, 'weekAll'),
     })
-  const byId = accountTokenWindows([...idOf.values()], {
+  const kit: UsageQueryOpts = {
     quota: (id) => resets.get(id) ?? null,
     store: opts.store,
     now: opts.now,
-  })
-  const out = new Map<string, AccountTokens>()
-  for (const [uuid, id] of idOf) {
-    const t = byId.get(id)
-    if (t) out.set(uuid, t)
   }
-  return out
+  const ids = [...idOf.values()]
+  const byUuid = (byId: Map<string, AccountTokens>) => {
+    const out = new Map<string, AccountTokens>()
+    for (const [uuid, id] of idOf) {
+      const t = byId.get(id)
+      if (t) out.set(uuid, t)
+    }
+    return out
+  }
+  return { ids, kit, byUuid }
+}
+
+export function kitTokensFor(
+  rows: { uuid: string | null; snapshot: UsageSnapshot | null | undefined }[],
+  opts: { store?: KitStore; now?: number } = {},
+): Map<string, AccountTokens> {
+  const q = kitTokenQuery(rows, opts)
+  return q.byUuid(accountTokenWindows(q.ids, q.kit))
+}
+
+/** kitTokensFor with a turn of the event loop between the per-account statements. */
+export async function kitTokensForAsync(
+  rows: { uuid: string | null; snapshot: UsageSnapshot | null | undefined }[],
+  opts: { store?: KitStore; now?: number } = {},
+): Promise<Map<string, AccountTokens>> {
+  const q = kitTokenQuery(rows, opts)
+  return q.byUuid(await accountTokenWindowsAsync(q.ids, q.kit))
 }
 
 // --- CLI instances (Feature A) ----------------------------------------------
@@ -476,7 +497,7 @@ export function kitTokensFor(
 // went dangling before the delete route learned to clean up (or via a hand-edited db) heals itself,
 // rather than showing a badge for an account that isn't there. One id-only read of a tiny table,
 // and the prune writes nothing when nothing dangles — so the UI's polling stays free.
-app.get('/api/cli-instances', (c) => {
+app.get('/api/cli-instances', async (c) => {
   pruneCliInstanceAccountAssociations(
     db
       .query<{ id: string }, []>('select id from accounts')
@@ -505,7 +526,9 @@ app.get('/api/cli-instances', (c) => {
   }))
   // One grouped read per window for every row (kit/account-windows.ts), cut at each account's own
   // quota reset as the row shows it.
-  const windows = kitTokensFor(rows.map((r) => ({ uuid: r.uuid, snapshot: r.lastUsageCheck })))
+  const windows = await kitTokensForAsync(
+    rows.map((r) => ({ uuid: r.uuid, snapshot: r.lastUsageCheck })),
+  )
   return c.json(
     rows.map(({ i, uuid, lastUsageCheck }) => ({
       ...i,
@@ -522,7 +545,7 @@ app.get('/api/cli-instances', (c) => {
 })
 // What the account signed in to each desktop instance has run (kit/account-windows.ts), by instance
 // dir, for the desktop table's Tokens column. A signed-out profile is null.
-app.get('/api/desktop-instance-tokens', (c) => {
+app.get('/api/desktop-instance-tokens', async (c) => {
   const dirs: { dir: string; uuid: string | null; snapshot: UsageSnapshot | null | undefined }[] =
     []
   for (const ref of Object.keys(allInstanceNumbers())) {
@@ -534,7 +557,7 @@ app.get('/api/desktop-instance-tokens', (c) => {
       snapshot: getCachedUsage(desktopKey(parsed.id)),
     })
   }
-  const windows = kitTokensFor(dirs)
+  const windows = await kitTokensForAsync(dirs)
   const out: Record<string, AccountTokens | null> = {}
   for (const d of dirs) out[d.dir] = d.uuid ? (windows.get(d.uuid) ?? null) : null
   return c.json(out)

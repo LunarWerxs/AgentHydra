@@ -578,13 +578,11 @@ function* computeUsage(
     // Calls ingested since the last rollup are not in the ledger yet: every pair with a raw row at or
     // after the first stale hour is counted from its raw rows, whole. Past MAX_PAIR_SEEKS pairs (a bulk
     // re-read is running) the ledger is served as it stands, so a load does not scan the store.
-    const dirtyFrom = store.dirtyFrom()
-    if (dirtyFrom !== null) {
+    const split = store.readSplit(now)
+    if (Number.isFinite(split)) {
       // Bounded by rows, not pairs: DISTINCT alone reads on until it has found enough pairs.
       const rows: { s: string; r: string }[] = []
-      for (const [from, to] of openEnded(
-        pieces(hourStart(dirtyFrom), Math.max(now, dirtyFrom), HOUR_MS, sliced),
-      )) {
+      for (const [from, to] of openEnded(pieces(split, Math.max(now, split), HOUR_MS, sliced))) {
         rows.push(
           ...(db
             .query(
@@ -757,12 +755,8 @@ function* computeUsage(
       rollRanges.push([hourStart(win.from), rollTo])
     }
     if (!sessionLike) {
-      const dirty = store.dirtyFrom()
       const lo = hourCeil(rawFrom)
-      const hi = Math.min(
-        hourStart(win.to + 1),
-        dirty === null ? Number.POSITIVE_INFINITY : hourStart(dirty),
-      )
+      const hi = Math.min(hourStart(win.to + 1), store.readSplit(now))
       if (rawFrom <= win.to && lo < hi) {
         rawRanges.length = 0
         if (rawFrom < lo) rawRanges.push([rawFrom, lo - 1])
@@ -1109,8 +1103,6 @@ function unpricedModels(
 // data_version on one through another. It never scans every raw row (1.6 s on 1.6M rows, measured
 // 2026-10-04): counts are the rollup's below the first stale hour plus a raw count from there.
 const coverageCache = new WeakMap<KitStore, { key: string; value: UsageResult['coverage'] }>()
-/** A first stale hour older than this is a bulk re-read: the last coverage is served until it ends. */
-const STALE_EXACT_MS = 48 * HOUR_MS
 /** Most (session, ref) pairs read from raw rows by one seek each before one scan of the window does it. */
 const MAX_PAIR_SEEKS = 3000
 /** Sliced ledger reads: past this many rows in the window, page by key; a page's rows. */
@@ -1130,8 +1122,6 @@ function* coverage(
   const key = `${v.data_version}:${t.t}`
   const hit = coverageCache.get(store)
   if (hit && hit.key === key) return hit.value
-  const dirty = store.dirtyFrom()
-  if (hit && dirty !== null && Date.now() - dirty > STALE_EXACT_MS) return hit.value
   const value = yield* scanCoverage(store, sliced)
   coverageCache.set(store, { key, value })
   return value
@@ -1142,8 +1132,8 @@ function* scanCoverage(
   sliced: boolean,
 ): Generator<void, UsageResult['coverage'], void> {
   const sources: UsageResult['coverage']['sources'] = {}
-  const dirty = store.dirtyFrom()
-  const dirtyHour = dirty === null ? null : hourStart(dirty)
+  const split = store.readSplit()
+  const dirtyHour = Number.isFinite(split) ? split : null
   const counts = new Map<string, number>()
   const rawCut = store.rawCut() ?? 0
   // One pass over the rollup in pieces: each source's total calls and hour edges, and its calls from the

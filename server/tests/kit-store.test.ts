@@ -333,4 +333,42 @@ describe('settled calls, the raw cut and the hour rollup', () => {
       (s.db.query('select cost_usd as c from usage_session').get() as { c: number }).c,
     ).toBeCloseTo(0.3)
   })
+
+  test('the schema-4 backfill pages a session with thousands of ledger rows by the whole key', () => {
+    const s = new KitStore(':memory:', { now: T0 })
+    s.upsertEvents(
+      Array.from({ length: 2500 }, (_, i) => ({
+        id: `r${i}`,
+        ts: T0 + i,
+        session: 'big',
+        ref: `ref${i}`,
+        source: 'hswarm',
+        list_usd: 0.2,
+        billed_usd: i % 2 ? 0.1 : null,
+      })),
+    )
+    s.runMaintenance(T0 + H)
+    expect(count(s, 'usage_session')).toBe(2500)
+    s.db.exec('update usage_session set unbilled_usd = 0, cost_usd = 0')
+    s.setMeta('backfill_v4', 'a')
+    const steps = (s as unknown as { backfillSteps(): Generator<void> }).backfillSteps()
+    let most = 0
+    for (;;) {
+      const phaseA = s.getMeta('backfill_v4') === 'a'
+      const before = (s.db.query('select total_changes() as c').get() as { c: number }).c
+      const r = steps.next()
+      const after = (s.db.query('select total_changes() as c').get() as { c: number }).c
+      if (phaseA) most = Math.max(most, after - before)
+      if (r.done) break
+    }
+    // the old paging by session id updated all 2500 rows of the one session in a single step
+    expect(most).toBeLessThan(2000)
+    expect(s.db.query('select count(*) as n from usage_session where cost_usd = 0').get()).toEqual({
+      n: 0,
+    })
+    const sum = s.db.query('select sum(unbilled_usd) as u from usage_session').get() as {
+      u: number
+    }
+    expect(sum.u).toBeCloseTo(1250 * 0.2)
+  })
 })
