@@ -5,7 +5,7 @@ import { defaultConfigDir } from '../src/usage-tokens'
 
 const H = 3_600_000
 const NOW = Date.UTC(2026, 5, 15, 12, 0, 0)
-const store = new KitStore(':memory:')
+const store = new KitStore(':memory:', { now: NOW })
 afterAll(() => store.close())
 
 let n = 0
@@ -56,7 +56,7 @@ test('an unknown config dir reads as no spend', () => {
 })
 
 test('whole hours of a rolled-up store come from the hourly rollup, stamped at the hour middle', async () => {
-  const s = new KitStore(':memory:')
+  const s = new KitStore(':memory:', { now: NOW })
   s.upsertEvents([
     ev('default', 'cli', 5 * H + 10 * 60_000, 7),
     ev('default', 'cli', 20 * 60_000, 9),

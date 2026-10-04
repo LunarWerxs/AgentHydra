@@ -8,7 +8,7 @@ const H = 3_600_000
 const D = 24 * H
 const NOW = Date.UTC(2026, 5, 15, 12, 0, 0)
 
-const store = new KitStore(':memory:')
+const store = new KitStore(':memory:', { now: NOW - 45 * D })
 afterAll(() => store.close())
 
 let n = 0
@@ -174,6 +174,8 @@ describe('measures and totals', () => {
       ok: 1,
       failed: 1,
       seconds: 5,
+      unbilled_usd: 3,
+      cost_usd: 3.75,
     })
   })
 
@@ -343,7 +345,7 @@ describe('GET /api/kit/usage parameters', () => {
 })
 
 describe('session and ref totals at any age', () => {
-  const sx = new KitStore(':memory:')
+  const sx = new KitStore(':memory:', { now: NOW })
   afterAll(() => sx.close())
   let m = 0
   const e = (ago: number, o: Partial<UsageEventInput>): UsageEventInput => ({
@@ -405,7 +407,7 @@ describe('session and ref totals at any age', () => {
 
 describe('usageQuery after a rollup', () => {
   test('whole hours read the rollup, edge hours raw rows: same answer; a later write is not served from cache', () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: NOW })
     const now = Date.UTC(2026, 5, 15, 12, 20, 0)
     const e = (id: string, ago: number, input: number) => ({
       id,
@@ -434,7 +436,7 @@ describe('usageQuery after a rollup', () => {
 
 describe('regressions: live rows, stale rollup, zones', () => {
   const mk = () => {
-    const st = new KitStore(':memory:')
+    const st = new KitStore(':memory:', { now: NOW })
     return { st, run: (p: UsageQueryParams) => usageQuery(p, { store: st, now: NOW }) }
   }
   const row = (id: string, ts: number, e: Partial<UsageEventInput> = {}): UsageEventInput => ({
@@ -465,7 +467,7 @@ describe('regressions: live rows, stale rollup, zones', () => {
     st.upsertEvents([row('c1', NOW - 5 * D), row('c2', NOW - 4 * D)])
     st.runMaintenance(NOW)
     st.upsertEvents([row('c3', NOW - H)])
-    expect(st.getMeta('dirty_from')).not.toBeNull()
+    expect(st.dirtyFrom()).not.toBeNull()
     const c = run({ window: { last: '7d' } }).coverage
     expect(c.sources.cli).toMatchObject({ events: 3, lastTs: NOW - H })
     st.close()
@@ -517,5 +519,51 @@ describe('regressions: live rows, stale rollup, zones', () => {
     })
     expect(r.rows).toEqual([{ day: '2026-06-15', calls: 1 }])
     st.close()
+  })
+})
+
+describe('billed and unbilled spend in one group', () => {
+  const D0 = NOW - 3 * D
+  const mixed = (): UsageEventInput[] => [
+    { id: 'u1', ts: D0, source: 'hswarm', session: 'sx', list_usd: 0.2, billed_usd: null },
+    { id: 'u2', ts: D0 + 1, source: 'hswarm', session: 'sx', list_usd: 0.5, billed_usd: 0.1 },
+    { id: 'u3', ts: D0 + 2, source: 'hswarm', session: 'sx', list_usd: 0.7, billed_usd: 0 },
+  ]
+  const run = (s: KitStore, extra: Partial<UsageQueryParams> = {}) =>
+    usageQuery(
+      {
+        window: { last: 'all' },
+        measures: ['list_usd', 'billed_usd', 'unbilled_usd', 'cost_usd'],
+        ...extra,
+      },
+      { store: s, now: NOW },
+    ).totals
+  const want = { list_usd: 1.4, billed_usd: 0.1, unbilled_usd: 0.2, cost_usd: 0.3 }
+
+  test('unbilled_usd is the list price of calls with no billing flag; cost_usd bills what is known and lists the rest', () => {
+    const s = new KitStore(':memory:', { now: NOW })
+    s.upsertEvents(mixed())
+    expect(run(s)).toMatchObject({ billed_usd: 0.1, unbilled_usd: 0.2 })
+    expect(run(s).cost_usd).toBeCloseTo(0.3)
+    s.rollup()
+    const rolled = run(s)
+    expect(rolled.unbilled_usd).toBeCloseTo(want.unbilled_usd as number)
+    expect(rolled.cost_usd).toBeCloseTo(want.cost_usd as number)
+    // settled (raw row pruned): hourly rows and the session ledger still carry both
+    s.pruneRaw(NOW + 40 * D)
+    for (const groupBy of [[], ['session']] as const) {
+      const t = run(s, { groupBy: [...groupBy] })
+      expect(t.unbilled_usd).toBeCloseTo(0.2)
+      expect(t.cost_usd).toBeCloseTo(0.3)
+    }
+    s.close()
+  })
+
+  test('the route accepts both measures', () => {
+    const p = new URLSearchParams('last=7d&measures=unbilled_usd,cost_usd')
+    expect(parseKitUsageQuery((k) => p.get(k) ?? undefined).measures).toEqual([
+      'unbilled_usd',
+      'cost_usd',
+    ])
   })
 })

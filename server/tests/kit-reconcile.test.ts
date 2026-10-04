@@ -51,7 +51,7 @@ const row = (r: Awaited<ReturnType<typeof reconcile>>, name: string) => {
 
 describe('kit reconcile', () => {
   test('the same calls on both sides give 0% gaps', async () => {
-    const store = new KitStore(':memory:')
+    const store = new KitStore(':memory:', { now: NOW })
     seed(store)
     // every source's first event is inside the window, and the window starts before them
     const r = await reconcile({ last: '24h' }, same, { store, now: NOW })
@@ -71,7 +71,7 @@ describe('kit reconcile', () => {
   })
 
   test('an account the old side knows by uuid pairs with the kit hashed id in ONE row', async () => {
-    const store = new KitStore(':memory:')
+    const store = new KitStore(':memory:', { now: NOW })
     seed(store)
     const r = await reconcile({ last: '24h' }, same, { store, now: NOW })
     expect(r.rows.filter((x) => x.name.startsWith('account '))).toHaveLength(1)
@@ -81,7 +81,7 @@ describe('kit reconcile', () => {
   })
 
   test('a deliberate difference shows the right gap', async () => {
-    const store = new KitStore(':memory:')
+    const store = new KitStore(':memory:', { now: NOW })
     seed(store)
     const off: OldReaders = { ...same, climayte: () => ({ tokens: 120, usd: 1 }) }
     const r = await reconcile({ last: '24h' }, off, { store, now: NOW })
@@ -90,7 +90,7 @@ describe('kit reconcile', () => {
   })
 
   test('a source the kit has not ingested is partial, not a disagreement', async () => {
-    const store = new KitStore(':memory:')
+    const store = new KitStore(':memory:', { now: NOW })
     seed(store)
     // OpenCode has run on the old side but the kit holds nothing of it yet; Codex starts mid-window.
     const old: OldReaders = {

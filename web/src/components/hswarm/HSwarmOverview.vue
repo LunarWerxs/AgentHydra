@@ -98,7 +98,16 @@ async function loadUsage() {
     source: 'hswarm',
     from: localDaysFrom(USAGE_DAYS),
     tz: localTz(),
-    measures: ['tokens', 'cache_read', 'list_usd', 'billed_usd', 'calls', 'ok', 'failed'],
+    measures: [
+      'tokens',
+      'cache_read',
+      'list_usd',
+      'billed_usd',
+      'unbilled_usd',
+      'calls',
+      'ok',
+      'failed',
+    ],
   }
   try {
     const [byDay, byProvider] = await Promise.all([
@@ -195,12 +204,11 @@ const totalTokens = computed(() => usage.value?.totals.tokens ?? 0)
 const totalCachedTokens = computed(() => usage.value?.totals.cache_read ?? 0)
 
 // The money under the token headline: list-price value of every call, and the part known to be billed. A window whose
-// calls carry no billing flag (written before the ledger recorded it) reads null here and counts as unknown, not spent.
+// calls carry no billing flag (written before the ledger recorded it) counts as unknown (unbilled_usd), not spent.
 const money = computed<HswarmMoney>(() => {
   const t = usage.value?.totals
   const value = t?.list_usd ?? 0
-  const spent = t?.billed_usd ?? null
-  return { value_usd: value, spent_usd: spent ?? 0, unknown_usd: spent === null ? value : 0 }
+  return { value_usd: value, spent_usd: t?.billed_usd ?? 0, unknown_usd: t?.unbilled_usd ?? 0 }
 })
 const moneyText = computed(() => moneyLine(money.value, t))
 

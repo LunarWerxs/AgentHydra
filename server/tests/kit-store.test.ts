@@ -11,7 +11,7 @@ const count = (s: KitStore, t: string) =>
 
 describe('kit store', () => {
   test('duplicate ids: the last write wins', () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: T0 })
     s.upsertEvents([{ id: 'cli:m1', ts: T0, source: 'cli', input: 10, output: 1 }])
     s.upsertEvents([{ id: 'cli:m1', ts: T0, source: 'cli', input: 10, output: 99 }])
     expect(count(s, 'usage_event')).toBe(1)
@@ -21,13 +21,13 @@ describe('kit store', () => {
   })
 
   test('day is the local date stored at write time', () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: T0 })
     s.upsertEvents([{ id: 'a', ts: T0, source: 'cli' }])
     expect(s.db.query('select day from usage_event').get()).toEqual({ day: localDay(T0) })
   })
 
   test('rollup sums per hour and dimensions, and is idempotent', () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: T0 })
     s.upsertEvents([
       {
         id: 'a',
@@ -70,16 +70,17 @@ describe('kit store', () => {
   })
 
   test('a late event re-marks its hour and the next rollup picks it up', () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: T0 })
     s.upsertEvents([{ id: 'a', ts: T0, source: 'cli', input: 1 }])
     s.rollup()
     s.upsertEvents([{ id: 'late', ts: T0 - 5 * H, source: 'cli', input: 4 }])
-    expect(s.rollup()).toBe(2)
+    // only the dirty hour is rebuilt now (the hour after it is already current); both rows exist
+    expect(s.rollup()).toBe(1)
     expect(count(s, 'usage_hour')).toBe(2)
   })
 
   test('pruning drops old raw events and keeps the hourly rows', () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: T0 })
     const now = T0 + 60 * D
     s.upsertEvents([
       { id: 'old1', ts: T0, source: 'cli', input: 3 },
@@ -97,7 +98,7 @@ describe('kit store', () => {
   })
 
   test('drop and rebuild empties every table and clears cursors', () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: T0 })
     s.upsertEvents([{ id: 'a', ts: T0, source: 'cli' }])
     s.rollup()
     s.setCursor({ path: '/x', size: 1, mtime: 2, offset: 1, version: 1 })
@@ -109,7 +110,7 @@ describe('kit store', () => {
   })
 
   test('a newer schema version is refused', () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: T0 })
     s.db.exec('pragma user_version = 99')
     const { migrateKitSchema } = require('../src/kit/schema')
     expect(() => migrateKitSchema(s.db)).toThrow()
@@ -128,7 +129,7 @@ describe('session ledger and the raw cut', () => {
     s.db.query('select sum(calls) as c, sum(input) as i from usage_hour').get()
 
   test('totals equal every event once across pruning, re-upserts and a re-read of old events', () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: T0 })
     const old = [
       { id: 'o1', ts: T0, session: 'a', ref: 'r', source: 'cli', input: 3, list_usd: 1 },
       { id: 'o2', ts: T0 + 10, session: 'a', ref: 'r', source: 'cli', input: 4, list_usd: 2 },
@@ -160,7 +161,7 @@ describe('session ledger and the raw cut', () => {
   })
 
   test('a rollup and prune cut into slices count every call once, over a dense hour and many days', async () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: T0 })
     const evs: Array<{
       id: string
       ts: number
@@ -214,12 +215,122 @@ describe('session ledger and the raw cut', () => {
     expect(s.rawCut()).toBe(Math.floor((NOW - 35 * D) / H) * H)
   })
   test('a v1 file is migrated to v2 with its surviving raw rows in the ledger', () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: T0 })
     s.upsertEvents([{ id: 'a', ts: T0, session: 's', source: 'cli', input: 5 }])
     s.db.exec('drop table usage_session; drop table usage_session_settled; pragma user_version = 1')
     const { migrateKitSchema } = require('../src/kit/schema')
     migrateKitSchema(s.db)
     expect(s.db.query('pragma user_version').get()).toEqual({ user_version: KIT_SCHEMA_VERSION })
     expect(ledger(s)).toMatchObject([{ session: 's', calls: 1, input: 5 }])
+  })
+})
+
+describe('settled calls, the raw cut and the hour rollup', () => {
+  const hourCalls = (s: KitStore, source: string) =>
+    (
+      s.db
+        .query('select coalesce(sum(calls),0) as c from usage_hour where source = ?')
+        .get(source) as {
+        c: number
+      }
+    ).c
+  const ledgerCalls = (s: KitStore) =>
+    (s.db.query('select coalesce(sum(calls),0) as c from usage_session').get() as { c: number }).c
+
+  test('a pruned call read again below the cut is not counted a second time', () => {
+    const s = new KitStore(':memory:', { now: T0 })
+    const ev = { id: 'msg_X', ts: T0 - 30 * D, session: 's', ref: 'r', source: 'cli', input: 5 }
+    s.upsertEvents([ev])
+    s.runMaintenance(T0)
+    s.pruneRaw(T0 + 10 * D)
+    expect(count(s, 'usage_event')).toBe(0)
+    expect(s.settleOld([ev])).toBe(0)
+    expect(hourCalls(s, 'cli')).toBe(1)
+    expect(ledgerCalls(s)).toBe(1)
+  })
+
+  test('an old foreign event on a fresh store does not erase settled Claude hours', () => {
+    const s = new KitStore(':memory:', { now: T0 })
+    s.settleOld([{ id: 'c1', ts: T0 - 100 * D, session: 's', source: 'cli', input: 7 }])
+    s.upsertEvents([{ id: 'x1', ts: T0 - 200 * D, session: 'z', source: 'codex', input: 3 }])
+    s.runMaintenance(T0)
+    expect(hourCalls(s, 'cli')).toBe(1)
+    expect(hourCalls(s, 'codex')).toBe(1)
+    expect(ledgerCalls(s)).toBe(2)
+    expect(count(s, 'usage_event')).toBe(0)
+  })
+
+  test('a call re-written with a later hour leaves its old hour', () => {
+    const s = new KitStore(':memory:', { now: T0 })
+    const h = T0 - (T0 % H)
+    s.upsertEvents([{ id: 'm', ts: h + H - 1000, session: 's', source: 'cli', input: 5 }])
+    s.rollup()
+    s.upsertEvents([{ id: 'm', ts: h + H + 1000, session: 's', source: 'cli', input: 6 }])
+    s.rollup()
+    const rows = s.db.query('select hour, calls, input from usage_hour order by hour').all()
+    expect(rows).toEqual([{ hour: h + H, calls: 1, input: 6 }])
+  })
+
+  test('a call settled in the band between the cut and the sweep cutoff survives the rollup', () => {
+    const s = new KitStore(':memory:', { now: T0 })
+    const A = T0 - (T0 % H)
+    s.upsertEvents([
+      { id: 'b1', ts: A - 600_000, session: 's', source: 'cli', input: 1 },
+      { id: 'b2', ts: A + 60_000, session: 's', source: 'cli', input: 2 },
+    ])
+    s.runMaintenance(A + 35 * D + 30_000)
+    expect(s.rawCut()).toBe(A)
+    s.settleOld([{ id: 'b3', ts: A + 20 * 60_000, session: 's', source: 'cli', input: 4 }])
+    s.runMaintenance(A + 35 * D + H + 60_000)
+    expect(s.db.query('select calls, input from usage_hour where hour = ?').get(A)).toEqual({
+      calls: 2,
+      input: 6,
+    })
+    expect(ledgerCalls(s)).toBe(3)
+  })
+
+  test('a long ingest keeps the dirty hours near now and readers use the rollup below them', async () => {
+    const s = new KitStore(':memory:', { now: T0 })
+    s.rollupEveryMs = 0
+    const evs = Array.from({ length: 1200 }, (_, i) => ({
+      id: `l${i}`,
+      ts: T0 - 20 * D + i * 1_440_000,
+      session: 's',
+      source: 'cli',
+      input: 1,
+    }))
+    await s.upsertEventsAsync(evs)
+    const dirty = s.dirtyFrom()
+    // without the mid-ingest rollup this is the first event's hour, 20 days back
+    expect(dirty === null || dirty > T0 - 10 * D).toBe(true)
+    expect(
+      (s.db.query('select coalesce(sum(calls),0) as c from usage_hour').get() as { c: number }).c,
+    ).toBeGreaterThan(0)
+  })
+
+  test('a v3 file is upgraded: unbilled and per-call cost are backfilled, in slices', async () => {
+    const s = new KitStore(':memory:', { now: T0 })
+    s.upsertEvents([
+      { id: 'a', ts: T0, session: 's', source: 'hswarm', list_usd: 0.2, billed_usd: null },
+      { id: 'b', ts: T0 + 1, session: 's', source: 'hswarm', list_usd: 0.5, billed_usd: 0.1 },
+      { id: 'c', ts: T0 + 2, session: 's', source: 'hswarm', list_usd: 0.7, billed_usd: 0 },
+    ])
+    await s.runMaintenanceAsync(T0 + H)
+    const want = s.db.query('select unbilled_usd as u, cost_usd as c from usage_hour').get() as {
+      u: number
+      c: number
+    }
+    expect(want.u).toBeCloseTo(0.2)
+    expect(want.c).toBeCloseTo(0.3)
+    s.db.exec('update usage_hour set unbilled_usd = 0, cost_usd = 0')
+    s.db.exec('update usage_session set unbilled_usd = 0, cost_usd = 0')
+    s.setMeta('backfill_v4', 'a')
+    await s.backfillAsync()
+    expect(s.db.query('select unbilled_usd as u, cost_usd as c from usage_hour').get()).toEqual(
+      want,
+    )
+    expect(
+      (s.db.query('select cost_usd as c from usage_session').get() as { c: number }).c,
+    ).toBeCloseTo(0.3)
   })
 })

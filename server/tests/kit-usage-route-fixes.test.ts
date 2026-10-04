@@ -10,7 +10,7 @@ const NOW = Date.UTC(2026, 5, 15, 12, 0, 0)
 const UUID = 'AAAAAAAA-0000-4000-8000-00000000000A'
 const ACCOUNT = hswarmAccountId(UUID.toLowerCase())
 
-const store = new KitStore(':memory:')
+const store = new KitStore(':memory:', { now: NOW })
 afterAll(() => store.close())
 let n = 0
 const ev = (ago: number, input: number) => ({

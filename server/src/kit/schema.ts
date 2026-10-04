@@ -2,10 +2,10 @@
 // Gated on PRAGMA user_version: a file with a lower version is migrated step by step, a higher one is
 // refused. The store is an index over the sources' own files, so a drop and rebuild is always safe.
 
-export const KIT_SCHEMA_VERSION = 3
+export const KIT_SCHEMA_VERSION = 4
 
-/** Measures summed by the hourly rollup (tokens by kind, money, quota units, counts). */
-export const KIT_MEASURES = [
+/** Measures every source reports per call (what usage_event stores). */
+export const KIT_BASE_MEASURES = [
   'input',
   'output',
   'cache_read',
@@ -17,6 +17,38 @@ export const KIT_MEASURES = [
   'weighted',
   'seconds',
 ] as const
+
+/**
+ * Measures derived per call from list_usd and billed_usd, carried only by the rollups (usage_event has no
+ * column for them): `unbilled_usd` is the list price of the calls whose billed_usd is unknown (null), and
+ * `cost_usd` is what each call cost, billed where known and list otherwise, added up call by call. Both
+ * are 0, never null, when nothing contributes.
+ */
+export const KIT_DERIVED_MEASURES = ['unbilled_usd', 'cost_usd'] as const
+
+/** Measures summed by the hourly rollup (tokens by kind, money, quota units, counts). */
+export const KIT_MEASURES = [...KIT_BASE_MEASURES, ...KIT_DERIVED_MEASURES] as const
+
+/** The aggregate over usage_event rows that produces measure `m`. */
+export function eventMeasureSql(m: (typeof KIT_MEASURES)[number]): string {
+  if (m === 'unbilled_usd')
+    return 'coalesce(sum(case when billed_usd is null then list_usd end), 0)'
+  if (m === 'cost_usd') return 'coalesce(sum(coalesce(billed_usd, list_usd)), 0)'
+  return `sum(${m})`
+}
+
+/** One call's value of measure `m` (null for a base measure the call does not carry). */
+export function eventMeasure(
+  e: {
+    list_usd?: number | null
+    billed_usd?: number | null
+  } & Partial<Record<(typeof KIT_BASE_MEASURES)[number], number | null>>,
+  m: (typeof KIT_MEASURES)[number],
+): number | null {
+  if (m === 'unbilled_usd') return e.billed_usd == null ? (e.list_usd ?? 0) : 0
+  if (m === 'cost_usd') return e.billed_usd ?? e.list_usd ?? 0
+  return e[m] ?? null
+}
 
 /** Dimensions kept by the hourly rollup (no session / ref). NULL is stored as '' there, so it can key. */
 export const KIT_HOUR_DIMS = [
@@ -55,6 +87,7 @@ export const KIT_TABLES = [
   'settled_claim',
   'ingest_cursor',
   'meta',
+  'dirty_hour',
 ] as const
 
 export const KIT_DDL_V1 = `
@@ -130,7 +163,7 @@ create table if not exists meta (
 `
 
 function sessionTableDdl(name: string): string {
-  const measures = KIT_MEASURES.map((m) =>
+  const measures = KIT_BASE_MEASURES.map((m) =>
     NULLABLE_MEASURES.includes(m)
       ? `${m} real`
       : m === 'weighted'
@@ -170,9 +203,19 @@ export const KIT_DDL_V3 = `
 create table if not exists settled_claim (h integer primary key);
 `
 
+/**
+ * v4: dirty_hour lists the hours whose usage_hour / usage_session rows are stale (one row per hour a write
+ * touched), so a rollup redoes exactly those and a reader splits at the oldest of them. usage_hour and
+ * both session tables gain unbilled_usd and cost_usd (KIT_DERIVED_MEASURES), filled for old rows by
+ * KitStore.backfillAsync (sliced, so the migration itself stays instant).
+ */
+export const KIT_DDL_V4 = `
+create table if not exists dirty_hour (hour integer primary key);
+`
+
 /** SELECT of usage_event rows (optionally filtered) aggregated to usage_session's key and columns. */
 export function sessionAggSql(where = '1'): string {
-  const sums = KIT_MEASURES.map((m) => `sum(${m})`).join(', ')
+  const sums = KIT_MEASURES.map(eventMeasureSql).join(', ')
   const key = KIT_SESSION_KEY.map((k) => `coalesce(${k}, '')`).join(', ')
   return `select ${key}, min(ts), max(ts), count(*), sum(case when ok = 1 then 1 else 0 end),
     sum(case when ok = 0 then 1 else 0 end), ${sums} from usage_event where ${where} group by ${key}`
@@ -255,6 +298,7 @@ export function migrateKitSchema(db: Exec): void {
   if (have < 1) db.exec(KIT_DDL_V1)
   if (have < 2) {
     db.exec(KIT_DDL_V2)
+    addDerivedColumns(db)
     if (have >= 1) backfillV2(db)
   }
   // Covers the per-source coverage summary. Building it over a live-size table takes seconds on the
@@ -269,7 +313,53 @@ export function migrateKitSchema(db: Exec): void {
   // of 60k wide path rows (0.3 s cold).
   db.exec('create index if not exists ingest_cursor_mtime on ingest_cursor (mtime)')
   if (have < 3) db.exec(KIT_DDL_V3)
+  if (have < 4) {
+    addDerivedColumns(db)
+    migrateV4(db, have)
+  }
   if (have !== KIT_SCHEMA_VERSION) db.exec(`pragma user_version = ${KIT_SCHEMA_VERSION}`)
+}
+
+const HOUR = 3_600_000
+
+/** New columns with constant defaults, so no table is rewritten. Safe to run again. */
+function addDerivedColumns(db: Exec): void {
+  for (const t of ['usage_hour', 'usage_session', 'usage_session_settled']) {
+    const cols = db.query(`select name from pragma_table_info('${t}')`) as unknown as {
+      all(): { name: string }[]
+    }
+    const names = new Set(cols.all().map((c) => c.name))
+    for (const m of KIT_DERIVED_MEASURES) {
+      if (!names.has(m)) db.exec(`alter table ${t} add column ${m} real not null default 0`)
+    }
+  }
+}
+
+/** v3 -> v4: the dirty-hour list seeded from the old single dirty_from floor, and a marker for the backfill. */
+function migrateV4(db: Exec, have: number): void {
+  db.exec(KIT_DDL_V4)
+  if (have < 1) return
+  const meta = (k: string) =>
+    (db.query(`select value from meta where key = '${k}'`).get() as { value: string } | null)?.value
+  const dirty = meta('dirty_from')
+  if (dirty !== undefined) {
+    const lo = Math.max(Number(dirty), Number(meta('raw_cut') ?? 0))
+    const top = (db.query('select max(ts) as t from usage_event').get() as { t: number | null }).t
+    if (top !== null && top >= lo) {
+      const a = lo - (lo % HOUR)
+      const b = top - (top % HOUR)
+      db.query(
+        `with recursive h(x) as (select ?1 union all select x + ${HOUR} from h where x + ${HOUR} <= ?2)
+         insert or ignore into dirty_hour select x from h`,
+      ).run(a, b)
+    }
+    db.exec("delete from meta where key = 'dirty_from'")
+  }
+  const any = db.query('select 1 as x from usage_hour limit 1').get()
+  const anyRaw = db.query('select 1 as x from usage_event limit 1').get()
+  if (any || anyRaw) {
+    db.exec("insert or replace into meta (key, value) values ('backfill_v4', 'a')")
+  }
 }
 
 export function dropKitSchema(db: Exec): void {

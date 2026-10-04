@@ -1672,6 +1672,7 @@ function buildSpendReport(opts: SpendReportOptions): SpendReport {
     'calls',
     'list_usd',
     'billed_usd',
+    'cost_usd',
     'input',
     'output',
     'cache_read',
@@ -1722,7 +1723,9 @@ function buildSpendReport(opts: SpendReportOptions): SpendReport {
     // The CLI's own notices ride on a pseudo-model with no tokens: not a model, not a row.
     if (NON_MODELS.has(model) && weighted <= 0 && tokens.total === 0) return null
     const billed = row.billed_usd as number | null
-    const cost = billed ?? (row.list_usd as number | null)
+    // A group can hold billed and unbilled calls: cost_usd is summed per call (billed, else list), so the
+    // billed part alone is never taken for the whole. Null when no call in the group has a price at all.
+    const cost = billed === null && row.list_usd === null ? null : Number(row.cost_usd ?? 0)
     const source = (row.source as string | null) ?? 'unknown'
     return {
       model,

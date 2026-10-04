@@ -5,7 +5,7 @@ import { KitStore, type UsageEventInput } from '../src/kit/store'
 const H = 3_600_000
 const NOW = Date.UTC(2026, 5, 15, 12, 0, 0)
 
-const store = new KitStore(':memory:')
+const store = new KitStore(':memory:', { now: NOW })
 afterAll(() => store.close())
 
 let n = 0
@@ -72,7 +72,7 @@ describe('accountTokenWindows', () => {
 
 describe('accountTokenWindows over a rolled-up store', () => {
   test('whole hours come from the rollup, partial edge hours from raw rows, and a write shows at once', () => {
-    const s = new KitStore(':memory:')
+    const s = new KitStore(':memory:', { now: NOW })
     // 20 min past the hour so every window edge cuts through an hour.
     const now = Date.UTC(2026, 5, 15, 12, 20, 0)
     const at = (id: string, ago: number, input: number): UsageEventInput => ({
@@ -99,6 +99,32 @@ describe('accountTokenWindows over a rolled-up store', () => {
     const after = accountTokenWindows(['acct-r'], { store: s, now, quota: () => null })
     expect(after.get('acct-r')?.fiveHour.input).toBe(1 + 2 + 16)
     expect(after.get('acct-r')?.total.input).toBe(1 + 2 + 4 + 8 + 16)
+    s.close()
+  })
+})
+
+describe('accountTokenWindows during a long ingest', () => {
+  test('hours the ingest has already rolled up are read from the rollup, not from every raw row', async () => {
+    const s = new KitStore(':memory:', { now: NOW })
+    s.rollupEveryMs = 0
+    // more than one write slice, spread over 20 days: an ingest that only rolled up at its end would
+    // leave the oldest hour dirty all along, and every reader would walk the raw rows
+    const evs = Array.from({ length: 1100 }, (_, i) => ({
+      id: `g${i}`,
+      ts: NOW - 20 * 24 * H + i * 26 * 60_000,
+      source: 'cli',
+      account: 'acct-g',
+      input: 1,
+    }))
+    await s.upsertEventsAsync(evs)
+    const dirty = s.dirtyFrom()
+    expect(dirty === null || dirty > NOW - 10 * 24 * H).toBe(true)
+    const read = () =>
+      accountTokenWindows(['acct-g'], { store: s, now: NOW, quota: () => null }).get('acct-g')
+    expect(read()?.total.input).toBe(1100)
+    // tamper with the raw rows: a reader that still used them for the rolled hours would see it
+    s.db.exec('update usage_event set input = 5')
+    expect(read()?.total.input).toBe(1100)
     s.close()
   })
 })

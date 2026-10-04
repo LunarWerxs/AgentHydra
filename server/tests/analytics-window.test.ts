@@ -17,7 +17,7 @@ const H = 3_600_000
 const D = 24 * H
 const NOW = Date.UTC(2026, 5, 15, 12, 0, 0)
 
-const store = new KitStore(':memory:')
+const store = new KitStore(':memory:', { now: NOW })
 afterAll(() => store.close())
 
 let n = 0
@@ -167,7 +167,7 @@ describe('the source filter narrows every figure', () => {
 
 describe('history past the raw window survives in the rollup', () => {
   test('a 60-day-old call still counts; its session is kept by the ledger, with no project', () => {
-    const old = new KitStore(':memory:')
+    const old = new KitStore(':memory:', { now: NOW })
     old.upsertEvents([call(60 * D, { account: 'acct-a', session: 'gone-session' })])
     old.runMaintenance(NOW)
     const r = spendReport({ store: old, now: NOW })
@@ -184,5 +184,31 @@ describe('history past the raw window survives in the rollup', () => {
     expect(b).toEqual(a)
     expect(a.byDay.reduce((s, d) => s + d.turns, 0)).toBe(a.calls)
     expect(a.byProject.reduce((s, d) => s + d.turns, 0)).toBe(a.calls)
+  })
+})
+
+describe('a group that holds billed and unbilled calls', () => {
+  test('costs each call (billed, else list) instead of taking the billed part for the whole', () => {
+    const s = new KitStore(':memory:', { now: NOW })
+    s.upsertEvents([
+      call(2 * H, {
+        id: 'mix1',
+        source: 'hswarm',
+        model: 'mix-model',
+        list_usd: 0.5,
+        billed_usd: 0.1,
+      }),
+      call(2 * H, {
+        id: 'mix2',
+        source: 'hswarm',
+        model: 'mix-model',
+        list_usd: 0.2,
+        billed_usd: null,
+      }),
+    ])
+    const r = spendReport({ store: s, now: NOW })
+    expect(r.byModel.find((b) => b.key === 'mix-model')?.costUsd).toBeCloseTo(0.3)
+    expect(r.totalCostUsd).toBeCloseTo(0.3)
+    s.close()
   })
 })

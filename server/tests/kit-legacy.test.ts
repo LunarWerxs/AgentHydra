@@ -79,7 +79,7 @@ const sessionTokens = (store: KitStore, session: string) =>
 
 describe('kit legacy backfill', () => {
   test('a gone session is counted once, split by day, priced like the kit, at the first hour', async () => {
-    const store = new KitStore(':memory:')
+    const store = new KitStore(':memory:', { now: NOW })
     const s = statsDb()
     put(s, 'gone1', { [day(90)]: 3, [day(89)]: 1 }, { gone: true })
     const r = await ingestLegacy(store, s, { now: NOW })
@@ -110,7 +110,7 @@ describe('kit legacy backfill', () => {
   })
 
   test("transcript-seen days stay the kit's, older days are added once each", async () => {
-    const store = new KitStore(':memory:')
+    const store = new KitStore(':memory:', { now: NOW })
     store.upsertEvents([kitCall('k1', 'mix', 3), kitCall('k2', 'mix', 1)])
     const s = statsDb()
     // the kit holds days -3 and -1; session_stats also has -60 (older than the kit) and -2 (inside the span)
@@ -126,7 +126,7 @@ describe('kit legacy backfill', () => {
   })
 
   test('a second run, and a run repeated after a crash, add nothing', async () => {
-    const store = new KitStore(':memory:')
+    const store = new KitStore(':memory:', { now: NOW })
     const s = statsDb()
     put(s, 'g', { [day(100)]: 1, [day(10)]: 1 }, { gone: true, instance: 'desktop:abc' })
     put(s, 'other', { [day(80)]: 1 }, { gone: true, source: 'codex' })
@@ -157,7 +157,7 @@ describe('kit legacy backfill', () => {
   })
 
   test("spendReport 'all' includes the backfill: total, day and project", async () => {
-    const store = new KitStore(':memory:')
+    const store = new KitStore(':memory:', { now: NOW })
     const s = statsDb()
     put(s, 'rep-gone', { [day(120)]: 1 }, { gone: true, cwd: 'D:/work/Legacy' })
     db.query(

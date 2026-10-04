@@ -6,7 +6,13 @@
 // call older than the raw window, or a raw row folded by the prune). It is created by the store itself so a
 // schema bump is not needed; dropAndRebuild drops it with everything else.
 import type { Database } from 'bun:sqlite'
-import { KIT_MEASURES, KIT_SESSION_KEY } from './schema'
+import {
+  eventMeasure,
+  eventMeasureSql,
+  KIT_DERIVED_MEASURES,
+  KIT_MEASURES,
+  KIT_SESSION_KEY,
+} from './schema'
 
 /** The sources the Claude ingest writes; HSwarm and the foreign ingest use others. */
 export const CLAUDE_SOURCES = ['cli', 'desktop', 'climayte']
@@ -26,13 +32,24 @@ export const SETTLED_PART_DDL = `create table if not exists settled_part (
       ? `${m} real`
       : m === 'weighted'
         ? 'weighted real not null default 0'
-        : `${m} integer not null default 0`,
+        : (KIT_DERIVED_MEASURES as readonly string[]).includes(m)
+          ? `${m} real not null default 0`
+          : `${m} integer not null default 0`,
   ).join(', ')},
   primary key (${KIT_SESSION_KEY.join(', ')}, hour)
 ) without rowid`
 
 export const ensureSettledPart = (db: Database): void => {
   db.exec(SETTLED_PART_DDL)
+  // A table written before unbilled_usd and cost_usd existed: the columns are added here, their values by the
+  // schema-4 backfill (KitStore.backfill), which walks this table with the other two session tables.
+  const names = new Set(
+    (
+      db.query("select name from pragma_table_info('settled_part')").all() as { name: string }[]
+    ).map((c) => c.name),
+  )
+  for (const m of KIT_DERIVED_MEASURES)
+    if (!names.has(m)) db.exec(`alter table settled_part add column ${m} real not null default 0`)
 }
 
 const addSet = VALUES.map((c) =>
@@ -56,7 +73,7 @@ export function tagSettledCalls(db: Database, events: readonly object[]): void {
     p.$ok_calls = e.ok === true ? 1 : 0
     p.$failed_calls = e.ok === false ? 1 : 0
     for (const m of KIT_MEASURES) {
-      const v = e[m] as number | null | undefined
+      const v = eventMeasure(e as Parameters<typeof eventMeasure>[0], m)
       p[`$${m}`] = typeof v === 'number' ? v : NULLABLE.includes(m) ? null : 0
     }
     stmt.run(p)
@@ -67,7 +84,7 @@ export function tagSettledCalls(db: Database, events: readonly object[]): void {
 export function tagRawRange(db: Database, a: number, b: number): void {
   const key = KIT_SESSION_KEY.map((k) => `coalesce(${k}, '')`).join(', ')
   const hour = `(ts - ((ts % ${HOUR_MS}) + ${HOUR_MS}) % ${HOUR_MS})`
-  const sums = KIT_MEASURES.map((m) => `sum(${m})`).join(', ')
+  const sums = KIT_MEASURES.map(eventMeasureSql).join(', ')
   db.query(
     `${INSERT}select ${key}, ${hour}, count(*), sum(case when ok = 1 then 1 else 0 end),
       sum(case when ok = 0 then 1 else 0 end), ${sums} from usage_event

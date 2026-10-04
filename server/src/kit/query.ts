@@ -8,7 +8,7 @@
 import type { Database } from 'bun:sqlite'
 import { getCachedUsage } from '../usage-cache'
 import { machineId } from './machine'
-import { KIT_SESSION_KEY } from './schema'
+import { eventMeasureSql, KIT_SESSION_KEY } from './schema'
 import { KitStore, RAW_RETENTION_DAYS } from './store'
 
 const HOUR_MS = 3_600_000
@@ -42,6 +42,8 @@ export const MEASURES = [
   'tokens',
   'list_usd',
   'billed_usd',
+  'unbilled_usd',
+  'cost_usd',
   'weighted',
   'calls',
   'ok',
@@ -261,6 +263,8 @@ interface RawRow {
   tokens: number
   list_usd: number | null
   billed_usd: number | null
+  unbilled_usd: number
+  cost_usd: number
   weighted: number
   calls: number
   ok: number
@@ -302,9 +306,11 @@ function selectRows(
     .join(', ')
   const measures = raw
     ? `sum(${TOKEN_SUM}) as tokens, sum(list_usd) as list_usd, sum(billed_usd) as billed_usd,
+       ${eventMeasureSql('unbilled_usd')} as unbilled_usd, ${eventMeasureSql('cost_usd')} as cost_usd,
        sum(weighted) as weighted, count(*) as calls, sum(case when ok = 1 then 1 else 0 end) as ok,
        sum(case when ok = 0 then 1 else 0 end) as failed, sum(seconds) as seconds`
     : `sum(${TOKEN_SUM}) as tokens, sum(list_usd) as list_usd, sum(billed_usd) as billed_usd,
+       sum(unbilled_usd) as unbilled_usd, sum(cost_usd) as cost_usd,
        sum(weighted) as weighted, sum(calls) as calls, sum(ok_calls) as ok,
        sum(failed_calls) as failed, sum(seconds) as seconds`
   const kinds =
@@ -469,14 +475,14 @@ function computeUsage(
     // Calls ingested since the last rollup are not in the ledger yet: every pair with a raw row at or
     // after the first stale hour is counted from its raw rows, whole. Past MAX_PAIR_SEEKS pairs (a bulk
     // re-read is running) the ledger is served as it stands, so a load does not scan the store.
-    const dirtyMeta = store.getMeta('dirty_from')
-    if (dirtyMeta !== null) {
+    const dirtyFrom = store.dirtyFrom()
+    if (dirtyFrom !== null) {
       // Bounded by rows, not pairs: DISTINCT alone reads on until it has found enough pairs.
       const rows = db
         .query(
           `select coalesce(session, '') as s, coalesce(ref, '') as r from usage_event indexed by usage_event_ts where ts >= ? limit ${MAX_FRESH_ROWS + 1}`,
         )
-        .all(hourStart(Number(dirtyMeta))) as { s: string; r: string }[]
+        .all(hourStart(dirtyFrom)) as { s: string; r: string }[]
       const fresh = [...new Map(rows.map((x) => [`${x.s}${x.r}`, x])).values()]
       if (rows.length > MAX_FRESH_ROWS || fresh.length > MAX_PAIR_SEEKS) {
         notes.push('sessions are behind: the store is re-reading old transcripts')
@@ -566,11 +572,11 @@ function computeUsage(
       rollRanges.push([hourStart(win.from), rollTo])
     }
     if (!sessionLike) {
-      const dirty = store.getMeta('dirty_from')
+      const dirty = store.dirtyFrom()
       const lo = hourCeil(rawFrom)
       const hi = Math.min(
         hourStart(win.to + 1),
-        dirty === null ? Number.POSITIVE_INFINITY : hourStart(Number(dirty)),
+        dirty === null ? Number.POSITIVE_INFINITY : hourStart(dirty),
       )
       if (rawFrom <= win.to && lo < hi) {
         rawRanges.length = 0
@@ -673,6 +679,8 @@ function computeUsage(
       for (const k of TOKEN_KIND_MEASURES) cur[k] = (cur[k] as number) + r[k]
       cur.list_usd = addNullable(cur.list_usd as number | null, r.list_usd)
       cur.billed_usd = addNullable(cur.billed_usd as number | null, r.billed_usd)
+      cur.unbilled_usd = (cur.unbilled_usd as number) + r.unbilled_usd
+      cur.cost_usd = (cur.cost_usd as number) + r.cost_usd
       cur.weighted = (cur.weighted as number) + r.weighted
       cur.calls = (cur.calls as number) + r.calls
       cur.ok = (cur.ok as number) + r.ok
@@ -769,6 +777,8 @@ const emptyRow = (): RawRow => ({
   tokens: 0,
   list_usd: null,
   billed_usd: null,
+  unbilled_usd: 0,
+  cost_usd: 0,
   weighted: 0,
   calls: 0,
   ok: 0,
@@ -788,6 +798,8 @@ const pick = (r: RawRow): UsageRow => ({
   tokens: r.tokens ?? 0,
   list_usd: r.list_usd,
   billed_usd: r.billed_usd,
+  unbilled_usd: r.unbilled_usd ?? 0,
+  cost_usd: r.cost_usd ?? 0,
   weighted: r.weighted ?? 0,
   calls: r.calls ?? 0,
   ok: r.ok ?? 0,
@@ -868,8 +880,8 @@ function coverage(store: KitStore): UsageResult['coverage'] {
   const key = `${v.data_version}:${t.t}`
   const hit = coverageCache.get(store)
   if (hit && hit.key === key) return hit.value
-  const dirty = store.getMeta('dirty_from')
-  if (hit && dirty !== null && Date.now() - Number(dirty) > STALE_EXACT_MS) return hit.value
+  const dirty = store.dirtyFrom()
+  if (hit && dirty !== null && Date.now() - dirty > STALE_EXACT_MS) return hit.value
   const value = scanCoverage(store)
   coverageCache.set(store, { key, value })
   return value
@@ -877,8 +889,8 @@ function coverage(store: KitStore): UsageResult['coverage'] {
 
 function scanCoverage(store: KitStore): UsageResult['coverage'] {
   const sources: UsageResult['coverage']['sources'] = {}
-  const dirtyMeta = store.getMeta('dirty_from')
-  const dirtyHour = dirtyMeta === null ? null : hourStart(Number(dirtyMeta))
+  const dirty = store.dirtyFrom()
+  const dirtyHour = dirty === null ? null : hourStart(dirty)
   const counts = new Map<string, number>()
   // Raw counts are the rollup's calls from the raw cut to the first stale hour, plus the raw rows from
   // there (an index range); each source's first and last raw ts is one index seek.
@@ -946,6 +958,6 @@ function scanCoverage(store: KitStore): UsageResult['coverage'] {
   return {
     sources,
     cursors: { files: cur.n, newestMtime: cur.m },
-    dirtyFrom: dirtyMeta === null ? null : Number(dirtyMeta),
+    dirtyFrom: store.dirtyFrom(),
   }
 }

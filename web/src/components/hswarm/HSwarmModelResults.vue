@@ -74,13 +74,21 @@ async function load() {
       fetchKitUsage({
         ...base,
         groupBy: 'model',
-        measures: ['tokens', 'list_usd', 'billed_usd', 'calls', 'ok', 'failed', 'seconds'],
+        measures: [
+          'tokens',
+          'list_usd',
+          'billed_usd',
+          'unbilled_usd',
+          'calls',
+          'ok',
+          'failed',
+          'seconds',
+        ],
       }),
       fetchKitUsage({ ...base, groupBy: ['day', 'model'], measures: ['calls'] }),
     ])
     if (mine !== latest) return
     const listUsd = byModel.totals.list_usd ?? 0
-    const billed = byModel.totals.billed_usd ?? null
     kit.value = {
       models: byModel.rows
         .map((r) => {
@@ -101,8 +109,8 @@ async function load() {
         .sort((a, b) => b.tasks - a.tasks || a.model.localeCompare(b.model)),
       totals: {
         value_usd: listUsd,
-        spent_usd: billed ?? 0,
-        unknown_usd: billed === null ? listUsd : 0,
+        spent_usd: byModel.totals.billed_usd ?? 0,
+        unknown_usd: byModel.totals.unbilled_usd ?? 0,
       },
       dayModel: byDayModel.rows.map((r) => ({
         date: String(r.day),

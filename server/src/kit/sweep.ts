@@ -45,22 +45,30 @@ async function sweepOnce(store: KitStore): Promise<string> {
   } catch (err) {
     parts.push(`indexes FAILED: ${err instanceof Error ? err.message : String(err)}`)
   }
+  // Rows written before schema 4 get their unbilled_usd / cost_usd (sliced; a no-op once done).
+  await guarded('backfill', async () => {
+    await store.backfillAsync()
+    return 'backfill ok'
+  })
   await guarded('claude', async () => {
     const s: ClaudeIngestSummary = await ingestClaude(store, await discoverClaudeRoots(), {
       pc,
       attempts: await climayteAttemptRuns(),
       fullPass: sweepNo % FULL_PASS_EVERY === 1,
     })
+    await store.rollupAsync() // what this source touched, so the next one starts with a current rollup
     return `claude files=${s.files} unchanged=${s.unchanged} bytes=${s.bytes} events=${s.events} old=${s.hourly}`
   })
   await guarded('foreign', async () => {
     const s = await ingestForeign(store, { ...discoverForeignSources(), hswarm: [] }, { pc })
+    await store.rollupAsync()
     return `foreign files=${s.files} events=${Object.values(s.events).reduce((a, b) => a + b, 0)}`
   })
-  await guarded(
-    'hswarm',
-    async () => `hswarm events=${(await ingestHswarm(store, hswarmLedgerPath(), { pc })) ?? 0}`,
-  )
+  await guarded('hswarm', async () => {
+    const n = (await ingestHswarm(store, hswarmLedgerPath(), { pc })) ?? 0
+    await store.rollupAsync()
+    return `hswarm events=${n}`
+  })
   await guarded('maintenance', async () => {
     const m = await store.runMaintenanceAsync()
     return `rolled=${m.rolledUp} pruned=${m.pruned}`

@@ -75,8 +75,8 @@ export function accountTokenWindows(
   const db = store.db
   const now = opts.now ?? Date.now()
   const quota = opts.quota ?? cachedQuota(db)
-  const dirty = store.getMeta('dirty_from')
-  const split = dirty === null ? NEVER : Math.floor(Number(dirty) / HOUR_MS) * HOUR_MS
+  const dirty = store.dirtyFrom()
+  const split = dirty === null ? NEVER : Math.floor(dirty / HOUR_MS) * HOUR_MS
 
   const from = (kind: '5h' | 'week') =>
     new Map(ids.map((id) => [id, resolveWindow({ account: id, kind }, now, quota).from]))

@@ -9,6 +9,8 @@ import { dirname, join } from 'node:path'
 import { DATA_DIR } from '../config'
 import {
   dropKitSchema,
+  eventMeasure,
+  eventMeasureSql,
   KIT_HOUR_DIMS,
   KIT_MEASURES,
   KIT_SESSION_KEY,
@@ -23,6 +25,8 @@ import { ensureSettledPart, tagRawRange, tagSettledCalls } from './settled-part'
 export const RAW_RETENTION_DAYS = 35
 const HOUR_MS = 3_600_000
 const DAY_MS = 86_400_000
+/** Stale hours this close together are rolled up as one range. */
+const RUN_GAP_MS = 12 * HOUR_MS
 
 export interface UsageEventInput {
   id: string
@@ -70,6 +74,9 @@ export function localDay(ts: number): string {
   const dd = String(d.getDate()).padStart(2, '0')
   return `${d.getFullYear()}-${m}-${dd}`
 }
+
+/** The settled_claim key of a call id. */
+const claimId = (id: string): bigint => createHash('sha1').update(id).digest().readBigInt64BE(0)
 
 export const hourStart = (ts: number): number => ts - (((ts % HOUR_MS) + HOUR_MS) % HOUR_MS)
 
@@ -151,7 +158,9 @@ export const SLICE_ROWS = 1000
 /** Deleting a raw row also maintains every index, so the prune takes fewer per slice. */
 const PRUNE_ROWS = 400
 /** Raw rows of one session added up per transaction when its usage_session row is rebuilt. */
-const SESSION_CHUNK_ROWS = 1500
+const SESSION_CHUNK_ROWS = 500
+/** Ledger rows updated per slice of the schema-4 backfill. */
+const LEDGER_PAGE = 500
 
 /**
  * Walks [lo, hi) in slices that hold about `rows` raw events each, `step(a, b)` run for each. The first
@@ -228,8 +237,13 @@ export class KitStore {
   private readonly upsertStmt
   /** Bumped when every cursor is dropped, so a cache of cursors held by an ingest knows it is stale. */
   cursorEpoch = 0
+  /** The clock the first raw cut was taken from (undefined: the wall clock); a test fixes it. */
+  private readonly openNow: number | undefined
 
-  constructor(readonly path: string = kitDbPath()) {
+  constructor(
+    readonly path: string = kitDbPath(),
+    opts: { now?: number } = {},
+  ) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.db = new Database(path, { create: true })
     if (path !== ':memory:') this.db.exec('pragma journal_mode = WAL')
@@ -238,8 +252,24 @@ export class KitStore {
     this.db.exec('pragma cache_size = -65536')
     migrateKitSchema(this.db)
     ensureSettledPart(this.db)
+    this.openNow = opts.now
+    this.initRawCut(this.openNow)
     this.upsertStmt = this.prepareUpsert()
     if (path !== ':memory:') OPEN_STORES.add(this)
+  }
+
+  /**
+   * raw_cut is never null: below it a call is settled (usage_hour and the ledger, no raw row), at or above it
+   * a call is raw. A store that has never pruned starts at the retention line, or at its oldest raw row when
+   * that is older, so a call read before the first prune lands on the same side whatever source brought it.
+   */
+  private initRawCut(now: number = Date.now()): void {
+    if (this.getMeta('raw_cut') !== null) return
+    const oldest = this.db.query('select min(ts) as t from usage_event').get() as {
+      t: number | null
+    }
+    const line = hourStart(now - RAW_RETENTION_DAYS * DAY_MS)
+    this.setMeta('raw_cut', String(oldest.t === null ? line : Math.min(line, hourStart(oldest.t))))
   }
 
   private prepareUpsert() {
@@ -341,21 +371,35 @@ export class KitStore {
   }
 
   /**
-   * Insert or replace by id: the last write wins, matching accumulateUsageLine. Returns rows written.
+   * Insert or replace by id: the last write wins, matching accumulateUsageLine. Returns calls taken.
    *
-   * An event older than the raw cut (the last prune's cutoff) is dropped: its raw row is gone and its
-   * usage is already counted in usage_hour and usage_session, so taking it again (a source file re-read
-   * from byte 0 after a cursor reset) would double it there, or make the next rollup rewrite hours that
-   * no raw row backs any more.
+   * raw_cut decides where a call lives. At or above it the call is a raw row. Below it the raw row is gone
+   * (or never was) and the call goes the settled way (settleOld: usage_hour and the ledger, first claim wins),
+   * so taking it again (a source file re-read from byte 0 after a cursor reset) cannot double it, and no rollup
+   * ever rebuilds an hour that no raw row backs.
    */
   upsertEvents(input: readonly UsageEventInput[]): number {
     const cut = this.rawCut()
     const events = cut === null ? input : input.filter((e) => e.ts >= cut)
+    let n = 0
+    if (cut !== null && events.length < input.length) {
+      n += this.settleOld(input.filter((e) => e.ts < cut))
+    }
+    return n + this.writeRaw(events)
+  }
+
+  /** Raw rows by id (the last write wins); marks the hours of the new and of any replaced timestamp dirty. */
+  private writeRaw(events: readonly UsageEventInput[]): number {
     if (events.length === 0) return 0
-    let minTs = Infinity
+    const prev = this.db.prepare('select ts from usage_event where id = ?')
+    const mark = this.db.prepare('insert or ignore into dirty_hour (hour) values (?)')
     const tx = this.db.transaction((rows: readonly UsageEventInput[]) => {
+      const hours = new Set<number>()
       for (const e of rows) {
-        minTs = Math.min(minTs, e.ts)
+        // A replaced call leaves its old hour too: that hour's rollup still counts it.
+        const old = prev.get(e.id) as { ts: number } | null
+        if (old) hours.add(hourStart(old.ts))
+        hours.add(hourStart(e.ts))
         this.upsertStmt.run({
           $id: e.id,
           $ts: e.ts,
@@ -383,7 +427,7 @@ export class KitStore {
           $ref: e.ref ?? null,
         })
       }
-      this.markDirty(hourStart(minTs))
+      for (const h of hours) mark.run(h)
     })
     tx(events)
     return events.length
@@ -395,8 +439,35 @@ export class KitStore {
     for (let i = 0; i < input.length; i += WRITE_SLICE) {
       n += this.upsertEvents(input.slice(i, i + WRITE_SLICE))
       await yieldLoop()
+      await this.rollupSoon()
     }
     return n
+  }
+
+  /** Least time between two rollups run by rollupSoon (it also waits four times as long as the last took; 0 means every call). */
+  rollupEveryMs = 5000
+  private rolling = false
+  private nextRollupAt = 0
+
+  /**
+   * Called between the commits of a long ingest: rolls up the hours the ingest has touched so far, at most
+   * once per rollupEveryMs and never taking more than a fifth of the time. A first sweep or an upgrade re-read
+   * takes tens of minutes; without this the oldest stale hour stays at the raw cut for all of it and every
+   * reader that splits there (account windows, usage queries) reads raw rows for the whole window.
+   */
+  async rollupSoon(): Promise<void> {
+    if (this.rolling || performance.now() < this.nextRollupAt) return
+    if (this.dirtyFrom() === null) return
+    this.rolling = true
+    const t = performance.now()
+    try {
+      await this.rollupAsync()
+    } finally {
+      this.rolling = false
+      this.nextRollupAt = this.rollupEveryMs
+        ? performance.now() + Math.max(this.rollupEveryMs, 4 * (performance.now() - t))
+        : 0
+    }
   }
 
   /**
@@ -420,7 +491,7 @@ export class KitStore {
       }
       g.calls++
       for (const m of KIT_MEASURES) {
-        const v = e[m]
+        const v = eventMeasure(e, m)
         if (v != null) g.n[m] = (g.n[m] ?? 0) + v
       }
     }
@@ -459,20 +530,35 @@ export class KitStore {
    * Returns calls settled.
    */
   settleOld(events: readonly UsageEventInput[]): number {
-    const inRaw = this.db.prepare('select 1 from usage_event where id = ?')
+    const cut = this.rawCut()
+    const inRaw = this.db.prepare('select instance, session from usage_event where id = ?')
+    const claimed = this.db.prepare('select 1 as x from settled_claim where h = ?')
     const claim = this.db.prepare('insert or ignore into settled_claim (h) values (?)')
     let fresh: UsageEventInput[] = []
+    let band: UsageEventInput[] = []
     this.db.transaction(() => {
+      // From the raw cut up the call is not settled-only: it becomes a raw row (the next prune settles it),
+      // so no rollup of its hour can rebuild the hour without it. A call already claimed stays out.
+      band = events.filter((e) => {
+        if (cut === null || e.ts < cut) return false
+        const have = inRaw.get(e.id) as { instance: string | null; session: string | null } | null
+        if (have) {
+          return have.instance === (e.instance ?? null) && have.session === (e.session ?? null)
+        }
+        return !claimed.get(claimId(e.id))
+      })
       fresh = events.filter(
         (e) =>
+          (cut === null || e.ts < cut) &&
           !inRaw.get(e.id) &&
-          claim.run(createHash('sha1').update(e.id).digest().readBigInt64BE(0)).changes === 1,
+          claim.run(claimId(e.id)).changes === 1,
       )
+      this.writeRaw(band)
       this.addToHourly(fresh)
       this.addToSessions(fresh)
       tagSettledCalls(this.db, fresh) // so a version upgrade can take back what a transcript still on disk gave
     })()
-    return fresh.length
+    return fresh.length + band.length
   }
 
   /** settleOld in slices of WRITE_SLICE calls. Each slice is atomic with its claims, so a cut-short run
@@ -505,7 +591,7 @@ export class KitStore {
       g.first = Math.min(g.first, e.ts)
       g.last = Math.max(g.last, e.ts)
       for (const m of KIT_MEASURES) {
-        const v = e[m]
+        const v = eventMeasure(e, m)
         if (v != null) g.n[m] = (g.n[m] ?? 0) + v
       }
     }
@@ -545,10 +631,10 @@ export class KitStore {
     this.db.query('insert or replace into meta (key, value) values (?, ?)').run(key, value)
   }
 
-  /** Oldest hour whose rollup may be stale; every upsert lowers it, a rollup clears it. */
-  private markDirty(hour: number): void {
-    const cur = this.getMeta('dirty_from')
-    if (cur === null || hour < Number(cur)) this.setMeta('dirty_from', String(hour))
+  /** Oldest hour whose rollup may be stale (every write marks the hours it touches), or null when none is. */
+  dirtyFrom(): number | null {
+    const r = this.db.query('select min(hour) as h from dirty_hour').get() as { h: number | null }
+    return r.h
   }
 
   // ---- ingest cursors ----
@@ -591,13 +677,21 @@ export class KitStore {
   }
 
   private *rollupSteps(fromTs?: number): Steps<number> {
-    const dirty = this.getMeta('dirty_from')
-    const from = fromTs !== undefined ? hourStart(fromTs) : dirty !== null ? Number(dirty) : null
-    if (from === null) return 0
-    const written = yield* this.rollupRange(from, Infinity)
-    if (dirty === null || Math.max(from, this.rawCut() ?? -Infinity) <= Number(dirty)) {
-      this.db.query("delete from meta where key = 'dirty_from'").run()
+    // Hours below the raw cut have no raw row to rebuild from.
+    const cut = this.rawCut()
+    if (cut !== null) this.db.query('delete from dirty_hour where hour < ?').run(cut)
+    if (fromTs !== undefined) return yield* this.rollupRange(hourStart(fromTs), Infinity)
+    // The stale hours, as runs: hours less than RUN_GAP_MS apart are rebuilt together.
+    const runs: [number, number][] = []
+    for (const r of this.db.query('select hour from dirty_hour order by hour').all() as {
+      hour: number
+    }[]) {
+      const last = runs[runs.length - 1]
+      if (last && r.hour - last[1] <= RUN_GAP_MS) last[1] = r.hour
+      else runs.push([r.hour, r.hour])
     }
+    let written = 0
+    for (const [lo, hi] of runs) written += yield* this.rollupRange(lo, hi + HOUR_MS)
     return written
   }
 
@@ -606,7 +700,7 @@ export class KitStore {
     from = Math.max(from, this.rawCut() ?? -Infinity)
     const dims = KIT_HOUR_DIMS.map((d) => `coalesce(${d}, '')`).join(', ')
     const sums = KIT_MEASURES.filter((m) => m !== 'weighted')
-      .map((m) => `sum(${m})`)
+      .map(eventMeasureSql)
       .join(', ')
     // Hours that exist in usage_hour but have no raw event any more still have to be cleared.
     // Index seeks (a min() over a union scans the range, which is seconds on a live-size store).
@@ -625,8 +719,14 @@ export class KitStore {
       edgeOf('usage_event', 'ts', 'desc'),
       edgeOf('usage_hour', 'hour', 'desc'),
     ].filter((v): v is number => v !== null)
-    if (lows.length === 0 || highs.length === 0) return 0
+    // Stale hours that no row backs (an event moved away, nothing left there) have nothing to rebuild.
+    const noData = this.db.prepare('delete from dirty_hour where hour >= $a and hour < $b')
+    if (lows.length === 0 || highs.length === 0) {
+      noData.run({ $a: from, $b: to })
+      return 0
+    }
     const edge = { lo: Math.min(...lows), hi: Math.max(...highs) }
+    noData.run({ $a: from, $b: Math.min(hourStart(edge.lo), to) })
     const hi = Math.min(hourStart(edge.hi) + HOUR_MS, to)
     // An hour's row is deleted by the slice its first millisecond falls in; every slice of the hour adds.
     const del = this.db.prepare('delete from usage_hour where hour >= $a and hour < $b')
@@ -648,12 +748,16 @@ export class KitStore {
     const pairsOf = this.db.prepare(
       "select distinct coalesce(session, '') as s, coalesce(ref, '') as r from usage_event where ts >= $a and ts < $b",
     )
+    // The hours a slice completes (the ones that end before its end) are fresh in the transaction that
+    // rebuilds them, so a write that lands in one afterwards marks it stale again.
+    const fresh = this.db.prepare('delete from dirty_hour where hour >= $a and hour < $b')
     let written = 0
     const pairs = new Map<string, { s: string; r: string }>()
     yield* eventSlices(this.db, Math.max(from, hourStart(edge.lo)), hi, (a, b) => {
       this.db.transaction(() => {
         del.run({ $a: a, $b: b })
         written += ins.run({ $a: a, $b: b }).changes
+        fresh.run({ $a: hourStart(a), $b: hourStart(b) })
       })()
       for (const p of pairsOf.all({ $a: a, $b: b }) as { s: string; r: string }[])
         pairs.set(`${p.s}\u0000${p.r}`, p)
@@ -730,15 +834,17 @@ export class KitStore {
     if (!oldest || oldest.t === null || oldest.t >= cutoff) return 0
     const oldestHour = hourStart(oldest.t)
     // Only the doomed hours are rolled up; whatever was stale at or after the cut stays stale.
-    const dirty = this.getMeta('dirty_from')
-    yield* this.rollupRange(Math.min(oldestHour, Number(dirty ?? Infinity)), cutoff)
-    if (dirty !== null && Number(dirty) < cutoff) this.setMeta('dirty_from', String(cutoff))
+    yield* this.rollupRange(Math.min(oldestHour, this.dirtyFrom() ?? Infinity), cutoff)
     let deleted = 0
     // The sessions' totals do not change: the doomed rows move from raw into the settled part.
     const fold = this.db.prepare(
       sessionAddSql('usage_session_settled', sessionAggSql('ts >= $a and ts < $b')),
     )
     const drop = this.db.prepare('delete from usage_event where ts >= $a and ts < $b')
+    // A call that leaves the raw rows stays claimed: read again below the cut (a transcript re-read from 0,
+    // a copy under another path) it is not added a second time.
+    const doomed = this.db.prepare('select id from usage_event where ts >= $a and ts < $b')
+    const claim = this.db.prepare('insert or ignore into settled_claim (h) values (?)')
     // A slice can end inside an hour. Every doomed hour was rolled up above, so raw_cut is raised to the end
     // of the hour the slice reaches: a run cut short here is never followed by a rollup of the hour's
     // remaining raw rows over its complete usage_hour row.
@@ -748,6 +854,7 @@ export class KitStore {
       cutoff,
       (a, b) => {
         this.db.transaction(() => {
+          for (const r of doomed.all({ $a: a, $b: b }) as { id: string }[]) claim.run(claimId(r.id))
           fold.run({ $a: a, $b: b })
           tagRawRange(this.db, a, b)
           deleted += drop.run({ $a: a, $b: b }).changes
@@ -758,6 +865,73 @@ export class KitStore {
       PRUNE_ROWS,
     )
     return deleted
+  }
+
+  /**
+   * Fills unbilled_usd and cost_usd for the rows written before schema 4 (the migration only adds the
+   * columns). Phase a: from the sums a row already has (billed where it has a billed sum, else list), which
+   * is exact unless one row mixes billed and unbilled calls, for every usage_hour row older than the oldest
+   * raw event and every ledger row, a slice at a time. Phase b: usage_hour and the ledger of the hours that
+   * still have raw rows are rebuilt from them (the ordinary rollup), which is exact. The marker is advanced
+   * between phases and removed last, and each phase can be run again after a restart. Does nothing once done.
+   */
+  backfill(): void {
+    runSteps(this.backfillSteps())
+  }
+
+  backfillAsync(): Promise<void> {
+    return runStepsAsync(this.backfillSteps())
+  }
+
+  private *backfillSteps(): Steps<void> {
+    const phase = this.getMeta('backfill_v4')
+    if (phase === null) return
+    const oldest = (
+      this.db.query('select min(ts) as t from usage_event').get() as { t: number | null }
+    ).t
+    const floor = oldest === null ? Infinity : hourStart(oldest)
+    const from =
+      'unbilled_usd = case when billed_usd is null then coalesce(list_usd, 0) else 0 end, cost_usd = coalesce(billed_usd, list_usd, 0)'
+    if (phase === 'a') {
+      const edge = this.db
+        .query('select min(hour) as lo, max(hour) as hi from usage_hour')
+        .get() as {
+        lo: number | null
+        hi: number | null
+      }
+      if (edge.lo !== null && edge.hi !== null) {
+        const upd = this.db.prepare(`update usage_hour set ${from} where hour >= $a and hour < $b`)
+        yield* hourSlices(edge.lo, Math.min(floor, edge.hi + HOUR_MS), (a, b) => {
+          upd.run({ $a: a, $b: b })
+        })
+      }
+      for (const table of ['usage_session_settled', 'usage_session', 'settled_part']) {
+        // The key starts with the session id: a run of sessions at a time, walking up the key.
+        const page = this.db.prepare(
+          `select session as s from ${table} where session > $lo order by session limit 1 offset ${LEDGER_PAGE - 1}`,
+        )
+        const upd = this.db.prepare(
+          `update ${table} set ${from} where session > $lo and session <= $hi`,
+        )
+        const rest = this.db.prepare(`update ${table} set ${from} where session > $lo`)
+        for (let lo = ''; ; ) {
+          const hi = (page.get({ $lo: lo }) as { s: string } | null)?.s
+          if (hi === undefined) {
+            rest.run({ $lo: lo })
+            break
+          }
+          upd.run({ $lo: lo, $hi: hi })
+          lo = hi
+          yield
+        }
+        // A session with an empty id sorts below every `> ''` bound.
+        this.db.query(`update ${table} set ${from} where session = ''`).run()
+        yield
+      }
+      this.setMeta('backfill_v4', 'b')
+    }
+    if (Number.isFinite(floor)) yield* this.rollupRange(floor, Infinity)
+    this.db.query("delete from meta where key = 'backfill_v4'").run()
   }
 
   /** The hourly job: roll up what changed, then prune. */
@@ -785,6 +959,7 @@ export class KitStore {
     this.cursorEpoch++
     migrateKitSchema(this.db)
     ensureSettledPart(this.db)
+    this.initRawCut(this.openNow)
     if (priceVer !== undefined) this.setMeta('price_ver', priceVer)
   }
 }

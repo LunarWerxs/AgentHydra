@@ -805,6 +805,7 @@ async function readFileInto(
       for (let i = 0; i < rows.length; i += WRITE_SLICE) {
         out.events += store.upsertEvents(unclaimed(rows.slice(i, i + WRITE_SLICE)))
         await yieldLoop()
+        await store.rollupSoon() // keeps the oldest stale hour close to now through a long re-read
       }
       out.hourly += await store.settleOldAsync(olds)
       const cursor = {
