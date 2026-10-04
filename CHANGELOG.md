@@ -15,13 +15,23 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   resume up to 30 minutes; a model turn or a typed message resets it. The idea comes from
   paperclipai/paperclip's re-wake throttle (MIT).
 
+- **`unblock_prompts` answers Claude's permission-change card when it only restores a bypass a chat
+  already had** (`orchestrator/scripts/unblock_prompts.py`, `orchestrator/scripts/lib/approvallib.py`,
+  `orchestrator/scripts/actuator/approve_prompt.ps1`). A chat that calls
+  `set_session_permission_mode` stopped on that card and the unblock lane could not answer it. A
+  card restoring a target's configured `bypassPermissions` mode, in the same profile and login, is
+  approved with **Allow once** after a recheck right before the press; anything else escalates, and
+  operator deny patterns win. The scan also keeps every unresolved tool call of the turn, so a
+  parallel sibling's result no longer hides a call still waiting. See
+  `docs/CLAUDE-PERMISSION-PROMPTS.md`; approval against a live card is not yet verified end to end.
+
 ### Fixed
 
 - **The CliMayte list no longer throws on a manager wave's verdicts** (`web/src/lib/climayte-status.ts`).
   A verdict recorded by a manager wave (`by: 'wave'`) had no line in the row's verdict mark or the
   failure story, so vue-i18n threw `SyntaxError: 17` for each such row (53 errors in the live
-  list's console, 2026-10-04). Wave verdicts now read "Its wave manager accepted / rejected the result", and a
-  recorder this build does not know reads as plain "Passed" / "Failed".
+  list's console, 2026-10-04). Wave verdicts now read "Its wave manager accepted / rejected the
+  result", and a recorder this build does not know reads as plain "Passed" / "Failed".
 
 ## [1.9.0] - 2026-10-04
 

@@ -18,7 +18,7 @@ call, and answering it would be inventing consent.
 
 THE FOUR CONDITIONS, all required:
   1. the chat has a LIVE engine (a dead one is not waiting on anything);
-  2. its newest transcript record is a tool call with no result - the shape of waiting;
+  2. its current turn has a tool call with no matching result - the shape of waiting;
   3. its meta record says bypassPermissions;
   4. it is not held, and its own app is running.
 The actuator then adds its own aim rails (the right chat open, an enabled Allow button in the
@@ -33,6 +33,12 @@ context - the bypass MODE was consent to never being asked, not to any specific 
 ESCALATE (everything the policy does not place) is never pressed UNATTENDED either - it is
 queued for interview.py's judgment queue instead. Only the INTERACTIVE run (`--force`, a
 person at orch.py) may press an ESCALATE row, and only after showing the command.
+
+Claude's set_session_permission_mode card is separate from tool availability. A request
+to restore a target's already configured bypass mode can approve automatically; a new
+permission increase goes through the existing decision path. Both use Allow once on a
+card naming the verified target and mode. Run this from another chat or the independent
+unblock lane: the caller waiting on the card cannot unblock itself.
 
 TARGETING ONE CHAT (--session, 2026-09-11). The sweep above answers "what in the fleet is
 stuck"; a MANAGER chat driving another account has the opposite question - "THIS chat stopped
@@ -83,17 +89,65 @@ MIN_WAIT_SECS = configlib.get("unblock.min_wait_secs")
 
 
 def _pending_record(transcript: Path) -> dict | None:
-    """This chat's newest record, when it is a tool call with no result - that is the
-    waiting shape. None otherwise. Returns the record itself (not just a bool) so the
-    caller can classify what the pending call would actually DO (approvallib.classify)."""
+    """Unresolved calls in the current turn, including parallel calls.
+
+    A result for one sibling must not hide another call waiting on an app card.
+    Ordinary user messages and completed turns reset the pending set. Old records
+    without tool IDs retain the previous last-record behavior.
+    """
     raw = gatelib.read_transcript_tail_text(str(transcript), 64 * 1024)
     if not raw:
         return None
     records = gatelib.parse_tail_records(raw[0], raw[1])
     if not records:
         return None
+    lines = raw[0].splitlines()
+    if not raw[1]:
+        lines = lines[1:]
+    pending = {}
+    for line in lines:
+        event = gatelib._tail_event(line)
+        if event is None:
+            continue
+        blocks = gatelib._content_blocks(event)
+        results = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_result"]
+        if event["type"] == "result" or (event["type"] == "user" and not results):
+            pending.clear()
+        for result in results:
+            pending.pop(result.get("tool_use_id"), None)
+        for block in blocks:
+            if (isinstance(block, dict) and block.get("type") == "tool_use"
+                    and isinstance(block.get("id"), str)):
+                pending[block["id"]] = {"id": block["id"], "name": block.get("name", ""),
+                                       "input": block.get("input") if isinstance(block.get("input"), dict) else {}}
+    if pending:
+        return {**records[-1], "has_tool_use": True, "has_tool_result": False,
+                "tool_inputs": list(pending.values())}
     last = records[-1]
     return last if (last["has_tool_use"] and not last["has_tool_result"]) else None
+
+
+def _permission_targets(metas: list, caller_path: Path, *, require_bypass: bool = True) -> dict:
+    """Exact local IDs in this profile; automatic restorations require existing bypass."""
+    targets = {}
+    titles = [meta.get("title") for _, meta in metas]
+    for path, meta in metas:
+        if path.parent.parent != caller_path.parent.parent:
+            continue  # a different login's on-disk records are not this caller's targets
+        if sum(other.stem == path.stem for other, _ in metas) != 1:
+            continue
+        sid = str(meta.get("cliSessionId") or path.stem.removeprefix("local_"))
+        title = str(meta.get("title") or "")
+        if ((require_bypass and not stamplib.is_bypass(meta)) or meta.get("isArchived") or holdlib.why_blocked(sid)
+                or not path.stem.startswith("local_")):
+            continue
+        # Claude shows the title when available. Refuse ambiguous names instead of
+        # approving a same-titled neighbour; untitled cards display the local ID.
+        if title and titles.count(title) != 1 and path != caller_path:
+            continue
+        targets[path.stem] = {"sessionId": path.stem, "title": title,
+                              "isSelf": path == caller_path}
+    return targets
 
 
 def find_stuck(only: set[str] | None = None,
@@ -114,7 +168,8 @@ def find_stuck(only: set[str] | None = None,
     out: list[dict] = []
     seen: set[str] = set()
     for store in stamplib.store_roots(fleet):
-        for path, meta in stamplib.iter_metas(store["root"]):
+        metas = list(stamplib.iter_metas(store["root"]))
+        for path, meta in metas:
             if meta.get("isArchived"):
                 continue
             sid = str(meta.get("cliSessionId") or path.stem.replace("local_", ""))
@@ -140,7 +195,23 @@ def find_stuck(only: set[str] | None = None,
             # that its permission mode says never-ask. DENY overrides bypass doctrine
             # entirely - a chat consented to a MODE, never to a specific destructive command.
             tool_name, cmd_text = approvallib.pending_command_text(pending)
-            verdict, verdict_reason, verdict_key = approvallib.classify(tool_name, cmd_text)
+            mode_calls = [call for call in pending["tool_inputs"]
+                          if call.get("name") == approvallib.PERMISSION_MODE_TOOL]
+            targets = _permission_targets(metas, path) if mode_calls else {}
+            verdict, verdict_reason, verdict_key = approvallib.classify_pending(pending, targets)
+            permission_prompt = None
+            if mode_calls:
+                wanted = [call.get("input", {}).get("session_id") for call in mode_calls]
+                known_targets = _permission_targets(metas, path, require_bypass=False)
+                permission_prompt = {
+                    "targets": [known_targets[target] for target in wanted if isinstance(target, str) and target in known_targets],
+                    "complete": (len(mode_calls) == len(pending["tool_inputs"])
+                                 and all(isinstance(target, str) and target in known_targets for target in wanted)
+                                 and all(set(call["input"]) == {"session_id", "mode"}
+                                         and call["input"].get("mode") == stamplib.BYPASS for call in mode_calls)),
+                    "transcript": str(f), "callerMeta": str(path),
+                    "toolCalls": pending["tool_inputs"],
+                }
             held = holdlib.why_blocked(sid)
             # THE IDENTITY PROOF (review 2026-09-01): the actuator identified the chat by TITLE
             # alone, and same-titled chats in two instances are a known fleet shape. The chat's
@@ -175,6 +246,7 @@ def find_stuck(only: set[str] | None = None,
                 # `eligible` for the old meaning. DENY/ESCALATE rows are structurally eligible
                 # but never make it into a press without the verdict's own say-so.
                 "toolName": tool_name, "command": cmd_text[:500],
+                "permissionPrompt": permission_prompt,
                 "verdict": verdict, "verdictReason": verdict_reason, "verdictKey": verdict_key,
                 "eligible": ((stamplib.is_bypass(meta) or bypass_by_promise)
                              and store["isRunning"] and not held and bool(verify)),
@@ -257,6 +329,23 @@ def press(row: dict, always_select: bool = False) -> dict:
                 "-Instance", str(row.get("instanceDir") or row["instance"])]
         if row.get("verify"):
             args += ["-VerifyText", str(row["verify"])]  # rail 2b: its own words, or no press
+        prompt = row.get("permissionPrompt")
+        if prompt:
+            # The transcript and destination settings can change between plan and press.
+            current = _pending_record(Path(prompt["transcript"]))
+            metas = list(stamplib.iter_metas(Path(row["instanceDir"]) / "claude-code-sessions"))
+            caller_path = Path(prompt["callerMeta"])
+            targets = _permission_targets(metas, caller_path, require_bypass=False)
+            verdict = approvallib.classify_pending(current or {}, _permission_targets(metas, caller_path))[0]
+            caller = next((meta for path, meta in metas if path == caller_path), {})
+            if (not prompt.get("complete") or not current
+                    or current["tool_inputs"] != prompt["toolCalls"]
+                    or any(targets.get(t["sessionId"]) != t for t in prompt["targets"])
+                    or not caller or caller.get("isArchived") or holdlib.why_blocked(row["sessionId"])
+                    or verdict == approvallib.DENY
+                    or (verdict != approvallib.APPROVE and not row.get("permissionChangeApproved"))):
+                raise ValueError("permission card changed or its target is not a verified bypass restoration; rescan")
+            args += ["-OnceOnly", "-PermissionTargetsJson", json.dumps(prompt["targets"])]
         if select:
             args.append("-Select")
         return clilib.run_text(args, timeout=180)
@@ -288,7 +377,7 @@ def press(row: dict, always_select: bool = False) -> dict:
     # whole session after the wrong thing: the actuator's own last line says WHICH window it
     # drove and which rows it could see, and that line was being dropped into a `detail` field
     # nobody printed. A bare refusal is not diagnosable; this one is.
-    outcome = ("approved - the chat carries on" if ok
+    outcome = ("approved one permission prompt" if ok
                else "no prompt showing (it may have cleared)" if r.returncode == 3
                else f"could not reach that chat's pane - {detail}" if r.returncode == 4
                else "did NOT clear")
@@ -537,7 +626,8 @@ def main(argv: list[str]) -> int:
     missing = _missing_report(requested, stuck)
     press_candidates, queued, denied = _select(stuck, context)
     eligible = press_candidates[:cap]
-    results = [press(r) for r in eligible] if act else []
+    results = [press({**r, "permissionChangeApproved": context == "interactive"})
+               for r in eligible] if act else []
     # Queuing an ESCALATE row for the judgment queue is itself an ACT (it mutates shared
     # state other lanes read), so it is gated on `act` exactly like a press - a plan-only or
     # disarmed run must observe without writing (armlib's own "seeing is not doing").
@@ -546,7 +636,8 @@ def main(argv: list[str]) -> int:
             approvallib.queue_escalation(
                 r["sessionId"], title=r["title"], instance=r["instance"],
                 instance_dir=r.get("instanceDir") or r["instance"], verify=r["verify"],
-                command=r["command"], tool_name=r["toolName"], reason=r["verdictReason"])
+                command=r["command"], tool_name=r["toolName"], reason=r["verdictReason"],
+                permission_prompt=r.get("permissionPrompt"))
 
     if as_json:
         print(json.dumps({"stuck": stuck, "results": results, "context": context,

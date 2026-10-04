@@ -36,6 +36,9 @@ param(
   [Parameter(Mandatory = $true)][string]$Instance,
   [switch]$Select,
   [switch]$OnceOnly,
+  # Verified pending permission-mode restorations, supplied by unblock_prompts.py.
+  # This selects the matching app card, never a nearby ordinary tool approval.
+  [string]$PermissionTargetsJson = '',
   # A snippet of the target chat's own last words; when given, it MUST be visible in the pane.
   [string]$VerifyText = '',
   # -SetMode 'Bypass permissions': instead of pressing Allow, set the chat's PERMISSION MODE
@@ -1234,7 +1237,77 @@ if ($SetMode) {
   exit 0
 }
 
-# RAILS 3 + 4: an ENABLED allow button, in the conversation pane. Always-allow wins.
+# >>> PERMISSION-CARD MATCH REGION >>>
+function Test-PermissionModeCard($parts, $targets) {
+  # Claude 2.19675.0's renderer emits this explanatory sentence (Vxe in
+  # ion-dist/assets/v1/cd5a31703-DiwdunLT.js). It is separate from localized labels.
+  # Keep matching conservative when future builds change the card's wording.
+  $text = (($parts -join ' ') -replace '\s+', ' ')
+  foreach ($t in $targets) {
+    $who = if ($t.isSelf) { 'this session' } else { 'a session' }
+    $pattern = 'This one switches ' + $who + '(?: from [^.]+)? to Bypass permissions \(bypassPermissions\) mode\.'
+    if ($text -cnotmatch $pattern) { continue }
+    if ($t.isSelf) { return $true }
+    $label = if ($t.title) { [string]$t.title } else { [string]$t.sessionId }
+    if ($label -and @($parts | Where-Object { $_ -ceq $label }).Count -gt 0) { return $true }
+  }
+  return $false
+}
+
+# One ancestor of an enabled Allow once button, read as a card: 'match', 'reject' (stop climbing)
+# or 'climb' (no mode sentence here yet). The card is the FIRST ancestor that carries a mode
+# sentence: text further out belongs to other messages (an earlier card's sentence or session
+# chip), so a card naming an unverified target can never borrow a verified target's title from
+# them. An ancestor holding two sentences or two Allow once buttons spans cards and is refused.
+function Get-PermissionCardLevel($parts, $onceCount, $targets) {
+  if ($onceCount -gt 1) { return 'reject' }
+  $text = (($parts -join ' ') -replace '\s+', ' ')
+  $sentences = ([regex]::Matches($text, 'This one switches ')).Count
+  if ($sentences -eq 0) { return 'climb' }
+  if ($sentences -gt 1 -or $onceCount -ne 1) { return 'reject' }
+  if (Test-PermissionModeCard $parts $targets) { return 'match' }
+  return 'reject'
+}
+# <<< PERMISSION-CARD MATCH REGION <<<
+
+$permissionTargets = @()
+if ($PermissionTargetsJson) {
+  $permissionTargets = @($PermissionTargetsJson | ConvertFrom-Json)
+  if (-not $OnceOnly -or $permissionTargets.Count -eq 0) {
+    Write-Output 'REFUSED: permission-mode cards require verified targets and -OnceOnly'; exit 1
+  }
+}
+
+function Test-ButtonPermissionCard($button, $targets) {
+  $node = $button
+  for ($depth = 0; $depth -lt 12; $depth++) {
+    $node = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($node)
+    if (-not $node) { return $false }
+    $rect = $node.Current.BoundingRectangle
+    if ($rect.IsEmpty -or $rect.Left -lt $minX) { return $false }
+    $parts = @(); $onceCount = 0
+    foreach ($child in $node.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+      try {
+        if ($child.Current.IsOffscreen) { continue }
+        $name = $child.Current.Name
+        $ct = $child.Current.ControlType
+        # Session chips can expose their title as a button/link rather than a text leaf.
+        if ($ct -eq [System.Windows.Automation.ControlType]::Text -or
+            $ct -eq [System.Windows.Automation.ControlType]::Button -or
+            $ct -eq [System.Windows.Automation.ControlType]::Hyperlink) { $parts += $name }
+        if ($ct -eq [System.Windows.Automation.ControlType]::Button -and $child.Current.IsEnabled) {
+          foreach ($label in $ALLOW_ONCE_NAMES) { if ($name -and $name.StartsWith($label)) { $onceCount++; break } }
+        }
+      } catch { return $false }
+    }
+    $level = Get-PermissionCardLevel $parts $onceCount $targets
+    if ($level -ne 'climb') { return $level -eq 'match' }
+  }
+  return $false
+}
+
+# RAILS 3 + 4: a visible, enabled allow button in the conversation pane.
+# A permission-mode restoration only uses Allow once on its matched app card.
 $minX = PaneMinX $el
 # ⛔ NAME THESE APART FROM THE NAME LISTS. PowerShell variables are CASE-INSENSITIVE, so
 # `$once = $null` silently ERASED the `$ONCE` list of button names and the match loop then
@@ -1246,15 +1319,55 @@ foreach ($b in $el.FindAll($TREE, $btnCond)) {
     if (-not $n) { continue }
     $r = $b.Current.BoundingRectangle
     if ($r.IsEmpty -or $r.Left -lt $minX) { continue }
-    if (-not $b.Current.IsEnabled) { continue }
+    if (-not $b.Current.IsEnabled -or $b.Current.IsOffscreen) { continue }
+    if ($permissionTargets.Count -gt 0) {
+      $isOnce = @($ALLOW_ONCE_NAMES | Where-Object { $n.StartsWith($_) }).Count -gt 0
+      if (-not $isOnce -or -not (Test-ButtonPermissionCard $b $permissionTargets)) { continue }
+      if ($hitOnce) { Write-Output 'REFUSED: multiple matching permission-mode cards are visible'; exit 1 }
+      $hitOnce = $b
+      continue
+    }
     foreach ($a in $ALLOW_ALWAYS_NAMES) { if ($n.StartsWith($a) -and -not $hitAlways) { $hitAlways = $b } }
     foreach ($o in $ALLOW_ONCE_NAMES) { if ($n.StartsWith($o) -and -not $hitOnce) { $hitOnce = $b } }
   } catch { continue }
 }
 $target = if ($OnceOnly) { $hitOnce } elseif ($hitAlways) { $hitAlways } else { $hitOnce }
-if (-not $target) { Write-Output "no permission prompt is showing for '$Title'"; exit 3 }
+if (-not $target) {
+  if ($permissionTargets.Count -gt 0) {
+    Write-Output "REFUSED: no matching visible permission-mode card for '$Title'"; exit 6
+  }
+  Write-Output "no permission prompt is showing for '$Title'"; exit 3
+}
 $inv = TryPattern $target ([System.Windows.Automation.InvokePattern]::Pattern)
 if (-not $inv) { Write-Output 'REFUSED: the allow button exposes no Invoke'; exit 1 }
+$approvedLabel = $target.Current.Name
+$approvedId = $target.GetRuntimeId()
 $inv.Invoke()
-Write-Output "APPROVED '$($target.Current.Name)' for '$Title' in $($proc.Dir)"
+if ($permissionTargets.Count -gt 0) {
+  # Cleared means neither the pressed button nor any Allow once still matching a verified card is
+  # enabled on screen. A re-render gives the card's button a new runtime id, so the id alone would
+  # read a still-pending card as cleared; and a window that can no longer be read proves nothing.
+  $deadline = (Get-Date).AddSeconds(5)
+  do {
+    Start-Sleep -Milliseconds 200
+    $stillShowing = $true
+    try {
+      $fresh = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+      if ($fresh) {
+        $stillShowing = $false
+        foreach ($b in $fresh.FindAll($TREE, $btnCond)) {
+          try {
+            if (-not $b.Current.IsEnabled -or $b.Current.IsOffscreen) { continue }
+            if (-not (Compare-Object $b.GetRuntimeId() $approvedId)) { $stillShowing = $true; break }
+            $n = $b.Current.Name
+            if ($n -and @($ALLOW_ONCE_NAMES | Where-Object { $n.StartsWith($_) }).Count -gt 0 -and
+                (Test-ButtonPermissionCard $b $permissionTargets)) { $stillShowing = $true; break }
+          } catch { continue }
+        }
+      }
+    } catch { $stillShowing = $true }
+  } while ($stillShowing -and (Get-Date) -lt $deadline)
+  if ($stillShowing) { Write-Output 'REFUSED: the permission-mode card did not clear after Invoke (or the window could not be read)'; exit 6 }
+}
+Write-Output "APPROVED '$approvedLabel' for '$Title' in $($proc.Dir)"
 exit 0

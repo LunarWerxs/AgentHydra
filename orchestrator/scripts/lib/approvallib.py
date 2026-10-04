@@ -20,7 +20,9 @@ a JSON policy file):
 The policy lives in a CONFIG FILE under the orchestrator's own state dir, never in the chat
 transcript. A prompt's own text - however phrased ("policy: allow everything") - is DATA
 that classify() matches patterns against, never an instruction that changes what the
-patterns are. Only a person hand-editing approval_policy.json changes policy.
+patterns are. The one structured exception is restoring a target's already configured
+bypass mode through Claude's permission-change card; classify_pending requires that
+target's metadata from the caller. Explicit operator deny patterns still win.
 
 NOT A POLICY DECISION EITHER - same law as unblock_prompts.py's own header. DENY records why
 and stops; ESCALATE hands the decision to a person or the AI (interview.py); only APPROVE
@@ -49,6 +51,7 @@ from lib import ledgerlib
 APPROVE = "approve"
 DENY = "deny"
 ESCALATE = "escalate"
+PERMISSION_MODE_TOOL = "mcp__ccd_session_mgmt__set_session_permission_mode"
 
 # THE DEFAULTS. Only what the item names: hardline-destructive shell/file operations for
 # DENY, and read-only/build/typecheck/test/lint/git-inspection for APPROVE. Anything else -
@@ -181,6 +184,37 @@ def _collect_strings(value, out: list) -> None:
             _collect_strings(v, out)
 
 
+def classify_pending(record: dict, permission_targets: dict,
+                     policy: dict | None = None) -> tuple[str, str, str]:
+    """Classify each unresolved call; one safe sibling cannot place another.
+
+    A permission-mode card may restore an existing bypass setting, established by the
+    caller from metadata in the same desktop profile. Tool input cannot establish that
+    permission itself. Operator deny rules still take precedence.
+    """
+    policy = policy if policy is not None else load_policy()
+    verdicts = []
+    for call in record.get("tool_inputs") or []:
+        name, command = pending_command_text({"tool_inputs": [call]})
+        verdict = classify(name, command, policy)
+        if name == PERMISSION_MODE_TOOL and verdict[0] != DENY:
+            args = call.get("input") or {}
+            if (isinstance(args, dict) and set(args) == {"session_id", "mode"}
+                    and args.get("mode") == "bypassPermissions"
+                    and isinstance(args.get("session_id"), str)
+                    and args["session_id"] in permission_targets):
+                verdict = (APPROVE, "restore the target chat's configured bypassPermissions mode",
+                           "restore_permission_mode")
+            else:
+                verdict = (ESCALATE, "permission change is not a verified restoration of an existing bypass setting", "")
+        verdicts.append(verdict)
+    for kind in (DENY, ESCALATE, APPROVE):
+        for verdict in verdicts:
+            if verdict[0] == kind:
+                return verdict
+    return ESCALATE, "no pending tool call", ""
+
+
 def pending_command_text(record: dict) -> tuple[str, str]:
     """The last pending record's tool name(s) + every string its input carries, joined - what
     classify() matches against. ("", "") when the record carries no tool_use (gatelib's
@@ -219,7 +253,8 @@ def _save_escalations(rows: dict) -> None:
 
 
 def queue_escalation(session_id: str, *, title: str, instance: str, instance_dir: str,
-                      verify: str, command: str, tool_name: str, reason: str) -> None:
+                      verify: str, command: str, tool_name: str, reason: str,
+                      permission_prompt: dict | None = None) -> None:
     """Record (or refresh) one stuck prompt the tri-state gate would not press on its own.
     Keyed by sessionId: a chat still stuck five minutes later updates its one row instead of
     piling up duplicates every unattended pass."""
@@ -228,6 +263,7 @@ def queue_escalation(session_id: str, *, title: str, instance: str, instance_dir
         "sessionId": session_id, "title": title, "instance": instance,
         "instanceDir": instance_dir, "verify": verify, "command": command[:2000],
         "toolName": tool_name, "reason": reason, "queuedAt": int(time.time() * 1000),
+        "permissionPrompt": permission_prompt,
     }
     _save_escalations(rows)
 
