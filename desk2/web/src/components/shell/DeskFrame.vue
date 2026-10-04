@@ -11,6 +11,9 @@ import DiffPane from '@/components/panes/DiffPane.vue'
 import SettingsView from '@/components/panes/SettingsView.vue'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import ExternalSessionView from '@/components/external/ExternalSessionView.vue'
+import HydraPane from '@/components/hydra/HydraPane.vue'
+import { OPEN_HYDRA_EVENT } from '@/components/hydra/api'
+import { useCloud } from '@/components/cloud/store'
 import BackgroundTasksPanel from '@/components/tasks/BackgroundTasksPanel.vue'
 import { OPEN_TASKS_EVENT, type OpenTasksDetail } from '@/components/tasks/api'
 import ChromeBar from './ChromeBar.vue'
@@ -218,6 +221,20 @@ function setShowThinking(show: boolean) {
 }
 const openThinking = computed(() => (showThinking.value ? items.value.filter((i) => i.kind === 'thinking').map((i) => i.id) : undefined))
 
+// Hydra Desk 2: AgentHydra slides in over the chat side (the sidebar stays), pushing the chat out to the
+// left; the same button or the pane's own "← Desk" button slides the chat back. The cloud button
+// turns the sidebar's list into every session of both PCs (components/cloud).
+const hydraOpen = ref(false)
+function toggleHydra(open = !hydraOpen.value) {
+  hydraOpen.value = open
+}
+const onOpenHydra = () => toggleHydra(true)
+const cloud = useCloud()
+function toggleCloud() {
+  cloud.on.value = !cloud.on.value
+  if (cloud.on.value) toggleSidebar(true)
+}
+
 // Right pane
 const pane = ref<RightPane | null>(null)
 function togglePane(p: RightPane) {
@@ -321,6 +338,7 @@ onMounted(() => {
   window.addEventListener(OPEN_DIFF_EVENT, onOpenDiff)
   window.addEventListener(OPEN_CLIMAYTE_EVENT, onOpenCliMayte)
   window.addEventListener(OPEN_TASKS_EVENT, onOpenTasks)
+  window.addEventListener(OPEN_HYDRA_EVENT, onOpenHydra)
   document.addEventListener('pointermove', onPeekPointer)
   document.addEventListener('pointerout', onPeekPointerOut)
   window.addEventListener('focus', markOpenRead)
@@ -332,6 +350,7 @@ onBeforeUnmount(() => {
   window.removeEventListener(OPEN_DIFF_EVENT, onOpenDiff)
   window.removeEventListener(OPEN_CLIMAYTE_EVENT, onOpenCliMayte)
   window.removeEventListener(OPEN_TASKS_EVENT, onOpenTasks)
+  window.removeEventListener(OPEN_HYDRA_EVENT, onOpenHydra)
   document.removeEventListener('pointermove', onPeekPointer)
   document.removeEventListener('pointerout', onPeekPointerOut)
   window.removeEventListener('focus', markOpenRead)
@@ -341,18 +360,24 @@ onBeforeUnmount(() => {
   peek.dispose()
 })
 
-// With the sidebar hidden the title bar starts after the chrome bar's buttons (Forward ends at 134).
-const CHROME_COLLAPSED = 142
+// With the sidebar hidden the title bar starts after the chrome bar's buttons (Cloud, after Forward and
+// AgentHydra, ends at 198).
+const CHROME_COLLAPSED = 206
+const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
 </script>
 
 <template>
-  <!-- DOM order is the real tab order: chrome bar, title bar, sidebar, then the pane; the grid places them. -->
-  <div class="relative grid h-full w-full grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[41px_minmax(0,1fr)] overflow-hidden bg-bg-page text-text">
+  <!-- DOM order is the tab order: chrome bar, sidebar, then the pane (title bar first); the grid places them. -->
+  <div class="relative grid h-full w-full grid-cols-[auto_minmax(0,1fr)] grid-rows-[41px_minmax(0,1fr)] overflow-hidden bg-bg-page text-text">
     <ChromeBar
       :sidebar-open="sidebarOpen"
       :width="sidebarWidth"
       :can-back="canBack"
       :can-forward="canForward"
+      :hydra-open="hydraOpen"
+      :cloud-on="cloud.on.value"
+      @hydra="toggleHydra()"
+      @cloud="toggleCloud"
       @new="src.select({ kind: 'new' })"
       @search="openSearch"
       @toggle-sidebar="toggleSidebar()"
@@ -360,29 +385,6 @@ const CHROME_COLLAPSED = 142
       @forward="travel('forward')"
       @settings="src.openSettings()"
     />
-
-    <div
-      class="col-start-2 row-start-1 min-w-0 pt-0.5"
-      :class="sliding ? 'transition-[padding] duration-[var(--dur-slow)] ease-[var(--ease-snap)]' : ''"
-      :style="{ paddingLeft: sidebarOpen ? '9px' : `${CHROME_COLLAPSED}px` }"
-    >
-      <ShellHeader
-        :chat="isNew ? null : chat"
-        :title="viewTitle"
-        :pane="pane"
-        :now="now"
-        :accounts="src.accounts.value"
-        :external="external"
-        :stand-in="standIn"
-        :show-thinking="showThinking"
-        :groups="groupChoices(src.chats.value, src.external.value)"
-        @action="act"
-        @rename="rename"
-        @toggle-pane="togglePane"
-        @account="pickAccount"
-        @update:show-thinking="setShowThinking"
-      />
-    </div>
 
     <div
       class="col-start-1 row-span-2 row-start-1 h-full overflow-hidden"
@@ -412,47 +414,84 @@ const CHROME_COLLAPSED = 142
     </div>
     <div v-if="flyout" data-peek-zone="open" aria-hidden="true" class="absolute left-0 top-0 z-[19] h-full w-1.5" />
 
-    <main class="col-start-2 row-start-2 flex min-h-0 min-w-0">
-      <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col">
-        <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
-        <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
-          <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" />
-        </div>
-        <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
-          <ExternalSessionView :key="view.id" :session-id="view.id" />
-        </div>
+    <!-- Hydra Desk 2: the chat side and AgentHydra side by side on one track; the AgentHydra button slides it
+         (a push: one goes out to the left as the other comes in). The side out of view is inert. -->
+    <div class="relative col-start-2 row-span-2 row-start-1 min-w-0 overflow-hidden" data-testid="stage">
+      <div
+        class="flex h-full w-[200%] transition-transform duration-[420ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
+        :style="{ transform: hydraOpen ? 'translateX(-50%)' : 'translateX(0)' }"
+      >
+        <div class="grid h-full w-1/2 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[41px_minmax(0,1fr)]" :inert="hydraOpen" :aria-hidden="hydraOpen || undefined">
+          <div
+            class="col-start-1 row-start-1 min-w-0 pt-0.5"
+            :class="sliding ? 'transition-[padding] duration-[var(--dur-slow)] ease-[var(--ease-snap)]' : ''"
+            :style="{ paddingLeft: `${titlePad}px` }"
+          >
+            <ShellHeader
+              :chat="isNew ? null : chat"
+              :title="viewTitle"
+              :pane="pane"
+              :now="now"
+              :accounts="src.accounts.value"
+              :external="external"
+              :stand-in="standIn"
+              :show-thinking="showThinking"
+              :groups="groupChoices(src.chats.value, src.external.value)"
+              @action="act"
+              @rename="rename"
+              @toggle-pane="togglePane"
+              @account="pickAccount"
+              @update:show-thinking="setShowThinking"
+            />
+          </div>
 
-        <Composer
-          ref="composer"
-          v-if="chat || isNew"
-          :chat="isNew ? null : chat"
-          :demo="props.demo ? { cwd: view.kind === 'new' ? view.cwd : undefined } : undefined"
-        />
+          <main class="col-start-1 row-start-2 flex min-h-0 min-w-0">
+            <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col">
+              <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
+              <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
+                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" />
+              </div>
+              <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
+                <ExternalSessionView :key="view.id" :session-id="view.id" />
+              </div>
+
+              <Composer
+                ref="composer"
+                v-if="chat || isNew"
+                :chat="isNew ? null : chat"
+                :demo="props.demo ? { cwd: view.kind === 'new' ? view.cwd : undefined } : undefined"
+              />
+            </div>
+
+            <aside v-if="!tasks && pane && (pane === 'climayte' || chat)" class="flex w-[380px] shrink-0 border-l border-border" :aria-label="pane === 'diff' ? 'Changes' : 'CliMayte'">
+              <DiffPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" />
+              <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
+            </aside>
+          </main>
+
+          <!-- Docked, the panel is a full-height third column: the title bar's buttons end left of it instead of
+               sitting over it. Expanded, it takes the pane under the title bar (the same cell as main, whose content hides). -->
+          <aside
+            v-if="tasks"
+            class="flex min-w-0 pb-2 pr-2"
+            :class="tasks.expanded ? 'col-start-1 row-start-2 pl-2 pt-0.5' : 'col-start-2 row-span-2 row-start-1 w-[440px] pt-2'"
+          >
+            <BackgroundTasksPanel
+              :session-id="chat?.sessionId"
+              :worker-ids="chat?.workerIds"
+              :items="items"
+              :focus-id="tasks.focus"
+              :expanded="tasks.expanded"
+              @close="tasks = null"
+              @toggle-expand="tasks && (tasks = { ...tasks, expanded: !tasks.expanded })"
+            />
+          </aside>
+        </div>
+        <div class="h-full w-1/2 min-w-0" :inert="!hydraOpen" :aria-hidden="!hydraOpen || undefined">
+          <HydraPane :open="hydraOpen" :pad-left="titlePad" @close="toggleHydra(false)" />
+        </div>
       </div>
-
-      <aside v-if="!tasks && pane && (pane === 'climayte' || chat)" class="flex w-[380px] shrink-0 border-l border-border" :aria-label="pane === 'diff' ? 'Changes' : 'CliMayte'">
-        <DiffPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" />
-        <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
-      </aside>
-    </main>
-
-    <!-- Docked, the panel is a full-height third column: the title bar's buttons end left of it instead of
-         sitting over it. Expanded, it takes the pane under the title bar (the same cell as main, whose content hides). -->
-    <aside
-      v-if="tasks"
-      class="flex min-w-0 pb-2 pr-2"
-      :class="tasks.expanded ? 'col-start-2 row-start-2 pl-2 pt-0.5' : 'col-start-3 row-span-2 row-start-1 w-[440px] pt-2'"
-    >
-      <BackgroundTasksPanel
-        :session-id="chat?.sessionId"
-        :worker-ids="chat?.workerIds"
-        :items="items"
-        :focus-id="tasks.focus"
-        :expanded="tasks.expanded"
-        @close="tasks = null"
-        @toggle-expand="tasks && (tasks = { ...tasks, expanded: !tasks.expanded })"
-      />
-    </aside>
+    </div>
 
     <Dialog :open="settingsOpen" @update:open="(o: boolean) => !o && closeSettings()">
       <DialogContent

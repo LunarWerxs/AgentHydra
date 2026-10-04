@@ -8,7 +8,27 @@ and folders changed to Desk 2's.
 
 ## What Desk 2 adds
 
-(Filled in as features land.)
+A first, quick version of each, to see whether the direction is right. The layout is Desk's own: the
+sidebar on the left stays put, and only the pane on the right changes.
+
+- **AgentHydra inside the window.** The AgentHydra button in the chrome bar, after Back and Forward,
+  slides AgentHydra's own window in over the chat with a push (0.42 s, the chat moving out to the left
+  as AgentHydra comes in). Its strip has Reload and **← Desk**, which slides the chat back. AgentHydra
+  loads the first time you open it and then stays, so going back and forth keeps your place in it.
+  The address is the one Desk's bridge talks to (`HYDRA_URL`, default http://127.0.0.1:7787).
+- **The cloud list.** The cloud button (next to it) turns the sidebar into every session AgentHydra
+  knows, from both PCs: a chat that came over from the other PC through AgentHydra's chat sync shows
+  that PC's name beside it. The sessions are grouped by folder, newest first. Clicking one opens its
+  transcript on the right. Search looks through every session, archived ones included, from all
+  time, and shows the best matches first. The cloud button again goes back to the desk list. This is
+  meant to replace AgentHydra's Sessions tab.
+- **More in the Filter menu.** The sidebar's Filter button now holds what AgentHydra's Sessions ⋯ menu
+  has: Refresh, Only this view, Select multiple sessions, then Source, Instance, Queued work, Usage
+  limits, Session shape, Archived, Computer and Time period, Reset, and Session settings (which opens
+  AgentHydra). The desk list's own filter is still at the top of the same menu.
+
+The server side is two read-only routes over AgentHydra's: `GET /api/cloud/sessions` (the same scope
+parameters as AgentHydra's `GET /api/sessions`) and `GET /api/cloud/instances`.
 
 ---
 
@@ -92,4 +112,4 @@ it, and works without it:
 If AgentHydra is not running, the window says so in a banner and those lists stay empty; your own chats
 keep working.
 
-This folder is its own private git repo. AgentHydra's repo above it is public and excludes this folder.
+This folder is part of AgentHydra's public repo: everything committed here is published.

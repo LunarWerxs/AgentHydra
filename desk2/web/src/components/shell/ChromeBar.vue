@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Cloud } from '@lucide/vue'
 import { shellGlyphs } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
@@ -6,9 +7,11 @@ import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem 
 
 // The custom chrome bar (h36, z21) that lies over the top of the sidebar: Menu, Hide sidebar, Back,
 // Forward (28px, r7). The real app's Chat / Code mode switch is left out: Hydra Desk is Code only.
+// Hydra Desk 2 adds two after Forward: AgentHydra (slides AgentHydra in beside the sidebar) and Cloud
+// (the sidebar lists every session of both PCs). Each shows when it is on.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
-defineProps<{ sidebarOpen: boolean; width: number; canBack: boolean; canForward: boolean }>()
-const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; back: []; forward: []; settings: [] }>()
+defineProps<{ sidebarOpen: boolean; width: number; canBack: boolean; canForward: boolean; hydraOpen?: boolean; cloudOn?: boolean }>()
+const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; back: []; forward: []; settings: []; hydra: []; cloud: [] }>()
 
 const BTN =
   'flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-7)] text-text transition-colors duration-[60ms] hover:bg-fill-hover disabled:opacity-50 disabled:hover:bg-transparent aria-expanded:bg-fill-hover'
@@ -52,6 +55,16 @@ const BTN =
     <Tip label="Forward (Alt + Right)">
       <button type="button" :class="[BTN, '-ml-0.5']" aria-label="Forward" :disabled="!canForward" @click="emit('forward')">
         <component :is="shellGlyphs.forward" class="size-4" />
+      </button>
+    </Tip>
+    <Tip :label="hydraOpen ? 'Back to Hydra Desk' : 'AgentHydra'">
+      <button type="button" :class="[BTN, hydraOpen ? 'bg-fill-selected' : '']" aria-label="AgentHydra" :aria-pressed="!!hydraOpen" @click="emit('hydra')">
+        <img src="/agenthydra.svg" alt="" class="size-4 rounded-[3px]" :class="hydraOpen ? '' : 'opacity-80 grayscale-[35%]'" />
+      </button>
+    </Tip>
+    <Tip :label="cloudOn ? 'Back to the desk list' : 'Cloud: every session, both PCs'">
+      <button type="button" :class="[BTN, cloudOn ? 'bg-fill-selected text-accent-text' : '']" aria-label="Cloud sessions" :aria-pressed="!!cloudOn" @click="emit('cloud')">
+        <Cloud class="size-4" />
       </button>
     </Tip>
   </div>

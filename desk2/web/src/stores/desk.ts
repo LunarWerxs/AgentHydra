@@ -295,7 +295,7 @@ function updateWindowTitle() {
   if (working > 0) parts.push(`${working} working`)
   if (needsYou > 0) parts.push(`${needsYou} need you`)
   const prefix = parts.length > 0 ? `(${parts.join(', ')}) ` : ''
-  document.title = `${prefix}Hydra Desk`
+  document.title = `${prefix}Hydra Desk 2`
 }
 
 watch(

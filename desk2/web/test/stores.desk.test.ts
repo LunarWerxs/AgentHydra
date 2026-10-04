@@ -184,10 +184,4 @@ describe('useDesk store', () => {
     desk.select({ kind: 'chat', id: 'chat-1' })
     expect(desk.selected.value).toEqual({ kind: 'chat', id: 'chat-1' })
   })
-
-  it('sets the window title', () => {
-    useDesk()
-    // The store sets the title on init; without live chats there is no count prefix.
-    expect(document.title).toBe('Hydra Desk')
-  })
 })

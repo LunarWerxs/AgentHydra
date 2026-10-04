@@ -2,10 +2,13 @@
 // poller that keeps open windows current. ctx.deps may carry `bridge` (a ready fake), `hydraUrl` (another
 // AgentHydra, for tests) and `bridgePollMs` / `bridgeAccountsPollMs` (faster polls in tests).
 
+import { hostname } from 'node:os'
 import type { Context, Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
+import type { CloudList } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { type Bridge, BridgeError, bridge, configureBridge } from '../bridge'
+import { type AhCloudRow, CLOUD_TIMEOUT_MS, cloudQuery, toCloudInstance, toCloudSession } from '../bridge/cloud'
 import { createPoller } from '../bridge/poller'
 import { SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX, SEARCH_MIN_CHARS } from '../bridge/search'
 
@@ -100,6 +103,23 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     try {
       await b.sendToWorker(c.req.param('id'), text)
       return c.json({ ok: true })
+    } catch (err) {
+      return fail(c, b, err)
+    }
+  })
+
+  // Desk 2's cloud list: AgentHydra's whole session list, both PCs' chats (bridge/cloud.ts).
+  app.get('/api/cloud/sessions', async (c) => {
+    try {
+      const rows = await b.client.get<AhCloudRow[]>(`/api/sessions?${cloudQuery((k) => c.req.query(k))}`, CLOUD_TIMEOUT_MS)
+      return c.json({ thisPc: hostname(), sessions: rows.map(toCloudSession) } satisfies CloudList)
+    } catch (err) {
+      return fail(c, b, err)
+    }
+  })
+  app.get('/api/cloud/instances', async (c) => {
+    try {
+      return c.json((await b.client.desktopInstances()).map(toCloudInstance))
     } catch (err) {
       return fail(c, b, err)
     }

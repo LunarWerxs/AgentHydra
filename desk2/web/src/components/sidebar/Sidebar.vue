@@ -3,12 +3,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatSummary, ExternalSession, SessionMetaPatch } from '@shared/protocol'
 import { icons, shellGlyphs, sidebarIcons } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Tip } from '@/components/ui/tooltip'
 import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import { useShellSource } from '@/components/shell/source'
+import CloudList from '@/components/cloud/CloudList.vue'
+import { useCloud } from '@/components/cloud/store'
 import ChatRow from './ChatRow.vue'
+import SidebarTools from './SidebarTools.vue'
 import ExternalRow from './ExternalRow.vue'
 import SearchHitRow from './SearchHitRow.vue'
 import {
@@ -23,7 +25,6 @@ import {
   type SearchState
 } from './search'
 import {
-  FILTER_LABELS,
   accountFace,
   chatRow,
   externalRow,
@@ -45,7 +46,6 @@ import {
   type SidebarFilter,
   type SidebarOrder
 } from './logic'
-import { MENU_CONTENT, MENU_ITEM, focusFirstItem } from './menuClasses'
 
 // The real sidebar: 288 wide on #111111, 36px left free at the top for the chrome bar, the New row (the
 // real app's Projects, Artifacts, Customize and More rows are left out on purpose), then Pinned and one
@@ -91,6 +91,29 @@ function openSearch() {
 function closeSearch() {
   searchOpen.value = false
   query.value = ''
+  cloud.search.value = ''
+}
+
+// Hydra Desk 2: the chrome bar's cloud button shows the cloud list here instead (every session of both
+// PCs, components/cloud). The search box then searches it: AgentHydra matches titles over everything in
+// the list's scope, or over everything at all unless "Only this view" is ticked.
+const cloud = useCloud()
+const searchText = computed({
+  get: () => (cloud.on.value ? cloud.search.value : query.value),
+  set: (v: string) => {
+    if (cloud.on.value) cloud.search.value = v
+    else query.value = v
+  }
+})
+function onCloudSearchKey(e: KeyboardEvent) {
+  if (e.isComposing) return
+  if (e.key === 'Enter') {
+    const first = cloud.groups.value[0]?.rows[0]
+    if (first) src.select({ kind: 'external', id: first.id })
+  } else if (e.key === 'Escape') {
+    if (searchEscape(e, cloud.search.value) === 'clear') cloud.search.value = ''
+    else closeSearch()
+  }
 }
 
 // The order groups and rows keep (Jacob, 2026-10-04: sending a message must not reorder the list; groups
@@ -371,18 +394,25 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <span class="flex size-6 shrink-0 items-center justify-center text-text-muted"><component :is="icons.search" class="size-4" /></span>
           <input
             ref="searchInput"
-            v-model="query"
+            v-model="searchText"
             type="text"
             aria-label="Search sessions"
-            placeholder="Search sessions"
+            :placeholder="cloud.on.value ? 'Search every session' : 'Search sessions'"
             class="h-full min-w-0 flex-1 bg-transparent text-[13px] text-text outline-none placeholder:text-text-muted"
-            @keydown="onSearchKey"
+            @keydown="cloud.on.value ? onCloudSearchKey($event) : onSearchKey($event)"
           />
           <button type="button" aria-label="Close search" class="flex size-5 items-center justify-center rounded-[var(--radius-5)] text-text-muted hover:bg-fill-hover hover:text-text" @click="closeSearch">
             <component :is="icons.dismiss" class="size-3.5" />
           </button>
         </div>
 
+        <CloudList v-if="cloud.on.value" :selected-id="selectedExternalId" @open="(id: string) => src.select({ kind: 'external', id })">
+          <template #tools>
+            <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
+          </template>
+        </CloudList>
+
+        <template v-else>
         <section v-for="(group, gi) in groupList" :key="group.key" :aria-label="group.label">
           <header
             class="group/head flex h-[34px] items-center gap-0 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted"
@@ -416,29 +446,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               </button>
             </Tip>
             <template v-if="gi === 0">
-              <Tip label="Search (Ctrl + K)">
-                <button type="button" :class="HEADER_BTN" aria-label="Search" @click="searchOpen ? closeSearch() : openSearch()">
-                  <component :is="shellGlyphs.search" class="size-4" />
-                </button>
-              </Tip>
-              <Tip label="Filter">
-                <span class="inline-flex">
-              <DropdownMenu>
-                  <DropdownMenuTrigger as-child>
-                    <button type="button" :class="[HEADER_BTN, filter !== 'active' ? 'text-accent-text' : '']" aria-label="Filter">
-                      <component :is="shellGlyphs.viewOptions" class="size-4" />
-                    </button>
-                  </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
-                  <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[13px] font-medium text-text-muted">Show</DropdownMenuLabel>
-                  <DropdownMenuItem v-for="(label, key) in FILTER_LABELS" :key="key" role="menuitemradio" :aria-checked="filter === key" :class="MENU_ITEM" @select="filter = key">
-                    <span class="flex-1">{{ label }}</span>
-                    <component :is="icons.check" v-if="filter === key" class="ml-3" />
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-                </span>
-              </Tip>
+              <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
             </template>
           </header>
           <div v-if="!collapsed.has(group.key)" class="flex flex-col gap-[1.5px] pt-[1.5px]">
@@ -514,6 +522,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             />
           </div>
         </section>
+        </template>
       </div>
     </div>
 

@@ -132,6 +132,16 @@ describe('a chat that streams before it is opened', () => {
   })
 })
 
+describe('the window title', () => {
+  // Desk 2 runs beside Desk: its window says which it is (index.html carries the name until the first report).
+  test('names Desk 2, with how many chats are working', async () => {
+    document.title = ''
+    push(hello([{ ...summary('rc-title'), status: 'working' }]))
+    await until(() => document.title !== '')
+    expect(document.title).toBe('(1 working) Hydra Desk 2')
+  })
+})
+
 describe('wantsDesktopNotice', () => {
   test('the Settings switch turns desktop notifications off', () => {
     expect(wantsDesktopNotice({ enabled: false, hidden: true, viewing: false })).toBe(false)

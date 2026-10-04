@@ -261,6 +261,38 @@ export interface SearchHit {
   score?: number
 }
 
+// Hydra Desk 2: the cloud list (the chrome bar's cloud button). AgentHydra's whole session list, the
+// way its Sessions tab shows it: every source and instance, both PCs' chats included. A Desktop chat
+// the chat sync took from another PC carries that PC's name in `fromPc`; every other row is this PC's.
+
+/** One row of the cloud list (GET /api/cloud/sessions), mapped from AgentHydra's GET /api/sessions. */
+export interface CloudSession {
+  id: string // the session id
+  title: string
+  cwd: string | null
+  source: string // AgentHydra's: claude, codex, opencode, hermes, dsh, zswarm, foreign
+  instance: string | null // the desktop or CLI instance folder it ran under; null = the default login
+  lastActivityAt: number
+  createdAt: number | null
+  messageCount: number
+  dispatched: boolean // queued by AgentHydra rather than driven by hand
+  archived: boolean
+  fromPc: string | null
+  model: string | null
+}
+
+export interface CloudList {
+  /** This PC's name, for the rows without `fromPc`. */
+  thisPc: string
+  sessions: CloudSession[]
+}
+
+/** A desktop instance the Instance filter offers (GET /api/cloud/instances). */
+export interface CloudInstance {
+  name: string // the folder name the session list filters by
+  label: string
+}
+
 export interface CliMayteWorker {
   id: string
   title: string
