@@ -86,41 +86,49 @@ export function d1(db: Database) {
 }
 
 /**
- * A minimal in-memory `caches.default` (match/put) for the Worker's shared head tier: an entry lives for
- * its `cache-control: max-age` on the test clock (Date.now), so a faked clock ages it too.
- * `clearCache()` empties it (a new colo).
+ * A Durable Object namespace with one object (the Worker's HEAD binding, StoreHead): `get()` hands a
+ * stub whose fetch builds a Request and runs the object's own fetch. Its storage is a Map of copies, so
+ * it outlives the object: `evict()` drops the object and the next request makes a new one that loads
+ * from that storage, as an evicted Durable Object does. `fail` refuses a request by op (its path:
+ * head, begin, end), as a dropped call to the object would throw.
  */
-const cacheStore = new Map<string, { at: number; maxAge: number; body: string }>()
-const cacheKey = (r: Request | string) => (typeof r === 'string' ? r : r.url)
-;(globalThis as any).caches = {
-  default: {
-    async put(req: Request | string, res: Response) {
-      const m = /max-age=(\d+)/.exec(res.headers.get('cache-control') ?? '')
-      if (m)
-        cacheStore.set(cacheKey(req), {
-          at: Date.now(),
-          maxAge: Number(m[1]),
-          body: await res.text(),
-        })
+export function headNamespace(cls: new (ctx: unknown, env: unknown) => any, env: unknown) {
+  const kept = new Map<string, unknown>()
+  const storage = {
+    get: async (k: string) => structuredClone(kept.get(k)),
+    put: async (k: string, v: unknown) => void kept.set(k, structuredClone(v)),
+    delete: async (k: string) => kept.delete(k),
+  }
+  let object: any = null
+  const ns = {
+    fail: null as null | ((op: string) => boolean),
+    idFromName: (name: string) => name,
+    get: () => ({
+      fetch: async (input: string, init?: RequestInit) => {
+        const req = new Request(input, init)
+        const op = new URL(req.url).pathname.slice(1)
+        if (ns.fail?.(op)) throw new Error(`the call to the store head (${op}) was lost`)
+        object ??= new cls({ storage }, env)
+        return object.fetch(req) as Promise<Response>
+      },
+    }),
+    evict: () => {
+      object = null
     },
-    async match(req: Request | string) {
-      const hit = cacheStore.get(cacheKey(req))
-      if (!hit) return undefined
-      const age = Date.now() - hit.at
-      if (age < 0 || age >= hit.maxAge * 1000) {
-        cacheStore.delete(cacheKey(req))
-        return undefined
-      }
-      return new Response(hit.body)
-    },
-  },
+  }
+  return ns
 }
-export const clearCache = () => cacheStore.clear()
 
 export const token = randomBytes(24).toString('base64url')
-const worker = (
-  await import(join(import.meta.dir, '..', '..', 'cloud', 'login-sync-worker', 'worker.js'))
-).default as { fetch: (r: Request, env: unknown) => Promise<Response>; forgetIsolate: () => void }
+const workerModule = await import(
+  join(import.meta.dir, '..', '..', 'cloud', 'login-sync-worker', 'worker.js')
+)
+const worker = workerModule.default as {
+  fetch: (r: Request, env: unknown) => Promise<Response>
+  forgetIsolate: () => void
+}
+/** The Worker's StoreHead Durable Object class, for a test that builds its own HEAD binding. */
+export const StoreHead = workerModule.StoreHead
 /** The Worker's bindings; a test may set CHAT_STORE_MB and must delete it again. */
 /** The store's D1, for counting the rows a call reads. */
 export const storeDb = d1(new Database(':memory:'))
@@ -128,15 +136,15 @@ export const env: {
   DB: unknown
   TOKEN_SHA256: string
   CHAT_STORE_MB?: string
-  HEAD_TRUST_S?: string
-  HEAD_CACHE_S?: string
+  HEAD?: ReturnType<typeof headNamespace>
 } = {
   DB: storeDb,
   TOKEN_SHA256: createHash('sha256').update(token).digest('hex'),
 }
+env.HEAD = headNamespace(StoreHead, env)
 const server = Bun.serve({ port: 0, fetch: (req) => worker.fetch(req, env) })
 server.unref()
-/** What a fresh isolate starts without: the Worker's kept head, lists and rows. */
+/** What a fresh isolate starts without: the Worker's kept lists and rows. */
 export const freshIsolate = () => worker.forgetIsolate()
 export const base = `http://127.0.0.1:${server.port}`
 
@@ -162,11 +170,19 @@ export async function emptyLogins() {
   }
 }
 
-/** Delete a queue row the way a Worker delete would: bump the rev and leave a tombstone, so the Worker's
- *  kept list and the changes feed drop it (the Worker has no queue DELETE route; a hand-run delete
- *  moves no rev, and a list kept in the isolate would show the row for hours). */
+/** Delete a queue row the way a Worker delete would: bump the rev and leave a tombstone inside a head
+ *  token, so the store head, the Worker's kept list and the changes feed drop it (the Worker has no
+ *  queue DELETE route; a hand-run delete moves no rev, and a list kept in the isolate would show the
+ *  row for hours). */
 export async function dropQueue(pc: string) {
-  await storeDb.batch([
+  const head = env.HEAD!
+  const askHead = (op: string, body = {}) =>
+    head
+      .get()
+      .fetch(`https://head/${op}`, { method: 'POST', body: JSON.stringify(body) })
+      .then((r) => r.json() as Promise<any>)
+  const { token: held } = await askHead('begin')
+  const done = await storeDb.batch([
     storeDb.prepare('UPDATE store_rev SET rev = rev + 1, queues_rev = rev + 1 WHERE id = 1'),
     storeDb
       .prepare(
@@ -174,5 +190,9 @@ export async function dropQueue(pc: string) {
       )
       .bind('queues', pc, Date.now()),
     storeDb.prepare('DELETE FROM queues WHERE pc = ?').bind(pc),
+    storeDb.prepare(
+      'SELECT rev, floor, logins_rev, queues_rev, chats_rev FROM store_rev WHERE id = 1',
+    ),
   ])
+  await askHead('end', { token: held, head: done[3]!.results[0] })
 }

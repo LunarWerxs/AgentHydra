@@ -20,6 +20,7 @@ import { liveByAccount, workers } from '../src/climayte-core'
 import {
   clearRemote,
   type QueueSnapshot,
+  REMOTE_STALE_MS,
   remoteSnapshots,
   remoteVersion,
   setRemote,
@@ -33,7 +34,6 @@ import { IDLE_MAX_MS, SyncPace } from '../src/core/login-sync-pace'
 import {
   base,
   dropQueue,
-  env,
   freshIsolate,
   type StatementStat,
   store,
@@ -341,8 +341,10 @@ test('a quiet hour of two CliMayte PCs with usage readings refreshing stays a ha
     console.log(
       `two CliMayte PCs, usage refreshing: ${reads(stats)} rows read, ${writes(stats)} rows written in the hour\n${table(stats)}`,
     )
-    expect(reads(stats)).toBeLessThanOrEqual(90) // measured 68: the head every 30 s, 4 heartbeats each
-    expect(writes(stats)).toBeLessThanOrEqual(20) // measured 16: 8 uploads (2 PCs x 4 heartbeats)
+    // ceilings from the 15-minute heartbeat (measured 68 read, 16 written: 2 PCs x 4 uploads); an
+    // unchanged queue is no longer uploaded at all
+    expect(reads(stats)).toBeLessThanOrEqual(90)
+    expect(writes(stats)).toBeLessThanOrEqual(20)
   } finally {
     liveByAccount.clear()
     for (const [k, v] of savedLive) liveByAccount.set(k, v)
@@ -407,7 +409,7 @@ test('an hour with two running workers whose activity changes every pass uploads
     console.log(
       `two running workers, activity changing every pass: ${uploads} uploads, ${reads(stats)} rows read in the hour`,
     )
-    // the 10-minute gate: 6 an hour (the 15-minute heartbeat never comes first), plus one for the hour's edge
+    // the 10-minute gate: 6 an hour, plus one for the hour's edge
     expect(uploads).toBeLessThanOrEqual(Math.ceil(HOUR / LIVE_GATE_MS) + 1)
     expect(uploads).toBeGreaterThanOrEqual(1)
   } finally {
@@ -425,8 +427,8 @@ test('a busy hour: logins refreshed, a chat growing, both PCs heartbeating', asy
 })
 
 // THE ADAPTIVE POLL (owner, 2026-10-03: ~2,300 rows an hour with both PCs idle). The Worker is on
-// *.workers.dev, where the Cache API is a no-op and free-plan isolates are short-lived, so every pass
-// reads the one-row head from D1: modelled here with HEAD_CACHE_S=0 and a fresh isolate per request.
+// *.workers.dev, where free-plan isolates are short-lived: modelled here with a fresh isolate per pass
+// (the head comes from the StoreHead Durable Object, which outlives them).
 // Both PCs run the real syncQueue and the real SyncPace: a pass only when one is due, and a quiet
 // pass (nothing moved) doubles the wait from 30 s up to IDLE_MAX_MS.
 /** The store call the daemon makes (cli-login-sync.ts `call`): the reply with its x-store-rev, which
@@ -486,47 +488,40 @@ async function pacedHour(paced: boolean) {
     await store('PUT', `/v1/logins/${id}`, { version: 0, blob: 'b', meta: { num: i } })
     made.logins.push(id)
   }
-  env.HEAD_CACHE_S = '0'
   const pcs = [pacedPc(0), pacedPc(1)]
-  try {
-    for (const p of pcs) await tickPc(p, clock) // start-up reads: the full lists, once
-    storeDb.resetRowsRead()
-    const start = clock
-    while (clock - start < HOUR) {
-      clock += TICK
-      for (const p of pcs) {
-        if (!paced) p.pace.nudge() // the old loop: a pass on every tick
-        await tickPc(p, clock)
-      }
+  for (const p of pcs) await tickPc(p, clock) // start-up reads: the full lists, once
+  storeDb.resetRowsRead()
+  const start = clock
+  while (clock - start < HOUR) {
+    clock += TICK
+    for (const p of pcs) {
+      if (!paced) p.pace.nudge() // the old loop: a pass on every tick
+      await tickPc(p, clock)
     }
-    return { reads: reads(storeDb.statements()), passes: pcs.map((p) => p.passes) }
-  } finally {
-    delete env.HEAD_CACHE_S
   }
+  return { reads: reads(storeDb.statements()), passes: pcs.map((p) => p.passes) }
 }
 
-// Measured (uncached Worker, two idle PCs): polling every 30 s read 272 rows an hour (120 passes each,
-// the head every time, plus the heartbeats); with the backoff each PC makes 16-17 passes and the hour
-// reads 59 rows: about 34 for the head, the rest the heartbeats (a PC's every-15-minute upload moves the
-// store, so the other reads the change and the queue once). Ceiling 75 leaves room for the heartbeat
-// landing a pass later; 1,400 a day is 58 an hour.
-test('a quiet hour of two PCs on an uncached Worker polls adaptively and reads about 60 rows', async () => {
+// Measured before the StoreHead Durable Object (uncached Worker, two idle PCs): polling every 30 s read
+// 272 rows an hour (120 passes each, the head every time, plus the 15-minute heartbeats); with the
+// backoff each PC made 16-17 passes and the hour read 59 rows: about 34 for the head, the rest the
+// heartbeats. Now an idle poll reads no head and no heartbeat goes up; 1,400 a day is 58 an hour.
+test('a quiet hour of two PCs on short-lived isolates polls adaptively and reads almost nothing', async () => {
   const fixed = await pacedHour(false)
   const hour = await pacedHour(true)
   console.log(
     `uncached Worker, quiet hour: fixed 30 s ${fixed.reads} rows (passes ${fixed.passes}); backoff ${hour.reads} rows (passes ${hour.passes})`,
   )
-  expect(hour.reads).toBeLessThanOrEqual(75)
-  expect(hour.reads).toBeLessThan(fixed.reads / 3)
+  expect(hour.reads).toBeLessThanOrEqual(10) // measured 4: the head is the Durable Object's
   for (const n of hour.passes) expect(n).toBeLessThanOrEqual(20) // not 120
-  expect(IDLE_MAX_MS).toBeLessThan(15 * 60_000) // the queue heartbeat still goes up in time
+  // liveness rides the polls: an idle PC still polls well inside the other PC's stale window
+  expect(IDLE_MAX_MS * 2).toBeLessThan(REMOTE_STALE_MS)
 })
 
 test('a worker queued mid-hour on a backed-off PC is uploaded within one 30 s tick', async () => {
   resetQueueSync()
   await sweep()
   clock = realNow()
-  env.HEAD_CACHE_S = '0'
   const savedWorkers = new Map(workers)
   workers.clear()
   const a = pacedPc(0)
@@ -562,7 +557,6 @@ test('a worker queued mid-hour on a backed-off PC is uploaded within one 30 s ti
     expect(uploadedAt - changedAt).toBeLessThanOrEqual(TICK)
     expect(a.passes).toBe(passesBefore + 1)
   } finally {
-    delete env.HEAD_CACHE_S
     workers.clear()
     for (const [k, v] of savedWorkers) workers.set(k, v)
   }
@@ -574,7 +568,6 @@ test('a running worker with an unchanged snapshot backs off; a shape change stil
   resetQueueSync()
   await sweep()
   clock = realNow()
-  env.HEAD_CACHE_S = '0'
   const savedWorkers = new Map(workers)
   workers.clear()
   const t0 = clock
@@ -627,7 +620,6 @@ test('a running worker with an unchanged snapshot backs off; a shape change stil
     expect(uploadedAt).toBeGreaterThan(0)
     expect(uploadedAt - changedAt).toBeLessThanOrEqual(TICK)
   } finally {
-    delete env.HEAD_CACHE_S
     workers.clear()
     for (const [k, v] of savedWorkers) workers.set(k, v)
   }

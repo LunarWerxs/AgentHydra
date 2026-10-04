@@ -9,10 +9,13 @@
 
 import type { CliMayteLiveUsage } from './climayte-lib'
 
-/** A snapshot older than this is stale: that PC is off, or not syncing. A live PC uploads at least
- *  every HEARTBEAT_MS (15 min, core/climayte-queue-sync.ts) and the other PC sees it one sync pass
- *  later, so 40 minutes leaves room for two missed heartbeats before a live PC reads as offline. */
-export const REMOTE_STALE_MS = 40 * 60_000
+/** A PC not seen for this long is stale: it is off, or not syncing. Seen is the newer of its snapshot's
+ *  `at` and when the store's Worker last saw it poll the changes feed (x-seen, noteSeen). A live PC
+ *  polls at least every IDLE_MAX_MS (5 min, core/login-sync-pace.ts), the Worker may lose up to 3
+ *  minutes of stamps when it is evicted, and this PC reads them on its own next poll, so 20 minutes
+ *  leaves room for a missed poll before a live PC reads as offline. Its queue is not re-uploaded just
+ *  to say it is alive. */
+export const REMOTE_STALE_MS = 20 * 60_000
 
 /** One worker as the other PC shows it: never the prompt, results, logs or paths. */
 export interface RemoteWorker {
@@ -104,6 +107,13 @@ export function buildStatus(
 }
 
 const remote = new Map<string, { version: number; snap: QueueSnapshot }>()
+const seenAt = new Map<string, number>()
+
+/** When the store last saw each other PC poll (epoch ms, from the changes feed's x-seen). */
+export function noteSeen(seen: Record<string, number>): void {
+  for (const [pc, at] of Object.entries(seen))
+    if (Number.isFinite(at)) seenAt.set(pc, Math.max(seenAt.get(pc) ?? 0, at))
+}
 
 export function remoteVersion(pc: string): number | undefined {
   return remote.get(pc)?.version
@@ -120,10 +130,11 @@ export function keepRemote(pcs: Set<string>): void {
 
 export function clearRemote(): void {
   remote.clear()
+  seenAt.clear()
 }
 
 export const isStale = (snap: QueueSnapshot, now: number): boolean =>
-  now - snap.at > REMOTE_STALE_MS
+  now - Math.max(snap.at, seenAt.get(snap.pc) ?? 0) > REMOTE_STALE_MS
 
 /** Every other PC's snapshot, newest first, with whether it is stale. */
 export function remoteSnapshots(now = Date.now()): Array<QueueSnapshot & { stale: boolean }> {

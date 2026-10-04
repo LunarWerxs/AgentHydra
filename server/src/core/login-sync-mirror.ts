@@ -15,7 +15,7 @@
 // chat that diverged) was fetched again by every pass, twice a minute, for nothing new.
 
 export type Table = 'logins' | 'queues' | 'chats'
-type Reply = { status: number; json: any; rev?: number }
+type Reply = { status: number; json: any; rev?: number; seen?: Record<string, number> }
 export type Call = (
   method: string,
   path: string,
@@ -34,6 +34,18 @@ const TABLES: Array<{ name: Table; key: 'id' | 'pc' }> = [
   { name: 'chats', key: 'id' },
 ]
 const KEY = { logins: 'id', queues: 'pc', chats: 'id' } as const
+
+/** The Worker's x-seen header (`<pc>=<epoch ms>,...`): when it last saw each OTHER PC poll the changes
+ *  feed. Malformed entries are skipped; no header reads as none. */
+export function parseSeen(header: string | null): Record<string, number> | undefined {
+  if (header === null) return undefined
+  const out: Record<string, number> = {}
+  for (const part of header.split(',')) {
+    const m = /^\s*([0-9a-fA-F-]{36})=(\d+)\s*$/.exec(part)
+    if (m) out[m[1]!.toLowerCase()] = Number(m[2])
+  }
+  return out
+}
 
 /** A refresh younger than this is reused: consumers on separate timers share one request. */
 export const MIRROR_FRESH_MS = 20_000
@@ -57,6 +69,10 @@ export class StoreMirror {
   private changed: Record<Table, number> = { logins: 0, queues: 0, chats: 0 }
   private queue: Promise<void> = Promise.resolve()
   private items = new Map<string, { stamp: string; reply: Reply }>()
+  private seen: Record<string, number> = {}
+  /** This PC's id, sent with every changes poll: the Worker stamps it seen, which is how the other PC
+   *  knows this one is alive (no upload needed for that). */
+  pc?: string
 
   constructor(private readonly call: Call) {}
 
@@ -121,16 +137,26 @@ export class StoreMirror {
     this.items.delete(path.split('?')[0])
   }
 
+  /** When the Worker last saw each other PC poll (epoch ms), from the changes feed's answers. */
+  lastSeen(): Record<string, number> {
+    return { ...this.seen }
+  }
+
   /** The feed's answer applied; false when it gave none (the caller then reads the lists). */
   private async applyChanges(since: number): Promise<boolean> {
     let r: Reply
     try {
       // The cursor doubles as the ETag: an unchanged store answers 304, which costs the Worker no
       // rows. A Worker that predates it ignores the header and answers 200 as before.
-      r = await this.call('GET', `/v1/changes?since=${since}`, { 'if-none-match': `"${since}"` })
+      r = await this.call('GET', `/v1/changes?since=${since}`, {
+        'if-none-match': `"${since}"`,
+        ...(this.pc ? { 'x-agenthydra-pc': this.pc } : {}),
+      })
     } catch {
       return false
     }
+    for (const [pc, at] of Object.entries(r.seen ?? {}))
+      this.seen[pc] = Math.max(this.seen[pc] ?? 0, at)
     if (r.status === 304) return true
     const j = r.json
     if (r.status !== 200 || j?.full === true || !Number.isInteger(j?.rev)) return false

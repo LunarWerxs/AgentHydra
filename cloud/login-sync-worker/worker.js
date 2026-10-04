@@ -8,6 +8,8 @@
 //
 // Bindings (set when it is deployed):
 //   DB            a D1 database (strongly consistent, so a PC reads what the other just wrote)
+//   HEAD          the StoreHead Durable Object (SQLite-backed, below): the store's head and the PCs'
+//                 lastSeen, so an idle poll reads no D1
 //   TOKEN_SHA256  hex SHA-256 of the access token the PCs send as `Authorization: Bearer <token>`.
 //                 Only the hash lives here; the token itself stays on the PCs.
 //   CHAT_STORE_MB optional: room for chat transcripts in MB of stored text, default 400. D1's free
@@ -17,7 +19,9 @@
 // Routes (JSON in and out):
 //   GET    /v1/health            {ok:true}, no token needed
 //   GET    /v1/changes?since=n   {rev, logins, queues, chats, gone:[{table,id}]} changed after cursor n,
-//                                or {rev, full:true} when n is below the kept tombstones or above rev
+//                                or {rev, full:true} when n is below the kept tombstones or above rev;
+//                                304 to a matching If-None-Match. The asking PC names itself in
+//                                x-agenthydra-pc; every answer carries x-seen: <pc>=<epoch ms>,...
 //   GET    /v1/logins            {logins:[{id, version, meta, updatedAt}]}
 //   GET    /v1/logins/:id        {id, version, blob, meta, updatedAt} | 404
 //   PUT    /v1/logins/:id        {version, blob, meta}: stored as version+1 when `version` is the
@@ -146,18 +150,21 @@ async function ensureSchema(db) {
 
 // Cron (daily, see README): drop tombstones older than 30 days and raise floor to the highest rev
 // dropped, so a cursor older than the kept tombstones is answered with full: true.
-async function pruneTombstones(db) {
+async function pruneTombstones(env, db) {
   const cutoff = Date.now() - TOMBSTONE_KEEP_MS
-  const dropped = await db.batch([
-    db
-      .prepare(
-        'UPDATE store_rev SET floor = MAX(floor, COALESCE((SELECT MAX(rev) FROM tombstones WHERE time < ?), 0)) WHERE id = 1',
-      )
-      .bind(cutoff),
-    db.prepare('DELETE FROM tombstones WHERE time < ?').bind(cutoff),
-  ])
-  // Tombstones dropped means the floor may have risen: the head any tier holds is behind it.
-  if ((dropped?.[1]?.meta?.changes ?? 0) > 0) keepHead(await db.prepare(HEAD_SQL).first())
+  // The floor may rise: like any write, it runs inside a head token and hands the new head back.
+  await headWrite(env, async (told) => {
+    const res = await db.batch([
+      db
+        .prepare(
+          'UPDATE store_rev SET floor = MAX(floor, COALESCE((SELECT MAX(rev) FROM tombstones WHERE time < ?), 0)) WHERE id = 1',
+        )
+        .bind(cutoff),
+      db.prepare('DELETE FROM tombstones WHERE time < ?').bind(cutoff),
+      db.prepare(HEAD_SQL),
+    ])
+    told(res[2].results?.[0])
+  })
 }
 
 const json = (body, status = 200) =>
@@ -199,129 +206,205 @@ const row = (t, r) =>
 
 // The store's head, ONE row of store_rev: the rev, the floor and the rev each table last changed at.
 // Every write bumps them in its own batch (storeRow, deleteRow), so together they name every change a
-// list can show, and a table's list is unchanged while its rev and the floor are. D1 bills the rows a
-// query looks at: the head is one row, where the lists it stands in for are dozens.
+// list can show, and a table's list is unchanged while its rev and the floor are.
 //
-// This isolate also keeps the head it last read for HEAD_TRUST_MS (env HEAD_TRUST_S; 0 reads it every
-// time). An older client lists the whole logins and queues tables every 30 s and cannot be changed, and
-// even a one-row check twice a poll is 5,760 rows a day. Within the window a change made on ANOTHER
-// isolate shows a poll later (a write through this one drops the head at once); a write itself is a
-// compare-and-swap on D1 and never reads it.
+// The Worker asks for the head on every read route, so it is NOT read from D1 there: the StoreHead
+// Durable Object (binding HEAD, one instance) holds it. Free-plan isolates are short-lived and two PCs
+// land on different ones, so a head kept per isolate (or in the Cache API, a no-op on *.workers.dev)
+// left most idle polls paying a D1 read. The Durable Object outlives them and keeps its head in its
+// own storage, so an evicted one comes back with it and still reads no D1.
 //
-// Free-plan isolates are short-lived and two PCs often land on different ones, so most polls still
-// found no head here and read D1 (about 310 reads an hour, idle). A second, shared tier stands behind
-// the isolate: the Workers Cache API (caches.default, free, no D1 read), one synthetic GET entry per
-// colo holding the head with max-age HEAD_CACHE_S (env HEAD_CACHE_S; default 120, 0 = off; skipped
-// silently where `caches` is missing: tests, wrangler dev). Read order: isolate memory, cache entry,
-// D1. Every write refreshes BOTH with the head its own batch read after the commit, and so does every
-// D1 head read, so a PC on the same colo sees its own and the other PC's writes at once. TRADE-OFF: a
-// colo the write did not go through keeps its entry until max-age runs out, so a change made through
-// another colo shows up to HEAD_CACHE_S late there (an entry's age also counts against HEAD_TRUST_MS,
-// so an isolate never trusts a head longer than the entry it came from).
-const HEAD_TRUST_MS = 75 * 1000
-const HEAD_CACHE_S = 120
+// THE RACE, and the choice made: the Worker writes D1 itself, and a write must never commit unseen by
+// the head. So every write is bracketed (headWrite): before its batch the Worker asks the Durable
+// Object for a token, which it stores durably as a pending write, and after the batch it hands back the
+// token with the head that batch read after its commit. While ANY token is pending the Durable Object
+// does not trust its copy: each head request reads store_rev from D1 (one statement) and keeps the
+// higher of the two. So a lost, failed or crashed `end` (the Worker died, the request to the Durable
+// Object was dropped, the batch threw with its outcome unknown) costs one D1 read per poll until it is
+// cleared; it never hides the change. A token is cleared by its `end` with a head, or else by a D1 read
+// started PENDING_MAX_MS after it began (a D1 batch gives up long before that, so whatever it did is in
+// that read; a batch that threw may still have committed, so an `end` without a head clears nothing).
+// A failed `begin` refuses the write (500), so no write runs without its token. Rejected alternative: re-reading D1 when the copy is older than a few
+// minutes, which costs idle polls rows forever and still shows a change minutes late. A rev moved by
+// hand-run SQL is not seen until the next write; reset the Durable Object with the database.
 const HEAD_SQL = 'SELECT rev, floor, logins_rev, queues_rev, chats_rev FROM store_rev WHERE id = 1'
+const HEAD_FIELDS = ['rev', 'floor', 'logins_rev', 'queues_rev', 'chats_rev']
 const NO_HEAD = { rev: 0, floor: 0, logins_rev: 0, queues_rev: 0, chats_rev: 0 }
-let headKept = null
-const trustOf = (env) => {
-  const s = env?.HEAD_TRUST_S
-  const n = s === undefined || s === '' ? Number.NaN : Number(s)
-  return Number.isFinite(n) && n >= 0 ? n * 1000 : HEAD_TRUST_MS
+const PENDING_MAX_MS = 2 * 60 * 1000
+
+// LIVENESS: each PC names itself on every /v1/changes poll (x-agenthydra-pc, its queue id). The Durable
+// Object stamps lastSeen[pc] in memory on every poll and saves it to its storage when that PC's saved
+// stamp is SEEN_SAVE_MS old (an idle Durable Object is evicted between polls minutes apart, so a save
+// timed from its own start would never come), so an evicted one loses at most that much. Every /v1/changes answer, 304 included,
+// carries the OTHER PCs' stamps in x-seen (`<pc>=<epoch ms>,...`): a PC reads the other as alive from its
+// polls, and no longer uploads its queue every 15 minutes just to say so. A PC not seen for
+// SEEN_KEEP_MS is forgotten.
+const SEEN_SAVE_MS = 3 * 60 * 1000
+const SEEN_KEEP_MS = 30 * 24 * 60 * 60 * 1000
+const SEEN_MAX = 32
+
+const higherHead = (a, b) => {
+  if (!a) return b
+  if (!b) return a
+  const out = {}
+  for (const f of HEAD_FIELDS) out[f] = Math.max(Number(a[f]) || 0, Number(b[f]) || 0)
+  return out
 }
-// Shared tier. `headKey` and `headCacheMs` are set by each request; puts wait in `headPuts` until the
-// request's end (ctx.waitUntil where there is one).
-let headKey = null
-let headCacheMs = HEAD_CACHE_S * 1000
-let headPuts = []
-const sharedCache = () => (typeof caches !== 'undefined' && caches?.default) || null
-const headCacheOf = (env) => {
-  const s = env?.HEAD_CACHE_S
-  const n = s === undefined || s === '' ? Number.NaN : Number(s)
-  return Number.isFinite(n) && n >= 0 ? n * 1000 : HEAD_CACHE_S * 1000
+const isHead = (h) => !!h && HEAD_FIELDS.every((f) => Number.isInteger(h[f]))
+
+export class StoreHead {
+  constructor(ctx, env) {
+    this.storage = ctx.storage
+    this.env = env
+    this.head = null
+    this.pending = new Map() // token -> the time its write began
+    this.seen = {}
+    this.savedSeen = {}
+    this.ready = this.load()
+  }
+
+  async load() {
+    const [head, pending, seen] = await Promise.all([
+      this.storage.get('head'),
+      this.storage.get('pending'),
+      this.storage.get('seen'),
+    ])
+    this.head = isHead(head) ? head : null
+    this.pending = new Map(Object.entries(pending ?? {}))
+    this.seen = seen ?? {}
+    this.savedSeen = { ...this.seen }
+  }
+
+  savePending() {
+    return this.storage.put('pending', Object.fromEntries(this.pending))
+  }
+
+  async fetch(request) {
+    await this.ready
+    const op = new URL(request.url).pathname.slice(1)
+    const body = await request.json().catch(() => ({}))
+    if (op === 'head') {
+      const head = await this.current()
+      return json({ head, seen: await this.stamp(body?.pc) })
+    }
+    if (op === 'begin') {
+      const token = crypto.randomUUID()
+      this.pending.set(token, Date.now())
+      await this.savePending()
+      return json({ token })
+    }
+    if (op === 'end') {
+      if (isHead(body?.head)) {
+        this.head = higherHead(this.head, body.head)
+        await this.storage.put('head', this.head)
+        this.pending.delete(body.token)
+        await this.savePending()
+      }
+      return json({ ok: true })
+    }
+    return json({ error: 'not found' }, 404)
+  }
+
+  // The head: its own copy while no write is pending, else D1's (kept the higher, field by field, since
+  // a write may have ended with a newer head while the read was out).
+  async current() {
+    if (this.head && this.pending.size === 0) return this.head
+    const startedAt = Date.now()
+    await ensureSchema(this.env.DB)
+    const row = await this.env.DB.prepare(HEAD_SQL).first()
+    this.head = higherHead(this.head, row ?? NO_HEAD)
+    await this.storage.put('head', this.head)
+    let cleared = false
+    for (const [token, at] of this.pending)
+      if (at < startedAt - PENDING_MAX_MS) {
+        this.pending.delete(token)
+        cleared = true
+      }
+    if (cleared) await this.savePending()
+    return this.head
+  }
+
+  // Stamp `pc` as seen now and answer the other PCs' stamps.
+  async stamp(pc) {
+    const now = Date.now()
+    const known = typeof pc === 'string' && ID_RE.test(pc)
+    if (known) this.seen[pc] = now
+    if (known && !(now - (this.savedSeen[pc] ?? 0) < SEEN_SAVE_MS)) {
+      const kept = Object.entries(this.seen)
+        .filter(([, at]) => now - at < SEEN_KEEP_MS)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, SEEN_MAX)
+      this.seen = Object.fromEntries(kept)
+      this.savedSeen = { ...this.seen }
+      await this.storage.put('seen', this.seen)
+    }
+    const others = {}
+    for (const [id, at] of Object.entries(this.seen)) if (id !== pc) others[id] = at
+    return others
+  }
 }
-const keepHead = (row) => {
-  headKept = { at: Date.now(), row: row ?? NO_HEAD }
-  const cache = sharedCache()
-  if (cache && headKey && headCacheMs > 0)
-    headPuts.push(
-      Promise.resolve(
-        cache.put(
-          headKey,
-          new Response(JSON.stringify(headKept), {
-            headers: { 'cache-control': `max-age=${Math.ceil(headCacheMs / 1000)}` },
-          }),
-        ),
-      ).catch(() => {}), // floor-ok: best-effort cache tier; a failed put only means the next poll reads the D1 head
-    )
-  return headKept.row
+
+async function askHead(env, op, body = {}) {
+  const res = await env.HEAD.get(env.HEAD.idFromName('head')).fetch(`https://head/${op}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`store head ${op}: ${res.status}`)
+  return res.json()
 }
-// An isolate with no head of its own takes the shared entry, keeping the entry's own age.
-async function seedHeadFromCache() {
-  const cache = sharedCache()
-  if (!cache || !headKey || headCacheMs <= 0) return
-  try {
-    const hit = await cache.match(headKey)
-    const kept = hit ? await hit.json() : null
-    const age = kept ? Date.now() - kept.at : -1
-    if (age >= 0 && age < headCacheMs && kept.row && (!headKept || headKept.at < kept.at))
-      headKept = { at: kept.at, row: kept.row }
-  } catch {} // floor-ok: best-effort cache tier; a failed match or unreadable entry falls through to the D1 head read
-}
-// The head this isolate still trusts, else null.
-const trustedHead = (trust) => {
-  const age = headKept ? Date.now() - headKept.at : -1
-  return trust > 0 && age >= 0 && age < trust ? headKept.row : null
+
+// {head, seen}: the authoritative head, and the other PCs' lastSeen (stamping `pc` when given).
+const headOf = (env, pc) => askHead(env, 'head', pc ? { pc } : {})
+
+// Run one write batch inside its pending token (see THE RACE above). `run` gets `told(head)` to pass
+// the head its batch read after the commit. Without one (the batch threw) the token is left to expire.
+async function headWrite(env, run) {
+  const { token } = await askHead(env, 'begin')
+  let head = null
+  const out = await run((h) => {
+    head = isHead(h) ? h : null
+  })
+  // floor-ok: a lost end leaves the token pending, which only makes polls read the D1 head until it clears
+  if (head) await askHead(env, 'end', { token, head }).catch(() => {})
+  return out
 }
 
 // Each list, kept in this isolate while its table has not changed. A PC listing a table every 30 s
-// paid for every row of it each time; a list that has not changed now costs nothing beyond the head,
-// and one that changed reads only its changed rows (by rev, as the changes feed does) and the
-// tombstones after them. A list is read whole when this isolate has none, when old tombstones were
-// dropped since it (below the floor), and after LIST_KEEP_MS anyway, so a row changed by hand-run SQL
-// (which moves no rev) shows within hours; redeploying shows it at once.
+// paid for every row of it each time; a list that has not changed now costs nothing (the head comes
+// from the StoreHead Durable Object), and one that changed reads only its changed rows (by rev, as the
+// changes feed does) and the tombstones after them. A list is read whole when this isolate has none,
+// when old tombstones were dropped since it (below the floor), and after LIST_KEEP_MS anyway, so a row
+// changed by hand-run SQL (which moves no rev) shows within hours; redeploying shows it at once.
 const LIST_KEEP_MS = 6 * 60 * 60 * 1000
 const listCache = new Map()
 const stampOf = (head, t) => `${head[`${t.table}_rev`]}/${head.floor}`
 
 // GET /v1/logins, GET /v1/queues, GET /v1/chats — the shared list, without the encrypted blobs. The
-// store rev is read with the list and sent as x-store-rev, so a client can start its changes cursor
-// there without missing a write. A kept list whose head is trusted (or whose stamp the head reads
-// equal) is answered with no list read; one that changed reads the head and the changed rows in one
-// batch, which is also the only head read of the request.
-async function listRows(db, t, trust) {
+// head is asked before the rows are read and sent as x-store-rev, so a client can start its changes
+// cursor there without missing a write: a row newer than it only shows in the list early, and the
+// cursor re-sends it at worst.
+async function listRows(env, db, t) {
   const now = Date.now()
   const kept = listCache.get(t.table)
   const fresh = kept && now - kept.fullAt >= 0 && now - kept.fullAt < LIST_KEEP_MS
-  const trusted = trustedHead(trust)
-  if (fresh && trusted && kept.stamp === stampOf(trusted, t))
-    return listResponse(kept.body, trusted.rev)
+  const { head } = await headOf(env)
+  if (fresh && kept.stamp === stampOf(head, t)) return listResponse(kept.body, head.rev)
 
+  await ensureSchema(db)
   const sel = `SELECT ${t.key}, version, meta, updated_at FROM ${t.table}`
-  if (fresh) {
-    // Behind a trusted head the head is not read again: the rows after the kept rev are the change,
-    // and one newer than the head only shows in the list earlier than the head would have said.
-    const res = await db.batch([
-      ...(trusted ? [] : [db.prepare(HEAD_SQL)]),
+  if (fresh && kept.rev >= head.floor && kept.rev <= head.rev) {
+    const [changed, tombs] = await db.batch([
       db.prepare(`${sel} WHERE rev > ? ORDER BY rev`).bind(kept.rev),
       db.prepare('SELECT table_name, id FROM tombstones WHERE rev > ? ORDER BY rev').bind(kept.rev),
     ])
-    const [changed, tombs] = res.slice(-2)
-    const snapshot = trusted ?? keepHead(res[0].results?.[0])
-    if (kept.stamp === stampOf(snapshot, t)) return listResponse(kept.body, snapshot.rev)
-    if (kept.rev >= snapshot.floor && kept.rev <= snapshot.rev) {
-      const rows = new Map(kept.rows)
-      for (const r of tombs.results || []) if (r.table_name === t.table) rows.delete(r.id)
-      for (const r of changed.results || []) rows.set(r[t.key], row(t, r))
-      return keepList(t, snapshot, rows, kept.fullAt)
-    }
+    const rows = new Map(kept.rows)
+    for (const r of tombs.results || []) if (r.table_name === t.table) rows.delete(r.id)
+    for (const r of changed.results || []) rows.set(r[t.key], row(t, r))
+    return keepList(t, head, rows, kept.fullAt)
   }
-  const [headRes, listRes] = await db.batch([
-    db.prepare(HEAD_SQL),
-    db.prepare(`${sel} ORDER BY ${t.key}`),
-  ])
-  const snapshot = keepHead(headRes.results?.[0])
-  const rows = new Map((listRes.results || []).map((r) => [r[t.key], row(t, r)]))
-  return keepList(t, snapshot, rows, now)
+  const { results } = await db.prepare(`${sel} ORDER BY ${t.key}`).all()
+  const rows = new Map((results || []).map((r) => [r[t.key], row(t, r)]))
+  return keepList(t, head, rows, now)
 }
 
 function keepList(t, snapshot, rows, fullAt) {
@@ -347,22 +430,18 @@ const listResponse = (body, rev) =>
 // every poll and each of those was a row read.
 const ITEMS_KEPT = 24
 const itemCache = new Map()
-async function fetchRow(db, t, id, trust) {
+async function fetchRow(env, db, t, id) {
   const path = `${t.table}/${id}`
   const kept = itemCache.get(path)
-  let head = trustedHead(trust)
-  if (kept && !head) head = keepHead(await db.prepare(HEAD_SQL).first())
+  const { head } = await headOf(env)
   const age = kept ? Date.now() - kept.at : -1
-  if (kept && head && age >= 0 && age < LIST_KEEP_MS && kept.stamp === stampOf(head, t))
+  if (kept && age >= 0 && age < LIST_KEEP_MS && kept.stamp === stampOf(head, t))
     return json(kept.body)
-  const sql = `SELECT ${t.key}, version, blob, meta, updated_at FROM ${t.table} WHERE ${t.key} = ?`
-  let r
-  if (head) r = await db.prepare(sql).bind(id).first()
-  else {
-    const [headRes, rowRes] = await db.batch([db.prepare(HEAD_SQL), db.prepare(sql).bind(id)])
-    head = keepHead(headRes.results?.[0])
-    r = rowRes.results?.[0]
-  }
+  await ensureSchema(db)
+  const r = await db
+    .prepare(`SELECT ${t.key}, version, blob, meta, updated_at FROM ${t.table} WHERE ${t.key} = ?`)
+    .bind(id)
+    .first()
   itemCache.delete(path)
   if (!r) return json({ error: 'not found' }, 404)
   const body = row(t, r)
@@ -377,8 +456,8 @@ const NEXT_REV = '(SELECT rev FROM store_rev WHERE id = 1)'
 // concurrent insert), a matching version updates atomically, anything else returns 409
 // with the current version so the PCs can retry. The rev bump, the row write and the tombstone
 // clean-up are ONE batch whose statements only act while the compare-and-swap still holds, so a
-// refused write changes nothing, rev included.
-async function storeRow(db, t, id, body) {
+// refused write changes nothing, rev included. The batch runs inside a head token (headWrite).
+async function storeRow(env, db, t, id, body) {
   const version = Number(body?.version)
   const blob = body?.blob
   const meta = JSON.stringify(body?.meta ?? {})
@@ -389,77 +468,81 @@ async function storeRow(db, t, id, body) {
   const now = Date.now()
   const has = `EXISTS (SELECT 1 FROM ${t.table} WHERE ${t.key} = ?`
 
-  const results =
-    version === 0
-      ? await db.batch([
-          db
-            .prepare(
-              `UPDATE store_rev SET rev = rev + 1, ${t.table}_rev = rev + 1 WHERE id = 1 AND NOT ${has})`,
-            )
-            .bind(id),
-          db
-            .prepare(
-              `INSERT INTO ${t.table} (${t.key}, version, blob, meta, updated_at, rev) SELECT ?, 1, ?, ?, ?, rev FROM store_rev WHERE id = 1 AND NOT ${has})`,
-            )
-            .bind(id, blob, meta, now, id),
-          db
-            .prepare(`DELETE FROM tombstones WHERE table_name = ? AND id = ? AND ${has})`)
-            .bind(t.table, id, id),
-          db.prepare(HEAD_SQL),
-        ])
-      : await db.batch([
-          db
-            .prepare(
-              `UPDATE store_rev SET rev = rev + 1, ${t.table}_rev = rev + 1 WHERE id = 1 AND ${has} AND version = ?)`,
-            )
-            .bind(id, version),
-          db
-            .prepare(
-              `UPDATE ${t.table} SET version = version + 1, blob = ?, meta = ?, updated_at = ?, rev = ${NEXT_REV} WHERE ${t.key} = ? AND version = ?`,
-            )
-            .bind(blob, meta, now, id, version),
-          db.prepare(HEAD_SQL),
-        ])
+  return headWrite(env, async (told) => {
+    const results =
+      version === 0
+        ? await db.batch([
+            db
+              .prepare(
+                `UPDATE store_rev SET rev = rev + 1, ${t.table}_rev = rev + 1 WHERE id = 1 AND NOT ${has})`,
+              )
+              .bind(id),
+            db
+              .prepare(
+                `INSERT INTO ${t.table} (${t.key}, version, blob, meta, updated_at, rev) SELECT ?, 1, ?, ?, ?, rev FROM store_rev WHERE id = 1 AND NOT ${has})`,
+              )
+              .bind(id, blob, meta, now, id),
+            db
+              .prepare(`DELETE FROM tombstones WHERE table_name = ? AND id = ? AND ${has})`)
+              .bind(t.table, id, id),
+            db.prepare(HEAD_SQL),
+          ])
+        : await db.batch([
+            db
+              .prepare(
+                `UPDATE store_rev SET rev = rev + 1, ${t.table}_rev = rev + 1 WHERE id = 1 AND ${has} AND version = ?)`,
+              )
+              .bind(id, version),
+            db
+              .prepare(
+                `UPDATE ${t.table} SET version = version + 1, blob = ?, meta = ?, updated_at = ?, rev = ${NEXT_REV} WHERE ${t.key} = ? AND version = ?`,
+              )
+              .bind(blob, meta, now, id, version),
+            db.prepare(HEAD_SQL),
+          ])
 
-  keepHead(results[results.length - 1].results?.[0])
-  if ((results[1]?.meta?.changes ?? 0) === 1) return json({ version: version + 1 })
+    told(results[results.length - 1].results?.[0])
+    if ((results[1]?.meta?.changes ?? 0) === 1) return json({ version: version + 1 })
 
-  const current = await db
-    .prepare(`SELECT ${t.key}, version, meta, updated_at FROM ${t.table} WHERE ${t.key} = ?`)
-    .bind(id)
-    .first()
-  return json({ error: 'version conflict', current: row(t, current) ?? null }, 409)
+    const current = await db
+      .prepare(`SELECT ${t.key}, version, meta, updated_at FROM ${t.table} WHERE ${t.key} = ?`)
+      .bind(id)
+      .first()
+    return json({ error: 'version conflict', current: row(t, current) ?? null }, 409)
+  })
 }
 
 // The compare-and-swap delete of a logins or chats row: bump rev, leave a tombstone at that rev and
 // delete the row, in one batch whose statements only act while `version` is still the current one.
 // Resolves to the deleted row's meta, or null when the delete was refused (nothing changed).
-async function deleteRow(db, t, id, version) {
+async function deleteRow(env, db, t, id, version) {
   const has = `EXISTS (SELECT 1 FROM ${t.table} WHERE ${t.key} = ? AND version = ?)`
-  const results = await db.batch([
-    db
-      .prepare(
-        `UPDATE store_rev SET rev = rev + 1, ${t.table}_rev = rev + 1 WHERE id = 1 AND ${has}`,
-      )
-      .bind(id, version),
-    db
-      .prepare(
-        `INSERT OR REPLACE INTO tombstones (table_name, id, rev, time) SELECT ?, ?, rev, ? FROM store_rev WHERE id = 1 AND ${has}`,
-      )
-      .bind(t.table, id, Date.now(), id, version),
-    db
-      .prepare(`DELETE FROM ${t.table} WHERE ${t.key} = ? AND version = ? RETURNING meta`)
-      .bind(id, version),
-    db.prepare(HEAD_SQL),
-  ])
-  keepHead(results[3].results?.[0])
-  return results[2]?.results?.[0] ?? null
+  return headWrite(env, async (told) => {
+    const results = await db.batch([
+      db
+        .prepare(
+          `UPDATE store_rev SET rev = rev + 1, ${t.table}_rev = rev + 1 WHERE id = 1 AND ${has}`,
+        )
+        .bind(id, version),
+      db
+        .prepare(
+          `INSERT OR REPLACE INTO tombstones (table_name, id, rev, time) SELECT ?, ?, rev, ? FROM store_rev WHERE id = 1 AND ${has}`,
+        )
+        .bind(t.table, id, Date.now(), id, version),
+      db
+        .prepare(`DELETE FROM ${t.table} WHERE ${t.key} = ? AND version = ? RETURNING meta`)
+        .bind(id, version),
+      db.prepare(HEAD_SQL),
+    ])
+    told(results[3].results?.[0])
+    return results[2]?.results?.[0] ?? null
+  })
 }
 
 // DELETE /v1/logins/:id — remove only when `version` is the current one.
-async function deleteLogin(db, id, version) {
+async function deleteLogin(env, db, id, version) {
   if (!Number.isInteger(version) || version < 1) return json({ error: 'bad version' }, 400)
-  return (await deleteRow(db, LOGINS, id, version))
+  return (await deleteRow(env, db, LOGINS, id, version))
     ? json({ ok: true })
     : json({ error: 'version conflict' }, 409)
 }
@@ -467,9 +550,9 @@ async function deleteLogin(db, id, version) {
 // DELETE /v1/chats/:id — the row delete is the compare-and-swap; the transcript goes only after it
 // won. A transcript lives under the chat's session (meta.s), which two rows can share (a chat moved
 // between profiles), so it stays while another row still reads it.
-async function deleteChat(db, id, version) {
+async function deleteChat(env, db, id, version) {
   if (!Number.isInteger(version) || version < 1) return json({ error: 'bad version' }, 400)
-  const gone = await deleteRow(db, CHATS, id, version)
+  const gone = await deleteRow(env, db, CHATS, id, version)
   if (!gone) return json({ error: 'version conflict' }, 409)
 
   let session = null
@@ -611,14 +694,14 @@ async function listChunks(db, id, fromParam) {
   return json({ chunks, next: last + 1, more: count < all.length })
 }
 
-async function putRow(request, db, t, id) {
+async function putRow(request, env, db, t, id) {
   let body
   try {
     body = await request.json()
   } catch {
     return json({ error: 'body must be JSON' }, 400)
   }
-  return storeRow(db, t, id, body)
+  return storeRow(env, db, t, id, body)
 }
 
 const changed = (t, r) => ({
@@ -628,46 +711,49 @@ const changed = (t, r) => ({
   updatedAt: r.updated_at,
 })
 
-// GET /v1/changes?since=<n> — what changed after cursor n. A cursor equal to the head this isolate
-// trusts is answered from it, with no read. Otherwise the head (store_rev, one row), the changed rows
-// and the tombstones come from ONE batch, one consistent snapshot, and an idle cursor costs that one row. full: true when n is older than the
-// kept tombstones (below floor) or newer than the store (it was reset). Each query is in rev order so
-// it walks the rev index from n and reads only the changed rows; in key order D1 read the whole
-// table on every call.
+// GET /v1/changes?since=<n> — what changed after cursor n. The head comes from the StoreHead Durable
+// Object, so a cursor equal to it is answered with no D1 statement at all (no schema check either).
+// Behind it, the changed rows and the tombstones come from ONE batch; full: true when n is older than
+// the kept tombstones (below floor) or newer than the store (it was reset). Each query is in rev order
+// so it walks the rev index from n and reads only the changed rows.
 //
-// The cursor is also the ETag ("<rev>"). A client that sends If-None-Match: "<rev>" with since=<rev> gets
-// 304 (no body) while the store is still at that rev: from the head this isolate trusts that is zero D1
-// statements, else ONE (the head row). Only a cursor behind the head reads the changed rows, in a second
-// batch; the head read first can only be older than those rows, so a cursor taken from it re-sends a
-// row at worst, never misses one. A client that sends no If-None-Match gets the same 200 bodies as ever.
+// The cursor is also the ETag ("<rev>"). A client that sends If-None-Match: "<rev>" with since=<rev>
+// gets 304 (no body) while the store is still at that rev. The head is asked before the rows are read,
+// so a row newer than it is re-sent at worst, never missed. A client that sends no If-None-Match gets
+// the same 200 bodies as ever. Every answer carries x-seen (see LIVENESS), stamping the asking PC.
 const etagOf = (rev) => `"${rev}"`
 const matchesEtag = (request, rev) =>
   (request.headers.get('if-none-match') || '')
     .split(',')
     .some((v) => v.trim().replace(/^W\//, '') === etagOf(rev))
-const changesJson = (body) => {
+const seenHeader = (seen) =>
+  Object.entries(seen || {})
+    .map(([pc, at]) => `${pc}=${at}`)
+    .join(',')
+const changesJson = (body, seen) => {
   const res = json(body)
   res.headers.set('etag', etagOf(body.rev))
+  res.headers.set('x-seen', seenHeader(seen))
   return res
 }
-const idleChanges = (request, rev) =>
+const idleChanges = (request, rev, seen) =>
   matchesEtag(request, rev)
     ? new Response(null, {
         status: 304,
-        headers: { etag: etagOf(rev), 'cache-control': 'no-store' },
+        headers: { etag: etagOf(rev), 'cache-control': 'no-store', 'x-seen': seenHeader(seen) },
       })
-    : changesJson({ rev, logins: [], queues: [], chats: [], gone: [] })
+    : changesJson({ rev, logins: [], queues: [], chats: [], gone: [] }, seen)
 
-async function getChanges(request, db, sinceParam, trust) {
+async function getChanges(request, env, db, sinceParam) {
   const since = Number(sinceParam)
   if (sinceParam === null || sinceParam === '' || !Number.isInteger(since))
     return json({ error: 'bad since' }, 400)
-  const age = headKept ? Date.now() - headKept.at : -1
-  if (trust > 0 && age >= 0 && age < trust && since === headKept.row.rev)
-    return idleChanges(request, since)
-  const { rev, floor } = keepHead(await db.prepare(HEAD_SQL).first())
-  if (since === rev) return idleChanges(request, rev)
-  if (since < floor || since > rev) return changesJson({ rev, full: true })
+  const pc = request.headers.get('x-agenthydra-pc')
+  const { head, seen } = await headOf(env, pc && ID_RE.test(pc) ? pc : null)
+  const { rev, floor } = head
+  if (since === rev) return idleChanges(request, rev, seen)
+  if (since < floor || since > rev) return changesJson({ rev, full: true }, seen)
+  await ensureSchema(db)
   const [logins, queues, chats, tombs] = await db.batch([
     db
       .prepare('SELECT id, version, meta, updated_at FROM logins WHERE rev > ? ORDER BY rev')
@@ -680,18 +766,21 @@ async function getChanges(request, db, sinceParam, trust) {
       .bind(since),
     db.prepare('SELECT table_name, id FROM tombstones WHERE rev > ? ORDER BY rev').bind(since),
   ])
-  return changesJson({
-    rev,
-    logins: (logins.results || []).map((r) => changed(LOGINS, r)),
-    queues: (queues.results || []).map((r) => changed(QUEUES, r)),
-    chats: (chats.results || []).map((r) => changed(CHATS, r)),
-    gone: (tombs.results || []).map((r) => ({ table: r.table_name, id: r.id })),
-  })
+  return changesJson(
+    {
+      rev,
+      logins: (logins.results || []).map((r) => changed(LOGINS, r)),
+      queues: (queues.results || []).map((r) => changed(QUEUES, r)),
+      chats: (chats.results || []).map((r) => changed(CHATS, r)),
+      gone: (tombs.results || []).map((r) => ({ table: r.table_name, id: r.id })),
+    },
+    seen,
+  )
 }
 
-function routeList(db, path, trust) {
+function routeList(env, db, path) {
   const tables = { '/v1/logins': LOGINS, '/v1/queues': QUEUES, '/v1/chats': CHATS }
-  return tables[path] ? listRows(db, tables[path], trust) : null
+  return tables[path] ? listRows(env, db, tables[path]) : null
 }
 
 function routeChunks(request, db, env, url, match) {
@@ -709,71 +798,53 @@ function routeChunks(request, db, env, url, match) {
   return json({ error: 'method not allowed' }, 405)
 }
 
-function routeRow(request, db, url, match, trust) {
+function routeRow(request, env, db, url, match) {
   const t = match[1] === 'queues' ? QUEUES : match[1] === 'chats' ? CHATS : LOGINS
   const id = match[2]
   if (!ID_RE.test(id)) return json({ error: 'bad id' }, 400)
-  if (request.method === 'GET') return fetchRow(db, t, id, trust)
-  if (request.method === 'PUT') return putRow(request, db, t, id)
+  if (request.method === 'GET') return fetchRow(env, db, t, id)
+  if (request.method === 'PUT') return putRow(request, env, db, t, id)
   const version = Number(url.searchParams.get('version'))
-  if (request.method === 'DELETE' && t === LOGINS) return deleteLogin(db, id, version)
-  if (request.method === 'DELETE' && t === CHATS) return deleteChat(db, id, version)
+  if (request.method === 'DELETE' && t === LOGINS) return deleteLogin(env, db, id, version)
+  if (request.method === 'DELETE' && t === CHATS) return deleteChat(env, db, id, version)
   return json({ error: 'method not allowed' }, 405)
 }
 
 function route(request, db, env, url, path) {
   if (path === '/v1/changes' && request.method === 'GET')
-    return getChanges(request, db, url.searchParams.get('since'), trustOf(env))
+    return getChanges(request, env, db, url.searchParams.get('since'))
   if (request.method === 'GET') {
-    const listed = routeList(db, path, trustOf(env))
+    const listed = routeList(env, db, path)
     if (listed) return listed
   }
   const c = /^\/v1\/chats\/([^/]+)\/chunks(?:\/([^/]+))?$/.exec(path)
   if (c) return routeChunks(request, db, env, url, c)
   const m = /^\/v1\/(logins|queues|chats)\/([^/]+)$/.exec(path)
-  return m ? routeRow(request, db, url, m, trustOf(env)) : json({ error: 'not found' }, 404)
+  return m ? routeRow(request, env, db, url, m) : json({ error: 'not found' }, 404)
 }
 
+// The read routes that may answer from the head alone check the schema only when they reach D1.
+const HEAD_FIRST = /^\/v1\/(changes|logins|queues|chats)(\/[^/]+)?$/
+
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url)
     const path = url.pathname.replace(/\/+$/, '')
     if (path === '/v1/health') return json({ ok: true })
     if (!env.DB) return json({ error: 'no DB binding' }, 500)
+    if (!env.HEAD) return json({ error: 'no HEAD binding (the StoreHead Durable Object)' }, 500)
     if (!(await authorized(request, env))) return json({ error: 'unauthorized' }, 401)
     const db = env.DB
-    headKey = sharedCache() ? new URL('/__head', request.url) : null
-    headCacheMs = headCacheOf(env)
-    await ensureSchema(db)
-    const trust = trustOf(env)
-    if (
-      request.method === 'GET' &&
-      trust > 0 &&
-      !trustedHead(trust) &&
-      (path === '/v1/changes' || /^\/v1\/(logins|queues|chats)(\/[^/]+)?$/.test(path))
-    )
-      await seedHeadFromCache()
-
-    try {
-      return await route(request, db, env, url, path)
-    } finally {
-      const puts = headPuts
-      headPuts = []
-      if (puts.length) {
-        const done = Promise.all(puts)
-        if (ctx?.waitUntil) ctx.waitUntil(done)
-        else await done
-      }
-    }
+    if (!(request.method === 'GET' && HEAD_FIRST.test(path))) await ensureSchema(db)
+    return route(request, db, env, url, path)
   },
   async scheduled(_event, env) {
-    if (!env.DB) return
+    if (!env.DB || !env.HEAD) return
     await ensureSchema(env.DB)
-    await pruneTombstones(env.DB)
+    await pruneTombstones(env, env.DB)
   },
-  // For tests: what a fresh isolate starts without (the head, the kept lists and rows).
+  // For tests: what a fresh isolate starts without (the kept lists and rows).
   forgetIsolate() {
-    headKept = null
     listCache.clear()
     itemCache.clear()
   },

@@ -7,7 +7,7 @@ import { Database } from 'bun:sqlite'
 import { expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { clearCache, d1 } from './login-sync-store'
+import { d1, headNamespace } from './login-sync-store'
 
 const token = 'old-schema-token'
 const sqlite = new Database(':memory:')
@@ -23,12 +23,15 @@ const oldLogin = crypto.randomUUID()
 const oldChat = crypto.randomUUID()
 sqlite.run(`INSERT INTO logins VALUES ('${oldLogin}', 4, 'blob', '{"pc":"old"}', 1000)`)
 sqlite.run(`INSERT INTO chats VALUES ('${oldChat}', 2, 'blob', '{}', 1000)`)
-const worker = (
-  await import(
-    `${join(import.meta.dir, '..', '..', 'cloud', 'login-sync-worker', 'worker.js')}?old-schema`
-  )
-).default as { fetch: (r: Request, env: unknown) => Promise<Response> }
-const env = { DB: d1(sqlite), TOKEN_SHA256: createHash('sha256').update(token).digest('hex') }
+const workerModule = await import(
+  `${join(import.meta.dir, '..', '..', 'cloud', 'login-sync-worker', 'worker.js')}?old-schema`
+)
+const worker = workerModule.default as { fetch: (r: Request, env: unknown) => Promise<Response> }
+const env: Record<string, unknown> = {
+  DB: d1(sqlite),
+  TOKEN_SHA256: createHash('sha256').update(token).digest('hex'),
+}
+env.HEAD = headNamespace(workerModule.StoreHead, env)
 
 async function call(method: string, path: string, body?: unknown) {
   const r = await worker.fetch(
@@ -88,12 +91,15 @@ test('a tombstone older than 30 days is pruned by the cron and raises floor', as
   const recent = crypto.randomUUID()
   db.run(`INSERT INTO tombstones VALUES ('logins', '${old}', 5, ${Date.now() - 31 * 86400000})`)
   db.run(`INSERT INTO tombstones VALUES ('logins', '${recent}', 8, ${Date.now() - 86400000})`)
-  const w = (
-    await import(
-      `${join(import.meta.dir, '..', '..', 'cloud', 'login-sync-worker', 'worker.js')}?prune`
-    )
-  ).default as typeof worker & { scheduled: (e: unknown, env: unknown) => Promise<void> }
-  const dbEnv = { DB: d1(db), TOKEN_SHA256: env.TOKEN_SHA256 }
+  const pruneModule = await import(
+    `${join(import.meta.dir, '..', '..', 'cloud', 'login-sync-worker', 'worker.js')}?prune`
+  )
+  const w = pruneModule.default as typeof worker & {
+    scheduled: (e: unknown, env: unknown) => Promise<void>
+  }
+  const dbEnv: Record<string, unknown> = { DB: d1(db), TOKEN_SHA256: env.TOKEN_SHA256 }
+  // its own Durable Object, from its own module copy: a module remembers its schema check
+  dbEnv.HEAD = headNamespace(pruneModule.StoreHead, dbEnv)
   const ask = async (path: string) =>
     (
       await w.fetch(
@@ -102,7 +108,6 @@ test('a tombstone older than 30 days is pruned by the cron and raises floor', as
       )
     ).json() as Promise<any>
 
-  clearCache() // the first test left its head (rev 3) in the shared cache tier under the same host
   // a request alone no longer prunes: the old tombstone is still there
   expect((await ask('/v1/changes?since=3')).gone?.length).toBe(2)
   await w.scheduled({}, dbEnv)

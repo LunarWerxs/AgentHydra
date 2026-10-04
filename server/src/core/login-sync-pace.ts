@@ -11,10 +11,9 @@
 // file moved). Back to BASE_MS at once after a pass that was not quiet, after nudge() (a local change:
 // nudgeLoginSync) and after a manual sync or a launch.
 //
-// THE QUEUE HEARTBEAT STILL HOLDS: an idle PC uploads its CliMayte queue every HEARTBEAT_MS (15 min,
-// climayte-queue-sync.ts) and the other PC treats it as gone after REMOTE_STALE_MS (40 min,
-// climayte-remote.ts). IDLE_MAX_MS (5 min) is well inside both: a pass is due at least every 5 minutes,
-// so the heartbeat goes up within 20 minutes at the very latest.
+// LIVENESS RIDES THE POLLS: every changes poll names this PC, the store's Worker stamps it seen, and
+// the other PC treats it as gone after REMOTE_STALE_MS (20 min, climayte-remote.ts) without a stamp.
+// IDLE_MAX_MS (5 min) is well inside that: a pass, and so a poll, is due at least every 5 minutes.
 
 /** How often the loop ticks, and the wait of a PC with something to do or just back from a change. */
 export const BASE_MS = 30_000

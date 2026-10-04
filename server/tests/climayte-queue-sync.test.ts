@@ -4,7 +4,8 @@
 // The contract (core/climayte-queue-sync.ts, climayte-remote.ts, cloud/login-sync-worker/worker.js):
 // a queue snapshot opens only under its own PC's id; a snapshot over the store's cap loses its oldest
 // finished workers and never an active one; what the other PC has running counts toward an account's
-// cap here (a stale snapshot counts for nothing); a queue that cannot sync reports itself in
+// cap here (a PC not seen lately, by snapshot or by its store polls, counts for nothing); an unchanged
+// queue is never uploaded again just to look alive; a queue that cannot sync reports itself in
 // `queueError` and leaves the logins' status alone. The store is the real Worker on bun:sqlite
 // (login-sync-store.ts); the other PC is played by writing to it with the key from the pairing code;
 // an older Worker (no queue routes) is a tiny stand-in server.
@@ -36,7 +37,6 @@ import {
 } from '../src/core/cli-login-sync'
 import {
   fitSnapshot,
-  HEARTBEAT_MS,
   LIVE_GATE_MS,
   openQueue,
   resetQueueSync,
@@ -209,6 +209,33 @@ describe('placement beside the other PC', () => {
     setRemote(snapshot(pc, full, Date.now() - 41 * 60_000), 2)
     expect(place()?.id).toBe('acct-a')
     clearRemote()
+  })
+
+  test('an old snapshot of a PC the store saw polling still holds the account', async () => {
+    clearRemote()
+    resetQueueSync()
+    const full = Array.from({ length: MAX_PER_ACCOUNT }, () => rw({ status: 'running' }))
+    const other = randomUUID()
+    const mine = randomUUID()
+    // its queue went up 41 minutes ago and has not changed since, so it was not uploaded again
+    setRemote(snapshot(other, full, Date.now() - 41 * 60_000), 3)
+    const sentPc: Array<string | undefined> = []
+    const mirror = new StoreMirror(async (_method, path, headers) => {
+      if (path === '/v1/queues')
+        return { status: 200, json: { queues: [{ pc: other, version: 3, meta: {} }] }, rev: 5 }
+      sentPc.push(headers?.['x-agenthydra-pc'])
+      return { status: 304, json: null, seen: { [other]: Date.now() - 60_000 } }
+    })
+    mirror.pc = mine
+    await mirror.refresh({ tables: ['queues'] }) // the first pass: the list
+    await mirror.refresh({ tables: ['queues'] }) // the next: a changes poll, answered 304 with x-seen
+    expect(sentPc).toEqual([mine])
+    const call = async () => ({ status: 200, json: { version: 1 } })
+    await syncQueue({ key, pc: mine, name: 'THIS-PC', call, mirror })
+    expect(remoteSnapshots().map((s) => [s.pc, s.stale])).toEqual([[other, false]])
+    expect(place()).toBeNull()
+    clearRemote()
+    resetQueueSync()
   })
 })
 
@@ -384,7 +411,7 @@ describe('downloading the other PC’s queue', () => {
 })
 
 describe('when this PC uploads', () => {
-  test('a worker change at once, a live bucket change after the gate, else the heartbeat', async () => {
+  test('a worker change at once, a live bucket change after the gate, an unchanged queue never', async () => {
     resetQueueSync()
     const saved = new Map(liveByAccount)
     liveByAccount.clear()
@@ -447,13 +474,12 @@ describe('when this PC uploads', () => {
       t += 1000
       await syncQueue(io, t)
       expect(puts).toHaveLength(4)
-      // Nothing changed: the heartbeat, not before.
-      t += HEARTBEAT_MS - 1000
+      // Nothing changed: no upload, however long (the 15-minute heartbeat is gone).
+      t += 16 * 60_000
+      await syncQueue(io, t)
+      t += 60 * 60_000
       await syncQueue(io, t)
       expect(puts).toHaveLength(4)
-      t += 1000
-      await syncQueue(io, t)
-      expect(puts).toHaveLength(5)
     } finally {
       workers.delete('w-gate')
       liveByAccount.clear()

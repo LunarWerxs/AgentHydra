@@ -3,15 +3,7 @@
 // store is one per test process.
 
 import { afterAll, expect, test } from 'bun:test'
-import {
-  base,
-  clearCache,
-  dropQueue,
-  freshIsolate,
-  store,
-  storeDb,
-  token,
-} from './login-sync-store'
+import { base, dropQueue, freshIsolate, store, storeDb, token } from './login-sync-store'
 
 const newId = () => crypto.randomUUID()
 const made = {
@@ -173,7 +165,7 @@ test('rows read: a changes call reads the changed rows only, and a list nothing 
 
   storeDb.resetRowsRead()
   expect((await changes(cursor)).chats.map((r: { id: string }) => r.id)).toEqual([chat])
-  expect(storeDb.rowsRead()).toBe(2) // the head, then the one changed row
+  expect(storeDb.rowsRead()).toBe(1) // the one changed row (the head comes from the Durable Object)
 
   await store('GET', '/v1/logins')
   storeDb.resetRowsRead()
@@ -208,11 +200,10 @@ test('a kept list shows every write: an update, a delete below the top, a new ro
   expect((await listed()).get(fresh)).toBe(1)
 })
 
-// The head's second tier: the Cache API entry every isolate of a colo shares. Free-plan isolates are
-// short and two PCs land on different ones, so the isolate's own copy alone left most idle polls
-// reading store_rev from D1 (measured: 310 an hour).
-test('idle polls on fresh isolates read the head from D1 once, and a write is seen at once', async () => {
-  clearCache()
+// The head lives in the StoreHead Durable Object. Free-plan isolates are short and two PCs land on
+// different ones, so a head kept per isolate left most idle polls reading store_rev from D1 (measured:
+// 310 an hour).
+test('idle polls on fresh isolates never read the head from D1, and a write is seen at once', async () => {
   freshIsolate()
   const headReads = () =>
     storeDb.statements().find((s) => s.sql.startsWith('SELECT rev, floor'))?.calls ?? 0
@@ -223,7 +214,7 @@ test('idle polls on fresh isolates read the head from D1 once, and a write is se
   const cursor = (await poll(0)).rev ?? (await listRev())
   storeDb.resetRowsRead()
   for (let i = 0; i < 10; i++) expect((await poll(cursor)).rev).toBe(cursor)
-  expect(headReads()).toBeLessThanOrEqual(1)
+  expect(headReads()).toBe(0)
 
   // PC A writes through one isolate; PC B's next poll, on another, shows it with no stale head.
   const login = await put('logins')

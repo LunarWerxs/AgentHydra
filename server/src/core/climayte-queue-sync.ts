@@ -28,6 +28,7 @@ import { liveByAccount, workers } from '../climayte-core'
 import { type CliMayteWorker, ranSeconds } from '../climayte-lib'
 import {
   keepRemote,
+  noteSeen,
   type QueueSnapshot,
   type RemoteLive,
   type RemoteWorker,
@@ -42,11 +43,10 @@ import { ownBuild } from './own-build'
 export const QUEUE_MAX_BLOB = 256 * 1024
 /** Workers finished longer ago than this are not shared. */
 export const FINISHED_KEEP_MS = 24 * 60 * 60_000
-/** An unchanged queue is uploaded at least this often, so the other PC can tell this one is alive
- *  (climayte-remote.ts REMOTE_STALE_MS is well over it). Measured 2026-10-03: a 60 s heartbeat plus an
- *  upload on every usage reading cost the store about 2,300 rows read an hour with both PCs idle. */
-export const HEARTBEAT_MS = 15 * 60_000
-/** A change in the live readings alone (no worker changed) uploads at most this often. */
+/** A change in the live readings alone (no worker changed) uploads at most this often. An unchanged
+ *  queue is never uploaded again: the other PC reads this one as alive from its changes polls (the
+ *  Worker's x-seen, climayte-remote.ts), not from a heartbeat upload (one every 15 min cost ~50 of the
+ *  store's 60 rows an hour). */
 export const LIVE_GATE_MS = 10 * 60_000
 /** sessionPct and weekPct count as changed only when they cross a step of this many points. */
 export const LIVE_BUCKET = 5
@@ -265,8 +265,7 @@ const livePrint = (snap: QueueSnapshot): string =>
 
 /** Whether a pass run at `now` would upload this PC's snapshot for news: nothing sent yet, a worker's
  *  shape changed, or a live bucket moved and LIVE_GATE_MS has passed. Local and free (no store call).
- *  A running worker's activity and cost alone are not news, so they do not make a pass due. The
- *  heartbeat is not counted either: the pace's own backoff (at most IDLE_MAX_MS) reaches it. */
+ *  A running worker's activity and cost alone are not news, so they do not make a pass due. */
 export function queueUploadPending(pc: string, now = Date.now()): boolean {
   const sent = sentBy.get(pc)
   if (!sent) return true
@@ -277,19 +276,16 @@ export function queueUploadPending(pc: string, now = Date.now()): boolean {
 
 /** True when the snapshot went up with news in it: a worker's shape or a live bucket changed. A
  *  volatile-only change (activity, cost, clocks, error, running time) goes up only once LIVE_GATE_MS has
- *  passed since the last upload, with the current values, and is not news; nor is a heartbeat. */
+ *  passed since the last upload, with the current values, and is not news. */
 async function upload(io: QueueIo, own: number, now: number): Promise<boolean> {
   const { blob, snap } = fitSnapshot(io.key, buildSnapshot(io.pc, io.name, now))
   const s = shapePrint(snap)
   const v = volatilePrint(snap)
   const l = livePrint(snap)
   const sent = sentBy.get(io.pc)
-  // A shape change goes at once; a live-bucket or volatile change only after LIVE_GATE_MS; else the
-  // heartbeat.
+  // A shape change goes at once; a live-bucket or volatile change only after LIVE_GATE_MS; else nothing.
   if (sent && sent.shape === s) {
-    const age = now - sent.at
-    if (age < HEARTBEAT_MS && ((sent.live === l && sent.volatile === v) || age < LIVE_GATE_MS))
-      return false
+    if ((sent.live === l && sent.volatile === v) || now - sent.at < LIVE_GATE_MS) return false
   }
   const body = (version: number) => ({
     version,
@@ -307,6 +303,7 @@ async function upload(io: QueueIo, own: number, now: number): Promise<boolean> {
 async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: number }>> {
   if (io.mirror) {
     await io.mirror.refresh({ tables: ['queues'], maxAgeMs: MIRROR_FRESH_MS })
+    noteSeen(io.mirror.lastSeen())
     const v = io.mirror.view('queues')
     if (!v.ok) throw queueFailure('Reading the queues', v.reply)
     return v.rows as Array<{ pc: string; version: number }>
@@ -319,10 +316,10 @@ async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: numb
 
 /** One queue pass: upload this PC's snapshot when a worker's shape changed, when the live readings
  *  moved a bucket or a worker's activity, cost or clocks changed (those two at most every
- *  LIVE_GATE_MS) or when the heartbeat is due, download every other PC's that changed. Throws the
+ *  LIVE_GATE_MS), download every other PC's that changed. Throws the
  *  first problem after doing all it can. Returns whether anything the queue shares moved: this PC's
- *  snapshot went up with a shape or live-bucket change, or another PC's came down with one (a heartbeat
- *  or a volatile-only change is no news; it is still stored). The sync loop polls less often when
+ *  snapshot went up with a shape or live-bucket change, or another PC's came down with one (a
+ *  volatile-only change is no news; it is still stored). The sync loop polls less often when
  *  nothing moved. */
 export async function syncQueue(io: QueueIo, now = Date.now()): Promise<boolean> {
   let moved = false

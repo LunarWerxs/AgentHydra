@@ -106,7 +106,7 @@ import {
   syncDesktopLogins,
 } from './desktop-login-sync'
 import { setBeforeLaunchHook } from './instances'
-import { StoreMirror } from './login-sync-mirror'
+import { parseSeen, StoreMirror } from './login-sync-mirror'
 import { BASE_MS, SyncPace } from './login-sync-pace'
 import { quietWriter } from './quiet-write'
 
@@ -256,7 +256,7 @@ async function call(
   path: string,
   body?: unknown,
   extra?: Record<string, string>,
-): Promise<{ status: number; json: any; rev?: number }> {
+): Promise<{ status: number; json: any; rev?: number; seen?: Record<string, number> }> {
   // A write moves the row on: what the mirror kept of it is not the store's copy any more.
   if (method !== 'GET') mirror?.m.forget(path)
   const res = await fetch(new URL(path, l.url), {
@@ -276,7 +276,8 @@ async function call(
   // The store's change counter, sent on the list routes: where a changes cursor can start.
   const header = res.headers.get('x-store-rev')
   const rev = header !== null && /^\d+$/.test(header) ? Number(header) : undefined
-  return { status: res.status, json, rev }
+  // The changes feed's other PCs, by when the Worker last saw them poll (their liveness).
+  return { status: res.status, json, rev, seen: parseSeen(res.headers.get('x-seen')) }
 }
 
 const httpError = (what: string, r: { status: number; json: any }): Error =>
@@ -1209,7 +1210,9 @@ async function pass(): Promise<LoginSyncPassResult> {
   }
   const excluded = new Set(c.excluded)
   const by = hostname()
-  // The queue's own news is judged by queuePass (a heartbeat of the other PC is none).
+  // Every changes poll names this PC, so the other PC reads it as alive (climayte-remote.ts).
+  mirrorFor(l).pc = c.pcId ??= randomUUID()
+  // The queue's own news is judged by queuePass.
   const seen = mirrorFor(l).changesIn(['logins', 'chats'])
   await executeSyncPass(l, c, out, excluded, by)
   const queueMoved = await queuePass(l, c, by)
