@@ -13,7 +13,7 @@
 // throwaway ones - but they are SHARED with every other test file in this worker, so each test
 // saves whatever it found and puts it back, corrupt bytes included, before it returns.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CONFIG_DIR } from '../src/config'
 import {
@@ -56,11 +56,23 @@ afterEach(() => {
 
 const MALFORMED = '{not-json; synthetic-old-id-keep-me}'
 
+/** Every instance dir under `root` now, as reconcile*InstanceDirs lists them. With the registry
+ *  corrupt, reconcile counts EVERY dir as an orphan, including the ones earlier test files in this
+ *  shared scratch home created with a record; "no orphan minted" is "no dir added". */
+function dirsIn(root: string): string[] {
+  if (!existsSync(root)) return []
+  return readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => join(root, e.name))
+    .sort()
+}
+
 describe('AH-01: a registry that cannot be read is never overwritten', () => {
   test('CLI: create against malformed JSON refuses, leaves the bytes, and mints no orphan dir', () => {
     restores.push(preserve(CLI_STORE))
     mkdirSync(CONFIG_DIR, { recursive: true })
     writeFileSync(CLI_STORE, MALFORMED)
+    const dirsBefore = dirsIn(CLI_ROOT)
 
     const result = createCliInstance('created-after-corruption')
     expect(result.ok).toBe(false)
@@ -69,7 +81,7 @@ describe('AH-01: a registry that cannot be read is never overwritten', () => {
     // Byte-for-byte: the identities in the damaged file are still there to recover.
     expect(readFileSync(CLI_STORE, 'utf8')).toBe(MALFORMED)
     // The dir minted for the never-landed record was taken back.
-    expect(reconcileCliInstanceDirs().orphanDirs).toEqual([])
+    expect(reconcileCliInstanceDirs().orphanDirs).toEqual(dirsBefore)
     // Readers degrade to empty rather than throwing, and say why.
     expect(listCliInstances()).toEqual([])
     expect(reconcileCliInstanceDirs().registry).toBe('corrupt')
@@ -90,13 +102,14 @@ describe('AH-01: a registry that cannot be read is never overwritten', () => {
     restores.push(preserve(CODEX_STORE))
     mkdirSync(CONFIG_DIR, { recursive: true })
     writeFileSync(CODEX_STORE, MALFORMED)
+    const dirsBefore = dirsIn(CODEX_ROOT)
 
     const result = createCodexInstance('created-after-corruption')
     expect(result.ok).toBe(false)
     expect(result.data?.registry).toBe('corrupt')
     expect(readFileSync(CODEX_STORE, 'utf8')).toBe(MALFORMED)
     expect(reconcileCodexInstanceDirs().registry).toBe('corrupt')
-    expect(reconcileCodexInstanceDirs().orphanDirs).toEqual([])
+    expect(reconcileCodexInstanceDirs().orphanDirs).toEqual(dirsBefore)
     expect(renameCodexInstance('any', 'x').ok).toBe(false)
   })
 

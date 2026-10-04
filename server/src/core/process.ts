@@ -324,6 +324,9 @@ export interface CapturedRun {
  *  taskkill, ps, security, secret-tool — so ten seconds is generous, not tight. */
 export const CAPTURE_TIMEOUT_MS = 10_000
 
+/** Bun.spawn as this module found it; spawnCaptured runs inline when it has been replaced. */
+const nativeSpawn = Bun.spawn
+
 /**
  * THE ONE BOUNDED SPAWN. Run a short command, capture what it said, and COME BACK — whatever the
  * child or its descendants do.
@@ -366,11 +369,16 @@ export async function spawnCaptured(
   } = {},
 ): Promise<CapturedRun> {
   // Spawned on a worker thread: Bun.spawn holds its caller for 100-280 ms on Windows, and the
-  // daemon's one thread serves every route. Inline only where no worker can run.
-  try {
-    return await captureInWorker(cmd, { timeoutMs, cwd, env, wantStderr })
-  } catch {
-    // worker unavailable or died: capture on this thread
+  // daemon's one thread serves every route. Inline only where no worker can run, or where this
+  // thread's Bun.spawn was replaced: the worker has its own Bun, so a test that breaks spawn to
+  // reach "could not look", or forbids it ("this suite must never launch anything"), would
+  // otherwise be bypassed and a real process launched behind its back.
+  if (Bun.spawn === nativeSpawn) {
+    try {
+      return await captureInWorker(cmd, { timeoutMs, cwd, env, wantStderr })
+    } catch {
+      // worker unavailable or died: capture on this thread
+    }
   }
   let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
   try {

@@ -790,7 +790,20 @@ describe('integration: a quota wall hands the session to the next account', () =
       { id: 'fake-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
     ])
     startCliMayte()
-    const run = climayteRun({ tasks: [{ prompt: 'do the fake task', cwd, title: 'fake' }] })
+    // One known setting: an auto pick depends on how many auto workers the store already holds
+    // (every 4th explores Haiku), and in the serial suite that is every earlier file's workers.
+    const run = climayteRun({
+      tasks: [
+        {
+          prompt: 'do the fake task',
+          cwd,
+          title: 'fake',
+          model: 'sonnet',
+          effort: 'medium',
+          modelWhy: 'the journal line below names one known setting',
+        },
+      ],
+    })
     group = run.group
     const id = run.workers[0]?.id as string
     expect(id).toBeTruthy()

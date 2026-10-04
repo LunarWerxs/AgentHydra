@@ -34,7 +34,8 @@ describe('db storage migration', () => {
   })
 
   test('versioned, incremental auto-vacuum, and reclaiming is safe', () => {
-    expect(one('pragma user_version')).toBe(1)
+    // 2 since piece 12 (usage_samples); a fresh file runs every step and ends on the newest.
+    expect(one('pragma user_version')).toBe(2)
     expect(one('pragma auto_vacuum')).toBe(2)
     expect(reclaimFreePages()).toBeGreaterThanOrEqual(0)
   })

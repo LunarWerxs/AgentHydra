@@ -11,6 +11,7 @@ import { test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { initFileLogging, restoreFileLogging, logFilePath } from "../../src/log-file.mjs";
 
 // The true native console methods, snapshotted before any test patches them. initFileLogging
@@ -73,19 +74,21 @@ test("tees console.log/warn/error to logs/daemon.log with level tags, while the 
   console.log = realLog;
 });
 
-test("rotates to daemon.log.1 once the existing log exceeds the size cap, keeping one generation", () => {
+test("rotates to daemon.log.1.gz once the existing log exceeds the size cap", () => {
   const home = tempHome();
   const logsDir = join(home, "logs");
   const path = join(logsDir, "daemon.log");
   mkdirSync(logsDir, { recursive: true });
-  // Seed an oversized previous log (> 5 MiB cap) with a marker we can look for after rotation.
-  writeFileSync(path, `OLD-MARKER\n${"x".repeat(6 * 1024 * 1024)}`);
+  // Seed an oversized previous log (> the 20 MiB cap) with a marker we can look for after rotation.
+  writeFileSync(path, `OLD-MARKER\n${"x".repeat(21 * 1024 * 1024)}`);
 
   initFileLogging(home);
 
-  const rolled = `${path}.1`;
+  // Old generations are gzipped since 2026-10-03 (3f394c98); no plain .1 is left behind.
+  const rolled = `${path}.1.gz`;
   expect(existsSync(rolled)).toBe(true);
-  expect(readFileSync(rolled, "utf8")).toContain("OLD-MARKER");
+  expect(existsSync(`${path}.1`)).toBe(false);
+  expect(gunzipSync(readFileSync(rolled)).toString("utf8")).toContain("OLD-MARKER");
   // The fresh log is small (just the boot marker) and does NOT carry the old content.
   const fresh = readFileSync(path, "utf8");
   expect(fresh).not.toContain("OLD-MARKER");
