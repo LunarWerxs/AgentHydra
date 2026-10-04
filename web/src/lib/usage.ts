@@ -4,7 +4,7 @@
 // server/src/index.ts for the cache keys (`acct:<id>`, `cli:<id>`) each check lands under.
 import type { ClaudeCodeCredit, UsageSnapshot } from './api'
 import { formatAgo } from './relativeTime'
-import { isWindowSuperseded } from './usage-reset'
+import { isWindowSuperseded, msUntilReset, SESSION_WINDOW_MS, WEEK_WINDOW_MS } from './usage-reset'
 
 /** Mirrors server's `UsageReason` (see server/src/types.ts). Not re-exported from lib/api.ts,
  *  so this is the single local source other modules (useUsage.ts, UsageBadge.vue, and the two
@@ -184,4 +184,46 @@ export function usageReasonMessageKey(reason: UsageReason | undefined): string |
     default:
       return 'instances.usageNotChecked'
   }
+}
+
+// ---- One quota-window rule -------------------------------------------------------------------
+// The API reports when a window ENDS (`resetsAt`), never when it started. Everything that needs a
+// window's start, or to know whether a reading still describes a live window, goes through these.
+
+export type WindowKind = '5h' | 'week'
+
+/** Length of a window of this kind. */
+export function windowLengthMs(kind: WindowKind): number {
+  return kind === '5h' ? SESSION_WINDOW_MS : WEEK_WINDOW_MS
+}
+
+/** The reset instant (ms) of a window, or null when `resetsAt` is missing or unparseable. */
+export function windowResetMs(resetsAt: string | null | undefined): number | null {
+  return msUntilReset({ pct: 0, resets: '', resetsAt }, new Date(0))
+}
+
+/** When the window began: its reset instant minus its length; null without a usable reset. */
+export function windowStartMs(
+  resetsAt: string | null | undefined,
+  kind: WindowKind,
+): number | null {
+  const reset = windowResetMs(resetsAt)
+  return reset === null ? null : reset - windowLengthMs(kind)
+}
+
+/** True when the reset instant has passed (at or before `nowMs`); false when it is missing. */
+export function windowHasReset(resetsAt: string | null | undefined, nowMs: number): boolean {
+  const reset = windowResetMs(resetsAt)
+  return reset !== null && reset <= nowMs
+}
+
+/** The % used to show: 0 once the window has reset (the stored % describes the ended window),
+ *  else the stored % clamped to 0-100; null with no reading. */
+export function windowUsedPct(
+  limit: { pct: number; resetsAt?: string | null } | null | undefined,
+  nowMs: number,
+): number | null {
+  if (!limit) return null
+  if (windowHasReset(limit.resetsAt, nowMs)) return 0
+  return Math.min(100, Math.max(0, limit.pct))
 }

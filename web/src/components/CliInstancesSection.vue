@@ -75,9 +75,8 @@ import {
   withoutPlanSuffix,
 } from '@/lib/instance-table'
 import { tokenPartsFor } from '@/lib/token-window'
-import { billsPastLimit, usageReasonMessageKey } from '@/lib/usage'
+import { billsPastLimit, usageReasonMessageKey, windowLengthMs, windowResetMs } from '@/lib/usage'
 import { planSize, pooledRemaining } from '@/lib/usage-pool'
-import { SESSION_WINDOW_MS } from '@/lib/usage-reset'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -543,7 +542,7 @@ function nudgeNote(inst: CliInstance): { ok: boolean; label: string; description
   if (!n) return null
   const nowMs = now.value.getTime()
   if (n.ok) {
-    const until = n.resetsAt ? Date.parse(n.resetsAt) : n.at + SESSION_WINDOW_MS
+    const until = windowResetMs(n.resetsAt) ?? n.at + windowLengthMs('5h')
     if (!(until > nowMs)) return null
     return {
       ok: true,

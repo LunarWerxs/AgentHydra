@@ -5,7 +5,7 @@
 // worth five Pros at 50%. Pure and clock-free like usage-reset.ts: every call takes `now`.
 
 import type { UsageLimit } from './api'
-import { msUntilReset } from './usage-reset'
+import { windowUsedPct } from './usage'
 
 /** How many Pro windows a plan's window holds: Pro 1, Max 5x 5, Max 20x 20. The same reading of
  *  the plan label as the server's planFactor (server/src/climayte-placement.ts). */
@@ -60,8 +60,7 @@ export function pooledRemaining(accounts: PoolAccount[], now: Date = new Date())
       unread++
       continue
     }
-    const ms = msUntilReset(a.limit, now)
-    const left = ms !== null && ms <= 0 ? 100 : Math.min(100, Math.max(0, 100 - a.limit.pct))
+    const left = 100 - (windowUsedPct(a.limit, now.getTime()) ?? 0)
     const factor = planFactor(a.planLabel)
     weighted += factor * left
     weight += factor

@@ -1,6 +1,8 @@
 // web/src/lib/home-charts.ts — data shaping for the Instances landing page's charts band.
 // Pure and clock-free: every call takes `asOf` (ms), so a chart never shifts between refreshes.
 
+import { windowUsedPct } from './usage'
+
 const HOUR_MS = 3_600_000
 
 /** Index 0 = oldest hour, `hours - 1` = the hour containing `asOf`; null when outside the window. */
@@ -74,12 +76,4 @@ export function severityOf(pct: number): 'ok' | 'warn' | 'high' {
 }
 
 /** A window whose reset has passed is back to 0% used (its stored % describes the ended window). */
-export function usedPct(
-  limit: { pct: number; resetsAt?: string | null } | null | undefined,
-  now: number,
-): number | null {
-  if (!limit) return null
-  const reset = limit.resetsAt ? Date.parse(limit.resetsAt) : Number.NaN
-  if (Number.isFinite(reset) && reset <= now) return 0
-  return Math.min(100, Math.max(0, limit.pct))
-}
+export const usedPct = windowUsedPct
