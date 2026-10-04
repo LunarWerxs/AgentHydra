@@ -69,3 +69,36 @@ describe('accountTokenWindows', () => {
     expect(out.get('acct-none')?.total.total).toBe(0)
   })
 })
+
+describe('accountTokenWindows over a rolled-up store', () => {
+  test('whole hours come from the rollup, partial edge hours from raw rows, and a write shows at once', () => {
+    const s = new KitStore(':memory:')
+    // 20 min past the hour so every window edge cuts through an hour.
+    const now = Date.UTC(2026, 5, 15, 12, 20, 0)
+    const at = (id: string, ago: number, input: number): UsageEventInput => ({
+      id,
+      ts: now - ago,
+      source: 'cli',
+      account: 'acct-r',
+      input,
+    })
+    s.upsertEvents([
+      at('r1', 10 * 60_000, 1), // in the 5h window, current hour
+      at('r2', 4 * H, 2), // in the 5h window, whole hour
+      at('r3', 5 * H + 10 * 60_000, 4), // before the rolling 5h edge (12:20 - 5h = 07:20), same hour as edge
+      at('r4', 3 * 24 * H, 8), // inside the week only
+    ])
+    const raw = accountTokenWindows(['acct-r'], { store: s, now, quota: () => null })
+    s.rollup()
+    const rolled = accountTokenWindows(['acct-r'], { store: s, now, quota: () => null })
+    expect(rolled.get('acct-r')).toEqual(raw.get('acct-r'))
+    expect(rolled.get('acct-r')?.fiveHour.input).toBe(1 + 2)
+    expect(rolled.get('acct-r')?.week.input).toBe(1 + 2 + 4 + 8)
+
+    s.upsertEvents([at('r5', 60_000, 16)])
+    const after = accountTokenWindows(['acct-r'], { store: s, now, quota: () => null })
+    expect(after.get('acct-r')?.fiveHour.input).toBe(1 + 2 + 16)
+    expect(after.get('acct-r')?.total.input).toBe(1 + 2 + 4 + 8 + 16)
+    s.close()
+  })
+})

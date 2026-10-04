@@ -226,6 +226,8 @@ export function migrateKitSchema(db: Exec): void {
     db.exec(KIT_DDL_V2)
     if (have >= 1) backfillV2(db)
   }
+  // Covers the per-source coverage summary; idempotent, so a file at any version gets it.
+  db.exec('create index if not exists usage_event_source_ts on usage_event (source, ts)')
   if (have !== KIT_SCHEMA_VERSION) db.exec(`pragma user_version = ${KIT_SCHEMA_VERSION}`)
 }
 

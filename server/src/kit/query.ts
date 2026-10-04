@@ -317,8 +317,67 @@ function dayOf(ts: number, tz: string | undefined): string {
   return f.format(ts)
 }
 
+/**
+ * Changes on this connection plus other connections' commits: it moves on every store write
+ * (events, rollups, prunes, meta, cursors) and holds still between them.
+ */
+export function storeGeneration(db: Database): string {
+  const c = db.query('select total_changes() as c').get() as { c: number }
+  const v = db.query('pragma data_version').get() as { data_version: number }
+  return `${c.c}:${v.data_version}`
+}
+
+interface ResultCache {
+  gen: string
+  results: Map<string, UsageResult>
+}
+const resultCaches = new WeakMap<Database, ResultCache>()
+const RESULT_CACHE_MAX = 64
+const CACHE_BUCKET_MS = 60_000
+
+function cacheFor(db: Database, gen: string): ResultCache {
+  let c = resultCaches.get(db)
+  if (!c || c.gen !== gen) {
+    c = { gen, results: new Map() }
+    resultCaches.set(db, c)
+  }
+  return c
+}
+
+/**
+ * The same query answers the same until the store is written, so a result is reused until then
+ * (and within one minute of a rolling window, whose edge moves with the clock).
+ */
 export function usageQuery(params: UsageQueryParams = {}, opts: UsageQueryOpts = {}): UsageResult {
   const store = opts.store ?? sharedKitStore()
+  const gen = storeGeneration(store.db)
+  const win = resolveWindow(
+    params.window,
+    opts.now ?? Date.now(),
+    opts.quota ?? cachedQuota(store.db),
+  )
+  const key = JSON.stringify([
+    params,
+    opts.now ?? Math.floor(Date.now() / CACHE_BUCKET_MS),
+    win.basis === 'snapshot' ? win.from : null,
+  ])
+  const cache = cacheFor(store.db, gen)
+  const hit = cache.results.get(key)
+  if (hit) return structuredClone(hit)
+  const res = computeUsage(params, opts, store)
+  // A query that wrote (the sessions temp table) moved the generation: do not file it under the old one.
+  if (storeGeneration(store.db) === gen) {
+    if (cache.results.size >= RESULT_CACHE_MAX) cache.results.clear()
+    cache.results.set(key, structuredClone(res))
+  }
+  return res
+}
+
+function computeUsage(
+  params: UsageQueryParams,
+  opts: UsageQueryOpts,
+  store: KitStore,
+): UsageResult {
   const db = store.db
   const now = opts.now ?? Date.now()
   if (params.tz) new Intl.DateTimeFormat('en-CA', { timeZone: params.tz }) // throws RangeError on a bad zone
@@ -364,15 +423,39 @@ export function usageQuery(params: UsageQueryParams = {}, opts: UsageQueryOpts =
     }
   }
 
-  // raw range: [max(from, cutoff), to]
+  // Time ranges answered from raw rows and from whole hours of the rollup. Raw rows older than the
+  // cutoff are gone, so those hours always come from the rollup; newer hours come from the rollup
+  // too once it is current (below the first stale hour) so a long window scans no raw rows except
+  // its partial edge hours. Filters the rollup lacks keep to raw rows.
   const rawFrom = Math.max(win.from, cutoff)
-  const rawRows =
-    rawFrom <= win.to
-      ? selectRows(db, 'usage_event', dims, withHour, {
-          sql: `ts >= ? and ts <= ?${dim.sql}${rawExtra(filter)}${whole?.sql ?? ''}`,
-          args: [rawFrom, win.to, ...dim.args, ...rawExtraArgs(filter)],
-        })
-      : []
+  const rawRanges: Range[] = rawFrom <= win.to ? [[rawFrom, win.to]] : []
+  const rollRanges: Range[] = []
+  if (!inSessions && !hourFilter) {
+    const rollTo = Math.min(cutoff - 1, win.to)
+    if (win.from < cutoff && hourStart(win.from) <= rollTo) {
+      rollRanges.push([hourStart(win.from), rollTo])
+    }
+    if (!sessionLike) {
+      const dirty = store.getMeta('dirty_from')
+      const lo = hourCeil(rawFrom)
+      const hi = Math.min(
+        hourStart(win.to + 1),
+        dirty === null ? Number.POSITIVE_INFINITY : hourStart(Number(dirty)),
+      )
+      if (rawFrom <= win.to && lo < hi) {
+        rawRanges.length = 0
+        if (rawFrom < lo) rawRanges.push([rawFrom, lo - 1])
+        if (hi <= win.to) rawRanges.push([hi, win.to])
+        rollRanges.push([lo, hi - 1])
+      }
+    }
+  }
+  const rawRows = rawRanges.flatMap(([from, to]) =>
+    selectRows(db, 'usage_event', dims, withHour, {
+      sql: `ts >= ? and ts <= ?${dim.sql}${rawExtra(filter)}${whole?.sql ?? ''}`,
+      args: [from, to, ...dim.args, ...rawExtraArgs(filter)],
+    }),
+  )
 
   let rollRows: RawRow[] = []
   if (inSessions) {
@@ -397,24 +480,23 @@ export function usageQuery(params: UsageQueryParams = {}, opts: UsageQueryOpts =
       }
     }
   } else {
-    // rollup range: whole hours below the cutoff that overlap the window
-    const rollFrom = hourStart(win.from)
-    const rollTo = Math.min(cutoff - 1, win.to)
-    if (win.from < cutoff && rollFrom <= rollTo) {
-      if (hourFilter) {
+    if (hourFilter) {
+      if (win.from < cutoff && hourStart(win.from) <= Math.min(cutoff - 1, win.to)) {
         notes.push(
           `${hourFilter} filter cannot be applied to hourly rollups: usage before ${new Date(cutoff).toISOString()} is not included`,
         )
-      } else {
-        rollRows = selectRows(db, 'usage_hour', dims, withHour, {
+      }
+    } else {
+      rollRows = rollRanges.flatMap(([from, to]) =>
+        selectRows(db, 'usage_hour', dims, withHour, {
           sql: `hour >= ? and hour <= ?${dim.sql}`,
-          args: [rollFrom, rollTo, ...dim.args],
-        })
-        if (sessionLike) {
-          notes.push(
-            'usage before the raw retention line has no session or ref: it groups under null',
-          )
-        }
+          args: [from, to, ...dim.args],
+        }),
+      )
+      if (sessionLike && win.from < cutoff && hourStart(win.from) <= Math.min(cutoff - 1, win.to)) {
+        notes.push(
+          'usage before the raw retention line has no session or ref: it groups under null',
+        )
       }
     }
   }
@@ -460,15 +542,7 @@ export function usageQuery(params: UsageQueryParams = {}, opts: UsageQueryOpts =
   return {
     rows,
     totals,
-    unpriced: unpricedModels(
-      db,
-      win,
-      cutoff,
-      dim,
-      filter,
-      !hourFilter,
-      inSessions ? sessWhere : null,
-    ),
+    unpriced: unpricedModels(db, rawRanges, rollRanges, dim, filter, inSessions ? sessWhere : null),
     priceVer: store.getMeta('price_ver'),
     coverage: coverage(store),
     window: win,
@@ -476,6 +550,8 @@ export function usageQuery(params: UsageQueryParams = {}, opts: UsageQueryOpts =
   }
 }
 
+type Range = [from: number, to: number]
+const hourCeil = (ts: number): number => hourStart(ts + HOUR_MS - 1)
 const hourStart = (ts: number): number => ts - (((ts % HOUR_MS) + HOUR_MS) % HOUR_MS)
 
 /** Raw-only filters: usage_event has the columns the rollup lacks (session, ok). */
@@ -557,21 +633,19 @@ function compareRows(groupBy: GroupBy[]) {
 
 function unpricedModels(
   db: Database,
-  win: ResolvedWindow,
-  cutoff: number,
+  rawRanges: Range[],
+  rollRanges: Range[],
   dim: Where,
   filter: NonNullable<UsageQueryParams['filter']>,
-  withRollup: boolean,
   sessions: Where | null,
 ): string[] {
   const out = new Set<string>()
-  const rawFrom = Math.max(win.from, cutoff)
-  if (rawFrom <= win.to) {
+  for (const [from, to] of rawRanges) {
     const rows = db
       .query(
         `select distinct model from usage_event where ts >= ? and ts <= ?${dim.sql}${rawExtra(filter)} and list_usd is null and model is not null`,
       )
-      .all(rawFrom, win.to, ...dim.args, ...rawExtraArgs(filter)) as { model: string }[]
+      .all(from, to, ...dim.args, ...rawExtraArgs(filter)) as { model: string }[]
     for (const r of rows) out.add(r.model)
   }
   if (sessions) {
@@ -584,13 +658,12 @@ function unpricedModels(
     for (const r of rows) out.add(r.model)
     return [...out].sort()
   }
-  const rollTo = Math.min(cutoff - 1, win.to)
-  if (withRollup && win.from < cutoff && hourStart(win.from) <= rollTo) {
+  for (const [from, to] of rollRanges) {
     const rows = db
       .query(
         `select distinct model from usage_hour where hour >= ? and hour <= ?${dim.sql} and list_usd is null and model != ''`,
       )
-      .all(hourStart(win.from), rollTo, ...dim.args) as { model: string }[]
+      .all(from, to, ...dim.args) as { model: string }[]
     for (const r of rows) out.add(r.model)
   }
   return [...out].sort()
@@ -613,11 +686,32 @@ function coverage(store: KitStore): UsageResult['coverage'] {
 
 function scanCoverage(store: KitStore): UsageResult['coverage'] {
   const sources: UsageResult['coverage']['sources'] = {}
-  const raw = store.db
-    .query(
-      'select source, count(*) as n, min(ts) as a, max(ts) as b from usage_event group by source',
-    )
-    .all() as { source: string; n: number; a: number; b: number }[]
+  // With a current rollup the raw counts are the rollup's calls since the raw cut (a few thousand
+  // rows) and each source's first and last raw ts one index seek; a stale rollup scans the raw rows.
+  const stale = store.getMeta('dirty_from') !== null
+  const raw = stale
+    ? (store.db
+        .query(
+          'select source, count(*) as n, min(ts) as a, max(ts) as b from usage_event group by source',
+        )
+        .all() as { source: string; n: number; a: number; b: number }[])
+    : (
+        store.db
+          .query(
+            'select source, sum(calls) as n from usage_hour where hour >= ? group by source having sum(calls) > 0',
+          )
+          .all(store.rawCut() ?? 0) as { source: string; n: number }[]
+      ).map((r) => {
+        // SQLite seeks an index for one min or max per statement, not for both together.
+        const edge = (fn: 'min' | 'max') =>
+          (
+            store.db
+              .query(`select ${fn}(ts) as t from usage_event where source = ?`)
+              .get(r.source) as { t: number }
+          ).t
+        const e = { a: edge('min'), b: edge('max') }
+        return { ...r, ...e }
+      })
   for (const r of raw) sources[r.source] = { events: r.n, firstTs: r.a, lastTs: r.b }
   // Sources that only survive in the rollup (their raw rows aged out).
   const hourly = store.db

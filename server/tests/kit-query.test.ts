@@ -387,3 +387,32 @@ describe('session and ref totals at any age', () => {
     expect(r.notes[0]).toContain('does not cover whole')
   })
 })
+
+describe('usageQuery after a rollup', () => {
+  test('whole hours read the rollup, edge hours raw rows: same answer; a later write is not served from cache', () => {
+    const s = new KitStore(':memory:')
+    const now = Date.UTC(2026, 5, 15, 12, 20, 0)
+    const e = (id: string, ago: number, input: number) => ({
+      id,
+      ts: now - ago,
+      source: 'cli',
+      account: 'acct-q',
+      model: 'm',
+      input,
+    })
+    s.upsertEvents([
+      e('q1', 10 * 60_000, 1),
+      e('q2', 2 * 3_600_000, 2),
+      e('q3', 5 * 3_600_000 + 10 * 60_000, 4),
+    ])
+    const p = { window: { last: '5h' as const }, groupBy: ['account' as const] }
+    const before = usageQuery(p, { store: s, now })
+    s.rollup()
+    const after = usageQuery(p, { store: s, now })
+    expect(after.rows).toEqual(before.rows)
+    expect(after.rows[0]?.tokens).toBe(3)
+    s.upsertEvents([e('q4', 60_000, 8)])
+    expect(usageQuery(p, { store: s, now }).rows[0]?.tokens).toBe(11)
+    s.close()
+  })
+})
