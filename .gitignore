@@ -63,3 +63,6 @@ docs/HANDOFF_MICHAEL.md
 # comment, not as a file of field notes about one machine's logs.
 /FINDINGS-*.md
 *.tsbuildinfo
+
+# Python build metadata (pip install -e .)
+*.egg-info/
