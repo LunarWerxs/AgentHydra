@@ -163,9 +163,9 @@ describe('kit legacy backfill', () => {
     db.query(
       'insert or replace into session_stats (session_key, session_id, source, cwd, first_seen_at, last_scanned_at) values (?, ?, ?, ?, 1, 2)',
     ).run('claude:rep-gone', 'rep-gone', 'claude', 'D:/work/Legacy')
-    const before = spendReport({ store, now: NOW })
+    const before = await spendReport({ store, now: NOW })
     await ingestLegacy(store, s, { now: NOW })
-    const after = spendReport({ store, now: NOW })
+    const after = await spendReport({ store, now: NOW })
     expect(before.tokens.total).toBe(0)
     expect(after.tokens.total).toBe(1200)
     expect(after.byDay.map((d) => d.key)).toEqual([day(120)])

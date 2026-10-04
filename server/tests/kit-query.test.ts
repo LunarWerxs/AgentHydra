@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { machineId } from '../src/kit/machine'
-import { type UsageQueryParams, usageQuery } from '../src/kit/query'
+import { type UsageQueryParams, usageQuery, usageQueryAsync } from '../src/kit/query'
 import { KitStore, type UsageEventInput } from '../src/kit/store'
 import { parseKitUsageQuery } from '../src/routes/kit'
 
@@ -565,5 +565,111 @@ describe('billed and unbilled spend in one group', () => {
       'unbilled_usd',
       'cost_usd',
     ])
+  })
+})
+
+describe('usageQueryAsync answers what usageQuery does, in slices', () => {
+  // Several sessions, one cut by the window, one cut by the raw cut, and calls since the last rollup.
+  const fixture = () => {
+    const st = new KitStore(':memory:')
+    const rows: UsageEventInput[] = []
+    for (let i = 0; i < 40; i++) {
+      rows.push({
+        id: `a${i}`,
+        ts: NOW - 50 * D + i * 31 * H,
+        source: i % 3 ? 'cli' : 'desktop',
+        account: i % 2 ? 'a' : 'b',
+        model: i % 5 ? 'opus' : 'sonnet',
+        session: `s${i % 7}`,
+        input: 10 + i,
+        list_usd: i % 4 ? 0.25 * i : null,
+        weighted: i,
+      })
+    }
+    st.upsertEvents(rows)
+    st.runMaintenance(NOW)
+    st.upsertEvents([
+      { id: 'late1', ts: NOW - 2 * H, source: 'cli', model: 'opus', session: 's3', input: 7 },
+      { id: 'late2', ts: NOW - H, source: 'cli', model: 'mystery', session: 'new', input: 9 },
+    ])
+    return st
+  }
+  const cases: [string, UsageQueryParams][] = [
+    ['by day and model', { window: { last: '30d' }, groupBy: ['day', 'model'] }],
+    ['by session in the window', { window: { last: '7d' }, groupBy: ['session', 'source'] }],
+    ['by session, all time', { groupBy: ['session', 'model', 'account'] }],
+    ['by hour', { window: { last: '24h' }, groupBy: ['hour'], measures: ['calls', 'input'] }],
+    ['filtered to one session', { window: { last: '30d' }, filter: { session: 's3' } }],
+  ]
+
+  test.each(cases)('%s', async (_name, params) => {
+    const a = fixture()
+    const b = fixture()
+    const sync = usageQuery(params, { store: a, now: NOW })
+    const sliced = await usageQueryAsync(params, { store: b, now: NOW })
+    expect(sliced.rows).toEqual(sync.rows)
+    expect(sliced.totals).toEqual(sync.totals)
+    expect(sliced.unpriced).toEqual(sync.unpriced)
+    expect(sliced.notes).toEqual(sync.notes)
+    expect(sliced.coverage).toEqual(sync.coverage)
+    a.close()
+    b.close()
+  })
+
+  test('a window holding thousands of sessions is paged by key and sums the same', async () => {
+    const make = () => {
+      const st = new KitStore(':memory:')
+      const rows: UsageEventInput[] = []
+      for (let i = 0; i < 4_300; i++) {
+        rows.push({
+          id: `p${i}`,
+          ts: NOW - 5 * D + i * 60_000,
+          source: 'cli',
+          account: i % 2 ? 'a' : 'b',
+          model: 'opus',
+          session: `s${i % 4_100}`,
+          ref: i % 9 ? 'r' : 'q',
+          input: i,
+        })
+      }
+      st.upsertEvents(rows)
+      st.runMaintenance(NOW)
+      return st
+    }
+    const a = make()
+    const b = make()
+    const params: UsageQueryParams = {
+      window: { last: '7d' },
+      groupBy: ['session', 'account'],
+      measures: ['calls', 'input'],
+    }
+    const sync = usageQuery(params, { store: a, now: NOW })
+    const sliced = await usageQueryAsync(params, { store: b, now: NOW })
+    expect(sync.rows.length).toBe(4_100)
+    expect(sliced.rows).toEqual(sync.rows)
+    expect(sliced.totals).toEqual(sync.totals)
+    a.close()
+    b.close()
+  })
+
+  test('the event loop runs between its statements', async () => {
+    const st = fixture()
+    let turns = 0
+    let done = false
+    const other = (async () => {
+      while (!done) {
+        turns++
+        await new Promise((r) => setImmediate(r))
+      }
+    })()
+    await usageQueryAsync(
+      { window: { last: '30d' }, groupBy: ['session', 'model'] },
+      { store: st, now: NOW },
+    )
+    done = true
+    await other
+    // Each statement of the query gave the loop a turn; a synchronous query would leave at most one.
+    expect(turns).toBeGreaterThan(3)
+    st.close()
   })
 })

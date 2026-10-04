@@ -9,7 +9,14 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { analyticsCacheKey, refreshAnalytics, scanSessionAnalytics } from '../src/analytics'
+import {
+  ANALYTICS_VERSION,
+  analyticsCacheKey,
+  analyticsCoverage,
+  analyticsCoverageSettled,
+  refreshAnalytics,
+  scanSessionAnalytics,
+} from '../src/analytics'
 import { db } from '../src/db'
 
 const dir = mkdtempSync(join(tmpdir(), 'ah-analytics-'))
@@ -395,5 +402,34 @@ describe('a Codex rollout that spends before it names its model', () => {
     const out = await scanSessionAnalytics(path, 'codex', 'sess')
     expect(Object.values(out.days).reduce((a, b) => a + b, 0)).toBeGreaterThan(0)
     expect(Object.values(out.hours).reduce((a, b) => a + b, 0)).toBe(1)
+  })
+})
+
+describe('coverage is counted off the request path', () => {
+  test('the settled counts are the scan cache’s, and a plain call answers from them', async () => {
+    const files = [1, 2].map((i) => ({
+      source: 'claude' as const,
+      session_id: `bbbbbbbb-0000-4000-8000-00000000000${i}`,
+      path: transcript([assistant('2024-08-10T10:00:00.000Z', U)]),
+      project: 'test-project',
+      cwd: 'D:/test',
+      mtime_ms: 1_700_000_000_000 + i,
+      size_bytes: 4096,
+      title: '',
+      archived: false,
+      created_at: null,
+    }))
+    await refreshAnalytics(files as never[], { budgetMs: 5_000, concurrency: 1 })
+    const want = db
+      .query<{ n: number; b: number }, [number]>(
+        "select count(*) as n, coalesce(sum(length(coalesce(tokens_json, '')) + length(coalesce(days_json, '')) + length(coalesce(hours_json, '')) + length(coalesce(tools_json, ''))), 0) as b from session_scan_cache where analytics_at is not null and analytics_version = ?",
+      )
+      .get(ANALYTICS_VERSION)
+    const settled = await analyticsCoverageSettled(files.length + 3)
+    expect(settled.sessions).toBe(want?.n ?? -1)
+    expect(settled.sessions).toBeGreaterThanOrEqual(2)
+    expect(settled.bytes).toBe(want?.b ?? -1)
+    expect(settled.total).toBe(Math.max(files.length + 3, settled.sessions))
+    expect(analyticsCoverage()).toEqual(settled)
   })
 })

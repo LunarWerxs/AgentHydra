@@ -21,7 +21,7 @@
 // sinks, hour-of-week), windowed by a session's last turn.
 
 import { createHash } from 'node:crypto'
-import { timeSlice } from './core/loop-yield'
+import { timeSlice, yieldToLoop } from './core/loop-yield'
 import { db } from './db'
 import { readDshUsage } from './dsh-sessions'
 import {
@@ -32,7 +32,7 @@ import {
 } from './edit-survival'
 import { readHermesUsage } from './hermes-sessions'
 import { findDesktopChat, instanceSessionMap } from './instance-sessions'
-import { sharedKitStore, storeGeneration, type UsageRow, usageQuery } from './kit/query'
+import { sharedKitStore, storeGeneration, type UsageRow, usageQueryAsync } from './kit/query'
 import type { KitStore } from './kit/store'
 import { readOpenCodeUsage } from './opencode-sessions'
 import { priceSource, pricesAsOf, priceTokens } from './pricing'
@@ -1302,6 +1302,7 @@ function persist(tf: TranscriptFile, a: SessionAnalytics): void {
  * a store remounted) is present again, and a row still flagged as gone would keep saying otherwise.
  */
 function recordPermanentStats(tf: TranscriptFile, a: SessionAnalytics): void {
+  projectsCache = null
   const totals = emptyTokens()
   for (const spend of Object.values(a.tokens)) addTokens(totals, spend)
   const weighted = Object.values(a.tokens).reduce((n, m) => n + m.weighted, 0)
@@ -1387,6 +1388,7 @@ export async function refreshAnalytics(
 ): Promise<AnalyticsRefresh> {
   const deadline = Date.now() + (opts.budgetMs ?? 60_000)
   const concurrency = Math.max(1, opts.concurrency ?? 4)
+  knownTranscripts = files.length
   const queue = [...files].sort((a, b) => b.mtime_ms - a.mtime_ms)
   let scanned = 0
   let skipped = 0
@@ -1427,7 +1429,10 @@ export async function refreshAnalytics(
     }
   }
   await Promise.all(Array.from({ length: concurrency }, worker))
-  if (scanned > 0) pruneEdits()
+  if (scanned > 0) {
+    pruneEdits()
+    refreshCoverageStats()
+  }
   return { scanned, skipped, failed, budgetExhausted }
 }
 
@@ -1528,10 +1533,9 @@ function storedModelSpend(json: string | null): Record<string, ModelSpend> {
  * folder. Grouping on the raw string put one project on the chart twice, which is exactly the kind
  * of mistake a chart makes look authoritative. Caught on real data, not in review.
  */
-const projectDisplay = new Map<string, string>()
-function projectKeyOf(path: string): string {
+function projectKeyOf(display: Map<string, string>, path: string): string {
   const key = path.toLowerCase()
-  if (!projectDisplay.has(key)) projectDisplay.set(key, path)
+  if (!display.has(key)) display.set(key, path)
   return key
 }
 
@@ -1566,23 +1570,74 @@ const KIT_PROVIDER: Record<string, SessionSource> = {
 }
 
 /** cwd (else the decoded store folder) of every session either stored table knows, by session id. */
-function sessionProjects(): Map<string, string> {
+async function sessionProjects(): Promise<Map<string, string>> {
+  // Sessions change slowly and reading the scan cache costs ~100 us a row, so a minute's answer is kept.
+  if (projectsCache && projectsCache.at > Date.now() - PROJECTS_TTL_MS) return projectsCache.map
+  if (!projectsInflight) {
+    projectsInflight = readSessionProjects().finally(() => {
+      projectsInflight = null
+    })
+  }
+  return projectsInflight
+}
+const PROJECTS_TTL_MS = 60_000
+let projectsCache: { at: number; map: Map<string, string> } | null = null
+let projectsInflight: Promise<Map<string, string>> | null = null
+
+async function readSessionProjects(): Promise<Map<string, string>> {
   const out = new Map<string, string>()
-  const read = (sql: string) => {
+  const read = async (table: string, where: string) => {
     try {
-      for (const r of db
-        .query<{ session_id: string; cwd: string | null; project: string | null }, []>(sql)
-        .all()) {
-        const path = r.cwd || (r.project ? decodeProjectKey(r.project) : '')
-        if (r.session_id && path) out.set(r.session_id, path)
-      }
+      await scanRowids<{ session_id: string; cwd: string | null; project: string | null }>(
+        table,
+        'session_id, cwd, project',
+        where,
+        [],
+        (rows) => {
+          for (const r of rows) {
+            const path = r.cwd || (r.project ? decodeProjectKey(r.project) : '')
+            if (r.session_id && path) out.set(r.session_id, path)
+          }
+        },
+      )
     } catch {
       // A store without these tables simply attributes nothing to a project.
     }
   }
-  read('select session_id, cwd, project from session_stats')
-  read('select session_id, cwd, project from session_scan_cache where analytics_at is not null')
+  await read('session_stats', '1')
+  await read('session_scan_cache', 'analytics_at is not null')
+  projectsCache = { at: Date.now(), map: out }
   return out
+}
+
+/**
+ * Read a table of the app database in rowid ranges sized to take about 10 ms each, handing the loop
+ * a turn between them: one statement over the scan cache (rows with kilobytes of JSON each) would
+ * hold the daemon for as long as the table is big. Rows written meanwhile may or may not be seen.
+ */
+async function scanRowids<T>(
+  table: string,
+  columns: string,
+  where: string,
+  args: (string | number)[],
+  onRows: (rows: T[]) => void,
+): Promise<void> {
+  const top = db.query<{ m: number | null }, []>(`select max(rowid) as m from ${table}`).get()?.m
+  if (top == null) return
+  const q = db.query<T, (string | number)[]>(
+    `select ${columns} from ${table} where rowid > ? and rowid <= ? and ${where}`,
+  )
+  let size = 200
+  for (let lo = 0; lo < top; ) {
+    const hi = lo + size
+    const t0 = performance.now()
+    onRows(q.all(lo, hi, ...args))
+    const ms = performance.now() - t0
+    lo = hi
+    // Grows by at most half again a step: a stretch of empty rowids says nothing about the next one.
+    size = Math.max(50, Math.min(50_000, Math.round(size * Math.min(1.5, ms > 0 ? 10 / ms : 1.5))))
+    await yieldToLoop()
+  }
 }
 
 /** A set of buckets keyed by name, counting each session once per bucket however many rows it has. */
@@ -1653,20 +1708,26 @@ export interface SpendReportOptions {
  * `notes` say so). Sessions are counted from raw rows only for the same reason; `calls` counts
  * every call, rollup included.
  */
-export function spendReport(opts: SpendReportOptions = {}): SpendReport {
+export async function spendReport(opts: SpendReportOptions = {}): Promise<SpendReport> {
   // The same question again within the minute, with nothing written since, is the last answer (the
-  // kit's own cache hands back a copy of thousands of rows each time).
+  // kit's own cache hands back a copy of thousands of rows each time); asked while the first is still
+  // being worked out, it waits for that one.
   const store = opts.store ?? sharedKitStore()
   const key = `${storeGeneration(store.db)}|${Math.floor((opts.sinceMs ?? 0) / 60_000)}|${Math.floor((opts.now ?? Date.now()) / 60_000)}|${opts.sources ? [...opts.sources].sort().join(',') : '*'}|${opts.pc ?? ''}`
   const hit = spendCache.get(store)
   if (hit && hit.key === key) return hit.value
   const value = buildSpendReport({ ...opts, store })
   spendCache.set(store, { key, value })
-  return value
+  try {
+    return await value
+  } catch (err) {
+    if (spendCache.get(store)?.value === value) spendCache.delete(store)
+    throw err
+  }
 }
-const spendCache = new WeakMap<KitStore, { key: string; value: SpendReport }>()
+const spendCache = new WeakMap<KitStore, { key: string; value: Promise<SpendReport> }>()
 
-function buildSpendReport(opts: SpendReportOptions): SpendReport {
+async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> {
   const sources = opts.sources ?? null
   const measures = [
     'tokens',
@@ -1691,16 +1752,16 @@ function buildSpendReport(opts: SpendReportOptions): SpendReport {
   // Two queries, because a session in the grouping makes the kit read every raw row of a window: the
   // figures (by day, model, source, account) come whole from the hourly rollup, and the sessions
   // (projects, session counts) from the session ledger.
-  const res = usageQuery(
+  const res = await usageQueryAsync(
     { window, filter, groupBy: ['day', 'model', 'source', 'account'], measures: [...measures] },
     qopts,
   )
-  const sess = usageQuery(
+  const sess = await usageQueryAsync(
     { window, filter, groupBy: ['session', 'model', 'source', 'account'], measures: [...measures] },
     qopts,
   )
-  const projects = sessionProjects()
-  projectDisplay.clear()
+  const projects = await sessionProjects()
+  const projectDisplay = new Map<string, string>()
 
   const byModel = new BucketSet()
   const byProject = new BucketSet()
@@ -1792,7 +1853,7 @@ function buildSpendReport(opts: SpendReportOptions): SpendReport {
       sessions.add(session)
     }
     const path = (session && projects.get(session)) || 'unknown'
-    byProject.add(projectKeyOf(path), r, session)
+    byProject.add(projectKeyOf(projectDisplay, path), r, session)
     attributed.weighted += r.weighted
     attributed.calls += r.calls
     if (r.cost !== null) attributed.cost = (attributed.cost ?? 0) + r.cost
@@ -1807,7 +1868,7 @@ function buildSpendReport(opts: SpendReportOptions): SpendReport {
     const t = totals.tokens
     const u = attributed.tokens
     byProject.add(
-      projectKeyOf('unknown'),
+      projectKeyOf(projectDisplay, 'unknown'),
       {
         weighted: totals.weighted - attributed.weighted,
         cost: totals.cost === null ? null : Math.max(0, totals.cost - (attributed.cost ?? 0)),
@@ -2319,34 +2380,74 @@ export function recentEdits(limit = 200): EditEntry[] {
   }
 }
 
-export function analyticsCoverage(): AnalyticsCoverage {
+/** What the scan cache holds, counted off the request path (see analyticsCoverage). */
+let coverageStats: { sessions: number; bytes: number; at: number } | null = null
+let coverageScan: Promise<void> | null = null
+/** Transcript files the last refresh was handed: the denominator, without listing the disk again. */
+let knownTranscripts = 0
+const COVERAGE_STALE_MS = 5 * 60_000
+
+async function scanCoverageStats(): Promise<void> {
   let sessions = 0
   let bytes = 0
   try {
-    const row = db
-      .query<{ n: number; b: number }, [number]>(
-        "select count(*) as n, coalesce(sum(length(coalesce(tokens_json, '')) + " +
-          "length(coalesce(days_json, '')) + length(coalesce(hours_json, '')) + " +
-          "length(coalesce(tools_json, ''))), 0) as b from session_scan_cache " +
-          'where analytics_at is not null and analytics_version = ?',
-      )
-      .get(ANALYTICS_VERSION)
-    sessions = row?.n ?? 0
-    bytes = row?.b ?? 0
+    await scanRowids<{ n: number; b: number }>(
+      'session_scan_cache',
+      "count(*) as n, coalesce(sum(length(coalesce(tokens_json, '')) + " +
+        "length(coalesce(days_json, '')) + length(coalesce(hours_json, '')) + " +
+        "length(coalesce(tools_json, ''))), 0) as b",
+      'analytics_at is not null and analytics_version = ?',
+      [ANALYTICS_VERSION],
+      (rows) => {
+        for (const r of rows) {
+          sessions += r.n
+          bytes += r.b
+        }
+      },
+    )
   } catch {
     // A database that predates the migration reports nothing rather than throwing.
   }
-  let total = 0
-  try {
-    total = listTranscriptFiles().length
-  } catch {
-    total = sessions
+  coverageStats = { sessions, bytes, at: Date.now() }
+}
+
+function refreshCoverageStats(): void {
+  coverageScan ??= scanCoverageStats().finally(() => {
+    coverageScan = null
+  })
+}
+
+/**
+ * How much of the transcript store the totals cover. Never blocks: the session and byte counts are
+ * the last ones counted, refreshed in slices off this call (a count over the scan cache reads every
+ * row of kilobyte JSON, and listing the transcript directories took 25 to 54 seconds on a large
+ * store), so the very first call after a start answers zeros with `refreshing` set.
+ */
+export function analyticsCoverage(): AnalyticsCoverage {
+  if (!coverageStats || Date.now() - coverageStats.at > COVERAGE_STALE_MS) refreshCoverageStats()
+  const sessions = coverageStats?.sessions ?? 0
+  return {
+    sessions,
+    total: Math.max(knownTranscripts, sessions),
+    refreshing: warming !== null || coverageScan !== null,
+    bytes: coverageStats?.bytes ?? 0,
   }
-  return { sessions, total, refreshing: warming !== null, bytes }
+}
+
+/**
+ * analyticsCoverage once the counts are current, for a one-shot process (the `--spend` command)
+ * that has no later call to read them on. `files` is the transcript count the caller has listed.
+ */
+export async function analyticsCoverageSettled(files = 0): Promise<AnalyticsCoverage> {
+  knownTranscripts = Math.max(knownTranscripts, files)
+  refreshCoverageStats()
+  await coverageScan
+  return analyticsCoverage()
 }
 
 /** Forget every stored total. The next warm rebuilds them; nothing else depends on them. */
 export function dropAnalytics(): boolean {
+  projectsCache = null
   try {
     db.run(
       'update session_scan_cache set analytics_at = null, analytics_version = null, ' +
@@ -2357,6 +2458,7 @@ export function dropAnalytics(): boolean {
         'analytics_mtime_ms = null, ' +
         'analytics_size_bytes = null, sinks_json = null',
     )
+    coverageStats = { sessions: 0, bytes: 0, at: Date.now() }
     db.run('delete from session_edits')
     db.run('delete from skill_listings')
     return true

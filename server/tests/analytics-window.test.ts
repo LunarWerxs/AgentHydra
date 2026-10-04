@@ -8,12 +8,13 @@
 // every CLI account's spend was missing from the totals and `byAccount` was always empty.
 // (3) The source filter has to narrow EVERY figure, not just one panel.
 
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { spendReport } from '../src/analytics'
 import { db } from '../src/db'
 import { machineId } from '../src/kit/machine'
 import { usageQuery } from '../src/kit/query'
 import { KitStore, type UsageEventInput } from '../src/kit/store'
+import type { SpendReport } from '../src/types'
 
 const H = 3_600_000
 const D = 24 * H
@@ -84,26 +85,29 @@ store.upsertEvents([
 ])
 
 describe('the window cuts a session where its calls are', () => {
-  test('only the marathon session’s in-window call counts, not its whole life', () => {
-    const r = report({ sinceMs: NOW - 7 * D, sources: ['cli'] })
+  test('only the marathon session’s in-window call counts, not its whole life', async () => {
+    const r = await report({ sinceMs: NOW - 7 * D, sources: ['cli'] })
     expect(r.calls).toBe(1)
     expect(r.totalCostUsd).toBe(1)
     expect(r.tokens.total).toBe(1150)
   })
 
-  test('no window counts every call', () => {
-    expect(report().calls).toBe(6)
+  test('no window counts every call', async () => {
+    expect((await report()).calls).toBe(6)
   })
 
-  test('the window is exact to the hour, not to the day', () => {
+  test('the window is exact to the hour, not to the day', async () => {
     // 2.5 h back: the desktop call (2 h) is in, the CliMayte call (3 h) is out.
-    const r = report({ sinceMs: NOW - 2.5 * H, sources: ['desktop', 'climayte'] })
+    const r = await report({ sinceMs: NOW - 2.5 * H, sources: ['desktop', 'climayte'] })
     expect(r.bySource.map((b) => b.key)).toEqual(['desktop'])
   })
 })
 
 describe('the totals cover every account, not desktop alone', () => {
-  const r = report({ sinceMs: NOW - 7 * D })
+  let r: SpendReport
+  beforeAll(async () => {
+    r = await report({ sinceMs: NOW - 7 * D })
+  })
 
   test('CLI, desktop and CliMayte spend are all in the total', () => {
     expect(r.bySource.map((b) => b.key).sort()).toEqual(
@@ -136,16 +140,16 @@ describe('the totals cover every account, not desktop alone', () => {
     expect(r.byProvider.map((p) => p.key).sort()).toEqual(['claude', 'codex', 'opencode'])
   })
 
-  test('a session’s project is its cwd; a session nobody knows is "unknown"', () => {
-    const all = report()
+  test('a session’s project is its cwd; a session nobody knows is "unknown"', async () => {
+    const all = await report()
     expect(all.byProject.find((b) => b.key === 'D:\\work\\Alpha')?.costUsd).toBe(2)
     expect(all.byProject.find((b) => b.key === 'unknown')).toBeDefined()
   })
 })
 
 describe('the source filter narrows every figure', () => {
-  test('one source leaves only that source in every breakdown and total', () => {
-    const r = report({ sources: ['desktop'] })
+  test('one source leaves only that source in every breakdown and total', async () => {
+    const r = await report({ sources: ['desktop'] })
     expect(r.totalCostUsd).toBe(2)
     expect(r.totalWeighted).toBe(20)
     expect(r.sessions).toBe(1)
@@ -156,23 +160,23 @@ describe('the source filter narrows every figure', () => {
     expect(r.byDay.reduce((s, b) => s + (b.costUsd ?? 0), 0)).toBe(2)
   })
 
-  test('an empty list is nothing ticked: zero, not everything', () => {
-    const r = report({ sources: [] })
+  test('an empty list is nothing ticked: zero, not everything', async () => {
+    const r = await report({ sources: [] })
     expect(r.calls).toBe(0)
     expect(r.totalCostUsd).toBeNull()
   })
 
-  test('the toolkit’s coverage rides along, so a partial figure can say so', () => {
-    expect(Object.keys(report().kitCoverage.sources)).toContain('desktop')
+  test('the toolkit’s coverage rides along, so a partial figure can say so', async () => {
+    expect(Object.keys((await report()).kitCoverage.sources)).toContain('desktop')
   })
 })
 
 describe('history past the raw window survives in the rollup', () => {
-  test('a 60-day-old call still counts; its session is kept by the ledger, with no project', () => {
+  test('a 60-day-old call still counts; its session is kept by the ledger, with no project', async () => {
     const old = new KitStore(':memory:', { now: NOW })
     old.upsertEvents([call(60 * D, { account: 'acct-a', session: 'gone-session' })])
     old.runMaintenance(NOW)
-    const r = spendReport({ store: old, now: NOW })
+    const r = await spendReport({ store: old, now: NOW })
     old.close()
     expect(r.calls).toBe(1)
     expect(r.totalCostUsd).toBe(1)
@@ -180,9 +184,9 @@ describe('history past the raw window survives in the rollup', () => {
     expect(r.byProject.map((b) => b.key)).toEqual(['unknown'])
   })
 
-  test('totals agree whatever the window start within a minute, and with the day split', () => {
-    const a = report({ sinceMs: NOW - 30 * D + 1_000 })
-    const b = report({ sinceMs: NOW - 30 * D + 40_000 })
+  test('totals agree whatever the window start within a minute, and with the day split', async () => {
+    const a = await report({ sinceMs: NOW - 30 * D + 1_000 })
+    const b = await report({ sinceMs: NOW - 30 * D + 40_000 })
     expect(b).toEqual(a)
     expect(a.byDay.reduce((s, d) => s + d.turns, 0)).toBe(a.calls)
     expect(a.byProject.reduce((s, d) => s + d.turns, 0)).toBe(a.calls)
@@ -190,15 +194,15 @@ describe('history past the raw window survives in the rollup', () => {
 })
 
 describe('the This PC choice', () => {
-  test('pc=self counts only this machine, and grouping by pc keeps every machine apart', () => {
+  test('pc=self counts only this machine, and grouping by pc keeps every machine apart', async () => {
     const s = new KitStore(':memory:', { now: NOW })
     s.upsertEvents([
       call(2 * H, { id: 'pc1', pc: machineId() }),
       call(3 * H, { id: 'pc2', pc: 'other-pc' }),
       call(4 * H, { id: 'pc3', pc: 'other-pc' }),
     ])
-    expect(spendReport({ store: s, now: NOW }).calls).toBe(3)
-    expect(spendReport({ store: s, now: NOW, pc: 'self' }).calls).toBe(1)
+    expect((await spendReport({ store: s, now: NOW })).calls).toBe(3)
+    expect((await spendReport({ store: s, now: NOW, pc: 'self' })).calls).toBe(1)
     const byPc = usageQuery(
       { window: { last: 'all' }, groupBy: ['pc'], measures: ['calls'] },
       { store: s, now: NOW },
@@ -212,7 +216,7 @@ describe('the This PC choice', () => {
 })
 
 describe('a group that holds billed and unbilled calls', () => {
-  test('costs each call (billed, else list) instead of taking the billed part for the whole', () => {
+  test('costs each call (billed, else list) instead of taking the billed part for the whole', async () => {
     const s = new KitStore(':memory:', { now: NOW })
     s.upsertEvents([
       call(2 * H, {
@@ -230,7 +234,7 @@ describe('a group that holds billed and unbilled calls', () => {
         billed_usd: null,
       }),
     ])
-    const r = spendReport({ store: s, now: NOW })
+    const r = await spendReport({ store: s, now: NOW })
     expect(r.byModel.find((b) => b.key === 'mix-model')?.costUsd).toBeCloseTo(0.3)
     expect(r.totalCostUsd).toBeCloseTo(0.3)
     s.close()

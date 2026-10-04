@@ -42,9 +42,9 @@ const spendSources = (raw: string | undefined): string[] | null => {
   if (raw === undefined || raw === '') return null
   return raw === 'none' ? [] : raw.split(',').map((s) => s.trim())
 }
-app.get('/api/analytics/spend', (c) =>
+app.get('/api/analytics/spend', async (c) =>
   c.json(
-    spendReport({
+    await spendReport({
       sinceMs: analyticsPeriod(c),
       sources: spendSources(c.req.query('source')),
       pc: c.req.query('pc') === 'self' ? 'self' : null,

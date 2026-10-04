@@ -47,11 +47,14 @@ if (mode === '--climayte-runner') {
   //
   // This DOES open the database (unlike --version, which must not), because there is nowhere else
   // the numbers live. It never binds a port.
-  const { spendReport } = await import('./analytics')
+  const { analyticsCoverageSettled, spendReport } = await import('./analytics')
+  const { listTranscriptFiles } = await import('./transcript')
   const { isSessionPeriod, periodCutoffMs } = await import('./types')
   const raw = rest.find((a) => a.startsWith('--period='))?.slice('--period='.length)
   const period = isSessionPeriod(raw) ? raw : '30d'
-  const report = spendReport({ sinceMs: periodCutoffMs(period) })
+  const report = await spendReport({ sinceMs: periodCutoffMs(period) })
+  // One-shot: nothing will read the counts later, and there is no daemon to keep responsive.
+  report.coverage = await analyticsCoverageSettled(listTranscriptFiles().length)
   if (rest.includes('--json')) {
     console.log(JSON.stringify(report))
   } else {
