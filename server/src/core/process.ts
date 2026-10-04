@@ -164,26 +164,43 @@ export function unixDescendants(pid: number, maxDepth = UNIX_TREE_MAX_DEPTH): nu
  * error, and every caller here is already reporting some other outcome.
  */
 export function killProcessTree(pid: number): void {
-  if (!Number.isFinite(pid) || pid <= 0) return
-  try {
-    if (process.platform === 'win32') {
-      Bun.spawnSync(['taskkill', '/PID', String(pid), '/T', '/F'], {
+  killProcessTrees([pid])
+}
+
+/**
+ * killProcessTree for several trees, in ONE taskkill on Windows: each taskkill walks every process
+ * on the box, 0.8-3 s a call on a loaded one, so a loop of killProcessTree held a CliMayte group
+ * cancel of 11 workers for 15.8 s (measured 2026-10-03). One call with a /PID per tree kills them
+ * all, a pid already gone included, in about the time of one.
+ */
+export function killProcessTrees(pids: number[]): void {
+  const live = pids.filter((pid) => Number.isFinite(pid) && pid > 0)
+  if (!live.length) return
+  if (process.platform === 'win32') {
+    try {
+      Bun.spawnSync(['taskkill', ...live.flatMap((pid) => ['/PID', String(pid)]), '/T', '/F'], {
         stdout: 'ignore',
         stderr: 'ignore',
         windowsHide: true,
       })
-      return
+    } catch {
+      // already gone
     }
-    for (const child of unixDescendants(pid)) {
-      try {
-        process.kill(child, 'SIGKILL')
-      } catch {
-        // already gone
+    return
+  }
+  for (const pid of live) {
+    try {
+      for (const child of unixDescendants(pid)) {
+        try {
+          process.kill(child, 'SIGKILL')
+        } catch {
+          // already gone
+        }
       }
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // already gone
     }
-    process.kill(pid, 'SIGKILL')
-  } catch {
-    // already gone
   }
 }
 

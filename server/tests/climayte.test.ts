@@ -2335,15 +2335,21 @@ describe('integration: the five-minute rule (owner, 2026-10-03)', () => {
   })
 
   afterAll(async () => {
-    // The folder goes once the cancelled workers' processes have exited: on Windows one still
-    // running holds it open (EBUSY, 2026-10-03).
-    const pids = [...workers.values()]
-      .filter((w) => groups.includes(w.group))
-      .flatMap((w) => w.attempts.flatMap((a) => [a.pid, a.runner?.pid ?? null]))
-      .filter((p): p is number => p !== null)
     for (const group of groups) climayteCancel({ group })
+    // The folder goes once the stopped CLIs have exited: on Windows one still running in `cwd`
+    // holds it open (EBUSY, 2026-10-03). Read after the cancel, which fills in the pids it found,
+    // and again each round: a runner that claimed its spec without writing a pid is killed by a
+    // later tick (killLateStarts), which reads it then. A finished attempt's pid is left out, as
+    // Windows may have handed it to a stranger since.
+    const stopping = () => {
+      const ats = [...workers.values()]
+        .filter((w) => groups.includes(w.group))
+        .flatMap((w) => w.attempts.filter((a) => a.outcome === 'cancelled'))
+      const pids = ats.flatMap((a) => [a.pid, a.runner?.pid ?? null])
+      return ats.some((a) => a.runner?.killOnStart) || pids.some((p) => p !== null && isPidAlive(p))
+    }
     const gone = Date.now() + 10_000
-    while (pids.some((p) => isPidAlive(p)) && Date.now() < gone) await Bun.sleep(200)
+    while (stopping() && Date.now() < gone) await Bun.sleep(200)
     clearRemote()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)

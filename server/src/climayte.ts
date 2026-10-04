@@ -155,7 +155,7 @@ import {
 import { judgeWaveTask, readWave, waveBatch, waveDone, writeWave } from './climayte-wave'
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
-import { isPidAlive, killProcessTree } from './core/process'
+import { isPidAlive, killProcessTrees } from './core/process'
 import { POINTER_DIR } from './instance'
 import { parseResetTime } from './usage'
 
@@ -531,7 +531,7 @@ function stopCheckRunner(r: CheckRunner): boolean {
   } else if (!readRunnerExit(r.exitFile)) {
     // Unconfirmed: checkRunners asks WMI on its own beat; a synchronous ask here would stall every tick.
     if (runnerIdentity(r.pid) === 'unknown') return false
-    killRunner(r.pid, r.log)
+    killRunners([{ pid: r.pid, log: r.log }])
   }
   removeCheckFiles(r)
   return true
@@ -860,36 +860,43 @@ function attemptExited(w: CliMayteWorker, at: Attempt): boolean {
   return runnerIdentity(runner.pid as number) === 'gone'
 }
 
-/** Kill the attempt's CLI through its runner (the whole tree), if the runner is still this
- *  worker's. Never a bare pid nobody can vouch for. Before the runner has written its pid the spec
- *  decides (measured 2026-10-02: three cancels 87-209 ms after launch stopped here at "no pid yet"
- *  and the runner ran each task to completion, $0.145-0.150 each charged to nothing; an urgent
- *  message even relaunched beside it on the same session). Voided first: nothing ever starts.
- *  Claimed first: the runner is marked killOnStart and killLateStarts kills it once its pid file
- *  appears. Every caller saves the worker right after (changed), which keeps the mark. */
-function killAttempt(at: Attempt): void {
-  const runner = at.runner
-  if (!runner) return
-  if (runner.pid === null) {
-    const pids = readRunnerPids(runner.pidFile)
-    if (!pids) {
-      if (voidSpec(at.log)) removeRunnerFiles(at)
-      else runner.killOnStart = true
-      return
+/** Kill the attempts' CLIs through their runners (each whole tree), each only if its runner is still
+ *  that worker's: one kill for them all (killRunners). Never a bare pid nobody can vouch for. Before
+ *  a runner has written its pid the spec decides (measured 2026-10-02: three cancels 87-209 ms after
+ *  launch stopped here at "no pid yet" and the runner ran each task to completion, $0.145-0.150 each
+ *  charged to nothing; an urgent message even relaunched beside it on the same session). Voided
+ *  first: nothing ever starts. Claimed first: the runner is marked killOnStart and killLateStarts
+ *  kills it once its pid file appears. Every caller saves the workers right after (changed), which
+ *  keeps the mark. */
+function killAttempts(ats: Attempt[]): void {
+  const kill: { at: Attempt; runner: NonNullable<Attempt['runner']>; pid: number }[] = []
+  for (const at of ats) {
+    const runner = at.runner
+    if (!runner) continue
+    if (runner.pid === null) {
+      const pids = readRunnerPids(runner.pidFile)
+      if (!pids) {
+        if (voidSpec(at.log)) removeRunnerFiles(at)
+        else runner.killOnStart = true
+        continue
+      }
+      takeRunnerPids(at, runner, pids)
     }
-    takeRunnerPids(at, runner, pids)
+    kill.push({ at, runner, pid: runner.pid as number })
   }
-  killRunner(runner.pid as number, at.log)
-  const identity = runnerIdentity(runner.pid as number)
-  // Killed, or already ended: its pid and exit files would otherwise stay for good (review, 2026-10-02).
-  if (identity === 'gone') removeRunnerFiles(at)
-  // Not confirmed as ours (WMI failed or timed out): killLateStarts tries again once checkRunners
-  // knows, instead of the stop being forgotten while the CLI runs on (re-review, 2026-10-02).
-  else if (identity === 'unknown') runner.killOnStart = true
+  killRunners(kill.map((k) => ({ pid: k.pid, log: k.at.log })))
+  for (const { at, runner, pid } of kill) {
+    const identity = runnerIdentity(pid)
+    // Killed, or already ended: its pid and exit files would otherwise stay for good (review, 2026-10-02).
+    if (identity === 'gone') removeRunnerFiles(at)
+    // Not confirmed as ours (WMI failed or timed out): killLateStarts tries again once checkRunners
+    // knows, instead of the stop being forgotten while the CLI runs on (re-review, 2026-10-02).
+    else if (identity === 'unknown') runner.killOnStart = true
+  }
 }
 
 /** Kill the runners a stop reached after they claimed their spec but before they wrote a pid
- *  (killAttempt marks them killOnStart). Every attempt of every worker, whatever its status: after a
+ *  (killAttempts marks them killOnStart). Every attempt of every worker, whatever its status: after a
  *  cancel the worker is no longer 'running', so pollRunning never visits it, and after an urgent
  *  message a new attempt is already the worker's last. */
 function killLateStarts(): void {
@@ -902,7 +909,7 @@ function killLateStarts(): void {
       if (pids && !readRunnerExit(runner.exitFile)) {
         takeRunnerPids(at, runner, pids)
         if (runnerIdentity(pids.runner) === 'unknown') continue // checkRunners confirms it first
-        killRunner(pids.runner, at.log)
+        killRunners([{ pid: pids.runner, log: at.log }])
       } else if (
         !pids &&
         !readRunnerExit(runner.exitFile) &&
@@ -916,27 +923,29 @@ function killLateStarts(): void {
     }
 }
 
-/** Kill a runner's whole tree, if it is still this attempt's runner. */
-function killRunner(pid: number, log: string): void {
-  if (runnerIdentity(pid) === 'unknown') {
-    // A stop cannot wait for the next tick's check: ask about this one now, under the same timeout.
-    const r = Bun.spawnSync(runnerQueryArgv([pid]), {
+/** Kill runners' whole trees, each only if it is still its attempt's (or check's) runner. ONE WMI ask
+ *  for the unconfirmed and ONE taskkill for the lot: each call walks every process on the box, and a
+ *  group cancel that killed its 11 workers one call each held the daemon 15.8 s (2026-10-03). */
+function killRunners(runners: { pid: number; log: string }[]): void {
+  const unknown = runners.filter((r) => runnerIdentity(r.pid) === 'unknown')
+  if (unknown.length) {
+    // A stop cannot wait for the next tick's check: ask about these now, under the same timeout.
+    const r = Bun.spawnSync(runnerQueryArgv(unknown.map((u) => u.pid)), {
       stdout: 'pipe',
       stderr: 'ignore',
       windowsHide: true,
       timeout: RUNNER_QUERY_TIMEOUT_MS,
     })
-    judgeRunners([{ pid, log }], r.success, r.stdout?.toString() ?? '')
+    judgeRunners(unknown, r.success, r.stdout?.toString() ?? '')
   }
-  const identity = runnerIdentity(pid)
-  if (identity === 'unknown')
-    console.error(`[climayte] runner ${pid} could not be confirmed as ${log}'s; not killed`)
-  if (identity !== 'ours') return
-  try {
-    killProcessTree(pid)
-  } catch {
-    // already gone
+  const ours: number[] = []
+  for (const { pid, log } of runners) {
+    const identity = runnerIdentity(pid)
+    if (identity === 'unknown')
+      console.error(`[climayte] runner ${pid} could not be confirmed as ${log}'s; not killed`)
+    if (identity === 'ours') ours.push(pid)
   }
+  killProcessTrees(ours)
 }
 
 function schedule(delay?: number): void {
@@ -1028,7 +1037,7 @@ const PACK_EVERY_MS = 10 * 60_000
 let nextPackAt = 0
 
 /** The attempt's CLI can no longer append to its log. finish() ends an attempt only once its CLI
- *  has exited. A cancel does not wait: the kill is not confirmed, and killAttempt leaves a runner
+ *  has exited. A cancel does not wait: the kill is not confirmed, and killAttempts leaves a runner
  *  it cannot vouch for alone, so a cancelled attempt's log is settled only when its runner wrote
  *  its exit file or is gone. */
 function logSettled(at: CliMayteWorker['attempts'][number]): boolean {
@@ -1323,7 +1332,7 @@ function stopForOverage(
   } catch (err) {
     console.error('[climayte] could not save walls:', err)
   }
-  if (running) killAttempt(at)
+  if (running) killAttempts([at])
   changed(w)
 }
 
@@ -1354,7 +1363,7 @@ function stopAtCeiling(
   } catch (err) {
     console.error('[climayte] could not save walls:', err)
   }
-  if (running) killAttempt(at)
+  if (running) killAttempts([at])
   changed(w)
 }
 
@@ -3000,30 +3009,48 @@ export function climayteScorecard(): {
   }
 }
 
-/** End a running worker's attempt now: kill its CLI and record the attempt as stopped, with its
- *  spend. False when the CLI had already finished (that turn is recorded instead, by poll) and the
- *  worker is no longer active. */
-function stopRunning(w: CliMayteWorker, notice: string | null): boolean {
+/** The attempt a stop kills: a running worker's last; null when the worker is not running. */
+const runningAttempt = (w: CliMayteWorker): Attempt | null => {
   const at = w.attempts[w.attempts.length - 1]
-  // Stopped just after the CLI finished: record that turn's result, cost and turns first.
-  if (w.status === 'running' && at && attemptExited(w, at)) {
+  return w.status === 'running' && at ? at : null
+}
+
+/** Before a stop: a CLI that finished just now has that turn's result, cost and turns recorded
+ *  first (poll). False when that left the worker no longer active, so there is nothing to stop. */
+function pollBeforeStop(w: CliMayteWorker): boolean {
+  const at = runningAttempt(w)
+  if (at && attemptExited(w, at)) {
     try {
       poll(w)
     } catch (err) {
-      // One worker's read error must not stop a group cancel; the kill path below still runs.
+      // One worker's read error must not stop a group cancel; the kill path still runs.
       console.error(`[climayte] could not read ${w.id}:`, err)
     }
     if (!isActive(w)) return false
   }
-  if (w.status === 'running' && at) {
-    killAttempt(at)
-    at.outcome = 'cancelled'
-    at.notice = notice
-    at.endedAt = Date.now()
-    charge(w, at)
-    forgetRead(at.log)
-    rmSync(signalPath(w.id), { force: true })
-    removeWorkerFiles(w.id)
+  return true
+}
+
+/** Record an attempt whose CLI was killed (killAttempts) as stopped, with its spend. */
+function recordStop(w: CliMayteWorker, at: Attempt, notice: string | null): void {
+  at.outcome = 'cancelled'
+  at.notice = notice
+  at.endedAt = Date.now()
+  charge(w, at)
+  forgetRead(at.log)
+  rmSync(signalPath(w.id), { force: true })
+  removeWorkerFiles(w.id)
+}
+
+/** End a running worker's attempt now: kill its CLI and record the attempt as stopped, with its
+ *  spend. False when the CLI had already finished (that turn is recorded instead, by poll) and the
+ *  worker is no longer active. */
+function stopRunning(w: CliMayteWorker, notice: string | null): boolean {
+  if (!pollBeforeStop(w)) return false
+  const at = runningAttempt(w)
+  if (at) {
+    killAttempts([at])
+    recordStop(w, at, notice)
   }
   return true
 }
@@ -3038,10 +3065,22 @@ export function climayteCancel(filter: { id?: string; group?: string }): {
   const cancelled: string[] = []
   const keptMessages: Record<string, number> = {}
   if (!filter.id && !filter.group) return { cancelled, keptMessages }
+  const stopping: { w: CliMayteWorker; at: Attempt | null }[] = []
   for (const w of workers.values()) {
     if (!matches(w, filter) || !isActive(w)) continue
     stopCheck(w)
-    if (!stopRunning(w, null)) continue
+    if (pollBeforeStop(w)) stopping.push({ w, at: runningAttempt(w) })
+  }
+  // Every running CLI in one kill (killRunners), not one each: a group of 11 took 15.8 s that way.
+  killAttempts(stopping.flatMap((s) => (s.at ? [s.at] : [])))
+  for (const { w, at: running } of stopping) {
+    try {
+      if (running) recordStop(w, running, null)
+    } catch (err) {
+      // Killed already: the worker is cancelled even when its files could not be tidied, or the next
+      // tick would read its dead CLI as interrupted and resume it.
+      console.error(`[climayte] ${w.id}: its stop could not be recorded in full:`, err)
+    }
     const at = w.attempts[w.attempts.length - 1]
     w.status = 'cancelled'
     w.error = null
