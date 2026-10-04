@@ -147,8 +147,23 @@ function readStore(): Store {
 
 /** MUTATORS: read-modify-write under the lock; see mutateJsonStore. */
 function mutate<R>(fn: (store: Store) => { result: R; changed: boolean }): JsonStoreMutation<R> {
-  return mutateJsonStore(STORE_SPEC, fn)
+  return mutateJsonStore(STORE_SPEC, (store) => {
+    const out = fn(store)
+    // The file is written for a real change only; the usage readings held in memory ride along then.
+    if (out.changed)
+      for (const rec of store.instances) {
+        const snap = usageInMemory.get(rec.id)
+        if (snap) rec.lastUsageCheck = snap
+      }
+    return out
+  })
 }
+
+/** The latest usage reading per instance. It changes every few minutes and used to rewrite the whole
+ *  registry each time; now it lives here, is overlaid on every read, and is folded into the file the
+ *  next time an instance itself changes. A restart starts from the last folded reading (the usage
+ *  cache refills it at the next check). */
+const usageInMemory = new Map<string, UsageSnapshot>()
 
 /** The status-carrying refusal every mutator returns when the registry cannot be safely changed. */
 function refusal(
@@ -242,6 +257,7 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
   const { loginNote: _stale, ...stored } = rec
   return {
     ...stored,
+    lastUsageCheck: usageInMemory.get(rec.id) ?? rec.lastUsageCheck ?? null,
     // The registry is the source of truth for the number, not whatever the store file happens to
     // hold — a store written before numbers existed has none at all. `num` is passed in by the
     // bulk lister so a 14-instance list is one registry read, not fourteen.
@@ -601,15 +617,9 @@ export function cliInstanceForDesktop(desktopDir: string): CliInstance | null {
 
 /** Store the latest usage snapshot on the record (called by the usage route after a check). */
 export function setCliInstanceUsage(id: string, snap: UsageSnapshot): void {
-  const outcome = mutate((store) => {
-    const rec = store.instances.find((i) => i.id === id)
-    if (!rec) return { result: null, changed: false }
-    rec.lastUsageCheck = snap
-    return { result: null, changed: true }
-  })
-  // A usage reading is a cache, not an identity: losing one costs a re-check, so a refusal here is
-  // only worth the log line the reader already emits. Nothing else to do.
-  void outcome
+  // Memory only: a usage reading is a cache, not an identity, and rewriting the registry for it was
+  // the file's whole write traffic. Only a known instance keeps one.
+  if (readStore().instances.some((i) => i.id === id)) usageInMemory.set(id, snap)
 }
 
 /** Record that this instance's login was moved to another PC (core/cli-login-move.ts), or clear it. */

@@ -22,11 +22,34 @@
  * and leaves the real console untouched.
  */
 import { join } from "node:path";
-import { mkdirSync, openSync, writeSync, closeSync, statSync, renameSync, rmSync } from "node:fs";
+import { mkdirSync, openSync, writeSync, closeSync, statSync, renameSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { inspect } from "node:util";
 
-/** Roll the log over at this size, keeping a single previous generation (bounds disk to ~2×). */
-const MAX_BYTES = 5 * 1024 * 1024;
+/** Roll the log over at this size, at start and while running; old generations are gzipped. */
+let MAX_BYTES = 20 * 1024 * 1024;
+/** Old generations kept: daemon.log.1.gz (newest) .. daemon.log.<KEEP>.gz. */
+const KEEP = 3;
+
+/**
+ * Roll `path` into `<path>.1.gz`, shifting `.1.gz` to `.2.gz` and so on, dropping beyond `keep`. A
+ * plain `<path>.1` from the older single-generation rotation is cleared too. Best effort; never throws.
+ * @param {string} path
+ * @param {number} [keep]
+ */
+export function rotateLog(path, keep = KEEP) {
+  try {
+    rmSync(`${path}.1`, { force: true });
+    rmSync(`${path}.${keep}.gz`, { force: true });
+    for (let i = keep - 1; i >= 1; i--) {
+      if (existsSync(`${path}.${i}.gz`)) renameSync(`${path}.${i}.gz`, `${path}.${i + 1}.gz`);
+    }
+    writeFileSync(`${path}.1.gz`, gzipSync(readFileSync(path)));
+    rmSync(path, { force: true });
+  } catch {
+    /* raced or unwritable: the caller opens whatever is there */
+  }
+}
 
 const CONSOLE_METHODS = ["log", "info", "warn", "error", "debug"];
 const LEVEL = { log: "INFO ", info: "INFO ", warn: "WARN ", error: "ERROR", debug: "DEBUG" };
@@ -35,6 +58,7 @@ let fd = null;
 let patched = false;
 const original = {};
 let currentPath = null;
+let written = 0;
 
 /** Format one console line the way console.* would render it (Errors keep their stack). */
 function formatArgs(args) {
@@ -45,7 +69,15 @@ function writeLine(level, text) {
   if (fd === null) return;
   try {
     const stamp = new Date().toISOString();
-    writeSync(fd, `[${stamp}] ${level} ${text}\n`);
+    const line = `[${stamp}] ${level} ${text}\n`;
+    if (written > MAX_BYTES && currentPath) {
+      // Roll while running, so a daemon that stays up for weeks cannot grow one file without bound.
+      closeSync(fd);
+      rotateLog(currentPath);
+      fd = openSync(currentPath, "a");
+      written = 0;
+    }
+    written += writeSync(fd, line);
   } catch {
     // Disk full / handle lost — stop trying so we don't spin on every log call. The real console
     // is untouched, so output still goes to stdout; only the file copy is dropped.
@@ -65,7 +97,8 @@ function writeLine(level, text) {
  *
  * @param {string} dir  The app's config dir; the log lands in <dir>/logs/daemon.log.
  */
-export function initFileLogging(dir) {
+export function initFileLogging(dir, opts) {
+  if (opts && opts.maxBytes > 0) MAX_BYTES = opts.maxBytes;
   if (patched && fd !== null) return currentPath;
 
   const logDir = join(dir, "logs");
@@ -73,22 +106,19 @@ export function initFileLogging(dir) {
   try {
     mkdirSync(logDir, { recursive: true });
     // Rotate before opening so a run's own crash still lands in the fresh file, and the rotated
-    // copy holds the previous run(s). One generation only — daemon.log.1.
+    // copies hold the previous run(s).
     try {
-      if (statSync(path).size > MAX_BYTES) {
-        const rolled = `${path}.1`;
-        try {
-          rmSync(rolled, { force: true });
-        } catch {
-          /* no previous generation */
-        }
-        renameSync(path, rolled);
-      }
+      if (statSync(path).size > MAX_BYTES) rotateLog(path);
     } catch {
-      /* no existing log yet, or stat/rename raced — just open fresh */
+      /* no existing log yet, or stat raced — just open fresh */
     }
     fd = openSync(path, "a");
     currentPath = path;
+    try {
+      written = statSync(path).size;
+    } catch {
+      written = 0;
+    }
   } catch {
     fd = null;
     currentPath = null;

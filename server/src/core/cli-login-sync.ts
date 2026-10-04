@@ -108,6 +108,7 @@ import {
 import { setBeforeLaunchHook } from './instances'
 import { StoreMirror } from './login-sync-mirror'
 import { BASE_MS, SyncPace } from './login-sync-pace'
+import { quietWriter } from './quiet-write'
 
 export { IDLE_MAX_MS } from './login-sync-pace'
 /** The loop's tick, and the wait of a PC with something to do. */
@@ -156,11 +157,22 @@ function readConfig(): SyncConfig | null {
   }
 }
 
+/** `lastSyncAt` moves every pass; the file is rewritten for it at most this often (and at shutdown). */
+const LAST_SYNC_FLUSH_MS = 10 * 60_000
+
+const configWriter = quietWriter<SyncConfig, 'lastSyncAt'>(
+  (c) => {
+    mkdirSync(CONFIG_DIR, { recursive: true })
+    const tmp = `${CONFIG_PATH}.${process.pid}.tmp`
+    writeFileSync(tmp, JSON.stringify(c, null, 2))
+    renameSync(tmp, CONFIG_PATH)
+  },
+  'lastSyncAt',
+  LAST_SYNC_FLUSH_MS,
+)
+
 function writeConfig(c: SyncConfig): void {
-  mkdirSync(CONFIG_DIR, { recursive: true })
-  const tmp = `${CONFIG_PATH}.${process.pid}.tmp`
-  writeFileSync(tmp, JSON.stringify(c, null, 2))
-  renameSync(tmp, CONFIG_PATH)
+  configWriter.write(c)
 }
 
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
@@ -1379,7 +1391,7 @@ export function loginSyncStatus(): CliLoginSyncStatus {
     configured: true,
     enabled: c.enabled,
     url: host,
-    lastSyncAt: c.lastSyncAt,
+    lastSyncAt: Math.max(c.lastSyncAt ?? 0, configWriter.latest() ?? 0) || null,
     lastError: c.lastError,
     shareQueue: c.shareQueue === true,
     queueError,
@@ -1423,4 +1435,9 @@ export function startLoginSync(): void {
 export function stopLoginSync(): void {
   if (timer) clearInterval(timer)
   timer = null
+  try {
+    configWriter.flush()
+  } catch {
+    /* the stamp is only a display; the next start writes a fresh one */
+  }
 }
