@@ -117,9 +117,16 @@ def key(caller: dict | None) -> str:
 def ledger_fields(caller: dict | None) -> dict:
     """The short fields copied onto every ledger line (the full stamp lives in job.json)."""
     c = caller or {}
+    try:
+        from . import utilization  # here, not at import: caller.py must stay import-cheap for every job
+
+        account = utilization.caller_account(c)  # the same hashed id the utilizations table carries
+    except Exception:  # a ledger line is never lost to an account lookup
+        account = ""
     return {
         "caller_instance": c.get("instance") or "",
         "caller_session": (c.get("session_id") or c.get("chat_id") or "")[:8],
         "caller_cwd": c.get("cwd") or "",
         "caller_model": c.get("model") or "",
+        "caller_account": account,
     }

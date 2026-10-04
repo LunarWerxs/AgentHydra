@@ -47,7 +47,8 @@ def test_detect_reads_the_calling_session(monkeypatch):
     assert c["instance"] == "temp2" and c["session_id"].startswith("abcdef12") and c["chat_id"] == "local_chat_temp2"
     assert c["entrypoint"] == "claude-desktop" and c["label"] == "my-label" and c["argv"] == ""
     assert caller.key(c) == "temp2 / abcdef12 / " + Path.cwd().name
-    assert caller.ledger_fields(c) == {"caller_instance": "temp2", "caller_session": "abcdef12", "caller_cwd": str(Path.cwd()), "caller_model": ""}
+    assert caller.ledger_fields(c) == {"caller_instance": "temp2", "caller_session": "abcdef12", "caller_cwd": str(Path.cwd()), "caller_model": "",
+                                       "caller_account": caller.ledger_fields(c)["caller_account"]}
 
 
 def test_detect_outside_claude_records_argv_and_invents_nothing(monkeypatch):
@@ -61,6 +62,10 @@ def test_detect_outside_claude_records_argv_and_invents_nothing(monkeypatch):
 def test_job_and_ledger_carry_the_caller(tmp_path, monkeypatch):
     _isolate(monkeypatch, tmp_path)
     _claude_env(monkeypatch, instance="funzypops")
+    from hswarm import utilization
+
+    seen = []
+    monkeypatch.setattr(utilization, "caller_account", lambda c: seen.append(c.get("instance")) or "acct-0123abcd")
 
     async def go():
         m = JobManager(client=_FakeClient())
@@ -73,6 +78,7 @@ def test_job_and_ledger_carry_the_caller(tmp_path, monkeypatch):
     assert on_disk["caller"]["instance"] == "funzypops" and on_disk["summary"]["caller"].startswith("funzypops / abcdef12 / ")
     rows = [json.loads(line) for line in (tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 2 and all(r["caller_instance"] == "funzypops" and r["caller_session"] == "abcdef12" for r in rows)
+    assert all(r["caller_account"] == "acct-0123abcd" for r in rows) and set(seen) == {"funzypops"}
 
 
 def test_usage_report_groups_by_caller_and_reads_the_routing_log(tmp_path, monkeypatch):

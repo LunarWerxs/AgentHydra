@@ -33,6 +33,7 @@ import {
   openCodeSpend,
   weighTurnCounts,
 } from '../usage-foreign'
+import { hswarmLedgerPath, ingestHswarm } from './ingest-hswarm'
 import type { KitStore, UsageEventInput } from './store'
 
 /** Bump to make every cursor read its file again (a parser fix that changes what is extracted). */
@@ -45,6 +46,8 @@ export interface ForeignSources {
   opencode: Array<{ dbPath: string; tool: string }>
   hermes: Array<{ dbPath: string; profile: string | null }>
   dsh: Array<{ home: string; instance: string }>
+  /** HSwarm ledger files (ingest-hswarm.ts). */
+  hswarm?: string[]
 }
 
 export interface ForeignIngestOptions {
@@ -83,7 +86,7 @@ export function discoverForeignSources(): ForeignSources {
     home,
     instance: home === DSH_HOME ? 'dsh:default' : `dsh:${basename(home)}`,
   }))
-  return { codex, opencode, hermes, dsh }
+  return { codex, opencode, hermes, dsh, hswarm: [hswarmLedgerPath()] }
 }
 
 /** One sweep over every source. Only bytes (or rows) that arrived since the last sweep are read. */
@@ -112,6 +115,7 @@ export async function ingestForeign(
   for (const d of sources.dsh)
     for (const s of listDshSessions(d.home))
       done('dsh', s.path, ingestDshSession(store, s, d.instance, opts))
+  for (const p of sources.hswarm ?? []) done('hswarm', p, ingestHswarm(store, p, { pc: opts.pc }))
   return sum
 }
 
