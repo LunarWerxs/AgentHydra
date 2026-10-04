@@ -188,6 +188,38 @@ export function killProcessTrees(pids: number[]): void {
     }
     return
   }
+  killUnixTrees(live)
+}
+
+/**
+ * killProcessTrees without holding the event loop: the same one taskkill, started and awaited
+ * instead of run with spawnSync. On a loaded box taskkill takes 0.8-3 s; run synchronously from the
+ * limit-reset sweep it was 87% of a 7.6 s daemon stall (stall profile, 2026-10-04), and a daemon
+ * that misses three health probes is killed by the tray. For a caller that needs the tree gone
+ * before it goes on, await this; a timeout handler can fire it and move on.
+ */
+export async function killProcessTreesAsync(pids: number[]): Promise<void> {
+  const live = pids.filter((pid) => Number.isFinite(pid) && pid > 0)
+  if (!live.length) return
+  if (process.platform !== 'win32') return killUnixTrees(live)
+  try {
+    const proc = Bun.spawn(
+      ['taskkill', ...live.flatMap((pid) => ['/PID', String(pid)]), '/T', '/F'],
+      {
+        stdin: 'ignore',
+        stdout: 'ignore',
+        stderr: 'ignore',
+        windowsHide: true,
+      },
+    )
+    // Bounded but never killed in turn: a taskkill that hangs is left, not chased with another.
+    await Promise.race([proc.exited, Bun.sleep(30_000)])
+  } catch {
+    // already gone
+  }
+}
+
+function killUnixTrees(live: number[]): void {
   for (const pid of live) {
     try {
       for (const child of unixDescendants(pid)) {
@@ -376,12 +408,9 @@ export async function capturePipedProc(
     timer = setTimeout(() => {
       timedOut = true
       // The TREE, not the pid: a grandchild holding the pipes is exactly what makes a drain
-      // outlive the process, and it is the thing a bare proc.kill() cannot reach.
-      try {
-        if (proc.pid) killProcessTree(proc.pid)
-      } catch {
-        // already gone
-      }
+      // outlive the process, and it is the thing a bare proc.kill() cannot reach. Not awaited: the
+      // 2 s drain wait below runs while taskkill does, and the event loop is never held.
+      if (proc.pid) void killProcessTreesAsync([proc.pid])
       resolve('timeout')
     }, timeoutMs)
   })
@@ -449,11 +478,7 @@ export async function capturePipedProc(
     }
   } finally {
     if (timer) clearTimeout(timer)
-    try {
-      if (proc.exitCode === null && !proc.killed && proc.pid) killProcessTree(proc.pid)
-    } catch {
-      // Already exited — ignore.
-    }
+    if (proc.exitCode === null && !proc.killed && proc.pid) void killProcessTreesAsync([proc.pid])
   }
 }
 
@@ -474,11 +499,7 @@ export async function awaitExitBounded(
       proc.exited,
       new Promise<null>((resolve) => {
         timer = setTimeout(() => {
-          try {
-            if (proc.pid) killProcessTree(proc.pid)
-          } catch {
-            // already gone
-          }
+          if (proc.pid) void killProcessTreesAsync([proc.pid])
           resolve(null)
         }, timeoutMs)
       }),

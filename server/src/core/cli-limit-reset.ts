@@ -26,7 +26,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { join } from 'node:path'
 import { CLAUDE_PROBE_NO_MCP_ARGS, DATA_DIR, resolveClaudeExe } from '../config'
 import type { CliLimitResetResult } from '../types'
-import { killProcessTree } from './process'
+import { killProcessTreesAsync } from './process'
 
 type LimitResetOutcome = CliLimitResetResult['outcome']
 type LimitResetResult = CliLimitResetResult
@@ -333,7 +333,7 @@ async function closeResetCli(run: ResetRun): Promise<void> {
   await Bun.sleep(300)
   typeInto(run, '\x03')
   await Bun.sleep(500)
-  if (run.proc.exitCode === null) killProcessTree(run.proc.pid)
+  if (run.proc.exitCode === null) await killProcessTreesAsync([run.proc.pid])
 }
 
 async function runOnce(configDir: string, confirm: boolean): Promise<LimitResetResult> {

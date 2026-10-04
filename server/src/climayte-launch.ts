@@ -489,11 +489,16 @@ function startRunner(
         // report or handoff note, yet the memory instructions rode in every request. The CLI
         // reads this variable ahead of the autoMemoryEnabled setting (2.1.286).
         // Piece 6: managers use 1-hour cache (less re-read cost on frequent wakes).
+        // TERM=dumb: a worker has no terminal. Unset, Git Bash makes it xterm-256color, and then
+        // every login shell runs aliases.sh's seven `$(type -p X.exe)` subshells for winpty
+        // aliases; a worker runs its Bash commands as login shells whenever its 10 s shell
+        // snapshot timed out (94% of them on 2026-10-04). Measured: 1.8 s -> 1.1 s a login shell.
         env: {
           ...scrubbedEnv(acct.configDir, w.id),
           ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
           CLAUDE_CODE_PROMPT_CACHE_TTL: w.kind === 'manage' ? '1h' : '5m',
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+          TERM: 'dumb',
         },
         stdin: promptFile,
         stdout: log,
