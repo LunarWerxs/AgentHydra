@@ -556,6 +556,52 @@ clear never changes where work goes. The open browser keeps the clear time too
 (`web/src/composables/useUsage.ts`), because its usage maps only ever merge and a poll in flight at
 the click would otherwise put the old number back until a reload.
 
+## The analytics kit routes
+
+The kit (`server/src/kit/`) is the one store of model-call usage: every source (Claude CLI and
+desktop, CliMayte, HSwarm, Codex, OpenCode and more) is ingested as one record per call and rolled
+up per hour. Its routes live in `server/src/routes/kit.ts`; the MCP tool `usage_query` is the same
+query. The one-off `GET /api/kit/reconcile` (kit against the old producers) is gone with those
+producers.
+
+| Route | What it does |
+|---|---|
+| `GET /api/kit/usage` | Usage from the store. Pick ONE window: `last` (`5h`, `24h`, `7d`, `30d`, `all`), `from` / `to` (epoch ms), or `kind` (`5h` or `week`) with `windowAccount` (else the first `account`), which cuts that account's current quota window from its latest quota snapshot, else rolling. Filters take a value or a comma list: `account`, `instance`, `pc`, `source`, `model`, `provider`, `session`, `ref`, `agent`, `ok` (`true` / `false`). `groupBy` is a comma list of `day`, `hour`, `account`, `instance`, `pc`, `source`, `model`, `provider`, `session`, `ref`. `measures` is a comma list of `tokens`, `list_usd`, `billed_usd`, `unbilled_usd`, `cost_usd`, `weighted`, `calls`, `ok`, `failed`, `seconds` (all by default) plus the opt-in token kinds `input`, `output`, `cache_read`, `cache_write`. `tz` is the IANA zone the `day` buckets are cut in. A bad value is a `400` with `{ "error": … }` |
+| `POST /api/kit/sync` | Run the cross-PC pass now (see below). The sweep runs the same pass every 15 minutes |
+
+`GET /api/kit/usage` answers `{ rows, totals, unpriced, priceVer, coverage, window, notes }`: `rows`
+hold the group keys and the measures, `totals` the measures over the whole window, `unpriced` the
+models whose tokens count but whose dollars do not (the dollar total is then a floor), `coverage`
+which sources are ingested up to when (`sources`, `cursors`, and `dirtyFrom`, non-null while recent
+hours are still being rolled up), `window` the resolved span and how it was resolved (`basis`), and
+`notes` any place the answer is narrower than asked. A low figure beside a lagging source is
+partial, not true.
+
+### Usage across PCs (`POST /api/kit/sync`)
+
+Each PC writes its own hourly rows as one gzip shard, `kit/<machine>.jsonl.gz`, into the private git
+repo HSwarm's usage sync already uses (`HSWARM_SYNC_REPO`, the `sync` branch checked out under the
+HSwarm home's `sync-tree`), and imports every other PC's shard as rows carrying that PC's `pc`, so
+the Analytics tab and `pc=` filters can show all PCs or one. The kit lives in a `kit/` subfolder so
+HSwarm's own shards at the tree root are never touched. An import replaces that PC's rows, hour range
+by hour range: importing the same shard twice changes nothing and a shard that shrank removes what
+it no longer holds. Sync is off, with the reason in `notes`, when `HSWARM_SYNC_REPO` is unset, is not
+a git checkout, or is this (public) repo: a shard carries project paths and session ids, so name a
+private repo.
+
+The request takes no body (any is ignored). The pass is forced, ignoring the 15-minute spacing; a call
+that arrives while a pass runs joins it. It answers `200` with
+
+```json
+{ "on": true, "notes": [], "exported": 1234, "imported": { "other-pc": 980 }, "committed": true, "pushed": true }
+```
+
+`on` is false when sync is off; `notes` holds that reason or a step that failed (pull, import,
+commit, push), and the pass carries on past a failed step; `exported` is the number of this PC's
+hourly rows in its shard; `imported` maps each PC whose shard changed to the rows imported (a PC
+whose shard is unchanged is absent); `committed` and `pushed` say whether the shard reached git. An
+unexpected failure is a `500` with `{ "error": … }`.
+
 ## Known noise in an instance's own log
 
 Every Claude Desktop instance keeps its own `logs/main.log` under its profile folder. One line there

@@ -77,28 +77,6 @@ export function parseKitUsageQuery(q: (k: string) => string | undefined): UsageQ
   }
 }
 
-// Temporary (piece 18 removes it): the kit's numbers next to each old producer's, same window.
-app.get('/api/kit/reconcile', async (c) => {
-  try {
-    const last = c.req.query('last') as LastWindow | undefined
-    if (last !== undefined && !LAST_WINDOWS.includes(last))
-      throw new Error(`last must be one of ${LAST_WINDOWS.join(', ')}`)
-    const num = (k: string) => {
-      const v = c.req.query(k)
-      if (v === undefined) return undefined
-      const n = Number(v)
-      if (!Number.isFinite(n)) throw new Error(`${k} must be epoch milliseconds`)
-      return n
-    }
-    const { reconcile, liveReaders } = await import('../kit/reconcile')
-    return c.json(
-      await reconcile(last ? { last } : { from: num('from'), to: num('to') }, liveReaders),
-    )
-  } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
-  }
-})
-
 app.get('/api/kit/usage', (c) => {
   try {
     return c.json(usageQuery(parseKitUsageQuery((k) => c.req.query(k))))

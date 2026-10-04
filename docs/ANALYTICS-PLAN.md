@@ -474,8 +474,9 @@ repo root.
         has backfilled it);
       - P4 code;
       - `claude_usage.py` pricing (scanner kept only for standalone HSwarm);
-      - `/api/kit/reconcile`.
-    - Update `docs/REFERENCE.md`, the routes list, and the MCP tool docs.
+      - `/api/kit/reconcile` (done: route, `kit/reconcile.ts`, `kit/reconcile-old.ts` and their test removed).
+    - Update `docs/REFERENCE.md`, the routes list, and the MCP tool docs (done: REFERENCE.md documents every
+      `/api/kit/*` route, including `POST /api/kit/sync`).
     - Done: `rg "priceTokens\(" server/src` hits only `kit/`.
     - Proof: that `rg`, `bun run typecheck`, `bun test`.
 
