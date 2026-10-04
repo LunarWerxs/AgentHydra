@@ -21,7 +21,9 @@
 // sent it first, and carries its account as `meta.acct` (an HMAC of the email under the sync key, so
 // the store never holds the address). An instance here whose account already has a row uses that
 // row (its `slot`) instead of adding its own; where two rows of one account exist, every PC picks the
-// same one (the later expiry, then the lower id) and the PC that sent the other removes it.
+// same one (the later expiry, then the lower id) and the PC that sent the other removes it. Of two
+// instances HERE on one account only one holds the row; the other follows it (no row, never uploaded
+// or landed into, its own token its own), so no PC re-creates a row another PC removed (2026-10-04).
 //
 // ONE PASS (due every SYNC_EVERY_MS while something moves, backing off to IDLE_MAX_MS (5 min) while
 // this PC and the store are idle, and on "Sync now"; a login file or a CliMayte worker changing here
@@ -690,13 +692,15 @@ function keeps(store: Map<string, StoreRow>, a: string, b: string): boolean {
 }
 
 /** Each CLI instance's row (see the header): its account's row when the store has one, else its own
- *  id. A login fed by its desktop instance has none of its own and keeps its id; of two instances
- *  here on one account, the first takes the account's row. */
+ *  id. A login fed by its desktop instance has none of its own and keeps its id. Of two instances
+ *  here on one account, one holds the account's row (the one whose id it is, else the first) and the
+ *  other FOLLOWS it: no row of its own, so this PC never re-creates a row another PC removed. */
 function slotsFor(
   key: Buffer,
   store: Map<string, StoreRow>,
   insts: CliInstance[],
-): Map<string, string> {
+  excluded: Set<string>,
+): { slots: Map<string, string>; follows: Map<string, string> } {
   const byAcct = new Map<string, string>()
   for (const [id, r] of store) {
     if (r.kind === 'desktop' || !r.acct) continue
@@ -704,17 +708,36 @@ function slotsFor(
     if (!kept || keeps(store, id, kept)) byAcct.set(r.acct, id)
   }
   const local = new Set(insts.map((i) => i.id))
-  const taken = new Set<string>()
   const slots = new Map<string, string>()
-  for (const i of insts) {
+  const follows = new Map<string, string>()
+  const held = new Map<string, string>() // account -> the row its holder here uses
+  // A left-out instance holds nothing and blocks nobody; the one fed by a desktop has no account row.
+  const acctOf = (i: CliInstance): string | null => {
     const email = cliLoginEmail(i)
     const fed = !!i.associatedDesktopDir && !hasOwnCliLogin(i.configDir)
-    const row = !fed && email ? byAcct.get(acctKey(key, email)) : undefined
-    const slot = row && (row === i.id || !local.has(row)) && !taken.has(row) ? row : i.id
-    taken.add(slot)
-    slots.set(i.id, slot)
+    return !excluded.has(i.id) && !fed && email ? acctKey(key, email) : null
   }
-  return slots
+  for (const i of insts) {
+    const acct = acctOf(i)
+    if (acct && byAcct.get(acct) === i.id) {
+      held.set(acct, i.id)
+      slots.set(i.id, i.id)
+    }
+  }
+  for (const i of insts) {
+    if (slots.has(i.id)) continue
+    const acct = acctOf(i)
+    const row = acct ? byAcct.get(acct) : undefined
+    if (acct && held.has(acct)) follows.set(i.id, held.get(acct)!)
+    else if (acct && row && !local.has(row)) {
+      held.set(acct, row)
+      slots.set(i.id, row)
+    } else {
+      if (acct) held.set(acct, i.id)
+      slots.set(i.id, i.id)
+    }
+  }
+  return { slots, follows }
 }
 
 /** Upload this instance's login to its row; a login that cannot go says why. */
@@ -918,6 +941,27 @@ async function dropOwnDuplicate(
   note(c, inst.num ?? null, 'merged', 'Two copies of one account in the store are one again.')
 }
 
+/** An instance here that follows another one's row of its account (slotsFor) has no row of its own: a
+ *  row of its id that this PC shared is removed once this PC agrees with the account's row, and is
+ *  never uploaded again. A row this PC never had is another PC's and stays. */
+async function dropFollowerRow(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  inst: CliInstance,
+  holderSlot: string,
+): Promise<void> {
+  const own = store.get(inst.id)
+  const held = store.get(holderSlot)
+  if (!own || !held || own.kind === 'desktop' || !c.state[inst.id]) return
+  if (c.state[holderSlot]?.version !== held.version) return
+  const r = await call(l, 'DELETE', `/v1/logins/${inst.id}?version=${own.version}`)
+  if (r.status !== 200) return
+  store.delete(inst.id)
+  delete c.state[inst.id]
+  note(c, inst.num ?? null, 'merged', 'Two copies of one account in the store are one again.')
+}
+
 /** Logins only the store holds: an instance for each here, same id and number. Not a row that is no
  *  separate login here (lastHidden), nor one left out. */
 async function syncStoreOnlyLogins(
@@ -1093,10 +1137,15 @@ async function executeSyncPass(
     await learnAccounts(l, store)
 
     const insts = listCliInstances()
-    const slots = slotsFor(l.key, store, insts)
-    lastSlots = slots
+    const { slots, follows } = slotsFor(l.key, store, insts, excluded)
+    lastSlots = new Map([...slots, ...follows])
     for (const inst of insts) {
       if (excluded.has(inst.id)) continue
+      const followed = follows.get(inst.id)
+      if (followed) {
+        await dropFollowerRow(l, c, store, inst, followed)
+        continue
+      }
       const slot = slots.get(inst.id)!
       await syncCliInstance(l, c, store, out, by, inst, slot)
       await dropOwnDuplicate(l, c, store, inst, slot)

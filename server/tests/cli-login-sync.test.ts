@@ -8,14 +8,25 @@
 // other PC is played by writing to the store with the key from this PC's pairing code.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { CONFIG_DIR } from '../src/config'
 import { createCliInstance, deleteCliInstance, getCliInstance } from '../src/core/cli-instances'
 import type { PortableLogin } from '../src/core/cli-login-move'
 import {
   configureLoginSync,
   disconnectLoginSync,
+  joinLoginSync,
   loginSyncPairingCode,
   loginSyncStatus,
   noteLoggedOutHere,
@@ -24,7 +35,7 @@ import {
   sealLogin,
   setLoginSyncExcluded,
 } from '../src/core/cli-login-sync'
-import { base, emptyLogins, store, token } from './login-sync-store'
+import { base, emptyLogins, store, storeDb, token } from './login-sync-store'
 
 // Scratch dirs from this file, reaped whatever the outcome, even on a throw before or past a test's
 // own try/finally.
@@ -254,4 +265,160 @@ describe('login sync between two PCs', () => {
       rmSync(fake.dir, { recursive: true, force: true })
     }
   }, 20_000)
+
+  // Measured live, 2026-10-04: a PC with two instances on one account re-created one row every 30 s
+  // and the other PC (one instance, landed from that row) deleted it again, about 110 inserts and 110
+  // deletes an hour. Both PCs are real here: each one's registry, sync config and instance dirs are
+  // parked on disk while the other runs, and both pass over the one real store.
+  test('two instances of one account on a PC are one store row, and no PC re-creates what the other removes', async () => {
+    const fake = refreshingClaude()
+    const claudeWas = process.env.AGENTHYDRA_CLAUDE_PATH
+    process.env.AGENTHYDRA_CLAUDE_PATH = fake.path
+    const FIRST = 'c8310000-0000-4000-8000-000000000069'
+    const SECOND = 'f6620000-0000-4000-8000-000000000103'
+    const parked = mkdtempSync(join(tmpdir(), 'ah-two-pcs-'))
+    scratchDirs.push(parked)
+    const parts = ['cli-instances.json', 'login-sync.json', 'cli-instances']
+    let at = 'A'
+    const switchTo = (pc: string) => {
+      if (pc === at) return
+      for (const [from, to] of [
+        [at, null],
+        [pc, 'live'],
+      ] as const)
+        for (const part of parts) {
+          const live = join(CONFIG_DIR, part)
+          const kept = join(parked, from, part)
+          if (to === null) {
+            rmSync(kept, { recursive: true, force: true })
+            mkdirSync(join(parked, from), { recursive: true })
+            if (existsSync(live)) cpSync(live, kept, { recursive: true })
+            rmSync(live, { recursive: true, force: true })
+          } else if (existsSync(kept)) cpSync(kept, live, { recursive: true })
+        }
+      at = pc
+    }
+    const email = JSON.stringify({ oauthAccount: { emailAddress: 'synced@example.com' } })
+    const signIn = (id: string, expiresAt: number) => {
+      const dir = getCliInstance(id)!.configDir
+      writeFileSync(join(dir, '.credentials.json'), creds(expiresAt))
+      writeFileSync(join(dir, '.claude.json'), email)
+    }
+    const rowWrites = () =>
+      storeDb
+        .statements()
+        .filter((s) => /^(INSERT( OR \w+)? INTO|DELETE FROM) logins\b/i.test(s.sql))
+        .reduce((n, s) => n + s.calls, 0)
+    const rows = async () =>
+      ((await store('GET', '/v1/logins')).json.logins as any[]).map((r) => r.id as string)
+    const pass = async (pc: string) => {
+      switchTo(pc)
+      const r = await runLoginSync()
+      expect(r.problems).toEqual([])
+    }
+    const works = (id: string) => {
+      const c = JSON.parse(
+        readFileSync(join(getCliInstance(id)!.configDir, '.credentials.json'), 'utf8'),
+      )
+      return !!c.claudeAiOauth.accessToken && c.claudeAiOauth.expiresAt > 0
+    }
+    try {
+      // PC A: the second instance signs in first and uploads its row; B joins and has it landed.
+      createCliInstance('second (Pro)', { id: SECOND })
+      signIn(SECOND, 1000)
+      expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+      await pass('A')
+      const code = loginSyncPairingCode()!
+      const key = Buffer.from(
+        JSON.parse(Buffer.from(code.slice('ahsync1:'.length), 'base64url').toString()).k,
+        'base64',
+      )
+      switchTo('B')
+      expect((await joinLoginSync(code)).ok).toBe(true)
+      await pass('B')
+      expect(getCliInstance(SECOND)).not.toBeNull()
+      expect(await rows()).toEqual([SECOND])
+
+      // Back on A, the first instance signs in on the same account with a later expiry, and its row is
+      // in the store as a build that gave each instance its own row wrote it.
+      switchTo('A')
+      createCliInstance('first (Pro)', { id: FIRST })
+      signIn(FIRST, 3000)
+      const mine = await store('GET', `/v1/logins/${SECOND}`)
+      const theirs: PortableLogin = {
+        ...openLogin(key, SECOND, mine.json.blob)!,
+        id: FIRST,
+        credentials: creds(3000),
+      }
+      const planted = await store('PUT', `/v1/logins/${FIRST}`, {
+        version: 0,
+        blob: sealLogin(key, theirs),
+        meta: { ...mine.json.meta, expiresAt: 3000, at: Date.now() },
+      })
+      expect(planted.status).toBe(200)
+      expect((await rows()).sort()).toEqual([FIRST, SECOND].sort())
+
+      // Passes settle after one round (B's second instance takes the account's row), then write no row.
+      await pass('A')
+      await pass('B')
+      await pass('A')
+      await pass('B')
+      expect(await rows()).toEqual([FIRST])
+      storeDb.resetRowsRead()
+      for (let i = 0; i < 3; i++) {
+        await pass('A')
+        await pass('B')
+      }
+      expect(rowWrites()).toBe(0)
+
+      // The second instance's token refreshes past the first's (the live flip): it is its own to
+      // manage, nothing goes up for it and no row comes back.
+      switchTo('A')
+      signIn(SECOND, 9000)
+      for (let i = 0; i < 3; i++) {
+        await pass('A')
+        await pass('B')
+      }
+      expect(rowWrites()).toBe(0)
+      expect(await rows()).toEqual([FIRST])
+      // The first one's refresh goes up on its row and lands on B.
+      switchTo('A')
+      signIn(FIRST, 11_000)
+      for (let i = 0; i < 2; i++) {
+        await pass('A')
+        await pass('B')
+      }
+      expect(rowWrites()).toBe(0)
+      expect(await rows()).toEqual([FIRST])
+      expect(
+        openLogin(key, FIRST, (await store('GET', `/v1/logins/${FIRST}`)).json.blob)!.credentials,
+      ).toBe(creds(11_000))
+      expect(works(SECOND)).toBe(true)
+      expect(
+        readFileSync(join(getCliInstance(SECOND)!.configDir, '.credentials.json'), 'utf8'),
+      ).toBe(creds(11_000))
+      switchTo('A')
+      expect(works(FIRST)).toBe(true)
+      expect(works(SECOND)).toBe(true)
+      // The follower keeps the token it manages itself.
+      expect(
+        readFileSync(join(getCliInstance(SECOND)!.configDir, '.credentials.json'), 'utf8'),
+      ).toBe(creds(9000))
+
+      // The instance that held the row is deleted here: the other one takes the account's row over.
+      const first = getCliInstance(FIRST)!
+      deleteCliInstance(FIRST, first.name)
+      await pass('A')
+      expect(await rows()).toEqual([FIRST])
+      await pass('B')
+      await pass('A')
+      expect(works(SECOND)).toBe(true)
+    } finally {
+      switchTo('A')
+      for (const id of [FIRST, SECOND]) deleteCliInstance(id, getCliInstance(id)?.name)
+      disconnectLoginSync()
+      process.env.AGENTHYDRA_CLAUDE_PATH = claudeWas
+      rmSync(fake.dir, { recursive: true, force: true })
+    }
+  }, 60_000)
 })
