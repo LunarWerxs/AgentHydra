@@ -1,0 +1,91 @@
+// web/src/lib/session-scopes.ts — the sidebar filters as SETS of ticked values.
+//
+// Every filter in the ⋯ menu used to be one choice with an 'all' value. They are now multi-select:
+// the model is the list of values that are TICKED, and "all" is simply every value ticked, "none" is
+// the empty list. Nothing here touches Vue or i18n, so the all / none / toggle / label rules are
+// plain functions that can be tested directly.
+
+import type { SessionSource } from '@/lib/api'
+import type { SessionShape } from '@/lib/session-shape'
+
+/** The providers the menu offers. 'foreign' (other tools) has no entry: ticking everything sends no
+ *  source filter at all, which is how those rows stay visible. */
+export const SOURCE_VALUES: readonly SessionSource[] = [
+  'claude',
+  'codex',
+  'opencode',
+  'hermes',
+  'dsh',
+  'zswarm',
+]
+export const DISPATCHED_VALUES = ['queued', 'manual'] as const
+export type DispatchedValue = (typeof DISPATCHED_VALUES)[number]
+/** A partition of Claude sessions by where they stand against a usage wall. */
+export const RATE_LIMIT_VALUES = ['clear', 'resolved', 'pending'] as const
+export type RateLimitValue = (typeof RATE_LIMIT_VALUES)[number]
+export const ARCHIVED_VALUES = ['active', 'archived'] as const
+export type ArchivedValue = (typeof ARCHIVED_VALUES)[number]
+export const SHAPE_VALUES: readonly SessionShape[] = [
+  'quick',
+  'standard',
+  'deep',
+  'marathon',
+  'automation',
+]
+
+/** The server's spelling of "nothing ticked" (an empty query value would read as "not asked"). */
+const NONE_TOKEN = 'none'
+
+export function isAllSelected(selected: readonly string[], universe: readonly string[]): boolean {
+  return universe.every((v) => selected.includes(v))
+}
+
+/** Tick or untick one value. Always returns the universe's order, so equal sets are equal arrays. */
+export function toggleValue<T extends string>(
+  selected: readonly T[],
+  universe: readonly T[],
+  value: T,
+): T[] {
+  const next = new Set(selected)
+  if (next.has(value)) next.delete(value)
+  else next.add(value)
+  return universe.filter((v) => next.has(v))
+}
+
+/** A stored value that is not an array of known values falls back to everything ticked. */
+export function parseStoredSelection<T extends string>(
+  raw: unknown,
+  universe: readonly T[],
+): T[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  if (!raw.every((v) => typeof v === 'string' && universe.includes(v as T))) return undefined
+  return universe.filter((v) => raw.includes(v))
+}
+
+/** The query value for one scope: undefined when everything is ticked (no narrowing, so rows from
+ *  sources the menu has no entry for stay visible), 'none' when nothing is, else a comma list. */
+export function scopeParam(
+  selected: readonly string[],
+  universe: readonly string[],
+): string | undefined {
+  if (isAllSelected(selected, universe)) return undefined
+  return selected.length === 0 ? NONE_TOKEN : selected.join(',')
+}
+
+/** The trigger's right-hand text: All, None, the one name, or the first name and a count. */
+export function summarizeSelection<T extends string>(
+  selected: readonly T[],
+  universe: readonly T[],
+  text: {
+    all: string
+    none: string
+    label: (value: T) => string
+    more: (first: string, extra: number) => string
+  },
+): string {
+  if (isAllSelected(selected, universe)) return text.all
+  const names = universe.filter((v) => selected.includes(v)).map(text.label)
+  if (names.length === 0) return text.none
+  const [first = ''] = names
+  return names.length === 1 ? first : text.more(first, names.length - 1)
+}

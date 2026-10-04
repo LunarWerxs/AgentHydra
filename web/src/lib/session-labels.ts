@@ -6,9 +6,6 @@
 // these maps are looked up from both the filter-menu labels and the per-row badges, and neither
 // of those is the map's owner.
 import type {
-  ArchivedScope,
-  DispatchedScope,
-  RateLimitScope,
   SessionEnding,
   SessionPeriod,
   SessionSource,
@@ -16,7 +13,8 @@ import type {
   TitleSource,
 } from '@/lib/api'
 import type { SessionActivity } from '@/lib/format'
-import type { ShapeScope } from '@/lib/session-shape'
+import type { ArchivedValue, DispatchedValue, RateLimitValue } from '@/lib/session-scopes'
+import type { SessionShape } from '@/lib/session-shape'
 
 export const SOURCE_LABEL: Record<SessionSourceScope, string> = {
   all: 'sessions.sourceAll',
@@ -29,9 +27,9 @@ export const SOURCE_LABEL: Record<SessionSourceScope, string> = {
   foreign: 'sessions.sourceOther',
 }
 
-export const RATE_LIMIT_LABEL: Record<RateLimitScope, string> = {
-  all: 'sessions.rateLimitedAll',
-  only: 'sessions.rateLimitedOnly',
+export const RATE_LIMIT_LABEL: Record<RateLimitValue, string> = {
+  clear: 'sessions.rateLimitedClear',
+  resolved: 'sessions.rateLimitedResolved',
   pending: 'sessions.rateLimitedPending',
 }
 
@@ -149,10 +147,9 @@ export const SOURCE_BADGE_CLASS: Record<SessionSource, string> = {
   foreign: 'border-border bg-muted text-muted-foreground',
 }
 
-export const ARCHIVED_LABEL: Record<ArchivedScope, string> = {
-  hide: 'sessions.archivedHide',
-  include: 'sessions.archivedInclude',
-  only: 'sessions.archivedOnly',
+export const ARCHIVED_LABEL: Record<ArchivedValue, string> = {
+  active: 'sessions.archivedActive',
+  archived: 'sessions.archivedArchived',
 }
 
 export const PERIOD_LABEL: Record<SessionPeriod, string> = {
@@ -162,14 +159,12 @@ export const PERIOD_LABEL: Record<SessionPeriod, string> = {
   all: 'sessions.periodAll',
 }
 
-export const DISPATCHED_LABEL: Record<DispatchedScope, string> = {
-  all: 'sessions.dispatchedAll',
+export const DISPATCHED_LABEL: Record<DispatchedValue, string> = {
   queued: 'sessions.dispatchedQueued',
   manual: 'sessions.dispatchedManual',
 }
 
-export const SHAPE_LABEL: Record<ShapeScope, string> = {
-  all: 'sessions.shapeAll',
+export const SHAPE_LABEL: Record<SessionShape, string> = {
   quick: 'sessions.shapeQuick',
   standard: 'sessions.shapeStandard',
   deep: 'sessions.shapeDeep',

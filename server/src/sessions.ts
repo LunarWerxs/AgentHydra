@@ -17,6 +17,15 @@ import { createLimitStopTracker, type LimitStop } from './rate-limit-signal'
 import { classifyEnding, endingEventText, type SessionEnding } from './session-ending'
 import { makeLocator, storeKeyOf } from './session-locator'
 import {
+  parseArchivedScope,
+  parseDispatchedScope,
+  parseInstanceScope,
+  parseRateLimitScope,
+  parseSourceScope,
+  type RateLimitState,
+  type ScopeInput,
+} from './session-scopes'
+import {
   decodeProjectKey,
   describeTaggedText,
   ensureTranscriptIndex,
@@ -28,13 +37,9 @@ import {
   type TranscriptFile,
 } from './transcript'
 import type {
-  ArchivedScope,
-  DispatchedScope,
   ProjectSummary,
   QueueStatus,
-  RateLimitScope,
   SessionSource,
-  SessionSourceScope,
   SessionSummary,
   TailEvent,
   TitleSource,
@@ -987,16 +992,22 @@ export interface ListSessionsOptions {
    * "other" (plain CLI) — plus, since Codex rows carry their own account, a Codex instance's name,
    * its `codex:<id>` ref, or its permanent number (`7` / `#7`). See instanceScopeMatches.
    */
-  instance?: string
-  archived?: ArchivedScope
+  instance?: string | readonly string[]
+  /** Every scope below takes one value, a list of them, or the legacy single spellings; see
+   *  session-scopes.ts. A list is a UNION, and an empty list ('none') matches nothing. */
+  archived?: ScopeInput
   /** Epoch cutoff on last activity, or null for no cutoff. */
   sinceMs?: number | null
   /** Upper epoch bound on last activity, for a caller asking about a past window rather than a
    *  trailing one. Null means "up to now". */
   untilMs?: number | null
-  source?: SessionSourceScope
-  dispatched?: DispatchedScope
-  rateLimited?: RateLimitScope
+  source?: ScopeInput
+  dispatched?: ScopeInput
+  rateLimited?: ScopeInput
+  /** The sidebar's contract: instance, dispatched and rate-limited are facts about CLAUDE sessions,
+   *  so they narrow Claude rows and let every other source pass through. Off (the default) keeps the
+   *  older exclusive reading for programmatic callers: scoped to an account, only that account. */
+  scopesNarrowClaudeOnly?: boolean
   /** Case-insensitive substring of the working directory or the provider's project key. */
   project?: string
 }
@@ -1052,6 +1063,12 @@ function transcriptMatchesProject(f: TranscriptFile, needle: string): boolean {
   )
 }
 
+/** Which usage-wall state a parsed row is in. */
+function rateLimitStateOf(m: ScannedMeta): RateLimitState {
+  if (!m.limit_stop) return 'clear'
+  return m.limit_stop.pending ? 'pending' : 'resolved'
+}
+
 /** Whether `f` might be a rate-limited row: a proven hit, or not yet scanned (see the rateLimited
  *  filter's own comment on why an unscanned row is always kept at this stage). */
 function transcriptRateLimitCandidate(
@@ -1068,7 +1085,7 @@ function transcriptRateLimitCandidate(
 function shouldDropParsedRow(
   m: ScannedMeta,
   sinceMs: number | null,
-  rateLimited: RateLimitScope,
+  rateLimitVerdict: (state: RateLimitState) => boolean,
 ): boolean {
   if (m.substantive_turns === 0) return true
   // The mtime pass above is a cheap SUPERSET (writing a turn always touches the file, so mtime is
@@ -1079,11 +1096,7 @@ function shouldDropParsedRow(
   // The exact half of the usage-wall scope. The pre-filter above only narrowed the candidates;
   // this is the verdict, and it runs on the same parsed row the badge is rendered from, so the
   // filter and the badge cannot disagree.
-  if (rateLimited !== 'all') {
-    if (!m.limit_stop) return true
-    if (rateLimited === 'pending' && !m.limit_stop.pending) return true
-  }
-  return false
+  return !rateLimitVerdict(rateLimitStateOf(m))
 }
 
 /** Whether the `instance` scope excludes this row, now that `desk` is resolved. A row whose store
@@ -1091,13 +1104,11 @@ function shouldDropParsedRow(
  *  reaches here — deskMetaFor is Claude-only, so `desk` would be null for every one of them. */
 function instanceExcludesRow(
   tf: TranscriptFile,
-  instance: string | undefined,
+  instances: readonly string[] | undefined,
   desk: SessionMeta | null,
 ): boolean {
-  if (!instance || tf.instance) return false
-  if ((instance === 'other') !== (desk === null)) return true
-  if (desk && desk.instance !== instance) return true
-  return false
+  if (!instances || tf.instance) return false
+  return !instances.some((i) => (i === 'other' ? desk === null : desk?.instance === i))
 }
 
 /** Assemble one row's DTO once it has cleared every filter. Split out of toSummary purely for
@@ -1150,15 +1161,28 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   const {
     limit = 200,
     offset = 0,
-    instance,
-    archived = 'hide',
     sinceMs = null,
     untilMs = null,
-    source = 'all',
-    dispatched = 'all',
-    rateLimited = 'all',
+    scopesNarrowClaudeOnly = false,
     project,
   } = opts
+  const sources = parseSourceScope(opts.source)
+  const instances = parseInstanceScope(opts.instance)
+  const archivedStates = parseArchivedScope(opts.archived)
+  const dispatchedStates = parseDispatchedScope(opts.dispatched)
+  const rateLimitStates = parseRateLimitScope(opts.rateLimited)
+  // None ticked in any scope is a real answer, not "unset": the list is empty by request.
+  if (
+    sources?.size === 0 ||
+    instances?.length === 0 ||
+    archivedStates.size === 0 ||
+    dispatchedStates?.size === 0 ||
+    rateLimitStates?.size === 0
+  )
+    return []
+  // Whether a scope speaks about this row at all. Off the Claude-only reading every row is judged,
+  // as before; on it, another provider's rows are not Claude facts and pass through untouched.
+  const scopeAppliesTo = (f: TranscriptFile) => !scopesNarrowClaudeOnly || f.source === 'claude'
   const mmap = sessionMetaMap()
   // Read up here rather than beside dmap below, because the `dispatched` scope filters on it and
   // that has to happen before the newest-N cap.
@@ -1191,18 +1215,22 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   }
   const collapsed = collapseSubagents(files)
   files = collapsed.rows
-  if (source !== 'all') files = files.filter((file) => file.source === source)
+  if (sources) files = files.filter((file) => sources.has(file.source))
   // A row whose id Desktop does not know is a CANDIDATE, not a miss: resolveInstanceByOrigin may
   // still place it once the parse supplies its cwd and start time. So this pre-filter keeps those
   // and toSummary settles them exactly, the same shape the usage-wall scope uses below and for
   // the same reason — a scope that runs before the cap cannot see anything only a parse knows,
   // and being conservative here costs a few parses where guessing would cost correctness.
-  if (instance) {
+  if (instances) {
     const byOrigin = originInstances()
-    files = files.filter((f) => transcriptMatchesInstance(f, instance, idsOf, mmap, byOrigin))
+    files = files.filter(
+      (f) =>
+        !scopeAppliesTo(f) ||
+        instances.some((i) => transcriptMatchesInstance(f, i, idsOf, mmap, byOrigin)),
+    )
   }
-  if (archived !== 'include') {
-    const want = archived === 'only'
+  if (archivedStates.size === 1) {
+    const want = archivedStates.has('archived')
     files = files.filter((f) => transcriptArchivedFlag(f, idsOf, mmap) === want)
   }
   if (sinceMs !== null) files = files.filter((f) => f.mtime_ms >= sinceMs)
@@ -1213,9 +1241,11 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   // Before the cap, for the same reason `instance` and `archived` are: a handful of queued runs
   // among thousands of hand-driven transcripts would never crack the newest-200, so a filter applied
   // afterwards would answer "you have never queued anything" on a machine that queues nightly.
-  if (dispatched !== 'all') {
-    const want = dispatched === 'queued'
-    files = files.filter((f) => transcriptDispatchedFlag(f, idsOf, qmap) === want)
+  if (dispatchedStates && dispatchedStates.size === 1) {
+    const want = dispatchedStates.has('queued')
+    files = files.filter(
+      (f) => !scopeAppliesTo(f) || transcriptDispatchedFlag(f, idsOf, qmap) === want,
+    )
   }
   // A folder scope, for a caller that wants one repository's history rather than one instance's.
   // Matched against BOTH the working directory and the provider's project key, because the two
@@ -1232,10 +1262,15 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   // boot warm-up the unscanned set is nearly empty, so this turns "re-read a thousand transcripts
   // to find nine" into one sqlite query. It is conservative in the safe direction: an unscanned row
   // is always kept, so the scope can be slow but never wrong.
-  if (rateLimited !== 'all') {
+  // 'clear' ticked means a row that never hit a wall qualifies, so the cache cannot prove any row
+  // out and nothing can be narrowed here; the parsed verdict below does all the work.
+  const rateLimitNarrows = !!rateLimitStates && !rateLimitStates.has('clear')
+  if (rateLimitNarrows) {
     const limited = new Set(selectLimitedKeys.all(SCAN_VERSION).map((r) => r.cache_key))
     const scanned = new Set(selectScannedKeys.all(SCAN_VERSION).map((r) => r.cache_key))
-    files = files.filter((f) => transcriptRateLimitCandidate(f, limited, scanned))
+    files = files.filter(
+      (f) => !scopeAppliesTo(f) || transcriptRateLimitCandidate(f, limited, scanned),
+    )
   }
   files = files.sort((a, b) => b.mtime_ms - a.mtime_ms)
   const dmap = doneMarkMap()
@@ -1245,11 +1280,14 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
     // Gone between the listing and the read, so there is no row to show. This is the path that
     // used to take the daemon down with it.
     if (!m) return null
-    if (shouldDropParsedRow(m, sinceMs, rateLimited)) return null
+    const applies = scopeAppliesTo(tf)
+    const wallVerdict = (state: RateLimitState) =>
+      !applies || !rateLimitStates || rateLimitStates.has(state)
+    if (shouldDropParsedRow(m, sinceMs, wallVerdict)) return null
     // Desktop's own id link first; the origin join only for rows it has never heard of. Resolved
     // ONCE here and used for both the chip and the filter below, so the two cannot disagree.
     const desk = deskMetaFor(tf, m, idsOf(tf), mmap)
-    if (instanceExcludesRow(tf, instance, desk)) return null
+    if (applies && instanceExcludesRow(tf, instances, desk)) return null
     return buildSessionSummary(tf, m, desk, qmap, dmap, collapsed)
   }
 

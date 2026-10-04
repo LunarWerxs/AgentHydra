@@ -11,15 +11,14 @@ import type {
   SessionSearchResponse,
   SessionSearchResult,
   SessionSource,
-  SessionSourceScope,
   SessionSummary,
 } from '@/lib/api'
 import * as api from '@/lib/api'
 
 export function useBodySearch(deps: {
   sessions: Ref<SessionSummary[]>
-  sessionInstanceFilter: Ref<string>
-  sessionSourceFilter: Ref<SessionSourceScope>
+  sessionInstanceFilter: Ref<string[] | null>
+  sessionSourceFilter: Ref<SessionSource[]>
   advancedCaseSensitive: Ref<boolean>
   selectedId: Ref<string | null>
   selectedSource: Ref<SessionSource | null>
@@ -49,9 +48,15 @@ export function useBodySearch(deps: {
       const r = await api.searchSessionBodies(q, {
         regex: advancedRegex.value,
         caseSensitive: deps.advancedCaseSensitive.value,
-        instance: deps.sessionInstanceFilter.value || undefined,
+        // Body search takes one source / one instance: narrow only when exactly one is ticked.
+        instance:
+          deps.sessionInstanceFilter.value?.length === 1
+            ? deps.sessionInstanceFilter.value[0]
+            : undefined,
         source:
-          deps.sessionSourceFilter.value === 'all' ? undefined : deps.sessionSourceFilter.value,
+          deps.sessionSourceFilter.value.length === 1
+            ? deps.sessionSourceFilter.value[0]
+            : undefined,
         everything: opts.everything,
       })
       bodyResults.value = r.results

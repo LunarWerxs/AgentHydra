@@ -65,14 +65,3 @@ export function sessionShape(s: ShapeInput): SessionShape {
   const byTime = minutes === null ? 0 : rank(minutes, BY_MINUTES)
   return SCALE[Math.max(byMessages, byTime)] ?? 'quick'
 }
-
-/** How a session list narrows by shape. 'all' is the default and is never applied on our own. */
-export type ShapeScope = 'all' | SessionShape
-export const SHAPE_SCOPES: readonly ShapeScope[] = [
-  'all',
-  'quick',
-  'standard',
-  'deep',
-  'marathon',
-  'automation',
-]

@@ -244,6 +244,38 @@ test(
 )
 
 test(
+  'list-valued source, instance, archived and scope filters return exactly the union',
+  async () => {
+    await indexReady()
+    const ids = async (opts: Parameters<typeof listSessions>[0]) =>
+      new Set((await listSessions({ instance: NAME, ...opts })).map((r) => r.session_id))
+    // archived: each box alone, both together, and nothing ticked.
+    const active = await ids({ archived: 'active' })
+    expect(active.has(LIVE_ID) && !active.has(ARCHIVED_ID)).toBe(true)
+    const archivedOnly = await ids({ archived: 'archived' })
+    expect(archivedOnly.has(ARCHIVED_ID) && !archivedOnly.has(LIVE_ID)).toBe(true)
+    const both = await ids({ archived: 'active,archived' })
+    expect(both.has(LIVE_ID) && both.has(ARCHIVED_ID)).toBe(true)
+    expect((await ids({ archived: 'none' })).size).toBe(0)
+    // source: a list holding codex keeps the codex rows, one without it drops them.
+    expect((await ids({ archived: 'active', source: 'claude,codex' })).has(LIVE_ID)).toBe(true)
+    expect((await ids({ archived: 'active', source: 'claude,opencode' })).has(LIVE_ID)).toBe(false)
+    // instance: a list is the union of its members.
+    const inst = (instance: string) =>
+      listSessions({ instance, archived: 'active' }).then((r) =>
+        r.some((x) => x.session_id === LIVE_ID),
+      )
+    expect(await inst(`other,${NAME}`)).toBe(true)
+    expect(await inst('other,default')).toBe(false)
+    // Claude-only scopes: a codex row passes through them only when the client asks for that.
+    const pending = { archived: 'active', rateLimited: 'pending' }
+    expect((await ids({ ...pending, scopesNarrowClaudeOnly: true })).has(LIVE_ID)).toBe(true)
+    expect((await ids(pending)).has(LIVE_ID)).toBe(false)
+  },
+  SWEEP_TIMEOUT_MS,
+)
+
+test(
   'search_sessions matches inside a managed instance transcript',
   async () => {
     await indexReady()

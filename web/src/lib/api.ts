@@ -26,7 +26,6 @@ import type {
   CodexResetRedeemResult,
   ConcurrencyPoint,
   CorrectionReport,
-  DispatchedScope,
   EditEntry,
   EffortLevel,
   ExtraUsageOffResult,
@@ -45,7 +44,6 @@ import type {
   ProjectSummary,
   ProviderSettings,
   QueueItem,
-  RateLimitScope,
   ResetEvent,
   RunCost,
   RunEvent,
@@ -55,7 +53,6 @@ import type {
   SessionSearchResponse,
   SessionSecretScan,
   SessionSource,
-  SessionSourceScope,
   SessionSummary,
   SessionUsage,
   SpendReport,
@@ -236,21 +233,29 @@ export const deleteAnalytics = () =>
 export const getRunCost = (id: string) => j<RunCost>(`/api/queue/${encodeURIComponent(id)}/cost`)
 
 // --- sessions ---------------------------------------------------------------
+/**
+ * Every scope is the server's query spelling: one value, a comma list (a union), 'none' for an
+ * empty selection, or '' / 'all' for no narrowing. The sidebar builds them with scopeParam()
+ * (lib/session-scopes.ts) and sets `othersPass` so a Claude-only scope (instance, queued work,
+ * usage wall) narrows Claude rows without emptying the other providers'.
+ */
 export const getSessions = (
   limit = 200,
   instance = '',
-  archived: ArchivedScope = 'hide',
+  archived = 'hide',
   period: SessionPeriod = '24h',
-  source: SessionSourceScope = 'all',
-  dispatched: DispatchedScope = 'all',
-  rateLimited: RateLimitScope = 'all',
+  source = 'all',
+  dispatched = 'all',
+  rateLimited = 'all',
+  othersPass = false,
 ) =>
   j<SessionSummary[]>(
     `/api/sessions?limit=${limit}${instance ? `&instance=${encodeURIComponent(instance)}` : ''}` +
-      `${archived === 'hide' ? '' : `&archived=${archived}`}&period=${period}` +
-      `${source === 'all' ? '' : `&source=${source}`}` +
-      `${dispatched === 'all' ? '' : `&dispatched=${dispatched}`}` +
-      `${rateLimited === 'all' ? '' : `&ratelimited=${rateLimited}`}`,
+      `${archived === 'hide' ? '' : `&archived=${encodeURIComponent(archived)}`}&period=${period}` +
+      `${source === 'all' ? '' : `&source=${encodeURIComponent(source)}`}` +
+      `${dispatched === 'all' ? '' : `&dispatched=${encodeURIComponent(dispatched)}`}` +
+      `${rateLimited === 'all' ? '' : `&ratelimited=${encodeURIComponent(rateLimited)}`}` +
+      `${othersPass ? '&othersPass=1' : ''}`,
   )
 /** Every folder with conversations in it, for a "where has work happened" overview. */
 export const getSessionProjects = () => j<ProjectSummary[]>('/api/sessions/projects')

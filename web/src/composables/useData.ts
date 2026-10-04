@@ -3,18 +3,22 @@ import { computed, ref } from 'vue'
 import type {
   Account,
   AgentStatus,
-  ArchivedScope,
-  DispatchedScope,
   Incident,
   QueueItem,
-  RateLimitScope,
   SchedulerState,
   SessionPeriod,
-  SessionSourceScope,
   SessionSummary,
 } from '@/lib/api'
 import * as api from '@/lib/api'
-import { SHAPE_SCOPES, type ShapeScope } from '@/lib/session-shape'
+import {
+  ARCHIVED_VALUES,
+  DISPATCHED_VALUES,
+  parseStoredSelection,
+  RATE_LIMIT_VALUES,
+  SHAPE_VALUES,
+  SOURCE_VALUES,
+  scopeParam,
+} from '@/lib/session-scopes'
 import { registerSharedPref } from './useSharedPrefs'
 
 const sessions = ref<SessionSummary[]>([])
@@ -28,60 +32,66 @@ const scheduler = ref<SchedulerState | null>(null)
 const sessionsLoading = ref(false)
 // Server-side instance scope for the sessions list ('' = all). Lives here so the
 // polling refresh keeps honoring whatever the sidebar filter picked.
-const sessionInstanceFilter = ref('')
+// null = every instance (the default, and it keeps covering instances added later); a list = just
+// those ticked, with [] meaning none. Session-only, like the single value it replaces.
+const sessionInstanceFilter = ref<string[] | null>(null)
+
+// The sidebar scopes below are each the list of values that are TICKED (lib/session-scopes.ts);
+// "all" is every value ticked and is the default, "none" is []. A stored value that is not a list
+// of known values falls back to everything ticked — the old single-string form included.
+function storedSelection<T extends string>(key: string, universe: readonly T[]) {
+  return useStorage<T[]>(key, [...universe], undefined, {
+    serializer: {
+      read: (raw) => {
+        try {
+          return parseStoredSelection(JSON.parse(raw), universe) ?? [...universe]
+        } catch {
+          return [...universe]
+        }
+      },
+      write: (value) => JSON.stringify(value),
+    },
+  })
+}
 // Archived sessions (Claude's own `isArchived` flag) are shown alongside live sessions by
-// default. The three-way scope remains useful for narrowing to only live or only archived chats.
+// default; untick one half to narrow to only live or only archived chats.
 // All scopes are applied server-side BEFORE the newest-N cap, so a quiet corner of the list can't
 // be starved out of the window by rows it was never going to show.
-const sessionArchivedScope = useStorage<ArchivedScope>(
-  'agenthydra.sessions.archivedScope',
-  'include',
-)
+const sessionArchivedScope = storedSelection('agenthydra.sessions.archivedScope', ARCHIVED_VALUES)
 // How far back the list reaches, by last activity. Defaults to the last 24 hours: this list
 // answers "what am I working on", and a store that has been accumulating transcripts for months
 // answers it worse the further back it goes. Applied server-side before the cap, like the scopes
 // above, so a widened window genuinely reaches further rather than reshuffling the same 200 rows.
 const sessionPeriod = useStorage<SessionPeriod>('agenthydra.sessions.period', '24h')
 // Provider scope for the unified local conversation list.
-const sessionSourceFilter = useStorage<SessionSourceScope>('agenthydra.sessions.source', 'all')
-// Work AgentHydra queued vs work driven by hand. 'all' by default and never narrowed on our own
-// initiative — same rule the `done` mark carries: this list may be narrowed on request, never
-// pruned behind the user's back. Applied server-side before the cap, like the scopes above.
-const sessionDispatchedScope = useStorage<DispatchedScope>('agenthydra.sessions.dispatched', 'all')
+const sessionSourceFilter = storedSelection('agenthydra.sessions.source', SOURCE_VALUES)
+// Work AgentHydra queued vs work driven by hand. Everything ticked by default and never narrowed on
+// our own initiative — same rule the `done` mark carries: this list may be narrowed on request,
+// never pruned behind the user's back. Applied server-side before the cap, like the scopes above.
+const sessionDispatchedScope = storedSelection('agenthydra.sessions.dispatched', DISPATCHED_VALUES)
 // Session SHAPE (lib/session-shape.ts). Unlike the scopes above this one is applied in the browser,
 // because it is a classification of rows already fetched rather than a question the daemon could
 // answer more cheaply — the two inputs are on every row already.
-const sessionShapeScope = useStorage<ShapeScope>('agenthydra.sessions.shape', 'all')
-// Conversations the provider cut off at a usage/quota wall. 'all' by default and, like the
-// dispatched scope above, never narrowed on our own initiative. Applied server-side, but NOT from
-// the cheap mtime index: the verdict comes from the transcript parse, so the daemon narrows to what
-// its scan cache already knows and settles the rest exactly (see listSessions in server/src).
-const sessionRateLimitScope = useStorage<RateLimitScope>('agenthydra.sessions.rateLimited', 'all')
+const sessionShapeScope = storedSelection('agenthydra.sessions.shape', SHAPE_VALUES)
+// Conversations the provider cut off at a usage/quota wall: never hit one, hit one and resumed, still
+// stopped at one. Everything ticked by default and, like the dispatched scope above, never narrowed
+// on our own initiative. Applied server-side, but NOT from the cheap mtime index: the verdict comes
+// from the transcript parse, so the daemon narrows to what its scan cache already knows and settles
+// the rest exactly (see listSessions in server/src).
+const sessionRateLimitScope = storedSelection('agenthydra.sessions.rateLimited', RATE_LIMIT_VALUES)
 
 // All of these are ALSO mirrored through the daemon (composables/useSharedPrefs.ts): the daemon hops
 // to another port whenever its preferred one is busy, and a browser scopes localStorage per origin
 // — port included — so without this these reset to their defaults on any launch that hops. Each one
 // declares its value set, because the store is a plain file and an unknown scope would reach a
 // control that has no such option.
-const ARCHIVED_SCOPES: readonly ArchivedScope[] = ['hide', 'include', 'only']
 const SESSION_PERIODS: readonly SessionPeriod[] = ['24h', '7d', '30d', 'all']
-const SESSION_SOURCES: readonly SessionSourceScope[] = [
-  'all',
-  'claude',
-  'codex',
-  'opencode',
-  'hermes',
-  'dsh',
-  'zswarm',
-]
-const DISPATCHED_SCOPES: readonly DispatchedScope[] = ['all', 'queued', 'manual']
-const RATE_LIMIT_SCOPES: readonly RateLimitScope[] = ['all', 'only', 'pending']
-registerSharedPref('agenthydra.sessions.archivedScope', sessionArchivedScope, ARCHIVED_SCOPES)
+registerSharedPref('agenthydra.sessions.archivedScope', sessionArchivedScope, ARCHIVED_VALUES)
 registerSharedPref('agenthydra.sessions.period', sessionPeriod, SESSION_PERIODS)
-registerSharedPref('agenthydra.sessions.source', sessionSourceFilter, SESSION_SOURCES)
-registerSharedPref('agenthydra.sessions.dispatched', sessionDispatchedScope, DISPATCHED_SCOPES)
-registerSharedPref('agenthydra.sessions.shape', sessionShapeScope, SHAPE_SCOPES)
-registerSharedPref('agenthydra.sessions.rateLimited', sessionRateLimitScope, RATE_LIMIT_SCOPES)
+registerSharedPref('agenthydra.sessions.source', sessionSourceFilter, SOURCE_VALUES)
+registerSharedPref('agenthydra.sessions.dispatched', sessionDispatchedScope, DISPATCHED_VALUES)
+registerSharedPref('agenthydra.sessions.shape', sessionShapeScope, SHAPE_VALUES)
+registerSharedPref('agenthydra.sessions.rateLimited', sessionRateLimitScope, RATE_LIMIT_VALUES)
 // true once the first queue fetch has settled — gates the queue's first-load skeletons
 const queueLoaded = ref(false)
 
@@ -132,6 +142,14 @@ function guard<T>(p: Promise<T>, status: ResourceStatus): Promise<T | undefined>
   )
 }
 
+/** The instance scope as a query value: '' (no narrowing) when null, else the ticked names. The
+ *  named-instance universe is dynamic, so "all ticked" is the null state rather than a full list. */
+function sessionInstanceParam(): string {
+  const picked = sessionInstanceFilter.value
+  if (picked === null) return ''
+  return picked.length ? picked.join(',') : 'none'
+}
+
 // A slow store can make /api/sessions take longer than the interval that asks for it. Without a
 // guard the timer keeps firing anyway and the requests stack up, so the server answers a queue of
 // identical questions whose results are all thrown away except the last.
@@ -158,15 +176,20 @@ async function refreshSessions() {
   // life of the page. Nothing would ever refresh the session list again, and the list would sit
   // there looking merely stale rather than broken.
   try {
+    // Instance, queued work and usage wall are facts about Claude sessions. With Claude unticked
+    // their submenus are disabled, so whatever they hold must not reach the server.
+    const claude = sessionSourceFilter.value.includes('claude')
     const r = await guard(
       api.getSessions(
         200,
-        sessionInstanceFilter.value,
-        sessionArchivedScope.value,
+        claude ? sessionInstanceParam() : '',
+        // Always sent: the server's own default for an absent archived scope is "active only".
+        sessionArchivedScope.value.length ? sessionArchivedScope.value.join(',') : 'none',
         sessionPeriod.value,
-        sessionSourceFilter.value,
-        sessionDispatchedScope.value,
-        sessionRateLimitScope.value,
+        scopeParam(sessionSourceFilter.value, SOURCE_VALUES),
+        claude ? scopeParam(sessionDispatchedScope.value, DISPATCHED_VALUES) : undefined,
+        claude ? scopeParam(sessionRateLimitScope.value, RATE_LIMIT_VALUES) : undefined,
+        true,
       ),
       sessionsStatus,
     )

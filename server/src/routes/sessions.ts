@@ -35,9 +35,6 @@ import { getSession, listProjects, listSessions, sessionMarkKey } from '../sessi
 import { findTranscriptAsync, tailTranscript } from '../transcript'
 import { buildTranscriptOpenArgv } from '../transcript-open'
 import {
-  type ArchivedScope,
-  isDispatchedScope,
-  isRateLimitScope,
   isSessionPeriod,
   isSessionSource,
   periodCutoffMs,
@@ -129,24 +126,14 @@ function projectSessionRows(
 // --- sessions -----------------------------------------------------------------
 app.get('/api/sessions', async (c) => {
   const limit = c.req.query('limit')
-  const instance = c.req.query('instance')
-  // Anything unrecognized falls back to 'hide': a typo'd scope should show the live list, never
-  // silently bury it under the archived majority.
-  const archived = c.req.query('archived')
-  const scope: ArchivedScope = archived === 'include' || archived === 'only' ? archived : 'hide'
+  // Every scope below is a comma list (a UNION) and 'none' is the empty one; the old single
+  // spellings still parse. See session-scopes.ts for the value sets and the fall-back rules.
+  // Anything unrecognized falls back to the default: a typo'd scope should show the live list,
+  // never silently bury it under the archived majority or hide sessions.
   // Same defensive read as the scope above: an unrecognized period falls back to the default
   // window rather than quietly widening the list to everything on disk.
   const rawPeriod = c.req.query('period')
   const period: SessionPeriod = isSessionPeriod(rawPeriod) ? rawPeriod : '24h'
-  const rawSource = c.req.query('source')
-  const source = isSessionSource(rawSource) ? rawSource : 'all'
-  // Unrecognized narrows to nothing, so this one falls back to 'all' as well: never let a bad
-  // parameter hide sessions.
-  const rawDispatched = c.req.query('dispatched')
-  const dispatched = isDispatchedScope(rawDispatched) ? rawDispatched : 'all'
-  // Same defensive read once more: an unrecognized value must never narrow the list.
-  const rawRateLimited = c.req.query('ratelimited')
-  const rateLimited = isRateLimitScope(rawRateLimited) ? rawRateLimited : 'all'
   // An explicit `since` OUTRANKS `period`, and `until` has no period equivalent at all. The canned
   // windows exist because the UI wants three buttons; a caller reconstructing a past week (an MCP
   // client asked to summarise last month, say) needs real bounds, and telling it to fetch 'all' and
@@ -156,13 +143,17 @@ app.get('/api/sessions', async (c) => {
   const rows = await listSessions({
     limit: boundedQueryInt(limit, 200, 500),
     offset: boundedQueryInt(c.req.query('offset'), 0, 100_000, 0),
-    instance: instance || undefined,
-    archived: scope,
+    instance: c.req.query('instance'),
+    archived: c.req.query('archived'),
     sinceMs: since ?? periodCutoffMs(period),
     untilMs: until,
-    source,
-    dispatched,
-    rateLimited,
+    source: c.req.query('source'),
+    dispatched: c.req.query('dispatched'),
+    rateLimited: c.req.query('ratelimited'),
+    // The sidebar ticks several sources at once, so it asks (othersPass=1) for a Claude-only fact
+    // (instance, queued, usage wall) to narrow Claude rows and leave the others alone rather than
+    // empty them. MCP and other callers keep the exclusive reading: "pending" means only those.
+    scopesNarrowClaudeOnly: c.req.query('othersPass') === '1',
     project: c.req.query('project') || undefined,
   })
   // ⛔ PROJECTED AFTER listSessions, never inside it. listSessions owns the paging contract -

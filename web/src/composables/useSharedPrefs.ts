@@ -50,7 +50,11 @@ import { watch } from 'vue'
 import * as api from '@/lib/api'
 
 /** A ref this file knows how to move through the store: a switch, a number, or a short enum. */
-export type SharedPrefRef = Ref<boolean> | Ref<number> | Ref<string>
+export type SharedPrefRef = Ref<boolean> | Ref<number> | Ref<string> | Ref<string[]>
+
+/** How a ref's value travels through the store: a list as JSON, everything else as String(). */
+const serialize = (value: boolean | number | string | string[]): string =>
+  Array.isArray(value) ? JSON.stringify(value) : String(value)
 
 /** A registered preference: the storage key it mirrors, and the live ref behind it. */
 interface SharedPref {
@@ -110,8 +114,25 @@ const HYDRATE_RETRY_MS = 250
  * screen, and an enum outside its own set is worse still (it renders as a control with nothing
  * chosen). A string ref with no declared set takes the value as written.
  */
-function parseLike(entry: SharedPref, raw: string): boolean | number | string | undefined {
+function parseLike(
+  entry: SharedPref,
+  raw: string,
+): boolean | number | string | string[] | undefined {
   const current = entry.ref.value
+  if (Array.isArray(current)) {
+    // A list of ticked values: every member must be in the declared set, or the stored value is
+    // ignored and the current selection stands.
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (!Array.isArray(parsed)) return undefined
+      const ok = parsed.every(
+        (v) => typeof v === 'string' && (!entry.allowed || entry.allowed.includes(v)),
+      )
+      return ok ? (parsed as string[]) : undefined
+    } catch {
+      return undefined
+    }
+  }
   if (typeof current === 'boolean') {
     if (raw === 'true') return true
     if (raw === 'false') return false
@@ -136,8 +157,8 @@ function applyFromStore(entry: SharedPref, raw: string): void {
   if (pending.has(entry.key)) return
   synced.set(entry.key, raw)
   const next = parseLike(entry, raw)
-  if (next === undefined || next === entry.ref.value) return
-  ;(entry.ref as Ref<boolean | number | string>).value = next
+  if (next === undefined || serialize(next) === serialize(entry.ref.value)) return
+  ;(entry.ref as Ref<boolean | number | string | string[]>).value = next
 }
 
 /** Write a patch to the store, and only forget it once the store says it has it. */
@@ -221,9 +242,9 @@ export function registerSharedPref(
   if (hydrated && late !== undefined) applyFromStore(entry, late)
 
   watch(
-    ref,
+    ref as Ref<boolean | number | string | string[]>,
     (value) => {
-      const next = String(value)
+      const next = serialize(value)
       // Already what the store holds — this is hydrate's own correction arriving on a later tick.
       if (synced.get(key) === next) return
       // Recorded FIRST and unconditionally, including before hydrate has resolved. Registration
@@ -284,7 +305,7 @@ export function hydrateSharedPrefs(): Promise<void> {
         // The very next window — including one on a different port with an empty localStorage —
         // then inherits the real configuration instead of defaults. Without this the store fills in
         // only as each control happens to be touched, and a setting made long ago never migrates.
-        pending.set(entry.key, String(entry.ref.value))
+        pending.set(entry.key, serialize(entry.ref.value))
       }
     } finally {
       // Set LAST, and set even on failure: until this flips, every watcher holds its change rather

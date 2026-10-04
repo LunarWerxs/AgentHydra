@@ -115,6 +115,7 @@ import { modelName } from '@/lib/climayte-status'
 import { baseName, queueStatusMeta, shortId, timeAgo } from '@/lib/format'
 import { highlightRuns, rankByQuery, sessionSearchFields, type TextRun } from '@/lib/fuzzy'
 import { groupByProject } from '@/lib/session-groups'
+import { isAllSelected, SHAPE_VALUES } from '@/lib/session-scopes'
 import { sessionShape } from '@/lib/session-shape'
 import { sessionSourceIcon } from '@/lib/session-source-icon'
 import type { SideListGroup } from '@/lib/side-list'
@@ -277,7 +278,29 @@ useShortcuts([
 const {
   namedInstances,
   instanceLabelFor,
+  instanceTicked,
+  claudeTicked,
   filtersActive,
+  filtersHideEverything,
+  resetFilters,
+  toggleInstance,
+  instanceAll,
+  instanceNone,
+  sourceToggle,
+  sourceAll,
+  sourceNone,
+  dispatchedToggle,
+  dispatchedAll,
+  dispatchedNone,
+  rateLimitToggle,
+  rateLimitAll,
+  rateLimitNone,
+  shapeToggle,
+  shapeAll,
+  shapeNone,
+  archivedToggle,
+  archivedAll,
+  archivedNone,
   sourceFilterLabel,
   rateLimitScopeLabel,
   instanceFilterLabel,
@@ -407,12 +430,13 @@ const search = ref('')
 // per row so the list can bold them.
 const searchRanked = computed(() => {
   const q = search.value.trim()
-  const shape = sessionShapeScope.value
+  const shapes = sessionShapeScope.value
   let rows = sessions.value
   // Applied in the browser, unlike the scopes the daemon owns, so it narrows the window that was
   // fetched rather than reaching further back. Said plainly in the menu, because "no marathons in
   // the last 24 hours" and "no marathons" are different answers.
-  if (shape !== 'all') rows = rows.filter((s) => sessionShape(s) === shape)
+  if (!isAllSelected(shapes, SHAPE_VALUES))
+    rows = rows.filter((s) => shapes.includes(sessionShape(s)))
   if (!q) return { rows, hits: new Map<api.SessionSummary, number[]>() }
   const ranked = rankByQuery(rows, q, sessionSearchFields)
   return {
@@ -702,27 +726,55 @@ function onComposerSent(mode: 'now' | 'queued') {
                       </span>
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent class="max-w-52">
-                      <DropdownMenuRadioGroup v-model="sessionSourceFilter">
-                        <DropdownMenuRadioItem value="all">{{ $t('sessions.sourceAll') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="claude">{{ $t('sessions.sourceClaude') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="codex">{{ $t('sessions.sourceCodex') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="opencode">{{ $t('sessions.sourceOpenCode') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="hermes">{{ $t('sessions.sourceHermes') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="dsh">{{ $t('sessions.sourceDsh') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="zswarm">{{ $t('sessions.sourceZswarm') }}</DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
+                      <DropdownMenuItem @select.prevent="sourceAll">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
+                      <DropdownMenuItem @select.prevent="sourceNone">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionSourceFilter.includes('claude')"
+                        @select.prevent
+                        @update:model-value="sourceToggle('claude')"
+                      >
+                        {{ $t('sessions.sourceClaude') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionSourceFilter.includes('codex')"
+                        @select.prevent
+                        @update:model-value="sourceToggle('codex')"
+                      >
+                        {{ $t('sessions.sourceCodex') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionSourceFilter.includes('opencode')"
+                        @select.prevent
+                        @update:model-value="sourceToggle('opencode')"
+                      >
+                        {{ $t('sessions.sourceOpenCode') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionSourceFilter.includes('hermes')"
+                        @select.prevent
+                        @update:model-value="sourceToggle('hermes')"
+                      >
+                        {{ $t('sessions.sourceHermes') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionSourceFilter.includes('dsh')"
+                        @select.prevent
+                        @update:model-value="sourceToggle('dsh')"
+                      >
+                        {{ $t('sessions.sourceDsh') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionSourceFilter.includes('zswarm')"
+                        @select.prevent
+                        @update:model-value="sourceToggle('zswarm')"
+                      >
+                        {{ $t('sessions.sourceZswarm') }}
+                      </DropdownMenuCheckboxItem>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
 
-                  <DropdownMenuSub
-                    :disabled="
-                      sessionSourceFilter === 'codex' ||
-                      sessionSourceFilter === 'opencode' ||
-                      sessionSourceFilter === 'hermes' ||
-                      sessionSourceFilter === 'dsh' ||
-                      sessionSourceFilter === 'zswarm'
-                    "
-                  >
+                  <DropdownMenuSub :disabled="!claudeTicked">
                     <DropdownMenuSubTrigger>
                       <Boxes />
                       {{ $t('sessions.filterInstance') }}
@@ -731,12 +783,30 @@ function onComposerSent(mode: 'now' | 'queued') {
                       </span>
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent class="max-w-80">
-                      <DropdownMenuRadioGroup v-model="sessionInstanceFilter">
-                        <DropdownMenuRadioItem value="">{{ $t('sessions.instanceAll') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="default">{{ $t('sessions.instanceDefault') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem v-for="i in namedInstances" :key="i.name" :value="i.name">{{ i.label }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="other">{{ $t('sessions.instanceOther') }}</DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
+                      <DropdownMenuItem @select.prevent="instanceAll">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
+                      <DropdownMenuItem @select.prevent="instanceNone">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuCheckboxItem
+                        :model-value="instanceTicked.includes('default')"
+                        @select.prevent
+                        @update:model-value="toggleInstance('default')"
+                      >
+                        {{ $t('sessions.instanceDefault') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem v-for="i in namedInstances" :key="i.name"
+                        :model-value="instanceTicked.includes(i.name)"
+                        @select.prevent
+                        @update:model-value="toggleInstance(i.name)"
+                      >
+                        {{ i.label }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="instanceTicked.includes('other')"
+                        @select.prevent
+                        @update:model-value="toggleInstance('other')"
+                      >
+                        {{ $t('sessions.instanceOther') }}
+                      </DropdownMenuCheckboxItem>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
 
@@ -749,7 +819,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                        command line; a usage wall is judged from a Claude transcript), and the
                        hand-written "codex or opencode" list silently went stale twice as sources
                        were added. -->
-                  <DropdownMenuSub :disabled="sessionSourceFilter !== 'all' && sessionSourceFilter !== 'claude'">
+                  <DropdownMenuSub :disabled="!claudeTicked">
                     <DropdownMenuSubTrigger>
                       <ListTodo />
                       {{ $t('sessions.dispatched') }}
@@ -758,18 +828,30 @@ function onComposerSent(mode: 'now' | 'queued') {
                       </span>
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent class="max-w-52">
-                      <DropdownMenuRadioGroup v-model="sessionDispatchedScope">
-                        <DropdownMenuRadioItem value="all">{{ $t('sessions.dispatchedAll') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="queued">{{ $t('sessions.dispatchedQueued') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="manual">{{ $t('sessions.dispatchedManual') }}</DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
+                      <DropdownMenuItem @select.prevent="dispatchedAll">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
+                      <DropdownMenuItem @select.prevent="dispatchedNone">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionDispatchedScope.includes('queued')"
+                        @select.prevent
+                        @update:model-value="dispatchedToggle('queued')"
+                      >
+                        {{ $t('sessions.dispatchedQueued') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionDispatchedScope.includes('manual')"
+                        @select.prevent
+                        @update:model-value="dispatchedToggle('manual')"
+                      >
+                        {{ $t('sessions.dispatchedManual') }}
+                      </DropdownMenuCheckboxItem>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
 
                   <!-- sessions a usage wall cut off. Server-side like the scopes above it, but
                        the verdict comes from the transcript parse rather than the mtime index, so
                        the first use after an upgrade is slow while the scan cache refills. -->
-                  <DropdownMenuSub :disabled="sessionSourceFilter !== 'all' && sessionSourceFilter !== 'claude'">
+                  <DropdownMenuSub :disabled="!claudeTicked">
                     <DropdownMenuSubTrigger>
                       <CircleAlert />
                       {{ $t('sessions.rateLimited') }}
@@ -778,11 +860,30 @@ function onComposerSent(mode: 'now' | 'queued') {
                       </span>
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent class="max-w-64">
-                      <DropdownMenuRadioGroup v-model="sessionRateLimitScope">
-                        <DropdownMenuRadioItem value="all">{{ $t('sessions.rateLimitedAll') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="only">{{ $t('sessions.rateLimitedOnly') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="pending">{{ $t('sessions.rateLimitedPending') }}</DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
+                      <DropdownMenuItem @select.prevent="rateLimitAll">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
+                      <DropdownMenuItem @select.prevent="rateLimitNone">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionRateLimitScope.includes('clear')"
+                        @select.prevent
+                        @update:model-value="rateLimitToggle('clear')"
+                      >
+                        {{ $t('sessions.rateLimitedClear') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionRateLimitScope.includes('resolved')"
+                        @select.prevent
+                        @update:model-value="rateLimitToggle('resolved')"
+                      >
+                        {{ $t('sessions.rateLimitedResolved') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionRateLimitScope.includes('pending')"
+                        @select.prevent
+                        @update:model-value="rateLimitToggle('pending')"
+                      >
+                        {{ $t('sessions.rateLimitedPending') }}
+                      </DropdownMenuCheckboxItem>
                       <p class="px-2 py-1.5 text-2xs leading-snug text-muted-foreground">
                         {{ $t('sessions.rateLimitedNote') }}
                       </p>
@@ -801,22 +902,52 @@ function onComposerSent(mode: 'now' | 'queued') {
                       </span>
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent class="max-w-60">
-                      <DropdownMenuRadioGroup v-model="sessionShapeScope">
-                        <DropdownMenuRadioItem value="all">{{ $t('sessions.shapeAll') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="quick">{{ $t('sessions.shapeQuick') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="standard">{{ $t('sessions.shapeStandard') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="deep">{{ $t('sessions.shapeDeep') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="marathon">{{ $t('sessions.shapeMarathon') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="automation">{{ $t('sessions.shapeAutomation') }}</DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
+                      <DropdownMenuItem @select.prevent="shapeAll">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
+                      <DropdownMenuItem @select.prevent="shapeNone">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionShapeScope.includes('quick')"
+                        @select.prevent
+                        @update:model-value="shapeToggle('quick')"
+                      >
+                        {{ $t('sessions.shapeQuick') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionShapeScope.includes('standard')"
+                        @select.prevent
+                        @update:model-value="shapeToggle('standard')"
+                      >
+                        {{ $t('sessions.shapeStandard') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionShapeScope.includes('deep')"
+                        @select.prevent
+                        @update:model-value="shapeToggle('deep')"
+                      >
+                        {{ $t('sessions.shapeDeep') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionShapeScope.includes('marathon')"
+                        @select.prevent
+                        @update:model-value="shapeToggle('marathon')"
+                      >
+                        {{ $t('sessions.shapeMarathon') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionShapeScope.includes('automation')"
+                        @select.prevent
+                        @update:model-value="shapeToggle('automation')"
+                      >
+                        {{ $t('sessions.shapeAutomation') }}
+                      </DropdownMenuCheckboxItem>
                       <p class="px-2 py-1.5 text-2xs leading-snug text-muted-foreground">
                         {{ $t('sessions.shapeNote') }}
                       </p>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
 
-                  <!-- three-way rather than a checkbox: archived is the large majority of the store,
-                       so "only" is the only practical way to go back and find one. -->
+                  <!-- two boxes: ticking only "Archived" is the way to go back and find one, since archived
+                       is the large majority of the store. -->
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger>
                       <Archive />
@@ -826,11 +957,23 @@ function onComposerSent(mode: 'now' | 'queued') {
                       </span>
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent class="max-w-52">
-                      <DropdownMenuRadioGroup v-model="sessionArchivedScope">
-                        <DropdownMenuRadioItem value="hide">{{ $t('sessions.archivedHide') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="include">{{ $t('sessions.archivedInclude') }}</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="only">{{ $t('sessions.archivedOnly') }}</DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
+                      <DropdownMenuItem @select.prevent="archivedAll">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
+                      <DropdownMenuItem @select.prevent="archivedNone">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionArchivedScope.includes('active')"
+                        @select.prevent
+                        @update:model-value="archivedToggle('active')"
+                      >
+                        {{ $t('sessions.archivedActive') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="sessionArchivedScope.includes('archived')"
+                        @select.prevent
+                        @update:model-value="archivedToggle('archived')"
+                      >
+                        {{ $t('sessions.archivedArchived') }}
+                      </DropdownMenuCheckboxItem>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
 
@@ -970,11 +1113,20 @@ function onComposerSent(mode: 'now' | 'queued') {
           </div>
 
           <div v-else class="p-4 text-center text-xs text-muted-foreground">
-            <p>{{ $t('sessions.noSessionsFound') }}</p>
+            <p v-if="filtersHideEverything">{{ $t('sessions.filtersHideEverything') }}</p>
+            <p v-else>{{ $t('sessions.noSessionsFound') }}</p>
+            <button
+              v-if="filtersHideEverything"
+              type="button"
+              class="mt-1.5 font-medium text-primary hover:underline"
+              @click="resetFilters"
+            >
+              {{ $t('sessions.filtersReset') }}
+            </button>
             <!-- the window is the most likely reason, and it is invisible until you open the ⋯
                  menu; offer the widening instead of making the user go find it -->
             <button
-              v-if="emptyBecauseOfPeriod"
+              v-if="emptyBecauseOfPeriod && !filtersHideEverything"
               type="button"
               class="mt-1.5 font-medium text-primary hover:underline"
               @click="sessionPeriod = 'all'"
