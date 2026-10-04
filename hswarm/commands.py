@@ -3,6 +3,7 @@ the parser and dispatch are in cli.py, the installer in install.py."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 import time
@@ -386,7 +387,7 @@ async def cmd_maintain(a) -> int:
     """Everything the machine should do once a day, in one command: age old job folders into their archives,
     pack jobs past their warm week, spill files past their day and cc transcripts past two days into the history,
     measure yesterday, re-measure the sub-agent profile, exchange shards with the fleet and rewrite the page."""
-    from . import archive, history, report_html, savings, survival, taskstore, utilization
+    from . import archive, history, keystate, report_html, savings, survival, taskstore, utilization
 
     if a.keep_days < 0:
         raise SystemExit("hswarm maintain --keep-days: 0 keeps every job (the default), N >= 1 deletes jobs older than N days")
@@ -399,11 +400,16 @@ async def cmd_maintain(a) -> int:
     cold = await asyncio.to_thread(history.pack_jobs)
     spilled = await asyncio.to_thread(history.pack_spill)
     cc = await asyncio.to_thread(history.pack_cc_transcripts)
-    # A key-state write Windows refused used to leave keys.json.<pid>.tmp behind (38 files, 61.5 MiB, 2026-10-02). The
-    # writer now retries and removes its own; this takes what a killed process leaves. By name and age, never opened.
+    # Builds before the key state moved into keys.sqlite left keys.json.<pid>.tmp behind (38 files, 61.5 MiB,
+    # 2026-10-02); an older build still running can make one, so this keeps taking what a killed process leaves.
     temps = [p for p in config.HOME.glob("keys.json.*.tmp") if time.time() - p.stat().st_mtime > 3600]
     for p in temps:
         p.unlink(missing_ok=True)
+    live: set[str] = set()
+    for name in config.PROVIDERS:
+        with contextlib.suppress(Exception):  # a provider with no key list has nothing to keep
+            live |= {config.fingerprint(k) for k in config.load_api_keys(name)}
+    keyrows = await asyncio.to_thread(keystate.prune, live) if live else {"stale": 0, "tombstones": 0, "expired": 0}
     days = await asyncio.to_thread(savings.record, a.backfill)
     kept = await asyncio.to_thread(survival.score_due)
     from . import egress
@@ -416,7 +422,7 @@ async def cmd_maintain(a) -> int:
     line = (f"maintain: archived {packed['jobs']} job(s) freeing {mib(packed['saved'])}; {deleted}into the history: {cold['jobs']} job(s) "
             f"of {cold['days']} day(s) ({mib(cold['before'])} as zips), {spilled['files']} spill file(s) ({mib(spilled['before'])}) and "
             f"{cc['files']} cc transcript(s) ({mib(cc['before'])}); indexed {indexed['tasks']} task(s) of {indexed['jobs']} job(s); "
-            f"{len(temps)} stale key temp file(s); recorded {len(days)} day(s); "
+            f"{len(temps)} stale key temp file(s), key rows pruned {keyrows['stale']} stale/{keyrows['tombstones']} emptied/{keyrows['expired']} expired; recorded {len(days)} day(s); "
             f"scored {kept['scored']} edit survival checkpoint(s); sync imported {rep['imported']}, pushed {rep['pushed']}; page {page}")
     savings.log(line)
     if not a.quiet:

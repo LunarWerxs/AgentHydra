@@ -10,7 +10,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hswarm import config  # noqa: E402
+from hswarm import config, keystate  # noqa: E402
 from hswarm.client import DeepSeekClient, KeyPool  # noqa: E402
 from hswarm.usage import ApiError  # noqa: E402
 
@@ -191,7 +191,7 @@ def test_dead_key_state_is_shared_and_backs_off(tmp_path, monkeypatch):
     a._load(force=True)
     st = {s["fingerprint"]: s for s in a.status()}[config.fingerprint(K[0])]
     assert st["strikes"] == 3 and st["dead"] and 2390 < st["resting_s"] <= 2400  # 10 -> 20 -> 40 minutes
-    raw = (tmp_path / "keys.json").read_text(encoding="utf-8")
+    raw = json.dumps(keystate.read_all())
     assert "sk-" not in raw  # fingerprints only on disk
     a.recover(K[0])
     b._load(force=True)
@@ -447,7 +447,20 @@ def test_a_park_in_one_process_survives_a_rest_in_another(tmp_path, monkeypatch)
     a.flush()
     st = KeyPool(K).status()
     assert st[0]["broke"] and st[1]["resting_s"] > 0 and st[2]["resting_s"] > 0, st
-    assert not list(tmp_path.glob("*.json.tmp"))  # the temp file is per process and gone
+
+
+def test_a_rest_writes_only_its_own_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "KEYS_STATE", tmp_path / "keys.json")
+    a, b = KeyPool(K), KeyPool(K)
+    a.broke(K[0])
+    a.broke(K[1])
+    seen = max(rev for _, _, rev in keystate.read_changes(None))
+    b.rest(K[2], 20.0, status=429)
+    b.flush()
+    rows = keystate.read_changes(seen)
+    assert [fp for fp, _, _ in rows] == [config.fingerprint(K[2])]  # one row, not the whole state
+    a._load(force=True)
+    assert a.status()[2]["resting_s"] > 0 and a.status()[0]["broke"]  # and the other process picks just that row up
 
 
 def test_a_failed_probe_counts_as_a_probe_and_leaves_every_record_alone():

@@ -60,7 +60,7 @@ except ImportError:  # pragma: no cover - POSIX
     msvcrt = None
     import fcntl
 
-from . import anthropic_native, config, egress, faults, input_limit
+from . import anthropic_native, config, egress, faults, input_limit, keystate
 from . import zdr as zdr_mod
 from .usage import ApiError, ChatResult, Usage, request_body  # noqa: F401 - re-exported
 
@@ -238,10 +238,8 @@ def _read_timeout_s(reasoning_effort: str | None) -> float:
 DEAD_REST_BASE_S = 600.0        # first strike: ten minutes
 DEAD_REST_CAP_S = 6 * 3600.0    # a key that keeps failing is rested at most six hours before its next chance
 DEAD_STRIKES = 3                # a revoked key that has struck out this many times is DISABLED, not rested again
-STATE_RECHECK_S = 5.0           # how often a pool re-reads the shared state file
-STATE_REREAD_ANYWAY_S = 30.0    # the longest a pool trusts an unchanged (mtime, size) before reading the file anyway
+STATE_RECHECK_S = 5.0           # how often a pool asks the shared key-state database for rows that changed
 STATE_FLUSH_S = STATE_RECHECK_S # a pool writes a burst of 429 rests / recoveries at most this often (KeyPool._defer)
-STATE_READ_TRIES = 5            # reads of it tried while another process holds it mid-replace (KeyPool._load)
 BROKE_REST_S = DEAD_REST_CAP_S  # kept for anything that still reads it; a key out of credit is now disabled, not timed
 BALANCE_FRESH_S = 1800.0        # a balance reading older than this is stale and probed again before a job's first task
 DISABLED_RECHECK_S = 6 * 3600.0 # ...but a key in the disabled slot is re-read at most this often (see KeyPool.stale_keys)
@@ -399,29 +397,15 @@ def key_tier(provider: str, fingerprint: str) -> float:
 
 
 def read_key_state() -> dict | None:
-    """The shared key-state file (config.KEYS_STATE) parsed: {} when there is none, None when it cannot be read now
-    (a torn or foreign file, or Windows refusing every try) and the caller keeps what it had."""
-    for attempt in range(STATE_READ_TRIES):
-        try:
-            data = json.loads(config.KEYS_STATE.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except FileNotFoundError:
-            return {}
-        except PermissionError:
-            # Windows refuses a read while another process os.replace()s the file: 2 of 807 reads on 2026-09-25,
-            # with a dozen processes writing it. A NEW pool that kept the empty state it started with read every
-            # disabled key as live (4,287 dead OpenRouter keys looked usable), so the read is tried again.
-            time.sleep(0.01 * (attempt + 1))
-        except (OSError, ValueError):
-            return None  # a torn or foreign file is ignored, never fatal
-    return None
+    """The shared key state (hswarm/keystate.py) as {fingerprint: entry}: {} when there is none, None when it cannot
+    be read now and the caller keeps what it had."""
+    return keystate.read_all()
 
 
 _LIVE_POOLS: list = []  # every KeyPool this process built, so queued hot writes are flushed at exit
 
-# ONE merged write per process, not one per pool. Each provider's pool used to flush its own queue every
-# STATE_FLUSH_S, so a server with four busy pools still rewrote the whole 1.3 MB file ~42 times a minute
-# (measured 2026-09-29 after 914385d went live, 55 MB/min); every pool's queue now goes out in one write.
+# ONE merged write per process, not one per pool: every pool's queue goes out in one transaction (the rows that
+# changed), at most every STATE_FLUSH_S.
 _FLUSH_GATE = threading.Lock()
 _flush_timer: threading.Timer | None = None
 _last_flush = 0.0
@@ -445,7 +429,7 @@ def _schedule_flush() -> None:
 
 @atexit.register
 def _flush_live_pools() -> None:
-    """Write every pool's queued hot ops now, in one read-modify-write under the lock, onto a fresh read, so another
+    """Write every pool's queued hot ops now, in one transaction, each onto a fresh read of its row, so another
     process's disable or rest that landed meanwhile is kept (the 2026-09-16 rule every write follows)."""
     global _flush_timer, _last_flush
     with _FLUSH_GATE:
@@ -453,24 +437,22 @@ def _flush_live_pools() -> None:
             _flush_timer.cancel()
         _flush_timer = None
         _last_flush = time.time()
-    target = config.KEYS_STATE
+    target = keystate.db_path()
     batches = [(pool, ops) for pool in list(_LIVE_POOLS) if (ops := pool._take_pending(target))]
     if not batches:
         return
-    with contextlib.suppress(Exception), batches[0][0]._locked():
-        state = read_key_state()
-        if state is None:  # unreadable: write onto this process's own copy, as a forced load that failed did
-            state = dict(batches[0][0]._state)
-        for pool, ops in batches:
-            pool._state = state  # one dict for the file: each pool's ops land in it, then it is written once
-            for fp, op in ops.items():
-                pool._apply_op(fp, op)
-        writer = batches[-1][0]
-        if not writer._save():
+    done = False
+    with contextlib.suppress(Exception), keystate.txn() as tx:
+        if tx is not None:
             for pool, ops in batches:
-                pool._put_back(ops, target)
-        for pool, _ in batches:
-            pool._state_sig, pool._state_read_at = writer._state_sig, writer._state_read_at
+                pool._load(force=True, tx=tx)
+                for fp, op in ops.items():
+                    pool._apply_op(fp, op)
+                    tx.put(fp, pool._state.get(fp) or {})
+            done = True
+    if not done:  # the lock was not taken or the write failed: every op waits for the next one, not lost
+        for pool, ops in batches:
+            pool._put_back(ops, target)
 
 
 class KeyPool:
@@ -501,8 +483,8 @@ class KeyPool:
         self._i = 0
         self._state: dict[str, dict] = {}
         self._state_checked = 0.0
-        self._state_sig: tuple[int, int] | None = None
-        self._state_read_at = 0.0
+        self._rev: int | None = None  # the newest keystate row this pool has seen; None until its first read
+        self._fpset = frozenset(self._fp.values())
         # Hot writes (429 rests, post-rest recoveries) waiting for the process's merged write: fingerprint -> the latest op.
         self._pending: dict[str, tuple] = {}
         self._pending_lock = threading.Lock()
@@ -522,50 +504,40 @@ class KeyPool:
 
     # ---- shared state --------------------------------------------------------------
 
-    def _load(self, force: bool = False) -> None:
-        """Read the shared file: every STATE_RECHECK_S for a pick, always when `force` (every write, under the
-        lock). It is read outright, never trusted to an mtime: two writes inside one clock tick carry the same
-        stamp on Windows, and a reader keyed on it kept the older one (caught by the test, 2026-09-16)."""
+    def _load(self, force: bool = False, tx=None) -> None:
+        """Bring this pool's copy up to date: every STATE_RECHECK_S for a pick, always when `force` (every write, inside
+        its transaction `tx`). Only the rows written since the last read come back (keystate `rev`), so an idle pool
+        costs one indexed query and a rest in another process costs one row."""
         now = time.time()
         if not force and now - self._state_checked < STATE_RECHECK_S:
             return
         self._state_checked = now
-        # An unchanged (mtime, size) skips the parse: every pool in every process re-read the whole file every
-        # STATE_RECHECK_S whether or not it moved, ~500 MB a minute of reads with a job running (measured
-        # 2026-09-29). Never trusted alone - two writes inside one Windows clock tick can share a stamp - so the
-        # file is read anyway once STATE_REREAD_ANYWAY_S has passed, and always on a forced (write-path) load.
-        try:
-            st = config.KEYS_STATE.stat()
-            sig = (st.st_mtime_ns, st.st_size)
-        except OSError:
-            sig = None
-        if not force and sig is not None and sig == self._state_sig and now - self._state_read_at < STATE_REREAD_ANYWAY_S:
+        rows = tx.changes(self._rev) if tx is not None else keystate.read_changes(self._rev)
+        if rows is None:  # unreadable now: keep what this pool had
             return
-        if (data := read_key_state()) is not None:
-            self._state = data
-            self._state_sig, self._state_read_at = sig, now
-            self._reapply_pending()
+        if self._rev is None:
+            self._state = {}  # a state handed in for display (state=) is replaced by the first real read
+        for fp, text, rev in rows:
+            self._rev = max(self._rev or 0, rev)
+            if fp in self._fpset:
+                e = json.loads(text)
+                if e:
+                    self._state[fp] = e
+                else:
+                    self._state.pop(fp, None)
+        self._rev = self._rev or 0
+        self._reapply_pending()
 
-    def _save(self) -> bool:
-        """Write the shared file; False when it could not be written (the caller still holds what it meant to write).
-
-        Through shared.atomic_write, which tries a refused os.replace again and removes its temp file: Windows refuses
-        the replace while another process has keys.json open to read, and a single try that swallowed the refusal
-        lost the write and left the temp file, 38 of them (61.5 MiB, one whole copy each) by 2026-10-02."""
-        from .shared import atomic_write  # here, not at the top: shared is the server module
-
-        p = config.KEYS_STATE
-        try:
-            # Compact: every 429 rest and post-rest recover rewrites the whole shared file (5,541 entries, 1.4 MB
-            # pretty-printed on 2026-09-28), so the indent alone was 15% of every write and every forced re-read.
-            atomic_write(p, json.dumps(self._state, separators=(",", ":")))
-            st = p.stat()
-            self._state_sig, self._state_read_at = (st.st_mtime_ns, st.st_size), time.time()  # no re-read of our own write
-            return True
-        except OSError:
-            with contextlib.suppress(OSError):  # a write that failed half way (a full disk) leaves no temp file either
-                p.with_name(f"{p.name}.{os.getpid()}.tmp").unlink(missing_ok=True)
-            return False
+    def _put(self, tx, key: str, e: dict) -> None:
+        """This pool's copy of one key's entry, and its row when the write lock is held (`tx` is None when it could not
+        be taken: the copy stands, the row is not written)."""
+        fp = self._fp[key]
+        if e:
+            self._state[fp] = e
+        else:
+            self._state.pop(fp, None)
+        if tx is not None:
+            tx.put(fp, e)
 
     def _put_back(self, ops: dict[str, tuple], target) -> None:
         """Queue again the ops a failed merged write took (_take_pending), under anything queued since, so they
@@ -575,8 +547,8 @@ class KeyPool:
             self._pending_path = self._pending_path or target
 
     def _locked(self):
-        """Hold the state file's lock (`keys.json.lock` beside it) across one read-modify-write (file_lock)."""
-        return file_lock(config.KEYS_STATE.with_name(config.KEYS_STATE.name + ".lock"))
+        """One write transaction on the shared key state (keystate.txn); it yields None when the lock was not taken."""
+        return keystate.txn()
 
     def _parked(self, key: str, now: float) -> bool:
         """Out of credit. Sticky since 2026-09-17: the older `broke` entries carried a six-hour timer and are
@@ -665,8 +637,8 @@ class KeyPool:
             self._state[self._fp[key]] = e
             self._defer(self._fp[key], ("rest", e["rest_until"], status, e["last"]))
             return
-        with self._locked():
-            self._load(force=True)
+        with self._locked() as tx:
+            self._load(force=True, tx=tx)
             now = time.time()
             e = dict(self._entry(key))
             if dead:
@@ -678,8 +650,7 @@ class KeyPool:
             e["rest_until"] = max(float(e.get("rest_until") or 0.0), now + seconds)
             e["status"] = status
             e["last"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-            self._state[self._fp[key]] = e
-            self._save()
+            self._put(tx, key, e)
 
     _READINGS = ("balance_usd", "balance_at", "probed_at", "free_left")
 
@@ -724,7 +695,7 @@ class KeyPool:
         keys.json (1.4 MB) was rewritten 220+ times a minute, 315+ MB a minute of writes, each one also a forced
         1.4 MB parse under the lock. Other processes re-read only every STATE_RECHECK_S anyway."""
         with self._pending_lock:
-            self._pending_path = config.KEYS_STATE
+            self._pending_path = keystate.db_path()
             self._pending[fp] = op  # the latest op for a key wins: a rest then a 200 is a recovery, and back again
         _schedule_flush()
 
@@ -770,8 +741,8 @@ class KeyPool:
         probe it again inside the freshness window. The next positive probe, or a 200, clears the whole record.
         `until` is the epoch second the provider itself said the key serves again (regain_at); probation lets
         the key out then, neither sooner nor a day later."""
-        with self._locked():
-            self._load(force=True)
+        with self._locked() as tx:
+            self._load(force=True, tx=tx)
             now = time.time()
             e = dict(self._entry(key))
             # A strike is a NEW failure. A probe that reads "still empty" on a key already disabled is the same
@@ -787,18 +758,16 @@ class KeyPool:
                 e["disabled_until"] = until
             else:
                 e.pop("disabled_until", None)  # the latest verdict wins: a later 402 names no date
-            self._state[self._fp[key]] = e
-            self._save()
+            self._put(tx, key, e)
 
     def disable(self, key: str, reason: str = "disabled by hand", status: int | None = None) -> None:
         """Put a key in the disabled slot outright (the `hswarm keys disable` path)."""
-        with self._locked():
-            self._load(force=True)
+        with self._locked() as tx:
+            self._load(force=True, tx=tx)
             e = dict(self._entry(key))
             e["last"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
             self._disable_entry(e, reason, status=status, free_ok=False)
-            self._state[self._fp[key]] = e
-            self._save()
+            self._put(tx, key, e)
 
     def enable(self, key_or_fp: str) -> bool:
         """Take one key out of the disabled slot and clear its rest and strikes, addressed by key or by
@@ -806,16 +775,12 @@ class KeyPool:
         target = next((k for k in self._keys if k == key_or_fp or self._fp[k] == key_or_fp), None)
         if target is None:
             return False
-        with self._locked():
-            self._load(force=True)
+        with self._locked() as tx:
+            self._load(force=True, tx=tx)
             e = dict(self._entry(target))
             kept = {k: e[k] for k in self._READINGS if k in e}
             kept.pop("balance_at", None)  # force a fresh probe rather than trust the reading that disabled it
-            if kept:
-                self._state[self._fp[target]] = kept
-            else:
-                self._state.pop(self._fp[target], None)
-            self._save()
+            self._put(tx, target, kept)
         return True
 
     def probation(self, max_age_s: float = NO_CREDIT_RECHECK_S) -> list[str]:
@@ -882,8 +847,8 @@ class KeyPool:
             self.broke(key, status=402, balance_usd=usd, free_ok=bool(free_left))
             return False
         learned = available is not None or usd is not None
-        with self._locked():
-            self._load(force=True)
+        with self._locked() as tx:
+            self._load(force=True, tx=tx)
             now = time.time()
             e = dict(self._entry(key))
             if learned and usable:
@@ -896,8 +861,7 @@ class KeyPool:
                     e["balance_usd"], e["balance_at"] = usd, now
             if free_left is not None:
                 e["free_left"] = int(free_left)
-            self._state[self._fp[key]] = e
-            self._save()
+            self._put(tx, key, e)
         return not self._parked(key, now)
 
     def stale_keys(self, max_age_s: float = BALANCE_FRESH_S, disabled_age_s: float = DISABLED_RECHECK_S) -> list[str]:

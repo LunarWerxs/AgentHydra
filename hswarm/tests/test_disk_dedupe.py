@@ -3,18 +3,17 @@
 The measurement behind this (2026-10-02, job 20261001-073621-cf71, 1,119 tasks): 300 transcripts held 0 blob refs
 and 26.2 of their 38.5 MB were strings the job already had as blobs, because a routed transcript nests its messages
 under {"routes": [...]}; job.json was 40.4 MB, 23.75 MB of it the results its journal already held and 3.69 MB one
-schema repeated on every task. And 38 `keys.json.<pid>.tmp` files (61.5 MiB) were key-state writes Windows refused."""
+schema repeated on every task."""
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hswarm import archive, blobs, config, utilization  # noqa: E402
+from hswarm import archive, blobs, config, keystate, utilization  # noqa: E402
 from hswarm.client import ChatResult, KeyPool, Usage  # noqa: E402
 from hswarm.job import Job  # noqa: E402
 from hswarm.jobs import JobManager  # noqa: E402
@@ -109,41 +108,17 @@ def test_backfill_counts_a_finished_job_whose_results_are_in_its_journal(tmp_pat
     assert (row["tasks"], row["ok"], row["failed"]) == (2, 1, 1)
 
 
-def test_save_retries_a_refused_replace_and_leaves_no_temp(tmp_path, monkeypatch):
-    # Windows refuses os.replace while another process has keys.json open to read; one swallowed refusal lost the
-    # write and left a whole copy of the file behind.
+def test_a_rest_whose_write_found_the_database_locked_goes_out_with_the_next_one(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "KEYS_STATE", tmp_path / "keys.json")
+    monkeypatch.setattr(keystate, "LOCK_WAIT_S", 0.05)
     pool = KeyPool(K)
-    real, refused = os.replace, []
-
-    def flaky(src, dst):
-        if len(refused) < 2:
-            refused.append(src)
-            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
-        return real(src, dst)
-
-    monkeypatch.setattr(os, "replace", flaky)
-    pool.disable(K[0], "by hand")
-
-    assert len(refused) == 2
-    assert KeyPool(K).status()[0]["disabled"]  # the write landed on the third try
-    assert not list(tmp_path.glob("keys.json.*.tmp"))
-
-
-def test_a_rest_whose_write_was_refused_goes_out_with_the_next_one(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "KEYS_STATE", tmp_path / "keys.json")
-    pool = KeyPool(K)
-    real = os.replace
-
-    def refuse(src, dst):
-        raise PermissionError(13, "The process cannot access the file because it is being used by another process")
-
-    monkeypatch.setattr(os, "replace", refuse)
+    holder = keystate.connect()
+    holder.execute("BEGIN IMMEDIATE")  # another process mid-write
     pool.rest(K[1], 20.0, status=429)
     pool.flush()
-    assert not list(tmp_path.glob("keys.json.*.tmp"))  # every try refused: nothing written, nothing left behind
-    assert KeyPool(K).status()[1]["resting_s"] == 0
+    holder.execute("ROLLBACK")
+    holder.close()
+    assert KeyPool(K).status()[1]["resting_s"] == 0  # nothing reached the rows while it was locked
 
-    monkeypatch.setattr(os, "replace", real)
     pool.flush()
     assert KeyPool(K).status()[1]["resting_s"] > 0  # the rest was queued again, not dropped

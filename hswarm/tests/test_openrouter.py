@@ -22,7 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hswarm import catalogue, config  # noqa: E402
+from hswarm import catalogue, config, keystate  # noqa: E402
 from hswarm import keys as keymod  # noqa: E402
 from hswarm.client import ChatClient, KeyPool, NoUsableKey, balance_reading, openrouter_free_left  # noqa: E402
 from hswarm.usage import ApiError  # noqa: E402
@@ -363,6 +363,7 @@ def test_a_legacy_timed_park_upgrades_consistently():
         config.fingerprint(OR[1]): {"broke": True, "rest_until": now + 3600, "strikes": 1, "status": 402},  # running
     }), encoding="utf-8")
     p = _pool()
+    assert not config.KEYS_STATE.exists()  # imported once into the database, then deleted: nothing reads or writes it again
     # A park whose timer ran out is back in play, and both the api and the cc path say so.
     assert p._usable(OR[0], False) and p.next_with_balance()[0] is not None
     assert sorted({p.pick() for _ in range(6)}) == [OR[0], OR[2]]
@@ -381,7 +382,7 @@ def test_the_state_file_never_holds_a_key(tmp_path):
     p.broke(OR[0])
     p.rest(OR[1], 30, status=429)
     p.disable(OR[2], reason="rotated out")
-    raw = config.KEYS_STATE.read_text(encoding="utf-8")
+    raw = json.dumps(keystate.read_all())
     assert "sk-or-v1-" not in raw and config.fingerprint(OR[0])[:8] in raw
     assert "sk-" not in json.dumps(p.status())
 

@@ -73,7 +73,7 @@ From the code (agent inventory, file:line) and the 7-minute stat sample:
 | `CONFIG_DIR/login-sync.json` | 14 KB | atomic rewrite on **every pass** (`cli-login-sync.ts:1214`) | **every 30 s tick** | Rewritten even when nothing changed but `lastSyncAt` |
 | `CONFIG_DIR/desktop-chat-sync.json` | 12.6 KB | atomic per chat pass | per pass | fine |
 | `instances-cache.json`, `known-accounts.json` (17 KB), `codex-accounts-cache.json`, `instance-*.json`, `ui-prefs.json`, `session-continuations.json`, `reset-watch.json` (41 KB), `keepalive.json`, `quota-calibration.json` | small | RMW, mostly atomic; several without a cross-process lock | n/a | Leftover `instances-cache.json.*.tmp` files from 2026-09-02/05 show interrupted rewrites |
-| `H/keys.json` | 1.0 MB (`~/.zswarm` copy 1.6 MB) | whole rewrite on every 429 rest/recover | by signature | A 1 MB rewrite per rate-limit event |
+| `H/keys.json` -> `H/keys.sqlite` | was 1.0 MB: 4,464 entries of ~236 bytes, 4,391 of them dead (disabled) keys, none stale (`~/.zswarm` copy 1.6 MB) | one row upserted per rest/recover (~4 KB written, was 1.05 MB) | rows past the last `rev` seen | **Done** (piece 14): `hswarm/keystate.py`; keys.json is imported once, then deleted |
 | `H/savings-daily.jsonl` | 7.2 MB | whole rewrite daily | whole | fine |
 
 ### 1c. Append logs and folders
