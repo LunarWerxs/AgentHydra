@@ -25,7 +25,7 @@
 const [mode, ...rest] = process.argv.slice(2)
 
 if (mode === '--climayte-runner') {
-  // Before anything else: a runner must not open the daemon's database or bind a port.
+  // Before anything else: a runner must not open the daemon's database or bind its port.
   const { runCliMayteRunner } = await import('./climayte-runner')
   process.exit(await runCliMayteRunner(rest[0] ?? ''))
 } else if (mode === '--version' || mode === '-v') {

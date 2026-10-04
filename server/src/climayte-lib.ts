@@ -117,6 +117,9 @@ export interface CliMayteAttempt {
   /** What the session left running when it ended (a background job, a dev server): ended with it,
    *  so whatever it was waiting on did not finish (cleanUpRunner). Absent: nothing. */
   left?: string[]
+  /** The most processes its worker's tree had alive at once (Windows, the runner's job; console
+   *  hosts included): what one worker really costs. Absent off Windows or before 2026-10-04. */
+  peakProcesses?: number
   runner?: {
     pid: number | null
     pidFile: string
@@ -438,6 +441,8 @@ export type CliMayteWorkerView = Omit<CliMayteWorker, 'prompt' | 'attempts' | 'v
     because?: AttemptCause
     /** What its session left running, ended with it (CliMayteAttempt.left). */
     left?: string[]
+    /** The most processes its worker had alive at once (CliMayteAttempt.peakProcesses). */
+    peakProcesses?: number
   }>
   /** What the task used over every attempt, in % of a Pro 5-hour window: `rereadPct` re-reading its
    *  conversation into a cold cache after a move, a limit, a handoff or a gap, `workPct` the rest. */
@@ -1790,6 +1795,7 @@ export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
       rereadPct: a.spend ? pctOf(rereadUnits(a, w.model)) : null,
       ...(attemptCause(w, i) ? { because: attemptCause(w, i) } : {}),
       ...(a.left?.length ? { left: a.left } : {}),
+      ...(a.peakProcesses ? { peakProcesses: a.peakProcesses } : {}),
     })),
     used: (() => {
       const all = w.attempts.reduce(

@@ -190,7 +190,9 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   port 4289 running (field note 43); a breakaway climbs nested jobs only as far as each allows, and
   this one allows none. When the CLI exits the runner lists what is still in the job (pid, exe,
   command line) into the exit file and exits, which closes the job and ends them; `finish` journals
-  them as `cleaned`. Per attempt: a follow-up turn starts its own server again.
+  them as `cleaned`. The job also holds a ceiling of 400 live processes per worker
+  (`WORKER_MAX_PROCESSES`; a runaway shell function once started about 3,000), and the exit file
+  records `peakProcesses`, which `finish` copies onto the attempt. Per attempt: a follow-up turn starts its own server again.
 
 ### Tokens, totals and the usage tables
 

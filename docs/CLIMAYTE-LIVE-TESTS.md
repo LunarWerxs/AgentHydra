@@ -141,7 +141,8 @@ re-reading the whole conversation (`5de5bbc`, `2965507`).
 
 - **How the worker hears it.** At 85% of the 5-hour window (95% of the week), and only when
   another account has room, CliMayte writes a signal that a PostToolUse hook shows the worker after its
-  next tool call. The hook is installed per worker with `--settings` and costs about 65 ms a call.
+  next tool call. The hook is installed per worker with `--settings`; the worker's runner answers it over a loopback
+  http hook, so a tool call starts no process for it (it was a `cat` through Git Bash, about 65 ms a call).
   Proven live first: the CLI showed the hook's `additionalContext` mid-turn and the model acted on
   it.
 - **What the continuation gets.** The task, the handoff, the old transcript's path, and any queued

@@ -23,6 +23,11 @@ import { readFileSync, writeFileSync } from 'node:fs'
  *  has not answered in this long is gone, and the call goes on without it. */
 export const SIGNAL_HOOK_TIMEOUT_S = 3
 
+/** Python that runs the script named in argv[1] as `__main__` when the file exists, and does nothing
+ *  when it does not. */
+export const RUN_IF_PRESENT =
+  "import os,runpy,sys;p=sys.argv[1];os.path.isfile(p) and runpy.run_path(p,run_name='__main__')"
+
 type Hook =
   | { type: 'command'; command: string; args?: string[]; timeout?: number }
   | { type: 'http'; url: string; timeout?: number }
@@ -41,9 +46,11 @@ export interface WorkerHooks {
  *  - PreToolUse on edits, when the owner's edit_claims hook is installed: it records the file under
  *    this task's id and says when another chat or worker edited it in the last half hour (2026-10-01:
  *    workers carry none of the owner's hooks, so their edits were invisible to the other chats). In
- *    exec form, `python` itself with no shell in front: the hook is advisory (it never exits 2), so
- *    the `|| true` the shell form carried changes nothing, and `-S` skips the site import (it reads
- *    only the standard library). */
+ *    exec form, `python` itself with no shell in front. The script never exits 2, but the
+ *    interpreter does when it cannot open the file, and an exit 2 from a PreToolUse hook denies the
+ *    edit: the shell form's `|| true` absorbed that, so the launcher below runs the script only if
+ *    it is still there (proven against the real CLI 2.1.286: a missing script blocked every Write).
+ *    `-S` skips the site import (the script reads only the standard library). */
 export function workerHooks(opts: { signalFile: string; claims: string | null }): WorkerHooks {
   return {
     ...(opts.claims
@@ -52,7 +59,12 @@ export function workerHooks(opts: { signalFile: string; claims: string | null })
             {
               matcher: 'Edit|Write|MultiEdit|NotebookEdit',
               hooks: [
-                { type: 'command', command: 'python', args: ['-S', opts.claims], timeout: 10 },
+                {
+                  type: 'command',
+                  command: 'python',
+                  args: ['-S', '-c', RUN_IF_PRESENT, opts.claims],
+                  timeout: 10,
+                },
               ],
             },
           ],

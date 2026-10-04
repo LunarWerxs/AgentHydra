@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   pointSignalHook,
+  RUN_IF_PRESENT,
   SIGNAL_HOOK_TIMEOUT_S,
   serveSignal,
   workerHooks,
@@ -51,12 +52,32 @@ describe('workerHooks', () => {
           {
             type: 'command',
             command: 'python',
-            args: ['-S', 'C:/u/.claude/hooks/edit_claims.py'],
+            args: ['-S', '-c', RUN_IF_PRESENT, 'C:/u/.claude/hooks/edit_claims.py'],
             timeout: 10,
           },
         ],
       },
     ])
+  })
+
+  // The interpreter exits 2 for a script it cannot open, and a PreToolUse exit 2 denies the edit: the
+  // shell form's `|| true` used to absorb it (the claims file deleted mid-attempt blocked every edit).
+  test('the launcher runs the claims script when present, and exits 0 quietly when it is gone', () => {
+    const dir = tmp()
+    const script = join(dir, 'claims.py')
+    writeFileSync(script, "import sys\nprint('ran', __name__)\nsys.exit(0)\n")
+    const run = (file: string) =>
+      Bun.spawnSync(['python', '-S', '-c', RUN_IF_PRESENT, file], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+    const present = run(script)
+    expect(present.exitCode).toBe(0)
+    expect(present.stdout.toString().trim()).toBe('ran __main__')
+    const gone = run(join(dir, 'missing.py'))
+    expect(gone.exitCode).toBe(0)
+    expect(gone.stdout.toString()).toBe('')
+    expect(gone.stderr.toString()).toBe('')
   })
 })
 

@@ -1372,7 +1372,12 @@ function stopAtCeiling(
  *  journal; the runner's own files go. */
 function cleanUpRunner(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]): void {
   if (!at.runner) return
-  const left = readRunnerExit(at.runner.exitFile)?.left
+  const exit = readRunnerExit(at.runner.exitFile)
+  const left = exit?.left
+  if (exit?.peakProcesses) {
+    at.peakProcesses = exit.peakProcesses
+    changed(w)
+  }
   if (left?.length) {
     journal(w, 'cleaned', {
       account: acctLabel(at.account),

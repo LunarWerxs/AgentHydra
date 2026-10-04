@@ -58,7 +58,8 @@ import { PORT } from './config'
 import { MCP_PATH, MCP_SERVER_KEY } from './mcp-register'
 import { getOrchestratorDaemonUrl } from './orchestrator'
 
-/** The most processes one worker's tree may have alive at once, runner and console hosts included.
+/** The most processes one worker's tree may have alive at once, the runner included (Windows leaves
+ *  console hosts, conhost.exe, out of the count it enforces).
  *  Not a limit on how many workers run: it ends a runaway inside its own job (2026-10-03: a worker's
  *  self-calling shell function started about 3,000 processes and froze the desktop). The busiest
  *  worker measured 2026-10-04 had 48 alive, so this leaves it eight times that. Each runner

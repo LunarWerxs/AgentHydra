@@ -74,8 +74,9 @@ export interface RunnerExit {
   error?: string
   /** What the CLI left running, ended when the runner's job closed (Windows). */
   left?: Leftover[]
-  /** The most processes the worker's tree had alive at once, the runner included (Windows, read
-   *  every 2 s): what one worker really costs, and how close it came to its ceiling. */
+  /** The most processes the worker's tree had alive at once, the runner and its console hosts
+   *  included (Windows, read every 2 s): what one worker really costs. The ceiling does not count
+   *  console hosts, so this can read above it without anything having been refused. */
   peakProcesses?: number
 }
 
@@ -97,11 +98,17 @@ export async function runCliMayteRunner(specPath: string): Promise<number> {
   const exit = (e: RunnerExit) => writeFileSync(spec.exitFile, JSON.stringify(e))
   const job = containWorker(spec.maxProcesses)
   let peak = 0
-  const watchPeak = (): void => {
-    const n = job?.active() ?? -1
-    if (n > peak) peak = n
+  let peaking: ReturnType<typeof setInterval> | null = null
+  function watchPeak(): void {
+    try {
+      const n = job?.active() ?? -1
+      if (n > peak) peak = n
+    } catch {
+      // The count is a diagnostic: a failed read ends the sampling, never the worker's runner.
+      if (peaking) clearInterval(peaking)
+    }
   }
-  const peaking = job ? setInterval(watchPeak, 2_000) : null
+  peaking = job ? setInterval(watchPeak, 2_000) : null
   // The wind-down hook answered from here (no process per tool call). Only once the settings say so;
   // if they cannot be rewritten the CLI keeps the shell form the daemon wrote, and no port is held.
   let signal = spec.signal ? serveSignal(spec.signal.file) : null
