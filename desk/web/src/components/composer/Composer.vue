@@ -34,6 +34,7 @@ import {
   applyMention,
   applySlashCommand,
   composerKeyAction,
+  STOP_GUARD_MS,
   dataUrlToBase64,
   filterMentions,
   filterSlashCommands,
@@ -575,7 +576,10 @@ function onKeydown(e: KeyboardEvent) {
   if (e.isComposing) return
   if (slashOpen.value && listKeys(e, slashMatches.value.length, slashIndex, () => pickCommand(slashMatches.value[slashIndex.value]), () => (slashDismissed.value = true))) return
   if (mentionOpen.value && listKeys(e, mentionMatches.value.length, mentionIndex, () => pickMention(mentionMatches.value[mentionIndex.value]), () => (mentionDismissed.value = true))) return
-  switch (composerKeyAction(e, { empty: !text.value, busy: busy.value, suggestion: !!shown.value })) {
+  switch (composerKeyAction(e, { empty: !text.value, busy: busy.value, suggestion: !!shown.value, stop: showStop.value })) {
+    case 'swallow':
+      e.preventDefault()
+      return
     case 'accept-suggestion': {
       e.preventDefault()
       const s = shown.value
@@ -593,7 +597,7 @@ function onKeydown(e: KeyboardEvent) {
       return
     case 'interrupt':
       e.preventDefault()
-      if (props.chat) desk.interrupt(props.chat.id).catch((err) => showNotice(`Stop failed: ${errText(err)}`))
+      stop()
       return
     case 'recall': {
       const pulled = chatQueue.value.findLast((i) => i.state !== 'sending')
@@ -762,14 +766,19 @@ function errText(e: unknown) {
   return e instanceof Error ? e.message : String(e)
 }
 
+let sentAt = 0
+/** The Stop button or Esc. `click`: the button, which sits where Send was, so the second click of a send is not a Stop. */
+function stop(click = false) {
+  if (!props.chat || (click && Date.now() - sentAt < STOP_GUARD_MS)) return
+  desk.interrupt(props.chat.id).catch((e) => showNotice(`Stop failed: ${errText(e)}`))
+}
+
 /** Sends the box, or queues it (see sendDecision); `ctrl` is Ctrl+Enter or a Ctrl-click, which asks to queue. */
 async function submit(ctrl = false) {
   if (sending.value) return
-  if (showStop.value) {
-    if (!ctrl && props.chat) desk.interrupt(props.chat.id).catch((e) => showNotice(`Stop failed: ${errText(e)}`))
-    return
-  }
-  if (!hasContent.value) return
+  // Nothing to send. Never a Stop: only the Stop button and Esc stop a turn (stop()).
+  if (showStop.value || !hasContent.value) return
+  sentAt = Date.now()
   const enqueue = sendDecision(ctrl) === 'enqueue'
   const body = text.value.trim()
   const refs: ImageRef[] = images.value.map((i) => ({ mediaType: i.mediaType, dataBase64: i.dataBase64, name: i.name }))
@@ -1042,7 +1051,7 @@ onBeforeUnmount(() => {
             :queue="!!queue"
             :chat-id="chatId"
             @send="submit"
-            @stop="submit()"
+            @stop="stop(true)"
             @close-focus="textarea?.focus()"
           />
         </div>

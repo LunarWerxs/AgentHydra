@@ -606,6 +606,27 @@ describe('ChatRuntime: interrupt', () => {
     expect(lastItem(t.items(), 'result').error).toBe('Interrupted')
     expect(t.notifies().map((n) => n.reason)).toEqual(['needs_you'])
   })
+
+  test('a Stop sent while the process still starts ends stopped, not in error, and the next message runs', async () => {
+    const t = setup()
+    t.rt.send('go')
+    await t.rt.interrupt()
+    expect(t.rt.chat.status).toBe('stopped')
+    // The CLI comes up, begins the turn it was sent, then takes the interrupt.
+    t.fake().push(hand.init(), state('running'), result({ errors: ['[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null'] }), state('idle'))
+    await settle()
+    expect(t.rt.chat.status).toBe('stopped')
+    expect(t.rt.chat.lastError).toBeNull()
+    expect(lastItem(t.items(), 'result').error).toBe('Interrupted')
+    expect(t.notifies()).toEqual([])
+
+    expect(t.rt.send('again')).toEqual({ queued: false })
+    expect(t.rt.chat.status).toBe('working')
+    // A later turn that really fails says so.
+    t.fake().push(state('running'), result({ errors: ['API Error: 500'] }), state('idle'))
+    await settle()
+    expect(t.rt.chat.status).toBe('error')
+  })
 })
 
 describe('ChatRuntime: messages while working', () => {

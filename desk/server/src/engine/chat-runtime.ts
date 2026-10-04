@@ -217,6 +217,8 @@ export class ChatRuntime {
   private normalizer: Normalizer | null = null
   private loop: Promise<void> | null = null
   private closing = false
+  /** A Stop was sent into a turn whose result has not come: that result's error is the stop, whatever the CLI said meanwhile. */
+  private stopping = false
   private sawSessionState = false
   private limitAnnounced = false
   private idleTimer: ReturnType<typeof setTimeout> | null = null
@@ -343,6 +345,7 @@ ${swap.real}` }
     this.ranAs = attach ? { ...attach.hello.account } : { ...this.chat.account }
     this.ranCwd = this.chat.cwd
     this.sawSessionState = false
+    this.stopping = false
     this.stderrTail = ''
     this.unanswered = []
     mkdirSync(join(this.store.home, 'logs'), { recursive: true })
@@ -393,6 +396,7 @@ ${swap.real}` }
         this.replaySeen = e.seq <= hello.delivered
         if (e.kind === 'input') this.replayInput(e.msg, e.seq <= hello.acked, stored)
         else if (e.kind === 'interrupt') {
+          this.stopping = this.midTurn
           this.normalizer?.noteInterrupt()
           this.dispatch({ type: 'interrupted' })
         } else {
@@ -573,6 +577,7 @@ ${swap.real}` }
 
   /** The turn is being stopped (Stop, or a bare No to a permission): stopped, every open request expired. */
   private stopTurn(): void {
+    this.stopping = this.midTurn
     this.normalizer?.noteInterrupt()
     this.dispatch({ type: 'interrupted' })
     this.expirePending(false)
@@ -806,6 +811,9 @@ ${swap.real}` }
       // An assistant 'rate_limit' error is a usage limit only when it says so; a 429 that passes in a
       // minute ends as a plain error (its result follows).
       if (e.type === 'usageLimit' && m.type === 'assistant' && !isUsageLimitText(assistantText(msg))) continue
+      // A Stop sent while the process was still starting is taken by the CLI after it began the turn: its
+      // 'running' put the chat back to working, and the aborted result is still the stop, not a failure.
+      if (e.type === 'turnError' && this.stopping) e = { type: 'interrupted' }
       if (e.type === 'turnError' && isUsageLimitText(e.message) && this.chat.status !== 'stopped') {
         e = { type: 'usageLimit', resetsAt: null }
         limitFromResult = true
@@ -852,6 +860,7 @@ ${swap.real}` }
       const total = (msg as { total_cost_usd?: unknown }).total_cost_usd
       if (typeof total === 'number') this.totalCost = total
       this.turns++
+      this.stopping = false
       this.resultSinceAck = true
       if (!this.replaying) this.cwdCheckDue = true
       const stillQueued = this.queued.size

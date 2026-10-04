@@ -164,18 +164,26 @@ export interface KeyLike {
   isComposing?: boolean
 }
 
-export type ComposerKeyAction = 'send' | 'queue' | 'interrupt' | 'recall' | 'attach' | 'accept-suggestion' | 'none'
+export type ComposerKeyAction = 'send' | 'queue' | 'interrupt' | 'recall' | 'attach' | 'accept-suggestion' | 'swallow' | 'none'
+
+/** The Stop button takes the Send button's place the moment a message goes out: a click this soon after is the send's second click, not a Stop. */
+export const STOP_GUARD_MS = 500
 
 /**
  * What a key in the composer's text box does when no slash or mention menu has it: Enter sends,
  * Ctrl+Enter (Cmd+Enter) adds to the send queue, Shift+Enter is a new line (the browser's own), Esc
  * interrupts a running turn, Up in an empty box recalls the last message, Ctrl+U opens the file picker
- * ("Add files or photos"), Tab in an empty box takes the suggested next prompt when one shows.
+ * ("Add files or photos"), Tab in an empty box takes the suggested next prompt when one shows. `stop`:
+ * the button shows Stop (a turn runs and the box has nothing to send); Enter then does nothing ('swallow',
+ * no new line either): a second or repeating Enter after a send must never stop the turn it just started.
  */
-export function composerKeyAction(e: KeyLike, s: { empty: boolean; busy: boolean; suggestion?: boolean }): ComposerKeyAction {
+export function composerKeyAction(e: KeyLike, s: { empty: boolean; busy: boolean; suggestion?: boolean; stop?: boolean }): ComposerKeyAction {
   if (e.isComposing) return 'none'
   if (e.key === 'Tab' && s.empty && s.suggestion && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) return 'accept-suggestion'
-  if (e.key === 'Enter' && !e.shiftKey && !e.altKey) return e.ctrlKey || e.metaKey ? 'queue' : 'send'
+  if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
+    if (s.stop) return 'swallow'
+    return e.ctrlKey || e.metaKey ? 'queue' : 'send'
+  }
   if (e.key === 'Escape' && s.busy) return 'interrupt'
   if (e.key === 'ArrowUp' && s.empty && !e.shiftKey) return 'recall'
   if ((e.key === 'u' || e.key === 'U') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) return 'attach'

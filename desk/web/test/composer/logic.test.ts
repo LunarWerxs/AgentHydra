@@ -142,6 +142,8 @@ describe('keys', () => {
     expect(composerKeyAction({ key: 'Enter' }, idle)).toBe('send')
     expect(composerKeyAction({ key: 'Enter', shiftKey: true }, idle)).toBe('none')
     expect(composerKeyAction({ key: 'Enter', isComposing: true }, idle)).toBe('none')
+    // The box is empty and the button shows Stop (the message just went out): Enter is not a Stop.
+    expect(composerKeyAction({ key: 'Enter' }, { empty: true, busy: true, stop: true })).toBe('swallow')
   })
   it('Ctrl+Enter and Cmd+Enter queue; with Shift it is still a new line', () => {
     expect(composerKeyAction({ key: 'Enter', ctrlKey: true }, idle)).toBe('queue')
