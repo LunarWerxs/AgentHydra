@@ -129,6 +129,10 @@ describe('calibrateQuotaDollars (disk-backed)', () => {
   })
 
   test('prices the turns between the readings of a window into dollars per percent, then re-prices', async () => {
+    // The readings sit in 2020, below a fresh store's raw cut, where a call is settled without a raw row.
+    sharedKitStore()
+      .db.query("insert or replace into meta (key, value) values ('raw_cut', '0')")
+      .run()
     sharedKitStore().upsertEvents([
       // $30 at $3 per million input tokens, inside the window.
       turn(T0 + HOUR / 2, 'r1', 10_000_000),
