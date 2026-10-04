@@ -52,10 +52,18 @@ import {
 } from './climayte-lib'
 import { ownerMcpServers, syncOwnerClaude } from './climayte-owner-sync'
 import { launchRunner } from './climayte-runner'
+import { workerHooks } from './climayte-signal'
 import { readWave, waveStateText } from './climayte-wave'
 import { PORT } from './config'
 import { MCP_PATH, MCP_SERVER_KEY } from './mcp-register'
 import { getOrchestratorDaemonUrl } from './orchestrator'
+
+/** The most processes one worker's tree may have alive at once, runner and console hosts included.
+ *  Not a limit on how many workers run: it ends a runaway inside its own job (2026-10-03: a worker's
+ *  self-calling shell function started about 3,000 processes and froze the desktop). The busiest
+ *  worker measured 2026-10-04 had 48 alive, so this leaves it eight times that. Each runner
+ *  records its worker's peak in its exit file (RunnerExit.peakProcesses), to tune it by. */
+export const WORKER_MAX_PROCESSES = 400
 
 /** Piece 6: when a manager's conversation exceeds this (the newest request's input, cache reads and
  *  cache writes), the next wake starts a fresh session from waveStateText instead of a handoff note. */
@@ -360,10 +368,12 @@ function writeWorkerMcp(w: CliMayteWorker): string | null {
   return file
 }
 
-/** The worker's own settings. The wind-down channel: after every tool call the CLI runs this hook,
- *  which prints the worker's signal file when there is one (signalWindDown) and nothing otherwise,
- *  about 65 ms a call. The denied MCP servers (WORKER_DENIED_MCP) and AgentHydra's endpoint under
- *  any name (WORKER_DENIED_MCP_URL), whichever scope lists them.
+/** The worker's own settings. The wind-down channel: after every tool call the CLI calls this hook,
+ *  which answers with the worker's signal file when there is one (signalWindDown) and nothing
+ *  otherwise. Written here as a `cat` command; the worker's runner turns it into an http hook it
+ *  answers itself, so a tool call starts no process for it (climayte-signal.ts). The edit_claims
+ *  hook is in exec form for the same reason. The denied MCP servers (WORKER_DENIED_MCP) and
+ *  AgentHydra's endpoint under any name (WORKER_DENIED_MCP_URL), whichever scope lists them.
  *  And no skills synced from claude.ai (docx, pptx, xlsx, computer-use, chrome-browser, ...: 14 of
  *  them, each listed with its description in every request); `syncClaudeAiSkills: false` given
  *  through --settings hides them
@@ -378,21 +388,6 @@ function writeWorkerSettings(w: CliMayteWorker): string {
   // none of the owner's hooks, so without this a worker's edits were invisible to it, and a worker
   // editing a chat's files was the collision it was built for (2026-10-01).
   const claims = ownerClaudeDir ? join(ownerClaudeDir, 'hooks', 'edit_claims.py') : null
-  const preToolUse =
-    claims && existsSync(claims)
-      ? [
-          {
-            matcher: 'Edit|Write|MultiEdit|NotebookEdit',
-            hooks: [
-              {
-                type: 'command',
-                command: `python '${slashed(claims)}' 2>/dev/null || true`,
-                timeout: 10,
-              },
-            ],
-          },
-        ]
-      : []
   writeFileSync(
     hookFile,
     JSON.stringify({
@@ -404,20 +399,12 @@ function writeWorkerSettings(w: CliMayteWorker): string {
       // One account's claude.ai-synced humanizer plugin still listed `humanizer:humanizer` in every
       // request after the line above (3 of 14 starts, 2026-10-02); no worker ever invoked it.
       enabledPlugins: { 'humanizer@synced': false },
-      hooks: {
-        ...(preToolUse.length ? { PreToolUse: preToolUse } : {}),
-        PostToolUse: [
-          {
-            matcher: '*',
-            hooks: [
-              {
-                type: 'command',
-                command: `cat '${slashed(signalPath(w.id))}' 2>/dev/null || true`,
-              },
-            ],
-          },
-        ],
-      },
+      // The signal hook is written in its shell form here; the worker's runner answers it over http
+      // instead, before the CLI starts (climayte-signal.ts, RunnerSpec.signal).
+      hooks: workerHooks({
+        signalFile: slashed(signalPath(w.id)),
+        claims: claims && existsSync(claims) ? slashed(claims) : null,
+      }),
     }),
   )
   rmSync(signalPath(w.id), { force: true })
@@ -505,6 +492,9 @@ function startRunner(
         stderr: errLog,
         pidFile: runner.pidFile,
         exitFile: runner.exitFile,
+        // The wind-down hook is answered by this runner over http, not by a `cat` per tool call.
+        signal: { file: signalPath(w.id), settings: workerFiles(w.id)[0] },
+        maxProcesses: WORKER_MAX_PROCESSES,
       },
       runnerSpecPath(log),
     )

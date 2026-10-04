@@ -249,14 +249,25 @@ if (existsSync(join(configDir, 'fake-winddown'))) {
     },
   })
   const settings = flag('--settings')
-  const command: string = settings
-    ? JSON.parse(readFileSync(settings, 'utf8')).hooks?.PostToolUse?.[0]?.hooks?.[0]?.command ?? ''
-    : ''
+  const hook = settings ? JSON.parse(readFileSync(settings, 'utf8')).hooks?.PostToolUse?.[0]?.hooks?.[0] : null
+  const command: string = hook?.command ?? ''
   const signal = /cat '([^']+)'/.exec(command)?.[1] ?? ''
+  // The hook is either the `cat` command (the settings as the daemon wrote them) or an http hook (the
+  // runner rewrote them to point at itself): the CLI calls it the same way a real one would.
+  const signalContext = async (): Promise<string | null> => {
+    if (hook?.type === 'http') {
+      const body = (await (await fetch(hook.url, { method: 'POST', body: '{}' })).json()) as {
+        hookSpecificOutput?: { additionalContext?: string }
+      }
+      return body.hookSpecificOutput?.additionalContext ?? null
+    }
+    if (!signal || !existsSync(signal)) return null
+    return JSON.parse(readFileSync(signal, 'utf8')).hookSpecificOutput.additionalContext
+  }
   for (let i = 0; i < 50; i++) {
     await Bun.sleep(200)
-    if (!signal || !existsSync(signal)) continue
-    const context: string = JSON.parse(readFileSync(signal, 'utf8')).hookSpecificOutput.additionalContext
+    const context = await signalContext()
+    if (!context) continue
     const path = /Write tool to (\S+?\.md)/.exec(context)?.[1]
     if (path) writeFileSync(path, 'HANDOFF: step 3 of 5 done; next is step 4.')
     emit({ type: 'result', subtype: 'success', is_error: false, result: 'Handoff written.', session_id: sessionId, total_cost_usd: 0.5, num_turns: 1 })

@@ -11,8 +11,10 @@
 
 import { createRequire } from 'node:module'
 
+const JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
 const JOB_OBJECT_BASIC_PROCESS_ID_LIST = 3
 const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+const JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x0008
 const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 const PROCESS_TERMINATE = 0x0001
 const PROCESS_SET_QUOTA = 0x0100
@@ -29,11 +31,17 @@ export interface Leftover {
 export interface WorkerJob {
   /** Every process in the job except `exceptPid` (the runner itself). */
   leftovers(exceptPid: number): Leftover[]
+  /** How many processes the job has alive right now, the runner included (-1 when unreadable). */
+  active(): number
 }
 
 /** Puts this process in a new kill-on-close job. Null off Windows, without bun:ffi, or when a call
- *  is refused: the CLI then runs as it did before, and what it leaves is left. */
-export function containWorker(): WorkerJob | null {
+ *  is refused: the CLI then runs as it did before, and what it leaves is left.
+ *  `maxProcesses` caps how many processes the job may have alive at once (the runner counts as one):
+ *  past it Windows refuses to start another. Not a limit on how many workers run, only on one
+ *  worker's own tree, so a runaway (2026-10-03: a self-calling shell function started about 3,000
+ *  processes and froze the desktop) ends at the ceiling and the machine keeps going. */
+export function containWorker(maxProcesses?: number): WorkerJob | null {
   if (process.platform !== 'win32') return null
   try {
     const { dlopen, FFIType, ptr } = createRequire(import.meta.url)('bun:ffi')
@@ -58,9 +66,17 @@ export function containWorker(): WorkerJob | null {
     const job = k.CreateJobObjectW(null, null)
     if (!job) return null
     // JOBOBJECT_EXTENDED_LIMIT_INFORMATION is 144 bytes on x64; BasicLimitInformation.LimitFlags is
-    // the DWORD at offset 16, after the two LARGE_INTEGER time limits.
+    // the DWORD at offset 16, after the two LARGE_INTEGER time limits, and ActiveProcessLimit the
+    // DWORD at offset 40, after the two working-set sizes.
     const info = new Uint8Array(144)
-    new DataView(info.buffer).setUint32(16, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, true)
+    const limits = new DataView(info.buffer)
+    const capped = typeof maxProcesses === 'number' && maxProcesses > 0
+    limits.setUint32(
+      16,
+      JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | (capped ? JOB_OBJECT_LIMIT_ACTIVE_PROCESS : 0),
+      true,
+    )
+    if (capped) limits.setUint32(40, Math.floor(maxProcesses), true)
     const self = k.OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, process.pid)
     const ok =
       k.SetInformationJobObject(
@@ -90,6 +106,22 @@ export function containWorker(): WorkerJob | null {
       }
     }
     return {
+      active(): number {
+        // JOBOBJECT_BASIC_ACCOUNTING_INFORMATION (48 bytes): four LARGE_INTEGER times, then the DWORDs
+        // TotalPageFaultCount, TotalProcesses, ActiveProcesses (offset 40) and TotalTerminatedProcesses.
+        const buf = new Uint8Array(48)
+        if (
+          !k.QueryInformationJobObject(
+            job,
+            JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
+            ptr(buf),
+            buf.byteLength,
+            null,
+          )
+        )
+          return -1
+        return new DataView(buf.buffer).getUint32(40, true)
+      },
       leftovers(exceptPid: number): Leftover[] {
         // JOBOBJECT_BASIC_PROCESS_ID_LIST: two DWORD counts, then ULONG_PTR process ids.
         const buf = new Uint8Array(8 + 8 * 1024)

@@ -30,6 +30,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { containWorker, type Leftover } from './climayte-job'
+import { pointSignalHook, serveSignal } from './climayte-signal'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 
 /** config.ts's own test, repeated so the runner process imports nothing of the daemon's: a source
@@ -49,6 +50,13 @@ export interface RunnerSpec {
    *  stderr are the same file. Git Bash cannot write through an append-only handle: its output
    *  vanished and `sleep` exited 1 (measured 2026-10-02), where the CLI appends to its logs fine. */
   fresh?: boolean
+  /** A worker's wind-down channel (climayte-signal.ts): the runner answers the CLI's PostToolUse
+   *  hook from `file` itself, and rewrites the `settings` file the CLI was given to say so before
+   *  it starts the CLI. Absent for a check's log, which has no hooks. */
+  signal?: { file: string; settings: string }
+  /** The most processes the worker's tree may have alive at once, the runner included (Windows job
+   *  ceiling, climayte-job.ts). Absent: no ceiling, as for a check's log. */
+  maxProcesses?: number
 }
 
 /** Written by the runner the moment it has claimed the spec (`runner` only), then again once the CLI
@@ -66,6 +74,9 @@ export interface RunnerExit {
   error?: string
   /** What the CLI left running, ended when the runner's job closed (Windows). */
   left?: Leftover[]
+  /** The most processes the worker's tree had alive at once, the runner included (Windows, read
+   *  every 2 s): what one worker really costs, and how close it came to its ceiling. */
+  peakProcesses?: number
 }
 
 /** The runner mode itself (main.ts `--climayte-runner <spec>`). Returns the process exit code. */
@@ -84,7 +95,20 @@ export async function runCliMayteRunner(specPath: string): Promise<number> {
   // Before anything slow: a stop that lost the claim kills this runner by this pid (killOnStart).
   writeFileSync(spec.pidFile, JSON.stringify({ runner: process.pid } satisfies RunnerPids))
   const exit = (e: RunnerExit) => writeFileSync(spec.exitFile, JSON.stringify(e))
-  const job = containWorker()
+  const job = containWorker(spec.maxProcesses)
+  let peak = 0
+  const watchPeak = (): void => {
+    const n = job?.active() ?? -1
+    if (n > peak) peak = n
+  }
+  const peaking = job ? setInterval(watchPeak, 2_000) : null
+  // The wind-down hook answered from here (no process per tool call). Only once the settings say so;
+  // if they cannot be rewritten the CLI keeps the shell form the daemon wrote, and no port is held.
+  let signal = spec.signal ? serveSignal(spec.signal.file) : null
+  if (signal && spec.signal && !pointSignalHook(spec.signal.settings, signal.port)) {
+    signal.stop()
+    signal = null
+  }
   let child: ReturnType<typeof Bun.spawn>
   try {
     const mode = spec.fresh ? 'w' : 'a'
@@ -98,6 +122,8 @@ export async function runCliMayteRunner(specPath: string): Promise<number> {
       windowsHide: true,
     })
   } catch (err) {
+    signal?.stop()
+    if (peaking) clearInterval(peaking)
     exit({ code: null, signal: null, endedAt: Date.now(), error: String(err) })
     return 1
   }
@@ -105,13 +131,17 @@ export async function runCliMayteRunner(specPath: string): Promise<number> {
     spec.pidFile,
     JSON.stringify({ runner: process.pid, child: child.pid } satisfies RunnerPids),
   )
+  watchPeak()
   await child.exited
+  signal?.stop()
+  if (peaking) clearInterval(peaking)
   const left = job?.leftovers(process.pid) ?? []
   exit({
     code: child.exitCode,
     signal: child.signalCode ?? null,
     endedAt: Date.now(),
     ...(left.length ? { left } : {}),
+    ...(peak > 0 ? { peakProcesses: peak } : {}),
   })
   // Returning ends this process, which closes the job: everything in `left` ends with it.
   return 0
