@@ -106,10 +106,7 @@ export function legacyEvents(
       const raw =
         part.input + part.output + part.cacheRead + part.cacheCreation5m + part.cacheCreation1h
       if (raw === 0) continue
-      const priced = priceTokens(
-        { [model]: { ...m, ...part, weighted: num(m.weighted) * share, turns: 0 } },
-        ts,
-      )
+      const priced = priceTokens({ [model]: part }, ts)
       out.push({
         id: `legacy:${row.session_key}:${day}:${model}`,
         ts,

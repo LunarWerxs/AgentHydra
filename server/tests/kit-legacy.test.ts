@@ -96,9 +96,7 @@ describe('kit legacy backfill', () => {
     const want = priceTokens(
       {
         [MODEL]: {
-          weighted: 0,
           output: 150,
-          turns: 0,
           input: 750,
           cacheRead: 0,
           cacheCreation5m: 0,
