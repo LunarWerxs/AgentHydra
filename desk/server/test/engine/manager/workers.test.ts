@@ -1,0 +1,149 @@
+// A new chat is a CliMayte worker (SPEC "Chats are CliMayte workers"): its first message starts the
+// worker on a strong model whatever the window asked, a later one is sent to that worker, and the chat
+// shows the worker's status, account (a move said in the transcript) and transcript.
+
+import { afterEach, expect, test } from 'bun:test'
+import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { ChatManager } from '../../../src/engine/chat-manager'
+import { DEFAULT_SETTINGS } from '../../../src/settings'
+import type { ServerEvent } from '@shared/protocol'
+import { fakeBridge, fakeQueries } from './fakes'
+
+const temps: string[] = []
+const managers: ChatManager[] = []
+afterEach(async () => {
+  for (const m of managers.splice(0)) await m.closeAll()
+  for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
+test('a new chat starts a worker on opus, a follow-up goes to that worker, and its status, move and transcript show', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const q = fakeQueries()
+  const m = new ChatManager({ home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
+  managers.push(m)
+
+  const chat = await m.create({ cwd: home, prompt: 'reply with the word pong', model: 'haiku' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  expect(b.state.started).toEqual([expect.objectContaining({ prompt: 'reply with the word pong', cwd: home, group: 'hydra-desk', model: 'opus' })])
+  expect(m.get(chat.id)).toMatchObject({ workerId: 'w1', sessionId: 'worker-session-1', model: 'opus' })
+  expect(q.all).toEqual([])
+
+  const row = b.state.rows[0]!
+  Object.assign(row, { status: 'running', accountId: 'cli-2', account: '#61 acct2' })
+  b.state.workerItems['worker-session-1'] = [{ kind: 'assistant_text', id: 'a-1', ts: 10, text: 'pong' }]
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id)).toMatchObject({ status: 'working', account: { id: 'cli-2' } })
+  expect(m.listItems(chat.id).find((i) => i.id === 'a-1')).toMatchObject({ text: 'pong' })
+
+  await m.send(chat.id, 'now reply with ping')
+  expect(b.state.sentToWorker).toEqual([{ id: 'w1', text: 'now reply with ping' }])
+  expect(b.state.started.length).toBe(1)
+
+  Object.assign(row, { status: 'done', accountId: 'cli-3', account: '#62 acct3' })
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id)).toMatchObject({ status: 'idle', unread: true, account: { id: 'cli-3' } })
+  const moved = m.listItems(chat.id).find((i) => i.kind === 'system' && /moved this chat/.test(i.text))
+  expect(moved && 'text' in moved && moved.text).toMatch(/from #61.* to #62/)
+})
+
+function newManager(home: string, b: ReturnType<typeof fakeBridge>) {
+  const m = new ChatManager({ home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
+  managers.push(m)
+  return m
+}
+
+test('the Desk file keeps every session of the chat in order, once, however often the JSONLs are re-read', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'first' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  const row = b.state.rows[0]!
+  const old = [{ kind: 'user', id: 'u-1', ts: 1, text: 'first' }, { kind: 'assistant_text', id: 'a-1', ts: 2, text: 'one' }] as const
+  b.state.workerItems['worker-session-1'] = [...old]
+  await m.syncWorkers(chat.id)
+
+  // CliMayte hands the worker to a fresh session; the old file now repeats its history and goes on.
+  Object.assign(row, { sessions: ['worker-session-1'], sessionId: 'worker-session-2' })
+  b.state.workerItems['worker-session-2'] = [...old, { kind: 'assistant_text', id: 'a-2', ts: 3, text: 'two' }]
+  await m.syncWorkers(chat.id)
+  await m.syncWorkers(chat.id)
+  // The old JSONL is later gone from every account folder: the record stays.
+  delete b.state.workerItems['worker-session-1']
+  b.state.workerItems['worker-session-2'] = []
+  await m.syncWorkers(chat.id)
+
+  const ids = (): string[] => m.listItems(chat.id).map((i) => i.id)
+  expect(ids()).toEqual(['u-1', 'a-1', 'a-2'])
+  const lines = readFileSync(join(home, 'chats', `${chat.id}.jsonl`), 'utf8').trim().split('\n')
+  expect(lines.filter((l) => l.includes('"u-1"')).length).toBe(1)
+  // A torn last line from a crash is tolerated.
+  appendFileSync(join(home, 'chats', `${chat.id}.jsonl`), '{"kind":"assist')
+  expect(ids()).toEqual(['u-1', 'a-1', 'a-2'])
+})
+
+test('an open chat is served from the Desk file without reading any account folder', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  b.state.workerItems['worker-session-1'] = [{ kind: 'assistant_text', id: 'a-1', ts: 2, text: 'one' }]
+  await m.syncWorkers(chat.id)
+  await m.closeAll()
+
+  // A restarted server: the chat opens from its file; the scan is not called until the background refresh.
+  const b2 = fakeBridge()
+  const m2 = newManager(home, b2)
+  expect(m2.listItems(chat.id).map((i) => i.id)).toEqual(['a-1'])
+  expect(b2.state.workerReads).toBe(0)
+})
+
+test('a sent message shows at once, before the worker has it, and its worker copy replaces it', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const events: ServerEvent[] = []
+  const m = new ChatManager({ home, emit: (e) => events.push(e), settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
+  managers.push(m)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+
+  // The worker takes its time: the message is on screen while the send is still out.
+  let take!: () => void
+  b.bridge.sendToWorker = () => new Promise<void>((r) => (take = r))
+  const sending = m.send(chat.id, `two
+
+paragraphs`)
+  const shown = events.findLast((e) => e.type === 'item.upsert' && e.item.kind === 'user')
+  expect(shown).toMatchObject({ chatId: chat.id, item: { kind: 'user', text: `two
+
+paragraphs` } })
+  expect(m.listItems(chat.id).filter((i) => i.kind === 'user').map((i) => 'text' in i && i.text)).toEqual(['hi', `two
+
+paragraphs`])
+  take()
+  await sending
+
+  // The worker's JSONL now has both messages: each stand-in goes, the worker's copies stay, once.
+  b.state.workerItems['worker-session-1'] = [
+    { kind: 'user', id: 'u-1', ts: Date.now(), text: 'hi' },
+    { kind: 'user', id: 'u-2', ts: Date.now(), text: `two
+
+paragraphs` },
+  ]
+  await m.syncWorkers(chat.id)
+  expect(m.listItems(chat.id).map((i) => i.id)).toEqual(['u-1', 'u-2'])
+  const removed = events.filter((e) => e.type === 'item.removed').map((e) => e.type === 'item.removed' && e.itemId)
+  expect(removed).toEqual(events.filter((e) => e.type === 'item.upsert' && e.item.id.startsWith('desk-sent:')).map((e) => e.type === 'item.upsert' && e.item.id))
+})

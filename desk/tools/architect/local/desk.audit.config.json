@@ -1,0 +1,238 @@
+{
+  "version": 1,
+  "project": "desk",
+  "suite": {
+    "mode": "configured"
+  },
+  "output": {
+    "reportDir": "tmp/architect"
+  },
+  "augments": [
+    "./augment.mjs"
+  ],
+  "checkDirs": [
+    "./checks"
+  ],
+  "groups": {
+    "desk": {
+      "checks": [
+        "circular-deps",
+        "dead-code",
+        "dependency-hygiene",
+        "code-duplication",
+        "oversized-files",
+        "cyclomatic-complexity",
+        "cognitive-complexity",
+        "maintainability-index",
+        "no-deep-relative-imports",
+        "stale-todos"
+      ]
+    }
+  },
+  "checks": {
+    "circular-deps": {
+      "enabled": true,
+      "requires": {},
+      "roots": [
+        "server/src",
+        "web/src",
+        "shared"
+      ],
+      "extensions": [
+        ".ts",
+        ".mjs",
+        ".vue"
+      ],
+      "aliases": {
+        "@/": "web/src/",
+        "@shared/": "shared/"
+      }
+    },
+    "dead-code": {
+      "enabled": true,
+      "requires": {},
+      "orphanFiles": {
+        "roots": [
+          "server/src",
+          "web/src",
+          "shared"
+        ],
+        "extensions": [
+          ".ts",
+          ".mjs",
+          ".vue"
+        ],
+        "entryPatterns": [
+          "^server/src/index.ts$",
+          "^server/src/plugins/[^/]+.ts$",
+          "^server/src/host/chat-host.ts$",
+          "^web/src/main.ts$",
+          "^web/src/dev/sections/[^/]+.vue$"
+        ],
+        "ignorePatterns": [
+          "\\.test\\.",
+          "\\.spec\\.",
+          "__tests__/",
+          "\\.d\\.ts$"
+        ],
+        "aliases": {
+          "@/": "web/src/",
+          "@shared/": "shared/"
+        }
+      },
+      "unusedExports": {
+        "roots": [
+          "server/src",
+          "web/src",
+          "shared"
+        ],
+        "extensions": [
+          ".ts",
+          ".mjs",
+          ".vue"
+        ],
+        "entryPatterns": [
+          "^server/src/index.ts$",
+          "^server/src/plugins/[^/]+.ts$",
+          "^server/src/host/chat-host.ts$",
+          "^web/src/main.ts$",
+          "^web/src/dev/sections/[^/]+.vue$"
+        ],
+        "ignorePatterns": [
+          "\\.test\\.",
+          "\\.spec\\.",
+          "__tests__/",
+          "\\.d\\.ts$"
+        ],
+        "ignoreNames": [
+          "^activate$",
+          "^deactivate$"
+        ],
+        "aliases": {
+          "@/": "web/src/",
+          "@shared/": "shared/"
+        }
+      }
+    },
+    "dependency-hygiene": {
+      "enabled": true,
+      "requires": {},
+      "roots": [
+        "server/src",
+        "web/src",
+        "shared"
+      ],
+      "extensions": [
+        ".ts",
+        ".mjs",
+        ".vue"
+      ],
+      "aliases": {
+        "@/": "web/src/",
+        "@shared/": "shared/"
+      }
+    },
+    "code-duplication": {
+      "enabled": true,
+      "requires": {},
+      "roots": [
+        "server/src",
+        "web/src",
+        "shared"
+      ],
+      "extensions": [
+        ".ts",
+        ".mjs",
+        ".vue"
+      ]
+    },
+    "oversized-files": {
+      "enabled": true,
+      "requires": {},
+      "roots": [
+        "server/src",
+        "web/src",
+        "shared"
+      ],
+      "extensions": [
+        ".ts",
+        ".mjs",
+        ".vue"
+      ],
+      "warnLines": 1200,
+      "errorLines": 2500,
+      "outputPath": "tmp/architect/OVERSIZED_FILES_AUDIT.md"
+    },
+    "cyclomatic-complexity": {
+      "enabled": true,
+      "requires": {},
+      "roots": [
+        "server/src",
+        "web/src",
+        "shared"
+      ],
+      "extensions": [
+        ".ts",
+        ".mjs",
+        ".vue"
+      ]
+    },
+    "cognitive-complexity": {
+      "enabled": true,
+      "requires": {},
+      "roots": [
+        "server/src",
+        "web/src",
+        "shared"
+      ],
+      "extensions": [
+        ".ts",
+        ".mjs",
+        ".vue"
+      ]
+    },
+    "maintainability-index": {
+      "enabled": true,
+      "requires": {},
+      "roots": [
+        "server/src",
+        "web/src",
+        "shared"
+      ],
+      "extensions": [
+        ".ts",
+        ".mjs",
+        ".vue"
+      ]
+    },
+    "no-deep-relative-imports": {
+      "enabled": true,
+      "requires": {},
+      "roots": [
+        "server/src",
+        "web/src",
+        "shared"
+      ],
+      "extensions": [
+        ".ts",
+        ".mjs",
+        ".vue"
+      ],
+      "maxDepth": 3
+    },
+    "stale-todos": {
+      "enabled": true,
+      "requires": {},
+      "roots": [
+        "server/src",
+        "web/src",
+        "shared"
+      ],
+      "extensions": [
+        ".ts",
+        ".mjs",
+        ".vue"
+      ]
+    }
+  }
+}

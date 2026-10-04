@@ -1,0 +1,488 @@
+// Pure sidebar logic (tested in web/test/shell). No Vue, no store.
+import type { ChatStatus, ChatSummary, ExternalSession } from '@shared/protocol'
+import { accountTitle } from '../accounts/format'
+
+/** The folder a chat belongs to, as the real sidebar labels it: the basename, case kept. */
+export function folderLabel(cwd: string): string {
+  const parts = cwd.split(/[\\/]+/).filter(Boolean)
+  return parts[parts.length - 1] ?? cwd
+}
+
+/** Two spellings of one folder ("C:\x\Connections", "c:/x/connections/") share a key. */
+export function folderKey(cwd: string): string {
+  return cwd.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase()
+}
+
+/** The filter menu: Active (not archived, the default), Archived only, or All (Archived as its own group last). */
+export type SidebarFilter = 'active' | 'archived' | 'all'
+export const FILTER_LABELS: Record<SidebarFilter, string> = {
+  active: 'Active',
+  archived: 'Archived',
+  all: 'All'
+}
+
+/** A remembered filter, back from storage: anything but a known one is the default, Active. */
+export function parseFilter(stored: string | null | undefined): SidebarFilter {
+  return stored && Object.hasOwn(FILTER_LABELS, stored) ? (stored as SidebarFilter) : 'active'
+}
+
+/**
+ * The list a chat the current one hides is shown in (a new chat started while Archived or a search is
+ * on): no search, and Active for a live chat, All for an archived one under Active.
+ */
+export function revealChat(chat: Pick<ChatSummary, 'archived'>, filter: SidebarFilter): { query: string; filter: SidebarFilter } {
+  if (chat.archived) return { query: '', filter: filter === 'active' ? 'all' : filter }
+  return { query: '', filter: filter === 'archived' ? 'active' : filter }
+}
+
+/**
+ * What renaming an outside session sends: the new name; null (an emptied field) for the session's own
+ * name again; undefined when nothing changed. The window only sees the shown title (the overlay's once
+ * renamed), so an empty field is the way back to the session's own name.
+ */
+export function externalRename(draft: string, shown: string): string | null | undefined {
+  const title = draft.trim()
+  if (!title) return null
+  return title === shown ? undefined : title
+}
+
+const ACTIVE: ChatStatus[] = ['starting', 'working', 'needs_you']
+
+/** One row of the list: a Hydra Desk chat, or a session running elsewhere (read-only until continued here). */
+export type SidebarEntry =
+  | { kind: 'chat'; id: string; at: number; chat: ChatSummary }
+  | { kind: 'external'; id: string; at: number; session: ExternalSession }
+
+export interface ChatGroup {
+  key: string // the cwd, '' for no folder, 'group:<name>' for a moved-to group, or 'pinned' / 'archived'
+  label: string
+  cwd: string | null // folder for "New session in <folder>"; null for Pinned / Archived / No folder / a moved-to group
+  entries: SidebarEntry[]
+}
+
+export interface SidebarGroups {
+  pinned: ChatGroup | null // hidden when empty, as in the real app
+  folders: ChatGroup[]
+  archived: ChatGroup | null // filter 'all' only, when non-empty
+}
+
+const newestFirst = (a: SidebarEntry, b: SidebarEntry) => b.at - a.at
+export const NO_FOLDER = 'No folder'
+
+/** The marks a row is grouped by, whichever kind it is (an outside session's are Hydra Desk's overlay). */
+const marksOf = (e: SidebarEntry) => (e.kind === 'chat' ? e.chat : e.session)
+const entryCwd = (e: SidebarEntry) => (e.kind === 'chat' ? e.chat.cwd : (e.session.cwd ?? ''))
+
+/**
+ * Active: Pinned first (its own group, newest first), then one group per folder, and one per group a
+ * row was moved to, ordered by its newest row; sessions running elsewhere sit in the same groups,
+ * except CliMayte's own workers and sessions that already are one of our chats. A moved-to group named
+ * like a folder group joins it. Archived: only the archived rows, grouped the same way. All: Active plus
+ * an Archived group last. Search drops rows; a group left empty is dropped.
+ */
+export function groupChats(
+  chats: ChatSummary[],
+  opts: { query?: string; filter?: SidebarFilter; external?: ExternalSession[]; order?: SidebarOrder } = {}
+): SidebarGroups {
+  const query = (opts.query ?? '').trim().toLowerCase()
+  const filter = opts.filter ?? 'active'
+  const ours = new Set(chats.map((c) => c.sessionId).filter(Boolean))
+  const entries: SidebarEntry[] = [
+    ...chats.map((chat): SidebarEntry => ({ kind: 'chat', id: chat.id, at: chat.updatedAt, chat })),
+    ...(opts.external ?? [])
+      .filter((s) => s.source !== 'climayte' && !ours.has(s.id))
+      .map((session): SidebarEntry => ({ kind: 'external', id: session.id, at: session.lastActivityAt ?? 0, session }))
+  ].filter((e) => !query || marksOf(e).title.toLowerCase().includes(query))
+  const live = filter === 'archived' ? [] : entries.filter((e) => !marksOf(e).archived)
+  const archivedRows = filter === 'active' ? [] : entries.filter((e) => marksOf(e).archived)
+
+  const inGroups = filter === 'archived' ? archivedRows : live.filter((e) => !marksOf(e).pinned)
+  const pinned = live.filter((e) => marksOf(e).pinned).sort(newestFirst)
+  // One folder however its path is spelled (Windows paths ignore case and slash direction); the group
+  // shows the path of its newest row exactly as that row has it. Moved-to groups ignore case too.
+  const byFolder = new Map<string, SidebarEntry[]>()
+  const byGroup = new Map<string, SidebarEntry[]>()
+  const add = (map: Map<string, SidebarEntry[]>, key: string, e: SidebarEntry) => map.set(key, [...(map.get(key) ?? []), e])
+  for (const e of inGroups) {
+    const group = marksOf(e).group
+    if (group) add(byGroup, group.toLowerCase(), e)
+    else add(byFolder, folderKey(entryCwd(e)), e)
+  }
+  const groups: ChatGroup[] = [...byFolder.values()].map((list) => {
+    const cwd = entryCwd(list.sort(newestFirst)[0]!)
+    return { key: cwd, label: cwd ? folderLabel(cwd) : NO_FOLDER, cwd: cwd || null, entries: list }
+  })
+  for (const [name, list] of byGroup) {
+    const folder = groups.find((g) => g.cwd && g.label.toLowerCase() === name)
+    if (folder) folder.entries.push(...list)
+    else groups.push({ key: `group:${name}`, label: marksOf(list.sort(newestFirst)[0]!).group!, cwd: null, entries: list })
+  }
+  for (const g of groups) g.entries.sort(newestFirst)
+  groups.sort((a, b) => b.entries[0]!.at - a.entries[0]!.at)
+  const archived = filter === 'all' ? archivedRows.sort(newestFirst) : []
+  // A saved order wins over activity, so sending a message moves nothing (Jacob, 2026-10-04).
+  const order = opts.order
+  const rows = (list: SidebarEntry[]) => (order ? stableOrder(list, (e) => e.id, order.rows) : list)
+  for (const g of groups) g.entries = rows(g.entries)
+
+  return {
+    pinned: pinned.length ? { key: 'pinned', label: 'Pinned', cwd: null, entries: rows(pinned) } : null,
+    folders: order ? stableOrder(groups, groupOrderKey, order.groups) : groups,
+    archived: archived.length ? { key: 'archived', label: 'Archived', cwd: null, entries: archived } : null
+  }
+}
+
+/** The order the sidebar keeps: group keys (groupOrderKey) and row ids, each first to last. */
+export interface SidebarOrder {
+  groups: readonly string[]
+  rows: readonly string[]
+}
+
+/** A group's place in the saved order: its folder however spelled, or its moved-to group key. */
+export function groupOrderKey(g: ChatGroup): string {
+  return g.cwd ? folderKey(g.cwd) : g.key
+}
+
+/** Items in their saved order; ones the order does not know yet go first, as they came (newest first). */
+export function stableOrder<T>(items: T[], keyOf: (t: T) => string, saved: readonly string[]): T[] {
+  const rank = new Map(saved.map((k, i) => [k, i]))
+  const fresh = items.filter((t) => !rank.has(keyOf(t)))
+  const known = items.filter((t) => rank.has(keyOf(t))).sort((a, b) => rank.get(keyOf(a))! - rank.get(keyOf(b))!)
+  return [...fresh, ...known]
+}
+
+/** The saved order after showing `shown` (first to last): what is shown, in place, then the rest as it was. */
+export function mergeOrder(saved: readonly string[], shown: readonly string[]): string[] {
+  const seen = new Set(shown)
+  return [...shown, ...saved.filter((k) => !seen.has(k))]
+}
+
+/** Whether a row shows an attention dot: orange (waiting on you, or background tasks running) or green (done, unread). */
+export function isOrange(e: SidebarEntry): boolean {
+  const tone = (e.kind === 'chat' ? statusGlyph(e.chat) : externalGlyph(e.session)).tone
+  return tone === 'warning' || tone === 'success'
+}
+
+/**
+ * The row order after rows turned orange (Jacob, 2026-10-04: a chat that finishes and needs checking
+ * goes to the top of its project, the latest one first; nothing else moves). `wasOrange` is each row's
+ * state last time; a row it does not know yet is not raised (it joins at the top anyway).
+ */
+export function raiseNewlyOrange(rows: readonly string[], entries: SidebarEntry[], wasOrange: ReadonlyMap<string, boolean>): string[] {
+  const raised = entries.filter((e) => wasOrange.get(e.id) === false && isOrange(e)).map((e) => e.id)
+  if (!raised.length) return [...rows]
+  const set = new Set(raised)
+  return [...raised, ...rows.filter((k) => !set.has(k))]
+}
+
+/** `order` with `key` moved to just before `before` (null: to the end). */
+export function moveInOrder(order: readonly string[], key: string, before: string | null): string[] {
+  const rest = order.filter((k) => k !== key)
+  const at = before === null ? -1 : rest.indexOf(before)
+  return at < 0 ? [...rest, key] : [...rest.slice(0, at), key, ...rest.slice(at)]
+}
+
+/** Every group a row can be moved to, by name: the folder groups and the moved-to ones, each once, A-Z. */
+export function groupChoices(chats: Pick<ChatSummary, 'cwd' | 'group'>[], external: Pick<ExternalSession, 'cwd' | 'group' | 'source'>[] = []): string[] {
+  const names = new Map<string, string>()
+  const add = (name: string) => {
+    if (name && !names.has(name.toLowerCase())) names.set(name.toLowerCase(), name)
+  }
+  for (const r of [...chats, ...external.filter((s) => s.source !== 'climayte')]) {
+    if (r.group) add(r.group)
+    if (r.cwd) add(folderLabel(r.cwd))
+  }
+  return [...names.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+}
+
+/** The dot of a session running elsewhere: the same language, stale is a dim ring, unread (marked here) orange. */
+export function externalGlyph(s: Pick<ExternalSession, 'status' | 'unread'>): StatusGlyph {
+  switch (s.status) {
+    case 'working':
+      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, label: 'Running elsewhere' }
+    case 'needs_you':
+      return { shape: 'dot', tone: 'warning', motion: 'pulse', dim: false, label: 'Needs you elsewhere' }
+    case 'stale':
+      return s.unread
+        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: true, label: 'Unread' }
+        : { shape: 'ring', tone: 'muted', motion: 'none', dim: true, label: 'Stale' }
+    default:
+      return s.unread
+        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: false, label: 'Unread' }
+        : { shape: 'ring', tone: 'muted', motion: 'none', dim: false, label: 'Idle elsewhere' }
+  }
+}
+
+/** "Claude Desktop", "Claude Code CLI", ... for the source glyph's tooltip. */
+export function sourceLabel(source: ExternalSession['source']): string {
+  return { desktop: 'Claude Desktop', cli: 'Claude Code CLI', climayte: 'CliMayte', codex: 'Codex', other: 'Another app' }[source]
+}
+
+/**
+ * The status dot. The real language: idle is a hollow ring, running a solid blinking dot. Hydra Desk
+ * paints every "waiting for you" state orange: a question or permission (pulsing) and a finished turn
+ * not looked at yet (solid; the real app uses blue there). Error is red, a usage limit a pink hollow
+ * ring (it waits for the reset, not for you), closed dims the title.
+ */
+export interface StatusGlyph {
+  shape: 'ring' | 'dot'
+  tone: 'muted' | 'warning' | 'success' | 'danger' | 'limited'
+  motion: 'none' | 'blink' | 'pulse'
+  dim: boolean // the row title is dimmed (closed)
+  label: string // aria-label of the dot, in words
+}
+
+export function statusGlyph(chat: Pick<ChatSummary, 'status' | 'unread'> & { climayteActive?: number; backgroundActive?: number }): StatusGlyph {
+  switch (chat.status) {
+    case 'starting':
+      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, label: 'Starting' }
+    case 'working':
+      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, label: 'Running' }
+    case 'needs_you':
+      return { shape: 'dot', tone: 'warning', motion: 'pulse', dim: false, label: 'Needs you' }
+    case 'error':
+      return { shape: 'dot', tone: 'danger', motion: 'none', dim: false, label: 'Error' }
+    case 'limited':
+      return { shape: 'ring', tone: 'limited', motion: 'none', dim: false, label: 'Usage limit' }
+    case 'closed':
+      return settledGlyph(chat, true, 'Closed')
+    default: // idle, stopped
+      return settledGlyph(chat, false, chat.status === 'stopped' ? 'Stopped' : 'Idle')
+  }
+}
+
+/**
+ * A chat that is not running. Background work still running keeps it orange whether or not it was read
+ * (Jacob, 2026-10-04: it must never look done while its workers run): its CliMayte workers, and its own
+ * background tasks less the long-lived ones (a dev server never ends, so it does not count). Done and
+ * not looked at is green.
+ */
+function settledGlyph(chat: Pick<ChatSummary, 'unread'> & { climayteActive?: number; backgroundActive?: number }, dim: boolean, idle: string): StatusGlyph {
+  if ((chat.climayteActive ?? 0) + (chat.backgroundActive ?? 0) > 0) return { shape: 'dot', tone: 'warning', motion: 'none', dim, label: 'Replied, background tasks running' }
+  return chat.unread
+    ? { shape: 'dot', tone: 'success', motion: 'none', dim, label: 'Done, unread' }
+    : { shape: 'ring', tone: 'muted', motion: 'none', dim, label: idle }
+}
+
+/** The 6px dot's classes for a glyph; every place that draws a status dot uses these. */
+export function glyphDotClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion'>): string {
+  if (g.shape === 'ring') {
+    return g.tone === 'limited'
+      ? 'border-[1.5px] border-[var(--status-limited)]'
+      : 'border border-[color-mix(in_srgb,var(--status-idle)_50%,transparent)]'
+  }
+  const tone = {
+    muted: 'bg-[var(--status-working)]',
+    warning: 'bg-[var(--status-needs-you)]',
+    success: 'bg-[var(--status-done)]',
+    danger: 'bg-[var(--status-error)]',
+    limited: 'bg-[var(--status-limited)]'
+  }[g.tone]
+  const motion = { none: '', blink: ' animate-dot-blink', pulse: ' animate-dot-pulse' }[g.motion]
+  return tone + motion
+}
+
+/** Elapsed time of a running turn, short: "12s", "4m", "1h 5m". */
+export function elapsedLabel(startedAt: number | null, now: number = Date.now()): string {
+  if (startedAt == null) return ''
+  const s = Math.max(0, Math.floor((now - startedAt) / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  return m % 60 ? `${h}h ${m % 60}m` : `${h}h`
+}
+
+/** "14:05" (today) or "Mon 14:05", for a limited chat's reset time. */
+export function resetClock(at: number | null, now: number = Date.now()): string {
+  if (at == null) return ''
+  const d = new Date(at)
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+  return new Date(now).toDateString() === d.toDateString()
+    ? time
+    : `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
+}
+
+/** The row's hover tooltip: status in words, activity, elapsed, account. */
+export function rowTooltip(chat: ChatSummary, now: number = Date.now()): string {
+  const g = statusGlyph(chat)
+  const lines = [chat.title, g.label]
+  if (chat.activity) lines.push(chat.activity)
+  if (chat.status === 'working' && chat.turnStartedAt) lines.push(`Working for ${elapsedLabel(chat.turnStartedAt, now)}`)
+  if (chat.status === 'limited' && chat.limitResetsAt) lines.push(`Resets ${resetClock(chat.limitResetsAt, now)}`)
+  if (chat.status === 'error' && chat.lastError) lines.push(chat.lastError)
+  if (chat.climayteActive > 0) lines.push(`${chat.climayteActive} CliMayte ${chat.climayteActive === 1 ? 'worker' : 'workers'} active`)
+  lines.push(accountTitle(chat.account))
+  return lines.join('\n')
+}
+
+/** What the row menu needs to know of a row: one of our chats, or a session run outside (marked here). */
+export interface RowState {
+  outside: boolean
+  stoppable: boolean // a turn is running here
+  pinned: boolean
+  archived: boolean
+  unread: boolean
+  group: string | null
+  cwd: string
+  sessionId: string | null // null until the chat's session exists
+  claudeSession: boolean // `claude --resume` can open it
+  forkable: boolean
+}
+
+export function chatRow(chat: ChatSummary): RowState {
+  return {
+    outside: false,
+    stoppable: ACTIVE.includes(chat.status),
+    pinned: chat.pinned,
+    archived: chat.archived,
+    unread: chat.unread,
+    group: chat.group,
+    cwd: chat.cwd,
+    sessionId: chat.sessionId,
+    claudeSession: true,
+    forkable: Boolean(chat.sessionId ?? chat.forkedFrom)
+  }
+}
+
+export function externalRow(s: ExternalSession): RowState {
+  const claude = s.source === 'desktop' || s.source === 'cli'
+  return {
+    outside: true,
+    stoppable: false,
+    pinned: s.pinned,
+    archived: s.archived,
+    unread: s.unread,
+    group: s.group,
+    cwd: s.cwd ?? '',
+    sessionId: s.id,
+    claudeSession: claude,
+    forkable: claude
+  }
+}
+
+/**
+ * The row menu, as the real app's (three dots and right-click share it): Open in ›, Pin P, Mark as
+ * unread U, Rename R, Fork F, Move to group ›, Archive A, Delete D. `shortcut` is the letter that runs
+ * the item while the menu is open; `separator` draws a 1px rule; an entry with `items` is a submenu.
+ */
+export type RowAction =
+  | 'reveal'
+  | 'copyResume'
+  | 'copySessionId'
+  | 'stop'
+  | 'pin'
+  | 'unpin'
+  | 'markUnread'
+  | 'markRead'
+  | 'rename'
+  | 'fork'
+  | 'moveTo'
+  | 'newGroup'
+  | 'removeFromGroup'
+  | 'archive'
+  | 'unarchive'
+  | 'delete'
+export interface RowMenuItem {
+  action: RowAction
+  label: string // for moveTo, the group's name
+  shortcut?: string
+  danger?: boolean
+  disabled?: boolean
+  checked?: boolean
+  title?: string // the native tooltip
+}
+export type RowMenuEntry = RowMenuItem | 'separator' | { label: string; items: (RowMenuItem | 'separator')[] }
+
+const OUTSIDE_ARCHIVE = 'Hides it in Hydra Desk. Sessions run outside are never deleted here: their files belong to the app that ran them.'
+
+export function rowMenu(row: RowState, groups: string[] = []): RowMenuEntry[] {
+  const current = (row.group ?? folderLabel(row.cwd)).toLowerCase()
+  const moveTo: (RowMenuItem | 'separator')[] = groups.map((g) => ({ action: 'moveTo', label: g, checked: g.toLowerCase() === current }))
+  if (moveTo.length) moveTo.push('separator')
+  moveTo.push({ action: 'newGroup', label: 'New group…' })
+  if (row.group) moveTo.push({ action: 'removeFromGroup', label: 'Remove from group' })
+
+  const out: RowMenuEntry[] = [
+    {
+      label: 'Open in',
+      items: [
+        { action: 'reveal', label: 'File Explorer', disabled: !row.cwd },
+        { action: 'copyResume', label: 'Copy resume command', disabled: !row.sessionId || !row.claudeSession },
+        { action: 'copySessionId', label: 'Copy session ID', disabled: !row.sessionId }
+      ]
+    },
+    'separator'
+  ]
+  if (row.stoppable) out.push({ action: 'stop', label: 'Stop' })
+  out.push(row.pinned ? { action: 'unpin', label: 'Unpin', shortcut: 'P' } : { action: 'pin', label: 'Pin', shortcut: 'P' })
+  out.push(row.unread ? { action: 'markRead', label: 'Mark as read', shortcut: 'U' } : { action: 'markUnread', label: 'Mark as unread', shortcut: 'U' })
+  out.push({ action: 'rename', label: 'Rename', shortcut: 'R' })
+  out.push({ action: 'fork', label: 'Fork', shortcut: 'F', disabled: !row.forkable })
+  out.push('separator', { label: 'Move to group', items: moveTo }, 'separator')
+  out.push(
+    row.archived
+      ? { action: 'unarchive', label: 'Unarchive', shortcut: 'A' }
+      : { action: 'archive', label: 'Archive', shortcut: 'A', ...(row.outside ? { title: OUTSIDE_ARCHIVE } : {}) }
+  )
+  if (!row.outside) out.push({ action: 'delete', label: 'Delete', shortcut: 'D', danger: true })
+  return out
+}
+
+/** The item a key press runs while the menu is open (the letter hints), or null. */
+export function shortcutItem(entries: RowMenuEntry[], key: string): RowMenuItem | null {
+  if (key.length !== 1) return null
+  const letter = key.toUpperCase()
+  for (const e of entries) if (e !== 'separator' && !('items' in e) && e.shortcut === letter && !e.disabled) return e
+  return null
+}
+
+/** Moving to a folder group is moving back to the row's own folder (null) when it is that folder. */
+export function moveTarget(row: Pick<RowState, 'cwd'>, name: string): string | null {
+  return row.cwd && folderLabel(row.cwd).toLowerCase() === name.toLowerCase() ? null : name
+}
+
+/** The patch a menu item stands for (a chat's or an outside session's marks); null for the rest. */
+export function rowPatch(item: RowMenuItem, row: Pick<RowState, 'cwd'>): { pinned?: boolean; archived?: boolean; unread?: boolean; group?: string | null } | null {
+  switch (item.action) {
+    case 'pin':
+      return { pinned: true }
+    case 'unpin':
+      return { pinned: false }
+    case 'markUnread':
+      return { unread: true }
+    case 'markRead':
+      return { unread: false }
+    case 'archive':
+      return { archived: true }
+    case 'unarchive':
+      return { archived: false }
+    case 'moveTo':
+      return { group: moveTarget(row, item.label) }
+    case 'removeFromGroup':
+      return { group: null }
+    default:
+      return null
+  }
+}
+
+/** What "Copy resume command" puts on the clipboard. */
+export const resumeCommand = (sessionId: string): string => `claude --resume ${sessionId}`
+
+/** Footer account control: initial, name, plan (the real shows "E  eek · Max"). */
+export function accountFace(
+  defaultAccountId: string,
+  accounts: { id: string; label: string; plan: string | null }[]
+): { initial: string; name: string; plan: string | null } {
+  const acc = accounts.find((a) => a.id === defaultAccountId)
+  if (!acc) return { initial: 'A', name: 'Auto', plan: accounts.length ? `${accounts.length} accounts` : null }
+  // "#68 eek (Max 20x)" -> "eek"; emails never shown.
+  const name =
+    acc.label
+      .replace(/[^\s<>()@]+@[^\s<>()@]+\.[^\s<>()@]+/g, '')
+      .replace(/\([^)]*\)/g, '')
+      .replace(/^#\d+\s*/, '')
+      .trim() || (acc.id === 'default' ? 'Default' : `#${acc.id}`)
+  // The real footer names the plan family only: an eek on Max 20x reads "eek · Max".
+  return { initial: name[0]!.toUpperCase(), name, plan: acc.plan ? acc.plan.split(/\s+/)[0]! : null }
+}

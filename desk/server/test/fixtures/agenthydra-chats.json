@@ -1,0 +1,65 @@
+{
+  "rows": [
+    {
+      "instance": "Claude-1",
+      "chatId": "local_00000000-0000-4000-8000-000000000900",
+      "sessionId": "00000000-0000-4000-8000-000000000002",
+      "title": "Desktop chat 1",
+      "archived": false,
+      "isArchived": false,
+      "lastActivityAt": "2026-10-03T23:23:36.260Z",
+      "cwd": "C:\\Users\\me\\Desktop\\Project\\beta",
+      "effort": "xhigh",
+      "ultracode": true,
+      "live": true,
+      "livePid": 40000,
+      "done": false,
+      "staleLogin": false
+    },
+    {
+      "instance": "Claude-2",
+      "chatId": "local_00000000-0000-4000-8000-000000000901",
+      "sessionId": "00000000-0000-4000-8000-000000000003",
+      "title": "Desktop chat 2",
+      "archived": false,
+      "isArchived": false,
+      "lastActivityAt": "2026-10-03T22:57:22.493Z",
+      "cwd": "C:\\Users\\me\\Desktop\\Project\\gamma",
+      "effort": "max",
+      "ultracode": false,
+      "live": true,
+      "livePid": 40001,
+      "done": false,
+      "staleLogin": false
+    },
+    {
+      "instance": "Claude-3",
+      "chatId": "local_00000000-0000-4000-8000-000000000902",
+      "sessionId": "00000000-0000-4000-8000-000000000001",
+      "title": "Desktop chat 3",
+      "archived": false,
+      "isArchived": false,
+      "lastActivityAt": "2026-10-03T22:56:09.079Z",
+      "cwd": "C:\\Users\\me\\Desktop\\Project\\alpha",
+      "effort": "xhigh",
+      "ultracode": true,
+      "live": true,
+      "livePid": 40002,
+      "done": false,
+      "staleLogin": false
+    }
+  ],
+  "total": 3,
+  "counts": {
+    "all": 3,
+    "unarchived": 3,
+    "archived": 0,
+    "live": 3,
+    "staleLogin": 0
+  },
+  "instances": [
+    "Claude-1",
+    "Claude-2",
+    "Claude-3"
+  ]
+}

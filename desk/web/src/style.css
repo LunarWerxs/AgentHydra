@@ -1,0 +1,264 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Hydra Desk is dark only: `dark:` utilities follow the `dark` class index.html puts on <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Token layer. Every value is MEASURED from the real Claude Desktop (docs/reference/real/DESIGN.md and
+ * tokens.json, dark theme). One variable per row; nothing here is guessed.
+ */
+:root {
+  /* Surfaces */
+  --bg-sidebar: #111111;
+  --bg-page: #151515;
+  --bg-panel: #1a1a19;
+  --bg-deepest: #0b0b0b;
+  --bg-popover: #20201f; /* popover, composer box, tooltip */
+
+  /* Text */
+  --text: #f0efec;
+  --text-2: #c3c2b7;
+  --text-muted: #898781;
+  --text-shortcut: #a5a49a;
+
+  /* Borders and white fills */
+  --border: #ffffff1a;
+  --border-strong: #ffffff33;
+  --border-stronger: #ffffff66;
+  --fill-hover: #ffffff13;
+  --fill-selected: #ffffff26;
+  --fill-5: #ffffff0d; /* user bubble, repo strip, mode radiogroup, inline code */
+
+  /* Accent (blue) */
+  --accent: #2a78d6;
+  --accent-hover: #3987e5;
+  --accent-text: #6da7ec;
+  --accent-bg: #032042;
+
+  /* Brand (clay) */
+  --brand: #c6613f;
+  --brand-hover: #d97757;
+
+  /* Semantic */
+  --success: #009300;
+  --success-text: #0ca30c;
+  --success-bg: #11260f;
+  --warning: #fab219;
+  --warning-text: #db9300;
+  --warning-bg: #311a00;
+  --danger: #d03b3b;
+  --danger-text: #ec7e7e;
+  --danger-bg: #3c0e0e;
+
+  /* Code and git */
+  --code-text: #ec7e7e;
+  --git-add: #32d74b;
+  --git-del: #ff2c56;
+  --git-mod: #ffd014;
+  --git-merged: #b796ff;
+
+  /* Focus and scrollbar */
+  --focus-ring: inset 0 0 0 1px #151515, 0 0 0 1px #2a78d6, 0 0 6px 1px #184f9599;
+  --scrollbar-thumb: rgba(225, 224, 217, 0.35);
+
+  /* Motion */
+  --dur-fast: 120ms;
+  --dur-slow: 300ms;
+
+  /*
+   * Hydra Desk status colors. The real sidebar dot language: idle is a 1px ring, working is a solid
+   * dot that blinks. Everything waiting for the owner (needs you, a finished turn unread) is the
+   * warning orange (the real app paints unread blue); error is the danger red. A usage-limited chat
+   * waits for a reset, not for him: its own soft red-pink, a ring, with a text tone for "resets ...".
+   */
+  --status-needs-you: var(--warning);
+  --status-done: var(--success-text);
+  --status-error: var(--danger);
+  --status-limited: #e5689a;
+  --status-limited-text: #f08fb6;
+  --status-working: var(--text-muted);
+  --status-idle: var(--text-muted);
+}
+
+/* Radii, shadows, easing, fonts: theme variables so Tailwind also emits rounded-10, shadow-menu, font-sans ... */
+@theme {
+  --radius-5: 5px; /* small button */
+  --radius-6: 6px; /* row, button */
+  --radius-7: 7px; /* chrome button */
+  --radius-8: 8px;
+  --radius-10: 10px; /* bubble, menu, strip */
+  --radius-12: 12px; /* composer */
+  --radius-22: 22px; /* popover dialog */
+
+  --shadow-menu: 0 8px 24px #00000052, 0 2px 6px #0003;
+  --shadow-composer: inset 0 0 0 1px #ffffff1a, 0 4px 20px #00000009;
+  --shadow-popover: inset 0 0 0 1px #ffffff1a, 0 8px 24px #000000;
+
+  --ease-default: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-snap: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.165, 0.84, 0.44, 1);
+
+  /* anthropic-sans / anthropic-mono are proprietary and not copied: the real app falls back to these on Windows. */
+  --font-sans: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --animate-dot-blink: dframe-dot-blink 1.2s ease-in-out infinite;
+  --animate-dot-pulse: dframe-dot-pulse 2s infinite;
+}
+
+/* Tailwind color utilities (bg-bg-page, text-text-muted, bg-fill-hover, text-danger-text ...) read the :root variables. */
+@theme inline {
+  --color-bg-sidebar: var(--bg-sidebar);
+  --color-bg-page: var(--bg-page);
+  --color-bg-panel: var(--bg-panel);
+  --color-bg-deepest: var(--bg-deepest);
+  --color-bg-popover: var(--bg-popover);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-muted: var(--text-muted);
+  --color-text-shortcut: var(--text-shortcut);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-border-stronger: var(--border-stronger);
+  --color-fill-hover: var(--fill-hover);
+  --color-fill-selected: var(--fill-selected);
+  --color-fill-5: var(--fill-5);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-text: var(--accent-text);
+  --color-accent-bg: var(--accent-bg);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-success: var(--success);
+  --color-success-text: var(--success-text);
+  --color-success-bg: var(--success-bg);
+  --color-warning: var(--warning);
+  --color-warning-text: var(--warning-text);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger: var(--danger);
+  --color-danger-text: var(--danger-text);
+  --color-danger-bg: var(--danger-bg);
+  --color-code-text: var(--code-text);
+  --color-git-add: var(--git-add);
+  --color-git-del: var(--git-del);
+  --color-git-mod: var(--git-mod);
+  --color-git-merged: var(--git-merged);
+}
+
+/* Keyframes, verbatim from tokens.json. */
+@keyframes dframe-dot-blink { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+@keyframes dframe-dot-pulse { 0%, 5% { opacity: 0.3; animation-timing-function: cubic-bezier(0.165, 0.84, 0.44, 1); } 15%, 25% { opacity: 1; animation-timing-function: cubic-bezier(0.165, 0.84, 0.44, 1); } 65%, 100% { opacity: 0.3; } }
+@keyframes epitaxy-thinking-shimmer { 0%, 100% { opacity: 1; } 50% { opacity: 0.75; } }
+@keyframes cds-shimmer { 0% { transform: translate(-100%); } 100% { transform: translate(100%); } }
+@keyframes cds-shimmer-text-shine { 0%, 15% { background-position: 83.333% 0px; animation-timing-function: cubic-bezier(0.714, 0.121, 0.211, 0.888); } 85%, 100% { background-position: 16.667% 0px; } }
+@keyframes cds-shimmer-text-band { 0%, 15% { animation-timing-function: cubic-bezier(0.714, 0.121, 0.211, 0.888); translate: -62.5%; } 85%, 100% { translate: -12.5%; } }
+@keyframes codeSpinnerSpin { 0% { transform: translateY(0px); } 10% { transform: translateY(-2em); } 20% { transform: translateY(-4em); } 30% { transform: translateY(-6em); } 40% { transform: translateY(-8em); } 50% { transform: translateY(-8em); } 60% { transform: translateY(-6em); } 70% { transform: translateY(-4em); } 80% { transform: translateY(-2em); } 90% { transform: translateY(0px); } }
+@keyframes spin { 100% { transform: rotate(360deg); } }
+@keyframes code-user-bubble-enter { 0% { opacity: 0; transform: scale(0.92) translateY(6px); } 100% { opacity: 1; transform: none; } }
+@keyframes epitaxy-approval-inline-enter { 0% { opacity: 0; } 100% { opacity: 1; } }
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #app {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 20px; /* body 14/20 */
+    letter-spacing: normal;
+    background: var(--bg-page);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
+
+  code,
+  pre,
+  kbd,
+  samp {
+    font-family: var(--font-mono);
+    font-feature-settings: "calt" 0, "liga" 0;
+  }
+
+  /* Times and counts. */
+  time,
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Focus ring (low specificity so a component's own ring still wins). */
+  :where(:focus-visible):not(textarea, input) {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  /* Thin scrollbars everywhere; no custom ::selection (native). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 4px;
+  }
+
+  /* Icon stroke (lib/icons.ts ICON_STROKE). */
+  .lucide {
+    stroke-width: 1.5;
+  }
+
+  /* Code blocks and tables: 8px scrollbar on a 5% track. */
+  .code-scroll {
+    scrollbar-width: auto;
+    scrollbar-color: var(--scrollbar-thumb) var(--fill-5);
+  }
+  .code-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .code-scroll::-webkit-scrollbar-track {
+    background: var(--fill-5);
+  }
+}
+
+/* Composer, menus and panes (composer fidelity worker; values from docs/reference/real tokens.json). */
+:root {
+  --fill-secondary: #ffffff1a; /* button fill (Create PR, counts chip) */
+  --fill-secondary-hover: #ffffff24;
+  --pro: #7161e0; /* effort name at the top stop */
+  --pro-hover: #8173e3;
+  --slider-track: #ffffff1a;
+  --slider-fill: #ffffff59;
+  --slider-handle: #ffffff;
+  --slider-stop: #ffffff40;
+  --shadow-menu-ringed: inset 0 0 0 1px #ffffff1a, 0 8px 24px #00000052, 0 2px 6px #0003; /* menu ring + shadow */
+  --shadow-composer-focus: inset 0 0 0 1px #ffffff33, 0 4px 20px #00000009; /* not measured: ring goes border-strong */
+  --ease-composer: cubic-bezier(0.4, 0, 0.2, 1);
+  --radius-4: 4px; /* badges (Recommended, Default, counts) */
+}
+
+/* Composer polish: the send glyph while the box shows a suggested next prompt (user/window.webp). */
+:root {
+  --send-suggested: #737371;
+}

@@ -1,0 +1,345 @@
+[
+  {
+    "id": "w-00000001",
+    "group": "g-abc123",
+    "title": "Worker task 1",
+    "cwd": "C:\\Users\\me\\Desktop\\Project\\alpha",
+    "prompt": "Build the thing. Done means the tests pass.",
+    "pending": [],
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "kind": "debug",
+    "priority": 0,
+    "accounts": null,
+    "status": "running",
+    "sessionId": "00000000-0000-4000-8000-000000000500",
+    "accountId": "cli-1",
+    "attempts": [
+      {
+        "account": {
+          "id": "cli-1",
+          "num": 60,
+          "name": "acct1"
+        },
+        "outcome": "running",
+        "notice": null,
+        "requested": {
+          "model": "claude-opus-5-5",
+          "effort": "medium"
+        },
+        "model": "claude-opus-5-5",
+        "costUsd": null,
+        "turns": null,
+        "pct": null,
+        "rereadPct": null
+      }
+    ],
+    "result": null,
+    "results": [
+      "Built it. Proof: bun test exits 0."
+    ],
+    "error": null,
+    "lastActivity": "Bash bun test ./server/test",
+    "costUsd": 0,
+    "turns": 0,
+    "moves": 0,
+    "retries": 0,
+    "notBefore": null,
+    "createdAt": 1791069626312,
+    "updatedAt": 1791069687692,
+    "origin": {
+      "kind": "chat",
+      "sessionId": "00000000-0000-4000-8000-000000000001",
+      "home": "C:\\Users\\me\\.claude",
+      "transcript": null,
+      "how": "binding"
+    },
+    "message": "Build the thing.",
+    "account": "#60 acct1",
+    "ranS": 198,
+    "reportedModel": "claude-opus-5-5",
+    "used": {
+      "pct": 0,
+      "workPct": 0,
+      "rereadPct": 0
+    },
+    "judged": false
+  },
+  {
+    "id": "w-00000002",
+    "group": "g-abc123",
+    "title": "Worker task 2",
+    "cwd": "C:\\Users\\me\\Desktop\\Project\\beta",
+    "prompt": "Build the thing. Done means the tests pass.",
+    "pending": [],
+    "model": "claude-sonnet-5-5",
+    "effort": "low",
+    "kind": "manage",
+    "auto": true,
+    "priority": 0,
+    "accounts": null,
+    "status": "waiting",
+    "sessionId": "00000000-0000-4000-8000-000000000501",
+    "accountId": "cli-2",
+    "attempts": [
+      {
+        "account": {
+          "id": "cli-2",
+          "num": 61,
+          "name": "acct2"
+        },
+        "outcome": "done",
+        "notice": null,
+        "requested": {
+          "model": "claude-sonnet-5-5",
+          "effort": "low"
+        },
+        "model": "claude-sonnet-5-5",
+        "tokens": {
+          "input": 8,
+          "output": 429,
+          "cacheRead": 99598,
+          "cacheWrite": 15874
+        },
+        "costUsd": 0.0877,
+        "turns": 4,
+        "pct": 0.3,
+        "rereadPct": 0
+      },
+      {
+        "account": {
+          "id": "cli-2",
+          "num": 61,
+          "name": "acct2"
+        },
+        "outcome": "done",
+        "notice": null,
+        "requested": {
+          "model": "claude-sonnet-5-5",
+          "effort": "low"
+        },
+        "model": "claude-sonnet-5-5",
+        "tokens": {
+          "input": 6,
+          "output": 256,
+          "cacheRead": 93624,
+          "cacheWrite": 2922
+        },
+        "costUsd": 0.033,
+        "turns": 3,
+        "pct": 0.1,
+        "rereadPct": 0,
+        "because": {
+          "cause": "follow-up",
+          "detail": null
+        }
+      }
+    ],
+    "result": "Built it. Proof: bun test exits 0.",
+    "results": [
+      "Built it. Proof: bun test exits 0."
+    ],
+    "error": "All accounts are at their limit.",
+    "lastActivity": "Bash bun test ./server/test",
+    "costUsd": 0.12070640000000002,
+    "turns": 8,
+    "moves": 0,
+    "retries": 0,
+    "notBefore": null,
+    "createdAt": 1791068449989,
+    "updatedAt": 1791069563781,
+    "origin": {
+      "kind": "chat",
+      "sessionId": "00000000-0000-4000-8000-000000000001",
+      "home": "C:\\Users\\me\\.claude",
+      "transcript": null,
+      "how": "binding"
+    },
+    "wave": "wv-498eeb",
+    "message": "Build the thing.",
+    "tokens": {
+      "input": 14,
+      "output": 685,
+      "cacheRead": 193222,
+      "cacheWrite": 18796
+    },
+    "hold": "wave",
+    "waitUntil": null,
+    "account": "#61 acct2",
+    "ranS": 35,
+    "reportedModel": "claude-sonnet-5-5",
+    "used": {
+      "pct": 0.4,
+      "workPct": 0.4,
+      "rereadPct": 0
+    },
+    "judged": false
+  },
+  {
+    "id": "w-00000003",
+    "group": "g-abc123",
+    "title": "Worker task 3",
+    "cwd": "C:\\Users\\me\\Desktop\\Project\\gamma",
+    "prompt": "Build the thing. Done means the tests pass.",
+    "pending": [],
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "kind": "code",
+    "auto": true,
+    "check": "bun test",
+    "priority": 0,
+    "accounts": null,
+    "status": "done",
+    "sessionId": "00000000-0000-4000-8000-000000000502",
+    "accountId": "cli-3",
+    "attempts": [
+      {
+        "account": {
+          "id": "cli-3",
+          "num": 62,
+          "name": "acct3"
+        },
+        "outcome": "done",
+        "notice": null,
+        "requested": {
+          "model": "claude-opus-5-5",
+          "effort": "medium"
+        },
+        "model": "claude-opus-5-5",
+        "tokens": {
+          "input": 56,
+          "output": 24323,
+          "cacheRead": 1905603,
+          "cacheWrite": 148694
+        },
+        "costUsd": 1.6113,
+        "turns": 28,
+        "pct": 8.9,
+        "rereadPct": 0
+      }
+    ],
+    "result": "Built it. Proof: bun test exits 0.",
+    "results": [
+      "Built it. Proof: bun test exits 0."
+    ],
+    "error": null,
+    "lastActivity": "Bash bun test ./server/test",
+    "costUsd": 1.6112746,
+    "turns": 35,
+    "moves": 0,
+    "retries": 0,
+    "notBefore": null,
+    "createdAt": 1791068470585,
+    "updatedAt": 1791069551482,
+    "wave": "wv-498eeb",
+    "message": "Build the thing.",
+    "tokens": {
+      "input": 56,
+      "output": 24323,
+      "cacheRead": 1905603,
+      "cacheWrite": 148694
+    },
+    "checkRuns": 1,
+    "verdicts": [
+      {
+        "at": 1791069551478,
+        "verdict": "pass",
+        "note": "checked",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "reread": 0,
+        "by": "wave",
+        "provisional": true,
+        "span": 1791068470609,
+        "pct": 8.9
+      }
+    ],
+    "account": "#62 acct3",
+    "ranS": 1074,
+    "reportedModel": "claude-opus-5-5",
+    "used": {
+      "pct": 8.9,
+      "workPct": 8.9,
+      "rereadPct": 0
+    },
+    "judged": true
+  },
+  {
+    "id": "w-00000004",
+    "group": "g-abc123",
+    "title": "Worker task 4",
+    "cwd": "C:\\Users\\me\\Desktop\\Project\\alpha",
+    "prompt": "Build the thing. Done means the tests pass.",
+    "pending": [],
+    "model": "claude-haiku-4-5",
+    "effort": null,
+    "kind": "code",
+    "auto": true,
+    "priority": 0,
+    "accounts": null,
+    "status": "cancelled",
+    "sessionId": "00000000-0000-4000-8000-000000000503",
+    "accountId": "cli-4",
+    "attempts": [
+      {
+        "account": {
+          "id": "cli-4",
+          "num": 63,
+          "name": "acct4"
+        },
+        "outcome": "cancelled",
+        "notice": null,
+        "requested": {
+          "model": "claude-haiku-4-5",
+          "effort": null
+        },
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "costUsd": null,
+        "turns": null,
+        "pct": 0,
+        "rereadPct": null
+      }
+    ],
+    "result": null,
+    "results": [
+      "Built it. Proof: bun test exits 0."
+    ],
+    "error": null,
+    "lastActivity": null,
+    "costUsd": 0,
+    "turns": 0,
+    "moves": 0,
+    "retries": 0,
+    "notBefore": null,
+    "createdAt": 1791068849439,
+    "updatedAt": 1791068866540,
+    "origin": {
+      "kind": "chat",
+      "sessionId": "00000000-0000-4000-8000-000000000001",
+      "home": "C:\\Users\\me\\.claude",
+      "transcript": null,
+      "how": "binding"
+    },
+    "message": "Build the thing.",
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "account": "#63 acct4",
+    "ranS": 17,
+    "reportedModel": null,
+    "used": {
+      "pct": 0,
+      "workPct": 0,
+      "rereadPct": 0
+    },
+    "judged": false
+  }
+]

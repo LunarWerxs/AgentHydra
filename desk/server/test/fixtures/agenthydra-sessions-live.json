@@ -1,0 +1,35 @@
+{
+  "count": 3,
+  "sessions": [
+    {
+      "pid": 40000,
+      "sessionId": "00000000-0000-4000-8000-000000000001",
+      "cwd": "C:\\Users\\me\\Desktop\\Project\\alpha",
+      "name": "peer-1",
+      "startedAt": 1791068134428,
+      "transcriptPath": "C:\\Users\\me\\.claude\\projects\\p0\\00000000-0000-4000-8000-000000000001.jsonl",
+      "version": "2.1.286",
+      "hostSessionId": "local_00000000-0000-4000-8000-000000000900"
+    },
+    {
+      "pid": 40001,
+      "sessionId": "00000000-0000-4000-8000-000000000002",
+      "cwd": "C:\\Users\\me\\Desktop\\Project\\beta",
+      "name": "peer-2",
+      "startedAt": 1791068144613,
+      "transcriptPath": "C:\\Users\\me\\.claude\\projects\\p1\\00000000-0000-4000-8000-000000000002.jsonl",
+      "version": "2.1.286",
+      "hostSessionId": "local_00000000-0000-4000-8000-000000000901"
+    },
+    {
+      "pid": 40002,
+      "sessionId": "00000000-0000-4000-8000-000000000003",
+      "cwd": "C:\\Users\\me\\Desktop\\Project\\gamma",
+      "name": "peer-3",
+      "startedAt": 1791068123575,
+      "transcriptPath": "C:\\Users\\me\\.claude\\projects\\p2\\00000000-0000-4000-8000-000000000003.jsonl",
+      "version": "2.1.286",
+      "hostSessionId": "local_00000000-0000-4000-8000-000000000902"
+    }
+  ]
+}

@@ -1,0 +1,792 @@
+import { ref, computed, reactive, watch } from 'vue'
+import type {
+  ChatSummary,
+  TranscriptItem,
+  ExternalSession,
+  CliMayteWorker,
+  AccountInfo,
+  AccountRef,
+  DeskSettings,
+  ServerEvent,
+  CreateChatRequest,
+  SendMessageRequest,
+  PermissionDecision,
+  QuestionAnswer,
+  PlanDecision,
+  ChatPatch,
+  ImportSessionRequest,
+  SearchHit,
+  SessionMeta,
+  SessionMetaPatch,
+  ElicitationAnswer,
+  QueueAddRequest,
+  QueueItem,
+  QueuePatch,
+  QueueReorder,
+  QueueSettingsPatch,
+  QueueState
+} from '@shared/protocol'
+import { openBackgroundTasks } from '@/components/tasks/api'
+import { movedOrder } from '@/components/composer/queue'
+import { SEARCH_LIMIT, SEARCH_MIN_CHARS, SearchError } from '@/components/sidebar/search'
+import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId } from '@/components/external/logic'
+import { saveDraft } from '@/components/composer/logic'
+import { reloadIfStale, watchBundle } from '@/lib/stale-bundle'
+import { rememberView, restoreView } from '@/lib/view-memory'
+import { wantsDesktopNotice } from './notify'
+
+const BASE_URL = '/api'
+
+function getWsUrl() {
+  if (typeof window === 'undefined') return 'ws://localhost/ws'
+  return location.protocol === 'https:' ? 'wss' : 'ws' + '://' + location.host + '/ws'
+}
+
+interface DeskStoreState {
+  chats: ChatSummary[]
+  itemsByChat: Map<string, TranscriptItem[]>
+  external: ExternalSession[]
+  workers: CliMayteWorker[]
+  accounts: AccountInfo[]
+  settings: DeskSettings | null
+  connected: boolean
+  selected:
+    | { kind: 'chat'; id: string }
+    | { kind: 'new'; cwd?: string }
+    | { kind: 'external'; id: string }
+    | { kind: 'elsewhere' }
+    | { kind: 'settings' }
+}
+
+let ws: WebSocket | null = null
+let wsReconnectDelay = 1000
+const maxReconnectDelay = 30000
+let wsReconnectTimeout: ReturnType<typeof setTimeout> | null = null
+
+const store = reactive<DeskStoreState>({
+  chats: [],
+  itemsByChat: new Map(),
+  external: [],
+  workers: [],
+  accounts: [],
+  settings: null,
+  connected: false,
+  // A reload onto a new build comes back to the chat or screen it left.
+  selected: restoreView({ kind: 'chat', id: '' })
+})
+watch(
+  () => store.selected,
+  (view) => rememberView(view),
+  { deep: true }
+)
+
+/** A request; a refusal rejects with the server's own sentence (its { error } body), else the status. */
+async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(BASE_URL + path, init)
+  if (!res.ok) {
+    const error = ((await res.json().catch(() => null)) as { error?: unknown } | null)?.error
+    throw new Error(typeof error === 'string' && error ? error : `${res.status} ${res.statusText}`)
+  }
+  return res.json()
+}
+
+function connectWebSocket() {
+  if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) {
+    return
+  }
+
+  ws = new WebSocket(getWsUrl())
+
+  ws.onopen = () => {
+    store.connected = true
+    wsReconnectDelay = 1000
+  }
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data) as ServerEvent
+    handleServerEvent(msg)
+  }
+
+  ws.onerror = () => {
+    store.connected = false
+  }
+
+  ws.onclose = () => {
+    store.connected = false
+    scheduleReconnect()
+  }
+}
+
+function scheduleReconnect() {
+  if (wsReconnectTimeout) clearTimeout(wsReconnectTimeout)
+  wsReconnectTimeout = setTimeout(() => {
+    connectWebSocket()
+  }, wsReconnectDelay)
+  wsReconnectDelay = Math.min(wsReconnectDelay * 2, maxReconnectDelay)
+}
+
+/** Items streamed for chats whose history is not loaded yet; the load takes them in (keepNewer). */
+const unloadedUpserts = new Map<string, TranscriptItem[]>()
+
+/** The chat's history with what streamed before and while it was fetched, now its whole cached transcript. */
+function landItems(id: string, snapshot: TranscriptItem[]): TranscriptItem[] {
+  const since = [...(unloadedUpserts.get(id) ?? []), ...(store.itemsByChat.get(id) ?? [])]
+  unloadedUpserts.delete(id)
+  const items = keepNewer(withWindowNotes(id, snapshot), since)
+  store.itemsByChat.set(id, items)
+  return items
+}
+
+function handleServerEvent(event: ServerEvent) {
+  switch (event.type) {
+    case 'hello':
+      store.chats = event.chats
+      store.settings = event.settings
+      // Full reload: clear items cache
+      store.itemsByChat.clear()
+      unloadedUpserts.clear()
+      reloadOpenChat()
+      // Whole, whatever its rev: a restarted server may count afresh. A server without a queue sends none.
+      queueState.value = event.queue ?? null
+      void reloadIfStale()
+      break
+
+    case 'queue.update':
+      takeQueue(event.queue)
+      break
+
+    case 'chat.upsert':
+      const idx = store.chats.findIndex((c) => c.id === event.chat.id)
+      if (idx >= 0) {
+        store.chats[idx] = event.chat
+      } else {
+        store.chats.push(event.chat)
+      }
+      break
+
+    case 'chat.removed':
+      store.chats = store.chats.filter((c) => c.id !== event.chatId)
+      store.itemsByChat.delete(event.chatId)
+      unloadedUpserts.delete(event.chatId)
+      break
+
+    case 'item.upsert': {
+      // A chat whose history is not loaded keeps what streams aside: put in the cache, it would stand for
+      // the whole transcript and opening the chat would never fetch its history.
+      let items = store.itemsByChat.get(event.chatId)
+      if (!items) {
+        items = unloadedUpserts.get(event.chatId) ?? []
+        unloadedUpserts.set(event.chatId, items)
+      }
+      const idx = items.findIndex((i) => i.id === event.item.id)
+      if (idx >= 0) {
+        items[idx] = event.item
+      } else {
+        items.push(event.item)
+      }
+      break
+    }
+
+    case 'item.delta': {
+      const items = store.itemsByChat.get(event.chatId) ?? unloadedUpserts.get(event.chatId)
+      if (items) {
+        const item = items.find((i) => i.id === event.itemId)
+        if (item && (item.kind === 'assistant_text' || item.kind === 'thinking')) {
+          item.text += event.text
+        }
+      }
+      break
+    }
+
+    case 'item.removed': {
+      const items = store.itemsByChat.get(event.chatId) ?? unloadedUpserts.get(event.chatId)
+      const idx = items?.findIndex((i) => i.id === event.itemId) ?? -1
+      if (idx >= 0) items!.splice(idx, 1)
+      break
+    }
+
+    case 'notify':
+      dispatchNotification(event)
+      break
+
+    case 'bridge.status':
+      // Bridge status update
+      break
+
+    case 'external.update':
+      store.external = event.sessions
+      break
+
+    case 'climayte.update':
+      store.workers = event.workers
+      break
+
+    case 'accounts.update':
+      store.accounts = event.accounts
+      break
+
+    case 'settings.update':
+      store.settings = event.settings
+      break
+  }
+}
+
+// A reconnect (the server restarted, the socket dropped) lost what streamed meanwhile and hello cleared the
+// cache: the open chat is fetched again, so its history and any docked request come back without a switch.
+// Upserts that land while the fetch is out are newer than its snapshot, so they are kept over it.
+function reloadOpenChat() {
+  const sel = store.selected
+  if (sel.kind !== 'chat' || !store.chats.some((c) => c.id === sel.id)) return
+  const id = sel.id
+  fetchJson<TranscriptItem[]>(`/chats/${id}/items`)
+    .then((items) => {
+      landItems(id, items)
+    })
+    .catch(() => {}) // floor-ok: left unloaded, the chat loads again when it is next opened
+}
+
+/** The snapshot with every item that arrived since it was asked for in place of its own copy, and after it when it has none. */
+function keepNewer(snapshot: TranscriptItem[], since: readonly TranscriptItem[] | undefined): TranscriptItem[] {
+  if (!since?.length) return snapshot
+  const newer = new Map(since.map((i) => [i.id, i]))
+  const out = snapshot.map((i) => newer.get(i.id) ?? i)
+  const had = new Set(snapshot.map((i) => i.id))
+  for (const i of since) if (!had.has(i.id)) out.push(i)
+  return out
+}
+
+function dispatchNotification(event: {
+  chatId: string
+  reason: 'finished' | 'needs_you' | 'error' | 'limited'
+  title: string
+  body: string
+}) {
+  const chat = store.chats.find((c) => c.id === event.chatId)
+  if (!chat) return
+
+  const viewing = store.selected.kind === 'chat' && store.selected.id === event.chatId
+  if (wantsDesktopNotice({ enabled: store.settings?.notifications, hidden: document.hidden, viewing })) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      const notification = new Notification(event.title, { body: event.body })
+      notification.onclick = () => {
+        window.focus()
+        store.selected = { kind: 'chat', id: event.chatId }
+      }
+    }
+  }
+
+  updateWindowTitle()
+}
+
+function updateWindowTitle() {
+  const working = store.chats.filter((c) => c.status === 'working').length
+  const needsYou = store.chats.filter((c) => c.status === 'needs_you').length
+  const parts = []
+  if (working > 0) parts.push(`${working} working`)
+  if (needsYou > 0) parts.push(`${needsYou} need you`)
+  const prefix = parts.length > 0 ? `(${parts.join(', ')}) ` : ''
+  document.title = `${prefix}Hydra Desk`
+}
+
+watch(
+  () => [
+    store.chats.map((c) => `${c.id}:${c.status}`).join(','),
+    store.connected
+  ],
+  () => {
+    updateWindowTitle()
+  }
+)
+
+// An outside session the window offers to carry on (ExternalSession.canResume) is a stand-in chat
+// 'ext:<session id>' until its first message: that imports the session under its account (the
+// existing import path), applies what was changed in the composer meanwhile, sends the message (which
+// resumes it) and opens the new chat. A session no CLI instance holds, with no account picked for it,
+// is placed by the server at the import; the 'landing' (the Settings default account or Auto's pick,
+// read when the view opens) is what the stand-in shows meanwhile. The server copies the transcript into
+// that account's folder when the message goes out.
+const externalPatches = reactive(new Map<string, ChatPatch>())
+const landings = reactive(new Map<string, AccountRef>())
+
+// The poller's list holds the last 24 hours. An older outside session the window opened anyway (a search
+// hit) is fetched on its own and kept here; the public list shows it after the list's own rows, and a
+// row the list carries wins.
+const extraExternal = reactive(new Map<string, ExternalSession>())
+const fetchingExternal = new Set<string>()
+
+function allExternal(): ExternalSession[] {
+  if (!extraExternal.size) return store.external
+  const listed = new Set(store.external.map((s) => s.id))
+  return [...store.external, ...[...extraExternal.values()].filter((s) => !listed.has(s.id))]
+}
+
+function findExternal(sessionId: string): ExternalSession | undefined {
+  return store.external.find((s) => s.id === sessionId) ?? extraExternal.get(sessionId)
+}
+
+// The managed send queue (SPEC "Send queue"): the server holds it and sends from it; the window shows it
+// and edits it, never dispatches. A queue.update or an answer older than the queue shown is dropped.
+const queueState = ref<QueueState | null>(null)
+
+function takeQueue(next: QueueState) {
+  if (!queueState.value || next.rev >= queueState.value.rev) queueState.value = next
+}
+
+/** A queue request; a refusal ({ error } with 400/404/409) rejects with the server's own words. */
+async function queueJson<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE_URL}/queue${path}`, {
+    method,
+    ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  })
+  const answer: unknown = await res.json().catch(() => null)
+  if (!res.ok) {
+    const error = (answer as { error?: unknown } | null)?.error
+    throw new Error(typeof error === 'string' && error ? error : `${res.status} ${res.statusText}`)
+  }
+  return answer as T
+}
+
+// The search in flight; a newer query cancels it.
+let searchAbort: AbortController | null = null
+
+/** What a superseded search rejects with; the sidebar's runner ignores it. */
+function searchSuperseded(): Error {
+  const err = new Error('A newer search replaced this one.')
+  err.name = 'AbortError'
+  return err
+}
+
+async function pickLanding(): Promise<AccountRef | null> {
+  const id = store.settings?.defaultAccountId
+  const named = id && id !== 'auto' ? store.accounts.find((a) => a.id === id) : undefined
+  if (named) return accountRefOf(named)
+  return fetchJson<AccountRef>('/accounts/pick').catch(() => null)
+}
+
+/**
+ * Imports an outside session under the account picked for it in the title bar, else the CLI instance
+ * that holds it (in place); else the server places it at the import, as it places a new chat: the pick
+ * is fresh, never the expired default login, and the chat stays Auto so a usage limit moves it. With
+ * `fork`, as a new chat that forks it at its first message.
+ */
+async function importOutside(s: ExternalSession, fork = false): Promise<ChatSummary> {
+  const pickedId = externalPatches.get(s.id)?.accountId
+  const picked = pickedId && pickedId !== 'auto' ? store.accounts.find((a) => a.id === pickedId) : undefined
+  if (!picked && s.accountId && !store.accounts.some((a) => a.id === s.accountId)) throw new Error(`Hydra Desk does not list the account ${s.accountId} yet.`)
+  // A holder signed out cannot resume it: the server places it then, as a copy on an account with room.
+  const account = picked ?? holderOf(s, store.accounts)
+  return fetchJson<ChatSummary>('/chats/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: s.id,
+      cwd: s.cwd ?? undefined,
+      title: s.title,
+      ...(account ? { configDir: account.configDir } : {}),
+      ...(fork ? { fork: true } : {})
+    } satisfies ImportSessionRequest)
+  })
+}
+
+async function resumeExternal(sessionId: string, message: SendMessageRequest): Promise<{ queued: boolean }> {
+  const s = findExternal(sessionId)
+  if (!s || !s.canResume) throw new Error('This session cannot be continued here right now.')
+  const chat = await importOutside(s)
+  // The import holds the session's history: in the cache before the send, the chat opens on the whole
+  // conversation with the message under it, as the stand-in showed it, never on the new lines alone.
+  await landHistory(chat.id)
+  // From here the chat exists: it opens whether the send goes or not, so a refused one is a chat to
+  // retry in, its message back in the box. The stand-in's composer is gone by the time the refusal
+  // reaches it, so the new chat's transcript says why.
+  try {
+    const patch = externalPatches.get(sessionId)
+    if (patch && Object.keys(patch).length) {
+      await fetchJson(`/chats/${chat.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+    }
+    externalPatches.delete(sessionId)
+    return await fetchJson<{ queued: boolean }>(`/chats/${chat.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(message)
+    })
+  } catch (err) {
+    saveDraft(typeof localStorage === 'undefined' ? null : localStorage, chat.id, message.text)
+    noteNotSent(chat.id, err instanceof Error ? err.message : String(err), message)
+    throw err
+  } finally {
+    landChat(chat)
+  }
+}
+
+// What the window itself writes into a chat's transcript: a first message refused after its chat was
+// made, which only the window knows of. Kept here, so the chat's items loaded from the server keep it.
+const windowNotes = new Map<string, { item: TranscriptItem; reason: string }[]>()
+
+// The server's own refusal line (a session no folder here has) already says why: not said twice.
+const statesReason = (items: TranscriptItem[], reason: string) => items.some((i) => i.kind === 'system' && i.text === reason)
+
+function noteNotSent(chatId: string, reason: string, message: SendMessageRequest) {
+  const images = message.images?.length ?? 0
+  const lines = [`Not sent: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}`]
+  if (message.text.trim()) lines.push('Your message is back in the box.')
+  // Only the text is kept as a draft.
+  if (images) lines.push(images === 1 ? 'The attached image was dropped: attach it again.' : `The ${images} attached images were dropped: attach them again.`)
+  const now = Date.now()
+  const note = { item: { kind: 'system', id: `window:not-sent:${now}`, ts: now, level: 'warn', text: lines.join(' ') } satisfies TranscriptItem, reason }
+  windowNotes.set(chatId, [...(windowNotes.get(chatId) ?? []), note])
+  const shown = store.itemsByChat.get(chatId)
+  if (shown && !statesReason(shown, reason)) shown.push(note.item)
+}
+
+/** The chat's items from the server with the window's own notes put in by their time. */
+function withWindowNotes(chatId: string, items: TranscriptItem[]): TranscriptItem[] {
+  const notes = windowNotes.get(chatId)
+  if (!notes) return items
+  const out = [...items]
+  for (const { item, reason } of notes) {
+    if (statesReason(items, reason)) continue
+    const at = out.findIndex((i) => i.ts > item.ts)
+    out.splice(at < 0 ? out.length : at, 0, item)
+  }
+  return out
+}
+
+/** Fetches a chat's history into the cache; on a failure it stays unloaded and opening the chat fetches it. */
+async function landHistory(id: string): Promise<void> {
+  try {
+    landItems(id, await fetchJson<TranscriptItem[]>(`/chats/${id}/items`))
+  } catch {} // floor-ok: left unloaded, DeskFrame loads it when the chat opens
+}
+
+// A chat the window just made is listed and opened at once: the server's chat.upsert may come after
+// the POST answers, and until then the chat view would fall back to the new-session screen. A summary
+// the socket already delivered is newer, so it is kept.
+function landChat(chat: ChatSummary) {
+  if (!store.chats.some((c) => c.id === chat.id)) store.chats.push(chat)
+  store.selected = { kind: 'chat', id: chat.id }
+}
+
+// Public API
+
+export function useDesk() {
+  return {
+    // State
+    chats: computed(() => store.chats),
+    itemsByChat: computed(() => store.itemsByChat),
+    external: computed(allExternal),
+    workers: computed(() => store.workers),
+    accounts: computed(() => store.accounts),
+    settings: computed(() => store.settings),
+    connected: computed(() => store.connected),
+    selected: computed(() => store.selected),
+    queue: computed(() => queueState.value),
+
+    // Actions
+    async init() {
+      if (Notification.permission === 'default') {
+        Notification.requestPermission()
+      }
+      connectWebSocket()
+      watchBundle()
+      try {
+        const data = await fetchJson<{
+          hello: ServerEvent & { type: 'hello' }
+        }>('/health')
+      } catch (err) {
+        console.error('Failed to initialize:', err)
+      }
+    },
+
+    select(
+      view:
+        | { kind: 'chat'; id: string }
+        | { kind: 'new'; cwd?: string }
+        | { kind: 'external'; id: string }
+        | { kind: 'elsewhere' }
+        | { kind: 'settings' }
+    ) {
+      store.selected = view
+    },
+
+    openSettings() {
+      store.selected = { kind: 'settings' }
+    },
+
+    /** Creates the chat (its first message goes with it), lists it and opens it. */
+    async createChat(req: CreateChatRequest): Promise<ChatSummary> {
+      const chat = await fetchJson<ChatSummary>('/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req)
+      })
+      landChat(chat)
+      return chat
+    },
+
+    async send(chatId: string, message: SendMessageRequest): Promise<{ queued: boolean }> {
+      if (isExternalChatId(chatId)) return resumeExternal(sessionOfChatId(chatId), message)
+      return fetchJson(`/chats/${chatId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(message)
+      })
+    },
+
+    async interrupt(chatId: string): Promise<{ ok: boolean }> {
+      return fetchJson(`/chats/${chatId}/interrupt`, { method: 'POST' })
+    },
+
+    async respondPermission(
+      chatId: string,
+      requestId: string,
+      decision: PermissionDecision
+    ): Promise<{ ok: boolean }> {
+      return fetchJson(`/chats/${chatId}/permission/${requestId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(decision)
+      })
+    },
+
+    async answerQuestion(
+      chatId: string,
+      requestId: string,
+      answer: QuestionAnswer
+    ): Promise<{ ok: boolean }> {
+      return fetchJson(`/chats/${chatId}/question/${requestId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(answer)
+      })
+    },
+
+    async respondPlan(
+      chatId: string,
+      requestId: string,
+      decision: PlanDecision
+    ): Promise<{ ok: boolean }> {
+      return fetchJson(`/chats/${chatId}/plan/${requestId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(decision)
+      })
+    },
+
+    async answerElicitation(
+      chatId: string,
+      requestId: string,
+      answer: ElicitationAnswer
+    ): Promise<{ ok: boolean }> {
+      return fetchJson(`/chats/${chatId}/elicitation/${requestId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(answer)
+      })
+    },
+
+    async updateChat(chatId: string, patch: ChatPatch): Promise<ChatSummary> {
+      if (isExternalChatId(chatId)) {
+        const id = sessionOfChatId(chatId)
+        const s = findExternal(id)
+        if (!s) throw new Error('This session is no longer listed.')
+        const next = { ...externalPatches.get(id), ...patch }
+        externalPatches.set(id, next)
+        return externalChat(s, store.accounts, next, landings.get(id) ?? null)
+      }
+      return fetchJson(`/chats/${chatId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      })
+    },
+
+    async removeChat(chatId: string): Promise<{ ok: boolean }> {
+      return fetchJson(`/chats/${chatId}`, { method: 'DELETE' })
+    },
+
+    /** Fork: a new chat continuing from a copy of the chat's session, listed and opened. */
+    async forkChat(chatId: string): Promise<ChatSummary> {
+      const chat = await fetchJson<ChatSummary>(`/chats/${chatId}/fork`, { method: 'POST' })
+      landChat(chat)
+      return chat
+    },
+
+    /** Fork of an outside session: imported as a new chat that forks it at its first message; the original stays listed. */
+    async forkExternal(sessionId: string): Promise<ChatSummary> {
+      const s = findExternal(sessionId)
+      if (!s) throw new Error('This session is no longer listed.')
+      const chat = await importOutside(s, true)
+      landChat(chat)
+      return chat
+    },
+
+    /** Hydra Desk's marks on an outside session; shown at once, the poller's next list carries them too. */
+    async updateSessionMeta(sessionId: string, patch: SessionMetaPatch): Promise<SessionMeta> {
+      const meta = await fetchJson<SessionMeta>(`/external/sessions/${encodeURIComponent(sessionId)}/meta`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      })
+      const s = findExternal(sessionId)
+      if (s) Object.assign(s, { pinned: meta.pinned, archived: meta.archived, unread: meta.unread, group: meta.group }, meta.title ? { title: meta.title } : {})
+      return meta
+    },
+
+    /** Lists an outside session the list lacks (older than its 24 hours) by fetching it; rejects on AgentHydra's 404. */
+    async ensureExternal(sessionId: string): Promise<void> {
+      if (findExternal(sessionId) || fetchingExternal.has(sessionId)) return
+      fetchingExternal.add(sessionId)
+      try {
+        extraExternal.set(sessionId, await fetchJson<ExternalSession>(`/external/sessions/${encodeURIComponent(sessionId)}`))
+      } finally {
+        fetchingExternal.delete(sessionId)
+      }
+    },
+
+    async revealFolder(path: string): Promise<{ path: string }> {
+      return fetchJson('/folders/reveal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+      })
+    },
+
+    /**
+     * AgentHydra's transcript search; a 503 means AgentHydra is not answering. Each call cancels the one
+     * still in flight, whose promise rejects with an AbortError; a query too short to search only cancels.
+     */
+    async search(query: string): Promise<SearchHit[]> {
+      searchAbort?.abort()
+      searchAbort = null
+      if (query.trim().length < SEARCH_MIN_CHARS) return []
+      const ctl = new AbortController()
+      searchAbort = ctl
+      // Settles the moment a newer call aborts, whether or not the request itself honours the signal.
+      const superseded = new Promise<never>((_, reject) => ctl.signal.addEventListener('abort', () => reject(searchSuperseded()), { once: true }))
+      const ask = async () => {
+        const res = await fetch(`${BASE_URL}/search?q=${encodeURIComponent(query)}&limit=${SEARCH_LIMIT}`, { signal: ctl.signal })
+        const body = (await res.json().catch(() => null)) as SearchHit[] | { error?: string } | null
+        if (res.ok && Array.isArray(body)) return body
+        const reason = body && !Array.isArray(body) && body.error ? body.error : `${res.status} ${res.statusText}`
+        throw new SearchError(res.status === 503, reason)
+      }
+      try {
+        return await Promise.race([ask(), superseded])
+      } finally {
+        if (searchAbort === ctl) searchAbort = null
+      }
+    },
+
+    async loadItems(chatId: string): Promise<TranscriptItem[]> {
+      return landItems(chatId, await fetchJson<TranscriptItem[]>(`/chats/${chatId}/items`))
+    },
+
+    async loadExternalItems(sessionId: string): Promise<TranscriptItem[]> {
+      return fetchJson(`/external/sessions/${sessionId}/items`)
+    },
+
+    /** What was changed in the composer of an outside session before its first message. */
+    externalPatch(sessionId: string): ChatPatch {
+      return externalPatches.get(sessionId) ?? {}
+    },
+    /** Where a session no CLI instance holds will continue: Settings' default account or Auto's pick. */
+    landingOf(sessionId: string): AccountRef | null {
+      return landings.get(sessionId) ?? null
+    },
+    async ensureLanding(sessionId: string): Promise<void> {
+      const landing = await pickLanding()
+      if (landing) landings.set(sessionId, landing)
+    },
+    /** The stand-in chat of an outside session the composer can carry on now, else null. */
+    standInOf(sessionId: string): ChatSummary | null {
+      const s = findExternal(sessionId)
+      return s?.canResume ? externalChat(s, store.accounts, externalPatches.get(sessionId), landings.get(sessionId) ?? null) : null
+    },
+
+    /** Opens the Background tasks panel, scrolled to `taskId` (a unit, worker or task id) when given. */
+    openBackgroundTasks(taskId?: string | null) {
+      openBackgroundTasks(taskId)
+    },
+
+    async cancelWorker(workerId: string): Promise<{ ok: boolean }> {
+      return fetchJson(`/climayte/workers/${workerId}/cancel`, { method: 'POST' })
+    },
+
+    async sendToWorker(workerId: string, text: string): Promise<{ ok: boolean }> {
+      return fetchJson(`/climayte/workers/${workerId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      })
+    },
+
+    async updateSettings(settings: Partial<DeskSettings>): Promise<DeskSettings> {
+      return fetchJson('/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      })
+    },
+
+    // The send queue: the item answers are also broadcast as queue.update; the queue answers are taken at once.
+    async queueAdd(req: QueueAddRequest): Promise<QueueItem> {
+      return queueJson('', 'POST', req)
+    },
+
+    async queueEdit(id: string, patch: QueuePatch): Promise<QueueItem> {
+      return queueJson(`/${encodeURIComponent(id)}`, 'PATCH', patch)
+    },
+
+    async queueRemove(id: string): Promise<{ ok: true }> {
+      return queueJson(`/${encodeURIComponent(id)}`, 'DELETE')
+    },
+
+    /** One place up or down within the item's own chat; nothing is sent at the end of it. */
+    async queueMove(id: string, direction: -1 | 1): Promise<QueueState | null> {
+      const q = queueState.value
+      const ids = q && movedOrder(q.items, id, direction)
+      if (!q || !ids) return null
+      const next = await queueJson<QueueState>('/reorder', 'POST', { ids, ifRev: q.rev } satisfies QueueReorder)
+      takeQueue(next)
+      return next
+    },
+
+    async queueSendNow(id: string): Promise<{ ok: boolean; chatId: string; queued: boolean }> {
+      return queueJson(`/${encodeURIComponent(id)}/send-now`, 'POST')
+    },
+
+    async queueRetry(id: string): Promise<QueueItem> {
+      return queueJson(`/${encodeURIComponent(id)}/retry`, 'POST')
+    },
+
+    async queueResume(chatId: string): Promise<QueueState> {
+      const next = await queueJson<QueueState>(`/chats/${encodeURIComponent(chatId)}/resume`, 'POST')
+      takeQueue(next)
+      return next
+    },
+
+    async queueSettings(patch: QueueSettingsPatch): Promise<QueueState> {
+      const next = await queueJson<QueueState>('', 'PATCH', patch)
+      takeQueue(next)
+      return next
+    },
+
+    disconnect() {
+      if (ws) {
+        ws.close()
+        ws = null
+      }
+      if (wsReconnectTimeout) {
+        clearTimeout(wsReconnectTimeout)
+      }
+    }
+  }
+}
+
+// Initialize on first use
+let initialized = false
+if (typeof window !== 'undefined' && !initialized) {
+  initialized = true
+  const desk = useDesk()
+  desk.init().catch(console.error)
+}
