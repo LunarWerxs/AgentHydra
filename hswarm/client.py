@@ -1445,9 +1445,10 @@ class ChatClient:
         except ValueError:
             return default
 
-    async def chat(self, messages: list[dict], model: str = config.DEFAULT_MODEL, tools: list[dict] | None = None, tool_choice: str | dict | None = None, max_tokens: int | None = None, thinking: bool | None = None, reasoning_effort: str | None = None, response_format: dict | None = None, temperature: float | None = None, user: str | None = None, stop: list[str] | None = None, rest_budget_s: float | None = None, last_leg: bool = False, affinity=None, cache_turns: bool = True) -> ChatResult:
+    async def chat(self, messages: list[dict], model: str = config.DEFAULT_MODEL, tools: list[dict] | None = None, tool_choice: str | dict | None = None, max_tokens: int | None = None, thinking: bool | None = None, reasoning_effort: str | None = None, response_format: dict | None = None, temperature: float | None = None, user: str | None = None, stop: list[str] | None = None, rest_budget_s: float | None = None, last_leg: bool = False, affinity=None, cache_turns: bool = True, avoid_upstream: list[str] | None = None) -> ChatResult:
         """One chat call. `affinity` names the conversation (one per task): a `sticky_keys` provider keeps it on one key.
-        `cache_turns=False` says no turn follows this one, so the native transport writes no turn to the prompt cache."""
+        `cache_turns=False` says no turn follows this one, so the native transport writes no turn to the prompt cache.
+        `avoid_upstream` names OpenRouter hosts to leave out of this call (provider.ignore); see _chat_body."""
         model = config.resolve_model(model)
         owner = config.provider_of(model)
         entry = config.MODELS[model]
@@ -1465,13 +1466,13 @@ class ChatClient:
             r, attempts = await self._post(body, free=False, rest_budget_s=rest_budget_s, last_leg=last_leg, affinity=affinity)
             return _native_result(r, attempts, model, t0)
         body = self._chat_body(model, entry, api_id, messages, tools=tools, tool_choice=tool_choice, max_tokens=max_tokens, thinking=thinking,
-                               reasoning_effort=reasoning_effort, response_format=response_format, temperature=temperature, user=user, stop=stop)
+                               reasoning_effort=reasoning_effort, response_format=response_format, temperature=temperature, user=user, stop=stop, avoid_upstream=avoid_upstream)
         r, attempts = await self._post_chat(body, model, api_id.endswith(":free"), rest_budget_s, last_leg, affinity)
         return _chat_result(r, attempts, model, t0, self.spec.get("upstream_header"))
 
     def _chat_body(self, model: str, entry: dict, api_id: str, messages: list[dict], *, tools: list[dict] | None, tool_choice: str | dict | None,
                    max_tokens: int | None, thinking: bool | None, reasoning_effort: str | None, response_format: dict | None,
-                   temperature: float | None, user: str | None, stop: list[str] | None) -> dict:
+                   temperature: float | None, user: str | None, stop: list[str] | None, avoid_upstream: list[str] | None = None) -> dict:
         """The request body, with only the fields this provider's endpoint accepts."""
         allowed = set(self.spec.get("options") or ())
         # Some OpenAI-compatible endpoints reject unknown/extra top-level fields with a 422 rather than
@@ -1493,6 +1494,10 @@ class ChatClient:
         for k, v in (entry.get("extra") or {}).items():
             if k in allowed:
                 body[k] = v
+        if avoid_upstream and "provider" in allowed and not _pins_upstream(entry):
+            prov = dict(body.get("provider") or {})
+            prov["ignore"] = list(dict.fromkeys([*(prov.get("ignore") or []), *avoid_upstream]))
+            body["provider"] = prov
         return body
 
     async def _post_chat(self, body: dict, model: str, free: bool, rest_budget_s: float | None, last_leg: bool,
@@ -1520,6 +1525,12 @@ class ChatClient:
     def _backoff(attempt: int) -> float:
         # Capped exponential with jitter, so 200 workers hitting one 429 do not retry in lockstep.
         return min(30.0, 0.5 * (2 ** (attempt - 1))) * (0.7 + 0.6 * random.random())
+
+
+def _pins_upstream(entry: dict) -> bool:
+    """A registry entry whose `extra.provider` names the host(s) to use has nowhere else to go, so nothing is ignored."""
+    prov = (entry.get("extra") or {}).get("provider")
+    return isinstance(prov, dict) and bool(prov.get("only") or prov.get("order"))
 
 
 DeepSeekClient = ChatClient

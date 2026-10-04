@@ -1,3 +1,4 @@
+# Idea adapted from whirlchat/whirl replyRepair.ts (MIT); written fresh.
 """`api` backend: a tool-using worker loop straight on DeepSeek chat completions.
 
 One coroutine per task, no threads. Thinking mode stays on (DeepSeek's default) and
@@ -90,7 +91,7 @@ class _GoalGate:
 
 async def _after_reply(task: Task, res: Result, sb: Sandbox, messages: list[dict], r: ChatResult, empty_retries: int,
                        schema_state: dict | None = None, guard: LoopGuard | None = None,
-                       gate: _GoalGate | None = None, last: bool = False) -> tuple[bool, int]:
+                       gate: _GoalGate | None = None, last: bool = False, avoid: list[str] | None = None) -> tuple[bool, int]:
     """Handle one assistant reply: budgets, an empty turn, a final text, or a round of tool calls. Returns (done, empty_retries).
     With a goal gate, a final answer (text or submit_result) must pass the done_when check before the task ends."""
     if over_budget(res, task, r):
@@ -99,6 +100,9 @@ async def _after_reply(task: Task, res: Result, sb: Sandbox, messages: list[dict
         if not r.content.strip() and empty_retries < EMPTY_RETRIES:
             _say(messages, EMPTY_NUDGE)  # the empty reply was not kept, so this joins the turn's own user message
             res.add_taint("R")
+            who = (r.raw or {}).get("provider")
+            if avoid is not None and who and str(who) not in avoid:
+                avoid.append(str(who))  # an empty reply is usually one bad upstream host: the retry goes round it
             return False, empty_retries + 1
         prior = res.status
         final_text(res, r)
@@ -199,6 +203,7 @@ async def _loop(client: DeepSeekClient, task: Task, res: Result, sb: Sandbox, me
     if warm is not None and not is_pilot:
         await wait_for_pilot(warm)  # the pilot's first reply lands the shared prefix in DeepSeek's cache; everyone else reads it
     empty_retries = 0
+    avoid: list[str] = []  # upstream hosts that served an empty reply to this task (see _after_reply)
     schema_state: dict = {}
     guard = LoopGuard()
     # Stale tool results past the task's token trigger go out as fetch_output pointers; `messages` stays the whole transcript.
@@ -212,7 +217,7 @@ async def _loop(client: DeepSeekClient, task: Task, res: Result, sb: Sandbox, me
             res.add_taint("B")
         else:
             budget.note(task, messages, turn, editor.view(messages), tools, editor.passes)
-        r = await _call_turn(client, task, res, editor, messages, tools, budget, exhausted, user_tag, slow_turn_s, escape)
+        r = await _call_turn(client, task, res, editor, messages, tools, budget, exhausted, user_tag, slow_turn_s, escape, avoid)
         if r is None:
             return
         _account_turn(task, res, r, usage, warm, is_pilot, slow_turn_s, tools, exhausted, escape)
@@ -222,7 +227,7 @@ async def _loop(client: DeepSeekClient, task: Task, res: Result, sb: Sandbox, me
         # message with no role. 2026-09-27, jobs 20260927-211430-8b33 and -214105-1b87: gemini-3-8-flash answered one
         # turn with no message, the loop appended `{}` ahead of its empty-answer nudge, and the next call died on
         # gemini 400 INVALID_ARGUMENT ("Request contains an invalid argument"), taking the task's turns with it.
-        done, empty_retries = await _after_reply(task, res, sb, messages, r, empty_retries, schema_state, guard, gate, exhausted)
+        done, empty_retries = await _after_reply(task, res, sb, messages, r, empty_retries, schema_state, guard, gate, exhausted, avoid)
         if done:
             return
     res.status, res.error = "error", "turn budget exhausted without a final answer"
@@ -297,7 +302,7 @@ class _TurnBudget:
 
 async def _call_turn(client: DeepSeekClient, task: Task, res: Result, editor: ContextEditor, messages: list[dict], tools: list[dict],
                      budget: _TurnBudget, exhausted: bool, user_tag: str | None, slow_turn_s: float | None,
-                     escape=None) -> ChatResult | None:
+                     escape=None, avoid: list[str] | None = None) -> ChatResult | None:
     """Plan one turn against the ceilings and send it. None when a ceiling refused it; res then carries the error."""
     ceilings = budget.ceilings
     send_tools = tools if (tools and not exhausted) else None
@@ -326,6 +331,7 @@ async def _call_turn(client: DeepSeekClient, task: Task, res: Result, editor: Co
         # Every turn of this task names the same conversation, so a sticky provider (Anthropic) answers it from one
         # key and one prompt cache (ChatClient._pick).
         affinity=f"{user_tag}:{task.id}" if task.id else id(messages),
+        **({"avoid_upstream": list(avoid)} if avoid else {}),
     )
     limit, live = None, LIVE_SPEND.get()
     if live is not None:
