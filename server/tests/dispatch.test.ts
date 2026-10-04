@@ -68,6 +68,11 @@ const statusOf = (id: string) =>
     )
     .get(id)
 
+// A test that waits here needs room for this 15 s deadline: on bun's 5 s default the deadline could
+// never be reached, and a loaded box timed the reattach tests out (0.9-2.5 s measured 2026-10-04)
+// before they could pass or fail on their own terms.
+const STATUS_WAIT_TEST_MS = 20_000
+
 async function waitForStatus(id: string, want: string, timeoutMs = 15000): Promise<string> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
@@ -90,126 +95,142 @@ test('EVERY headless dispatch is refused - there is no setting that permits one'
   expect(dispatch.isActive(item.id)).toBe(false)
 })
 
-test('reattachRuns: a run that finished while the daemon was down is recovered from its log', async () => {
-  // Simulate the "daemon died mid-run, run finished on its own" state: a queue_items row still
-  // marked 'running', an on-disk log ending in the runner's terminal marker, and a status sidecar.
-  const item = makeItem({ status: 'running' })
-  db.query('update queue_items set status = ? where id = ?').run('running', item.id)
-  // This run's session id is synthetic and has no real transcript on disk (see the seam's comment
-  // in dispatch.ts), so stand in for the independent read-back finalize() now requires before a
-  // completed run.
-  dispatch.__setCompletionEvidenceCheckForTests(async () => ({ ok: true }))
-  const log = join(RUN_LOG_DIR, `${item.id}.stream.jsonl`)
-  writeFileSync(
-    log,
-    `${[
-      JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-fake' }),
-      JSON.stringify({
-        type: 'assistant',
-        message: { role: 'assistant', content: [{ type: 'text', text: 'recovered work' }] },
-      }),
-      JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done' }),
-      JSON.stringify({ __dispatch: 'exit', code: 0, at: new Date().toISOString() }),
-    ].join('\n')}\n`,
-  )
-  writeFileSync(
-    join(RUN_LOG_DIR, `${item.id}.status.json`),
-    JSON.stringify({ runnerPid: 1, childPid: null, state: 'exited', code: 0 }),
-  )
+test(
+  'reattachRuns: a run that finished while the daemon was down is recovered from its log',
+  async () => {
+    // Simulate the "daemon died mid-run, run finished on its own" state: a queue_items row still
+    // marked 'running', an on-disk log ending in the runner's terminal marker, and a status sidecar.
+    const item = makeItem({ status: 'running' })
+    db.query('update queue_items set status = ? where id = ?').run('running', item.id)
+    // This run's session id is synthetic and has no real transcript on disk (see the seam's comment
+    // in dispatch.ts), so stand in for the independent read-back finalize() now requires before a
+    // completed run.
+    dispatch.__setCompletionEvidenceCheckForTests(async () => ({ ok: true }))
+    const log = join(RUN_LOG_DIR, `${item.id}.stream.jsonl`)
+    writeFileSync(
+      log,
+      `${[
+        JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-fake' }),
+        JSON.stringify({
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'recovered work' }] },
+        }),
+        JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done' }),
+        JSON.stringify({ __dispatch: 'exit', code: 0, at: new Date().toISOString() }),
+      ].join('\n')}\n`,
+    )
+    writeFileSync(
+      join(RUN_LOG_DIR, `${item.id}.status.json`),
+      JSON.stringify({ runnerPid: 1, childPid: null, state: 'exited', code: 0 }),
+    )
 
-  dispatch.reattachRuns() // rebuilds events from the log, then finalizes from the terminal marker
-  const final = await waitForStatus(item.id, 'completed')
-  expect(final).toBe('completed')
+    dispatch.reattachRuns() // rebuilds events from the log, then finalizes from the terminal marker
+    const final = await waitForStatus(item.id, 'completed')
+    expect(final).toBe('completed')
 
-  const events = dispatch.getRunEvents(item.id)
-  expect(events.some((e) => e.text.includes('recovered work'))).toBe(true) // events rebuilt from the log
-})
+    const events = dispatch.getRunEvents(item.id)
+    expect(events.some((e) => e.text.includes('recovered work'))).toBe(true) // events rebuilt from the log
+  },
+  STATUS_WAIT_TEST_MS,
+)
 
 // --- never claim a run landed without checking (ports the shape of hermes-agent's
 // the never-claim-landed rule + delivery_queue.py's never-retry-on-UNKNOWN doctrine) ------------
 
-test('finalize: exit 0 with no transcript evidence is unverified, not completed - and it says why', async () => {
-  // Same recovered-log shape as the test above, but standing in (via the seam - the REAL check
-  // would otherwise scan the developer's actual ~/.claude/projects, which is both slow here and
-  // not what this test is about) for the shape of a crash right after `claude` printed its exit
-  // marker, with nothing durable on disk to back it up. Also carries a desktop import target, so
-  // this run doubles as the "never deliver silently" check below.
-  dispatch.__setCompletionEvidenceCheckForTests(async () => ({
-    ok: false,
-    reason: 'no transcript file was found for this session',
-  }))
-  const item = makeItem({ status: 'running' })
-  db.query(
-    "update queue_items set status = 'running', started_at = ?, import_to = 'desktop:some-instance' where id = ?",
-  ).run(new Date().toISOString(), item.id)
-  writeFileSync(
-    join(RUN_LOG_DIR, `${item.id}.stream.jsonl`),
-    `${[
-      JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-fake' }),
-      JSON.stringify({ __dispatch: 'exit', code: 0, at: new Date().toISOString() }),
-    ].join('\n')}\n`,
-  )
-  writeFileSync(
-    join(RUN_LOG_DIR, `${item.id}.status.json`),
-    JSON.stringify({ runnerPid: 1, childPid: null, state: 'exited', code: 0 }),
-  )
-
-  await dispatch.reattachRuns()
-  expect(await waitForStatus(item.id, 'unverified')).toBe('unverified')
-
-  const events = dispatch.getRunEvents(item.id)
-  expect(events.some((e) => e.text.includes('UNVERIFIED'))).toBe(true)
-  // Never deliver a desktop import on unverified evidence - it must be skipped, visibly, not fired.
-  expect(events.some((e) => e.text.includes('desktop delivery skipped'))).toBe(true)
-  const row = db
-    .query<{ import_state: string | null }, [string]>(
-      'select import_state from queue_items where id = ?',
+test(
+  'finalize: exit 0 with no transcript evidence is unverified, not completed - and it says why',
+  async () => {
+    // Same recovered-log shape as the test above, but standing in (via the seam - the REAL check
+    // would otherwise scan the developer's actual ~/.claude/projects, which is both slow here and
+    // not what this test is about) for the shape of a crash right after `claude` printed its exit
+    // marker, with nothing durable on disk to back it up. Also carries a desktop import target, so
+    // this run doubles as the "never deliver silently" check below.
+    dispatch.__setCompletionEvidenceCheckForTests(async () => ({
+      ok: false,
+      reason: 'no transcript file was found for this session',
+    }))
+    const item = makeItem({ status: 'running' })
+    db.query(
+      "update queue_items set status = 'running', started_at = ?, import_to = 'desktop:some-instance' where id = ?",
+    ).run(new Date().toISOString(), item.id)
+    writeFileSync(
+      join(RUN_LOG_DIR, `${item.id}.stream.jsonl`),
+      `${[
+        JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-fake' }),
+        JSON.stringify({ __dispatch: 'exit', code: 0, at: new Date().toISOString() }),
+      ].join('\n')}\n`,
     )
-    .get(item.id)
-  expect(row?.import_state).not.toBe('pending')
-})
-
-test('finalize: exit 0 WITH real completion evidence still reads completed', async () => {
-  // The inverse of the test above, using the test seam so this pipeline test never has to touch
-  // the developer's actual ~/.claude/projects to prove the positive case too.
-  dispatch.__setCompletionEvidenceCheckForTests(async () => ({ ok: true }))
-  const item = makeItem({ status: 'running' })
-  db.query('update queue_items set status = ? where id = ?').run('running', item.id)
-  writeFileSync(
-    join(RUN_LOG_DIR, `${item.id}.stream.jsonl`),
-    `${JSON.stringify({ __dispatch: 'exit', code: 0, at: new Date().toISOString() })}\n`,
-  )
-  writeFileSync(
-    join(RUN_LOG_DIR, `${item.id}.status.json`),
-    JSON.stringify({ runnerPid: 1, childPid: null, state: 'exited', code: 0 }),
-  )
-  await dispatch.reattachRuns()
-  expect(await waitForStatus(item.id, 'completed')).toBe('completed')
-})
-
-test('an unknown failure (pid vanished, no exit code) is never auto-retried, and that is recorded', async () => {
-  // reattachRuns' own "unrecoverable" branch: status still 'running', but no runner and no log to
-  // replay at all - the daemon genuinely never learned what happened, which is the UNKNOWN case
-  // the hermes doctrine is about (never confuse "we know it failed" with "we never found out").
-  const item = makeItem()
-  db.query("update queue_items set status = 'running' where id = ?").run(item.id)
-
-  await dispatch.reattachRuns()
-  expect(await waitForStatus(item.id, 'failed')).toBe('failed')
-
-  const row = db
-    .query<{ retry_attempts: number; not_before: string | null }, [string]>(
-      'select retry_attempts, not_before from queue_items where id = ?',
+    writeFileSync(
+      join(RUN_LOG_DIR, `${item.id}.status.json`),
+      JSON.stringify({ runnerPid: 1, childPid: null, state: 'exited', code: 0 }),
     )
-    .get(item.id)
-  // Never silently re-queued: an unknown outcome must never be retried automatically.
-  expect(row?.retry_attempts ?? 0).toBe(0)
-  expect(row?.not_before).toBeNull()
-  // And the refusal to retry is on the record, not just a design property nobody can see.
-  const events = dispatch.getRunEvents(item.id)
-  expect(events.some((e) => e.text.includes('UNKNOWN outcome'))).toBe(true)
-  expect(events.some((e) => e.text.includes('will not be auto-retried'))).toBe(true)
-})
+
+    await dispatch.reattachRuns()
+    expect(await waitForStatus(item.id, 'unverified')).toBe('unverified')
+
+    const events = dispatch.getRunEvents(item.id)
+    expect(events.some((e) => e.text.includes('UNVERIFIED'))).toBe(true)
+    // Never deliver a desktop import on unverified evidence - it must be skipped, visibly, not fired.
+    expect(events.some((e) => e.text.includes('desktop delivery skipped'))).toBe(true)
+    const row = db
+      .query<{ import_state: string | null }, [string]>(
+        'select import_state from queue_items where id = ?',
+      )
+      .get(item.id)
+    expect(row?.import_state).not.toBe('pending')
+  },
+  STATUS_WAIT_TEST_MS,
+)
+
+test(
+  'finalize: exit 0 WITH real completion evidence still reads completed',
+  async () => {
+    // The inverse of the test above, using the test seam so this pipeline test never has to touch
+    // the developer's actual ~/.claude/projects to prove the positive case too.
+    dispatch.__setCompletionEvidenceCheckForTests(async () => ({ ok: true }))
+    const item = makeItem({ status: 'running' })
+    db.query('update queue_items set status = ? where id = ?').run('running', item.id)
+    writeFileSync(
+      join(RUN_LOG_DIR, `${item.id}.stream.jsonl`),
+      `${JSON.stringify({ __dispatch: 'exit', code: 0, at: new Date().toISOString() })}\n`,
+    )
+    writeFileSync(
+      join(RUN_LOG_DIR, `${item.id}.status.json`),
+      JSON.stringify({ runnerPid: 1, childPid: null, state: 'exited', code: 0 }),
+    )
+    await dispatch.reattachRuns()
+    expect(await waitForStatus(item.id, 'completed')).toBe('completed')
+  },
+  STATUS_WAIT_TEST_MS,
+)
+
+test(
+  'an unknown failure (pid vanished, no exit code) is never auto-retried, and that is recorded',
+  async () => {
+    // reattachRuns' own "unrecoverable" branch: status still 'running', but no runner and no log to
+    // replay at all - the daemon genuinely never learned what happened, which is the UNKNOWN case
+    // the hermes doctrine is about (never confuse "we know it failed" with "we never found out").
+    const item = makeItem()
+    db.query("update queue_items set status = 'running' where id = ?").run(item.id)
+
+    await dispatch.reattachRuns()
+    expect(await waitForStatus(item.id, 'failed')).toBe('failed')
+
+    const row = db
+      .query<{ retry_attempts: number; not_before: string | null }, [string]>(
+        'select retry_attempts, not_before from queue_items where id = ?',
+      )
+      .get(item.id)
+    // Never silently re-queued: an unknown outcome must never be retried automatically.
+    expect(row?.retry_attempts ?? 0).toBe(0)
+    expect(row?.not_before).toBeNull()
+    // And the refusal to retry is on the record, not just a design property nobody can see.
+    const events = dispatch.getRunEvents(item.id)
+    expect(events.some((e) => e.text.includes('UNKNOWN outcome'))).toBe(true)
+    expect(events.some((e) => e.text.includes('will not be auto-retried'))).toBe(true)
+  },
+  STATUS_WAIT_TEST_MS,
+)
 
 // --- classifyLimit on the CLI's real notices ----------------------------------------------------
 //

@@ -13,6 +13,10 @@ const { repointClaudeStartShortcut } = await import('../src/claude-start-shortcu
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
 
 const win = process.platform === 'win32'
+// Each test starts three to six powershell.exe (one per link written or read, and the shortcut's own
+// read): 2.4 and 3.3 s measured 2026-10-04 with 15% memory free, and over bun's 5 s default when the
+// box was busier. The allowance is chosen, not inherited.
+const POWERSHELL_TEST_MS = 30_000
 
 async function ps(script: string, env: Record<string, string>): Promise<string> {
   const run = await spawnCaptured(
@@ -58,14 +62,18 @@ function fixture() {
   return { root, managed, paths }
 }
 
-test.skipIf(!win)('a shortcut aimed at a managed copy is moved onto the install stub', async () => {
-  const f = fixture()
-  await makeLink(f.paths.lnk, f.managed)
-  expect(await repointClaudeStartShortcut(f.paths)).toBe('repointed')
-  expect((await readLink(f.paths.lnk)).toLowerCase()).toBe(longForm(f.paths.stub))
-  // Already on the stub: a second pass leaves it alone.
-  expect(await repointClaudeStartShortcut(f.paths)).toBe('unchanged')
-})
+test.skipIf(!win)(
+  'a shortcut aimed at a managed copy is moved onto the install stub',
+  async () => {
+    const f = fixture()
+    await makeLink(f.paths.lnk, f.managed)
+    expect(await repointClaudeStartShortcut(f.paths)).toBe('repointed')
+    expect((await readLink(f.paths.lnk)).toLowerCase()).toBe(longForm(f.paths.stub))
+    // Already on the stub: a second pass leaves it alone.
+    expect(await repointClaudeStartShortcut(f.paths)).toBe('unchanged')
+  },
+  POWERSHELL_TEST_MS,
+)
 
 test.skipIf(!win)(
   'a shortcut aimed anywhere else, or no shortcut at all, is never touched',
@@ -85,4 +93,5 @@ test.skipIf(!win)(
       'unchanged',
     )
   },
+  POWERSHELL_TEST_MS,
 )

@@ -11,7 +11,7 @@
 // unchanged list cost a 3-row check (1,323), and the same few logins were downloaded again and
 // again (539).
 
-import { afterAll, beforeAll, expect, test } from 'bun:test'
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -47,6 +47,11 @@ import {
   storeDb,
   token,
 } from './login-sync-store'
+
+// Each test runs an hour of both PCs' passes against the real Worker on sqlite: 0.2-2.1 s per test
+// measured 2026-10-04 with 15% memory free, and past bun's 5 s default on a busier box. CPU-bound,
+// so the allowance is chosen here rather than inherited.
+setDefaultTimeout(20_000)
 
 const key = randomBytes(32)
 const HOUR = 3_600_000

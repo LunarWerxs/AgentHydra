@@ -79,8 +79,9 @@ describe('login sync between two PCs', () => {
   // sync error here.
   beforeEach(emptyLogins)
 
-  // It starts the stand-in CLI several times, and that alone takes 4.6-5.0 s on this box (measured
-  // 2026-10-02, the same before and after the sync refactor): past bun's 5 s default under load.
+  // It took 4.6-8.5 s (measured 2026-10-02 and 2026-10-04), past bun's 5 s default under load. Nearly
+  // all of it was the process scan every pass started for desktop logins this test does not have; a
+  // pass with no desktop login to decide no longer scans, and it takes 0.14 s (2026-10-04).
   test('the later expiry wins either way, a stale copy never does, and a left-out login stays put', async () => {
     const fake = refreshingClaude()
     const claudeWas = process.env.AGENTHYDRA_CLAUDE_PATH

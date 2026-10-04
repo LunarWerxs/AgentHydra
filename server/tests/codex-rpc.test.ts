@@ -66,9 +66,14 @@ test('Codex RPC rejects pending work when the child exits', async () => {
   }
 })
 
+// The per-call timeout also bounds the initialize handshake, which waits on the child bun starting:
+// about 0.3 s here (2026-10-04). With the old 500 ms, a loaded box that started it slower failed in
+// connect, before the hang this test is about was ever sent.
+const RPC_TIMEOUT_MS = 2_000
+
 test('Codex RPC times out and closes the connection', async () => {
   const f = fixture()
-  const rpc = await connectCodexRpc(f.home, { command: f.command, timeoutMs: 500 })
+  const rpc = await connectCodexRpc(f.home, { command: f.command, timeoutMs: RPC_TIMEOUT_MS })
   try {
     const error = await rpc.call('hang').then(
       () => '',
@@ -83,4 +88,4 @@ test('Codex RPC times out and closes the connection', async () => {
   } finally {
     await rpc.close()
   }
-})
+}, 20_000)

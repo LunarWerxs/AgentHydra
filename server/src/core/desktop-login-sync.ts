@@ -604,8 +604,10 @@ type DesktopSyncState = DesktopSyncContext['state'][string]
 interface DesktopPass {
   ctx: DesktopSyncContext
   profiles: DesktopProfile[]
-  /** The folders whose app runs now; null when that could not be read (nothing counts as closed). */
-  running: Set<string> | null
+  /** The folders whose app runs now; null when that could not be read (nothing counts as closed).
+   *  Scanned on first need and at most once a pass: a pass with no desktop login to decide (no
+   *  profile signed in here, nothing in the store to land) starts no process scan at all. */
+  running: () => Promise<Set<string> | null>
   own: Set<string>
   waiting: Set<string>
 }
@@ -801,7 +803,7 @@ async function syncProfile(
     hash: tokensHash(tokens.v2, tokens.v1),
     st: ctx.state[uuid],
     cookiesAt: mtimeOf(cookieDb(p.dir)),
-    isClosed: isClosedDir(pass.running, p.dir),
+    isClosed: isClosedDir(await pass.running(), p.dir),
     read: null,
   }
   if (!remote) {
@@ -847,11 +849,12 @@ async function syncStoreOnlyAccounts(
       continue
     }
     const target = pass.profiles.find((p) => !p.uuid && p.name === remote.name) ?? null
-    if (target && !isClosedDir(pass.running, target.dir)) {
+    const running = await pass.running()
+    if (target && !isClosedDir(running, target.dir)) {
       pass.waiting.add(uuid)
       continue
     }
-    if (!pass.running) continue
+    if (!running) continue
     const theirs = await ctx.download(uuid)
     if (theirs) await landFromStore(pass, theirs, target, remote.version)
   }
@@ -861,11 +864,11 @@ async function syncStoreOnlyAccounts(
 export async function syncDesktopLogins(ctx: DesktopSyncContext): Promise<void> {
   if (process.platform !== 'win32') return
   const profiles = listDesktopProfiles()
-  const running = await runningDesktopDirs()
+  let scan: Promise<Set<string> | null> | null = null
   const pass: DesktopPass = {
     ctx,
     profiles,
-    running,
+    running: () => (scan ??= runningDesktopDirs()),
     own: new Set<string>(),
     waiting: new Set<string>(),
   }
