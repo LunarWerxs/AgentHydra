@@ -162,6 +162,7 @@ import { parseResetTime } from './usage'
 export {
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
+  setCliMayteMemoryReader,
   setCliMayteOwnerDir,
 } from './climayte-core'
 export * from './climayte-journal'

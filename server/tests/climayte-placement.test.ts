@@ -10,9 +10,11 @@ import {
   climayteRun,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
+  setCliMayteMemoryReader,
   startCliMayte,
 } from '../src/climayte'
 import { type CliMayteAccount, dueOrder, pickAccount, rankAccounts } from '../src/climayte-lib'
+import { type MachineMemory, memoryShort } from '../src/climayte-memory'
 import {
   DEFAULT_TASK_PCT,
   expectedCost,
@@ -267,10 +269,23 @@ describe('which account a task starts on', () => {
   })
 })
 
+const GIB = 2 ** 30
+/** A 64 GB machine with `free` GB of RAM free and, when given, `commitFree` GB of a 160 GB commit
+ *  limit left. */
+const box = (free: number, commitFree: number | null = null): MachineMemory => ({
+  freeBytes: free * GIB,
+  totalBytes: 64 * GIB,
+  commitFreeBytes: commitFree === null ? null : commitFree * GIB,
+  commitLimitBytes: commitFree === null ? null : 160 * GIB,
+})
+
 describe('climayteCapacity', () => {
   // check_my_usage quotes this to every chat. 2026-10-02 04:58: it said 9 accounts sat idle while
   // 24 tasks waited, because it counted every account under the stop lines.
-  afterAll(() => setCliMayteAccountsProvider(null))
+  afterAll(() => {
+    setCliMayteAccountsProvider(null)
+    setCliMayteMemoryReader(null)
+  })
 
   test('says how many tasks already wait, and counts as idle only where a task would start now', () => {
     setCliMayteAccountsProvider(() => [])
@@ -287,7 +302,90 @@ describe('climayteCapacity', () => {
       { id: 'room-tight', num: 2, name: 'tight', configDir: dir, sessionPct: 70, weekPct: 10 },
     ])
     expect(climayteCapacity()).toMatchObject({ accounts: 2, idle: 1 })
+    // A machine out of memory starts nothing, so no account is idle with room.
+    setCliMayteMemoryReader(() => box(1))
+    expect(climayteCapacity()).toMatchObject({ accounts: 2, idle: 0 })
   })
+})
+
+describe('memoryShort (owner, 2026-10-04: the same progress with less memory)', () => {
+  test('a start leaves 8% of RAM and 5% of commit, counting workers still growing; an unread machine never holds', () => {
+    // 64 GB: the RAM floor is 5.12 GB, and a worker needs about 0.75 GB above it.
+    expect(memoryShort(box(6), 0)).toBeNull()
+    expect(memoryShort(box(5.5), 0)).toContain('5.5 GB of 64.0 GB RAM free')
+    // Two workers that started a minute ago are not in the reading yet: 6 GB holds one start, not
+    // three (2026-10-04: 33 started on one free figure).
+    expect(memoryShort(box(6), 2)).toContain('2 workers started in the last 2 minutes')
+    // RAM to spare, but the commit limit nearly reached (160 GB, floor 8 GB).
+    expect(memoryShort(box(30, 8.5), 0)).toContain('commit limit')
+    expect(memoryShort(box(30, 20), 0)).toBeNull()
+    expect(memoryShort(null, 50)).toBeNull()
+  })
+})
+
+describe('a task waits for memory, and starts on the first tick with room', () => {
+  // 2026-10-04: 33 workers ran at once with 0.5 GB of RAM free and commit at 96% of its limit.
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-memory-'))
+  const cwd = join(root, 'work')
+  const acctDir = join(root, 'acct')
+  for (const d of [cwd, acctDir]) mkdirSync(d, { recursive: true })
+  let group: string | null = null
+
+  afterAll(() => {
+    if (group) climayteCancel({ group })
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    setCliMayteMemoryReader(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test('held while a start would leave RAM under the floor, then run to done', async () => {
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    let memory = box(1)
+    setCliMayteMemoryReader(() => memory)
+    let ticks = 0
+    setCliMayteAccountsProvider(() => {
+      ticks++
+      return [
+        {
+          id: 'mem-roomy',
+          num: 61,
+          name: 'roomy',
+          configDir: acctDir,
+          sessionPct: 5,
+          weekPct: 5,
+          readAt: Date.now(),
+        },
+      ]
+    })
+    const until = async (ok: () => boolean) => {
+      const deadline = Date.now() + 20_000
+      while (!ok() && Date.now() < deadline) await Bun.sleep(100)
+    }
+    const aTick = async () => {
+      const seen = ticks
+      await until(() => ticks >= seen + 2)
+    }
+    startCliMayte()
+    // A named setting: an auto task would shift the scorecard's every-4th pick for later suites.
+    const run = climayteRun({
+      model: 'sonnet',
+      effort: 'medium',
+      modelWhy: 'the memory gate under test',
+      tasks: [{ prompt: 'do the fake task', cwd, title: 'fake' }],
+    })
+    group = run.group
+    const id = run.workers[0]?.id as string
+    const view = () => climayteList({ id })[0]
+    await aTick()
+    expect(view()?.status).toBe('queued')
+    expect(view()?.attempts).toHaveLength(0)
+    expect(view()?.error).toContain('Waiting for memory: 1.0 GB of 64.0 GB RAM free')
+    memory = box(32)
+    await until(() => view()?.status === 'done' || view()?.status === 'failed')
+    expect(view()?.status).toBe('done')
+    expect(view()?.attempts).toHaveLength(1)
+  }, 45_000)
 })
 
 describe('a reading over 10 minutes old is read again before a task starts there', () => {

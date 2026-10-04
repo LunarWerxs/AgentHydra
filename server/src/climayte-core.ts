@@ -44,6 +44,7 @@ import {
   READING_STALE_MS,
   summarizeEvent,
 } from './climayte-lib'
+import { type MachineMemory, readMachineMemory } from './climayte-memory'
 import {
   type CostEstimate,
   expectedCost,
@@ -459,6 +460,16 @@ export function setCliMayteOwnerDir(dir: string | null): void {
 /** Tests: supply the accounts. null restores the signed-in CLI instances. */
 export function setCliMayteAccountsProvider(fn: (() => CliMayteAccount[]) | null): void {
   accountsProvider = fn ?? signedInAccounts
+}
+
+/** This machine's free memory, which a start must leave room in (climayte-memory.ts). Off under
+ *  tests unless a test sets it, so a suite run on a busy box never holds its fake workers. */
+export let memoryReader: (() => MachineMemory | null) | null =
+  process.env.NODE_ENV === 'test' ? null : readMachineMemory
+
+/** Tests: read the machine's memory from `fn`. null turns the memory gate off. */
+export function setCliMayteMemoryReader(fn: (() => MachineMemory | null) | null): void {
+  memoryReader = fn
 }
 
 /** Every readable worker file under done/. One that cannot be read, or that names another worker

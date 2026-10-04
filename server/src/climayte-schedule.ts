@@ -7,6 +7,7 @@ import {
   basisText,
   changed,
   journal,
+  memoryReader,
   overageAllowed,
   perAccount,
   perAccountStrict,
@@ -30,6 +31,7 @@ import {
   WIND_DOWN_SESSION_PCT,
   weekStopPct,
 } from './climayte-lib'
+import { type MachineMemory, memoryShort, RAMP_MS } from './climayte-memory'
 import {
   type CliMaytePlacement,
   type CostEstimate,
@@ -60,6 +62,10 @@ interface TickState {
   costOf: ReturnType<typeof placementState>['costOf']
   running: Map<string, RunningLoad[]>
   finishedSince: Map<string, number>
+  /** The machine's free memory at the start of the tick (null: not read, nothing waits for it). */
+  memory: MachineMemory | null
+  /** Workers started within RAMP_MS, this tick's starts included: not yet in `memory`. */
+  growing: number
 }
 
 export function tickAccounts(): CliMayteAccount[] {
@@ -88,15 +94,29 @@ export function tickState(accounts: CliMayteAccount[], now: number): TickState {
   const allowFull = overageAllowed()
   const active = new Map<string, number>()
   const byGroup = new Map<string, Map<string, number>>()
+  let growing = 0
   for (const w of workers.values())
     if (w.status === 'running' && w.accountId) {
       bumpCount(active, w.accountId)
       bumpCount(groupCounts(byGroup, w.group), w.accountId)
+      if ((w.attempts.at(-1)?.startedAt ?? 0) > now - RAMP_MS) growing++
     }
   // What the other PC has running on an account counts here too (climayte-remote): not its groups.
   for (const [id, n] of remoteActiveCounts(now)) active.set(id, (active.get(id) ?? 0) + n)
   const { costOf, running, finishedSince } = placementState()
-  return { now, accounts, allowFull, active, byGroup, costOf, running, finishedSince }
+  const memory = memoryReader?.() ?? null
+  return {
+    now,
+    accounts,
+    allowFull,
+    active,
+    byGroup,
+    costOf,
+    running,
+    finishedSince,
+    memory,
+    growing,
+  }
 }
 
 /** When an account can next take work: the end of its usage wall, else its 5-hour reset. A login
@@ -356,6 +376,7 @@ function refusalOn(
  *  room. 2026-10-02 04:58: the hint counted every account with no worker under the stop lines and
  *  said 9 sat idle while placement held 24 tasks. */
 export function roomNow(s: TickState): CliMayteAccount[] {
+  if (memoryShort(s.memory, s.growing)) return []
   const { accounts, active, now, running, finishedSince } = s
   const probe = { accounts: null, accountId: null, attempts: [], priority: 0 }
   const placement = { expected: DEFAULT_TASK_PCT, running, finishedSince }
@@ -425,8 +446,30 @@ function holdForReading(s: TickState, w: CliMayteWorker, acct: CliMayteAccount):
   }
 }
 
+const MEMORY_HEAD = 'Waiting for memory'
+
+/** The machine has no room for another worker (climayte-memory.ts): the task stays queued and starts
+ *  on the first tick with room. Said once: the free figure moves every tick, and each new one would
+ *  be a journal line and a change event. */
+function holdForMemory(w: CliMayteWorker, short: string): void {
+  if (w.status === 'queued' && w.error?.startsWith(MEMORY_HEAD)) return
+  const why = `${MEMORY_HEAD}: ${short}. It starts the moment there is room (work finishing, or memory freed); nothing running is stopped.`
+  journal(w, 'waiting', { error: firstLine(why) })
+  w.status = 'queued'
+  w.error = why
+  w.waitUntil = null
+  changed(w)
+}
+
+/** startOn will start the task on `acct` this tick rather than hold it (no reading due there, and
+ *  the machine has the memory): a journal line about the start is written only then, not on every
+ *  tick it is held. */
+const goesNow = (s: TickState, acct: CliMayteAccount): boolean =>
+  !readingPending(acct, s.now) && !memoryShort(s.memory, s.growing)
+
 /** Start the task on the picked account, and count it there for the rest of this tick; first its
- *  usage is read again if that is due (holdForReading). */
+ *  usage is read again if that is due (holdForReading), and the machine must have the memory for it
+ *  (holdForMemory). */
 function startOn(
   s: TickState,
   w: CliMayteWorker,
@@ -436,6 +479,11 @@ function startOn(
 ): void {
   if (readingPending(acct, s.now)) {
     holdForReading(s, w, acct)
+    return
+  }
+  const short = memoryShort(s.memory, s.growing)
+  if (short) {
+    holdForMemory(w, short)
     return
   }
   const expected = cost.pct
@@ -453,6 +501,7 @@ function startOn(
     retryLaunch(w, acct, err)
   }
   if (w.status === 'running') {
+    s.growing++
     bumpCount(s.active, acct.id)
     bumpCount(groupActive, acct.id)
     s.running.set(acct.id, [
@@ -607,7 +656,7 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
     const past = firstTaker(spill, over)
     if (past) {
       const within = cap ?? 'the default'
-      if (!readingPending(past, now))
+      if (goesNow(s, past))
         journal(w, 'spill', {
           account: acctLabel(past),
           notice: `no account within its per_account (${within}) took it now`,
@@ -634,7 +683,7 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
   // (4) Nothing comes soon: start short where the most room is, if there is enough to work in.
   const roomy = (spill.length ? spill : ranked).find((a) => roomOn(s, a) >= MIN_START_ROOM_PCT)
   if (roomy) {
-    if (!readingPending(roomy, now))
+    if (goesNow(s, roomy))
       journal(w, 'start-short', {
         account: acctLabel(roomy),
         notice: `expected to use about ${Math.round(expected)}% of a Pro 5-hour window, about ${Math.round(roomOn(s, roomy))}% left there; it hands off at the ${WIND_DOWN_SESSION_PCT}% line and goes on where there is room`,

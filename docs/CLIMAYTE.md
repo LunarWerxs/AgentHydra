@@ -599,6 +599,35 @@ plan: a Max 5x window holds five Pro windows (`planFactor`).
 - An attempt's spend is read from the folder it ran in (`account.configDir` on the attempt), not from
   wherever the instance store points now.
 
+### Memory (`server/src/climayte-memory.ts`, owner, 2026-10-04)
+
+Owner, 2026-10-04: the same progress with less memory and CPU; memory is the cause, CPU the side
+effect. Placement weighs the accounts; this weighs the machine.
+
+- **What happened:** 33 workers ran at once beside the owner's own work on a 63 GB PC. Free RAM
+  swung between 0.5 and 5.8 GB, commit stood at 157-170 GB of a 165-177 GB limit, and Windows spent
+  about 5 of 32 threads compressing and paging memory. A worker started past that line adds no
+  progress: everything on the box slows, and at the commit limit allocations fail (a CLI dies, a
+  check goes red for the machine).
+- **The gate** (startOn, every start path: the pick, a spill, a short start): a start waits while it
+  would leave free RAM under 8% of the machine (`FREE_FLOOR_SHARE`, fairjob's floor) or, on Windows,
+  commit under 5% of its limit (`COMMIT_FLOOR_SHARE`). A worker counts as `WORKER_BYTES` (0.75 GB:
+  24.5 GB over the 33 worker trees measured that day; its CLI 544 MB private on average, its runner
+  123 MB). Workers that started within `RAMP_MS` (2 minutes), this tick's included, count as full
+  grown, since the reading does not show them yet; without that, one free figure lets a whole burst
+  through.
+- **Held, not refused:** the task stays `queued` with "Waiting for memory: ..." (journaled once, not
+  every tick) and starts on the first tick with room, highest priority first (`dueOrder`). Nothing
+  running is stopped or slowed. The spill and start-short journal lines are written only when the
+  start goes ahead (`goesNow`).
+- **Capacity:** with no room for a worker, `climayteCapacity` reports `idle: 0`, so check_my_usage
+  tells a chat there is no room to hand work over.
+- **Reading:** Windows `GlobalMemoryStatusEx` (bun:ffi, opened once; available physical and the
+  commit charge); Linux `/proc/meminfo` MemAvailable, no commit floor (overcommit makes it no
+  limit). macOS and a failed read give no reading, and no reading holds nothing: os.freemem on macOS
+  leaves out reclaimable memory and would hold every task on a healthy machine. Off under tests
+  unless a test sets `setCliMayteMemoryReader`.
+
 ### Journal (`server/src/climayte-journal.ts`)
 
 The owner's ask on the first real run ("we probably also need logging in CliMayte"): one short JSON
