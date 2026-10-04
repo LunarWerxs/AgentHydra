@@ -207,6 +207,136 @@ describe('ingestClaude', () => {
     expect(hourly()).toEqual({ calls: 2, output: 100 })
   })
 
+  const ledger = (store: KitStore, table = 'usage_session') =>
+    store.db
+      .query(
+        `select session, instance, calls, output, first_ts, last_ts from ${table} order by session, instance`,
+      )
+      .all()
+  const hourTotals = (store: KitStore) =>
+    store.db.query('select sum(calls) as calls, sum(output) as output from usage_hour').get()
+
+  test('an old session has its total in the session ledger, settled part included, and a raw call joins it', async () => {
+    const f = fixture()
+    const opts = { maxBytesPerSec: Number.POSITIVE_INFINITY, now: NOW }
+    const oldTs = NOW - 60 * DAY
+    f.file('p/old.jsonl', reply('o1', oldTs) + reply('o2', oldTs + 5000, 70))
+    f.file('p/mix.jsonl', reply('m1', oldTs) + reply('m2', NOW - 1000))
+    await ingestClaude(f.store, [rootOf(f.dir, () => cliOwner(() => UUID_A))], opts)
+    f.store.runMaintenance(NOW)
+    const want = [
+      {
+        session: 'mix',
+        instance: 'cli:inst1',
+        calls: 2,
+        output: 100,
+        first_ts: oldTs,
+        last_ts: NOW - 1000,
+      },
+      {
+        session: 'old',
+        instance: 'cli:inst1',
+        calls: 2,
+        output: 120,
+        first_ts: oldTs,
+        last_ts: oldTs + 5000,
+      },
+    ]
+    expect(ledger(f.store)).toEqual(want)
+    // the settled part holds only what is no longer raw
+    expect(ledger(f.store, 'usage_session_settled').map((r: any) => [r.session, r.calls])).toEqual([
+      ['mix', 1],
+      ['old', 2],
+    ])
+  })
+
+  test('a session copied into two config dirs counts once, for raw and for old calls', async () => {
+    const f = fixture()
+    const opts = { maxBytesPerSec: Number.POSITIVE_INFINITY, now: NOW }
+    const oldTs = NOW - 60 * DAY
+    const text = reply('c1', oldTs) + reply('c2', NOW - 9000)
+    f.file('orig/p/s.jsonl', text)
+    f.file('copy/p/s.jsonl', text + reply('c3', oldTs + 1000)) // the copy carries on with one more old call
+    const roots = [
+      rootOf(join(f.dir, 'orig'), () => cliOwner(() => UUID_A, 'one')),
+      rootOf(join(f.dir, 'copy'), () => cliOwner(() => UUID_B, 'two')),
+    ]
+    await ingestClaude(f.store, roots, opts)
+    f.store.runMaintenance(NOW)
+    expect(hourTotals(f.store)).toEqual({ calls: 3, output: 150 })
+    expect(ledger(f.store)).toEqual([
+      {
+        session: 's',
+        instance: 'cli:one',
+        calls: 2,
+        output: 100,
+        first_ts: oldTs,
+        last_ts: NOW - 9000,
+      },
+      {
+        session: 's',
+        instance: 'cli:two',
+        calls: 1,
+        output: 50,
+        first_ts: oldTs + 1000,
+        last_ts: oldTs + 1000,
+      },
+    ])
+  })
+
+  test('the upgrade drops only Claude old rows and settled sessions, and the next sweep counts them once', async () => {
+    const f = fixture()
+    const opts = { maxBytesPerSec: Number.POSITIVE_INFINITY, now: NOW }
+    const roots = [rootOf(f.dir, () => cliOwner(() => UUID_A))]
+    const oldTs = NOW - 60 * DAY
+    f.file('p/s.jsonl', reply('u1', oldTs) + reply('u2', NOW - 1000))
+    await ingestClaude(f.store, roots, opts)
+    f.store.runMaintenance(NOW)
+    const claude = () =>
+      f.store.db
+        .query(
+          "select sum(calls) as calls, sum(output) as output from usage_hour where source = 'cli'",
+        )
+        .get()
+    expect(claude()).toEqual({ calls: 2, output: 100 })
+
+    // an HSwarm row below the cut, and what 7356156f's ingest left: the old call counted a second time
+    f.store.addToHourly([{ id: 'h1', ts: oldTs, source: 'hswarm', instance: 'hs', output: 7 }])
+    f.store.addToHourly([
+      { id: 'dup', ts: oldTs, source: 'cli', instance: 'cli:inst1', output: 50 },
+    ])
+    f.store.db.exec("delete from meta where key = 'claude_ingest_version'")
+    f.store.db.exec('update ingest_cursor set version = 1')
+    f.store.db.exec('delete from settled_claim')
+
+    await ingestClaude(f.store, roots, opts)
+    f.store.runMaintenance(NOW)
+    const hour = f.store.db
+      .query(
+        'select source, sum(calls) as calls, sum(output) as output from usage_hour group by source order by source',
+      )
+      .all()
+    expect(hour).toEqual([
+      { source: 'cli', calls: 2, output: 100 },
+      { source: 'hswarm', calls: 1, output: 7 },
+    ])
+    expect(ledger(f.store)).toEqual([
+      {
+        session: 's',
+        instance: 'cli:inst1',
+        calls: 2,
+        output: 100,
+        first_ts: oldTs,
+        last_ts: NOW - 1000,
+      },
+    ])
+
+    // current version: a further sweep does not reset anything
+    await ingestClaude(f.store, roots, { ...opts, fullPass: true })
+    f.store.runMaintenance(NOW)
+    expect(claude()).toEqual({ calls: 2, output: 100 })
+  })
+
   test('a session copied into another instance keeps its calls with the first account that ran them', async () => {
     const f = fixture()
     const text = reply('x1', NOW - 9000) + reply('x2', NOW - 8000)

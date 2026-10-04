@@ -3,6 +3,7 @@
 // (kept forever), a per-session ledger in usage_session (kept forever), per-file ingest cursors and a meta table. Nothing here reads a source file; ingest
 // and the query API are separate pieces.
 import { Database } from 'bun:sqlite'
+import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DATA_DIR } from '../config'
@@ -10,6 +11,7 @@ import {
   dropKitSchema,
   KIT_HOUR_DIMS,
   KIT_MEASURES,
+  KIT_SESSION_KEY,
   migrateKitSchema,
   sessionAddSql,
   sessionAggSql,
@@ -219,6 +221,69 @@ export class KitStore {
       }
     })()
     return events.length
+  }
+
+  /**
+   * Settle calls already older than the raw window without a usage_event row: they are added to usage_hour,
+   * to the live session ledger and to its settled part (the same keys pruneRaw folds raw rows under).
+   * First claim wins: an id that has a raw row, or was settled before (by this source or a copy of it in
+   * another), is dropped. Additive, so the caller writes the file's cursor in the same transaction.
+   * Returns calls settled.
+   */
+  settleOld(events: readonly UsageEventInput[]): number {
+    const inRaw = this.db.prepare('select 1 from usage_event where id = ?')
+    const claim = this.db.prepare('insert or ignore into settled_claim (h) values (?)')
+    let fresh: UsageEventInput[] = []
+    this.db.transaction(() => {
+      fresh = events.filter(
+        (e) =>
+          !inRaw.get(e.id) &&
+          claim.run(createHash('sha1').update(e.id).digest().readBigInt64BE(0)).changes === 1,
+      )
+      this.addToHourly(fresh)
+      this.addToSessions(fresh)
+    })()
+    return fresh.length
+  }
+
+  /** Add events to usage_session and usage_session_settled (both keep them forever). */
+  private addToSessions(events: readonly UsageEventInput[]): void {
+    if (events.length === 0) return
+    const nullable = new Set(['list_usd', 'billed_usd', 'seconds'])
+    const groups = new Map<
+      string,
+      { e: UsageEventInput; first: number; last: number; calls: number; n: Record<string, number> }
+    >()
+    for (const e of events) {
+      const key = KIT_SESSION_KEY.map((k) => e[k] ?? '').join('\u0000')
+      let g = groups.get(key)
+      if (!g) {
+        g = { e, first: e.ts, last: e.ts, calls: 0, n: {} }
+        groups.set(key, g)
+      }
+      g.calls++
+      g.first = Math.min(g.first, e.ts)
+      g.last = Math.max(g.last, e.ts)
+      for (const m of KIT_MEASURES) {
+        const v = e[m]
+        if (v != null) g.n[m] = (g.n[m] ?? 0) + v
+      }
+    }
+    const select = `select ${KIT_SESSION_KEY.map((k) => `$${k}`).join(', ')}, $first, $last, $calls, 0, 0,
+      ${KIT_MEASURES.map((m) => `$${m}`).join(', ')} where true`
+    const stmts = ['usage_session', 'usage_session_settled'].map((t) =>
+      this.db.prepare(sessionAddSql(t, select)),
+    )
+    for (const g of groups.values()) {
+      const p: Record<string, string | number | null> = {
+        $first: g.first,
+        $last: g.last,
+        $calls: g.calls,
+      }
+      for (const k of KIT_SESSION_KEY) p[`$${k}`] = g.e[k] ?? ''
+      for (const m of KIT_MEASURES) p[`$${m}`] = g.n[m] ?? (nullable.has(m) ? null : 0)
+      for (const s of stmts) s.run(p)
+    }
   }
 
   // ---- meta ----

@@ -2,7 +2,7 @@
 // Gated on PRAGMA user_version: a file with a lower version is migrated step by step, a higher one is
 // refused. The store is an index over the sources' own files, so a drop and rebuild is always safe.
 
-export const KIT_SCHEMA_VERSION = 2
+export const KIT_SCHEMA_VERSION = 3
 
 /** Measures summed by the hourly rollup (tokens by kind, money, quota units, counts). */
 export const KIT_MEASURES = [
@@ -52,6 +52,7 @@ export const KIT_TABLES = [
   'usage_hour',
   'usage_session',
   'usage_session_settled',
+  'settled_claim',
   'ingest_cursor',
   'meta',
 ] as const
@@ -160,6 +161,15 @@ ${sessionTableDdl('usage_session_settled')}
 create index if not exists usage_event_session on usage_event (coalesce(session, ''), coalesce(ref, ''));
 `
 
+/**
+ * v3: settled_claim holds a 64-bit hash of the id of every call that went straight to the rollups
+ * (older than the raw window, so it has no usage_event row). The hash is the rowid, so a row is the
+ * hash and nothing else; the first source to claim an id keeps the call.
+ */
+export const KIT_DDL_V3 = `
+create table if not exists settled_claim (h integer primary key);
+`
+
 /** SELECT of usage_event rows (optionally filtered) aggregated to usage_session's key and columns. */
 export function sessionAggSql(where = '1'): string {
   const sums = KIT_MEASURES.map((m) => `sum(${m})`).join(', ')
@@ -228,6 +238,7 @@ export function migrateKitSchema(db: Exec): void {
   }
   // Covers the per-source coverage summary; idempotent, so a file at any version gets it.
   db.exec('create index if not exists usage_event_source_ts on usage_event (source, ts)')
+  if (have < 3) db.exec(KIT_DDL_V3)
   if (have !== KIT_SCHEMA_VERSION) db.exec(`pragma user_version = ${KIT_SCHEMA_VERSION}`)
 }
 

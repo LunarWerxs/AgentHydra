@@ -17,12 +17,13 @@
 //  * CURSOR rules (same as account-tokens): a file that only grew is read from the saved offset, a
 //    shrunk one from 0, an unfinished last line waits (the offset stops at the last newline).
 //    A rewrite that keeps or grows the size is not noticed; transcripts are append-only.
-//  * THE 35-DAY WINDOW. A call older than the raw window goes straight to usage_hour (store.addToHourly,
-//    additive, in the same transaction as the file's cursor). Re-reading a file from 0 after a shrink
-//    or a version bump skips those rows, which were counted the first time.
+//  * THE 35-DAY WINDOW. A call older than the raw window goes straight to usage_hour and the session
+//    ledger (store.settleOld, additive, in the same transaction as the file's cursor), with no raw row.
+//    Re-reading a file from 0 (a shrink) skips those calls: their ids are in settled_claim.
 //  * A session moved between config dirs (a CliMayte handoff copies the transcript) has the same message
-//    ids in both. Files go OLDEST first and the first to claim an id keeps it, so the account that ran
-//    the call is the one credited; account-tokens, counting per file, credits the copy's account too.
+//    ids in both. Files go OLDEST first and the first to claim an id keeps it (raw calls by their
+//    usage_event row, old calls by settled_claim), so the account that ran the call is the one credited;
+//    account-tokens, counting per file, credits the copy's account too.
 //  * GENTLE. The first sweep reads tens of GB. Files go oldest first, in READ_CHUNK pieces, each piece
 //    followed by a yield to the event loop; the read rate is capped (maxBytesPerSec) and the store is
 //    committed every FLUSH_BYTES, so a restart continues at the last commit.
@@ -37,10 +38,14 @@ import { POINTER_DIR } from '../instance'
 import { pricesAsOf, priceTokens } from '../pricing'
 import { hswarmAccountId } from '../routes/hswarm'
 import { accumulateUsageLine, defaultConfigDir, emptySpend } from '../usage-tokens'
+import { sessionAddSql, sessionAggSql } from './schema'
 import { hourStart, type KitStore, RAW_RETENTION_DAYS, type UsageEventInput } from './store'
 
-/** Bump to make every cursor read its file again (a parser fix that changes what is extracted). */
-export const CLAUDE_INGEST_VERSION = 1
+/**
+ * Bump to make every cursor read its file again (a parser fix that changes what is extracted). The next
+ * sweep also drops Claude's old part of the store (upgradeClaudeStore), so the re-read cannot double it.
+ */
+export const CLAUDE_INGEST_VERSION = 2
 
 /** Bytes read per step; each step ends in a yield to the event loop. */
 const READ_CHUNK = 4 * 1024 * 1024
@@ -280,6 +285,40 @@ function makeThrottle(maxBytesPerSec: number) {
   }
 }
 
+/** The sources this ingest writes; HSwarm and the foreign ingest use others. */
+const CLAUDE_SOURCES = ['cli', 'desktop', 'climayte']
+
+/**
+ * Once per CLAUDE_INGEST_VERSION: forget Claude's old part so it is read again under the current rules.
+ * Drops Claude's usage_hour rows below the raw window, its settled session rows and settled claims, and
+ * the cursors under `roots`; the live session ledger is rebuilt from the raw rows that remain. Raw rows,
+ * HSwarm rows and the foreign sources are not touched. A sweep after it counts each old call once.
+ */
+export function upgradeClaudeStore(
+  store: KitStore,
+  roots: readonly ClaudeRoot[],
+  now: number,
+): void {
+  const have = store.getMeta('claude_ingest_version')
+  if (have === String(CLAUDE_INGEST_VERSION)) return
+  const cut = hourStart(now - RAW_RETENTION_DAYS * DAY_MS)
+  const list = CLAUDE_SOURCES.map((s) => `'${s}'`).join(',')
+  store.db.transaction(() => {
+    // Fold doomed raw rows first, so nothing below the cut is left half raw, half settled.
+    store.pruneRaw(now)
+    store.db.query(`delete from usage_hour where hour < ? and source in (${list})`).run(cut)
+    store.db.exec(`delete from usage_session_settled where source in (${list})`)
+    store.db.exec(`delete from usage_session where source in (${list})`)
+    store.db.exec(sessionAddSql('usage_session', sessionAggSql(`source in (${list})`)))
+    store.db.exec('delete from settled_claim')
+    for (const r of roots)
+      store.db
+        .query('delete from ingest_cursor where path >= ? and path < ?')
+        .run(r.dir, `${r.dir}￿`)
+    store.setMeta('claude_ingest_version', String(CLAUDE_INGEST_VERSION))
+  })()
+}
+
 /** One sweep over every root. Only bytes that arrived since the last sweep are read. */
 export async function ingestClaude(
   store: KitStore,
@@ -294,6 +333,7 @@ export async function ingestClaude(
   const throttle = makeThrottle(opts.maxBytesPerSec ?? DEFAULT_MAX_BYTES_PER_SEC)
   const priceVer = pricesAsOf()
   const rawCutoff = hourStart(now - RAW_RETENTION_DAYS * DAY_MS)
+  upgradeClaudeStore(store, roots, now)
   const accountIds = new Map<string, string>()
   const accountId = (uuid: string | null): string | null => {
     if (!uuid) return null
@@ -361,8 +401,6 @@ export async function ingestClaude(
     // Shrunk (or the offset lies past the end): the file was rewritten, read it whole.
     const reset = known !== null && (st.size < known.size || start > st.size)
     if (reset) start = 0
-    // A re-read of a file counted before must not add its old rows to usage_hour a second time.
-    const recount = !!cur && (reset || !known)
     const ctx = {
       session: c.session,
       agent: c.agent,
@@ -373,7 +411,7 @@ export async function ingestClaude(
       accountId,
     }
     try {
-      const r = await readFileInto(store, c.path, start, st, ctx, rawCutoff, recount, throttle)
+      const r = await readFileInto(store, c.path, start, st, ctx, rawCutoff, throttle)
       sum.files++
       sum.bytes += r.bytes
       sum.events += r.events
@@ -393,7 +431,6 @@ async function readFileInto(
   st: { size: number; mtimeMs: number },
   ctx: Parameters<typeof claudeLineEvent>[2],
   rawCutoff: number,
-  recount: boolean,
   throttle: (n: number) => Promise<void>,
 ): Promise<{ bytes: number; events: number; hourly: number }> {
   const fh = await open(path, 'r')
@@ -416,7 +453,7 @@ async function readFileInto(
     const commit = (offset: number, size: number) => {
       store.db.transaction(() => {
         out.events += store.upsertEvents(unclaimed([...raw.values()]))
-        if (!recount) out.hourly += store.addToHourly([...old.values()])
+        out.hourly += store.settleOld([...old.values()])
         store.setCursor({
           path,
           size,

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { KIT_SCHEMA_VERSION } from '../src/kit/schema'
 import { KitStore, localDay } from '../src/kit/store'
 
 const H = 3_600_000
@@ -164,7 +165,7 @@ describe('session ledger and the raw cut', () => {
     s.db.exec('drop table usage_session; drop table usage_session_settled; pragma user_version = 1')
     const { migrateKitSchema } = require('../src/kit/schema')
     migrateKitSchema(s.db)
-    expect(s.db.query('pragma user_version').get()).toEqual({ user_version: 2 })
+    expect(s.db.query('pragma user_version').get()).toEqual({ user_version: KIT_SCHEMA_VERSION })
     expect(ledger(s)).toMatchObject([{ session: 's', calls: 1, input: 5 }])
   })
 })
