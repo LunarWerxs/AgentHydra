@@ -32,7 +32,7 @@ import {
   isApiErrorEvent,
   limitEventText,
 } from './rate-limit-signal'
-import { sumTranscriptTokens } from './usage-tokens'
+import { contextOf, parseUsageLine, readTurnUsage, sumTranscriptTokens } from './usage-tokens'
 
 export type CliMayteStatus =
   | 'queued'
@@ -701,12 +701,11 @@ export const CONTEXT_HANDOFF_TOKENS = 150_000
 /** The conversation's size in tokens: what the newest main-agent request in `events` read (input,
  *  cache reads and cache writes). Null when they hold no such request. */
 export function contextTokens(events: unknown[]): number | null {
-  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i] as any
-    const u = ev?.type === 'assistant' && !ev.parent_tool_use_id ? ev.message?.usage : null
-    if (!u || typeof u !== 'object') continue
-    return n(u.input_tokens) + n(u.cache_read_input_tokens) + n(u.cache_creation_input_tokens)
+    const u =
+      ev?.type === 'assistant' && !ev.parent_tool_use_id ? readTurnUsage(ev.message?.usage) : null
+    if (u) return contextOf(u)
   }
   return null
 }
@@ -1199,23 +1198,10 @@ export interface AttemptSpend {
 /** The first assistant request's usage in [startedAt, endedAt] of a transcript, or null. */
 function firstRequest(text: string, startedAt: number, endedAt: number): CliMayteTokens | null {
   for (const line of text.split('\n')) {
-    if (!line.includes('"usage"') || !line.includes('"assistant"')) continue
-    let rec: { type?: string; timestamp?: string; message?: { usage?: Record<string, unknown> } }
-    try {
-      rec = JSON.parse(line)
-    } catch {
-      continue
-    }
-    const at = rec.timestamp ? Date.parse(rec.timestamp) : Number.NaN
-    const u = rec.message?.usage
-    if (rec.type !== 'assistant' || !u || !(at >= startedAt && at <= endedAt)) continue
-    const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
-    return {
-      input: n(u.input_tokens),
-      output: n(u.output_tokens),
-      cacheRead: n(u.cache_read_input_tokens),
-      cacheWrite: n(u.cache_creation_input_tokens),
-    }
+    const turn = parseUsageLine(line)
+    if (!turn || !(turn.ts >= startedAt && turn.ts <= endedAt)) continue
+    const u = turn.usage
+    return { input: u.input, output: u.output, cacheRead: u.cacheRead, cacheWrite: u.cacheCreation }
   }
   return null
 }

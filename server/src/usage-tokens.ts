@@ -175,6 +175,78 @@ function splitCacheWrite(usage: RawUsage): { w5m: number; w1h: number } {
   return { w5m: total, w1h: 0 }
 }
 
+/** One request's token counts as a transcript's `usage` block states them. */
+export interface TurnUsage {
+  input: number
+  output: number
+  cacheRead: number
+  /** All cache writes; `w5m` + `w1h` always sum to it. */
+  cacheCreation: number
+  w5m: number
+  w1h: number
+}
+
+/** The counts in a `usage` block (a transcript line's or a stream event's); null if it is not one. */
+export function readTurnUsage(usage: unknown): TurnUsage | null {
+  if (!usage || typeof usage !== 'object') return null
+  const u = usage as RawUsage
+  const { w5m, w1h } = splitCacheWrite(u)
+  return {
+    input: num(u.input_tokens),
+    output: num(u.output_tokens),
+    cacheRead: num(u.cache_read_input_tokens),
+    cacheCreation: num(u.cache_creation_input_tokens),
+    w5m,
+    w1h,
+  }
+}
+
+/** What a request's context held: input, cache reads and cache writes (output is not in it). */
+export const contextOf = (u: TurnUsage): number => u.input + u.cacheRead + u.cacheCreation
+
+/** One assistant transcript line's request. */
+export interface UsageLine {
+  /** ms since epoch; NaN when the line carries no usable timestamp. */
+  ts: number
+  model: string
+  messageId?: string
+  requestId?: string
+  usage: TurnUsage
+}
+
+/**
+ * Parse ONE transcript line: the assistant turn's usage, model, ids and time, or null when the line
+ * is anything else (not JSON, a partial trailing write, a user turn or tool result, which can echo
+ * a `usage` and would double-count the same spend). The only place a transcript line's usage is
+ * read; every token counter in the product goes through it.
+ */
+export function parseUsageLine(line: string): UsageLine | null {
+  if (line?.charCodeAt(0) !== 123 /* '{' */) return null
+  // Cheap pre-filter: skip the ~90% of lines that cannot contribute, before paying for JSON.parse.
+  if (!line.includes('"usage"')) return null
+  let rec: {
+    type?: string
+    timestamp?: string
+    requestId?: string
+    message?: { id?: string; model?: string; usage?: RawUsage }
+  }
+  try {
+    rec = JSON.parse(line)
+  } catch {
+    return null
+  }
+  if (rec?.type !== 'assistant') return null
+  const usage = readTurnUsage(rec.message?.usage)
+  if (!usage) return null
+  return {
+    ts: rec.timestamp ? Date.parse(rec.timestamp) : Number.NaN,
+    model: rec.message?.model ?? 'unknown',
+    messageId: rec.message?.id,
+    requestId: rec.requestId,
+    usage,
+  }
+}
+
 /**
  * Requests already counted, so one API response is charged once.
  *
@@ -222,41 +294,19 @@ export function accumulateUsageLine(
   /** See {@link newUsageSeen}. Omit only where a caller genuinely wants every record counted. */
   seen?: UsageSeen,
 ): number | null {
-  if (line?.charCodeAt(0) !== 123 /* '{' */) return null
-  // Cheap pre-filter: skip the ~90% of lines that cannot contribute, before paying for JSON.parse.
-  if (!line.includes('"usage"')) return null
-
-  let rec: {
-    type?: string
-    timestamp?: string
-    requestId?: string
-    message?: { id?: string; model?: string; usage?: RawUsage }
-  }
-  try {
-    rec = JSON.parse(line)
-  } catch {
-    return null // partial trailing write, or a line we don't understand
-  }
-  // Only an ASSISTANT turn spends quota. A user turn or tool result can carry a `usage` echo, and
-  // counting those would double-count the same spend.
-  if (rec.type !== 'assistant') return null
-  const usage = rec.message?.usage
-  if (!usage) return null
-  const ts = rec.timestamp ? Date.parse(rec.timestamp) : Number.NaN
+  const turn = parseUsageLine(line)
+  if (!turn) return null
+  const ts = turn.ts
   const dated = Number.isFinite(ts)
   if (sinceMs > 0 && (!dated || ts < sinceMs)) return null
 
-  let input = num(usage.input_tokens)
-  let output = num(usage.output_tokens)
-  let cacheRead = num(usage.cache_read_input_tokens)
-  let cacheCreation = num(usage.cache_creation_input_tokens)
-  let { w5m, w1h } = splitCacheWrite(usage)
-  const model = rec.message?.model ?? 'unknown'
+  let { input, output, cacheRead, cacheCreation, w5m, w1h } = turn.usage
+  const model = turn.model
 
   // ONE API RESPONSE, SEVERAL RECORDS. See newUsageSeen: Claude Code writes a transcript record per
   // content block and stamps the SAME complete usage object on every one, so a reply with text plus
   // two tool calls appears three times at full price. Counted once here.
-  const key = rec.requestId ? `${rec.message?.id ?? ''}|${rec.requestId}` : ''
+  const key = turn.requestId ? `${turn.messageId ?? ''}|${turn.requestId}` : ''
   if (seen && key) {
     const applied = seen.get(key)
     if (applied === undefined) {

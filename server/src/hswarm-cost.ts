@@ -63,58 +63,6 @@ export function readHSwarmLedger(root: string = hswarmHome()): HSwarmLedgerEntry
   return out
 }
 
-/** One day/model/backend bucket's total spend. */
-export interface HSwarmCostRow {
-  /** UTC calendar day, taken straight off `ts` (`2026-09-15`) - the ledger already writes UTC. */
-  day: string
-  model: string
-  backend: string
-  cost_usd: number
-  tasks: number
-}
-
-export interface HSwarmCostSummary {
-  rows: HSwarmCostRow[]
-  total_usd: number
-  /** Tasks whose backend keeps no cost data (`dsh`) or that errored before anything priced - counted
-   *  so `total_usd` never LOOKS complete when part of the ledger is genuinely unpriced. */
-  unpriced_tasks: number
-}
-
-/**
- * Sum `cost_usd` from the ledger by day/model/backend.
- *
- * A `null` cost contributes zero dollars but is still counted in `unpriced_tasks`, so "the swarm
- * spent nothing today" and "the swarm spent an amount we cannot see" stay distinguishable - folding
- * null into 0 silently would report the second as the first.
- */
-export function summarizeHSwarmCost(root: string = hswarmHome()): HSwarmCostSummary {
-  const buckets = new Map<string, HSwarmCostRow>()
-  let total = 0
-  let unpriced = 0
-  for (const entry of readHSwarmLedger(root)) {
-    const day = (entry.ts || '').slice(0, 10) || 'unknown'
-    const model = entry.model || 'unknown'
-    const backend = entry.backend || 'unknown'
-    const key = `${day}\u0001${model}\u0001${backend}`
-    let row = buckets.get(key)
-    if (!row) {
-      row = { day, model, backend, cost_usd: 0, tasks: 0 }
-      buckets.set(key, row)
-    }
-    row.tasks++
-    if (typeof entry.cost_usd === 'number' && Number.isFinite(entry.cost_usd)) {
-      row.cost_usd += entry.cost_usd
-      total += entry.cost_usd
-    } else {
-      unpriced++
-    }
-  }
-  // Newest day first, matching how every other spend list in this codebase orders its rows.
-  const rows = [...buckets.values()].sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))
-  return { rows, total_usd: total, unpriced_tasks: unpriced }
-}
-
 // --- the DeepSeek account balance, cached and never throwing ------------------------------------
 
 const BALANCE_URL = 'https://api.deepseek.com/user/balance'

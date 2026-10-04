@@ -46,6 +46,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CLAUDE_PROJECTS_ROOT } from '../config'
 import type { AccountTokens, TokenParts, UsageSnapshot } from '../types'
+import { parseUsageLine } from '../usage-tokens'
 import { collectChatsAsync, lineageIdsOf } from './chat-store-scan'
 import { listCliInstances } from './cli-instances'
 import { accountHoldersFile, accountTokensCacheFile, appDataDir } from './paths'
@@ -67,31 +68,30 @@ function parseMessages(
   let unnamed = 0
   const lines = text.split('\n')
   for (let n = 0; n < lines.length; n++) {
-    const line = lines[n] as string
-    if (!line.includes('"usage"')) continue
-    let entry: {
-      type?: string
-      timestamp?: string
-      message?: { id?: string; usage?: Record<string, unknown> }
-    }
-    try {
-      entry = JSON.parse(line)
-    } catch {
+    const turn = parseUsageLine(lines[n] as string)
+    if (!turn) continue
+    const u = turn.usage
+    // One usage per reply, as usage-tokens counts it: a repeat is dropped, and a record with more
+    // output than the one kept is that reply's finished form, so only its output replaces.
+    const id = turn.messageId
+      ? turn.requestId
+        ? `${turn.messageId}|${turn.requestId}`
+        : turn.messageId
+      : `line-${unnamed++}`
+    const kept = byMessage.get(id)
+    if (kept) {
+      if (u.output > (kept.row[2] as number)) kept.row[2] = u.output
       continue
     }
-    const usage = entry?.message?.usage
-    if (entry?.type !== 'assistant' || !usage) continue
-    const ts = Date.parse(entry.timestamp ?? '')
-    const id = entry.message?.id ?? `line-${unnamed++}`
     byMessage.set(id, {
       row: [
-        Number.isFinite(ts) ? ts : fallbackTs,
-        Number(usage.input_tokens) || 0,
-        Number(usage.output_tokens) || 0,
-        Number(usage.cache_read_input_tokens) || 0,
-        Number(usage.cache_creation_input_tokens) || 0,
+        Number.isFinite(turn.ts) ? turn.ts : fallbackTs,
+        u.input,
+        u.output,
+        u.cacheRead,
+        u.cacheCreation,
       ],
-      line: byMessage.get(id)?.line ?? n,
+      line: n,
     })
   }
   const all = [...byMessage.values()]

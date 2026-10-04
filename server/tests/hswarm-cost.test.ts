@@ -15,7 +15,6 @@ import {
   readDeepSeekKey,
   readHSwarmLedger,
   resetHSwarmBalanceCache,
-  summarizeHSwarmCost,
 } from '../src/hswarm-cost'
 
 const homes: string[] = []
@@ -112,37 +111,6 @@ describe('readHSwarmLedger', () => {
 
   test('a missing ledger reads as empty, not an error', () => {
     expect(readHSwarmLedger(join(tmpdir(), 'no-such-hswarm-home'))).toEqual([])
-  })
-})
-
-describe('summarizeHSwarmCost', () => {
-  test('sums cost_usd by day/model/backend, and counts unpriced tasks separately', () => {
-    const home = newHome()
-    writeLedger(home, LEDGER_ROWS)
-    const summary = summarizeHSwarmCost(home)
-    expect(summary.total_usd).toBeCloseTo(0.0003 + 0.0002 + 0.05, 6)
-    expect(summary.unpriced_tasks).toBe(1) // the dsh-backend row
-    // two same-day/model/backend rows collapse into one bucket
-    const flashBucket = summary.rows.find(
-      (r) => r.day === '2026-09-15' && r.model === 'deepseek-flash' && r.backend === 'api',
-    )
-    expect(flashBucket?.tasks).toBe(2)
-    expect(flashBucket?.cost_usd).toBeCloseTo(0.0005, 6)
-    // the dsh row still gets a bucket, just at $0
-    const dshBucket = summary.rows.find((r) => r.backend === 'dsh')
-    expect(dshBucket?.cost_usd).toBe(0)
-    expect(dshBucket?.tasks).toBe(1)
-    // newest day first
-    expect(summary.rows[0]?.day >= summary.rows[summary.rows.length - 1]!.day).toBe(true)
-  })
-
-  test('an empty ledger summarizes to zero, not an error', () => {
-    const home = newHome()
-    writeLedger(home, [])
-    const summary = summarizeHSwarmCost(home)
-    expect(summary.rows).toEqual([])
-    expect(summary.total_usd).toBe(0)
-    expect(summary.unpriced_tasks).toBe(0)
   })
 })
 
