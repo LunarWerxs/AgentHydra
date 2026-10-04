@@ -11,6 +11,7 @@
  * tunnel without app-layer auth - the caller refuses to start one unless OIDC is configured.
  */
 import { type ChildProcess, spawn } from 'node:child_process'
+import { networkInterfaces } from 'node:os'
 
 /**
  * Injection point for tests: a fake child (EventEmitter-based, matching just the surface below)
@@ -30,6 +31,17 @@ export interface TunnelHandle {
 
 export function cloudflaredExecutable(platform = process.platform): string {
   return process.env.CLOUDFLARED ?? (platform === 'win32' ? 'cloudflared.exe' : 'cloudflared')
+}
+
+/**
+ * The address cloudflared dials Cloudflare's edge from when `tunnel.edgeInterface` names a network card: that
+ * card's IPv4 address, or null when it has none right now (unplugged, renamed). A full-tunnel VPN can drop the
+ * edge's port 7844 for QUIC and HTTP/2 alike (2026-10-04: every dial timed out from the VPN's address, so the
+ * connector never registered and the hostname answered 530). cloudflared bound to the physical card's address
+ * goes out that card while everything else stays on the VPN. Looked up at every start, because DHCP moves it.
+ */
+export function edgeBindAddress(name: string, interfaces = networkInterfaces()): string | null {
+  return (interfaces[name] ?? []).find((a) => a.family === 'IPv4' && !a.internal)?.address ?? null
 }
 
 function launchFailure(err: unknown): string {
@@ -121,13 +133,14 @@ export function startTunnel(
   onUrl: (url: string) => void,
   onError: (message: string) => void,
   spawnFn?: SpawnFn,
+  extraEnv?: Record<string, string>,
 ): TunnelHandle {
   return spawnCloudflared(
     ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${port}`],
     (chunk) => URL_RE.exec(chunk)?.[0] ?? null,
     onUrl,
     onError,
-    undefined,
+    extraEnv,
     spawnFn,
   )
 }
@@ -148,6 +161,7 @@ export function startNamedTunnel(
   hostname: string,
   onUrl: (url: string) => void,
   onError: (message: string) => void,
+  extraEnv?: Record<string, string>,
 ): TunnelHandle {
   const url = `https://${hostname}`
   return spawnCloudflared(
@@ -155,6 +169,6 @@ export function startNamedTunnel(
     (chunk) => (TUNNEL_READY_RE.test(chunk) ? url : null),
     onUrl,
     onError,
-    { TUNNEL_TOKEN: token },
+    { ...extraEnv, TUNNEL_TOKEN: token },
   )
 }

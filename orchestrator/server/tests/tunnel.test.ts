@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { EventEmitter } from 'node:events'
-import { startTunnel } from '../src/tunnel.ts'
+import { edgeBindAddress, startTunnel } from '../src/tunnel.ts'
 
 class FakeChild extends EventEmitter {
   stdout = new EventEmitter()
@@ -83,5 +83,24 @@ describe('tunnel: exit after readiness', () => {
 
     expect(urls).toEqual(['https://green-elk.trycloudflare.com'])
     expect(errors).toEqual([])
+  })
+})
+
+// tunnel.edgeInterface: a full-tunnel VPN that drops the edge's port 7844 is routed around by binding
+// cloudflared to the physical card. Windows lists a card's IPv6 link-local address before its IPv4 one,
+// and cloudflared cannot dial the IPv4 edge from fe80::, so the pick must be the card's own IPv4 address.
+describe('tunnel: edgeBindAddress', () => {
+  const cards = {
+    Ethernet: [
+      { address: 'fe80::1', family: 'IPv6', internal: false },
+      { address: '192.0.2.10', family: 'IPv4', internal: false },
+    ],
+    'Loopback Pseudo-Interface 1': [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
+  } as unknown as Parameters<typeof edgeBindAddress>[1]
+
+  test("the named card's IPv4 address, never its IPv6 one, a loopback or a card that is not there", () => {
+    expect(edgeBindAddress('Ethernet', cards)).toBe('192.0.2.10')
+    expect(edgeBindAddress('Loopback Pseudo-Interface 1', cards)).toBeNull()
+    expect(edgeBindAddress('Wi-Fi', cards)).toBeNull()
   })
 })

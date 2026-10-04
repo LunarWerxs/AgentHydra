@@ -27,7 +27,13 @@ import {
   OAUTH_CALLBACK_CAPABILITY,
   publicKeyFor,
 } from './relay.ts'
-import { type SpawnFn, startNamedTunnel, startTunnel, type TunnelHandle } from './tunnel.ts'
+import {
+  edgeBindAddress,
+  type SpawnFn,
+  startNamedTunnel,
+  startTunnel,
+  type TunnelHandle,
+} from './tunnel.ts'
 
 export type OAuthCallbackStatus = 'ready' | 'pending' | 'retrying' | 'failed' | 'incompatible'
 
@@ -294,11 +300,20 @@ export function startRemote(
     writeStatusFile(port)
     console.error(`[orchestrator-remote] tunnel: ${message}`)
   }
+  const edge = cfg.tunnel?.edgeInterface?.trim()
+  const bind = edge ? edgeBindAddress(edge) : null
+  if (bind)
+    console.log(`[orchestrator-remote] tunnel: dialing Cloudflare's edge from ${edge} (${bind})`)
+  else if (edge)
+    console.warn(
+      `[orchestrator-remote] tunnel: "${edge}" has no IPv4 address right now; dialing the edge the default way`,
+    )
+  const edgeEnv = bind ? { TUNNEL_EDGE_BIND_ADDRESS: bind } : undefined
   const named = namedTunnel(cfg)
   if (named) {
     state.tunnel = 'named'
-    return startNamedTunnel(named.token, named.hostname, onUrl, onError)
+    return startNamedTunnel(named.token, named.hostname, onUrl, onError, edgeEnv)
   }
   state.tunnel = 'quick'
-  return startTunnel(port, onUrl, onError, spawnFn)
+  return startTunnel(port, onUrl, onError, spawnFn, edgeEnv)
 }

@@ -34,6 +34,7 @@ Usage: python scripts/remote_tunnel.py --status
        python scripts/remote_tunnel.py --rotate --name orch-michael [--no-install]   (a leaked token)
        python scripts/remote_tunnel.py --export-token <file> --name orch-jacob
        python scripts/remote_tunnel.py --import-token <file>
+       python scripts/remote_tunnel.py --edge-interface Ethernet | off   (a VPN blocks the edge)
 Exit:  0 ok - 1 a Cloudflare call failed - 2 no API token in the environment -
        3 bad arguments - 4 nothing configured yet.
 
@@ -293,6 +294,24 @@ def cmd_status() -> int:
     tok = t.get("token") or ""
     print(f"  token:      {'present, sha256:' + fingerprint(tok) if tok else 'MISSING - run --install-token'}")
     print(f"  provider:   {t.get('provider')}")
+    print(f"  edge from:  {t.get('edgeInterface') or 'the default route'}")
+    return 0
+
+
+def cmd_edge_interface(card: str) -> int:
+    """Pin (or with "off", unpin) the network card cloudflared dials Cloudflare's edge from. For a full-tunnel VPN
+    that drops the edge's port 7844: the gateway binds the connector to that card's current IPv4 address at every
+    start (server/src/tunnel.ts edgeBindAddress), so the tunnel goes out the card and everything else stays on the
+    VPN. Takes effect at the gateway's next start."""
+    cfg = load_config()
+    t = cfg.setdefault("tunnel", {})
+    if card.strip().lower() in ("", "off", "none"):
+        t.pop("edgeInterface", None)
+        print("edge interface cleared: cloudflared dials the edge the default way")
+    else:
+        t["edgeInterface"] = card.strip()
+        print(f"edge interface: {card.strip()} (restart the gateway to apply)")
+    save_config(cfg)
     return 0
 
 
@@ -535,6 +554,12 @@ def main(argv: list[str]) -> int:
                 print("--import-token needs a file path", file=sys.stderr)
                 return 3
             return cmd_import(Path(target))
+        if "--edge-interface" in argv:
+            card = opt("--edge-interface")
+            if card is None:
+                print("--edge-interface needs a network card name (e.g. Ethernet), or off", file=sys.stderr)
+                return 3
+            return cmd_edge_interface(card)
     except CfError as err:
         print(f"Cloudflare: {err}", file=sys.stderr)
         return 1

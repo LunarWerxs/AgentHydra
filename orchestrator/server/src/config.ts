@@ -58,6 +58,9 @@ export interface TunnelConfig {
   hostname?: string
   /** Named-tunnel connector token. Sensitive - config.json is ACL-restricted for this reason. */
   token?: string
+  /** The network card cloudflared dials Cloudflare's edge from, e.g. "Ethernet", when a full-tunnel VPN blocks
+   *  the edge's port 7844 (tunnel.ts edgeBindAddress). Unset dials the default way. */
+  edgeInterface?: string
 }
 
 /** Ed25519 identity that signs relay announcements. The private half never leaves this disk. */
@@ -167,6 +170,7 @@ export function redactConfig(cfg: RemoteConfig): Record<string, unknown> {
       provider: namedTunnel(cfg) ? 'named' : 'quick',
       hostname: cfg.tunnel?.hostname?.trim() || null,
       hasToken: !!(process.env.CF_TUNNEL_TOKEN ?? cfg.tunnel?.token ?? '').trim(),
+      edgeInterface: cfg.tunnel?.edgeInterface?.trim() || null,
     },
     relay: { url: relayBase(cfg), id: cfg.relay?.identity?.id ?? null },
   }

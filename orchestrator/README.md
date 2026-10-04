@@ -405,6 +405,13 @@ reading it. Then start the icon and sign in at `https://orch-jacob.lunarwerx.com
 verified sign-in claims that install. Until a connector runs there the hostname answers
 Cloudflare 530, which is the correct "provisioned, nobody home" state and not a fault.
 
+**Behind a full-tunnel VPN** the hostname can stay at 530 with the gateway up: cloudflared reaches
+Cloudflare's edge on port 7844 (QUIC, then HTTP/2), and a VPN that drops it leaves every dial timing
+out ("failed to dial to edge"). `python scripts/remote_tunnel.py --edge-interface Ethernet` pins the
+connector to that network card: the gateway binds cloudflared to the card's current IPv4 address at
+every start (it follows DHCP), so the tunnel goes out the card while everything else stays on the VPN.
+`--edge-interface off` undoes it; `--status` shows it.
+
 ⛔ **One label only.** `lunarwerx.com` is on Cloudflare's free plan, whose Universal SSL
 certificate covers `lunarwerx.com` and `*.lunarwerx.com` and nothing deeper (verified: those are
 the cert's only SANs). `michael.orch.lunarwerx.com` would resolve and then fail the TLS
