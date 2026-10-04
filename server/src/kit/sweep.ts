@@ -3,7 +3,6 @@
 // analytics.db, one after another. Waiting for the end of a sweep before timing the next means two
 // never run at once, and the first (which reads tens of GB, ingest-claude.ts) simply takes as long as it
 // takes. One source failing is logged and the others still run.
-import { hostname } from 'node:os'
 import {
   type ClaudeIngestSummary,
   climayteAttemptRuns,
@@ -13,8 +12,11 @@ import {
 import { discoverForeignSources, ingestForeign } from './ingest-foreign'
 import { hswarmLedgerPath, ingestHswarm } from './ingest-hswarm'
 import { ingestLegacy } from './ingest-legacy'
+import { machineId } from './machine'
 import { sharedKitStore } from './query'
 import type { KitStore } from './store'
+
+export { machineId }
 
 const EVERY_MS = 60_000
 /**
@@ -22,18 +24,6 @@ const EVERY_MS = 60_000
  * folders whose mtime moved and stat only the transcripts written within the last hour.
  */
 const FULL_PASS_EVERY = 10
-
-/** This machine's id, the way HSwarm names it (hswarm/vault.py machine_name). */
-export function machineId(): string {
-  return (
-    hostname()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 63)
-      .replace(/-+$/, '') || 'machine'
-  )
-}
 
 let sweeping: Promise<string> | null = null
 let sweepNo = 0

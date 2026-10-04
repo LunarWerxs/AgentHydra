@@ -166,7 +166,7 @@ describe('the source filter narrows every figure', () => {
 })
 
 describe('history past the raw window survives in the rollup', () => {
-  test('a 60-day-old call still counts, but has no session, so no project', () => {
+  test('a 60-day-old call still counts; its session is kept by the ledger, with no project', () => {
     const old = new KitStore(':memory:')
     old.upsertEvents([call(60 * D, { account: 'acct-a', session: 'gone-session' })])
     old.runMaintenance(NOW)
@@ -174,8 +174,15 @@ describe('history past the raw window survives in the rollup', () => {
     old.close()
     expect(r.calls).toBe(1)
     expect(r.totalCostUsd).toBe(1)
-    expect(r.sessions).toBe(0)
+    expect(r.sessions).toBe(1)
     expect(r.byProject.map((b) => b.key)).toEqual(['unknown'])
-    expect(r.notes.join(' ')).toContain('no session')
+  })
+
+  test('totals agree whatever the window start within a minute, and with the day split', () => {
+    const a = report({ sinceMs: NOW - 30 * D + 1_000 })
+    const b = report({ sinceMs: NOW - 30 * D + 40_000 })
+    expect(b).toEqual(a)
+    expect(a.byDay.reduce((s, d) => s + d.turns, 0)).toBe(a.calls)
+    expect(a.byProject.reduce((s, d) => s + d.turns, 0)).toBe(a.calls)
   })
 })

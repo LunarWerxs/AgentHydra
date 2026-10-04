@@ -226,6 +226,19 @@ function backfillV2(db: Exec): void {
 
 export const SOURCE_TS_INDEX_SQL =
   'create index if not exists usage_event_source_ts on usage_event (source, ts)'
+/** Ledger rows still active at a time (covering last_ts and first_ts): sessions mode finds the rows a window cuts through from the index alone. */
+export const SESSION_LAST_INDEX_SQL =
+  'create index if not exists usage_session_span on usage_session (last_ts, first_ts)'
+/** Raw rows of one session, newest window first: the key equality plus a ts range is one index seek. */
+export const SESSION_TS_INDEX_SQL =
+  "create index if not exists usage_event_session_ts on usage_event (coalesce(session, ''), coalesce(ref, ''), ts)"
+/** Everything a big table gets from KitStore.ensureIndexes instead of the migration. */
+export const LAZY_INDEXES_SQL = `${SOURCE_TS_INDEX_SQL}; ${SESSION_LAST_INDEX_SQL}; ${SESSION_TS_INDEX_SQL}; drop index if exists usage_event_session`
+export const LAZY_INDEX_NAMES = [
+  'usage_event_source_ts',
+  'usage_session_span',
+  'usage_event_session_ts',
+]
 
 /** True when usage_event holds more rows than an index can be built over without a noticeable pause. */
 function hasManyEvents(db: Exec): boolean {
@@ -246,7 +259,15 @@ export function migrateKitSchema(db: Exec): void {
   }
   // Covers the per-source coverage summary. Building it over a live-size table takes seconds on the
   // thread that runs the daemon, so a big table gets it from KitStore.ensureIndexes (a worker thread).
-  if (!hasManyEvents(db)) db.exec(SOURCE_TS_INDEX_SQL)
+  if (!hasManyEvents(db)) {
+    db.exec(SOURCE_TS_INDEX_SQL)
+    db.exec(SESSION_LAST_INDEX_SQL)
+    db.exec(SESSION_TS_INDEX_SQL)
+    db.exec('drop index if exists usage_event_session')
+  }
+  // coverage reads the cursor count and newest mtime: a narrow index makes both a short walk, not a scan
+  // of 60k wide path rows (0.3 s cold).
+  db.exec('create index if not exists ingest_cursor_mtime on ingest_cursor (mtime)')
   if (have < 3) db.exec(KIT_DDL_V3)
   if (have !== KIT_SCHEMA_VERSION) db.exec(`pragma user_version = ${KIT_SCHEMA_VERSION}`)
 }

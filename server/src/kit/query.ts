@@ -7,6 +7,8 @@
 // side excluding those) for the rest, so no event is counted in both.
 import type { Database } from 'bun:sqlite'
 import { getCachedUsage } from '../usage-cache'
+import { machineId } from './machine'
+import { KIT_SESSION_KEY } from './schema'
 import { KitStore, RAW_RETENTION_DAYS } from './store'
 
 const HOUR_MS = 3_600_000
@@ -90,7 +92,7 @@ export interface ResolvedWindow {
   from: number
   to: number
   /** How it was resolved: given by the caller, a `last` span, an account's snapshot, or the rolling fallback. */
-  basis: 'explicit' | 'last' | 'snapshot' | 'rolling'
+  basis: 'explicit' | 'last' | 'snapshot' | 'snapshot-past' | 'rolling'
   account?: string
   kind?: '5h' | 'week'
   /** The snapshot's reset instant the window was cut from (ISO), when basis is `snapshot`. */
@@ -161,8 +163,8 @@ export function cachedQuota(db: Database): (account: string) => QuotaReset | nul
 
 /**
  * `[resetsAt - span, now]` from the account's snapshot. A reset instant already in the past means the
- * snapshot predates the current window, so it cannot say where that window began: roll back `span`
- * from now instead, the same as with no snapshot.
+ * snapshot predates the current window: it began at that reset plus whole spans (so never more than one
+ * span back), basis `snapshot-past`. With no snapshot the window rolls back `span` from now.
  */
 export function resolveWindow(
   w: UsageWindow | undefined,
@@ -182,6 +184,12 @@ export function resolveWindow(
         basis: 'snapshot',
         resetsAt: new Date(reset).toISOString(),
       }
+    }
+    if (Number.isFinite(reset)) {
+      // A reset already past: the snapshot predates the current window but still fixes the cadence, so
+      // the window began at the latest reset instant not after now (never more than one span back).
+      const from = reset + Math.floor((now - reset) / span) * span
+      return { ...base, from, basis: 'snapshot-past', resetsAt: new Date(reset).toISOString() }
     }
     return { ...base, from: now - span, basis: 'rolling' }
   }
@@ -216,14 +224,17 @@ function dimWhere(filter: NonNullable<UsageQueryParams['filter']>): Where {
       parts.push('0')
       continue
     }
-    // `pc=self`: this machine's own events. The local ingest leaves pc empty (the rollup stores ''),
-    // so "self" is the empty pc, alone or alongside named PCs.
+    // `pc=self`: this machine's own events. The sweep stamps every row with machineId(); rows from before
+    // that carry no pc (the rollup stores ''), so "self" is this machine's id or the empty pc, alone or
+    // alongside named PCs.
     if (k === 'pc') {
       const named = vals.filter((v) => v !== 'self')
-      const clause = named.length ? [`pc in (${named.map(() => '?').join(',')})`] : []
-      if (named.length !== vals.length) clause.push("(pc is null or pc = '')")
+      const self = named.length !== vals.length
+      const names = self ? [...new Set([...named, machineId()])] : named
+      const clause = names.length ? [`pc in (${names.map(() => '?').join(',')})`] : []
+      if (self) clause.push("(pc is null or pc = '')")
       parts.push(`(${clause.join(' or ')})`)
-      args.push(...named)
+      args.push(...names)
       continue
     }
     parts.push(`${k} in (${vals.map(() => '?').join(',')})`)
@@ -270,6 +281,8 @@ function selectRows(
   dims: DimCol[],
   withHour: boolean,
   where: Where,
+  bucketMs = HOUR_MS,
+  flagUnpriced = false,
 ): RawRow[] {
   const raw = table === 'usage_event'
   // The hourly rollup keeps no session or ref; both rollups store NULL as ''.
@@ -280,7 +293,7 @@ function selectRows(
       ? `null as ${d}`
       : `nullif(${DIM_COLS[d]}, '') as ${d}`
   })
-  const hourSel = withHour ? (raw ? `ts - (ts % ${HOUR_MS}) as h` : 'hour as h') : 'null as h'
+  const hourSel = withHour ? (raw ? `ts - (ts % ${bucketMs}) as h` : 'hour as h') : 'null as h'
   const group = [
     withHour ? 'h' : null,
     ...dims.filter((d) => !noSess || (d !== 'session' && d !== 'ref')).map((d) => DIM_COLS[d]),
@@ -296,9 +309,34 @@ function selectRows(
        sum(failed_calls) as failed, sum(seconds) as seconds`
   const kinds =
     'sum(input) as input, sum(output) as output, sum(cache_read) as cache_read, sum(cache_write_5m + cache_write_1h) as cache_write'
-  const sql = `select ${[hourSel, ...dimSel].join(', ')}, ${measures}, ${kinds} from ${table} where ${where.sql}${group ? ` group by ${group}` : ''}`
+  // The ledger's unpriced models ride on the same pass: a second read of its wide rows costs as much again.
+  const unp = flagUnpriced
+    ? ", sum(case when list_usd is null and model != '' then 1 else 0 end) as unpriced_calls"
+    : ''
+  const sql = `select ${[hourSel, ...dimSel].join(', ')}, ${measures}, ${kinds}${unp} from ${table} where ${where.sql}${group ? ` group by ${group}` : ''}`
   return db.query(sql).all(...where.args) as RawRow[]
 }
+
+/** The same row with every measure negated: what a window leaves out, taken off a ledger row. */
+function negated(r: RawRow): RawRow {
+  const out: RawRow = { ...r }
+  for (const k of NEGATED) if (out[k] !== null) out[k] = -(out[k] as number)
+  return out
+}
+const NEGATED = [
+  'tokens',
+  'list_usd',
+  'billed_usd',
+  'weighted',
+  'calls',
+  'ok',
+  'failed',
+  'seconds',
+  'input',
+  'output',
+  'cache_read',
+  'cache_write',
+] as const
 
 const addNullable = (a: number | null, b: number | null): number | null =>
   a === null ? b : b === null ? a : a + b
@@ -362,7 +400,7 @@ export function usageQuery(params: UsageQueryParams = {}, opts: UsageQueryOpts =
   const key = JSON.stringify([
     params,
     opts.now ?? Math.floor(Date.now() / CACHE_BUCKET_MS),
-    win.basis === 'snapshot' ? win.from : null,
+    win.basis === 'snapshot' || win.basis === 'snapshot-past' ? win.from : null,
     opts.coverage === false,
   ])
   const cache = cacheFor(store.db, gen)
@@ -395,6 +433,9 @@ function computeUsage(
   const wantDay = groupBy.includes('day')
   const wantHour = groupBy.includes('hour')
   const withHour = wantDay || wantHour
+  // Raw rows bucket by quarter hour when only days are wanted, so a zone offset by 30 or 45 minutes
+  // still puts each call on its local day.
+  const dayBucket = wantDay && !wantHour ? 15 * 60_000 : HOUR_MS
 
   const cutoff = hourStart(now - RAW_RETENTION_DAYS * DAY_MS)
   const dim = dimWhere(filter)
@@ -406,17 +447,109 @@ function computeUsage(
   )
   const hourFilter = okVals ? 'ok' : sessVals ? 'session' : refVals ? 'ref' : null
 
-  // Sessions mode: (session, ref) pairs wholly inside the window come from the ledger.
+  // Sessions mode: a ledger row (one per session, ref, source, account, instance, model, ...) whose
+  // whole span lies inside the window comes from usage_session; the raw rows of the rows the window
+  // cuts through, and of any session with calls newer than the last rollup, are counted instead.
   const inSessions = sessionLike && !okVals && !withHour
   const sessWhere = sessionWhere(filter)
-  // The (session, ref) pairs the window covers whole, as a subquery (no temp table: a query must not
-  // write, or it moves the store generation and is never served from cache).
-  let whole: Where | null = null
+  const inside: Where = {
+    sql: `${sessWhere.sql}${dim.sql} and first_ts >= ? and last_ts <= ?`,
+    args: [...sessWhere.args, ...dim.args, win.from, win.to],
+  }
+  // What to AND onto a raw read: one scope per statement (a sessions-mode read is one per ledger key,
+  // each an index seek, never a scan of the window's raw rows).
+  let scopes: Where[] = [{ sql: '', args: [] }]
+  // Ledger rows the window cuts through, as [first_ts, scope], and the sessions to leave out of the ledger.
+  let cutFirst: number[] = []
+  let ledger: Where = inside
+  const unsettled: { s: string; r: string }[] = []
+  const tailLedger: RawRow[] = []
+  const tailBefore: RawRow[] = []
   if (inSessions) {
-    whole = {
-      sql: `select session, ref from usage_session where ${sessWhere.sql}${dim.sql} group by session, ref
-            having min(first_ts) >= ? and max(last_ts) <= ?`,
-      args: [...sessWhere.args, ...dim.args, win.from, win.to],
+    // Calls ingested since the last rollup are not in the ledger yet: every pair with a raw row at or
+    // after the first stale hour is counted from its raw rows, whole. Past MAX_PAIR_SEEKS pairs (a bulk
+    // re-read is running) the ledger is served as it stands, so a load does not scan the store.
+    const dirtyMeta = store.getMeta('dirty_from')
+    if (dirtyMeta !== null) {
+      // Bounded by rows, not pairs: DISTINCT alone reads on until it has found enough pairs.
+      const rows = db
+        .query(
+          `select coalesce(session, '') as s, coalesce(ref, '') as r from usage_event indexed by usage_event_ts where ts >= ? limit ${MAX_FRESH_ROWS + 1}`,
+        )
+        .all(hourStart(Number(dirtyMeta))) as { s: string; r: string }[]
+      const fresh = [...new Map(rows.map((x) => [`${x.s}${x.r}`, x])).values()]
+      if (rows.length > MAX_FRESH_ROWS || fresh.length > MAX_PAIR_SEEKS) {
+        notes.push('sessions are behind: the store is re-reading old transcripts')
+      } else unsettled.push(...fresh)
+    }
+    const unsettledKeys = new Set(unsettled.map((x) => `${x.s}${x.r}`))
+    const cut = (
+      db
+        .query(
+          `select ${KIT_SESSION_KEY.join(', ')}, first_ts, last_ts from usage_session
+          where ${sessWhere.sql}${dim.sql} and +first_ts <= ? and last_ts >= ? and (first_ts < ? or last_ts > ?)`,
+        )
+        .all(...sessWhere.args, ...dim.args, win.to, win.from, win.from, win.to) as Record<
+        string,
+        string | number
+      >[]
+    ).filter((r) => !unsettledKeys.has(`${r.session}${r.ref}`))
+    if (unsettled.length) {
+      ledger = {
+        sql: `${inside.sql} and session || char(31) || ref not in (${unsettled.map(() => '?').join(',')})`,
+        args: [...inside.args, ...unsettled.map((x) => `${x.s}${x.r}`)],
+      }
+    }
+    cutFirst = cut.map((r) => r.first_ts as number)
+    const keyScope = (r: Record<string, string | number>): Where => ({
+      sql: ` and ${KIT_SESSION_KEY.map((k) => `coalesce(${k}, '') = ?`).join(' and ')}`,
+      args: KIT_SESSION_KEY.map((k) => r[k] as string),
+    })
+    // A row that began shortly before the window is its ledger row less the few calls before it (a
+    // seek on the key and a ts range), not a read of all its calls inside the window.
+    const direct: typeof cut = []
+    for (const r of cut) {
+      const first = r.first_ts as number
+      const last = r.last_ts as number
+      if (
+        first >= cutoff &&
+        first < win.from &&
+        last <= win.to &&
+        win.from - first < last - win.from
+      ) {
+        const key = keyScope(r)
+        tailLedger.push(
+          ...selectRows(
+            db,
+            'usage_session',
+            dims,
+            false,
+            {
+              sql: `${KIT_SESSION_KEY.map((k) => `${k} = ?`).join(' and ')}`,
+              args: key.args,
+            },
+            HOUR_MS,
+            dims.includes('model'),
+          ),
+        )
+        tailBefore.push(
+          ...selectRows(db, 'usage_event', dims, false, {
+            sql: `ts >= ? and ts < ?${key.sql}`,
+            args: [first, win.from, ...key.args],
+          }).map(negated),
+        )
+      } else direct.push(r)
+    }
+    scopes = [
+      ...unsettled.map((x) => ({
+        sql: " and coalesce(session, '') = ? and coalesce(ref, '') = ?",
+        args: [x.s, x.r],
+      })),
+      ...direct.map(keyScope),
+    ]
+    if (scopes.length > MAX_PAIR_SEEKS) {
+      scopes = scopes.slice(0, MAX_PAIR_SEEKS)
+      notes.push('very many sessions touch the window edge: the oldest are left out')
     }
   }
 
@@ -447,34 +580,46 @@ function computeUsage(
       }
     }
   }
-  const rawRows = rawRanges.flatMap(([from, to]) =>
-    selectRows(db, 'usage_event', dims, withHour, {
-      sql: `ts >= ? and ts <= ?${dim.sql}${rawExtra(filter)}${whole ? ` and (coalesce(session, ''), coalesce(ref, '')) not in (${whole.sql})` : ''}`,
-      args: [from, to, ...dim.args, ...rawExtraArgs(filter), ...(whole?.args ?? [])],
-    }),
+  const rawRows = tailBefore.concat(
+    rawRanges.flatMap(([from, to]) =>
+      scopes.flatMap((scope) =>
+        selectRows(
+          db,
+          'usage_event',
+          dims,
+          withHour,
+          {
+            sql: `ts >= ? and ts <= ?${dim.sql}${rawExtra(filter)}${scope.sql}`,
+            args: [from, to, ...dim.args, ...rawExtraArgs(filter), ...scope.args],
+          },
+          dayBucket,
+        ),
+      ),
+    ),
   )
 
   let rollRows: RawRow[] = []
+  let ledgerUnpriced: string[] | null = null
   if (inSessions) {
-    rollRows = selectRows(db, 'usage_session', dims, false, {
-      sql: `${sessWhere.sql}${dim.sql} and (session, ref) in (${whole?.sql})`,
-      args: [...sessWhere.args, ...dim.args, ...(whole?.args ?? [])],
-    })
+    rollRows = [
+      ...selectRows(db, 'usage_session', dims, false, ledger, HOUR_MS, dims.includes('model')),
+      ...tailLedger,
+    ]
+    if (dims.includes('model')) {
+      ledgerUnpriced = [
+        ...new Set(
+          rollRows
+            .filter((r) => Number((r as Record<string, unknown>).unpriced_calls) > 0)
+            .map((r) => r.model as string),
+        ),
+      ]
+    }
     // Sessions the window cuts through, reaching back past the raw cut: their older part is in
     // usage_hour, which cannot attribute it.
-    if (win.from < cutoff) {
-      const cut = db
-        .query(
-          `select 1 from usage_session where ${sessWhere.sql} and first_ts < ?
-             and last_ts >= ? and (first_ts < ? or last_ts > ?)
-             and (session, ref) not in (${whole?.sql}) limit 1`,
-        )
-        .get(...sessWhere.args, cutoff, win.from, win.from, win.to, ...(whole?.args ?? []))
-      if (cut) {
-        notes.push(
-          `sessions the window does not cover whole count only their usage since ${new Date(cutoff).toISOString()}`,
-        )
-      }
+    if (win.from < cutoff && cutFirst.some((f) => f < cutoff)) {
+      notes.push(
+        `sessions the window does not cover whole count only their usage since ${new Date(cutoff).toISOString()}`,
+      )
     }
   } else {
     if (hourFilter) {
@@ -496,6 +641,18 @@ function computeUsage(
         )
       }
     }
+  }
+
+  if (
+    wantDay &&
+    !wantHour &&
+    rollRows.length > 0 &&
+    params.tz &&
+    !wholeHourZone(params.tz, win.to)
+  ) {
+    notes.push(
+      'days from the hourly rollup are cut on whole UTC hours: in a zone offset by a part of an hour the first minutes of a local day can fall on the day before',
+    )
   }
 
   // merge both ranges onto the requested keys
@@ -545,8 +702,9 @@ function computeUsage(
       rollRanges,
       dim,
       filter,
-      inSessions ? sessWhere : null,
-      whole,
+      inSessions ? ledger : null,
+      scopes,
+      ledgerUnpriced,
     ),
     priceVer: store.getMeta('price_ver'),
     coverage:
@@ -556,6 +714,16 @@ function computeUsage(
     window: win,
     notes,
   }
+}
+
+/** True when the zone's UTC offset at `ts` is a whole number of hours. */
+function wholeHourZone(tz: string, ts: number): boolean {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    minute: 'numeric',
+    hourCycle: 'h23',
+  }).formatToParts(hourStart(ts))
+  return Number(parts.find((p) => p.type === 'minute')?.value ?? 0) === 0
 }
 
 type Range = [from: number, to: number]
@@ -647,25 +815,28 @@ function unpricedModels(
   rollRanges: Range[],
   dim: Where,
   filter: NonNullable<UsageQueryParams['filter']>,
-  sessions: Where | null,
-  whole: Where | null,
+  ledger: Where | null,
+  scopes: Where[],
+  ledgerUnpriced: string[] | null,
 ): string[] {
   const out = new Set<string>()
   for (const [from, to] of rawRanges) {
-    const rows = db
-      .query(
-        `select distinct model from usage_event where ts >= ? and ts <= ?${dim.sql}${rawExtra(filter)} and list_usd is null and model is not null`,
-      )
-      .all(from, to, ...dim.args, ...rawExtraArgs(filter)) as { model: string }[]
-    for (const r of rows) out.add(r.model)
+    for (const scope of scopes) {
+      const rows = db
+        .query(
+          `select distinct model from usage_event where ts >= ? and ts <= ?${dim.sql}${rawExtra(filter)}${scope.sql} and list_usd is null and model is not null`,
+        )
+        .all(from, to, ...dim.args, ...rawExtraArgs(filter), ...scope.args) as { model: string }[]
+      for (const r of rows) out.add(r.model)
+    }
   }
-  if (sessions) {
+  if (ledger && ledgerUnpriced) return [...new Set([...out, ...ledgerUnpriced])].sort()
+  if (ledger) {
     const rows = db
       .query(
-        `select distinct model from usage_session where ${sessions.sql}${dim.sql} and list_usd is null and model != ''
-           and (session, ref) in (${whole?.sql})`,
+        `select distinct model from usage_session where ${ledger.sql} and list_usd is null and model != ''`,
       )
-      .all(...sessions.args, ...dim.args, ...(whole?.args ?? [])) as { model: string }[]
+      .all(...ledger.args) as { model: string }[]
     for (const r of rows) out.add(r.model)
     return [...out].sort()
   }
@@ -680,9 +851,16 @@ function unpricedModels(
   return [...out].sort()
 }
 
-// Coverage scans every raw row (1.6 s on 1.6M rows, measured 2026-10-04), so it is kept until the store
-// changes: total_changes() moves on a write through this connection, data_version on one through another.
+// Coverage is kept until the store changes: total_changes() moves on a write through this connection,
+// data_version on one through another. It never scans every raw row (1.6 s on 1.6M rows, measured
+// 2026-10-04): counts are the rollup's below the first stale hour plus a raw count from there.
 const coverageCache = new WeakMap<KitStore, { key: string; value: UsageResult['coverage'] }>()
+/** A first stale hour older than this is a bulk re-read: the last coverage is served until it ends. */
+const STALE_EXACT_MS = 48 * HOUR_MS
+/** Most (session, ref) pairs read from raw rows by one seek each before one scan of the window does it. */
+const MAX_PAIR_SEEKS = 3000
+/** Most raw rows read to find the sessions with calls newer than the last rollup. */
+const MAX_FRESH_ROWS = 30_000
 
 function coverage(store: KitStore): UsageResult['coverage'] {
   const t = store.db.query('select total_changes() as t').get() as { t: number }
@@ -690,6 +868,8 @@ function coverage(store: KitStore): UsageResult['coverage'] {
   const key = `${v.data_version}:${t.t}`
   const hit = coverageCache.get(store)
   if (hit && hit.key === key) return hit.value
+  const dirty = store.getMeta('dirty_from')
+  if (hit && dirty !== null && Date.now() - Number(dirty) > STALE_EXACT_MS) return hit.value
   const value = scanCoverage(store)
   coverageCache.set(store, { key, value })
   return value
@@ -697,39 +877,63 @@ function coverage(store: KitStore): UsageResult['coverage'] {
 
 function scanCoverage(store: KitStore): UsageResult['coverage'] {
   const sources: UsageResult['coverage']['sources'] = {}
-  // With a current rollup the raw counts are the rollup's calls since the raw cut (a few thousand
-  // rows) and each source's first and last raw ts one index seek; a stale rollup scans the raw rows.
-  const stale = store.getMeta('dirty_from') !== null
-  const raw = stale
-    ? (store.db
-        .query(
-          'select source, count(*) as n, min(ts) as a, max(ts) as b from usage_event group by source',
-        )
-        .all() as { source: string; n: number; a: number; b: number }[])
-    : (
-        store.db
-          .query(
-            'select source, sum(calls) as n from usage_hour where hour >= ? group by source having sum(calls) > 0',
-          )
-          .all(store.rawCut() ?? 0) as { source: string; n: number }[]
-      ).map((r) => {
-        // SQLite seeks an index for one min or max per statement, not for both together.
-        const edge = (fn: 'min' | 'max') =>
-          (
-            store.db
-              .query(`select ${fn}(ts) as t from usage_event where source = ?`)
-              .get(r.source) as { t: number }
-          ).t
-        const e = { a: edge('min'), b: edge('max') }
-        return { ...r, ...e }
-      })
-  for (const r of raw) sources[r.source] = { events: r.n, firstTs: r.a, lastTs: r.b }
-  // Sources that only survive in the rollup (their raw rows aged out).
+  const dirtyMeta = store.getMeta('dirty_from')
+  const dirtyHour = dirtyMeta === null ? null : hourStart(Number(dirtyMeta))
+  const counts = new Map<string, number>()
+  // Raw counts are the rollup's calls from the raw cut to the first stale hour, plus the raw rows from
+  // there (an index range); each source's first and last raw ts is one index seek.
+  const rolled = store.db
+    .query(
+      `select source, sum(calls) as n from usage_hour where hour >= ?${dirtyHour === null ? '' : ' and hour < ?'} group by source`,
+    )
+    .all(...(dirtyHour === null ? [store.rawCut() ?? 0] : [store.rawCut() ?? 0, dirtyHour])) as {
+    source: string
+    n: number
+  }[]
+  for (const r of rolled) counts.set(r.source, r.n)
+  if (dirtyHour !== null) {
+    const fresh = store.db
+      .query('select source, count(*) as n from usage_event where ts >= ? group by source')
+      .all(dirtyHour) as { source: string; n: number }[]
+    for (const r of fresh) counts.set(r.source, (counts.get(r.source) ?? 0) + r.n)
+  }
+  // Sources that only survive in the rollup (their raw rows aged out), and each source's hourly edges.
   const hourly = store.db
     .query(
       'select source, sum(calls) as n, min(hour) as a, max(hour) as b from usage_hour group by source',
     )
     .all() as { source: string; n: number; a: number; b: number }[]
+  const edges = new Map(hourly.map((r) => [r.source, r]))
+  // The (source, ts) index is built off the main thread after an upgrade (ensureIndexes): until it
+  // exists a min or max over a source is a scan of every raw row (12 s measured), so the rollup's hour
+  // edges stand in, with the newest raw rows (ts index, from the first stale hour) for the last call.
+  const indexed = store.db
+    .query(
+      "select 1 as x from sqlite_master where type = 'index' and name = 'usage_event_source_ts'",
+    )
+    .get()
+  const newestRaw = (source: string): number | null =>
+    (
+      store.db
+        .query('select max(ts) as t from usage_event where ts >= ? and source = ?')
+        .get(dirtyHour ?? Number.MAX_SAFE_INTEGER, source) as { t: number | null }
+    ).t
+  for (const [source, n] of counts) {
+    if (n <= 0) continue
+    // SQLite seeks an index for one min or max per statement, not for both together.
+    const edge = (fn: 'min' | 'max') =>
+      (
+        store.db.query(`select ${fn}(ts) as t from usage_event where source = ?`).get(source) as {
+          t: number
+        }
+      ).t
+    const h = edges.get(source)
+    if (indexed) sources[source] = { events: n, firstTs: edge('min'), lastTs: edge('max') }
+    else {
+      const last = Math.max(newestRaw(source) ?? 0, h ? h.b + HOUR_MS - 1 : 0)
+      sources[source] = { events: n, firstTs: h?.a ?? last, lastTs: last }
+    }
+  }
   for (const r of hourly) {
     const cur = sources[r.source]
     if (!cur) sources[r.source] = { events: r.n, firstTs: r.a, lastTs: r.b + HOUR_MS - 1 }
@@ -739,10 +943,9 @@ function scanCoverage(store: KitStore): UsageResult['coverage'] {
     n: number
     m: number | null
   }
-  const dirty = store.getMeta('dirty_from')
   return {
     sources,
     cursors: { files: cur.n, newestMtime: cur.m },
-    dirtyFrom: dirty === null ? null : Number(dirty),
+    dirtyFrom: dirtyMeta === null ? null : Number(dirtyMeta),
   }
 }

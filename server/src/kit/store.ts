@@ -12,8 +12,9 @@ import {
   KIT_HOUR_DIMS,
   KIT_MEASURES,
   KIT_SESSION_KEY,
+  LAZY_INDEX_NAMES,
+  LAZY_INDEXES_SQL,
   migrateKitSchema,
-  SOURCE_TS_INDEX_SQL,
   sessionAddSql,
   sessionAggSql,
 } from './schema'
@@ -233,6 +234,8 @@ export class KitStore {
     this.db = new Database(path, { create: true })
     if (path !== ':memory:') this.db.exec('pragma journal_mode = WAL')
     this.db.exec('pragma synchronous = NORMAL')
+    // 64 MB of pages, not 2: a usage query over a week of the ledger reads tens of MB and re-reads them from the OS each time.
+    this.db.exec('pragma cache_size = -65536')
     migrateKitSchema(this.db)
     ensureSettledPart(this.db)
     this.upsertStmt = this.prepareUpsert()
@@ -310,10 +313,10 @@ export class KitStore {
   async ensureIndexes(): Promise<void> {
     const have = this.db
       .query(
-        "select 1 as x from sqlite_master where type = 'index' and name = 'usage_event_source_ts'",
+        `select count(*) as n from sqlite_master where type = 'index' and name in (${LAZY_INDEX_NAMES.map((n) => `'${n}'`).join(', ')})`,
       )
-      .get()
-    if (have) return
+      .get() as { n: number }
+    if (have.n === LAZY_INDEX_NAMES.length) return
     if (this.path !== ':memory:') {
       try {
         const w = new Worker(
@@ -324,7 +327,7 @@ export class KitStore {
             w.onmessage = (e: MessageEvent<{ error?: string }>) =>
               e.data.error === undefined ? resolve() : reject(new Error(e.data.error))
             w.onerror = (e) => reject(new Error(e.message))
-            w.postMessage({ path: this.path, sql: SOURCE_TS_INDEX_SQL })
+            w.postMessage({ path: this.path, sql: LAZY_INDEXES_SQL })
           })
           return
         } finally {
@@ -334,7 +337,7 @@ export class KitStore {
         // fall through to building it here
       }
     }
-    this.db.exec(SOURCE_TS_INDEX_SQL)
+    this.db.exec(LAZY_INDEXES_SQL)
   }
 
   /**

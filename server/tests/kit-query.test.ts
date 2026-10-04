@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
+import { machineId } from '../src/kit/machine'
 import { type UsageQueryParams, usageQuery } from '../src/kit/query'
 import { KitStore, type UsageEventInput } from '../src/kit/store'
 import { parseKitUsageQuery } from '../src/routes/kit'
@@ -218,16 +219,30 @@ describe('windows', () => {
     expect(r.totals.calls).toBe(5)
   })
 
-  test('no snapshot, or one whose reset has passed, rolls back from now', () => {
-    for (const quota of [() => null, snap(iso(NOW - H), iso(NOW - H))]) {
-      const five = usageQuery({ window: { account: 'a', kind: '5h' } }, { store, now: NOW, quota })
-      expect(five.window).toMatchObject({ from: NOW - 5 * H, to: NOW, basis: 'rolling' })
-      const week = usageQuery(
-        { window: { account: 'a', kind: 'week' } },
-        { store, now: NOW, quota },
-      )
-      expect(week.window).toMatchObject({ from: NOW - 7 * D, basis: 'rolling' })
-    }
+  test('no snapshot rolls back from now', () => {
+    const five = usageQuery(
+      { window: { account: 'a', kind: '5h' } },
+      { store, now: NOW, quota: () => null },
+    )
+    expect(five.window).toMatchObject({ from: NOW - 5 * H, to: NOW, basis: 'rolling' })
+    const week = usageQuery(
+      { window: { account: 'a', kind: 'week' } },
+      { store, now: NOW, quota: () => null },
+    )
+    expect(week.window).toMatchObject({ from: NOW - 7 * D, basis: 'rolling' })
+  })
+
+  test('a snapshot whose reset has passed starts at the reset, not a full span back', () => {
+    const quota = snap(iso(NOW - H), iso(NOW - H))
+    const five = usageQuery({ window: { account: 'a', kind: '5h' } }, { store, now: NOW, quota })
+    expect(five.window).toMatchObject({ from: NOW - H, basis: 'snapshot-past' })
+    const week = usageQuery({ window: { account: 'a', kind: 'week' } }, { store, now: NOW, quota })
+    expect(week.window).toMatchObject({ from: NOW - H, basis: 'snapshot-past' })
+    const old = usageQuery(
+      { window: { account: 'a', kind: 'week' } },
+      { store, now: NOW, quota: snap(null, iso(NOW - 8 * D)) },
+    )
+    expect(old.window).toMatchObject({ from: NOW - 8 * D + 7 * D, basis: 'snapshot-past' })
   })
 })
 
@@ -414,5 +429,93 @@ describe('usageQuery after a rollup', () => {
     s.upsertEvents([e('q4', 60_000, 8)])
     expect(usageQuery(p, { store: s, now }).rows[0]?.tokens).toBe(11)
     s.close()
+  })
+})
+
+describe('regressions: live rows, stale rollup, zones', () => {
+  const mk = () => {
+    const st = new KitStore(':memory:')
+    return { st, run: (p: UsageQueryParams) => usageQuery(p, { store: st, now: NOW }) }
+  }
+  const row = (id: string, ts: number, e: Partial<UsageEventInput> = {}): UsageEventInput => ({
+    id,
+    ts,
+    source: 'cli',
+    account: 'a',
+    model: 'opus',
+    input: 10,
+    ...e,
+  })
+
+  test('pc=self matches rows stamped with this machine id, and old rows with none', () => {
+    const { st, run } = mk()
+    st.upsertEvents([
+      row('m1', NOW - H, { pc: machineId() }),
+      row('m2', NOW - 2 * H),
+      row('m3', NOW - 3 * H, { pc: 'elsewhere' }),
+    ])
+    expect(
+      run({ window: { last: '7d' }, filter: { pc: 'self' }, measures: ['calls'] }).totals.calls,
+    ).toBe(2)
+    st.close()
+  })
+
+  test('coverage with a stale rollup counts rollup hours plus the raw rows since', () => {
+    const { st, run } = mk()
+    st.upsertEvents([row('c1', NOW - 5 * D), row('c2', NOW - 4 * D)])
+    st.runMaintenance(NOW)
+    st.upsertEvents([row('c3', NOW - H)])
+    expect(st.getMeta('dirty_from')).not.toBeNull()
+    const c = run({ window: { last: '7d' } }).coverage
+    expect(c.sources.cli).toMatchObject({ events: 3, lastTs: NOW - H })
+    st.close()
+  })
+
+  test('sessions mode counts a call ingested since the last rollup', () => {
+    const { st, run } = mk()
+    st.upsertEvents([row('s1', NOW - 3 * H, { session: 'x' })])
+    st.runMaintenance(NOW)
+    st.upsertEvents([row('s2', NOW - H, { session: 'x' })])
+    const r = run({ window: { last: '7d' }, groupBy: ['session'], measures: ['calls'] })
+    expect(r.rows).toEqual([{ session: 'x', calls: 2 }])
+    st.close()
+  })
+
+  test('sessions mode counts only the in-window part of a session the window cuts through', () => {
+    const { st, run } = mk()
+    // 'near' began just before the window (ledger less its few early calls); 'far' began long before
+    // (its calls inside the window are read directly).
+    st.upsertEvents([
+      row('n1', NOW - 7 * D - H, { session: 'near', list_usd: 1 }),
+      row('n2', NOW - 3 * D, { session: 'near', list_usd: 2 }),
+      row('n3', NOW - D, { session: 'near', list_usd: 4 }),
+      row('f1', NOW - 20 * D, { session: 'far', list_usd: 1 }),
+      row('f2', NOW - 19 * D, { session: 'far', list_usd: 1 }),
+      row('f3', NOW - 2 * D, { session: 'far', list_usd: 8 }),
+    ])
+    st.runMaintenance(NOW)
+    const r = run({
+      window: { last: '7d' },
+      groupBy: ['session'],
+      measures: ['calls', 'input', 'list_usd'],
+    })
+    expect(r.rows).toEqual([
+      { session: 'far', calls: 1, input: 10, list_usd: 8 },
+      { session: 'near', calls: 2, input: 20, list_usd: 6 },
+    ])
+    st.close()
+  })
+
+  test('a half-hour zone puts a call at 00:10 local on its own day', () => {
+    const { st, run } = mk()
+    st.upsertEvents([row('z1', Date.UTC(2026, 5, 14, 18, 40))])
+    const r = run({
+      window: { last: '7d' },
+      groupBy: ['day'],
+      measures: ['calls'],
+      tz: 'Asia/Kolkata',
+    })
+    expect(r.rows).toEqual([{ day: '2026-06-15', calls: 1 }])
+    st.close()
   })
 })

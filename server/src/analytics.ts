@@ -32,7 +32,7 @@ import {
 } from './edit-survival'
 import { readHermesUsage } from './hermes-sessions'
 import { findDesktopChat, instanceSessionMap } from './instance-sessions'
-import { usageQuery } from './kit/query'
+import { sharedKitStore, storeGeneration, type UsageRow, usageQuery } from './kit/query'
 import type { KitStore } from './kit/store'
 import { readOpenCodeUsage } from './opencode-sessions'
 import { priceSource, pricesAsOf, priceTokens } from './pricing'
@@ -1614,6 +1614,11 @@ class BucketSet {
     if (session) e.sessions.add(session)
   }
 
+  /** Count `session` in a bucket that already exists (its numbers came from another query). */
+  touch(key: string, session: string | null): void {
+    if (session) this.rows.get(key)?.sessions.add(session)
+  }
+
   /** The buckets, most expensive first, with their session counts filled in. */
   list(order: 'spend' | 'key' = 'spend'): SpendBucket[] {
     const out = [...this.rows.values()].map((e) => ({ ...e.b, sessions: e.sessions.size }))
@@ -1647,25 +1652,46 @@ export interface SpendReportOptions {
  * every call, rollup included.
  */
 export function spendReport(opts: SpendReportOptions = {}): SpendReport {
+  // The same question again within the minute, with nothing written since, is the last answer (the
+  // kit's own cache hands back a copy of thousands of rows each time).
+  const store = opts.store ?? sharedKitStore()
+  const key = `${storeGeneration(store.db)}|${Math.floor((opts.sinceMs ?? 0) / 60_000)}|${Math.floor((opts.now ?? Date.now()) / 60_000)}|${opts.sources ? [...opts.sources].sort().join(',') : '*'}`
+  const hit = spendCache.get(store)
+  if (hit && hit.key === key) return hit.value
+  const value = buildSpendReport({ ...opts, store })
+  spendCache.set(store, { key, value })
+  return value
+}
+const spendCache = new WeakMap<KitStore, { key: string; value: SpendReport }>()
+
+function buildSpendReport(opts: SpendReportOptions): SpendReport {
   const sources = opts.sources ?? null
+  const measures = [
+    'tokens',
+    'weighted',
+    'calls',
+    'list_usd',
+    'billed_usd',
+    'input',
+    'output',
+    'cache_read',
+    'cache_write',
+  ] as const
+  // To the minute, so a window cut from the clock (now - 30d) asks the same question for a minute and
+  // the kit's result cache answers repeats.
+  const window = { from: Math.floor((opts.sinceMs ?? 0) / 60_000) * 60_000 }
+  const filter = sources ? { source: [...sources] } : undefined
+  const qopts = { store: opts.store, now: opts.now }
+  // Two queries, because a session in the grouping makes the kit read every raw row of a window: the
+  // figures (by day, model, source, account) come whole from the hourly rollup, and the sessions
+  // (projects, session counts) from the session ledger.
   const res = usageQuery(
-    {
-      window: { from: opts.sinceMs ?? 0 },
-      filter: sources ? { source: [...sources] } : undefined,
-      groupBy: ['day', 'session', 'model', 'source', 'account'],
-      measures: [
-        'tokens',
-        'weighted',
-        'calls',
-        'list_usd',
-        'billed_usd',
-        'input',
-        'output',
-        'cache_read',
-        'cache_write',
-      ],
-    },
-    { store: opts.store, now: opts.now },
+    { window, filter, groupBy: ['day', 'model', 'source', 'account'], measures: [...measures] },
+    qopts,
+  )
+  const sess = usageQuery(
+    { window, filter, groupBy: ['session', 'model', 'source', 'account'], measures: [...measures] },
+    qopts,
   )
   const projects = sessionProjects()
   projectDisplay.clear()
@@ -1680,11 +1706,10 @@ export function spendReport(opts: SpendReportOptions = {}): SpendReport {
     { tokens: TokenBreakdown; sessions: Set<string>; costUsd: number | null }
   >()
   const sessions = new Set<string>()
-  const allTime = !opts.sinceMs
   const billedModels = new Set<string>()
   const totals = { weighted: 0, cost: null as number | null, calls: 0, tokens: emptyTokens() }
 
-  for (const row of res.rows) {
+  const read = (row: UsageRow) => {
     const model = (row.model as string | null) ?? 'unknown'
     const weighted = Number(row.weighted ?? 0)
     const tokens: TokenBreakdown = {
@@ -1695,24 +1720,29 @@ export function spendReport(opts: SpendReportOptions = {}): SpendReport {
       total: Number(row.tokens ?? 0),
     }
     // The CLI's own notices ride on a pseudo-model with no tokens: not a model, not a row.
-    if (NON_MODELS.has(model) && weighted <= 0 && tokens.total === 0) continue
+    if (NON_MODELS.has(model) && weighted <= 0 && tokens.total === 0) return null
     const billed = row.billed_usd as number | null
     const cost = billed ?? (row.list_usd as number | null)
-    if (billed !== null) billedModels.add(model)
-    const calls = Number(row.calls ?? 0)
-    const session = (row.session as string | null) ?? null
     const source = (row.source as string | null) ?? 'unknown'
-    const r = { weighted, cost, calls, tokens }
-
-    byModel.add(model, r, session)
-    bySource.add(source, r, session)
-    byDay.add(row.day as string, r, session)
-    const account = row.account as string | null
-    if (account) byAccount.add(account, r, session)
-    if (!allTime) {
-      const path = (session && projects.get(session)) || 'unknown'
-      byProject.add(projectKeyOf(path), r, session)
+    return {
+      model,
+      billed,
+      source,
+      account: row.account as string | null,
+      r: { weighted, cost, calls: Number(row.calls ?? 0), tokens },
     }
+  }
+
+  for (const row of res.rows) {
+    const x = read(row)
+    if (!x) continue
+    const { model, source, r } = x
+    const { tokens, cost, weighted, calls } = r
+    if (x.billed !== null) billedModels.add(model)
+    byModel.add(model, r, null)
+    bySource.add(source, r, null)
+    byDay.add(row.day as string, r, null)
+    if (x.account) byAccount.add(x.account, r, null)
 
     const provider = KIT_PROVIDER[source] ?? 'claude'
     const pv = byProvider.get(provider) ?? {
@@ -1725,11 +1755,9 @@ export function spendReport(opts: SpendReportOptions = {}): SpendReport {
     pv.tokens.cacheWrite += tokens.cacheWrite
     pv.tokens.output += tokens.output
     pv.tokens.total += tokens.total
-    if (session) pv.sessions.add(session)
     if (cost !== null) pv.costUsd = (pv.costUsd ?? 0) + cost
     byProvider.set(provider, pv)
 
-    if (session) sessions.add(session)
     totals.weighted += weighted
     totals.calls += calls
     if (cost !== null) totals.cost = (totals.cost ?? 0) + cost
@@ -1740,52 +1768,56 @@ export function spendReport(opts: SpendReportOptions = {}): SpendReport {
     totals.tokens.total += tokens.total
   }
 
-  // All time: projects come from the session ledger, which keeps a session past the raw window (the day
-  // rows above cannot name one), so the history older than that is not all 'unknown'.
-  if (allTime) {
-    const ledger = usageQuery(
-      {
-        window: { from: 0 },
-        filter: sources ? { source: [...sources] } : undefined,
-        groupBy: ['session', 'model'],
-        measures: [
-          'tokens',
-          'weighted',
-          'calls',
-          'list_usd',
-          'billed_usd',
-          'input',
-          'output',
-          'cache_read',
-          'cache_write',
-        ],
-      },
-      { store: opts.store, now: opts.now },
-    )
-    for (const row of ledger.rows) {
-      const model = (row.model as string | null) ?? 'unknown'
-      const weighted = Number(row.weighted ?? 0)
-      const tokens: TokenBreakdown = {
-        input: Number(row.input ?? 0),
-        cacheRead: Number(row.cache_read ?? 0),
-        cacheWrite: Number(row.cache_write ?? 0),
-        output: Number(row.output ?? 0),
-        total: Number(row.tokens ?? 0),
-      }
-      if (NON_MODELS.has(model) && weighted <= 0 && tokens.total === 0) continue
-      const session = (row.session as string | null) ?? null
-      const path = (session && projects.get(session)) || 'unknown'
-      byProject.add(
-        projectKeyOf(path),
-        {
-          weighted,
-          cost: (row.billed_usd as number | null) ?? (row.list_usd as number | null),
-          calls: Number(row.calls ?? 0),
-          tokens,
-        },
-        session,
-      )
+  // The session ledger's view of the same calls: who they belong to. What it does not attribute (usage
+  // past the raw window, kept only in the hourly rollup) is the difference to the figures above.
+  const attributed = { weighted: 0, cost: null as number | null, calls: 0, tokens: emptyTokens() }
+  for (const row of sess.rows) {
+    const x = read(row)
+    if (!x) continue
+    const { model, source, r } = x
+    const session = (row.session as string | null) ?? null
+    byModel.touch(model, session)
+    bySource.touch(source, session)
+    if (x.account) byAccount.touch(x.account, session)
+    if (session) {
+      byProvider.get(KIT_PROVIDER[source] ?? 'claude')?.sessions.add(session)
+      sessions.add(session)
     }
+    const path = (session && projects.get(session)) || 'unknown'
+    byProject.add(projectKeyOf(path), r, session)
+    attributed.weighted += r.weighted
+    attributed.calls += r.calls
+    if (r.cost !== null) attributed.cost = (attributed.cost ?? 0) + r.cost
+    attributed.tokens.input += r.tokens.input
+    attributed.tokens.cacheRead += r.tokens.cacheRead
+    attributed.tokens.cacheWrite += r.tokens.cacheWrite
+    attributed.tokens.output += r.tokens.output
+    attributed.tokens.total += r.tokens.total
+  }
+  const rest = totals.calls - attributed.calls
+  if (rest > 0) {
+    const t = totals.tokens
+    const u = attributed.tokens
+    byProject.add(
+      projectKeyOf('unknown'),
+      {
+        weighted: totals.weighted - attributed.weighted,
+        cost: totals.cost === null ? null : Math.max(0, totals.cost - (attributed.cost ?? 0)),
+        calls: rest,
+        tokens: {
+          input: t.input - u.input,
+          cacheRead: t.cacheRead - u.cacheRead,
+          cacheWrite: t.cacheWrite - u.cacheWrite,
+          output: t.output - u.output,
+          total: t.total - u.total,
+        },
+      },
+      null,
+    )
+  }
+  const notes = [...new Set([...res.notes, ...sess.notes])]
+  if (rest > 0) {
+    notes.push('usage before the raw retention line has no session or ref: it groups under null')
   }
 
   const days = byDay.list('key')
@@ -1823,7 +1855,7 @@ export function spendReport(opts: SpendReportOptions = {}): SpendReport {
     priceSource: priceSource(),
     coverage: analyticsCoverage(),
     kitCoverage: res.coverage,
-    notes: res.notes,
+    notes,
   }
 }
 
