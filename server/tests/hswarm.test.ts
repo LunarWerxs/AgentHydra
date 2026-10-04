@@ -214,6 +214,35 @@ test('a server running another package folder (or one that names none) is ended 
   }
 })
 
+test('a side-run daemon adopts a foreign server read-only and never ends it; the primary does end it', async () => {
+  for (const sideRun of [true, false]) {
+    const server = serverOnPort(withPackage('primary-checkout'))
+    const { calls, spawn } = countingSpawn()
+    await startHSwarm({
+      enabled: true,
+      dir: withPackage('scratch-checkout'),
+      logDir: join(tmp, 'logs'),
+      probe: server.probe,
+      kill: server.kill,
+      spawn,
+      watchEveryMs: 5,
+      sideRun,
+      port: 1,
+    })
+    await Bun.sleep(40) // several watch intervals: the watcher must not replace it either
+    if (sideRun) {
+      expect(server.killed).toEqual([])
+      expect(calls).toHaveLength(0)
+      expect(getHSwarmStatus()).toMatchObject({ running: true, pid: 4242 })
+    } else {
+      expect(server.killed).toEqual([4242])
+      expect(calls).toHaveLength(1)
+    }
+    await stopHSwarm()
+    resetHSwarmStateForTests()
+  }
+})
+
 test('a server running our own package folder is adopted and left alone', async () => {
   const dir = withPackage('ours')
   const server = serverOnPort(dir)

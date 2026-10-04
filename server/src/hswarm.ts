@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { APP_ROOT, appEnv, DATA_DIR } from './config'
 import { killProcessTree } from './core/process'
+import { IS_PRIMARY_INSTALL } from './instance'
 
 /** Default port hswarm listens on. */
 const DEFAULT_HSWARM_PORT = 7793
@@ -101,6 +102,9 @@ interface HSwarmDeps {
   /** Ends a foreign server by pid (tests pass a fake). */
   kill?: (pid: number) => void
   watchEveryMs?: number
+  /** A side-run daemon (not the primary install) never ends a server it did not start; defaults to
+   *  `!IS_PRIMARY_INSTALL`. Tests inject it. */
+  sideRun?: boolean
 }
 
 interface HSwarmState {
@@ -149,6 +153,10 @@ function normalizeDir(p: string): string {
   return process.platform === 'win32' ? resolved.replace(/\\/g, '/').toLowerCase() : resolved
 }
 
+function isSideRun(deps: HSwarmDeps): boolean {
+  return deps.sideRun ?? !IS_PRIMARY_INSTALL
+}
+
 /** True when a live server's /health says it runs from `dir`; a server of older code names no folder. */
 function runsFrom(live: Record<string, unknown>, dir: string): boolean {
   return typeof live.package === 'string' && normalizeDir(live.package) === normalizeDir(dir)
@@ -191,7 +199,7 @@ function watchAdopted(deps: HSwarmDeps, port: number, dir: string): void {
     if (stopRequested || !state.running || proc) return
     const live = await (deps.probe ?? probeHSwarm)(port)
     if (stopRequested || !state.running || proc) return
-    if (live?.hswarm === true && runsFrom(live, dir)) {
+    if (live?.hswarm === true && (isSideRun(deps) || runsFrom(live, dir))) {
       watchAdopted(deps, port, dir)
       return
     }
@@ -256,7 +264,8 @@ export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
 
   // Probe for an existing live hswarm before starting a competitor
   const liveHSwarm = await (deps.probe ?? probeHSwarm)(port)
-  if (liveHSwarm?.hswarm === true && !runsFrom(liveHSwarm, dir)) {
+  const sideRun = isSideRun(deps)
+  if (liveHSwarm?.hswarm === true && !sideRun && !runsFrom(liveHSwarm, dir)) {
     // Adopting it would leave this folder's code unserved: end it and start our own.
     if (!(await replaceForeign(deps, port, dir, liveHSwarm))) {
       state.lastError = `the server on port ${port} runs from another folder and did not end`
@@ -264,9 +273,10 @@ export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
       scheduleRestart(deps)
       return
     }
-  } else if (liveHSwarm?.hswarm === true && typeof liveHSwarm.pid === 'number') {
+  } else if (liveHSwarm?.hswarm === true && (sideRun || typeof liveHSwarm.pid === 'number')) {
+    // A side-run adopts whatever server answers, read-only: spawning beside it would fight for the port.
     state.running = true
-    state.pid = liveHSwarm.pid
+    state.pid = typeof liveHSwarm.pid === 'number' ? liveHSwarm.pid : null
     state.port = port
     state.lastError = null
     backoffMs = MIN_BACKOFF_MS
