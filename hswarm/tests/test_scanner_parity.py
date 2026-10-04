@@ -68,4 +68,4 @@ def test_every_arm_agrees_including_the_threaded_ones(tree):
             assert got == want, f"{lang}@{threads} disagrees with Python"
             ran += 1
     if not ran:
-        pytest.skip("no native scanner built: run `python hswarm.py native build`")
+        pytest.skip("no native scanner built: run `hswarm native build`")

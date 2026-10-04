@@ -1,0 +1,24 @@
+[package]
+name = "zscan"
+version = "0.1.0"
+edition = "2021"
+description = "hswarm: Claude Code transcript scanner (the native arm of claude_usage.collect)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+walkdir = "2"
+memchr = "2"
+
+# Its own workspace root: cargo never walks up into a parent manifest, so the profiles below apply.
+[workspace]
+
+# Line tables only in dev and test builds: a panic still names file:line, and links take about half
+# the time of full debug info (rust-ci-speed).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

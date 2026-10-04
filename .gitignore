@@ -66,3 +66,8 @@ docs/HANDOFF_MICHAEL.md
 
 # Python build metadata (pip install -e .)
 *.egg-info/
+
+# HSwarm's native scanners: build output (hswarm native build)
+hswarm/native/bin/
+hswarm/native/zscan-rs/target/
+hswarm/native/zscan-rs/build.log

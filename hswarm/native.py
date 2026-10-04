@@ -2,10 +2,11 @@
 chosen and run.
 
 Why they exist: `hswarm savings` reads every Claude Code transcript on the machine (21 GB, 40k files
-here, 2026-09-15) and the pure-Python scan is the one hot loop in this repo. bench/native_ab.py runs
+here, 2026-09-15) and the pure-Python scan is the one hot loop in this repo. native_ab.py runs
 the same window through Python, Rust and Go, checks the three agree on every number, and writes the
-winner (language and thread count) to native/winner.json. `choose()` runs that winner when its binary
-is built (`python -m hswarm native build`) and falls back to Python otherwise, so a clone with no
+winner (language and thread count) to ~/.hswarm/native/winner.json, a measurement of this machine.
+`choose()` runs that winner when its binary is built (`python -m hswarm native build`; the sources are
+in native/ beside this module) and falls back to Python otherwise, so a clone with no
 cargo or go works unchanged. HSWARM_SCANNER=python|rust|go forces an arm; HSWARM_SCAN_THREADS a count.
 """
 from __future__ import annotations
@@ -17,12 +18,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import claude_usage
+from . import claude_usage, config
 
-REPO = Path(__file__).resolve().parent.parent
-NATIVE = REPO / "native"
+NATIVE = Path(__file__).resolve().parent / "native"
 BIN_DIR = NATIVE / "bin"
-WINNER = NATIVE / "winner.json"
+WINNER = config.HOME / "native" / "winner.json"
 LANGS = ("rust", "go")
 EXE = ".exe" if os.name == "nt" else ""
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -162,7 +162,7 @@ def build(langs: tuple[str, ...] = LANGS) -> dict[str, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`hswarm native build [--langs rust,go]` and `hswarm native bench ...` (bench/native_ab.py's own flags)."""
+    """`hswarm native build [--langs rust,go]` and `hswarm native bench ...` (native_ab.py's own flags)."""
     import sys
 
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -174,7 +174,6 @@ def main(argv: list[str] | None = None) -> int:
         for lang, where in build(langs).items():
             print(f"{lang}: {where}")
         return 0
-    sys.path.insert(0, str(REPO))
-    from bench.native_ab import main as bench_main  # type: ignore
+    from .native_ab import main as bench_main
 
     return bench_main(argv[1:])
