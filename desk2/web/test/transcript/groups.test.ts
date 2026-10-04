@@ -1,0 +1,90 @@
+import { describe, expect, test } from 'bun:test'
+import type { TranscriptItem } from '@shared/protocol'
+import { groupRows, rowGap, toolSummary, type ToolItem } from '../../src/components/transcript/lib/groups'
+
+const tool = (id: string, name: string, input: Record<string, unknown> = {}, status: ToolItem['status'] = 'done'): ToolItem => ({
+  id,
+  ts: 1,
+  kind: 'tool_use',
+  name,
+  input,
+  status,
+  startedAt: 1,
+})
+const user = (id: string): TranscriptItem => ({ id, ts: 1, kind: 'user', text: 'hi' })
+const text = (id: string, streaming = false): TranscriptItem => ({ id, ts: 1, kind: 'assistant_text', text: 'ok', streaming })
+
+const phrase = (items: ToolItem[], cwd?: string) =>
+  toolSummary(items, cwd)
+    .phrases.map((p) => [p.text, p.target, p.after].filter(Boolean).join(' '))
+    .join(', ')
+
+describe('groupRows', () => {
+  test('folds a run of tool calls into one row keyed by its first call', () => {
+    const rows = groupRows([user('u'), tool('a', 'Bash'), tool('b', 'Read'), text('t'), tool('c', 'Bash')])
+    expect(rows.map((r) => r.id)).toEqual(['u', 'tools:a', 't', 'tools:c'])
+    expect(rows[1].kind === 'tools' && rows[1].items.map((i) => i.id)).toEqual(['a', 'b'])
+  })
+
+  test('a sub-agent call keeps its own card and breaks the run; a CliMayte call folds like any MCP tool', () => {
+    const rows = groupRows([tool('a', 'Bash'), tool('g', 'Agent'), tool('m', 'mcp__agenthydra__climayte_run'), tool('b', 'Bash')])
+    expect(rows.map((r) => r.id)).toEqual(['tools:a', 'g', 'tools:m'])
+    expect(rows[2].kind === 'tools' && rows[2].items.map((i) => i.id)).toEqual(['m', 'b'])
+  })
+
+  test('only the last finished assistant text of each turn ends the turn', () => {
+    const rows = groupRows([user('u1'), text('t1'), tool('a', 'Bash'), text('t2'), user('u2'), text('t3', true)])
+    const end = Object.fromEntries(rows.flatMap((r) => (r.kind === 'item' ? [[r.id, r.endOfTurn]] : [])))
+    expect(end).toEqual({ u1: false, t1: false, t2: true, u2: false, t3: false })
+  })
+})
+
+describe('rowGap', () => {
+  test('20px between turns, 12 beside a status row, 4 from a user message to a status row, none after the last row', () => {
+    const rows = groupRows([user('u'), tool('a', 'Bash'), text('t'), user('u2'), text('t2')])
+    expect(rows.map((_, i) => rowGap(rows, i))).toEqual([4, 12, 20, 12, 0])
+  })
+})
+
+describe('toolSummary', () => {
+  test('counts commands and names a single file by its base name', () => {
+    expect(phrase([tool('a', 'Bash'), tool('b', 'Bash'), tool('c', 'Bash'), tool('d', 'Read', { file_path: 'C:\\p\\docs\\screen-half.png' })], 'C:\\p')).toBe(
+      'Ran 3 commands, read screen-half.png',
+    )
+  })
+
+  test('mixes a command with one unknown tool', () => {
+    expect(phrase([tool('a', 'Bash'), tool('b', 'Skill')])).toBe('Ran a command, used a tool')
+  })
+
+  test('a lone MCP call reads as server: tool, present tense while running', () => {
+    expect(phrase([tool('a', 'mcp__connections__memory_search', {}, 'running')])).toBe('Using connections: memory search')
+    expect(phrase([tool('a', 'mcp__connections__memory_search')])).toBe('Used connections: memory search')
+  })
+
+  test('says searched code and puts failures after the clause they belong to, as the real app does', () => {
+    const items = [
+      ...Array.from({ length: 9 }, (_, i) => tool(`b${i}`, 'Bash', {}, i === 4 ? 'error' : 'done')),
+      tool('g1', 'Grep', { pattern: 'a' }),
+      tool('g2', 'Grep', { pattern: 'b' }),
+      tool('r', 'Read', { file_path: 'src/index.ts' }),
+      tool('m1', 'mcp__agenthydra__climayte_status'),
+      tool('m2', 'mcp__agenthydra__climayte_run'),
+    ]
+    expect(phrase(items)).toBe('Ran 9 commands (1 failed), searched code, read index.ts, used 2 tools')
+    expect(phrase([tool('m', 'mcp__agenthydra__climayte_run')])).toBe('Used agenthydra: climayte run')
+    expect(toolSummary(items).phrases[2]).toEqual({ text: 'read index.ts' })
+    expect(toolSummary([tool('i', 'Read', { file_path: 'tmp/screen-half.png' })]).phrases[0]).toEqual({ text: 'Read', target: 'screen-half.png' })
+  })
+
+  test('sums diff lines and counts failures', () => {
+    const s = toolSummary([
+      tool('a', 'Edit', { file_path: 'a.ts', old_string: 'x', new_string: 'y\nz' }),
+      tool('b', 'Bash', {}, 'error'),
+    ])
+    expect(s.added).toBe(2)
+    expect(s.removed).toBe(1)
+    expect(s.failed).toBe(1)
+    expect(s.running).toBe(false)
+  })
+})

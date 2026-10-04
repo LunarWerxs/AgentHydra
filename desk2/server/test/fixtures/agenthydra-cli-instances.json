@@ -1,0 +1,205 @@
+[
+  {
+    "num": 60,
+    "id": "cli-1",
+    "name": "acct1",
+    "configDir": "C:\\Users\\me\\.claude-cli\\cli-1",
+    "associatedAccountId": null,
+    "associatedAccountLabel": null,
+    "associatedDesktopDir": null,
+    "associatedDesktopLabel": null,
+    "loggedIn": true,
+    "lastUsageCheck": {
+      "account": "user1@example.com",
+      "session": {
+        "pct": 17,
+        "resets": "Oct 3, 9:50pm",
+        "resetsAt": "2026-10-04T02:50:00.000Z",
+        "severity": "normal"
+      },
+      "weekAll": {
+        "pct": 39,
+        "resets": "Oct 9, 2am",
+        "resetsAt": "2026-10-09T07:00:00.000Z",
+        "severity": "normal"
+      },
+      "weekModel": {
+        "pct": 0,
+        "resets": "Oct 9, 2am",
+        "resetsAt": "2026-10-09T07:00:00+00:00",
+        "severity": "normal",
+        "label": "Fable"
+      },
+      "capturedAt": "2026-10-03T23:22:39.423Z",
+      "source": "api",
+      "extraUsage": false
+    },
+    "createdAt": 1789959926596,
+    "planLabel": "Max 20×",
+    "movedAway": null,
+    "lastNudge": null,
+    "liveSessions": 6,
+    "tokens": {
+      "input": 15140,
+      "output": 5267246,
+      "cacheRead": 827479820,
+      "cacheWrite": 37711867,
+      "total": 870474073
+    }
+  },
+  {
+    "num": 61,
+    "id": "cli-2",
+    "name": "acct2",
+    "configDir": "C:\\Users\\me\\.claude-cli\\cli-2",
+    "associatedAccountId": null,
+    "associatedAccountLabel": null,
+    "associatedDesktopDir": null,
+    "associatedDesktopLabel": null,
+    "loggedIn": true,
+    "lastUsageCheck": {
+      "account": "user2@example.com",
+      "weekModel": null,
+      "session": {
+        "pct": 75,
+        "resets": "Oct 3, 9pm",
+        "resetsAt": "2026-10-04T02:00:00.000Z",
+        "severity": "warning"
+      },
+      "weekAll": {
+        "pct": 72,
+        "resets": "Oct 7, 8am",
+        "resetsAt": "2026-10-07T13:00:00.000Z",
+        "severity": "normal"
+      },
+      "capturedAt": "2026-10-03T23:09:38.865Z"
+    },
+    "createdAt": 1790993220479,
+    "planLabel": "Pro",
+    "movedAway": null,
+    "lastNudge": null,
+    "liveSessions": 0,
+    "tokens": {
+      "input": 1224,
+      "output": 407728,
+      "cacheRead": 60169038,
+      "cacheWrite": 3321763,
+      "total": 63899753
+    }
+  },
+  {
+    "num": 62,
+    "id": "cli-3",
+    "name": "acct3",
+    "configDir": "C:\\Users\\me\\.claude-cli\\cli-3",
+    "associatedAccountId": null,
+    "associatedAccountLabel": null,
+    "associatedDesktopDir": null,
+    "associatedDesktopLabel": null,
+    "loggedIn": true,
+    "lastUsageCheck": {
+      "account": "user3@example.com",
+      "session": {
+        "pct": 0,
+        "resets": "",
+        "resetsAt": null,
+        "severity": "normal"
+      },
+      "weekAll": {
+        "pct": 86,
+        "resets": "Oct 4, 1:59pm",
+        "resetsAt": "2026-10-04T18:59:59.921602+00:00",
+        "severity": "warning"
+      },
+      "weekModel": null,
+      "capturedAt": "2026-10-03T16:00:22.531Z",
+      "source": "api",
+      "extraUsage": false
+    },
+    "createdAt": 1790993227954,
+    "planLabel": "Pro",
+    "movedAway": null,
+    "lastNudge": null,
+    "liveSessions": 0,
+    "tokens": {
+      "input": 184,
+      "output": 49626,
+      "cacheRead": 8959362,
+      "cacheWrite": 352673,
+      "total": 9361845
+    }
+  },
+  {
+    "num": 63,
+    "id": "cli-4",
+    "name": "acct4",
+    "configDir": "C:\\Users\\me\\.claude-cli\\cli-4",
+    "associatedAccountId": null,
+    "associatedAccountLabel": null,
+    "associatedDesktopDir": null,
+    "associatedDesktopLabel": null,
+    "loggedIn": true,
+    "lastUsageCheck": {
+      "account": "user4@example.com",
+      "session": {
+        "pct": 84,
+        "resets": "Oct 3, 6:30pm",
+        "resetsAt": "2026-10-03T23:30:00.000Z",
+        "severity": "warning"
+      },
+      "weekAll": {
+        "pct": 44,
+        "resets": "Oct 6, 3am",
+        "resetsAt": "2026-10-06T08:00:00.000Z",
+        "severity": "normal"
+      },
+      "weekModel": null,
+      "capturedAt": "2026-10-03T19:57:41.125Z",
+      "source": "api",
+      "extraUsage": true
+    },
+    "createdAt": 1790993230736,
+    "planLabel": "Pro",
+    "movedAway": null,
+    "lastNudge": null,
+    "liveSessions": 0,
+    "tokens": {
+      "input": 774,
+      "output": 244913,
+      "cacheRead": 36355985,
+      "cacheWrite": 2341195,
+      "total": 38942867
+    }
+  },
+  {
+    "num": 64,
+    "id": "cli-5",
+    "name": "acct5",
+    "configDir": "C:\\Users\\me\\.claude-cli\\cli-5",
+    "associatedAccountId": null,
+    "associatedAccountLabel": null,
+    "associatedDesktopDir": null,
+    "associatedDesktopLabel": null,
+    "loggedIn": false,
+    "lastUsageCheck": {
+      "account": "user5@example.com",
+      "session": null,
+      "weekAll": null,
+      "weekModel": null,
+      "capturedAt": "2026-10-03T22:49:49.385Z",
+      "source": "cli"
+    },
+    "createdAt": 1789222807663,
+    "planLabel": null,
+    "movedAway": null,
+    "lastNudge": null,
+    "liveSessions": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+    }
+  }
+]

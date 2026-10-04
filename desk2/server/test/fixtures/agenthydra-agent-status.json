@@ -1,0 +1,50 @@
+[
+  {
+    "sessionId": "00000000-0000-4000-8000-000000000001",
+    "state": "working",
+    "mainState": "working",
+    "subagents": 0,
+    "waiting": null,
+    "source": "claude-hook",
+    "event": "PreToolUse",
+    "cwd": "C:\\Users\\me\\Desktop\\Project\\alpha",
+    "at": "2026-10-03T23:20:00.000Z",
+    "restoredUnconfirmed": false
+  },
+  {
+    "sessionId": "00000000-0000-4000-8000-000000000003",
+    "state": "blocked",
+    "mainState": "working",
+    "subagents": 0,
+    "waiting": "permission_prompt",
+    "source": "claude-hook",
+    "event": "Notification",
+    "cwd": "C:\\Users\\me\\Desktop\\Project\\gamma",
+    "at": "2026-10-03T23:19:00.000Z",
+    "restoredUnconfirmed": false
+  },
+  {
+    "sessionId": "00000000-0000-4000-8000-000000000002",
+    "state": "working",
+    "mainState": "working",
+    "subagents": 0,
+    "waiting": null,
+    "source": "claude-hook",
+    "event": "UserPromptSubmit",
+    "cwd": "C:\\Users\\me\\Desktop\\Project\\beta",
+    "at": "2026-10-03T20:00:00.000Z",
+    "restoredUnconfirmed": true
+  },
+  {
+    "sessionId": "00000000-0000-4000-8000-000000000077",
+    "state": "working",
+    "mainState": "working",
+    "subagents": 1,
+    "waiting": null,
+    "source": "claude-hook",
+    "event": "PreToolUse",
+    "cwd": "C:\\Users\\me\\Desktop\\Project\\delta",
+    "at": "2026-10-03T23:21:00.000Z",
+    "restoredUnconfirmed": false
+  }
+]

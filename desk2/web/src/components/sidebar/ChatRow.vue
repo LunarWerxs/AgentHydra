@@ -1,0 +1,147 @@
+<script setup lang="ts">
+import { computed, nextTick, ref } from 'vue'
+import type { ChatSummary } from '@shared/protocol'
+import { shellGlyphs } from '@/lib/icons'
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, rowTooltip, statusGlyph, type RowMenuItem } from './logic'
+import { Tip } from '@/components/ui/tooltip'
+import RowMenuList from './RowMenuList.vue'
+import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
+
+// One session row: 26px, r6, status dot in a 24px leading slot, title with a right fade, and on hover
+// the "More options" button. The three-dot menu and the right-click menu are the same list.
+const props = withDefaults(defineProps<{ chat: ChatSummary; selected?: boolean; now?: number; /** Move to group's names. */ groups?: string[] }>(), {
+  selected: false,
+  now: () => Date.now(),
+  groups: () => []
+})
+const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; rename: [title: string] }>()
+
+const glyph = computed(() => statusGlyph(props.chat))
+const menu = computed(() => rowMenu(chatRow(props.chat), props.groups))
+const tooltip = computed(() => rowTooltip(props.chat, props.now))
+const menuOpen = ref(false)
+
+const dotClass = computed(() => glyphDotClass(glyph.value))
+
+const elapsed = computed(() =>
+  props.chat.status === 'working' || props.chat.status === 'starting' ? elapsedLabel(props.chat.turnStartedAt, props.now) : ''
+)
+const resets = computed(() => (props.chat.status === 'limited' ? resetClock(props.chat.limitResetsAt, props.now) : ''))
+
+// Inline rename
+const renaming = ref(false)
+const draft = ref('')
+const input = ref<HTMLInputElement | null>(null)
+function startRename() {
+  draft.value = props.chat.title
+  renaming.value = true
+  nextTick(() => {
+    input.value?.focus()
+    input.value?.select()
+  })
+}
+function commitRename() {
+  if (!renaming.value) return
+  renaming.value = false
+  const title = draft.value.trim()
+  if (title && title !== props.chat.title) emit('rename', title)
+}
+function run(item: RowMenuItem) {
+  if (item.action === 'rename') {
+    // After the menu has closed and given focus back, or the input loses it at once.
+    setTimeout(startRename, 0)
+    return
+  }
+  emit('action', item)
+}
+defineExpose({ startRename })
+</script>
+
+<template>
+  <!-- The Tip wraps the whole context menu from outside: a Tip between the menu root and its trigger leaves the menu's popper unplaced (it opens off-screen). -->
+  <Tip :label="renaming || menuOpen ? '' : tooltip" side="right" align="start">
+    <span class="block">
+      <ContextMenu>
+        <ContextMenuTrigger as-child>
+        <div
+          role="button"
+          tabindex="0"
+          :aria-current="selected ? 'page' : undefined"
+          class="group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
+          :class="[
+            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
+            menuOpen && !selected ? 'bg-fill-hover' : '',
+            glyph.dim && !selected ? 'text-text-muted' : ''
+          ]"
+          @click="!renaming && emit('select')"
+          @keydown.enter.self="emit('select')"
+          @keydown.f2.self="startRename"
+        >
+          <span class="flex size-6 shrink-0 items-center justify-center">
+            <span class="flex size-[14px] items-center justify-center">
+              <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
+            </span>
+          </span>
+
+          <input
+            v-if="renaming"
+            ref="input"
+            v-model="draft"
+            aria-label="Rename session"
+            class="h-5 min-w-0 flex-1 rounded-[4px] bg-bg-deepest px-1 text-[13px] text-text outline-none ring-1 ring-accent"
+            @click.stop
+            @keydown.enter.stop="commitRename"
+            @keydown.escape.stop="renaming = false"
+            @blur="commitRename"
+          />
+          <span v-else class="row-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'row-title-open': menuOpen }">{{ chat.title }}</span>
+
+          <!-- Hydra Desk extras: elapsed time, limit reset, CliMayte count -->
+          <!-- The elapsed counter gives its place to the three dots while the row is hovered or its menu open. -->
+          <span v-if="!renaming && (elapsed || resets || chat.climayteActive > 0)" class="ml-2 flex shrink-0 items-center gap-1 pr-1 text-[12px] leading-4 group-hover/row:pr-6" :class="{ 'pr-6': menuOpen }">
+            <span v-if="elapsed" class="tnum text-text-muted group-hover/row:hidden" :class="{ hidden: menuOpen }">{{ elapsed }}</span>
+            <span v-if="resets" class="tnum text-[var(--status-limited-text)]">resets {{ resets }}</span>
+            <span
+              v-if="chat.climayteActive > 0"
+              class="tnum flex h-4 min-w-4 items-center justify-center rounded-[4px] bg-[var(--fill-secondary)] px-1 text-[11px] text-text-2"
+              :aria-label="`${chat.climayteActive} CliMayte ${chat.climayteActive === 1 ? 'worker' : 'workers'} active`"
+            >{{ chat.climayteActive }}</span>
+          </span>
+
+          <DropdownMenu v-if="!renaming" v-model:open="menuOpen">
+            <DropdownMenuTrigger as-child>
+              <button
+                type="button"
+                :aria-label="`More options for ${chat.title}`"
+                class="absolute right-[3px] top-[3px] flex size-5 items-center justify-center rounded-[var(--radius-5)] text-text-2 opacity-0 hover:bg-fill-hover hover:text-text focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100"
+                @click.stop
+              >
+                <component :is="shellGlyphs.rowMore" class="size-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" :side-offset="4" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
+              <RowMenuList :entries="menu" kind="dropdown" @run="run" />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </ContextMenuTrigger>
+    <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
+      <RowMenuList :entries="menu" kind="context" @run="run" />
+    </ContextMenuContent>
+  </ContextMenu>
+    </span>
+  </Tip>
+</template>
+
+<style scoped>
+/* Fade mask behind the row's control: 32px (the title ends a little before the counter), 44px while the control shows. */
+.row-title {
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+.group\/row:hover .row-title,
+.row-title-open {
+  mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 20px));
+}
+</style>
