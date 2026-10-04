@@ -21,6 +21,7 @@
 import { Database } from 'bun:sqlite'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { timeSlice } from './core/loop-yield'
 import type { TailEvent } from './types'
 
 /** One conversation from a foreign store, in the shape the transcript index wants. */
@@ -401,14 +402,14 @@ const vscodeCopilot: Adapter = {
    */
   async listAsync(root) {
     const out: ForeignSession[] = []
-    let examined = 0
+    // By the clock, not by count: one chat parses in a few ms or in 100+ (a multi-MB JSON), so
+    // "every 32 files" was either wasted turns or a long block. A chat that is empty, unreadable, or
+    // cached-as-empty still costs a stat and often a full parse while contributing no row, so every
+    // file LOOKED AT is a chance to yield, not just each session returned.
+    const slice = timeSlice()
     for (const session of vsCodeChats(root)) {
       if (session) out.push(session)
-      // Counted per FILE LOOKED AT, not per session returned. A chat that is empty, unreadable, or
-      // cached-as-empty still costs a stat and often a full parse while contributing no row, so
-      // budgeting by results would let an arbitrarily long run of them execute with no await in it
-      // at all — which on a profile full of abandoned chat panels is the whole freeze, back again.
-      if (++examined % 32 === 0) await new Promise((r) => setTimeout(r, 0))
+      if (slice.due()) await slice.pause()
     }
     return out
   },

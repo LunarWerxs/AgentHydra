@@ -246,6 +246,47 @@ function stampHasSettled(stamp: DbStamp, now = Date.now()): boolean {
   return now - stamp.newestMtimeMs >= STAMP_SETTLE_MS
 }
 
+/** The listing query. `parentId` is the column expression, chosen by whether the store has one. */
+function sessionListSql(hasParent: boolean): string {
+  const parentId = hasParent ? 's.parent_id' : 'null as parent_id'
+  // octet_length, NOT length. length() of a TEXT value counts characters, so SQLite loads every
+  // byte of every row to count them: 2.5 s for an 8 GB store (2026-09-27), synchronous on the
+  // daemon's only thread, at every boot - long enough for the tray watchdog to kill it.
+  // octet_length() reads the size from the record header without touching the content (111 ms
+  // for the same store), and a byte count is what `size_bytes` claims to be anyway.
+  return `select
+           s.id, s.project_id, s.directory, s.title, s.time_created, s.time_updated,
+           s.time_archived, ${parentId},
+           coalesce((select sum(octet_length(m.data)) from message m where m.session_id = s.id), 0) +
+           coalesce((select sum(octet_length(p.data)) from part p where p.session_id = s.id), 0)
+             as size_bytes
+         from session s`
+}
+
+function sessionRecordsOf(rows: SessionRow[]): OpenCodeSessionRecord[] {
+  return rows.map((row) => ({
+    session_id: row.id,
+    project: row.project_id || 'opencode',
+    cwd: row.directory || '',
+    title: row.title || row.id,
+    created_at: row.time_created,
+    last_activity_at: row.time_updated ?? row.time_created ?? 0,
+    archived: row.time_archived !== null,
+    size_bytes: Number(row.size_bytes) || 0,
+    // Empty string is not a parent: an older store that writes '' rather than NULL would otherwise
+    // make every session the child of a session that does not exist.
+    parent_id: row.parent_id || null,
+  }))
+}
+
+/** Only remember an answer whose stamp is already evidence. Reading a store within a tick of
+ *  its last write cannot rule out a second write sharing that tick, and remembering it would
+ *  pin the stale list in place for good - so drop the entry instead and pay one more listing. */
+function rememberList(path: string, stamp: DbStamp, records: OpenCodeSessionRecord[]): void {
+  if (stampHasSettled(stamp)) openCodeListCache.set(path, { stamp: stamp.key, rows: records })
+  else openCodeListCache.delete(path)
+}
+
 export function listOpenCodeSessions(path = OPENCODE_DB_PATH): OpenCodeSessionRecord[] {
   const stamp = openCodeDbStamp(path)
   const hit = openCodeListCache.get(path)
@@ -253,46 +294,41 @@ export function listOpenCodeSessions(path = OPENCODE_DB_PATH): OpenCodeSessionRe
   const db = openDb(path)
   if (!db) return []
   try {
-    const parentId = hasColumn(db, 'session', 'parent_id') ? 's.parent_id' : 'null as parent_id'
-    // octet_length, NOT length. length() of a TEXT value counts characters, so SQLite loads every
-    // byte of every row to count them: 2.5 s for an 8 GB store (2026-09-27), synchronous on the
-    // daemon's only thread, at every boot - long enough for the tray watchdog to kill it.
-    // octet_length() reads the size from the record header without touching the content (111 ms
-    // for the same store), and a byte count is what `size_bytes` claims to be anyway.
     const rows = db
-      .query<SessionRow, []>(
-        `select
-           s.id, s.project_id, s.directory, s.title, s.time_created, s.time_updated,
-           s.time_archived, ${parentId},
-           coalesce((select sum(octet_length(m.data)) from message m where m.session_id = s.id), 0) +
-           coalesce((select sum(octet_length(p.data)) from part p where p.session_id = s.id), 0)
-             as size_bytes
-         from session s`,
-      )
+      .query<SessionRow, []>(sessionListSql(hasColumn(db, 'session', 'parent_id')))
       .all()
-    const records = rows.map((row) => ({
-      session_id: row.id,
-      project: row.project_id || 'opencode',
-      cwd: row.directory || '',
-      title: row.title || row.id,
-      created_at: row.time_created,
-      last_activity_at: row.time_updated ?? row.time_created ?? 0,
-      archived: row.time_archived !== null,
-      size_bytes: Number(row.size_bytes) || 0,
-      // Empty string is not a parent: an older store that writes '' rather than NULL would otherwise
-      // make every session the child of a session that does not exist.
-      parent_id: row.parent_id || null,
-    }))
-    // Only remember an answer whose stamp is already evidence. Reading a store within a tick of
-    // its last write cannot rule out a second write sharing that tick, and remembering it would
-    // pin the stale list in place for good — so drop the entry instead and pay one more listing.
-    if (stampHasSettled(stamp)) openCodeListCache.set(path, { stamp: stamp.key, rows: records })
-    else openCodeListCache.delete(path)
+    const records = sessionRecordsOf(rows)
+    rememberList(path, stamp, records)
     return records
   } catch {
     return []
   } finally {
     db.close()
+  }
+}
+
+/**
+ * {@link listOpenCodeSessions} for the async index build: the same rows and the same cache, but
+ * the query runs on a worker thread. Cold, the size sums read the whole 8 GB store from disk and
+ * held the daemon's only thread for ~1.1 s (measured 2026-10-04); warm it was 90 ms.
+ */
+export async function listOpenCodeSessionsAsync(
+  path = OPENCODE_DB_PATH,
+): Promise<OpenCodeSessionRecord[]> {
+  const stamp = openCodeDbStamp(path)
+  const hit = openCodeListCache.get(path)
+  if (hit?.stamp === stamp.key) return hit.rows
+  if (!existsSync(path)) return []
+  try {
+    const columns = await queryInWorker<{ name: string }>(path, 'pragma table_info(session)')
+    const hasParent = columns.some((c) => c.name === 'parent_id')
+    const records = sessionRecordsOf(
+      await queryInWorker<SessionRow>(path, sessionListSql(hasParent)),
+    )
+    rememberList(path, stamp, records)
+    return records
+  } catch {
+    return []
   }
 }
 

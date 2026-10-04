@@ -36,9 +36,11 @@
 // there" is a permanent fact worth caching. "I ran out of candidates" or "that file was too big to
 // scan" is not, and caching it would silently un-fix the very duplicate this file exists to remove.
 
-import { readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CONFIG_DIR } from './config'
+import { mapPool } from './core/map-pool'
 
 /** How much of a transcript's head to read looking for the continuation marker. */
 const HEAD_BYTES = 256 * 1024
@@ -61,6 +63,7 @@ const MAX_CANDIDATES = 24
 /** Links resolved per background pass, so a store meeting this feature for the first time spreads
  *  its reads over several sweeps instead of doing them all at once. */
 const RESOLVE_BUDGET = 8
+const STAT_WIDTH = 8
 
 export interface ContinuationLink {
   /** The continuation's own session id. */
@@ -227,28 +230,34 @@ async function resolveOne(entry: ContinuationLink): Promise<Resolution> {
   const dir = join(entry.path, '..')
   let names: string[]
   try {
-    names = readdirSync(dir).filter((n) => n.endsWith('.jsonl'))
+    names = (await readdir(dir)).filter((n) => n.endsWith('.jsonl'))
   } catch {
     // The folder is gone. Nothing to find, and nothing will change that.
     return { parent: '', exhaustive: true }
   }
   const self = entry.path.replace(/\\/g, '/').toLowerCase()
-  const candidates: Array<{ path: string; id: string; size: number; distance: number }> = []
-  for (const name of names) {
-    const path = join(dir, name)
-    if (path.replace(/\\/g, '/').toLowerCase() === self) continue
-    try {
-      const st = statSync(path)
-      candidates.push({
-        path,
-        id: name.replace(/\.jsonl$/i, ''),
-        size: st.size,
-        distance: Math.abs(st.mtimeMs - entry.mtimeMs),
-      })
-    } catch {
-      // Vanished between the listing and the stat. Not a candidate.
-    }
-  }
+  // Pooled async stats: a project folder can hold thousands of transcripts, and a sync stat loop over
+  // them held the loop ~200 ms on every sweep that had a link still unresolved.
+  const stats = await mapPool(
+    names.filter((name) => join(dir, name).replace(/\\/g, '/').toLowerCase() !== self),
+    STAT_WIDTH,
+    async (name) => {
+      const path = join(dir, name)
+      try {
+        const st = await stat(path)
+        return {
+          path,
+          id: name.replace(/\.jsonl$/i, ''),
+          size: st.size,
+          distance: Math.abs(st.mtimeMs - entry.mtimeMs),
+        }
+      } catch {
+        // Vanished between the listing and the stat. Not a candidate.
+        return null
+      }
+    },
+  )
+  const candidates = stats.filter((c): c is NonNullable<typeof c> => c !== null)
   candidates.sort((a, b) => a.distance - b.distance)
   const tried = candidates.slice(0, MAX_CANDIDATES)
   for (const c of tried) {

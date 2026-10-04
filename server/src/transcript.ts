@@ -6,6 +6,7 @@ import { extraRootsWithFormat } from './agent-catalog'
 import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH } from './config'
 import { codexInstanceStores } from './core/codex-instances'
 import { dshInstanceStores } from './core/dsh-instances'
+import { timeSlice } from './core/loop-yield'
 import { mapPool } from './core/map-pool'
 import { listDshSessions, readDshSession } from './dsh-sessions'
 import {
@@ -27,7 +28,11 @@ import {
   listHSwarmSessionsAsync,
   readHSwarmSession,
 } from './hswarm-sessions'
-import { listOpenCodeSessions, readOpenCodeSession } from './opencode-sessions'
+import {
+  listOpenCodeSessions,
+  listOpenCodeSessionsAsync,
+  readOpenCodeSession,
+} from './opencode-sessions'
 import {
   type ContinuationLink,
   pruneContinuationHeadCache,
@@ -741,13 +746,37 @@ function promoteOrphans(
   }>,
 ): void {
   const known = new Set(files.map((f) => f.session_id))
+  for (const c of pending) promoteOrphan(known, files, children, c)
+}
+
+type PendingChild = Parameters<typeof promoteOrphans>[2][number]
+
+function promoteOrphan(
+  known: Set<string>,
+  files: TranscriptFile[],
+  children: Map<string, string[]>,
+  c: PendingChild,
+): void {
+  if (known.has(c.parentId)) {
+    rememberChild(children, c.parentId, join(c.store.root, c.rel))
+    return
+  }
+  const orphan = { ...c.store, idFrom: 'basename' as const, idPrefix: '' }
+  files.push(claudeRecord(c.rel, c.mtimeMs, c.size, orphan))
+}
+
+/** {@link promoteOrphans} for the async build: tens of thousands of subagent files, so it hands the
+ *  loop back by the clock between them. */
+async function promoteOrphansAsync(
+  files: TranscriptFile[],
+  children: Map<string, string[]>,
+  pending: PendingChild[],
+): Promise<void> {
+  const known = new Set(files.map((f) => f.session_id))
+  const slice = timeSlice()
   for (const c of pending) {
-    if (known.has(c.parentId)) {
-      rememberChild(children, c.parentId, join(c.store.root, c.rel))
-      continue
-    }
-    const orphan = { ...c.store, idFrom: 'basename' as const, idPrefix: '' }
-    files.push(claudeRecord(c.rel, c.mtimeMs, c.size, orphan))
+    promoteOrphan(known, files, children, c)
+    if (slice.due()) await slice.pause()
   }
 }
 
@@ -864,7 +893,22 @@ function codexRecord(
 }
 
 function openCodeRecords(dbPath: string = OPENCODE_DB_PATH, tool = 'opencode'): TranscriptFile[] {
-  return listOpenCodeSessions(dbPath).map((session) => ({
+  return openCodeRowsOf(listOpenCodeSessions(dbPath), dbPath, tool)
+}
+
+async function openCodeRecordsAsync(
+  dbPath: string = OPENCODE_DB_PATH,
+  tool = 'opencode',
+): Promise<TranscriptFile[]> {
+  return openCodeRowsOf(await listOpenCodeSessionsAsync(dbPath), dbPath, tool)
+}
+
+function openCodeRowsOf(
+  sessions: ReturnType<typeof listOpenCodeSessions>,
+  dbPath: string,
+  tool: string,
+): TranscriptFile[] {
+  return sessions.map((session) => ({
     session_id: session.session_id,
     source: 'opencode' as const,
     path: dbPath,
@@ -1272,7 +1316,9 @@ async function buildClaudeRecordsAsync(
       }
     })
     const tops: Array<{ record: TranscriptFile; mtimeMs: number; size: number }> = []
+    const slice = timeSlice()
     for (const f of scanned) {
+      if (slice.due()) await slice.pause()
       if (!f) continue
       const parent = claudeParentId(f.rel, store)
       if (parent) {
@@ -1300,10 +1346,14 @@ async function buildClaudeRecordsAsync(
           mtimeMs: l.mtimeMs,
         })
   }
-  promoteOrphans(files, claudeChildren, pendingChildren)
+  await promoteOrphansAsync(files, claudeChildren, pendingChildren)
   if (restatCold) lastFullClaudeStatAt = statNow
   // A transcript the glob no longer lists is gone; its remembered stat goes with it.
-  for (const path of claudeStatCache.keys()) if (!statSeen.has(path)) claudeStatCache.delete(path)
+  const prune = timeSlice()
+  for (const path of [...claudeStatCache.keys()]) {
+    if (!statSeen.has(path)) claudeStatCache.delete(path)
+    if (prune.due()) await prune.pause()
+  }
 }
 
 async function buildCodexRecordsAsync(files: TranscriptFile[]): Promise<void> {
@@ -1342,7 +1392,7 @@ async function appendExtraAndForeignRecordsAsync(
     dshFiles: TranscriptFile[]
   },
 ): Promise<void> {
-  files.push(...openCodeRecords())
+  files.push(...(await openCodeRecordsAsync()))
   files.push(...extra.openCodeFiles)
   files.push(...extra.hermesFiles)
   files.push(...extra.dshFiles)

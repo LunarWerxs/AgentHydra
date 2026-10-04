@@ -6,6 +6,7 @@ import { CONFIG_DIR } from '../src/config'
 import {
   listOpenCodeSearchEvents,
   listOpenCodeSessions,
+  listOpenCodeSessionsAsync,
   readOpenCodeSession,
 } from '../src/opencode-sessions'
 
@@ -258,4 +259,33 @@ test('a write that cannot move the stamp is still not lost to the cache', () => 
       .map((s) => s.session_id)
       .sort(),
   ).toEqual(['ses_one', 'ses_two'])
+})
+
+// The index build lists OpenCode on a worker thread (the cold size sums held the loop ~1 s); it must
+// answer exactly what the sync listing answers, for a store with and without `parent_id`.
+test('the async OpenCode listing returns the sync listing, with and without parent_id', async () => {
+  for (const parentColumn of ['', ', parent_id text']) {
+    const path = join(CONFIG_DIR, `opencode-${crypto.randomUUID()}.db`)
+    const db = new Database(path)
+    db.exec(`
+      create table session (
+        id text primary key, project_id text, directory text, title text,
+        time_created integer, time_updated integer, time_archived integer${parentColumn}
+      );
+      create table message (id text primary key, session_id text, time_created integer, data text);
+      create table part (
+        id text primary key, message_id text, session_id text, time_created integer, data text
+      );
+    `)
+    db.query(
+      'insert into session (id, project_id, title, time_created, time_updated) values (?, ?, ?, ?, ?)',
+    ).run('ses_a', 'p', 'A', 1, 2)
+    db.query('insert into message values (?, ?, ?, ?)').run('m1', 'ses_a', 1, 'hello world')
+    db.close()
+
+    const sync = listOpenCodeSessions(path)
+    expect(sync).toHaveLength(1)
+    expect(await listOpenCodeSessionsAsync(path)).toEqual(sync)
+  }
+  expect(await listOpenCodeSessionsAsync(join(CONFIG_DIR, 'no-such-opencode.db'))).toEqual([])
 })
