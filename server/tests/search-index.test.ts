@@ -218,7 +218,8 @@ describe('refresh and query', () => {
     expect(r?.vacuumed || r?.freeRatio === 0).toBe(true)
     expect(statSync(searchIndexPath()).size).toBeLessThan(before)
     expect(searchIndexCandidates('keepword0')).toEqual(new Set([claudeKey('s0')]))
-  })
+    // Thirteen refreshes of 12 bodies: 6.4 s on the GitHub Windows runner (2026-10-04), past bun's 5 s.
+  }, 30_000)
 
   test('coverage reports what is current, so a stale index can stand aside', async () => {
     const a = session('a', [turn('user', 'hello')])
