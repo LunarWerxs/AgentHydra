@@ -294,11 +294,14 @@ export interface CliMayteAccount {
   /** When the 7-day window `weekPct` was read from resets (epoch ms); null when unknown. */
   weekResetsAt?: number | null
   /** When `sessionPct` was read (epoch ms): the usage check's capture, or a worker's stream. Past
-   *  READING_STALE_MS the account takes one worker at a time (rankAccounts). Absent: not known. */
+   *  READING_STALE_MS no task starts there until it is read again (readingPending). Absent: not
+   *  known. */
   readAt?: number | null
-  /** Its usage is being read again now (climayte-core refreshReading): it takes no new work until
-   *  that reading is in, so a task is not placed on a number half an hour old. */
+  /** Its usage is being read again now (climayte-core refreshReading). */
   refreshing?: boolean
+  /** When its usage was last asked to be read again for placement (epoch ms; null: not since the
+   *  daemon started). */
+  readTriedAt?: number | null
   /** Someone else is on this account now (climayte-core.ts signedInAccounts): how long ago a hand
    *  used its desktop app (core/hands-on.ts; null: not in the last ten minutes), and how many Claude
    *  sessions that are not CliMayte's run in its folder. */
@@ -663,6 +666,23 @@ export const READING_STALE_MS = 10 * 60_000
 /** The account's reading is older than READING_STALE_MS (readAt). */
 export const readingStale = (a: Pick<CliMayteAccount, 'readAt'>, now: number): boolean =>
   a.readAt != null && now - a.readAt > READING_STALE_MS
+
+/** No task starts on this account until its usage is read again (climayte-schedule startOn): the
+ *  read is running, or its reading is missing (`readAt` null) or older than READING_STALE_MS and no
+ *  re-read was tried in that time. One that was tried and failed lets a worker go on the old
+ *  reading (takesNewWork: one at a time), so a login whose check keeps failing still gets work.
+ *  2026-10-03: #116 read 69% about 21 minutes earlier and #152 24% 70 minutes earlier; each took a
+ *  task in the second it became due, before any re-read began, and was found at 110% and 101%. A
+ *  follow-up went home to #147 on an 89% about 14 minutes old and hit the limit 3 s later. */
+export function readingPending(
+  a: Pick<CliMayteAccount, 'readAt' | 'refreshing' | 'readTriedAt'>,
+  now: number,
+): boolean {
+  if (a.refreshing) return true
+  if (a.readAt === undefined) return false
+  const due = a.readAt === null || now - a.readAt > READING_STALE_MS
+  return due && !(a.readTriedAt != null && now - a.readTriedAt < READING_STALE_MS)
+}
 
 /** The conversation size at which a session is asked to hand off to a fresh one: every request
  *  re-reads the whole conversation. Measured over all logs, 2026-10-02: 3,135 of 8,370 requests ran
@@ -1403,9 +1423,25 @@ interface RankInputs {
   ids: LastAttemptIds
 }
 
-/** The worker's session already lives on this account and may carry on there (its home). */
+/** An account at CliMayte's ceiling (CEILING_PCT) on either window. */
+function accountAtCeiling(a: CliMayteAccount): boolean {
+  return (
+    (a.sessionPct !== null && a.sessionPct >= CEILING_PCT) ||
+    (a.weekPct !== null && a.weekPct >= CEILING_PCT)
+  )
+}
+
+/** The worker's session already lives on this account and may carry on there (its home), past the
+ *  stop line too (it is asked to hand off there), but not at the ceiling: a session going on there
+ *  is stopped on its first request. 2026-10-03: a manager's wake went home to #129 at 92% and was
+ *  found past the ceiling at once. */
 function keepsHome(a: CliMayteAccount, r: RankInputs): boolean {
-  return !r.ids.handedOffFrom && a.id === r.worker.accountId && a.id !== r.ids.failedId
+  return (
+    !r.ids.handedOffFrom &&
+    a.id === r.worker.accountId &&
+    a.id !== r.ids.failedId &&
+    (r.allowFull || !accountAtCeiling(a))
+  )
 }
 
 /** The account may take the worker at all: one it may use, not walled, not full (unless
@@ -1437,7 +1473,8 @@ function takesNewWork(a: CliMayteAccount, r: RankInputs): boolean {
   // old, it counted as half full and roomy, and one tick sent it four tasks; all four failed
   // sign-in together.
   if ((a.sessionPct === null || readingStale(a, r.now)) && load > 0) return false
-  if (a.refreshing) return false
+  // An account whose usage is due to be read again keeps its rank: the start waits for the reading
+  // (readingPending), so the task neither goes on the old number nor passes the account over.
   // New work goes around an account someone else is using; a task that names the account is a
   // person's word.
   if (accountInUse(a) && !r.worker.accounts?.includes(a.id)) return false

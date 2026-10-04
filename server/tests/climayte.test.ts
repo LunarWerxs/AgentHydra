@@ -514,7 +514,7 @@ describe('pickAccount', () => {
     // Run 1, 19:32-19:36: the one account below the line (#98, 52%) was at its worker cap, so each
     // continuation went to the next best, at 89-97%, and was told to hand off again within three
     // calls: twenty hops, about $0.75 each. It waits for a free slot below the line instead.
-    const crowded = [acct('a84', 84, 91, 7), acct('a88', 88, 93, 12), acct('a98', 98, 52, 64)]
+    const crowded = [acct('a84', 84, 87, 7), acct('a88', 88, 93, 12), acct('a98', 98, 52, 64)]
     const capped = new Map([['a98', 2]])
     const handedOff = worker({
       accountId: 'a95',
@@ -538,6 +538,10 @@ describe('pickAccount', () => {
       ],
     })
     expect(pickAccount(home, crowded, {}, capped, 2, now)?.id).toBe('a84')
+    // Not at the 90% ceiling, where a session going on is stopped on its first request (2026-10-03:
+    // a manager's wake went home to #129 at 92%).
+    const atCeiling = [acct('a84', 84, 92, 7), ...crowded.slice(1)]
+    expect(pickAccount(home, atCeiling, {}, capped, 2, now)).toBeNull()
   })
 
   test('with a placement, a task goes where it can finish, counting the work running there', () => {
@@ -621,9 +625,10 @@ describe('pickAccount', () => {
     expect(pick(readAt(11), [])?.id).toBe('a88')
     expect(pick(readAt(11), [['a88', 1]])?.id).toBe('a94')
     expect(pick(readAt(2), [['a88', 1]])?.id).toBe('a88')
-    // While its reading is being refreshed it takes nothing; the read is seconds away.
+    // While its reading is being refreshed it keeps its rank: the start waits for the reading, a few
+    // seconds (readingPending, climayte-placement.test.ts), rather than pass it over.
     const refreshing = [{ ...acct('a88', 88, 5, 5), refreshing: true }, acct('a94', 94, 60, 20)]
-    expect(pick(refreshing, [])?.id).toBe('a94')
+    expect(pick(refreshing, [])?.id).toBe('a88')
   })
 
   test("an idle account beats one busy with another group's worker, even at lower usage (note 8)", () => {

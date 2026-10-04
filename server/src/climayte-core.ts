@@ -258,11 +258,20 @@ const REFRESH_HOLD_MS = 30_000
  *  one-at-a-time line, or one stuck read would stop every later refresh until a restart. */
 const REFRESH_LOCK_MS = 120_000
 
+/** The account a task waits to start on until its usage is read (climayte-schedule startOn): the
+ *  next pool build reads it before any other. */
+let wantedRead: string | null = null
+
+export function wantReading(id: string): void {
+  wantedRead = id
+}
+
 /** Read an account's usage again, at most once per READING_STALE_MS, while there is work to place
  *  and its reading is missing or older than that (buildPool). The background sweep reads every
  *  account only every 30 minutes, and an account can be used outside CliMayte in between:
  *  2026-10-02, #118 was placed at 82% and read 95%, #119 at 79% and read 100%. The read is the
- *  usage check (no quota); its result lands in the usage cache the next pool build reads. */
+ *  usage check (no quota); its result lands in the usage cache the next pool build reads. No task
+ *  starts on the account until then (readingPending). */
 function refreshReading(id: string, now: number): void {
   // One read at a time, like the background sweep: `/api/oauth/usage` rate-limits per user agent,
   // and a burst over every stale account at once could earn a 429 that silences all of them for
@@ -344,6 +353,8 @@ interface PoolBuild {
   mine: Set<string>
   cache: Record<string, UsageSnapshot>
   toPlace: boolean
+  /** Accounts whose reading is due to be read again and has not been tried since it fell due. */
+  due: string[]
 }
 
 /** One CLI instance as a pool account (buildPool). */
@@ -359,7 +370,9 @@ function poolAccount(i: CliInstance, b: PoolBuild): CliMayteAccount {
   const readAt = sessionReadAt(sessionPct, live.session, snapshotAt)
   // A walled account takes no work until its wall ends, so its reading waits too.
   const due = readAt === null || now - readAt > READING_STALE_MS
-  if (b.toPlace && due && !isWalledNow(walls[i.id], now)) refreshReading(i.id, now)
+  const asked = refreshAsked.get(i.id)
+  const untried = asked === undefined || now - asked >= READING_STALE_MS
+  if (b.toPlace && due && untried && !isWalledNow(walls[i.id], now)) b.due.push(i.id)
   const refreshStarted = refreshRunning.get(i.id)
   return {
     id: i.id,
@@ -377,6 +390,7 @@ function poolAccount(i: CliInstance, b: PoolBuild): CliMayteAccount {
     weekResetsAt: upcomingReset(weekPct, limitReset(live.week, snapshotAt, u?.weekAll), now),
     readAt,
     refreshing: refreshStarted !== undefined && now - refreshStarted < REFRESH_HOLD_MS,
+    readTriedAt: asked ?? null,
     handsOnAgoMs: handsOnAgoMs(i.associatedDesktopDir, now),
     otherSessions: otherSessionsIn(i.configDir, b.mine),
   }
@@ -389,12 +403,22 @@ function poolAccount(i: CliInstance, b: PoolBuild): CliMayteAccount {
  *  failure, once. Each carries who else is on it now (accountInUse), so new work goes around a
  *  person at the keyboard and around sessions that are not CliMayte's. */
 function buildPool(now: number): CliMayteAccount[] {
-  const b: PoolBuild = { now, mine: ownSessions(), cache: allCachedUsage(), toPlace: placing() }
+  const b: PoolBuild = {
+    now,
+    mine: ownSessions(),
+    cache: allCachedUsage(),
+    toPlace: placing(),
+    due: [],
+  }
   // A login vetoed by CliMayte's own signed-out wall stays in the pool, walled, so recheckSignedOut
   // can find out when it works again.
-  return listCliInstances()
+  const accounts = listCliInstances()
     .filter((i) => i.loggedIn || !!i.loginNote)
     .map((i) => poolAccount(i, b))
+  // One read at a time (refreshReading): the account a task waits on first, else the first due.
+  const next = wantedRead && b.due.includes(wantedRead) ? wantedRead : b.due[0]
+  if (next) refreshReading(next, now)
+  return accounts
 }
 
 /** The newer of the background refresh's cached reading and a person's manual check (only the

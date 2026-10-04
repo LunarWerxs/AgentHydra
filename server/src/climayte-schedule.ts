@@ -12,6 +12,7 @@ import {
   perAccountStrict,
   placementState,
   walls,
+  wantReading,
   workers,
 } from './climayte-core'
 import { firstLine } from './climayte-journal'
@@ -25,6 +26,7 @@ import {
   maxPerAccount,
   pickAccount,
   rankAccounts,
+  readingPending,
   WIND_DOWN_SESSION_PCT,
   weekStopPct,
 } from './climayte-lib'
@@ -406,7 +408,25 @@ function retryLaunch(w: CliMayteWorker, acct: CliMayteAccount, err: unknown): vo
   changed(w)
 }
 
-/** Start the task on the picked account, and count it there for the rest of this tick. */
+/** The picked account's usage is due to be read again (readingPending): the task waits for that
+ *  reading, a few seconds, rather than start on the old number or go elsewhere. */
+function holdForReading(s: TickState, w: CliMayteWorker, acct: CliMayteAccount): void {
+  wantReading(acct.id)
+  const age =
+    acct.readAt == null
+      ? 'it has no reading in this window'
+      : `its last reading is ${Math.round((s.now - acct.readAt) / 60_000)} minutes old`
+  const why = `Reading the usage of ${acctLabel(acct)} before it starts there: ${age}.`
+  if (w.status !== 'queued' || w.error !== why) {
+    w.status = 'queued'
+    w.error = why
+    w.waitUntil = null
+    changed(w)
+  }
+}
+
+/** Start the task on the picked account, and count it there for the rest of this tick; first its
+ *  usage is read again if that is due (holdForReading). */
 function startOn(
   s: TickState,
   w: CliMayteWorker,
@@ -414,6 +434,10 @@ function startOn(
   cost: CostEstimate,
   groupActive: Map<string, number>,
 ): void {
+  if (readingPending(acct, s.now)) {
+    holdForReading(s, w, acct)
+    return
+  }
   const expected = cost.pct
   // The row's size says what this start was placed on, not the estimate at dispatch.
   if (w.size)
@@ -583,10 +607,11 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
     const past = firstTaker(spill, over)
     if (past) {
       const within = cap ?? 'the default'
-      journal(w, 'spill', {
-        account: acctLabel(past),
-        notice: `no account within its per_account (${within}) took it now`,
-      })
+      if (!readingPending(past, now))
+        journal(w, 'spill', {
+          account: acctLabel(past),
+          notice: `no account within its per_account (${within}) took it now`,
+        })
       startOn(s, w, past, cost, groupActive)
       return
     }
@@ -609,10 +634,11 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
   // (4) Nothing comes soon: start short where the most room is, if there is enough to work in.
   const roomy = (spill.length ? spill : ranked).find((a) => roomOn(s, a) >= MIN_START_ROOM_PCT)
   if (roomy) {
-    journal(w, 'start-short', {
-      account: acctLabel(roomy),
-      notice: `expected to use about ${Math.round(expected)}% of a Pro 5-hour window, about ${Math.round(roomOn(s, roomy))}% left there; it hands off at the ${WIND_DOWN_SESSION_PCT}% line and goes on where there is room`,
-    })
+    if (!readingPending(roomy, now))
+      journal(w, 'start-short', {
+        account: acctLabel(roomy),
+        notice: `expected to use about ${Math.round(expected)}% of a Pro 5-hour window, about ${Math.round(roomOn(s, roomy))}% left there; it hands off at the ${WIND_DOWN_SESSION_PCT}% line and goes on where there is room`,
+      })
     startOn(s, w, roomy, cost, groupActive)
     return
   }
