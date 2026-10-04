@@ -89,7 +89,8 @@ describe('a worker asks its origin a question (climayte_ask)', () => {
     expect(text).toContain(`${id} "ask me": asks: Keep the old API? Options: keep | drop`)
     expect(text).toContain('climayte_send')
     expect(text).not.toContain('needs your verdict')
-    expect(text).not.toContain('settled')
+    // Only this group: an earlier test's cancelled groups can share the same batched ping.
+    expect(text).not.toContain('Group og-ask settled')
 
     // The answer is the existing climayte_send: the same session resumes and the question clears.
     expect(climayteSend(id, 'keep it').ok).toBe(true)

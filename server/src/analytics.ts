@@ -2468,6 +2468,9 @@ export function analyticsCoverage(): AnalyticsCoverage {
  */
 export async function analyticsCoverageSettled(files = 0): Promise<AnalyticsCoverage> {
   knownTranscripts = Math.max(knownTranscripts, files)
+  // A scan already in flight may have counted before the caller's last write: let it land, then
+  // count again, or this answers the stale count (CI, 2026-10-04: 1 session where 3 were stored).
+  await coverageScan
   refreshCoverageStats()
   await coverageScan
   return analyticsCoverage()
