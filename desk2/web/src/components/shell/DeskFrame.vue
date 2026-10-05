@@ -8,6 +8,8 @@ import Composer from '@/components/composer/Composer.vue'
 import { OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT } from '@/components/composer/api'
 import CliMaytePanel from '@/components/climayte/CliMaytePanel.vue'
 import DiffPane from '@/components/panes/DiffPane.vue'
+import ServersPane from '@/components/servers/ServersPane.vue'
+import { clampPane, loadPaneWidth, PANE_KEY } from '@/components/servers/logic'
 import SettingsView from '@/components/panes/SettingsView.vue'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import ExternalSessionView from '@/components/external/ExternalSessionView.vue'
@@ -306,6 +308,12 @@ const pane = ref<RightPane | null>(null)
 function togglePane(p: RightPane) {
   pane.value = pane.value === p ? null : p
 }
+// The servers pane is wider than Changes (a browser needs room); its width is dragged and remembered.
+const serversWidth = ref(loadPaneWidth())
+function resizeServers(w: number) {
+  serversWidth.value = clampPane(w, window.innerWidth * 0.7)
+  storage?.setItem(PANE_KEY, String(serversWidth.value))
+}
 const onOpenDiff = () => (pane.value = 'diff')
 const onOpenCliMayte = () => (pane.value = 'climayte')
 // Background tasks (the inline row, a workflow card, desk.openBackgroundTasks()) takes the right pane's place.
@@ -543,8 +551,15 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
               />
             </div>
 
-            <aside v-if="!tasks && pane && (pane === 'climayte' || chat)" class="flex w-[380px] shrink-0 border-l border-border" :aria-label="pane === 'diff' ? 'Changes' : 'CliMayte'">
+            <aside
+              v-if="!tasks && pane && (pane === 'climayte' || chat)"
+              class="flex shrink-0 border-l border-border"
+              :class="pane === 'servers' ? '' : 'w-[380px]'"
+              :style="pane === 'servers' ? { width: `${serversWidth}px` } : undefined"
+              :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : 'CliMayte'"
+            >
               <DiffPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" />
+              <ServersPane v-else-if="pane === 'servers' && chat" :cwd="chat.cwd" :width="serversWidth" @close="pane = null" @resize="resizeServers" />
               <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
             </aside>
           </main>

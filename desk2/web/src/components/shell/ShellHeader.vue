@@ -16,7 +16,7 @@ import { useClock } from '@/lib/clock'
 // The title bar inside the pane (h32): session title (click to rename), its menu, the folder pill,
 // Hydra Desk's status cue, and on the right the 26px pane buttons. Hydra Desk 2: an outside session's
 // title bar has one, the session header's fold (components/session-header).
-export type RightPane = 'diff' | 'climayte'
+export type RightPane = 'diff' | 'climayte' | 'servers'
 
 const props = withDefaults(
   defineProps<{
@@ -223,8 +223,8 @@ const PANE_BTN =
           <component :is="shellGlyphs.changes" class="size-4" />
         </button>
       </Tip>
-      <Tip label="Browser (not in Hydra Desk)">
-        <button type="button" :class="PANE_BTN" aria-label="Browser" aria-disabled="true">
+      <Tip label="Browser and servers">
+        <button type="button" :class="PANE_BTN" aria-label="Browser and servers" :aria-pressed="pane === 'servers'" @click="emit('toggle-pane', 'servers')">
           <component :is="shellGlyphs.browser" class="size-4" />
         </button>
       </Tip>

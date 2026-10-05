@@ -24,6 +24,11 @@ between server/ and web/.
   kept as its own project beside AgentHydra and Desk: its only job here is the servers and browser pane a
   chat opens (start/stop the project's localhost servers, show one). It keeps its own package.json, tests
   and tooling; the root suite and biome skip it, as they skip desk/ and desk2/.
+  Desk 2 uses it only through `server/src/plugins/50-devwebui.ts` (+ `server/src/devwebui/daemon.ts`) and the web pane
+  `web/src/components/servers`: the plugin finds the daemon (`DEVWEBUI_URL`, else `runtime.json` in `DEVWEBUI_HOME` or
+  `~/.devwebui`), starts `bun server/src/index.ts` there hidden when the pane asks, and forwards `/dw/api/*` with the
+  daemon's `.cookie` credential. Contract: `shared/devwebui.ts`. Tests set `DEVWEBUI_HOME` to a temp folder. Change
+  `../devwebui` only when the pane truly needs it, upstream-shaped, and name it in the commit message.
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp
