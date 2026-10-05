@@ -53,6 +53,22 @@ export interface RemoteWorker {
   originTitle?: string | null
 }
 
+/** One HSwarm job as the other PC shows it: never the job's dir, cwd, prompts or caller key string. */
+export interface RemoteSwarmJob {
+  id: string
+  label: string
+  state: string
+  tasks: number
+  /** Task counts by status (ok, done, failed, error, timeout, cancelled), only those present. */
+  counts: Record<string, number>
+  /** ISO times as HSwarm gives them; finished is null while the job runs. */
+  created: string | null
+  finished: string | null
+  /** The chat that started the job (HSwarm's caller_ids), null when HSwarm did not say. */
+  callerSessionId: string | null
+  callerChatId: string | null
+}
+
 /** This PC's newest live reading of one account, as shared. */
 export interface RemoteLive {
   sessionPct: number | null
@@ -76,6 +92,9 @@ export interface QueueSnapshot {
   workers: RemoteWorker[]
   live: Record<string, RemoteLive>
   build?: QueueBuild | null
+  /** This PC's HSwarm jobs: every running one and the newest finished. Absent from an older
+   *  AgentHydra's snapshot (read as none). */
+  jobs?: RemoteSwarmJob[]
 }
 
 /** A PC whose commit is older than this one's by more than this reads as behind. */

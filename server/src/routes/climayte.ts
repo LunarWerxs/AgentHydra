@@ -131,12 +131,13 @@ app.get('/api/corch/workers', async (c) => {
 app.get('/api/corch/remote', (c) => {
   const enabled = queueSharingOn()
   const pcs = enabled
-    ? remoteSnapshots().map(({ pc, name, at, stale, workers, build }) => ({
+    ? remoteSnapshots().map(({ pc, name, at, stale, workers, jobs, build }) => ({
         pc,
         name,
         at,
         stale,
         workers,
+        jobs: jobs ?? [],
         ...buildStatus(name, build, ownBuild()),
       }))
     : []

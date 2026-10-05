@@ -22,6 +22,7 @@ import {
   buildStatus,
   clearRemote,
   type QueueSnapshot,
+  type RemoteSwarmJob,
   type RemoteWorker,
   remoteSnapshots,
   setRemote,
@@ -43,9 +44,11 @@ import {
   QUEUE_SHAPE_GAP_MS,
   queueUploadPending,
   resetQueueSync,
+  SWARM_WAIT_MS,
   sealQueue,
   syncQueue,
   warmOriginTitles,
+  warmSwarmJobs,
 } from '../src/core/climayte-queue-sync'
 import { StoreMirror } from '../src/core/login-sync-mirror'
 import { app } from '../src/http-app'
@@ -123,6 +126,127 @@ describe('the queue snapshot', () => {
     const build = { version: '1.2.3', commit: 'abc1234', date: '2026-10-02T18:40:00.000Z' }
     expect(openQueue(key, pc, sealQueue(key, { ...snapshot(pc, []), build }))?.build).toEqual(build)
     expect(openQueue(key, pc, sealQueue(key, snapshot(pc, [])))?.build).toBeUndefined()
+  })
+
+  test('carries this PC’s HSwarm jobs with only the allowed fields, and an unreachable HSwarm still snapshots the workers', async () => {
+    resetQueueSync()
+    workers.set('w-swarm-ok', {
+      id: 'w-swarm-ok',
+      group: 'g-s',
+      title: 'a task',
+      status: 'running',
+      attempts: [],
+      createdAt: 1,
+      updatedAt: Date.now(),
+    } as any)
+    const row = (over: Record<string, unknown>) => ({
+      job_id: 'j-1',
+      label: 'example-job',
+      state: 'running',
+      tasks: 3,
+      counts: { ok: 1, pending: 2, running: 0 },
+      created: '2026-10-05T10:00:00+00:00',
+      finished: null,
+      cost_usd: 0.5,
+      dir: 'C:/secret/jobs/j-1',
+      cwd: 'C:/secret/cwd',
+      prompt: 'the private prompt',
+      caller: 'secret-folder:claude:abc',
+      caller_ids: {
+        session_id: '11111111-2222-3333-4444-555555555555',
+        chat_id: 'c-1',
+        instance: 'i-1',
+      },
+      ...over,
+    })
+    try {
+      await warmSwarmJobs(async () => [
+        row({}),
+        row({
+          job_id: 'j-2',
+          state: 'done',
+          counts: { ok: 3 },
+          finished: '2026-10-05T10:05:00+00:00',
+          caller_ids: undefined,
+        }),
+      ])
+      const snap = buildSnapshot(randomUUID(), 'T')
+      expect(snap.jobs).toEqual([
+        {
+          id: 'j-1',
+          label: 'example-job',
+          state: 'running',
+          tasks: 3,
+          counts: { ok: 1 },
+          created: '2026-10-05T10:00:00+00:00',
+          finished: null,
+          callerSessionId: '11111111-2222-3333-4444-555555555555',
+          callerChatId: 'c-1',
+        },
+        {
+          id: 'j-2',
+          label: 'example-job',
+          state: 'done',
+          tasks: 3,
+          counts: { ok: 3 },
+          created: '2026-10-05T10:00:00+00:00',
+          finished: '2026-10-05T10:05:00+00:00',
+          callerSessionId: null,
+          callerChatId: null,
+        },
+      ])
+      expect(JSON.stringify(snap.jobs)).not.toContain('secret')
+      expect(JSON.stringify(snap.jobs)).not.toContain('private prompt')
+
+      // Many finished jobs: every running one stays, only the 20 newest finished do.
+      await warmSwarmJobs(async () => [
+        row({}),
+        ...Array.from({ length: 30 }, (_, i) =>
+          row({
+            job_id: `j-f${i}`,
+            state: 'done',
+            finished: `2026-10-05T11:${String(i).padStart(2, '0')}:00+00:00`,
+          }),
+        ),
+      ])
+      const capped = buildSnapshot(randomUUID(), 'T').jobs!
+      expect(capped).toHaveLength(21)
+      expect(capped[0].id).toBe('j-1')
+      expect(capped[1].id).toBe('j-f29')
+
+      // HSwarm down, then HSwarm that never answers: no jobs, the workers' snapshot still builds.
+      await warmSwarmJobs(async () => {
+        throw new Error('connection refused')
+      })
+      expect(buildSnapshot(randomUUID(), 'T').jobs).toEqual([])
+      const t0 = Date.now()
+      await warmSwarmJobs(() => new Promise(() => {}))
+      expect(Date.now() - t0).toBeLessThan(SWARM_WAIT_MS + 1_500)
+      const down = buildSnapshot(randomUUID(), 'T')
+      expect(down.jobs).toEqual([])
+      expect(down.workers.map((w) => w.id)).toContain('w-swarm-ok')
+    } finally {
+      workers.delete('w-swarm-ok')
+      resetQueueSync()
+    }
+  })
+
+  test('a snapshot with jobs opens with them, and one from an older PC without jobs still opens', () => {
+    const pc = randomUUID()
+    const job: RemoteSwarmJob = {
+      id: 'j-1',
+      label: 'example-job',
+      state: 'done',
+      tasks: 2,
+      counts: { ok: 2 },
+      created: '2026-10-05T10:00:00+00:00',
+      finished: '2026-10-05T10:05:00+00:00',
+      callerSessionId: null,
+      callerChatId: null,
+    }
+    const snap = { ...snapshot(pc, []), jobs: [job] }
+    expect(openQueue(key, pc, sealQueue(key, snap))?.jobs).toEqual([job])
+    expect(openQueue(key, pc, sealQueue(key, snapshot(pc, [])))?.jobs).toBeUndefined()
   })
 
   test('a chat-dispatched worker carries the chat’s title and its earlier sessions, never a path', async () => {
@@ -381,7 +505,21 @@ describe('a pass through the store', () => {
     )
     // The other PC: one running worker on acct-a.
     const other = randomUUID()
-    const theirs = snapshot(other, [rw({ title: 'their task', status: 'running' })])
+    const theirJob: RemoteSwarmJob = {
+      id: 'j-their-1',
+      label: 'example-job',
+      state: 'running',
+      tasks: 4,
+      counts: { ok: 1 },
+      created: '2026-10-05T10:00:00+00:00',
+      finished: null,
+      callerSessionId: '11111111-2222-3333-4444-555555555555',
+      callerChatId: null,
+    }
+    const theirs = {
+      ...snapshot(other, [rw({ title: 'their task', status: 'running' })]),
+      jobs: [theirJob],
+    }
     const put = await store('PUT', `/v1/queues/${other}`, {
       version: 0,
       blob: sealQueue(syncKey, theirs),
@@ -430,6 +568,7 @@ describe('a pass through the store', () => {
     expect(answer.pcs).toHaveLength(1)
     expect(answer.pcs[0]).toMatchObject({ pc: other, name: 'OTHER-PC', stale: false })
     expect(answer.pcs[0].workers[0].title).toBe('their task')
+    expect(answer.pcs[0].jobs).toEqual([theirJob])
     // Their snapshot shares no build (an AgentHydra from before this field): it reads as behind. Ours does share one.
     expect(answer.pcs[0]).toMatchObject({ build: null, behind: true })
     expect(answer.pcs[0].behindNote).toContain('OTHER-PC runs an older AgentHydra')

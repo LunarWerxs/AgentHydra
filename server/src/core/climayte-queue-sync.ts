@@ -40,6 +40,7 @@ import {
   noteSeen,
   type QueueSnapshot,
   type RemoteLive,
+  type RemoteSwarmJob,
   type RemoteWorker,
   remoteSnapshots,
   remoteVersion,
@@ -129,6 +130,96 @@ export async function warmOriginTitles(
   }
 }
 
+/** HSwarm jobs shared per snapshot: every running one (up to SWARM_RUNNING_MAX) and this many newest
+ *  finished ones. */
+export const SWARM_FINISHED_KEEP = 20
+export const SWARM_RUNNING_MAX = 50
+/** Longest the HSwarm jobs read may hold the pass. */
+export const SWARM_WAIT_MS = 2_000
+
+/** This PC's HSwarm jobs as the last pass read them (empty: unreachable, slow or none). Only read by
+ *  buildSnapshot; filled by warmSwarmJobs at the start of a queue pass. */
+let swarmJobs: RemoteSwarmJob[] = []
+
+/** HSwarm's jobs list rows (GET /jobs through the sidecar), or throws. */
+export type SwarmJobsFetch = (signal: AbortSignal) => Promise<unknown[]>
+
+const hswarmJobsFetch: SwarmJobsFetch = async (signal) => {
+  const { getHSwarmStatus, hswarmHome } = await import('../hswarm')
+  const st = getHSwarmStatus()
+  if (!st.running || !st.port) throw new Error('hswarm is not running')
+  const headers: Record<string, string> = {}
+  try {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const token = readFileSync(join(hswarmHome(), 'console-token'), 'utf8').trim()
+    if (token) headers['X-Hswarm-Token'] = token
+  } catch {
+    // no token file yet: ask without it
+  }
+  const r = await fetch(`http://127.0.0.1:${st.port}/jobs?limit=200`, { headers, signal })
+  if (!r.ok) throw new Error(`hswarm answered ${r.status}`)
+  const body = (await r.json()) as { jobs?: unknown }
+  return Array.isArray(body?.jobs) ? body.jobs : []
+}
+
+const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
+
+/** One jobs-list row cut down to the shared fields; null when it has no id. Never its dir, cwd,
+ *  prompts or caller key string. */
+function reduceJob(row: unknown): RemoteSwarmJob | null {
+  const j = row as Record<string, any> | null
+  const id = str(j?.job_id)
+  if (!j || !id) return null
+  const counts: Record<string, number> = {}
+  for (const k of ['ok', 'done', 'failed', 'error', 'timeout', 'cancelled']) {
+    const n = j.counts?.[k]
+    if (typeof n === 'number' && n > 0) counts[k] = n
+  }
+  return {
+    id,
+    label: typeof j.label === 'string' ? j.label.slice(0, TITLE_MAX) : '',
+    state: str(j.state) ?? 'unknown',
+    tasks: typeof j.tasks === 'number' ? j.tasks : 0,
+    counts,
+    created: str(j.created),
+    finished: str(j.finished),
+    callerSessionId: str(j.caller_ids?.session_id),
+    callerChatId: str(j.caller_ids?.chat_id),
+  }
+}
+
+/** Every running job and the SWARM_FINISHED_KEEP newest finished, running first, newest first. */
+export function pickSwarmJobs(rows: unknown[]): RemoteSwarmJob[] {
+  const jobs = rows.map(reduceJob).filter((j): j is RemoteSwarmJob => j !== null)
+  const newest = (a: RemoteSwarmJob, b: RemoteSwarmJob) =>
+    (b.finished ?? b.created ?? '').localeCompare(a.finished ?? a.created ?? '')
+  const running = jobs.filter((j) => !j.finished).sort(newest)
+  const finished = jobs.filter((j) => j.finished).sort(newest)
+  return [...running.slice(0, SWARM_RUNNING_MAX), ...finished.slice(0, SWARM_FINISHED_KEEP)]
+}
+
+/** Reads this PC's HSwarm jobs for the next snapshot. HSwarm down, slow (SWARM_WAIT_MS) or answering
+ *  badly means no jobs this pass: never a failure. */
+export async function warmSwarmJobs(fetchJobs: SwarmJobsFetch = hswarmJobsFetch): Promise<void> {
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), SWARM_WAIT_MS)
+  try {
+    swarmJobs = pickSwarmJobs(
+      await Promise.race([
+        fetchJobs(ctl.signal),
+        new Promise<never>((_, rej) => {
+          ctl.signal.addEventListener('abort', () => rej(new Error('hswarm is slow')))
+        }),
+      ]),
+    )
+  } catch {
+    swarmJobs = []
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 function reduce(w: CliMayteWorker, now: number): RemoteWorker {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const v = w.verdicts?.at(-1)?.verdict
@@ -175,7 +266,7 @@ export function buildSnapshot(pc: string, name: string, now = Date.now()): Queue
   const live: Record<string, RemoteLive> = {}
   for (const [id, r] of liveByAccount)
     live[id] = { sessionPct: r.sessionPct, weekPct: r.weekPct, at: r.at }
-  return { pc, name, at: now, workers: list, live, build: ownBuild() }
+  return { pc, name, at: now, workers: list, live, build: ownBuild(), jobs: [...swarmJobs] }
 }
 
 /** Marks the zstd format: `Z2:` then base64 of iv (12 bytes), GCM tag (16) and the encrypted zstd JSON.
@@ -298,6 +389,7 @@ const sentBy = new Map<string, { shape: string; volatile: string; live: string; 
 export function resetQueueSync(): void {
   sentBy.clear()
   titleCache.clear()
+  swarmJobs = []
 }
 
 const hash = (value: unknown): string =>
@@ -313,7 +405,8 @@ const byId = (workers: QueueSnapshot['workers']): QueueSnapshot['workers'] =>
 
 /** What a reader of the list sees change: a change here uploads at once and counts as news. */
 const shapePrint = (snap: QueueSnapshot): string =>
-  hash(
+  hash([
+    (snap.jobs ?? []).map((j) => [j.id, j.label, j.state, j.finished, j.callerSessionId]),
     byId(snap.workers).map((w) => [
       w.id,
       w.title,
@@ -328,13 +421,14 @@ const shapePrint = (snap: QueueSnapshot): string =>
       w.sessions,
       w.originTitle,
     ]),
-  )
+  ])
 
 /** What moves on every tool call of a running worker (activity, cost, clocks, error, running time): a
  *  change here alone rides the LIVE_GATE_MS gate and is no news. Measured 2026-10-03: with a few
  *  running workers it made an upload every ~21 s. */
 const volatilePrint = (snap: QueueSnapshot): string =>
-  hash(
+  hash([
+    (snap.jobs ?? []).map((j) => [j.id, j.counts]),
     byId(snap.workers).map((w) => [
       w.id,
       w.lastActivity,
@@ -343,7 +437,7 @@ const volatilePrint = (snap: QueueSnapshot): string =>
       w.error,
       w.activeS,
     ]),
-  )
+  ])
 
 /** The live readings without their `at`, with the percentages in 5-point steps. */
 const livePrint = (snap: QueueSnapshot): string =>
@@ -431,6 +525,7 @@ export async function syncQueueDetail(
   } catch {
     // titles are a nicety: never fail the pass
   }
+  await warmSwarmJobs() // never throws: HSwarm down or slow is no jobs this pass
   const rows = await queueRows(io)
   const own = rows.find((r) => r.pc === io.pc)?.version ?? 0
   let problem: Error | null = null
