@@ -8,8 +8,8 @@ anything else; shared/protocol.ts is the contract between server/ and web/.
   is never pushed. Everything committed here is published: no real emails, account addresses, keys or
   chat content in files, tests or screenshots. The parent AGENTS.md's public-repo rules apply; its
   release, changelog, i18n and kit-sync rules govern AgentHydra's own code, not this folder.
-  Screenshots under `docs/` are gitignored since 2026-10-05 and stay on the PC that took them; if a
-  pull removed yours, `docs/reference/real/NOTES.md` has the command that brings them back.
+  Screenshots under `docs/` are gitignored since 2026-10-05 and stay on the PC that took them; they
+  were also purged from history that day, so a clone made before it must save its copies before syncing.
 - Commit your own paths only, from the AgentHydra repo: `git add -- desk/<paths> && git commit -m
   "<what changed and why>"`. No push unless the brief says so. Never `reset --hard`, `stash`,
   `clean -f` or `checkout .`: other workers edit this tree at the same time.

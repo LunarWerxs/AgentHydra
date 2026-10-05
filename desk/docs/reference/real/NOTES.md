@@ -5,9 +5,8 @@
 
 ## Captured (PNG, full resolution, DPR 1)
 The screenshots stay on the PC that took them and are gitignored: they show real chats, and this repo is public.
-They left the tree on 2026-10-05; history was not rewritten, so commits before that still hold them.
-If a pull removed them, get them back with (from the AgentHydra root; this touches images only):
-`git restore --source=583f8b5b --worktree -- 'desk/docs/*.png' 'desk/docs/*.webp' 'desk/docs/*.jpg'`
+On 2026-10-05 they were purged from the repo's history too, so git cannot bring them back: keep your own
+copy outside the repo before syncing a clone made before that day.
 whole-window, sidebar, sidebar-selected-row-and-hover (selected row; hover read from CSS), top-bar-header (+ -left, -right), transcript-user-message, transcript-assistant-text, transcript-inline-code, transcript-tool-row-collapsed, composer-idle, composer-strip-above-box, composer-dock, menu-permission-mode, menu-model, menu-effort, menu-plus, sidebar-more, new-session-screen (+ -sidebar, -stats-card, -tip-and-composer), restored-check (proof the original chat row is selected again).
 Also: tokens.json, dom-outline.json (structure only), DESIGN.md, SPEC.md token table and Sidebar / Transcript / Composer values marked measured.
 
