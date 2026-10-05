@@ -38,8 +38,11 @@ const groups = computed(() => [
   { h: 'By folder', d: list<GroupStats>('byFolder') }
 ])
 const when = (ts: number): string => new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-const known = (id: string): boolean => src.chats.value.some((c) => c.id === id)
-const titleOf = (id: string): string => src.chats.value.find((c) => c.id === id)?.title || 'Open chat'
+// Each slow turn's stage parts and its chat's title (null when the chat is gone), worked out once per change.
+const turnRows = computed(() => {
+  const titles = new Map(src.chats.value.map((c) => [c.id, c.title || 'Open chat']))
+  return turns.value.map((t) => ({ t, parts: stageParts(t.stages), title: t.chatId ? (titles.get(t.chatId) ?? null) : null }))
+})
 const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed session', warm: 'Warm start', running: 'Already running' }
 </script>
 
@@ -87,23 +90,23 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
       <h3 class="mt-8 text-[13px] font-semibold leading-5 text-text">Slowest turns <span class="font-normal text-text-muted">(7 days)</span></h3>
       <p v-if="!turns.length" class="mt-1 text-text-muted">No turns measured yet.</p>
       <ul v-else>
-        <li v-for="t in turns" :key="t.turnId || t.ts" class="border-b border-border py-2 last:border-b-0">
+        <li v-for="{ t, parts, title } in turnRows" :key="t.turnId || t.ts" class="border-b border-border py-2 last:border-b-0">
           <div class="flex flex-wrap items-baseline gap-x-3">
             <span class="tnum text-text">{{ ms(t.ms) }}</span>
             <span class="tnum text-text-muted">{{ when(t.ts) }}</span>
             <span class="text-text-muted">{{ t.kind }}<template v-if="t.cold"> · {{ COLD[t.cold] ?? t.cold }}</template><template v-if="t.model"> · {{ t.model }}</template><template v-if="t.accountNumber !== null"> · #{{ t.accountNumber }}</template></span>
             <span v-if="!t.ok" class="text-danger-text">failed</span>
             <button
-              v-if="t.chatId && known(t.chatId)"
+              v-if="t.chatId && title !== null"
               type="button"
               class="ml-auto cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline"
               @click="src.select({ kind: 'chat', id: t.chatId })"
             >
-              {{ titleOf(t.chatId) }}
+              {{ title }}
             </button>
           </div>
-          <div v-if="stageParts(t.stages).length" class="mt-0.5 flex flex-wrap gap-x-3 text-[12px] text-text-muted">
-            <span v-for="[k, v] in stageParts(t.stages)" :key="k" class="tnum">{{ partLabel(k) }} {{ ms(v) }}</span>
+          <div v-if="parts.length" class="mt-0.5 flex flex-wrap gap-x-3 text-[12px] text-text-muted">
+            <span v-for="[k, v] in parts" :key="k" class="tnum">{{ partLabel(k) }} {{ ms(v) }}</span>
           </div>
         </li>
       </ul>
