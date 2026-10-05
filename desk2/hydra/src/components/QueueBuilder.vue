@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CalendarClock, ChevronDown, GitFork, Pencil, Plus, Sparkles, X } from '@lucide/vue'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SchedulePanel from '@/components/SchedulePanel.vue'
 import SessionPicker from '@/components/SessionPicker.vue'
@@ -76,7 +76,10 @@ const showCreateForm = computed(() => editing.value || HEADLESS_QUEUEING_ENABLED
 // Queue dispatch is intentionally Claude-only even though the Sessions tab can now browse other
 // providers. Keep a dedicated source-scoped list so changing the Sessions provider filter cannot
 // empty this picker or accidentally feed a Codex/OpenCode id to the Claude dispatcher.
-const queueSessions = ref<api.SessionSummary[]>([])
+const queueSessions = shallowRef<api.SessionSummary[]>([])
+// When the list above was last loaded: reopening the dialog within a few seconds reuses it.
+let queueSessionsAt = 0
+const QUEUE_SESSIONS_FRESH_MS = 5000
 const byId = computed(() => new Map(queueSessions.value.map((s) => [s.session_id, s])))
 
 /** ISO (UTC) → the local wall-clock string a datetime-local input expects. */
@@ -124,15 +127,19 @@ watch([open, editItem], ([isOpen]) => {
   // Instances tab — refresh here so the picker is complete even if that tab was never opened.
   void refreshInstances()
   void refreshCliInstances({ silent: true })
-  void api
-    .getSessions(500, '', 'hide', 'all', 'claude')
-    .then((rows) => {
-      queueSessions.value = rows
-    })
-    .catch(() => {
-      // The form still opens and reports any actual submit failure; a transient list refresh
-      // should not discard a previously loaded picker.
-    })
+  if (Date.now() - queueSessionsAt > QUEUE_SESSIONS_FRESH_MS) {
+    queueSessionsAt = Date.now()
+    void api
+      .getSessions(500, '', 'hide', 'all', 'claude')
+      .then((rows) => {
+        queueSessions.value = rows
+      })
+      .catch(() => {
+        // The form still opens and reports any actual submit failure; a transient list refresh
+        // should not discard a previously loaded picker.
+        queueSessionsAt = 0
+      })
+  }
   const it = editItem.value
   if (it) {
     form.new_chat = it.new_chat

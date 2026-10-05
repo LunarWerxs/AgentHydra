@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ChevronRight, Terminal, Wrench } from '@lucide/vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { Switch } from '@/components/ui/switch'
 import { useData } from '@/composables/useData'
@@ -8,7 +8,14 @@ import type { RunEvent } from '@/lib/api'
 import { streamUrl } from '@/lib/api'
 
 const props = defineProps<{ itemId: string }>()
-const events = ref<RunEvent[]>([])
+// Events are only ever appended and read, so the list is shallow (no proxy per event). A long run
+// streams thousands of them: only the newest MAX_EVENTS are kept, so the panel's memory and DOM
+// stay bounded.
+const MAX_EVENTS = 3000
+const events = shallowRef<RunEvent[]>([])
+// Events that arrived since the last frame: applied in one go, with one scroll, per frame.
+let pending: RunEvent[] = []
+let frame = 0
 const showTools = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 // The stream dropped and has not delivered anything since. EventSource reconnects on its own, so
@@ -18,6 +25,16 @@ const scroller = ref<HTMLElement | null>(null)
 const connectionLost = ref(false)
 let es: EventSource | null = null
 
+function flush() {
+  frame = 0
+  if (pending.length === 0) return
+  const all = events.value.concat(pending)
+  pending = []
+  events.value = all.length > MAX_EVENTS ? all.slice(all.length - MAX_EVENTS) : all
+  nextTick(() => {
+    if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight
+  })
+}
 function connect(id: string) {
   disconnect()
   events.value = []
@@ -30,10 +47,10 @@ function connect(id: string) {
     try {
       const msg = JSON.parse(e.data)
       if (msg.type === 'event') {
-        events.value.push(msg.data as RunEvent)
-        nextTick(() => {
-          if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight
-        })
+        pending.push(msg.data as RunEvent)
+        // A frame never comes while the pane is hidden, so the backlog is capped here too.
+        if (pending.length > MAX_EVENTS) pending = pending.slice(pending.length - MAX_EVENTS)
+        if (!frame) frame = requestAnimationFrame(flush)
       }
     } catch {
       /* ignore keepalive */
@@ -50,6 +67,9 @@ function connect(id: string) {
 function disconnect() {
   es?.close()
   es = null
+  if (frame) cancelAnimationFrame(frame)
+  frame = 0
+  pending = []
 }
 
 // How the run ended, from the queue's own record. A log that simply stops looks identical whether

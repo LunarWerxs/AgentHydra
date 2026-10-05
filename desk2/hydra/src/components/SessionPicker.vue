@@ -7,6 +7,7 @@
 // Single or multi select via the `multiple` prop. v-model is a string[] either way (one
 // element in single mode) so the caller has one shape to handle.
 import { Check, ChevronsUpDown, Copy, Info, Search, X } from '@lucide/vue'
+import { refDebounced } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -28,6 +29,8 @@ const { t } = useI18n()
 
 const open = ref(false)
 const search = ref('')
+// The rank runs on the text a moment after the last keystroke, not on every one.
+const rankQuery = refDebounced(search, 120)
 const copiedId = ref<string | null>(null)
 let copiedTimer: number | undefined
 
@@ -35,7 +38,7 @@ let copiedTimer: number | undefined
 // the list keeps its server order (most-recently-active first); with one, the best match sorts
 // first and equal scores keep that order.
 const filtered = computed(() => {
-  const q = search.value.trim()
+  const q = rankQuery.value.trim()
   if (!q) return props.sessions
   return rankByQuery(props.sessions, q, sessionSearchFields).map((r) => r.row)
 })

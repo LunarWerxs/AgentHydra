@@ -1,5 +1,5 @@
 import { useStorage } from '@vueuse/core'
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import type {
   Account,
   AgentStatus,
@@ -10,6 +10,7 @@ import type {
   SessionSummary,
 } from '@/lib/api'
 import * as api from '@/lib/api'
+import { reconcileList, sameData } from '@/lib/reconcile'
 import {
   ARCHIVED_VALUES,
   DEFAULT_ARCHIVED,
@@ -26,14 +27,16 @@ import {
 import { registerSharedPref } from './useSharedPrefs'
 import { storedSelection } from './useStoredSelection'
 
-const sessions = ref<SessionSummary[]>([])
-const queue = ref<QueueItem[]>([])
-const incidents = ref<Incident[]>([])
+// Polled payloads are replaced whole and never edited in place, so they are shallow: no deep proxy
+// over hundreds of rows, and an unchanged poll keeps the old reference and wakes nothing.
+const sessions = shallowRef<SessionSummary[]>([])
+const queue = shallowRef<QueueItem[]>([])
+const incidents = shallowRef<Incident[]>([])
 // Live working / waiting / done per session (server/src/agent-status.ts). One cheap indexed read,
 // so it rides the fast timer: a status that lags by twelve seconds is not live.
-const agentStatuses = ref<AgentStatus[]>([])
-const accounts = ref<Account[]>([])
-const scheduler = ref<SchedulerState | null>(null)
+const agentStatuses = shallowRef<AgentStatus[]>([])
+const accounts = shallowRef<Account[]>([])
+const scheduler = shallowRef<SchedulerState | null>(null)
 const sessionsLoading = ref(false)
 // Server-side instance scope for the sessions list ('' = all). Lives here so the
 // polling refresh keeps honoring whatever the sidebar filter picked.
@@ -206,7 +209,7 @@ async function refreshSessions() {
     )
     // A rejected fetch must not touch the sessions the list is already showing — the old data
     // stays on screen (sessionsStatus.stale says so) rather than being blanked by an outage.
-    if (r) sessions.value = r
+    if (r) sessions.value = reconcileList(sessions.value, r, (x) => x.locator)
   } finally {
     sessionsLoading.value = false
     sessionsStatus.loading.value = false
@@ -235,20 +238,20 @@ async function refreshQueue() {
   // queueStatus.stale) instead of wiping it, and `queueLoaded` still flips once the FIRST attempt
   // has settled either way, so a first-load failure falls through to queueStatus.unavailable
   // rather than being read as "queue is empty".
-  if (r) queue.value = r
+  if (r) queue.value = reconcileList(queue.value, r, (i) => i.id)
   queueLoaded.value = true
 }
 async function refreshIncidents() {
   const r = await guard(api.getIncidents(), incidentsStatus)
-  if (r) incidents.value = r
+  if (r) incidents.value = reconcileList(incidents.value, r, (i) => i.id)
 }
 async function refreshAgentStatuses() {
   const r = await guard(api.getAgentStatuses(), agentStatusStatus)
-  if (r) agentStatuses.value = r
+  if (r) agentStatuses.value = reconcileList(agentStatuses.value, r, (a) => a.sessionId)
 }
 async function refreshAccounts() {
   const r = await guard(api.getAccounts(), accountsStatus)
-  if (r) accounts.value = r
+  if (r) accounts.value = reconcileList(accounts.value, r, (a) => a.id)
 }
 let schedulerGeneration = 0
 async function refreshScheduler() {
@@ -257,47 +260,44 @@ async function refreshScheduler() {
   const r = await guard(api.getScheduler(), schedulerStatus)
   if (gen !== schedulerGeneration) return
   schedulerStatus.loading.value = false
-  if (r) scheduler.value = r
+  if (r && !sameData(scheduler.value, r)) scheduler.value = r
 }
 
 let fastTimer: number | null = null
 let slowTimer: number | null = null
 
+// Desk 2's copy has no Sessions tab and nothing on screen reads `sessions` or `agentStatuses`
+// (Desk draws its own cloud list), so neither is polled: a view that wants one calls
+// refreshSessions() / refreshAgentStatuses() itself. The sessions poll made the daemon re-scan
+// transcripts every 12 s for a list nobody saw.
 function startPolling() {
   if (fastTimer !== null) return
-  refreshSessions()
   refreshQueue()
   refreshIncidents()
   refreshAccounts()
   refreshScheduler()
-  refreshAgentStatuses()
   // queue + scheduler are cheap and change often while runs are active
   fastTimer = window.setInterval(() => {
     if (document.hidden) return
     refreshQueue()
     refreshScheduler()
-    refreshAgentStatuses()
   }, 2000)
-  // sessions require disk scans - refresh more lazily. Incidents change only on a new failure or an
-  // ack/resolve click (both already re-fetch on their own), so the slow cadence is plenty.
+  // Incidents change only on a new failure or an ack/resolve click (both already re-fetch on their
+  // own), so the slow cadence is plenty.
   slowTimer = window.setInterval(() => {
     if (document.hidden) return
-    refreshSessions()
     refreshIncidents()
   }, 12000)
-  // A window left open in the background or minimised to the tray kept every poll running, and
-  // each sessions poll makes the daemon re-scan the transcripts that changed. Nobody is looking,
-  // so the ticks above skip; coming back catches up at once instead of on the next tick.
+  // A window left open in the background or minimised to the tray kept every poll running. Nobody
+  // is looking, so the ticks above skip; coming back catches up at once instead of on the next tick.
   document.addEventListener('visibilitychange', catchUpWhenShown)
 }
 
 function catchUpWhenShown() {
   if (document.hidden) return
-  refreshSessions()
   refreshQueue()
   refreshIncidents()
   refreshScheduler()
-  refreshAgentStatuses()
 }
 
 function stopPolling() {

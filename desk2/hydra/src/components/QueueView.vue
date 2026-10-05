@@ -76,23 +76,24 @@ const finishedShown = computed(() => (diedOnly.value ? died.value : finished.val
  *  back to the legacy sqlite accounts lookup only when no instance_ref is set. A ref that no
  *  longer resolves (the instance/account was deleted) still gets a clearly-labeled badge rather
  *  than silently rendering blank. */
+const instanceByDir = computed(() => new Map(instances.value.map((i) => [i.dir, i])))
+const cliInstanceById = computed(() => new Map(cliInstances.value.map((c) => [c.id, c])))
+const accountById = computed(() => new Map(accounts.value.map((a) => [a.id, a])))
 function accountLabel(item: QueueItem): string | null {
   const ref = item.instance_ref
   if (ref) {
     if (ref.startsWith('desktop:')) {
-      const dir = ref.slice('desktop:'.length)
-      const inst = instances.value.find((i) => i.dir === dir)
+      const inst = instanceByDir.value.get(ref.slice('desktop:'.length))
       return inst ? piiDisplayName(inst) : t('queue.deletedInstance')
     }
     if (ref.startsWith('cli:')) {
-      const id = ref.slice('cli:'.length)
-      const inst = cliInstances.value.find((c) => c.id === id)
+      const inst = cliInstanceById.value.get(ref.slice('cli:'.length))
       return inst ? pii(inst.name) : t('queue.deletedInstance')
     }
     return t('queue.deletedInstance')
   }
   if (!item.account_id) return null
-  return accounts.value.find((a) => a.id === item.account_id)?.label ?? 'account'
+  return accountById.value.get(item.account_id)?.label ?? 'account'
 }
 
 function toggle(id: string) {
