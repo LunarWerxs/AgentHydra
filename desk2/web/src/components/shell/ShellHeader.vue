@@ -9,9 +9,12 @@ import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem, runShortcut } 
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { resumable } from '@/components/external/logic'
 import AccountSubmenu from './AccountSubmenu.vue'
+import { PanelTopClose, PanelTopOpen } from '@lucide/vue'
+import { headerOpen } from '@/components/session-header/state'
 
 // The title bar inside the pane (h32): session title (click to rename), its menu, the folder pill,
-// Hydra Desk's status cue, and on the right the 26px pane buttons.
+// Hydra Desk's status cue, and on the right the 26px pane buttons. Hydra Desk 2: an outside session's
+// title bar has one, the session header's fold (components/session-header).
 export type RightPane = 'diff' | 'climayte'
 
 const props = withDefaults(
@@ -94,6 +97,8 @@ function run(item: RowMenuItem) {
   if (item.action === 'rename') setTimeout(startRename, 0)
   else emit('action', item)
 }
+
+const toggleSessionHeader = () => (headerOpen.value = !headerOpen.value)
 
 const PANE_BTN =
   'flex size-[26px] items-center justify-center rounded-[var(--radius-6)] text-text-2 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text aria-pressed:bg-fill-selected aria-pressed:text-text aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-expanded:bg-fill-hover aria-expanded:text-text'
@@ -223,5 +228,10 @@ const PANE_BTN =
         </span>
       </Tip>
     </div>
+    <Tip v-else-if="external" :label="headerOpen ? 'Hide session details' : 'Show session details'">
+      <button type="button" :class="PANE_BTN" :aria-label="headerOpen ? 'Hide session details' : 'Show session details'" @click="toggleSessionHeader">
+        <component :is="headerOpen ? PanelTopClose : PanelTopOpen" class="size-4" />
+      </button>
+    </Tip>
   </header>
 </template>

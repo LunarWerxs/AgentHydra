@@ -723,3 +723,13 @@ button.tx-file-card:hover {
 .tx-input:focus {
   box-shadow: var(--focus-ring);
 }
+
+/* Hydra Desk 2's session header Find (TranscriptView paints these with the CSS Custom Highlight API). */
+::highlight(desk-find) {
+  background-color: rgb(250 204 21 / 0.3);
+  color: inherit;
+}
+::highlight(desk-find-active) {
+  background-color: rgb(249 115 22 / 0.8);
+  color: #fff;
+}

@@ -4,7 +4,7 @@ import type { CloudSession } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
 import { relativeTime } from '@/components/sidebar/search'
-import { pcOf, SOURCE_LABELS, sessionShape, SHAPE_LABELS, type CloudSource } from './logic'
+import { modelName, pcOf, SOURCE_LABELS, sessionShape, SHAPE_LABELS, type CloudSource } from './logic'
 import { useCloud } from './store'
 
 // Hydra Desk 2's cloud list, in the sidebar in place of the desk list: every session AgentHydra knows,
@@ -31,11 +31,6 @@ onBeforeUnmount(() => timer && clearInterval(timer))
 
 const thisPc = computed(() => cloud.thisPc.value)
 const sourceName = (s: string) => SOURCE_LABELS[s as CloudSource] ?? s
-/** claude-opus-5-5 -> Opus 5.5, the way AgentHydra's rows name it; any other model as it is. */
-const modelName = (m: string | null) => {
-  const hit = m?.match(/^claude-([a-z]+)-(\d+)-(\d+)/)
-  return hit ? `${hit[1]!.charAt(0).toUpperCase()}${hit[1]!.slice(1)} ${hit[2]}.${hit[3]}` : m
-}
 function tooltip(r: CloudSession): string {
   return [
     r.title,

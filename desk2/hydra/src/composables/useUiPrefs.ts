@@ -44,13 +44,13 @@ export { APP_VIEWS, type AppView } from '@/lib/app-view'
  *  window, read by none after first paint. Validated on read, not trusted — a stale or hand-edited
  *  value must fall back rather than render a tab that no longer exists, and the same set is handed
  *  to the mirror, which has to make the same guarantee about what the daemon's store gives back. */
-const storedView = useStorage<AppView>(APP_VIEW_KEY, 'sessions', undefined, {
+const storedView = useStorage<AppView>(APP_VIEW_KEY, 'climayte', undefined, {
   // No cross-window listener. That listener IS the bug: same origin, so a click in one window was
   // pushed into the other one live. This key is a memory for next time, not a channel between
   // windows, and the daemon mirror below is how it reaches a window on a different port.
   listenToStorageChanges: false,
   serializer: {
-    read: (raw) => parseAppView(raw) ?? 'sessions',
+    read: (raw) => parseAppView(raw) ?? 'climayte',
     write: (v) => v,
   },
 })

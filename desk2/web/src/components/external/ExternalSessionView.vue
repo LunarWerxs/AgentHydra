@@ -7,6 +7,9 @@ import { externalGlyph, glyphDotClass, sourceLabel } from '@/components/sidebar/
 import { useDesk } from '@/stores/desk'
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
 import Composer from '@/components/composer/Composer.vue'
+import SessionHeader from '@/components/session-header/SessionHeader.vue'
+import { displayItems, type FindHit } from '@/components/session-header/logic'
+import { displayPrefs } from '@/components/session-header/state'
 import { continueLine, externalChat, holderOf, knownResumeAccount, resumable, whereLabel } from './logic'
 
 // A session running outside Hydra Desk, in the same column as a chat. A Claude Code session from Claude
@@ -14,6 +17,8 @@ import { continueLine, externalChat, holderOf, knownResumeAccount, resumable, wh
 // message imports and resumes it (on the CLI instance that holds it, else as a copy under the account
 // it lands on), a quiet line over it saying which; working there, a quiet line until it settles.
 // Anything else (Codex, CliMayte workers) stays read-only: nothing here can resume it.
+// Hydra Desk 2: AgentHydra's session header sits over the transcript (components/session-header), and
+// its Display choices pick what the transcript shows.
 const props = defineProps<{ sessionId: string }>()
 
 const src = useShellSource()
@@ -27,6 +32,8 @@ let pollInterval: ReturnType<typeof setInterval> | null = null
 const session = computed(() => src.external.value.find((s) => s.id === props.sessionId))
 const isWorking = computed(() => session.value?.status === 'working' || session.value?.status === 'needs_you')
 const usable = computed(() => !!session.value && resumable(session.value))
+const shown = computed(() => displayItems(items.value, displayPrefs.value))
+const find = ref<{ query: string; active: FindHit | null } | null>(null)
 const standIn = computed(() =>
   session.value?.canResume ? externalChat(session.value, src.accounts.value, desk.externalPatch(session.value.id), desk.landingOf(session.value.id)) : null
 )
@@ -97,13 +104,14 @@ onUnmounted(stopPolling)
 
 <template>
   <div class="flex h-full flex-col bg-[var(--bg-page)] text-[13px] leading-[19.5px] text-[var(--text)]">
+    <SessionHeader :session-id="sessionId" :session="session ?? null" :items="items" :shown="shown" @update:find="(f) => (find = f)" />
     <div v-if="loading" class="flex flex-1 items-center justify-center text-[var(--text-muted)]">Loading transcript…</div>
     <div v-else-if="error && !items.length" class="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
       <div class="font-medium">Could not load this session</div>
       <div class="text-[var(--text-muted)]">{{ error }}</div>
     </div>
     <div v-else class="min-h-0 flex-1 overflow-hidden">
-      <TranscriptView :chat-id="sessionId" :items="items" :read-only="!standIn" :chat="standIn" />
+      <TranscriptView :chat-id="sessionId" :items="shown" :read-only="!standIn" :chat="standIn" :find="find" :compact="displayPrefs.compact" />
     </div>
 
     <template v-if="standIn">

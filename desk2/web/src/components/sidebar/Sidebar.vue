@@ -9,7 +9,6 @@ import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import { useShellSource } from '@/components/shell/source'
 import CloudList from '@/components/cloud/CloudList.vue'
 import { useCloud } from '@/components/cloud/store'
-import { hydraOpen, hydraShowing, openInHydra } from '@/components/hydra/api'
 import ChatRow from './ChatRow.vue'
 import SidebarTools from './SidebarTools.vue'
 import ExternalRow from './ExternalRow.vue'
@@ -106,11 +105,10 @@ const searchText = computed({
     else query.value = v
   }
 })
-// A cloud row opens in AgentHydra while it is open (the sidebar is its session list then), else as an
-// outside session on Desk's side.
+// A cloud row opens as an outside session on Desk's side, with AgentHydra's session header over it
+// (AgentHydra, if it is open, slides away: DeskFrame).
 function openCloud(r: CloudSession) {
-  if (hydraOpen.value) openInHydra(r.id, r.source)
-  else src.select({ kind: 'external', id: r.id })
+  src.select({ kind: 'external', id: r.id })
 }
 function onCloudSearchKey(e: KeyboardEvent) {
   if (e.isComposing) return
@@ -413,7 +411,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </button>
         </div>
 
-        <CloudList v-if="cloud.on.value" :selected-id="hydraOpen ? hydraShowing : selectedExternalId" @open="openCloud">
+        <CloudList v-if="cloud.on.value" :selected-id="selectedExternalId" @open="openCloud">
           <template #tools>
             <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
           </template>

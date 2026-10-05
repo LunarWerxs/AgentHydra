@@ -8,6 +8,12 @@
 import type { CloudSession } from '@shared/protocol'
 import { folderKey, folderLabel, NO_FOLDER } from '../sidebar/logic'
 
+/** claude-opus-5-5 -> Opus 5.5, the way AgentHydra's rows name it; any other model as it is. */
+export function modelName(m: string | null | undefined): string | null {
+  const hit = m?.match(/^claude-([a-z]+)-(\d+)-(\d+)/)
+  return hit ? `${hit[1]!.charAt(0).toUpperCase()}${hit[1]!.slice(1)} ${hit[2]}.${hit[3]}` : (m ?? null)
+}
+
 export const SOURCE_VALUES = ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm'] as const
 export type CloudSource = (typeof SOURCE_VALUES)[number]
 export const SOURCE_LABELS: Record<CloudSource, string> = {

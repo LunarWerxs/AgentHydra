@@ -28,6 +28,10 @@ const props = defineProps<{
   chat?: ChatSummary | null
   /** Rows or sections to start open (the Gallery uses it to show expanded states). */
   expandedIds?: string[]
+  /** Hydra Desk 2's session header Find: every match marked, the active one (an item and which match in it) scrolled to. */
+  find?: { query: string; active: { itemId: string; nth: number } | null } | null
+  /** Tighter gaps between rows (the session header's Compact layout). */
+  compact?: boolean
 }>()
 
 const desk = useDesk()
@@ -62,7 +66,7 @@ const heights = new Map<string, number>()
 const version = ref(0)
 
 const indexById = computed(() => new Map(display.value.map((r, i) => [r.id, i])))
-const gaps = computed(() => display.value.map((_, i) => rowGap(display.value, i)))
+const gaps = computed(() => display.value.map((_, i) => (props.compact ? Math.round(rowGap(display.value, i) * 0.4) : rowGap(display.value, i))))
 const offsets = computed(() => {
   void version.value
   const top = display.value
@@ -176,6 +180,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   rowObserver?.disconnect()
   viewObserver?.disconnect()
+  clearFind()
 })
 
 // Follow new items, streaming growth and re-measured rows while pinned.
@@ -186,6 +191,73 @@ watch(
   },
   { flush: 'post' },
 )
+
+// Find: the matches in the rows on screen are marked with the CSS Custom Highlight API, so no row
+// renders again; marked again as rows come into view. The active match's row is scrolled to first (it
+// may not be in the DOM yet), then the match itself, a third of the way down.
+const highlights = typeof CSS !== 'undefined' && 'highlights' in CSS ? CSS.highlights : null
+let activeRange: Range | null = null
+function clearFind() {
+  highlights?.delete('desk-find')
+  highlights?.delete('desk-find-active')
+  activeRange = null
+}
+function paintFind() {
+  clearFind()
+  const q = props.find?.query.trim().toLowerCase()
+  const el = scroller.value
+  if (!highlights || !q || !el) return
+  const act = props.find?.active ?? null
+  const all: Range[] = []
+  for (const row of el.querySelectorAll<HTMLElement>('[data-id]')) {
+    const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT)
+    let nth = 0
+    let first: Range | null = null
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const text = n.nodeValue?.toLowerCase() ?? ''
+      for (let at = text.indexOf(q); at !== -1; at = text.indexOf(q, at + q.length)) {
+        const r = new Range()
+        r.setStart(n, at)
+        r.setEnd(n, at + q.length)
+        all.push(r)
+        first ??= r
+        if (act && row.dataset.id === act.itemId && nth === act.nth) activeRange = r
+        nth++
+      }
+    }
+    // The rendered text can count differently from the item's own (markdown): its first match stands in.
+    if (act && row.dataset.id === act.itemId && !activeRange) activeRange = first
+  }
+  if (all.length) highlights.set('desk-find', new Highlight(...all))
+  if (activeRange) highlights.set('desk-find-active', new Highlight(activeRange))
+}
+function revealActive() {
+  const el = scroller.value
+  if (!el || !activeRange) return
+  const box = activeRange.getBoundingClientRect()
+  const view = el.getBoundingClientRect()
+  if (box.top >= view.top + 48 && box.bottom <= view.bottom - 48) return
+  el.scrollTop += box.top - view.top - el.clientHeight / 3
+  scrollTop.value = lastTop = el.scrollTop
+}
+// Keyed by value: the header hands a fresh object whenever the items poll in, and that must not scroll.
+const activeKey = computed(() => (props.find?.active ? `${props.find.active.nth}:${props.find.active.itemId}` : ''))
+watch(activeKey, () => {
+  const act = props.find?.active
+  const el = scroller.value
+  const idx = act ? indexById.value.get(act.itemId) : undefined
+  if (!el || idx === undefined) return
+  pinned.value = false
+  el.scrollTop = Math.max(0, offsets.value[idx] - el.clientHeight / 3)
+  scrollTop.value = lastTop = el.scrollTop
+  nextTick(() =>
+    requestAnimationFrame(() => {
+      paintFind()
+      revealActive()
+    }),
+  )
+})
+watch([visible, () => props.find?.query, activeKey], () => nextTick(paintFind), { flush: 'post' })
 
 // A different chat starts at its bottom.
 watch(

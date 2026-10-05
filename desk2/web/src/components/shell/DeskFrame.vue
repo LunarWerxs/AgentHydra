@@ -242,10 +242,20 @@ function toggleHydra(open = !hydraOpen.value) {
   }
 }
 const onOpenHydra = () => toggleHydra(true)
+// Picking anything slides the chat back; an outside session came from the cloud list, which stays.
 watch(
   () => src.selected.value,
-  () => hydraOpen.value && toggleHydra(false)
+  (v) => {
+    if (!hydraOpen.value) return
+    if (v.kind === 'external') cloudForHydra = false
+    toggleHydra(false)
+  }
 )
+function showSessions() {
+  cloudForHydra = false
+  cloud.on.value = true
+  toggleHydra(false)
+}
 function toggleCloud() {
   cloud.on.value = !cloud.on.value
   cloudForHydra = false
@@ -505,7 +515,13 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
           </aside>
         </div>
         <div class="h-full w-1/2 min-w-0" :inert="!hydraOpen" :aria-hidden="!hydraOpen || undefined">
-          <HydraPane :open="hydraOpen" :pad-left="titlePad" @close="toggleHydra(false)" />
+          <HydraPane
+            :open="hydraOpen"
+            :pad-left="titlePad"
+            @close="toggleHydra(false)"
+            @open-session="(id: string) => src.select({ kind: 'external', id })"
+            @show-sessions="showSessions"
+          />
         </div>
       </div>
     </div>

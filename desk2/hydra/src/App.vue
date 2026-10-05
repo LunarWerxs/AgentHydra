@@ -31,7 +31,6 @@ import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
 import QueueBuilder from '@/components/QueueBuilder.vue'
 import QueueView from '@/components/QueueView.vue'
 import SchedulerStatus from '@/components/SchedulerStatus.vue'
-import SessionsView from '@/components/SessionsView.vue'
 import SettingsView from '@/components/SettingsView.vue'
 import ShortcutSheet from '@/components/ShortcutSheet.vue'
 import { Button } from '@/components/ui/button'
@@ -55,8 +54,8 @@ import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
 import { INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
-import { listenToDesk } from '@/lib/desk-embed'
-import { pendingSessionJump } from '@/lib/session-jump'
+import { openInDesk, showSessionsInDesk } from '@/lib/desk-embed'
+import { pendingSessionJump, takeSessionJump } from '@/lib/session-jump'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
 import { applyWindowSizeHint } from '@/lib/window-size-hint'
@@ -85,13 +84,11 @@ const { startPolling: startNotificationPolling } = useNotifications()
 // composables/useUiPrefs.ts, which is where every mirrored layout preference lives.
 const { view } = useUiPrefs()
 // "Open this chat" asked from another view (the Instances move dialog lists chats; clicking one
-// should land on its transcript). Switch the tab here; SessionsView takes the request when it
-// mounts, or at once if it is already the view showing. See lib/session-jump.ts.
+// should land on its transcript). Hydra Desk 2's copy has no Sessions tab (Michael, 2026-10-04: the
+// cloud list is the same thing): Desk opens the chat in its own view (lib/desk-embed.ts).
 watch(pendingSessionJump, (j) => {
-  if (j) view.value = 'sessions'
+  if (j) openInDesk(takeSessionJump() ?? j)
 })
-// Inside Hydra Desk 2, Desk's sidebar asks for sessions the same way (lib/desk-embed.ts).
-listenToDesk()
 
 // The shell's own bindings — global, so they are on every view and lead the `?` sheet. Registered
 // here rather than in each view because that is what makes them true everywhere.
@@ -101,14 +98,6 @@ useShortcuts([
     labelKey: 'app.shortcutShowSheet',
     groupKey: 'app.shortcutGroupApp',
     run: openShortcutSheet,
-  },
-  {
-    keys: 'mod+1',
-    labelKey: 'app.shortcutSessions',
-    groupKey: 'app.shortcutGroupApp',
-    run: () => {
-      view.value = 'sessions'
-    },
   },
   {
     keys: 'mod+2',
@@ -243,7 +232,6 @@ async function onShutdown() {
 // Top-level tabs. Instances is a group: clicking it opens the landing page, and its two sub-pages
 // sit in a hover dropdown. The group reads as active on any of its three views.
 const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
-  { id: 'sessions', labelKey: 'app.tabSessions', icon: MessagesSquare },
   { id: 'climayte', labelKey: 'app.tabClimayte', icon: Bot },
   { id: 'instances-home', labelKey: 'app.tabInstances', icon: Boxes },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
@@ -312,7 +300,8 @@ function pickInstancesSub(id: AppView) {
 function onHomeNavigate(
   to: 'cli' | 'instances' | 'climayte' | 'sessions' | 'analytics' | 'hswarm',
 ) {
-  view.value = to === 'instances' ? 'desktop' : to
+  if (to === 'sessions') showSessionsInDesk()
+  else view.value = to === 'instances' ? 'desktop' : to
 }
 
 provide(OPEN_VIEW, (v: AppView) => {
@@ -582,8 +571,7 @@ onUnmounted(stopAvailabilityPolling)
         :class="inInstances ? 'overflow-y-auto scroll-slim' : ''"
       >
         <Transition name="view-fade" mode="out-in">
-          <SessionsView v-if="view === 'sessions'" />
-          <AnalyticsView v-else-if="view === 'analytics'" />
+          <AnalyticsView v-if="view === 'analytics'" />
           <CliMayteView v-else-if="view === 'climayte'" class="h-full" />
           <InstancesHomeView v-else-if="view === 'instances-home'" @navigate="onHomeNavigate" />
           <CliView v-else-if="view === 'cli'" />

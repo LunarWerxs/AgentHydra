@@ -13,24 +13,36 @@ sidebar on the left stays put, and only the pane on the right changes.
 
 - **AgentHydra inside the window, Desk 2's own copy of it.** The AgentHydra button in the chrome bar,
   after Back and Forward, slides AgentHydra in over the chat with a push (0.42 s, the chat moving out
-  to the left as AgentHydra comes in). While it is open the sidebar is AgentHydra's session list (the
-  cloud list below), and AgentHydra's own list is gone: click a session in the sidebar and it opens in
-  AgentHydra's Sessions view on the right, and the sidebar marks the one it shows. Every other
-  AgentHydra tab (CliMayte, Instances, Analytics, HSwarm) is there as usual. **← Desk** (or the button
-  again, or picking one of Desk's own chats) slides the chat back and puts the desk list back.
+  to the left as AgentHydra comes in). While it is open the sidebar is the cloud list below. The copy
+  has no Sessions tab: the cloud list is the session list, and a session clicked there slides the chat
+  back and opens it in Desk's own view, under the session header below. A chat the copy itself is asked
+  to open (the Instances move dialog's list, the landing page's session tiles) comes back to Desk the
+  same way. Every other AgentHydra tab (CliMayte, Instances, Analytics, HSwarm) is there as usual.
+  **← Desk** (or the button again, or picking one of Desk's own chats) slides the chat back.
   What slides in is not AgentHydra's own window but Desk 2's copy of it, `hydra/` (AgentHydra's `web/`,
   copied at 779aa0fd), so it can be changed as much as wanted without touching AgentHydra. Desk 2
   serves it at `/ah/` and hands its API calls to the one AgentHydra daemon (`HYDRA_URL`, default
   http://127.0.0.1:7787), only from Desk 2's own page and without the browser's cookies or origin; the
   daemon itself is not copied, since two would both run work on the same accounts. `bun run build`
   builds both windows.
-- **The cloud list.** The cloud button (next to it) turns the sidebar into every session AgentHydra
-  knows, from both PCs: a chat that came over from the other PC through AgentHydra's chat sync shows
-  that PC's name beside it, and each shows its AgentHydra instance number (#37), as AgentHydra's rows
-  do. The sessions are grouped by folder, newest first. Clicking one opens its transcript on the right
-  (in AgentHydra while that is open). Search looks through every session, archived ones included, from all
-  time, and shows the best matches first. The cloud button again goes back to the desk list. This is
-  meant to replace AgentHydra's Sessions tab.
+- **The cloud list.** The cloud button (next to it, blue while it is on) turns the sidebar into every
+  session AgentHydra knows, from both PCs: a chat that came over from the other PC through AgentHydra's
+  chat sync shows that PC's name beside it, and each shows its AgentHydra instance number (#37), as
+  AgentHydra's rows do. The sessions are grouped by folder, newest first. Clicking one opens its
+  transcript on the right. Search looks through every session, archived ones included, from all time,
+  and shows the best matches first. The cloud button again goes back to the desk list. It replaces
+  AgentHydra's Sessions tab.
+- **The session header.** Over a session opened from the cloud list (or any session running outside
+  Desk) sits what AgentHydra's Sessions tab said about it: the product, the short id (click to copy),
+  the instance number and account (its address in the tooltip), the folder, the git branch, turns,
+  tokens and cost (the breakdown in the tooltip; a "+" when a model has no published price), the model
+  and effort, and any credentials the transcript printed (redacted). Its buttons are Find (Ctrl + F;
+  Enter and Shift + Enter step through the matches, marked in the transcript), Copy session file
+  location, Copy session id and Close, and its ⋯ menu has the account (bring it to the front, copy its
+  address), Display (only what I typed, tool activity, reasoning, compact layout), the session file
+  (open it, save it as Markdown, a web page or the raw .jsonl, copy the file itself, copy its path), and
+  for Claude sessions Reopen in a terminal and Migrate to another account. The title bar's panel icon
+  folds it away and back. It reads AgentHydra through Desk 2's `/ah/api`.
 - **More in the Filter menu.** The sidebar's Filter button now holds what AgentHydra's Sessions ⋯ menu
   has: Refresh, Only this view, Select multiple sessions, then Source, Instance, Queued work, Usage
   limits, Session shape, Archived, Computer and Time period, Reset, and Session settings (which opens

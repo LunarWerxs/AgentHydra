@@ -262,8 +262,8 @@ export function useMoveAllChats(deps: {
     reportMoveAll(job, id, t, instLabel, tally)
   }
 
-  /** A chat in the move list, clicked: close the dialog and land on that chat in Sessions, filtered
-   *  to it and selected. The tab switch happens in App.vue; the select happens in SessionsView. */
+  /** A chat in the move list, clicked: close the dialog and open that chat. App.vue hands it to
+   *  Hydra Desk 2, which opens it in its own view. */
   function openChatFromMoveDialog(row: ChatListRow) {
     if (!row.sessionId) return
     moveAll.value = null
