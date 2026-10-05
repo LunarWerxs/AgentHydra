@@ -87,14 +87,20 @@ function fireMessage(info: BootWatchdogFireInfo): string {
 function defaultOnFire(info: BootWatchdogFireInfo): void {
   const line = fireMessage(info)
   console.error(line)
+  appendDaemonLogLine(line)
+  process.exit(BOOT_WATCHDOG_EXIT_CODE)
+}
+
+/** One ERROR line straight into <CONFIG_DIR>/logs/daemon.log, for a process that may not have
+ *  reached initFileLogging yet. Synchronous, so it is safe in an 'exit' listener. Never throws:
+ *  disk hung or full, or the dir unwritable, and the caller's console line is the last resort. */
+export function appendDaemonLogLine(line: string): void {
   try {
     mkdirSync(logDir(), { recursive: true })
     appendFileSync(join(logDir(), 'daemon.log'), `[${new Date().toISOString()}] ERROR ${line}\n`)
   } catch {
-    // Disk hung/full, or the dir is unwritable - console.error above is the fallback of last
-    // resort and already ran; a logging failure must never be the reason the exit doesn't happen.
+    // A logging failure must never be the reason an exit doesn't happen.
   }
-  process.exit(BOOT_WATCHDOG_EXIT_CODE)
 }
 
 const realDeps: BootWatchdogDeps = {
