@@ -3516,7 +3516,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **Instance rows follow the login, not the profile's display name**
   (`web/src/lib/instance-appearance.ts`). The Anthropic profile's `full_name` is whatever someone
-  typed into claude.ai, so a fleet named that way read "Toby", "Martin", "Michael Griswold":
+  typed into claude.ai, so a fleet named that way read "Alex", "Morgan", "Example Owner":
   friendly words that do not say which login each row is. Rows now use the email handle, and a
   stored name that no longer matches the account it is signed into is flagged, with a one-click
   "Name it after the account" in the three-dot menu.
@@ -8161,7 +8161,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   folder name was only ever a guess at the identity, and it stops being true the moment a profile is
   signed into an account other than the one it was named after, nothing prevents that drift and
   nothing corrects it. On the machine this was built against, the folder called `claude` was signed
-  into `6claude@lunarwerx.com` and had been reading as "claude" the whole time, while two other
+  into the `6claude` account and had been reading as "claude" the whole time, while two other
   instances had been hand-relabelled to their accounts precisely to paper over the same problem. So
   the resolved account's name (its profile name, else the local part of its email) is now the
   default, ahead of the folder name; an explicit label you set still wins over both, and the folder

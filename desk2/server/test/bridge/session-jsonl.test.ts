@@ -32,8 +32,8 @@ function lines(): string {
 
 describe('outside session .jsonl', () => {
   test('encodes a cwd the way Claude Code names its project folder', () => {
-    expect(encodeProjectDir('C:\\Users\\jacob\\Desktop\\Project\\Connections')).toBe('C--Users-jacob-Desktop-Project-Connections')
-    expect(encodeProjectDir('C:/Users/jacob/Desktop/Project/Agent Hydra/desk')).toBe('C--Users-jacob-Desktop-Project-Agent-Hydra-desk')
+    expect(encodeProjectDir('C:\\Users\\me\\Desktop\\Project\\Connections')).toBe('C--Users-me-Desktop-Project-Connections')
+    expect(encodeProjectDir('C:/Users/me/Desktop/Project/Agent Hydra/desk')).toBe('C--Users-me-Desktop-Project-Agent-Hydra-desk')
   })
 
   test('finds the projects folders of the default login, Desktop instances and given config dirs', () => {

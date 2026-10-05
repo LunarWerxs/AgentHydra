@@ -78,7 +78,7 @@ export function prettyTier(tier: string | null | undefined): string | null {
  * afterwards, and an unexpired grant is no evidence that they are fresh. Measured across 11 local
  * accounts by decrypting every token cache and diffing it against the live profile:
  *
- *   - lunawerx@gmail.com is `organization_type: "claude_free"`, `billing_type: "none"`,
+ *   - the owner's main account (owner@example.com here) is `organization_type: "claude_free"`, `billing_type: "none"`,
  *     `has_claude_max: false` — and all THREE of its unexpired grants still say
  *     `subscriptionType: "max"` / `rateLimitTier: "default_claude_max_20x"`. Preferring the grant
  *     therefore rendered "Max 20×" for a free account (owner-reported).
@@ -208,7 +208,7 @@ export interface CMAccount {
   orgName: string | null
   /** Where this CMAccount came from: 'live' (network), 'cache', 'offline', etc. */
   source: string | null
-  /** One-line display label, e.g. "Michael <lunawerx@gmail.com> · Max 20×". */
+  /** One-line display label, e.g. "Example Owner <owner@example.com> · Max 20×". */
   label: string
 }
 

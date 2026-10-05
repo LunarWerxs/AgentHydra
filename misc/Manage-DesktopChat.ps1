@@ -125,7 +125,7 @@ param(
   [switch]$AllowDuplicateRows,
   # -All is the OTHER duplicate case, and it is the opposite claim: SEVERAL REAL CHATS share
   # this title and EVERY one of them is to be actioned (measured 2026-09-17 cleaning up 17
-  # fan-out judge chats, of which three were titled 'Blogitech showcase design critique' and two
+  # fan-out judge chats, of which three were titled 'Showcase design critique' and two
   # 'Critic judge instructions batch b002'). -AllowDuplicateRows would be a lie there - it
   # asserts one chat drawn twice - so the caller was left to loop outside the tool, which is
   # exactly the one-off scripting this file exists to stop. Archive only: a rename or an

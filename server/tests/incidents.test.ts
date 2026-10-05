@@ -35,14 +35,12 @@ test('signature is stable across differing timestamps, paths, and ids (dedups as
   const a = await recordIncident({
     scope: 'queue',
     key: '/repo/project-a',
-    error:
-      'Error at 2026-09-04T12:34:56.789Z in C:\\Users\\jacob\\repo\\src\\run.ts:42 (pid 18234)',
+    error: 'Error at 2026-09-04T12:34:56.789Z in C:\\Users\\me\\repo\\src\\run.ts:42 (pid 18234)',
   })
   const b = await recordIncident({
     scope: 'queue',
     key: '/repo/project-a',
-    error:
-      'Error at 2026-09-04T13:01:02.001Z in C:\\Users\\jacob\\repo\\src\\run.ts:42 (pid 55190)',
+    error: 'Error at 2026-09-04T13:01:02.001Z in C:\\Users\\me\\repo\\src\\run.ts:42 (pid 55190)',
   })
   expect(a.isNew).toBe(true)
   expect(b.isNew).toBe(false)

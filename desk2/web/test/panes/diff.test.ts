@@ -68,7 +68,7 @@ describe('statusLetter', () => {
 
 describe('auto-refresh helpers', () => {
   it('matches folders across slashes, case and trailing separators', () => {
-    expect(sameFolder('C:\\Users\\jacob\\desk\\', 'c:/users/jacob/desk')).toBe(true)
+    expect(sameFolder('C:\\Users\\me\\desk\\', 'c:/users/me/desk')).toBe(true)
     expect(sameFolder('C:/a/desk', 'C:/a/desk2')).toBe(false)
     expect(sameFolder(null, 'C:/a')).toBe(false)
   })

@@ -7,7 +7,7 @@
 // group keep the order they arrived in.
 //
 // THE LABEL IS THE FOLDER, NOT SessionSummary.project. That field is Claude's projects-store slug
-// for the working directory - `C--Users-jacob-Desktop-Project-Connections` - which is an identity,
+// for the working directory - `C--Users-me-Desktop-Project-Connections` - which is an identity,
 // not a name; the first live render of this dialog showed exactly that string as a header. The
 // sessions list itself labels a row by the last segment of its cwd ("Connections"), so the groups
 // use the same, and the slug is only the fallback for a session with no cwd at all.

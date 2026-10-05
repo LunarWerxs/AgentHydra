@@ -16,7 +16,7 @@ const worker = (over: Partial<CliMayteWorker> & Pick<CliMayteWorker, 'id' | 'tit
   model: 'claude-opus-5-5',
   effort: 'high',
   kind: 'fix',
-  cwd: 'C:/Users/jacob/Desktop/Project/Agent Hydra/desk',
+  cwd: 'C:/Users/me/Desktop/Project/Agent Hydra/desk',
   sessionId: `ws-${over.id}`,
   originSessionId: SESSION,
   startedAt: START,

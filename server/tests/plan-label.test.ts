@@ -13,7 +13,7 @@ import { prettyTier, resolvePlanLabel } from '../src/core/shared'
 describe('resolvePlanLabel', () => {
   describe('organization_type is authoritative', () => {
     test('a claude_free org is Free even when every other signal shouts Max 20×', () => {
-      // REGRESSION, owner-reported 2026-08-07. lunawerx@gmail.com: the live profile says
+      // REGRESSION, owner-reported 2026-08-07. The owner's main account: the live profile says
       // organization_type "claude_free", billing_type "none", has_claude_max false — while all
       // THREE unexpired grants in its token cache still say subscriptionType "max" /
       // rateLimitTier "default_claude_max_20x". The row rendered "Max 20×" for a free account.

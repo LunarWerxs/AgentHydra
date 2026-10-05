@@ -11,7 +11,7 @@ import {
   truncateText,
 } from '../../src/components/transcript/lib/tools'
 
-const CWD = 'C:\\Users\\jacob\\proj'
+const CWD = 'C:\\Users\\me\\proj'
 
 describe('keyArgument', () => {
   test('Bash shows the first line of the command', () => {
@@ -20,17 +20,17 @@ describe('keyArgument', () => {
   })
 
   test('file tools show the path relative to the chat folder', () => {
-    expect(keyArgument('Edit', { file_path: 'C:\\Users\\jacob\\proj\\src\\a.ts' }, CWD)).toBe('src/a.ts')
+    expect(keyArgument('Edit', { file_path: 'C:\\Users\\me\\proj\\src\\a.ts' }, CWD)).toBe('src/a.ts')
     expect(keyArgument('Write', { file_path: 'D:/other/b.ts' }, CWD)).toBe('D:/other/b.ts')
   })
 
   test('Read adds its line range', () => {
-    expect(keyArgument('Read', { file_path: 'C:/Users/jacob/proj/a.ts', offset: 10, limit: 50 }, CWD)).toBe('a.ts · lines 10-59')
+    expect(keyArgument('Read', { file_path: 'C:/Users/me/proj/a.ts', offset: 10, limit: 50 }, CWD)).toBe('a.ts · lines 10-59')
     expect(keyArgument('Read', { file_path: 'a.ts', limit: 20 })).toBe('a.ts · lines 1-20')
   })
 
   test('search and web tools show pattern, URL or query', () => {
-    expect(keyArgument('Grep', { pattern: 'foo\\(', path: 'C:/Users/jacob/proj/src' }, CWD)).toBe('foo\\( · src')
+    expect(keyArgument('Grep', { pattern: 'foo\\(', path: 'C:/Users/me/proj/src' }, CWD)).toBe('foo\\( · src')
     expect(keyArgument('Glob', { pattern: '**/*.vue' })).toBe('**/*.vue')
     expect(keyArgument('WebFetch', { url: 'https://example.com/x', prompt: 'p' })).toBe('https://example.com/x')
     expect(keyArgument('WebSearch', { query: 'shiki bundles' })).toBe('shiki bundles')

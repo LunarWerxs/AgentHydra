@@ -7,7 +7,8 @@
 //    AES-256-GCM) and asserts the plaintext contains 'sk-ant-oat01'. Skipped automatically on
 //    non-Windows platforms, and whenever that instance is absent or signed out on this machine.
 // 2. Golden (Windows-only, no network): resolveAccount(lunarwerx, { noNetwork: true }) resolves
-//    from local decrypt/cache to lunawerx@gmail.com without ever calling fetch, and its plan label
+//    from local decrypt/cache to the owner's address (matched by SHA-256, so this public file
+//    never spells it out) without ever calling fetch, and its plan label
 //    agrees with the cached organization_type rather than with the token cache's stale grants.
 // 3. Static AES-128-CBC + PBKDF2(SHA1) vector: proves the mac/linux math path (KDF + cipher)
 //    end-to-end using hand-computed values, independent of any live Keychain/keyring — so
@@ -16,6 +17,7 @@
 //    returns a well-formed CMAccount and never throws, independent of any real machine state.
 
 import { afterEach, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path, { join } from 'node:path'
@@ -23,7 +25,13 @@ import { resolveAccount } from '../src/core/accounts'
 import { decryptSafeStorage, deriveMacKey } from '../src/core/crypto/index'
 
 const GOLDEN_INSTANCE_DIR = join(os.homedir(), '.claude-instances', 'lunarwerx')
-const GOLDEN_EMAIL = 'lunawerx@gmail.com'
+/** SHA-256 of the address the golden instance is signed into: the repo is public, so the vectors
+ *  compare digests instead of carrying the owner's real email in plain text. */
+const GOLDEN_EMAIL_SHA256 = 'c1099ef6ebbd4cffbb43df966baeca251b8ece33cdf3c8733aa2fc9923ea2495'
+const sha256Hex = (s: string | null): string =>
+  createHash('sha256')
+    .update(s ?? '')
+    .digest('hex')
 
 /** The plan assertions below are written as an INVARIANT against `orgType`, not as a hardcoded
  *  label, so they keep testing the right thing if this account's subscription changes. As of
@@ -192,7 +200,7 @@ describe('static AES-128-CBC + PBKDF2-SHA1 vector (mac/linux math path)', () => 
 
 describe('resolveAccount — golden noNetwork vector (local decrypt/cache only, no HTTP call)', () => {
   test.if(goldenAvailable)(
-    'resolves the real lunarwerx instance via noNetwork -> lunawerx@gmail.com, plan per cached orgType',
+    'resolves the real lunarwerx instance via noNetwork -> its known email, plan per cached orgType',
     async () => {
       const account = await resolveAccount(GOLDEN_INSTANCE_DIR, { noNetwork: true })
 
@@ -203,7 +211,7 @@ describe('resolveAccount — golden noNetwork vector (local decrypt/cache only, 
       expect(['cache', 'offline']).toContain(account.status)
 
       if (account.status === 'cache') {
-        expect(account.email).toBe(GOLDEN_EMAIL)
+        expect(sha256Hex(account.email)).toBe(GOLDEN_EMAIL_SHA256)
         // The cached organization_type must beat the token cache's stale grants offline too —
         // that is the whole reason it is persisted (accounts.ts writeAccountsCacheEntry).
         expectPlanAgreesWithOrgType(account)
@@ -235,15 +243,16 @@ describe('resolveAccount — golden LIVE network vector (gated: CM_TEST_LIVE_ACC
   const liveFlagSet = process.env.CM_TEST_LIVE_ACCOUNT === '1'
 
   test.if(goldenAvailable && liveFlagSet)(
-    'resolves the real lunarwerx instance live -> lunawerx@gmail.com, plan per live orgType',
+    'resolves the real lunarwerx instance live -> its known email, plan per live orgType',
     async () => {
       const account = await resolveAccount(GOLDEN_INSTANCE_DIR)
 
       expect(account.status).toBe('live')
-      expect(account.email).toBe(GOLDEN_EMAIL)
+      expect(sha256Hex(account.email)).toBe(GOLDEN_EMAIL_SHA256)
       expect(account.orgType).toBeTruthy()
       expectPlanAgreesWithOrgType(account)
-      expect(account.label).toContain(GOLDEN_EMAIL)
+      // The digest above pins account.email to the golden address, so this is the same check.
+      expect(account.label).toContain(account.email as string)
       // The one-liner shows the reconciled plan label, never the raw tier — a `default_claude_ai`
       // tier used to leak into it verbatim.
       expect(account.label).toContain(account.planLabel as string)

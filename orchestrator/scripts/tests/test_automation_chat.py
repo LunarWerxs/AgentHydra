@@ -551,7 +551,7 @@ class RenderedNameRetryTest(unittest.TestCase):
 
     REFUSAL = (
         "REFUSED: no sidebar row is named 'QuickDictate listening stops intermittently' in "
-        "c:/users/blogi/.claude-instances/another_meh - a MATCH failure, not a timing one: 3 "
+        "c:/users/me/.claude-instances/another_meh - a MATCH failure, not a timing one: 3 "
         "rows are rendered right now (rows read by the kebab phrase 'Chat options'). "
         "Rows: 'QuickDictate' | 'Slite changelog review' | 'Ask AI rollout deployment'"
     )

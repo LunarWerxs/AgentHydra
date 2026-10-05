@@ -9,7 +9,7 @@ import { classifyUserText, type InjectedPart } from '../../src/engine/system-tex
 const WORKFLOW_DONE = `<task-notification>
 <task-id>w5ahe9hto</task-id>
 <tool-use-id>toolu_011HebVQBuHoytXnT7iH9VQB</tool-use-id>
-<output-file>C:\\Users\\jacob\\AppData\\Local\\Temp\\claude\\C--Users-jacob-Desktop-Project-Connections\\02b95209-e131-404d-9fc7-6033f2d04adf\\tasks\\w5ahe9hto.output</output-file>
+<output-file>C:\\Users\\me\\AppData\\Local\\Temp\\claude\\C--Users-me-Desktop-Project-Connections\\02b95209-e131-404d-9fc7-6033f2d04adf\\tasks\\w5ahe9hto.output</output-file>
 <status>completed</status>
 <summary>Dynamic workflow "Build a real-vs-ours screenshot parity harness, then match every Hydra Desk area to the real Claude Code desktop, then audit it" completed</summary>
 <result>{"harness":{"area":"Parity harness (docs/reference/tools/parity.ts, docs/reference/real/scenes.json)","summary":"The parity harness is built and committed as 37e4392. Running \`bun run parity &lt;scene|all&gt;\` builds the web app"}}</result>
@@ -19,7 +19,7 @@ const WORKFLOW_DONE = `<task-notification>
 const BASH_DONE = `<task-notification>
 <task-id>bovmv81je</task-id>
 <tool-use-id>toolu_01AbC</tool-use-id>
-<output-file>C:\\Users\\jacob\\AppData\\Local\\Temp\\claude\\x\\tasks\\bovmv81je.output</output-file>
+<output-file>C:\\Users\\me\\AppData\\Local\\Temp\\claude\\x\\tasks\\bovmv81je.output</output-file>
 <status>completed</status>
 <summary>Background command "bun test ./server/test" completed (exit code 0)</summary>
 </task-notification>`
@@ -69,7 +69,7 @@ const cases: { name: string; text: string; meta?: boolean; want: InjectedPart[] 
           taskKind: 'workflow',
           toolUseId: 'toolu_011HebVQBuHoytXnT7iH9VQB',
           outputFile:
-            'C:\\Users\\jacob\\AppData\\Local\\Temp\\claude\\C--Users-jacob-Desktop-Project-Connections\\02b95209-e131-404d-9fc7-6033f2d04adf\\tasks\\w5ahe9hto.output',
+            'C:\\Users\\me\\AppData\\Local\\Temp\\claude\\C--Users-me-Desktop-Project-Connections\\02b95209-e131-404d-9fc7-6033f2d04adf\\tasks\\w5ahe9hto.output',
           agents: 3,
           tokens: 539600,
           durationMs: 660000,
@@ -90,7 +90,7 @@ const cases: { name: string; text: string; meta?: boolean; want: InjectedPart[] 
           summary: 'Background command "bun test ./server/test" completed (exit code 0)',
           taskKind: 'bash',
           toolUseId: 'toolu_01AbC',
-          outputFile: 'C:\\Users\\jacob\\AppData\\Local\\Temp\\claude\\x\\tasks\\bovmv81je.output',
+          outputFile: 'C:\\Users\\me\\AppData\\Local\\Temp\\claude\\x\\tasks\\bovmv81je.output',
         },
       },
     ],

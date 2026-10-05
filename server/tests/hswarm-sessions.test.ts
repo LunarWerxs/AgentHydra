@@ -45,8 +45,8 @@ const JOB_TWO_TASKS = {
     finished: '2024-07-15T05:16:25+00:00',
   },
   tasks: [
-    { id: 'lines', prompt: 'How many lines are in a.txt?', cwd: 'C:\\Users\\blogi\\scratch' },
-    { id: 'broken', prompt: 'This task fails on purpose.', cwd: 'C:\\Users\\blogi\\scratch' },
+    { id: 'lines', prompt: 'How many lines are in a.txt?', cwd: 'C:\\Users\\me\\scratch' },
+    { id: 'broken', prompt: 'This task fails on purpose.', cwd: 'C:\\Users\\me\\scratch' },
   ],
   results: {
     lines: {
@@ -74,7 +74,7 @@ describe('listHSwarmSessions', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]?.session_id).toBe('20240715-051622-08a3')
     expect(rows[0]?.title).toBe('mcp-smoke')
-    expect(rows[0]?.cwd).toBe('C:\\Users\\blogi\\scratch')
+    expect(rows[0]?.cwd).toBe('C:\\Users\\me\\scratch')
     expect(rows[0]?.archived).toBe(false)
     expect(rows[0]?.size_bytes).toBeGreaterThan(0)
   })

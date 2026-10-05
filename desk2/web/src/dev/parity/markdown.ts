@@ -1,4 +1,4 @@
-// The transcript-markdown scene: user/real-markdown-and-file-card.png word for word - a SendUserFile
+// The transcript-markdown scene: user/real-markdown-and-file-card.png in shape, with invented words - a SendUserFile
 // with its caption and file card, the answer with bold lead-in bullets and '##' headings, 18 settled
 // background commands, and one still running (the running-tasks row under the last message).
 import type { TranscriptItem } from '@shared/protocol'
@@ -7,38 +7,38 @@ import { PARITY_NOW } from './clock'
 // A 1x1 PNG: the real picture above the caption is outside the compared region.
 const DOT = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 
-const ANSWER = `It now looks like Claude Code Desktop. I sent you a screenshot of the live window, with your real chats in it. A few things on it are still wrong, and I just started a second round to fix them.
+const ANSWER = `It now looks like the desktop app. I sent a screenshot of the live window with sample chats in it. A few things on it are still off, and a second round to fix them has started.
 
 **What’s done:**
 
-- **Sidebar and chat list.** The sidebar is your project-grouped chat list with the status dots, plus New, Projects, Artifacts, Customize and More. It collapses with the toggle and Ctrl+B.
-- **Chat view and composer.** The chat view, composer and menus have been matched against your screenshots, and side by side they line up to within a pixel. What differs now is mostly Anthropic’s private font, which I can’t copy.
+- **Sidebar and chat list.** The sidebar is the project-grouped chat list with status dots, plus New, Projects, Artifacts, Customize and More. It collapses with the toggle and Ctrl+B.
+- **Chat view and composer.** The chat view, composer and menus were matched against reference screenshots, and side by side they line up to within a pixel. What differs now is mostly the reference app’s private font, which can’t be copied.
 - **Checks.** The tests, typecheck and build all pass: 330 tests, typecheck exit 0, build exit 0.
 
-**What round 2 is fixing now (you can see these in the screenshot):**
+**What round 2 is fixing now (visible in the screenshot):**
 
 - **Account picker.** It shows an email address. It will show only "#128 · Pro", and never an email anywhere.
-- **Icon on every row.** Each outside-chat row has an icon the real app doesn’t have. It’s coming off.
-- **New-session screen.** The real one has pills for Local, the folder, the branch and "worktree," plus a tip banner above the box. The stats card should show real numbers, and the model should show a real name instead of "Default."
-- **Approval cards.** The real app shows permission, question and plan requests above the composer. Ours puts them in the chat.
+- **Icon on every row.** Each outside-chat row has an icon the reference doesn’t have. It’s coming off.
+- **New-session screen.** The reference has pills for Local, the folder, the branch and "worktree," plus a tip banner above the box. The stats card should show real numbers, and the model should show a real name instead of "Default."
+- **Approval cards.** The reference shows permission, question and plan requests above the composer. Ours puts them in the chat.
 - **Smaller fixes.** Custom hover tooltips and the menu shadows.
 - **Re-check.** Afterwards, a fresh critic re-checks everything on a new build.
 
-**Not building:** the real app’s Routines, Ultracode level, "What’s new" and Send feedback. Hydra Desk has no feature behind them, and I won’t add fake ones.
+**Not building:** the reference’s Routines, Ultracode level, "What’s new" and Send feedback. Hydra Desk has no feature behind them, and fake ones would only mislead.
 
-Your Hydra Desk server had stopped, so I restarted it. If your window shows an error, close it and reopen it from the desktop shortcut.
+The Hydra Desk server had stopped, so I restarted it. If the window shows an error, close it and reopen it from the desktop shortcut.
 
 ## What I did
 
-Finished round 1 and checked it myself. Sent you the live screenshot and started round 2 on the critics’ findings.
+Finished round 1 and checked it. Sent the live screenshot and started round 2 on the critics’ findings.
 
 ## Am I 100% done?
 
-No. Round 2 is running and I haven’t seen its results yet.
+No. Round 2 is running and its results aren’t in yet.
 
 ## Do I recommend anything else?
 
-Nothing. I’ll send the next screenshot when round 2 is done and checked.`
+Nothing. The next screenshot comes when round 2 is done and checked.`
 
 export function markdownSceneItems(): TranscriptItem[] {
   const t = PARITY_NOW - 20 * 60_000
@@ -50,9 +50,9 @@ export function markdownSceneItems(): TranscriptItem[] {
       kind: 'tool_use',
       name: 'SendUserFile',
       input: {
-        files: ['C:\\Users\\jacob\\Desktop\\Project\\Agent Hydra\\desk\\docs\\screens\\live-round1.png'],
+        files: ['C:\\Users\\me\\Desktop\\Project\\Agent Hydra\\desk\\docs\\screens\\live-round1.png'],
         caption:
-          'Hydra Desk right now, live with your real chats. Round 2 is fixing the visible leftovers: the email in the account picker, the icon on every row, the zero stats, and the new-session pills and tip.',
+          'Hydra Desk right now, live with sample chats. Round 2 is fixing the visible leftovers: the email in the account picker, the icon on every row, the zero stats, and the new-session pills and tip.',
         display: 'render',
       },
       status: 'done',
@@ -138,7 +138,7 @@ export function cacheOf(home: string) {
 \`\`\`
 
 \`\`\`bash
-cd "C:/Users/jacob/Desktop/Project/Agent Hydra/desk" && bun test ./server/test/engine/system-text.test.ts ./server/test/media/media.test.ts ./web/test/transcript/tasks-media.test.ts
+cd "C:/Users/me/Desktop/Project/Agent Hydra/desk" && bun test ./server/test/engine/system-text.test.ts ./server/test/media/media.test.ts ./web/test/transcript/tasks-media.test.ts
 \`\`\`
 
 \`\`\`ts
@@ -176,7 +176,7 @@ export function markdownGalleryItems(): TranscriptItem[] {
       ts: t + 2000,
       kind: 'tool_use',
       name: 'Read',
-      input: { file_path: 'C:/Users/jacob/Desktop/Project/Agent Hydra/desk/docs/screens/side.png' },
+      input: { file_path: 'C:/Users/me/Desktop/Project/Agent Hydra/desk/docs/screens/side.png' },
       status: 'done',
       startedAt: t + 2000,
       endedAt: t + 2100,

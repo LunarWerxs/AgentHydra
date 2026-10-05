@@ -3,7 +3,7 @@
 // The precedence is the whole point and it is load-bearing: an explicit label the user typed beats
 // everything, then the account the profile is actually signed into, and only then the folder name.
 // The folder is last because it is the one that lies — the machine this was built against had a
-// folder named `claude` signed into 6claude@lunarwerx.com, and two folders (3claude/4claude) whose
+// folder named `claude` signed into 6claude@example.com, and two folders (3claude/4claude) whose
 // accounts were the other way round. Nothing detects that drift, so the folder cannot be trusted
 // ahead of a resolved identity.
 //
@@ -51,13 +51,13 @@ const LOGGED_OUT = account({ status: 'loggedout', label: '(not logged in)' })
 
 describe('accountName', () => {
   test('prefers the profile name', () => {
-    expect(accountName(account({ name: 'LunarWerx', email: 'lunawerx@gmail.com' }))).toBe(
-      'LunarWerx',
+    expect(accountName(account({ name: 'Example Org', email: 'owner@example.com' }))).toBe(
+      'Example Org',
     )
   })
 
   test("falls back to the email's local part when there is no name", () => {
-    expect(accountName(account({ email: '6claude@lunarwerx.com' }))).toBe('6claude')
+    expect(accountName(account({ email: '6claude@example.com' }))).toBe('6claude')
   })
 
   test('is null for null/undefined, and for an account carrying no identity', () => {
@@ -69,12 +69,12 @@ describe('accountName', () => {
   })
 
   test('treats a whitespace-only name as absent and moves on to the email', () => {
-    expect(accountName(account({ name: '   ', email: '5claude@lunarwerx.com' }))).toBe('5claude')
+    expect(accountName(account({ name: '   ', email: '5claude@example.com' }))).toBe('5claude')
   })
 
   test('is null when the email is whitespace-only or has no local part', () => {
     expect(accountName(account({ email: '   ' }))).toBeNull()
-    expect(accountName(account({ email: '@lunarwerx.com' }))).toBeNull()
+    expect(accountName(account({ email: '@example.com' }))).toBeNull()
   })
 
   test('handles an email-shaped string with no @ by using the whole thing', () => {
@@ -109,7 +109,7 @@ describe('displayName', () => {
     const name = displayName({
       name: '3claude',
       label: 'My Main',
-      account: account({ name: '4claude', email: '4claude@lunarwerx.com' }),
+      account: account({ name: '4claude', email: '4claude@example.com' }),
     })
     expect(name).toBe('My Main')
   })
@@ -118,7 +118,7 @@ describe('displayName', () => {
     const name = displayName({
       name: 'claude',
       label: null,
-      account: account({ email: '6claude@lunarwerx.com' }),
+      account: account({ email: '6claude@example.com' }),
     })
     expect(name).toBe('6claude')
   })
@@ -155,7 +155,7 @@ describe('displayName', () => {
   })
 
   test('two instances on one account share a name — the dir is what disambiguates them', () => {
-    const shared = account({ name: '4claude', email: '4claude@lunarwerx.com' })
+    const shared = account({ name: '4claude', email: '4claude@example.com' })
     expect(displayName({ name: 'a', label: null, account: shared })).toBe('4claude')
     expect(displayName({ name: 'b', label: null, account: shared })).toBe('4claude')
   })
@@ -186,7 +186,7 @@ describe('shortDisplayName', () => {
   })
 
   test('a cut landing after a space does not read as " …"', () => {
-    expect(shortDisplayName('Michael Griswold-Thorne', 9)).toBe('Michael…')
+    expect(shortDisplayName('Example Owner-Thorne', 9)).toBe('Example…')
   })
 
   test('counted in code points, so a surrogate pair is never split in half', () => {
@@ -220,24 +220,22 @@ describe('nameOverflowTitle', () => {
   })
 
   test('it agrees with shortDisplayName about the same budget', () => {
-    expect(nameOverflowTitle('Michael Griswold', 9)).toBe('Michael Griswold')
-    expect(nameOverflowTitle('Michael Griswold', 40)).toBeUndefined()
+    expect(nameOverflowTitle('Example Owner', 9)).toBe('Example Owner')
+    expect(nameOverflowTitle('Example Owner', 40)).toBeUndefined()
   })
 })
 
 // --- the address behind the handle ---------------------------------------------------------------
 // accountHandle() is a DISPLAY compromise: it fits a table column, and it is not an identifier —
-// `5claude@lunarwerx.com` and `5claude@gmail.com` render the same chip. So anything that leaves the
+// `5claude@example.com` and `5claude@example.test` render the same chip. So anything that leaves the
 // app (a clipboard, a paste into another tool) must use the full address, and only the full one.
 describe('accountEmail', () => {
   test('returns the full address, not the handle the column shows', () => {
-    expect(accountEmail(account({ email: '5claude@lunarwerx.com' }))).toBe('5claude@lunarwerx.com')
+    expect(accountEmail(account({ email: '5claude@example.com' }))).toBe('5claude@example.com')
   })
 
   test('trims, because a padded address is not a different address', () => {
-    expect(accountEmail(account({ email: '  5claude@lunarwerx.com  ' }))).toBe(
-      '5claude@lunarwerx.com',
-    )
+    expect(accountEmail(account({ email: '  5claude@example.com  ' }))).toBe('5claude@example.com')
   })
 
   test('nothing resolved yet is null, never a guess', () => {
@@ -347,7 +345,7 @@ describe('labelDisagreesWithAccount', () => {
     expect(
       labelDisagreesWithAccount({
         label: '3claude',
-        account: account({ email: '4claude@lunarwerx.com' }),
+        account: account({ email: '4claude@example.com' }),
       }),
     ).toBe(true)
   })
@@ -364,8 +362,8 @@ describe('labelDisagreesWithAccount', () => {
   test('does not fire while the account is unresolved — unknown is not disagreement', () => {
     // Every row would light up for the second between load and resolve, which trains the marker
     // straight out of usefulness.
-    expect(labelDisagreesWithAccount({ label: 'Toby', account: null })).toBe(false)
-    expect(labelDisagreesWithAccount({ label: 'Toby', account: LOGGED_OUT })).toBe(false)
+    expect(labelDisagreesWithAccount({ label: 'Alex', account: null })).toBe(false)
+    expect(labelDisagreesWithAccount({ label: 'Alex', account: LOGGED_OUT })).toBe(false)
   })
 
   test('does not fire when the user simply typed the account name themselves', () => {
@@ -373,13 +371,13 @@ describe('labelDisagreesWithAccount', () => {
     expect(
       labelDisagreesWithAccount({
         label: '4claude',
-        account: account({ email: '4claude@lunarwerx.com' }),
+        account: account({ email: '4claude@example.com' }),
       }),
     ).toBe(false)
     expect(
       labelDisagreesWithAccount({
-        label: 'Michael Griswold',
-        account: account({ name: 'Michael Griswold', email: 'mg@lunarwerx.com' }),
+        label: 'Example Owner',
+        account: account({ name: 'Example Owner', email: 'owner@example.com' }),
       }),
     ).toBe(false)
   })
@@ -390,7 +388,7 @@ describe('labelDisagreesWithAccount', () => {
     expect(
       labelDisagreesWithAccount({
         label: 't.mercer',
-        account: account({ name: 'Martin', email: 't.mercer@example.com' }),
+        account: account({ name: 'Morgan', email: 't.mercer@example.com' }),
       }),
     ).toBe(false)
   })
@@ -399,7 +397,7 @@ describe('labelDisagreesWithAccount', () => {
     expect(
       labelDisagreesWithAccount({
         label: '  5Claude  ',
-        account: account({ email: '5claude@lunarwerx.com' }),
+        account: account({ email: '5claude@example.com' }),
       }),
     ).toBe(false)
   })
@@ -407,20 +405,20 @@ describe('labelDisagreesWithAccount', () => {
 
 // --- naming a row after the LOGIN, not the profile's display name ---------------------------------
 // The Anthropic profile's full_name is whatever the person typed into claude.ai, so naming rows with
-// it gave a table reading "Toby", "Martin", "Michael Griswold" — friendly words that do not say
+// it gave a table reading "Alex", "Morgan", "Example Owner" — friendly words that do not say
 // which login each row is and cannot be matched against the folder or the number. Observed: an
-// instance in the folder `6claude`, signed into 6claude@…, displayed as "Toby". The handle is the
+// instance in the folder `6claude`, signed into 6claude@…, displayed as "Alex". The handle is the
 // one field every signed-in account has, is unique, and the user actually typed.
 describe('accountDisplayName', () => {
   test('prefers the email handle over the profile display name', () => {
-    expect(accountDisplayName(account({ name: 'Toby', email: '6claude@lunarwerx.com' }))).toBe(
+    expect(accountDisplayName(account({ name: 'Alex', email: '6claude@example.com' }))).toBe(
       '6claude',
     )
   })
 
   test('falls back to the profile name when there is no address to take a handle from', () => {
     // Dropping to the folder name here would throw away the better answer we already have.
-    expect(accountDisplayName(account({ name: 'Toby', email: null }))).toBe('Toby')
+    expect(accountDisplayName(account({ name: 'Alex', email: null }))).toBe('Alex')
   })
 
   test('nothing resolved, or signed out, is null', () => {
@@ -433,16 +431,16 @@ describe('accountDisplayName', () => {
 describe('displayName follows the login', () => {
   test('the profile name is what names the row (owner directive 2026-09-11)', () => {
     // Reversed on purpose: the owner wants the Name column to read the person's name — "kestrel",
-    // "Toby" — not the email fragment. The handle did not vanish; it moved to the Account column
+    // "Alex" — not the email fragment. The handle did not vanish; it moved to the Account column
     // (accountDisplayName, still handle-first, above) and the row tooltip. So this shows the name
     // and loses no identifying information.
     expect(
       displayName({
         name: '6claude',
         label: null,
-        account: account({ name: 'Toby', email: '6claude@lunarwerx.com' }),
+        account: account({ name: 'Alex', email: '6claude@example.com' }),
       }),
-    ).toBe('Toby')
+    ).toBe('Alex')
   })
 
   test('with no profile name, the email handle still names the row', () => {
@@ -451,7 +449,7 @@ describe('displayName follows the login', () => {
       displayName({
         name: 'claude',
         label: null,
-        account: account({ email: '6claude@lunarwerx.com' }),
+        account: account({ email: '6claude@example.com' }),
       }),
     ).toBe('6claude')
   })
@@ -463,7 +461,7 @@ describe('displayName follows the login', () => {
       displayName({
         name: '6claude',
         label: 'Build box',
-        account: account({ name: 'Toby', email: '6claude@lunarwerx.com' }),
+        account: account({ name: 'Alex', email: '6claude@example.com' }),
       }),
     ).toBe('Build box')
   })

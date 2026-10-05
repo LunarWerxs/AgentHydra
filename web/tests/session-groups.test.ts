@@ -13,13 +13,13 @@ const row = (project: string, cwd: string, title: string) => ({ project, cwd, ti
 test('the header is the folder name, not the project-store slug', () => {
   const groups = groupByProject([
     row(
-      'C--Users-jacob-Desktop-Project-Connections',
-      'C:\\Users\\jacob\\Desktop\\Project\\Connections',
+      'C--Users-me-Desktop-Project-Connections',
+      'C:\\Users\\me\\Desktop\\Project\\Connections',
       'a',
     ),
     row(
-      'C--Users-jacob-Desktop-Project-Agent-Hydra',
-      'C:\\Users\\jacob\\Desktop\\Project\\Agent Hydra',
+      'C--Users-me-Desktop-Project-Agent-Hydra',
+      'C:\\Users\\me\\Desktop\\Project\\Agent Hydra',
       'b',
     ),
   ])

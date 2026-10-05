@@ -79,7 +79,7 @@ export const PARITY_SCENES: Record<string, ParityScene> = {
       {
         id: 'x-run',
         title: 'Level editor export bug',
-        cwd: 'C:/Users/jacob/Desktop/nexuscode-2d',
+        cwd: 'C:/Users/me/Desktop/nexuscode-2d',
         source: 'desktop',
         instance: '#68',
         status: 'working',
@@ -208,7 +208,7 @@ export function sceneComposerApi(scene: ParityScene): ComposerApi {
     rememberFolder: async () => [CWD],
     forgetFolder: async () => [],
     pickFolder: async () => null,
-    browse: async (path) => ({ path: path ?? CWD, parent: 'C:/Users/jacob/Desktop/Project', dirs: [] }),
+    browse: async (path) => ({ path: path ?? CWD, parent: 'C:/Users/me/Desktop/Project', dirs: [] }),
     accounts: async () => parityAccounts(),
     pickAccount: async () => parityAccounts()[0]!,
     mcpServers: async () => [{ name: 'agenthydra', scope: 'hydra-desk', transport: 'stdio' }],

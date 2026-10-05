@@ -108,7 +108,7 @@ export function colorValue(key: InstanceColorKey): string {
 }
 
 /** The short human name of a resolved account: the profile's full name, else the local part of
- *  its email ("4claude" out of "4claude@lunarwerx.com"). Null when nothing is resolved yet, or
+ *  its email ("4claude" out of "4claude@example.com"). Null when nothing is resolved yet, or
  *  the instance is logged out — both leave name/email null, so no status check is needed.
  *
  *  FRIENDLY, NOT IDENTIFYING. Whether it returns a profile name or an email fragment depends on
@@ -127,7 +127,7 @@ export function accountName(account: CMAccount | null | undefined): string | nul
  *
  * One rule for every row, which is the entire point. The account column used to render
  * {@link accountName}, so a machine with several logins showed a column reading "kestrel",
- * "5claude", "Martin", "Michael Griswold" — a mix of Anthropic profile display names and email
+ * "5claude", "Morgan", "Example Owner" — a mix of Anthropic profile display names and email
  * fragments, indistinguishable from each other and from the instance's own name and folder. There
  * was no way to tell that "kestrel" was a profile name for t.mercer@example.com while "5claude" was
  * just an email with the domain cut off.
@@ -143,7 +143,7 @@ export function accountHandle(account: CMAccount | null | undefined): string | n
 
 /** The FULL address the account is signed in with — what a copy action puts on the clipboard, and
  *  the only form that identifies the login outside this app (the handle alone is ambiguous across
- *  domains: `5claude@lunarwerx.com` and `5claude@gmail.com` collapse to the same chip).
+ *  domains: `5claude@example.com` and `5claude@example.test` collapse to the same chip).
  *
  *  Null when nothing is resolved yet or the instance is signed out — a signed-out account still
  *  carries a non-empty `label` ("(not logged in)"), and that label must never reach a clipboard as
@@ -157,10 +157,10 @@ export function accountEmail(account: CMAccount | null | undefined): string | nu
  *
  * The handle comes first, which is the reverse of {@link accountName}, and it is the same argument
  * the account COLUMN already settled: the profile's `full_name` is whatever the person typed into
- * claude.ai, so a fleet named that way reads "Toby", "Martin", "Michael Griswold" — friendly words
+ * claude.ai, so a fleet named that way reads "Alex", "Morgan", "Example Owner" — friendly words
  * that do not say WHICH LOGIN each row is, and cannot be matched against the folder, the number, or
  * anything the user would search for. Observed: an instance in the folder `6claude`, signed into
- * 6claude@…, displayed as "Toby", and there was no way to tell from the table that those were the
+ * 6claude@…, displayed as "Alex", and there was no way to tell from the table that those were the
  * same thing.
  *
  * The email is the one field every signed-in account has, is unique, and the user actually typed.

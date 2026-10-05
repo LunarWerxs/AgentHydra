@@ -20,7 +20,7 @@ const git: GitStatus = {
   ]
 }
 // The folder menu's list, kept here so choosing, removing and Add new folder show in the gallery.
-let recentFolders = ['D:/NEWProjects/connections', 'C:/Users/jacob/Desktop/Project/Agent Hydra/desk', 'D:/NEWProjects/web', 'C:/Users/jacob/Desktop/Project/Agent Hydra/desk/web']
+let recentFolders = ['D:/NEWProjects/connections', 'C:/Users/me/Desktop/Project/Agent Hydra/desk', 'D:/NEWProjects/web', 'C:/Users/me/Desktop/Project/Agent Hydra/desk/web']
 const fixtureApi: ComposerApi = {
   // The real model menu's order.
   models: async () => [
