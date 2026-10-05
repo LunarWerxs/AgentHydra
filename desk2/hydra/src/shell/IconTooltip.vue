@@ -12,13 +12,18 @@
 // folder, and "click to focus" — and folding any two into one string made the hover read as prose.
 // Reach for it only when each line is a different KIND of fact; a second sentence about the same
 // fact belongs in `description`.
+import LazyOverlay from '@/components/ui/lazy/LazyOverlay.vue';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 defineProps<{ label: string; description?: string; detail?: string }>();
 </script>
 
+<!-- Until someone hovers, focuses or presses the trigger, only the trigger is mounted (LazyOverlay); the
+     stand-in carries what reka's trigger sets while closed. -->
 <template>
-  <Tooltip>
+  <LazyOverlay :stand-in="{ 'data-slot': 'tooltip-trigger', 'data-state': 'closed', 'data-grace-area-trigger': '' }">
+    <template #closed><slot /></template>
+    <Tooltip>
     <TooltipTrigger as-child>
       <slot />
     </TooltipTrigger>
@@ -29,5 +34,6 @@ defineProps<{ label: string; description?: string; detail?: string }>();
         <div v-if="detail" class="text-background/70">{{ detail }}</div>
       </div>
     </TooltipContent>
-  </Tooltip>
+    </Tooltip>
+  </LazyOverlay>
 </template>
