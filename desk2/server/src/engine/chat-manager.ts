@@ -104,6 +104,12 @@ export interface SendOptions {
   onlyIfReady?: boolean
   /** The SDK message uuid, which is also the user item's id: a send the queue made is found in the transcript by it. */
   messageId?: string
+  /**
+   * A person's plain send (Enter in "Send immediately", or Send now on a queue row): to a running CliMayte worker it
+   * goes now, as Send now on its bubble does, not after the worker's whole task. An SDK chat's CLI takes it into the
+   * running turn anyway.
+   */
+  now?: boolean
 }
 
 /** createFromQueue's answer: the chat and how its first message went (its error, or null). `waiting` is
@@ -560,7 +566,7 @@ export class ChatManager {
     const chat = e.chat
     if (this.chats.get(chat.id) !== e) throw new ChatError(404, `no chat ${chat.id}`)
     if (opts.onlyIfReady && busy(chat)) throw new ChatBusyError()
-    const queued = busy(chat)
+    let queued = busy(chat)
     // The message shows at once: the worker's JSONL has it only once its CLI runs and the poll reads it.
     const ts = this.now()
     const standIn: UserItem = { kind: 'user', id: `desk-sent:${ts}:${randomUUID()}`, ts, text: said, ...(shown ? { images: shown } : {}), ...(queued ? { queued } : {}) }
@@ -595,6 +601,17 @@ export class ChatManager {
     if (this.chats.get(chat.id) !== e) return { queued }
     this.timings.workerSent(chat, this.now() - sentAt)
     e.workerLive = true
+    // A worker takes nothing mid-turn, so CliMayte held it until the whole task ends; a plain send goes now, as Send now
+    // on its bubble would (Jacob, 2026-10-05: "every single message, even if I don't have add to queue, always does
+    // stinking add to queue"). If that fails it stays held, and the bubble's Send now can try again.
+    if (queued && opts.now && chat.workerId) {
+      try {
+        if (await this.deliverHeldNow(e, standIn, text)) queued = false
+      } catch (err) {
+        console.warn(`[desk] ${chat.id}: the message stays held, it could not go now: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      if (this.chats.get(chat.id) !== e) return { queued }
+    }
     if (!queued) {
       chat.status = 'starting'
       chat.activity = 'Queued'
@@ -616,19 +633,12 @@ export class ChatManager {
   async sendNow(id: string, itemId?: string): Promise<SendNowResult> {
     const e = this.entry(id)
     if (e.chat.workerId) {
-      const i = e.sent?.findIndex((s) => s.id === itemId && s.queued) ?? -1
-      const standIn = i >= 0 ? e.sent![i]! : undefined
+      const standIn = e.sent?.find((s) => s.id === itemId && s.queued)
       let stopped: boolean
       try {
-        stopped = await this.bridge.sendToWorkerNow(e.chat.workerId, standIn?.text.trim() ? standIn.text : undefined)
+        stopped = await this.deliverHeldNow(e, standIn, standIn?.text.trim() ? standIn.text : undefined)
       } catch (err) {
         throw new ChatError(502, `CliMayte did not send it now: ${err instanceof Error ? err.message : String(err)}`)
-      }
-      if (stopped && standIn && e.sent?.[i] === standIn) {
-        // It is the turn starting now, not a queued one: the worker's own copy replaces it once its CLI runs.
-        const { queued: _q, ...sent } = standIn
-        e.sent[i] = sent
-        this.emitEvent({ type: 'item.upsert', chatId: id, item: sent })
       }
       await this.syncWorkers(id)
       return { ok: true, stopped }
@@ -636,6 +646,22 @@ export class ChatManager {
     if (!e.runtime?.running || e.chat.queuedCount === 0) return { ok: true, stopped: false }
     await e.runtime.interrupt()
     return { ok: true, stopped: true }
+  }
+
+  /**
+   * AgentHydra's deliver-now for the message the worker holds (`text` names it): its running turn stops and the same
+   * session continues with that message first. When it stopped, the stand-in is no longer queued: it is the turn
+   * starting now, and the worker's own copy replaces it once its CLI runs. True when the turn was stopped.
+   */
+  private async deliverHeldNow(e: Entry, standIn: UserItem | undefined, text: string | undefined): Promise<boolean> {
+    const stopped = await this.bridge.sendToWorkerNow(e.chat.workerId as string, text)
+    const i = standIn && e.sent ? e.sent.indexOf(standIn) : -1
+    if (stopped && i >= 0) {
+      const { queued: _q, ...sent } = standIn!
+      e.sent![i] = sent
+      this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: sent })
+    }
+    return stopped
   }
 
   async interrupt(id: string): Promise<void> {
@@ -1034,7 +1060,8 @@ export class ChatManager {
     // Desk file is read once, for what it already holds (emitted), not on every poll.
     if (!e.emitted) this.deskItems(e)
     const rescan = e.readAccount !== w.accountId
-    const items = await this.bridge.workerItems([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])], chat.cwd, { rescan })
+    const writing = w.sessionId && w.accountId ? { sessionId: w.sessionId, accountId: w.accountId } : undefined
+    const items = await this.bridge.workerItems([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])], chat.cwd, { rescan, writing })
     if (this.chats.get(chat.id) !== e) return
     e.readAccount = w.accountId
     const emitted = e.emitted!

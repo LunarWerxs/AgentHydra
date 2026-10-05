@@ -190,7 +190,8 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   app.post('/api/chats/:id/messages', (c) =>
     answer(c, async () => {
       const { text, images } = parseSend(await body(c))
-      return manager.send(c.req.param('id'), text, images)
+      // A person's send: to a running CliMayte worker it goes now (SendOptions.now), not after its whole task.
+      return manager.send(c.req.param('id'), text, images, { now: true })
     }),
   )
   app.post('/api/chats/:id/send-now', (c) =>

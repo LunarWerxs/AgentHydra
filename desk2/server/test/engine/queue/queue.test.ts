@@ -216,6 +216,7 @@ test('a message for an idle chat goes once the chat has stayed ready for the set
   expect(t.texts()).toEqual(['next step'])
   const sent = t.fake.sends[0]!
   expect(sent.opts.onlyIfReady).toBe(true)
+  expect(sent.opts.now).toBe(false)
   expect(t.fake.items.get('c1')!.map((i) => i.id)).toEqual([sent.opts.messageId!])
   expect(t.items()).toEqual([])
   expect(t.events.at(-1)).toMatchObject({ type: 'queue.update', queue: { items: [] } })
@@ -454,6 +455,8 @@ test('send-now goes past the hold and the running turn, as a plain send does, an
   t.fake.setStatus('c1', 'working', { turnStartedAt: 5 })
   expect(await t.q.sendNow(a.id)).toEqual({ ok: true, chatId: 'c1', queued: true })
   expect(t.fake.sends[0]!.opts.onlyIfReady).toBe(false)
+  // A person's Send now: a running CliMayte worker takes it now, not after its whole task.
+  expect(t.fake.sends[0]!.opts.now).toBe(true)
   expect(t.q.state().held).toEqual({})
   expect(t.items()).toEqual([expect.objectContaining({ text: 'later', state: 'waiting' })])
 })

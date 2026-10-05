@@ -424,7 +424,7 @@ export class QueueManager {
     try {
       // Sent only once queue.json has this uuid: it is how a restart tells whether the message went.
       if (!this.changed()) throw new UnsavedError()
-      const r = await this.manager.send(item.chatId, item.text, await this.readBack(item.images), { onlyIfReady: dispatch, messageId: item.sentUuid })
+      const r = await this.manager.send(item.chatId, item.text, await this.readBack(item.images), { onlyIfReady: dispatch, messageId: item.sentUuid, now: !dispatch })
       this.drop(item)
       return r
     } catch (err) {

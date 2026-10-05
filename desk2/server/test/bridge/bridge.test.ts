@@ -1,10 +1,14 @@
 // The bridge against a fake AgentHydra: reads, writes, AgentHydra down, and the poller's broadcasts.
 
 import { afterEach, describe, expect, test } from 'bun:test'
+import { cpSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { ServerEvent } from '@shared/protocol'
 import { BridgeError, createBridge } from '../../src/bridge'
 import { createClient } from '../../src/bridge/client'
 import { createPoller } from '../../src/bridge/poller'
+import { encodeProjectDir } from '../../src/bridge/session-jsonl'
 import { deadUrl, type FakeHydra, NOW, startFakeHydra } from './fake-hydra'
 
 const sid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -16,8 +20,11 @@ async function fake(): Promise<FakeHydra> {
   return f
 }
 
+const temps: string[] = []
+
 afterEach(async () => {
   for (const f of fakes.splice(0)) await f.stop()
+  for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
 describe('client', () => {
@@ -240,5 +247,66 @@ describe('poller', () => {
     h.setClients(1)
     await h.poller.tick()
     expect(h.types().sort()).toEqual(['accounts.update', 'bridge.status', 'climayte.update', 'external.update'])
+  })
+})
+
+describe('a worker moved to another account', () => {
+  const SESSION = sid(77)
+  const CWD = 'C:/Users/me/Desktop/Project/Example'
+  const line = (kind: 'user' | 'assistant', n: number, text: string) =>
+    JSON.stringify(
+      kind === 'user'
+        ? { type: 'user', uuid: `u${n}`, timestamp: new Date(NOW + n * 1000).toISOString(), message: { role: 'user', content: text } }
+        : { type: 'assistant', uuid: `a${n}`, timestamp: new Date(NOW + n * 1000).toISOString(), message: { id: `msg_${n}`, role: 'assistant', content: [{ type: 'text', text }] } },
+    )
+
+  /** Two CLI instances' folders, `old-acct` listed first; the session written on `old-acct` only. */
+  async function moved() {
+    const home = mkdtempSync(join(tmpdir(), 'desk-moved-'))
+    temps.push(home)
+    const dir = (name: string) => join(home, name)
+    const file = (name: string) => join(dir(name), 'projects', encodeProjectDir(CWD), `${SESSION}.jsonl`)
+    mkdirSync(join(dir('old'), 'projects', encodeProjectDir(CWD)), { recursive: true })
+    writeFileSync(file('old'), `${line('user', 1, 'first question')}
+${line('assistant', 2, 'first answer')}
+`)
+    const f = await fake()
+    const instance = (id: string, num: number) => ({ num, id, name: `Example ${num}`, configDir: dir(id === 'old-acct' ? 'old' : 'new'), loggedIn: true, lastUsageCheck: null })
+    f.state.instances = [instance('old-acct', 1), instance('new-acct', 2)]
+    const b = createBridge({ url: f.url, now: () => NOW, home, projectRoots: () => [join(dir('old'), 'projects'), join(dir('new'), 'projects')] })
+    /** The move: the session copied into new-acct's folder with the old file's time, as AgentHydra's cpSync leaves it. */
+    const copy = () => {
+      mkdirSync(join(dir('new'), 'projects', encodeProjectDir(CWD)), { recursive: true })
+      cpSync(file('old'), file('new'))
+      const { atime, mtime } = statSync(file('old'))
+      utimesSync(file('new'), atime, mtime)
+    }
+    /** The worker answers on new-acct: its file grows, the old account's copy stays as the move left it. */
+    const answer = () => writeFileSync(file('new'), `${line('user', 3, 'second question')}
+${line('assistant', 4, 'second answer')}
+`, { flag: 'a' })
+    const read = (accountId: string, rescan = false) => b.workerItems([SESSION], CWD, { rescan, writing: { sessionId: SESSION, accountId } })
+    const texts = async (accountId: string, rescan = false) => (await read(accountId, rescan)).filter((i) => i.kind === 'assistant_text').map((i) => (i as { text: string }).text)
+    return { copy, answer, texts }
+  }
+
+  test("the copy on its new account is read, though the move left both copies the same time", async () => {
+    const m = await moved()
+    expect(await m.texts('old-acct')).toEqual(['first answer'])
+    m.copy()
+    // The poll that sees the new account (rescan) while both copies tie on time.
+    expect(await m.texts('new-acct', true)).toEqual(['first answer'])
+    m.answer()
+    expect(await m.texts('new-acct')).toEqual(['first answer', 'second answer'])
+  })
+
+  test('a copy that lands after the poll that saw the move is still found', async () => {
+    const m = await moved()
+    expect(await m.texts('old-acct')).toEqual(['first answer'])
+    // AgentHydra names the new account before the copy is on disk: the old copy is all there is.
+    expect(await m.texts('new-acct', true)).toEqual(['first answer'])
+    m.copy()
+    m.answer()
+    expect(await m.texts('new-acct')).toEqual(['first answer', 'second answer'])
   })
 })

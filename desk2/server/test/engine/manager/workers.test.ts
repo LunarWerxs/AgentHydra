@@ -185,6 +185,38 @@ test('Send now on a queued message has CliMayte deliver that one now, and its bu
   expect(m.sendNow(chat.id, first.id)).rejects.toThrow(/CliMayte did not send it now: .*needs its update/)
 })
 
+test("a person's plain send to a running worker goes now; the queue's own dispatch and a failed deliver-now stay held", async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  const bubble = (text: string) => m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === text)!
+
+  expect(await m.send(chat.id, 'look at the other file instead', undefined, { now: true })).toEqual({ queued: false })
+  expect(b.state.sentToWorker.at(-1)).toEqual({ id: 'w1', text: 'look at the other file instead' })
+  expect(b.state.sentNow).toEqual([{ id: 'w1', text: 'look at the other file instead' }])
+  expect(bubble('look at the other file instead')).not.toHaveProperty('queued')
+
+  // Without `now` (the queue dispatching on its own) it waits for the turn, as before.
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  expect(await m.send(chat.id, 'after that, run the tests')).toEqual({ queued: true })
+  expect(b.state.sentNow).toHaveLength(1)
+  expect(bubble('after that, run the tests')).toMatchObject({ queued: true })
+
+  // CliMayte could not stop the turn: the message is held all the same, and its bubble keeps Send now.
+  b.bridge.sendToWorkerNow = async () => {
+    throw new Error('this AgentHydra cannot send a held message now yet: it needs its update')
+  }
+  expect(await m.send(chat.id, 'and then commit', undefined, { now: true })).toEqual({ queued: true })
+  expect(bubble('and then commit')).toMatchObject({ queued: true })
+})
+
 test('a new worker chat asks for chat mode and forces no model or effort', async () => {
   const bodies: { path: string; body: unknown }[] = []
   const fetchImpl = (async (url: string, init?: { body?: string }) => {

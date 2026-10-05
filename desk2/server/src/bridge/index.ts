@@ -32,7 +32,7 @@ import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
 import { resumeAccount, type ResumeData } from './resume'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 
 export { BridgeError } from './client'
 export { DEFAULT_ACCOUNT } from './accounts'
@@ -61,6 +61,12 @@ const SEARCH_ROW_FRESH_MS = 60_000
 const SEARCH_ROWS_MAX = 300
 
 const unreachable = (err: unknown): boolean => err instanceof BridgeError && err.unreachable
+
+/** True when `file` is inside `dir` (Windows compares the two without case). */
+const isUnder = (file: string, dir: string): boolean => {
+  const rel = relative(dir, file)
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+}
 
 export function createBridge(opts: BridgeOptions = {}) {
   const client: HydraClient = createClient(opts)
@@ -410,12 +416,30 @@ export function createBridge(opts: BridgeOptions = {}) {
    * (findSessionJsonl): the transcript follows the worker across accounts. Items repeated in a later
    * session (a resume copies the history) keep their first place. While no file changed it answers the very
    * array it answered last time, so the caller can skip it whole.
+   *
+   * `writing`: the session the worker writes now and its account. That session is read from the account's
+   * own folder whenever a copy is there. The copy a move makes keeps the old file's time, so the newest-copy
+   * rule tied and could keep the old account's copy, and nothing looked again: a chat moved #109 to #124
+   * on 2026-10-05 showed none of the four replies that followed ("I've sent like seven chats ... nothing happens").
    */
-  async function workerItems(sessionIds: string[], cwd: string | null, o: { rescan?: boolean } = {}): Promise<TranscriptItem[]> {
+  async function workerItems(
+    sessionIds: string[],
+    cwd: string | null,
+    o: { rescan?: boolean; writing?: { sessionId: string; accountId: string } } = {},
+  ): Promise<TranscriptItem[]> {
     let roots: string[] | null = null
+    const ownDir = o.writing ? (await instanceDirs()).get(o.writing.accountId) : undefined
+    const ownRoot = ownDir ? join(ownDir, 'projects') : null
     const parts: TranscriptItem[][] = []
     for (const sid of new Set(sessionIds)) {
-      const known = o.rescan ? null : foundAt.get(sid)
+      let known = o.rescan ? null : foundAt.get(sid)
+      if (ownRoot && sid === o.writing?.sessionId && !(known && isUnder(known, ownRoot))) {
+        const own = findSessionJsonl(sid, [ownRoot], cwd)
+        if (own) {
+          rememberFile(sid, own)
+          known = own
+        }
+      }
       let part = known ? readItems(known, cwd) : null
       if (!part) {
         roots ??= await projectRoots()
