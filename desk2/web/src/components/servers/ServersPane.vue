@@ -37,18 +37,20 @@ let alive = true
 let started = false
 
 async function refresh() {
+  let s: DevWebStatus
   try {
-    status.value = await devwebStatus()
+    s = await devwebStatus()
     statusMissing.value = false
   } catch (err) {
     if (err instanceof RouteMissing) statusMissing.value = true
     return
   }
-  const s = status.value
   if (s.state === 'stopped' && !started) {
+    // Show 'starting' while the automatic start runs, so the stopped card only appears once a start has failed.
     started = true
+    status.value = { state: 'starting', url: null }
     status.value = await devwebStart().catch((err) => ({ state: 'failed', url: null, reason: err instanceof Error ? err.message : String(err) }) as DevWebStatus)
-  }
+  } else status.value = s
   if (status.value.state !== 'running') {
     projects.value = null
     return
@@ -155,7 +157,7 @@ const restart = (p: DevWebProcess) => run(p.id, () => processAction(p.id, 'resta
 const all = (action: 'start' | 'stop') => project.value && run('all', () => projectAction(project.value!.id, action))
 async function tryAgain() {
   started = false
-  status.value = { state: 'stopped', url: null }
+  status.value = { state: 'starting', url: null }
   await refresh()
 }
 
