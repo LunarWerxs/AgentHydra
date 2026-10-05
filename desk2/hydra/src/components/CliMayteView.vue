@@ -1,8 +1,10 @@
 <script setup lang="ts">
 // CliMayte view: the tasks a chat handed to the owner's Claude CLI accounts (server/src/climayte.ts,
 // docs/CLIMAYTE.md). A task list grouped by hand-off on the left, the selected task on the right
-// (CliMayteWorkerDetail.vue). Polls every 3 s while a task can still change, every 15 s otherwise,
-// and again when the page is shown or the window regains focus.
+// (CliMayteWorkerDetail.vue). Polls the list every 3 s while a task can still change, every 15 s
+// otherwise (the totals, scorecard, other PCs and waves only every 30 s), not at all while the page is
+// hidden, and again when the page is shown or the window regains focus. The list asks for the newest
+// 150 finished tasks; "Show older" asks for all of them.
 //
 // Layout (2026-09-30 review, three lenses agreeing): the header comes first and says what CliMayte is;
 // the list is one bordered panel with the hand-off as a subheader. On a wide screen the list and the
@@ -50,6 +52,7 @@ import {
   onMounted,
   onUnmounted,
   ref,
+  shallowRef,
   watch,
 } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -68,6 +71,7 @@ import { Switch } from '@/components/ui/switch'
 import { useCliMayteFloat } from '@/composables/useCliMayteFloat'
 import { i18n } from '@/i18n'
 import { pii } from '@/composables/usePrivacy'
+import { privacyMode } from '@/composables/useUiPrefs'
 import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import type {
   CliMayteRemotePc,
@@ -100,9 +104,12 @@ import { deskWorkerAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { formatUsd } from '@/lib/kit'
 import { reconcileList, sameData } from '@/lib/reconcile'
 import type { SideListGroup } from '@/lib/side-list'
+import { visibleInterval } from '@/lib/visible-poll'
 import InfoHint from '@/shell/InfoHint.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+// The one text this view adds (the copy's English messages are not edited from here).
+i18n.global.mergeLocaleMessage('en', { climayte: { showOlder: 'Show older' } })
 const openView = inject(OPEN_VIEW, () => {})
 const { pipWindow, isOpen: floatIsOpen, open: openFloat, close: closeFloat } = useCliMayteFloat()
 
@@ -113,9 +120,11 @@ let floatApp: ReturnType<typeof createApp> | null = null
 type ListRow = CliMayteWorkerView & {
   remote?: { pc: string; name: string; at: number; stale: boolean }
 }
-const workers = ref<CliMayteWorkerView[]>([])
+// The lists are replaced whole by a poll that brought a change (reconcileList), never edited in place,
+// so Vue does not wrap every row in a proxy.
+const workers = shallowRef<CliMayteWorkerView[]>([])
 /** The other PCs' workers (GET /api/corch/remote), shaped as rows; empty when sharing is off. */
-const remoteRows = ref<ListRow[]>([])
+const remoteRows = shallowRef<ListRow[]>([])
 /** Every row the list shows: this PC's workers, then the other PCs'. */
 const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value])
 /** One warning line per other PC whose build differs from this one's (its `behindNote`). */
@@ -217,7 +226,7 @@ function remoteLabel(w: ListRow): string {
 }
 
 let timer: number | null = null
-let clock: number | null = null
+let clock: (() => void) | null = null
 let alive = true
 
 async function loadDetail() {
@@ -245,21 +254,43 @@ function verdictMark(w: CliMayteWorkerView) {
   return { kind: m.kind, label: said, hint: m.note ? `${said}: ${m.note}` : said }
 }
 
-async function load(opts: { silent?: boolean } = {}) {
+/** The finished tasks the list asks for (the daemon keeps every active one regardless): a busy queue
+ *  is thousands of tasks, and each poll used to carry all of them. "Show older" asks for every one. */
+const FINISHED_PAGE = 150
+const finishedLimit = ref<number | undefined>(FINISHED_PAGE)
+/** The list may hold more finished tasks than were read. */
+const hasOlder = computed(
+  () =>
+    finishedLimit.value !== undefined &&
+    workers.value.reduce((n, w) => n + (isCliMayteActive(w) ? 0 : 1), 0) >= finishedLimit.value,
+)
+function showOlder() {
+  finishedLimit.value = undefined
+  void load()
+}
+
+// The totals, the scorecard, the other PCs' queue and the waves move slowly: they are read on this
+// beat, not on every 3 s poll of the list (and at once on a refresh or when the page is shown again).
+const SIDE_MS = 30_000
+let sideAt = 0
+
+async function load(opts: { silent?: boolean; side?: boolean } = {}) {
   if (timer !== null) window.clearTimeout(timer)
   timer = null
   if (!opts.silent) loading.value = true
   try {
+    const side = !opts.silent || opts.side === true || Date.now() - sideAt >= SIDE_MS
     // The scorecard is extra: a failed read keeps the last one and never marks CliMayte unreachable.
     // The other PCs' queue is extra too: a failed read keeps the last one.
     const [list, sums, score, remote, waveList] = await Promise.all([
-      listCliMayteWorkers(),
-      getCliMayteTotals(),
-      getCliMayteScorecard().catch(() => null),
-      getCliMayteRemote().catch(() => null),
-      listCliMayteWaves(),
+      listCliMayteWorkers({ limit: finishedLimit.value }),
+      side ? getCliMayteTotals() : null,
+      side ? getCliMayteScorecard().catch(() => null) : null,
+      side ? getCliMayteRemote().catch(() => null) : null,
+      side ? listCliMayteWaves() : null,
     ])
-    if (!sameData(waves.value, waveList)) waves.value = waveList
+    if (side) sideAt = Date.now()
+    if (waveList && !sameData(waves.value, waveList)) waves.value = waveList
     workers.value = reconcileList(workers.value, list, (w) => w.id)
     if (remote) {
       const next = remote.enabled
@@ -271,7 +302,8 @@ async function load(opts: { silent?: boolean } = {}) {
         : []
       if (!sameData(remoteNotes.value, notes)) remoteNotes.value = notes
     }
-    if (!sameData(totals.value, sums)) totals.value = sums
+    pruneRowViews()
+    if (sums && !sameData(totals.value, sums)) totals.value = sums
     if (score && !sameData(scorecard.value, score)) scorecard.value = score
     unreachable.value = false
     now.value = Date.now()
@@ -293,18 +325,22 @@ async function load(opts: { silent?: boolean } = {}) {
   }
   // 3 s while a task can still change; otherwise 15 s (the server tick's idle rate), because a
   // chat can start new tasks or revive a finished one at any time. Clear again first: a focus
-  // reload overlapping a poll must not leave two timers running.
+  // reload overlapping a poll must not leave two timers running. A hidden page (a minimized window, or
+  // in Desk the pane slid out of view) schedules nothing: onVisible reads again when it is seen.
   if (timer !== null) window.clearTimeout(timer)
   timer = null
-  if (alive)
+  if (alive && !document.hidden)
     timer = window.setTimeout(
-      () => load({ silent: true }),
+      () => {
+        timer = null
+        if (!document.hidden) void load({ silent: true })
+      },
       rows.value.some(isCliMayteActive) ? 3000 : 15_000,
     )
 }
 
 function onVisible() {
-  if (document.visibilityState === 'visible') void load({ silent: true })
+  if (document.visibilityState === 'visible') void load({ silent: true, side: true })
 }
 
 /** A wave's manager link: open that worker's row. */
@@ -438,6 +474,46 @@ function runTag(w: CliMayteWorkerView): { text: string; differs: boolean } | nul
   }
 }
 
+/** What a row says, worked out once and kept until the row, the clock it depends on, the task list its
+ *  failure story reads, or the language or privacy mode changes: a render, a poll that changed other
+ *  rows or a clock tick no longer rebuilds every row's texts. Only a task that can still change reads
+ *  the clock (its running time, its wait, its other PC); a finished one's texts never change with it. */
+interface RowView {
+  mark: ReturnType<typeof verdictMark>
+  tag: ReturnType<typeof runTag>
+  hint: string
+  time: string
+  /** Desk's version of the row, built when Desk's sidebar first needs it. */
+  desk?: SidebarRow
+}
+const rowViews = new Map<
+  string,
+  { w: ListRow; clock: string; tasks: unknown; words: string; view: RowView }
+>()
+function rowView(w: ListRow): RowView {
+  const clock = isCliMayteActive(w) || w.remote ? `${now.value}/${listedAt.value}` : ''
+  const tasks = w.status === 'failed' ? workers.value : null
+  const words = `${locale.value}/${privacyMode.value}`
+  const key = rowKey(w)
+  const hit = rowViews.get(key)
+  if (hit && hit.w === w && hit.clock === clock && hit.tasks === tasks && hit.words === words)
+    return hit.view
+  const view: RowView = {
+    mark: verdictMark(w),
+    tag: runTag(w),
+    hint: rowHint(w),
+    time: activeLabel(activeS(w)),
+  }
+  rowViews.set(key, { w, clock, tasks, words, view })
+  return view
+}
+/** Drops the kept rows of tasks no longer listed. */
+function pruneRowViews() {
+  if (rowViews.size <= rows.value.length) return
+  const keep = new Set(rows.value.map(rowKey))
+  for (const key of rowViews.keys()) if (!keep.has(key)) rowViews.delete(key)
+}
+
 // Hydra Desk 2: the list as Desk's sidebar draws it (shared/hydra-embed.ts), saying per row what
 // SideListRow and CliMayteStatusBadge say here.
 const STATUS_ICON = new Map<LucideIcon, EmbedIcon>([
@@ -469,9 +545,8 @@ function deskStatus(w: ListRow): SidebarRow['status'] {
     label: `${t(meta.label)}: ${said}`,
   }
 }
-function deskRow(w: ListRow): SidebarRow {
-  const tag = runTag(w)
-  const mark = verdictMark(w)
+function buildDeskRow(w: ListRow, view: RowView): SidebarRow {
+  const { tag, mark } = view
   return {
     key: rowKey(w),
     label: w.title,
@@ -484,7 +559,7 @@ function deskRow(w: ListRow): SidebarRow {
         }
       : undefined,
     tag: tag ? { text: tag.text, tone: tag.differs ? 'warning' : 'muted' } : undefined,
-    time: activeLabel(activeS(w)),
+    time: view.time,
     mark: mark
       ? {
           icon: mark.kind === 'pass' ? 'check' : mark.kind === 'retry' ? 'retry' : 'x',
@@ -494,8 +569,13 @@ function deskRow(w: ListRow): SidebarRow {
         }
       : undefined,
     dim: !!w.remote?.stale,
-    hint: rowHint(w),
+    hint: view.hint,
   }
+}
+/** The row as Desk's sidebar draws it, built once per change of the row (rowView). */
+function deskRow(w: ListRow): SidebarRow {
+  const view = rowView(w)
+  return (view.desk ??= buildDeskRow(w, view))
 }
 // Desk's list: every task that can still change and the open one, then the newest finished ones up to
 // a page; "Show more" adds a page. All 1,754 of a busy queue were 1.3 MB per update and 23k nodes in
@@ -520,6 +600,21 @@ const deskGroups = computed(() => {
   }
   return { groups: out, cut }
 })
+const deskFooter = computed(() => [
+  ...(deskGroups.value.cut
+    ? [
+        {
+          id: 'more',
+          icon: 'plus' as const,
+          label: t('climayte.deskShowMore', {
+            n: Math.min(DESK_PAGE, deskGroups.value.cut),
+            total: deskGroups.value.cut,
+          }),
+        },
+      ]
+    : []),
+  ...(hasOlder.value ? [{ id: 'older', icon: 'plus' as const, label: t('climayte.showOlder') }] : []),
+])
 useDeskSidebar(
   'climayte',
   () => ({
@@ -569,18 +664,7 @@ useDeskSidebar(
         ? t('climayte.allHidden', { n: hiddenCount.value })
         : t('climayte.emptyTitle'),
     loading: !loaded.value && loading.value,
-    footer: deskGroups.value.cut
-      ? [
-          {
-            id: 'more',
-            icon: 'plus',
-            label: t('climayte.deskShowMore', {
-              n: Math.min(DESK_PAGE, deskGroups.value.cut),
-              total: deskGroups.value.cut,
-            }),
-          },
-        ]
-      : undefined,
+    footer: deskFooter.value.length ? deskFooter.value : undefined,
   }),
   (e) => {
     if (e.action === 'select') {
@@ -590,6 +674,7 @@ useDeskSidebar(
       if (e.id === 'refresh') void load()
       else if (e.id === 'pip') void toggleFloat()
       else if (e.id === 'more') deskLimit.value += DESK_PAGE
+      else if (e.id === 'older') showOlder()
     } else if (e.action === 'switch' && e.id === 'hideFinished') hideFinished.value = e.on
   },
 )
@@ -615,9 +700,10 @@ watch(
 
 onMounted(() => {
   void load()
-  // Keeps a running task's active time honest between the slow idle polls.
-  clock = window.setInterval(() => {
-    now.value = Date.now()
+  // Keeps a running task's active time honest between the slow idle polls. It rests while the page is
+  // hidden and while no task can change (a poll sets the time too), and reads at once when shown again.
+  clock = visibleInterval(() => {
+    if (rows.value.some(isCliMayteActive)) now.value = Date.now()
   }, 30_000)
   document.addEventListener('visibilitychange', onVisible)
   window.addEventListener('focus', onVisible)
@@ -627,7 +713,7 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisible)
   window.removeEventListener('focus', onVisible)
   if (timer !== null) window.clearTimeout(timer)
-  if (clock !== null) window.clearInterval(clock)
+  clock?.()
   timer = null
   clock = null
   unmountFloat()
@@ -735,12 +821,12 @@ onUnmounted(() => {
             :label="w.title"
             :selected="rowKey(w) === selectedId"
             :dim="!!w.remote?.stale"
-            :hint="rowHint(w)"
+            :hint="rowView(w).hint"
             :chip="w.priority ? $t('climayte.rowPriority', { n: w.priority }) : undefined"
             :chip-hint="w.priority ? $t('climayte.rowPriorityHint', { n: w.priority }) : undefined"
-            :tag="runTag(w)?.text"
-            :tag-tone="runTag(w)?.differs ? 'warning' : 'muted'"
-            :time="activeLabel(activeS(w))"
+            :tag="rowView(w).tag?.text"
+            :tag-tone="rowView(w).tag?.differs ? 'warning' : 'muted'"
+            :time="rowView(w).time"
             @click="select(w)"
           >
             <template #status>
@@ -759,22 +845,29 @@ onUnmounted(() => {
                  arrow, never the red cross: ten running rows with a red cross read as "lots
                  of chats failed" (owner, 2026-10-02). -->
             <template #mark>
-              <span v-if="verdictMark(w)" class="inline-flex shrink-0" :title="verdictMark(w)?.hint">
+              <span v-if="rowView(w).mark" class="inline-flex shrink-0" :title="rowView(w).mark?.hint">
                 <Check
-                  v-if="verdictMark(w)?.kind === 'pass'"
+                  v-if="rowView(w).mark?.kind === 'pass'"
                   class="size-3.5 text-success"
-                  :aria-label="verdictMark(w)?.label"
+                  :aria-label="rowView(w).mark?.label"
                 />
                 <RotateCcw
-                  v-else-if="verdictMark(w)?.kind === 'retry'"
+                  v-else-if="rowView(w).mark?.kind === 'retry'"
                   class="size-3.5 text-warning"
-                  :aria-label="verdictMark(w)?.label"
+                  :aria-label="rowView(w).mark?.label"
                 />
-                <X v-else class="size-3.5 text-destructive" :aria-label="verdictMark(w)?.label" />
+                <X v-else class="size-3.5 text-destructive" :aria-label="rowView(w).mark?.label" />
               </span>
             </template>
           </SideListRow>
         </template>
+
+        <!-- The list reads the newest finished tasks; this reads every older one too. -->
+        <div v-if="hasOlder" class="px-3 py-2">
+          <Button variant="outline" size="sm" class="w-full" @click="showOlder()">
+            {{ $t('climayte.showOlder') }}
+          </Button>
+        </div>
     </SideBar>
 
     <section class="flex min-h-0 min-w-0 flex-1 flex-col p-4">
@@ -867,7 +960,7 @@ onUnmounted(() => {
         :tasks="workers"
         :events-loading="!!selectedId && !detail"
         :now="now"
-        @changed="load({ silent: true })"
+        @changed="load({ silent: true, side: true })"
       />
       </template>
     </section>

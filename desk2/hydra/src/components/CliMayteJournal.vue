@@ -14,6 +14,7 @@ import type { CliMayteJournalEntry } from '@/lib/api'
 import { getCliMayteJournal } from '@/lib/api'
 import { modelName } from '@/lib/climayte-status'
 import { formatUsd } from '@/lib/kit'
+import { visibleInterval } from '@/lib/visible-poll'
 
 /** `fill`: the box takes the height its parent gives it on a wide screen (CliMayteWorkerDetail). */
 const props = defineProps<{ workerId: string; group: string; updatedAt: number; fill?: boolean }>()
@@ -23,7 +24,8 @@ const scope = ref<'task' | 'group'>('task')
 const entries = ref<CliMayteJournalEntry[]>([])
 const failed = ref(false)
 const loadedOnce = ref(false)
-let timer: number | null = null
+// Rests while the page is hidden (lib/visible-poll.ts) and reads once when it is seen again.
+let stopTimer: (() => void) | null = null
 let seq = 0
 
 async function load() {
@@ -59,13 +61,13 @@ watch(
 watch(
   scope,
   (s) => {
-    if (timer !== null) window.clearInterval(timer)
-    timer = s === 'group' ? window.setInterval(() => void load(), 10_000) : null
+    stopTimer?.()
+    stopTimer = s === 'group' ? visibleInterval(() => void load(), 10_000) : null
   },
   { immediate: true },
 )
 onUnmounted(() => {
-  if (timer !== null) window.clearInterval(timer)
+  stopTimer?.()
 })
 
 const pct = (v: number | null | undefined) => (typeof v === 'number' ? `${Math.round(v)}%` : '?')

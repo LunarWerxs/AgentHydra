@@ -11,6 +11,7 @@
 // task rows).
 import { onScopeDispose, ref, watch } from 'vue'
 import type { AhMessage, DeskMessage, SidebarModel } from '@desk/shared/hydra-embed'
+import { sameData } from '@/lib/reconcile'
 import type { SessionJump } from '@/lib/session-jump'
 
 export const EMBEDDED =
@@ -35,17 +36,23 @@ export function showSessionsInDesk(): void {
 export type SidebarEvent = Extract<DeskMessage, { type: 'desk:sidebar' }>
 
 const sidebarHandlers = new Map<string, (e: SidebarEvent) => void>()
-// What Desk was last sent, so a rebuild that changed nothing it shows sends nothing.
-let lastSent = ''
+// What Desk was last sent, so a rebuild that changed nothing it shows sends nothing. Compared by value
+// (rows a tab keeps between builds are the same objects, so they cost one check each), not by a
+// JSON string of the whole model.
+let lastSent: SidebarModel | null | undefined
 
 /** The current tab's sidebar to Desk, or null for a tab without one (App.vue, on a change of tab). */
 export function publishSidebar(model: SidebarModel | null): void {
   if (!EMBEDDED) return
-  const json = JSON.stringify(model)
-  if (json === lastSent) return
-  lastSent = json
+  if (lastSent !== undefined && sameData(lastSent, model)) return
+  lastSent = model
   tellDesk({ type: 'ah:sidebar', model })
 }
+
+// Whether the page is out of view (document.hidden, which says so for a pane Desk slid away, see below):
+// the sidebar is not rebuilt while it is, and is the moment it is seen again.
+const pageHidden = ref(typeof document !== 'undefined' && document.hidden)
+if (EMBEDDED) document.addEventListener('visibilitychange', () => (pageHidden.value = document.hidden))
 
 /** In Desk: describes this tab's sidebar (`build` re-runs when what it reads changes) and takes Desk's
  *  clicks on it. Outside Desk it does nothing and the tab draws its own sidebar. The tab after it sends
@@ -57,7 +64,14 @@ export function useDeskSidebar(
 ): void {
   if (!EMBEDDED) return
   sidebarHandlers.set(view, onEvent)
-  watch(build, publishSidebar, { immediate: true })
+  // Out of view the getter reads nothing, so no change of the tab's data rebuilds the model.
+  watch(
+    () => (pageHidden.value ? undefined : build()),
+    (model) => {
+      if (model !== undefined) publishSidebar(model)
+    },
+    { immediate: true },
+  )
   onScopeDispose(() => {
     if (sidebarHandlers.get(view) === onEvent) sidebarHandlers.delete(view)
   })
@@ -70,16 +84,32 @@ export const deskWorkerAsk = ref<{ id: string; pc?: string } | null>(null)
 
 /** The row of instance #num once the tab shows it, or null after `ms`; never one in the tab fading out
  *  (App.vue's view Transition keeps it mounted while the next comes in). */
-export async function findInstanceRow(num: number, ms: number): Promise<HTMLElement | null> {
-  const end = Date.now() + ms
-  for (;;) {
-    const el =
-      [...document.querySelectorAll<HTMLElement>(`[data-instance-num="${num}"]`)].find(
-        (x) => !x.closest('.view-fade-leave-active'),
-      ) ?? null
-    if (el || Date.now() >= end) return el
-    await new Promise((r) => setTimeout(r, 100))
-  }
+export function findInstanceRow(num: number, ms: number): Promise<HTMLElement | null> {
+  const look = () =>
+    [...document.querySelectorAll<HTMLElement>(`[data-instance-num="${num}"]`)].find(
+      (x) => !x.closest('.view-fade-leave-active'),
+    ) ?? null
+  const now = look()
+  if (now) return Promise.resolve(now)
+  // Waits for the page to add the row (or the fading tab to finish leaving) instead of asking every 100 ms.
+  return new Promise((resolve) => {
+    const done = (el: HTMLElement | null) => {
+      observer.disconnect()
+      clearTimeout(timeout)
+      resolve(el)
+    }
+    const observer = new MutationObserver(() => {
+      const el = look()
+      if (el) done(el)
+    })
+    const timeout = setTimeout(() => done(look()), ms)
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class'],
+    })
+  })
 }
 
 /** Scrolls a row into the middle and rings it for two seconds (style.css .desk-flash). */
