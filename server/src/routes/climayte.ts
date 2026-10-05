@@ -16,6 +16,8 @@ import {
   climayteHandoff,
   climayteJournal,
   climayteJournalLines,
+  climayteLeanWave,
+  climayteLeanWorker,
   climayteList,
   climaytePingState,
   climayteRemove,
@@ -37,6 +39,7 @@ import {
   climayteWaveVerify,
   verdictNoteTooLong,
 } from '../climayte'
+import type { CliMayteWorkerView } from '../climayte-lib'
 import type { CliMayteOrigin } from '../climayte-ping'
 import { buildStatus, remoteSnapshots } from '../climayte-remote'
 import { queueSharingOn } from '../core/cli-login-sync'
@@ -123,8 +126,11 @@ app.get('/api/corch/workers', async (c) => {
     if (wait > 0) await climayteWait(filter, wait)
     return c.json(climayteReports(filter, optInt(c.req.query('chars'))))
   }
-  if (wait > 0) return c.json(await climayteWait(filter, wait))
-  return c.json(climayteList(filter))
+  // `lean=1` (the CliMayte pane and Desk 2's server): the full rows without the long text no list
+  // shows (climayteLeanWorker); it means nothing next to `brief`, which is already short.
+  const lean = flag(c.req.query('lean')) && !filter.brief
+  const rows = wait > 0 ? await climayteWait(filter, wait) : climayteList(filter)
+  return c.json(lean ? (rows as CliMayteWorkerView[]).map(climayteLeanWorker) : rows)
 })
 // The other PC's CliMayte queue, as it last shared it through the login sync (core/climayte-queue-sync.ts):
 // shown apart, never part of /api/corch/workers. `stale`: that PC was not seen (its snapshot or
@@ -300,7 +306,11 @@ app.post('/api/corch/waves', async (c) => {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
   }
 })
-app.get('/api/corch/waves', (c) => c.json({ waves: climayteWaves() }))
+// `lean=1`: each task without its prompt and check command (climayteLeanWave); /waves/:id has them.
+app.get('/api/corch/waves', (c) => {
+  const waves = climayteWaves()
+  return c.json({ waves: flag(c.req.query('lean')) ? waves.map(climayteLeanWave) : waves })
+})
 app.get('/api/corch/waves/:id', (c) => {
   const wave = climayteWave(c.req.param('id'))
   return wave ? c.json(wave) : c.json({ error: 'wave not found' }, 404)

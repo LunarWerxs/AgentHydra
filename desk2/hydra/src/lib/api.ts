@@ -1162,8 +1162,9 @@ export const listCliMayteWorkers = (
   if (filter.group) q.set('group', filter.group)
   if (filter.active) q.set('active', '1')
   if (filter.limit !== undefined) q.set('limit', String(filter.limit))
-  const qs = q.toString()
-  return j<CliMayteWorkerView[]>(`/api/corch/workers${qs ? `?${qs}` : ''}`)
+  // `lean`: no result, reports or whole attempts (the open task's detail route has them); an older daemon ignores it.
+  q.set('lean', '1')
+  return j<CliMayteWorkerView[]>(`/api/corch/workers?${q}`)
 }
 /** A worker from another PC that shares the queue (GET /api/corch/remote): the row's fields only. */
 export interface CliMayteRemoteWorker {
@@ -1263,7 +1264,7 @@ export interface CliMayteWave {
 }
 /** Newest first. The route may be missing on an older daemon: that is no waves, not an error. */
 export const listCliMayteWaves = () =>
-  j<{ waves: CliMayteWave[] }>('/api/corch/waves')
+  j<{ waves: CliMayteWave[] }>('/api/corch/waves?lean=1')
     .then((r) => r.waves ?? [])
     .catch(() => [] as CliMayteWave[])
 export const getCliMayteScorecard = () => j<CliMayteScorecard>('/api/corch/scorecard')

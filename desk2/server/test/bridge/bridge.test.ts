@@ -220,12 +220,12 @@ describe('poller', () => {
     })
     const reads = (prefix: string) => f.gets.filter((g) => g.startsWith(prefix)).length
     await poller.tick()
-    expect(reads('/api/corch/workers?limit=20')).toBe(1)
+    expect(reads('/api/corch/workers?limit=20&lean=1')).toBe(1)
     t += 3000
     await poller.tick()
     t += 3000
     await poller.tick()
-    expect(reads('/api/corch/workers?limit=20')).toBe(3)
+    expect(reads('/api/corch/workers?limit=20&lean=1')).toBe(3)
     expect(reads('/api/corch/remote')).toBe(1)
     expect(reads('/api/sessions?')).toBe(1)
     t += 8000

@@ -2471,6 +2471,54 @@ export function climayteList(
   return keep.map(toBrief)
 }
 
+/** `lean=1` on the workers list (Desk 2's server and pane): the same rows without the long text no list
+ *  row shows. `result`, `results` and `reports` become `resultChars` (the detail route has them);
+ *  each attempt keeps its account, outcome, ceiling flag and tokens; each verdict keeps who, what and
+ *  the first line of its note (the row's hover). Everything else, the 300-character prompt included,
+ *  stays. */
+export function climayteLeanWorker(v: CliMayteWorkerView): Omit<
+  CliMayteWorkerView,
+  'results' | 'reports' | 'attempts' | 'verdicts'
+> & {
+  attempts: Array<
+    Pick<CliMayteWorkerView['attempts'][number], 'account' | 'outcome' | 'tokens'> & {
+      ceiling?: true
+    }
+  >
+  verdicts?: Array<
+    Omit<NonNullable<CliMayteWorkerView['verdicts']>[number], 'note'> & { note: string | null }
+  >
+  resultChars: number
+} {
+  const { results, reports: _reports, ...row } = v
+  const text = results?.length ? results : v.result ? [v.result] : []
+  return {
+    ...row,
+    result: null,
+    resultChars: text.reduce((n, r) => n + r.length, 0),
+    attempts: v.attempts.map((a) => ({
+      account: a.account,
+      outcome: a.outcome,
+      tokens: a.tokens,
+      ...(a.ceiling ? { ceiling: true as const } : {}),
+    })),
+    verdicts: v.verdicts?.map((x) => ({
+      ...x,
+      note: x.note ? (x.note.split('\n', 1)[0] ?? '').slice(0, 200) : null,
+    })),
+  }
+}
+
+/** `lean=1` on the waves list: each task without its `prompt` and `check` command (the wave's `notes`
+ *  scratch too); the keys, titles, states, paths, proof, escalations and report a list shows stay. */
+export function climayteLeanWave(w: CliMayteWave): CliMayteWave {
+  return {
+    ...w,
+    notes: '',
+    tasks: w.tasks.map((t) => ({ ...t, prompt: '', check: null })),
+  }
+}
+
 const isLiveStatus = (s: CliMayteWorker['status']): boolean =>
   s === 'queued' || s === 'running' || s === 'waiting' || s === 'checking'
 

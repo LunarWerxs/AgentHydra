@@ -435,7 +435,9 @@ export function createClient(opts: HydraClientOptions = {}) {
       const query = new URLSearchParams()
       if (q.limit !== undefined) query.set('limit', String(q.limit))
       if (q.group) query.set('group', q.group)
-      return get<AhWorker[]>(`/api/corch/workers${query.size ? `?${query}` : ''}`)
+      // `lean`: the rows without the long text no list reads (result, reports, whole attempts); an older AgentHydra ignores it.
+      query.set('lean', '1')
+      return get<AhWorker[]>(`/api/corch/workers?${query}`)
     },
     worker: (id: string) => get<AhWorkerDetail>(`/api/corch/workers/${enc(id)}`),
     /** The other PCs' CliMayte queues (read-only: AgentHydra cancels and sends only to this PC's workers). */
@@ -451,7 +453,7 @@ export function createClient(opts: HydraClientOptions = {}) {
     cancelWorker: (id: string) =>
       post<{ cancelled: string[]; keptMessages: Record<string, number> }>('/api/corch/cancel', { id }),
     /** These workers however old (a chat's worker that finished a week ago), in one read. */
-    workersByIds: (ids: string[]) => get<AhWorker[]>(`/api/corch/workers?ids=${ids.map(enc).join(',')}`),
+    workersByIds: (ids: string[]) => get<AhWorker[]>(`/api/corch/workers?ids=${ids.map(enc).join(',')}&lean=1`),
     /** Starts one CliMayte worker: CliMayte picks its account and moves it when that account fails. */
     startWorker: (task: StartWorker) =>
       post<{ group: string; workers: AhWorker[] }>('/api/corch/workers', {
