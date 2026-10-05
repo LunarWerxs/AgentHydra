@@ -36,9 +36,9 @@ import {
   groupChoices,
   groupOrderKey,
   isOrange,
-  mergeOrder,
   moveInOrder,
   raiseNewlyOrange,
+  recordOrder,
   moveTarget,
   parseFilter,
   resumeCommand,
@@ -47,9 +47,9 @@ import {
   type ChatGroup,
   type RowMenuItem,
   type RowState,
-  type SidebarFilter,
-  type SidebarOrder
+  type SidebarFilter
 } from './logic'
+import { useSidebarOrder } from './order'
 
 // The real sidebar: 288 wide on #111111, 36px left free at the top for the chrome bar, the New row (the
 // real app's Projects, Artifacts, Customize and More rows are left out on purpose), then Pinned and one
@@ -127,26 +127,8 @@ function onCloudSearchKey(e: KeyboardEvent) {
 }
 
 // The order groups and rows keep (Jacob, 2026-10-04: sending a message must not reorder the list; groups
-// are dragged into the order wanted). New ones join at the top; this viewer's browser remembers it.
-const ORDER_KEY = 'hydra-desk.sidebar.order'
-function readOrder(): SidebarOrder {
-  try {
-    const o = JSON.parse(storage?.getItem(ORDER_KEY) ?? 'null') as Partial<SidebarOrder> | null
-    const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
-    return { groups: strs(o?.groups), rows: strs(o?.rows) }
-  } catch {
-    return { groups: [], rows: [] }
-  }
-}
-const order = ref<SidebarOrder>(readOrder())
-function saveOrder(next: SidebarOrder) {
-  order.value = next
-  try {
-    storage?.setItem(ORDER_KEY, JSON.stringify({ groups: next.groups, rows: next.rows.slice(0, 3000) }))
-  } catch {
-    // storage full or blocked: the order holds for this window only
-  }
-}
+// are dragged into the order wanted), the one the cloud list keeps too (order.ts). New ones join at the top.
+const { order, save: saveOrder } = useSidebarOrder()
 
 // While AgentHydra is open, a tab of it with a sidebar of its own (CliMayte, HSwarm) has it drawn here.
 const hydraModel = computed(() => (hydraOpen.value ? hydraSidebar.value : null))
@@ -154,8 +136,9 @@ const hydraModel = computed(() => (hydraOpen.value ? hydraSidebar.value : null))
 const groups = computed(() =>
   groupChats(src.chats.value, { query: query.value, filter: filter.value, external: src.external.value, order: order.value })
 )
-// What the plain list shows is the order from now on, so a new group or row keeps the place it appeared in;
-// a row that just turned orange goes to the top of its group.
+// A group or row the plain list shows that the order lacks joins it at the top, so it keeps the place it
+// appeared in; a saved one never moves (the cloud list's rows among them); a row that just turned orange
+// goes to the top of its group.
 const wasOrange = new Map<string, boolean>()
 watch(
   groups,
@@ -164,10 +147,9 @@ watch(
     const shownEntries = [...(g.pinned?.entries ?? []), ...g.folders.flatMap((f) => f.entries)]
     const shownGroups = g.folders.map(groupOrderKey)
     const shownRows = shownEntries.map((e) => e.id)
-    const rows = raiseNewlyOrange(mergeOrder(order.value.rows, shownRows), shownEntries, wasOrange)
+    const rows = raiseNewlyOrange(recordOrder(order.value.rows, shownRows, 'top'), shownEntries, wasOrange)
     for (const e of shownEntries) wasOrange.set(e.id, isOrange(e))
-    const next = { groups: mergeOrder(order.value.groups, shownGroups), rows }
-    if (next.groups.join('|') !== order.value.groups.join('|') || next.rows.join('|') !== order.value.rows.join('|')) saveOrder(next)
+    saveOrder({ groups: recordOrder(order.value.groups, shownGroups, 'top'), rows })
   },
   { immediate: true }
 )
@@ -208,10 +190,11 @@ const emptyText = computed(() =>
 
 // Hydra Desk 2: with the chrome bar's CliMayte button on, each row of the list shown (the cloud list or the
 // desk list, the rows each draws) lists the CliMayte tasks it handed out under it, a manager's wave one step
-// further in, each task once (tasks.ts). The running tasks no drawn row holds (another PC's, or one from a
-// session the filter, the search or the list leaves out) head the list in a CliMayte block of their own.
-// The other PCs' tasks: the desk store keeps them apart from src.workers so they never count as this PC's
-// (stores/desk.ts splitWorkers); a source without them (the Gallery) has none.
+// further in, each task once (tasks.ts). Tasks appear only there, another PC's under its chat too (the chat
+// sync brings that chat here with the same session id); one whose row the filter, the search or the list
+// leaves out is not shown (owner, 2026-10-04: "Under the chat which spawned them. Not as its own stand
+// alone table"). The other PCs' tasks: the desk store keeps them apart from src.workers so they never count
+// as this PC's (stores/desk.ts splitWorkers); a source without them (the Gallery) has none.
 const remoteWorkers = computed(() => src.remoteWorkers?.value ?? [])
 const nesting = computed<NestedTasks | null>(() => {
   if (!showTasks.value) return null
@@ -448,21 +431,6 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             <component :is="icons.dismiss" class="size-3.5" />
           </button>
         </div>
-
-        <!-- CliMayte button on: the running tasks no row below holds, or a line saying none runs anywhere -->
-        <template v-if="nesting && !hydraModel">
-          <section v-if="nesting.unplaced.length" aria-label="CliMayte">
-            <header class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted">
-              <span class="truncate">CliMayte</span>
-              <span class="flex-1" />
-              <span class="tnum">{{ nesting.unplaced.length }}</span>
-            </header>
-            <div class="flex flex-col gap-[1.5px] pt-[1.5px]">
-              <TaskRows :nodes="nesting.unplaced" :selected-id="selectedExternalId" :now="now" @open="openTask" />
-            </div>
-          </section>
-          <p v-else-if="!nesting.byRow.size" class="flex h-[34px] items-center pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted">No CliMayte tasks running</p>
-        </template>
 
         <HydraSidebar v-if="hydraModel" :model="hydraModel" />
 

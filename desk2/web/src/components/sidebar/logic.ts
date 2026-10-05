@@ -132,7 +132,11 @@ export function groupChats(
   }
 }
 
-/** The order the sidebar keeps: group keys (groupOrderKey) and row ids, each first to last. */
+/**
+ * The order the sidebar keeps (order.ts), each first to last: group keys (groupOrderKey) and row keys, a
+ * desk row's id (a Desk chat's id, an outside session's session id) or the session id of a row only the
+ * cloud list has.
+ */
 export interface SidebarOrder {
   groups: readonly string[]
   rows: readonly string[]
@@ -143,18 +147,27 @@ export function groupOrderKey(g: ChatGroup): string {
   return g.cwd ? folderKey(g.cwd) : g.key
 }
 
-/** Items in their saved order; ones the order does not know yet go first, as they came (newest first). */
-export function stableOrder<T>(items: T[], keyOf: (t: T) => string, saved: readonly string[]): T[] {
+/**
+ * Items in their saved order; ones the order does not know yet go first, as they came (newest first),
+ * except the ones `last` picks, which go after the known ones (the cloud list's own rows and groups).
+ */
+export function stableOrder<T>(items: T[], keyOf: (t: T) => string, saved: readonly string[], last: (t: T) => boolean = () => false): T[] {
   const rank = new Map(saved.map((k, i) => [k, i]))
   const fresh = items.filter((t) => !rank.has(keyOf(t)))
   const known = items.filter((t) => rank.has(keyOf(t))).sort((a, b) => rank.get(keyOf(a))! - rank.get(keyOf(b))!)
-  return [...fresh, ...known]
+  return [...fresh.filter((t) => !last(t)), ...known, ...fresh.filter(last)]
 }
 
-/** The saved order after showing `shown` (first to last): what is shown, in place, then the rest as it was. */
-export function mergeOrder(saved: readonly string[], shown: readonly string[]): string[] {
-  const seen = new Set(shown)
-  return [...shown, ...saved.filter((k) => !seen.has(k))]
+/**
+ * The saved order after a list showed `shown`: the keys it lacks are added, at the top (the desk list's:
+ * a new desk row or group joins at the top) or at the end (the cloud list's own), in the order shown; a
+ * key already saved never moves. The two lists share one order (order.ts), so recording what one shows
+ * must not push the other's rows about (owner, 2026-10-04: "For some reason they change order").
+ */
+export function recordOrder(saved: readonly string[], shown: readonly string[], at: 'top' | 'end'): string[] {
+  const known = new Set(saved)
+  const added = [...new Set(shown.filter((k) => !known.has(k)))]
+  return at === 'top' ? [...added, ...saved] : [...saved, ...added]
 }
 
 /** Whether a row shows an attention dot: orange (waiting on you, or background tasks running) or green (done, unread). */

@@ -246,6 +246,7 @@ describe('a pass through the store', () => {
     disconnectLoginSync()
     clearRemote()
     workers.delete('w-mine')
+    workers.delete('w-mine-kid')
   })
 
   // Each runs two full login-sync passes (logins, desktop logins, queue), like cli-login-sync.test.ts:
@@ -264,7 +265,7 @@ describe('a pass through the store', () => {
       effort: null,
       accounts: null,
       status: 'queued',
-      sessionId: null,
+      sessionId: 's-mine',
       accountId: null,
       attempts: [],
       result: null,
@@ -277,7 +278,25 @@ describe('a pass through the store', () => {
       notBefore: null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      // Dispatched by a chat: its origin also names that chat's Claude home and transcript.
+      origin: {
+        kind: 'chat',
+        sessionId: 's-chat',
+        home: 'C:/secret/home',
+        transcript: 'C:/secret/home/t.jsonl',
+        how: 'binding',
+      },
+      wave: 'wv-mine',
     } as any)
+    // A task the first one dispatched.
+    workers.set('w-mine-kid', {
+      ...workers.get('w-mine')!,
+      id: 'w-mine-kid',
+      title: 'its task',
+      sessionId: 's-kid',
+      origin: { kind: 'worker', workerId: 'w-mine' },
+      wave: null,
+    })
     expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
     expect(loginSyncStatus().shareQueue).toBe(false)
     expect(setQueueSharing(true).ok).toBe(true)
@@ -305,7 +324,8 @@ describe('a pass through the store', () => {
     // (Other test files leave logins in this process's one store; they are not this test's business.)
     expect(status.lastError ?? '').not.toContain('queue')
 
-    // This PC's snapshot is in the store, under its own id, without the prompt or the path.
+    // This PC's snapshot is in the store, under its own id, without the prompt or any path (the
+    // folder, the origin chat's home and transcript).
     const rows = (await store('GET', '/v1/queues')).json.queues as Array<{ pc: string; meta: any }>
     const mine = rows.find((r) => r.pc !== other)!
     expect(mine.meta.name.length).toBeGreaterThan(0)
@@ -314,6 +334,20 @@ describe('a pass through the store', () => {
     expect(snap.workers.map((w) => w.title)).toContain('my own task')
     expect(JSON.stringify(snap)).not.toContain('private prompt')
     expect(JSON.stringify(snap)).not.toContain('secret')
+    // Who dispatched each, by id alone: the other PC's Hydra Desk draws it under that chat or worker.
+    const shared = (id: string) => snap.workers.find((w) => w.id === id)
+    expect(shared('w-mine')).toMatchObject({
+      sessionId: 's-mine',
+      originSessionId: 's-chat',
+      originWorkerId: null,
+      wave: 'wv-mine',
+    })
+    expect(shared('w-mine-kid')).toMatchObject({
+      sessionId: 's-kid',
+      originSessionId: 's-mine',
+      originWorkerId: 'w-mine',
+      wave: null,
+    })
 
     // And it read the other PC's, never its own back.
     expect(remoteSnapshots().map((s) => s.pc)).toEqual([other])

@@ -29,11 +29,15 @@ sidebar on the left stays put, and only the pane on the right changes.
   daemon itself is not copied, since two would both run work on the same accounts. `bun run build`
   builds both windows.
 - **The cloud list.** The cloud button (next to it, blue while it is on) turns the sidebar into every
-  session AgentHydra knows, from both PCs: a chat that came over from the other PC through AgentHydra's
-  chat sync shows a cloud icon and that PC's name (the desk list marks it with the same cloud), and each
-  shows its AgentHydra instance number (#37), as AgentHydra's rows do. The sessions are grouped by folder,
-  newest first, each in the same group as on the desk list: a session the desk list shows sits where it
-  does there (its chat's folder or the group it was moved to), and any other one under the folder it
+  session AgentHydra knows, from both PCs: the desk list's rows plus the rest. Turning it on or off moves
+  nothing (owner, 2026-10-04: "for some reason they change order"): both lists keep one saved order, so a
+  row the desk list shows sits in the same group at the same place, and is there even when it is older
+  than the cloud list's time period; the rows only the cloud list has come after the desk's in their group
+  (and their groups after the desk's groups), each kept where it first appeared. Those rows lead with a
+  cloud icon, their tooltip saying where they come from; a chat that came over from the other PC through
+  AgentHydra's chat sync also shows that PC's name (the desk list marks it with the same cloud), and each
+  row shows its AgentHydra instance number (#37), as AgentHydra's rows do. A session the desk list does
+  not show goes under the folder it
   started in, which is where Claude Desktop files it, even after it moved into a subfolder. Clicking one opens its
   transcript on the right. Search looks through every session, archived ones included, from all time,
   and shows the best matches first. The cloud button again goes back to the desk list. It replaces
@@ -43,12 +47,13 @@ sidebar on the left stays put, and only the pane on the right changes.
   each (status, title, model, how long it has run); a task a manager started sits one step further in,
   under its manager. A task with a session opens it; one without opens it on AgentHydra's CliMayte tab.
   Each task is listed once: a row that is itself a task (a manager's session in the cloud list) does not
-  list its tasks again when they already show under the row that started it. The tasks no row shown
-  holds (the other PC's, which AgentHydra shares without their session, or one from a session the list
-  leaves out) head the sidebar in a CliMayte block of their own, the other PC's with a little cloud (the PC
-  in its tooltip);
-  with nothing running anywhere the block says so. Turning it on while an AgentHydra tab with its own
-  list is open slides back to the desk so the tasks show.
+  list its tasks again when they already show under the row that started it. A task sits only under the
+  chat that spawned it, never in a list of its own (owner, 2026-10-04: "under the chat which spawned them.
+  Not as its own stand alone table"): a task a manager's wave runs, which AgentHydra records with only its
+  wave, goes under that manager, and the other PC's tasks (a little cloud, the PC in its tooltip) go under
+  their chat when it is in the list, which takes that PC's chat sync and an AgentHydra there new enough to
+  share the task's chat. Turning it on while an AgentHydra tab with its own list is open slides back to
+  the desk so the tasks show.
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
   instead of waiting for the next change.
@@ -73,6 +78,14 @@ sidebar on the left stays put, and only the pane on the right changes.
   row instead of at the bottom of the page. A CliMayte task's pane shows its whole title and, first in
   its body, the whole brief it was sent (the daemon's `GET /api/corch/workers/:id?prompt=full`; lists
   and MCP still get the first 300 characters). The centred column has no side lines.
+- **Every source in the home screen's stats.** The stats card under "What's up next?" counts everything
+  AgentHydra knows, not only Desk's own chats (owner, 2026-10-04: "full consolidated stats from all
+  sources"): sessions, messages, tokens, active days, peak hour, favourite model, CliMayte's tasks,
+  HSwarm's tasks and the cost at API rates, then one line per source (Claude desktop, the CLI, CliMayte,
+  HSwarm, Codex, OpenCode, DeepSeek) and the activity grid, for All, 30 days or 7 days. Desk's server
+  gathers it in one route, `GET /api/stats/home?range=`, from AgentHydra's spend and activity reports,
+  CliMayte's totals and HSwarm's stats; a part that does not answer shows a dash saying why, never a 0,
+  and with AgentHydra away the card shows Desk's own chats and says so.
 - **The window comes back where it was.** Closing Desk 2 and opening it again puts the window back at
   the size and place it had, a snapped one included: Windows keeps a snapped window's floating size apart
   from where it sits, so the launcher's window keeper saves the rectangle on screen too

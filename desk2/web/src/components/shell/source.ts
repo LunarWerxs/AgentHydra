@@ -8,6 +8,8 @@ import type {
   CliMayteWorker,
   DeskSettings,
   ExternalSession,
+  HomeStats,
+  HomeStatsRange,
   QueueAddRequest,
   QueueItem,
   QueuePatch,
@@ -57,6 +59,13 @@ export interface ShellSource {
   revealFolder(path: string): Promise<unknown>
   /** AgentHydra's transcript search (GET /api/search); rejects with a SearchError. */
   search(query: string): Promise<SearchHit[]>
+  /**
+   * The stats card's figures over every source AgentHydra counts (GET /api/stats/home): `homeStats` asks the
+   * server and keeps the answer in this browser, `cachedHomeStats` is the kept one (a reload paints it at
+   * once). Optional: a source without them shows Hydra Desk's own chats only.
+   */
+  homeStats?(range: HomeStatsRange): Promise<HomeStats>
+  cachedHomeStats?(range: HomeStatsRange): HomeStats | null
   /**
    * The managed send queue (SPEC "Send queue"); null until the server reports one. Optional, like every
    * queue member below: the composer shows no queue UI for a source without them (the Gallery, parity).

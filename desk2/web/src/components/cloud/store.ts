@@ -1,10 +1,13 @@
 // The cloud list's state, one per window: whether the sidebar shows it, its filters (remembered), the rows
 // AgentHydra answered, the search box and the multi-select. Fetched on demand and every 30 s while shown.
+// Its order is the desk list's own (sidebar/order.ts), so a refresh or the cloud button moves nothing.
 import { computed, ref, watch } from 'vue'
 import type { CloudInstance, CloudList, CloudSession } from '@shared/protocol'
 import { readCache, writeCache } from '@/lib/list-cache'
 import { useShellSource } from '@/components/shell/source'
-import { cloudQuery, deskPlaces, effectiveScopes, groupCloud, parseScopes, pcsIn, type CloudScopes } from './logic'
+import { recordOrder } from '@/components/sidebar/logic'
+import { useSidebarOrder } from '@/components/sidebar/order'
+import { cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud, parseScopes, pcsIn, type CloudScopes } from './logic'
 
 /** The last plain (unsearched) answer and the query it answered, for the next reload (lib/list-cache.ts). */
 interface CachedCloud {
@@ -112,16 +115,36 @@ function createCloud() {
   })
 
   // The chats and outside sessions the desk list draws, read the way Sidebar reads them (the Gallery's
-  // fixture source, else the desk store): a session it shows sits in the same group here (logic.ts groupCloud).
-  // The first useCloud() runs in a component's setup, where the source can be injected.
+  // fixture source, else the desk store): every session it shows is listed here, in the same group at the
+  // same place (logic.ts groupCloud). The first useCloud() runs in a component's setup, where the source
+  // can be injected.
   const desk = useShellSource()
   const placed = computed(() => deskPlaces(desk.chats.value, desk.external.value))
+  const answeredIds = computed(() => new Set(sessions.value.map((r) => r.id)))
+  const { order, save: saveOrder } = useSidebarOrder()
 
   const searching = computed(() => !!answered.value.trim())
   const groups = computed(() =>
-    groupCloud(sessions.value, effectiveScopes(scopes.value, answered.value), thisPc.value, searching.value, placed.value)
+    groupCloud(sessions.value, effectiveScopes(scopes.value, answered.value), thisPc.value, {
+      ranked: searching.value,
+      desk: placed.value,
+      order: order.value
+    })
   )
   const pcs = computed(() => pcsIn(sessions.value, thisPc.value))
+
+  // The rows and groups only this list has join the saved order at its end once shown, newest first, and
+  // keep their places from then on; the desk list records its own at the top (Sidebar.vue). A search's
+  // answer records nothing.
+  watch(
+    () => (on.value && !searching.value ? groups.value : null),
+    (shown) => {
+      if (!shown) return
+      const added = cloudOnlyKeys(shown, placed.value)
+      saveOrder({ groups: recordOrder(order.value.groups, added.groups, 'end'), rows: recordOrder(order.value.rows, added.rows, 'end') })
+    },
+    { immediate: true }
+  )
 
   function toggleSelected(id: string) {
     const next = new Set(selected.value)
@@ -150,6 +173,10 @@ function createCloud() {
     refresh,
     toggleSelected,
     setSelectMode,
+    /** The desk list lists this session too (with the cloud button off); a row it does not wears a cloud. */
+    onDesk: (id: string): boolean => placed.value.has(id),
+    /** The row is made of the desk's facts: AgentHydra's answer left the session out (logic.ts groupCloud). */
+    fromDesk: (id: string): boolean => !answeredIds.value.has(id),
     /** Every filter back to AgentHydra's Sessions defaults. */
     reset(): void {
       scopes.value = parseScopes(null)

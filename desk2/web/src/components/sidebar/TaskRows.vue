@@ -6,12 +6,15 @@ import { modelName } from '@/components/cloud/logic'
 import { elapsedLabel } from './logic'
 import type { TaskNode } from './tasks'
 
-// The CliMayte tasks under one sidebar row, or the ones no row holds (components/sidebar/tasks.ts): 22px
+// The CliMayte tasks under one sidebar row, the chat that spawned them (components/sidebar/tasks.ts): 22px
 // lines, one step in per level, with a guide line down their left. A task with a session opens its live
-// transcript in Desk; one still queued (no session yet), or one on another PC (named by a cloud mark),
-// opens on CliMayte's tab in AgentHydra.
+// transcript in Desk; one still queued (no session yet), or one on another PC (named by a cloud mark; its
+// session is that PC's), opens on CliMayte's tab in AgentHydra.
 defineProps<{ nodes: TaskNode[]; selectedId: string | null; now: number }>()
 const emit = defineEmits<{ open: [worker: CliMayteWorker] }>()
+
+/** The session it opens here: none for another PC's (Sidebar.vue openTask). */
+const ownSession = (w: CliMayteWorker) => (w.pc ? null : w.sessionId)
 
 const STATUS: Record<string, { icon: Component; tone: string; spin?: boolean; label: string }> = {
   queued: { icon: Clock, tone: 'text-text-muted', label: 'Queued' },
@@ -33,7 +36,7 @@ function tip(w: CliMayteWorker, now: number): string {
     [statusOf(w).label, w.account, [modelName(w.model), w.effort].filter(Boolean).join(' · ')].filter(Boolean).join(' · '),
     w.startedAt ? `Started ${elapsedLabel(w.startedAt, now)} ago` : null,
     w.lastActivity,
-    w.sessionId ? 'Click to open its transcript' : 'Click to open it on CliMayte'
+    ownSession(w) ? 'Click to open its transcript' : 'Click to open it on CliMayte'
   ]
     .filter(Boolean)
     .join('\n')
@@ -47,9 +50,9 @@ function tip(w: CliMayteWorker, now: number): string {
       :key="keyOf(n.worker)"
       type="button"
       :title="tip(n.worker, now)"
-      :aria-current="n.worker.sessionId && selectedId === n.worker.sessionId ? 'page' : undefined"
+      :aria-current="ownSession(n.worker) && selectedId === ownSession(n.worker) ? 'page' : undefined"
       class="flex h-[22px] w-full min-w-0 cursor-default items-center gap-1 rounded-r-[var(--radius-6)] pr-1 text-left text-[12px] leading-4 transition-colors duration-[var(--dur-fast)]"
-      :class="n.worker.sessionId && selectedId === n.worker.sessionId ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover'"
+      :class="ownSession(n.worker) && selectedId === ownSession(n.worker) ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover'"
       :style="{ paddingLeft: `${4 + (n.depth - 1) * 14}px` }"
       @click="emit('open', n.worker)"
     >

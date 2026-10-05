@@ -9,7 +9,7 @@ import type { CliMayteWorker, ServerEvent } from '@shared/protocol'
 import { createServer, type DeskServer } from '../../src/index'
 import { createBridge } from '../../src/bridge'
 import { RECENT_FINISHED } from '../../src/bridge/climayte'
-import { deadUrl, type FakeHydra, remoteAnswer, startFakeHydra } from './fake-hydra'
+import { deadUrl, type FakeHydra, REMOTE_SESSIONS, remoteAnswer, startFakeHydra } from './fake-hydra'
 
 const PLUGIN = join(import.meta.dir, '..', '..', 'src', 'plugins', '10-bridge.ts')
 const temps: string[] = []
@@ -95,19 +95,23 @@ test("the other PCs' CliMayte workers join the list under their PC's name, and n
   expect(remote.filter((w) => !w.active)).toHaveLength(RECENT_FINISHED)
   expect(remote.some((w) => w.id === 'w-remote-done-0')).toBe(true)
   expect(remote.some((w) => w.id === `w-remote-done-${RECENT_FINISHED + 2}`)).toBe(false)
-  // Its id repeats one of this PC's; it stays its own row, with nothing that ties it to a chat here.
+  // Its id repeats one of this PC's; it stays its own row, tied to the chat that spawned it on its own PC
+  // (owner, 2026-10-04: CliMayte's chats sit under the chat that spawned them).
   expect(remote.find((w) => w.id === 'w-00000001')).toMatchObject({
     pc: 'OTHER-PC',
     account: '#7',
     status: 'running',
     active: true,
     cwd: null,
-    sessionId: null,
-    originSessionId: null,
+    sessionId: REMOTE_SESSIONS.manager,
+    originSessionId: REMOTE_SESSIONS.chat,
     originWorkerId: null,
     endedAt: null,
   })
-  expect(remote.find((w) => w.id === 'w-remote-q')!.account).toBeNull()
+  // Its wave's task, shared with no origin, answers to that PC's manager of the wave, as this PC's do.
+  expect(remote.find((w) => w.id === 'w-remote-q')).toMatchObject({ account: null, originWorkerId: 'w-00000001', originSessionId: REMOTE_SESSIONS.manager })
+  // One an older AgentHydra shared carries no session or origin, and still reads.
+  expect(remote.find((w) => w.id === 'w-remote-done-0')).toMatchObject({ sessionId: null, originSessionId: null, originWorkerId: null })
   // The login's name (an email here) never leaves the server.
   expect(JSON.stringify(list)).not.toContain('someone@example.com')
 

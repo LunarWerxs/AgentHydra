@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { mapAccounts } from '../../src/bridge/accounts'
-import { activeFor, mapWorkers } from '../../src/bridge/climayte'
+import { activeFor, mapWorkers, workersOfChat } from '../../src/bridge/climayte'
 import { mapExternal, tailToItems, workerDetailToItems } from '../../src/bridge/external'
 import { fixture, freshState, NOW } from './fake-hydra'
 
@@ -94,7 +94,6 @@ describe('CliMayte workers', () => {
       verdict: null,
       error: null,
     })
-    expect(workers.find((w) => w.id === 'w-00000003')!.originSessionId).toBeNull()
   })
 
   test('a settled worker has ended when it last changed and carries every token it was charged', () => {
@@ -104,10 +103,16 @@ describe('CliMayte workers', () => {
     expect(workers[0].endedAt).toBeNull()
   })
 
-  test('a worker dispatched by another worker takes that worker session as its origin', () => {
+  test("a worker dispatched by another worker, or a wave's task, takes that worker (the wave's manager) and its session as its origin", () => {
     const child = { ...raw[0], id: 'w-child', sessionId: sid(600), origin: { kind: 'worker', workerId: 'w-00000001' } }
     const mapped = mapWorkers([...raw, child]).find((w) => w.id === 'w-child')!
     expect(mapped.originSessionId).toBe(sid(500))
+    // The recorded wave: its task w-00000003 has no origin, only the wave its manager w-00000002 (dispatched
+    // by the chat sid(1)) runs (owner, 2026-10-04: CliMayte's chats sit under the chat that spawned them).
+    expect(workers.find((w) => w.id === 'w-00000003')).toMatchObject({ originWorkerId: 'w-00000002', originSessionId: sid(501) })
+    expect(workers.find((w) => w.id === 'w-00000002')).toMatchObject({ originWorkerId: null, originSessionId: sid(1) })
+    // The chat's own count finds the task through its manager, as the sidebar nests it.
+    expect(workersOfChat(workers, { sessionId: sid(1) }).map((w) => w.id)).toEqual(['w-00000001', 'w-00000002', 'w-00000003', 'w-00000004'])
   })
 
   test('activeFor keeps the active workers a chat dispatched', () => {

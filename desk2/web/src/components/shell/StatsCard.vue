@@ -1,24 +1,60 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import type { ChatSummary } from '@shared/protocol'
+import { computed, reactive, ref, watch } from 'vue'
+import type { ChatSummary, HomeStats } from '@shared/protocol'
 import { computeStats, type StatsRange } from './logic'
-import { statsFooter, statsTiles } from './stats'
+import { useShellSource } from './source'
+import { DESK_ONLY_OFFLINE, DESK_ONLY_WAITING, homeFooter, homeModels, homeSources, homeTiles, statsFooter, statsTiles } from './stats'
 
-// The stats card of the new-session screen (480 wide, r12, #ffffff0d): tabs, ranges, six tiles and
-// the activity grid, from what Hydra Desk knows about its own chats (stats.ts).
+// The stats card of the new-session screen (480 wide, r12, #ffffff0d): tabs, ranges, nine tiles, the
+// sources and the activity grid, over every source AgentHydra counts (owner, 2026-10-04: "the overview
+// screen needs to display full consolidated stats from all sources"; GET /api/stats/home, stats.ts).
+// Until AgentHydra's answer comes, or when it does not answer, it shows Hydra Desk's own chats (six
+// tiles) and says so.
 const props = defineProps<{ chats: ChatSummary[] }>()
+const src = useShellSource()
 
 const tab = ref<'overview' | 'models'>('overview')
 const range = ref<StatsRange>('all')
-const stats = computed(() => computeStats(props.chats, range.value))
+const desk = computed(() => computeStats(props.chats, range.value))
 
-const tiles = computed(() => statsTiles(stats.value))
+// Each range's last answer: the one this browser kept paints at once, the server's replaces it.
+const answers = reactive<Partial<Record<StatsRange, HomeStats>>>({})
+const failed = reactive<Partial<Record<StatsRange, string>>>({})
+function load(r: StatsRange): void {
+  if (!src.homeStats) return
+  const kept = answers[r] ?? src.cachedHomeStats?.(r)
+  if (kept) answers[r] = kept
+  src.homeStats(r).then(
+    (stats) => {
+      answers[r] = stats
+      delete failed[r]
+    },
+    (err: unknown) => {
+      failed[r] = err instanceof Error ? err.message : String(err)
+    }
+  )
+}
+watch(range, (r) => load(r), { immediate: true })
+
+/** AgentHydra's figures for the range, or null while Hydra Desk's own stand in. */
+const home = computed(() => (failed[range.value] ? null : (answers[range.value] ?? null)))
+const tiles = computed(() => (home.value ? homeTiles(home.value) : statsTiles(desk.value)))
+const sources = computed(() => (home.value ? homeSources(home.value) : []))
+const models = computed(() => (home.value ? homeModels(home.value) : desk.value.models))
 
 // 27 weeks of 7 days, filled column by column (oldest week on the left).
 const HEAT = ['var(--fill-secondary)', '#8fb8f0', 'var(--accent-text)', 'var(--accent-hover)', 'var(--accent)']
-const maxModel = computed(() => Math.max(1, ...stats.value.models.map((m) => m.sessions)))
+const heat = computed(() => home.value?.heat ?? desk.value.heat)
+const maxModel = computed(() => Math.max(1, ...models.value.map((m) => m.sessions)))
 
-const footer = computed(() => statsFooter(stats.value))
+const footer = computed(() => {
+  if (home.value) return homeFooter(home.value)
+  if (!src.homeStats) return [statsFooter(desk.value)]
+  return [statsFooter(desk.value), failed[range.value] ? DESK_ONLY_OFFLINE : DESK_ONLY_WAITING]
+})
+const footerTitle = computed(() => (home.value ? undefined : failed[range.value]))
+
+const SOURCE_COLS = 'grid grid-cols-[minmax(0,1fr)_52px_56px_64px] items-center gap-x-2 px-1.5'
 
 const CHIP = 'flex h-5 cursor-default items-center rounded-[var(--radius-5)] px-1.5 text-[12px] leading-4'
 const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text' : 'text-text-muted hover:text-text-2']
@@ -46,20 +82,37 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
           <span class="tnum truncate text-[13px] leading-[19px] text-text" :class="t.strong ? 'font-semibold' : ''">{{ t.value }}</span>
         </div>
       </div>
+      <div v-if="sources.length" class="mt-[6px] flex flex-col gap-[2px]" role="table" aria-label="Sources">
+        <div role="row" :class="SOURCE_COLS" class="h-4 text-[11px] leading-4 text-text-muted">
+          <span role="columnheader">Sources</span>
+          <span role="columnheader" class="text-right">Sessions</span>
+          <span role="columnheader" class="text-right">Tokens</span>
+          <span role="columnheader" class="text-right">Cost</span>
+        </div>
+        <div v-for="s in sources" :key="s.key" role="row" :title="s.title" :class="SOURCE_COLS" class="relative h-[22px] overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)] text-[12px] leading-4">
+          <span class="absolute bottom-0 left-0 h-[2px] bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${s.share * 100}%` }" />
+          <span role="cell" class="relative truncate text-text">{{ s.label }}</span>
+          <span role="cell" class="tnum relative text-right text-text-2">{{ s.sessions }}</span>
+          <span role="cell" class="tnum relative text-right text-text-2">{{ s.tokens }}</span>
+          <span role="cell" class="tnum relative text-right text-text-2">{{ s.cost }}</span>
+        </div>
+      </div>
       <div class="mt-[6px] grid grid-flow-col grid-rows-7 justify-between gap-y-[3px]" role="img" aria-label="Activity over the last 27 weeks">
-        <span v-for="(level, i) in stats.heat" :key="i" class="size-[15px] rounded-[2px]" :style="{ background: HEAT[level] }" />
+        <span v-for="(level, i) in heat" :key="i" class="size-[15px] rounded-[2px]" :style="{ background: HEAT[level] }" />
       </div>
     </template>
 
     <div v-else class="mt-[18px] flex min-h-[217px] flex-col gap-[5px]">
-      <div v-for="m in stats.models" :key="m.label" class="relative flex h-7 items-center overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[13px] leading-[19px]">
+      <div v-for="m in models" :key="m.label" class="relative flex h-7 items-center overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[13px] leading-[19px]">
         <span class="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${(m.sessions / maxModel) * 100}%` }" />
         <span class="relative min-w-0 flex-1 truncate text-text">{{ m.label }}</span>
         <span class="tnum relative text-text-2">{{ m.sessions.toLocaleString('en-US') }}</span>
       </div>
-      <p v-if="!stats.models.length" class="text-[12px] leading-4 text-text-muted">No sessions in this range yet.</p>
+      <p v-if="!models.length" class="text-[12px] leading-4 text-text-muted">No sessions in this range yet.</p>
     </div>
 
-    <p class="mt-2 text-[11px] leading-4 text-text-muted">{{ footer }}</p>
+    <div class="mt-2 text-[11px] leading-4 text-text-muted" :title="footerTitle">
+      <p v-for="line in footer" :key="line">{{ line }}</p>
+    </div>
   </section>
 </template>

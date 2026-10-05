@@ -12,9 +12,9 @@ import {
   groupChats,
   groupChoices,
   groupOrderKey,
-  mergeOrder,
   moveInOrder,
   raiseNewlyOrange,
+  recordOrder,
   parseFilter,
   resumeCommand,
   revealChat,
@@ -456,8 +456,8 @@ describe('sidebar order', () => {
     const before = [chat('a1', { cwd: 'C:/work/alpha', updatedAt: 30 }), chat('a2', { cwd: 'C:/work/alpha', updatedAt: 20 }), chat('c1', { cwd: 'C:/work/conn', updatedAt: 10 })]
     const first = groupChats(before, { order: { groups: [], rows: [] } })
     let order = {
-      groups: mergeOrder([], first.folders.map(groupOrderKey)),
-      rows: mergeOrder([], first.folders.flatMap((f) => f.entries.map((e) => e.id))),
+      groups: recordOrder([], first.folders.map(groupOrderKey), 'top'),
+      rows: recordOrder([], first.folders.flatMap((f) => f.entries.map((e) => e.id)), 'top'),
     }
     expect(first.folders.map((f) => f.label)).toEqual(['alpha', 'conn'])
 
@@ -473,6 +473,15 @@ describe('sidebar order', () => {
 
     order = { ...order, groups: moveInOrder(order.groups, 'c:/work/conn', 'c:/work/alpha') }
     expect(groupChats(sent, { order }).folders.map((f) => f.label)).toEqual(['conn', 'alpha'])
+  })
+
+  // Owner, 2026-10-04: the desk list and the cloud list share one order, so one recording what it shows
+  // must not push the rows only the other shows to the end (they drifted with every toggle).
+  it('recording what a list shows never moves a saved key: the desk adds its new ones at the top, the cloud its own at the end', () => {
+    const saved = ['desk-a', 'cloud-x', 'desk-b', 'cloud-y']
+    expect(recordOrder(saved, ['desk-b', 'desk-a'], 'top')).toEqual(saved)
+    expect(recordOrder(saved, ['desk-n', 'desk-b', 'desk-m'], 'top')).toEqual(['desk-n', 'desk-m', ...saved])
+    expect(recordOrder(saved, ['cloud-y', 'cloud-z', 'cloud-z'], 'end')).toEqual([...saved, 'cloud-z'])
   })
 })
 

@@ -29,6 +29,7 @@ import {
 import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
 import { claudeProjectRoots, findSessionJsonl, sessionJsonlItems } from './session-jsonl'
+import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
 import { resumeAccount, type ResumeData } from './resume'
 import { homedir } from 'node:os'
@@ -68,6 +69,7 @@ export function createBridge(opts: BridgeOptions = {}) {
   let sessionMeta: (list: ExternalSession[]) => ExternalSession[] = (list) => list
   let lastWorkers: { at: number; workers: CliMayteWorker[] } | null = null
   const workerTokens = createWorkerTokens()
+  const homeStats = createHomeStats(client, now)
   let configDirs: { at: number; byId: Map<string, string> } | null = null
   let instancesRead: { at: number; read: Promise<AhCliInstance[]> } | null = null
 
@@ -380,6 +382,8 @@ export function createBridge(opts: BridgeOptions = {}) {
     startWorker,
     workersByIds,
     workerItems,
+    /** The home screen's stats card, consolidated over every source AgentHydra counts (stats.ts). */
+    homeStats,
     setExtraWorkerIds(fn: () => string[]): void {
       extraWorkerIds = fn
     },

@@ -10,7 +10,8 @@
 //
 // WHAT A SNAPSHOT HOLDS: the workers that are queued, running, waiting or checking, and the ones
 // finished in the last 24 hours, each cut down to what a reader of the list needs (RemoteWorker:
-// never the prompt, results, logs or paths), and this PC's newest live usage reading per account. It
+// never the prompt, results, logs or paths; its session, origin and wave ids, so the other PC draws it
+// under the chat that spawned it), and this PC's newest live usage reading per account. It
 // is gzipped, then AES-256-GCM encrypted under the sync's own key with `climayte-queue:<pc>` as
 // associated data, so a blob cannot be passed off as another PC's. Over the store's 256 KB cap the
 // oldest finished workers go first; the active ones never do.
@@ -72,6 +73,9 @@ const isFinished = (s: string): boolean => s === 'done' || s === 'failed' || s =
 function reduce(w: CliMayteWorker, now: number): RemoteWorker {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const v = w.verdicts?.at(-1)?.verdict
+  // Who dispatched it, as ids only: a chat's origin also holds its Claude home and transcript path.
+  const o = w.origin
+  const byWorker = o?.kind === 'worker' ? o.workerId : null
   return {
     id: w.id,
     title: w.title,
@@ -88,6 +92,15 @@ function reduce(w: CliMayteWorker, now: number): RemoteWorker {
     lastActivity: w.lastActivity,
     error: w.error,
     verdict: v === 'pass' || v === 'fail' ? v : null,
+    sessionId: w.sessionId ?? null,
+    originSessionId:
+      o?.kind === 'chat'
+        ? o.sessionId
+        : byWorker
+          ? (workers.get(byWorker)?.sessionId ?? null)
+          : null,
+    originWorkerId: byWorker,
+    wave: w.wave ?? null,
   }
 }
 

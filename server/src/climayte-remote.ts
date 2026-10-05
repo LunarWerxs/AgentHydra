@@ -35,6 +35,15 @@ export interface RemoteWorker {
   lastActivity: string | null
   error: string | null
   verdict: 'pass' | 'fail' | null
+  /** Its session, who dispatched it (the chat's session, or the worker and that worker's session
+   *  when this PC knows it) and its wave: enough for the other PC's Hydra Desk to draw it under the
+   *  chat or the manager that spawned it (owner, 2026-10-04: "I was hoping you'd stick the climayte
+   *  chats as sub items in the HD2 sidebar. Under the chat which spawned them"). Never the origin's
+   *  Claude home or transcript path. Absent from an older AgentHydra's snapshot. */
+  sessionId?: string | null
+  originSessionId?: string | null
+  originWorkerId?: string | null
+  wave?: string | null
 }
 
 /** This PC's newest live reading of one account, as shared. */

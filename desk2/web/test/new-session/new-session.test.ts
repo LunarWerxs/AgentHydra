@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'bun:test'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ChatSummary } from '@shared/protocol'
+import type { ChatSummary, HomeStats } from '@shared/protocol'
 import { accountLabel, accountTitle } from '../../src/components/accounts/format'
 import { rowTooltip } from '../../src/components/sidebar/logic'
 import { TIPS, TIPS_KEY, dismissTip, modelTriggerLabel, nextTip, resolvedEffort, type DraftStorage } from '../../src/components/composer/logic'
 import { computeStats } from '../../src/components/shell/logic'
-import { statsFooter, statsTiles } from '../../src/components/shell/stats'
+import { homeFooter, homeModels, homeSources, homeTiles, statsFooter, statsTiles } from '../../src/components/shell/stats'
 
 const EMAIL = /[^\s<>()@]+@[^\s<>()@]+\.[a-z]{2,}/i
 
@@ -113,5 +113,65 @@ describe('stats card', () => {
   it('says nothing invented for an empty range', () => {
     expect(statsFooter(computeStats([], '7d', NOW))).toBe('No sessions in this range yet.')
     expect(statsFooter(computeStats([chat({ costUsd: 0 })], 'all', NOW))).toBe("You've run 1 session in 1 folder over 1 day.")
+  })
+
+  it("shows AgentHydra's consolidated figures, and a dash with the reason for a part that did not answer", () => {
+    const home: HomeStats = {
+      range: 'all',
+      sessions: 6499,
+      messages: 1_234_567,
+      tokens: { input: 2_000_000_000, cacheRead: 480_000_000_000, cacheWrite: 5_000_000_000, output: 600_000_000, total: 487_600_000_000 },
+      costUsd: 257_672.4,
+      pricesAsOf: '2026-10-01',
+      activeDays: 91,
+      peakHour: '2 PM',
+      favoriteModel: 'claude-opus-5-5',
+      agentMinutes: 86_936,
+      heat: [],
+      sources: [
+        { key: 'desktop', label: 'Claude desktop', sessions: 311, messages: 224_761, tokens: 61_746_567_890, costUsd: 21_376.3 },
+        { key: 'opencode', label: 'OpenCode', sessions: 4, messages: 4, tokens: 999_950, costUsd: null }
+      ],
+      models: [
+        { key: 'claude-opus-5-5', sessions: 40 },
+        { key: 'claude-sonnet-5-5', sessions: 30 },
+        { key: 'claude-opus-5-5-20260901', sessions: 5 }
+      ],
+      climayte: { tasks: 1668, sessions: 3164, costUsd: 3788.2, limitHits: 37 },
+      hswarm: null,
+      coverage: { sessions: 3248, total: 6499, refreshing: true },
+      missing: [{ part: 'hswarm', reason: 'HSwarm did not answer (502)' }]
+    }
+    const tiles = homeTiles(home)
+    expect(tiles.map((t) => [t.label, t.value])).toEqual([
+      ['Sessions', '6,499'],
+      ['Messages', '1,234,567'],
+      ['Total tokens', '487.6B'],
+      ['Active days', '91'],
+      ['Peak hour', '2 PM'],
+      ['Favorite model', 'Opus 5.5'],
+      ['CliMayte tasks', '1,668'],
+      ['HSwarm tasks', '–'],
+      ['Cost at API rates', '$257,672']
+    ])
+    expect(tiles[2]!.title).toBe('Input 2,000,000,000\nCache read 480,000,000,000\nCache write 5,000,000,000\nOutput 600,000,000')
+    expect(tiles[3]!.title).toBe('1,449 hours of agent time')
+    expect(tiles[6]!.title).toBe('37 runs stopped at a usage limit\n$3,788 at API rates')
+    expect(tiles[7]!.title).toBe('HSwarm did not answer (502)')
+    expect(tiles[8]!.title).toBe('Prices as of 2026-10-01')
+    // 999,950 tokens round up to the next unit; a source AgentHydra could not price shows a dash.
+    expect(homeSources(home).map((s) => [s.label, s.sessions, s.tokens, s.cost])).toEqual([
+      ['Claude desktop', '311', '61.7B', '$21,376'],
+      ['OpenCode', '4', '1.0M', '–']
+    ])
+    // A dated id joins its model's row.
+    expect(homeModels(home)).toEqual([
+      { label: 'Opus 5.5', sessions: 45 },
+      { label: 'Sonnet 5.5', sessions: 30 }
+    ])
+    expect(homeFooter(home)).toEqual([
+      '6,499 sessions from 2 sources over 91 days, $257,672 at API rates.',
+      'AgentHydra is still reading sessions (3,248 of 6,499), so these figures will grow.'
+    ])
   })
 })

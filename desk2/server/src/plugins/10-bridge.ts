@@ -11,6 +11,7 @@ import { type Bridge, BridgeError, bridge, configureBridge } from '../bridge'
 import { type AhCloudRow, CLOUD_TIMEOUT_MS, cloudQuery, toCloudInstance, toCloudSession } from '../bridge/cloud'
 import { createPoller } from '../bridge/poller'
 import { SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX, SEARCH_MIN_CHARS } from '../bridge/search'
+import { HOME_STATS_RANGES, isHomeStatsRange } from '../bridge/stats'
 
 function pickBridge(deps: Record<string, unknown>): Bridge {
   if (deps.bridge) return deps.bridge as Bridge
@@ -120,6 +121,17 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   app.get('/api/cloud/instances', async (c) => {
     try {
       return c.json((await b.client.desktopInstances()).map(toCloudInstance))
+    } catch (err) {
+      return fail(c, b, err)
+    }
+  })
+
+  // The home screen's stats card: every source AgentHydra counts, consolidated (bridge/stats.ts).
+  app.get('/api/stats/home', async (c) => {
+    const range = c.req.query('range') ?? 'all'
+    if (!isHomeStatsRange(range)) return c.json({ error: `range must be one of ${HOME_STATS_RANGES.join(', ')}` }, 400)
+    try {
+      return c.json(await b.homeStats(range))
     } catch (err) {
       return fail(c, b, err)
     }

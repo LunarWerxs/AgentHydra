@@ -6,7 +6,7 @@
 // instance, queued work, usage limits, archived and the time period are applied by AgentHydra; shape
 // and computer narrow the rows already fetched.
 import type { ChatSummary, CloudSession, ExternalSession } from '@shared/protocol'
-import { folderKey, folderLabel, NO_FOLDER } from '../sidebar/logic'
+import { folderKey, folderLabel, NO_FOLDER, stableOrder, type SidebarOrder } from '../sidebar/logic'
 
 /** claude-opus-5-5 -> Opus 5.5, the way AgentHydra's rows name it; any other model as it is. */
 export function modelName(m: string | null | undefined): string | null {
@@ -192,6 +192,21 @@ export const pcOf = (s: Pick<CloudSession, 'fromPc'>, thisPc: string): string =>
 /** The words of the cloud icon on another PC's chat, in both lists (AgentHydra's Sessions tab says the same). */
 export const fromPcLabel = (pc: string): string => `From ${pc}, through the chat sync`
 
+/** A source in words: AgentHydra's by their menu names, any other as it is. */
+export const sourceName = (s: string): string => SOURCE_LABELS[s as CloudSource] ?? s
+
+/** Where a row comes from: its source, account number (or instance) and PC ("Claude · #37 · on Studio"). */
+export function originLabel(r: Pick<CloudSession, 'source' | 'instance' | 'instanceNum' | 'fromPc'>, thisPc: string): string {
+  return [sourceName(r.source), r.instanceNum !== null ? `#${r.instanceNum}` : r.instance, `on ${pcOf(r, thisPc)}`].filter(Boolean).join(' · ')
+}
+
+/**
+ * The words of the cloud icon on a row only the cloud list has, one the desk list does not show (owner,
+ * 2026-10-04: "none display a cloud icon"), and where it comes from.
+ */
+export const cloudOnlyLabel = (r: Pick<CloudSession, 'source' | 'instance' | 'instanceNum' | 'fromPc'>, thisPc: string): string =>
+  `Only in the cloud list, from ${originLabel(r, thisPc)}`
+
 /** Every PC the rows name, this one first. */
 export function pcsIn(rows: Pick<CloudSession, 'fromPc'>[], thisPc: string): string[] {
   const others = [...new Set(rows.map((r) => r.fromPc).filter((p): p is string => !!p && p !== thisPc))].sort()
@@ -202,57 +217,138 @@ export interface CloudGroup {
   key: string
   label: string
   cwd: string | null
+  /** Its key in the saved order, the desk list's spelling (sidebar/logic.ts groupOrderKey): the folder however spelled, '' for none, or `group:<name>`. */
+  orderKey: string
   rows: CloudSession[]
 }
 
 export const RESULTS_LABEL = 'Best matches first'
 
-/** Where the desk list (the cloud button off) puts a session: under its folder ('' for none), or in the group it was moved to. */
+/**
+ * A session the desk list (the cloud button off) lists: where it puts it, under its folder ('' for none)
+ * or in the group it was moved to; its row's key in the saved order (sidebar/order.ts), which is the desk
+ * row's id (a Desk chat's own id, not its session's; an outside session's session id); and a row made of
+ * what the desk knows of it, listed when AgentHydra's answer leaves the session out (groupCloud).
+ */
 export interface DeskPlace {
   cwd: string
   group: string | null
+  key: string
+  row: CloudSession
 }
 
+type DeskChat = Pick<ChatSummary, 'id' | 'sessionId' | 'title' | 'cwd' | 'group' | 'archived' | 'createdAt' | 'updatedAt' | 'model' | 'effort' | 'account'>
+type DeskExternal = Pick<ExternalSession, 'id' | 'title' | 'cwd' | 'group' | 'source' | 'instance' | 'archived' | 'lastActivityAt' | 'model' | 'fromPc'>
+
+/** A cloud row of what the desk knows of a session; what only AgentHydra counts (messages, queued work) is left at nothing. */
+const deskRow = (r: Omit<CloudSession, 'lastCwd' | 'messageCount' | 'dispatched'>): CloudSession => ({ ...r, lastCwd: null, messageCount: 0, dispatched: false })
+
+/** An outside session's source in AgentHydra's spelling; 'other' is a tool the desk does not name. */
+const ahSource = (s: ExternalSession['source']): string => (s === 'codex' ? 'codex' : s === 'other' ? 'other' : 'claude')
+
 /**
- * Where the desk list puts each session it shows, by session id: a Desk chat by its session, and the
- * outside sessions groupChats (sidebar/logic.ts) lists, which leaves out CliMayte's own workers and a
- * session that already is one of our chats.
+ * Every session the desk list lists, by session id: a Desk chat by its session, and the outside sessions
+ * groupChats (sidebar/logic.ts) lists, which leaves out CliMayte's own workers and a session that already
+ * is one of our chats. A Desk chat without a session yet has no cloud row to be.
  */
-export function deskPlaces(
-  chats: Pick<ChatSummary, 'sessionId' | 'cwd' | 'group'>[],
-  external: Pick<ExternalSession, 'id' | 'cwd' | 'group' | 'source'>[]
-): Map<string, DeskPlace> {
+export function deskPlaces(chats: DeskChat[], external: DeskExternal[]): Map<string, DeskPlace> {
   const out = new Map<string, DeskPlace>()
-  for (const c of chats) if (c.sessionId) out.set(c.sessionId, { cwd: c.cwd, group: c.group })
-  for (const s of external) if (s.source !== 'climayte' && !out.has(s.id)) out.set(s.id, { cwd: s.cwd ?? '', group: s.group })
+  for (const c of chats) {
+    if (!c.sessionId) continue
+    const row = deskRow({
+      id: c.sessionId,
+      title: c.title,
+      cwd: c.cwd || null,
+      source: 'claude',
+      instance: null,
+      lastActivityAt: c.updatedAt,
+      createdAt: c.createdAt,
+      archived: c.archived,
+      fromPc: null,
+      model: c.model,
+      effort: c.effort,
+      instanceNum: c.account.number ?? null
+    })
+    out.set(c.sessionId, { cwd: c.cwd, group: c.group, key: c.id, row })
+  }
+  for (const s of external) {
+    if (s.source === 'climayte' || out.has(s.id)) continue
+    const num = s.instance?.match(/^#(\d+)$/)
+    const row = deskRow({
+      id: s.id,
+      title: s.title,
+      cwd: s.cwd,
+      source: ahSource(s.source),
+      instance: num ? null : s.instance,
+      lastActivityAt: s.lastActivityAt ?? 0,
+      createdAt: null,
+      archived: s.archived,
+      fromPc: s.fromPc,
+      model: s.model,
+      effort: null,
+      instanceNum: num ? Number(num[1]) : null
+    })
+    out.set(s.id, { cwd: s.cwd ?? '', group: s.group, key: s.id, row })
+  }
   return out
 }
 
+/**
+ * Whether the filters let through a session the desk list lists that AgentHydra's answer left out. The
+ * period never keeps it out (owner, 2026-10-04: a desk chat older than the cloud's 24 hours was missing
+ * from the cloud list); every other filter still does. Source, archived (the desk's own mark) and PC are
+ * read off the desk's facts; shape, instance, queued work and usage limits are AgentHydra's, so once one
+ * of those narrows, the row stays out.
+ */
+function keepsDeskRow(r: CloudSession, s: CloudScopes, thisPc: string): boolean {
+  const named = (SOURCE_VALUES as readonly string[]).includes(r.source)
+  const sourceOk = named ? s.source.includes(r.source as CloudSource) : allOf(s.source, SOURCE_VALUES.filter((v) => v !== 'zswarm'))
+  if (!sourceOk || !s.archived.includes(r.archived ? 'archived' : 'active')) return false
+  if (s.pcs !== null && !s.pcs.includes(pcOf(r, thisPc))) return false
+  if (!allOf(s.shape, SHAPE_VALUES)) return false
+  const claudeNarrowed = s.instance !== null || !allOf(s.dispatched, DISPATCHED_VALUES) || !allOf(s.rateLimit, RATE_LIMIT_VALUES)
+  return !(r.source === 'claude' && claudeNarrowed)
+}
+
+/** A row's key in the saved order: its desk row's id when the desk list lists the session, else its own session id. */
+export const rowOrderKey = (r: Pick<CloudSession, 'id'>, desk: ReadonlyMap<string, DeskPlace>): string => desk.get(r.id)?.key ?? r.id
+
 const newestFirst = (a: CloudSession, b: CloudSession) => b.lastActivityAt - a.lastActivityAt
 
+export interface GroupCloudOptions {
+  /** A search's answer: AgentHydra's order, best match first. */
+  ranked?: boolean
+  /** The sessions the desk list lists (deskPlaces). */
+  desk?: ReadonlyMap<string, DeskPlace>
+  /** The order both lists keep (sidebar/order.ts); without one, groups by their newest row and rows newest first. */
+  order?: SidebarOrder
+}
+
 /**
- * The rows the list shows, grouped by folder like the rest of the sidebar: the shape and computer filters
- * applied, groups ordered by their newest row, rows newest first. A session the desk list shows (`desk`,
- * deskPlaces) sits where it sits there, so turning the cloud on moves nothing (owner, 2026-10-04: a chat
- * jumped to another folder's group): under its desk row's folder, or in the group it was moved to, which
- * joins a folder group of the same name as in groupChats. Every other row goes under the folder AgentHydra
- * gives, the one it started in (server bridge/cloud.ts). A search's answer (`ranked`) keeps AgentHydra's
- * order instead, best match first (a title hit before a folder hit before letters in order), as one group.
+ * The rows the list shows, grouped and ordered like the desk list, so turning the cloud on or off moves
+ * nothing (owner, 2026-10-04: "For some reason they change order"). The shape and computer filters
+ * apply. Every session the desk list lists is here (`desk`, deskPlaces), made of the desk's facts when
+ * AgentHydra's answer left it out (keepsDeskRow: the period never drops it), and sits where it sits there:
+ * under its desk row's folder, or in the group it was moved to, which joins a folder group of the same
+ * name as in groupChats (owner, 2026-10-04: a chat jumped to another folder's group). Every other row goes
+ * under the folder AgentHydra gives, the one it started in (server bridge/cloud.ts). With the saved
+ * `order`, groups and rows keep the desk list's places (a row by its desk row's id, rowOrderKey); the rows
+ * only the cloud list has come after the desk's in their group, and their groups after the desk's groups,
+ * newest first until the cloud list records them (cloudOnlyKeys) and kept there after. A search's answer
+ * (`ranked`) keeps AgentHydra's order instead, best match first (a title hit before a folder hit before
+ * letters in order), as one group.
  */
-export function groupCloud(
-  rows: CloudSession[],
-  s: { shape: readonly CloudShape[]; pcs: string[] | null },
-  thisPc: string,
-  ranked = false,
-  desk: ReadonlyMap<string, DeskPlace> = new Map()
-): CloudGroup[] {
+export function groupCloud(rows: CloudSession[], s: CloudScopes, thisPc: string, opts: GroupCloudOptions = {}): CloudGroup[] {
+  const desk = opts.desk ?? new Map<string, DeskPlace>()
   const shown = rows.filter((r) => s.shape.includes(sessionShape(r)) && (s.pcs === null || s.pcs.includes(pcOf(r, thisPc))))
-  if (ranked) return shown.length ? [{ key: 'cloud:results', label: RESULTS_LABEL, cwd: null, rows: shown }] : []
+  if (opts.ranked) return shown.length ? [{ key: 'cloud:results', label: RESULTS_LABEL, cwd: null, orderKey: 'cloud:results', rows: shown }] : []
+  const answered = new Set(rows.map((r) => r.id))
+  for (const [id, place] of desk) if (!answered.has(id) && keepsDeskRow(place.row, s, thisPc)) shown.push(place.row)
   const byFolder = new Map<string, CloudGroup>()
   const byGroup = new Map<string, CloudGroup>()
   // Rows come newest first, so a group's label is its newest row's spelling.
   const add = (map: Map<string, CloudGroup>, id: string, label: string, cwd: string | null, r: CloudSession) => {
-    const g: CloudGroup = map.get(id) ?? { key: `cloud:${id}`, label, cwd, rows: [] }
+    const g: CloudGroup = map.get(id) ?? { key: `cloud:${id}`, label, cwd, orderKey: id, rows: [] }
     map.set(id, g)
     g.rows.push(r)
   }
@@ -272,7 +368,25 @@ export function groupCloud(
     else groups.push(g)
   }
   for (const g of groups) g.rows.sort(newestFirst)
-  return groups.sort((a, b) => b.rows[0]!.lastActivityAt - a.rows[0]!.lastActivityAt)
+  groups.sort((a, b) => b.rows[0]!.lastActivityAt - a.rows[0]!.lastActivityAt)
+  const order = opts.order
+  if (!order) return groups
+  const cloudOnly = (r: CloudSession) => !desk.has(r.id)
+  for (const g of groups) g.rows = stableOrder(g.rows, (r) => rowOrderKey(r, desk), order.rows, cloudOnly)
+  return stableOrder(groups, (g) => g.orderKey, order.groups, (g) => g.rows.every(cloudOnly))
+}
+
+/**
+ * What the cloud list adds to the saved order, at its end (sidebar/logic.ts recordOrder), the way the desk
+ * list adds what it shows at the top: its rows the desk list does not list, and its groups holding none
+ * the desk list does, as shown. Recorded once, they keep their places when new rows come.
+ */
+export function cloudOnlyKeys(groups: CloudGroup[], desk: ReadonlyMap<string, DeskPlace>): SidebarOrder {
+  const cloudOnly = (r: CloudSession) => !desk.has(r.id)
+  return {
+    groups: groups.filter((g) => g.rows.every(cloudOnly)).map((g) => g.orderKey),
+    rows: groups.flatMap((g) => g.rows.filter(cloudOnly).map((r) => r.id))
+  }
 }
 
 /** A filter's right-hand text in the menu: All, None, the one name, or the first and a count. */

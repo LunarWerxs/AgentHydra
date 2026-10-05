@@ -3,6 +3,8 @@ import type {
   ChatSummary,
   TranscriptItem,
   ExternalSession,
+  HomeStats,
+  HomeStatsRange,
   CliMayteWorker,
   AccountInfo,
   AccountRef,
@@ -33,7 +35,7 @@ import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId
 import { saveDraft } from '@/components/composer/logic'
 import { reloadIfStale, watchBundle } from '@/lib/stale-bundle'
 import { rememberView, restoreView } from '@/lib/view-memory'
-import { readListCache, writeCache } from '@/lib/list-cache'
+import { readCache, readListCache, writeCache } from '@/lib/list-cache'
 import { wantsDesktopNotice } from './notify'
 import { reportAtPaint, reportTiming } from '@/lib/timing'
 
@@ -706,6 +708,18 @@ export function useDesk() {
       } finally {
         if (searchAbort === ctl) searchAbort = null
       }
+    },
+
+    /** The stats card's figures over every source AgentHydra counts; each range's answer is kept in this browser. */
+    async homeStats(range: HomeStatsRange): Promise<HomeStats> {
+      const stats = await fetchJson<HomeStats>(`/stats/home?range=${range}`)
+      writeCache(`home-stats.${range}`, stats)
+      return stats
+    },
+    /** The answer kept for the range, or null (none yet, or another build's shape). */
+    cachedHomeStats(range: HomeStatsRange): HomeStats | null {
+      const kept = readCache<HomeStats>(`home-stats.${range}`)
+      return kept?.range === range && Array.isArray(kept.heat) && Array.isArray(kept.sources) && Array.isArray(kept.missing) ? kept : null
     },
 
     async loadItems(chatId: string): Promise<TranscriptItem[]> {

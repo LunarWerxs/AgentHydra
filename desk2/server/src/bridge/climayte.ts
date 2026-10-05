@@ -27,15 +27,39 @@ export function workerAccountLabel(w: Pick<AhWorker, 'account'>): string | null 
   return m ? m[0] : w.account
 }
 
+type WaveMember = { id: string; kind?: string | null; wave?: string | null }
+
+/** Each wave's manager (its worker of kind 'manage'), by wave id, among one PC's workers. */
+function waveManagers<T extends WaveMember>(list: Iterable<T>): Map<string, T> {
+  const out = new Map<string, T>()
+  for (const w of list) if (w.kind === 'manage' && w.wave) out.set(w.wave, w)
+  return out
+}
+
+/**
+ * The manager a wave's task answers to. AgentHydra dispatches a wave's tasks with no origin, only their
+ * `wave`, so without this they sit under no chat (owner, 2026-10-04: "I was hoping you'd stick the
+ * climayte chats as sub items in the HD2 sidebar. Under the chat which spawned them").
+ */
+function managerOf<T extends WaveMember>(w: WaveMember, managers: ReadonlyMap<string, T>): T | undefined {
+  if (!w.wave || w.kind === 'manage') return undefined
+  const m = managers.get(w.wave)
+  return m && m.id !== w.id ? m : undefined
+}
+
 /**
  * One worker. `originSessionId` is the dispatching chat's session: AgentHydra stores it as
  * `origin: { kind: 'chat', sessionId }`; a worker dispatched by another worker takes that worker's
- * session (looked up in `all`), so its chat's count still finds it through the chain.
+ * session (looked up in `all`), so its chat's count still finds it through the chain. A wave's task,
+ * which has no origin, is dispatched by its wave's manager (`managers`, from waveManagers): the
+ * sidebar nests it under the manager and the chat's count finds it, both from here.
  */
-export function mapWorker(w: AhWorker, all: ReadonlyMap<string, AhWorker>): CliMayteWorker {
+export function mapWorker(w: AhWorker, all: ReadonlyMap<string, AhWorker>, managers: ReadonlyMap<string, AhWorker>): CliMayteWorker {
   let originSessionId: string | null = null
+  let originWorkerId: string | null = null
   if (w.origin?.kind === 'chat') originSessionId = w.origin.sessionId
-  else if (w.origin?.kind === 'worker') originSessionId = all.get(w.origin.workerId)?.sessionId ?? null
+  else originWorkerId = w.origin?.kind === 'worker' ? w.origin.workerId : (managerOf(w, managers)?.id ?? null)
+  if (originWorkerId) originSessionId = all.get(originWorkerId)?.sessionId ?? null
   const active = isActiveWorkerStatus(w.status)
   return {
     id: w.id,
@@ -51,7 +75,7 @@ export function mapWorker(w: AhWorker, all: ReadonlyMap<string, AhWorker>): CliM
     cwd: w.cwd || null,
     sessionId: w.sessionId ?? null,
     originSessionId,
-    originWorkerId: w.origin?.kind === 'worker' ? w.origin.workerId : null,
+    originWorkerId,
     sessions: w.sessions ?? [],
     startedAt: w.createdAt ?? null,
     endedAt: active ? null : (w.updatedAt ?? null),
@@ -76,17 +100,21 @@ export const byRecency = (a: CliMayteWorker, b: CliMayteWorker): number =>
 
 export function mapWorkers(raw: AhWorker[]): CliMayteWorker[] {
   const byId = new Map(raw.map((w) => [w.id, w]))
-  return raw.map((w) => mapWorker(w, byId)).sort(byRecency)
+  const managers = waveManagers(raw)
+  return raw.map((w) => mapWorker(w, byId, managers)).sort(byRecency)
 }
 
 /**
- * One worker of another PC (`pc`: that PC's name). AgentHydra shares no folder, session or origin for it,
- * so it sits under no chat and opens on CliMayte's tab; its account is '#<num>' and never the login's
- * name (often an email).
+ * One worker of another PC (`pc`: that PC's name). AgentHydra shares no folder for it, so it opens on
+ * CliMayte's tab; its account is '#<num>' and never the login's name (often an email). Its session and
+ * origin are its own PC's ids (absent from an older AgentHydra): it sits under the chat that spawned it,
+ * which the chat sync brings here with the same session id, or under a worker of its own PC; a wave's
+ * task goes under that PC's manager of the wave (`managers`, from waveManagers), as this PC's do.
  */
-export function mapRemoteWorker(w: AhRemoteWorker, pc: string): CliMayteWorker {
+export function mapRemoteWorker(w: AhRemoteWorker, pc: string, managers: ReadonlyMap<string, AhRemoteWorker>): CliMayteWorker {
   const active = isActiveWorkerStatus(w.status)
   const num = w.account?.num
+  const manager = w.originSessionId || w.originWorkerId ? undefined : managerOf(w, managers)
   return {
     id: w.id,
     title: w.title,
@@ -99,9 +127,9 @@ export function mapRemoteWorker(w: AhRemoteWorker, pc: string): CliMayteWorker {
     effort: w.effort ?? null,
     kind: w.kind ?? null,
     cwd: null,
-    sessionId: null,
-    originSessionId: null,
-    originWorkerId: null,
+    sessionId: w.sessionId ?? null,
+    originSessionId: w.originSessionId ?? manager?.sessionId ?? null,
+    originWorkerId: w.originWorkerId ?? manager?.id ?? null,
     sessions: [],
     startedAt: w.createdAt ?? null,
     endedAt: active ? null : (w.updatedAt ?? null),
@@ -119,13 +147,16 @@ export function mapRemoteWorker(w: AhRemoteWorker, pc: string): CliMayteWorker {
  * The other PCs' workers: every active one and, unless `all`, only the RECENT_FINISHED newest finished
  * ones, as this PC's list keeps (each PC shares its last day, which can be hundreds). Sharing off, or no
  * answer, is none. A stale PC (off, asleep or not syncing; AgentHydra counts its workers for nothing) is
- * left out: its last snapshot would show its tasks running for as long as it stays away.
+ * left out: its last snapshot would show its tasks running for as long as it stays away. A wave's managers
+ * are found among each PC's whole list, before the finished ones are cut.
  */
 export function mapRemote(answer: AhRemoteQueues | null | undefined, o: { all?: boolean } = {}): CliMayteWorker[] {
   if (!answer?.enabled || !Array.isArray(answer.pcs)) return []
-  const list = answer.pcs.flatMap((p) =>
-    !p.stale && Array.isArray(p.workers) ? p.workers.map((w) => mapRemoteWorker(w, p.name || 'another PC')) : [],
-  )
+  const list = answer.pcs.flatMap((p) => {
+    if (p.stale || !Array.isArray(p.workers)) return []
+    const managers = waveManagers(p.workers)
+    return p.workers.map((w) => mapRemoteWorker(w, p.name || 'another PC', managers))
+  })
   const finished = list.filter((w) => !w.active).sort(byRecency)
   return [...list.filter((w) => w.active), ...(o.all ? finished : finished.slice(0, RECENT_FINISHED))].sort(byRecency)
 }

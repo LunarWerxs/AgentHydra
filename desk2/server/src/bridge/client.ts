@@ -164,7 +164,10 @@ export interface AhWorker {
   attempts?: { account: { id: string; num: number | null; name: string }; outcome: string; tokens?: AhTokens }[]
   used?: { pct: number }
   verdicts?: { verdict: 'pass' | 'fail' | null }[]
+  /** Absent on a wave's tasks: AgentHydra dispatches them with no origin, only their `wave`. */
   origin?: { kind: 'chat'; sessionId: string } | { kind: 'worker'; workerId: string }
+  /** The wave it belongs to: a task of it, or (kind 'manage') the wave's manager. */
+  wave?: string | null
 }
 
 /** GET /api/corch/workers/:id: the view plus its last 60 event lines (summarizeEvent). */
@@ -172,7 +175,9 @@ export type AhWorkerDetail = AhWorker & { events: string[] }
 
 /**
  * One worker of another PC's shared queue (climayte-queue-sync.ts reduce()). It deliberately carries no
- * prompt, folder, session or origin; `account.name` is often the login's email and is never shown.
+ * prompt or folder; `account.name` is often the login's email and is never shown. Its session, origin
+ * (the chat's session, or the worker and that worker's session) and wave are ids on its own PC, absent
+ * from an AgentHydra older than 2026-10-04.
  */
 export interface AhRemoteWorker {
   id: string
@@ -190,6 +195,10 @@ export interface AhRemoteWorker {
   lastActivity: string | null
   error: string | null
   verdict: 'pass' | 'fail' | null
+  sessionId?: string | null
+  originSessionId?: string | null
+  originWorkerId?: string | null
+  wave?: string | null
 }
 
 /** GET /api/corch/remote: the other PCs' queues, as the last poll of the shared store found them. */
@@ -236,6 +245,59 @@ export interface AhSearchAnswer {
   conversationOnly: boolean
   budgetExhausted: boolean
   limitReached: boolean
+}
+
+/** The home stats reads can take seconds while AgentHydra warms its store (the spend report reads every session). */
+export const STATS_TIMEOUT_MS = 15_000
+
+/** AgentHydra's four token figures (TokenBreakdown): `input` is uncached input on every provider. */
+export interface AhTokenBreakdown {
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+  total: number
+}
+
+/** One row of a spend report (SpendBucket, trimmed); `tokens` is set per model, source and day. */
+export interface AhSpendBucket {
+  key: string
+  costUsd: number | null
+  sessions: number
+  turns: number
+  tokens?: AhTokenBreakdown
+}
+
+/** GET /api/analytics/spend (SpendReport, trimmed). `byDay` keys are local days (YYYY-MM-DD), quiet days left out. */
+export interface AhSpendReport {
+  totalCostUsd: number | null
+  tokens: AhTokenBreakdown
+  sessions: number
+  calls: number
+  byModel: AhSpendBucket[]
+  byDay: AhSpendBucket[]
+  bySource: AhSpendBucket[]
+  pricesAsOf: string
+  coverage: { sessions: number; total: number; refreshing: boolean }
+}
+
+/** GET /api/analytics/activity (ActivityReport, trimmed): `hours` is 168 slots, Sunday 00:00 first, the PC's local time. */
+export interface AhActivityReport {
+  hours: number[]
+  agentMinutes: number
+}
+
+/** GET /api/corch/totals (climayte-totals.ts, trimmed): what CliMayte ran, since `since` when given. */
+export interface AhCorchTotals {
+  tasks: number
+  sessions: number
+  costUsd: number
+  limitHits: number
+}
+
+/** GET /api/hswarm/api/stats (HSwarm's own stats through AgentHydra's proxy, trimmed). */
+export interface AhHswarmStats {
+  total: { tasks: number; saved_usd: number }
 }
 
 // --- the client ----------------------------------------------------------------------------------
@@ -353,6 +415,14 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** `cwd`: the folder the chat moved to; the worker's next launch copies its session there and resumes there. */
     sendToWorker: (id: string, text: string, cwd?: string) =>
       post<{ ok: boolean; message: string }>(`/api/corch/workers/${enc(id)}/send`, cwd ? { text, cwd } : { text }),
+    /** AgentHydra's spend report over `period` (all, 30d, 7d): sessions, turns, tokens and dollars per source, model and day. */
+    spend: (period: string) => get<AhSpendReport>(`/api/analytics/spend?period=${enc(period)}`, STATS_TIMEOUT_MS),
+    activity: (period: string) => get<AhActivityReport>(`/api/analytics/activity?period=${enc(period)}`, STATS_TIMEOUT_MS),
+    /** CliMayte's totals; `since` (epoch ms) scopes them to the tasks since then, else every task on record. */
+    corchTotals: (since?: number) =>
+      get<AhCorchTotals>(`/api/corch/totals${since === undefined ? '' : `?since=${enc(new Date(since).toISOString())}`}`, STATS_TIMEOUT_MS),
+    /** HSwarm's own stats over the last `days` days; its proxy errors while HSwarm is down. */
+    hswarmStats: (days: number) => get<AhHswarmStats>(`/api/hswarm/api/stats?days=${days}`, STATS_TIMEOUT_MS),
   }
 }
 

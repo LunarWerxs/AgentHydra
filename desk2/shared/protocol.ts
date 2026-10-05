@@ -326,8 +326,9 @@ export interface CliMayteWorker {
   error: string | null
   /**
    * The other PC's name when the worker runs there (AgentHydra's shared queue, GET /api/corch/remote);
-   * absent or null = this PC. Such a worker has no folder, session or origin, its id may equal one of this
-   * PC's, and nothing here can cancel it or send to it: the window keeps it apart from this PC's workers.
+   * absent or null = this PC. Such a worker has no folder, and its session and origin are only ids that
+   * PC shared (a snapshot from an older AgentHydra has neither); its id may equal one of this PC's, and
+   * nothing here can cancel it or send to it: the window keeps it apart from this PC's workers.
    */
   pc?: string | null
 }
@@ -601,4 +602,60 @@ export interface FailuresResponse {
   byAccount: Record<string, number>
   /** Keyed by local day, YYYY-MM-DD. */
   byDay: Record<string, number>
+}
+
+export type HomeStatsRange = 'all' | '30d' | '7d'
+
+/** A part of the card that did not answer: the card shows a dash for it with `reason` as its tooltip. */
+export interface HomeStatsMissing {
+  part: 'activity' | 'climayte' | 'hswarm'
+  reason: string
+}
+
+/** One of AgentHydra's sources (desktop, cli, climayte, hswarm, codex, opencode, dsh, hermes). */
+export interface HomeStatsSource {
+  key: string
+  /** 'Claude desktop', 'CliMayte', ...; a source the server does not know keeps its key. */
+  label: string
+  sessions: number
+  messages: number
+  tokens: number
+  costUsd: number | null
+}
+
+/**
+ * GET /api/stats/home?range=: the home screen's stats card over every source AgentHydra counts (owner,
+ * 2026-10-04: "the overview screen needs to display full consolidated stats from all sources"). From
+ * AgentHydra's spend and activity reports, CliMayte's totals and HSwarm's stats; a part that failed is
+ * null and named in `missing`, never 0.
+ */
+export interface HomeStats {
+  range: HomeStatsRange
+  sessions: number
+  /** Model turns. */
+  messages: number
+  /** `input` is uncached input; total = input + cacheRead + cacheWrite + output. */
+  tokens: { input: number; cacheRead: number; cacheWrite: number; output: number; total: number }
+  /** At API rates; null when AgentHydra could not price it. */
+  costUsd: number | null
+  /** The date the prices behind `costUsd` were last known good. */
+  pricesAsOf: string | null
+  activeDays: number
+  /** The busiest hour of the day, '1 PM' (the PC's local time); null when the activity report is missing or quiet. */
+  peakHour: string | null
+  /** The raw model id with the most sessions ('claude-opus-5-5'). */
+  favoriteModel: string | null
+  /** Engaged agent time; null when the activity report is missing. */
+  agentMinutes: number | null
+  /** 27 weeks x 7 days of levels 0-4, oldest first, ending today: the card's activity grid. */
+  heat: number[]
+  /** Most tokens first. */
+  sources: HomeStatsSource[]
+  /** Raw model ids, most sessions first. */
+  models: { key: string; sessions: number }[]
+  climayte: { tasks: number; sessions: number; costUsd: number; limitHits: number } | null
+  hswarm: { tasks: number; savedUsd: number } | null
+  /** How much of the store AgentHydra has read: while `refreshing` the figures still grow. */
+  coverage: { sessions: number; total: number; refreshing: boolean }
+  missing: HomeStatsMissing[]
 }

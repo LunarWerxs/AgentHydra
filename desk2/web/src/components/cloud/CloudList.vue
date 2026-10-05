@@ -7,15 +7,18 @@ import { Tip } from '@/components/ui/tooltip'
 import { relativeTime } from '@/components/sidebar/search'
 import TaskRows from '@/components/sidebar/TaskRows.vue'
 import type { TaskNode } from '@/components/sidebar/tasks'
-import { fromPcLabel, modelName, pcOf, SOURCE_LABELS, sessionShape, SHAPE_LABELS, type CloudSource } from './logic'
+import { cloudOnlyLabel, fromPcLabel, modelName, originLabel, sessionShape, SHAPE_LABELS } from './logic'
 import { useCloud } from './store'
 
 // Hydra Desk 2's cloud list, in the sidebar in place of the desk list: every session AgentHydra knows,
-// both PCs' (a chat from the other PC carries its name), grouped by folder like the desk list. A row
-// opens the session (Sidebar decides where: the outside-session view, or AgentHydra while it is open); in
-// select mode it ticks instead. No title or counts over it: the chrome bar's blue cloud says which list this
-// is (Michael, 2026-10-04). The search and filter buttons (the `tools` slot) sit at the right end of the
-// first folder's header, as on the desk list, or alone in a header while there is no folder to show.
+// both PCs' (a chat from the other PC carries its name), plus every one the desk list shows, in the desk
+// list's groups and order (one saved order for both, sidebar/order.ts; logic.ts groupCloud), so the cloud
+// button moves nothing. The rows only this list has follow the desk's in their group, each leading with a
+// cloud (owner, 2026-10-04: "they change order and none display a cloud icon"). A row opens the session
+// (Sidebar decides where: the outside-session view, or AgentHydra while it is open); in select mode it
+// ticks instead. No title or counts over it: the chrome bar's blue cloud says which list this is (Michael,
+// 2026-10-04). The search and filter buttons (the `tools` slot) sit at the right end of the first folder's
+// header, as on the desk list, or alone in a header while there is no folder to show.
 const props = defineProps<{
   selectedId: string | null
   /** With the chrome bar's CliMayte button on: the tasks a row handed out, listed under it (sidebar/tasks.ts). */
@@ -39,15 +42,16 @@ onBeforeUnmount(() => timer && clearInterval(timer))
 const thisPc = computed(() => cloud.thisPc.value)
 /** The other PC's name on a chat the chat sync brought from it; null for this PC's rows. */
 const otherPc = (r: CloudSession) => (r.fromPc && r.fromPc !== thisPc.value ? r.fromPc : null)
-const sourceName = (s: string) => SOURCE_LABELS[s as CloudSource] ?? s
 function tooltip(r: CloudSession): string {
   const pc = otherPc(r)
+  // A row made of the desk's facts (AgentHydra's answer left it out) has no count or shape to tell.
+  const size = cloud.fromDesk(r.id) ? 'Listed because the desk list shows it' : `${SHAPE_LABELS[sessionShape(r)]} · ${r.messageCount} messages`
   return [
     r.title,
-    [sourceName(r.source), r.instanceNum !== null ? `#${r.instanceNum}` : r.instance, `on ${pcOf(r, thisPc.value)}`].filter(Boolean).join(' · '),
+    cloud.onDesk(r.id) ? originLabel(r, thisPc.value) : cloudOnlyLabel(r, thisPc.value),
     pc && fromPcLabel(pc),
     [modelName(r.model), r.effort].filter(Boolean).join(' · '),
-    `${SHAPE_LABELS[sessionShape(r)]} · ${r.messageCount} messages${r.archived ? ' · archived' : ''}`,
+    `${size}${r.archived ? ' · archived' : ''}`,
     r.cwd,
     r.lastCwd && `Now in ${r.lastCwd}`
   ]
@@ -115,7 +119,7 @@ const ROW =
             @click="onRow(r)"
             @keydown.enter.self="onRow(r)"
           >
-            <!-- Another PC's chat leads with a cloud, as AgentHydra's Sessions tab draws it (owner, 2026-10-04: "the cloud chats don't have a cloud icon"). -->
+            <!-- A row only this list has leads with a cloud (owner, 2026-10-04: "none display a cloud icon"), and so does another PC's chat, as AgentHydra's Sessions tab draws it (owner, 2026-10-04: "the cloud chats don't have a cloud icon"); a row the desk list shows keeps its dot. -->
             <span class="flex size-6 shrink-0 items-center justify-center">
               <span
                 v-if="cloud.selectMode.value"
@@ -124,6 +128,7 @@ const ROW =
               >
                 <svg v-if="cloud.selected.value.has(r.id)" viewBox="0 0 12 12" class="size-2.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 6.2 5 8.5 9.5 3.5" /></svg>
               </span>
+              <Cloud v-else-if="!cloud.onDesk(r.id)" role="img" :aria-label="cloudOnlyLabel(r, thisPc)" class="size-3.5 text-text-muted" />
               <Cloud v-else-if="otherPc(r)" role="img" :aria-label="fromPcLabel(otherPc(r)!)" class="size-3.5 text-text-muted" />
               <span v-else class="size-1.5 rounded-full" :class="r.archived ? 'border border-text-muted' : 'bg-text-muted'" />
             </span>

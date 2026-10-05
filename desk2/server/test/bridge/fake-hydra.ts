@@ -26,12 +26,19 @@ export interface FakeState {
   search: any
   /** What GET /api/corch/remote answers; null answers 404 (an AgentHydra without the route), a string that error with a 500. */
   remote: any
+  /** What the home stats reads answer (spend and activity reports, CliMayte's totals, HSwarm's stats); a string answers that error with a 500. */
+  stats: { spend: any; activity: any; totals: any; hswarm: any }
 }
+
+/** Sessions on the other PC: the chat that started its wave, and that wave's manager. */
+export const REMOTE_SESSIONS = { chat: '00000000-0000-4000-8000-000000000a01', manager: '00000000-0000-4000-8000-000000000a02' }
 
 /**
  * The other PCs' queues in AgentHydra's shape (routes/climayte.ts GET /api/corch/remote), made up: one PC with a
- * running worker whose id repeats one of this PC's, a queued one, and `finished` done ones. The account name is
- * email-shaped on purpose: it must never reach the window.
+ * running wave manager whose id repeats one of this PC's, a queued task of its wave (shared, as AgentHydra
+ * dispatches a wave's tasks, with no origin), and `finished` done ones as an AgentHydra from before 2026-10-04
+ * shared them (no session, origin or wave). The account name is email-shaped on purpose: it must never reach
+ * the window.
  */
 export function remoteAnswer(finished = 0): any {
   const account = { id: 'cli-remote-7', num: 7, name: 'someone@example.com' }
@@ -48,8 +55,10 @@ export function remoteAnswer(finished = 0): any {
         at: NOW,
         stale: false,
         workers: [
-          worker('w-00000001', 'running', NOW - 60_000),
-          worker('w-remote-q', 'queued', NOW - 30_000, { account: null }),
+          worker('w-00000001', 'running', NOW - 60_000, {
+            kind: 'manage', wave: 'wv-remote', sessionId: REMOTE_SESSIONS.manager, originSessionId: REMOTE_SESSIONS.chat, originWorkerId: null,
+          }),
+          worker('w-remote-q', 'queued', NOW - 30_000, { account: null, wave: 'wv-remote', sessionId: null, originSessionId: null, originWorkerId: null }),
           ...Array.from({ length: finished }, (_, i) => worker(`w-remote-done-${i}`, 'done', NOW - 3_600_000 - i * 1000, { verdict: 'pass' })),
         ],
         build: null,
@@ -79,6 +88,65 @@ export function searchAnswer(): any {
   }
 }
 
+/** The local day `daysAgo` days before today, as AgentHydra keys its days (YYYY-MM-DD). */
+export function localDay(daysAgo: number): string {
+  const now = new Date()
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysAgo)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * The home stats reads in AgentHydra's shapes (types.ts SpendReport and ActivityReport, climayteTotals, HSwarm's
+ * /api/stats), made up and dated from today. The spend report carries a `rank:` pseudo model with more sessions
+ * than any real one, a source the card does not know, a quiet day and a day older than the activity grid.
+ */
+export function statsAnswers(): FakeState['stats'] {
+  const tokens = (total: number) => ({ input: total / 10, cacheRead: (total * 7) / 10, cacheWrite: total / 10, output: total / 10, total })
+  const hours = new Array<number>(168).fill(0)
+  hours[1 * 24 + 14] = 5 // Monday 2 PM
+  hours[3 * 24 + 14] = 4 // Wednesday 2 PM
+  hours[2 * 24 + 9] = 7 // Tuesday 9 AM: the busiest slot, but 2 PM is the busiest hour over the week
+  return {
+    spend: {
+      from: null,
+      to: null,
+      totalCostUsd: 1234.5,
+      totalWeighted: 0,
+      tokens: { input: 1_000_000, cacheRead: 40_000_000, cacheWrite: 2_000_000, output: 500_000, total: 43_500_000 },
+      sessions: 60,
+      calls: 900,
+      byProvider: [],
+      byModel: [
+        { key: 'claude-opus-5-5', weighted: 0, costUsd: 1100, sessions: 40, turns: 700, tokens: tokens(40_000_000) },
+        { key: 'rank:claude-opus-5-5-low:direct', weighted: 0, costUsd: 0, sessions: 45, turns: 50, tokens: tokens(0) },
+        { key: 'claude-sonnet-5-5', weighted: 0, costUsd: 120, sessions: 15, turns: 150, tokens: tokens(3_000_000) },
+        { key: 'gpt-6-astra', weighted: 0, costUsd: 14.5, sessions: 5, turns: 50, tokens: tokens(500_000) },
+      ],
+      byProject: [],
+      byDay: [
+        { key: localDay(250), weighted: 0, costUsd: 100, sessions: 0, turns: 200, tokens: tokens(5_000_000) },
+        { key: localDay(5), weighted: 0, costUsd: 0, sessions: 0, turns: 0, tokens: tokens(0) },
+        { key: localDay(2), weighted: 0, costUsd: 300, sessions: 0, turns: 200, tokens: tokens(8_500_000) },
+        { key: localDay(0), weighted: 0, costUsd: 834.5, sessions: 0, turns: 500, tokens: tokens(30_000_000) },
+      ],
+      byAccount: [],
+      bySource: [
+        { key: 'climayte', weighted: 0, costUsd: 400, sessions: 30, turns: 300, tokens: tokens(10_000_000) },
+        { key: 'desktop', weighted: 0, costUsd: 800, sessions: 20, turns: 500, tokens: tokens(30_000_000) },
+        { key: 'newtool', weighted: 0, costUsd: null, sessions: 10, turns: 100, tokens: tokens(3_500_000) },
+      ],
+      unpricedModels: [],
+      pricesAsOf: '2026-10-01',
+      priceSource: 'bundled',
+      coverage: { sessions: 50, total: 60, refreshing: true, bytes: 0 },
+      notes: [],
+    },
+    activity: { hours, tools: [], agentMinutes: 321, health: [], editSurvival: { sessions: 0, average: null, overdue: 0 } },
+    totals: { tasks: 12, sessions: 20, cliSessions: 14, costUsd: 400, limitHits: 2, since: null },
+    hswarm: { source: 'hswarm', empty: false, total: { n: 9, tasks: 77, worker_usd: 1.5, saved_usd: 55.5 }, days: [], today: {} },
+  }
+}
+
 export function freshState(): FakeState {
   return {
     agentStatus: fixture('agent-status'),
@@ -91,6 +159,7 @@ export function freshState(): FakeState {
     tail: fixture('tail'),
     search: searchAnswer(),
     remote: null,
+    stats: statsAnswers(),
   }
 }
 
@@ -173,6 +242,11 @@ export async function startFakeHydra(state: FakeState = freshState()): Promise<F
       if (state.tail?.session_id === id) return json(state.tail)
       return json({ session_id: id, source: '', title: '', cwd: '', events: [], error: 'transcript not found' })
     }
+    const stat = (answer: any) => (typeof answer === 'string' ? json({ error: answer }, 500) : json(answer))
+    if (p === '/api/analytics/spend') return stat(state.stats.spend)
+    if (p === '/api/analytics/activity') return stat(state.stats.activity)
+    if (p === '/api/corch/totals') return stat(state.stats.totals)
+    if (p === '/api/hswarm/api/stats') return stat(state.stats.hswarm)
     return json({ error: 'not found' }, 404)
   }
 

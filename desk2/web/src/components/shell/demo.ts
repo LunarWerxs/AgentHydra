@@ -1,7 +1,7 @@
 // Gallery-only data for the shell: the same folders and rows as the real screenshots
 // (docs/reference/real/sidebar.png), plus one row for each Hydra Desk status cue.
 import { ref } from 'vue'
-import type { AccountInfo, ChatStatus, ChatSummary, DeskSettings, ExternalSession, SearchHit, TranscriptItem } from '@shared/protocol'
+import type { AccountInfo, ChatStatus, ChatSummary, DeskSettings, ExternalSession, HomeStats, HomeStatsRange, SearchHit, TranscriptItem } from '@shared/protocol'
 import { cliMayteWorkerFixtures, settingsFixtures, transcriptFixtures } from '@/dev/fixtures'
 import type { ShellSource } from './source'
 import type { View } from './logic'
@@ -154,6 +154,52 @@ export function demoSearchHits(): SearchHit[] {
   ]
 }
 
+/**
+ * Made-up consolidated figures for the stats card, scaled by range (the real ones are AgentHydra's). 7d leaves
+ * HSwarm out to show a missing part; All is still being read, to show that footer line.
+ */
+export function demoHomeStats(range: HomeStatsRange): HomeStats {
+  const f = range === 'all' ? 1 : range === '30d' ? 0.4 : 0.1
+  const n = (x: number) => Math.round(x * f)
+  const sources = [
+    { key: 'desktop', label: 'Claude desktop', sessions: n(1800), messages: n(410_000), tokens: n(120e9), costUsd: n(42_000) },
+    { key: 'climayte', label: 'CliMayte', sessions: n(2600), messages: n(96_000), tokens: n(18e9), costUsd: n(9_400) },
+    { key: 'cli', label: 'Claude Code CLI', sessions: n(240), messages: n(30_000), tokens: n(9e9), costUsd: n(3_700) },
+    { key: 'hswarm', label: 'HSwarm', sessions: n(1100), messages: n(61_000), tokens: n(6e9), costUsd: n(5_100) },
+    { key: 'opencode', label: 'OpenCode', sessions: n(12), messages: n(40), tokens: n(1.1e9), costUsd: n(20) },
+    { key: 'codex', label: 'Codex', sessions: n(60), messages: n(4_000), tokens: n(0.9e9), costUsd: n(700) }
+  ]
+  const sum = (pick: (s: (typeof sources)[number]) => number) => sources.reduce((t, s) => t + pick(s), 0)
+  const total = sum((s) => s.tokens)
+  const parts = { input: Math.round(total * 0.03), cacheRead: Math.round(total * 0.94), cacheWrite: Math.round(total * 0.02) }
+  const days = range === 'all' ? 189 : range === '30d' ? 30 : 7
+  const heat = Array.from({ length: 189 }, (_, i) => (i < 189 - days ? 0 : [0, 1, 2, 1, 3, 4, 2][i % 7]!))
+  return {
+    range,
+    sessions: sum((s) => s.sessions),
+    messages: sum((s) => s.messages),
+    tokens: { ...parts, output: total - parts.input - parts.cacheRead - parts.cacheWrite, total },
+    costUsd: sum((s) => s.costUsd),
+    pricesAsOf: '2026-10-01',
+    activeDays: heat.filter((l) => l > 0).length,
+    peakHour: '2 PM',
+    favoriteModel: 'claude-opus-5-5',
+    agentMinutes: n(90_000),
+    heat,
+    sources,
+    models: [
+      { key: 'claude-opus-5-5', sessions: n(3100) },
+      { key: 'claude-sonnet-5-5', sessions: n(2200) },
+      { key: 'claude-opus-5-5-20260901', sessions: n(300) },
+      { key: 'gpt-6-astra', sessions: n(60) }
+    ],
+    climayte: { tasks: n(1700), sessions: n(3200), costUsd: n(9_400), limitHits: n(40) },
+    hswarm: range === '7d' ? null : { tasks: n(5200), savedUsd: n(2_300) },
+    coverage: { sessions: range === 'all' ? 5200 : 5800, total: 5800, refreshing: range === 'all' },
+    missing: range === '7d' ? [{ part: 'hswarm', reason: 'HSwarm did not answer (the Gallery leaves it out on 7d)' }] : []
+  }
+}
+
 /** A ShellSource over local refs: select, rename, pin, archive and delete all work in the Gallery. */
 export function demoSource(start: View = { kind: 'chat', id: 'ccd' }): ShellSource {
   const chats = ref<ChatSummary[]>(demoChats())
@@ -210,6 +256,11 @@ export function demoSource(start: View = { kind: 'chat', id: 'ccd' }): ShellSour
       await new Promise((r) => setTimeout(r, 300))
       const words = query.toLowerCase().split(/\s+/).filter(Boolean)
       return demoSearchHits().filter((h) => words.every((w) => `${h.title} ${h.snippet}`.toLowerCase().includes(w)))
+    },
+    // The Gallery keeps nothing in the browser: its figures must never land in the live app's cache.
+    homeStats: async (range) => {
+      await new Promise((r) => setTimeout(r, 300))
+      return demoHomeStats(range)
     }
   }
 }
