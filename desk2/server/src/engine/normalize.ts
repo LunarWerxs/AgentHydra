@@ -217,6 +217,10 @@ function todosFrom(input: Loose): TodoEntry[] | null {
   return out
 }
 
+/** How many tool items (results up to 20,000 chars each) and assistant message counts a normalizer keeps for later lookups. */
+const MAX_KEPT_TOOLS = 200
+const MAX_KEPT_MESSAGES = 500
+
 export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
   const now = opts.now ?? Date.now
   const formatTime = opts.formatTime ?? ((ms: number) => new Date(ms).toLocaleString())
@@ -236,6 +240,18 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
   let activity: string | null = null
   let interruptedTurn = false
   let limitedTurn = false
+
+  // A runtime lives for days: the tools and message counts kept are the newest ones. A tool still running is never dropped.
+  function prune() {
+    for (const [id, t] of tools) {
+      if (tools.size <= MAX_KEPT_TOOLS) break
+      if (t.status !== 'running') tools.delete(id)
+    }
+    for (const id of blockCount.keys()) {
+      if (blockCount.size <= MAX_KEPT_MESSAGES) break
+      blockCount.delete(id)
+    }
+  }
 
   function withParent<T extends TranscriptItem>(item: T, parent: string | null | undefined): T {
     if (parent) item.parentToolUseId = parent
@@ -352,6 +368,7 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
           parent,
         )
         tools.set(id, item)
+        prune()
         out.push({ type: 'upsert', item })
         if (name === 'TodoWrite') {
           const todos = todosFrom(input)

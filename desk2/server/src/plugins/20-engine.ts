@@ -36,6 +36,21 @@ import { RecentFolders } from '../folders/recent'
 /** How often climayteActive is re-read from the bridge poller's last worker list. */
 const CLIMAYTE_REFRESH_MS = 3000
 
+/** The items one JSON line each, written out a few hundred at a time instead of built as one string. */
+function jsonlStream(items: readonly unknown[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder()
+  let next = 0
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (next >= items.length) return controller.close()
+      const end = Math.min(items.length, next + 200)
+      let chunk = ''
+      for (; next < end; next++) chunk += JSON.stringify(items[next]) + '\n'
+      controller.enqueue(encoder.encode(chunk))
+    },
+  })
+}
+
 async function body(c: Context): Promise<unknown> {
   try {
     return await c.req.json()
@@ -146,7 +161,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     try {
       await manager.syncWorkers(id)
       const items = manager.listItems(id)
-      if (c.req.query('format') === 'jsonl') return c.body(items.map((i) => JSON.stringify(i)).join('\n') + (items.length ? '\n' : ''), 200, { 'content-type': 'application/x-ndjson; charset=utf-8' })
+      if (c.req.query('format') === 'jsonl') return c.body(jsonlStream(items), 200, { 'content-type': 'application/x-ndjson; charset=utf-8' })
       return c.json(items)
     } catch (err) {
       if (err instanceof ChatError) return c.json({ error: err.message }, err.status)
