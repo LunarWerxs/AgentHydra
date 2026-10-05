@@ -23,7 +23,7 @@ from . import shared
 _INSTANCE_RX = re.compile(r"[\\/]\.claude-instances[\\/]([^\\/]+)")
 TAIL_BYTES = 262_144  # the last assistant turn is always within the last quarter megabyte of a live transcript
 
-FIELDS = ("instance", "session_id", "chat_id", "entrypoint", "cwd", "parent_pid", "argv", "label", "model")
+FIELDS = ("instance", "session_id", "chat_id", "entrypoint", "cwd", "parent_pid", "argv", "label", "model", "climayte_worker")
 
 
 def _model_in_transcript(path) -> str:
@@ -86,7 +86,8 @@ def detect(label: str = "", argv: list[str] | None = None) -> dict:
         r = shared.REQUEST.get() or {}
         session_id = r.get("session") or ""
         return {"instance": r.get("instance") or "", "session_id": session_id, "chat_id": r.get("chat") or "", "entrypoint": "mcp-http",
-                "cwd": r.get("cwd") or "", "parent_pid": 0, "argv": "", "label": label or "", "model": session_model(session_id)}
+                "cwd": r.get("cwd") or "", "parent_pid": 0, "argv": "", "label": label or "", "model": session_model(session_id),
+                "climayte_worker": bool(r.get("climayte_worker"))}
     env = os.environ
     execpath = env.get("CLAUDE_CODE_EXECPATH") or env.get("CLAUDE_CONFIG_DIR") or ""
     instance = _instance_of(execpath)
@@ -102,6 +103,7 @@ def detect(label: str = "", argv: list[str] | None = None) -> dict:
         "argv": args,
         "label": label or "",
         "model": session_model(session_id),
+        "climayte_worker": bool(env.get("AGENTHYDRA_CLIMAYTE_WORKER")),
     }
 
 

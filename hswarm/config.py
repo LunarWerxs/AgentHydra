@@ -273,7 +273,12 @@ _PRICE_ROUTING_DEFAULT = (os.environ.get("HSWARM_PRICE_ROUTING") or "on").strip(
 PRICE_ROUTING = _PRICE_ROUTING_DEFAULT
 # `route_via_climayte` in settings.toml: ask AgentHydra (POST /api/routing/decide) whether an agentic task should run as a
 # CliMayte worker on the owner's Claude subscription instead of its API route (climayte_route.py). On by default.
+# A LOCAL opt-out ANDed with AgentHydra's own routing switch (settings.enabled of /api/routing/cost-model): both must be on.
 ROUTE_VIA_CLIMAYTE = True
+# `route_via_climayte_max`: tasks routed to CliMayte at once across the server process; a task over it takes its API route
+# without asking. `route_via_climayte_start_s`: a worker not running by then is cancelled and the task runs on its API route.
+ROUTE_VIA_CLIMAYTE_MAX = 4
+ROUTE_VIA_CLIMAYTE_START_S = 90.0
 
 _CORES = os.cpu_count() or 4
 # Process discipline (owner, Michael, 2026-09-15: "make sure we don't end up spinning up a billion sub
@@ -433,7 +438,7 @@ def _inherit() -> None:
 
 
 def _apply_settings(doc: dict) -> None:
-    global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE
+    global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     cap = doc.get("daily_cap_usd")
     if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0:
         DAILY_CAP_USD = float(cap)
@@ -441,6 +446,11 @@ def _apply_settings(doc: dict) -> None:
         PRICE_ROUTING = doc["routing"]
     if isinstance(doc.get("route_via_climayte"), bool):
         ROUTE_VIA_CLIMAYTE = doc["route_via_climayte"]
+    mx, st = doc.get("route_via_climayte_max"), doc.get("route_via_climayte_start_s")
+    if isinstance(mx, int) and not isinstance(mx, bool) and mx >= 0:
+        ROUTE_VIA_CLIMAYTE_MAX = mx
+    if isinstance(st, (int, float)) and not isinstance(st, bool) and st > 0:
+        ROUTE_VIA_CLIMAYTE_START_S = float(st)
     bias = doc.get("load_bias")
     if isinstance(bias, (int, float)) and not isinstance(bias, bool) and bias >= 0:
         LOAD_BIAS = float(bias)
@@ -466,7 +476,7 @@ _BUILTIN_DOCS = _builtins()
 
 
 def _reset() -> None:
-    global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE
+    global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     for table in (PROVIDERS, MODELS, ALIASES, ROUTES, ROUTES_CC, DISABLED_MODELS, PRIORITY, ROLES):
         table.clear()
     ROLES.update(_ROLES_DEFAULT)
@@ -474,7 +484,7 @@ def _reset() -> None:
     # Reset with everything else: a settings file that says nothing about routing must not leave a
     # `routing = false` from a PREVIOUS read standing (it did until 2026-09-17).
     PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD = _PRICE_ROUTING_DEFAULT, _LOAD_BIAS_DEFAULT, None
-    ROUTE_VIA_CLIMAYTE = True
+    ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S = True, 4, 90.0
     for name, doc in _BUILTIN_DOCS:
         _add_provider(name, doc, user=False)
 

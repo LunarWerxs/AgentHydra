@@ -37,8 +37,10 @@ class _Api:
 class _Fake:
     """A fake AgentHydra: /api/routing/decide, POST /api/corch/workers, GET /api/corch/workers/:id."""
 
-    def __init__(self, route="subscription", worker=None, delay=0.0, decide_status=200):
-        self.route, self.delay, self.decide_status = route, delay, decide_status
+    def __init__(self, route="subscription", worker=None, delay=0.0, decide_status=200, enabled=True, running_for=0.0):
+        self.route, self.delay, self.decide_status, self.enabled = route, delay, decide_status, enabled
+        self.running_for, self.t0 = running_for, time.monotonic()
+        self.cancelled: list[str] = []
         self.worker = worker or {"status": "done", "result": "worker report", "reportedModel": "claude-sonnet-5-5"}
         self.decides: list[dict] = []
         self.dispatched: list[dict] = []
@@ -65,10 +67,17 @@ class _Fake:
                 if self.path == "/api/corch/workers":
                     fake.dispatched.append(body)
                     return self._send(200, {"group": body.get("group"), "workers": [{"id": "w1"}]})
+                if self.path == "/api/corch/cancel":
+                    fake.cancelled.append(body.get("id"))
+                    return self._send(200, {"ok": True})
                 self._send(404, {})
 
             def do_GET(self):
+                if self.path == "/api/routing/cost-model":
+                    return self._send(200, {"settings": {"enabled": fake.enabled}})
                 if self.path == "/api/corch/workers/w1":
+                    if time.monotonic() - fake.t0 < fake.running_for:
+                        return self._send(200, {"id": "w1", "status": "running"})
                     return self._send(200, {"id": "w1", **fake.worker})
                 self._send(404, {})
 
@@ -90,6 +99,8 @@ def fake(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "LEDGER", tmp_path / "ledger.jsonl")
     monkeypatch.setattr(climayte_route, "POLL_S", 0.01)
     monkeypatch.setattr(climayte_route, "_LOGGED", set())
+    monkeypatch.setattr(climayte_route, "_ACTIVE", 0)
+    monkeypatch.setattr(climayte_route, "_SWITCH", {"at": -1e9, "on": True})
     made: list[_Fake] = []
 
     def make(**kw):
@@ -103,14 +114,15 @@ def fake(monkeypatch, tmp_path):
         f.close()
 
 
-def _run(tmp_path, tools="read", schema=None, timeout_s=30):
+def _run(tmp_path, tools="read", schema=None, timeout_s=30, n=1):
     api = _Api()
-    spec = {"id": "t0", "prompt": "look at it", "cwd": str(tmp_path), "tools": tools, "model": "deepseek-flash", "timeout_s": timeout_s}
+    specs = [{"id": f"t{i}", "prompt": "look at it", "cwd": str(tmp_path), "tools": tools, "model": "deepseek-flash", "timeout_s": timeout_s} for i in range(n)]
     if schema:
-        spec["schema"] = schema
+        for spec in specs:
+            spec["schema"] = schema
 
     async def go():
-        return await JobManager(client=api).run_batch([Task.from_dict(spec, {}, 0)], concurrency=1)
+        return await JobManager(client=api).run_batch([Task.from_dict(spec, {}, i) for i, spec in enumerate(specs)], concurrency=n)
 
     job = asyncio.run(go())
     return job, job.results["t0"], api
@@ -191,3 +203,44 @@ def test_an_api_decision_runs_the_api_route_and_says_so(fake, tmp_path):
     _, res, api = _run(tmp_path)
     assert f.dispatched == [] and api.calls == 1
     assert res.selection["route"] == {"via": "api", "decided": "api", "why": "cheaper on the plan"}
+
+
+def test_a_request_carrying_the_worker_header_is_never_routed(fake, tmp_path):
+    from hswarm import shared
+
+    f = fake()
+    tok = shared.REQUEST.set({"climayte_worker": "1"})
+    try:
+        _, res, api = _run(tmp_path)
+    finally:
+        shared.REQUEST.reset(tok)
+    assert f.decides == [] and res.answer == "api route" and api.calls == 1
+
+
+def test_over_the_cap_a_task_takes_its_api_route_without_asking(fake, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "ROUTE_VIA_CLIMAYTE_MAX", 4)
+    f = fake(running_for=0.5)
+    job, _, api = _run(tmp_path, n=5)
+    assert len(f.decides) == 4 and len(f.dispatched) == 4 and api.calls == 1
+    assert sorted(r.answer for r in job.results.values()).count("api route") == 1
+
+
+def test_a_worker_still_queued_at_the_start_deadline_is_cancelled_and_the_task_falls_back(fake, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "ROUTE_VIA_CLIMAYTE_START_S", 0.05)
+    f = fake(worker={"status": "queued"})
+    _, res, api = _run(tmp_path)
+    assert f.cancelled == ["w1"] and api.calls == 1
+    assert res.answer == "api route" and res.selection["route"]["climayte_not_started"] == "w1"
+
+
+def test_an_unpriced_model_never_asks(fake, tmp_path, monkeypatch):
+    monkeypatch.setattr(climayte_route, "_usd", lambda model: None)
+    f = fake()
+    _, res, api = _run(tmp_path)
+    assert f.decides == [] and res.answer == "api route" and api.calls == 1
+
+
+def test_agenthydras_switch_off_means_no_decide_call(fake, tmp_path):
+    f = fake(enabled=False)
+    _, res, api = _run(tmp_path)
+    assert f.decides == [] and res.answer == "api route" and api.calls == 1

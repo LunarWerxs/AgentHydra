@@ -51,6 +51,7 @@ SERVING_PORT: int | None = None  # the port this process serves on, when it is t
 REQUEST: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hswarm_request", default=None)
 HEADERS = {"session": "x-hswarm-session", "chat": "x-hswarm-chat", "instance": "x-hswarm-instance", "cwd": "x-hswarm-cwd",
            "mcp_session": "mcp-session-id",
+           "climayte_worker": "x-hswarm-climayte-worker",  # "1" when the calling chat is a CliMayte worker (climayte_route.eligible)
            "envelope": "x-hswarm-envelope"}  # the spawn envelope a cc worker's hswarm runs under (envelope.inherited)
 SHARED_NOTE = (" This is the ONE hswarm server every chat on this machine shares, so it cannot see your folder: give every "
                "task that uses tools or files an ABSOLUTE cwd (your project folder).")
@@ -503,5 +504,7 @@ def connect(port: int = PORT) -> int:
     values = {"cwd": env.get("CLAUDE_PROJECT_DIR") or os.getcwd(), "session": env.get("CLAUDE_CODE_SESSION_ID") or "",
               "chat": env.get("CLAUDE_CODE_HOST_SESSION_ID") or "",
               "instance": _instance_of(env.get("CLAUDE_CODE_EXECPATH") or env.get("CLAUDE_CONFIG_DIR") or "")}
+    if env.get("AGENTHYDRA_CLIMAYTE_WORKER"):
+        values["climayte_worker"] = "1"
     print(json.dumps({HEADERS[k]: quote(v, safe="") for k, v in values.items() if v}))
     return 0

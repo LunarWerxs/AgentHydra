@@ -412,8 +412,15 @@ def set_role(role: str, model: str | None) -> dict:
     return snapshot()
 
 
-def set_options(*, routing: bool | None = None, load_bias: float | None = None, daily_cap_usd=None, route_via_climayte: bool | None = None) -> dict:
-    """daily_cap_usd: a positive number of dollars, or "" / 0 to remove the cap; None leaves it as it is."""
+def set_options(*, routing: bool | None = None, load_bias: float | None = None, daily_cap_usd=None, route_via_climayte: bool | None = None,
+                route_via_climayte_max: int | None = None, route_via_climayte_start_s: float | None = None) -> dict:
+    """daily_cap_usd: a positive number of dollars, or "" / 0 to remove the cap; None leaves it as it is.
+    route_via_climayte is a local opt-out ANDed with AgentHydra's own routing switch; _max (0 or more) caps the tasks
+    in CliMayte at once, _start_s (above 0) is how long a worker may wait to start before the task takes its API route."""
+    if route_via_climayte_max is not None and (isinstance(route_via_climayte_max, bool) or not isinstance(route_via_climayte_max, int) or not 0 <= route_via_climayte_max <= 1000):
+        raise SettingsError("route_via_climayte_max is a whole number from 0 to 1000")
+    if route_via_climayte_start_s is not None and (isinstance(route_via_climayte_start_s, bool) or not isinstance(route_via_climayte_start_s, (int, float)) or not 0 < route_via_climayte_start_s <= 3600):
+        raise SettingsError("route_via_climayte_start_s is a number of seconds above 0, up to 3600")
     if load_bias is not None and (not isinstance(load_bias, (int, float)) or load_bias < 0 or load_bias > 5):
         raise SettingsError("load_bias is a number from 0 (off) to 5")
     cap = None
@@ -430,6 +437,10 @@ def set_options(*, routing: bool | None = None, load_bias: float | None = None, 
             doc["routing"] = bool(routing)
         if route_via_climayte is not None:
             doc["route_via_climayte"] = bool(route_via_climayte)
+        if route_via_climayte_max is not None:
+            doc["route_via_climayte_max"] = route_via_climayte_max
+        if route_via_climayte_start_s is not None:
+            doc["route_via_climayte_start_s"] = float(route_via_climayte_start_s)
         if load_bias is not None:
             doc["load_bias"] = float(load_bias)
         if cap is not None:
@@ -503,6 +514,7 @@ def snapshot() -> dict:
         "models": [_model_row(n, m, labels, bench) for n, m in listed],
         "priority": dict(config.PRIORITY), "disabled_models": sorted(config.DISABLED_MODELS),
         "roles": dict(sorted(config.ROLES.items())),
-        "options": {"routing": config.PRICE_ROUTING, "route_via_climayte": config.ROUTE_VIA_CLIMAYTE, "load_bias": config.LOAD_BIAS, "daily_cap_usd": config.DAILY_CAP_USD,
+        "options": {"routing": config.PRICE_ROUTING, "route_via_climayte": config.ROUTE_VIA_CLIMAYTE, "route_via_climayte_max": config.ROUTE_VIA_CLIMAYTE_MAX,
+                    "route_via_climayte_start_s": config.ROUTE_VIA_CLIMAYTE_START_S, "load_bias": config.LOAD_BIAS, "daily_cap_usd": config.DAILY_CAP_USD,
                     "concurrency": config.DEFAULT_CONCURRENCY, "max_concurrency": config.MAX_CONCURRENCY},
     }
