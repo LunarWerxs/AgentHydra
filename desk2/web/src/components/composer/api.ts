@@ -11,8 +11,8 @@ export interface FolderListing {
 
 export interface ComposerApi {
   models(): Promise<ModelChoice[]>
-  commands(chatId: string): Promise<SlashCommandInfo[]>
-  git(cwd: string): Promise<GitStatus>
+  commands(chatId: string, signal?: AbortSignal): Promise<SlashCommandInfo[]>
+  git(cwd: string, signal?: AbortSignal): Promise<GitStatus>
   /** The folder menu's Recent list, latest first. */
   recentFolders(): Promise<string[]>
   /** The folder was just chosen: it goes to the top of Recent. Answers the new list. */
@@ -21,7 +21,7 @@ export interface ComposerApi {
   forgetFolder(path: string): Promise<string[]>
   /** Opens Windows' folder dialog (near `current`); the folder chosen, already on Recent, or null when cancelled. */
   pickFolder(current: string | null): Promise<string | null>
-  browse(path?: string): Promise<FolderListing>
+  browse(path?: string, signal?: AbortSignal): Promise<FolderListing>
   accounts(): Promise<AccountInfo[]>
   pickAccount(): Promise<AccountRef>
   /** The MCP servers a chat in `cwd` on the account at `configDir` (null = default login) loads. */
@@ -48,8 +48,8 @@ async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const httpComposerApi: ComposerApi = {
   models: () => getJson('/models'),
-  commands: (chatId) => getJson(`/chats/${encodeURIComponent(chatId)}/commands`),
-  git: (cwd) => getJson(`/git?cwd=${encodeURIComponent(cwd)}`),
+  commands: (chatId, signal) => getJson(`/chats/${encodeURIComponent(chatId)}/commands`, { signal }),
+  git: (cwd, signal) => getJson(`/git?cwd=${encodeURIComponent(cwd)}`, { signal }),
   recentFolders: () => getJson('/folders/recent'),
   rememberFolder: (path) =>
     getJson('/folders/recent', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path }) }),
@@ -62,7 +62,7 @@ export const httpComposerApi: ComposerApi = {
     })
     return res.path
   },
-  browse: (path) => getJson(`/folders/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  browse: (path, signal) => getJson(`/folders/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`, { signal }),
   accounts: () => getJson('/accounts'),
   pickAccount: () => getJson('/accounts/pick'),
   mcpServers: (cwd, configDir) =>

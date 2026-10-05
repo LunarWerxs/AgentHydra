@@ -2,7 +2,7 @@
 // The composer dock, laid out like the real Claude Desktop Code tab (docs/reference/real DESIGN.md
 // "Composer"): 768 wide, gap 6, top to bottom: Hydra Desk's status row (pending, queued;
 // ours), the repo strip, the box, the toolbar row below the box.
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { composerIcons, icons } from '@/lib/icons'
 import type {
   ChatStatus,
@@ -104,7 +104,8 @@ const api = inject(COMPOSER_API, httpComposerApi)
 const storage = typeof localStorage === 'undefined' ? null : localStorage
 
 const text = ref('')
-const images = ref<PendingImage[]>([])
+// Shallow: the pictures hold large base64 strings, so they are replaced, never changed in place, and never walked.
+const images = shallowRef<PendingImage[]>([])
 const notice = ref<string | null>(null)
 const sending = ref(false)
 const dragging = ref(false)
@@ -259,7 +260,7 @@ function onModelKey(e: KeyboardEvent) {
 }
 
 // Repo strip
-const git = ref<GitStatus | null>(null)
+const git = shallowRef<GitStatus | null>(null)
 const dismissedFor = ref<string | null>(null)
 const showStrip = computed(() => !!git.value?.isRepo && dismissedFor.value !== cwd.value)
 
@@ -285,18 +286,27 @@ watch(
     if (id && !props.chat) newAccount.value = id
   }
 )
+// The repo is polled only while the window is shown and focused; a change of folder, a finished turn,
+// and the window coming back refresh it at once.
+const GIT_POLL_MS = 15_000
 let gitTimer: ReturnType<typeof setInterval> | null = null
+let gitRun: AbortController | null = null
 async function refreshGit() {
+  gitRun?.abort()
+  gitRun = null
   const dir = cwd.value
   if (!dir) {
     git.value = null
     return
   }
+  const run = new AbortController()
+  gitRun = run
   try {
-    const g = await api.git(dir)
-    if (dir === cwd.value) git.value = g
+    const g = await api.git(dir, run.signal)
+    // An unchanged answer keeps the object, so nothing that reads it re-renders.
+    if (dir === cwd.value && JSON.stringify(g) !== JSON.stringify(git.value)) git.value = g
   } catch {
-    git.value = null
+    if (!run.signal.aborted) git.value = null
   }
 }
 function openDiff() {
@@ -322,6 +332,7 @@ function showPending() {
 // Slash commands
 const commands = ref<SlashCommandInfo[]>([])
 let commandsFor: string | null = null
+let commandsRun: AbortController | null = null
 const slashIndex = ref(0)
 const slashDismissed = ref(false)
 const query = computed(() => slashQuery(text.value))
@@ -337,11 +348,17 @@ watch(query, async (q) => {
   const id = chatId.value
   if (id && commandsFor !== id) {
     commandsFor = id
+    commandsRun?.abort()
+    const run = new AbortController()
+    commandsRun = run
     try {
-      commands.value = await api.commands(id)
+      const list = await api.commands(id, run.signal)
+      if (!run.signal.aborted) commands.value = list
     } catch {
-      commands.value = []
-      commandsFor = null
+      if (!run.signal.aborted) {
+        commands.value = []
+        commandsFor = null
+      }
     }
   }
 })
@@ -355,6 +372,7 @@ function pickCommand(cmd: SlashCommandInfo | undefined) {
 // @-mentions: changed files from git plus the folder's top-level directories
 const mentionDirs = ref<string[]>([])
 let mentionDirsFor: string | null = null
+let mentionRun: AbortController | null = null
 const mentionIndex = ref(0)
 const mentionDismissed = ref(false)
 const mention = computed(() => mentionQuery(text.value, caret.value))
@@ -376,10 +394,14 @@ watch(
     const dir = cwd.value
     if (dir && mentionDirsFor !== dir) {
       mentionDirsFor = dir
+      mentionRun?.abort()
+      const run = new AbortController()
+      mentionRun = run
       try {
-        mentionDirs.value = (await api.browse(dir)).dirs.map((d) => d + '/')
+        const dirs = (await api.browse(dir, run.signal)).dirs.map((d) => d + '/')
+        if (!run.signal.aborted) mentionDirs.value = dirs
       } catch {
-        mentionDirs.value = []
+        if (!run.signal.aborted) mentionDirs.value = []
       }
     }
   }
@@ -407,8 +429,9 @@ function autoGrow() {
   const el = textarea.value
   if (!el) return
   el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, MAX_TEXT_HEIGHT) + 'px'
-  el.style.overflowY = el.scrollHeight > MAX_TEXT_HEIGHT ? 'auto' : 'hidden'
+  const full = el.scrollHeight
+  el.style.height = Math.min(full, MAX_TEXT_HEIGHT) + 'px'
+  el.style.overflowY = full > MAX_TEXT_HEIGHT ? 'auto' : 'hidden'
 }
 
 // The box's text and pictures are kept per chat, and per folder for a new session (draftSlot): moving to
@@ -432,8 +455,7 @@ watch(
   images,
   (list) => {
     if (!props.demo) saveDraftImages(slot.value, list)
-  },
-  { deep: true }
+  }
 )
 
 watch(
@@ -638,13 +660,16 @@ function addFiles(files: File[]) {
     const reader = new FileReader()
     reader.onload = () => {
       const url = String(reader.result)
-      images.value.push({
-        id: crypto.randomUUID(),
-        name: file.name || 'Pasted image',
-        mediaType: file.type,
-        dataBase64: dataUrlToBase64(url),
-        url
-      })
+      images.value = [
+        ...images.value,
+        {
+          id: crypto.randomUUID(),
+          name: file.name || 'Pasted image',
+          mediaType: file.type,
+          dataBase64: dataUrlToBase64(url),
+          url
+        }
+      ]
     }
     reader.onerror = () => showNotice(`Could not read ${file.name || 'the image'}.`)
     reader.readAsDataURL(file)
@@ -829,6 +854,9 @@ async function submit(ctrl = false) {
 
 // Lifecycle
 watch(cwd, () => refreshGit())
+function onShown() {
+  if (!document.hidden) refreshGit()
+}
 watch(
   () => props.chat?.status,
   (now, before) => {
@@ -857,7 +885,11 @@ onMounted(async () => {
   }
   nextTick(autoGrow)
   refreshGit()
-  gitTimer = setInterval(refreshGit, 5000)
+  gitTimer = setInterval(() => {
+    if (!document.hidden && document.hasFocus()) refreshGit()
+  }, GIT_POLL_MS)
+  window.addEventListener('focus', refreshGit)
+  document.addEventListener('visibilitychange', onShown)
   window.addEventListener('resize', autoGrow)
   loadNewSessionDefaults()
   try {
@@ -873,6 +905,11 @@ defineExpose({ focus: () => textarea.value && holdFocus(textarea.value, document
 
 onBeforeUnmount(() => {
   if (gitTimer) clearInterval(gitTimer)
+  gitRun?.abort()
+  commandsRun?.abort()
+  mentionRun?.abort()
+  window.removeEventListener('focus', refreshGit)
+  document.removeEventListener('visibilitychange', onShown)
   if (draftTimer) {
     clearTimeout(draftTimer)
     if (!props.demo) saveDraft(storage, slot.value, text.value)
