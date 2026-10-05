@@ -31,6 +31,7 @@ import {
   climayteVerdicts,
   climayteWait,
   climayteWave,
+  climayteWaveResolve,
   climayteWaveStart,
   climayteWaves,
   climayteWaveVerify,
@@ -309,6 +310,15 @@ app.post('/api/corch/waves/:id/verify', async (c) => {
   if (typeof body.ok !== 'boolean') return c.json({ error: 'ok (true or false) is required' }, 400)
   const r = climayteWaveVerify(c.req.param('id'), { ok: body.ok, note: body.note })
   return c.json({ ok: r.ok, message: r.message }, r.status as 200 | 404 | 409)
+})
+app.post('/api/corch/waves/:id/tasks/:key/resolve', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.ok !== 'boolean') return c.json({ error: 'ok (true or false) is required' }, 400)
+  const r = climayteWaveResolve(c.req.param('id'), c.req.param('key'), {
+    ok: body.ok,
+    note: body.note,
+  })
+  return c.json({ ok: r.ok, message: r.message }, r.status as 200 | 400 | 404 | 409)
 })
 // What works per kind of task, from every verdict (climayte-scorecard.ts).
 // --- pings to the dispatching chat (climayte-ping.ts) -----------------------------------

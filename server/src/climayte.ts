@@ -2886,6 +2886,13 @@ export function climayteVerdict(
     reason: next ? `sent back on ${configLabel(next)}` : undefined,
   })
   changed(w)
+  if (input.by !== 'wave' && input.by !== 'check') {
+    try {
+      settleKeyOfWorker(w, verdict.verdict === 'pass', note)
+    } catch {
+      // The verdict stands; the key can still be settled with climayte_wave_resolve.
+    }
+  }
   return { ok: true, message, next }
 }
 
@@ -3190,6 +3197,68 @@ export function climayteWaveVerify(
       ? `Wave ${id} verified: ${confirmed} provisional pass(es) confirmed.`
       : `Wave ${id} rejected: no provisional pass confirmed.`,
   }
+}
+
+/** The orchestrator settles one escalated or failed key of a wave: pass -> passed (counts for `after`),
+ *  fail -> failed. The key joins the batch so the manager hears it in its next message. */
+export function climayteWaveResolve(
+  id: string,
+  key: string,
+  input: { ok: unknown; note?: unknown },
+): { ok: boolean; status: number; message: string } {
+  load()
+  const tooLong = verdictNoteTooLong(input.note)
+  if (tooLong) return { ok: false, status: 400, message: tooLong }
+  const ok = input.ok === true
+  const note = typeof input.note === 'string' && input.note.trim() ? input.note.trim() : null
+  const out = climayteWaveEdit(id, (wave) => {
+    const task = wave.tasks.find((t) => t.key === key)
+    if (!task) return { ok: false, status: 404, message: `Wave ${id} has no key ${key}.` }
+    if (task.state !== 'escalated' && task.state !== 'failed')
+      return {
+        ok: false,
+        status: 409,
+        message: `Key ${key} is ${task.state}: only an escalated or failed key can be resolved.`,
+      }
+    settleWaveTask(wave, task, ok, note ?? 'settled by the orchestrator', Date.now())
+    return { ok: true, status: 200, message: `Key ${key} is now ${task.state}.` }
+  })
+  if (out?.ok) queueWaveForTick(id)
+  return out ?? { ok: false, status: 404, message: `No such wave: ${id}` }
+}
+
+/** Set a wave key's state by the orchestrator's word, clear its escalation, and queue it for the manager. */
+function settleWaveTask(
+  wave: CliMayteWave,
+  task: CliMayteWave['tasks'][number],
+  ok: boolean,
+  note: string,
+  now: number,
+): void {
+  task.state = ok ? 'passed' : 'failed'
+  task.proof = { ...(task.proof ?? { check: null, commits: [], paths: null }), note }
+  wave.escalations = wave.escalations.filter((e) => e.key !== task.key)
+  if (!wave.batch.held.includes(task.key)) wave.batch.held.push(task.key)
+  if (wave.batch.since === null) wave.batch.since = now
+  wave.updatedAt = now
+}
+
+/** Hand a just-edited wave to the tick so its batch wakes the manager. */
+function queueWaveForTick(id: string): void {
+  const held = modifiedWaves.get(id)
+  const found = held ?? findWave(id)
+  if (found) modifiedWaves.set(id, found)
+}
+
+/** An orchestrator verdict on the worker of a wave key settles that key too. */
+function settleKeyOfWorker(w: CliMayteWorker, ok: boolean, note: string | null): void {
+  if (!w.wave || w.kind === 'manage') return
+  climayteWaveEdit(w.wave, (wave) => {
+    const task = wave.tasks.find((t) => t.workerId === w.id)
+    if (task && (task.state === 'escalated' || task.state === 'failed'))
+      settleWaveTask(wave, task, ok, note ?? 'settled by the orchestrator verdict', Date.now())
+  })
+  queueWaveForTick(w.wave)
 }
 
 /** What works, per kind of task: every verdict on record summed by setting, with what a task cost

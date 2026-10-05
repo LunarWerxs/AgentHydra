@@ -991,6 +991,32 @@ export const TOOLS: McpEngineTool[] = [
     },
   },
   {
+    name: 'climayte_wave_resolve',
+    description:
+      'MUTATES: settle one ESCALATED or FAILED key of a wave (climayte_manage) that the daemon could not: ok: true makes it passed (it counts for `after` and the manager hears it in its next batch), ok: false makes it failed. climayte_verdict on the worker of that key does the same. Refused for a key in any other state.',
+    inputSchema: S(
+      {
+        wave: { type: 'string' },
+        key: { type: 'string' },
+        ok: { type: 'boolean' },
+        note: { type: 'string' },
+      },
+      ['wave', 'key', 'ok'],
+    ),
+    run: (a) =>
+      api(
+        `/api/corch/waves/${encodeURIComponent(str(a.wave))}/tasks/${encodeURIComponent(str(a.key))}/resolve`,
+        {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            ok: a.ok === true,
+            note: a.note != null ? str(a.note) : undefined,
+          }),
+        },
+      ),
+  },
+  {
     name: 'climayte_wave_verify',
     description:
       'MUTATES: your one verification of a REPORTED wave (climayte_manage), after you ran its `verify` command on the branch head. ok: true confirms every provisional pass so it counts in the scorecard, and records a pass on the manager. ok: false confirms none and fails the manager with `note` (nothing is sent back; record your own fails on the tasks you blame with climayte_verdict). Refused unless the wave is reported.',

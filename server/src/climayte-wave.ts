@@ -245,6 +245,58 @@ function git(cwd: string, args: string[]): { code: number | null; out: string } 
   return { code: r.status, out: (r.stdout ?? '').trim() }
 }
 
+/** How many of the branch's newest commits are searched for a rebased copy of a task's commit. */
+const PATCH_ID_SEARCH = 500
+
+/** The commit among the branch's newest PATCH_ID_SEARCH with the same stable patch-id as `sha`, or null. */
+export function findByPatchId(cwd: string, sha: string, branch: string): string | null {
+  const run = (args: string[], input?: string) => {
+    const r = spawnSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 60_000,
+      maxBuffer: 512 * 1024 * 1024,
+      input,
+    })
+    return r.status === 0 ? (r.stdout ?? '') : ''
+  }
+  const mine = run(['diff-tree', '-p', '--root', sha])
+  const wanted = run(['patch-id', '--stable'], mine).split(/\s+/)[0]
+  if (!wanted) return null
+  const log = run(['log', '-p', '--format=%H', '-n', String(PATCH_ID_SEARCH), branch])
+  for (const line of run(['patch-id', '--stable'], log).split('\n')) {
+    const [pid, commit] = line.trim().split(/\s+/)
+    if (pid === wanted && commit) return commit
+  }
+  return null
+}
+
+/** Files the commits change taken together: a file restored to its original content does not count.
+ *  Judged against `globs`; returns the files outside them. */
+function netOutside(cwd: string, shas: string[], globs: Bun.Glob[]): string[] {
+  const count = (s: string) => Number(git(cwd, ['rev-list', '--count', s]).out) || 0
+  const ordered = [...new Set(shas)].sort((a, b) => count(a) - count(b))
+  const first = ordered[0] as string
+  const last = ordered[ordered.length - 1] as string
+  const touched = new Set<string>()
+  for (const s of ordered)
+    for (const f of git(cwd, ['diff-tree', '--no-commit-id', '--name-only', '-r', '--root', s])
+      .out.split('\n')
+      .map((x) => x.trim())
+      .filter(Boolean))
+      touched.add(f)
+  const hasParent = git(cwd, ['rev-parse', '--verify', '-q', `${first}^`]).code === 0
+  const blob = (rev: string, f: string) => {
+    const r = git(cwd, ['rev-parse', '--verify', '-q', `${rev}:${f}`])
+    return r.code === 0 ? r.out : ''
+  }
+  return [...touched].filter(
+    (f) =>
+      !globs.some((g) => g.match(f)) && (hasParent ? blob(`${first}^`, f) : '') !== blob(last, f),
+  )
+}
+
 export interface WaveJudgement {
   /** `unproven`: nothing a command could check (no check, no commits): no verdict is recorded. */
   verdict: 'pass' | 'fail' | 'unproven'
@@ -270,24 +322,31 @@ export function judgeWaveTask(
     return { verdict: 'fail', note, proof }
   }
   const globs = task.paths.map((p) => new Bun.Glob(p))
+  const resolved: string[] = []
+  const notes: string[] = []
   for (const sha of commits) {
     if (!/^[0-9a-f]{7,40}$/i.test(sha))
       return fail(`\`${sha}\` on the Commits line is not a commit sha.`)
     if (git(wave.cwd, ['cat-file', '-e', `${sha}^{commit}`]).code !== 0)
       return fail(`Commit ${sha} does not exist in ${wave.cwd}.`)
-    if (git(wave.cwd, ['merge-base', '--is-ancestor', sha, wave.branch]).code !== 0)
-      return fail(`Commit ${sha} is not on the branch ${wave.branch}.`)
-    const files = git(wave.cwd, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha])
-      .out.split('\n')
-      .map((f) => f.trim())
-      .filter(Boolean)
-    const outside = files.filter((f) => !globs.some((g) => g.match(f)))
+    if (git(wave.cwd, ['merge-base', '--is-ancestor', sha, wave.branch]).code !== 0) {
+      // Another session's landing tool may have rebased the commit onto the branch: look for it by content.
+      const moved = findByPatchId(wave.cwd, sha, wave.branch)
+      if (!moved) return fail(`Commit ${sha} is not on the branch ${wave.branch}.`)
+      resolved.push(moved)
+      notes.push(`${sha} found on ${wave.branch} as ${moved.slice(0, 10)} after a rebase`)
+      continue
+    }
+    resolved.push(sha)
+  }
+  if (resolved.length) {
+    const outside = netOutside(wave.cwd, resolved, globs)
     if (outside.length) {
       proof.paths = false
       return fail(
         task.paths.length
-          ? `Commit ${sha} touches ${outside.slice(0, 5).join(', ')}, outside the brief's paths (${task.paths.join(', ')}).`
-          : `Commit ${sha} touches ${outside.slice(0, 5).join(', ')}, but this task must not commit.`,
+          ? `The task's commits change ${outside.slice(0, 5).join(', ')} net, outside the brief's paths (${task.paths.join(', ')}).`
+          : `The task's commits change ${outside.slice(0, 5).join(', ')} net, but this task must not commit.`,
       )
     }
     proof.paths = true
@@ -299,6 +358,7 @@ export function judgeWaveTask(
   const parts = [
     checkPassed ? 'the check passed' : '',
     commits.length ? `${commits.length} commit(s) on ${wave.branch} inside the brief's paths` : '',
+    ...notes,
   ]
   proof.note = `Provisional pass: ${parts.filter(Boolean).join('; ')}.`
   return { verdict: 'pass', note: proof.note, proof }

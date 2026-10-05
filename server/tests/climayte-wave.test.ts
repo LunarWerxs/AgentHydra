@@ -12,6 +12,7 @@ import {
   climayteTotals,
   climayteVerdict,
   climayteWait,
+  climayteWaveResolve,
   climayteWaveStart,
   climayteWaveVerify,
   setCliMayteAccountsProvider,
@@ -22,7 +23,14 @@ import { workers as liveWorkers, setSpendKit } from '../src/climayte-core'
 import { MANAGER_CONTEXT_TOKENS } from '../src/climayte-launch'
 import type { CliMayteWave, CliMayteWorker } from '../src/climayte-lib'
 import { OPUS } from '../src/climayte-scorecard'
-import { readWave, waveBatch, waveDone, waveStateText, writeWave } from '../src/climayte-wave'
+import {
+  judgeWaveTask,
+  readWave,
+  waveBatch,
+  waveDone,
+  waveStateText,
+  writeWave,
+} from '../src/climayte-wave'
 import { harnessKit } from './mocks/climayte-kit'
 
 setSpendKit(harnessKit)
@@ -1348,4 +1356,101 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
       note: 'CI red',
     })
   }, 60_000)
+
+  test('resolve turns an escalated key into passed and unblocks a key that waits on it', () => {
+    const r = start()
+    const w = readWave(acct, r.wave) as CliMayteWave
+    const a = w.tasks.find((x) => x.key === 'a') as CliMayteWave['tasks'][number]
+    a.state = 'escalated'
+    w.escalations.push({ key: 'a', reason: 'unproven: example', at: Date.now() })
+    writeWave(acct, w)
+    expect(climayteWaveResolve(r.wave, 'b', { ok: true }).status).toBe(409)
+    expect(climayteWaveResolve(r.wave, 'zz', { ok: true }).status).toBe(404)
+    expect(climayteWaveResolve(r.wave, 'a', { ok: true, note: 'checked by hand' })).toMatchObject({
+      ok: true,
+      status: 200,
+    })
+    const after = readWave(acct, r.wave) as CliMayteWave
+    expect(after.tasks.find((x) => x.key === 'a')?.state).toBe('passed')
+    expect(after.escalations.some((e) => e.key === 'a')).toBe(false)
+    expect(after.batch.held).toContain('a')
+    // `c` waits on `a`: the state text now marks it ready.
+    expect(waveStateText(after, new Map())).toContain('- c: pending (ready)')
+  })
+})
+
+describe('judging a wave task by its commits (field notes 93 and 94)', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'ah-climayte-judge-'))
+  const git = (...args: string[]) =>
+    execFileSync('git', args, { cwd: repo, windowsHide: true, encoding: 'utf8' }).trim()
+  const put = (file: string, text: string) => {
+    mkdirSync(dirname(join(repo, file)), { recursive: true })
+    writeFileSync(join(repo, file), text)
+  }
+  const commit = (msg: string) => {
+    git('add', '-A')
+    git('commit', '-q', '-m', msg)
+    return git('rev-parse', 'HEAD')
+  }
+  const task = {
+    key: 't',
+    prompt: 'p',
+    title: 't',
+    kind: 'code',
+    check: null,
+    paths: ['src/**'],
+    after: [],
+    workerId: null,
+    state: 'running',
+    proof: null,
+  } as CliMayteWave['tasks'][number]
+
+  beforeAll(() => {
+    git('init', '-q', '-b', 'main')
+    git('config', 'user.email', 'dev@example.test')
+    git('config', 'user.name', 'Example Dev')
+    git('config', 'commit.gpgsign', 'false')
+    put('src/a.txt', 'one\n')
+    put('docs/x.md', 'x\n')
+    commit('base')
+  })
+  afterAll(() => rmSync(repo, { recursive: true, force: true }))
+
+  test('a commit rebased onto a moved branch is found by its patch-id and passes', () => {
+    git('checkout', '-q', '-b', 'work')
+    put('src/b.txt', 'task\n')
+    const mine = commit('task work')
+    git('checkout', '-q', 'main')
+    put('docs/other.md', 'someone else\n')
+    commit('moved on')
+    git('cherry-pick', mine)
+    const landed = git('rev-parse', 'HEAD')
+    expect(landed).not.toBe(mine)
+    const j = judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${mine}`, null)
+    expect(j.verdict).toBe('pass')
+    expect(j.note).toContain(`found on main as ${landed.slice(0, 10)} after a rebase`)
+    git('checkout', '-q', 'work')
+    put('src/unlanded.txt', 'never landed\n')
+    const stray = commit('never landed')
+    git('checkout', '-q', 'main')
+    const none = judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${stray}`, null)
+    expect(none.verdict).toBe('fail')
+    expect(none.note).toContain('is not on the branch main')
+  })
+
+  test('an edit outside paths that the next commit reverts passes; a kept one fails', () => {
+    const before = git('rev-parse', 'HEAD')
+    put('docs/x.md', 'changed\n')
+    put('src/c.txt', 'c\n')
+    const c1 = commit('edit too much')
+    put('docs/x.md', 'x\n')
+    const c2 = commit('restore docs')
+    const ok = judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${c1} ${c2}`, null)
+    expect(ok.verdict).toBe('pass')
+    expect(ok.proof.paths).toBe(true)
+    const bad = judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${c1}`, null)
+    expect(bad.verdict).toBe('fail')
+    expect(bad.note).toContain('docs/x.md')
+    expect(before).not.toBe(c2)
+  })
 })

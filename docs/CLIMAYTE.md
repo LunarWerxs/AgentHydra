@@ -1534,6 +1534,12 @@ Workers carry `wave?: string` (the wave they belong to; the manager carries it t
    orchestrator records its own fails on the tasks it blames (each replaces that task's provisional
    pass) and a fail on the manager with the note, `retry: false` (the wave is over). An unverified
    wave's provisional passes never count.
+   The daemon judges a task's commits as a whole: a sha that is not on the branch is looked up by
+   `git patch-id --stable` among the branch's newest 500 commits (a landing tool's rebase), and paths
+   are judged on the net diff, so an outside edit the task reverted does not fail it. An escalated or
+   failed key is settled with `climayte_wave_resolve { wave, key, ok, note? }` (route `POST
+   /api/corch/waves/:id/tasks/:key/resolve`) or by a `climayte_verdict` on that key's worker: a pass
+   counts for `after`, and the manager hears the key in its next batch message.
 
 ### The manager session
 
