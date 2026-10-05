@@ -160,7 +160,14 @@ import {
   scoreRows,
   UNITS_PER_PRO_PERCENT,
 } from './climayte-scorecard'
-import { judgeWaveTask, readWave, waveBatch, waveDone, writeWave } from './climayte-wave'
+import {
+  judgeWaveTask,
+  readWave,
+  reportWave,
+  waveBatch,
+  waveDone,
+  writeWave,
+} from './climayte-wave'
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { isPidAlive, killProcessTrees, spawnCaptured } from './core/process'
@@ -1636,18 +1643,58 @@ function settleWorker(
   // hold it in waiting with hold: 'wave'.
   if (v.outcome === 'done' && w.kind === 'manage' && w.wave && w.status !== 'failed') {
     try {
-      const wave = liveWave(w.wave)?.wave
-      if (wave && wave.status === 'running' && !wave.report && !waveDone(wave)) {
+      const found = liveWave(w.wave)
+      const wave = found?.wave
+      if (found && wave && wave.status === 'running' && !wave.report && !waveDone(wave)) {
         const running = wave.tasks.filter((t) => t.state === 'running').length
         const queued = wave.tasks.filter((t) => t.state === 'pending').length
-        w.status = 'waiting'
-        w.hold = 'wave'
-        w.error = `Managing wave ${w.wave}: ${running} running, ${queued} queued`
-      }
+        if (running || w.status !== 'done') {
+          w.waveNudged = false
+          w.status = 'waiting'
+          w.hold = 'wave'
+          w.error = `Managing wave ${w.wave}: ${running} running, ${queued} queued`
+        } else if (w.waveNudged) {
+          // Nothing runs, so no task's end will wake it: held, the wave would wait forever.
+          w.status = 'failed'
+          w.error = `Wave ${w.wave} has ${queued} pending task(s), none running and no report after "report or dispatch": it needs the orchestrator.`
+        } else {
+          w.waveNudged = true
+          w.pending.push(REPORT_OR_DISPATCH)
+          w.status = 'queued'
+          w.revived = true
+        }
+      } else if (found) reportForManager(w, found, now)
     } catch {
       // If we can't read the wave, proceed normally (status is already set by settleWorker).
     }
   }
+}
+
+/** The one message a manager gets when its turn ends with nothing of its wave running and no report. */
+const REPORT_OR_DISPATCH =
+  'Report or dispatch: nothing in your wave is running and it has no report. Dispatch the next ready keys (wave_dispatch), escalate a key that cannot run (wave_escalate), or call wave_report if every key is passed, failed or escalated. Another turn like this one fails you.'
+
+/** A manager that ended `done` on its finished wave without calling wave_report: its last answer is the
+ *  report, so climayte_wait --wave wakes and climayte_wave_verify takes the wave. RustTor, 2026-10-05:
+ *  wv-42c178 (13 tasks) and wv-5a5bbc (12) sat `running` for hours with every task passed, nothing
+ *  held, and each manager's report written as its answer instead. Nothing happens while a change the
+ *  manager has not seen is held for it, or a message waits for its next turn. */
+function reportForManager(
+  w: CliMayteWorker,
+  found: { wave: CliMayteWave; configDir: string },
+  now: number,
+): void {
+  const { wave } = found
+  if (w.status !== 'done' || wave.managerId !== w.id || wave.status !== 'running' || wave.report)
+    return
+  if (!waveDone(wave) || wave.batch.held.length) return
+  const said = w.results?.at(-1) ?? w.result ?? ''
+  reportWave(
+    wave,
+    `The manager ended without wave_report; its last answer:\n\n${said || '(none)'}`,
+    now,
+  )
+  modifiedWaves.set(wave.id, found)
 }
 
 /** Piece 5: judge a finished wave task by command (judgeWaveTask) instead of the manager's word:
@@ -2034,8 +2081,14 @@ export const REPEAT_WINDOW_MS = 10 * 60_000
 function processBatchWakes(now: number): void {
   for (const [, { wave, configDir }] of modifiedWaves) {
     const manager = workers.get(wave.managerId)
-    if (!manager || manager.status === 'failed' || manager.status === 'cancelled') {
-      // Manager is not available; keep what the tasks' judgements changed in the wave.
+    // A wave no longer running (reported, decided) wakes no manager: there is nothing left to manage.
+    if (
+      !manager ||
+      manager.status === 'failed' ||
+      manager.status === 'cancelled' ||
+      wave.status !== 'running'
+    ) {
+      // No manager to wake; keep what changed in the wave.
       try {
         writeWave(configDir, wave)
       } catch {
@@ -2926,6 +2979,8 @@ function liveWave(id: string): { wave: CliMayteWave; configDir: string } | null 
 /** How often reconcileWaves reads the wave records (a read of every wave file). */
 const WAVE_RECONCILE_MS = 5_000
 let nextWaveReconcile = 0
+/** Waves seen reported, decided, failed or cancelled: reconcileWaves reads their files no more. */
+const settledWaves = new Set<string>()
 
 /** A task of a running wave that is `running` while its worker has finished was missed by the
  *  worker's finish (a wave read from the wrong account, a daemon restarted mid-check): judge it now.
@@ -2934,18 +2989,33 @@ let nextWaveReconcile = 0
 function reconcileWaves(now: number): void {
   if (now < nextWaveReconcile) return
   nextWaveReconcile = now + WAVE_RECONCILE_MS
-  // Most workers never belong to a wave: read no wave file unless a finished one does.
-  const finished = [...workers.values()].filter(
+  // Most workers never belong to a wave: read no wave file unless a finished one does. A wave seen
+  // past `running` never runs again, so it is not read again.
+  const ended = [...workers.values()].filter(
     (w) =>
       w.wave &&
-      w.kind !== 'manage' &&
+      !settledWaves.has(w.wave) &&
       (w.status === 'done' || w.status === 'failed' || w.status === 'cancelled'),
   )
+  // A manager that ended `done` on its finished wave before settleWorker reported it (an older
+  // daemon, a restart between): its wave is reported now (reportForManager).
+  for (const m of ended) {
+    if (m.kind !== 'manage' || m.status !== 'done') continue
+    const found = liveWave(m.wave as string)
+    if (!found) continue
+    if (found.wave.status !== 'running') settledWaves.add(found.wave.id)
+    else reportForManager(m, found, now)
+  }
+  const finished = ended.filter((w) => w.kind !== 'manage')
   if (!finished.length) return
   const ids = new Set(finished.map((w) => w.wave as string))
   for (const id of ids) {
     const wave = liveWave(id)?.wave
-    if (!wave || wave.status !== 'running') continue
+    if (!wave) continue
+    if (wave.status !== 'running') {
+      settledWaves.add(id)
+      continue
+    }
     for (const task of wave.tasks) {
       if (task.state !== 'running' || !task.workerId) continue
       const w = workers.get(task.workerId)

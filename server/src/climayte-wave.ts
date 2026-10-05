@@ -180,6 +180,42 @@ export function waveDone(wave: CliMayteWave): boolean {
   )
 }
 
+/** The most a manager's report or notes keep, in characters. */
+export const WAVE_TEXT_CAP = 2000
+
+/** The table a report starts with: one line per key, then the branch head (git, hidden). */
+export function reportTable(wave: CliMayteWave): string {
+  const head = spawnSync('git', ['rev-parse', wave.branch], {
+    cwd: wave.cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 30_000,
+  })
+  const sha = head.status === 0 ? (head.stdout ?? '').trim() : 'unknown'
+  const lines = wave.tasks.map((t) => {
+    const p = t.proof
+    const proof = p
+      ? [
+          p.check === null ? '' : `check ${p.check ? 'pass' : 'fail'}`,
+          p.paths === null ? '' : `paths ${p.paths ? 'ok' : 'mismatch'}`,
+          p.note,
+        ]
+          .filter(Boolean)
+          .join('; ')
+      : 'none'
+    return `${t.key} | ${t.state} | ${proof} | ${p?.commits.length ? p.commits.join(' ') : 'none'}`
+  })
+  return [`key | state | proof | commits`, ...lines, `branch ${wave.branch} head ${sha}`].join('\n')
+}
+
+/** The wave is reported: the table, then `text` (the manager's wave_report, or the daemon's stand-in for a
+ *  manager that ended without calling it). Only now can climayte_wait --wave wake and the wave be verified. */
+export function reportWave(wave: CliMayteWave, text: string, now = Date.now()): void {
+  wave.report = `${reportTable(wave)}\n\n${text.slice(0, WAVE_TEXT_CAP)}`
+  wave.status = 'reported'
+  wave.updatedAt = now
+}
+
 // Pure: the changed task ids since the last batch wake, or null to keep holding.
 // The daemon calls this when wave tasks change (their state, or a task's workerId) to decide whether
 // to wake the manager. Rules from climayte_wait.py:

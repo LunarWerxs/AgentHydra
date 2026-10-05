@@ -1207,6 +1207,33 @@ describe('a wave is judged wherever it is stored, not only on the account its ta
     await until(() => launched().includes('Wave batch: 1 changed tasks: x'), 40_000)
     expect(launched()).toContain('Wave batch: 1 changed tasks: x')
   }, 90_000)
+
+  test('a manager that ended `done` on its finished wave without wave_report leaves it reported, and verify takes it', async () => {
+    // Found live 2026-10-05 (waves wv-42c178, wv-5a5bbc): every task passed and each manager wrote its
+    // report as its answer, so the wave stayed `running`, climayte_wait --wave never woke and verify refused.
+    const mgr = climayteRun({
+      tasks: [{ prompt: 'manage silent', cwd: repo, title: 'manager', kind: 'manage' }],
+      group: 'twoacct-silent',
+    })
+    groups.push(mgr.group)
+    const mid = mgr.workers[0]?.id as string
+    await until(() => climayteList({ id: mid })[0]?.status === 'done', 30_000)
+
+    const wave: CliMayteWave = { ...oneTask('wv-silent', 'w-gone'), managerId: mid }
+    ;(wave.tasks[0] as CliMayteWave['tasks'][0]).state = 'passed'
+    writeWave(acctA, wave)
+    ;(liveWorkers.get(mid) as CliMayteWorker).wave = wave.id
+    // Nothing is active, so climayteWait returns at once: sleep for the idle tick (15 s) to come.
+    const deadline = Date.now() + 40_000
+    while (readWave(acctA, wave.id)?.status === 'running' && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 500))
+
+    const saved = readWave(acctA, wave.id)
+    expect(saved?.status).toBe('reported')
+    expect(saved?.report).toContain('x | passed')
+    expect(saved?.report).toContain('The manager ended without wave_report')
+    expect(climayteWaveVerify(wave.id, { ok: true })).toMatchObject({ ok: true, status: 200 })
+  }, 90_000)
 })
 
 describe('the orchestrator starts and verifies a wave (piece 7)', () => {

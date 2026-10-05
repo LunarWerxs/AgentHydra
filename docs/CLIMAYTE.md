@@ -1544,9 +1544,13 @@ Workers carry `wave?: string` (the wave they belong to; the manager carries it t
    `wave_report { text }` (at most 2,000 characters; the daemon prefixes a table it builds itself:
    one line per key, state, proof, commits, and the branch head) and ends its turn. With the wave
    `reported` the manager is no longer held, so it ends `done`, and the orchestrator's waiter wakes
-   with the report under the manager's line. A turn that ends with nothing live and no report gets
-   one message ("report or dispatch"); a second such turn fails the manager with that reason, and the
-   orchestrator wakes on `failed`.
+   with the report under the manager's line. A turn that ends with nothing of the wave running, keys
+   still pending and no report gets one message ("report or dispatch"); a second such turn in a row
+   fails the manager with that reason, and the orchestrator wakes on `failed`. A manager that ends
+   `done` on a finished wave without calling `wave_report` (it wrote its report as its answer:
+   wv-42c178 and wv-5a5bbc, 2026-10-05, sat `running` for hours) has the wave reported for it: the
+   daemon's table, then the manager's last answer. The 5-second wave check does the same for one that
+   ended so before this daemon started.
 8. **The orchestrator verifies once** (rule 5): it runs the wave's `verify` (the repo's CI or gate,
    through fairjob) on the branch head, reads the escalations, and calls
    `climayte_wave_verify { wave, ok, note? }`. `ok` confirms the provisional passes (they count in

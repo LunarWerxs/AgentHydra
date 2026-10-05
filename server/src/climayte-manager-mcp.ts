@@ -4,7 +4,6 @@
 // The tools act on the CALLING manager's wave: managerTools(managerId) closes over the manager.
 // See docs/CLIMAYTE.md, "Scope and identity of the manager endpoint".
 
-import { spawnSync } from 'node:child_process'
 import type { Hono } from 'hono'
 import {
   CliMayteSplitNeeded,
@@ -17,15 +16,12 @@ import {
 import { attemptCliPid, CALLER_REFUSED } from './climayte-ask-mcp'
 import { load, workers } from './climayte-core'
 import type { CliMayteWave } from './climayte-lib'
-import { waveStateText } from './climayte-wave'
+import { reportWave, WAVE_TEXT_CAP, waveStateText } from './climayte-wave'
 import { VERSION } from './config'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import { handleRpc, type McpEngineTool } from './mcp-stdio.mjs'
 
 type Task = CliMayteWave['tasks'][number]
-
-/** The text caps: the manager's notes and its report. */
-export const WAVE_TEXT_CAP = 2000
 
 /** Appended to every brief a manager dispatches. */
 export const DISPATCH_SUFFIX =
@@ -97,31 +93,6 @@ function startTask(wave: CliMayteWave, task: Task): Record<string, unknown> {
       refused: err instanceof CliMayteSplitNeeded ? `split needed: ${message}` : message,
     }
   }
-}
-
-/** The table the report starts with: one line per key, then the branch head (git, hidden). */
-function reportTable(wave: CliMayteWave): string {
-  const head = spawnSync('git', ['rev-parse', wave.branch], {
-    cwd: wave.cwd,
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: 30_000,
-  })
-  const sha = head.status === 0 ? (head.stdout ?? '').trim() : 'unknown'
-  const lines = wave.tasks.map((t) => {
-    const p = t.proof
-    const proof = p
-      ? [
-          p.check === null ? '' : `check ${p.check ? 'pass' : 'fail'}`,
-          p.paths === null ? '' : `paths ${p.paths ? 'ok' : 'mismatch'}`,
-          p.note,
-        ]
-          .filter(Boolean)
-          .join('; ')
-      : 'none'
-    return `${t.key} | ${t.state} | ${proof} | ${p?.commits.length ? p.commits.join(' ') : 'none'}`
-  })
-  return [`key | state | proof | commits`, ...lines, `branch ${wave.branch} head ${sha}`].join('\n')
 }
 
 /** The seven wave tools, bound to the wave of `managerId`. Each writes the wave record after a
@@ -262,8 +233,7 @@ export function managerTools(managerId: string): McpEngineTool[] {
       run: async (args) =>
         onWave(managerId, (wave) => {
           if (wave.status !== 'running') return { error: `the wave is already ${wave.status}` }
-          wave.report = `${reportTable(wave)}\n\n${str(args.text).slice(0, WAVE_TEXT_CAP)}`
-          wave.status = 'reported'
+          reportWave(wave, str(args.text))
           return { ok: true, status: wave.status }
         }),
     },

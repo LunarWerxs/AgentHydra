@@ -260,6 +260,9 @@ export interface CliMayteWorker {
   wave?: string | null
   /** A manager with a live, unreported wave is held: no new attempt starts until the wave reports. */
   hold?: 'wave' | null
+  /** A manager whose last turn ended with nothing of its wave running and no report was sent "report
+   *  or dispatch"; a second such turn in a row fails it (docs/CLIMAYTE.md, "Report"). */
+  waveNudged?: boolean
   /** Who dispatched it, so its news is pinged back there (climayte-ping.ts): the calling chat as
    *  the MCP route resolved it, or the worker that dispatched it. Absent: nobody is pinged (work
    *  dispatched before 2026-10-03, a wave task, or `notify: false`). */
