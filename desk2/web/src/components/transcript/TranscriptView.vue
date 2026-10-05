@@ -289,7 +289,12 @@ watch(activeKey, () => {
   )
 })
 // Without a query there is nothing to mark, so the rows scrolling or measuring do not ask the DOM anything.
-watch([() => (props.find?.query ? visible.value : null), () => props.find?.query, activeKey], () => nextTick(paintFind), { flush: 'post' })
+// Each source is a primitive or a stable ref, so a scroll that keeps the same rendered range does not repaint.
+watch(
+  [() => (props.find?.query ? range.value.start : null), () => (props.find?.query ? range.value.end : null), () => (props.find?.query ? display.value : null), () => props.find?.query, activeKey],
+  () => nextTick(paintFind),
+  { flush: 'post' },
+)
 
 // The header over the top folding or unfolding changes the inset: what is on screen stays where it is
 // (the header slides over it or off it) unless the list is at its top, where the first row follows it.

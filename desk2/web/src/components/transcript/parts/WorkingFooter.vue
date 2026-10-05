@@ -29,7 +29,7 @@ const GLYPHS = ['·', '✢', '✳', '✶', '✻']
       <span class="tx-spinner-strip"><span v-for="g in GLYPHS" :key="g">{{ g }}</span></span>
     </span>
     <span class="min-w-0 truncate" :class="needsYou ? 'text-warning-text' : 'tx-shimmer'">{{ text }}</span>
-    <span class="shrink-0 tabular-nums text-[13px] text-text-muted">{{ elapsed }}</span>
+    <span class="shrink-0 tabular-nums text-[13px] text-text-muted" aria-hidden="true">{{ elapsed }}</span>
     <span v-if="chat.queuedCount" class="shrink-0 text-[13px] text-text-muted">· {{ chat.queuedCount }} queued</span>
   </div>
 </template>

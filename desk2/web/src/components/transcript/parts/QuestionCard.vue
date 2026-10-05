@@ -146,7 +146,7 @@ const summary = computed(() => {
           v-for="(c, i) in item.questions"
           :key="c.question"
           class="h-1.5 rounded-full transition-all"
-          :class="i === step ? 'w-4 bg-brand' : answerFor(c.question) !== '' ? 'w-1.5 bg-brand/50' : 'w-1.5 bg-border'"
+          :class="i === step ? 'w-4 bg-brand' : answered(c.question) ? 'w-1.5 bg-brand/50' : 'w-1.5 bg-border'"
         />
       </span>
     </div>

@@ -72,6 +72,7 @@ function setLocal(s: DeskSettings) {
 let savedTimer: ReturnType<typeof setTimeout> | null = null
 async function save(patch: Partial<DeskSettings>) {
   if (!local.value) return
+  const prev = local.value
   local.value = { ...local.value, ...patch }
   saveError.value = null
   try {
@@ -80,6 +81,7 @@ async function save(patch: Partial<DeskSettings>) {
     if (savedTimer) clearTimeout(savedTimer)
     savedTimer = setTimeout(() => (showSaved.value = false), 1600)
   } catch (e) {
+    setLocal(prev)
     saveError.value = e instanceof Error ? e.message : String(e)
   }
 }

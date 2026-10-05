@@ -54,16 +54,20 @@ async function refresh() {
   }
 }
 
+let diffSeq = 0
 async function loadDiff(path: string) {
+  const mine = ++diffSeq
   diffLoading.value = true
   diffError.value = null
   try {
-    diff.value = parseUnifiedDiff(await api.gitDiff(props.cwd, path))
+    const parsed = parseUnifiedDiff(await api.gitDiff(props.cwd, path))
+    if (mine === diffSeq) diff.value = parsed
   } catch (e) {
+    if (mine !== diffSeq) return
     diff.value = null
     diffError.value = e instanceof Error ? e.message : String(e)
   } finally {
-    diffLoading.value = false
+    if (mine === diffSeq) diffLoading.value = false
   }
 }
 
@@ -71,6 +75,8 @@ function open(path: string) {
   if (selectedPath.value === path) {
     selectedPath.value = null
     diff.value = null
+    diffSeq++
+    diffLoading.value = false
     return
   }
   selectedPath.value = path
