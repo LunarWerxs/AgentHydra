@@ -43,11 +43,13 @@ const { instances, refresh, startPolling } = useDshInstances()
 /** The id of whatever action is in flight, so one row's button can be busy without freezing the
  *  table: a launch legitimately takes seconds (the harness prints its address only once serving). */
 const busyIds = shallowRef<Set<string>>(new Set())
+const busyCounts = new Map<string, number>()
 function setBusy(id: string, on: boolean) {
-  const next = new Set(busyIds.value)
-  if (on) next.add(id)
-  else next.delete(id)
-  busyIds.value = next
+  // A launch and a quit can overlap on one row: it stays busy until the last of them ends.
+  const n = (busyCounts.get(id) ?? 0) + (on ? 1 : -1)
+  if (n > 0) busyCounts.set(id, n)
+  else busyCounts.delete(id)
+  busyIds.value = new Set(busyCounts.keys())
 }
 
 /** The status dot's hover: whether a server answers for this home, and on which port. */

@@ -88,8 +88,11 @@ const finished = computed(
   () => !!item.value && item.value.status !== 'queued' && item.value.status !== 'running',
 )
 
+// The socket is closed by its own end (onerror once finished), so trailing events still in transit
+// are not dropped. A run that goes finished -> running again (resumed, re-run) needs a new stream.
 watch(finished, (f) => {
-  if (f) stop()
+  // connect() clears the list and the flag; the stream replays the run from its start.
+  if (!f && !es) connect(props.itemId)
 })
 onMounted(() => connect(props.itemId))
 watch(() => props.itemId, connect)

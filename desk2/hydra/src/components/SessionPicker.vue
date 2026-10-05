@@ -154,6 +154,7 @@ const triggerLabel = computed(() => {
           type="button"
           class="text-muted-foreground hover:text-foreground"
           :title="s.session_id"
+          :aria-label="$t('builder.sessionPickerCopyId')"
           @click="copyId(s.session_id, $event)"
         >
           <Info class="size-3" />
@@ -161,6 +162,7 @@ const triggerLabel = computed(() => {
         <button
           type="button"
           class="text-muted-foreground hover:text-destructive"
+          :aria-label="$t('builder.sessionPickerRemove')"
           @click="removeChip(s.session_id)">
           <X class="size-3" />
         </button>
