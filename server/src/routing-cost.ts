@@ -5,12 +5,9 @@
 import { climayteTotals } from './climayte-totals'
 import { listCliInstances } from './core/cli-instances'
 import { db, getSetting } from './db'
+import { PLAN_SIZE, PLANS, type Plan, planOf } from './plans'
 
-export const PLANS = ['Pro', 'Max 5×', 'Max 20×'] as const
-export type Plan = (typeof PLANS)[number]
-
-/** Window size in Pro 5-hour windows. */
-export const PLAN_SIZE: Record<Plan, number> = { Pro: 1, 'Max 5×': 4.75, 'Max 20×': 19 }
+export { PLAN_SIZE, PLANS, planOf, type Plan }
 export const FALLBACK_DOLLARS_PER_PRO_WINDOW = 20.7
 export const FALLBACK_WINDOWS_PER_WEEK: Record<Plan, number> = {
   Pro: 11.7,
@@ -25,15 +22,6 @@ const SAMPLE_DAYS = 21
 const MIN_SESSION_POINTS = 40
 const MAX_GAP_MS = 30 * 60_000
 const RESET_TOLERANCE_MS = 15 * 60_000
-
-/** The plan a CLI instance's planLabel names, or null when it is none of the three. */
-export function planOf(label: string | null | undefined): Plan | null {
-  const l = (label ?? '').toLowerCase()
-  if (/max\s*20/.test(l)) return 'Max 20×'
-  if (/max\s*5/.test(l)) return 'Max 5×'
-  if (/pro/.test(l)) return 'Pro'
-  return null
-}
 
 // --- measured numbers ---------------------------------------------------------
 

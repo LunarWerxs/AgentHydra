@@ -2,7 +2,8 @@
 
 HSwarm sends work to API-key models (DeepSeek, the Anthropic API, OpenRouter). CliMayte sends it to Claude Code
 workers on the owner's Pro, Max 5x and Max 20x subscriptions. `server/src/routing-cost.ts` compares what the same
-work costs on each side and picks one. Research and numbers below are from 2026-10-05.
+work costs on each side and picks one. The research numbers below are a dated snapshot (measured 2026-10-05); the
+live figures come from `GET /api/routing/cost-model`.
 
 ## The research
 
@@ -16,7 +17,7 @@ and 4.1 on Max 20x (2 accounts). A Max 5x window is 4.75 Pro windows, a Max 20x 
 At full use over 4.33 weeks a month, Pro ($20) buys about 50.7 Pro windows, about $1,049 at list (1.9 %). Max 5x
 ($100) buys about 202, about $4,170 (2.4 %). Max 20x ($200) buys about 337, about $6,980 (2.9 %).
 
-So Claude on a subscription is 35 to 50 times cheaper than the Claude API at list. DeepSeek flash is 3 to 12 % of
+So Claude on a subscription is about 34 to 50 times cheaper than the Claude API at list at full use of the plan. DeepSeek flash is 3 to 12 % of
 Sonnet's list price, the same order as a subscription, and that is where the split below matters.
 
 ## How the numbers are measured
@@ -27,6 +28,9 @@ Sonnet's list price, the same order as a subscription, and that is where the spl
   consecutive samples at most 30 minutes apart in the same session and week window (reset times within 15 minutes).
   Accounts with under 40 session points are dropped. The median of week-rise / session-rise per plan gives
   windows per week as its inverse. A plan with no qualifying account uses 11.7 / 9.8 / 4.1.
+- The constants 20.7 (dollars per Pro window) and 11.7 / 9.8 / 4.1 (windows per week) in `routing-cost.ts` are
+  fallbacks, used only when there is not enough measured data. Plan sizes (1 / 4.75 / 19) live in `server/src/plans.ts`,
+  shared with CliMayte's placement.
 - **Effective fraction** of a plan = price / (windows per week x size x 4.33 x dollars per Pro window): what a
   subscription costs as a share of list at full use.
 - **Fleet fraction** weights the three plans by how many signed-in CLI instances each has.
@@ -41,6 +45,10 @@ Sonnet's list price, the same order as a subscription, and that is where the spl
 - If the dearer side costs more than `routing_close_ratio` times the cheaper, the cheaper wins.
 - Otherwise the call is close. The key is hashed into 0..99; below `routing_api_preference_pct` it goes to the API.
   The same key always lands on the same side.
+
+The split (`routing_api_preference_pct`) applies only inside the close band; outside it the cheaper side always wins.
+The same key always lands on the same side. `subscriptionUsd` is not a bill: it is the list value of the quota the task
+would use (list cost x fleet fraction + session overhead), for comparison with API dollars.
 
 The answer carries the route, a one-sentence reason, both dollar figures and whether the call was close.
 
@@ -65,3 +73,16 @@ percent off per provider and the API side of every comparison drops by it.
 - `PUT /api/routing/settings`: validated and clamped; send any of `enabled`, `apiPreferencePct`, `closeRatio`,
   `sessionOverheadPct`, `discounts`, `planPrices`.
 - `POST /api/routing/decide`: the body of `decideRoute`; answers `{ route, why, apiUsd, subscriptionUsd, close }`.
+
+## Where to change it
+
+Hydra Desk 2: AgentHydra pane, HSwarm tab, Routing page. Or `PUT /api/routing/settings`. The settings are synced to
+the other PC by login sync. The endpoint accepts numbers or numeric strings only: percents are clamped to 0..100,
+`closeRatio` to 1..100, plan prices to 0..10000. A junk value leaves that field unchanged and the answer is a 400 naming
+it. `POST /api/routing/decide` answers 400 when `api.usd` is not a finite number >= 0; a `listUsd` that is not one counts
+as no list cost.
+
+## Forcing a route
+
+- All API: `enabled` false, or `apiPreferencePct` 100.
+- More subscription: `apiPreferencePct` 0 and a higher `closeRatio` (more calls count as close, so the split decides them).

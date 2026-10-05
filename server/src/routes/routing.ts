@@ -59,36 +59,69 @@ app.get('/api/routing/cost-model', (c) => {
   })
 })
 
-const pct = (v: unknown): number | null => {
-  const n = Number(v)
-  return v === null || v === '' || !Number.isFinite(n) ? null : Math.min(100, Math.max(0, n))
+/** A finite number from a number or a numeric string; anything else (boolean, array, null, '') is junk. */
+const numeric = (v: unknown): number | null => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
 }
+
+const clampTo = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
 
 app.put('/api/routing/settings', async (c) => {
   const b = await body(c)
-  if (typeof b.enabled === 'boolean') setSetting('routing_enabled', b.enabled ? '1' : '0')
-  const pref = pct(b.apiPreferencePct)
-  if (pref !== null) setSetting('routing_api_preference_pct', String(pref))
-  const overhead = pct(b.sessionOverheadPct)
-  if (overhead !== null) setSetting('routing_session_overhead_pct', String(overhead))
-  const ratio = Number(b.closeRatio)
-  if (b.closeRatio !== undefined && Number.isFinite(ratio))
-    setSetting('routing_close_ratio', String(Math.max(1, ratio)))
-  if (b.discounts && typeof b.discounts === 'object') {
-    const next = { ...readRoutingSettings().discounts, ...(b.discounts as object) }
-    setSetting('routing_discounts', JSON.stringify(clampDiscounts(next)))
+  const bad: string[] = []
+  const writes: Array<[string, string]> = []
+  /** One numeric field: absent leaves it alone, junk is named in the 400, a number is clamped. */
+  const field = (name: string, key: string, lo: number, hi: number) => {
+    const v = b[name]
+    if (v === undefined) return
+    const n = numeric(v)
+    if (n === null) bad.push(name)
+    else writes.push([key, String(clampTo(n, lo, hi))])
   }
-  if (b.planPrices && typeof b.planPrices === 'object') {
-    const p = b.planPrices as Record<string, unknown>
-    for (const [field, key] of [
-      ['Pro', 'routing_price_pro'],
-      ['Max 5×', 'routing_price_max5'],
-      ['Max 20×', 'routing_price_max20'],
-    ] as const) {
-      const n = Number(p[field])
-      if (p[field] !== undefined && Number.isFinite(n)) setSetting(key, String(Math.max(0, n)))
-    }
+  if (b.enabled !== undefined) {
+    if (typeof b.enabled === 'boolean') writes.push(['routing_enabled', b.enabled ? '1' : '0'])
+    else bad.push('enabled')
   }
+  field('apiPreferencePct', 'routing_api_preference_pct', 0, 100)
+  field('sessionOverheadPct', 'routing_session_overhead_pct', 0, 100)
+  field('closeRatio', 'routing_close_ratio', 1, 100)
+  if (b.discounts !== undefined) {
+    if (b.discounts && typeof b.discounts === 'object' && !Array.isArray(b.discounts)) {
+      const d = b.discounts as Record<string, unknown>
+      const next: Record<string, unknown> = { ...readRoutingSettings().discounts }
+      for (const k of Object.keys(next)) {
+        if (d[k] === undefined) continue
+        const n = numeric(d[k])
+        if (n === null) bad.push(`discounts.${k}`)
+        else next[k] = n
+      }
+      writes.push(['routing_discounts', JSON.stringify(clampDiscounts(next))])
+    } else bad.push('discounts')
+  }
+  if (b.planPrices !== undefined) {
+    if (b.planPrices && typeof b.planPrices === 'object' && !Array.isArray(b.planPrices)) {
+      const p = b.planPrices as Record<string, unknown>
+      for (const [name, key] of [
+        ['Pro', 'routing_price_pro'],
+        ['Max 5×', 'routing_price_max5'],
+        ['Max 20×', 'routing_price_max20'],
+      ] as const) {
+        if (p[name] === undefined) continue
+        const n = numeric(p[name])
+        if (n === null) bad.push(`planPrices.${name}`)
+        else writes.push([key, String(clampTo(n, 0, 10_000))])
+      }
+    } else bad.push('planPrices')
+  }
+  // Good fields are stored even when others are junk; the 400 names only the junk.
+  for (const [key, value] of writes) setSetting(key, value)
+  if (bad.length)
+    return c.json({ error: `invalid value for: ${bad.join(', ')}`, fields: bad }, 400)
   return c.json(readRoutingSettings())
 })
 
@@ -98,20 +131,19 @@ app.post('/api/routing/decide', async (c) => {
   let api: { provider: string; model: string; usd: number } | null = null
   if (b.api !== null && b.api !== undefined) {
     const a = b.api as Record<string, unknown>
-    if (
-      typeof a.provider !== 'string' ||
-      typeof a.model !== 'string' ||
-      !Number.isFinite(Number(a.usd))
-    )
+    if (!a || typeof a !== 'object' || typeof a.provider !== 'string' || typeof a.model !== 'string')
       return c.json({ error: 'api must be null or { provider, model, usd }' }, 400)
-    api = { provider: a.provider, model: a.model, usd: Number(a.usd) }
+    const usd = numeric(a.usd)
+    if (usd === null || usd < 0)
+      return c.json({ error: 'api.usd must be a finite number >= 0' }, 400)
+    api = { provider: a.provider, model: a.model, usd }
   }
-  const listUsd = b.listUsd === null || b.listUsd === undefined ? null : Number(b.listUsd)
+  const list = numeric(b.listUsd)
   return c.json(
     decideRoute(
       {
         key: b.key,
-        listUsd: Number.isFinite(listUsd) ? listUsd : null,
+        listUsd: list !== null && list >= 0 ? list : null,
         api,
         subscriptionRoom: b.subscriptionRoom === true,
       },

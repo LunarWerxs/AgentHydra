@@ -15,6 +15,7 @@
 // than finishing part of the work and handing off.
 
 import type { CliMayteAccount } from './climayte-lib'
+import { planSizeOf } from './plans'
 import { modelMultiplier } from './usage-tokens'
 
 /** A task fits on an account when its projected 5-hour usage stays at or under this: the stop line
@@ -49,11 +50,10 @@ export interface CliMaytePlacement {
   finishedSince?: Map<string, number>
 }
 
-/** Pro 1, Max 5x 5, Max 20x 20: how many Pro windows an account's 5-hour window holds. */
+/** Pro 1, Max 5x 4.75, Max 20x 19 (plans.ts PLAN_SIZE): how many Pro windows an account's 5-hour
+ *  window holds. An unknown label counts as 1. */
 export function planFactor(planLabel: string | null | undefined): number {
-  const m = /max\s*(\d+)/i.exec(planLabel ?? '')
-  const n = m ? Number(m[1]) : 1
-  return Number.isFinite(n) && n > 0 ? n : 1
+  return planSizeOf(planLabel)
 }
 
 /** The account's 5-hour usage once this task and the work already running there are done, in % of

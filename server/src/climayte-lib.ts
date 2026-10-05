@@ -160,7 +160,7 @@ export function addTokens(a: CliMayteTokens | undefined, b: CliMayteTokens): Cli
   }
 }
 
-/** A task's size, all in % of a Pro 5-hour window (a Max 5x window is 500): its expected cost and
+/** A task's size, all in % of a Pro 5-hour window (a Max 5x window is 475): its expected cost and
  *  what that is based on, the biggest window it may use (FIT_PCT of it), and the most room any of
  *  those accounts has (`room`, counting what the work running there will still use; null with no
  *  account to place on) on `roomOn`. */
@@ -323,7 +323,7 @@ export interface CliMayteAccount {
   configDir: string
   sessionPct: number | null
   weekPct: number | null
-  /** How many Pro windows its 5-hour window holds (climayte-placement planFactor): Pro 1, Max 5x 5. */
+  /** How many Pro windows its 5-hour window holds (climayte-placement planFactor): Pro 1, Max 5x 4.75. */
   planFactor?: number
   /** When the 5-hour window `sessionPct` was read from resets (epoch ms); null when unknown. */
   sessionResetsAt?: number | null

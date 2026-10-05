@@ -36,8 +36,11 @@ describe('projectedPct', () => {
     expect(projectedPct({ sessionPct: 10 }, fresh, 25)).toBe(110)
     // Later the meter reads 50: 40 of their 75 are spent and already in the reading.
     expect(projectedPct({ sessionPct: 50 }, fresh, 25)).toBe(110)
-    // A Max 5x window holds five Pro windows.
-    expect(projectedPct({ sessionPct: 10, planFactor: planFactor('Max 5×') }, fresh, 25)).toBe(30)
+    // A Max 5x window holds 4.75 Pro windows (the owner's measurement, plans.ts), not 5.
+    expect(projectedPct({ sessionPct: 10, planFactor: planFactor('Max 5×') }, fresh, 25)).toBeCloseTo(
+      10 + 100 / 4.75,
+      6,
+    )
     // One 25% task running since 10%; another task that ended meanwhile spent 20 of the rise to 40.
     // The running one has spent 10 and still owes 15: a new 25% task ends near 80, not 65.
     const one = [{ expected: 25, startPct: 10 }]
