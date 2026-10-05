@@ -121,17 +121,81 @@ export function lastCwd(path: string): string | null {
 }
 
 const MEMO_MAX = 8
-const memo = new Map<string, { sig: string; items: TranscriptItem[] }>()
 
-/** A session file's items, remembered by size and mtime: an open outside chat polled every few seconds costs a stat. */
+/** One session file as last read: the records of its complete lines, and where the next read starts. */
+interface Memo {
+  ino: number
+  size: number
+  mtimeMs: number
+  /** Where the first unconsumed byte is: just after the last complete line read. */
+  offset: number
+  recs: { rec: unknown; bytes: number }[]
+  /** Bytes the kept records took in the file. */
+  bytes: number
+  items: TranscriptItem[]
+}
+const memo = new Map<string, Memo>()
+
+/** Reads [from, size) of a file. */
+function readFrom(path: string, from: number, size: number): Buffer {
+  const buf = Buffer.alloc(size - from)
+  const fd = openSync(path, 'r')
+  try {
+    let read = 0
+    while (read < buf.length) {
+      const n = readSync(fd, buf, read, buf.length - read, from + read)
+      if (n <= 0) break
+      read += n
+    }
+    return buf.subarray(0, read)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/**
+ * A session file's items. An open chat is polled every few seconds and a running one grows all the time,
+ * so the file is read once and then only from where the last read stopped: the new complete lines are
+ * parsed and added to the records kept (the newest TAIL_BYTES of them), and the items are made from
+ * those. A file that shrank or was replaced starts over; one that did not change costs a stat.
+ */
 export function sessionJsonlItems(path: string, cwd?: string | null): TranscriptItem[] {
   const st = statSync(path)
-  const sig = `${st.size}:${st.mtimeMs}`
-  const hit = memo.get(path)
-  if (hit && hit.sig === sig) return hit.items
-  const items = historyToItems(parseJsonl(readTail(path)), { cwd: cwd ?? null })
+  let m = memo.get(path)
+  if (m && m.size === st.size && m.mtimeMs === st.mtimeMs && m.ino === st.ino) return m.items
+  if (m && (st.size < m.size || st.ino !== m.ino || st.mtimeMs < m.mtimeMs)) m = undefined
+  let from = m?.offset ?? Math.max(0, st.size - TAIL_BYTES)
+  const buf = readFrom(path, from, st.size)
+  let text = buf.toString('utf8')
+  if (!m && from > 0) {
+    // The read starts mid-file: its first line may be cut, so it is left out.
+    const nl = buf.indexOf(10)
+    from += nl < 0 ? buf.length : nl + 1
+    text = nl < 0 ? '' : buf.subarray(nl + 1).toString('utf8')
+  }
+  const end = text.lastIndexOf('
+') + 1
+  const fresh = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, recs: [], bytes: 0, items: [] }
+  const done = text.slice(0, end).split('
+')
+  done.pop()
+  for (const line of done) {
+    const bytes = Buffer.byteLength(line) + 1
+    fresh.offset += bytes
+    const recs = parseJsonl(line)
+    if (!recs.length) continue
+    fresh.recs.push({ rec: recs[0], bytes })
+    fresh.bytes += bytes
+  }
+  // The last line may still be being written: it counts when it already parses, but is read again next time.
+  const unfinished = parseJsonl(text.slice(end))
+  while (fresh.bytes > TAIL_BYTES && fresh.recs.length > 1) fresh.bytes -= fresh.recs.shift()!.bytes
+  fresh.size = st.size
+  fresh.mtimeMs = st.mtimeMs
+  fresh.ino = st.ino
+  fresh.items = historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })
   memo.delete(path)
-  memo.set(path, { sig, items })
+  memo.set(path, fresh)
   if (memo.size > MEMO_MAX) memo.delete(memo.keys().next().value!)
-  return items
+  return fresh.items
 }
