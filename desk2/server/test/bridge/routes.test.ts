@@ -124,7 +124,8 @@ test("the other PCs' CliMayte workers join the list under their PC's name, and n
   // An AgentHydra without the route (404), or one whose route fails, leaves this PC's list whole.
   for (const answer of [null, 'the shared store is unreachable']) {
     f.state.remote = answer
-    expect(ids((await call(desk, '/api/climayte/workers')).body)).toEqual(local)
+    // The other PCs' queues are reused for 30 s, so a new server reads the changed answer.
+    expect(ids((await call(await boot(f.url), '/api/climayte/workers')).body)).toEqual(local)
   }
 })
 

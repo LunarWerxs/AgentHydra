@@ -85,7 +85,7 @@ export function createBridge(opts: BridgeOptions = {}) {
   let sessionMeta: (list: ExternalSession[]) => ExternalSession[] = (list) => list
   let pinnedIds: () => string[] = () => []
   let lastWorkers: { at: number; workers: CliMayteWorker[] } | null = null
-  let lastRawWorkers: { at: number; recent: Promise<AhWorker[]>; all: Promise<AhWorker[]> } | null = null
+  let lastRawWorkers: { at: number; recent: Promise<AhWorker[]> | null; all: Promise<AhWorker[]> | null } | null = null
   /** Told when this side changed the worker list (a start, a follow-up, a cancel): the poller reads it at once. */
   const workerChange = new Set<() => void>()
   function workersChanged(): void {
@@ -176,14 +176,11 @@ export function createBridge(opts: BridgeOptions = {}) {
 
   /** Reads once per WORKERS_FRESH_MS; both recent and all share the same tick. */
   function rawWorkers(all = false): Promise<AhWorker[]> {
-    if (lastRawWorkers && now() - lastRawWorkers.at < WORKERS_FRESH_MS) {
-      return all ? lastRawWorkers.all : lastRawWorkers.recent
-    }
-    const recent = client.workers({ limit: RECENT_FINISHED })
-    const all_ = client.workers({})
-    const entry = { at: now(), recent, all: all_ }
-    lastRawWorkers = entry
-    return all ? all_ : recent
+    if (!lastRawWorkers || now() - lastRawWorkers.at >= WORKERS_FRESH_MS) lastRawWorkers = { at: now(), recent: null, all: null }
+    const entry = lastRawWorkers
+    // Each list is read only when asked for: the poll needs the recent one, a transcript lookup the full one.
+    if (all) return (entry.all ??= client.workers({}))
+    return (entry.recent ??= client.workers({ limit: RECENT_FINISHED }))
   }
 
   /** Adds the finished workers a running one hangs from (its dispatcher, a wave's manager, a few links up)

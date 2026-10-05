@@ -149,14 +149,15 @@ describe('poller', () => {
   function harness(url: string, clients = 1) {
     const events: ServerEvent[] = []
     let n = clients
-    const b = createBridge({ url, now: () => NOW })
+    let t = NOW
+    const b = createBridge({ url, now: () => t })
     const poller = createPoller({
       bridge: b,
       broadcast: (e) => events.push(e),
       wsClientCount: () => n,
-      now: () => NOW,
+      now: () => t,
     })
-    return { events, poller, setClients: (k: number) => void (n = k), types: () => events.map((e) => e.type) }
+    return { events, poller, advance: (ms: number) => void (t += ms), setClients: (k: number) => void (n = k), types: () => events.map((e) => e.type) }
   }
 
   test('polls nothing while no window is connected', async () => {
@@ -179,6 +180,7 @@ describe('poller', () => {
     expect(h.events).toEqual([])
 
     f.state.workers[1].status = 'running'
+    h.advance(3000) // the shared worker read is reused for 3 s
     await h.poller.tick()
     // the worker list changed, and with it its session (waiting -> working)
     expect(h.types().sort()).toEqual(['climayte.update', 'external.update'])
@@ -205,6 +207,34 @@ describe('poller', () => {
     t += 30_000
     await poller.tick()
     expect(reads()).toBe(2)
+  })
+
+  test('each tick reads the worker list once; the slow lists wait for their own freshness', async () => {
+    const f = await fake()
+    let t = NOW
+    const poller = createPoller({
+      bridge: createBridge({ url: f.url, now: () => t }),
+      broadcast: () => {},
+      wsClientCount: () => 1,
+      now: () => t,
+    })
+    const reads = (prefix: string) => f.gets.filter((g) => g.startsWith(prefix)).length
+    await poller.tick()
+    expect(reads('/api/corch/workers?limit=20')).toBe(1)
+    t += 3000
+    await poller.tick()
+    t += 3000
+    await poller.tick()
+    expect(reads('/api/corch/workers?limit=20')).toBe(3)
+    expect(reads('/api/corch/remote')).toBe(1)
+    expect(reads('/api/sessions?')).toBe(1)
+    t += 8000
+    await poller.tick()
+    expect(reads('/api/sessions?')).toBe(2)
+    expect(reads('/api/corch/remote')).toBe(1)
+    t += 30_000
+    await poller.tick()
+    expect(reads('/api/corch/remote')).toBe(2)
   })
 
   test('AgentHydra going down then up: status flips, lists empty then refill', async () => {
