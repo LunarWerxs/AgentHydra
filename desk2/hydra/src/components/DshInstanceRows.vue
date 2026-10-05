@@ -12,7 +12,7 @@
 // its authentication, so "launch" and "open" are daemon actions that open the window on the machine
 // the daemon runs on and answer with an outcome. See server/src/core/dsh-instances.ts.
 import { Copy, Pencil, Play, Square, Trash2 } from '@lucide/vue'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
@@ -42,7 +42,13 @@ const { instances, refresh, startPolling } = useDshInstances()
 
 /** The id of whatever action is in flight, so one row's button can be busy without freezing the
  *  table: a launch legitimately takes seconds (the harness prints its address only once serving). */
-const busyId = ref<string | null>(null)
+const busyIds = shallowRef<Set<string>>(new Set())
+function setBusy(id: string, on: boolean) {
+  const next = new Set(busyIds.value)
+  if (on) next.add(id)
+  else next.delete(id)
+  busyIds.value = next
+}
 
 /** The status dot's hover: whether a server answers for this home, and on which port. */
 function statusTitle(inst: DshInstance): string {
@@ -55,7 +61,7 @@ function statusTitle(inst: DshInstance): string {
 /** Run one action, then re-read: every verb here changes something the list reports (a port, a
  *  running flag, a row), so the table would otherwise be stale exactly when it is being watched. */
 async function act(id: string, fn: () => Promise<{ ok: boolean; message: string | null }>) {
-  busyId.value = id
+  setBusy(id, true)
   try {
     const result = await fn()
     if (result.ok) toast.success(result.message ?? '')
@@ -63,7 +69,7 @@ async function act(id: string, fn: () => Promise<{ ok: boolean; message: string 
   } catch (err) {
     toast.error(err instanceof Error ? err.message : String(err))
   } finally {
-    busyId.value = null
+    setBusy(id, false)
     await refresh()
   }
 }
@@ -212,13 +218,13 @@ defineExpose({ openCreate, refresh })
       <Button
         size="sm"
         variant="outline"
-        :disabled="busyId === inst.id"
+        :disabled="busyIds.has(inst.id)"
         :title="inst.running ? $t('dshInstances.openHint') : $t('dshInstances.launchHint')"
         @click="act(inst.id, () => launchDshInstance(inst.id))"
       >
         <Play class="size-3.5" />
         {{
-          busyId === inst.id
+          busyIds.has(inst.id)
             ? $t('dshInstances.launching')
             : inst.running
               ? $t('dshInstances.open')

@@ -62,7 +62,14 @@ function connect(id: string) {
     // the badge while the run is still in flight, because a finished run's stream is closed by the
     // server and lands here too, where "reconnecting" would be a lie on every completed run.
     connectionLost.value = true
+    // A finished run's stream is closed by the server: stop the browser reconnecting (and replaying).
+    if (finished.value) stop()
   }
+}
+/** Close only the socket; events not yet drawn stay queued so the run's last lines still show. */
+function stop() {
+  es?.close()
+  es = null
 }
 function disconnect() {
   es?.close()
@@ -81,6 +88,9 @@ const finished = computed(
   () => !!item.value && item.value.status !== 'queued' && item.value.status !== 'running',
 )
 
+watch(finished, (f) => {
+  if (f) stop()
+})
 onMounted(() => connect(props.itemId))
 watch(() => props.itemId, connect)
 onBeforeUnmount(disconnect)

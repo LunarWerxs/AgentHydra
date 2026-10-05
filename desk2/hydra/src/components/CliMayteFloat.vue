@@ -10,6 +10,7 @@ const props = withDefaults(
   defineProps<{
     workers: CliMayteWorkerView[]
     now: number
+    listedAt: number
     onRowClick?: (workerId: string) => void
   }>(),
   {
@@ -32,8 +33,7 @@ const queued = computed(() =>
 const totalActive = computed(() => running.value.length + queued.value.length)
 
 const activeS = (w: CliMayteWorkerView): number => {
-  const listedAt = props.now
-  return w.ranS + (w.status === 'running' ? Math.max(0, (props.now - listedAt) / 1000) : 0)
+  return w.ranS + (w.status === 'running' ? Math.max(0, (props.now - props.listedAt) / 1000) : 0)
 }
 
 function activeLabel(totalS: number): string {

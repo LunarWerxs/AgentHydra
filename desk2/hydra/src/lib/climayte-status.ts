@@ -120,6 +120,10 @@ export const CLIMAYTE_OUTCOME: Record<
   cancelled: { variant: 'outline', label: 'climayte.outcomeCancelled' },
 }
 
+/** The table row for an outcome from the daemon; one this build does not know reads as an error. */
+export const outcomeMeta = (o: CliMayteAttemptOutcome) =>
+  Object.hasOwn(CLIMAYTE_OUTCOME, o) ? CLIMAYTE_OUTCOME[o] : CLIMAYTE_OUTCOME.error
+
 /** Why a task that has already run is queued again, as an i18n key and its values; null for one
  *  that simply has not started. Without it a task moving accounts after a limit looked exactly like
  *  one that had never run (2026-09-30 UI review). */
@@ -268,7 +272,7 @@ function failedHow(w: CliMayteStoryTask): CliMayteStoryLine[] {
   }
   const counts = [...tally]
     .sort((a, b) => b[1] - a[1])
-    .map(([outcome, n]) => ({ n, label: CLIMAYTE_OUTCOME[outcome].label }))
+    .map(([outcome, n]) => ({ n, label: outcomeMeta(outcome).label }))
   const [only] = counts
   const how: CliMayteStoryLine[] = [
     !only

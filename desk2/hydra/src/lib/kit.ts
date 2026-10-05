@@ -82,7 +82,13 @@ export function acquirePoll<T>(
   key: string,
   fetcher: () => Promise<T>,
   ms = KIT_POLL_MS,
-): { state: PollState<T>; ready: Promise<void>; shared: boolean; release: () => void } {
+): {
+  state: PollState<T>
+  ready: Promise<void>
+  load: () => Promise<void>
+  shared: boolean
+  release: () => void
+} {
   let poll = polls.get(key) as Poll<T> | undefined
   const shared = poll !== undefined
   if (!poll) {
@@ -123,6 +129,7 @@ export function acquirePoll<T>(
   return {
     state: held.state,
     ready: held.first,
+    load: held.load,
     shared,
     release: () => {
       if (released) return
@@ -142,6 +149,8 @@ export async function readShared<T>(key: string, fetcher: () => Promise<T>): Pro
   const h = acquirePoll<T>(key, fetcher)
   try {
     await h.ready
+    // A live poll's first load may have failed long ago: ask again rather than rethrow the stale error.
+    if (h.shared && h.state.data === null) await h.load()
     if (h.state.data === null) throw new Error(h.state.error ?? 'no data')
     return h.state.data
   } finally {

@@ -69,6 +69,8 @@ function assignIfChanged<T>(target: { value: T }, next: T): void {
 const loading = ref(true)
 const refreshing = ref(false)
 const error = ref<string | null>(null)
+/** The banner shows an action's failure (Start/Stop/...), which a successful poll must not clear. */
+const errorFromAction = ref(false)
 const notice = ref<string | null>(null)
 const busy = ref(new Set<string>())
 const resolvingAccounts = ref(new Set<string>())
@@ -264,8 +266,29 @@ async function hydrateClaudeAccounts(rows: CMInstance[], force = false): Promise
   )
 }
 
-async function refresh(silent = false): Promise<void> {
-  if (refreshing.value) return
+// A refresh asked for while one is running (an action finishing during the 10 s poll) would otherwise
+// be dropped, and the running scan began before the action: it reruns once when the first ends.
+let inflight: Promise<void> | null = null
+let rerun = false
+function refresh(silent = false): Promise<void> {
+  if (inflight) {
+    rerun = true
+    return inflight
+  }
+  const run = (async () => {
+    await refreshOnce(silent)
+    while (rerun) {
+      rerun = false
+      await refreshOnce(true)
+    }
+  })().finally(() => {
+    inflight = null
+  })
+  inflight = run
+  return run
+}
+
+async function refreshOnce(silent: boolean): Promise<void> {
   refreshing.value = true
   if (!silent) loading.value = true
   try {
@@ -299,10 +322,12 @@ async function refresh(silent = false): Promise<void> {
         usageSnapshots.value = merged
       }
     }
-    error.value = null
+    // An action's failure stays until dismissed or the next action: a silent poll must not erase it.
+    if (!errorFromAction.value) error.value = null
     void hydrateClaudeAccounts(claude.value, !silent)
   } catch (cause) {
     error.value = message(cause)
+    errorFromAction.value = false
   } finally {
     refreshing.value = false
     loading.value = false
@@ -320,6 +345,8 @@ async function act(
 ): Promise<void> {
   setBusy(key, true)
   notice.value = null
+  error.value = null
+  errorFromAction.value = false
   try {
     const result = await action()
     if (!result.ok) throw new Error(result.message ?? `${label} failed.`)
@@ -332,6 +359,7 @@ async function act(
     }
   } catch (cause) {
     error.value = message(cause)
+    errorFromAction.value = true
   } finally {
     setBusy(key, false)
   }
@@ -518,7 +546,7 @@ onBeforeUnmount(() => {
         class="flex items-start justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-sm text-destructive"
       >
         <span>{{ error }}</span>
-        <button class="shrink-0 text-xs underline underline-offset-2" @click="error = null">
+        <button class="shrink-0 text-xs underline underline-offset-2" @click="((error = null), (errorFromAction = false))">
           Dismiss
         </button>
       </div>

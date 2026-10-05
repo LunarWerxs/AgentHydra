@@ -7,18 +7,20 @@
 import { RotateCcw } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliLimitResetResult } from '@/lib/api'
 import { formatAgo } from '@/lib/relativeTime'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 const props = defineProps<{ result: CliLimitResetResult | null | undefined }>()
 const { t } = useI18n()
+const { now } = useUsageMode()
 
 const view = computed(() => {
   const r = props.result
   if (!r || r.outcome === 'error') return null
   const date = r.nextAvailable ?? t('cliInstances.limitResetUnknownDate')
-  const ago = formatAgo(Date.now(), r.at)
+  const ago = formatAgo(now.value.getTime(), r.at)
   if (r.outcome === 'unavailable')
     return {
       tone: 'text-muted-foreground/60',
