@@ -7,8 +7,17 @@ import { toolDiff } from './diff'
 export type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>
 export type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
 
+/** The user message that started a turn: what Retry under its finished reply sends again. */
+export interface TurnPrompt {
+  text: string
+  images: Extract<TranscriptItem, { kind: 'user' }>['images']
+}
+
+// One prompt object per user message, so a row's prompt keeps its identity while the list is laid out again.
+const prompts = new WeakMap<TranscriptItem, TurnPrompt>()
+
 export type DisplayRow =
-  | { id: string; kind: 'item'; item: TranscriptItem; endOfTurn: boolean }
+  | { id: string; kind: 'item'; item: TranscriptItem; endOfTurn: boolean; prompt?: TurnPrompt | null }
   /** A tool run; `tasks` are background tasks that settled inside it ("finished 2 background tasks"). */
   | { id: string; kind: 'tools'; items: ToolItem[]; tasks?: TaskItem[] }
   /** Settled background tasks in a row: "18 background commands completed". */
@@ -59,8 +68,14 @@ export function groupRows(items: TranscriptItem[]): DisplayRow[] {
     const s = settledAt(it)
     if (s !== undefined) turnStart = Math.max(turnStart, s)
   })
+  let prompt: TurnPrompt | null = null
   items.forEach((it, i) => {
     const last = out[out.length - 1]
+    if (it.kind === 'user' && !it.parentToolUseId && !it.queued) {
+      let p = prompts.get(it)
+      if (!p || p.text !== it.text || p.images !== it.images) prompts.set(it, (p = { text: it.text, images: it.images }))
+      prompt = p
+    }
     if (folds(it)) {
       if (last?.kind === 'tools') last.items.push(it)
       else out.push({ id: `tools:${it.id}`, kind: 'tools', items: [it] })
@@ -72,7 +87,7 @@ export function groupRows(items: TranscriptItem[]): DisplayRow[] {
       else if (last?.kind === 'tools') (last.tasks ??= []).push(it)
       else if (last?.kind === 'tasks') last.items.push(it)
       else out.push({ id: `tasks:${it.id}`, kind: 'tasks', items: [it] })
-    } else out.push({ id: it.id, kind: 'item', item: it, endOfTurn: false })
+    } else out.push(it.kind === 'assistant_text' ? { id: it.id, kind: 'item', item: it, endOfTurn: false, prompt } : { id: it.id, kind: 'item', item: it, endOfTurn: false })
   })
   let seenText = false
   for (let i = out.length - 1; i >= 0; i--) {

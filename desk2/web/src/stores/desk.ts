@@ -1,4 +1,4 @@
-import { ref, computed, reactive, watch } from 'vue'
+import { ref, computed, reactive, shallowReactive, isReactive, toRaw, watch } from 'vue'
 import type {
   ChatSummary,
   TranscriptItem,
@@ -48,7 +48,6 @@ function getWsUrl() {
 
 interface DeskStoreState {
   chats: ChatSummary[]
-  itemsByChat: Map<string, TranscriptItem[]>
   external: ExternalSession[]
   workers: CliMayteWorker[]
   remoteWorkers: CliMayteWorker[]
@@ -81,7 +80,6 @@ function splitWorkers(list: CliMayteWorker[]): Pick<DeskStoreState, 'workers' | 
 // reload shows the sidebar before the server's welcome lands.
 const store = reactive<DeskStoreState>({
   chats: [],
-  itemsByChat: new Map(),
   external: readListCache<ExternalSession>('external') ?? [],
   ...splitWorkers(readListCache<CliMayteWorker>('workers') ?? []),
   accounts: [],
@@ -92,9 +90,113 @@ const store = reactive<DeskStoreState>({
 })
 watch(
   () => store.selected,
-  (view) => rememberView(view),
+  (view) => {
+    rememberView(view)
+    if (view.kind === 'chat' && itemsByChat.has(view.id)) touchChat(view.id)
+  },
   { deep: true }
 )
+
+// Every loaded chat's transcript. Only the map and each chat's array are reactive: the items inside stay
+// plain objects, so a streamed delta is not tracked through a proxy per item. An item that changes is
+// replaced in its array (replaceItem), which is what tells the views showing it.
+const itemsByChat = shallowReactive(new Map<string, TranscriptItem[]>())
+
+/** The chats whose transcripts are kept, least recently opened first; the rest are fetched again when opened. */
+const KEEP_CHATS = 12
+const recentChats: string[] = []
+
+function touchChat(id: string) {
+  const at = recentChats.indexOf(id)
+  if (at >= 0) recentChats.splice(at, 1)
+  recentChats.push(id)
+  const open = store.selected.kind === 'chat' ? store.selected.id : ''
+  for (let i = 0; recentChats.length > KEEP_CHATS && i < recentChats.length; ) {
+    const old = recentChats[i]
+    if (old === open) {
+      i++
+      continue
+    }
+    recentChats.splice(i, 1)
+    itemsByChat.delete(old)
+    indexes.delete(old)
+  }
+}
+
+/** A chat's loaded transcript; an array put in the map by hand is made reactive here. */
+function chatItems(id: string): TranscriptItem[] | undefined {
+  const items = itemsByChat.get(id)
+  if (!items || isReactive(items)) return items
+  const wrapped = shallowReactive(items)
+  itemsByChat.set(id, wrapped)
+  return wrapped
+}
+
+// Where each item id sits in its chat's array, so a streamed delta or an upsert finds its item at once. An
+// entry stands only for the array and length it was built on; anything else rebuilds it.
+const indexes = new Map<string, { arr: TranscriptItem[]; len: number; byId: Map<string, number> }>()
+
+function indexFor(chatId: string, items: TranscriptItem[]) {
+  const raw = toRaw(items)
+  let entry = indexes.get(chatId)
+  if (!entry || entry.arr !== raw || entry.len !== raw.length) {
+    const byId = new Map<string, number>()
+    raw.forEach((it, i) => {
+      if (!byId.has(it.id)) byId.set(it.id, i)
+    })
+    entry = { arr: raw, len: raw.length, byId }
+    indexes.set(chatId, entry)
+  }
+  return entry
+}
+
+function indexOfItem(chatId: string, items: TranscriptItem[], id: string): number {
+  const entry = indexFor(chatId, items)
+  const at = entry.byId.get(id)
+  if (at === undefined) return -1
+  if (entry.arr[at]?.id === id) return at
+  indexes.delete(chatId)
+  return items.findIndex((i) => i.id === id)
+}
+
+function appendItem(chatId: string, items: TranscriptItem[], item: TranscriptItem) {
+  const entry = indexFor(chatId, items)
+  entry.byId.set(item.id, items.length)
+  items.push(item)
+  entry.len = toRaw(items).length
+}
+
+/** Puts a new copy of an item in its place: the arrays are shallow, so a change in place would reach no view. */
+function replaceItem(items: TranscriptItem[], at: number, item: TranscriptItem) {
+  items[at] = item
+}
+
+/** The new list with the old row kept for every row that did not change, so only the changed rows draw again. */
+function reconcile<T extends { id: string }>(old: T[], next: T[]): T[] {
+  const before = new Map(old.map((o) => [o.id, o]))
+  const out = next.map((n) => {
+    const o = before.get(n.id)
+    return o && JSON.stringify(toRaw(o)) === JSON.stringify(n) ? o : n
+  })
+  return out.length === old.length && out.every((o, i) => o === old[i]) ? old : out
+}
+
+// The lists' browser copies are written once things settle, not on every broadcast; leaving the page writes them at once.
+const pendingCache = new Map<string, unknown>()
+let cacheTimer: ReturnType<typeof setTimeout> | null = null
+
+function flushCache() {
+  if (cacheTimer) clearTimeout(cacheTimer)
+  cacheTimer = null
+  for (const [key, value] of pendingCache) writeCache(key, value)
+  pendingCache.clear()
+}
+
+function cacheLater(key: string, value: unknown) {
+  pendingCache.set(key, value)
+  cacheTimer ??= setTimeout(flushCache, 2000)
+}
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('pagehide', flushCache)
 
 /** A request; a refusal rejects with the server's own sentence (its { error } body), else the status. */
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -149,11 +251,14 @@ const sendClicks = new Map<string, number>()
 
 /** The chat's history with what streamed before and while it was fetched, now its whole cached transcript. */
 function landItems(id: string, snapshot: TranscriptItem[]): TranscriptItem[] {
-  const since = [...(unloadedUpserts.get(id) ?? []), ...(store.itemsByChat.get(id) ?? [])]
+  const since = [...(unloadedUpserts.get(id) ?? []), ...(itemsByChat.get(id) ?? [])]
   unloadedUpserts.delete(id)
   const items = keepNewer(withWindowNotes(id, snapshot), since)
-  store.itemsByChat.set(id, items)
-  return items
+  const kept = shallowReactive(items)
+  itemsByChat.set(id, kept)
+  indexes.delete(id)
+  touchChat(id)
+  return kept
 }
 
 function handleServerEvent(event: ServerEvent) {
@@ -162,7 +267,9 @@ function handleServerEvent(event: ServerEvent) {
       store.chats = event.chats
       store.settings = event.settings
       // Full reload: clear items cache
-      store.itemsByChat.clear()
+      itemsByChat.clear()
+      indexes.clear()
+      recentChats.length = 0
       unloadedUpserts.clear()
       reloadOpenChat()
       // Whole, whatever its rev: a restarted server may count afresh. A server without a queue sends none.
@@ -185,7 +292,10 @@ function handleServerEvent(event: ServerEvent) {
 
     case 'chat.removed':
       store.chats = store.chats.filter((c) => c.id !== event.chatId)
-      store.itemsByChat.delete(event.chatId)
+      itemsByChat.delete(event.chatId)
+      indexes.delete(event.chatId)
+      const gone = recentChats.indexOf(event.chatId)
+      if (gone >= 0) recentChats.splice(gone, 1)
       unloadedUpserts.delete(event.chatId)
       break
 
@@ -198,35 +308,34 @@ function handleServerEvent(event: ServerEvent) {
       }
       // A chat whose history is not loaded keeps what streams aside: put in the cache, it would stand for
       // the whole transcript and opening the chat would never fetch its history.
-      let items = store.itemsByChat.get(event.chatId)
+      let items = chatItems(event.chatId)
       if (!items) {
         items = unloadedUpserts.get(event.chatId) ?? []
         unloadedUpserts.set(event.chatId, items)
       }
-      const idx = items.findIndex((i) => i.id === event.item.id)
-      if (idx >= 0) {
-        items[idx] = event.item
-      } else {
-        items.push(event.item)
-      }
+      const idx = indexOfItem(event.chatId, items, event.item.id)
+      if (idx >= 0) replaceItem(items, idx, event.item)
+      else appendItem(event.chatId, items, event.item)
       break
     }
 
     case 'item.delta': {
-      const items = store.itemsByChat.get(event.chatId) ?? unloadedUpserts.get(event.chatId)
-      if (items) {
-        const item = items.find((i) => i.id === event.itemId)
-        if (item && (item.kind === 'assistant_text' || item.kind === 'thinking')) {
-          item.text += event.text
-        }
+      const items = chatItems(event.chatId) ?? unloadedUpserts.get(event.chatId)
+      const at = items ? indexOfItem(event.chatId, items, event.itemId) : -1
+      const item = items?.[at]
+      if (items && item && (item.kind === 'assistant_text' || item.kind === 'thinking')) {
+        replaceItem(items, at, { ...item, text: item.text + event.text })
       }
       break
     }
 
     case 'item.removed': {
-      const items = store.itemsByChat.get(event.chatId) ?? unloadedUpserts.get(event.chatId)
-      const idx = items?.findIndex((i) => i.id === event.itemId) ?? -1
-      if (idx >= 0) items!.splice(idx, 1)
+      const items = chatItems(event.chatId) ?? unloadedUpserts.get(event.chatId)
+      const idx = items ? indexOfItem(event.chatId, items, event.itemId) : -1
+      if (idx >= 0) {
+        items!.splice(idx, 1)
+        indexes.delete(event.chatId)
+      }
       break
     }
 
@@ -239,13 +348,13 @@ function handleServerEvent(event: ServerEvent) {
       break
 
     case 'external.update':
-      store.external = event.sessions
-      writeCache('external', event.sessions)
+      store.external = reconcile(store.external, event.sessions)
+      cacheLater('external', event.sessions)
       break
 
     case 'climayte.update':
       Object.assign(store, splitWorkers(event.workers))
-      writeCache('workers', event.workers)
+      cacheLater('workers', event.workers)
       break
 
     case 'accounts.update':
@@ -316,10 +425,7 @@ function updateWindowTitle() {
 }
 
 watch(
-  () => [
-    store.chats.map((c) => `${c.id}:${c.status}`).join(','),
-    store.connected
-  ],
+  () => [store.chats.filter((c) => c.status === 'working').length, store.chats.filter((c) => c.status === 'needs_you').length, store.connected],
   () => {
     updateWindowTitle()
   }
@@ -461,8 +567,8 @@ function noteNotSent(chatId: string, reason: string, message: SendMessageRequest
   const now = Date.now()
   const note = { item: { kind: 'system', id: `window:not-sent:${now}`, ts: now, level: 'warn', text: lines.join(' ') } satisfies TranscriptItem, reason }
   windowNotes.set(chatId, [...(windowNotes.get(chatId) ?? []), note])
-  const shown = store.itemsByChat.get(chatId)
-  if (shown && !statesReason(shown, reason)) shown.push(note.item)
+  const shown = chatItems(chatId)
+  if (shown && !statesReason(shown, reason)) appendItem(chatId, shown, note.item)
 }
 
 /** The chat's items from the server with the window's own notes put in by their time. */
@@ -499,7 +605,7 @@ export function useDesk() {
   return {
     // State
     chats: computed(() => store.chats),
-    itemsByChat: computed(() => store.itemsByChat),
+    itemsByChat: computed(() => itemsByChat),
     external: computed(allExternal),
     workers: computed(() => store.workers),
     /** The other PCs' CliMayte workers, for the sidebar's CliMayte rows only (splitWorkers). */
@@ -517,13 +623,6 @@ export function useDesk() {
       }
       connectWebSocket()
       watchBundle()
-      try {
-        const data = await fetchJson<{
-          hello: ServerEvent & { type: 'hello' }
-        }>('/health')
-      } catch (err) {
-        console.error('Failed to initialize:', err)
-      }
     },
 
     select(

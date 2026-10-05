@@ -22,8 +22,9 @@ const diff = computed(() => (open.value ? toolDiff(props.item.name, props.item.i
 const exit = computed(() => bashExit(props.item.status, props.item.result?.text))
 const command = computed(() => String(props.item.input.command ?? ''))
 const todos = computed(() => (Array.isArray(props.item.input.todos) ? (props.item.input.todos as TodoEntry[]) : []))
-const inputJson = computed(() => JSON.stringify(props.item.input, null, 2))
 const showInput = computed(() => !['bash', 'edit', 'write', 'todo', 'read'].includes(family.value))
+// Only an open row of a family that shows its input pretty-prints it.
+const inputJson = computed(() => (open.value && showInput.value ? JSON.stringify(props.item.input, null, 2) : ''))
 // A result that is only pictures ("[image]" per picture) shows the pictures, not the placeholder text.
 const pictureOnly = computed(() => !!props.item.result?.images?.length && /^(\[image\]\s*)+$/.test(props.item.result?.text ?? ''))
 </script>

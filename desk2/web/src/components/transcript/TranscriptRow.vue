@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { CircleAlert, Info, TriangleAlert } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { formatElapsed, isSendFileTool, toolFamily } from './lib/tools'
+import type { TurnPrompt } from './lib/groups'
 import UserMessage from './parts/UserMessage.vue'
 import MarkdownBlock from './parts/MarkdownBlock.vue'
 import ThinkingRow from './parts/ThinkingRow.vue'
@@ -19,11 +20,10 @@ import PlanCard from './parts/PlanCard.vue'
 import ElicitationCard from './parts/ElicitationCard.vue'
 import MessageActions from './parts/MessageActions.vue'
 import { useTranscript } from './context'
-import { useShellSource } from '@/components/shell/source'
 
 // overlayActions: settled tasks follow the reply ("18 background commands completed" sits 15px under its last
 // line in real-markdown-and-file-card.png), so the hover toolbar floats over that gap instead of opening one.
-const props = defineProps<{ item: TranscriptItem; nested?: boolean; endOfTurn?: boolean; overlayActions?: boolean }>()
+const props = defineProps<{ item: TranscriptItem; nested?: boolean; endOfTurn?: boolean; overlayActions?: boolean; prompt?: TurnPrompt | null }>()
 
 const ctx = useTranscript()
 const family = computed(() => (props.item.kind === 'tool_use' ? toolFamily(props.item.name) : null))
@@ -41,18 +41,8 @@ const resultLine = computed(() => {
   return parts.join(' · ')
 })
 
-// Retry under a finished reply sends again the prompt that started its turn.
-const shell = useShellSource()
-const turnPrompt = computed(() => {
-  if (props.item.kind !== 'assistant_text' || !props.endOfTurn || props.nested) return null
-  const items = shell.itemsByChat.value.get(ctx.chatId.value) ?? []
-  const at = items.findIndex((i) => i.id === props.item.id)
-  for (let i = (at < 0 ? items.length : at) - 1; i >= 0; i--) {
-    const it = items[i]
-    if (it.kind === 'user' && !it.parentToolUseId && !it.queued) return { text: it.text, images: it.images }
-  }
-  return null
-})
+// Retry under a finished reply sends again the prompt that started its turn (worked out with the rows).
+const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !props.endOfTurn || props.nested ? null : (props.prompt ?? null)))
 </script>
 
 <template>
