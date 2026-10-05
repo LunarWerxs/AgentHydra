@@ -1,6 +1,6 @@
 // What the transcript lays out, after nesting: runs of tool calls fold into one status row
 // ("Ran 3 commands, read screen-half.png"), as the real Claude Code desktop does. Pure: no Vue, no DOM.
-import type { TranscriptItem } from '@shared/protocol'
+import { CONTINUED_LINE, type TranscriptItem } from '@shared/protocol'
 import { formatElapsed, isSendFileTool, parseMcpName, shortPath, toolFamily } from './tools'
 import { toolDiff } from './diff'
 
@@ -79,6 +79,9 @@ export function groupRows(items: TranscriptItem[]): DisplayRow[] {
     }
     // A reply to a note has no prompt of the person's to send again.
     if (it.kind === 'note') prompt = null
+    // A handoff's continuation right after CliMayte's move line says nothing that line has not (owner,
+    // 2026-10-05: only the move line). The move line's id is `moved:<ts>` (server chat-manager systemLine).
+    if (it.kind === 'system' && it.text.startsWith(CONTINUED_LINE) && last?.kind === 'item' && last.item.id.startsWith('moved:')) return
     if (folds(it)) {
       if (last?.kind === 'tools') last.items.push(it)
       else out.push({ id: `tools:${it.id}`, kind: 'tools', items: [it] })

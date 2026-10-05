@@ -146,6 +146,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   repeated it above the composer is gone. A workflow that finished before the latest turn began (a
   finished background task starts a turn of its own) folds into one muted line, as in the real app,
   instead of keeping its card.
+- **A CliMayte move reads as one line.** When CliMayte moves a chat to another account, the chat shows
+  "CliMayte moved this chat from #164 to #153." and nothing else for it: the prompt the new session was
+  started with (the task again, a note to it and the whole handoff) is never shown as your message. A
+  handoff with no move (same account) is one muted "Continued in a fresh session" line; messages you sent
+  that the earlier session never got to stay as yours. Chats already saved read the same way.
 - **Restart to update.** When Desk 2's server code changes after it started, the Menu button gets a blue
   dot and Menu has Restart to update: it runs `launcher/restart.ps1` for you, the chats keep running and the
   window reconnects. A button that needs newer server code than the running one says so instead of a bare

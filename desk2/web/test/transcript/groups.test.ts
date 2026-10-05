@@ -32,6 +32,14 @@ describe('groupRows', () => {
     expect(rows[2].kind === 'tools' && rows[2].items.map((i) => i.id)).toEqual(['m', 'b'])
   })
 
+  test("a handoff's continuation line right after CliMayte's move line is not shown: the move line says it", () => {
+    const moved: TranscriptItem = { id: 'moved:5', ts: 5, kind: 'system', level: 'info', text: 'CliMayte moved this chat from #1 to #2.' }
+    const continued: TranscriptItem = { id: 'u2', ts: 6, kind: 'system', level: 'info', text: 'Continued in a fresh session on another account: the account neared its usage limit.' }
+    expect(groupRows([user('u1'), text('t1'), moved, continued, text('t2')]).map((r) => r.id)).toEqual(['u1', 't1', 'moved:5', 't2'])
+    // A handoff on the same account has no move line before it: its line stays.
+    expect(groupRows([user('u1'), text('t1'), continued, text('t2')]).map((r) => r.id)).toEqual(['u1', 't1', 'u2', 't2'])
+  })
+
   test('only the last finished assistant text of each turn ends the turn', () => {
     const rows = groupRows([user('u1'), text('t1'), tool('a', 'Bash'), text('t2'), user('u2'), text('t3', true)])
     const end = Object.fromEntries(rows.flatMap((r) => (r.kind === 'item' ? [[r.id, r.endOfTurn]] : [])))

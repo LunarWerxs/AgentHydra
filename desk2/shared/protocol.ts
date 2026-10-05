@@ -215,6 +215,9 @@ export type TranscriptItem =
 
 export const MAX_TOOL_RESULT_CHARS = 20_000
 
+/** How the muted line a CliMayte handoff's continuation prompt is shown as starts (server engine/system-text.ts). */
+export const CONTINUED_LINE = 'Continued in a fresh session'
+
 // Things Hydra Desk watches through AgentHydra (the daemon on 127.0.0.1:7787)
 
 /** A Claude Code session NOT run by Hydra Desk: a Claude Desktop chat, a terminal CLI, a CliMayte worker, Codex. */

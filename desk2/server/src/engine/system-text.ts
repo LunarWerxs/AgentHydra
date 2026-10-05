@@ -4,7 +4,7 @@
 // classifier used by every path that turns messages into transcript items (the live SDK stream, a
 // session's .jsonl, AgentHydra's tail).
 
-import type { ImageRef, TranscriptItem } from '@shared/protocol'
+import { CONTINUED_LINE, type ImageRef, type TranscriptItem } from '@shared/protocol'
 import type { MediaCache } from '../media/cache'
 
 type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
@@ -243,7 +243,7 @@ export function continuationOf(text: string): { messages: string | null; line: s
   const messages = list ? (list.startsWith('- ') && !list.includes('\n- ') ? list.slice(2).trim() : list) : null
   const why = CONTINUED_WHY.find(([re]) => re.test(m[2]))?.[1]
   const where = m[1] === 'on another account' ? ' on another account' : ''
-  return { messages: messages || null, line: `Continued in a fresh session${where}${why ? `: ${why}` : ''}.` }
+  return { messages: messages || null, line: `${CONTINUED_LINE}${where}${why ? `: ${why}` : ''}.` }
 }
 
 /**
