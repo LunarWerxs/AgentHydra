@@ -17,7 +17,7 @@
 // A crosshair rather than per-point dots: at hourly buckets over a month there are hundreds of
 // points, and a marker on each is noise. One series, so no legend.
 import { useElementSize } from '@vueuse/core'
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
 import ChartTip from '@/components/charts/ChartTip.vue'
 import { areaPath, axisMax, linePath, ticks } from '@/lib/chart'
 
@@ -63,7 +63,14 @@ const xy = computed(() => {
 })
 
 const hover = ref<number | null>(null)
-const tip = ref({ x: 0, y: 0 })
+// Read only by ChartTip, so moving the pointer re-renders the card and not the chart.
+const tip = shallowRef({ x: 0, y: 0 })
+// Handed over inside a plain object so the template passes the ref itself and never reads it.
+const tipHolder = { pos: tip }
+/** The series peak, once per change of points rather than once per hover. */
+const peak = computed(() => Math.max(...props.points.map((p) => p.value)))
+const area = computed(() => areaPath(xy.value, plotH))
+const line = computed(() => linePath(xy.value))
 
 /** The neighbouring value as well as the hovered one, so the card says what the line is DOING
  *  rather than only where it is. */
@@ -73,27 +80,47 @@ const tipRows = computed(() => {
   const at = props.points[i]
   if (!at) return []
   const prev = i > 0 ? props.points[i - 1] : null
-  const peak = Math.max(...props.points.map((p) => p.value))
   const rows = [{ label: props.valueLabel, value: props.format(at.value) }]
   if (prev) {
     const delta = at.value - prev.value
     rows.push({ label: props.changeLabel, value: `${delta >= 0 ? '+' : ''}${props.format(delta)}` })
   }
-  rows.push({ label: props.peakLabel, value: props.format(peak) })
+  rows.push({ label: props.peakLabel, value: props.format(peak.value) })
   return rows
 })
 
-function onMove(e: MouseEvent) {
-  if (props.points.length === 0) return
-  const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
+// Pointer moves are coalesced to one update per animation frame, which also reads the layout once.
+let frame = 0
+let last: { el: SVGSVGElement; x: number; y: number } | null = null
+
+function applyMove() {
+  frame = 0
+  const m = last
+  last = null
+  if (!m || props.points.length === 0) return
+  const rect = m.el.getBoundingClientRect()
   if (rect.width === 0) return
   // One unit per pixel, so this is a direct read rather than a scale.
-  const local = e.clientX - rect.left
+  const local = m.x - rect.left
   const n = Math.max(1, props.points.length - 1)
   const i = Math.round(((local - PAD_L.value) / (W.value - PAD_L.value)) * n)
   hover.value = Math.min(props.points.length - 1, Math.max(0, i))
-  tip.value = { x: e.clientX, y: e.clientY }
+  tip.value = { x: m.x, y: m.y }
 }
+
+function onMove(e: MouseEvent) {
+  last = { el: e.currentTarget as SVGSVGElement, x: e.clientX, y: e.clientY }
+  if (!frame) frame = requestAnimationFrame(applyMove)
+}
+
+function onLeave() {
+  last = null
+  hover.value = null
+}
+
+onBeforeUnmount(() => {
+  if (frame) cancelAnimationFrame(frame)
+})
 </script>
 
 <template>
@@ -105,7 +132,7 @@ function onMove(e: MouseEvent) {
       class="h-37.5 w-full"
       role="img"
       @mousemove="onMove"
-      @mouseleave="hover = null"
+      @mouseleave="onLeave"
     >
       <line
         v-for="t in axisTicks"
@@ -126,9 +153,9 @@ function onMove(e: MouseEvent) {
         class="fill-muted-foreground text-3xs tabular-nums"
       >{{ axisText(t) }}</text>
 
-      <path :d="areaPath(xy, plotH)" class="fill-(--viz-seq) opacity-14" />
+      <path :d="area" class="fill-(--viz-seq) opacity-14" />
       <path
-        :d="linePath(xy)"
+        :d="line"
         fill="none"
         class="stroke-(--viz-seq)"
         stroke-width="2"
@@ -159,8 +186,7 @@ function onMove(e: MouseEvent) {
   </div>
   <ChartTip
     v-if="hover !== null && points[hover]"
-    :x="tip.x"
-    :y="tip.y"
+    :pos="tipHolder.pos"
     :title="labelAt(points[hover]?.at ?? 0)"
     :rows="tipRows"
   />

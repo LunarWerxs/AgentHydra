@@ -15,7 +15,7 @@
 // CELLS SIZED FROM THE CONTAINER, like HourGrid, but from the WEEK COUNT rather than a fixed 24 —
 // a fortnight and three years both have to fill the same card without overflowing it.
 import { useElementSize } from '@vueuse/core'
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ChartTip from '@/components/charts/ChartTip.vue'
 
@@ -105,7 +105,10 @@ const monthTicks = computed(() => {
 const { t } = useI18n()
 const max = computed(() => Math.max(1, ...cells.value.map((c) => c.value)))
 const hover = ref<string | null>(null)
-const tip = ref({ x: 0, y: 0 })
+// Read only by ChartTip, so moving the pointer re-renders the card and not the grid.
+const tip = shallowRef({ x: 0, y: 0 })
+// Handed over inside a plain object so the template passes the ref itself and never reads it.
+const tipHolder = { pos: tip }
 const hovered = computed(() => cells.value.find((c) => c.key === hover.value) ?? null)
 
 const tipRows = computed(() => {
@@ -140,6 +143,14 @@ const intensity = (v: number) => (v === 0 ? 0 : 0.15 + 0.85 * (v / max.value))
  *  screen reader gets, so the grid is not mouse-only. */
 const cellLabel = (c: { date: Date; value: number }) =>
   `${c.date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}, ${props.format(c.value)}`
+
+/** The cells split into the seven weekday rows, each with its label, built once per change of data
+ *  rather than once per render. */
+const rows = computed(() => {
+  const out: { cell: (typeof cells.value)[number]; label: string }[][] = [[], [], [], [], [], [], []]
+  for (const c of cells.value) out[c.row]?.push({ cell: c, label: cellLabel(c) })
+  return out
+})
 
 function onEnter(key: string, e: MouseEvent) {
   hover.value = key
@@ -186,12 +197,12 @@ function onEnter(key: string, e: MouseEvent) {
         <span class="w-(--cg-label) shrink-0 text-3xs text-muted-foreground">{{ label }}</span>
         <div class="relative h-(--cg-cell) w-(--cg-grid)">
           <div
-            v-for="c in cells.filter((x) => x.row === row)"
+            v-for="{ cell: c, label: cellAria } in rows[row]"
             :key="c.key"
             class="absolute top-0 left-(--cg-x) size-(--cg-cell) rounded-xs bg-muted"
             :class="hover === c.key ? 'ring-1 ring-foreground/40' : ''"
             :style="{ '--cg-x': `${c.col * (cell + GAP)}px` }"
-            :aria-label="cellLabel(c)"
+            :aria-label="cellAria"
             @mouseenter="onEnter(c.key, $event)"
             @mousemove="tip = { x: $event.clientX, y: $event.clientY }"
             @mouseleave="hover = null"
@@ -205,5 +216,5 @@ function onEnter(key: string, e: MouseEvent) {
       </div>
     </div>
   </div>
-  <ChartTip v-if="hovered" :x="tip.x" :y="tip.y" :title="tipTitle" :rows="tipRows" />
+  <ChartTip v-if="hovered" :pos="tipHolder.pos" :title="tipTitle" :rows="tipRows" />
 </template>
