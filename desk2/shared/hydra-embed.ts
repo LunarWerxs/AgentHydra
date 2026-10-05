@@ -122,3 +122,6 @@ export type DeskMessage =
   | { type: 'desk:show-instance'; num: number; kind: 'desktop' | 'cli' }
   /** Open this CliMayte task on the CliMayte tab; `pc` (that PC's name) for another PC's, whose id may repeat one here. */
   | { type: 'desk:open-worker'; id: string; pc?: string }
+  /** Whether the pane is in view. Out of view the copy's page counts as hidden (document.hidden), so its
+   *  polls rest until it slides back in; the frame stays loaded either way. */
+  | { type: 'desk:visible'; visible: boolean }

@@ -18,7 +18,8 @@ import {
 import type { TranscriptItem } from '@shared/protocol'
 import { bashExit, formatElapsed, keyArgument, toolFamily, toolLabel } from '../lib/tools'
 import { toolDiff } from '../lib/diff'
-import { useClock, useTranscript } from '../context'
+import { useClock } from '@/lib/clock'
+import { useTranscript } from '../context'
 import StatusIcon from './StatusIcon.vue'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>

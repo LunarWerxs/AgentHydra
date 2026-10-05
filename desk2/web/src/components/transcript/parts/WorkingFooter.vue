@@ -5,7 +5,7 @@
 import { computed } from 'vue'
 import type { ChatSummary } from '@shared/protocol'
 import { formatElapsed } from '../lib/tools'
-import { useClock } from '../context'
+import { useClock } from '@/lib/clock'
 
 const props = defineProps<{ chat: ChatSummary }>()
 

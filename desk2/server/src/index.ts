@@ -9,6 +9,7 @@ import type { ServerEvent } from '@shared/protocol'
 import pkg from '../package.json'
 import { type HelloProvider, type Plugin, type ServerContext, setContext } from './context'
 import { createSettingsStore, SettingsError } from './settings'
+import { cacheControl } from './static-cache'
 import { createWsHub, type WsClient } from './ws'
 
 export const VERSION: string = pkg.version
@@ -98,9 +99,9 @@ function serveStatic(app: Hono, dist: string): void {
     const path = decodeURIComponent(new URL(c.req.url).pathname)
     const file = resolve(dist, `.${path}`)
     if ((file === dist || file.startsWith(dist + sep)) && existsSync(file) && statSync(file).isFile()) {
-      return new Response(Bun.file(file))
+      return new Response(Bun.file(file), { headers: { 'cache-control': cacheControl(path) } })
     }
-    return new Response(Bun.file(index), { headers: { 'content-type': 'text/html; charset=utf-8' } })
+    return new Response(Bun.file(index), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } })
   })
 }
 

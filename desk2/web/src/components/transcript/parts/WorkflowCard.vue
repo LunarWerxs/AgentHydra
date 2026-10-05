@@ -6,7 +6,7 @@ import { computed } from 'vue'
 import { icons } from '@/lib/icons'
 import type { TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
-import { useClock } from '../context'
+import { useClock } from '@/lib/clock'
 import { workflowDots, workflowElapsed } from '../lib/groups'
 
 const Chevron = icons.statusChevron

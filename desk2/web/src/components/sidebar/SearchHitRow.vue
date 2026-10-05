@@ -2,21 +2,24 @@
 import { computed } from 'vue'
 import type { SearchHit } from '@shared/protocol'
 import { Tip } from '@/components/ui/tooltip'
+import { useClock } from '@/lib/clock'
 import { folderLabel, sourceLabel } from './logic'
 import { highlightParts, relativeTime } from './search'
 
 // One "Everywhere" row of the sidebar search: AgentHydra found the query inside this session's
 // transcript. The title and the matching line with the query's words emphasised, folder and age beside.
-const props = withDefaults(defineProps<{ hit: SearchHit; query: string; now: number; active?: boolean; selected?: boolean }>(), {
+const props = withDefaults(defineProps<{ hit: SearchHit; query: string; active?: boolean; selected?: boolean }>(), {
   active: false,
   selected: false
 })
 const emit = defineEmits<{ select: [] }>()
+// Its age is in minutes (relativeTime), so a minute clock.
+const now = useClock(60_000)
 
 const title = computed(() => highlightParts(props.hit.title, props.query))
 const snippet = computed(() => highlightParts(props.hit.snippet, props.query))
 const meta = computed(() =>
-  [props.hit.cwd ? folderLabel(props.hit.cwd) : null, relativeTime(props.hit.lastActivityAt, props.now)].filter(Boolean).join(' · ')
+  [props.hit.cwd ? folderLabel(props.hit.cwd) : null, relativeTime(props.hit.lastActivityAt, now.value)].filter(Boolean).join(' · ')
 )
 const tooltip = computed(() => [sourceLabel(props.hit.source), props.hit.cwd].filter(Boolean).join('\n'))
 </script>

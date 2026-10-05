@@ -11,6 +11,7 @@ import { resumable } from '@/components/external/logic'
 import AccountSubmenu from './AccountSubmenu.vue'
 import { PanelTopClose, PanelTopOpen } from '@lucide/vue'
 import { headerOpen } from '@/components/session-header/state'
+import { useClock } from '@/lib/clock'
 
 // The title bar inside the pane (h32): session title (click to rename), its menu, the folder pill,
 // Hydra Desk's status cue, and on the right the 26px pane buttons. Hydra Desk 2: an outside session's
@@ -23,7 +24,6 @@ const props = withDefaults(
     /** Title of a view that is not a chat (CliMayte, Elsewhere, Settings); empty on the new-session screen. */
     title?: string
     pane?: RightPane | null
-    now?: number
     /** Accounts for the chat menu's "Account" submenu. */
     accounts?: AccountInfo[]
     /** A session running elsewhere: read-only unless it is a Claude Code session. */
@@ -35,7 +35,7 @@ const props = withDefaults(
     /** The chat menu's Move to group names. */
     groups?: string[]
   }>(),
-  { title: '', pane: null, now: () => Date.now(), accounts: () => [], external: null, standIn: null, showThinking: false, groups: () => [] }
+  { title: '', pane: null, accounts: () => [], external: null, standIn: null, showThinking: false, groups: () => [] }
 )
 const emit = defineEmits<{
   action: [item: RowMenuItem]
@@ -47,7 +47,9 @@ const emit = defineEmits<{
 
 const menu = computed(() => (props.chat ? rowMenu(chatRow(props.chat), props.groups) : []))
 
-// Hydra Desk status cue: only states the real app hides (idle and stopped show nothing).
+// Hydra Desk status cue: only states the real app hides (idle and stopped show nothing). Only a working or
+// limited chat's cue reads the clock, so the bar redraws on the tick only while its time moves.
+const clock = useClock()
 const cue = computed(() => {
   const c = props.chat
   if (!c) return null
@@ -56,7 +58,7 @@ const cue = computed(() => {
     case 'starting':
       return { text: 'Starting', tone: 'text-text-muted', dot: 'bg-[var(--status-working)] animate-dot-blink' }
     case 'working': {
-      const t = elapsedLabel(c.turnStartedAt, props.now)
+      const t = elapsedLabel(c.turnStartedAt, clock.value)
       return { text: t ? `Working · ${t}` : 'Working', tone: 'text-text-muted', dot: 'bg-[var(--status-working)] animate-dot-blink' }
     }
     case 'needs_you':
@@ -64,7 +66,7 @@ const cue = computed(() => {
     case 'error':
       return { text: 'Error', tone: 'text-danger-text', dot: 'bg-[var(--status-error)]' }
     case 'limited': {
-      const t = resetClock(c.limitResetsAt, props.now)
+      const t = resetClock(c.limitResetsAt, clock.value)
       return { text: t ? `Limited · resets ${t}` : 'Limited', tone: 'text-[var(--status-limited-text)]', dot: glyphDotClass(g) }
     }
     case 'closed':

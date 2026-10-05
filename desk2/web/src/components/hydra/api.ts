@@ -22,6 +22,8 @@ export const hydraSidebar = shallowRef<SidebarModel | null>(null)
 let frame: Window | null = null
 let ready = false
 const held: DeskMessage[] = []
+// Whether the pane is in view: the frame stays loaded behind the chat, and out of view its polls rest.
+let visible = false
 
 /** HydraPane: a frame was (re)created, or went away. Its sidebar is gone until it describes one again. */
 export function attachHydraFrame(win: Window | null): void {
@@ -33,7 +35,15 @@ export function attachHydraFrame(win: Window | null): void {
 /** HydraPane: the frame said ah:ready. */
 export function hydraReady(): void {
   ready = true
+  frame?.postMessage({ type: 'desk:visible', visible } satisfies DeskMessage, window.location.origin)
   for (const m of held.splice(0)) frame?.postMessage(m, window.location.origin)
+}
+
+/** HydraPane: the pane slid in or out. Only the latest counts, so it is never held. */
+export function setHydraVisible(v: boolean): void {
+  if (v === visible) return
+  visible = v
+  if (ready && frame) frame.postMessage({ type: 'desk:visible', visible } satisfies DeskMessage, window.location.origin)
 }
 
 export function tellHydra(message: DeskMessage): void {

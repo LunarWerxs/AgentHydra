@@ -2,6 +2,7 @@
 import { computed, nextTick, ref } from 'vue'
 import type { ChatSummary } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
+import { useClock } from '@/lib/clock'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, rowTooltip, statusGlyph, type RowMenuItem } from './logic'
@@ -11,24 +12,27 @@ import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 
 // One session row: 26px, r6, status dot in a 24px leading slot, title with a right fade, and on hover
 // the "More options" button. The three-dot menu and the right-click menu are the same list.
-const props = withDefaults(defineProps<{ chat: ChatSummary; selected?: boolean; now?: number; /** Move to group's names. */ groups?: string[] }>(), {
+const props = withDefaults(defineProps<{ chat: ChatSummary; selected?: boolean; /** Move to group's names. */ groups?: string[] }>(), {
   selected: false,
-  now: () => Date.now(),
   groups: () => []
 })
 const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; rename: [title: string] }>()
 
 const glyph = computed(() => statusGlyph(props.chat))
 const menu = computed(() => rowMenu(chatRow(props.chat), props.groups))
-const tooltip = computed(() => rowTooltip(props.chat, props.now))
+// The clock is read only while the row shows a time that moves (a working chat's elapsed time, a limited
+// one's reset), so an idle row never redraws on the tick.
+const clock = useClock()
+const timed = computed(() => props.chat.status === 'working' || props.chat.status === 'starting' || props.chat.status === 'limited')
+const tooltip = computed(() => rowTooltip(props.chat, timed.value ? clock.value : Date.now()))
 const menuOpen = ref(false)
 
 const dotClass = computed(() => glyphDotClass(glyph.value))
 
 const elapsed = computed(() =>
-  props.chat.status === 'working' || props.chat.status === 'starting' ? elapsedLabel(props.chat.turnStartedAt, props.now) : ''
+  props.chat.status === 'working' || props.chat.status === 'starting' ? elapsedLabel(props.chat.turnStartedAt, clock.value) : ''
 )
-const resets = computed(() => (props.chat.status === 'limited' ? resetClock(props.chat.limitResetsAt, props.now) : ''))
+const resets = computed(() => (props.chat.status === 'limited' ? resetClock(props.chat.limitResetsAt, clock.value) : ''))
 
 // Inline rename
 const renaming = ref(false)

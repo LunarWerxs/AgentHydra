@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { ChatSummary, CliMayteWorker, CloudSession, ExternalSession, SessionMetaPatch } from '@shared/protocol'
 import { icons, shellGlyphs, sidebarIcons } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -313,12 +313,6 @@ function onSearchKey(e: KeyboardEvent) {
   }
 }
 
-// Elapsed times tick once a second.
-const now = ref(Date.now())
-let timer: ReturnType<typeof setInterval> | null = null
-onMounted(() => (timer = setInterval(() => (now.value = Date.now()), 1000)))
-onBeforeUnmount(() => timer && clearInterval(timer))
-
 // Row actions: one menu for our chats and outside sessions. A chat's marks are the chat's; an outside
 // session's are Hydra Desk's overlay on it (its own files are never touched, so it has no Delete).
 type Row = { kind: 'chat'; chat: ChatSummary } | { kind: 'external'; session: ExternalSession }
@@ -465,7 +459,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               <span class="flex-1" />
               <span class="tnum">{{ unplacedText(g).count }}</span>
             </header>
-            <TaskRows :nodes="g.nodes" :selected-id="selectedExternalId" :now="now" @open="openTask" />
+            <TaskRows :nodes="g.nodes" :selected-id="selectedExternalId" @open="openTask" />
           </section>
         </template>
 
@@ -528,7 +522,6 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 v-if="entry.kind === 'chat'"
                 :chat="entry.chat"
                 :selected="selectedChatId === entry.id"
-                :now="now"
                 :groups="groupNames"
                 @select="src.select({ kind: 'chat', id: entry.id })"
                 @action="(item: RowMenuItem) => act({ kind: 'chat', chat: entry.chat }, item)"
@@ -543,7 +536,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 @action="(item: RowMenuItem) => act({ kind: 'external', session: entry.session }, item)"
                 @rename="(title: string | null) => attempt('The change', src.updateSessionMeta(entry.id, { title }))"
               />
-              <TaskRows v-if="tasksOf(`${entry.kind}:${entry.id}`)" :nodes="tasksOf(`${entry.kind}:${entry.id}`)!" :selected-id="selectedExternalId" :now="now" @open="openTask" />
+              <TaskRows v-if="tasksOf(`${entry.kind}:${entry.id}`)" :nodes="tasksOf(`${entry.kind}:${entry.id}`)!" :selected-id="selectedExternalId" @open="openTask" />
             </div>
           </TransitionGroup>
         </section>
@@ -585,7 +578,6 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               :key="row.key"
               :hit="row.hit"
               :query="search.query"
-              :now="now"
               :active="cursorKey === row.key"
               :selected="row.view.kind === 'chat' ? selectedChatId === row.view.id : selectedExternalId === row.view.id"
               @select="src.select(row.view)"

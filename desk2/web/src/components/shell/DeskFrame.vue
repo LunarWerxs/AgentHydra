@@ -374,10 +374,6 @@ function onKey(e: KeyboardEvent) {
   else travel(s)
 }
 
-// Elapsed time in the title bar
-const now = ref(Date.now())
-let timer: ReturnType<typeof setInterval> | null = null
-
 onMounted(() => {
   window.addEventListener('keydown', onKey)
   window.addEventListener(OPEN_DIFF_EVENT, onOpenDiff)
@@ -388,7 +384,6 @@ onMounted(() => {
   document.addEventListener('pointerout', onPeekPointerOut)
   window.addEventListener('focus', markOpenRead)
   document.addEventListener('visibilitychange', onVisibility)
-  timer =setInterval(() => (now.value = Date.now()), 1000)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
@@ -400,7 +395,6 @@ onBeforeUnmount(() => {
   document.removeEventListener('pointerout', onPeekPointerOut)
   window.removeEventListener('focus', markOpenRead)
   document.removeEventListener('visibilitychange', onVisibility)
-  if (timer) clearInterval(timer)
   if (slideTimer) clearTimeout(slideTimer)
   peek.dispose()
 })
@@ -479,7 +473,6 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
               :chat="isNew ? null : chat"
               :title="viewTitle"
               :pane="pane"
-              :now="now"
               :accounts="src.accounts.value"
               :external="external"
               :stand-in="standIn"

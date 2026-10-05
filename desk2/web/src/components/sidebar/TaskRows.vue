@@ -3,6 +3,7 @@ import { type Component } from 'vue'
 import { CircleCheck, CircleX, Clock, Cloud, Hourglass, ListChecks, LoaderCircle } from '@lucide/vue'
 import type { CliMayteWorker } from '@shared/protocol'
 import { modelName } from '@/components/cloud/logic'
+import { useClock } from '@/lib/clock'
 import { elapsedLabel } from './logic'
 import type { TaskNode } from './tasks'
 import { rowLeave } from '@/lib/row-leave'
@@ -11,8 +12,10 @@ import { rowLeave } from '@/lib/row-leave'
 // lines, one step in per level, with a guide line down their left. A task with a session opens its live
 // transcript in Desk; one still queued (no session yet), or one on another PC (named by a cloud mark; its
 // session is that PC's), opens on CliMayte's tab in AgentHydra.
-defineProps<{ nodes: TaskNode[]; selectedId: string | null; now: number }>()
+defineProps<{ nodes: TaskNode[]; selectedId: string | null }>()
 const emit = defineEmits<{ open: [worker: CliMayteWorker] }>()
+// Only these lines redraw on the tick, not the list around them.
+const now = useClock()
 
 /** The session it opens here: none for another PC's (Sidebar.vue openTask). */
 const ownSession = (w: CliMayteWorker) => (w.pc ? null : w.sessionId)
