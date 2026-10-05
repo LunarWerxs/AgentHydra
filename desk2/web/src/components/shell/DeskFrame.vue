@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatSummary } from '@shared/protocol'
 import Sidebar from '@/components/sidebar/Sidebar.vue'
 import { accountFace, groupChoices, type RowMenuItem } from '@/components/sidebar/logic'
@@ -7,18 +7,18 @@ import TranscriptView from '@/components/transcript/TranscriptView.vue'
 import Composer from '@/components/composer/Composer.vue'
 import { OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT } from '@/components/composer/api'
 import CliMaytePanel from '@/components/climayte/CliMaytePanel.vue'
-const DiffPane = defineAsyncComponent(() => import('@/components/panes/DiffPane.vue'))
-const ServersPane = defineAsyncComponent(() => import('@/components/servers/ServersPane.vue'))
+const DiffPane = lazyPanel(() => import('@/components/panes/DiffPane.vue'))
+const ServersPane = lazyPanel(() => import('@/components/servers/ServersPane.vue'))
 import { clampPane, loadPaneWidth, PANE_KEY } from '@/components/servers/logic'
 const loadSettingsView = () => import('@/components/panes/SettingsView.vue')
-const SettingsView = defineAsyncComponent(loadSettingsView)
+const SettingsView = lazyPanel(loadSettingsView)
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import ExternalSessionView from '@/components/external/ExternalSessionView.vue'
 import HydraPane from '@/components/hydra/HydraPane.vue'
 import { OPEN_HYDRA_EVENT, hydraOpen, hydraSidebar } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
 import { showTasks } from '@/components/sidebar/tasks'
-const BackgroundTasksPanel = defineAsyncComponent(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
+const BackgroundTasksPanel = lazyPanel(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
 import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@/components/tasks/api'
 import { panelLists } from '@/components/tasks/logic'
 import ChromeBar from './ChromeBar.vue'
@@ -27,6 +27,8 @@ import NewSessionScreen from './NewSessionScreen.vue'
 import { NavHistory, SidebarPeek, matchShortcut, viewUnder, type View } from './logic'
 import { useShellSource } from './source'
 import { restartServer, updateOffer } from '@/lib/server-update'
+import { lazyPanel } from '@/lib/lazy-panel'
+import { actionError } from '@/lib/action-error'
 
 // The whole window: sidebar (288, resizable), the chrome bar over its top, and the pane with the
 // title bar, the view, the composer and an optional right pane.
@@ -63,10 +65,13 @@ const closeSettings = () => src.select(under.value)
 const focusSettingsNav = async (e: Event) => {
   e.preventDefault()
   const box = e.target as HTMLElement | null
-  // SettingsView loads on first open: wait for it and its first render before looking for the nav.
-  await loadSettingsView()
-  await nextTick()
-  box?.querySelector<HTMLElement>('[data-section][aria-current="page"]')?.focus()
+  // SettingsView loads on first open: wait (bounded, ~2 s) until it has rendered its nav before focusing it.
+  await loadSettingsView().catch(() => {}) // floor-ok: a failed load leaves the dialog as it is; lazyPanel sends it to the stale-bundle check
+  for (let i = 0; i < 120; i++) {
+    const nav = box?.querySelector<HTMLElement>('[data-section][aria-current="page"]')
+    if (nav) return nav.focus()
+    await new Promise<void>((r) => requestAnimationFrame(() => r()))
+  }
 }
 const chat = computed<ChatSummary | null>(() => {
   const v = view.value
@@ -517,7 +522,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
       >
         <div class="grid h-full w-1/2 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[41px_minmax(0,1fr)]" :inert="hydraOpen" :aria-hidden="hydraOpen || undefined">
           <div
-            class="col-start-1 row-start-1 min-w-0 pt-0.5"
+            class="relative col-start-1 row-start-1 min-w-0 pt-0.5"
             :class="sliding ? 'transition-[padding] duration-[var(--dur-slow)] ease-[var(--ease-snap)]' : ''"
             :style="{ paddingLeft: `${titlePad}px` }"
           >
@@ -539,6 +544,15 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
               @toggle-tasks="toggleTasksPanel"
               @update:show-thinking="setShowThinking"
             />
+            <!-- A failed rename or delete from the title bar shows here when neither the sidebar list nor the cloud list is on screen to say it. -->
+            <p
+              v-if="actionError && (!sidebarOpen || cloud.on.value)"
+              role="alert"
+              class="pointer-events-none absolute top-0.5 flex h-8 max-w-[28%] items-center truncate text-[12px] leading-4 text-danger-text"
+              :style="{ left: `${titlePad}px` }"
+            >
+              {{ actionError }}
+            </p>
           </div>
 
           <main class="col-start-1 row-start-2 flex min-h-0 min-w-0">

@@ -51,6 +51,10 @@ function find(target: string): HTMLElement | null {
 }
 
 const frames = (n: number) => new Promise<void>((r) => (n <= 0 ? r() : requestAnimationFrame(() => void frames(n - 1).then(r))))
+/** Waits (bounded, ~3 s) for an element a lazily loaded pane draws. */
+async function waitFor(selector: string) {
+  for (let i = 0; i < 180 && !document.querySelector(selector); i++) await frames(1)
+}
 const settle = async () => {
   await nextTick()
   await frames(2)
@@ -71,10 +75,12 @@ async function setUp(): Promise<{ hover: { x: number; y: number } | null }> {
   }
   if (scene.openDiff) {
     window.dispatchEvent(new Event(OPEN_DIFF_EVENT))
+    await waitFor('aside[aria-label="Changes"] > *')
     await settle()
   }
   if (scene.openTasks) {
     openBackgroundTasks()
+    await waitFor('section[aria-label="Background tasks"]')
     await settle()
   }
   const open = query.get('open') as MenuName | null
