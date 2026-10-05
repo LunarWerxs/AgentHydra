@@ -166,27 +166,26 @@ export function sessionJsonlItems(path: string, cwd?: string | null): Transcript
   if (m && (st.size < m.size || st.ino !== m.ino || st.mtimeMs < m.mtimeMs)) m = undefined
   let from = m?.offset ?? Math.max(0, st.size - TAIL_BYTES)
   const buf = readFrom(path, from, st.size)
-  let text = buf.toString('utf8')
+  let start = 0
   if (!m && from > 0) {
     // The read starts mid-file: its first line may be cut, so it is left out.
     const nl = buf.indexOf(10)
-    from += nl < 0 ? buf.length : nl + 1
-    text = nl < 0 ? '' : buf.subarray(nl + 1).toString('utf8')
+    start = nl < 0 ? buf.length : nl + 1
+    from += start
   }
-  const end = text.lastIndexOf('\n') + 1
   const fresh = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, recs: [], bytes: 0, items: [] }
-  const done = text.slice(0, end).split('\n')
-  done.pop()
-  for (const line of done) {
-    const bytes = Buffer.byteLength(line) + 1
+  // Lines are cut on the bytes themselves, so the offset counts what the file holds even where a line is
+  // not valid UTF-8 (decoded, such a byte would count as three).
+  for (let nl = buf.indexOf(10, start); nl >= 0; start = nl + 1, nl = buf.indexOf(10, start)) {
+    const bytes = nl + 1 - start
     fresh.offset += bytes
-    const recs = parseJsonl(line)
+    const recs = parseJsonl(buf.subarray(start, nl).toString('utf8'))
     if (!recs.length) continue
     fresh.recs.push({ rec: recs[0], bytes })
     fresh.bytes += bytes
   }
   // The last line may still be being written: it counts when it already parses, but is read again next time.
-  const unfinished = parseJsonl(text.slice(end))
+  const unfinished = parseJsonl(buf.subarray(start).toString('utf8'))
   while (fresh.bytes > TAIL_BYTES && fresh.recs.length > 1) fresh.bytes -= fresh.recs.shift()!.bytes
   fresh.size = st.size
   fresh.mtimeMs = st.mtimeMs
