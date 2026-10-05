@@ -272,7 +272,7 @@ onMounted(() => {
                 v-if="askResult && !askLoading"
                 variant="outline"
                 size="icon"
-                :aria-label="t('hswarm.v.tools.clear')"
+                :aria-label="t('hswarm.v.tools.clear', 'Clear result')"
                 @click="clearAskResult"
               >
                 <X class="size-4" />
