@@ -103,8 +103,8 @@
   --font-sans: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
 
-  --animate-dot-blink: dframe-dot-blink 1.2s ease-in-out infinite;
-  --animate-dot-pulse: dframe-dot-pulse 2s infinite;
+  --animate-dot-blink: dframe-dot-blink 2.4s ease-in-out infinite;
+  --animate-dot-pulse: dframe-dot-pulse 3s infinite;
 }
 
 /* Tailwind color utilities (bg-bg-page, text-text-muted, bg-fill-hover, text-danger-text ...) read the :root variables. */

@@ -71,6 +71,19 @@ describe('bridge', () => {
     expect(ids.length).toBe(6)
   })
 
+  test('a pinned session stays listed however old; unpinned it ages out again', async () => {
+    const f = await fake()
+    const old = { ...f.state.sessions[0], session_id: sid(901), source: 'claude', last_activity_at: NOW - 3 * 24 * 3600_000 }
+    f.state.sessions.push(old)
+    const b = createBridge({ url: f.url, now: () => NOW })
+    expect((await b.externalSessions()).map((s) => s.id)).not.toContain(sid(901))
+    let pinned = [sid(901)]
+    b.setSessionMeta((list) => list, () => pinned)
+    expect((await b.externalSessions()).map((s) => s.id)).toContain(sid(901))
+    pinned = []
+    expect((await b.externalSessions()).map((s) => s.id)).not.toContain(sid(901))
+  })
+
   test('items come from the tail, a worker falls back to its detail, an unknown id is a 404', async () => {
     const f = await fake()
     const b = createBridge({ url: f.url, now: () => NOW })

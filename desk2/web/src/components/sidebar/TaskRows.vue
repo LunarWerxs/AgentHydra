@@ -76,7 +76,7 @@ const hot = ref<string | null>(null)
       @focus="hot = key"
       @blur="hot = null"
     >
-      <component :is="status.icon" class="size-3 shrink-0" :class="[status.tone, status.spin ? 'animate-spin' : '']" aria-hidden="true" />
+      <component :is="status.icon" class="size-3 shrink-0" :class="[status.tone, status.spin ? 'animate-[spin_2.5s_linear_infinite]' : '']" aria-hidden="true" />
       <span class="sr-only">{{ status.label }}:</span>
       <span class="min-w-0 flex-1 truncate">{{ n.worker.title }}</span>
       <!-- Another PC's task: a little cloud, its PC in the tooltip, so the title keeps the room (owner,

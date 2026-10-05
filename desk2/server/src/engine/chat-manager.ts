@@ -272,7 +272,7 @@ export class ChatManager {
     this.bridge.setExcludeSessionIds(() => this.sessionIds())
     this.bridge.setExtraWorkerIds(() => this.workerIdsOfChats())
     // Outside sessions are listed with Hydra Desk's marks on them.
-    this.bridge.setSessionMeta((list) => this.sessionMeta.apply(list))
+    this.bridge.setSessionMeta((list) => this.sessionMeta.apply(list), () => this.sessionMeta.pinnedIds())
   }
 
   // Reads

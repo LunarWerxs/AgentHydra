@@ -248,17 +248,20 @@ export function runningSessionIds(chats: Pick<ChatSummary, 'sessionId' | 'status
   ])
 }
 
-/** The desk rows' dots that move (running, needs you) by session id: the cloud list draws the same dot on those rows. */
-export function movingGlyphs(
+/**
+ * The desk rows' dots by session id (a chat's row before an outside session's, as groupChats has it): the
+ * cloud list draws the same dot on every row the desk list shows, the hollow ring of an idle one included.
+ */
+export function deskGlyphs(
   chats: Pick<ChatSummary, 'sessionId' | 'status' | 'unread'>[],
-  external: Pick<ExternalSession, 'id' | 'status' | 'unread'>[]
+  external: Pick<ExternalSession, 'id' | 'status' | 'unread' | 'source'>[]
 ): Map<string, StatusGlyph> {
   const out = new Map<string, StatusGlyph>()
   for (const [id, g] of [
     ...chats.map((c) => [c.sessionId, statusGlyph(c)] as const),
-    ...external.map((s) => [s.id, externalGlyph(s)] as const)
+    ...external.filter((s) => s.source !== 'climayte').map((s) => [s.id, externalGlyph(s)] as const)
   ])
-    if (id && g.motion !== 'none' && !out.has(id)) out.set(id, g)
+    if (id && !out.has(id)) out.set(id, g)
   return out
 }
 
@@ -279,6 +282,20 @@ export function moveInOrder(order: readonly string[], key: string, before: strin
   const rest = order.filter((k) => k !== key)
   const at = before === null ? -1 : rest.indexOf(before)
   return at < 0 ? [...rest, key] : [...rest.slice(0, at), key, ...rest.slice(at)]
+}
+
+/**
+ * Where a dragged row lands: the key it goes just before in the saved order (null: after every other), or
+ * undefined when the drop changes nothing. `keys` are the group's rows as shown; the drop is on `over`, on
+ * its lower half when `after`. Rows of other groups are never a target.
+ */
+export function rowDropBefore(keys: readonly string[], from: string, over: string, after: boolean): string | null | undefined {
+  if (from === over || !keys.includes(from) || !keys.includes(over)) return undefined
+  const rest = keys.filter((k) => k !== from)
+  const at = rest.indexOf(over) + (after ? 1 : 0)
+  const next = [...rest.slice(0, at), from, ...rest.slice(at)]
+  if (next.every((k, i) => k === keys[i])) return undefined
+  return next[next.indexOf(from) + 1] ?? null
 }
 
 /** Every group a row can be moved to, by name: the folder groups and the moved-to ones, each once, A-Z. */
@@ -466,6 +483,7 @@ export function externalRow(s: ExternalSession): RowState {
  * the item while the menu is open; `separator` draws a 1px rule; an entry with `items` is a submenu.
  */
 export type RowAction =
+  | 'open'
   | 'reveal'
   | 'copyResume'
   | 'copySessionId'

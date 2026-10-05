@@ -14,7 +14,8 @@ import {
   groupChoices,
   groupOrderKey,
   moveInOrder,
-  movingGlyphs,
+  deskGlyphs,
+  rowDropBefore,
   raiseNewlyOrange,
   recordOrder,
   parseFilter,
@@ -144,19 +145,31 @@ describe('sessions running elsewhere in the same list', () => {
     expect(g.folders[0]!.entries.map((e) => `${e.kind}:${e.id}`)).toEqual(['chat:a2', 'external:e', 'chat:a1'])
   })
 
-  it("a folded group's green count is the rows whose turn runs, ours and elsewhere's, never one waiting on you; the cloud list draws their moving dots by session", () => {
+  it("a folded group's green count is the rows whose turn runs, ours and elsewhere's, never one waiting on you; the cloud list draws every desk row's dot by session", () => {
     const chats = [chat('w', { status: 'working', sessionId: 's-w' }), chat('s', { status: 'starting' }), chat('q', { status: 'needs_you', sessionId: 's-q' }), chat('i')]
     const external = [ext('e-run', { status: 'working' }), ext('e-ask', { status: 'needs_you' }), ext('e-idle')]
     expect(groupChats(chats, { external }).folders[0]!.entries.filter(entryRunning).map((e) => e.id).sort()).toEqual(['e-run', 's', 'w'])
     // The cloud list knows a row by its session: a running chat with none yet has nothing to match.
     expect([...runningSessionIds(chats, external)].sort()).toEqual(['e-run', 's-w'])
-    // Its dot is the desk row's while that one moves: gray blinking while it runs, orange pulsing while it waits on you.
-    expect([...movingGlyphs(chats, external)].map(([id, g]) => `${id}:${g.tone}:${g.motion}`).sort()).toEqual([
-      'e-ask:warning:pulse',
-      'e-run:muted:blink',
-      's-q:warning:pulse',
-      's-w:muted:blink'
+    // Its dot is the desk row's: gray blinking while it runs, orange pulsing while it waits on you, a hollow ring when idle.
+    expect([...deskGlyphs(chats, [...external, ext('cm', { source: 'climayte' })])].map(([id, g]) => `${id}:${g.shape}:${g.tone}:${g.motion}`).sort()).toEqual([
+      'e-ask:dot:warning:pulse',
+      'e-idle:ring:muted:none',
+      'e-run:dot:muted:blink',
+      's-q:dot:warning:pulse',
+      's-w:dot:muted:blink'
     ])
+  })
+
+  it('a dragged row lands before the row it is dropped on, or after it on its lower half; no change is no drop', () => {
+    const keys = ['a', 'b', 'c', 'd']
+    expect(rowDropBefore(keys, 'd', 'b', false)).toBe('b')
+    expect(rowDropBefore(keys, 'a', 'c', true)).toBe('d')
+    expect(rowDropBefore(keys, 'a', 'd', true)).toBeNull()
+    expect(rowDropBefore(keys, 'b', 'c', false)).toBeUndefined()
+    expect(rowDropBefore(keys, 'b', 'a', true)).toBeUndefined()
+    expect(rowDropBefore(keys, 'b', 'b', true)).toBeUndefined()
+    expect(rowDropBefore(keys, 'b', 'other', true)).toBeUndefined()
   })
 
   it('skips CliMayte workers and sessions that already are one of our chats; no cwd goes under No folder', () => {

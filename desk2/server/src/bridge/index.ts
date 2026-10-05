@@ -68,6 +68,7 @@ export function createBridge(opts: BridgeOptions = {}) {
   let excludeSessionIds: () => Ids = opts.excludeSessionIds ?? (() => [])
   let extraWorkerIds: () => string[] = () => []
   let sessionMeta: (list: ExternalSession[]) => ExternalSession[] = (list) => list
+  let pinnedIds: () => string[] = () => []
   let lastWorkers: { at: number; workers: CliMayteWorker[] } | null = null
   /** Told when this side changed the worker list (a start, a follow-up, a cancel): the poller reads it at once. */
   const workerChange = new Set<() => void>()
@@ -239,7 +240,15 @@ export function createBridge(opts: BridgeOptions = {}) {
     if (!inp) return []
     const exclude = new Set(await excludeSessionIds())
     const who = await resumeData()
-    return sessionMeta(mapExternal(inp, exclude, now(), (q) => resumeAccount(q, who)))
+    // A pinned session stays listed however old: the index answer is only the last 24 h, so a pinned id
+    // missing from it is read by id, as externalSession(id) does. One AgentHydra does not know is left out.
+    const pinned = pinnedIds()
+    const known = new Set(inp.sessions.map((s) => s.session_id))
+    const extra = (await Promise.all(pinned.filter((id) => !known.has(id)).map((id) => client.session(id).catch(() => null)))).filter(
+      (r): r is NonNullable<typeof r> => r !== null,
+    )
+    const withPinned: ExternalInputs = pinned.length ? { ...inp, sessions: [...inp.sessions, ...extra], wanted: new Set(pinned) } : inp
+    return sessionMeta(mapExternal(withPinned, exclude, now(), (q) => resumeAccount(q, who)))
   }
 
   /**
@@ -473,10 +482,12 @@ export function createBridge(opts: BridgeOptions = {}) {
     excludeIds: (): Ids => excludeSessionIds(),
     extraIds: (): string[] => extraWorkerIds(),
     /** Registers Hydra Desk's marks on outside sessions (the engine's session-meta store); externalSessions() applies them. */
-    setSessionMeta(fn: (list: ExternalSession[]) => ExternalSession[]): void {
+    setSessionMeta(fn: (list: ExternalSession[]) => ExternalSession[], pinned: () => string[] = () => []): void {
       sessionMeta = fn
+      pinnedIds = pinned
     },
     applySessionMeta: (list: ExternalSession[]): ExternalSession[] => sessionMeta(list),
+    pinnedSessionIds: (): string[] => pinnedIds(),
   }
 }
 
@@ -498,7 +509,7 @@ export function configureBridge(opts: BridgeOptions): Bridge {
     const prev = instance
     next.setExcludeSessionIds(() => prev.excludeIds())
     next.setExtraWorkerIds(() => prev.extraIds())
-    next.setSessionMeta((list) => prev.applySessionMeta(list))
+    next.setSessionMeta((list) => prev.applySessionMeta(list), () => prev.pinnedSessionIds())
   }
   instance = next
   return next

@@ -25,6 +25,11 @@ export class SessionMetaStore {
     return m ? { ...m } : null
   }
 
+  /** The session ids marked pinned (the bridge keeps them listed however old). */
+  pinnedIds(): string[] {
+    return [...this.byId].filter(([, m]) => m.pinned).map(([id]) => id)
+  }
+
   /** Applies the patch and writes the file now; a session left with no marks is dropped from it. */
   patch(sessionId: string, p: SessionMetaPatch): SessionMeta {
     const next: SessionMeta = { ...UNMARKED, ...this.byId.get(sessionId) }

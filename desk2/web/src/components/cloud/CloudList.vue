@@ -9,9 +9,13 @@ import { relativeTime } from '@/components/sidebar/search'
 import TaskRows from '@/components/sidebar/TaskRows.vue'
 import RunningBadge from '@/components/sidebar/RunningBadge.vue'
 import { runningIn, type TaskNode } from '@/components/sidebar/tasks'
-import { glyphDotClass, type StatusGlyph } from '@/components/sidebar/logic'
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
+import RowMenuList from '@/components/sidebar/RowMenuList.vue'
+import { MENU_CONTENT, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
+import { useRowDrag } from '@/components/sidebar/rowDrag'
+import { glyphDotClass, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
-import { cloudOnlyLabel, fromPcLabel, modelName, originLabel, sessionShape, SHAPE_LABELS } from './logic'
+import { cloudOnlyLabel, fromPcLabel, modelName, originLabel, scopesNarrowed, sessionShape, SHAPE_LABELS } from './logic'
 import { useCloud } from './store'
 
 // Hydra Desk 2's cloud list, in the sidebar in place of the desk list: every session AgentHydra knows,
@@ -29,13 +33,19 @@ const props = defineProps<{
   tasksOf?: (id: string) => TaskNode[] | null
   /** Whether a row's session runs now, for a folded group's heading. */
   running?: (id: string) => boolean
-  /** The desk row's dot while it moves (running, needs you): the row here draws the same one. */
+  /** The desk row's dot (running, needs you, idle): the row here draws the same one. */
   glyph?: (id: string) => StatusGlyph | undefined
+  /** A row's right-click menu: its desk row's, or the cloud-only one (Sidebar.vue cloudMenu). */
+  menuFor?: (row: CloudSession) => RowMenuEntry[]
 }>()
-const emit = defineEmits<{ open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker] }>()
+const emit = defineEmits<{ open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker]; action: [row: CloudSession, item: RowMenuItem] }>()
 
 const cloud = useCloud()
 const rowLeave = leaveUnlessFiltered([() => cloud.answeredQuery.value, () => JSON.stringify(cloud.scopes.value)])
+// Rows drag to another place in their group (sidebar/rowDrag.ts), into the order the desk list shares;
+// not in select mode, nor while a search or a filter narrows the list.
+const rowDrag = useRowDrag()
+const canDrag = computed(() => !cloud.selectMode.value && !cloud.search.value.trim() && !scopesNarrowed(cloud.scopes.value))
 const collapsed = ref(new Set<string>())
 function toggleGroup(key: string) {
   const next = new Set(collapsed.value)
@@ -142,8 +152,21 @@ const ROW =
         <slot v-if="gi === 0" name="tools" />
       </header>
       <TransitionGroup v-if="!collapsed.has(g.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
-        <div v-for="r in g.rows" :key="r.id" class="flex flex-col gap-[1.5px]">
+        <div
+          v-for="r in g.rows"
+          :key="r.id"
+          class="flex flex-col gap-[1.5px]"
+          :class="rowDrag.line(cloud.orderKey(r.id))"
+          :draggable="canDrag"
+          @dragstart="canDrag && rowDrag.start($event, g.key, cloud.orderKey(r.id))"
+          @dragover="canDrag && rowDrag.onOver($event, g.key, cloud.orderKey(r.id))"
+          @drop="canDrag && rowDrag.drop($event, g.key, g.rows.map((x) => cloud.orderKey(x.id)), cloud.orderKey(r.id))"
+          @dragend="rowDrag.end"
+        >
         <Tip :label="tips.get(r.id) ?? ''" side="right" align="start">
+          <span class="block">
+          <ContextMenu>
+          <ContextMenuTrigger as-child>
           <div
             role="button"
             tabindex="0"
@@ -171,6 +194,12 @@ const ROW =
             <span v-if="r.instanceNum !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
             <span class="shrink-0 pr-1 text-[12px] leading-4 text-text-muted tnum">{{ relativeTime(r.lastActivityAt, now) }}</span>
           </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent v-if="props.menuFor" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, props.menuFor!(r))">
+            <RowMenuList :entries="props.menuFor(r)" kind="context" @run="(item: RowMenuItem) => emit('action', r, item)" />
+          </ContextMenuContent>
+          </ContextMenu>
+          </span>
         </Tip>
         <TaskRows v-if="props.tasksOf?.(r.id)" :nodes="props.tasksOf(r.id)!" :selected-id="props.selectedId" @open="(w: CliMayteWorker) => emit('open-task', w)" />
         </div>

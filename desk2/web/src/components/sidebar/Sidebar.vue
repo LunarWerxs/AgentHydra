@@ -48,13 +48,16 @@ import {
   revealChat,
   rowPatch,
   runningSessionIds,
-  movingGlyphs,
+  deskGlyphs,
+  rowMenu,
   type ChatGroup,
+  type RowMenuEntry,
   type RowMenuItem,
   type RowState,
   type SidebarFilter
 } from './logic'
 import { useSidebarOrder } from './order'
+import { useRowDrag } from './rowDrag'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
 
 // The real sidebar: 288 wide on #111111, 36px left free at the top for the chrome bar, the New row (the
@@ -191,6 +194,9 @@ const groupList = computed<ChatGroup[]>(() => {
   return [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
 })
 const filtering = computed(() => query.value.trim() !== '' || filter.value !== 'active')
+// Rows drag to another place in their own group (rowDrag.ts); not while a search or a filter narrows the list.
+const rowDrag = useRowDrag()
+const rowsDraggable = (g: ChatGroup) => !filtering.value && g.key !== 'archived'
 const rowLeave = leaveUnlessFiltered([query, filter])
 const emptyText = computed(() =>
   query.value.trim() ? 'No matching sessions' : filter.value === 'archived' ? 'No archived sessions' : 'No sessions yet'
@@ -239,7 +245,7 @@ const foldedRunning = computed(() => {
 /** The cloud list's rows that run: the ones the desk knows as running. */
 const runningSessions = computed(() => runningSessionIds(src.chats.value, src.external.value))
 const sessionRunning = (id: string) => runningSessions.value.has(id)
-const movingDots = computed(() => movingGlyphs(src.chats.value, src.external.value))
+const deskDots = computed(() => deskGlyphs(src.chats.value, src.external.value))
 /** A task with a session here opens its transcript; one still queued, or another PC's, opens on CliMayte's tab. */
 function openTask(w: CliMayteWorker) {
   if (w.sessionId && !w.pc) src.select({ kind: 'external', id: w.sessionId })
@@ -349,6 +355,33 @@ function act(row: Row, item: RowMenuItem) {
   } else if (item.action === 'reveal') attempt('Opening the folder', src.revealFolder(state.cwd))
   else if (item.action === 'copyResume' && state.sessionId) attempt('Copy', navigator.clipboard.writeText(resumeCommand(state.sessionId)))
   else if (item.action === 'copySessionId' && state.sessionId) attempt('Copy', navigator.clipboard.writeText(state.sessionId))
+}
+/** The desk row a session is, when the desk list shows it: a chat of ours by its session, else an outside session. */
+function deskRowOf(id: string): Row | null {
+  const chat = src.chats.value.find((c) => c.sessionId === id)
+  if (chat) return { kind: 'chat', chat }
+  const session = src.external.value.find((s) => s.id === id && s.source !== 'climayte')
+  return session ? { kind: 'external', session } : null
+}
+/** A cloud row's menu: its desk row's (without Rename, which the row does inline), or Open, Pin and Copy session ID for one only the cloud list has. */
+function cloudMenu(r: CloudSession): RowMenuEntry[] {
+  const row = deskRowOf(r.id)
+  if (!row) {
+    return [
+      { action: 'open', label: 'Open' },
+      'separator',
+      { action: 'pin', label: 'Pin', shortcut: 'P' },
+      { action: 'copySessionId', label: 'Copy session ID' }
+    ]
+  }
+  return rowMenu(stateOf(row), groupNames.value).filter((e) => e === 'separator' || !('action' in e) || e.action !== 'rename')
+}
+function cloudAct(r: CloudSession, item: RowMenuItem) {
+  const row = deskRowOf(r.id)
+  if (row) return item.action === 'open' ? openCloud(r) : act(row, item)
+  if (item.action === 'open') openCloud(r)
+  else if (item.action === 'pin') attempt('The change', src.updateSessionMeta(r.id, { pinned: true }))
+  else if (item.action === 'copySessionId') attempt('Copy', navigator.clipboard.writeText(r.id))
 }
 /** Opening an outside session reads it, as opening a chat does. */
 function openExternal(s: ExternalSession) {
@@ -473,7 +506,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
         <HydraSidebar v-if="hydraModel" :model="hydraModel" />
 
-        <CloudList v-else-if="cloud.on.value" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :running="sessionRunning" :glyph="(id: string) => movingDots.get(id)" @open="openCloud" @open-task="openTask">
+        <CloudList v-else-if="cloud.on.value" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :running="sessionRunning" :glyph="(id: string) => deskDots.get(id)" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask">
           <template #tools>
             <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
           </template>
@@ -524,7 +557,12 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               v-for="entry in group.entries"
               :key="`${entry.kind}:${entry.id}`"
               :data-search-cursor="cursorKey === `${entry.kind}:${entry.id}` || undefined"
-              :class="cursorKey === `${entry.kind}:${entry.id}` ? 'rounded-[var(--radius-6)] bg-fill-hover' : ''"
+              :class="[cursorKey === `${entry.kind}:${entry.id}` ? 'rounded-[var(--radius-6)] bg-fill-hover' : '', rowDrag.line(entry.id)]"
+              :draggable="rowsDraggable(group)"
+              @dragstart="rowsDraggable(group) && rowDrag.start($event, group.key, entry.id)"
+              @dragover="rowsDraggable(group) && rowDrag.onOver($event, group.key, entry.id)"
+              @drop="rowsDraggable(group) && rowDrag.drop($event, group.key, group.entries.map((e) => e.id), entry.id)"
+              @dragend="rowDrag.end"
             >
               <ChatRow
                 v-if="entry.kind === 'chat'"

@@ -7,7 +7,7 @@ import { readCache, writeCache } from '@/lib/list-cache'
 import { useShellSource } from '@/components/shell/source'
 import { recordCloudOrder } from '@/components/sidebar/logic'
 import { useSidebarOrder } from '@/components/sidebar/order'
-import { cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud, parseScopes, pcsIn, type CloudScopes } from './logic'
+import { cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud, parseScopes, pcsIn, rowOrderKey, type CloudScopes } from './logic'
 
 /** The last plain (unsearched) answer and the query it answered, for the next reload (lib/list-cache.ts). */
 interface CachedCloud {
@@ -194,6 +194,8 @@ ${rows}`
     setSelectMode,
     /** The desk list lists this session too (with the cloud button off); a row it does not wears a cloud. */
     onDesk: (id: string): boolean => placed.value.has(id),
+    /** The row's place in the saved order: its desk row's id, else its session id (logic.ts rowOrderKey). */
+    orderKey: (id: string): string => rowOrderKey({ id }, placed.value),
     /** The row is made of the desk's facts: AgentHydra's answer left the session out (logic.ts groupCloud). */
     fromDesk: (id: string): boolean => !answeredIds.value.has(id),
     /** Every filter back to AgentHydra's Sessions defaults. */
