@@ -5,7 +5,6 @@ import {
   Boxes,
   ChevronDown,
   Layers,
-  ListChecks,
   Maximize2,
   MessagesSquare,
   Minimize2,
@@ -17,7 +16,17 @@ import {
   Sun,
   Terminal,
 } from '@lucide/vue'
-import { computed, defineAsyncComponent, onMounted, onUnmounted, provide, ref, watch } from 'vue'
+import {
+  type Component,
+  computed,
+  defineAsyncComponent,
+  KeepAlive,
+  onMounted,
+  onUnmounted,
+  provide,
+  ref,
+  watch,
+} from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AutomationSettings from '@/components/AutomationSettings.vue'
@@ -55,9 +64,12 @@ import {
   findInstanceRow,
   flashRow,
   openInDesk,
+  PANE_OPEN_EVENT,
   publishSidebar,
   showSessionsInDesk,
 } from '@/lib/desk-embed'
+import { refreshForView } from '@/lib/warm-data'
+import { startWarmData } from '@/lib/warm-kinds'
 import { pendingSessionJump, takeSessionJump } from '@/lib/session-jump'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
@@ -85,7 +97,7 @@ applyWindowSizeHint()
 
 const { t } = useI18n()
 
-const { queue, startPolling } = useData()
+const { startPolling } = useData()
 // Reset notifications. The NATIVE notification is raised by the daemon whether or not this window
 // exists (that is the point of it); this mirror is so the news also lands in the app when you do
 // happen to be looking at it, with the Acknowledge action that stops persistent mode repeating.
@@ -288,6 +300,23 @@ const instancesSub: { id: AppView; labelKey: string; icon: typeof Terminal }[] =
   { id: 'desktop', labelKey: 'app.tabDesktop', icon: Monitor },
 ]
 const inInstances = computed(() => INSTANCES_VIEWS.includes(view.value))
+// The tab on screen. 'desktop' is the fallback, as the v-else chain it replaces was.
+const VIEW_COMPONENTS: Partial<Record<AppView, Component>> = {
+  analytics: AnalyticsView,
+  climayte: CliMayteView,
+  'instances-home': InstancesHomeView,
+  cli: CliView,
+  hswarm: HSwarmView,
+}
+const viewComponent = computed(() => VIEW_COMPONENTS[view.value] ?? InstancesView)
+const viewKey = computed(() => (view.value in VIEW_COMPONENTS ? view.value : 'desktop'))
+const viewProps = computed(() =>
+  view.value === 'climayte'
+    ? { class: 'h-full' }
+    : view.value === 'instances-home'
+      ? { onNavigate: onHomeNavigate }
+      : {},
+)
 function tabActive(id: AppView) {
   return id === 'instances-home' ? inInstances.value : view.value === id
 }
@@ -354,7 +383,6 @@ provide(OPEN_VIEW, (v: AppView) => {
   view.value = v
 })
 
-const runningCount = computed(() => queue.value.filter((q) => q.status === 'running').length)
 
 // The "Sync my settings with Connections" sign-in (SettingsView.vue) opens /oauth/login in a
 // NEW tab; that tab's SPA boots fresh here and lands back on ?connected=1 / ?connect=failed
@@ -397,6 +425,31 @@ function showRebrandNoticeOnce() {
 }
 
 onMounted(startPolling)
+// Preload and warm data: the data kinds load once in the background shortly after first paint (when the
+// browser is idle, so the window's own load is never slowed), then refresh about every 2 minutes
+// (lib/warm-data.ts). Opening a tab, or the Desk pane, refreshes what it shows right then.
+onMounted(() => {
+  const go = () => startWarmData()
+  if ('requestIdleCallback' in window) window.requestIdleCallback(go, { timeout: 4000 })
+  else setTimeout(go, 2000)
+})
+watch(view, (v) => refreshForView(v), { immediate: true })
+const onPaneOpen = () => refreshForView(view.value)
+// Escape inside the embedded copy asks Desk to close the pane (keys do not cross frames); a dialog or menu
+// that is open gets the key first.
+const onEscape = (e: KeyboardEvent) => {
+  if (!EMBEDDED || e.key !== 'Escape' || e.defaultPrevented) return
+  if (document.querySelector('[role=dialog],[role=menu],[role=listbox]')) return
+  window.parent.dispatchEvent(new CustomEvent('hydra-desk:close-hydra'))
+}
+onMounted(() => {
+  window.addEventListener(PANE_OPEN_EVENT, onPaneOpen)
+  window.addEventListener('keydown', onEscape)
+})
+onUnmounted(() => {
+  window.removeEventListener(PANE_OPEN_EVENT, onPaneOpen)
+  window.removeEventListener('keydown', onEscape)
+})
 onMounted(() => startNotificationPolling(t))
 onMounted(handleConnectRedirect)
 onMounted(showRebrandNoticeOnce)
@@ -447,16 +500,10 @@ onUnmounted(stopAvailabilityPolling)
          push-panel padding shift with the main content, or an open drawer would cover the
          right-side buttons instead of nudging them over. -->
     <header
-      class="flex shrink-0 items-center gap-3 bg-sidebar ps-4 pe-(--header-pe) py-2 transition-padding duration-300 ease-in-out"
+      class="flex shrink-0 items-center gap-3 bg-sidebar ps-[max(1rem,var(--desk-pad-left,0px))] pe-(--header-pe) py-2 transition-padding duration-300 ease-in-out"
     >
-      <div class="flex items-center gap-2.5">
-        <!-- the real brand mark (same asset as the favicon/tray icon), not a placeholder glyph -->
-        <img src="/favicon.svg" alt="" class="size-8 rounded-lg" />
-        <span class="hidden text-sm font-bold tracking-tight min-[480px]:inline">AgentHydra</span>
-      </div>
-
-      <!-- view tabs -->
-      <nav class="ms-2 flex items-start gap-1" :aria-label="$t('app.navLabel')">
+      <!-- view tabs (no logo or title: Desk's pane already says where you are, owner 2026-10-05) -->
+      <nav class="flex items-start gap-1" :aria-label="$t('app.navLabel')">
         <template v-for="n in nav" :key="n.id">
           <!-- Instances: the tab opens the landing page; hovering it (or its chevron) drops down CLI and Desktop -->
           <DropdownMenu
@@ -532,28 +579,7 @@ onUnmounted(stopAvailabilityPolling)
       <div class="ms-auto flex items-center gap-2">
         <!-- always-on "is it working?" indicator: scheduler state + live run / next-run -->
         <SchedulerStatus />
-        <!-- New run lives inside the queue drawer's toolbar (QueueView) now, so the header
-             carries just the queue toggle + settings. -->
-        <!-- queue drawer toggle: stays available on every view. Brand-purple (primary)
-             at rest; this is now the ONE queue button, so it carries the accent the
-             old in-chat one had; secondary while the drawer is open (pressed state). -->
-        <Button
-          :variant="queueOpen ? 'secondary' : 'default'"
-          size="sm"
-          :title="$t('app.queue')"
-          :aria-pressed="queueOpen"
-          @click="queueOpen = !queueOpen"
-        >
-          <ListChecks />
-          <span class="hidden sm:inline">{{ $t('app.queue') }}</span>
-          <span
-            v-if="runningCount > 0"
-            class="ms-0.5 inline-flex size-4 items-center justify-center rounded-full text-3xs font-semibold"
-            :class="queueOpen ? 'bg-info/15 text-info' : 'bg-primary-foreground/25 text-primary-foreground'"
-          >
-            {{ runningCount }}
-          </span>
-        </Button>
+        <!-- The queue button is gone from the bar (owner, 2026-10-05); the queue drawer itself stays. -->
         <!-- Only when the daemon is serving older code than its folder (a commit or pull without a
              restart): new routes and tools are missing until it restarts, and nothing else on
              screen would say why. One click relaunches it in place and reloads the page. -->
@@ -618,13 +644,12 @@ onUnmounted(stopAvailabilityPolling)
         class="h-full min-h-0"
         :class="inInstances ? 'overflow-y-auto scroll-slim' : ''"
       >
+        <!-- Each tab is built the first time it is opened and then kept (KeepAlive), so switching
+             back shows it as it was; its data is the shared warm copy (lib/warm-data.ts). -->
         <Transition name="view-fade" mode="out-in">
-          <AnalyticsView v-if="view === 'analytics'" />
-          <CliMayteView v-else-if="view === 'climayte'" class="h-full" />
-          <InstancesHomeView v-else-if="view === 'instances-home'" @navigate="onHomeNavigate" />
-          <CliView v-else-if="view === 'cli'" />
-          <HSwarmView v-else-if="view === 'hswarm'" />
-          <InstancesView v-else />
+          <KeepAlive>
+            <component :is="viewComponent" :key="viewKey" v-bind="viewProps" />
+          </KeepAlive>
         </Transition>
       </main>
     </div>

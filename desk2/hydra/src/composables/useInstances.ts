@@ -7,7 +7,6 @@ import type { CMInstance } from '@/lib/api'
 import * as api from '@/lib/api'
 import { loginChanged } from '@/lib/instance-appearance'
 import { reconcileList, sameData } from '@/lib/reconcile'
-import { visibleInterval } from '@/lib/visible-poll'
 
 const instances = ref<CMInstance[]>([])
 const loading = ref(false)
@@ -196,21 +195,12 @@ async function autoResolveAccounts(
   }
 }
 
-let stopPoll: (() => void) | null = null
-
-/** Started by the Instances tab alone, which is why this is the one caller that resolves in 'full'
- *  mode: it is the screen where an out-of-date email or plan is the thing you came to look at.
- *  Every other consumer calls refreshInstances() directly and gets the cache. */
+/** The Instances tab's first load: resolves in 'full' mode, which is why it is the one caller that
+ *  does: it is the screen where an out-of-date email or plan is the thing you came to look at. Every
+ *  other consumer calls refreshInstances() directly and gets the cache. Later refreshes are
+ *  lib/warm-data.ts's (about every 2 minutes, and when the tab is shown again). */
 function startPolling() {
-  if (stopPoll) return
-  refreshInstances({ resolve: 'full' })
-  // Background ticks are silent (no `loading` toggle) — see refreshInstances().
-  stopPoll = visibleInterval(() => refreshInstances({ silent: true, resolve: 'full' }), 4000)
-}
-
-function stopPolling() {
-  stopPoll?.()
-  stopPoll = null
+  void refreshInstances({ resolve: 'full' })
 }
 
 /** Show an open or quit the server has just CONFIRMED on its row at once. The re-list that follows
@@ -375,7 +365,6 @@ export function useInstances() {
     lastError,
     refreshInstances,
     startPolling,
-    stopPolling,
     open,
     quit,
     focus,

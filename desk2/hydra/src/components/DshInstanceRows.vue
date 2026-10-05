@@ -38,7 +38,7 @@ import type { InstanceColumn, InstanceRowModel } from '@/lib/instance-table'
 defineProps<{ columns: InstanceColumn[] }>()
 
 const { t } = useI18n()
-const { instances, refresh, startPolling, stopPolling } = useDshInstances()
+const { instances, refresh, startPolling } = useDshInstances()
 
 /** The id of whatever action is in flight, so one row's button can be busy without freezing the
  *  table: a launch legitimately takes seconds (the harness prints its address only once serving). */
@@ -202,7 +202,6 @@ async function copyHome(inst: DshInstance): Promise<void> {
 }
 
 onMounted(startPolling)
-onUnmounted(stopPolling)
 
 defineExpose({ openCreate, refresh })
 </script>

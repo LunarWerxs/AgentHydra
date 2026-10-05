@@ -7,7 +7,6 @@ import { ref } from 'vue'
 import type { CliInstance } from '@/lib/api'
 import * as api from '@/lib/api'
 import { reconcileList } from '@/lib/reconcile'
-import { visibleInterval } from '@/lib/visible-poll'
 import { useUsage } from './useUsage'
 
 const cliInstances = ref<CliInstance[]>([])
@@ -29,7 +28,7 @@ function setBusy(id: string, busy: boolean) {
   busyIds.value = next
 }
 
-/** Reload the CLI instance list. `silent` (used by the 5s background poll) skips the
+/** Reload the CLI instance list. `silent` (used by the background refresh) skips the
  *  `loading` toggle so the toolbar spinner only shows on a first load or a user refresh. */
 async function refreshCliInstances(opts: { silent?: boolean } = {}) {
   if (!opts.silent) loading.value = true
@@ -47,17 +46,9 @@ async function refreshCliInstances(opts: { silent?: boolean } = {}) {
   if (!opts.silent) loading.value = false
 }
 
-let stopPoll: (() => void) | null = null
-
+/** The first load when a table opens; later refreshes are lib/warm-data.ts's. */
 function startPolling() {
-  if (stopPoll) return
-  refreshCliInstances()
-  stopPoll = visibleInterval(() => refreshCliInstances({ silent: true }), 5000)
-}
-
-function stopPolling() {
-  stopPoll?.()
-  stopPoll = null
+  void refreshCliInstances()
 }
 
 /** Create a new CLI instance (a fresh isolated `CLAUDE_CONFIG_DIR`). */
@@ -186,7 +177,6 @@ export function useCliInstances() {
     lastError,
     refreshCliInstances,
     startPolling,
-    stopPolling,
     create,
     launch,
     login,

@@ -1,9 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, RefreshCw } from '@lucide/vue'
 import type { AhMessage } from '@shared/hydra-embed'
-import { Tip } from '@/components/ui/tooltip'
-import { agentHydraIcon } from '@/lib/icons'
 import { attachHydraFrame, hydraReady, hydraSidebar, setHydraVisible } from './api'
 
 // Hydra Desk 2: AgentHydra in the pane beside the sidebar (the chrome bar's AgentHydra button slides it in
@@ -12,9 +9,12 @@ import { attachHydraFrame, hydraReady, hydraSidebar, setHydraVisible } from './a
 // AgentHydra. The copy has no Sessions tab: the sidebar's cloud list is the session list, and a chat the
 // copy asks to open (ah:open-session) or its session tiles (ah:show-sessions) come back to Desk. A tab
 // with a sidebar of its own hands it over (ah:sidebar) and Desk's sidebar draws it (shared/hydra-embed.ts).
-// The frame loads the first time the pane opens and then stays, so going back and forth keeps AgentHydra
-// where it was; out of view it is told so (desk:visible), and its polls rest until it comes back.
-const props = defineProps<{ open: boolean; /** Left padding of the title strip (the chrome bar lies over it when the sidebar is hidden). */ padLeft: number }>()
+// The frame is created in the background shortly after Desk's first paint (browser idle), so opening the
+// pane shows AgentHydra at once, and then stays, so going back and forth keeps it where it was. There is no
+// header strip: the copy's own top bar fills the pane, and Escape (or the chrome bar's AgentHydra button)
+// closes it. Out of view the copy is told so (desk:visible) and its polls rest until it comes back.
+// The copy gets the room the chrome bar covers on the left as --desk-pad-left.
+const props = defineProps<{ open: boolean; /** Room the chrome bar covers at the pane's top left when the sidebar is hidden. */ padLeft: number }>()
 const emit = defineEmits<{ close: []; 'open-session': [id: string]; 'show-sessions': [] }>()
 
 const SRC = '/ah/?embed=desk'
@@ -33,12 +33,29 @@ async function readStatus(): Promise<void> {
     up.value = false
   }
 }
+function frameWindow(): Window | null {
+  return frame.value?.contentWindow ?? null
+}
+function syncPad() {
+  try {
+    frameWindow()?.document.documentElement.style.setProperty('--desk-pad-left', `${props.padLeft}px`)
+  } catch {
+    /* not same-origin yet */
+  }
+}
+watch(() => props.padLeft, syncPad)
 watch(
   () => props.open,
   (open) => {
     setHydraVisible(open)
     if (!open) return
     started.value = true
+    // The copy refreshes what it shows right as the pane comes back.
+    try {
+      frameWindow()?.dispatchEvent(new Event('hydra:pane-open'))
+    } catch {
+      /* frame not ready */
+    }
     // Coming back to a pane that found AgentHydra down asks again.
     if (!up.value) void readStatus().then(() => up.value && reload())
   },
@@ -55,12 +72,29 @@ function onMessage(e: MessageEvent) {
   else if (m?.type === 'ah:show-sessions') emit('show-sessions')
   else if (m?.type === 'ah:sidebar') hydraSidebar.value = m.model && Array.isArray(m.model.sections) ? m.model : null
 }
+function onKey(e: KeyboardEvent) {
+  if (props.open && e.key === 'Escape' && !e.defaultPrevented) emit('close')
+}
+// The copy asks to close when Escape is pressed inside its own frame (keys do not cross frames).
+const onCloseAsk = () => props.open && emit('close')
+let idleHandle: number | undefined
 onMounted(() => {
   void readStatus()
   window.addEventListener('message', onMessage)
+  window.addEventListener('keydown', onKey)
+  window.addEventListener('hydra-desk:close-hydra', onCloseAsk)
+  // Preload: start the frame once Desk has painted and the browser is idle.
+  const start = () => {
+    started.value = true
+  }
+  if ('requestIdleCallback' in window) idleHandle = window.requestIdleCallback(start, { timeout: 4000 })
+  else idleHandle = setTimeout(start, 3000) as unknown as number
 })
 onBeforeUnmount(() => {
+  if (idleHandle !== undefined && 'cancelIdleCallback' in window) window.cancelIdleCallback(idleHandle)
   window.removeEventListener('message', onMessage)
+  window.removeEventListener('keydown', onKey)
+  window.removeEventListener('hydra-desk:close-hydra', onCloseAsk)
   attachHydraFrame(null)
 })
 
@@ -69,32 +103,20 @@ function reload() {
   frameKey.value++
 }
 
-const BTN = 'flex h-[26px] shrink-0 items-center gap-1 rounded-[var(--radius-6)] px-1.5 text-[13px] text-text-2 hover:bg-fill-hover hover:text-text'
 </script>
 
 <template>
   <section class="flex h-full min-w-0 flex-col" aria-label="AgentHydra">
-    <div class="flex h-[41px] shrink-0 items-center gap-1.5 pr-2 pt-0.5" :style="{ paddingLeft: `${padLeft}px` }">
-      <component :is="agentHydraIcon" class="size-4 shrink-0 text-text" />
-      <span class="min-w-0 truncate text-[13px] font-medium leading-[19.5px] text-text">AgentHydra</span>
-      <Tip :label="`Hydra Desk 2's own copy of AgentHydra's window, on the AgentHydra at ${daemon ?? '…'}`">
-        <span class="min-w-0 truncate text-[12px] text-text-muted">Desk 2's copy{{ daemon ? ` · ${daemon}` : '' }}</span>
-      </Tip>
-      <span class="flex-1" />
-      <Tip label="Reload AgentHydra">
-        <button type="button" :class="BTN" aria-label="Reload AgentHydra" @click="reload">
-          <RefreshCw class="size-3.5" />
-        </button>
-      </Tip>
-      <Tip label="Back to Hydra Desk">
-        <button type="button" :class="BTN" aria-label="Back to Hydra Desk" @click="emit('close')">
-          <ArrowLeft class="size-3.5" />
-          <span>Desk</span>
-        </button>
-      </Tip>
-    </div>
-    <div class="relative min-h-0 flex-1 overflow-hidden border-t border-border bg-bg-page">
-      <iframe v-if="started && up" ref="frame" :key="frameKey" :src="SRC" title="AgentHydra" class="absolute inset-0 size-full border-0" />
+    <div class="relative min-h-0 flex-1 overflow-hidden bg-bg-page">
+      <iframe
+        v-if="started && up"
+        ref="frame"
+        :key="frameKey"
+        :src="SRC"
+        title="AgentHydra"
+        class="absolute inset-0 size-full border-0"
+        @load="syncPad"
+      />
       <div v-else-if="started" class="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-text-2">
         <p>AgentHydra is not answering{{ daemon ? ` at ${daemon}` : '' }}.</p>
         <button type="button" class="h-7 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-3 text-[13px] text-text hover:bg-[var(--fill-secondary-hover)]" @click="reload">

@@ -18,24 +18,18 @@ import {
   Terminal,
   Zap,
 } from '@lucide/vue'
-import { useDocumentVisibility, useElementVisibility } from '@vueuse/core'
-import { type Component, computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { type Component, computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
 import SwarmStatsCard from '@/components/swarm-stats/SwarmStatsCard.vue'
 import { Button } from '@/components/ui/button'
 import { useCliInstances } from '@/composables/useCliInstances'
+import { useCliMayteData } from '@/composables/useCliMayteData'
+import { useHomeSessions } from '@/composables/useHomeSessions'
 import { useInstances } from '@/composables/useInstances'
 import { pii } from '@/composables/usePrivacy'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
-import {
-  type CliMayteTotals,
-  type CliMayteWorkerView,
-  getCliMayteTotals,
-  getSessions,
-  listCliMayteWorkers,
-} from '@/lib/api'
 import { seriesColor } from '@/lib/chart'
 import { isCliMayteActive, modelName, tokenTotal } from '@/lib/climayte-status'
 import {
@@ -47,10 +41,11 @@ import {
   usedPct,
   workersPerHour,
 } from '@/lib/home-charts'
-import { accountDisplay, type HswarmAccountName, useHswarmApi } from '@/lib/hswarm-api'
+import { accountDisplay, useHswarmApi } from '@/lib/hswarm-api'
 import { formatTokens, formatUsd, useKitSourceTokens } from '@/lib/kit'
 import { accountSaved, useSwarmStats } from '@/lib/swarm-stats'
 import { pooledRemaining } from '@/lib/usage-pool'
+import { refreshWarm } from '@/lib/warm-data'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -58,22 +53,20 @@ type HomeView = 'cli' | 'instances' | 'climayte' | 'sessions' | 'analytics' | 'h
 const emit = defineEmits<{ navigate: [view: HomeView] }>()
 
 const { t } = useI18n()
-const REFRESH_MS = 20_000
 const HOUR_MS = 3_600_000
 const NOW_MS = 300_000
 
-const { instances: desktopInstances, refreshInstances } = useInstances()
-const { cliInstances, refreshCliInstances } = useCliInstances()
-const { snapshotFor, hydrate } = useUsage()
+// Every figure is a shared copy kept warm by lib/warm-data.ts; this page only reads them.
+const { instances: desktopInstances } = useInstances()
+const { cliInstances } = useCliInstances()
+const { snapshotFor } = useUsage()
+const { totals, workers, unreachable, listedAt } = useCliMayteData()
+const { sessionTimes } = useHomeSessions()
 const { now } = useUsageMode(true)
 
-const { fetchAccountNames } = useHswarmApi()
+const { accountNames } = useHswarmApi()
 const { stats: swarmStats } = useSwarmStats(14)
 const kitTokens = useKitSourceTokens('climayte')
-const accountNames = ref<Record<string, HswarmAccountName>>({})
-onMounted(async () => {
-  accountNames.value = await fetchAccountNames()
-})
 const swarmRows = computed(() =>
   [...(swarmStats.value?.accounts?.rows ?? [])]
     .sort((a, b) => b.runs - a.runs)
@@ -93,12 +86,7 @@ const swarmRows = computed(() =>
     }),
 )
 
-const totals = ref<CliMayteTotals | null>(null)
-// Replaced whole on each refresh, never edited in place: shallow, so a long list gets no deep proxies.
-const workers = shallowRef<CliMayteWorkerView[]>([])
-// The page only reads each session's last activity, so that is all that is kept.
-const sessionTimes = shallowRef<number[]>([])
-const failed = ref(false)
+const failed = computed(() => unreachable.value)
 const refreshing = ref(false)
 /** Wall clock for the "last hour" cuts, taken at each refresh so a tile never changes between them. */
 const asOf = ref(Date.now())
@@ -133,29 +121,18 @@ const cliPool = computed(() =>
   ),
 )
 
+/** The refresh button: every kind this page shows, read now. */
 async function load() {
   if (refreshing.value) return
   refreshing.value = true
-  const results = await Promise.allSettled([
-    refreshInstances({ silent: true }),
-    refreshCliInstances({ silent: true }),
-    hydrate(),
-    getCliMayteTotals().then((v) => {
-      totals.value = v
-    }),
-    listCliMayteWorkers().then((v) => {
-      workers.value = v
-    }),
-    getSessions(1000, '', 'hide', '24h').then((v) => {
-      const times = v.map((s) => s.last_activity_at)
-      const old = sessionTimes.value
-      if (times.length !== old.length || times.some((x, i) => x !== old[i])) sessionTimes.value = times
-    }),
-  ])
-  failed.value = results.some((r) => r.status === 'rejected')
+  await Promise.all((['cli', 'desktop', 'climayte', 'hswarm'] as const).map((k) => refreshWarm(k)))
   asOf.value = Date.now()
   refreshing.value = false
 }
+// The warm refreshes move the "last hour" cuts along: a tile never changes between them.
+watch(listedAt, () => {
+  asOf.value = Date.now()
+})
 
 const sessionsSince = (ms: number) =>
   sessionTimes.value.filter((at) => at >= asOf.value - ms).length
@@ -340,30 +317,10 @@ const tiles = computed<Tile[]>(() => {
   ]
 })
 
-// Refresh on an interval, and only while the page is on screen and the tab is in front.
-const root = ref<HTMLElement | null>(null)
-const elementVisible = useElementVisibility(root)
-const tabVisibility = useDocumentVisibility()
-const active = computed(() => elementVisible.value && tabVisibility.value === 'visible')
-let timer: number | null = null
-function stop() {
-  if (timer !== null) window.clearInterval(timer)
-  timer = null
-}
-function start() {
-  stop()
-  void load()
-  timer = window.setInterval(() => void load(), REFRESH_MS)
-}
-watch(active, (on) => (on ? start() : stop()))
-onMounted(() => {
-  if (active.value) start()
-})
-onUnmounted(stop)
 </script>
 
 <template>
-  <div ref="root" class="@container flex flex-col gap-2 p-3">
+  <div class="@container flex flex-col gap-2 p-3">
     <div class="flex items-center gap-1.5">
       <h2 class="text-sm font-semibold">{{ $t('instances.home.title') }}</h2>
       <InfoHint :text="`${$t('instances.home.refreshHint')} ${$t('instances.home.sessionsLocalOnly')}`" />

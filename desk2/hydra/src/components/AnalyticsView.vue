@@ -24,7 +24,7 @@ import {
   RefreshCw,
   Wrench,
 } from '@lucide/vue'
-import { computed, inject, onMounted, onScopeDispose, ref, shallowRef, watch } from 'vue'
+import { computed, inject, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CommandCorrections from '@/components/CommandCorrections.vue'
@@ -47,6 +47,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAnalyticsData } from '@/composables/useAnalyticsData'
 import { useAnalyticsPrefs } from '@/composables/useAnalyticsPrefs'
 import { useShellWidth } from '@/composables/useShellWidth'
 import {
@@ -55,12 +56,8 @@ import {
   type AnalyticsSource,
 } from '@/lib/analytics-sources'
 import type {
-  ActivityReport,
-  AgentPresence,
-  ConcurrencyPoint,
   EditEntry,
   SessionPeriod,
-  SpendReport,
   TokenSink,
   TokenSinkReport,
 } from '@/lib/api'
@@ -69,9 +66,8 @@ import { OPEN_VIEW } from '@/lib/app-view'
 import { modelVendor, vendorLabel } from '@/lib/chart'
 import { baseName, formatCompact, formatUsd } from '@/lib/format'
 import { accountDisplay, fetchAccountNames, type HswarmAccountName } from '@/lib/hswarm-api'
-import { KIT_POLL_MS, formatUsd as kitUsd } from '@/lib/kit'
+import { formatUsd as kitUsd } from '@/lib/kit'
 import { scopeParam, summarizeSelection } from '@/lib/session-scopes'
-import { visibleInterval } from '@/lib/visible-poll'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -115,35 +111,10 @@ function toggleSource(value: string) {
  *  vendor is derived from the model id, so the daemon has nothing extra to compute. */
 const vendorFilter = ref<string>('all')
 
-// The reports are replaced whole by each read and never edited, so they are shallow: no deep proxy
-// over a large payload, and a timed read that brings the same report again writes nothing.
-const spend = shallowRef<SpendReport | null>(null)
-const activity = shallowRef<ActivityReport | null>(null)
-const concurrency = shallowRef<ConcurrencyPoint[]>([])
-const edits = shallowRef<EditEntry[]>([])
-/** Where the tokens went and why (server/src/analytics.ts sinkReport). */
-const sinks = shallowRef<TokenSinkReport | null>(null)
-/** Tools found on this machine, readable or not. Independent of the period filter: an install is
- *  not something that happened in the last 30 days. */
-const agentTools = shallowRef<AgentPresence[]>([])
-
-/** What each report looked like when it last landed, so an identical one can be told apart. */
-const seen = new WeakMap<object, string>()
-/** Stores `next` unless it says the same as what is held. */
-function land<T>(target: { value: T }, next: T) {
-  const had = target.value
-  if (had && next && typeof had === 'object' && typeof next === 'object') {
-    let before = seen.get(had)
-    if (before === undefined) {
-      before = JSON.stringify(had)
-      seen.set(had, before)
-    }
-    const after = JSON.stringify(next)
-    if (before === after) return
-    seen.set(next, after)
-  }
-  target.value = next
-}
+// One shared copy (composables/useAnalyticsData.ts), already filled by lib/warm-data.ts when the tab
+// is first opened.
+const { spend, activity, concurrency, edits, sinks, agentTools, loading, loadAnalytics: load, loadSpend } =
+  useAnalyticsData()
 
 /** Why a detected tool is not read. Written as a switch over literal keys rather than an
  *  interpolated one so the i18n checker can see every string that is actually used. */
@@ -153,97 +124,14 @@ function toolNoteLabel(note: string | undefined): string {
   if (note === 'opt-in') return t('analytics.toolNoteOptIn')
   return t('analytics.toolUnread')
 }
-const loading = ref(true)
 const refreshing = ref(false)
-
-// Request tokens, like HSwarmModelResults' `latest`: only the newest request of each kind may land,
-// and `loading` clears only when nothing newer is still in flight. `latest` guards the period-wide
-// reads, `latestSpend` the one read that also depends on the source selection.
-let latest = 0
-let latestSpend = 0
-let pageBusy = false
-let spendBusy = false
-const settle = () => {
-  loading.value = pageBusy || spendBusy
-}
 
 const allSources = computed(
   () => scopeParam(analyticsSources.value, ANALYTICS_SOURCES) === undefined,
 )
 
-/** The spend read, the only one a source change repeats. `quiet`: the timed refresh, which keeps
- *  the charts on screen instead of the skeletons. */
-async function loadSpend(quiet = false) {
-  const mine = ++latestSpend
-  if (!quiet) {
-    spendBusy = true
-    loading.value = true
-  }
-  try {
-    const s = await api.getSpend(
-      analyticsPeriod.value,
-      scopeParam(analyticsSources.value, ANALYTICS_SOURCES),
-      analyticsPc.value === 'self' ? 'self' : undefined,
-    )
-    if (mine === latestSpend) land(spend, s)
-  } catch {
-    if (mine === latestSpend && !quiet) spend.value = null
-  } finally {
-    if (mine === latestSpend && !quiet) {
-      spendBusy = false
-      settle()
-    }
-  }
-}
-
-async function load(quiet = false) {
-  const mine = ++latest
-  const period = analyticsPeriod.value
-  if (!quiet) {
-    pageBusy = true
-    loading.value = true
-  }
-  void loadSpend(quiet)
-  try {
-    // In parallel: independent reads of the same warmed table, so serialising them would just add
-    // round trips to a page that is otherwise instant. The tool scan is the one that touches disk;
-    // it is capped and cached server-side, and its failure must not take the charts with it.
-    // The tool scan does not depend on time, so the timed refresh leaves it out.
-    const [a, c, e, tools, k] = await Promise.all([
-      api.getActivity(period),
-      api.getConcurrency(period, period === '24h' ? 60 : 180),
-      api.getRecentEdits(120),
-      quiet ? null : api.getAgentTools().catch(() => ({ tools: [] })),
-      // An addition to the page: a daemon without the route must not blank every chart.
-      api.getSinks(period).catch(() => null),
-    ])
-    if (mine !== latest) return // the window moved on while we were fetching
-    land(activity, a)
-    land(concurrency, c.buckets)
-    // Always replaced: the feed's "3m ago" labels are worked out when it draws, so even an unchanged list
-    // is drawn again on each refresh to keep them true.
-    edits.value = e.edits
-    if (tools) land(agentTools, tools.tools)
-    land(sinks, k)
-  } catch {
-    if (mine === latest && !quiet) activity.value = null
-  } finally {
-    if (mine === latest && !quiet) {
-      pageBusy = false
-      settle()
-    }
-  }
-}
-
-onMounted(() => load())
-// The charts follow the work while the tab is open, on the same clock as the HSwarm card above
-// them; they used to be read once, when the tab opened (owner, 2026-10-04: "it doesn't even move").
-// It rests while the page is hidden; inside Desk 2 that includes the pane being slid out of view.
-onScopeDispose(
-  visibleInterval(() => {
-    if (!loading.value && !refreshing.value) void load(true)
-  }, KIT_POLL_MS),
-)
+onMounted(() => load(true))
+// The charts follow the work through lib/warm-data.ts (about every 2 minutes); opening the tab asks again now.
 watch(analyticsPeriod, () => load())
 watch([analyticsSources, analyticsPc], () => loadSpend())
 onMounted(async () => {

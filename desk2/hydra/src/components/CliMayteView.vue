@@ -49,6 +49,8 @@ import {
   createApp,
   h,
   inject,
+  onActivated,
+  onDeactivated,
   onMounted,
   onUnmounted,
   ref,
@@ -68,6 +70,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import { useCliMayteData } from '@/composables/useCliMayteData'
 import { useCliMayteFloat } from '@/composables/useCliMayteFloat'
 import { i18n } from '@/i18n'
 import { pii } from '@/composables/usePrivacy'
@@ -76,18 +79,10 @@ import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import type {
   CliMayteRemotePc,
   CliMayteRemoteWorker,
-  CliMayteWave,
   CliMayteWorkerView,
 } from '@/lib/api'
 import {
-  type CliMayteScorecard,
-  type CliMayteTotals,
-  getCliMayteRemote,
-  getCliMayteScorecard,
-  getCliMayteTotals,
   getCliMayteWorker,
-  listCliMayteWaves,
-  listCliMayteWorkers,
 } from '@/lib/api'
 import { OPEN_VIEW } from '@/lib/app-view'
 import {
@@ -100,7 +95,7 @@ import {
   firstLine,
   isCliMayteActive,
 } from '@/lib/climayte-status'
-import { deskWorkerAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
+import { deskWorkerAsk, EMBEDDED, PANE_OPEN_EVENT, useDeskSidebar } from '@/lib/desk-embed'
 import { formatUsd } from '@/lib/kit'
 import { reconcileList, sameData } from '@/lib/reconcile'
 import type { SideListGroup } from '@/lib/side-list'
@@ -118,29 +113,46 @@ let floatApp: ReturnType<typeof createApp> | null = null
 type ListRow = CliMayteWorkerView & {
   remote?: { pc: string; name: string; at: number; stale: boolean }
 }
-// The lists are replaced whole by a poll that brought a change (reconcileList), never edited in place,
-// so Vue does not wrap every row in a proxy.
-const workers = shallowRef<CliMayteWorkerView[]>([])
-/** The other PCs' workers (GET /api/corch/remote), shaped as rows; empty when sharing is off. */
-const remoteRows = shallowRef<ListRow[]>([])
+// The data is one shared copy (composables/useCliMayteData.ts), kept warm by lib/warm-data.ts.
+const {
+  workers,
+  remote,
+  totals,
+  scorecard,
+  waves,
+  loading,
+  loaded,
+  unreachable,
+  listedAt,
+  hasOlder,
+  finishedLimit,
+  showOlder: widenFinished,
+  refreshCliMayte,
+} = useCliMayteData()
 /** Every row the list shows: this PC's workers, then the other PCs'. */
 const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value])
 /** One warning line per other PC whose build differs from this one's (its `behindNote`). */
-const remoteNotes = ref<Array<{ pc: string; note: string }>>([])
+const remoteNotes = computed<Array<{ pc: string; note: string }>>(() =>
+  remote.value?.enabled
+    ? remote.value.pcs.flatMap((pc) => (pc.behindNote ? [{ pc: pc.pc, note: pc.behindNote }] : []))
+    : [],
+)
 /** Local and remote ids may match, so a row is selected by this key, never its bare id. */
 const rowKey = (w: ListRow) => (w.remote ? `${w.remote.pc}/${w.id}` : w.id)
-/** Manager waves (GET /api/corch/waves; none when the route is missing). */
-const waves = ref<CliMayteWave[]>([])
-const loading = ref(false)
-const loaded = ref(false)
+/** The other PCs' workers (GET /api/corch/remote), shaped as rows; empty when sharing is off. Built once
+ *  per change of the shared copy, and unchanged rows keep their objects. */
+const remoteRows = shallowRef<ListRow[]>([])
+watch(
+  remote,
+  (r) => {
+    const next = r?.enabled ? r.pcs.flatMap((pc) => pc.workers.map((w) => remoteRow(pc, w))) : []
+    remoteRows.value = reconcileList(remoteRows.value, next, rowKey)
+  },
+  { immediate: true },
+)
 const selectedId = ref<string | null>(null)
 const detail = ref<(CliMayteWorkerView & { events: string[] }) | null>(null)
 const now = ref(Date.now())
-// When the list was last read: a running task's `ranS` keeps growing from there until the next poll.
-const listedAt = ref(Date.now())
-/** The last load failed. Before anything loaded that is an error state (never "No tasks yet");
- *  after, a banner over the last known list, whose spinners would otherwise look alive. */
-const unreachable = ref(false)
 
 /** Show only tasks that can still change (isCliMayteActive), kept in this browser. */
 const hideFinished = useStorage('agenthydra.climayte.hideFinished', false)
@@ -223,9 +235,7 @@ function remoteLabel(w: ListRow): string {
   })
 }
 
-let timer: number | null = null
 let clock: (() => void) | null = null
-let alive = true
 
 async function loadDetail() {
   const id = selectedId.value
@@ -239,11 +249,6 @@ async function loadDetail() {
   }
 }
 
-/** What CliMayte has offloaded so far (owner, 2026-09-30: a running count of sessions and tokens). */
-const totals = ref<CliMayteTotals | null>(null)
-/** What passed per kind of task (GET /api/corch/scorecard); shown in the stats card. */
-const scorecard = ref<CliMayteScorecard | null>(null)
-
 /** The row's verdict mark (lib/climayte-status.ts) with its hover: who judged it, and what they said. */
 function verdictMark(w: CliMayteWorkerView) {
   const m = climayteVerdictMark(w)
@@ -252,100 +257,45 @@ function verdictMark(w: CliMayteWorkerView) {
   return { kind: m.kind, label: said, hint: m.note ? `${said}: ${m.note}` : said }
 }
 
-/** The finished tasks the list asks for (the daemon keeps every active one regardless): a busy queue
- *  is thousands of tasks, and each poll used to carry all of them. "Show older" asks for every one. */
-const FINISHED_PAGE = 150
-const finishedLimit = ref<number | undefined>(FINISHED_PAGE)
-/** The list may hold more finished tasks than were read. */
-const hasOlder = computed(
-  () =>
-    finishedLimit.value !== undefined &&
-    workers.value.reduce((n, w) => n + (isCliMayteActive(w) ? 0 : 1), 0) >= finishedLimit.value,
-)
 function showOlder() {
-  finishedLimit.value = undefined
+  widenFinished()
   void load()
 }
 
-// The totals, the scorecard, the other PCs' queue and the waves move slowly: they are read on this
-// beat, not on every 3 s poll of the list (and at once on a refresh or when the page is shown again).
-const SIDE_MS = 30_000
-let sideAt = 0
-
+/** Opening the tab, its refresh button and the pane being shown again: read the shared list now, open
+ *  the first task on the first look, and read the open task's detail. Between those, lib/warm-data.ts
+ *  keeps the list fresh (about every 2 minutes). */
 async function load(opts: { silent?: boolean; side?: boolean } = {}) {
-  if (timer !== null) window.clearTimeout(timer)
-  timer = null
-  if (!opts.silent) loading.value = true
-  try {
-    const side = !opts.silent || opts.side === true || Date.now() - sideAt >= SIDE_MS
-    // The scorecard is extra: a failed read keeps the last one and never marks CliMayte unreachable.
-    // The other PCs' queue is extra too: a failed read keeps the last one.
-    const [list, sums, score, remote, waveList] = await Promise.all([
-      listCliMayteWorkers({ limit: finishedLimit.value }),
-      side ? getCliMayteTotals() : null,
-      side ? getCliMayteScorecard().catch(() => null) : null,
-      side ? getCliMayteRemote().catch(() => null) : null,
-      side ? listCliMayteWaves() : null,
-    ])
-    if (side) sideAt = Date.now()
-    if (waveList && !sameData(waves.value, waveList)) waves.value = waveList
-    workers.value = reconcileList(workers.value, list, (w) => w.id)
-    if (remote) {
-      const next = remote.enabled
-        ? remote.pcs.flatMap((pc) => pc.workers.map((r) => remoteRow(pc, r)))
-        : []
-      remoteRows.value = reconcileList(remoteRows.value, next, rowKey)
-      const notes = remote.enabled
-        ? remote.pcs.flatMap((pc) => (pc.behindNote ? [{ pc: pc.pc, note: pc.behindNote }] : []))
-        : []
-      if (!sameData(remoteNotes.value, notes)) remoteNotes.value = notes
-    }
-    pruneRowViews()
-    if (sums && !sameData(totals.value, sums)) totals.value = sums
-    if (score && !sameData(scorecard.value, score)) scorecard.value = score
-    unreachable.value = false
-    now.value = Date.now()
-    listedAt.value = now.value
-    if (!loaded.value) {
-      loaded.value = true
-      // First paint: open the newest live task, else the newest one.
-      const first =
-        [...workers.value].sort((a, b) => b.createdAt - a.createdAt).find(isCliMayteActive) ??
-        groups.value[0]?.items[0]
-      if (first) selectedId.value = rowKey(first)
-    }
-    await loadDetail()
-  } catch {
-    unreachable.value = true
-    if (!opts.silent && loaded.value) toast.error(t('climayte.loadFailed'))
-  } finally {
-    if (!opts.silent) loading.value = false
+  const wasLoaded = loaded.value
+  await refreshCliMayte(opts)
+  if (unreachable.value) {
+    if (!opts.silent && wasLoaded) toast.error(t('climayte.loadFailed'))
+    return
   }
-  // 3 s while a task can still change; otherwise 15 s (the server tick's idle rate), because a
-  // chat can start new tasks or revive a finished one at any time. Clear again first: a focus
-  // reload overlapping a poll must not leave two timers running. A hidden page (a minimized window, or
-  // in Desk the pane slid out of view) schedules nothing: onVisible reads again when it is seen.
-  if (timer !== null) window.clearTimeout(timer)
-  timer = null
-  if (alive && !document.hidden)
-    timer = window.setTimeout(
-      () => {
-        timer = null
-        if (!document.hidden) void load({ silent: true })
-      },
-      rows.value.some(isCliMayteActive) ? 3000 : 15_000,
-    )
+  pruneRowViews()
+  now.value = Date.now()
+  if (!selectedId.value) {
+    // First paint: open the newest live task, else the newest one.
+    const first =
+      [...workers.value].sort((a, b) => b.createdAt - a.createdAt).find(isCliMayteActive) ??
+      groups.value[0]?.items[0]
+    if (first) selectedId.value = rowKey(first)
+  }
+  await loadDetail()
 }
 
+// The tab stays built while another is shown (App.vue's KeepAlive): it reads again only while it is the
+// one on screen, when it comes back, and when the window or the Desk pane is shown again.
+let active = false
 function onVisible() {
-  if (document.visibilityState === 'visible') void load({ silent: true, side: true })
+  if (active && document.visibilityState === 'visible') void load({ silent: true, side: true })
 }
 
 /** This PC's task by id. One older than the finished tasks read so far reads the whole list first. */
 async function findWorker(id: string): Promise<ListRow | undefined> {
   const w = workers.value.find((x) => x.id === id)
   if (w || finishedLimit.value === undefined) return w
-  finishedLimit.value = undefined
+  widenFinished()
   await load({ silent: true })
   return workers.value.find((x) => x.id === id)
 }
@@ -705,23 +655,29 @@ watch(
   { immediate: true },
 )
 
+onActivated(() => {
+  active = true
+  // Shown (first time or back again): what the shared list has is on screen already; read it now.
+  void load({ silent: loaded.value })
+})
+onDeactivated(() => {
+  active = false
+})
 onMounted(() => {
-  void load()
-  // Keeps a running task's active time honest between the slow idle polls. It rests while the page is
-  // hidden and while no task can change (a poll sets the time too), and reads at once when shown again.
+  // Keeps a running task's active time honest between the slow refreshes. It rests while the page is
+  // hidden and while no task can change (a read sets the time too), and reads at once when shown again.
   clock = visibleInterval(() => {
     if (rows.value.some(isCliMayteActive)) now.value = Date.now()
   }, 30_000)
   document.addEventListener('visibilitychange', onVisible)
   window.addEventListener('focus', onVisible)
+  window.addEventListener(PANE_OPEN_EVENT, onVisible)
 })
 onUnmounted(() => {
-  alive = false
   document.removeEventListener('visibilitychange', onVisible)
+  window.removeEventListener(PANE_OPEN_EVENT, onVisible)
   window.removeEventListener('focus', onVisible)
-  if (timer !== null) window.clearTimeout(timer)
   clock?.()
-  timer = null
   clock = null
   unmountFloat()
   closeFloat()

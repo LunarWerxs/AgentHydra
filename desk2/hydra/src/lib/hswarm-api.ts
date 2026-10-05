@@ -184,11 +184,46 @@ export async function fetchAccountNames(): Promise<Record<string, HswarmAccountN
   }
 }
 
+/** The shared copy of fetchAccountNames, read by every page that names an HSwarm account. */
+const accountNames = ref<Record<string, HswarmAccountName>>({})
+async function refreshAccountNames(): Promise<void> {
+  const names = await fetchAccountNames()
+  // An unreachable daemon answers {}: keep the names already known.
+  if (Object.keys(names).length || !Object.keys(accountNames.value).length) accountNames.value = names
+}
+
 async function refresh() {
   await fetchStatus()
   if (status.value.running) {
     await fetchState()
   }
+}
+
+// The tree's two lists, one shared copy beside the state (null until first read).
+const clients = ref<{ client: string; registered: boolean | null }[] | null>(null)
+const jobs = ref<{ job_id: string; label?: string; state: string; created?: string }[] | null>(null)
+
+async function loadClients() {
+  try {
+    clients.value = (await apiCall('clients')).clients ?? []
+  } catch {
+    // The tree falls back to the known clients, marked "checking".
+  }
+}
+async function loadJobs() {
+  try {
+    jobs.value = (await apiCall('jobs')).jobs ?? []
+  } catch {
+    // Jobs keeps its last list; the Jobs page reports the error itself.
+  }
+}
+
+/** Everything the HSwarm tab shows, read once: status, state, the clients and the jobs. Used by
+ *  lib/warm-data.ts (about every 2 minutes) and when the tab opens. Never throws. */
+async function refreshHswarm(): Promise<void> {
+  await fetchStatus()
+  if (!status.value.running) return
+  await Promise.all([fetchState(), loadClients(), loadJobs(), refreshAccountNames()])
 }
 
 export function useHswarmApi() {
@@ -197,6 +232,13 @@ export function useHswarmApi() {
     state: computed(() => state.value),
     error: computed(() => error.value),
     loading: computed(() => loading.value),
+    accountNames,
+    refreshAccountNames,
+    clients,
+    jobs,
+    loadClients,
+    loadJobs,
+    refreshHswarm,
     fetchStatus,
     fetchState,
     refresh,

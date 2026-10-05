@@ -9,7 +9,7 @@
 // hides its own, Desk draws it, and Desk's clicks on it come back here to that tab. Desk can also ask
 // for an account's row in Instances (its session header's account chip) or a CliMayte task (its sidebar's
 // task rows).
-import { onScopeDispose, ref, watch } from 'vue'
+import { onActivated, onDeactivated, onScopeDispose, ref, watch } from 'vue'
 import type { AhMessage, DeskMessage, SidebarModel } from '@desk/shared/hydra-embed'
 import { sameData } from '@/lib/reconcile'
 import type { SessionJump } from '@/lib/session-jump'
@@ -32,6 +32,10 @@ export function openInDesk(s: SessionJump): void {
 export function showSessionsInDesk(): void {
   tellDesk({ type: 'ah:show-sessions' })
 }
+
+/** Desk's pane (HydraPane.vue) fires this on this window each time AgentHydra is shown, so a page that
+ *  stayed built behind the pane can read again right then. The frame's own visibility never changes. */
+export const PANE_OPEN_EVENT = 'hydra:pane-open'
 
 export type SidebarEvent = Extract<DeskMessage, { type: 'desk:sidebar' }>
 
@@ -64,14 +68,23 @@ export function useDeskSidebar(
 ): void {
   if (!EMBEDDED) return
   sidebarHandlers.set(view, onEvent)
-  // Out of view the getter reads nothing, so no change of the tab's data rebuilds the model.
+  // The tab stays built behind the next one (App.vue's KeepAlive): only the tab on screen speaks for
+  // the sidebar, and it says so again when it comes back. Out of view the getter reads nothing, so no
+  // change of the tab's data rebuilds the model.
+  const active = ref(true)
   watch(
-    () => (pageHidden.value ? undefined : build()),
+    () => (!active.value || pageHidden.value ? undefined : build()),
     (model) => {
       if (model !== undefined) publishSidebar(model)
     },
     { immediate: true },
   )
+  onActivated(() => {
+    active.value = true
+  })
+  onDeactivated(() => {
+    active.value = false
+  })
   onScopeDispose(() => {
     if (sidebarHandlers.get(view) === onEvent) sidebarHandlers.delete(view)
   })

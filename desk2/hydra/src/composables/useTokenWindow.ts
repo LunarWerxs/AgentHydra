@@ -4,9 +4,8 @@
 
 import type { AccountTokens } from '@agenthydra/server/types'
 import { useStorage } from '@vueuse/core'
-import { onScopeDispose, ref } from 'vue'
+import { ref } from 'vue'
 import { listDesktopInstanceTokens } from '@/lib/api'
-import { visibleInterval } from '@/lib/visible-poll'
 import { TOKEN_WINDOWS, type TokenWindow } from '@/lib/token-window'
 import { registerSharedPref } from './useSharedPrefs'
 
@@ -18,20 +17,18 @@ registerSharedPref('agenthydra.desktopTokens.window', desktopTokenWindow, TOKEN_
 export const useCliTokenWindow = () => cliTokenWindow
 export const useDesktopTokenWindow = () => desktopTokenWindow
 
-/** Each desktop instance's current account's tokens, by instance dir; refreshed every minute while
- *  the table is mounted. */
-export function useDesktopAccountTokens() {
-  const byDir = ref<Record<string, AccountTokens | null>>({})
-  const load = async () => {
-    try {
-      const next = await listDesktopInstanceTokens()
-      if (JSON.stringify(next) !== JSON.stringify(byDir.value)) byDir.value = next
-    } catch {
-      // Keep the last figures; the next tick asks again.
-    }
+/** Each desktop instance's current account's tokens, by instance dir. One shared copy, read by the
+ *  table and refreshed by lib/warm-data.ts (the desktop kind) and when the tab is shown. */
+const desktopAccountTokens = ref<Record<string, AccountTokens | null>>({})
+export async function refreshDesktopAccountTokens(): Promise<void> {
+  try {
+    const next = await listDesktopInstanceTokens()
+    if (JSON.stringify(next) !== JSON.stringify(desktopAccountTokens.value)) desktopAccountTokens.value = next
+  } catch {
+    // Keep the last figures; the next refresh asks again.
   }
-  void load()
-  const stop = visibleInterval(() => void load(), 60_000)
-  onScopeDispose(stop)
-  return byDir
+}
+export function useDesktopAccountTokens() {
+  void refreshDesktopAccountTokens()
+  return desktopAccountTokens
 }

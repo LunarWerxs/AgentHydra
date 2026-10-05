@@ -14,7 +14,6 @@ import type { UsageSnapshot } from '@/lib/api'
 import * as api from '@/lib/api'
 import { reconcileMap, sameData } from '@/lib/reconcile'
 import { isNoDataSnap, type UsageReason } from '@/lib/usage'
-import { visibleInterval } from '@/lib/visible-poll'
 
 const snapshots = ref<Map<string, UsageSnapshot>>(new Map())
 /** A signed-out account's last reading (server usage-cache.ts lastKnownUsage), shown in its row
@@ -71,7 +70,16 @@ function setReason(key: string, reason: UsageReason) {
 /** Bulk-hydrate from the server's whole usage cache (a plain read of cached snapshots — it checks
  *  nothing). Safe to call more than once; a later call just re-syncs, and an unchanged cache
  *  assigns nothing. */
-async function hydrate(skipSame = false): Promise<void> {
+let hydrating: Promise<void> | null = null
+/** One read at a time: the CLI and desktop kinds both refresh it, and share a running request.
+ *  `skipSame` (the background refresh) writes nothing when the cache is the one already read. */
+function hydrate(skipSame = false): Promise<void> {
+  return (hydrating ??= hydrateOnce(skipSame).finally(() => {
+    hydrating = null
+  }))
+}
+
+async function hydrateOnce(skipSame: boolean): Promise<void> {
   const res = await guard(api.getUsageCache())
   if (res) {
     const text = JSON.stringify(res)
@@ -89,29 +97,8 @@ async function hydrate(skipSame = false): Promise<void> {
 }
 
 // --- keeping the numbers current -----------------------------------------------------------------
-// The server re-checks quota on its own schedule (usage-refresh.ts, every 15 min by default), but
-// that only writes to ITS cache — until something pulls, an open Instances tab keeps showing
-// whatever it hydrated on mount and quietly goes stale for as long as you leave it open.
-//
-// So pull on the same cycle the instances table already refreshes on. hydrate() is a read of the
-// server's cache: no probe, no `claude`, no request to Anthropic, no quota — one localhost GET of a
-// small JSON file. It costs nothing, so there is no reason to do it only once and hope.
-
-/** Matches useInstances.ts's list poll — the Instances screen refreshes as one thing. */
-const HYDRATE_INTERVAL_MS = 4000
-
-let stopPoll: (() => void) | null = null
-
-function startPolling(): void {
-  if (stopPoll) return
-  void hydrate()
-  stopPoll = visibleInterval(() => void hydrate(true), HYDRATE_INTERVAL_MS)
-}
-
-function stopPolling(): void {
-  stopPoll?.()
-  stopPoll = null
-}
+// hydrate() is a read of the server's cache (no probe, no `claude`, no quota). It is refreshed by
+// lib/warm-data.ts (the cli and desktop kinds, about every 2 minutes) and when a page opens.
 
 /** `snap`, unless its row's usage was cleared after it was taken. */
 function shown(key: string, snap: UsageSnapshot | undefined): UsageSnapshot | undefined {
@@ -222,8 +209,6 @@ export function useUsage() {
     lastError,
     lastAutoRefreshAt,
     hydrate,
-    startPolling,
-    stopPolling,
     snapshotFor,
     clearUsage,
     reasonFor,

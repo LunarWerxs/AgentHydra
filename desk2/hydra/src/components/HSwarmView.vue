@@ -46,7 +46,8 @@ import HSwarmSavings from './hswarm/HSwarmSavings.vue'
 import HSwarmTools from './hswarm/HSwarmTools.vue'
 
 const { t } = useI18n()
-const { status, error, loading, state, fetchStatus, fetchState, refresh, apiCall } = useHswarmApi()
+const { status, error, loading, state, clients, jobs, loadClients, loadJobs, refreshHswarm, fetchState, refresh, apiCall } =
+  useHswarmApi()
 
 type Dot = 'ok' | 'warn' | 'nokey' | 'off' | 'run' | 'bad'
 interface TreeNode {
@@ -136,8 +137,6 @@ const starBusy = ref<string | null>(null)
 const navOpen = ref(false)
 const treeWidth = ref<number>(load('w', TREE_DEFAULT))
 const isRefreshing = ref(false)
-const clients = ref<{ client: string; registered: boolean | null }[] | null>(null)
-const jobs = ref<{ job_id: string; label?: string; state: string; created?: string }[] | null>(null)
 const treeEl = ref<HTMLElement | null>(null)
 const searchEl = ref<InstanceType<typeof Input> | null>(null)
 
@@ -405,21 +404,6 @@ function onChevron(e: MouseEvent, r: TreeRow) {
   toggle(r.id)
 }
 
-async function loadClients() {
-  try {
-    clients.value = (await apiCall('clients')).clients ?? []
-  } catch {
-    // The tree falls back to the known clients, marked "checking".
-  }
-}
-async function loadJobs() {
-  try {
-    jobs.value = (await apiCall('jobs')).jobs ?? []
-  } catch {
-    // Jobs keeps its last list; the Jobs page reports the error itself.
-  }
-}
-
 function focusRow(id: string) {
   cur.value = id
   treeEl.value
@@ -672,13 +656,9 @@ useDeskSidebar(
 onMounted(async () => {
   // In Desk the tree's search is Desk's, so "/" is left to the page.
   if (!EMBEDDED) window.addEventListener('keydown', onGlobalKey)
-  await fetchStatus()
-  if (status.value?.running) {
-    await fetchState()
-    loadClients()
-    loadJobs()
-    void askIcons()
-  }
+  // What the shared copy has (lib/warm-data.ts) is on screen already; read it again now.
+  await refreshHswarm()
+  if (status.value?.running) void askIcons()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKey)

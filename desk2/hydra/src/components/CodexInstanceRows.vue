@@ -66,7 +66,6 @@ const {
   busyIds,
   refresh,
   startPolling,
-  stopPolling,
   create,
   launchCli,
   login,
@@ -531,7 +530,6 @@ async function runMove() {
 onMounted(startPolling)
 onUnmounted(() => {
   catchupSignal.aborted = true
-  stopPolling()
 })
 
 // `refresh` is the old section's Refresh button (list, then every ChatGPT login's usage, then the

@@ -86,7 +86,6 @@ const {
   loading,
   busyIds,
   startPolling,
-  stopPolling,
   refreshCliInstances,
   launch,
   logout,
@@ -102,8 +101,7 @@ const {
   isChecking,
   checkCli,
   reasonFor,
-  startPolling: startUsagePolling,
-  stopPolling: stopUsagePolling,
+  hydrate: hydrateUsage,
 } = useUsage()
 const { accounts, refreshAccounts } = useData()
 // The desktop instances are the link targets. useInstances is a module singleton that the Instances
@@ -614,16 +612,14 @@ const associateAccountOptions = computed(() => accounts.value)
 
 onMounted(() => {
   startPolling()
-  // The server's usage cache, every few seconds, as the Instances tab reads it: a window the
-  // keepalive started (or the background sweep re-read) lands there and nowhere else, so without
-  // this a row stayed blank until something on the page asked again (owner, 2026-10-02).
-  startUsagePolling()
+  // The server's usage cache: a window the keepalive started (or the background sweep re-read) lands
+  // there and nowhere else, so a row stays blank until something asks. Read now; lib/warm-data.ts
+  // reads it again about every 2 minutes.
+  void hydrateUsage()
   if (!settingsLoaded.value) void loadSettings()
   if (desktopInstances.value.length === 0) void refreshInstances({ silent: true })
 })
 onUnmounted(() => {
-  stopPolling()
-  stopUsagePolling()
   clearKeepaliveRefresh()
 })
 </script>

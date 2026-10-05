@@ -121,7 +121,6 @@ const {
   resolvingAccounts,
   busyDirs,
   startPolling,
-  stopPolling,
   refreshInstances,
   open,
   quit,
@@ -143,8 +142,7 @@ const {
   checkCodex,
   reasonFor,
   hydrated: usageHydrated,
-  startPolling: startUsagePolling,
-  stopPolling: stopUsagePolling,
+  hydrate: hydrateUsage,
 } = useUsage()
 
 const usageKeyFor = (inst: CMInstance) => `desktop:${inst.dir}`
@@ -425,7 +423,6 @@ const {
   cliInstances,
   loading: cliLoading,
   startPolling: startCliPolling,
-  stopPolling: stopCliPolling,
   checkUsage: checkCliUsage,
   create: createCli,
   launch: launchCli,
@@ -1293,11 +1290,10 @@ async function refreshDesktopInstall(fresh = false) {
 let desktopInstallTimer: number | null = null
 
 onMounted(() => {
+  // The first look at this tab: later refreshes are lib/warm-data.ts's (the desktop and cli kinds).
   startPolling()
-  startUsagePolling()
-  // The CLI table lives on the CLI tab now, but the Claude rows here still read the CLI list (the
-  // linked-CLI badge and the ⋯ menu's CLI items), so this tab keeps it current while it is open.
-  // One shared timer: the two tabs are never mounted at the same time.
+  void hydrateUsage()
+  // The Claude rows here read the CLI list too (the linked-CLI badge and the ⋯ menu's CLI items).
   startCliPolling()
   refreshDesktopInstall()
   desktopInstallTimer = window.setInterval(() => {
@@ -1307,9 +1303,6 @@ onMounted(() => {
   if (holding.value) loadHoldTimer = window.setTimeout(releaseHold, LOAD_HOLD_MAX_MS)
 })
 onUnmounted(() => {
-  stopPolling()
-  stopUsagePolling()
-  stopCliPolling()
   // Leaving the tab cancels whatever is still trickling through the catch-up queue: those probes
   // exist to fill in THIS table, and a tab you have navigated away from has no business holding a
   // slow queue of network requests open behind you.
