@@ -443,7 +443,8 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
 
     <!-- Hydra Desk 2: the chat side and AgentHydra side by side on one track; the AgentHydra button slides it
          (a push: one goes out to the left as the other comes in). The side out of view is inert. -->
-    <div class="relative col-start-2 row-span-2 row-start-1 min-w-0 overflow-hidden" data-testid="stage">
+    <!-- Never scrolled sideways: a focus or find-in-page landing near the edge would show half of each side. -->
+    <div class="relative col-start-2 row-span-2 row-start-1 min-w-0 overflow-hidden" data-testid="stage" @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)">
       <div
         class="flex h-full w-[200%] transition-transform duration-[420ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
         :style="{ transform: hydraOpen ? 'translateX(-50%)' : 'translateX(0)' }"

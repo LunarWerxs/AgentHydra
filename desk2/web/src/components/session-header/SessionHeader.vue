@@ -291,8 +291,10 @@ onBeforeUnmount(() => {
 const secretsOpen = ref(false)
 const close = () => src.select({ kind: 'new' })
 
-const BTN =
-  'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-text-2 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text disabled:opacity-40 disabled:hover:bg-transparent aria-expanded:bg-fill-hover aria-expanded:text-text'
+// The colour is apart so the ⋯ button's blue (a display filter is on) replaces it rather than racing it.
+const BTN_SHAPE =
+  'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] transition-colors duration-[60ms] hover:bg-fill-hover disabled:opacity-40 disabled:hover:bg-transparent aria-expanded:bg-fill-hover'
+const BTN = `${BTN_SHAPE} text-text-2 hover:text-text aria-expanded:text-text`
 const CHIP = 'flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius-6)] px-1 hover:bg-fill-hover hover:text-text-2'
 </script>
 
@@ -322,7 +324,7 @@ const CHIP = 'flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius
               <span class="max-w-48 truncate">{{ folderLabel(cwd) }}</span>
             </span>
           </Tip>
-          <Tip v-if="row?.git_branch" label="Git branch">
+          <Tip v-if="row?.git_branch && row.git_branch !== 'HEAD'" label="Git branch">
             <span :class="CHIP" class="cursor-default">
               <component :is="newSessionGlyphs.branch" class="size-3.5" />
               <span class="max-w-40 truncate">{{ row.git_branch }}</span>
@@ -361,7 +363,7 @@ const CHIP = 'flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius
             <span class="inline-flex">
               <DropdownMenu @update:open="menuOpened">
                 <DropdownMenuTrigger as-child>
-                  <button type="button" :class="[BTN, filtered ? 'text-accent-text' : '']" aria-label="More actions">
+                  <button type="button" :class="filtered ? `${BTN_SHAPE} text-accent-text` : BTN" aria-label="More actions">
                     <component :is="shellGlyphs.rowMore" class="size-4" />
                   </button>
                 </DropdownMenuTrigger>

@@ -16,7 +16,9 @@ const emit = defineEmits<{ search: []; 'update:filter': [filter: SidebarFilter] 
 
 const cloud = useCloud()
 const narrowed = computed(() => (cloud.on.value ? scopesNarrowed(cloud.scopes.value) : props.filter !== 'active'))
-const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-text-2 hover:bg-fill-hover hover:text-text'
+// The colour is apart so the Filter's blue (a filter is narrowing the list) replaces it rather than racing it.
+const BTN_SHAPE = 'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] hover:bg-fill-hover'
+const HEADER_BTN = `${BTN_SHAPE} text-text-2 hover:text-text`
 </script>
 
 <template>
@@ -29,7 +31,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
     <span class="inline-flex">
       <DropdownMenu>
         <DropdownMenuTrigger as-child>
-          <button type="button" :class="[HEADER_BTN, narrowed ? 'text-accent-text' : '']" aria-label="Filter">
+          <button type="button" :class="narrowed ? `${BTN_SHAPE} text-accent-text` : HEADER_BTN" aria-label="Filter">
             <component :is="shellGlyphs.viewOptions" class="size-4" />
           </button>
         </DropdownMenuTrigger>

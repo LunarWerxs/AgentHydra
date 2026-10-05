@@ -13,8 +13,11 @@ import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem 
 defineProps<{ sidebarOpen: boolean; width: number; canBack: boolean; canForward: boolean; hydraOpen?: boolean; cloudOn?: boolean }>()
 const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; back: []; forward: []; settings: []; hydra: []; cloud: [] }>()
 
-const BTN =
-  'flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-7)] text-text transition-colors duration-[60ms] hover:bg-fill-hover disabled:opacity-50 disabled:hover:bg-transparent aria-expanded:bg-fill-hover'
+// The colour is apart so the cloud's blue replaces it: two colour utilities on one button resolve by
+// stylesheet order, not by which came last.
+const BTN_SHAPE =
+  'flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-7)] transition-colors duration-[60ms] hover:bg-fill-hover disabled:opacity-50 disabled:hover:bg-transparent aria-expanded:bg-fill-hover'
+const BTN = `${BTN_SHAPE} text-text`
 </script>
 
 <template>
@@ -64,7 +67,7 @@ const BTN =
     </Tip>
     <Tip :label="cloudOn ? 'Back to the desk list' : 'Cloud: every session, both PCs'">
       <!-- On shows as a blue icon alone, no pressed background (Michael, 2026-10-04). -->
-      <button type="button" :class="[BTN, cloudOn ? 'text-accent-text' : '']" aria-label="Cloud sessions" :aria-pressed="!!cloudOn" @click="emit('cloud')">
+      <button type="button" :class="[BTN_SHAPE, cloudOn ? 'text-accent-text' : 'text-text']" aria-label="Cloud sessions" :aria-pressed="!!cloudOn" @click="emit('cloud')">
         <Cloud class="size-4" />
       </button>
     </Tip>
