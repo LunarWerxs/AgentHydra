@@ -396,7 +396,7 @@ function act(item: RowMenuItem) {
   if (chat.value) sidebar.value?.chatAction(chat.value, item)
 }
 function rename(title: string) {
-  if (chat.value) void src.updateChat(chat.value.id, { title }).catch(() => {})
+  if (chat.value) sidebar.value?.renameChat(chat.value, title)
 }
 
 // Keyboard

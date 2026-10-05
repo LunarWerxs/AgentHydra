@@ -443,7 +443,7 @@ async function confirmDelete() {
   deleting.value = null
   if (!chat) return
   if (selectedChatId.value === chat.id) src.select({ kind: 'new' })
-  await src.removeChat(chat.id).catch(() => {})
+  attempt('Delete', src.removeChat(chat.id))
 }
 
 // Footer
@@ -474,7 +474,9 @@ function onResizeKey(e: KeyboardEvent) {
 defineExpose({
   openSearch,
   /** The title bar's chat menu runs here: the same actions and dialogs as the row's. */
-  chatAction: (chat: ChatSummary, item: RowMenuItem) => act({ kind: 'chat', chat }, item)
+  chatAction: (chat: ChatSummary, item: RowMenuItem) => act({ kind: 'chat', chat }, item),
+  /** The title bar's rename: a failure shows in the same alert as a row's. */
+  renameChat: (chat: ChatSummary, title: string) => mark({ kind: 'chat', chat }, { title })
 })
 
 const NAV_ROW =

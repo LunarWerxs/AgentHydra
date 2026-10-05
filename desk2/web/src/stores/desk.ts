@@ -264,6 +264,7 @@ function scheduleReconnect() {
 
 /** Items streamed for chats whose history is not loaded yet; the load takes them in (keepNewer). */
 const unloadedUpserts = new Map<string, TranscriptItem[]>()
+const UNLOADED_UPSERTS_MAX = 200
 
 /** Speed tracking: when Send was clicked in a chat whose bubble has not shown yet (performance.now()). */
 const sendClicks = new Map<string, number>()
@@ -338,6 +339,11 @@ function handleServerEvent(event: ServerEvent) {
       const idx = indexOfItem(event.chatId, items, event.item.id)
       if (idx >= 0) replaceItem(items, idx, event.item)
       else appendItem(event.chatId, items, event.item)
+      // Only the newest few are kept for an unloaded chat: the history fetch already holds the older ones.
+      if (!chatItems(event.chatId) && items.length > UNLOADED_UPSERTS_MAX) {
+        items.splice(0, items.length - UNLOADED_UPSERTS_MAX)
+        indexes.delete(event.chatId)
+      }
       break
     }
 

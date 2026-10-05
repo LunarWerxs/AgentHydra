@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Send, ArrowUpRight } from '@lucide/vue'
+import { ArrowUpRight } from '@lucide/vue'
+import { useClock } from '@/lib/clock'
 import { icons } from '@/lib/icons'
 
 const Square = icons.stop
@@ -45,9 +46,11 @@ const groupedActive = computed(() => {
   return Array.from(groups.entries()).map(([group, items]) => ({ group, items }))
 })
 
+const now = useClock(1000)
+
 const elapsedTime = (worker: CliMayteWorker): string => {
   if (!worker.startedAt) return ''
-  const elapsed = Date.now() - worker.startedAt
+  const elapsed = Math.max(0, now.value - worker.startedAt)
   const minutes = Math.floor(elapsed / 60000)
   const seconds = Math.floor((elapsed % 60000) / 1000)
   return minutes > 0 ? `${minutes}m` : `${seconds}s`
@@ -73,22 +76,15 @@ const glyphClass = (worker: CliMayteWorker): string => {
   }
 }
 
+const cancelErrors = ref(new Map<string, string>())
+
 const cancelWorker = async (worker: CliMayteWorker) => {
   if (confirm(`Cancel "${worker.title}"?`)) {
+    cancelErrors.value.delete(worker.id)
     try {
       await desk.cancelWorker(worker.id)
     } catch (err) {
-      console.error('Failed to cancel worker:', err)
-    }
-  }
-}
-
-const sendToWorker = async (worker: CliMayteWorker, text: string) => {
-  if (text.trim()) {
-    try {
-      await desk.sendToWorker(worker.id, text)
-    } catch (err) {
-      console.error('Failed to send to worker:', err)
+      cancelErrors.value.set(worker.id, `Stop failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 }
@@ -179,6 +175,7 @@ const sendToWorker = async (worker: CliMayteWorker, text: string) => {
                 </button>
               </Tip>
             </div>
+            <p v-if="cancelErrors.get(worker.id)" role="alert" class="mt-2 text-[12px] text-danger-text">{{ cancelErrors.get(worker.id) }}</p>
           </div>
         </div>
       </div>
