@@ -117,6 +117,10 @@ export interface SendOptions {
 export type QueueCreated = { waiting: 'no-room' | 'unreachable' } | { chat: ChatSummary; firstSend: Promise<string | null> }
 
 export const TITLE_MAX = 60
+/** A chat's title until its first message names it. */
+export const NEW_TITLE = 'New session'
+/** How many accounts a generated title is asked of: the first, and one retry. */
+const TITLE_TRIES = 2
 /** A chat with a turn under way (the send queue waits on these). */
 export const LIVE = new Set<ChatSummary['status']>(['starting', 'working', 'needs_you'])
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -183,6 +187,9 @@ interface Entry {
   titled?: boolean
   /** The ids of its own background tasks still running that count toward backgroundActive (long-lived ones do not). */
   bgTasks?: Set<string>
+  /** A CliMayte chat: the task items Hydra Desk settled because their session ended (endTasks). The worker's own
+   *  JSONL still says 'running' for them, which never replaces the settled item; a real notice still does. */
+  ended?: Set<string>
   /** A folder the session ended its last turn in, outside the chat's own (cwd-move): the move happens only if the next turn begins and ends there. `offset` is the transcript's size at that turn end. */
   cwdPending?: { target: string; file: string; offset: number }
   /** The owner's latest message (cwd-move: a move it asked for needs no second turn). */
@@ -299,15 +306,21 @@ export class ChatManager {
     const e = this.entry(id)
     // A CliMayte chat: its worker's transcript, with the lines Hydra Desk wrote (a move, a failure) in time order.
     if (e.chat.workerId !== undefined) return this.deskItems(e)
-    return this.store.loadItems(id).map((item) => {
+    const live = e.runtime?.running === true
+    const items = this.store.loadItems(id).map((item) => {
       // A request stored 'pending' that no running runtime waits on was left by a process that died (a
       // hard stop, a crash): nothing can answer it, so it is expired, on disk and in every window.
-      const done = settled(item)
-      if (done === item || e.runtime?.isPending(item.id)) return item
+      let done = settled(item)
+      if (done !== item && e.runtime?.isPending(item.id)) done = item
+      // So is a task still 'running' with no runtime running: its session ended (a restart, a crash), and the task with it.
+      if (!live) done = endedTask(done)
+      if (done === item) return item
       this.store.appendItem(id, done)
       this.emitEvent({ type: 'item.upsert', chatId: id, item: done })
       return done
     })
+    if (!live && this.clearTasks(e)) this.changed(e.chat)
+    return items
   }
 
   /** A CliMayte chat's whole transcript from its Desk file (chats/<id>.jsonl), oldest first, without touching any account folder. */
@@ -316,7 +329,12 @@ export class ChatManager {
     if (!e.emitted) {
       e.emitted = new Map()
       e.workerSeen = undefined
-      for (const item of items) e.emitted.set(item.id, signature(item))
+      for (const item of items) {
+        e.emitted.set(item.id, signature(item))
+        if (item.kind !== 'task') continue
+        if (item.status === 'stopped' && item.summary === TASK_SESSION_ENDED) (e.ended ??= new Set()).add(item.id)
+        else if (item.status === 'running' && !isLongLived(item)) (e.bgTasks ??= new Set()).add(item.taskId)
+      }
     }
     return e.sent?.length ? [...items, ...e.sent] : items
   }
@@ -453,7 +471,7 @@ export class ChatManager {
     const chat: ChatSummary = {
       id: randomUUID(),
       sessionId: null,
-      title: req.title?.trim() || (prompt ? titleFrom(prompt) : 'New session'),
+      title: req.title?.trim() || (prompt ? titleFrom(prompt) : NEW_TITLE),
       cwd,
       account,
       accountAuto: auto,
@@ -480,11 +498,11 @@ export class ChatManager {
       climayteActive: 0,
       ...(worker ? { workerId: null } : {}),
     }
-    const entry: Entry = { chat, runtime: null, query: null }
+    const entry: Entry = { chat, runtime: null, query: null, ...(req.title?.trim() ? { titled: true } : {}) }
     this.chats.set(chat.id, entry)
     this.changed(chat)
     this.accountNote(chat.id, note)
-    if (prompt && !req.title?.trim()) this.autoTitle(entry, prompt)
+    if (prompt && !entry.titled) this.autoTitle(entry, prompt)
     const firstSend: Promise<string | null> =
       prompt || req.images?.length
         ? this.send(chat.id, prompt ?? '', req.images, { messageId }).then(
@@ -499,35 +517,68 @@ export class ChatManager {
     return { chat: { ...chat }, firstSend }
   }
 
-  /** Names a new chat from its first message, off the send's path; once, and never over a title the owner set. Any failure keeps the first words. */
+  /**
+   * Names a chat from its first message, off the send's path; once, and never over a title the owner set. Asked
+   * of the chat's own account, or (a CliMayte chat not placed yet, the default login) the healthiest signed-in
+   * one, then once more on another; each failure is in the server log. If both fail the first words stay.
+   * 2026-10-05: every title ever asked for failed in silence: a new chat's account is CliMayte's stand-in, whose
+   * null config folder meant the default login, signed out on the owner's PC.
+   */
   private autoTitle(e: Entry, prompt: string): void {
     const gen = this.titleGen
-    if (!gen) return
+    if (!gen || e.titled) return
     const first = e.chat.title
+    const chat = e.chat
+    const stale = () => e.titled || chat.title !== first || this.chats.get(chat.id) !== e
     void (async () => {
-      let title: string | null = null
-      const from = this.now()
-      try {
-        title = await gen({ prompt, cwd: e.chat.cwd, configDir: e.chat.account.configDir })
-      } catch {
-        return
-      } finally {
-        this.timings.span({ stage: 'title', ms: this.now() - from, chatId: e.chat.id, ok: !!title })
+      const tried: string[] = []
+      let account: AccountRef | null = null
+      for (let n = 1; n <= TITLE_TRIES; n++) {
+        // No other account to try: the same one again (a slow answer, a passing error).
+        account = (await this.titleAccount(chat, tried)) ?? account ?? { ...DEFAULT_ACCOUNT }
+        tried.push(account.id)
+        let why = 'no usable title in the answer'
+        let title: string | null = null
+        const from = this.now()
+        try {
+          title = await gen({ prompt, cwd: chat.cwd, configDir: account.configDir }, (w) => (why = w))
+        } catch (err) {
+          why = err instanceof Error ? err.message : String(err)
+        }
+        this.timings.span({ stage: 'title', ms: this.now() - from, chatId: chat.id, accountId: account.id, accountNumber: account.number ?? null, ok: !!title })
+        if (stale()) return
+        if (title) {
+          e.titled = true
+          chat.title = title
+          this.changed(chat)
+          return
+        }
+        console.warn(`[desk] chat ${chat.id}: no title from ${accountName(account)} (try ${n} of ${TITLE_TRIES}): ${why}`)
       }
-      const chat = e.chat
-      if (!title || e.titled || chat.title !== first || this.chats.get(chat.id) !== e) return
-      e.titled = true
-      chat.title = title
-      this.changed(chat)
     })()
+  }
+
+  /** The account a title is asked of: the chat's own when it has a login of its own, else the healthiest not tried; null when none is left. */
+  private async titleAccount(chat: ChatSummary, tried: string[]): Promise<AccountRef | null> {
+    if (chat.account.configDir && !tried.includes(chat.account.id)) return chat.account
+    const next = pickHealthy(await this.bridge.listAccounts().catch(() => []), tried)
+    return next ? accountRef(next) : null
   }
 
   async send(id: string, text: string, images?: ImageRef[], opts: SendOptions = {}): Promise<{ queued: boolean }> {
     const e = this.entry(id)
     if (!text.trim() && !images?.length) throw new ChatError(400, 'text is required')
     e.lastAsk = text
+    // A chat opened empty is named by its first message, as one opened with it is.
+    if (!e.titled && e.chat.title === NEW_TITLE && text.trim()) {
+      e.chat.title = titleFrom(text)
+      this.changed(e.chat)
+      this.autoTitle(e, text)
+    }
     if (e.chat.workerId !== undefined) return this.sendToWorker(e, text, images, opts)
     if (!e.runtime?.running) {
+      // A cold start is a new process: the tasks the last one started ended with it.
+      if (this.endTasks(e)) this.changed(e.chat)
       const cannot = this.seedResume(e)
       if (cannot) throw new ChatError(409, cannot)
     }
@@ -546,6 +597,7 @@ export class ChatManager {
     const e = this.entry(id)
     if (e.chat.workerId !== undefined || e.runtime?.running || e.chat.archived) return { started: false }
     if (this.seedResume(e)) return { started: false }
+    if (this.endTasks(e)) this.changed(e.chat)
     const started = this.runtimeOf(e).warm()
     if (started) this.timings.sdkWarmed(id)
     return { started }
@@ -819,7 +871,8 @@ export class ChatManager {
       queuedCount: 0,
       climayteActive: 0,
     }
-    for (const item of this.store.loadItems(id)) this.store.appendItem(chat.id, settled(item))
+    // A fork runs none of its source's tasks: a copy still 'running' is settled as ended.
+    for (const item of this.store.loadItems(id)) this.store.appendItem(chat.id, endedTask(settled(item)))
     // Its first start copies the source's session from where the source last ran, which has its latest turns.
     this.chats.set(chat.id, { chat, runtime: null, query: null, forkAt, ranIn: ranInOf(se) })
     this.changed(chat)
@@ -874,7 +927,7 @@ export class ChatManager {
       chat.account = await this.accountForConfigDir(found.configDir)
       chat.accountAuto = true
     }
-    for (const item of items.slice(0, index)) this.store.appendItem(chat.id, settled(item))
+    for (const item of items.slice(0, index)) this.store.appendItem(chat.id, endedTask(settled(item)))
     this.chats.set(chat.id, { chat, runtime: null, query: null, ...(fresh ? {} : { forkAt: found.cut as string, ranIn: found.configDir }) })
     this.changed(chat)
     return { ...chat }
@@ -987,9 +1040,14 @@ export class ChatManager {
 
     const settings = this.settingsOf()
     const now = this.now()
-    const title = req.title?.trim() || outside?.title?.trim() || IMPORT_TITLE
     // The marks Hydra Desk kept on the outside session carry over to the chat it becomes.
     const meta = this.sessionMeta.get(req.sessionId)
+    // A session nobody named (no title, or only its first words) is named from its first message, as a new chat is.
+    const firstAsk = items.find((i): i is UserItem => i.kind === 'user' && !!i.text.trim())?.text
+    const named = !!req.title?.trim() || !!meta?.title?.trim()
+    const words = firstAsk ? titleFrom(firstAsk) : null
+    const generate = !req.fork && !named && !!firstAsk && (!outside?.title?.trim() || outside.title.trim() === words)
+    const title = req.title?.trim() || outside?.title?.trim() || words || IMPORT_TITLE
     const chat: ChatSummary = {
       id: randomUUID(),
       sessionId: req.fork ? null : req.sessionId,
@@ -1029,6 +1087,9 @@ export class ChatManager {
     this.refreshClimayte()
     this.changed(chat)
     this.accountNote(chat.id, note)
+    const e = this.chats.get(chat.id)!
+    if (generate) this.autoTitle(e, firstAsk!)
+    else e.titled = true
     return { ...chat }
   }
 
@@ -1065,6 +1126,11 @@ export class ChatManager {
     const chat = e.chat
     const before = { ...chat }
     const was = chat.status
+    // Moved to another account, or continued in a fresh session: the process that ran the old session is gone,
+    // and the background tasks it started with it (their notices never come).
+    const moved = !!w.accountId && w.accountId !== chat.account.id && chat.account.id !== CLIMAYTE_ACCOUNT.id
+    const freshSession = !!before.sessionId && !!w.sessionId && w.sessionId !== before.sessionId
+    if (moved || freshSession) this.endTasks(e)
     if (w.accountId && w.accountId !== chat.account.id) {
       const from = chat.account.id === CLIMAYTE_ACCOUNT.id ? null : chat.account
       chat.account = workerAccount(w)
@@ -1101,6 +1167,8 @@ export class ChatManager {
     for (const item of unchanged ? [] : items) {
       const sig = signature(item)
       if (emitted.get(item.id) === sig) continue
+      // The ended session's JSONL still says 'running': the settled item stays.
+      if (item.kind === 'task' && item.status === 'running' && e.ended?.has(item.id)) continue
       if (!emitted.has(item.id) && (item.kind === 'assistant_text' || item.kind === 'thinking' || item.kind === 'tool_use')) newReply = true
       emitted.set(item.id, sig)
       if (item.kind === 'user' && e.sent?.length) {
@@ -1112,7 +1180,8 @@ export class ChatManager {
       this.noteTask(e, item)
     }
     this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive, newReply, ok: next.status !== 'error' })
-    if (!e.workerLive) this.clearTasks(e)
+    // A finished worker's process is gone, and every background task it started with it.
+    if (!e.workerLive) this.endTasks(e)
     // A worker's turn ended in another folder: the sidebar follows once the move holds (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
     if (w.sessionId && LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(next.status)) {
       this.noteCwd(e, this.workerFile(e, w.sessionId, w.accountId ?? null))
@@ -1203,7 +1272,13 @@ export class ChatManager {
         continue
       }
       this.runtimeOf(e).start(c)
+      // Its tasks still run in the host: they count again.
+      for (const item of this.store.loadItems(e.chat.id)) this.noteTask(e, item)
       adopted++
+    }
+    // A chat no host kept ran nothing through the restart: what it said was running ended with its process.
+    for (const e of this.chats.values()) {
+      if (e.chat.workerId === undefined && !e.runtime?.running && e.chat.backgroundActive && this.endTasks(e)) this.changed(e.chat)
     }
     return adopted
   }
@@ -1397,8 +1472,8 @@ export class ChatManager {
       if (e.forkAt && e.chat.sessionId) e.forkAt = undefined
       // A start publishes the chat: from then on its session's latest copy is in that account's folder.
       if (e.runtime?.startedAs) e.ranIn = e.runtime.startedAs.configDir
-      // A closed runtime took its background tasks with it.
-      if (e.chat.status === 'closed') this.clearTasks(e)
+      // A closed runtime took its background tasks with it: their items say so, and stop counting.
+      if (e.chat.status === 'closed' && e.bgTasks?.size) this.endTasks(e, this.now())
       this.store.saveChats(this.stored())
       this.matchWorkers(e.chat, this.bridge.lastWorkers())
       this.emitEvent({ type: 'chat.upsert', chat: { ...e.chat } })
@@ -1424,9 +1499,31 @@ export class ChatManager {
     return true
   }
 
-  private clearTasks(e: Entry): void {
+  /** No task of the chat runs any more; true when backgroundActive changed. */
+  private clearTasks(e: Entry): boolean {
     e.bgTasks?.clear()
-    if (e.chat.backgroundActive) e.chat.backgroundActive = 0
+    if (!e.chat.backgroundActive) return false
+    e.chat.backgroundActive = 0
+    return true
+  }
+
+  /**
+   * The process that ran the chat's session is gone (closed, moved, a fresh session, a finished worker): each
+   * task item still 'running' in its Desk file is settled as ended (endedTask), on disk and in every window, and
+   * nothing counts as running any more. `at`: when it ended, if that was seen. True when backgroundActive changed.
+   * 2026-10-05: a chat's panel listed three commands 'running' for five hours after its session had ended.
+   */
+  private endTasks(e: Entry, at?: number): boolean {
+    const chatId = e.chat.id
+    for (const item of this.store.loadItems(chatId)) {
+      const done = endedTask(item, at)
+      if (done === item) continue
+      this.store.appendItem(chatId, done)
+      this.emitEvent({ type: 'item.upsert', chatId, item: done })
+      e.emitted?.set(done.id, signature(done))
+      ;(e.ended ??= new Set()).add(done.id)
+    }
+    return this.clearTasks(e)
   }
 
   private answer(id: string, kind: string, requestId: string, fn: (rt: ChatRuntime) => void): void {
@@ -1641,6 +1738,18 @@ function copyMedia(text: string, from: string, to: string): void {
 function settled(item: TranscriptItem): TranscriptItem {
   if ((item.kind === 'permission' || item.kind === 'question' || item.kind === 'plan' || item.kind === 'elicitation') && item.state === 'pending') return { ...item, state: 'expired' }
   return item
+}
+
+/** What a task item settled by Hydra Desk says: the session that ran it is gone, so is the task. */
+export const TASK_SESSION_ENDED = 'Stopped: the session that started it ended.'
+
+/**
+ * A task still 'running' whose session ended, settled 'stopped' with TASK_SESSION_ENDED; `at` (when the end was
+ * seen) gives its duration. A long-lived one (a local server, long-lived.ts) is left as it is, and so is the rest.
+ */
+export function endedTask(item: TranscriptItem, at?: number): TranscriptItem {
+  if (item.kind !== 'task' || item.status !== 'running' || isLongLived(item)) return item
+  return { ...item, status: 'stopped', summary: TASK_SESSION_ENDED, ...(at !== undefined ? { durationMs: Math.max(0, at - item.ts) } : {}) }
 }
 
 export function checkCwd(cwd: string): string {

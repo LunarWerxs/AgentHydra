@@ -93,32 +93,48 @@ const STATUS: Record<string, TaskItem['status']> = {
   running: 'running',
 }
 
-/** One <task-notification> body: a task notice, or (no task id: a hook's notice) a muted line. */
-export function parseTaskNotification(body: string): InjectedPart | null {
+/** Claude Code's notice, on resume, of tasks the previous session left: their own descriptions stay. */
+const ENDED_BEFORE = /didn't finish before the previous session ended/i
+
+/**
+ * One <task-notification> body: a task notice per task id, or (no task id: a hook's notice) a muted line.
+ * Claude Code's resume notice names several tasks in one body (`<task-id>a</task-id><task-id>b</task-id>
+ * <task-id>__orphan_summary__:shell</task-id>`); every real id is settled, the `__` pseudo id is not a task.
+ * 2026-10-05: only the first was read, so the others stayed 'running' for hours after their session ended.
+ */
+export function parseTaskNotification(body: string): InjectedPart[] {
   const summary = field(body, 'summary') ?? ''
-  const taskId = field(body, 'task-id')
-  if (!taskId) return summary ? { kind: 'system', text: clip(summary) } : null
+  const ids = [...body.matchAll(/<task-id>([\s\S]*?)<\/task-id>/g)].map((m) => decode(m[1]).trim()).filter(Boolean)
+  if (!ids.length) return summary ? [{ kind: 'system', text: clip(summary) }] : []
+  const real = ids.filter((id) => !id.startsWith('__'))
+  if (!real.length) return summary ? [{ kind: 'system', text: clip(summary) }] : []
   const rawStatus = field(body, 'status')
   const quoted = /"([^"]+)"/.exec(summary)?.[1]
   const event = field(body, 'event')
-  const task: TaskNotice = {
-    taskId,
-    status: rawStatus ? (STATUS[rawStatus.toLowerCase()] ?? 'completed') : null,
-    description: clip(quoted ?? summary, 160),
-    summary: clip(event ? `${summary}: ${event}` : summary),
-    taskKind: taskKindOf(summary),
-  }
+  // A notice about several tasks (or about tasks a previous session left) describes none of them alone.
+  const shared = real.length > 1 || ENDED_BEFORE.test(summary)
   const toolUseId = field(body, 'tool-use-id')
   const outputFile = field(body, 'output-file')
-  if (toolUseId) task.toolUseId = toolUseId
-  if (outputFile) task.outputFile = outputFile
   const agents = num(body, 'agent_count', 'agents')
   const tokens = num(body, 'subagent_tokens', 'total_tokens', 'tokens')
   const durationMs = num(body, 'duration_ms')
-  if (agents !== undefined) task.agents = agents
-  if (tokens !== undefined) task.tokens = tokens
-  if (durationMs !== undefined) task.durationMs = durationMs
-  return { kind: 'task', task }
+  return real.map((taskId) => {
+    const task: TaskNotice = {
+      taskId,
+      status: rawStatus ? (STATUS[rawStatus.toLowerCase()] ?? 'completed') : null,
+      description: shared ? '' : clip(quoted ?? summary, 160),
+      summary: clip(event ? `${summary}: ${event}` : summary),
+      taskKind: shared ? 'other' : taskKindOf(summary),
+    }
+    if (!shared) {
+      if (toolUseId) task.toolUseId = toolUseId
+      if (outputFile) task.outputFile = outputFile
+      if (agents !== undefined) task.agents = agents
+      if (tokens !== undefined) task.tokens = tokens
+      if (durationMs !== undefined) task.durationMs = durationMs
+    }
+    return { kind: 'task', task }
+  })
 }
 
 /** '/name args' from a <command-name>/<command-message>/<command-args> echo. */
@@ -153,8 +169,7 @@ export function classifyUserText(text: string, meta = false): InjectedPart[] {
     last = m.index + m[0].length
     const [, tag, body] = m
     if (tag === 'task-notification') {
-      const part = parseTaskNotification(body)
-      if (part) out.push(part)
+      out.push(...parseTaskNotification(body))
     } else if (tag === 'command-name' || tag === 'command-message' || tag === 'command-args') {
       command.set(tag, decode(body))
     } else if (MUTED.has(tag)) {

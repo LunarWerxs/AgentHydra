@@ -11,8 +11,8 @@ export interface TitleRequest {
   configDir: string | null
 }
 
-/** Makes the title for a chat's first message; null = keep the first-words title. Never throws. */
-export type TitleGenerator = (req: TitleRequest) => Promise<string | null>
+/** Makes the title for a chat's first message; null = keep the first-words title, `failed` then says why. Never throws. */
+export type TitleGenerator = (req: TitleRequest, failed?: (why: string) => void) => Promise<string | null>
 
 /** The model's answer as a title: one line, no quotes or trailing period, at most 6 words; null when nothing usable. */
 export function cleanTitle(raw: string): string | null {
@@ -34,7 +34,7 @@ export function cleanTitle(raw: string): string | null {
  * HydraSwarm because it needs no extra service, rides the login the chat already has, and is one call.
  */
 export function sdkTitleGenerator(queryImpl: QueryImpl, env: Record<string, string | undefined> | undefined, timeoutMs = TITLE_TIMEOUT_MS): TitleGenerator {
-  return async (req) => {
+  return async (req, failed) => {
     const abort = new AbortController()
     const timer = setTimeout(() => abort.abort(), timeoutMs)
     try {
@@ -58,12 +58,14 @@ export function sdkTitleGenerator(queryImpl: QueryImpl, env: Record<string, stri
         },
       })
       let text = ''
+      let error = 'the query ended without a result'
       const run = (async () => {
         for await (const m of q) {
           if (m.type === 'result') {
             // A signed-out account answers 'success' with is_error and the error as the result; that is
             // no title (two chats were named 'Failed to authenticate: OAuth session ex...').
             if (m.subtype === 'success' && !m.is_error) text = m.result
+            else error = m.subtype === 'success' ? String(m.result ?? '').slice(0, 200) || 'the model answered with an error' : m.subtype
             break
           }
         }
@@ -72,10 +74,14 @@ export function sdkTitleGenerator(queryImpl: QueryImpl, env: Record<string, stri
       await Promise.race([run, timedOut])
       if (abort.signal.aborted) {
         void run.catch(() => {})
+        failed?.(`no answer within ${Math.round(timeoutMs / 1000)}s`)
         return null
       }
-      return cleanTitle(text)
-    } catch {
+      const title = cleanTitle(text)
+      if (!title) failed?.(text.trim() ? 'the answer had no usable title' : error)
+      return title
+    } catch (err) {
+      failed?.(err instanceof Error ? err.message : String(err))
       return null
     } finally {
       clearTimeout(timer)

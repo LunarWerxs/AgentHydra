@@ -42,6 +42,24 @@ const AGENT_DONE = `<task-notification>
 <usage><subagent_tokens>189906</subagent_tokens><tool_uses>78</tool_uses><duration_ms>908339</duration_ms></usage>
 </task-notification>`
 
+// Claude Code's notice, on resume, of the tasks the previous session left (one body, several ids, a pseudo id).
+const LEFT_BEHIND = `<task-notification>
+<task-id>b6o886gzv</task-id><task-id>bhf5zoqj5</task-id><task-id>bnuidvnut</task-id><task-id>__orphan_summary__:shell</task-id>
+<status>stopped</status>
+<summary>3 background shell command tasks didn't finish before the previous session ended. Task ids: b6o886gzv, bhf5zoqj5, bnuidvnut</summary>
+</task-notification>`
+
+test('a notice naming several tasks settles every one of them and keeps their own descriptions', () => {
+  const prev = new Map(['b6o886gzv', 'bhf5zoqj5', 'bnuidvnut'].map((id, n) => [id, { kind: 'task', id: `task:${id}`, ts: n, taskId: id, description: `command ${n}`, status: 'running', taskKind: 'bash' } as const]))
+  const parts = classifyUserText(LEFT_BEHIND)
+  expect(parts.map((p) => (p.kind === 'task' ? p.task.taskId : p.kind))).toEqual(['b6o886gzv', 'bhf5zoqj5', 'bnuidvnut'])
+  for (const p of parts) {
+    if (p.kind !== 'task') continue
+    const item = taskItemFrom(p.task, prev.get(p.task.taskId), 100)
+    expect(item).toMatchObject({ status: 'stopped', description: prev.get(p.task.taskId)!.description, taskKind: 'bash' })
+  }
+})
+
 const MONITOR = `<task-notification>
 <task-id>m1x</task-id>
 <summary>Monitor event: "both vitest full runs completing"</summary>
