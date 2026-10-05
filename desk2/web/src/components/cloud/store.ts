@@ -100,7 +100,6 @@ function createCloud() {
   const searching = computed(() => !!answered.value.trim())
   const groups = computed(() => groupCloud(sessions.value, effectiveScopes(scopes.value, answered.value), thisPc.value, searching.value))
   const pcs = computed(() => pcsIn(sessions.value, thisPc.value))
-  const shownCount = computed(() => groups.value.reduce((n, g) => n + g.rows.length, 0))
 
   function toggleSelected(id: string) {
     const next = new Set(selected.value)
@@ -122,10 +121,8 @@ function createCloud() {
     loading,
     error,
     loaded,
-    searching,
     groups,
     pcs,
-    shownCount,
     selectMode,
     selected,
     refresh,

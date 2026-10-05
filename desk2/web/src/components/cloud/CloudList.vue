@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Cloud } from '@lucide/vue'
 import type { CloudSession } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
 import { relativeTime } from '@/components/sidebar/search'
-import { pcOf, PERIOD_LABELS, SOURCE_LABELS, sessionShape, SHAPE_LABELS, type CloudSource } from './logic'
+import { pcOf, SOURCE_LABELS, sessionShape, SHAPE_LABELS, type CloudSource } from './logic'
 import { useCloud } from './store'
 
 // Hydra Desk 2's cloud list, in the sidebar in place of the desk list: every session AgentHydra knows,
 // both PCs' (a chat from the other PC carries its name), grouped by folder like the desk list. A row
 // opens the session (Sidebar decides where: the outside-session view, or AgentHydra while it is open); in
-// select mode it ticks instead. The header's
-// right end holds the search and filter buttons (the `tools` slot).
+// select mode it ticks instead. No title or counts over it: the chrome bar's blue cloud says which list this
+// is (Michael, 2026-10-04). The search and filter buttons (the `tools` slot) sit at the right end of the
+// first folder's header, as on the desk list, or alone in a header while there is no folder to show.
 const props = defineProps<{ selectedId: string | null }>()
 const emit = defineEmits<{ open: [row: CloudSession] }>()
 
@@ -30,12 +30,6 @@ onMounted(() => (timer = setInterval(() => (now.value = Date.now()), 30_000)))
 onBeforeUnmount(() => timer && clearInterval(timer))
 
 const thisPc = computed(() => cloud.thisPc.value)
-const otherPcRows = computed(() => cloud.sessions.value.filter((r) => r.fromPc && r.fromPc !== thisPc.value).length)
-const summary = computed(() => {
-  const n = cloud.shownCount.value
-  if (cloud.searching.value) return `${n} match${n === 1 ? '' : 'es'} · ${cloud.scopes.value.onlyThisView ? 'this view' : 'everywhere, all time'}`
-  return `${n} session${n === 1 ? '' : 's'} · ${PERIOD_LABELS[cloud.scopes.value.period].replace('Last ', '')}`
-})
 const sourceName = (s: string) => SOURCE_LABELS[s as CloudSource] ?? s
 /** claude-opus-5-5 -> Opus 5.5, the way AgentHydra's rows name it; any other model as it is. */
 const modelName = (m: string | null) => {
@@ -71,21 +65,11 @@ const ROW =
 
 <template>
   <div class="flex flex-col" role="region" aria-label="Cloud list">
-    <header class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted">
-      <Cloud class="size-3.5 shrink-0 text-accent-text" />
-      <Tip :label="`This PC is ${thisPc}. ${otherPcRows} of these came from another PC through AgentHydra's chat sync.`" align="start">
-        <span class="min-w-0 truncate">All sessions · both PCs</span>
-      </Tip>
-      <span
-        v-if="cloud.loading.value"
-        role="status"
-        aria-label="Loading the cloud list"
-        class="size-2.5 shrink-0 animate-spin rounded-full border border-current border-t-transparent"
-      />
+    <header v-if="cloud.groups.value.length === 0" class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted">
+      <span v-if="!cloud.loaded.value && !cloud.error.value" role="status">Loading sessions…</span>
       <span class="flex-1" />
       <slot name="tools" />
     </header>
-    <p class="px-1.5 pb-1 text-[12px] leading-4 text-text-muted">{{ summary }}</p>
 
     <p v-if="cloud.error.value" role="alert" class="px-1.5 pt-2 text-[12px] leading-4 text-danger-text">
       {{ cloud.error.value }}
@@ -96,7 +80,7 @@ const ROW =
       <button type="button" class="ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="cloud.reset()">Reset filters</button>
     </p>
 
-    <section v-for="g in cloud.groups.value" :key="g.key" :aria-label="g.label">
+    <section v-for="(g, gi) in cloud.groups.value" :key="g.key" :aria-label="g.label">
       <header class="group/head flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted">
         <Tip :label="g.cwd ?? ''" align="start">
           <button type="button" class="flex min-w-0 items-center gap-0.5 rounded-[4px] hover:text-text-2" :aria-expanded="!collapsed.has(g.key)" @click="toggleGroup(g.key)">
@@ -110,6 +94,7 @@ const ROW =
         </Tip>
         <span class="flex-1" />
         <span class="tnum">{{ g.rows.length }}</span>
+        <slot v-if="gi === 0" name="tools" />
       </header>
       <div v-if="!collapsed.has(g.key)" class="flex flex-col gap-[1.5px] pt-[1.5px]">
         <Tip v-for="r in g.rows" :key="r.id" :label="tooltip(r)" side="right" align="start">

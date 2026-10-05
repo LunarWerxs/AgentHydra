@@ -8,7 +8,7 @@ import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem 
 // The custom chrome bar (h36, z21) that lies over the top of the sidebar: Menu, Hide sidebar, Back,
 // Forward (28px, r7). The real app's Chat / Code mode switch is left out: Hydra Desk is Code only.
 // Hydra Desk 2 adds two after Forward: AgentHydra (slides AgentHydra in beside the sidebar) and Cloud
-// (the sidebar lists every session of both PCs). Each shows when it is on.
+// (the sidebar lists every session of both PCs). Each shows when it is on: AgentHydra pressed, Cloud blue.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
 defineProps<{ sidebarOpen: boolean; width: number; canBack: boolean; canForward: boolean; hydraOpen?: boolean; cloudOn?: boolean }>()
 const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; back: []; forward: []; settings: []; hydra: []; cloud: [] }>()
@@ -63,7 +63,8 @@ const BTN =
       </button>
     </Tip>
     <Tip :label="cloudOn ? 'Back to the desk list' : 'Cloud: every session, both PCs'">
-      <button type="button" :class="[BTN, cloudOn ? 'bg-fill-selected text-accent-text' : '']" aria-label="Cloud sessions" :aria-pressed="!!cloudOn" @click="emit('cloud')">
+      <!-- On shows as a blue icon alone, no pressed background (Michael, 2026-10-04). -->
+      <button type="button" :class="[BTN, cloudOn ? 'text-accent-text' : '']" aria-label="Cloud sessions" :aria-pressed="!!cloudOn" @click="emit('cloud')">
         <Cloud class="size-4" />
       </button>
     </Tip>
