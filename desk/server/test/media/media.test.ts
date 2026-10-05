@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
@@ -69,6 +69,28 @@ describe('media cache', () => {
     expect(c.fileRef(join(root, 'fake.png'))!.url).toBeUndefined()
     expect(c.fileRef(join(root, 'missing.png'))).toBeNull()
     expect(c.fileRef(root)).toBeNull()
+  })
+
+  test('a named picture is read once while its size and time hold; a changed or uncached one is read again', () => {
+    const root = temp('known')
+    const dir = join(root, 'media')
+    const c = createMediaCache(dir)
+    const shot = join(root, 'shot.png')
+    const at = new Date(Date.UTC(2026, 9, 3, 12, 0, 0))
+    writeFileSync(shot, PNG)
+    utimesSync(shot, at, at)
+    const first = c.fileRef(shot)!.url
+    // Other bytes of the same size and time: a read would give another hash.
+    const other = PNG.slice()
+    other[other.length - 1]! ^= 0xff
+    writeFileSync(shot, other)
+    utimesSync(shot, at, at)
+    expect(c.fileRef(shot)!.url).toBe(first)
+    rmSync(join(dir, first!.slice('/api/media/'.length)))
+    const second = c.fileRef(shot)!.url
+    expect(second).not.toBe(first)
+    writeFileSync(shot, PNG)
+    expect(c.fileRef(shot)!.url).toBe(first)
   })
 
   test('a sent image keeps its url, never its base64', () => {

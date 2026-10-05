@@ -122,6 +122,18 @@ describe('outside session .jsonl', () => {
     expect(said()).toEqual(['AAAA', 'next'])
   })
 
+  test("a chat's many sessions read in turn stay remembered, however many there are", () => {
+    const dir = temp()
+    const files = Array.from({ length: 12 }, (_, i) => join(dir, `s${i}.jsonl`))
+    const line = (text: string) => JSON.stringify({ type: 'user', uuid: 'u1', timestamp: '2026-10-03T12:00:00Z', message: { role: 'user', content: text } })
+    const said = (f: string): unknown => (sessionJsonlItems(f)[0] as { text?: string }).text
+    for (const f of files) writeFileSync(f, `${line('AAAA')}\n`)
+    expect(files.map(said)).toEqual(files.map(() => 'AAAA'))
+    // Each changes in place: a file read afresh (forgotten since its last read) would say BBBB.
+    for (const f of files) writeFileSync(f, `${line('BBBB')}\n`)
+    expect(files.map(said)).toEqual(files.map(() => 'AAAA'))
+  })
+
   test('a file that shrank was rewritten and is read again', () => {
     const f = join(temp(), `${SID}.jsonl`)
     writeFileSync(f, lines())

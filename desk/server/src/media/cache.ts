@@ -13,6 +13,8 @@ import type { ImageRef } from '@shared/protocol'
 import { ctx } from '../context'
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
+/** How many picture files fileRef remembers. */
+const KNOWN_MAX = 2000
 export const MEDIA_ROUTE = '/api/media/'
 
 type Ext = 'png' | 'jpg' | 'gif' | 'webp'
@@ -76,6 +78,9 @@ export function createMediaCache(dir: string): MediaCache {
     return ref
   }
 
+  /** A picture file's answer by path, size and mtime: a transcript read again names the same screenshots, and each was read whole and hashed every time. */
+  const known = new Map<string, { sig: string; ref: ImageRef }>()
+
   return {
     dir,
     put,
@@ -90,19 +95,28 @@ export function createMediaCache(dir: string): MediaCache {
     },
     fileRef(path) {
       let size: number
+      let sig: string
       try {
         const st = statSync(path)
         if (!st.isFile()) return null
         size = st.size
+        sig = `${st.size}:${st.mtimeMs}`
       } catch {
         return null
       }
       const name = basename(path)
       const ext = extname(name).slice(1).toLowerCase()
       if (RENDERABLE.test(name) && size <= MAX_MEDIA_BYTES) {
+        const hit = known.get(path)
+        if (hit && hit.sig === sig && existsSync(join(dir, hit.ref.url!.slice(MEDIA_ROUTE.length)))) return { ...hit.ref }
         try {
           const ref = put(new Uint8Array(readFileSync(path)), name)
-          if (ref) return ref
+          if (ref) {
+            known.delete(path)
+            known.set(path, { sig, ref: { ...ref } })
+            if (known.size > KNOWN_MAX) known.delete(known.keys().next().value!)
+            return ref
+          }
         } catch {
           // unreadable: a card like any other file
         }

@@ -144,7 +144,12 @@ export function firstCwdFrom(path: string, offset: number): string | null {
   return null
 }
 
-const MEMO_MAX = 8
+/**
+ * How much transcript the remembered files may cover together. A CliMayte chat reads every session it has
+ * had at each poll (a handoff adds one): a cap of 8 files evicted each of a 12-session chat's files before
+ * its next read, so every poll read them all afresh.
+ */
+const MEMO_BYTES = 64 * 1024 * 1024
 /** How far past where its read began a followed file may grow before its tail is read afresh: bounds what one file holds. */
 const REFOLD_BYTES = TAIL_BYTES + TAIL_BYTES / 2
 
@@ -185,16 +190,23 @@ export function sessionJsonlItems(path: string, cwd?: string | null): Transcript
   const sig = `${st.size}:${st.mtimeMs}`
   const key = `${path}\n${cwd ?? ''}`
   let f = memo.get(key)
-  if (f && f.sig === sig) return f.items
-  if (!f || st.size < f.offset || st.size - f.start > REFOLD_BYTES) {
-    const start = Math.max(0, st.size - TAIL_BYTES)
-    f = { sig, start, offset: start, fold: historyFold({ cwd: cwd ?? null }), items: [] }
+  if (!f || f.sig !== sig) {
+    if (!f || st.size < f.offset || st.size - f.start > REFOLD_BYTES) {
+      const start = Math.max(0, st.size - TAIL_BYTES)
+      f = { sig, start, offset: start, fold: historyFold({ cwd: cwd ?? null }), items: [] }
+    }
+    takeLines(f, readRange(path, f.offset, st.size), f.offset)
+    f.sig = sig
+    f.items = f.fold.items()
   }
-  takeLines(f, readRange(path, f.offset, st.size), f.offset)
-  f.sig = sig
-  f.items = f.fold.items()
   memo.delete(key)
   memo.set(key, f)
-  if (memo.size > MEMO_MAX) memo.delete(memo.keys().next().value!)
+  let held = 0
+  for (const m of memo.values()) held += m.offset - m.start
+  for (const [k, m] of memo) {
+    if (held <= MEMO_BYTES || k === key) break
+    memo.delete(k)
+    held -= m.offset - m.start
+  }
   return f.items
 }
