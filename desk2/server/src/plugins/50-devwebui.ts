@@ -1,6 +1,7 @@
 // The servers pane's side of Desk 2 (SPEC-less, see README "What Desk 2 adds"): /dw/api/* goes on to the DevWebUI
 // daemon (../devwebui) that lists, starts and stops this chat's localhost servers, and GET /dw/status says whether
-// that daemon answers. POST /dw/start brings one up when none does (hidden, see devwebui/daemon.ts).
+// that daemon answers. POST /dw/start brings one up when none does (hidden, see devwebui/daemon.ts), and
+// POST /dw/folder sets up a chat's folder in it (devwebui/folder.ts).
 //
 // Desk's localOnly guard (index.ts) runs first on every route. Like /ah/, a browser request here must come from
 // Desk 2's own page, and what goes on carries no Origin, Referer, cookies or Sec-Fetch headers: to DevWebUI it is a
@@ -8,9 +9,10 @@
 // local credential is added here when its data dir has one, and the page's own Authorization never goes on.
 
 import type { Hono } from 'hono'
-import { DW_API, DW_BASE, DW_STATUS } from '@shared/devwebui'
+import { DW_API, DW_BASE, DW_FOLDER, DW_STATUS } from '@shared/devwebui'
 import type { ServerContext } from '../context'
 import { daemonAuth, DevWebDaemon, findDaemon } from '../devwebui/daemon'
+import { setUpFolder } from '../devwebui/folder'
 
 const NOT_PASSED_ON = ['origin', 'referer', 'cookie', 'host', 'connection', 'accept-encoding', 'content-length', 'authorization']
 
@@ -44,6 +46,20 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const why = notOwnPage(c.req.raw.headers)
     if (why) return c.json({ error: why }, 403)
     return c.json(await daemon.ensure())
+  })
+
+  app.post(DW_FOLDER, async (c) => {
+    const why = notOwnPage(c.req.raw.headers)
+    if (why) return c.json({ error: why }, 403)
+    const cwd = ((await c.req.json().catch(() => null)) as { cwd?: unknown } | null)?.cwd
+    if (typeof cwd !== 'string' || cwd.trim() === '') return c.json({ error: 'cwd required' }, 400)
+    const base = await findDaemon()
+    if (!base) return c.json({ error: 'the server manager is not running' }, 503)
+    try {
+      return c.json(await setUpFolder(base, cwd))
+    } catch {
+      return c.json({ error: `the server manager is not answering at ${base}` }, 503)
+    }
   })
 
   app.all(`${DW_API}/*`, async (c) => {

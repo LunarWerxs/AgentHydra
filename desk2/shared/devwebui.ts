@@ -5,6 +5,8 @@
 export const DW_BASE = '/dw'
 export const DW_API = `${DW_BASE}/api`
 export const DW_STATUS = `${DW_BASE}/status`
+/** POST {cwd}: the chat folder's project, set up in the server manager when it is not yet (server/src/devwebui/folder.ts). */
+export const DW_FOLDER = `${DW_BASE}/folder`
 
 /** running: a daemon answers. starting: Desk 2 is bringing one up. stopped: none answers and none was asked for. */
 export type DevWebState = 'running' | 'starting' | 'stopped' | 'failed'
@@ -38,6 +40,9 @@ export interface DevWebProject {
   path: string
   processes: DevWebProcess[]
 }
+
+/** What POST /dw/folder answers: the folder's project (`created`: the .devwebui it wrote), or why there is none. */
+export type DevWebFolder = { project: DevWebProject; created?: string } | { nothing: string }
 
 export interface DevWebLogLine {
   stream: 'stdout' | 'stderr'

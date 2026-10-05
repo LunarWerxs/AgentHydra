@@ -1,5 +1,5 @@
-// The calls the servers pane makes: Desk 2's /dw/status and /dw/start, and DevWebUI's own API behind /dw/api.
-import { DW_API, DW_BASE, DW_STATUS, type DevWebLogLine, type DevWebProject, type DevWebStatus } from '@shared/devwebui'
+// The calls the servers pane makes: Desk 2's /dw/status, /dw/start and /dw/folder, and DevWebUI's own API behind /dw/api.
+import { DW_API, DW_BASE, DW_FOLDER, DW_STATUS, type DevWebFolder, type DevWebLogLine, type DevWebProject, type DevWebStatus } from '@shared/devwebui'
 
 /** Thrown when /dw/status is not there: a Desk 2 server started before the route existed. */
 export class RouteMissing extends Error {}
@@ -46,18 +46,5 @@ export async function processLogs(id: string): Promise<DevWebLogLine[]> {
   return (await call<{ lines: DevWebLogLine[] }>(`${DW_API}/processes/${encodeURIComponent(id)}/logs`)).lines
 }
 
-export type AddResult = { added: DevWebProject } | { nothing: string }
-
-/** Adds a folder as a project: DevWebUI reads its .devwebui file, or builds one from its dev scripts. */
-export async function addFolder(path: string): Promise<AddResult> {
-  let res: { project?: DevWebProject; needsScaffold?: boolean; dir?: string; fileName?: string; proposal?: unknown }
-  try {
-    res = await call(`${DW_API}/projects/load`, post({ path }))
-  } catch (err) {
-    return { nothing: err instanceof Error ? err.message : String(err) }
-  }
-  if (res.needsScaffold) {
-    res = await call(`${DW_API}/projects/scaffold`, post({ dir: res.dir, fileName: res.fileName, project: res.proposal }))
-  }
-  return res.project ? { added: res.project } : { nothing: 'DevWebUI found nothing to run in this folder.' }
-}
+/** The chat folder's project, set up in the server manager when it is not yet (no Add step). */
+export const setUpFolder = (cwd: string): Promise<DevWebFolder> => call(DW_FOLDER, post({ cwd }))

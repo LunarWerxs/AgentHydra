@@ -208,6 +208,8 @@ export interface DetectedProcess {
   port?: number;
   color?: string;
   runtime?: "node" | "bun"; // pinned to "bun" for Bun projects (efficient Vite)
+  env?: Record<string, string>; // from a .claude/launch.json configuration
+  url?: string; // likewise: where the server answers, when not http://localhost:<port>
 }
 
 /**

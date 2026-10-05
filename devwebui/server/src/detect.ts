@@ -3,9 +3,12 @@
 // package.json (+ vite config, + any workspace packages) and propose a
 // .devwebui from the dev scripts it finds. Best-effort and recoverable: the
 // user previews before anything is written and can edit every process after.
+// A folder Claude Code Desktop already set up (.claude/launch.json) is read
+// from that file instead.
 // ---------------------------------------------------------------------------
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { parse as parseJsonc } from "jsonc-parser";
 import { detect as detectPackageManager } from "package-manager-detector";
 import { glob } from "tinyglobby";
 import { parse as parseYaml } from "yaml";
@@ -241,6 +244,90 @@ async function processesFromPackage(
   return { processes: out, framework };
 }
 
+// ---- Claude Code Desktop's .claude/launch.json ----------------------------
+// https://code.claude.com/docs/en/desktop#configure-preview-servers — JSON with
+// comments; each configuration is runtimeExecutable + runtimeArgs, or a
+// `program` run with node + `args`; `port` defaults to 3000; `cwd` is relative
+// to the folder and may start with ${workspaceFolder}. A configuration with only
+// a `url` attaches to a server started elsewhere, so there is nothing to run.
+
+type LaunchConfig = {
+  name?: unknown;
+  runtimeExecutable?: unknown;
+  runtimeArgs?: unknown;
+  program?: unknown;
+  args?: unknown;
+  port?: unknown;
+  cwd?: unknown;
+  env?: unknown;
+  url?: unknown;
+};
+
+const LAUNCH_DEFAULT_PORT = 3000;
+
+/** One argv word for a command line: bare when nothing in it needs quoting. */
+function quoteArg(a: string): string {
+  return /^[\w@%+=:,./\\-]+$/.test(a) ? a : `"${a.replace(/"/g, '\\"')}"`;
+}
+
+const words = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
+
+function launchCommand(c: LaunchConfig): string | null {
+  if (typeof c.runtimeExecutable === "string" && c.runtimeExecutable.trim())
+    return [c.runtimeExecutable.trim(), ...words(c.runtimeArgs)].map(quoteArg).join(" ");
+  if (typeof c.program === "string" && c.program.trim())
+    return ["node", c.program.trim(), ...words(c.args)].map(quoteArg).join(" ");
+  return null;
+}
+
+/** `cwd` relative to `dir` with forward slashes, or undefined for the folder itself. */
+function launchCwd(dir: string, raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const t = raw.replace(/\$\{workspaceFolder\}/g, ".").trim();
+  if (!t) return undefined;
+  const rel = path.relative(dir, path.resolve(dir, t)).replace(/\\/g, "/");
+  return rel === "" ? undefined : rel;
+}
+
+async function launchJsonProcesses(dir: string): Promise<DetectedProcess[]> {
+  let doc: { configurations?: unknown } | null;
+  try {
+    doc = parseJsonc(await readFile(path.join(dir, ".claude", "launch.json"), "utf8"));
+  } catch {
+    return []; // no launch.json
+  }
+  const configs = Array.isArray(doc?.configurations) ? (doc.configurations as LaunchConfig[]) : [];
+  const seen = new Set<string>();
+  const out: DetectedProcess[] = [];
+  for (const c of configs) {
+    if (!c || typeof c !== "object") continue;
+    const command = launchCommand(c);
+    if (!command) continue;
+    const name =
+      typeof c.name === "string" && c.name.trim() ? c.name.trim() : `Server ${out.length + 1}`;
+    const cwd = launchCwd(dir, c.cwd);
+    const port =
+      typeof c.port === "number" && Number.isInteger(c.port) && c.port > 0
+        ? c.port
+        : LAUNCH_DEFAULT_PORT;
+    const env =
+      c.env && typeof c.env === "object" && !Array.isArray(c.env)
+        ? Object.fromEntries(Object.entries(c.env).filter(([, v]) => typeof v === "string"))
+        : {};
+    out.push({
+      id: uniqueProcessId(name, undefined, seen),
+      name,
+      command,
+      ...(cwd ? { cwd } : {}),
+      port,
+      ...(Object.keys(env).length ? { env } : {}),
+      ...(typeof c.url === "string" && /^https?:\/\//i.test(c.url) ? { url: c.url } : {}),
+    });
+    if (out.length >= MAX_PROCESSES) break;
+  }
+  return out;
+}
+
 // ---- workspace expansion -------------------------------------------------
 function packageWorkspaceGlobs(pkg: Pkg): string[] {
   const w = pkg.workspaces;
@@ -303,9 +390,22 @@ async function expandWorkspaceGlobs(root: string, patterns: string[]): Promise<s
   return dirs;
 }
 
-/** Inspect `dir` (package.json, vite config, workspaces) and propose a .devwebui, or null. */
+/** Inspect `dir` (.claude/launch.json, else package.json, vite config, workspaces) and propose a .devwebui, or null. */
 export async function detectProject(dir: string): Promise<Detection | null> {
   const rootPkg = await readPkg(dir);
+
+  const launched = await launchJsonProcesses(dir);
+  if (launched.length) {
+    launched.forEach((p, i) => {
+      p.color = PALETTE[i % PALETTE.length];
+    });
+    return {
+      name: prettyProjectName(String(rootPkg?.name || path.basename(dir))),
+      framework: launched.map((p) => frameworkOf(p.command)?.name).find(Boolean),
+      processes: launched,
+    };
+  }
+
   if (!rootPkg) return null;
 
   const runner = await detectRunner(dir);

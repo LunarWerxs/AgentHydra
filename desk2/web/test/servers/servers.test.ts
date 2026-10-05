@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { type DevWebProject, folderContains, processAddress, projectForCwd } from '@shared/devwebui'
-import { clampPane, isUp, loadPaneWidth, PANE_DEFAULT, PANE_KEY, PANE_MAX, PANE_MIN, paneView, parseAddress, statusDot, tailLines } from '../../src/components/servers/logic'
+import { clampPane, isUp, loadPaneWidth, needsSetup, otherRunning, PANE_DEFAULT, PANE_KEY, PANE_MAX, PANE_MIN, paneView, parseAddress, statusDot, tailLines } from '../../src/components/servers/logic'
 
 const project = (id: string, file: string): DevWebProject => ({ id, name: id, path: file, processes: [] })
 const projects = [project('app', 'C:\\Users\\me\\Code\\App\\.devwebui'), project('inner', 'C:/Users/me/Code/App/packages/inner/.devwebui')]
@@ -32,12 +32,35 @@ describe('the pane for each state', () => {
     expect(paneView({ ...base, status: { state: 'failed', url: null, reason: 'bun install failed' } })).toEqual({ kind: 'failed', reason: 'bun install failed' })
     expect(paneView({ ...base, status: { state: 'stopped', url: null } })).toEqual({ kind: 'stopped' })
   })
-  it('with the daemon up: the list loading, unreadable, no project, or the chat project', () => {
-    const running = { state: 'running' as const, url: 'http://127.0.0.1:4000' }
+  const running = { state: 'running' as const, url: 'http://127.0.0.1:4000' }
+  it('with the daemon up: the list loading, unreadable, the folder being set up, or the chat project', () => {
     expect(paneView({ ...base, status: running })).toEqual({ kind: 'loading' })
     expect(paneView({ ...base, status: running, projectsError: 'boom' })).toEqual({ kind: 'unreachable', reason: 'boom' })
-    expect(paneView({ ...base, status: running, projects: [] })).toEqual({ kind: 'not-a-project' })
+    expect(paneView({ ...base, status: running, projects: [] })).toEqual({ kind: 'looking' })
     expect(paneView({ ...base, status: running, projects }).kind).toBe('project')
+  })
+  it('sets a folder that is in no project up once, without an Add step, and shows what it answered', () => {
+    const listed = { ...base, status: running, projects: [] }
+    expect(needsSetup(listed)).toBe(true)
+    expect(needsSetup({ ...listed, setup: { cwd: base.cwd, nothing: null } })).toBe(false)
+    expect(paneView({ ...listed, setup: { cwd: base.cwd, nothing: null } })).toEqual({ kind: 'looking' })
+    expect(paneView({ ...listed, setup: { cwd: base.cwd, nothing: 'Nothing to run here' } })).toEqual({ kind: 'nothing', reason: 'Nothing to run here' })
+    // Asked about another folder: this one is asked about too.
+    expect(needsSetup({ ...listed, setup: { cwd: 'C:/Users/me/Code/Other', nothing: 'Nothing to run here' } })).toBe(true)
+    expect(needsSetup({ ...base, status: running, projects })).toBe(false)
+    expect(needsSetup({ ...base, status: running })).toBe(false)
+    expect(needsSetup({ ...base, status: { state: 'starting', url: null }, projects: [] })).toBe(false)
+  })
+})
+
+describe('servers running elsewhere', () => {
+  it("lists other projects' servers that answer, by name, and not this folder's own", () => {
+    const proc = (id: string, status: 'running' | 'stopped', port?: number) => ({ id, name: id, command: 'npm run dev', cwd: '', port, status, exitCode: null, projectId: '' })
+    const here = { ...project('here', 'C:/Users/me/Code/Here/.devwebui'), processes: [proc('mine', 'running', 3000)] }
+    const there = { ...project('there', 'C:/Users/me/Code/There/.devwebui'), processes: [proc('web', 'running', 5173), proc('off', 'stopped', 4000), proc('worker', 'running'), proc('api', 'running', 8080)] }
+    expect(otherRunning([here, there], here).map((r) => `${r.project.id}/${r.proc.id}`)).toEqual(['there/api', 'there/web'])
+    expect(otherRunning([here], here)).toEqual([])
+    expect(otherRunning(null, null)).toEqual([])
   })
 })
 

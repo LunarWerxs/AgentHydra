@@ -3,7 +3,7 @@
 // Desk 2's own page with the daemon's credential added and never shown.
 
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -177,4 +177,86 @@ test("the credential is not sent to a daemon that is not on this machine's loopb
   writeFileSync(join(dwHome, '.cookie'), `__cookie__:${SECRET}`)
   expect(daemonAuth('http://example.test:4000')).toBeNull()
   expect(daemonAuth('http://127.0.0.1:4000')).not.toBeNull()
+})
+
+/** A DevWebUI with projects: lists them, loads a folder's .devwebui, offers a scaffold for `proposals`, and writes it. */
+function projectsDaemon(projects: { id: string; name: string; path: string; processes: unknown[] }[], proposals: Record<string, unknown> = {}) {
+  const calls: string[] = []
+  const srv = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch(req) {
+      const u = new URL(req.url)
+      if (u.pathname === '/api/health') return Response.json({ ok: true, service: 'devwebui' })
+      calls.push(`${req.method} ${u.pathname}`)
+      if (u.pathname === '/api/projects') return Response.json(projects)
+      const body = (await req.json()) as Record<string, any>
+      if (u.pathname === '/api/projects/load') {
+        const proposal = proposals[body.path]
+        if (proposal) return Response.json({ needsScaffold: true, dir: body.path, fileName: '.devwebui', proposal })
+        return Response.json({ error: `No .devwebui file found in ${body.path}, and no dev script to build one from.` }, { status: 400 })
+      }
+      if (u.pathname === '/api/projects/scaffold') {
+        const file = join(body.dir, body.fileName)
+        writeFileSync(file, JSON.stringify(body.project))
+        const project = { id: 'new1', name: body.project.name, path: file, processes: [] }
+        projects.push(project)
+        return Response.json({ ok: true, project, firstLoad: true, created: file })
+      }
+      return Response.json({ error: 'unexpected' }, { status: 404 })
+    }
+  })
+  stops.push(() => srv.stop(true))
+  return { url: `http://127.0.0.1:${srv.port}`, calls }
+}
+
+const folder = (desk: DeskServer, cwd: unknown, headers: Record<string, string> = {}) =>
+  fetch(`${desk.url}/dw/folder`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ cwd }) })
+
+const gitIn = (cwd: string, ...args: string[]) => Bun.spawnSync(['git', '-C', cwd, ...args], { stdout: 'pipe', stderr: 'pipe' })
+
+test('/dw/folder answers the project a folder is already in, without loading anything', async () => {
+  const root = temp('desk-dw-known-')
+  const known = { id: 'p1', name: 'Site', path: join(root, '.devwebui'), processes: [] }
+  const fake = projectsDaemon([known])
+  point(fake.url)
+  const desk = await boot(newDaemon())
+  const res = await folder(desk, join(root, 'src'))
+  expect(await res.json()).toEqual({ project: known })
+  expect(fake.calls).toEqual(['GET /api/projects'])
+})
+
+test('/dw/folder sets up a folder DevWebUI can build a .devwebui for, and keeps that file out of git status', async () => {
+  const repo = temp('desk-dw-repo-')
+  const cwd = join(repo, 'apps', 'web')
+  mkdirSync(cwd, { recursive: true })
+  expect(gitIn(repo, 'init', '-q').exitCode).toBe(0)
+  const proposal = { name: 'Web', processes: [{ id: 'dev', name: 'Dev', command: 'npm run dev', port: 3000 }] }
+  const fake = projectsDaemon([], { [cwd]: proposal })
+  point(fake.url)
+  const desk = await boot(newDaemon())
+
+  const out = await (await folder(desk, cwd)).json()
+  expect(out).toMatchObject({ project: { id: 'new1', name: 'Web' }, created: join(cwd, '.devwebui') })
+  expect(fake.calls).toEqual(['GET /api/projects', 'POST /api/projects/load', 'POST /api/projects/scaffold'])
+  expect(existsSync(join(cwd, '.devwebui'))).toBe(true)
+  expect(gitIn(repo, 'status', '--porcelain', '--untracked-files=all').stdout.toString()).toBe('')
+  expect(readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8')).toEndWith('\n/apps/web/.devwebui\n')
+
+  // Asked again, the folder is now a project: nothing is written twice.
+  expect(await (await folder(desk, cwd)).json()).toMatchObject({ project: { id: 'new1' } })
+  expect(fake.calls.slice(3)).toEqual(['GET /api/projects'])
+})
+
+test('/dw/folder says when there is nothing to run, and refuses another page, no cwd, and no daemon', async () => {
+  const empty = temp('desk-dw-empty-')
+  const desk = await boot(newDaemon())
+  expect((await folder(desk, empty)).status).toBe(503)
+
+  const fake = projectsDaemon([])
+  point(fake.url)
+  expect(await (await folder(desk, empty)).json()).toEqual({ nothing: 'Nothing to run here: no .claude/launch.json, and no dev script in package.json.' })
+  expect((await folder(desk, '')).status).toBe(400)
+  expect((await folder(desk, empty, { origin: 'http://localhost:9999' })).status).toBe(403)
+  expect(existsSync(join(empty, '.devwebui'))).toBe(false)
 })
