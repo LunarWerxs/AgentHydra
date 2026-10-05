@@ -123,7 +123,15 @@ const accountTip = computed(() => {
 const title = computed(() => row.value?.title || props.session?.title || 'Session')
 const cwd = computed(() => row.value?.cwd || props.session?.cwd || null)
 const shortId = computed(() => props.sessionId.slice(0, 8))
-const turns = computed(() => turnCount(props.items))
+// Turns over the whole session as AgentHydra counts them (its tokens and cost are over the same file),
+// else the prompts in the transcript shown: Desk reads only a long session file's last 8 MB.
+const prompts = computed(() => turnCount(props.items))
+const sessionTurns = computed(() => (usage.value?.status === 'ok' ? usage.value.tokens.turns : null))
+const turns = computed(() => sessionTurns.value ?? prompts.value)
+const turnsTip = computed(() => {
+  const yours = `${prompts.value} of your ${prompts.value === 1 ? 'prompt is' : 'prompts are'} in the transcript shown here`
+  return sessionTurns.value === null ? yours : `Claude's turns over the whole session, as AgentHydra counts them for tokens and cost. ${yours}.`
+})
 const usageText = computed(() => usageSummary(usage.value))
 const usageTip = computed(() => usageDetail(usage.value))
 const model = computed(() => [modelName(row.value?.model ?? props.session?.model), row.value?.effort].filter(Boolean).join(' · '))
@@ -330,7 +338,9 @@ const CHIP = 'flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius
               <span class="max-w-40 truncate">{{ row.git_branch }}</span>
             </span>
           </Tip>
-          <span :class="CHIP" class="tnum cursor-default">{{ turns }} {{ turns === 1 ? 'turn' : 'turns' }}</span>
+          <Tip :label="turnsTip">
+            <span :class="CHIP" class="tnum cursor-default">{{ turns }} {{ turns === 1 ? 'turn' : 'turns' }}</span>
+          </Tip>
           <Tip v-if="usageText" :label="usageTip">
             <span :class="CHIP" class="tnum cursor-default" aria-label="Tokens and cost">{{ usageText }}</span>
           </Tip>
