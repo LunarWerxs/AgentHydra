@@ -75,6 +75,8 @@ const TITLE_MAX = 120
 /** Most chat titles one pass looks up, and how long a miss waits before it is tried again. */
 export const TITLE_LOOKUPS_PER_PASS = 10
 export const TITLE_RETRY_MS = 10 * 60_000
+/** Longest one title lookup may hold the pass. */
+const TITLE_WAIT_MS = 2_000
 
 /** Chat session id -> its title as the session list shows it (null: not found). Only read by
  *  buildSnapshot; filled by warmOriginTitles at the start of a queue pass. */
@@ -113,7 +115,13 @@ export async function warmOriginTitles(
   for (const id of todo) {
     let title: string | null = null
     try {
-      title = cleanTitle(await lookup(id))
+      // A miss can wait on the index's sweep: past TITLE_WAIT_MS it counts as a miss.
+      title = cleanTitle(
+        await Promise.race([
+          lookup(id),
+          new Promise<null>((r) => setTimeout(() => r(null), TITLE_WAIT_MS)),
+        ]),
+      )
     } catch {
       // a miss
     }
