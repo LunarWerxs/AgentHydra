@@ -306,8 +306,14 @@ function watchFindDom(on: boolean) {
   findFrame = 0
   const el = scroller.value
   if (!on || !el || !highlights) return
-  findMutations = new MutationObserver(() => {
-    if (findFrame) return
+  // Only changes in a row (or rows coming and going) move the marks: the working clock under the rows ticks every second.
+  const inRow = (m: MutationRecord) => {
+    const t = m.target
+    if ((t instanceof Element ? t : t.parentElement)?.closest('[data-id]')) return true
+    return m.type === 'childList' && [...m.addedNodes, ...m.removedNodes].some((n) => n instanceof Element && (n.matches('[data-id]') || !!n.querySelector('[data-id]')))
+  }
+  findMutations = new MutationObserver((records) => {
+    if (findFrame || !records.some(inRow)) return
     findFrame = requestAnimationFrame(() => {
       findFrame = 0
       paintFind() // the marks are highlights, not elements: painting adds no mutation

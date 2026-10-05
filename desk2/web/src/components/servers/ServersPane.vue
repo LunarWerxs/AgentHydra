@@ -157,8 +157,11 @@ const restart = (p: DevWebProcess) => run(p.id, () => processAction(p.id, 'resta
 const all = (action: 'start' | 'stop') => project.value && run('all', () => projectAction(project.value!.id, action))
 async function tryAgain() {
   started = false
-  status.value = { state: 'starting', url: null }
+  const pending: DevWebStatus = { state: 'starting', url: null }
+  status.value = pending
   await refresh()
+  // A status error that refresh returned on leaves the pane as on first open (loading, polling goes on), not starting for good.
+  if (status.value === pending) status.value = null
 }
 
 // ---- the browser: hidden until a server (or an address) is opened ----
