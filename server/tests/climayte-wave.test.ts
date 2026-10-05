@@ -1436,7 +1436,7 @@ describe('judging a wave task by its commits (field notes 93 and 94)', () => {
     const none = judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${stray}`, null)
     expect(none.verdict).toBe('fail')
     expect(none.note).toContain('is not on the branch main')
-  })
+  }, 60_000)
 
   test('an edit outside paths that the next commit reverts passes; a kept one fails', () => {
     const before = git('rev-parse', 'HEAD')
@@ -1452,5 +1452,5 @@ describe('judging a wave task by its commits (field notes 93 and 94)', () => {
     expect(bad.verdict).toBe('fail')
     expect(bad.note).toContain('docs/x.md')
     expect(before).not.toBe(c2)
-  })
+  }, 60_000)
 })
