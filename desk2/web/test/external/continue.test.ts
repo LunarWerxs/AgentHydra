@@ -41,8 +41,8 @@ describe('the line over an outside session’s composer, before its first messag
     expect(knownResumeAccount({ accountId: null }, [sue], 'auto', landing)).toEqual(landing)
   })
 
-  test('landing on the default login, it says no account has room (the server refuses it)', () => {
-    expect(continueLine({ accountId: null }, defaultLogin)).toBe('No account has room to continue this session now.')
+  test('landing on the default login, it says CliMayte picks the account at send', () => {
+    expect(continueLine({ accountId: null }, defaultLogin)).toBe('Continues as a copy on the account CliMayte picks when you send. The original stays as it is.')
   })
 
   test('the default login picked in the title bar is where it goes, not a lack of room', () => {

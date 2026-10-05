@@ -16,7 +16,7 @@ import { OPEN_HYDRA_EVENT, hydraOpen, hydraSidebar } from '@/components/hydra/ap
 import { useCloud } from '@/components/cloud/store'
 import { showTasks } from '@/components/sidebar/tasks'
 import BackgroundTasksPanel from '@/components/tasks/BackgroundTasksPanel.vue'
-import { OPEN_TASKS_EVENT, type OpenTasksDetail } from '@/components/tasks/api'
+import { OPEN_TASKS_EVENT, outsideTasks, type OpenTasksDetail } from '@/components/tasks/api'
 import ChromeBar from './ChromeBar.vue'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import NewSessionScreen from './NewSessionScreen.vue'
@@ -66,6 +66,13 @@ const chat = computed<ChatSummary | null>(() => {
 // A chat view whose chat is gone (deleted, or nothing picked yet) is the new-session screen.
 const isNew = computed(() => view.value.kind === 'new' || (view.value.kind === 'chat' && !chat.value))
 const items = computed(() => (chat.value ? (src.itemsByChat.value.get(chat.value.id) ?? []) : []))
+// The Background tasks panel for an outside session: its id, and the transcript its view published.
+const outsideId = computed(() => (view.value.kind === 'external' ? view.value.id : null))
+const tasksSessionId = computed(() => outsideId.value ?? chat.value?.sessionId)
+const tasksItems = computed(() =>
+  outsideId.value ? (outsideTasks.value?.sessionId === outsideId.value ? outsideTasks.value.items : []) : items.value
+)
+const tasksWorkerIds = computed(() => (outsideId.value ? undefined : chat.value?.workerIds))
 
 // The list of outside sessions holds the last 24 hours; a search hit can open an older one, which is
 // fetched on its own. Unknown to AgentHydra (404), the pane keeps its read-only fallback.
@@ -518,9 +525,9 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             :class="tasks.expanded ? 'col-start-1 row-start-2 pl-2 pt-0.5' : 'col-start-2 row-span-2 row-start-1 w-[440px] pt-2'"
           >
             <BackgroundTasksPanel
-              :session-id="chat?.sessionId"
-              :worker-ids="chat?.workerIds"
-              :items="items"
+              :session-id="tasksSessionId"
+              :worker-ids="tasksWorkerIds"
+              :items="tasksItems"
               :focus-id="tasks.focus"
               :expanded="tasks.expanded"
               @close="tasks = null"

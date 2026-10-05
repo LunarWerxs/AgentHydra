@@ -173,7 +173,13 @@ export function demoHomeStats(range: HomeStatsRange): HomeStats {
   const total = sum((s) => s.tokens)
   const parts = { input: Math.round(total * 0.03), cacheRead: Math.round(total * 0.94), cacheWrite: Math.round(total * 0.02) }
   const days = range === 'all' ? 189 : range === '30d' ? 30 : 7
-  const heat = Array.from({ length: 189 }, (_, i) => (i < 189 - days ? 0 : [0, 1, 2, 1, 3, 4, 2][i % 7]!))
+  const now = new Date()
+  const heat = Array.from({ length: 189 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (188 - i))
+    const level = i < 189 - days ? 0 : [0, 1, 2, 1, 3, 4, 2][i % 7]!
+    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    return { day, count: level * n(120), level }
+  })
   return {
     range,
     sessions: sum((s) => s.sessions),
@@ -181,7 +187,7 @@ export function demoHomeStats(range: HomeStatsRange): HomeStats {
     tokens: { ...parts, output: total - parts.input - parts.cacheRead - parts.cacheWrite, total },
     costUsd: sum((s) => s.costUsd),
     pricesAsOf: '2026-10-01',
-    activeDays: heat.filter((l) => l > 0).length,
+    activeDays: heat.filter((c) => c.level > 0).length,
     peakHour: '2 PM',
     favoriteModel: 'claude-opus-5-5',
     agentMinutes: n(90_000),

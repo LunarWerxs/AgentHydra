@@ -1,5 +1,5 @@
 // Pure shell logic (tested in web/test/shell): navigation history, shortcuts, new-session stats.
-import type { ChatSummary } from '@shared/protocol'
+import type { ChatSummary, HeatCell } from '@shared/protocol'
 
 export type View =
   | { kind: 'chat'; id: string }
@@ -150,8 +150,8 @@ export interface DeskStats {
   favoriteModel: string // a model label, or 'Default'
   totalCost: string // '$12.40'
   models: { label: string; sessions: number }[]
-  /** Activity per day, oldest first, `days` long, ending today: 0..4 intensity. */
-  heat: number[]
+  /** Activity per day, oldest first, `days` long, ending today: chats touched (`count`) and 0..4 intensity. */
+  heat: HeatCell[]
 }
 
 /** 'claude-opus-5-5' -> 'Opus 5.5'; an alias or unknown id is shown as given. */
@@ -202,7 +202,12 @@ export function computeStats(chats: ChatSummary[], range: StatsRange, now: numbe
     }
   }
   const max = Math.max(1, ...counts)
-  const heat = counts.map((n) => (n === 0 ? 0 : Math.min(4, Math.ceil((n / max) * 4))))
+  const localDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const heat: HeatCell[] = counts.map((n, i) => ({
+    day: localDay(new Date(today.getFullYear(), today.getMonth(), today.getDate() - (days - 1 - i))),
+    count: n,
+    level: n === 0 ? 0 : Math.min(4, Math.ceil((n / max) * 4))
+  }))
 
   return {
     sessions: inRange.length,

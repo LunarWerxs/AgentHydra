@@ -296,12 +296,15 @@ function dismissedTips(storage: DraftStorage | null): string[] {
   }
 }
 
-/** The first tip not dismissed yet, or null once every tip is gone. */
+/**
+ * The first tip until any tip was closed, then null for good: showing the next one on the next chat read as
+ * the banner coming back (owner, 2026-10-05: "Those all need to remember if I close them and stay closed").
+ */
 export function nextTip(storage: DraftStorage | null, tips: Tip[] = TIPS): Tip | null {
-  const gone = new Set(dismissedTips(storage))
-  return tips.find((t) => !gone.has(t.id)) ?? null
+  return dismissedTips(storage).length ? null : (tips[0] ?? null)
 }
 
+/** Keeps a closed tip's id under TIPS_KEY; any id there ends the tips (nextTip). */
 export function dismissTip(storage: DraftStorage | null, id: string): void {
   const gone = dismissedTips(storage)
   if (gone.includes(id)) return

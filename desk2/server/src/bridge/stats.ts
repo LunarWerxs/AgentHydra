@@ -6,7 +6,7 @@
 // The other three may fail on their own (HSwarm is often down); the answer then names them in `missing`,
 // and the card shows a dash for them, never a made-up 0.
 
-import type { HomeStats, HomeStatsMissing, HomeStatsRange } from '@shared/protocol'
+import type { HeatCell, HomeStats, HomeStatsMissing, HomeStatsRange } from '@shared/protocol'
 import { BridgeError, type AhActivityReport, type AhCorchTotals, type AhHswarmStats, type AhSpendReport, type HydraClient } from './client'
 
 export const HOME_STATS_RANGES: readonly HomeStatsRange[] = ['all', '30d', '7d']
@@ -57,16 +57,16 @@ function dayKey(d: Date): string {
 }
 
 /**
- * HEAT_DAYS levels 0-4, oldest first, ending on `today`: each day's turns against the busiest day in the
- * window (the scale the card has always drawn: any activity is at least 1).
+ * HEAT_DAYS cells, oldest first, ending on `today`: each day's turns, and its level 0-4 against the busiest
+ * day in the window (the scale the card has always drawn: any activity is at least 1).
  */
-function heatLevels(turnsByDay: Map<string, number>, today: Date): number[] {
-  const counts = Array.from({ length: HEAT_DAYS }, (_, i) => {
-    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (HEAT_DAYS - 1 - i))
-    return turnsByDay.get(dayKey(d)) ?? 0
+function heatCells(turnsByDay: Map<string, number>, today: Date): HeatCell[] {
+  const days = Array.from({ length: HEAT_DAYS }, (_, i) => {
+    const d = dayKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - (HEAT_DAYS - 1 - i)))
+    return { day: d, count: turnsByDay.get(d) ?? 0 }
   })
-  const max = Math.max(1, ...counts)
-  return counts.map((n) => (n <= 0 ? 0 : Math.min(4, Math.ceil((n / max) * 4))))
+  const max = Math.max(1, ...days.map((c) => c.count))
+  return days.map((c) => ({ ...c, level: c.count <= 0 ? 0 : Math.min(4, Math.ceil((c.count / max) * 4)) }))
 }
 
 /**
@@ -126,7 +126,7 @@ function consolidate(range: HomeStatsRange, r: Reads, today: Date): HomeStats {
     peakHour: r.activity ? peakHour(r.activity.hours ?? []) : null,
     favoriteModel: models[0]?.key ?? null,
     agentMinutes: r.activity ? num(r.activity.agentMinutes) : null,
-    heat: heatLevels(turnsByDay, today),
+    heat: heatCells(turnsByDay, today),
     sources,
     models: models.map(({ key, sessions }) => ({ key, sessions })),
     climayte: r.climayte

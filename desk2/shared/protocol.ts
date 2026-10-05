@@ -624,6 +624,17 @@ export interface HomeStatsSource {
 }
 
 /**
+ * One square of the stats card's activity grid: its local day (YYYY-MM-DD), that day's figure and its
+ * shade 0-4 against the busiest day shown, so a hover can name the day and its number (owner, 2026-10-05:
+ * "Each of the squares ... need to have a number I can read when I hover over them").
+ */
+export interface HeatCell {
+  day: string
+  count: number
+  level: number
+}
+
+/**
  * GET /api/stats/home?range=: the home screen's stats card over every source AgentHydra counts (owner,
  * 2026-10-04: "the overview screen needs to display full consolidated stats from all sources"). From
  * AgentHydra's spend and activity reports, CliMayte's totals and HSwarm's stats; a part that failed is
@@ -647,8 +658,8 @@ export interface HomeStats {
   favoriteModel: string | null
   /** Engaged agent time; null when the activity report is missing. */
   agentMinutes: number | null
-  /** 27 weeks x 7 days of levels 0-4, oldest first, ending today: the card's activity grid. */
-  heat: number[]
+  /** 27 weeks x 7 days, oldest first, ending today: the card's activity grid; `count` is model turns. */
+  heat: HeatCell[]
   /** Most tokens first. */
   sources: HomeStatsSource[]
   /** Raw model ids, most sessions first. */

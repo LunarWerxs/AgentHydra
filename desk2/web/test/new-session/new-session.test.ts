@@ -6,7 +6,7 @@ import { accountLabel, accountTitle } from '../../src/components/accounts/format
 import { rowTooltip } from '../../src/components/sidebar/logic'
 import { TIPS, TIPS_KEY, dismissTip, modelTriggerLabel, nextTip, resolvedEffort, type DraftStorage } from '../../src/components/composer/logic'
 import { computeStats } from '../../src/components/shell/logic'
-import { homeFooter, homeModels, homeSources, homeTiles, statsFooter, statsTiles } from '../../src/components/shell/stats'
+import { heatTitle, homeFooter, homeModels, homeSources, homeTiles, statsFooter, statsTiles } from '../../src/components/shell/stats'
 
 const EMAIL = /[^\s<>()@]+@[^\s<>()@]+\.[a-z]{2,}/i
 
@@ -78,11 +78,11 @@ describe('model and effort triggers', () => {
 })
 
 describe('tips', () => {
-  it('shows the first tip and remembers dismissals', () => {
+  it('shows the first tip, and closing one ends the tips for good', () => {
     const s = memory()
     expect(nextTip(s)?.id).toBe(TIPS[0]!.id)
     dismissTip(s, TIPS[0]!.id)
-    expect(nextTip(s)?.id).toBe(TIPS[1]!.id)
+    expect(nextTip(s)).toBeNull()
     dismissTip(s, TIPS[0]!.id)
     expect(JSON.parse(s.data.get(TIPS_KEY)!)).toEqual([TIPS[0]!.id])
     for (const t of TIPS) dismissTip(s, t.id)
@@ -108,6 +108,20 @@ describe('stats card', () => {
     expect(tiles.map((t) => t.label)).toEqual(['Sessions', 'Messages', 'Total tokens', 'Active days', 'Peak hour', 'Favorite model'])
     expect(tiles.map((t) => t.value)).toEqual(['2', '–', '–', '2', '2 PM', 'Opus 5.5'])
     expect(statsFooter(s)).toBe("You've run 2 sessions in 2 folders over 2 days, $3.00 in all.")
+  })
+
+  it('builds one cell per local day, chats touched and their level', () => {
+    const s = computeStats([chat({}), chat({ updatedAt: NOW - 86_400_000 * 2, createdAt: NOW - 86_400_000 * 2 })], 'all', NOW)
+    expect(s.heat).toHaveLength(189)
+    expect(s.heat.at(-1)).toEqual({ day: '2026-10-04', count: 1, level: 4 })
+    expect(s.heat.at(-3)).toEqual({ day: '2026-10-02', count: 1, level: 4 })
+    expect(s.heat.at(-2)).toEqual({ day: '2026-10-03', count: 0, level: 0 })
+  })
+
+  it('names a square by its day and its number', () => {
+    expect(heatTitle({ day: '2026-10-03', count: 1234, level: 4 }, 'message', 'messages')).toBe('Sat, Oct 3: 1,234 messages')
+    expect(heatTitle({ day: '2026-10-04', count: 0, level: 0 }, 'chat', 'chats')).toBe('Sun, Oct 4: no chats')
+    expect(heatTitle({ day: '2026-10-04', count: 1, level: 4 }, 'chat', 'chats')).toBe('Sun, Oct 4: 1 chat')
   })
 
   it('says nothing invented for an empty range', () => {

@@ -719,7 +719,7 @@ export function useDesk() {
     /** The answer kept for the range, or null (none yet, or another build's shape). */
     cachedHomeStats(range: HomeStatsRange): HomeStats | null {
       const kept = readCache<HomeStats>(`home-stats.${range}`)
-      return kept?.range === range && Array.isArray(kept.heat) && Array.isArray(kept.sources) && Array.isArray(kept.missing) ? kept : null
+      return kept?.range === range && Array.isArray(kept.heat) && kept.heat.every((c) => typeof c === 'object' && c !== null) && Array.isArray(kept.sources) && Array.isArray(kept.missing) ? kept : null
     },
 
     async loadItems(chatId: string): Promise<TranscriptItem[]> {

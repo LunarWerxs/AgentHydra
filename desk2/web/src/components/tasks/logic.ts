@@ -45,6 +45,8 @@ export interface TaskUnit {
   stoppable: string[]
   /** The ids the trash button hides: its workers, or the task item. */
   keys: string[]
+  /** A transcript task that failed or was stopped: its finished row shows an X. */
+  failed?: boolean
 }
 
 export const FINISHED_CAP = 25
@@ -145,7 +147,8 @@ function taskUnit(t: TaskItem): TaskUnit {
     account: null,
     phases: [],
     stoppable: [],
-    keys: [`task:${t.id}`]
+    keys: [`task:${t.id}`],
+    failed: t.status === 'failed' || t.status === 'stopped'
   }
 }
 
@@ -161,6 +164,8 @@ export function workerUnits(workers: CliMayteWorker[]): TaskUnit[] {
   return units
 }
 
+const TASK_STATUSES = new Set<string>(['running', 'completed', 'failed', 'stopped'])
+
 export interface PanelLists {
   running: TaskUnit[]
   finished: TaskUnit[]
@@ -168,7 +173,9 @@ export interface PanelLists {
 
 /**
  * What the panel lists. `workerIds` (the server's match) scope it to the workers this chat dispatched (`all`:
- * every worker AgentHydra lists); `items` adds the chat's own task items that still run. Running
+ * every worker AgentHydra lists); `items` adds the chat's own task items, running or finished
+ * (completed, failed, stopped), so a chat's finished background tasks list and count as the real
+ * app's do (owner, 2026-10-05: "there actually is one running and one finished"). Running
  * units newest first; finished ones most recent first, minus the cleared, capped at FINISHED_CAP.
  */
 export function panelLists(o: {
@@ -180,7 +187,7 @@ export function panelLists(o: {
   cleared?: ReadonlySet<string>
 }): PanelLists {
   const scoped = o.all ? o.workers : chatWorkers(o.workers, o.sessionId, o.workerIds)
-  const tasks = (o.items ?? []).filter((i): i is TaskItem => i.kind === 'task' && i.status === 'running').map(taskUnit)
+  const tasks = (o.items ?? []).filter((i): i is TaskItem => i.kind === 'task' && TASK_STATUSES.has(i.status ?? '')).map(taskUnit)
   const units = [...workerUnits(scoped), ...tasks]
   const cleared = o.cleared ?? new Set<string>()
   const running = units.filter((u) => u.running).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))

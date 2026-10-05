@@ -46,15 +46,18 @@ export function resumeAccountRef(s: Pick<ExternalSession, 'accountId'>, accounts
 
 /**
  * The quiet line over a stand-in's composer, said before the first message: it continues in place on
- * the CLI instance that holds the session, else as a copy on the account it lands on. The default login
- * is never landed on unasked (the server refuses it), so landing there means no account has room; one
- * `picked` in the title bar is where it goes. '' while the account is unknown.
+ * the CLI instance that holds the session, else as a copy on the account it lands on. The pick answers
+ * the default login whenever Desk chooses no account: at the first message the server imports the
+ * session and CliMayte places the copy on an account with room, so landing there unpicked says so
+ * rather than "no account has room" (owner, 2026-10-05: "the bottom of multiple threads say, 'No account
+ * has room to continue this session now.' I am uncertain as to what it is saying"). One `picked` in the
+ * title bar is where it goes. '' while the account is unknown.
  */
 export function continueLine(s: Pick<ExternalSession, 'accountId'>, account: AccountRef | null, picked = false): string {
   if (!account) return ''
   const name = accountLabel(account.label, /\(([^()]+)\)\s*$/.exec(account.label)?.[1]?.trim() ?? null, account.id)
   if (account.id === s.accountId) return `Continues in place on ${name}.`
-  if (account.id === DEFAULT_LOGIN && !picked) return 'No account has room to continue this session now.'
+  if (account.id === DEFAULT_LOGIN && !picked) return 'Continues as a copy on the account CliMayte picks when you send. The original stays as it is.'
   return `Continues as a copy on ${name}. The original stays as it is.`
 }
 

@@ -725,8 +725,9 @@ config folder before the resume, so it never fails with "No conversation found".
   room the import is refused (409) rather than landed there, and a named account that is signed out is
   refused the same way ("<label> is signed out").
 - Before the first message the stand-in's quiet line says where it goes: "Continues in place on #N." or
-  "Continues as a copy on #N. The original stays as it is."; `No account has room to continue this session
-  now.` when only the default login is left. A failed import leaves the stand-in open with the server's
+  "Continues as a copy on #N. The original stays as it is."; "Continues as a copy on the account CliMayte
+  picks when you send. The original stays as it is." when the pick lands on the default login (CliMayte
+  places the copy on an account with room at the first message). A failed import leaves the stand-in open with the server's
   reason.
 - Working elsewhere, the strip is a quiet line (the session is not resumed while its owner's process works
   on it). Only Claude Desktop and terminal sessions continue; Codex, CliMayte and other sources stay

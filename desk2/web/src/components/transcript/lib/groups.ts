@@ -27,7 +27,9 @@ export function isStatusRow(r: DisplayRow): boolean {
 /**
  * How a background task shows in the flow, as the real app does: a workflow that runs, or settled in the
  * last turn, is its own card; any other running task is left to the running-tasks row under the
- * transcript; settled ones fold into the tool run they sit in, else into one muted line.
+ * transcript; settled ones fold into the tool run they sit in, else into one muted line. A workflow that
+ * finished in an earlier turn is a muted line (owner, 2026-10-05: "the chat literally shows ... two
+ * running somethings").
  */
 function taskPlace(it: TaskItem, lastTurn: boolean): 'card' | 'hidden' | 'settled' {
   if (it.taskKind === 'workflow' && (it.status === 'running' || lastTurn)) return 'card'
@@ -36,14 +38,26 @@ function taskPlace(it: TaskItem, lastTurn: boolean): 'card' | 'hidden' | 'settle
 
 /**
  * Consecutive tool calls become one 'tools' row (id `tools:<first id>`, stable while the run grows).
- * Background tasks are placed by taskPlace. The last assistant text before the next user message (or
- * the end) is marked endOfTurn: it carries the message actions toolbar, unless it is still streaming.
+ * Background tasks are placed by taskPlace. The last turn starts at the latest of the last user message
+ * and the last settle time (ts + durationMs) of a task: each settle woke the session with a
+ * <task-notification>, which starts a new turn. A settled workflow with a settle time is in the last
+ * turn when it settled at or after that start; one without keeps the index rule (after the last user
+ * message). The last assistant text before the next user message (or the end) is marked endOfTurn: it
+ * carries the message actions toolbar, unless it is still streaming.
  */
 export function groupRows(items: TranscriptItem[]): DisplayRow[] {
   const out: DisplayRow[] = []
   let lastUser = -1
+  let turnStart = -Infinity
+  const settledAt = (it: TranscriptItem) =>
+    it.kind === 'task' && it.status !== 'running' && it.durationMs !== undefined ? it.ts + it.durationMs : undefined
   items.forEach((it, i) => {
-    if (it.kind === 'user') lastUser = i
+    if (it.kind === 'user') {
+      lastUser = i
+      turnStart = Math.max(turnStart, it.ts)
+    }
+    const s = settledAt(it)
+    if (s !== undefined) turnStart = Math.max(turnStart, s)
   })
   items.forEach((it, i) => {
     const last = out[out.length - 1]
@@ -51,7 +65,8 @@ export function groupRows(items: TranscriptItem[]): DisplayRow[] {
       if (last?.kind === 'tools') last.items.push(it)
       else out.push({ id: `tools:${it.id}`, kind: 'tools', items: [it] })
     } else if (it.kind === 'task') {
-      const place = taskPlace(it, i > lastUser)
+      const s = settledAt(it)
+      const place = taskPlace(it, s !== undefined ? s >= turnStart : i > lastUser)
       if (place === 'hidden') return
       if (place === 'card') out.push({ id: it.id, kind: 'item', item: it, endOfTurn: false })
       else if (last?.kind === 'tools') (last.tasks ??= []).push(it)

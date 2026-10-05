@@ -84,9 +84,13 @@ test('GET /api/stats/home consolidates every source AgentHydra counts, and reuse
   // 27 weeks ending today, against the busiest day: today's 500 turns are 4, two days ago's 200 are 2,
   // and the day 250 days back has no cell.
   expect(body.heat).toHaveLength(189)
-  expect(body.heat.at(-1)).toBe(4)
-  expect(body.heat.at(-3)).toBe(2)
-  expect(body.heat.filter((level: number) => level > 0)).toHaveLength(2)
+  expect(body.heat.at(-1).level).toBe(4)
+  expect(body.heat.at(-3).level).toBe(2)
+  expect(body.heat.filter((cell: { level: number }) => cell.level > 0)).toHaveLength(2)
+  // Each cell names its local day and its number, for the square's hover.
+  const now = new Date()
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  expect(body.heat.at(-1)).toMatchObject({ day: today, count: 500 })
 
   const spends = () => f.gets.filter((g) => g.startsWith('/api/analytics/spend')).length
   const before = spends()

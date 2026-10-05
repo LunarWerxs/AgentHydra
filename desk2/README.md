@@ -55,7 +55,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   share the task's chat. However deep a chain goes, a running task still shows (past three steps in, at
   the third step's indent), and so does every finished task above it: the server keeps those past its
   "20 newest finished" cut. Turning it on while an AgentHydra tab with its own list is open slides back to
-  the desk so the tasks show.
+  the desk so the tasks show. When the other PC's AgentHydra is too old to say which chat started its
+  running tasks, one quiet line at the top of the list says how many are not shown there, and why.
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
   instead of waiting for the next change.
@@ -87,7 +88,22 @@ sidebar on the left stays put, and only the pane on the right changes.
   HSwarm, Codex, OpenCode, DeepSeek) and the activity grid, for All, 30 days or 7 days. Desk's server
   gathers it in one route, `GET /api/stats/home?range=`, from AgentHydra's spend and activity reports,
   CliMayte's totals and HSwarm's stats; a part that does not answer shows a dash saying why, never a 0,
-  and with AgentHydra away the card shows Desk's own chats and says so.
+  and with AgentHydra away the card shows Desk's own chats and says so. Each square of the activity grid
+  says its day and its number on hover (owner, 2026-10-05), and the Sources list folds up: folded at
+  first, then as you last left it.
+- **Background tasks, as the real app shows them.** The Background tasks panel works for a session
+  running outside Desk too (owner, 2026-10-05: "it currently says, 'No running, no finished,' but there
+  actually is one running and one finished"): it lists that session's running and finished background
+  tasks, a failed or stopped one with an X, and keeps asking while one runs, even when the session itself
+  is idle. A chat's finished tasks count under Finished, in Desk's own chats too. The count lives in one
+  place, the muted "1 running task · 2 finished" line under the last message; the agents chip that
+  repeated it above the composer is gone. A workflow that finished before the latest turn began (a
+  finished background task starts a turn of its own) folds into one muted line, as in the real app,
+  instead of keeping its card.
+- **Small things that stay put.** Closing the tip over a new chat's composer ends the tips for good
+  (owner, 2026-10-05: "Those all need to remember if I close them and stay closed"). Over an outside
+  session, the line about continuing it says what happens: it continues as a copy on the account CliMayte
+  picks when you send, and the original stays as it is.
 - **The window comes back where it was.** Closing Desk 2 and opening it again puts the window back at
   the size and place it had, a snapped one included: Windows keeps a snapped window's floating size apart
   from where it sits, so the launcher's window keeper saves the rectangle on screen too

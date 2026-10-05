@@ -192,5 +192,8 @@ export function taskItemFrom(n: TaskNotice, prev: TaskItem | undefined, ts: numb
   if (n.agents !== undefined) item.agents = n.agents
   if (n.tokens !== undefined) item.tokens = n.tokens
   if (n.durationMs !== undefined) item.durationMs = n.durationMs
+  // The time it settled, which also places it in its turn: a notice with no duration of its own counts
+  // from the task's start to the notice.
+  else if (prev && n.status && n.status !== 'running' && item.durationMs === undefined) item.durationMs = Math.max(0, ts - prev.ts)
   return item
 }

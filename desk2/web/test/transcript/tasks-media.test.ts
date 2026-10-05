@@ -46,6 +46,16 @@ describe('background tasks in the flow', () => {
     expect(rows[1].kind === 'tasks' && tasksLine(rows[1].items)).toBe('1 workflow completed')
   })
 
+  test('a workflow that settled before the last settle woke a new turn is a muted line; the latest settle stays a card', () => {
+    const a = task('wa', 'workflow', 'completed', { durationMs: 1_000 })
+    const b = task('wb', 'workflow', 'completed', { durationMs: 2_000 })
+    const bash = task('b', 'bash', 'completed', { durationMs: 5_000 })
+    const rows = groupRows([user('u'), a, b, bash])
+    expect(rows.map((r) => r.kind)).toEqual(['item', 'tasks'])
+    expect(rows[1].kind === 'tasks' && tasksLine(rows[1].items)).toBe('2 workflows and 1 background command completed')
+    expect(groupRows([user('u'), a, b]).map((r) => r.kind)).toEqual(['item', 'tasks', 'item'])
+  })
+
   test('the line is singular for one', () => {
     expect(tasksLine([task('b', 'bash')])).toBe('1 background command completed')
     expect(tasksLine([task('x', undefined)])).toBe('1 background task completed')

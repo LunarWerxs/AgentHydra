@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { TranscriptItem } from '@shared/protocol'
 import { tailToItems } from '../../src/bridge/external'
 import { historyToItems } from '../../src/engine/normalize'
-import { classifyUserText, type InjectedPart } from '../../src/engine/system-text'
+import { classifyUserText, taskItemFrom, type InjectedPart } from '../../src/engine/system-text'
 
 // Real samples, from Jacob's session jsonl (02b95209-..., the screenshot ours-transcript-task-notification.png)
 // and other local transcripts; ids and paths kept, long blobs shortened.
@@ -267,5 +267,13 @@ describe("a background task the file shows launched and never settled", () => {
   test("is taken as stopped once a day has passed with no notification", () => {
     const items = historyToItems(launch("wold", "Workflow", "", "2026-10-01T08:00:00.000Z"), { now: () => Date.parse("2026-10-04T09:00:00.000Z") })
     expect(items.find((i) => i.kind === "task")).toMatchObject({ status: "stopped" })
+  })
+})
+
+describe("taskItemFrom", () => {
+  test("a notice that settles a running task with no duration of its own records the time from start to notice", () => {
+    const prev = { kind: "task" as const, id: "task:t1", ts: 1_000, taskId: "t1", description: "d", status: "running" as const, taskKind: "workflow" as const }
+    const item = taskItemFrom({ taskId: "t1", status: "completed", description: "", summary: "", taskKind: "other" }, prev, 61_000)
+    expect(item).toMatchObject({ status: "completed", ts: 1_000, durationMs: 60_000 })
   })
 })

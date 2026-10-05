@@ -41,7 +41,7 @@ function w(id: string, over: Partial<CliMayteWorker> = {}): CliMayteWorker {
 const done = (id: string, over: Partial<CliMayteWorker> = {}) =>
   w(id, { status: 'done', active: false, verdict: 'ok', endedAt: 5_000, ...over })
 
-const task = (id: string, status: 'running' | 'completed', over: Partial<Extract<TranscriptItem, { kind: 'task' }>> = {}): TranscriptItem => ({
+const task = (id: string, status: 'running' | 'completed' | 'failed', over: Partial<Extract<TranscriptItem, { kind: 'task' }>> = {}): TranscriptItem => ({
   id,
   ts: 2_000,
   kind: 'task',
@@ -115,6 +115,7 @@ describe('panelLists', () => {
     expect(mine.running.map((u) => u.id)).toEqual(['task:t1', 'worker:mine'])
     expect(mine.running[0]!.name).toBe('bun test ./web/test')
     expect(mine.running[0]!.label).toBe('Background command')
+    expect(mine.finished.map((u) => u.id)).toEqual(['task:t2'])
     expect(panelLists({ workers, sessionId: 'chat-1', all: true }).running).toHaveLength(2)
     expect(panelLists({ workers, sessionId: null }).running).toHaveLength(0)
   })
@@ -131,6 +132,16 @@ describe('panelLists', () => {
     const { finished } = panelLists({ workers: many, sessionId: 'chat-1', cleared: new Set(['d29']) })
     expect(finished).toHaveLength(FINISHED_CAP)
     expect(finished[0]!.id).toBe('worker:d28')
+  })
+
+  test("a chat's finished background tasks list and count under finished, a failed one marked", () => {
+    const items = [task('run', 'running'), task('ok', 'completed', { durationMs: 1_000 }), task('bad', 'failed', { durationMs: 500 })]
+    const lists = panelLists({ workers: [], items, sessionId: 'chat-1' })
+    expect(lists.running.map((u) => u.id)).toEqual(['task:run'])
+    expect(lists.finished.map((u) => [u.id, !!u.failed])).toEqual([
+      ['task:ok', false],
+      ['task:bad', true]
+    ])
   })
 })
 

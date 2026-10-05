@@ -124,3 +124,18 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
   for (const key of dropped) lists.delete(key)
   return { byRow: lists }
 }
+
+/**
+ * Per PC, in first-seen order, how many of another PC's running tasks say nothing of where they came from
+ * (no session, origin session or origin worker): that PC's AgentHydra is too old to say which chat started
+ * them, so nestTasks can put them under no row and the sidebar says why instead (owner, 2026-10-05: "there
+ * are currently running tasks in the cloud on the other computer. But it does not show me them").
+ */
+export function unplacedRemote(workers: readonly CliMayteWorker[]): { pc: string; count: number }[] {
+  const counts = new Map<string, number>()
+  for (const w of workers) {
+    if (!w.pc || !w.active || w.sessionId || w.originSessionId || w.originWorkerId) continue
+    counts.set(w.pc, (counts.get(w.pc) ?? 0) + 1)
+  }
+  return [...counts].map(([pc, count]) => ({ pc, count }))
+}

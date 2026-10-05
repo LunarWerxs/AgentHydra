@@ -3,7 +3,7 @@ import { provide } from 'vue'
 import type { ChatSummary, GitStatus } from '@shared/protocol'
 import Composer from '@/components/composer/Composer.vue'
 import { COMPOSER_API, type ComposerApi } from '@/components/composer/api'
-import { accountFixtures, chatFixtures, cliMayteWorkerFixtures } from '../fixtures'
+import { accountFixtures, chatFixtures } from '../fixtures'
 
 // The composer reads its lists through COMPOSER_API; here they come from fixtures, so no server is needed.
 const git: GitStatus = {
@@ -100,20 +100,6 @@ const pics = [
 const longText = Array.from({ length: 30 }, (_, i) =>
   i === 0 ? 'A long draft, to show the box growing to 384px and then scrolling:' : `${i}. Step ${i} of the plan, with enough words to fill part of a line.`
 ).join('\n')
-const workers = cliMayteWorkerFixtures.map((w, i) => ({ ...w, active: true, status: i ? 'queued' : 'running', startedAt: Date.now() - (i + 1) * 7 * 60_000 }))
-// The workers dock: two running, then one finished, then all finished.
-const t = Date.now()
-const running = [
-  { ...cliMayteWorkerFixtures[0], id: 'dock-a', title: 'Composer fidelity: workers dock', status: 'running', active: true, account: '#68', startedAt: t - 12 * 60_000, lastActivity: 'Edit web/src/components/climayte/WorkerDock.vue' },
-  { ...cliMayteWorkerFixtures[1], id: 'dock-b', title: 'Transcript fidelity: status rows', status: 'running', active: true, account: '#41', startedAt: t - 4 * 60_000, lastActivity: 'bun test ./web/test' }
-]
-const finished = { ...running[1], id: 'dock-c', title: 'Sidebar: chat row menu', status: 'done', active: false, verdict: 'ok', startedAt: t - 31 * 60_000, lastActivityAt: t - 2 * 60_000, lastActivity: 'Committed 3f2a91c: chat row menu' }
-const dockMixed = [running[0], finished]
-const dockDone = [
-  { ...running[0], status: 'done', active: false, verdict: 'ok', lastActivityAt: t - 60_000, lastActivity: 'Committed ed7a18c' },
-  finished,
-  { ...running[1], id: 'dock-d', status: 'failed', active: false, error: 'bun run build exited 1', lastActivityAt: t - 5 * 60_000 }
-]
 
 type Case = { id: string; label: string; chat: ChatSummary | null; demo: InstanceType<typeof Composer>['$props']['demo'] }
 const cases: Case[] = [
@@ -121,7 +107,7 @@ const cases: Case[] = [
   { id: 'empty', label: 'Idle chat, empty box: placeholder', chat: idle, demo: { text: '' } },
   { id: 'new', label: 'New session (chat null): folder and account pickers in the strip', chat: null, demo: { cwd: 'D:/NEWProjects/connections' } },
   { id: 'working', label: 'Working chat, empty box: Stop (Esc)', chat: working, demo: { text: '' } },
-  { id: 'extras', label: 'Hydra Desk row: waiting for you, queued, CliMayte workers', chat: extras, demo: { text: '', workers } },
+  { id: 'extras', label: 'Hydra Desk row: waiting for you, queued', chat: extras, demo: { text: '' } },
   { id: 'attach', label: 'Attachments', chat: attach, demo: { text: 'What is wrong in these two?', images: pics } },
   { id: 'long', label: 'Long draft while working: Queue', chat: long, demo: { text: longText } }
 ]
@@ -132,10 +118,7 @@ const menuCases: Case[] = [
   { id: 'menu-effort', label: 'Effort popover', chat: idle, demo: { text: 'how we looking', openMenu: 'effort' } },
   { id: 'menu-plus', label: 'Plus menu', chat: idle, demo: { text: 'how we looking', openMenu: 'plus' } },
   { id: 'slash', label: 'Slash menu (typed /re)', chat: slash, demo: { text: '/re', slashOpen: true } },
-  { id: 'mention', label: '@-mention menu', chat: idle, demo: { text: 'look at @', mentionOpen: true } },
-  { id: 'dock', label: 'Workers dock, collapsed: 2 agents running', chat: idle, demo: { text: '', workers: running } },
-  { id: 'dock-done', label: 'Workers dock: 1 running, 1 done', chat: idle, demo: { text: '', workers: dockMixed } },
-  { id: 'dock-all-done', label: 'Workers dock: all finished (green)', chat: idle, demo: { text: '', workers: dockDone } }
+  { id: 'mention', label: '@-mention menu', chat: idle, demo: { text: 'look at @', mentionOpen: true } }
 ]
 
 const shot = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('shot')

@@ -3,7 +3,7 @@
 // tooltip, never a made-up 0. Until that answer comes, or when AgentHydra is not answering, the card falls
 // back to what Hydra Desk knows about its own chats (DeskStats), which keeps no messages or tokens per chat,
 // so those tiles show a dash too.
-import type { HomeStats, HomeStatsMissing } from '@shared/protocol'
+import type { HeatCell, HomeStats, HomeStatsMissing } from '@shared/protocol'
 import { modelName, type DeskStats } from './logic'
 
 export interface StatsTile {
@@ -34,6 +34,13 @@ export function statsFooter(s: DeskStats): string {
   const where = `${plural(s.sessions, 'session', 'sessions')} in ${plural(s.folders, 'folder', 'folders')}`
   const when = `over ${plural(s.activeDays, 'day', 'days')}`
   return s.totalCost === '$0.00' ? `You've run ${where} ${when}.` : `You've run ${where} ${when}, ${s.totalCost} in all.`
+}
+
+/** A grid square's hover: 'Sat, Oct 4: 1,234 messages', or 'Sat, Oct 4: no messages' (its day read as a local date). */
+export function heatTitle(cell: HeatCell, one: string, many: string): string {
+  const [y, m, d] = cell.day.split('-').map(Number)
+  const date = new Date(y!, m! - 1, d!).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+  return `${date}: ${cell.count === 0 ? `no ${many}` : plural(cell.count, one, many)}`
 }
 
 /** The line under Hydra Desk's own figures while AgentHydra's have not come, and when it did not answer. */

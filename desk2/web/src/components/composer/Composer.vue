@@ -1,13 +1,12 @@
 <script setup lang="ts">
 // The composer dock, laid out like the real Claude Desktop Code tab (docs/reference/real DESIGN.md
-// "Composer"): 768 wide, gap 6, top to bottom: Hydra Desk's status row (pending, queued, CliMayte
-// workers; ours), the repo strip, the box, the toolbar row below the box.
+// "Composer"): 768 wide, gap 6, top to bottom: Hydra Desk's status row (pending, queued;
+// ours), the repo strip, the box, the toolbar row below the box.
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { composerIcons, icons } from '@/lib/icons'
 import type {
   ChatStatus,
   ChatSummary,
-  CliMayteWorker,
   Effort,
   ImageRef,
   ModelChoice,
@@ -27,7 +26,6 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import WorkerDock from '@/components/climayte/WorkerDock.vue'
-import { chatWorkers as workersOfChat } from '@/components/climayte/dock'
 import { COMPOSER_API, httpComposerApi, OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT, SHOW_PENDING_EVENT } from './api'
 import {
   appendDictation,
@@ -97,7 +95,6 @@ const props = defineProps<{
     mentionOpen?: boolean
     cwd?: string
     openMenu?: MenuName
-    workers?: CliMayteWorker[]
   }
 }>()
 const emit = defineEmits<{ 'open-diff': [cwd: string] }>()
@@ -315,11 +312,6 @@ function createPr(draft: boolean) {
   desk.send(props.chat.id, { text: ask }).catch((e) => showNotice(`Not sent: ${errText(e)}`))
 }
 
-// Hydra Desk status row: the CliMayte workers this chat dispatched
-const chatWorkers = computed(() => {
-  if (props.demo?.workers) return props.demo.workers
-  return workersOfChat(desk.workers.value, props.chat?.sessionId, props.chat?.workerIds)
-})
 function openCliMayte() {
   window.dispatchEvent(new CustomEvent(OPEN_CLIMAYTE_EVENT, { detail: { originSessionId: props.chat?.sessionId ?? null } }))
 }
@@ -893,12 +885,10 @@ onBeforeUnmount(() => {
 <template>
   <div class="bg-[var(--bg-page)] px-4 pb-[9px]">
     <div class="mx-auto flex w-full max-w-[768px] flex-col gap-1.5">
-      <!-- Hydra Desk status row (ours): pending, queued, CliMayte workers -->
+      <!-- Hydra Desk status row (ours): pending, queued -->
       <WorkerDock
-        :workers="chatWorkers"
         :pending="Math.max(0, (chat?.pendingCount ?? 0) - (request ? 1 : 0))"
         :queued="chat?.queuedCount ?? 0"
-        :climayte-active="chat?.climayteActive ?? 0"
         @show-pending="showPending"
       />
       <!-- The box (and its queue tray) gives way to a docked request: the queue opens from here then -->

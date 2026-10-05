@@ -1,16 +1,7 @@
-// The agents chip above the composer: Hydra Desk's version of the real app's background-tasks
-// pill. It counts only the CliMayte workers this chat dispatched (ChatSummary.workerIds, the server's
-// match); pure functions here so the label and states are testable.
+// Which CliMayte workers belong to a chat (ChatSummary.workerIds, the server's match) and the done
+// workers the user cleared; the background-tasks row and panel (tasks/) count with these. Pure
+// functions here so they are testable.
 import type { CliMayteWorker } from '@shared/protocol'
-
-export type DockTone = 'running' | 'done' | 'none'
-
-export interface DockSummary {
-  running: number
-  done: number
-  tone: DockTone
-  label: string
-}
 
 /**
  * The workers that belong to a chat: the ids the server matched to it (`workerIds`, kept for finished ones too),
@@ -19,21 +10,6 @@ export interface DockSummary {
 export function chatWorkers(workers: CliMayteWorker[], sessionId: string | null | undefined, workerIds: readonly string[] = []): CliMayteWorker[] {
   const ids = new Set(workerIds)
   return workers.filter((w) => ids.has(w.id) || (!!sessionId && w.originSessionId === sessionId))
-}
-
-/**
- * The chip: "1 agent running", "3 agents running", "2 running, 1 done", "1 agent done", "4 agents done".
- * `climayteActive` (ChatSummary) covers workers the list has not reported yet; done workers the user
- * cleared (dismissed ids) no longer count.
- */
-export function summarizeDock(workers: CliMayteWorker[], climayteActive = 0, dismissed: ReadonlySet<string> = new Set()): DockSummary {
-  const running = Math.max(workers.filter((w) => w.active).length, climayteActive)
-  const done = workers.filter((w) => !w.active && !dismissed.has(w.id)).length
-  const agents = (n: number) => `${n} ${n === 1 ? 'agent' : 'agents'}`
-  if (running && done) return { running, done, tone: 'running', label: `${running} running, ${done} done` }
-  if (running) return { running, done, tone: 'running', label: `${agents(running)} running` }
-  if (done) return { running, done, tone: 'done', label: `${agents(done)} done` }
-  return { running, done, tone: 'none', label: '' }
 }
 
 const DISMISSED_KEY = 'hydra-desk:dock-dismissed'

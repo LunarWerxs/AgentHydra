@@ -12,7 +12,7 @@ import { useCloud } from '@/components/cloud/store'
 import HydraSidebar from '@/components/hydra/HydraSidebar.vue'
 import { hydraOpen, hydraSidebar, openWorkerInHydra } from '@/components/hydra/api'
 import TaskRows from './TaskRows.vue'
-import { nestTasks, showTasks, type NestedTasks, type NestRow } from './tasks'
+import { nestTasks, showTasks, unplacedRemote, type NestedTasks, type NestRow } from './tasks'
 import ChatRow from './ChatRow.vue'
 import SidebarTools from './SidebarTools.vue'
 import ExternalRow from './ExternalRow.vue'
@@ -197,6 +197,10 @@ const emptyText = computed(() =>
 // alone table"). The other PCs' tasks: the desk store keeps them apart from src.workers so they never count
 // as this PC's (stores/desk.ts splitWorkers); a source without them (the Gallery) has none.
 const remoteWorkers = computed(() => src.remoteWorkers?.value ?? [])
+// Another PC's running tasks its older AgentHydra sends with no origin sit under no row: one line per PC
+// says why (owner, 2026-10-05: "there are currently running tasks in the cloud on the other computer. But it
+// does not show me them").
+const unplaced = computed(() => (showTasks.value ? unplacedRemote(remoteWorkers.value) : []))
 const nesting = computed<NestedTasks | null>(() => {
   if (!showTasks.value) return null
   const workers = [...src.workers.value, ...remoteWorkers.value]
@@ -432,6 +436,12 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             <component :is="icons.dismiss" class="size-3.5" />
           </button>
         </div>
+
+        <template v-if="!hydraModel">
+          <p v-for="u in unplaced" :key="u.pc" role="status" class="px-1.5 pt-1 text-[12px] leading-4 text-text-muted">
+            {{ u.count }} running {{ u.count === 1 ? 'task' : 'tasks' }} on {{ u.pc }} {{ u.count === 1 ? 'is' : 'are' }} not shown: its AgentHydra is too old to say which chat started them. Update it there.
+          </p>
+        </template>
 
         <HydraSidebar v-if="hydraModel" :model="hydraModel" />
 

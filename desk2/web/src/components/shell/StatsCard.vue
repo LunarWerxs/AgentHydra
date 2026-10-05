@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { ChevronRight } from '@lucide/vue'
 import type { ChatSummary, HomeStats } from '@shared/protocol'
 import { computeStats, type StatsRange } from './logic'
 import { useShellSource } from './source'
-import { DESK_ONLY_OFFLINE, DESK_ONLY_WAITING, homeFooter, homeModels, homeSources, homeTiles, statsFooter, statsTiles } from './stats'
+import { DESK_ONLY_OFFLINE, DESK_ONLY_WAITING, heatTitle, homeFooter, homeModels, homeSources, homeTiles, statsFooter, statsTiles } from './stats'
 
 // The stats card of the new-session screen (480 wide, r12, #ffffff0d): tabs, ranges, nine tiles, the
 // sources and the activity grid, over every source AgentHydra counts (owner, 2026-10-04: "the overview
@@ -45,6 +46,28 @@ const models = computed(() => (home.value ? homeModels(home.value) : desk.value.
 // 27 weeks of 7 days, filled column by column (oldest week on the left).
 const HEAT = ['var(--fill-secondary)', '#8fb8f0', 'var(--accent-text)', 'var(--accent-hover)', 'var(--accent)']
 const heat = computed(() => home.value?.heat ?? desk.value.heat)
+// Each square names its day and its number on hover (owner, 2026-10-05: "Each of the squares ... need to
+// have a number I can read when I hover over them"): model turns from AgentHydra, chats touched from Desk.
+const heatUnit = computed<[string, string]>(() => (home.value ? ['message', 'messages'] : ['chat', 'chats']))
+
+// The Sources list folds, folded by default, and the choice is kept (owner, 2026-10-05: "The sources need
+// to be collapsible and collapsed by default").
+const SOURCES_OPEN_KEY = 'hydra-desk.stats.sources-open'
+let openAtStart = false
+try {
+  openAtStart = localStorage.getItem(SOURCES_OPEN_KEY) === '1'
+} catch {
+  // floor-ok: storage blocked; the list starts folded
+}
+const sourcesOpen = ref(openAtStart)
+function toggleSources(): void {
+  sourcesOpen.value = !sourcesOpen.value
+  try {
+    localStorage.setItem(SOURCES_OPEN_KEY, sourcesOpen.value ? '1' : '0')
+  } catch {
+    // floor-ok: storage full or blocked; the choice holds for this window only
+  }
+}
 const maxModel = computed(() => Math.max(1, ...models.value.map((m) => m.sessions)))
 
 const footer = computed(() => {
@@ -82,23 +105,30 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
           <span class="tnum truncate text-[13px] leading-[19px] text-text" :class="t.strong ? 'font-semibold' : ''">{{ t.value }}</span>
         </div>
       </div>
-      <div v-if="sources.length" class="mt-[6px] flex flex-col gap-[2px]" role="table" aria-label="Sources">
-        <div role="row" :class="SOURCE_COLS" class="h-4 text-[11px] leading-4 text-text-muted">
-          <span role="columnheader">Sources</span>
-          <span role="columnheader" class="text-right">Sessions</span>
-          <span role="columnheader" class="text-right">Tokens</span>
-          <span role="columnheader" class="text-right">Cost</span>
-        </div>
-        <div v-for="s in sources" :key="s.key" role="row" :title="s.title" :class="SOURCE_COLS" class="relative h-[22px] overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)] text-[12px] leading-4">
-          <span class="absolute bottom-0 left-0 h-[2px] bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${s.share * 100}%` }" />
-          <span role="cell" class="relative truncate text-text">{{ s.label }}</span>
-          <span role="cell" class="tnum relative text-right text-text-2">{{ s.sessions }}</span>
-          <span role="cell" class="tnum relative text-right text-text-2">{{ s.tokens }}</span>
-          <span role="cell" class="tnum relative text-right text-text-2">{{ s.cost }}</span>
+      <div v-if="sources.length" class="mt-[6px] flex flex-col gap-[2px]">
+        <button type="button" class="flex h-5 items-center gap-1 px-1.5 text-left text-[11px] leading-4 text-text-muted hover:text-text-2" :aria-expanded="sourcesOpen" aria-controls="stats-sources" @click="toggleSources">
+          <ChevronRight class="size-3 transition-transform" :class="sourcesOpen ? 'rotate-90' : ''" aria-hidden="true" />
+          <span>Sources</span>
+          <span class="tnum">{{ sources.length }}</span>
+        </button>
+        <div v-if="sourcesOpen" id="stats-sources" class="flex flex-col gap-[2px]" role="table" aria-label="Sources">
+          <div role="row" :class="SOURCE_COLS" class="h-4 text-[11px] leading-4 text-text-muted">
+            <span role="columnheader">Source</span>
+            <span role="columnheader" class="text-right">Sessions</span>
+            <span role="columnheader" class="text-right">Tokens</span>
+            <span role="columnheader" class="text-right">Cost</span>
+          </div>
+          <div v-for="s in sources" :key="s.key" role="row" :title="s.title" :class="SOURCE_COLS" class="relative h-[22px] overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)] text-[12px] leading-4">
+            <span class="absolute bottom-0 left-0 h-[2px] bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${s.share * 100}%` }" />
+            <span role="cell" class="relative truncate text-text">{{ s.label }}</span>
+            <span role="cell" class="tnum relative text-right text-text-2">{{ s.sessions }}</span>
+            <span role="cell" class="tnum relative text-right text-text-2">{{ s.tokens }}</span>
+            <span role="cell" class="tnum relative text-right text-text-2">{{ s.cost }}</span>
+          </div>
         </div>
       </div>
       <div class="mt-[6px] grid grid-flow-col grid-rows-7 justify-between gap-y-[3px]" role="img" aria-label="Activity over the last 27 weeks">
-        <span v-for="(level, i) in heat" :key="i" class="size-[15px] rounded-[2px]" :style="{ background: HEAT[level] }" />
+        <span v-for="cell in heat" :key="cell.day" :title="heatTitle(cell, ...heatUnit)" class="size-[15px] rounded-[2px]" :style="{ background: HEAT[cell.level] }" />
       </div>
     </template>
 

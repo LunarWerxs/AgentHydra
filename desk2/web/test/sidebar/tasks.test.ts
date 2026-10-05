@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { CliMayteWorker } from '@shared/protocol'
-import { nestTasks, type TaskNode } from '../../src/components/sidebar/tasks'
+import { nestTasks, unplacedRemote, type TaskNode } from '../../src/components/sidebar/tasks'
 
 // The sidebar's CliMayte toggle: each session's running tasks under it and nowhere else, a manager's wave one
 // step further in.
@@ -127,4 +127,27 @@ test("another PC's tasks sit under the chat that spawned them there, a wave unde
   const tasks = nestTasks(rows, workers)
   expect(listOf(tasks.byRow.get('chat:1'))).toEqual(['1:here:w-1', '2:here:w-2'])
   expect(listOf(tasks.byRow.get('external:s-remote-chat'))).toEqual(['1:OTHER-PC:w-1', '2:OTHER-PC:w-2'])
+})
+
+// (owner, 2026-10-05: "there are currently running tasks in the cloud on the other computer. But it does not show me them")
+test("another PC's running tasks with no session or origin are counted per PC, so the sidebar can say why they are missing", () => {
+  const bare = { sessionId: null, originSessionId: null, originWorkerId: null }
+  const workers = [
+    worker('a1', 1, { ...bare, pc: 'PC-B' }),
+    worker('a2', 2, { ...bare, pc: 'PC-A' }),
+    worker('a3', 3, { ...bare, pc: 'PC-B' }),
+    // Placed: it says where it came from.
+    worker('a4', 4, { pc: 'PC-A', originSessionId: 's-chat' }),
+    worker('a5', 5, { ...bare, pc: 'PC-A', originWorkerId: 'w-mgr' }),
+    worker('a6', 6, { pc: 'PC-B' }),
+    // Finished: nothing to show.
+    worker('a7', 7, { ...bare, pc: 'PC-A', status: 'done', active: false }),
+    // This PC's own.
+    worker('a8', 8, bare)
+  ]
+  expect(unplacedRemote(workers)).toEqual([
+    { pc: 'PC-B', count: 2 },
+    { pc: 'PC-A', count: 1 }
+  ])
+  expect(unplacedRemote([worker('a9', 9, { pc: 'PC-A', originSessionId: 's-x' })])).toEqual([])
 })

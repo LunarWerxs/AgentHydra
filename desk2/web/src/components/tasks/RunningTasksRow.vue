@@ -16,8 +16,7 @@ const src = useShellSource()
 // its own background tasks); a task the chat finished counts as finished.
 const label = computed(() => {
   const lists = panelLists({ workers: src.workers.value, items: props.items, sessionId: props.chat.sessionId, workerIds: props.chat.workerIds })
-  const tasksDone = props.items.filter((i) => i.kind === 'task' && i.status !== 'running').length
-  return runningLabel(lists.running.length, lists.finished.length + tasksDone)
+  return runningLabel(lists.running.length, lists.finished.length)
 })
 </script>
 

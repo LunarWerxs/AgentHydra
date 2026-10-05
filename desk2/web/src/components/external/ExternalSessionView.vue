@@ -5,6 +5,7 @@ import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
 import { externalGlyph, glyphDotClass, sourceLabel } from '@/components/sidebar/logic'
 import { useDesk } from '@/stores/desk'
+import { outsideTasks } from '@/components/tasks/api'
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
 import Composer from '@/components/composer/Composer.vue'
 import SessionHeader from '@/components/session-header/SessionHeader.vue'
@@ -92,18 +93,33 @@ watch(
   },
   { immediate: true }
 )
+// The Background tasks panel reads this session's transcript from here.
 watch(
-  isWorking,
-  (working, before) => {
-    if (working && !pollInterval) pollInterval = setInterval(() => loadItems(true), 3000)
-    else if (!working) {
+  [items, () => props.sessionId],
+  () => (outsideTasks.value = { sessionId: props.sessionId, items: items.value }),
+  { immediate: true }
+)
+// A session sits idle while its background Bash runs, so a running task keeps a slower poll going
+// until it finishes (owner, 2026-10-05: "there actually is one running and one finished").
+const tasksRunning = computed(() => items.value.some((i) => i.kind === 'task' && i.status === 'running'))
+let pollMs = 0
+watch(
+  () => [isWorking.value, tasksRunning.value] as const,
+  ([working, running], before) => {
+    const ms = working ? 3000 : running ? 10000 : 0
+    if (ms !== pollMs) {
       stopPolling()
-      if (before) void loadItems(true)
+      if (ms) pollInterval = setInterval(() => loadItems(true), ms)
+      pollMs = ms
     }
+    if (!working && before?.[0]) void loadItems(true)
   },
   { immediate: true }
 )
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  stopPolling()
+  if (outsideTasks.value?.sessionId === props.sessionId) outsideTasks.value = null
+})
 </script>
 
 <template>

@@ -7,7 +7,6 @@ import { SHELL_SOURCE } from '@/components/shell/source'
 import { COMPOSER_API, OPEN_DIFF_EVENT } from '@/components/composer/api'
 import { openBackgroundTasks } from '@/components/tasks/api'
 import { PANE_API } from '@/components/panes/api'
-import { cliMayteWorkerFixtures } from '@/dev/fixtures'
 import { PARITY_SCENES, sceneComposerApi, scenePaneApi, sceneSource, type MenuName } from './scenes'
 
 // '#/parity/<scene>?open=<plus|mode|model|effort>&hover=<css selector | text:Label>&draft=<text>'
@@ -125,7 +124,7 @@ onMounted(() => {
     <p v-if="!scene" class="p-6 text-sm">Unknown parity scene '{{ name }}'. Known: {{ Object.keys(PARITY_SCENES).join(', ') }}</p>
     <DeskFrame v-else-if="scene.layout === 'frame'" demo :accounts-open="scene.accountsOpen" :history="scene.history" />
     <div v-else class="flex h-full flex-col justify-end pl-[288px]">
-      <Composer :chat="chat" :demo="{ text: draft, workers: cliMayteWorkerFixtures }" />
+      <Composer :chat="chat" :demo="{ text: draft }" />
     </div>
   </div>
 </template>

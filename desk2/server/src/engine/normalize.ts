@@ -587,6 +587,8 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
         next.taskKind ??= taskKindOf(str(msg.summary))
         if (msg.tool_use_id) next.toolUseId = str(msg.tool_use_id)
         if (msg.output_file) next.outputFile = str(msg.output_file)
+        // The time it settled, which also places it in its turn.
+        if (t && next.durationMs === undefined) next.durationMs = Math.max(0, now() - t.ts)
         tasks.set(taskId, next)
         out.push({ type: 'upsert', item: next })
         return

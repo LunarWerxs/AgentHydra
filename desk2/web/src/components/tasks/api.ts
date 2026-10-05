@@ -1,7 +1,11 @@
-// Opening the Background tasks panel from anywhere (the inline row, the composer's agents chip, a
-// workflow card): one window event the frame listens to, as the diff pane does.
-import { ref } from 'vue'
+// Opening the Background tasks panel from anywhere (the inline row, a workflow card): one window
+// event the frame listens to, as the diff pane does.
+import { ref, shallowRef } from 'vue'
+import type { TranscriptItem } from '@shared/protocol'
 import { loadDismissed, saveDismissed } from '@/components/climayte/dock'
+
+/** The transcript of the outside session on view, published by ExternalSessionView for the Background tasks panel. */
+export const outsideTasks = shallowRef<{ sessionId: string; items: TranscriptItem[] } | null>(null)
 
 export const OPEN_TASKS_EVENT = 'hydra-desk:open-background-tasks'
 
