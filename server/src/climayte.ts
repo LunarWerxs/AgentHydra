@@ -2409,7 +2409,13 @@ export function climayteVerdicts(
   return ids.map((id) => ({ id, ...climayteVerdict(id, input) }))
 }
 
-export function climayteGet(id: string): (CliMayteWorkerView & { events: string[] }) | null {
+/** `fullPrompt`: the whole brief instead of the views' first 300 characters, for a window showing the
+ *  task (Desk 2's CliMayte pane). Off by default, so a chat reading a task over MCP is not handed back
+ *  the brief it wrote. */
+export function climayteGet(
+  id: string,
+  opts: { fullPrompt?: boolean } = {},
+): (CliMayteWorkerView & { events: string[] }) | null {
   load()
   const w = workers.get(id)
   if (!w) return null
@@ -2423,7 +2429,11 @@ export function climayteGet(id: string): (CliMayteWorkerView & { events: string[
     const lines = a.outcome === 'running' ? readLog(a).recent : finishedLines(a.log)
     events.unshift(`— attempt ${i + 1} on ${who}: ${a.outcome} —`, ...lines)
   }
-  return { ...toView(w, Date.now()), events: events.slice(-60) }
+  return {
+    ...toView(w, Date.now()),
+    ...(opts.fullPrompt ? { prompt: w.prompt } : {}),
+    events: events.slice(-60),
+  }
 }
 
 export function climayteWait(

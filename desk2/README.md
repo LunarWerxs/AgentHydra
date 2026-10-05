@@ -70,7 +70,13 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **The copy's own changes.** Its desktop Instances table keeps its column widths and row order while
   the stats load (fixed columns, placeholders the size of what replaces them; Memory and Tokens re-sort
   on a header click or Refresh, not on every poll), and an HSwarm job opens its summary right under its
-  row instead of at the bottom of the page.
+  row instead of at the bottom of the page. A CliMayte task's pane shows its whole title and, first in
+  its body, the whole brief it was sent (the daemon's `GET /api/corch/workers/:id?prompt=full`; lists
+  and MCP still get the first 300 characters). The centred column has no side lines.
+- **The window comes back where it was.** Closing Desk 2 and opening it again puts the window back at
+  the size and place it had, a snapped one included: Windows keeps a snapped window's floating size apart
+  from where it sits, so the launcher's window keeper saves the rectangle on screen too
+  (`~/.hydra-desk-2/window.json`) and puts the window back on it, if that monitor is still there.
 - **More in the Filter menu.** The sidebar's Filter button now holds what AgentHydra's Sessions ⋯ menu
   has: Refresh, Only this view, Select multiple sessions, then Source, Instance, Queued work, Usage
   limits, Session shape, Archived, Computer and Time period, Reset, and Session settings (which opens

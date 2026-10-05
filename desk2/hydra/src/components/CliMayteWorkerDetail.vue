@@ -303,7 +303,9 @@ async function onStop() {
       <header class="flex flex-col gap-3 border-b px-4 py-3">
         <div class="flex items-start justify-between gap-3">
           <div class="flex min-w-0 flex-col items-start gap-1.5">
-            <h3 class="line-clamp-2 wrap-break-word text-sm font-semibold" :title="worker.title">
+            <!-- Whole, never clamped (owner, 2026-10-04: "is showing a cut off version of the title?
+                 Prompt? Whatever? Should show full one"); the brief itself heads the body below. -->
+            <h3 class="wrap-break-word text-sm font-semibold">
               {{ worker.title }}
             </h3>
             <!-- Its id, to name it in chat (owner, 2026-10-02: "should have an ID ... so I can refer to
@@ -549,6 +551,13 @@ async function onStop() {
            journal share what is left, each scrolling in its own box. Only a window too short for
            their minimums scrolls this body. -->
       <div class="flex flex-col gap-4 px-4 py-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+        <!-- The whole brief it was sent: a title is often only the brief's first words. The detail
+             asks for it in full (lib/api.ts getCliMayteWorker); the list's rows carry 300 characters. -->
+        <div v-if="worker.prompt" class="flex flex-col gap-1.5">
+          <h4 class="text-xs font-medium">{{ $t('climayte.prompt') }}</h4>
+          <p class="scroll-slim max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-2.5 text-xs">{{ $pii(worker.prompt) }}</p>
+        </div>
+
         <div v-if="worker.attempts.length" class="flex flex-col gap-1.5">
           <h4 class="flex items-baseline justify-between gap-2 text-xs font-medium">
             {{ $t('climayte.attempts') }}

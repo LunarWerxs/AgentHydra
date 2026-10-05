@@ -820,7 +820,7 @@ onUnmounted(() => {
         :aria-label="selectedRemote.title"
       >
         <div class="flex min-w-0 flex-col items-start gap-1.5">
-          <h3 class="line-clamp-2 wrap-break-word text-sm font-semibold" :title="selectedRemote.title">
+          <h3 class="wrap-break-word text-sm font-semibold">
             {{ selectedRemote.title }}
           </h3>
           <span class="mono rounded px-1 text-2xs text-muted-foreground">{{ selectedRemote.id }}</span>

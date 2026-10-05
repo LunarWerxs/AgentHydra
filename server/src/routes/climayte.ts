@@ -142,11 +142,12 @@ app.get('/api/corch/remote', (c) => {
   return c.json({ enabled, pcs })
 })
 // One worker's detail with its last 60 event lines; `wait` first waits for its next status change.
+// `prompt=full` answers the whole brief, not its first 300 characters.
 app.get('/api/corch/workers/:id', async (c) => {
   const id = c.req.param('id')
   const wait = waitMs(c.req.query('wait'))
   if (wait > 0 && climayteGet(id)) await climayteWait({ id }, wait)
-  const worker = climayteGet(id)
+  const worker = climayteGet(id, { fullPrompt: c.req.query('prompt') === 'full' })
   return worker ? c.json(worker) : c.json({ error: 'worker not found' }, 404)
 })
 // The orchestration journal (climayte-journal.ts), oldest first, the newest `limit` (default 100).

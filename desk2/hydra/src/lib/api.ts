@@ -1195,10 +1195,10 @@ export interface CliMayteRemotePc {
 }
 export const getCliMayteRemote = () =>
   j<{ enabled: boolean; pcs: CliMayteRemotePc[] }>('/api/corch/remote')
-/** One worker plus its last 60 summarised event lines. */
+/** One worker plus its last 60 summarised event lines, with its whole brief (the list's is cut short). */
 export const getCliMayteWorker = (id: string) =>
   j<(CliMayteWorkerView & { events: string[] }) | null>(
-    `/api/corch/workers/${encodeURIComponent(id)}`,
+    `/api/corch/workers/${encodeURIComponent(id)}?prompt=full`,
   )
 export const runCliMayte = (input: {
   tasks: CliMayteTask[]

@@ -207,6 +207,25 @@ describe('climayte_run records the calling chat as the origin', () => {
   })
 })
 
+describe("a task's detail carries its whole brief only when asked", () => {
+  // Desk 2's CliMayte pane shows the whole brief (owner, 2026-10-04: "should show full one"); the
+  // views, and so climayte_status { id }, keep its first 300 characters, so a chat reading its own
+  // task is not handed back the brief it wrote.
+  test('prompt=full answers the whole brief; climayte_status { id } still gets 300 characters', async () => {
+    const prompt = `do the long one ${'x'.repeat(600)}`
+    const id = climayteRun({
+      tasks: [{ prompt, cwd: CWD, title: 'long brief', size: 'whole' }],
+      group: 'og-brief',
+    }).workers[0].id
+    const res = await http.fetch(
+      new Request(`http://127.0.0.1/api/corch/workers/${id}?prompt=full`),
+    )
+    expect(((await res.json()) as { prompt: string }).prompt).toBe(prompt)
+    const status = (await bound('climayte_status').run({ id })) as { prompt: string }
+    expect(status.prompt).toBe(prompt.slice(0, 300))
+  })
+})
+
 describe('a task a worker dispatches reports to that worker', () => {
   test('a caller that is a CliMayte worker becomes a worker origin; a wave task gets none', async () => {
     const mgr = climayteRun({

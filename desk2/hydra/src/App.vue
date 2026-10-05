@@ -429,9 +429,11 @@ onUnmounted(stopAvailabilityPolling)
   <TooltipProvider :delay-duration="120">
   <!-- fixed-viewport shell, centered at a comfortable reading width: each view scrolls
        its own columns internally; the page itself never scrolls. The header's full-width
-       toggle lifts the cap altogether; 100vw rather than `none` so max-width still animates. -->
+       toggle lifts the cap altogether; 100vw rather than `none` so max-width still animates.
+       No side borders: the faint lines marked where the narrower column starts and ends
+       (owner, 2026-10-04: "shouldn't show the slight left and right vertical lines"). -->
   <div
-    class="mx-auto flex h-dvh w-full max-w-(--shell-max) flex-col overflow-hidden border-x border-border transition-max-width duration-300 ease-in-out"
+    class="mx-auto flex h-dvh w-full max-w-(--shell-max) flex-col overflow-hidden transition-max-width duration-300 ease-in-out"
     :style="{
       '--shell-max': fullWidth ? '100vw' : `${SHELL_BASE_MAX}px`,
       '--push-shift': `${shiftPx}px`,

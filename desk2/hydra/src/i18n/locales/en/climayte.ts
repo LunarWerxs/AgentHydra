@@ -106,6 +106,7 @@ export default {
   detailCostHint: 'Every attempt on every account, stopped ones included.',
   detailMore: 'More about this task: started, turns, model, thinking, group',
   detailGroup: 'Handed off together as',
+  prompt: 'What it was asked',
   attempts: 'Accounts tried',
   switchedAccount: 'Stayed on one account | Switched account once | Switched account {n} times',
   events: 'What it did, on every account',

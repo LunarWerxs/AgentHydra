@@ -5,6 +5,12 @@
 # the window: every 2 s it reads the window's placement (normal bounds, maximized or not) and writes it
 # to ~/.hydra-desk-2/window.json when it changed; with -Apply it first restores the saved placement on the
 # window just opened. It exits once the window's browser process is gone. One keeper at a time.
+#
+# A snapped window (Win+arrow, a snap layout, dragged to an edge) is not "moved" as far as its placement
+# goes: its normal bounds stay where it floated before the snap, so the window came back there, not where
+# it was closed (owner, 2026-10-04: "HD2 needs to remember the size and placement of the window when
+# closed"). So it also keeps the window's rectangle as it is on screen, and a window that was not maximized
+# goes back to exactly that.
 param(
   [Parameter(Mandatory)] [string]$BrowserExe,
   [Parameter(Mandatory)] [string]$WindowProfile,
@@ -22,7 +28,17 @@ Add-Type -Namespace HydraDesk -Name Placement -MemberDefinition @'
 }
 [DllImport("user32.dll")] public static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT wp);
 [DllImport("user32.dll")] public static extern bool SetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT wp);
+[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern IntPtr MonitorFromRect(ref RECT r, uint flags);
+[DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
 '@
+
+# Real pixels on every monitor: a DPI-unaware reader gets scaled figures that do not round-trip on a
+# monitor scaled differently from the main one. -4 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2.
+# Windows before 10 1607 has no such call: the keeper then reads scaled figures, as it always did.
+try { [void][HydraDesk.Placement]::SetThreadDpiAwarenessContext([IntPtr]::new(-4)) } catch { }  # floor-ok: the fallback is the old behaviour
 
 # The browser process that owns our profile (not its --type= helpers), as start.ps1 finds it.
 function Find-Window {
@@ -66,7 +82,9 @@ try {
       if (((Get-Date) - $missingSince).TotalSeconds -gt $(if ($last) { 4 } else { 30 })) { break }
     } else {
       $missingSince = Get-Date
-      if (-not $applied) {
+      # Applied once the window shows, so the browser's own restore (its normal bounds, from before any
+      # snap) is already done and does not land on top of ours.
+      if (-not $applied -and [HydraDesk.Placement]::IsWindowVisible($h)) {
         $applied = $true
         $s = Read-Saved
         if ($s) {
@@ -79,12 +97,29 @@ try {
           $wp.showCmd = if ($s.maximized) { 3 } else { 1 }  # SW_SHOWMAXIMIZED / SW_SHOWNORMAL
           $wp.flags = 0
           [void][HydraDesk.Placement]::SetWindowPlacement($h, [ref]$wp)
+          # Then the rectangle it had on screen (a snapped one included), on a monitor that is still
+          # there; SetWindowPlacement above already pulled an off-screen window back onto one.
+          $w = $s.window
+          if (-not $s.maximized -and $w -and $w.right -gt $w.left -and $w.bottom -gt $w.top) {
+            $rect = New-Object HydraDesk.Placement+RECT
+            $rect.Left = [int]$w.left; $rect.Top = [int]$w.top; $rect.Right = [int]$w.right; $rect.Bottom = [int]$w.bottom
+            if ([HydraDesk.Placement]::MonitorFromRect([ref]$rect, 0) -ne [IntPtr]::Zero) {  # 0 = MONITOR_DEFAULTTONULL
+              # 0x14 = SWP_NOZORDER | SWP_NOACTIVATE
+              [void][HydraDesk.Placement]::SetWindowPos($h, [IntPtr]::Zero, $rect.Left, $rect.Top, $rect.Right - $rect.Left, $rect.Bottom - $rect.Top, 0x14)
+            }
+          }
         }
       }
       $wp = New-Placement
       if ([HydraDesk.Placement]::GetWindowPlacement($h, [ref]$wp) -and $wp.showCmd -ne 2) {  # 2 = minimized: keep the last
         $r = $wp.rcNormalPosition
         $state = [ordered]@{ left = $r.Left; top = $r.Top; right = $r.Right; bottom = $r.Bottom; maximized = ($wp.showCmd -eq 3) }
+        # Where it is on screen while it is not maximized: a snapped window's own rectangle, which its
+        # normal bounds above do not follow.
+        $onScreen = New-Object HydraDesk.Placement+RECT
+        if ($wp.showCmd -ne 3 -and [HydraDesk.Placement]::GetWindowRect($h, [ref]$onScreen)) {
+          $state.window = [ordered]@{ left = $onScreen.Left; top = $onScreen.Top; right = $onScreen.Right; bottom = $onScreen.Bottom }
+        }
         $json = $state | ConvertTo-Json -Compress
         if ($json -ne $last) {
           $dir = Split-Path -Parent $StateFile
