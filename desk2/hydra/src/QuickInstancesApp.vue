@@ -42,6 +42,7 @@ import {
   quitInstance,
 } from '@/lib/api'
 import { loginChanged } from '@/lib/instance-appearance'
+import { sameData } from '@/lib/reconcile'
 import { useTheme } from '@/lib/theme'
 import type { UsageScope } from '@/lib/usage'
 import {
@@ -63,7 +64,7 @@ const claudeCli = shallowRef<CliInstance[]>([])
 const codex = shallowRef<CodexInstance[]>([])
 /** Writes `next` into `target` only when it differs from what is there. */
 function assignIfChanged<T>(target: { value: T }, next: T): void {
-  if (JSON.stringify(target.value) !== JSON.stringify(next)) target.value = next
+  if (!sameData(target.value, next)) target.value = next
 }
 const loading = ref(true)
 const refreshing = ref(false)

@@ -561,6 +561,10 @@ function nudgeNote(inst: CliInstance): { ok: boolean; label: string; description
   }
 }
 
+// One model and one nudge note per visible row, built once per change instead of in the template.
+const rowModels = computed(() => new Map(visibleRows.value.map((i) => [i.id, rowModel(i)])))
+const nudgeNotes = computed(() => new Map(visibleRows.value.map((i) => [i.id, nudgeNote(i)])))
+
 // Move logins to the other PC (CliLoginMoveDialog.vue, server/src/core/cli-login-move.ts).
 const moveOpen = ref(false)
 const moveMode = ref<'out' | 'in'>('out')
@@ -759,7 +763,7 @@ onUnmounted(() => {
         @sort="toggleSort"
       >
         <TableBody v-if="visibleRows.length > 0">
-          <InstanceRow v-for="inst in visibleRows" :key="inst.id" :columns="columns" :row="rowModel(inst)">
+          <InstanceRow v-for="inst in visibleRows" :key="inst.id" :columns="columns" :row="rowModels.get(inst.id)!">
             <template #name-extra>
               <!-- Linked to a desktop instance: the same account, also shown on that row in the
                    Instances tab. The chip names the row by its number; the hover says the rest. -->
@@ -790,14 +794,14 @@ onUnmounted(() => {
               <CliLimitResetIcon :result="inst.lastLimitReset" />
               <!-- The keepalive started this window, or its last nudge did not (session-keepalive.ts). -->
               <IconTooltip
-                v-if="nudgeNote(inst)"
-                :label="nudgeNote(inst)!.label"
-                :description="nudgeNote(inst)!.description"
+                v-if="nudgeNotes.get(inst.id)"
+                :label="nudgeNotes.get(inst.id)!.label"
+                :description="nudgeNotes.get(inst.id)!.description"
               >
-                <span class="inline-flex items-center" :aria-label="nudgeNote(inst)!.label">
+                <span class="inline-flex items-center" :aria-label="nudgeNotes.get(inst.id)!.label">
                   <Timer
                     class="size-3.5"
-                    :class="nudgeNote(inst)!.ok ? 'text-info' : 'text-warning'"
+                    :class="nudgeNotes.get(inst.id)!.ok ? 'text-info' : 'text-warning'"
                   />
                 </span>
               </IconTooltip>

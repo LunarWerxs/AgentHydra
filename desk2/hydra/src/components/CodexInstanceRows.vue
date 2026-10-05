@@ -538,6 +538,9 @@ onUnmounted(() => {
 // One model per drawn row, rebuilt only when the rows or the facts they read change, so a row whose data
 // did not change gets the same prop and does not redraw.
 const rowModels = computed(() => new Map(visibleRows.value.map((i) => [i.id, rowModel(i)])))
+const redeemReasons = computed(
+  () => new Map(visibleRows.value.map((i) => [i.id, redeemDisabledReason(i)])),
+)
 const visibleCount = computed(() => visibleRows.value.length)
 defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter, visibleCount })
 </script>
@@ -653,8 +656,8 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
            server otherwise, which gives the authoritative answer when the cache is stale. -->
       <DropdownMenuItem
         v-if="instance.account?.authMode === 'chatgpt'"
-        :disabled="isBusy(instance) || !!redeemDisabledReason(instance)"
-        :title="redeemDisabledReason(instance) ?? undefined"
+        :disabled="isBusy(instance) || !!redeemReasons.get(instance.id)"
+        :title="redeemReasons.get(instance.id) ?? undefined"
         @click="onRedeemResetCredit(instance)"
       >
         <RotateCcw /> {{ $t('codexInstances.redeemResetCredit') }}

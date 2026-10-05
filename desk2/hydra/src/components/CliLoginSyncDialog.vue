@@ -39,6 +39,7 @@ import {
   setupLoginSync,
 } from '@/lib/api'
 import { bytes, timeAgo } from '@/lib/format'
+import { sameData } from '@/lib/reconcile'
 import { visibleInterval } from '@/lib/visible-poll'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -58,7 +59,7 @@ async function load() {
   try {
     const next = await getLoginSync()
     // An unchanged payload keeps the old object so the lists do not re-render.
-    if (JSON.stringify(next) !== JSON.stringify(status.value)) status.value = next
+    if (!sameData(next, status.value)) status.value = next
   } catch (err) {
     toast.error(err instanceof Error ? err.message : String(err))
   }
