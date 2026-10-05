@@ -5,7 +5,8 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import type { CloudInstance, CloudList, CloudSession } from '@shared/protocol'
 import { readCache, writeCache } from '@/lib/list-cache'
 import { useShellSource } from '@/components/shell/source'
-import { recordCloudOrder } from '@/components/sidebar/logic'
+import { dropHidden, recordCloudOrder } from '@/components/sidebar/logic'
+import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { useSidebarOrder } from '@/components/sidebar/order'
 import { cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud, parseScopes, pcsIn, rowOrderKey, type CloudScopes } from './logic'
 
@@ -143,13 +144,21 @@ ${rows}`
   const { order, save: saveOrder } = useSidebarOrder()
 
   const searching = computed(() => !!answered.value.trim())
-  const groups = computed(() =>
-    groupCloud(sessions.value, effectiveScopes(scopes.value, answered.value), thisPc.value, {
-      ranked: searching.value,
-      desk: placed.value,
-      order: order.value
-    })
+  // The groups the desk list hides are hidden here too (sidebar/hidden.ts); a search's answer is one group.
+  const hiddenGroups = useHiddenGroups()
+  const visible = computed(() =>
+    dropHidden(
+      groupCloud(sessions.value, effectiveScopes(scopes.value, answered.value), thisPc.value, {
+        ranked: searching.value,
+        desk: placed.value,
+        order: order.value
+      }),
+      (g) => g.orderKey,
+      hiddenGroups.hidden.value,
+      hiddenGroups.showHidden.value || searching.value
+    )
   )
+  const groups = computed(() => visible.value.shown)
   const pcs = computed(() => pcsIn(sessions.value, thisPc.value))
 
   // The rows and groups only this list has join the saved order at its end once shown, newest first, and
@@ -187,6 +196,8 @@ ${rows}`
     error,
     loaded,
     groups,
+    /** The groups Hide left out of `groups`. */
+    hiddenOut: computed(() => visible.value.out),
     pcs,
     selectMode,
     selected,

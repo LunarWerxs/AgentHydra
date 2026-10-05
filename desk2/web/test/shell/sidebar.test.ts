@@ -13,7 +13,9 @@ import {
   groupChats,
   groupChoices,
   groupOrderKey,
+  hideable,
   moveInOrder,
+  setHidden,
   deskGlyphs,
   rowDropBefore,
   raiseNewlyOrange,
@@ -233,6 +235,44 @@ describe('moved-to groups', () => {
   it('a group named like a folder group joins it, keeping the folder as its path', () => {
     const g = groupChats([chat('a', { cwd: 'C:/work/Beta', updatedAt: 10 }), chat('m', { group: 'beta', updatedAt: 20 })])
     expect(g.folders.map((f) => [f.label, f.cwd, ids(f)])).toEqual([['Beta', 'C:/work/Beta', ['m', 'a']]])
+  })
+
+  it('a hidden group is left out, the moved-to rows that joined it too, and Pinned keeps its pinned row', () => {
+    const list = [
+      chat('a', { cwd: 'C:/work/Beta', updatedAt: 10 }),
+      chat('m', { group: 'beta', updatedAt: 20 }),
+      chat('p', { cwd: 'C:/work/Beta', pinned: true, updatedAt: 30 }),
+      chat('l', { group: 'Launch', updatedAt: 5 }),
+      chat('o', { updatedAt: 1 })
+    ]
+    const hidden = new Set(['c:/work/beta', 'group:launch'])
+    const g = groupChats(list, { hidden })
+    expect(g.folders.map((f) => f.label)).toEqual(['alpha'])
+    expect(g.hiddenOut).toBe(2)
+    expect(ids(g.pinned)).toEqual(['p'])
+    expect(g.folders[0]!.hidden).toBeUndefined()
+  })
+
+  it('Show hidden or a search brings a hidden group back, marked', () => {
+    const list = [chat('a', { cwd: 'C:\\Work\\Beta', updatedAt: 10, title: 'Shader cache' }), chat('o', { updatedAt: 1 })]
+    const hidden = new Set(['c:/work/beta'])
+    const shown = groupChats(list, { hidden, showHidden: true })
+    expect(shown.folders.map((f) => [f.label, f.hidden])).toEqual([
+      ['Beta', true],
+      ['alpha', undefined]
+    ])
+    expect(shown.hiddenOut).toBe(0)
+    expect(groupChats(list, { hidden, query: 'shader' }).folders.map((f) => [f.label, f.hidden])).toEqual([['Beta', true]])
+    expect(groupChats(list, { hidden, filter: 'all' }).folders.map((f) => f.label)).toEqual(['alpha'])
+  })
+
+  it('Hide and Unhide change only that group', () => {
+    const one = setHidden(new Set(['c:/work/x']), 'group:launch', true)
+    expect([...one]).toEqual(['c:/work/x', 'group:launch'])
+    expect([...setHidden(one, 'c:/work/x', false)]).toEqual(['group:launch'])
+    expect(hideable({ key: 'pinned' })).toBe(false)
+    expect(hideable({ key: 'archived' })).toBe(false)
+    expect(hideable({ key: '' })).toBe(true)
   })
 
   it('lists every group once, folders and moved-to ones, A-Z, CliMayte workers left out', () => {

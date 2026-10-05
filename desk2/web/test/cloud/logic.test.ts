@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { CloudSession, ExternalSession } from '@shared/protocol'
 import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud } from '../../src/components/cloud/logic'
-import { groupChats, recordCloudOrder, recordDeskOrder, type SidebarOrder } from '../../src/components/sidebar/logic'
+import { dropHidden, groupChats, groupOrderKey, recordCloudOrder, recordDeskOrder, type SidebarOrder } from '../../src/components/sidebar/logic'
 
 // The cloud list asks AgentHydra's GET /api/sessions (through Desk's /api/cloud/sessions) in AgentHydra's
 // own scope spelling. A wrong spelling does not fail loudly there: an unknown value falls back to a
@@ -201,6 +201,22 @@ describe('groupCloud', () => {
     const cloudFolder = groupCloud(answer, all, 'PC', { desk: deskPlaces([], external) }).find((g) => g.rows.some((r) => r.id === 'moved'))
     expect(deskFolder?.cwd).toBe('D:/a/app')
     expect(cloudFolder?.cwd).toBe('D:/a/app')
+  })
+
+  // Owner, 2026-10-05: a group hidden with its right-click's Hide stays hidden with the cloud button on.
+  test('a group hidden on the desk list is the one the cloud list hides', () => {
+    const external = [outside('plain', { cwd: 'D:\\Work\\Alpha', lastActivityAt: 3 }), outside('moved', { cwd: 'D:/work/beta', group: 'Reading', lastActivityAt: 2 }), outside('kept', { cwd: 'D:/work/gamma', lastActivityAt: 1 })]
+    const session = (o: DeskOutside): ExternalSession => ({ ...o, status: 'idle', activity: null, accountId: null, canResume: false, pinned: false, unread: false })
+    const deskGroups = groupChats([], { external: external.map(session) }).folders
+    const hidden = new Set(deskGroups.filter((g) => g.label !== 'gamma').map(groupOrderKey))
+    const answer = [row('plain', 'D:/work/alpha', 3), row('moved', 'D:/work/beta', 2), row('kept', 'D:/work/gamma', 1), row('cloud-only', 'd:/work/Alpha/', 9)]
+    const cloud = groupCloud(answer, all, 'PC', { desk: deskPlaces([], external) })
+    expect(listed(dropHidden(cloud, (g) => g.orderKey, hidden, false).shown)).toEqual([['gamma', ['kept']]])
+    expect(dropHidden(cloud, (g) => g.orderKey, hidden, true).shown.map((g) => [g.label, g.hidden])).toEqual([
+      ['Alpha', true],
+      ['Reading', true],
+      ['gamma', undefined]
+    ])
   })
 
   // Owner, 2026-10-04: an outside Desktop chat the desk list shows was missing from the cloud list, older

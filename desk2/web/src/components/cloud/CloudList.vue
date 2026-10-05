@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Cloud } from '@lucide/vue'
+import { Cloud, EyeOff } from '@lucide/vue'
 import type { CliMayteWorker, CloudSession } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
@@ -8,13 +8,14 @@ import RowAge from '@/lib/RowAge.vue'
 import TaskRows from '@/components/sidebar/TaskRows.vue'
 import RunningBadge from '@/components/sidebar/RunningBadge.vue'
 import { runningIn, type TaskNode } from '@/components/sidebar/tasks'
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
-import { MENU_CONTENT, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
+import { MENU_CONTENT, MENU_ITEM, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
+import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { useRowDrag } from '@/components/sidebar/rowDrag'
-import { glyphDotClass, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
+import { glyphDotClass, HIDE_TITLE, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
-import { cloudOnlyLabel, fromPcLabel, modelName, originLabel, scopesNarrowed, sessionShape, SHAPE_LABELS } from './logic'
+import { cloudOnlyLabel, fromPcLabel, modelName, originLabel, RESULTS_KEY, scopesNarrowed, sessionShape, SHAPE_LABELS } from './logic'
 import { useCloud } from './store'
 
 // Hydra Desk 2's cloud list, in the sidebar in place of the desk list: every session AgentHydra knows,
@@ -40,6 +41,8 @@ const props = defineProps<{
 const emit = defineEmits<{ open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker]; action: [row: CloudSession, item: RowMenuItem] }>()
 
 const cloud = useCloud()
+// A group's right-click hides it here and on the desk list alike (sidebar/hidden.ts); the store leaves it out.
+const hiddenGroups = useHiddenGroups()
 const rowLeave = leaveUnlessFiltered([() => cloud.answeredQuery.value, () => JSON.stringify(cloud.scopes.value)])
 // Rows drag to another place in their group (sidebar/rowDrag.ts), into the order the desk list shares;
 // not in select mode, nor while a search or a filter narrows the list.
@@ -125,6 +128,10 @@ const ROW =
       {{ cloud.error.value }}
       <button type="button" class="ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="cloud.refresh()">Retry</button>
     </p>
+    <p v-else-if="cloud.loaded.value && cloud.groups.value.length === 0 && cloud.hiddenOut.value" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
+      Every group here is hidden.
+      <button type="button" class="ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
+    </p>
     <p v-else-if="cloud.loaded.value && cloud.groups.value.length === 0" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
       No sessions match.
       <button type="button" class="ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="cloud.reset()">Reset filters</button>
@@ -132,10 +139,13 @@ const ROW =
 
     <TransitionGroup :css="false" @leave="rowLeave">
     <section v-for="(g, gi) in cloud.groups.value" :key="g.key" :aria-label="g.label">
-      <header class="group/head flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted">
+      <ContextMenu>
+      <ContextMenuTrigger as-child :disabled="g.key === RESULTS_KEY">
+      <header class="group/head flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
         <Tip :label="g.cwd ?? ''" align="start">
           <button type="button" class="flex min-w-0 items-center gap-0.5 rounded-[4px] hover:text-text-2" :aria-expanded="!collapsed.has(g.key)" @click="toggleGroup(g.key)">
             <span class="truncate">{{ g.label }}</span>
+            <EyeOff v-if="g.hidden" role="img" aria-label="Hidden group" class="ml-0.5 size-3 shrink-0" />
             <component
               :is="shellGlyphs.groupChevron"
               class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)] group-hover/head:opacity-100"
@@ -148,6 +158,13 @@ const ROW =
         <span class="tnum">{{ g.rows.length }}</span>
         <slot v-if="gi === 0" name="tools" />
       </header>
+      </ContextMenuTrigger>
+      <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
+        <ContextMenuItem :class="MENU_ITEM" :title="g.hidden ? undefined : HIDE_TITLE" @select="hiddenGroups.hide(g.orderKey, !g.hidden)">
+          <span class="flex-1">{{ g.hidden ? 'Unhide' : 'Hide' }}</span>
+        </ContextMenuItem>
+      </ContextMenuContent>
+      </ContextMenu>
       <TransitionGroup v-if="!collapsed.has(g.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
         <div
           v-for="r in g.rows"

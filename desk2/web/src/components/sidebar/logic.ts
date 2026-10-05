@@ -60,12 +60,49 @@ export interface ChatGroup {
   label: string
   cwd: string | null // folder for "New session in <folder>"; null for Pinned / Archived / No folder / a moved-to group
   entries: SidebarEntry[]
+  hidden?: boolean // hidden (its right-click's Hide), shown because Show hidden is on or a search is typed
 }
 
 export interface SidebarGroups {
   pinned: ChatGroup | null // hidden when empty, as in the real app
   folders: ChatGroup[]
   archived: ChatGroup | null // filter 'all' only, when non-empty
+  hiddenOut: number // the folder groups Hide left out of `folders`
+}
+
+/** Hide's tooltip, in both lists' group menus. */
+export const HIDE_TITLE = 'Hides this group, not its chats (they stay active). Filter, Show hidden groups brings it back.'
+
+/** Hide is offered on a folder or moved-to group's header; Pinned and Archived are not projects. */
+export const hideable = (g: Pick<ChatGroup, 'key'>): boolean => g.key !== 'pinned' && g.key !== 'archived'
+
+/**
+ * The groups a list shows once the hidden ones (a group's right-click → Hide, by its groupOrderKey) are
+ * out (owner, 2026-10-05: "I don't want to like archive because they're meant to be there, but I also
+ * don't feel like seeing"): with `show` (the Filter menu's Show hidden, or a typed search, which finds
+ * every row) they stay, marked `hidden`. The desk list and the cloud list both use it.
+ */
+export function dropHidden<T extends { hidden?: boolean }>(
+  groups: T[],
+  keyOf: (g: T) => string,
+  hidden: ReadonlySet<string> | undefined,
+  show: boolean
+): { shown: T[]; out: number } {
+  if (!hidden?.size) return { shown: groups, out: 0 }
+  const shown: T[] = []
+  for (const g of groups) {
+    if (!hidden.has(keyOf(g))) shown.push(g)
+    else if (show) shown.push(Object.assign(g, { hidden: true }))
+  }
+  return { shown, out: groups.length - shown.length }
+}
+
+/** The hidden keys after Hide (`on`) or Unhide on the group `key`. */
+export function setHidden(hidden: ReadonlySet<string>, key: string, on: boolean): Set<string> {
+  const next = new Set(hidden)
+  if (on) next.add(key)
+  else next.delete(key)
+  return next
 }
 
 const newestFirst = (a: SidebarEntry, b: SidebarEntry) => b.at - a.at
@@ -80,11 +117,20 @@ const entryCwd = (e: SidebarEntry) => (e.kind === 'chat' ? e.chat.cwd : (e.sessi
  * row was moved to, ordered by its newest row; sessions running elsewhere sit in the same groups,
  * except CliMayte's own workers and sessions that already are one of our chats. A moved-to group named
  * like a folder group joins it. Archived: only the archived rows, grouped the same way. All: Active plus
- * an Archived group last. Search drops rows; a group left empty is dropped.
+ * an Archived group last. Search drops rows; a group left empty is dropped. A `hidden` group (by its
+ * groupOrderKey, so a moved-to group that joined it goes with it) is left out unless `showHidden` or a
+ * search; a pinned row of it stays in Pinned.
  */
 export function groupChats(
   chats: ChatSummary[],
-  opts: { query?: string; filter?: SidebarFilter; external?: ExternalSession[]; order?: SidebarOrder } = {}
+  opts: {
+    query?: string
+    filter?: SidebarFilter
+    external?: ExternalSession[]
+    order?: SidebarOrder
+    hidden?: ReadonlySet<string>
+    showHidden?: boolean
+  } = {}
 ): SidebarGroups {
   const query = (opts.query ?? '').trim().toLowerCase()
   const filter = opts.filter ?? 'active'
@@ -130,11 +176,13 @@ export function groupChats(
   const order = opts.order
   const rows = (list: SidebarEntry[]) => (order ? stableOrder(list, (e) => e.id, order.rows) : list)
   for (const g of groups) g.entries = rows(g.entries)
+  const folders = dropHidden(order ? stableOrder(groups, groupOrderKey, order.groups) : groups, groupOrderKey, opts.hidden, !!opts.showHidden || !!query)
 
   return {
     pinned: pinned.length ? { key: 'pinned', label: 'Pinned', cwd: null, entries: rows(pinned) } : null,
-    folders: order ? stableOrder(groups, groupOrderKey, order.groups) : groups,
-    archived: archived.length ? { key: 'archived', label: 'Archived', cwd: null, entries: archived } : null
+    folders: folders.shown,
+    archived: archived.length ? { key: 'archived', label: 'Archived', cwd: null, entries: archived } : null,
+    hiddenOut: folders.out
   }
 }
 

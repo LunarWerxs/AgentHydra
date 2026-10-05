@@ -66,6 +66,13 @@ sidebar on the left stays put, and only the pane on the right changes.
   idle has the dimmer hollow ring, as Claude draws one, in the cloud list too. Motion is calmer: a
   working dot blinks every 2.4 s (was 1.2), a waiting one pulses every 3 s (was 2), and the sidebar's
   spinner turns once in 2.5 s.
+- **Groups you hide.** A project group's header has a right-click menu with Hide: the group leaves the
+  list and its chats stay active, nothing is archived (owner, 2026-10-05: "I don't want to like archive
+  because they're meant to be there, but I also don't feel like seeing"). The Filter menu's Show hidden
+  groups brings every hidden group back, dimmed with an eye-off mark, and its right-click then says
+  Unhide. Both lists hide the same groups; a search still finds their rows, and opening a chat that sits
+  in a hidden group turns Show hidden on. Pinned and Archived cannot be hidden. The browser remembers
+  both (`web/src/components/sidebar/hidden.ts`).
 - **CliMayte tasks in the sidebar.** The robot button beside the cloud (blue while on) lists, under each
   chat or session in the sidebar that has CliMayte tasks running, those tasks, one short indented line
   each (status, title, model, how long it has run); a task a manager started sits one step further in,

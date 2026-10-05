@@ -11,7 +11,8 @@ import CloudList from '@/components/cloud/CloudList.vue'
 import { useCloud } from '@/components/cloud/store'
 import HydraSidebar from '@/components/hydra/HydraSidebar.vue'
 import { hydraOpen, hydraSidebar, openWorkerInHydra } from '@/components/hydra/api'
-import { Cloud, Info, LoaderCircle, MessageSquare } from '@lucide/vue'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { Cloud, EyeOff, Info, LoaderCircle, MessageSquare } from '@lucide/vue'
 import TaskRows from './TaskRows.vue'
 import RunningBadge from './RunningBadge.vue'
 import { nestTasks, runningIn, showTasks, unplacedHeading, type NestedTasks, type NestRow } from './tasks'
@@ -38,6 +39,8 @@ import {
   groupChats,
   groupChoices,
   groupOrderKey,
+  HIDE_TITLE,
+  hideable,
   isOrange,
   moveInOrder,
   raiseNewlyOrange,
@@ -57,6 +60,8 @@ import {
   type SidebarFilter
 } from './logic'
 import { useSidebarOrder } from './order'
+import { useHiddenGroups } from './hidden'
+import { MENU_CONTENT, MENU_ITEM, focusFirstItem } from './menuClasses'
 import { useRowDrag } from './rowDrag'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
 
@@ -142,8 +147,18 @@ const { order, save: saveOrder } = useSidebarOrder()
 // While AgentHydra is open, a tab of it with a sidebar of its own (CliMayte, HSwarm) has it drawn here.
 const hydraModel = computed(() => (hydraOpen.value ? hydraSidebar.value : null))
 
+// Groups hidden with their header's right-click (hidden.ts), out of the list unless the Filter menu's Show hidden.
+const hiddenGroups = useHiddenGroups()
+
 const groups = computed(() =>
-  groupChats(src.chats.value, { query: query.value, filter: filter.value, external: src.external.value, order: order.value })
+  groupChats(src.chats.value, {
+    query: query.value,
+    filter: filter.value,
+    external: src.external.value,
+    order: order.value,
+    hidden: hiddenGroups.hidden.value,
+    showHidden: hiddenGroups.showHidden.value
+  })
 )
 // A group or row the plain list shows that the order lacks joins it at the top, so it keeps the place it
 // appeared in, and so does one only the cloud list had shown (recordDeskOrder); any other saved one never
@@ -199,7 +214,13 @@ const rowDrag = useRowDrag()
 const rowsDraggable = (g: ChatGroup) => !filtering.value && g.key !== 'archived'
 const rowLeave = leaveUnlessFiltered([query, filter])
 const emptyText = computed(() =>
-  query.value.trim() ? 'No matching sessions' : filter.value === 'archived' ? 'No archived sessions' : 'No sessions yet'
+  query.value.trim()
+    ? 'No matching sessions'
+    : groups.value.hiddenOut
+      ? 'Every group here is hidden'
+      : filter.value === 'archived'
+        ? 'No archived sessions'
+        : 'No sessions yet'
 )
 
 // Hydra Desk 2: with the chrome bar's CliMayte button on, each row of the list shown (the cloud list or the
@@ -254,7 +275,8 @@ function openTask(w: CliMayteWorker) {
 
 // The chosen chat lands visibly: its group opens and its row scrolls into view (a new chat is the
 // first row of its group). One the filter or the search hides (a chat started while Archived is on)
-// brings the list that shows it back; one picked from the Everywhere rows leaves the search as it is.
+// brings the list that shows it back, and one in a hidden group turns Show hidden on (its group stays
+// hidden for when that goes off again); one picked from the Everywhere rows leaves the search as it is.
 const groupOf = (id: string) => groupList.value.find((g) => g.entries.some((e) => e.kind === 'chat' && e.id === id))
 watch(selectedChatId, (id) => {
   if (!id) return
@@ -265,6 +287,10 @@ watch(selectedChatId, (id) => {
     query.value = shown.query
     filter.value = shown.filter
     group = groupOf(id)
+    if (!group && groups.value.hiddenOut) {
+      hiddenGroups.setShowHidden(true)
+      group = groupOf(id)
+    }
   }
   if (group && collapsed.value.has(group.key)) toggleGroup(group.key)
   nextTick(() => {
@@ -532,9 +558,12 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         <!-- A folder whose last row went away fades and folds shut like the row (row-leave.ts). -->
         <TransitionGroup :css="false" @leave="rowLeave">
         <section v-for="(group, gi) in groupList" :key="group.key" :aria-label="group.label">
+          <!-- A project group's right-click hides it (hidden.ts); Show hidden in the Filter menu brings it back, dimmed, with Unhide. -->
+          <ContextMenu>
+          <ContextMenuTrigger as-child :disabled="!hideable(group)">
           <header
             class="group/head flex h-[34px] items-center gap-0 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted"
-            :class="dropOn === groupOrderKey(group) && dragging !== dropOn && 'shadow-[inset_0_2px_0_var(--accent)]'"
+            :class="[dropOn === groupOrderKey(group) && dragging !== dropOn && 'shadow-[inset_0_2px_0_var(--accent)]', group.hidden && 'opacity-60']"
             :draggable="draggable(group) && !filtering"
             @dragstart="onGroupDragStart($event, group)"
             @dragover="onGroupDragOver($event, group)"
@@ -550,6 +579,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 @click="toggleGroup(group.key)"
               >
                 <span class="truncate">{{ group.label }}</span>
+                <EyeOff v-if="group.hidden" role="img" aria-label="Hidden group" class="ml-0.5 size-3 shrink-0" />
                 <component
                   :is="shellGlyphs.groupChevron"
                   class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)] group-hover/head:opacity-100"
@@ -568,6 +598,13 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
             </template>
           </header>
+          </ContextMenuTrigger>
+          <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
+            <ContextMenuItem :class="MENU_ITEM" :title="group.hidden ? undefined : HIDE_TITLE" @select="hiddenGroups.hide(groupOrderKey(group), !group.hidden)">
+              <span class="flex-1">{{ group.hidden ? 'Unhide' : 'Hide' }}</span>
+            </ContextMenuItem>
+          </ContextMenuContent>
+          </ContextMenu>
           <TransitionGroup v-if="!collapsed.has(group.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
             <div
               v-for="entry in group.entries"
@@ -609,6 +646,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <template v-if="filtering && !searchOpen">
             <button type="button" class="rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="filter = 'active'">Show active</button>
           </template>
+          <button v-if="groups.hiddenOut" type="button" class="rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
         </div>
 
         <p v-if="rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-[12px] leading-4 text-danger-text">

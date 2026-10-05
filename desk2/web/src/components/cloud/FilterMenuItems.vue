@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Archive, Boxes, CalendarRange, CircleAlert, Hourglass, ListTodo, MessagesSquare, Monitor, RefreshCw, RotateCcw, Search, Settings2 } from '@lucide/vue'
+import { Archive, Boxes, CalendarRange, CircleAlert, EyeOff, Hourglass, ListTodo, MessagesSquare, Monitor, RefreshCw, RotateCcw, Search, Settings2 } from '@lucide/vue'
 import { icons } from '@/lib/icons'
 import {
   DropdownMenuItem,
@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { FILTER_LABELS, type SidebarFilter } from '@/components/sidebar/logic'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR } from '@/components/sidebar/menuClasses'
+import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { openHydra } from '@/components/hydra/api'
 import {
   ARCHIVED_LABELS,
@@ -37,11 +38,18 @@ import { useCloud } from './store'
 
 // The sidebar's Filter menu in Hydra Desk 2: the desk list's Show choice, then everything AgentHydra's
 // Sessions ⋯ menu offers for the cloud list, plus Computer (which PC). Changing a cloud filter shows the
-// cloud list, so what it did is on screen. Toggles keep the menu open so several go in one visit.
+// cloud list, so what it did is on screen. Toggles keep the menu open so several go in one visit. Show
+// hidden groups, between the two, is both lists': the groups a header's right-click hid (sidebar/hidden.ts).
 const props = defineProps<{ filter: SidebarFilter }>()
 const emit = defineEmits<{ 'update:filter': [filter: SidebarFilter] }>()
 
 const cloud = useCloud()
+const { hidden, showHidden, setShowHidden } = useHiddenGroups()
+const hiddenTip = computed(() =>
+  hidden.value.size || showHidden.value
+    ? "Show the groups hidden with a group header's right-click, in both lists"
+    : "Right-click a group's header and choose Hide to hide it"
+)
 const s = computed(() => cloud.scopes.value)
 const claude = computed(() => s.value.source.includes('claude'))
 
@@ -108,6 +116,20 @@ const ITEM = `${MENU_ITEM} pr-2`
   >
     <span class="flex-1">{{ label }}</span>
     <component :is="icons.check" v-if="!cloud.on.value && props.filter === key" class="ml-3" />
+  </DropdownMenuItem>
+
+  <DropdownMenuSeparator :class="MENU_SEPARATOR" />
+  <DropdownMenuItem
+    role="menuitemcheckbox"
+    :aria-checked="showHidden"
+    :disabled="!showHidden && hidden.size === 0"
+    :title="hiddenTip"
+    :class="ITEM"
+    @select.prevent="setShowHidden(!showHidden)"
+  >
+    <EyeOff />
+    <span class="flex-1">Show hidden groups</span>
+    <component :is="icons.check" v-if="showHidden" class="ml-3" />
   </DropdownMenuItem>
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />

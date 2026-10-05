@@ -220,9 +220,13 @@ export interface CloudGroup {
   /** Its key in the saved order, the desk list's spelling (sidebar/logic.ts groupOrderKey): the folder however spelled, '' for none, or `group:<name>`. */
   orderKey: string
   rows: CloudSession[]
+  /** Hidden (its right-click's Hide), shown because Show hidden is on (sidebar/logic.ts dropHidden). */
+  hidden?: boolean
 }
 
 export const RESULTS_LABEL = 'Best matches first'
+/** The one group of a search's answer; never hidden. */
+export const RESULTS_KEY = 'cloud:results'
 
 /**
  * A session the desk list (the cloud button off) lists: where it puts it, under its folder ('' for none)
@@ -341,7 +345,7 @@ export interface GroupCloudOptions {
 export function groupCloud(rows: CloudSession[], s: CloudScopes, thisPc: string, opts: GroupCloudOptions = {}): CloudGroup[] {
   const desk = opts.desk ?? new Map<string, DeskPlace>()
   const shown = rows.filter((r) => s.shape.includes(sessionShape(r)) && (s.pcs === null || s.pcs.includes(pcOf(r, thisPc))))
-  if (opts.ranked) return shown.length ? [{ key: 'cloud:results', label: RESULTS_LABEL, cwd: null, orderKey: 'cloud:results', rows: shown }] : []
+  if (opts.ranked) return shown.length ? [{ key: RESULTS_KEY, label: RESULTS_LABEL, cwd: null, orderKey: RESULTS_KEY, rows: shown }] : []
   const answered = new Set(rows.map((r) => r.id))
   for (const [id, place] of desk) if (!answered.has(id) && keepsDeskRow(place.row, s, thisPc)) shown.push(place.row)
   const byFolder = new Map<string, CloudGroup>()
