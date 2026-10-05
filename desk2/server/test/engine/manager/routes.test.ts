@@ -225,6 +225,37 @@ describe('chat routes', () => {
     await waitFor(() => statuses(events, chat.id).includes('stopped'))
   })
 
+  test('Stop on a background task: the process stops it and its notice settles it; one the process no longer runs is settled here', async () => {
+    const t = await boot()
+    const { events } = await listen(t.desk)
+    const { chat, fake } = await working(t, temp('desk-cwd-'))
+    const sys = (subtype: string, more: Record<string, unknown>): SDKMessage => ({ type: 'system', subtype, uuid: uuid(), session_id: SID, ...more }) as unknown as SDKMessage
+    const started = (id: string) => sys('task_started', { task_id: id, description: `check ${id}`, task_type: 'local_bash' })
+    fake.push(started('b1'), started('b2'), sys('background_tasks_changed', { tasks: [{ task_id: 'b1', task_type: 'local_bash', description: 'check b1' }] }))
+    await waitFor(() => chatEvents(events, chat.id).at(-1)?.backgroundActive === 2)
+    fake.onStopTask = (id) => fake.push(sys('task_notification', { task_id: id, status: 'stopped', summary: 'Stopped by the user', output_file: '' }))
+
+    const one = await call<{ item: TranscriptItem }>(t.desk, 'POST', `/api/chats/${chat.id}/tasks/b1/stop`)
+    expect(one.status).toBe(200)
+    expect(fake.calls.stopTask).toEqual(['b1'])
+    expect(one.body.item).toMatchObject({ kind: 'task', taskId: 'b1', status: 'stopped', summary: 'Stopped by the user' })
+
+    // b2 is not among the tasks the process says are alive: no control message, settled by the Desk.
+    const two = await call<{ item: TranscriptItem }>(t.desk, 'POST', `/api/chats/${chat.id}/tasks/b2/stop`)
+    expect(fake.calls.stopTask).toEqual(['b1'])
+    expect(two.body.item).toMatchObject({ kind: 'task', taskId: 'b2', status: 'stopped', summary: 'Stopped from Hydra Desk.' })
+    await waitFor(() => events.some((e) => e.type === 'item.upsert' && e.item.kind === 'task' && e.item.taskId === 'b2' && e.item.status === 'stopped'))
+    expect((await call<ChatSummary>(t.desk, 'GET', `/api/chats/${chat.id}`)).body.backgroundActive).toBe(0)
+    const stored = (await call<TranscriptItem[]>(t.desk, 'GET', `/api/chats/${chat.id}/items`)).body.filter((i) => i.kind === 'task')
+    expect(stored.map((i) => i.kind === 'task' && i.status)).toEqual(['stopped', 'stopped'])
+    // The chat's turn goes on: stopping a task is not a Stop.
+    expect(fake.calls.interrupt).toBe(0)
+
+    // A settled task stays as it is; an unknown one is a 404.
+    expect((await call<{ item: TranscriptItem }>(t.desk, 'POST', `/api/chats/${chat.id}/tasks/b1/stop`)).body.item).toMatchObject({ summary: 'Stopped by the user' })
+    expect((await call(t.desk, 'POST', `/api/chats/${chat.id}/tasks/nope/stop`)).status).toBe(404)
+  })
+
   test('Send now on a queued message stops the turn (the CLI keeps the message) and the send queue is not held by it', async () => {
     const t = await boot()
     const { events } = await listen(t.desk)

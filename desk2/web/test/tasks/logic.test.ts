@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { CliMayteWorker, TranscriptItem } from '@shared/protocol'
 import {
   agentState,
+  canStop,
   etaLeft,
   etaShort,
   formatElapsed,
@@ -134,6 +135,19 @@ describe('panelLists', () => {
     const { finished } = panelLists({ workers: many, sessionId: 'chat-1', cleared: new Set(['d59']) })
     expect(finished).toHaveLength(50)
     expect(finished[0]!.id).toBe('worker:d58')
+  })
+
+  test("a Desk chat's running task can be stopped by its task id; a settled one, or one of a session outside Hydra Desk, cannot", () => {
+    const items = [task('run', 'running', { taskId: 'b1' }), task('ok', 'completed', { durationMs: 1_000 })]
+    const desk = panelLists({ workers: [w('mine')], items, sessionId: 'chat-1', chatId: 'desk-chat-1' })
+    const run = desk.running.find((u) => u.id === 'task:run')!
+    expect(run.stopTask).toBe('b1')
+    expect(canStop(run)).toBe(true)
+    expect(desk.finished[0]!.stopTask).toBeNull()
+    const worker = desk.running.find((u) => u.id === 'worker:mine')!
+    expect([worker.stopTask, canStop(worker)]).toEqual([null, true])
+    const outside = panelLists({ workers: [], items, sessionId: 'chat-1', chatId: null })
+    expect(outside.running.map((u) => [u.stopTask, canStop(u)])).toEqual([[null, false]])
   })
 
   test("a chat's finished background tasks list and count under finished, a failed one marked", () => {

@@ -295,3 +295,23 @@ test('a worker chat takes a picture as a saved file named in the message, and a 
   const note = m2.listItems(c2.id).find((i) => i.kind === 'system' && /was not sent/.test(i.text))
   expect(note && 'text' in note && note.text).toContain('keep these words')
 })
+
+test('Stop on a CliMayte task stops its worker (a worker takes no control message) and settles the task', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'watch the build' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running', accountId: 'cli-2', account: '#61 acct2' })
+  b.state.workerItems['worker-session-1'] = [{ kind: 'task', id: 'task:b1', ts: 10, taskId: 'b1', description: 'Watch the build', status: 'running', taskKind: 'bash' }]
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id).backgroundActive).toBe(1)
+
+  const item = await m.stopTask(chat.id, 'b1')
+  expect(b.state.cancelled).toEqual(['w1'])
+  expect(item).toMatchObject({ taskId: 'b1', status: 'stopped' })
+  expect(m.listItems(chat.id).find((i) => i.id === 'task:b1')).toMatchObject({ status: 'stopped' })
+  expect(m.get(chat.id).backgroundActive).toBe(0)
+})

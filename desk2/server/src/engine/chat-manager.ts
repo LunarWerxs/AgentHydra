@@ -675,6 +675,35 @@ export class ChatManager {
     if (e.runtime?.running) await e.runtime.interrupt()
   }
 
+  /**
+   * Stops one background task (its Stop in the tasks panel) and answers the task's item as it is then. A chat's own
+   * process is asked to stop it, and the task's notice settles it (up to 3 s). A CliMayte worker takes no control
+   * message, so its running worker is stopped, turn and all. A task no process runs any more is settled here.
+   */
+  async stopTask(id: string, taskId: string): Promise<TranscriptItem> {
+    const e = this.entry(id)
+    const find = () => this.store.loadItems(id).find((i) => i.kind === 'task' && i.taskId === taskId)
+    const item = find()
+    if (item?.kind !== 'task') throw new ChatError(404, `chat ${id} has no background task ${taskId}`)
+    if (item.status !== 'running') return item
+    if (e.chat.workerId !== undefined) {
+      if (e.workerLive) await this.interrupt(id)
+    } else if (await e.runtime?.stopTask(taskId)) {
+      for (const until = Date.now() + 3000; Date.now() < until; await Bun.sleep(100)) {
+        const now = find()
+        if (now?.kind === 'task' && now.status !== 'running') return now
+      }
+    }
+    const last = find()
+    if (last?.kind !== 'task' || last.status !== 'running') return last ?? item
+    const done: TranscriptItem = { ...last, status: 'stopped', summary: 'Stopped from Hydra Desk.', durationMs: Math.max(0, this.now() - last.ts) }
+    this.store.appendItem(id, done)
+    this.emitEvent({ type: 'item.upsert', chatId: id, item: done })
+    e.emitted?.set(done.id, signature(done))
+    if (this.noteTask(e, done)) this.changed(e.chat)
+    return done
+  }
+
   respondPermission(id: string, requestId: string, d: PermissionDecision): void {
     this.answer(id, 'permission', requestId, (rt) => rt.respondPermission(requestId, d))
   }

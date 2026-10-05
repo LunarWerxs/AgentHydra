@@ -154,6 +154,13 @@ sidebar on the left stays put, and only the pane on the right changes.
   repeated it above the composer is gone. A workflow that finished before the latest turn began (a
   finished background task starts a turn of its own) folds into one muted line, as in the real app,
   instead of keeping its card.
+- **Stop a background task, or all of them.** Every running row in the Background tasks panel has a
+  Stop square, and the Running header has **Stop all** (owner, 2026-10-05: three background commands
+  listed running for hours with no way to stop them). Both ask first. A Desk chat's command is stopped
+  through its own Claude Code process (`POST /api/chats/:id/tasks/:taskId/stop`, the SDK's `stopTask`)
+  and its turn goes on; a task the process no longer runs is marked stopped at once. A CliMayte chat's
+  worker takes no message to stop one command, so its Stop stops that worker, turn and all (the dialog
+  says so); CliMayte workers in the list are cancelled through AgentHydra as before.
 - **A CliMayte move reads as one line.** When CliMayte moves a chat to another account, the chat shows
   "CliMayte moved this chat from #164 to #153." and nothing else for it: the prompt the new session was
   started with (the task again, a note to it and the whole handoff) is never shown as your message. A

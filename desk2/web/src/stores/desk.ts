@@ -948,6 +948,11 @@ export function useDesk() {
       return fetchJson(`/climayte/workers/${workerId}/cancel`, { method: 'POST' })
     },
 
+    /** Stops one background task of a Desk chat; answers the task's item as it is then (settled, normally). */
+    async stopTask(chatId: string, taskId: string): Promise<{ item: TranscriptItem }> {
+      return fetchJson(`/chats/${chatId}/tasks/${encodeURIComponent(taskId)}/stop`, { method: 'POST' })
+    },
+
     async sendToWorker(workerId: string, text: string): Promise<{ ok: boolean }> {
       return fetchJson(`/climayte/workers/${workerId}/send`, {
         method: 'POST',

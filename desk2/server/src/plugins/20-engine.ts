@@ -211,6 +211,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
       return { ok: true }
     }),
   )
+  app.post('/api/chats/:id/tasks/:taskId/stop', (c) => answer(c, async () => ({ item: await manager.stopTask(c.req.param('id'), c.req.param('taskId')) })))
   app.post('/api/chats/:id/permission/:requestId', (c) =>
     answer(c, async () => {
       manager.respondPermission(c.req.param('id'), c.req.param('requestId'), parsePermission(await body(c)))

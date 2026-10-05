@@ -4,7 +4,9 @@
 // this chat's background tasks), its phases with progress squares and the agent table, then the
 // finished ones behind 'Finished N'. A worker's own estimate (its `ETA:` line) shows after its time,
 // '1m 20s / ~5m', and a running unit says about how long is left by its latest one. Stop cancels the
-// unit's active workers through AgentHydra; the trash only hides finished units here.
+// unit's active workers through AgentHydra, or stops a Desk chat's background task through the chat
+// (a CliMayte chat's worker with it: a worker takes no message to stop one command); Stop all does
+// that for every running unit listed. The trash only hides finished units here.
 import { computed, effectScope, nextTick, onBeforeUnmount, ref, shallowRef, watch, type EffectScope, type Ref } from 'vue'
 import { Check, ChevronDown, ChevronRight, Maximize2, Minimize2, Trash2, X } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
@@ -14,12 +16,16 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { Tip } from '@/components/ui/tooltip'
 import { useClock } from '@/lib/clock'
 import { cleared, clearFinished } from './api'
-import { elapsedOf, etaLeft, etaShort, formatTokens, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
+import { canStop, elapsedOf, etaLeft, etaShort, formatTokens, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
 
 const props = defineProps<{
   sessionId: string | null | undefined
   workerIds?: readonly string[]
   items: TranscriptItem[]
+  /** The Hydra Desk chat the items are of (its tasks get Stop); null for a session outside it. */
+  chatId?: string | null
+  /** That chat is a CliMayte worker: stopping one of its tasks stops the worker, turn and all. */
+  climayte?: boolean
   focusId?: string | null
   expanded?: boolean
 }>()
@@ -47,7 +53,7 @@ function toggleAll() {
   }
 }
 const lists = computed(() =>
-  panelLists({ workers: src.workers.value, items: props.items, sessionId: props.sessionId, workerIds: props.workerIds, all: all.value, cleared: cleared.value })
+  panelLists({ workers: src.workers.value, items: props.items, sessionId: props.sessionId, workerIds: props.workerIds, all: all.value, cleared: cleared.value, chatId: props.chatId })
 )
 
 // The progress squares of every phase on show, worked out once per list change.
@@ -101,14 +107,39 @@ async function bringIntoView(id: string | null | undefined) {
 }
 watch(() => props.focusId, bringIntoView, { immediate: true })
 
-const stopping = ref<TaskUnit | null>(null)
+// Stop asks first: one unit, or 'all' (every running unit listed that can be stopped).
+const stopping = ref<TaskUnit | 'all' | null>(null)
 const stopError = ref('')
+const stoppableNow = computed(() => lists.value.running.filter(canStop))
+const stopUnits = computed(() => (stopping.value === 'all' ? stoppableNow.value : stopping.value ? [stopping.value] : []))
+const stopTitle = computed(() => {
+  const us = stopUnits.value
+  return stopping.value === 'all' ? `Stop ${us.length === 1 ? 'the running task' : `all ${us.length} running tasks`}?` : `Stop ${us[0]?.name ?? ''}?`
+})
+const stopText = computed(() => {
+  const us = stopUnits.value
+  const workers = us.reduce((n, u) => n + u.stoppable.length, 0)
+  const tasks = us.filter((u) => u.stopTask !== null).length
+  const parts: string[] = []
+  if (workers) parts.push(`${workers === 1 ? 'Its running agent is' : `${workers} running agents are`} cancelled in AgentHydra.`)
+  if (tasks) {
+    parts.push(
+      props.climayte
+        ? "A CliMayte worker cannot stop one command alone, so this chat's worker stops too, its turn with it. Send a message to go on."
+        : `${tasks === 1 ? 'The command is' : `${tasks} commands are`} stopped; the chat's turn goes on.`
+    )
+  }
+  return `${parts.join(' ')} Finished work stays.`
+})
 async function confirmStop() {
-  const u = stopping.value
+  const us = stopUnits.value
   stopping.value = null
-  if (!u) return
   const failed: string[] = []
-  for (const id of u.stoppable) await desk.cancelWorker(id).catch((e: unknown) => failed.push(e instanceof Error ? e.message : String(e)))
+  const why = (e: unknown) => failed.push(e instanceof Error ? e.message : String(e))
+  for (const u of us) {
+    for (const id of u.stoppable) await desk.cancelWorker(id).catch(why)
+    if (u.stopTask && props.chatId) await desk.stopTask(props.chatId, u.stopTask).catch(why)
+  }
   stopError.value = failed.length ? `Not stopped: ${failed[0]}` : ''
 }
 
@@ -146,6 +177,14 @@ const ICON_BTN =
       <div class="mb-[5px] flex h-5 items-center text-[var(--text-muted)]">
         <span class="flex-1">Running</span>
         <button
+          v-if="stoppableNow.length"
+          type="button"
+          class="rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]"
+          @click="stopping = 'all'"
+        >
+          Stop all
+        </button>
+        <button
           v-if="sessionId"
           type="button"
           class="rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]"
@@ -182,7 +221,7 @@ const ICON_BTN =
                 <span><b class="font-semibold text-[var(--text-2)]">{{ formatTokens(u.tokens) }}</b> tokens</span>
               </p>
             </div>
-            <Tip v-if="u.stoppable.length" :label="`Stop ${u.name}`" side="left">
+            <Tip v-if="canStop(u)" :label="`Stop ${u.name}`" side="left">
               <button
                 type="button"
                 class="flex size-5 shrink-0 items-center justify-center rounded-[4px] bg-white/10 text-[var(--text)] outline-none transition-colors duration-[60ms] hover:bg-white/20 focus-visible:shadow-[var(--focus-ring)]"
@@ -312,10 +351,8 @@ const ICON_BTN =
 
     <Dialog :open="stopping !== null" @update:open="(o: boolean) => !o && (stopping = null)">
       <DialogContent :show-close-button="false" class="gap-3 rounded-[var(--radius-12)] p-4 shadow-(--shadow-popover) ring-0 sm:max-w-[360px]">
-        <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Stop {{ stopping?.name }}?</DialogTitle>
-        <DialogDescription class="text-[13px] leading-[19px] text-text-2">
-          {{ stopping?.stoppable.length === 1 ? 'Its running agent is cancelled' : `Its ${stopping?.stoppable.length} running agents are cancelled` }} in AgentHydra. Finished work stays.
-        </DialogDescription>
+        <DialogTitle class="text-[14px] font-semibold leading-5 text-text">{{ stopTitle }}</DialogTitle>
+        <DialogDescription class="text-[13px] leading-[19px] text-text-2">{{ stopText }}</DialogDescription>
         <div class="flex justify-end gap-2 pt-1">
           <button type="button" class="h-7 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-3 text-[13px] text-text hover:bg-[var(--fill-secondary-hover)]" @click="stopping = null">Cancel</button>
           <button type="button" class="h-7 rounded-[var(--radius-6)] bg-danger px-3 text-[13px] font-medium text-white hover:brightness-110" @click="confirmStop">Stop</button>

@@ -19,7 +19,10 @@ export class FakeQuery {
     setModel: [] as (string | undefined)[],
     applyFlagSettings: [] as unknown[],
     toggleMcpServer: [] as [string, boolean][],
+    stopTask: [] as string[],
   }
+  /** What the process does when asked to stop a task (a real one answers with its task_notification). */
+  onStopTask: ((taskId: string) => void) | null = null
   mcp: McpServerStatus[] = []
   /** The MCP status read and toggle never answer (a session too busy to). */
   mcpHangs = false
@@ -73,6 +76,10 @@ export class FakeQuery {
   }
   async applyFlagSettings(s: unknown) {
     this.calls.applyFlagSettings.push(s)
+  }
+  async stopTask(taskId: string) {
+    this.calls.stopTask.push(taskId)
+    this.onStopTask?.(taskId)
   }
   async getContextUsage() {
     return { percentage: 10 }

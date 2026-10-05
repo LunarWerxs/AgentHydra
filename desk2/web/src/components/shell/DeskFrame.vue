@@ -578,6 +578,8 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
               :session-id="tasksSessionId"
               :worker-ids="tasksWorkerIds"
               :items="tasksItems"
+              :chat-id="outsideId ? null : chat?.id"
+              :climayte="!outsideId && chat?.workerId !== undefined"
               :focus-id="tasks.focus"
               :expanded="tasks.expanded"
               @close="tasks = null"

@@ -246,6 +246,8 @@ export class ChatRuntime {
   /** A Stop was sent into a turn whose result has not come: that result's error is the stop, whatever the CLI said meanwhile. */
   private stopping = false
   private sawSessionState = false
+  /** The background tasks the process says are alive (its last background_tasks_changed); null until it says. */
+  private liveTasks: Set<string> | null = null
   private limitAnnounced = false
   private idleTimer: ReturnType<typeof setTimeout> | null = null
   private stderrTail = ''
@@ -377,6 +379,7 @@ ${swap.real}` }
     this.ranAs = attach ? { ...attach.hello.account } : { ...this.chat.account }
     this.ranCwd = this.chat.cwd
     this.sawSessionState = false
+    this.liveTasks = null
     this.stopping = false
     this.stderrTail = ''
     this.unanswered = []
@@ -620,6 +623,21 @@ ${swap.real}` }
       await this.q.interrupt()
     } catch {
       // the process may already be gone; the status already says stopped
+    }
+  }
+
+  /**
+   * Asks the process to stop one background task; its task_notification settles the item. False when no process
+   * runs or the process said the task is not alive (an unknown id is ignored by the CLI without a word).
+   */
+  async stopTask(taskId: string): Promise<boolean> {
+    const q = this.q
+    if (!q || (this.liveTasks && !this.liveTasks.has(taskId))) return false
+    try {
+      await q.stopTask(taskId)
+      return true
+    } catch {
+      return false
     }
   }
 
@@ -880,6 +898,10 @@ ${swap.real}` }
     const now = this.clock()
     const m = msg as { type: string; subtype?: string }
     if (m.type === 'system' && m.subtype === 'session_state_changed') this.sawSessionState = true
+    if (m.type === 'system' && m.subtype === 'background_tasks_changed') {
+      const tasks = (msg as { tasks?: { task_id?: unknown }[] }).tasks
+      this.liveTasks = new Set((Array.isArray(tasks) ? tasks : []).map((t) => String(t.task_id)))
+    }
     this.takeUp(msg)
 
     const before = this.chat.status

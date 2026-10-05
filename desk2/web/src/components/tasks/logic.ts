@@ -43,8 +43,11 @@ export interface TaskUnit {
   description: string
   account: string | null // '#68', or '#68, #41' when its workers ran on several
   phases: TaskPhase[]
-  /** Active worker ids, for Stop. Empty for a transcript task (Hydra Desk cannot stop those). */
+  /** Active worker ids, for Stop (cancelled through AgentHydra). Empty for a transcript task. */
   stoppable: string[]
+  /** A Hydra Desk chat's running background task: its task id, which Stop sends to the chat. Null for a
+   *  worker unit, a settled task, or a task of a session outside Hydra Desk (nothing here runs it). */
+  stopTask: string | null
   /** The ids the trash button hides: its workers, or the task item. */
   keys: string[]
   /** A transcript task that failed or was stopped: its finished row shows an X. */
@@ -132,6 +135,7 @@ function workerUnit(id: string, name: string, workers: CliMayteWorker[]): TaskUn
     account: accounts.length ? accounts.join(', ') : null,
     phases: phasesOf(workers),
     stoppable: workers.filter((w) => w.active).map((w) => w.id),
+    stopTask: null,
     keys: workers.map((w) => w.id),
     etaEndsAt: maxOf(workers.map(etaEnd))
   }
@@ -144,7 +148,7 @@ const TASK_LABEL: Record<NonNullable<TaskItem['taskKind']>, string> = {
   other: 'Task'
 }
 
-function taskUnit(t: TaskItem): TaskUnit {
+function taskUnit(t: TaskItem, deskChat: boolean): TaskUnit {
   const running = t.status === 'running'
   // A finished task that never said when it settled shows a dash, not a time still counting up.
   const timed = running || t.durationMs !== undefined
@@ -161,6 +165,7 @@ function taskUnit(t: TaskItem): TaskUnit {
     account: null,
     phases: [],
     stoppable: [],
+    stopTask: running && deskChat ? t.taskId : null,
     keys: [`task:${t.id}`],
     failed: t.status === 'failed' || t.status === 'stopped',
     etaEndsAt: null
@@ -181,6 +186,9 @@ export function workerUnits(workers: CliMayteWorker[]): TaskUnit[] {
 
 const TASK_STATUSES = new Set<string>(['running', 'completed', 'failed', 'stopped'])
 
+/** The unit has something Stop can end: active workers, or a Desk chat's running task. */
+export const canStop = (u: TaskUnit): boolean => u.stoppable.length > 0 || u.stopTask !== null
+
 export interface PanelLists {
   running: TaskUnit[]
   finished: TaskUnit[]
@@ -190,7 +198,8 @@ export interface PanelLists {
  * What the panel lists. `workerIds` (the server's match) scope it to the workers this chat dispatched (`all`:
  * every worker AgentHydra lists); `items` adds the chat's own task items, running or finished
  * (completed, failed, stopped), so a chat's finished background tasks list and count as the real
- * app's do (owner, 2026-10-05: "there actually is one running and one finished"). Running
+ * app's do (owner, 2026-10-05: "there actually is one running and one finished"); a Desk chat's running
+ * task can be stopped (`chatId`). Running
  * units newest first; finished ones most recent first, minus the cleared, capped at FINISHED_CAP.
  */
 export function panelLists(o: {
@@ -200,9 +209,11 @@ export function panelLists(o: {
   workerIds?: readonly string[]
   all?: boolean
   cleared?: ReadonlySet<string>
+  /** The Hydra Desk chat the items are of; null or absent for a session outside it (its tasks get no Stop). */
+  chatId?: string | null
 }): PanelLists {
   const scoped = o.all ? o.workers : chatWorkers(o.workers, o.sessionId, o.workerIds)
-  const tasks = (o.items ?? []).filter((i): i is TaskItem => i.kind === 'task' && TASK_STATUSES.has(i.status ?? '')).map(taskUnit)
+  const tasks = (o.items ?? []).filter((i): i is TaskItem => i.kind === 'task' && TASK_STATUSES.has(i.status ?? '')).map((t) => taskUnit(t, !!o.chatId))
   const units = [...workerUnits(scoped), ...tasks]
   const cleared = o.cleared ?? new Set<string>()
   const running = units.filter((u) => u.running).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
