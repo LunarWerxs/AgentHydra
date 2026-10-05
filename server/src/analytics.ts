@@ -36,6 +36,7 @@ import { sharedKitStore, storeGeneration, type UsageRow, usageQueryAsync } from 
 import type { KitStore } from './kit/store'
 import { readOpenCodeUsage } from './opencode-sessions'
 import { priceSource, pricesAsOf } from './pricing'
+import { anyDiscount, atYourRate, readRoutingSettings } from './routing-cost'
 import { streamLines } from './session-search'
 import {
   decodeProjectKey,
@@ -1778,6 +1779,8 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
   const sessions = new Set<string>()
   const billedModels = new Set<string>()
   const totals = { weighted: 0, cost: null as number | null, calls: 0, tokens: emptyTokens() }
+  const discounts = readRoutingSettings().discounts
+  let totalAtRate = 0
 
   const read = (row: UsageRow) => {
     const model = (row.model as string | null) ?? 'unknown'
@@ -1832,7 +1835,10 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
 
     totals.weighted += weighted
     totals.calls += calls
-    if (cost !== null) totals.cost = (totals.cost ?? 0) + cost
+    if (cost !== null) {
+      totals.cost = (totals.cost ?? 0) + cost
+      totalAtRate += atYourRate(model, cost, discounts)
+    }
     totals.tokens.input += tokens.input
     totals.tokens.cacheRead += tokens.cacheRead
     totals.tokens.cacheWrite += tokens.cacheWrite
@@ -1921,6 +1927,8 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
     from: days[0]?.key ?? null,
     to: days[days.length - 1]?.key ?? null,
     totalCostUsd: totals.cost,
+    totalCostAtRateUsd: totals.cost === null ? null : totalAtRate,
+    hasRateDiscount: anyDiscount(discounts),
     totalWeighted: totals.weighted,
     tokens: totals.tokens,
     byProvider: [...byProvider.entries()]
@@ -1933,7 +1941,10 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
       .sort((a, b) => b.tokens.total - a.tokens.total),
     sessions: sessions.size,
     calls: totals.calls,
-    byModel: byModel.list(),
+    byModel: byModel.list().map((b) => ({
+      ...b,
+      costAtRateUsd: b.costUsd === null ? null : atYourRate(b.key, b.costUsd, discounts),
+    })),
     // Re-labelled with the spelling the reader will recognise, now that grouping is done.
     byProject: byProject
       .list()

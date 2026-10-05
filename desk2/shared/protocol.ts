@@ -718,6 +718,8 @@ export interface HomeStats {
   tokens: { input: number; cacheRead: number; cacheWrite: number; output: number; total: number }
   /** At API rates; null when AgentHydra could not price it. */
   costUsd: number | null
+  /** `costUsd` at the owner's bulk rate; null when no routing discount is set or it is unpriced. */
+  costAtRateUsd?: number | null
   /** The date the prices behind `costUsd` were last known good. */
   pricesAsOf: string | null
   activeDays: number

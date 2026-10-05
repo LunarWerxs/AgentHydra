@@ -93,6 +93,8 @@ interface Reads {
 /** One answer from the four reads. */
 function consolidate(range: HomeStatsRange, r: Reads, today: Date): HomeStats {
   const { spend } = r
+  // The daemon's cost at the owner's bulk rate; bridge/client.ts's AhSpendReport does not list it.
+  const rate = spend as { hasRateDiscount?: boolean; totalCostAtRateUsd?: number | null }
   const sources = (spend.bySource ?? [])
     .map((b) => ({
       key: b.key,
@@ -121,6 +123,7 @@ function consolidate(range: HomeStatsRange, r: Reads, today: Date): HomeStats {
     messages: sources.reduce((sum, s) => sum + s.messages, 0),
     tokens: { input: num(t?.input), cacheRead: num(t?.cacheRead), cacheWrite: num(t?.cacheWrite), output: num(t?.output), total: num(t?.total) },
     costUsd: spend.totalCostUsd ?? null,
+    ...(rate.hasRateDiscount && typeof rate.totalCostAtRateUsd === 'number' ? { costAtRateUsd: rate.totalCostAtRateUsd } : {}),
     pricesAsOf: spend.pricesAsOf || null,
     activeDays: turnsByDay.size,
     peakHour: r.activity ? peakHour(r.activity.hours ?? []) : null,

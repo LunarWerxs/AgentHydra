@@ -199,6 +199,8 @@ const unpricedMore = computed(() => unpricedBuckets.value.slice(6))
  * They are named underneath instead, so their absence is explained rather than silent, and their
  * tokens still appear in the split and the per-tool chart above.
  */
+/** A bulk-rate discount is set: the cost tile shows the figure at the owner's rate, list in its tooltip. */
+const atRate = computed(() => spend.value?.hasRateDiscount === true)
 const pricedModels = computed(() => (spend.value?.byModel ?? []).filter((b) => b.costUsd !== null))
 const unpricedModelRows = computed(() =>
   (spend.value?.byModel ?? []).filter((b) => b.costUsd === null),
@@ -618,19 +620,32 @@ const survivalAverage = computed(() => {
         <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div class="rounded-lg border border-border p-3">
             <p class="text-2xs text-muted-foreground">
-              {{ tokenMode ? $t('analytics.totalTokens') : $t('analytics.totalCost') }}
+              {{
+                tokenMode
+                  ? $t('analytics.totalTokens')
+                  : atRate
+                    ? $t('analytics.totalCostAtRate')
+                    : $t('analytics.totalCost')
+              }}
             </p>
             <!-- In token mode this is the RAW total — every token sent and received. The weighted
                  figure has its own tile; the two are different numbers on purpose and used to be
                  distinguishable only by the word "weighted", which is how a 106B and a 244B ended
                  up on one screen with nothing saying they measure the same work differently. -->
-            <p class="text-xl font-semibold tabular-nums">
+            <p
+              class="text-xl font-semibold tabular-nums"
+              :title="
+                !tokenMode && atRate && spend.totalCostUsd !== null
+                  ? $t('analytics.atYourRateTip', { list: formatUsd(spend.totalCostUsd) })
+                  : undefined
+              "
+            >
               {{
                 tokenMode
                   ? formatCompact(spend.tokens.total)
                   : spend.totalCostUsd === null
                     ? '—'
-                    : formatUsd(spend.totalCostUsd)
+                    : formatUsd(atRate ? (spend.totalCostAtRateUsd ?? spend.totalCostUsd) : spend.totalCostUsd)
               }}<span v-if="!tokenMode && spend.unpricedModels.length">+</span>
             </p>
             <!-- Where the rates came from and how old they are. A dollar total with no price date

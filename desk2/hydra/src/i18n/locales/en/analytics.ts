@@ -32,6 +32,9 @@ export default {
     'This build has no token figures for this chart yet. Restart AgentHydra to pick them up, or switch back to money.',
   // --- headline numbers ---
   totalCost: 'Cost',
+  // Shown instead of the plain "Cost" when a bulk-rate discount is set (Routing page).
+  totalCostAtRate: 'Cost at your rate',
+  atYourRateTip: 'At list price: {list}',
   totalTokens: 'Tokens',
   // Why the two token tiles disagree, said where they disagree. Raw is everything sent and
   // received; weighted discounts cache reads and multiplies output to approximate cost, so the

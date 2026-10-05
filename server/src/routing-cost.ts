@@ -272,6 +272,24 @@ export function providerGroup(provider: string): keyof Discounts {
   return 'other'
 }
 
+/**
+ * A list-price cost at the owner's bulk rate: the discount of the provider group of `modelOrProvider`
+ * (a model id or a provider name, grouped by providerGroup) taken off `usd`. `discounts` defaults to
+ * the saved routing settings; callers pricing many rows read them once and pass them in.
+ */
+export function atYourRate(
+  modelOrProvider: string,
+  usd: number,
+  discounts: Discounts = readRoutingSettings().discounts,
+): number {
+  return usd * (1 - (discounts[providerGroup(modelOrProvider)] ?? 0) / 100)
+}
+
+/** True when any provider group has a discount set. */
+export function anyDiscount(discounts: Discounts = readRoutingSettings().discounts): boolean {
+  return Object.values(discounts).some((d) => d > 0)
+}
+
 // --- the decision -------------------------------------------------------------
 
 export interface RoutingContext {

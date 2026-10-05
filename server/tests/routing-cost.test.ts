@@ -2,6 +2,8 @@
 import { afterAll, expect, test } from 'bun:test'
 import { db } from '../src/db'
 import {
+  anyDiscount,
+  atYourRate,
   bucketOf,
   decideRoute,
   effectiveFraction,
@@ -21,6 +23,15 @@ test('effectiveFraction: a Pro plan at the research numbers is about 1.9% of lis
   expect(f).toBeLessThan(0.02)
   // A Max 5x window is 4.75 Pro windows.
   expect(effectiveFraction(100, 9.8, 4.75, 20.7)).toBeCloseTo(0.024, 3)
+})
+
+test('atYourRate: a 20% anthropic discount takes 20% off a Claude model and leaves DeepSeek at list', () => {
+  const d = { anthropic: 20, deepseek: 0, openrouter: 0, other: 0 }
+  expect(atYourRate('claude-opus-5-5', 10, d)).toBeCloseTo(8, 10)
+  expect(atYourRate('deepseek-v4-example', 10, d)).toBe(10)
+  expect(atYourRate('some-other-model', 10, d)).toBe(10)
+  expect(anyDiscount(d)).toBe(true)
+  expect(anyDiscount({ anthropic: 0, deepseek: 0, openrouter: 0, other: 0 })).toBe(false)
 })
 
 test('windowsPerWeek is the inverse of week-rise per session-rise, from stored samples', () => {

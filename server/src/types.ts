@@ -397,6 +397,8 @@ export interface SpendBucket {
   key: string
   weighted: number
   costUsd: number | null
+  /** costUsd at the owner's bulk rate (routing discounts); set on the per-model buckets. */
+  costAtRateUsd?: number | null
   sessions: number
   turns: number
   /** Only populated where the split is meaningful (per model, per provider). */
@@ -431,6 +433,10 @@ export interface SpendReport {
   from: string | null
   to: string | null
   totalCostUsd: number | null
+  /** totalCostUsd with each model's provider-group discount taken off; equals it when none is set. */
+  totalCostAtRateUsd: number | null
+  /** True when any routing discount is set, so the two totals can differ. */
+  hasRateDiscount: boolean
   totalWeighted: number
   /** The four categories, summed across every counted session. */
   tokens: TokenBreakdown
