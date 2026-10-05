@@ -11,6 +11,7 @@ import {
   climayteAdopt,
   climayteCancel,
   climayteCapacity,
+  climayteDeliverNow,
   climayteGet,
   climayteHandoff,
   climayteJournal,
@@ -228,6 +229,14 @@ app.post('/api/corch/workers/:id/send', async (c) => {
     cwd: body.cwd as string | undefined,
   })
   return c.json(r, r.ok || !body.cwd ? 200 : 400)
+})
+// Send now on a held message (Hydra Desk 2): the running turn stops and the same session continues
+// with that message first. `text` names which held message; without it, the oldest.
+app.post('/api/corch/workers/:id/deliver-now', async (c) => {
+  const body = await jsonBody(c)
+  if (body.text !== undefined && typeof body.text !== 'string')
+    return c.json({ error: 'text must be a string' }, 400)
+  return c.json(climayteDeliverNow(c.req.param('id'), body.text as string | undefined))
 })
 // A task's priority: queued and waiting work starts highest first (climayte_priority).
 app.post('/api/corch/workers/:id/priority', async (c) => {

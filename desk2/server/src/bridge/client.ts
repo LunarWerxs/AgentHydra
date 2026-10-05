@@ -429,6 +429,9 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** `cwd`: the folder the chat moved to; the worker's next launch copies its session there and resumes there. */
     sendToWorker: (id: string, text: string, cwd?: string) =>
       post<{ ok: boolean; message: string }>(`/api/corch/workers/${enc(id)}/send`, cwd ? { text, cwd } : { text }),
+    /** Send now on a message the worker holds (`text` names it, else its oldest): its turn stops and the same session continues with it first. */
+    deliverNow: (id: string, text?: string) =>
+      post<{ ok: boolean; stopped?: boolean; message: string }>(`/api/corch/workers/${enc(id)}/deliver-now`, text ? { text } : {}),
     /** Queues `text` in a working Claude Desktop chat's own input queue (peer channel only: never typed into its window); it runs when the current turn ends. */
     sendToDesktopChat: (sessionId: string, text: string) =>
       post<{ ok: boolean; route?: string; delivered?: boolean; detail?: string }>(`/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true }),

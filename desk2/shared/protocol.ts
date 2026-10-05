@@ -465,6 +465,17 @@ export interface ForkChatRequest {
   at?: string
 }
 
+/** POST /api/chats/:id/send-now: Send now on a message waiting behind a running turn ("Queued" under its bubble); `itemId` is that bubble. */
+export interface SendNowRequest {
+  itemId?: string
+}
+
+/** Its answer: `stopped` is false when nothing waited any more (the turn had ended and the message gone on). */
+export interface SendNowResult {
+  ok: true
+  stopped: boolean
+}
+
 export interface SlashCommandInfo {
   name: string // without the leading slash
   description: string

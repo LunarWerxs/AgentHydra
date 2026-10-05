@@ -150,6 +150,41 @@ paragraphs` },
   expect(removed).toEqual(events.filter((e) => e.type === 'item.upsert' && e.item.id.startsWith('desk-sent:')).map((e) => e.type === 'item.upsert' && e.item.id))
 })
 
+test('Send now on a queued message has CliMayte deliver that one now, and its bubble is no longer queued', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  expect(await m.send(chat.id, 'first, check the build')).toEqual({ queued: true })
+  expect(await m.send(chat.id, 'stop and do this')).toEqual({ queued: true })
+  const queued = () => m.listItems(chat.id).filter((i) => i.kind === 'user' && i.queued).map((i) => i.kind === 'user' && i.text)
+  const second = m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'stop and do this')!
+
+  expect(await m.sendNow(chat.id, second.id)).toEqual({ ok: true, stopped: true })
+  expect(b.state.sentNow).toEqual([{ id: 'w1', text: 'stop and do this' }])
+  expect(queued()).toEqual(['first, check the build'])
+
+  // Nothing held any more (it went meanwhile): nothing stops and the bubble stays as it is.
+  b.state.nowStops = false
+  const first = m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'first, check the build')!
+  expect(await m.sendNow(chat.id, first.id)).toEqual({ ok: true, stopped: false })
+  expect(queued()).toEqual(['first, check the build'])
+  // A bubble that is not a held stand-in names no message: CliMayte takes its oldest.
+  await m.sendNow(chat.id, 'u-unknown')
+  expect(b.state.sentNow.at(-1)).toEqual({ id: 'w1' })
+  expect(b.state.cancelled).toEqual([])
+
+  b.bridge.sendToWorkerNow = async () => {
+    throw new Error('this AgentHydra cannot send a held message now yet: it needs its update')
+  }
+  expect(m.sendNow(chat.id, first.id)).rejects.toThrow(/CliMayte did not send it now: .*needs its update/)
+})
+
 test('a new worker chat asks for chat mode and forces no model or effort', async () => {
   const bodies: { path: string; body: unknown }[] = []
   const fetchImpl = (async (url: string, init?: { body?: string }) => {

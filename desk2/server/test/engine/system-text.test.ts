@@ -320,6 +320,13 @@ describe('notes and picture lines', () => {
     expect(note).toEqual({ kind: 'note', id: 'u1', ts: 5, parentToolUseId: null, from: 'AgentHydra · CliMayte', text: noteOf(PING)!.text })
   })
 
+  test('a message sent now reads as the person typed it, without the preface AgentHydra gave the worker', () => {
+    const preface = '[Sent now: the user stopped your previous turn mid-step to send this message. Act on it first.]'
+    expect(userTurn(user(`${preface}\n\nfix the build first`), null)).toMatchObject({ kind: 'user', text: 'fix the build first' })
+    // Only as the preface: the same words further in are the person's.
+    expect(userTurn(user(`see ${preface}\nthere`), null)).toMatchObject({ text: `see ${preface}\nthere` })
+  })
+
   test('a picture line becomes the picture once, a missing file stays as text, plain text is the same item', () => {
     const { media, file } = png()
     const turn = userTurn(user(`look at this\n[Image: source: ${file}]\n[Image: source: ${file}]\n[Image: source: C:/Users/me/gone.png]`), media)

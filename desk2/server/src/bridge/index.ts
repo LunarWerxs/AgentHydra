@@ -445,6 +445,22 @@ export function createBridge(opts: BridgeOptions = {}) {
     workersChanged()
   }
 
+  /** Send now on a message the worker holds: true when its running turn was stopped for it. */
+  async function sendToWorkerNow(id: string, text?: string): Promise<boolean> {
+    let r: Awaited<ReturnType<typeof client.deliverNow>>
+    try {
+      r = await client.deliverNow(id, text)
+    } catch (err) {
+      // An AgentHydra from before deliver-now answers its own 404 page.
+      if (err instanceof BridgeError && err.kind === 'bad_json' && err.status === 404)
+        throw new BridgeError('http', 'this AgentHydra cannot send a held message now yet: it needs its update', 404)
+      throw err
+    }
+    if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused to send ${id}'s message now`, /no such worker/i.test(r.message) ? 404 : 400)
+    workersChanged()
+    return r.stopped === true
+  }
+
   return {
     url: client.url,
     client,
@@ -472,6 +488,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     },
     cancelWorker,
     sendToWorker,
+    sendToWorkerNow,
     startWorker,
     workersByIds,
     workerItems,

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { PermissionResult, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { ChatSummary, ExternalSession, ServerEvent, SessionMeta, TranscriptItem } from '@shared/protocol'
+import type { ChatSummary, ExternalSession, QueueState, ServerEvent, SessionMeta, TranscriptItem } from '@shared/protocol'
 import { createServer, type DeskServer } from '../../../src/index'
 import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
 import { titleFrom } from '../../../src/engine/chat-manager'
@@ -223,6 +223,26 @@ describe('chat routes', () => {
     expect(fake.calls.interrupt).toBe(1)
     expect((await call<ChatSummary>(t.desk, 'GET', `/api/chats/${chat.id}`)).body.status).toBe('stopped')
     await waitFor(() => statuses(events, chat.id).includes('stopped'))
+  })
+
+  test('Send now on a queued message stops the turn (the CLI keeps the message) and the send queue is not held by it', async () => {
+    const t = await boot()
+    const { events } = await listen(t.desk)
+    const { chat, fake } = await working(t, temp('desk-cwd-'))
+    expect((await call(t.desk, 'POST', `/api/chats/${chat.id}/send-now`)).body).toEqual({ ok: true, stopped: false })
+    expect(fake.calls.interrupt).toBe(0)
+
+    await call(t.desk, 'POST', `/api/chats/${chat.id}/messages`, { text: 'and then this' })
+    await waitFor(() => chatEvents(events, chat.id).at(-1)?.queuedCount === 1)
+    const later = await call<{ id: string; state: string }>(t.desk, 'POST', '/api/queue', { kind: 'message', chatId: chat.id, text: 'after that, this' })
+    expect(later.body.state).toBe('waiting')
+
+    const now = await call(t.desk, 'POST', `/api/chats/${chat.id}/send-now`, { itemId: 'ignored-for-an-sdk-chat' })
+    expect(now.body).toEqual({ ok: true, stopped: true })
+    expect(fake.calls.interrupt).toBe(1)
+    const queue = await call<QueueState>(t.desk, 'GET', '/api/queue')
+    expect(queue.body.held).toEqual({})
+    expect(queue.body.items.find((i) => i.id === later.body.id)?.state).not.toBe('held')
   })
 
   test('a permission round trip over HTTP', async () => {

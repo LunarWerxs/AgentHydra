@@ -49,16 +49,38 @@ function watchColumn(column: Element, f: Fitter) {
 // The real user bubble: right aligned, at most 85% of the column and only as wide as its longest line,
 // padding 8/12, radius 10, white 5%, 14/20 text,
 // entering with code-user-bubble-enter; the actions toolbar (time, Copy, Resend, Fork) under it, shown on hover.
+// A message waiting behind a running turn says so instead, with Send now: the turn stops and it goes at once.
 // A long message is clamped with a fade and a "Show more" link inside the bubble. Pictures sent with it
 // sit above the bubble as 8px-rounded tiles that open in the lightbox.
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ImageRef } from '@shared/protocol'
+import { useDesk } from '@/stores/desk'
+import { useTranscript } from '../context'
 import MessageActions from './MessageActions.vue'
 import ImageTiles from './ImageTiles.vue'
 
 const props = defineProps<{ id?: string; text: string; ts: number; images?: ImageRef[]; queued?: boolean }>()
 // Only a message that just arrived animates in; one scrolled back into view does not.
 const fresh = Date.now() - props.ts < 2000
+
+const ctx = useTranscript()
+const desk = useDesk()
+const canSendNow = computed(() => !ctx.readOnly.value && !!ctx.chatId.value)
+const sendNowState = ref<'idle' | 'sending' | 'failed'>('idle')
+const sendNowError = ref('')
+
+async function sendNow() {
+  if (sendNowState.value === 'sending') return
+  sendNowState.value = 'sending'
+  try {
+    await desk.sendNow(ctx.chatId.value, props.id)
+    sendNowState.value = 'idle'
+  } catch (err) {
+    sendNowError.value = err instanceof Error ? err.message : String(err)
+    sendNowState.value = 'failed'
+    setTimeout(() => (sendNowState.value = 'idle'), 4000)
+  }
+}
 
 const row = ref<HTMLElement | null>(null)
 const body = ref<HTMLElement | null>(null)
@@ -124,7 +146,24 @@ watch(() => props.text, () => nextTick(fit))
         {{ expanded ? 'Show less' : 'Show more' }}
       </button>
     </div>
-    <div v-if="queued" class="flex h-6 items-center text-[13px] text-text-muted">Queued, sends when this turn ends</div>
+    <div v-if="queued" class="flex h-6 items-center gap-1.5 text-[13px] text-text-muted">
+      <span v-if="sendNowState === 'failed'" class="text-danger-text">Send now failed{{ sendNowError ? `: ${sendNowError}` : '' }}</span>
+      <template v-else>
+        <span>Queued, sends when this turn ends</span>
+        <template v-if="canSendNow">
+          <span aria-hidden="true">·</span>
+          <button
+            type="button"
+            class="cursor-pointer hover:text-text disabled:cursor-default disabled:opacity-60"
+            :disabled="sendNowState === 'sending'"
+            title="Stop this turn and send this message now"
+            @click="sendNow"
+          >
+            {{ sendNowState === 'sending' ? 'Sending…' : 'Send now' }}
+          </button>
+        </template>
+      </template>
+    </div>
     <MessageActions v-else :text="text" :ts="ts" align="end" :resend="{ text, images }" :item-id="id" />
   </div>
 </template>

@@ -925,6 +925,10 @@ export async function climayteWait(filter: { group?: string; id?: string }, time
    // resolves on the first status change in scope, or at timeout, with climayteList(filter)
 export function climayteSend(id: string, text: string, opts?: { urgent?: boolean; model?: string; effort?: string }): { ok: boolean; message: string; model?: string | null; effort?: string | null }
    // to a running worker: held until its task ends; `urgent` stops the running work and sends it first
+export function climayteDeliverNow(id: string, text?: string): { ok: boolean; stopped?: boolean; message: string }
+   // Send now on a HELD message (Hydra Desk 2): stops the running turn like `urgent` and continues the same
+   // session with that message first (prefaced by SENT_NOW_PREFIX, which Desk hides), adding no second copy;
+   // `text` picks the held message (equal, else the first containing it), else the oldest; nothing held → stopped false
 export function climayteHandoff(id: string): { ok: boolean; message: string }
 export function climayteSetPriority(id: string, priority: unknown): { ok: boolean; message: string; priority?: number }
    // a whole number -1000..1000; reorders queued/waiting work, never stops a running attempt
@@ -1231,6 +1235,7 @@ desktop? ... to save me from having to do both individually."
   `GET /api/corch/pings` → `{ unread: [sessionId] }`, the chats holding undelivered pings;
   `POST /api/corch/pings/read` `{ sessionId }` → that chat's `{ count, texts }`, marked read
 - `POST /api/corch/workers/:id/send` `{ text, urgent?, model?, effort? }` → `climayteSend`
+- `POST /api/corch/workers/:id/deliver-now` `{ text? }` → `climayteDeliverNow`
 - `POST /api/corch/workers/:id/handoff` → `climayteHandoff`
 - `POST /api/corch/workers/:id/priority` `{ priority }` → `climayteSetPriority` (400 on a bad value)
 - `POST /api/corch/cancel` `{ id? , group? }` → `climayteCancel`

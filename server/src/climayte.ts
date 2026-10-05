@@ -2603,14 +2603,7 @@ export function climayteSend(
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
     })
-    if (stopRunning(w, 'Stopped to deliver an urgent message from the orchestrator.')) {
-      w.status = 'queued'
-      w.retries = 0
-      w.error = null
-      w.notBefore = null
-      w.revived = true
-      changed(w)
-      schedule(0)
+    if (stopToDeliver(w, 'Stopped to deliver an urgent message from the orchestrator.')) {
       const more = w.pending.length - 1
       return {
         ok: true,
@@ -2647,6 +2640,75 @@ export function climayteSend(
     model: w.model,
     effort: w.effort,
   }
+}
+
+/** Preface of a held message the person sent now (Hydra Desk 2's Send now), so the session knows why
+ *  its turn ended mid-step. Desk shows the person's bubble without it. */
+export const SENT_NOW_PREFIX =
+  '[Sent now: the user stopped your previous turn mid-step to send this message. Act on it first; then continue the task only if it still applies, checking the state of anything you were in the middle of.]'
+
+/** Send now on a message held for a running worker: its turn stops as for an urgent message, and the
+ *  same session continues at once with that message first and the others after it, in order. No new
+ *  message is added (a second climayteSend with urgent would deliver it twice). `text` says which held
+ *  message: the one equal to it, else the first containing it (a sender's picture lines add to it);
+ *  without it, the oldest. Nothing running or nothing held answers ok with `stopped: false`. */
+export function climayteDeliverNow(
+  id: string,
+  text?: string,
+): { ok: boolean; stopped?: boolean; message: string } {
+  load()
+  const w = workers.get(id)
+  if (!w) return { ok: false, message: 'No such worker.' }
+  if (w.status !== 'running')
+    return {
+      ok: true,
+      stopped: false,
+      message: w.pending.length
+        ? 'Not running: what it holds goes as its next turn.'
+        : 'Not running, and it holds no message.',
+    }
+  const want = text?.trim()
+  let i = want ? w.pending.indexOf(text as string) : w.pending.length ? 0 : -1
+  if (i < 0 && want) i = w.pending.findIndex((p) => p.includes(want))
+  if (i < 0)
+    return {
+      ok: true,
+      stopped: false,
+      message: 'That message is not held any more: it was delivered, or its turn has begun.',
+    }
+  const [held] = w.pending.splice(i, 1) as [string]
+  w.pending.unshift(`${SENT_NOW_PREFIX}\n\n${held}`)
+  journal(w, 'follow-up-queued', { pending: w.pending.length, urgent: true })
+  if (stopToDeliver(w, 'Stopped to deliver a message the user sent now.')) {
+    const more = w.pending.length - 1
+    return {
+      ok: true,
+      stopped: true,
+      message: `Stopped its running work; the same session continues now with this message${more ? `, then the ${more} other held message(s)` : ''}.`,
+    }
+  }
+  // It finished on its own a moment ago: the message leads its next turn, with no word of a stop.
+  w.pending[0] = held
+  changed(w)
+  return {
+    ok: true,
+    stopped: false,
+    message: 'It had just finished: this message leads its next turn.',
+  }
+}
+
+/** Ends a running worker's turn so the same session continues at once with what it holds (an urgent
+ *  or sent-now message first). False when it had finished on its own a moment ago. */
+function stopToDeliver(w: CliMayteWorker, notice: string): boolean {
+  if (!stopRunning(w, notice)) return false
+  w.status = 'queued'
+  w.retries = 0
+  w.error = null
+  w.notBefore = null
+  w.revived = true
+  changed(w)
+  schedule(0)
+  return true
 }
 
 const QUESTION_MAX = 2000

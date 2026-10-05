@@ -287,6 +287,16 @@ describe('the row menu through the store', () => {
     await expect(desk.forkAt('ext:gone', 'u-1:0', { text: 'x' })).rejects.toThrow('This session is no longer listed.')
   })
 
+  test('Send now on a queued message posts its id to the send-now route', async () => {
+    calls.length = 0
+    await desk.sendNow('c1', 'u-9:0')
+    await desk.sendNow('c1')
+    expect(calls).toEqual([
+      { path: '/api/chats/c1/send-now', method: 'POST', body: { itemId: 'u-9:0' } },
+      { path: '/api/chats/c1/send-now', method: 'POST', body: {} }
+    ])
+  })
+
   test("an outside session's marks go to its meta route and show at once", async () => {
     push({ type: 'external.update', sessions: [session({ id: 'm1' })] })
     calls.length = 0

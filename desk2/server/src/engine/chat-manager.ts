@@ -30,6 +30,8 @@ import type {
   PermissionMode,
   PlanDecision,
   QuestionAnswer,
+  SendNowRequest,
+  SendNowResult,
   ServerEvent,
   SessionMeta,
   SessionMetaPatch,
@@ -54,7 +56,7 @@ import { classifyFailure, FailureLedger, type FailureInput } from './failures'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
 
-export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalItems' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
+export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'sendToWorkerNow' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalItems' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
 export interface ChatManagerOptions {
   home: string
@@ -603,6 +605,37 @@ export class ChatManager {
     this.changed(chat)
     void this.syncWorkers(chat.id)
     return { queued }
+  }
+
+  /**
+   * Send now on a message waiting behind a running turn (its bubble says "Queued"): the turn stops and the message
+   * goes at once. An SDK chat's CLI keeps its queued sends through a plain interrupt and starts the next one straight
+   * away; a CliMayte chat's worker is stopped by AgentHydra, which continues the same session with that held message
+   * first (`itemId`, the bubble's stand-in, names it). Nothing waiting any more stops nothing.
+   */
+  async sendNow(id: string, itemId?: string): Promise<SendNowResult> {
+    const e = this.entry(id)
+    if (e.chat.workerId) {
+      const i = e.sent?.findIndex((s) => s.id === itemId && s.queued) ?? -1
+      const standIn = i >= 0 ? e.sent![i]! : undefined
+      let stopped: boolean
+      try {
+        stopped = await this.bridge.sendToWorkerNow(e.chat.workerId, standIn?.text.trim() ? standIn.text : undefined)
+      } catch (err) {
+        throw new ChatError(502, `CliMayte did not send it now: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      if (stopped && standIn && e.sent?.[i] === standIn) {
+        // It is the turn starting now, not a queued one: the worker's own copy replaces it once its CLI runs.
+        const { queued: _q, ...sent } = standIn
+        e.sent[i] = sent
+        this.emitEvent({ type: 'item.upsert', chatId: id, item: sent })
+      }
+      await this.syncWorkers(id)
+      return { ok: true, stopped }
+    }
+    if (!e.runtime?.running || e.chat.queuedCount === 0) return { ok: true, stopped: false }
+    await e.runtime.interrupt()
+    return { ok: true, stopped: true }
   }
 
   async interrupt(id: string): Promise<void> {
@@ -1795,6 +1828,12 @@ export function parseImport(body: unknown): ImportSessionRequest {
   const at = optString(b, 'at')
   if (at?.trim()) req.at = at.trim()
   return req
+}
+
+/** Send now's request: the bubble's item id, when one is given. */
+export function parseSendNow(body: unknown): SendNowRequest {
+  const itemId = optString(obj(body), 'itemId')
+  return itemId?.trim() ? { itemId: itemId.trim() } : {}
 }
 
 /** A fork's request: an empty body forks the whole chat. */

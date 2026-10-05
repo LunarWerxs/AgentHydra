@@ -27,7 +27,9 @@ import type {
   QueuePatch,
   QueueReorder,
   QueueSettingsPatch,
-  QueueState
+  QueueState,
+  SendNowRequest,
+  SendNowResult
 } from '@shared/protocol'
 import { openBackgroundTasks } from '@/components/tasks/api'
 import { movedOrder } from '@/components/composer/queue'
@@ -680,6 +682,15 @@ export function useDesk() {
 
     async interrupt(chatId: string): Promise<{ ok: boolean }> {
       return fetchJson(`/chats/${chatId}/interrupt`, { method: 'POST' })
+    },
+
+    /** Send now on a message queued behind a running turn: the turn stops and that message goes at once. */
+    async sendNow(chatId: string, itemId?: string): Promise<SendNowResult> {
+      return fetchJson<SendNowResult>(`/chats/${chatId}/send-now`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId } satisfies SendNowRequest)
+      })
     },
 
     async respondPermission(

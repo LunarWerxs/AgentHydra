@@ -205,6 +205,8 @@ export function taskItemFrom(n: TaskNotice, prev: TaskItem | undefined, ts: numb
 
 /** A program's message typed in as a user turn: `[AgentHydra · CliMayte] Not from the user. Ping 3, ...`. */
 const NOTE = /^\s*\[([^\]\n]{1,80})\]\s+Not from the user\.?[ \t]*\n?/
+/** AgentHydra's preface of a held message the person sent now (its SENT_NOW_PREFIX, Send now on a CliMayte chat). */
+const SENT_NOW = /^\s*\[Sent now: [^\]\n]*\]\s*\n/
 /** A picture named by its file, the form Claude Code (and a Desk worker's message) uses. */
 const PICTURE_LINE = /^[ \t]*\[Image: source: ([^\]\n]+)\][ \t]*(?:\r?\n|$)/gm
 
@@ -219,7 +221,9 @@ export function noteOf(text: string): { from: string; text: string } | null {
  * `[Image: source: <path>]` line whose file is a picture shown as that picture instead of the line.
  * A line naming a missing file or a non-picture stays as text.
  */
-export function userTurn(item: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem {
+export function userTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem {
+  // A message sent now reads as the person typed it, without the preface that told the worker why its turn ended.
+  const item = SENT_NOW.test(raw.text) ? { ...raw, text: raw.text.replace(SENT_NOW, '') } : raw
   const note = noteOf(item.text)
   if (note) {
     const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = item

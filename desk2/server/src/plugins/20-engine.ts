@@ -28,6 +28,7 @@ import {
   parsePermission,
   parsePlan,
   parseQuestion,
+  parseSendNow,
   parseSend,
   parseSessionMeta,
 } from '../engine/chat-manager'
@@ -190,6 +191,17 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     answer(c, async () => {
       const { text, images } = parseSend(await body(c))
       return manager.send(c.req.param('id'), text, images)
+    }),
+  )
+  app.post('/api/chats/:id/send-now', (c) =>
+    answer(c, async () => {
+      const id = c.req.param('id')
+      const { itemId } = parseSendNow(await optionalBody(c))
+      const held = queue.state().held[id] !== undefined
+      const r = await manager.sendNow(id, itemId)
+      // The stop only hands the queued message its turn: the send queue's own messages to this chat are not held by it.
+      if (!held) queue.resume(id)
+      return r
     }),
   )
   app.post('/api/chats/:id/interrupt', (c) =>

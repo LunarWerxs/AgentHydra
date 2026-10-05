@@ -26,6 +26,7 @@ import {
   classifyAttempt,
   climayteCancel,
   climayteCapacity,
+  climayteDeliverNow,
   climayteGet,
   climayteJournal,
   climayteJournalLines,
@@ -53,6 +54,7 @@ import {
   RECENT_FINISHED,
   RESULT_SEPARATOR,
   recentWorkers,
+  SENT_NOW_PREFIX,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   setCliMayteOwnerDir,
@@ -1859,6 +1861,29 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     const events = climayteJournal({ id }).map((e) => e.event)
     expect(events.filter((e) => e === 'follow-up-delivered')).toHaveLength(2)
     expect(climayteJournal({ id }).find((e) => e.urgent)?.event).toBe('follow-up-queued')
+  }, 25_000)
+
+  test('send now: a held message leads the next turn at once, with no second copy', async () => {
+    const id = await start('send-now', 'slow-1')
+    expect(climayteDeliverNow('no-such-worker')).toMatchObject({ ok: false })
+    climayteSend(id, 'first held')
+    climayteSend(id, 'SECOND HELD')
+    expect(climayteDeliverNow(id, 'never sent')).toMatchObject({ ok: true, stopped: false })
+    const now = climayteDeliverNow(id, 'SECOND HELD')
+    expect(now).toMatchObject({ ok: true, stopped: true })
+    expect(now.message).toContain('then the 1 other held message(s)')
+    expect(climayteList({ id })[0]?.pending).toEqual([
+      `${SENT_NOW_PREFIX}\n\nSECOND HELD`,
+      'first held',
+    ])
+
+    const w = await settle(id, 15_000)
+    expect(w?.status).toBe('done')
+    expect(w?.pending).toEqual([])
+    expect(w?.attempts.map((a) => a.outcome)).toEqual(['cancelled', 'done', 'done'])
+    expect(w?.attempts[0]?.notice).toContain('sent now')
+    expect(climayteJournal({ id }).filter((e) => e.event === 'follow-up-delivered')).toHaveLength(2)
+    expect(climayteDeliverNow(id)).toMatchObject({ ok: true, stopped: false })
   }, 25_000)
 
   test('model and effort: unknown values are refused, aliases become full ids, the group default fills in', () => {
