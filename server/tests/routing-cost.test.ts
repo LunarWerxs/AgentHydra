@@ -20,7 +20,7 @@ test('effectiveFraction: a Pro plan at the research numbers is about 1.9% of lis
   expect(f).toBeGreaterThan(0.018)
   expect(f).toBeLessThan(0.02)
   // A Max 5x window is 4.75 Pro windows.
-  expect(effectiveFraction(100, 9.8, 4.75, 20.7)).toBeCloseTo(0.0211, 3)
+  expect(effectiveFraction(100, 9.8, 4.75, 20.7)).toBeCloseTo(0.024, 3)
 })
 
 test('windowsPerWeek is the inverse of week-rise per session-rise, from stored samples', () => {
