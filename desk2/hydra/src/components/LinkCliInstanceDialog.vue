@@ -47,8 +47,17 @@ watch(open, (isOpen) => {
   if (isOpen) selected.value = props.currentDesktopDir ?? ''
 })
 
+// reka-ui's SelectItem throws on value '', so the none option uses a sentinel.
+const NONE = '__none__'
+const selectedModel = computed({
+  get: () => selected.value || NONE,
+  set: (v: string) => {
+    selected.value = v === NONE ? '' : v
+  },
+})
+
 const options = computed(() => [
-  { value: '', label: null as string | null },
+  { value: NONE, label: null as string | null },
   ...props.desktopInstances.map((i) => ({
     value: i.dir,
     label: piiDisplayName(i) as string | null,
@@ -75,11 +84,11 @@ function handleSubmit() {
         </DialogHeader>
 
         <div class="mt-3 flex flex-col gap-1.5">
-          <label class="text-xs font-medium text-muted-foreground">
+          <label id="link-desktop-label" class="text-xs font-medium text-muted-foreground">
             {{ $t('cliInstances.linkDesktopLabel') }}
           </label>
-          <Select v-model="selected">
-            <SelectTrigger class="w-full">
+          <Select v-model="selectedModel">
+            <SelectTrigger class="w-full" aria-labelledby="link-desktop-label">
               <SelectValue :placeholder="$t('cliInstances.linkNone')" />
             </SelectTrigger>
             <SelectContent>
