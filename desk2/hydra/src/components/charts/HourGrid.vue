@@ -13,7 +13,7 @@
 // monotonic by construction and cannot cross a hue boundary. Every cell keeps a faint track, so an
 // hour with nothing in it reads as EMPTY rather than as absent.
 import { useElementSize } from '@vueuse/core'
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ChartTip from '@/components/charts/ChartTip.vue'
 import { formatCompact } from '@/lib/format'
@@ -44,7 +44,10 @@ const gridWidth = computed(() => cell.value * 24 + GAP * 23)
 const { t } = useI18n()
 const max = computed(() => Math.max(1, ...props.hours))
 const hover = ref<number | null>(null)
-const tip = ref({ x: 0, y: 0 })
+// Read only by ChartTip, so moving the pointer re-renders the card and not the grid.
+const tip = shallowRef({ x: 0, y: 0 })
+// Handed over inside a plain object so the template passes the ref itself and never reads it.
+const tipHolder = { pos: tip }
 
 /** Totals for the hovered cell's own day and hour, so the card says how this square compares rather
  *  than only what it holds. Both are cheap sums over 168 numbers. */
@@ -153,8 +156,7 @@ const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21]
   </div>
   <ChartTip
     v-if="hover !== null"
-    :x="tip.x"
-    :y="tip.y"
+    :pos="tipHolder.pos"
     :title="tipTitle"
     :rows="tipRows"
   />

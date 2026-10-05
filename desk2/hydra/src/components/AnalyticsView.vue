@@ -24,8 +24,7 @@ import {
   RefreshCw,
   Wrench,
 } from '@lucide/vue'
-import { useIntervalFn } from '@vueuse/core'
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, onMounted, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CommandCorrections from '@/components/CommandCorrections.vue'
@@ -72,6 +71,7 @@ import { baseName, formatCompact, formatUsd } from '@/lib/format'
 import { accountDisplay, fetchAccountNames, type HswarmAccountName } from '@/lib/hswarm-api'
 import { KIT_POLL_MS, formatUsd as kitUsd } from '@/lib/kit'
 import { scopeParam, summarizeSelection } from '@/lib/session-scopes'
+import { visibleInterval } from '@/lib/visible-poll'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -115,15 +115,35 @@ function toggleSource(value: string) {
  *  vendor is derived from the model id, so the daemon has nothing extra to compute. */
 const vendorFilter = ref<string>('all')
 
-const spend = ref<SpendReport | null>(null)
-const activity = ref<ActivityReport | null>(null)
-const concurrency = ref<ConcurrencyPoint[]>([])
-const edits = ref<EditEntry[]>([])
+// The reports are replaced whole by each read and never edited, so they are shallow: no deep proxy
+// over a large payload, and a timed read that brings the same report again writes nothing.
+const spend = shallowRef<SpendReport | null>(null)
+const activity = shallowRef<ActivityReport | null>(null)
+const concurrency = shallowRef<ConcurrencyPoint[]>([])
+const edits = shallowRef<EditEntry[]>([])
 /** Where the tokens went and why (server/src/analytics.ts sinkReport). */
-const sinks = ref<TokenSinkReport | null>(null)
+const sinks = shallowRef<TokenSinkReport | null>(null)
 /** Tools found on this machine, readable or not. Independent of the period filter: an install is
  *  not something that happened in the last 30 days. */
-const agentTools = ref<AgentPresence[]>([])
+const agentTools = shallowRef<AgentPresence[]>([])
+
+/** What each report looked like when it last landed, so an identical one can be told apart. */
+const seen = new WeakMap<object, string>()
+/** Stores `next` unless it says the same as what is held. */
+function land<T>(target: { value: T }, next: T) {
+  const had = target.value
+  if (had && next && typeof had === 'object' && typeof next === 'object') {
+    let before = seen.get(had)
+    if (before === undefined) {
+      before = JSON.stringify(had)
+      seen.set(had, before)
+    }
+    const after = JSON.stringify(next)
+    if (before === after) return
+    seen.set(next, after)
+  }
+  target.value = next
+}
 
 /** Why a detected tool is not read. Written as a switch over literal keys rather than an
  *  interpolated one so the i18n checker can see every string that is actually used. */
@@ -165,7 +185,7 @@ async function loadSpend(quiet = false) {
       scopeParam(analyticsSources.value, ANALYTICS_SOURCES),
       analyticsPc.value === 'self' ? 'self' : undefined,
     )
-    if (mine === latestSpend) spend.value = s
+    if (mine === latestSpend) land(spend, s)
   } catch {
     if (mine === latestSpend && !quiet) spend.value = null
   } finally {
@@ -188,20 +208,21 @@ async function load(quiet = false) {
     // In parallel: independent reads of the same warmed table, so serialising them would just add
     // round trips to a page that is otherwise instant. The tool scan is the one that touches disk;
     // it is capped and cached server-side, and its failure must not take the charts with it.
+    // The tool scan does not depend on time, so the timed refresh leaves it out.
     const [a, c, e, tools, k] = await Promise.all([
       api.getActivity(period),
       api.getConcurrency(period, period === '24h' ? 60 : 180),
       api.getRecentEdits(120),
-      api.getAgentTools().catch(() => ({ tools: [] })),
+      quiet ? null : api.getAgentTools().catch(() => ({ tools: [] })),
       // An addition to the page: a daemon without the route must not blank every chart.
       api.getSinks(period).catch(() => null),
     ])
     if (mine !== latest) return // the window moved on while we were fetching
-    activity.value = a
-    concurrency.value = c.buckets
-    edits.value = e.edits
-    agentTools.value = tools.tools
-    sinks.value = k
+    land(activity, a)
+    land(concurrency, c.buckets)
+    land(edits, e.edits)
+    if (tools) land(agentTools, tools.tools)
+    land(sinks, k)
   } catch {
     if (mine === latest && !quiet) activity.value = null
   } finally {
@@ -215,9 +236,12 @@ async function load(quiet = false) {
 onMounted(() => load())
 // The charts follow the work while the tab is open, on the same clock as the HSwarm card above
 // them; they used to be read once, when the tab opened (owner, 2026-10-04: "it doesn't even move").
-useIntervalFn(() => {
-  if (document.visibilityState === 'visible' && !loading.value && !refreshing.value) void load(true)
-}, KIT_POLL_MS)
+// It rests while the page is hidden; inside Desk 2 that includes the pane being slid out of view.
+onScopeDispose(
+  visibleInterval(() => {
+    if (!loading.value && !refreshing.value) void load(true)
+  }, KIT_POLL_MS),
+)
 watch(analyticsPeriod, () => load())
 watch([analyticsSources, analyticsPc], () => loadSpend())
 onMounted(async () => {
@@ -492,11 +516,16 @@ const groupedByMonth = computed(() => {
  *  the day it was two bars that hardly moved (owner, 2026-10-04). */
 const byHour = computed(() => spend.value?.byHour ?? null)
 
+// One formatter per kind of label, built once: toLocale*String builds a new one on every call.
+const hourLabel = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
+const dayLabel = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' })
+const monthLabel = new Intl.DateTimeFormat(undefined, { month: 'short', year: '2-digit' })
+
 const dayPoints = computed(() => {
   if (byHour.value)
     return byHour.value.map((b) => ({
       key: b.key,
-      label: new Date(b.key).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
+      label: hourLabel.format(new Date(b.key)),
       value: metricOf(b),
     }))
   const days = spend.value?.byDay ?? []
@@ -505,10 +534,7 @@ const dayPoints = computed(() => {
       key: b.key,
       // "12 Aug" rather than the ISO key: the axis has two labels on it and they are for orienting,
       // not for reading a date off.
-      label: new Date(`${b.key}T00:00:00`).toLocaleDateString(undefined, {
-        day: 'numeric',
-        month: 'short',
-      }),
+      label: dayLabel.format(new Date(`${b.key}T00:00:00`)),
       value: metricOf(b),
     }))
   // Summed, not averaged: the question this chart answers is "what did that month come to".
@@ -521,10 +547,7 @@ const dayPoints = computed(() => {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([key, value]) => ({
       key,
-      label: new Date(`${key}-01T00:00:00`).toLocaleDateString(undefined, {
-        month: 'short',
-        year: '2-digit',
-      }),
+      label: monthLabel.format(new Date(`${key}-01T00:00:00`)),
       value,
     }))
 })

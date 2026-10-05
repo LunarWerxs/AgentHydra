@@ -9,11 +9,14 @@
 // Positioned in FIXED coordinates from the pointer, not inside the chart, so it is never clipped by
 // the chart's own overflow and never widens the card it sits in. It flips to the other side of the
 // cursor near a viewport edge rather than being cut off.
-import { computed } from 'vue'
+import { computed, type ShallowRef } from 'vue'
 
 const props = defineProps<{
-  x: number
-  y: number
+  x?: number
+  y?: number
+  /** The pointer position as a ref the CHART never reads in its own template, so a pointer move
+   *  re-renders only this card and not the grid or bars it describes. Wins over `x` and `y`. */
+  pos?: ShallowRef<{ x: number; y: number }>
   title: string
   /** Label/value pairs. Kept as data rather than a formatted string so the layout stays aligned. */
   rows?: Array<{ label: string; value: string }>
@@ -22,15 +25,19 @@ const props = defineProps<{
 
 const ESTIMATED_W = 220
 const ESTIMATED_H = 96
+const px = () => props.pos?.value.x ?? props.x ?? 0
+const py = () => props.pos?.value.y ?? props.y ?? 0
 const left = computed(() => {
   const vw = typeof window === 'undefined' ? 1280 : window.innerWidth
-  const flipX = props.x + ESTIMATED_W + 24 > vw
-  return `${flipX ? props.x - ESTIMATED_W - 12 : props.x + 12}px`
+  const x = px()
+  const flipX = x + ESTIMATED_W + 24 > vw
+  return `${flipX ? x - ESTIMATED_W - 12 : x + 12}px`
 })
 const top = computed(() => {
   const vh = typeof window === 'undefined' ? 800 : window.innerHeight
-  const flipY = props.y + ESTIMATED_H + 24 > vh
-  return `${flipY ? props.y - ESTIMATED_H - 12 : props.y + 12}px`
+  const y = py()
+  const flipY = y + ESTIMATED_H + 24 > vh
+  return `${flipY ? y - ESTIMATED_H - 12 : y + 12}px`
 })
 </script>
 

@@ -5,7 +5,7 @@
 // One series, so no legend: the caption above the chart names it. Hovering a bar shows its exact
 // value, because the axis is deliberately sparse and reading a value off it is not the job.
 import { useElementSize } from '@vueuse/core'
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import ChartTip from '@/components/charts/ChartTip.vue'
 import { axisMax, ticks } from '@/lib/chart'
 
@@ -41,7 +41,10 @@ const yOf = (v: number) => PAD_T + (plotH - PAD_T) * (1 - v / max.value)
 const fmtAxis = (n: number) => (props.axisFormat ?? props.format)(n)
 
 const hover = ref<number | null>(null)
-const tip = ref({ x: 0, y: 0 })
+// Read only by ChartTip, so moving the pointer re-renders the card and not the bars.
+const tip = shallowRef({ x: 0, y: 0 })
+// Handed over inside a plain object so the template passes the ref itself and never reads it.
+const tipHolder = { pos: tip }
 
 /** The hovered day plus how it sits against the rest, so the card explains rather than repeats. */
 const tipRows = computed(() => {
@@ -140,8 +143,7 @@ function onEnter(i: number, e: MouseEvent) {
   </div>
   <ChartTip
     v-if="hover !== null && points[hover]"
-    :x="tip.x"
-    :y="tip.y"
+    :pos="tipHolder.pos"
     :title="points[hover]?.label ?? ''"
     :rows="tipRows"
   />
