@@ -1153,10 +1153,15 @@ export interface CliMayteTotals {
   rereadShare?: number
 }
 export const getCliMayteTotals = () => j<CliMayteTotals>('/api/corch/totals')
-export const listCliMayteWorkers = (filter: { group?: string; active?: boolean } = {}) => {
+// `limit` keeps every active worker and only that many recently finished ones (a busy queue is
+// thousands of workers); without it the list is every worker.
+export const listCliMayteWorkers = (
+  filter: { group?: string; active?: boolean; limit?: number } = {},
+) => {
   const q = new URLSearchParams()
   if (filter.group) q.set('group', filter.group)
   if (filter.active) q.set('active', '1')
+  if (filter.limit !== undefined) q.set('limit', String(filter.limit))
   const qs = q.toString()
   return j<CliMayteWorkerView[]>(`/api/corch/workers${qs ? `?${qs}` : ''}`)
 }

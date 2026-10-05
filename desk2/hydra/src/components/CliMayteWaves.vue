@@ -56,17 +56,48 @@ const wavesOpen = useStorage('agenthydra.climayte.wavesOpen', false)
 const open = useStorage<Record<string, boolean>>('agenthydra.climayte.waveOpen', {})
 const reportOpen = ref<Record<string, boolean>>({})
 
-const counts = (w: CliMayteWave) =>
-  STATE_ORDER.map((state) => ({
-    state,
-    n: w.tasks.filter((k) => k.state === state).length,
-  })).filter((c) => c.n > 0)
-const hasManager = (w: CliMayteWave) => props.workers.some((x) => x.id === w.managerId)
+/** Per wave, once per change of the waves (not per render or clock tick): the count of each task
+ *  state, the escalations by key, and the ones on a key the plan no longer lists (none is dropped). */
+const derived = computed(() => {
+  const out = new Map<
+    string,
+    {
+      counts: { state: CliMayteWaveTaskState; n: number }[]
+      escalations: Map<string, CliMayteWave['escalations']>
+      strays: CliMayteWave['escalations']
+    }
+  >()
+  for (const w of props.waves) {
+    const tally = new Map<CliMayteWaveTaskState, number>()
+    const keys = new Set<string>()
+    for (const k of w.tasks) {
+      tally.set(k.state, (tally.get(k.state) ?? 0) + 1)
+      keys.add(k.key)
+    }
+    const escalations = new Map<string, CliMayteWave['escalations']>()
+    const strays: CliMayteWave['escalations'] = []
+    for (const e of w.escalations) {
+      const list = escalations.get(e.key)
+      if (list) list.push(e)
+      else escalations.set(e.key, [e])
+      if (!keys.has(e.key)) strays.push(e)
+    }
+    out.set(w.id, {
+      counts: STATE_ORDER.map((state) => ({ state, n: tally.get(state) ?? 0 })).filter(
+        (c) => c.n > 0,
+      ),
+      escalations,
+      strays,
+    })
+  }
+  return out
+})
+const counts = (w: CliMayteWave) => derived.value.get(w.id)?.counts ?? []
+const managerIds = computed(() => new Set(props.workers.map((x) => x.id)))
+const hasManager = (w: CliMayteWave) => managerIds.value.has(w.managerId)
 const short = (sha: string) => sha.slice(0, 7)
-const escalationsOf = (w: CliMayteWave, key: string) => w.escalations.filter((e) => e.key === key)
-/** Escalations on a key the plan no longer lists: none is dropped. */
-const strays = (w: CliMayteWave) =>
-  w.escalations.filter((e) => !w.tasks.some((k) => k.key === e.key))
+const escalationsOf = (w: CliMayteWave, key: string) => derived.value.get(w.id)?.escalations.get(key) ?? []
+const strays = (w: CliMayteWave) => derived.value.get(w.id)?.strays ?? []
 </script>
 
 <template>

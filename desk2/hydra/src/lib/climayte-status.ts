@@ -305,6 +305,24 @@ function failedEnd(accepted: boolean, redo: CliMayteStoryTask | undefined): stri
             : 'climayte.failedEndRedoActive'
 }
 
+const redoKey = (w: CliMayteStoryTask): string => `${w.cwd}\u0000${w.title}`
+// The newest task per title and folder, indexed once per task list (a list is replaced whole when a
+// poll changes it), so a failed task finds its redo without a pass over every task.
+const newestIndex = new WeakMap<readonly CliMayteStoryTask[], Map<string, CliMayteStoryTask>>()
+function newestByTitle(tasks: readonly CliMayteStoryTask[]): Map<string, CliMayteStoryTask> {
+  let index = newestIndex.get(tasks)
+  if (!index) {
+    index = new Map()
+    for (const o of tasks) {
+      const key = redoKey(o)
+      const old = index.get(key)
+      if (!old || o.createdAt > old.createdAt) index.set(key, o)
+    }
+    newestIndex.set(tasks, index)
+  }
+  return index
+}
+
 /** A failed task's story, from the task and the loaded task list; null for any other status. The
  *  list's hover and the detail pane both print it (owner, 2026-10-02: "a little clearer to the human
  *  what failed, and also what the next result was. Try again, use a smarter model, what happened,
@@ -330,11 +348,8 @@ export function climayteFailedStory(
     if (last.note) next.push({ key: 'climayte.failedNote', values: { note: firstLine(last.note) } })
   }
   // Started again: the newest later task with the same title in the same folder.
-  const redo = tasks
-    .filter(
-      (o) => o.id !== w.id && o.title === w.title && o.cwd === w.cwd && o.createdAt > w.createdAt,
-    )
-    .sort((a, b) => b.createdAt - a.createdAt)[0]
+  const newest = newestByTitle(tasks).get(redoKey(w))
+  const redo = newest && newest.id !== w.id && newest.createdAt > w.createdAt ? newest : undefined
   if (redo) {
     const status = { status: CLIMAYTE_STATUS[redo.status].label }
     const was = w.reportedModel ?? w.model
