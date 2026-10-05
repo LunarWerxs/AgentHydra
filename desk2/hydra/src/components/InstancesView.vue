@@ -251,7 +251,8 @@ function holdable(column: SortableColumn<CMInstance>): SortableColumn<CMInstance
       if (!always && !holding.value) {
         // A live column is sorting now, so the memo is dropped: going back to Memory or Tokens
         // afterwards must read them afresh, not reuse the figures from the last time they sorted.
-        held = null
+        // Only when this column IS the sort: any other read of a live accessor leaves the memo be.
+        if (desktopSortKey.value === column.key) held = null
         return live(inst)
       }
       const asked = `${desktopSortDirection.value}|${tokenWindow.value}|${holdEpoch.value}`
