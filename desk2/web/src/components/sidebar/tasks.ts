@@ -291,7 +291,7 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
     const chat =
       sameChat ??
       (sid
-        ? chatFor(null, `origin:|${sid}`, () => ({ title: `A chat · ${sid.slice(0, 8)}`, worker: null, note: NOT_LISTED }))
+        ? chatFor(null, `origin:|${sid}`, () => ({ title: j.callerTitle || `A chat · ${sid.slice(0, 8)}`, worker: null, note: NOT_LISTED }))
         : chatFor(null, 'none:', () => ({ title: 'No chat', worker: null, note: 'Not under a chat: nothing here says which chat started them.' })))
     chat.jobs.push(j)
   }

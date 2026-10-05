@@ -145,7 +145,7 @@ describe('poller', () => {
     const f = await fake()
     const h = harness(f.url)
     await h.poller.tick()
-    expect(h.types().sort()).toEqual(['accounts.update', 'bridge.status', 'climayte.update', 'external.update'])
+    expect(h.types().sort()).toEqual(['accounts.update', 'bridge.status', 'climayte.update', 'external.update', 'swarm.update'])
     expect(h.events.find((e) => e.type === 'bridge.status')).toEqual({ type: 'bridge.status', up: true, url: f.url })
 
     h.events.length = 0
@@ -193,9 +193,10 @@ describe('poller', () => {
       { type: 'bridge.status', up: false, url: f.url },
       { type: 'external.update', sessions: [] },
       { type: 'climayte.update', workers: [] },
+      { type: 'swarm.update', jobs: [] },
       expect.objectContaining({ type: 'accounts.update' }),
     ])
-    const acc = h.events[3] as Extract<ServerEvent, { type: 'accounts.update' }>
+    const acc = h.events[4] as Extract<ServerEvent, { type: 'accounts.update' }>
     expect(acc.accounts.map((a) => a.id)).toEqual(['default'])
 
     // still down: nothing new to say
@@ -246,7 +247,7 @@ describe('poller', () => {
     h.events.length = 0
     h.setClients(1)
     await h.poller.tick()
-    expect(h.types().sort()).toEqual(['accounts.update', 'bridge.status', 'climayte.update', 'external.update'])
+    expect(h.types().sort()).toEqual(['accounts.update', 'bridge.status', 'climayte.update', 'external.update', 'swarm.update'])
   })
 })
 

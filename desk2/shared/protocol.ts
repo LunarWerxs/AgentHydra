@@ -358,12 +358,14 @@ export interface CliMayteWorker {
 }
 
 /**
- * One HSwarm job (AgentHydra's proxy of HSwarm, GET /api/hswarm/api/jobs), for the sidebar: it sits under the chat
- * that called HSwarm. The jobs list stamps the caller as a key ('<instance> / <8 chars of its session> / <folder>'),
- * so `callerSessionId` is that 8-character prefix (a full id when the answer carries the whole stamp) and
- * `callerHostSessionId` is set only then; the window matches a row by prefix.
+ * One HSwarm job (AgentHydra's proxy of HSwarm, GET /api/hswarm/api/jobs, and the other PCs' through
+ * GET /api/corch/remote), for the sidebar: it sits under the chat that called HSwarm. The jobs list gives the
+ * caller's full ids (`caller_ids`): `callerSessionId` is the CLI session (a Claude Desktop chat only has a chat
+ * id, which is resolved to its session through AgentHydra's /api/chats; null when unknown), `callerHostSessionId`
+ * the Desktop chat id and `callerTitle` that chat's name when known. Only an answer without caller_ids falls back
+ * to the old key's 8-character session prefix, which the window matches by prefix.
+ * The jobs reach the window in the `swarm.update` event, every 10 s at most.
  */
-// GET /api/swarm/jobs answers SwarmJob[].
 export interface SwarmJob {
   id: string
   title: string // the job's label, else its id
@@ -371,10 +373,12 @@ export interface SwarmJob {
   active: boolean // still running
   startedAt: number | null
   endedAt: number | null // null while active
-  tasks: { total: number; done: number; failed: number }
-  model: string | null
+  tasks: { total: number; done: number; failed: number; cancelled: number }
   callerSessionId: string | null
   callerHostSessionId: string | null
+  callerTitle: string | null
+  /** The other PC's name when the job ran there; null = this PC. Such jobs show only while the cloud is on. */
+  pc: string | null
 }
 
 export interface AccountInfo extends AccountRef {
@@ -621,6 +625,7 @@ export type ServerEvent =
   | { type: 'bridge.status'; up: boolean; url: string }
   | { type: 'external.update'; sessions: ExternalSession[] }
   | { type: 'climayte.update'; workers: CliMayteWorker[] }
+  | { type: 'swarm.update'; jobs: SwarmJob[] }
   | { type: 'accounts.update'; accounts: AccountInfo[] }
   | { type: 'settings.update'; settings: DeskSettings }
 

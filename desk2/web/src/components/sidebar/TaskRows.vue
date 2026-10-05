@@ -17,7 +17,7 @@ const props = defineProps<{ nodes: TaskNode[]; jobs?: SwarmJob[]; selectedId: st
 const emit = defineEmits<{ open: [worker: CliMayteWorker]; 'open-job': [job: SwarmJob] }>()
 
 const jobTip = (j: SwarmJob) =>
-  [j.title, `HSwarm job · ${j.status} · ${j.tasks.done}/${j.tasks.total} tasks${j.tasks.failed ? `, ${j.tasks.failed} failed` : ''}`, modelName(j.model), 'Click to open it on HSwarm'].filter(Boolean).join('\n')
+  [j.title, `HSwarm job · ${j.status} · ${j.tasks.done}/${j.tasks.total} tasks${j.tasks.failed ? `, ${j.tasks.failed} failed` : ''}${j.tasks.cancelled ? `, ${j.tasks.cancelled} cancelled` : ''}`, j.pc, 'Click to open it on HSwarm'].filter(Boolean).join('\n')
 // Only these lines redraw on the tick, not the list around them.
 const now = useClock()
 
@@ -103,7 +103,6 @@ const hot = ref<string | null>(null)
       <Network class="size-3 shrink-0" :class="j.active ? 'text-accent-text' : j.tasks.failed ? 'text-danger-text' : 'text-text-muted'" aria-hidden="true" />
       <span class="sr-only">HSwarm job, {{ j.status }}:</span>
       <span class="min-w-0 flex-1 truncate">{{ j.title }}</span>
-      <span v-if="j.model" class="max-w-[38%] shrink-0 truncate text-[11px] text-text-muted">{{ modelName(j.model) }}</span>
       <span class="shrink-0 text-[11px] text-text-muted tnum">{{ j.tasks.done }}/{{ j.tasks.total }}</span>
     </button>
   </TransitionGroup>

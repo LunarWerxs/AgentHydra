@@ -210,7 +210,20 @@ export interface AhRemoteWorker {
 export interface AhRemoteQueues {
   /** Queue sharing is off on this PC: `pcs` is then empty. */
   enabled: boolean
-  pcs: { pc: string; name: string; at: number; stale: boolean; workers: AhRemoteWorker[] }[]
+  pcs: { pc: string; name: string; at: number; stale: boolean; workers: AhRemoteWorker[]; jobs?: AhRemoteJob[] }[]
+}
+
+/** One HSwarm job of another PC (server/src/climayte-remote.ts RemoteSwarmJob). */
+export interface AhRemoteJob {
+  id: string
+  label: string
+  state: string
+  tasks: number
+  counts: Record<string, number>
+  created: string | null
+  finished: string | null
+  callerSessionId: string | null
+  callerChatId: string | null
 }
 
 export interface AhTailEvent {
@@ -317,7 +330,8 @@ export interface AhHswarmJob {
   counts?: Record<string, number>
   /** hswarm/caller.py key(): '<instance> / <8 chars of the session> / <folder>'; a whole stamp (an object) is read too. */
   caller?: string | { session_id?: string; chat_id?: string } | null
-  model?: string | null
+  /** The caller's full ids (an empty session_id for a Claude Desktop chat, which has a chat_id like 'local_...'). */
+  caller_ids?: { session_id?: string | null; chat_id?: string | null; instance?: string | null } | null
   created?: string | null
   finished?: string | boolean | null
 }

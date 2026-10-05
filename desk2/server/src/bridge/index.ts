@@ -13,7 +13,7 @@
 
 import type { AccountInfo, AccountRef, CliMayteWorker, ExternalSession, SearchHit, SwarmJob, TranscriptItem } from '@shared/protocol'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
-import { JOBS_ASKED, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
+import { CHATS_FRESH_MS, type ChatIndex, JOBS_ASKED, mapRemoteJobs, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
 import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED } from './climayte'
 import {
   BridgeError,
@@ -191,15 +191,33 @@ export function createBridge(opts: BridgeOptions = {}) {
       .catch(() => [])
   }
 
-  /** HSwarm's running jobs and its newest finished ones; HSwarm down, off or without the route is none. One read
-   *  serves every window for SWARM_FRESH_MS, so HSwarm is asked at most that often, and only while a window asks. */
+  /** Chat id -> session id and title, from AgentHydra's /api/chats: how a job a Desktop chat started (it has a chat
+   *  id and no session id) finds its row. Read at most once per CHATS_FRESH_MS; a failed read keeps the last map. */
+  let chatIndex: { at: number; map: ChatIndex } | null = null
+  async function chatsIndex(): Promise<ChatIndex> {
+    if (chatIndex && now() - chatIndex.at < CHATS_FRESH_MS) return chatIndex.map
+    try {
+      const rows = await client.chats()
+      chatIndex = { at: now(), map: new Map(rows.map((r) => [r.chatId, { sessionId: r.sessionId, title: r.title || null }])) }
+    } catch {
+      chatIndex = { at: now(), map: chatIndex?.map ?? new Map() }
+    }
+    return chatIndex.map
+  }
+
+  /** HSwarm's running jobs and its newest finished ones, then the other PCs' (`pc` set); HSwarm down, off or without
+   *  the route is none. One read serves every caller for SWARM_FRESH_MS (the poller asks on its 3 s timer). */
   let lastJobs: { at: number; jobs: Promise<SwarmJob[]> } | null = null
   function swarmJobs(): Promise<SwarmJob[]> {
     if (lastJobs && now() - lastJobs.at < SWARM_FRESH_MS) return lastJobs.jobs
-    const jobs = client
-      .hswarmJobs(JOBS_ASKED)
-      .then(mapSwarmJobs)
-      .catch(() => [])
+    const jobs = (async () => {
+      const [answer, remote, chats] = await Promise.all([
+        client.hswarmJobs(JOBS_ASKED).catch(() => null),
+        client.remoteQueues().catch(() => null),
+        chatsIndex(),
+      ])
+      return [...mapSwarmJobs(answer, chats), ...mapRemoteJobs(remote, chats)]
+    })()
     lastJobs = { at: now(), jobs }
     return jobs
   }

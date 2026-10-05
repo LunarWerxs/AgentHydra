@@ -230,7 +230,7 @@ test("a task dispatched from a remote worker's earlier session sits under that w
 
 // HSwarm jobs: nested under the row of the session that called HSwarm, apart from the CliMayte tasks.
 function swarmJob(id: string, o: Partial<SwarmJob> = {}): SwarmJob {
-  return { id, title: id, status: 'running', active: true, startedAt: 1, endedAt: null, tasks: { total: 4, done: 1, failed: 0 }, model: null, callerSessionId: null, callerHostSessionId: null, ...o }
+  return { id, title: id, status: 'running', active: true, startedAt: 1, endedAt: null, tasks: { total: 4, done: 1, failed: 0, cancelled: 0 }, callerSessionId: null, callerHostSessionId: null, callerTitle: null, pc: null, ...o }
 }
 
 test("an HSwarm job sits under the row of its caller's session, or of its host session, apart from the CliMayte tasks", () => {

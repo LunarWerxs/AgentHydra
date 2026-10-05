@@ -103,7 +103,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       return fail(c, b, err)
     }
   })
-  // HSwarm's running jobs and newest finished ones, for the sidebar (web/src/lib/swarm-jobs.ts); none while HSwarm is down.
+  // HSwarm's running jobs and newest finished ones, for debugging: the window gets them in the poller's swarm.update event.
   app.get('/api/swarm/jobs', async (c) => c.json(await b.swarmJobs()))
   app.post('/api/climayte/workers/:id/cancel', async (c) => {
     try {

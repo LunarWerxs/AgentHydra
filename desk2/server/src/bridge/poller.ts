@@ -34,7 +34,7 @@ function sameJson(a: unknown, b: unknown): boolean {
 }
 
 export interface PollerOptions {
-  bridge: Pick<Bridge, 'url' | 'ping' | 'externalSessions' | 'workers' | 'listAccounts'> & Partial<Pick<Bridge, 'onWorkersChanged'>>
+  bridge: Pick<Bridge, 'url' | 'ping' | 'externalSessions' | 'workers' | 'listAccounts'> & Partial<Pick<Bridge, 'onWorkersChanged' | 'swarmJobs'>>
   broadcast(event: ServerEvent): void
   wsClientCount(): number
   fastMs?: number
@@ -102,20 +102,24 @@ export function createPoller(o: PollerOptions) {
       idle = false
       emitIfChanged({ type: 'external.update', sessions: [] })
       emitIfChanged({ type: 'climayte.update', workers: [] })
+      emitIfChanged({ type: 'swarm.update', jobs: [] })
       emitIfChanged({ type: 'accounts.update', accounts: [DEFAULT_ACCOUNT_INFO] })
       accountsAt = 0
       return
     }
 
     const dueAccounts = flipped || now() - accountsAt >= accountsMs
-    const [sessions, workers, accounts] = await Promise.all([
+    const [sessions, workers, jobs, accounts] = await Promise.all([
       o.bridge.externalSessions().catch(() => null),
       o.bridge.workers().catch(() => null),
+      // The bridge reads HSwarm at most every SWARM_FRESH_MS (10 s); the other ticks get its last answer.
+      o.bridge.swarmJobs?.().catch(() => null) ?? null,
       dueAccounts ? o.bridge.listAccounts().catch(() => null) : Promise.resolve(null),
     ])
     // A read that failed for another reason than "down" keeps the last list rather than blanking it.
     if (sessions) emitIfChanged({ type: 'external.update', sessions })
     if (workers) emitIfChanged({ type: 'climayte.update', workers })
+    if (jobs) emitIfChanged({ type: 'swarm.update', jobs })
     // Nothing running (and both reads answered): the timer can rest between polls.
     idle = !!sessions && !!workers && !sessions.some((x) => x.status === 'working' || x.status === 'needs_you') && !workers.some((w) => w.active)
     if (accounts) {

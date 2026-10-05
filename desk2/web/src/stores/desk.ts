@@ -6,6 +6,7 @@ import type {
   HomeStats,
   HomeStatsRange,
   CliMayteWorker,
+  SwarmJob,
   AccountInfo,
   AccountRef,
   DeskSettings,
@@ -56,6 +57,9 @@ interface DeskStoreState {
   external: ExternalSession[]
   workers: CliMayteWorker[]
   remoteWorkers: CliMayteWorker[]
+  /** HSwarm's jobs on this PC and on the other PCs (`pc` set), split as the workers are (splitJobs). */
+  swarmJobs: SwarmJob[]
+  remoteSwarmJobs: SwarmJob[]
   accounts: AccountInfo[]
   settings: DeskSettings | null
   connected: boolean
@@ -81,12 +85,18 @@ function splitWorkers(list: CliMayteWorker[]): Pick<DeskStoreState, 'workers' | 
   return { workers: list.filter((w) => !w.pc), remoteWorkers: list.filter((w) => !!w.pc) }
 }
 
+/** The server's one job list (swarm.update), split by PC like the workers: the other PCs' show only with the cloud on. */
+function splitJobs(list: SwarmJob[]): Pick<DeskStoreState, 'swarmJobs' | 'remoteSwarmJobs'> {
+  return { swarmJobs: list.filter((j) => !j.pc), remoteSwarmJobs: list.filter((j) => !!j.pc) }
+}
+
 // Outside sessions and CliMayte workers start from this browser's last copy (lib/list-cache.ts), so a
 // reload shows the sidebar before the server's welcome lands.
 const store = reactive<DeskStoreState>({
   chats: [],
   external: readListCache<ExternalSession>('external') ?? [],
   ...splitWorkers(readListCache<CliMayteWorker>('workers') ?? []),
+  ...splitJobs([]),
   accounts: [],
   settings: null,
   connected: false,
@@ -385,6 +395,10 @@ function handleServerEvent(event: ServerEvent) {
       cacheLater('workers', event.workers)
       break
 
+    case 'swarm.update':
+      Object.assign(store, splitJobs(event.jobs))
+      break
+
     case 'accounts.update':
       store.accounts = event.accounts
       break
@@ -663,6 +677,9 @@ export function useDesk() {
     workers: computed(() => store.workers),
     /** The other PCs' CliMayte workers, for the sidebar's CliMayte rows only (splitWorkers). */
     remoteWorkers: computed(() => store.remoteWorkers),
+    /** HSwarm's jobs on this PC, and the other PCs' (the sidebar shows those with the cloud on). */
+    swarmJobs: computed(() => store.swarmJobs),
+    remoteSwarmJobs: computed(() => store.remoteSwarmJobs),
     accounts: computed(() => store.accounts),
     settings: computed(() => store.settings),
     connected: computed(() => store.connected),

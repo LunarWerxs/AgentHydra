@@ -6,7 +6,7 @@ import { nestTasks } from '../../src/components/sidebar/tasks'
 const worker = (id: string, o: Partial<CliMayteWorker> = {}): CliMayteWorker =>
   ({ id, title: `Task ${id}`, group: null, status: 'running', active: true, sessionId: `s-${id}`, originSessionId: 's-chat', originWorkerId: null, startedAt: 1, ...o }) as CliMayteWorker
 const job = (id: string, o: Partial<SwarmJob> = {}): SwarmJob =>
-  ({ id, title: `Job ${id}`, status: 'running', active: true, callerSessionId: 's-chat', startedAt: 1, tasks: { done: 0, total: 1, failed: 0 }, ...o }) as SwarmJob
+  ({ id, title: `Job ${id}`, status: 'running', active: true, callerSessionId: 's-chat', startedAt: 1, tasks: { done: 0, total: 1, failed: 0, cancelled: 0 }, callerTitle: null, pc: null, ...o }) as SwarmJob
 
 test('the mode store defaults to List for CliMayte and Count for HSwarm, and reads a stored value', () => {
   expect(SUB_MODE_DEFAULTS).toEqual({ tasks: 'list', jobs: 'count' })
