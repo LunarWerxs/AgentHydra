@@ -11,7 +11,6 @@
 // AgentHydra down never throws out of a list: accounts fall back to the default login, sessions and
 // workers to []. Writes (cancel, send) and a single transcript read do throw a BridgeError.
 
-import { existsSync } from 'node:fs'
 import type { AccountInfo, AccountRef, CliMayteWorker, ExternalSession, SearchHit, TranscriptItem } from '@shared/protocol'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
 import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED } from './climayte'
@@ -54,6 +53,8 @@ export interface BridgeOptions extends HydraClientOptions {
 const WORKERS_FRESH_MS = 3000
 /** How long one read of AgentHydra's CLI instances serves the account list, the resume matching and the transcript folders. */
 const INSTANCES_FRESH_MS = 30_000
+/** How long the list of projects folders is reused. */
+const ROOTS_FRESH_MS = 10_000
 /** How long a search hit's session row (its title, folder, activity time) is reused before it is read again. */
 const SEARCH_ROW_FRESH_MS = 60_000
 /** At most this many search rows are kept; the oldest go first. */
@@ -258,11 +259,17 @@ export function createBridge(opts: BridgeOptions = {}) {
     return sessionMeta([found])[0] ?? found
   }
 
-  /** Claude-format projects folders: the default login, Desktop instances and AgentHydra's CLI instances. */
+  let rootsRead: { at: number; roots: string[] } | null = null
+
+  /** Claude-format projects folders: the default login, Desktop instances and AgentHydra's CLI instances.
+   *  Remembered for ROOTS_FRESH_MS: the polls of an open chat would otherwise scan the folders each time. */
   async function projectRoots(): Promise<string[]> {
     if (opts.projectRoots) return opts.projectRoots()
+    if (rootsRead && now() - rootsRead.at < ROOTS_FRESH_MS) return rootsRead.roots
     const instances = await cliInstances().catch(() => [])
-    return claudeProjectRoots(instances.map((i) => i.configDir))
+    const roots = claudeProjectRoots(instances.map((i) => i.configDir))
+    rootsRead = { at: now(), roots }
+    return roots
   }
 
   /** Every projects folder a session's transcript can be in, as of the last instance read. */
@@ -272,8 +279,14 @@ export function createBridge(opts: BridgeOptions = {}) {
 
   async function externalItems(sessionId: string): Promise<TranscriptItem[]> {
     // A Claude Code session's own .jsonl keeps every newline, list and code fence; the tail flattens them.
+    const known = foundAt.get(sessionId)
+    const items = known ? readItems(known) : null
+    if (items) return items
     const file = findSessionJsonl(sessionId, await projectRoots())
-    if (file) return sessionJsonlItems(file)
+    if (file) {
+      rememberFile(sessionId, file)
+      return sessionJsonlItems(file)
+    }
     const tail = await client.tail(sessionId)
     if (!tail.error) return tailToItems(tail)
     // Not in the transcript index: a CliMayte worker's session lives in its CLI instance's folder.
@@ -346,8 +359,26 @@ export function createBridge(opts: BridgeOptions = {}) {
     return ids.length ? client.workersByIds(ids) : Promise.resolve([])
   }
 
-  /** Where each session's JSONL was last found: checked first, so a read is a stat, not a scan of every account folder. */
+  /** Where each session's JSONL was last found: checked first, so a read is a stat, not a scan of every account folder.
+   *  The newest FOUND_KEPT, so a long-lived server does not keep every session it ever read. */
   const foundAt = new Map<string, string>()
+  const FOUND_KEPT = 200
+
+  function rememberFile(sessionId: string, file: string): void {
+    foundAt.delete(sessionId)
+    foundAt.set(sessionId, file)
+    if (foundAt.size > FOUND_KEPT) foundAt.delete(foundAt.keys().next().value as string)
+  }
+
+  /** A file's items, or null when the file is gone (the stat of the read says so; no separate existence check). */
+  function readItems(file: string, cwd?: string | null): TranscriptItem[] | null {
+    try {
+      return sessionJsonlItems(file, cwd)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw err
+    }
+  }
 
   /** Each worker's list as last answered, with the per-file lists it was made of (sessionJsonlItems answers the
    *  same array for a file that has not changed): while none changed, the same list goes back. The newest few. */
@@ -365,15 +396,16 @@ export function createBridge(opts: BridgeOptions = {}) {
     let roots: string[] | null = null
     const parts: TranscriptItem[][] = []
     for (const sid of new Set(sessionIds)) {
-      let file = o.rescan ? null : foundAt.get(sid) ?? null
-      if (file && !existsSync(file)) file = null
-      if (!file) {
+      const known = o.rescan ? null : foundAt.get(sid)
+      let part = known ? readItems(known, cwd) : null
+      if (!part) {
         roots ??= await projectRoots()
-        file = findSessionJsonl(sid, roots, cwd)
+        const file = findSessionJsonl(sid, roots, cwd)
+        if (!file) continue
+        rememberFile(sid, file)
+        part = sessionJsonlItems(file, cwd)
       }
-      if (!file) continue
-      foundAt.set(sid, file)
-      parts.push(sessionJsonlItems(file, cwd))
+      parts.push(part)
     }
     const key = `${sessionIds.join(',')}|${cwd ?? ''}`
     const last = workerReads.get(key)
