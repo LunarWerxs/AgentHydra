@@ -55,15 +55,20 @@ function toggle() {
 }
 
 const resizing = ref(false)
+// The width while a drag is running: the stored width is written once, when the pointer lets go,
+// not a synchronous localStorage write (and shared-prefs mirror) per pointermove.
+const dragWidth = ref<number | null>(null)
 function startResize(e: PointerEvent) {
   const startX = e.clientX
   const startWidth = width.value
   resizing.value = true
   const onMove = (ev: PointerEvent) => {
-    width.value = clampWidth(startWidth + ev.clientX - startX)
+    dragWidth.value = clampWidth(startWidth + ev.clientX - startX)
   }
   const onUp = () => {
     resizing.value = false
+    if (dragWidth.value !== null) width.value = dragWidth.value
+    dragWidth.value = null
     window.removeEventListener('pointermove', onMove)
     window.removeEventListener('pointerup', onUp)
   }
@@ -81,7 +86,7 @@ function startResize(e: PointerEvent) {
   <aside
     class="relative min-h-0 shrink-0 overflow-hidden border-e border-border bg-sidebar"
     :class="[collapsed ? 'w-11' : 'sessions-sidebar-w', resizing ? '' : 'transition-width duration-300 ease-in-out']"
-    :style="{ '--sidebar-w': `${width}px` }"
+    :style="{ '--sidebar-w': `${dragWidth ?? width}px` }"
   >
     <IconTooltip :label="collapsed ? $t('sessions.expandSidebar') : $t('sessions.collapseSidebar')">
       <Button variant="ghost" size="icon" class="absolute right-2 top-1.5 z-10" @click="toggle">

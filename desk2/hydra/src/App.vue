@@ -17,16 +17,10 @@ import {
   Sun,
   Terminal,
 } from '@lucide/vue'
-import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import AnalyticsView from '@/components/AnalyticsView.vue'
 import AutomationSettings from '@/components/AutomationSettings.vue'
-import CliMayteView from '@/components/CliMayteView.vue'
-import CliView from '@/components/CliView.vue'
-import HSwarmView from '@/components/HSwarmView.vue'
-import InstancesHomeView from '@/components/InstancesHomeView.vue'
-import InstancesView from '@/components/InstancesView.vue'
 import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
 import QueueBuilder from '@/components/QueueBuilder.vue'
 import QueueView from '@/components/QueueView.vue'
@@ -71,6 +65,15 @@ import { applyWindowSizeHint } from '@/lib/window-size-hint'
 import DiscordMark from '@/shell/DiscordMark.vue'
 import Sidebar from '@/shell/Sidebar.vue'
 import { usePushPanel } from '@/shell/usePushPanel'
+
+// Each tab's view loads the first time its tab opens, so the pane starts with the shell and the one
+// view in front of it, not the whole graph (charts included).
+const AnalyticsView = defineAsyncComponent(() => import('@/components/AnalyticsView.vue'))
+const CliMayteView = defineAsyncComponent(() => import('@/components/CliMayteView.vue'))
+const CliView = defineAsyncComponent(() => import('@/components/CliView.vue'))
+const HSwarmView = defineAsyncComponent(() => import('@/components/HSwarmView.vue'))
+const InstancesHomeView = defineAsyncComponent(() => import('@/components/InstancesHomeView.vue'))
+const InstancesView = defineAsyncComponent(() => import('@/components/InstancesView.vue'))
 
 // The studio's one invite link, never expiring (the same one every product carries).
 const DISCORD_URL = 'https://lunarwerx.com/discord/agenthydra'

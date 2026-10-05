@@ -1,9 +1,11 @@
 // The web's one analytics layer: one fetch of the toolkit's usage query (server/src/kit/query.ts,
 // GET /api/kit/usage), a shared ref-counted poll, and the one token and USD formatter set.
 // docs/ANALYTICS-PLAN.md section 4.7 and piece 16.
-import { computed, getCurrentScope, onScopeDispose, reactive } from 'vue'
+import { computed, getCurrentScope, onScopeDispose, shallowReactive } from 'vue'
 import { t } from '@/i18n'
 import { j } from '@/lib/api'
+import { sameData } from '@/lib/reconcile'
+import { visibleInterval } from '@/lib/visible-poll'
 
 // ---- the query -----------------------------------------------------------------------------------
 
@@ -66,7 +68,7 @@ export interface PollState<T> {
 interface Poll<T> {
   state: PollState<T>
   refs: number
-  timer: ReturnType<typeof setInterval> | undefined
+  stopTimer: (() => void) | undefined
   load: () => Promise<void>
   first: Promise<void>
 }
@@ -84,7 +86,8 @@ export function acquirePoll<T>(
   let poll = polls.get(key) as Poll<T> | undefined
   const shared = poll !== undefined
   if (!poll) {
-    const state = reactive({
+    // Shallow: the payload is replaced whole, never edited, so it needs no deep proxy.
+    const state = shallowReactive({
       data: null,
       loading: false,
       error: null,
@@ -93,7 +96,9 @@ export function acquirePoll<T>(
     const load = async () => {
       state.loading = state.data === null
       try {
-        state.data = await fetcher()
+        const next = await fetcher()
+        // An unchanged answer keeps the old reference, so no chart or card redraws for it.
+        if (!sameData(state.data, next)) state.data = next
         state.error = null
         state.offline = false
       } catch (err) {
@@ -103,17 +108,15 @@ export function acquirePoll<T>(
         state.loading = false
       }
     }
-    poll = { state, refs: 0, timer: undefined, load, first: Promise.resolve() }
+    poll = { state, refs: 0, stopTimer: undefined, load, first: Promise.resolve() }
     polls.set(key, poll as Poll<unknown>)
   }
   poll.refs++
   if (poll.refs === 1) {
     const p = poll
     p.first = p.load()
-    p.timer = setInterval(() => {
-      if (typeof document !== 'undefined' && document.hidden) return
-      void p.load()
-    }, ms)
+    // Rests while the page is hidden (the pane out of view in Desk) and loads at once on return.
+    p.stopTimer = visibleInterval(() => void p.load(), ms)
   }
   const held = poll
   let released = false
@@ -126,7 +129,7 @@ export function acquirePoll<T>(
       released = true
       held.refs--
       if (held.refs <= 0) {
-        clearInterval(held.timer)
+        held.stopTimer?.()
         if (polls.get(key) === held) polls.delete(key)
       }
     },
