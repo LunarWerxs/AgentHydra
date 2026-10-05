@@ -25,11 +25,10 @@ watch(() => props.item.text, () => nextTick(measure))
 </script>
 
 <template>
-  <div class="tx-card max-w-[85%] self-start px-3 py-2 text-[13px] leading-5">
+  <div class="tx-card max-w-[72%] self-start px-3 py-2 text-[13px] leading-5">
     <div class="flex items-center gap-1.5 text-text-muted">
       <Bot class="size-3.5 shrink-0" />
-      <span class="truncate text-text-2">{{ item.from }}</span>
-      <span class="shrink-0">· automatic note, not from you</span>
+      <span class="truncate text-text-2">{{ item.from }} response</span>
     </div>
     <p v-if="item.text" ref="body" class="mt-1 whitespace-pre-wrap break-words text-text-2" :class="!expanded && 'line-clamp-4'">{{ item.text }}</p>
     <button v-if="clipped || expanded" type="button" class="mt-0.5 text-text-muted hover:text-text" :aria-expanded="expanded" @click="expanded = !expanded">
