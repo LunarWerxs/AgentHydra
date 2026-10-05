@@ -154,7 +154,8 @@ function parts(r: SidebarRow): [string, string, string] {
   const [a, b] = r.hit
   return [r.label.slice(0, a), r.label.slice(a, b), r.label.slice(b)]
 }
-const hasBranches = (rs: SidebarRow[]) => rs.some((r) => r.branch)
+/** The sections that have a branch row, so their other rows leave room for the chevron; once per model. */
+const branching = computed(() => new Set(props.model.sections.filter((s) => s.rows.some((r) => r.branch)).map((s) => s.key)))
 // A logo that does not load gives way to the initials.
 const brokenAvatars = ref(new Set<string>())
 const empty = computed(() => !rows.value.length)
@@ -273,7 +274,7 @@ const FOOT_BTN =
             <span v-if="r.branch" class="flex size-4 shrink-0 items-center justify-center text-text-muted" aria-hidden="true" @click.stop="send.toggle(r.key)">
               <ChevronRight class="size-3 transition-transform duration-[var(--dur-fast)]" :class="r.branch === 'open' ? 'rotate-90' : ''" />
             </span>
-            <span v-else-if="hasBranches(sec.rows)" class="size-4 shrink-0" aria-hidden="true" />
+            <span v-else-if="branching.has(sec.key)" class="size-4 shrink-0" aria-hidden="true" />
             <span v-if="r.status" class="flex size-5 shrink-0 items-center justify-center" :class="tone(r.status.tone)" :title="r.status.label">
               <component :is="icon(r.status.icon)" v-if="r.status.icon" class="size-3.5" :class="r.status.spin ? 'animate-spin' : ''" aria-hidden="true" />
               <span v-else-if="r.status.dot" class="size-1.5 rounded-full" :class="[DOT[r.status.dot], r.status.pulse ? 'animate-pulse' : '']" aria-hidden="true" />
@@ -292,7 +293,7 @@ const FOOT_BTN =
               <span v-else class="flex size-4 shrink-0 items-center justify-center rounded-[3px] bg-fill-5 text-[9px] font-semibold text-text-muted" aria-hidden="true">{{ r.avatar.text }}</span>
             </template>
             <component :is="icon(r.icon)" v-else-if="r.icon" class="size-3.5 shrink-0 text-text-muted" aria-hidden="true" />
-            <span class="min-w-0 flex-1 truncate">{{ parts(r)[0] }}<mark v-if="parts(r)[1]" class="rounded-[2px] bg-[rgb(250_204_21/0.3)] text-inherit">{{ parts(r)[1] }}</mark>{{ parts(r)[2] }}</span>
+            <span class="min-w-0 flex-1 truncate"><template v-for="[before, match, after] in [parts(r)]" :key="r.key">{{ before }}<mark v-if="match" class="rounded-[2px] bg-[rgb(250_204_21/0.3)] text-inherit">{{ match }}</mark>{{ after }}</template></span>
             <component :is="icon(r.badge.icon)" v-if="r.badge" class="size-3.5 shrink-0 text-text-muted" :aria-label="r.badge.label" />
             <span v-if="r.chip" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-warning-text" :title="r.chip.hint">{{ r.chip.text }}</span>
             <span v-if="r.count != null" class="shrink-0 text-[12px] leading-4 text-text-muted tnum">({{ r.count }})</span>

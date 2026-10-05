@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { Cloud } from '@lucide/vue'
 import type { CliMayteWorker, CloudSession } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
+import { useClock } from '@/lib/clock'
 import { Tip } from '@/components/ui/tooltip'
 import { relativeTime } from '@/components/sidebar/search'
 import TaskRows from '@/components/sidebar/TaskRows.vue'
@@ -45,11 +46,18 @@ function toggleGroup(key: string) {
 /** The running tasks under a group's rows, and its rows that run, for its heading while it is folded. */
 const runningInGroup = (rows: readonly CloudSession[]) => (props.tasksOf ? runningIn(rows.map((r) => props.tasksOf!(r.id))) : 0)
 const chatsRunningIn = (rows: readonly CloudSession[]) => (props.running ? rows.filter((r) => props.running!(r.id)).length : 0)
+const foldedRunning = computed(() => {
+  const out = new Map<string, { tasks: number; chats: number }>()
+  for (const g of cloud.groups.value) {
+    if (!collapsed.value.has(g.key)) continue
+    const tasks = runningInGroup(g.rows)
+    const chats = chatsRunningIn(g.rows)
+    if (tasks || chats) out.set(g.key, { tasks, chats })
+  }
+  return out
+})
 
-const now = ref(Date.now())
-let timer: ReturnType<typeof setInterval> | null = null
-onMounted(() => (timer = setInterval(() => (now.value = Date.now()), 30_000)))
-onBeforeUnmount(() => timer && clearInterval(timer))
+const now = useClock(30_000)
 
 const thisPc = computed(() => cloud.thisPc.value)
 /** The other PC's name on a chat the chat sync brought from it; null for this PC's rows. */
@@ -76,6 +84,12 @@ function dotClass(r: CloudSession): string {
   const g = props.glyph?.(r.id)
   return g ? glyphDotClass(g) : 'bg-text-muted'
 }
+// Each row's tooltip, built when the rows change and not on every redraw (the 30 s clock redraws them).
+const tips = computed(() => {
+  const out = new Map<string, string>()
+  for (const g of cloud.groups.value) for (const r of g.rows) out.set(r.id, tooltip(r))
+  return out
+})
 function onRow(r: CloudSession) {
   if (cloud.selectMode.value) cloud.toggleSelected(r.id)
   else emit('open', r)
@@ -120,7 +134,7 @@ const ROW =
               class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)] group-hover/head:opacity-100"
               :class="collapsed.has(g.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
             />
-            <RunningBadge v-if="collapsed.has(g.key) && (runningInGroup(g.rows) || chatsRunningIn(g.rows))" class="ml-1" :tasks="runningInGroup(g.rows)" :chats="chatsRunningIn(g.rows)" />
+            <RunningBadge v-if="foldedRunning.get(g.key)" class="ml-1" :tasks="foldedRunning.get(g.key)!.tasks" :chats="foldedRunning.get(g.key)!.chats" />
           </button>
         </Tip>
         <span class="flex-1" />
@@ -129,7 +143,7 @@ const ROW =
       </header>
       <TransitionGroup v-if="!collapsed.has(g.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
         <div v-for="r in g.rows" :key="r.id" class="flex flex-col gap-[1.5px]">
-        <Tip :label="tooltip(r)" side="right" align="start">
+        <Tip :label="tips.get(r.id) ?? ''" side="right" align="start">
           <div
             role="button"
             tabindex="0"

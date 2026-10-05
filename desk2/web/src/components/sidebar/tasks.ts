@@ -79,16 +79,30 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
   for (const w of workers) for (const s of sessionsOf(w)) bySession.set(s, w)
   const byKey = new Map(workers.map((w) => [keyOf(w), w]))
 
+  // Workers indexed once: under the worker that dispatched them when it is listed, else under the session
+  // they came from, so a row's tasks are lookups and not a filter over every worker.
+  const place = new Map<CliMayteWorker, number>(workers.map((w, i) => [w, i]))
+  const byParent = new Map<string, CliMayteWorker[]>()
+  const byOrigin = new Map<string, CliMayteWorker[]>()
+  const addTo = (index: Map<string, CliMayteWorker[]>, key: string, w: CliMayteWorker) => {
+    const list = index.get(key)
+    if (list) list.push(w)
+    else index.set(key, [w])
+  }
+  for (const w of workers) {
+    const parent = parentKey(w)
+    if (parent && byKey.has(parent)) addTo(byParent, parent, w)
+    else if (w.originSessionId) addTo(byOrigin, w.originSessionId, w)
+  }
+
   /** The tasks a row (its sessions, and the workers those sessions belong to) handed out. */
   function kidsOf(sessions: ReadonlySet<string>, self: ReadonlySet<string>): CliMayteWorker[] {
-    return workers
-      .filter((w) => {
-        if (self.has(keyOf(w))) return false
-        const parent = parentKey(w)
-        if (parent && byKey.has(parent)) return self.has(parent)
-        return !!w.originSessionId && sessions.has(w.originSessionId)
-      })
-      .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
+    const found = new Set<CliMayteWorker>()
+    for (const key of self) for (const w of byParent.get(key) ?? []) found.add(w)
+    for (const id of sessions) for (const w of byOrigin.get(id) ?? []) found.add(w)
+    return [...found]
+      .filter((w) => !self.has(keyOf(w)))
+      .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0) || place.get(a)! - place.get(b)!)
   }
   // `seen` ends it: each task is walked once, however deep or looped the data.
   function walk(sessions: ReadonlySet<string>, self: ReadonlySet<string>, depth: number, seen: Set<string>): TaskNode[] {
