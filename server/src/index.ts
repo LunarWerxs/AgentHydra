@@ -833,6 +833,7 @@ await import('./routes/session-message')
 await import('./routes/versions')
 await import('./routes/climayte')
 await import('./routes/hswarm')
+await import('./routes/routing')
 
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------
 app.post('/api/portable-window', async (c) => {
