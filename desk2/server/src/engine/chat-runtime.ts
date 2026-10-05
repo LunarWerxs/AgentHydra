@@ -4,7 +4,7 @@
 // MCP elicitation ones (onElicitation).
 
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -132,6 +132,8 @@ interface PendingElicitation {
 }
 
 const STDERR_TAIL_CHARS = 4000
+/** Stderr chunks that arrive within this many ms of a write are gathered into the next one. */
+const STDERR_FLUSH_MS = 200
 const STDERR_TAIL_LINES = 20
 /** Images larger than this (base64 chars) are kept out of the stored transcript. */
 const MAX_STORED_IMAGE_CHARS = 200_000
@@ -158,14 +160,32 @@ export function isSignInFailureText(text: string): boolean {
   return SIGN_IN_TEXT.test(text)
 }
 
-/** `mcpServers.agenthydra` from ~/.claude.json, or null. Never logs what it read. */
+/** What was read from each config file last, by its size and mtime: the file grows to megabytes, and every chat start and MCP list asks for the same entry. */
+const agentHydraMcpMemo = new Map<string, { sig: string; mcp: McpServerConfig | null }>()
+
+/** `mcpServers.agenthydra` from ~/.claude.json, or null. Never logs what it read. Read again only when the file changed. */
 export function readAgentHydraMcp(file = join(homedir(), '.claude.json')): McpServerConfig | null {
   try {
+    const st = statSync(file)
+    const sig = `${st.size}:${st.mtimeMs}`
+    const hit = agentHydraMcpMemo.get(file)
+    if (hit && hit.sig === sig) return hit.mcp
     const json = JSON.parse(readFileSync(file, 'utf8')) as { mcpServers?: Record<string, McpServerConfig> }
-    return json.mcpServers?.agenthydra ?? null
+    const mcp = json.mcpServers?.agenthydra ?? null
+    agentHydraMcpMemo.set(file, { sig, mcp })
+    return mcp
   } catch {
+    agentHydraMcpMemo.delete(file)
     return null
   }
+}
+
+/** Whether two chat summaries differ (a shallow comparison: their object fields, account and workerIds, are replaced when they change, never edited in place). */
+export function chatDiffers(a: ChatSummary, b: ChatSummary): boolean {
+  const x = a as unknown as Record<string, unknown>
+  const y = b as unknown as Record<string, unknown>
+  for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) if (!Object.is(x[k], y[k])) return true
+  return false
 }
 
 /** The main .claude.json to read: the one given, else ~/.claude.json unless a test injected agentHydraMcp (then none). */
@@ -229,6 +249,10 @@ export class ChatRuntime {
   private limitAnnounced = false
   private idleTimer: ReturnType<typeof setTimeout> | null = null
   private stderrTail = ''
+  private logBuffer = ''
+  private logTimer: ReturnType<typeof setTimeout> | null = null
+  /** The chat as last published, so a message that changed nothing in it publishes nothing. */
+  private published: ChatSummary | null = null
   /** The mode the chat had when it went into plan mode: approving the plan goes back to it. */
   private beforePlan: PermissionMode | null = null
   private readonly pending = new Map<string, Pending | PendingElicitation>()
@@ -743,6 +767,7 @@ ${swap.real}` }
       // already gone
     }
     this.q = null
+    this.endLog()
     this.dispatch({ type: 'closed' })
     this.unqueueAll()
     this.publishChat()
@@ -912,7 +937,8 @@ ${swap.real}` }
     if (this.chat.status === 'working' || this.chat.status === 'needs_you') this.clearIdleTimer()
     else this.armIdleTimer()
     this.ackHost(msg)
-    this.publishChat()
+    // Streamed text and tool progress change no field of the chat: only a changed summary goes out.
+    if (!this.published || chatDiffers(this.published, this.chat)) this.publishChat()
     // At the quiet point after a turn the session's own transcript says where it is now.
     if (this.cwdCheckDue && !this.replaying && !this.midTurn && this.chat.status === 'idle') {
       this.cwdCheckDue = false
@@ -984,6 +1010,7 @@ ${swap.real}` }
 
   private publishChat(): void {
     if (this.replaying) return
+    this.published = { ...this.chat }
     this.emitEvent({ type: 'chat.upsert', chat: { ...this.chat } })
   }
 
@@ -1076,11 +1103,44 @@ ${swap.real}` }
 
   private onStderr(data: string): void {
     this.stderrTail = (this.stderrTail + data).slice(-STDERR_TAIL_CHARS)
+    // The first chunk after a quiet spell is written at once; chunks that follow within the window go out as one write.
+    if (this.logTimer) {
+      this.logBuffer += data
+      return
+    }
+    this.appendLog(data)
+    this.logTimer = setTimeout(() => this.flushLog(), STDERR_FLUSH_MS)
+    ;(this.logTimer as { unref?: () => void }).unref?.()
+  }
+
+  /** Writes what the window gathered; a window that gathered nothing ends. */
+  private flushLog(): void {
+    const data = this.logBuffer
+    this.logBuffer = ''
+    if (!data) {
+      this.logTimer = null
+      return
+    }
+    this.appendLog(data)
+    this.logTimer = setTimeout(() => this.flushLog(), STDERR_FLUSH_MS)
+    ;(this.logTimer as { unref?: () => void }).unref?.()
+  }
+
+  private appendLog(data: string): void {
     try {
       appendFileSync(this.logFile, data)
     } catch {
       // the log is best effort
     }
+  }
+
+  /** Writes the gathered stderr now and ends the window (the process ended). */
+  private endLog(): void {
+    if (this.logTimer) clearTimeout(this.logTimer)
+    this.logTimer = null
+    const data = this.logBuffer
+    this.logBuffer = ''
+    if (data) this.appendLog(data)
   }
 
   private failed(message: string, startedAt: number | null): void {
@@ -1098,6 +1158,7 @@ ${swap.real}` }
     const now = this.now()
     this.failed(message, this.chat.turnStartedAt)
     this.q = null
+    this.endLog()
     this.input?.close()
     this.expirePending(false)
     this.unqueueAll()
@@ -1195,6 +1256,7 @@ function sentOf(msg: SDKUserMessage): Sent {
 
 /** The same item but for when it was made: a replay's clock is not the one the stored copy was written by. */
 function sameItem(a: TranscriptItem, b: TranscriptItem): boolean {
+  if (a.kind !== b.kind || a.id !== b.id) return false
   return JSON.stringify(timeless(a)) === JSON.stringify(timeless(b))
 }
 

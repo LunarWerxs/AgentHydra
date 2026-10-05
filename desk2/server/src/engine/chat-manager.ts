@@ -43,7 +43,7 @@ import { forkPoint, placeInCwd, projectsRoot, seedSession } from '../bridge/seed
 import { findSessionJsonl, lastCwd } from '../bridge/session-jsonl'
 import { movedOutOf } from './cwd-move'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
-import { ChatRuntime, type QueryImpl } from './chat-runtime'
+import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
 import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } from './requests'
 import { mediaCache, toStoredImage } from '../media/cache'
@@ -125,6 +125,16 @@ export const CLIMAYTE_ACCOUNT: AccountRef = { id: 'climayte', label: 'CliMayte',
 /** A turn runs or is about to: ChatRuntime.send queues a message behind it (the same test). */
 const busy = (c: ChatSummary): boolean => c.status === 'working' || c.status === 'needs_you' || (c.status === 'starting' && c.turnStartedAt !== null)
 
+/** What an item is remembered as in Entry.emitted: a 64-bit hash of its JSON, not the JSON itself. */
+const signature = (item: TranscriptItem): string => String(Bun.hash(JSON.stringify(item)))
+
+/** A short hash of what matching workers to chats reads from the worker list (workersOfChat, activeness). */
+function workersKey(workers: readonly CliMayteWorker[]): string {
+  let text = ''
+  for (const w of workers) text += `${w.id},${w.pc ?? ''},${w.active ? 1 : 0},${w.sessionId ?? ''},${w.originSessionId ?? ''},${w.originWorkerId ?? ''},${w.sessions?.join('+') ?? ''};`
+  return String(Bun.hash(text))
+}
+
 /** The first line of the prompt, at most 60 chars (SPEC "Titles"). */
 export function titleFrom(prompt: string): string {
   const line = prompt.split(/\r?\n/).find((l) => l.trim())?.trim() ?? ''
@@ -139,8 +149,12 @@ interface Entry {
   query: Query | null
   /** Set while the chat's worker is being started: a second send waits for it instead of starting another. */
   starting?: Promise<void>
-  /** A CliMayte chat: what each item of its Desk file looked like when last written or emitted (the file is the record, the worker's session JSONL the live source). */
+  /** A CliMayte chat: a short hash of what each item of its Desk file looked like when last written or emitted (the file is the record, the worker's session JSONL the live source). Dropped once its worker is finished; the Desk file seeds it again. */
   emitted?: Map<string, string>
+  /** What matchWorkers last matched the chat on (the worker list and the chat's own ids): the same input is not matched again. */
+  matchKey?: string
+  /** A CliMayte chat: the worker's session file and the account it was found under, so a poll does not search the session folders again. */
+  cwdFile?: { sessionId: string; account: string | null; file: string }
   /** The worker's items as the last poll went through them: the bridge answers the same array while nothing changed. */
   workerSeen?: TranscriptItem[]
   /** The account the worker's JSONL was last read under: a change means the live file may have moved, so it is looked for again. */
@@ -295,7 +309,7 @@ export class ChatManager {
     if (!e.emitted) {
       e.emitted = new Map()
       e.workerSeen = undefined
-      for (const item of items) e.emitted.set(item.id, JSON.stringify(item))
+      for (const item of items) e.emitted.set(item.id, signature(item))
     }
     return e.sent?.length ? [...items, ...e.sent] : items
   }
@@ -802,7 +816,7 @@ export class ChatManager {
   /** The chat as its worker stands: status, account (a move is said in the transcript), model, transcript. */
   private async applyWorker(e: Entry, w: AhWorker): Promise<void> {
     const chat = e.chat
-    const before = JSON.stringify(chat)
+    const before = { ...chat }
     const was = chat.status
     if (w.accountId && w.accountId !== chat.account.id) {
       const from = chat.account.id === CLIMAYTE_ACCOUNT.id ? null : chat.account
@@ -837,7 +851,7 @@ export class ChatManager {
     const unchanged = items === e.workerSeen
     e.workerSeen = items
     for (const item of unchanged ? [] : items) {
-      const sig = JSON.stringify(item)
+      const sig = signature(item)
       if (emitted.get(item.id) === sig) continue
       if (!emitted.has(item.id) && (item.kind === 'assistant_text' || item.kind === 'thinking' || item.kind === 'tool_use')) newReply = true
       emitted.set(item.id, sig)
@@ -854,11 +868,26 @@ export class ChatManager {
     // The worker cd'd out of the chat's folder: the sidebar follows (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
     if (w.sessionId && e.cwdAt !== w.updatedAt) {
       e.cwdAt = w.updatedAt
-      this.noteCwd(e, findSessionJsonl(w.sessionId, this.bridge.sessionRoots(), chat.cwd))
+      this.noteCwd(e, this.workerFile(e, w.sessionId, w.accountId ?? null))
     }
-    if (JSON.stringify(chat) === before) return
+    // A finished worker is not polled again: what remembers its items is let go (the Desk file seeds it again).
+    if (!e.workerLive) {
+      e.emitted = undefined
+      e.workerSeen = undefined
+      e.cwdFile = undefined
+    }
+    if (!chatDiffers(before, chat)) return
     chat.updatedAt = Math.max(chat.updatedAt, w.updatedAt || 0)
     this.changed(chat)
+  }
+
+  /** The worker's session file: the one found last time while the session and account are the same and it is still there, else searched for. */
+  private workerFile(e: Entry, sessionId: string, account: string | null): string | null {
+    const hit = e.cwdFile
+    if (hit && hit.sessionId === sessionId && hit.account === account && existsSync(hit.file)) return hit.file
+    const file = findSessionJsonl(sessionId, this.bridge.sessionRoots(), e.chat.cwd)
+    e.cwdFile = file ? { sessionId, account, file } : undefined
+    return file
   }
 
   /** Sets climayteActive and adds the workers now matched to the chat to workerIds; true when workerIds grew. */
@@ -881,11 +910,18 @@ export class ChatManager {
   refreshClimayte(): void {
     void this.syncWorkers()
     const workers = this.bridge.lastWorkers()
-    for (const { chat } of this.chats.values()) {
+    let dirty = false
+    const listKey = workersKey(workers)
+    for (const e of this.chats.values()) {
+      const chat = e.chat
+      // Same worker list and same ids on the chat as the last match: the answer is the same, nothing to count or send.
+      const matchKey = `${listKey}|${chat.workerId ?? ''}|${chat.sessionId ?? ''}|${chat.workerIds?.length ?? 0}`
+      if (e.matchKey === matchKey) continue
       const before = chat.climayteActive
       const grew = this.matchWorkers(chat, workers)
+      e.matchKey = grew ? undefined : matchKey
       const n = chat.climayteActive
-      if (grew) this.store.saveChats(this.stored())
+      if (grew) dirty = true
       if (n === before) {
         if (grew) this.emitEvent({ type: 'chat.upsert', chat: { ...chat } })
         continue
@@ -895,10 +931,11 @@ export class ChatManager {
       const finished = n === 0 && before > 0 && (chat.status === 'idle' || chat.status === 'stopped' || chat.status === 'closed')
       if (finished) {
         chat.unread = true
-        this.store.saveChats(this.stored())
+        dirty = true
       }
       this.emitEvent({ type: 'chat.upsert', chat: { ...chat } })
     }
+    if (dirty) this.store.saveChats(this.stored())
   }
 
   /**
