@@ -1,7 +1,7 @@
 // The cloud list's state, one per window: whether the sidebar shows it, its filters (remembered), the rows
 // AgentHydra answered, the search box and the multi-select. Fetched on demand and every 30 s while shown.
 // Its order is the desk list's own (sidebar/order.ts), so a refresh or the cloud button moves nothing.
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import type { CloudInstance, CloudList, CloudSession } from '@shared/protocol'
 import { readCache, writeCache } from '@/lib/list-cache'
 import { useShellSource } from '@/components/shell/source'
@@ -41,7 +41,11 @@ function createCloud() {
   const cached = readCache<CachedCloud>('cloud')
   const fresh =
     cached?.query === cloudQuery(effectiveScopes(scopes.value, ''), '') && Array.isArray(cached.list?.sessions) ? cached.list : null
-  const sessions = ref<CloudSession[]>(fresh?.sessions ?? [])
+  // Replaced whole by each answer, never edited in place, so it is not made deeply reactive.
+  const sessions = shallowRef<CloudSession[]>(fresh?.sessions ?? [])
+  // The text of the rows held, so an unchanged 30 s answer replaces and writes nothing.
+  let heldRows = JSON.stringify(sessions.value)
+  let keptCache = ''
   const thisPc = ref(fresh?.thisPc ?? 'This PC')
   const instances = ref<CloudInstance[]>([])
   const loading = ref(false)
@@ -67,8 +71,19 @@ function createCloud() {
       const asked = search.value
       const query = cloudQuery(effectiveScopes(scopes.value, asked), asked)
       const list = await getJson<CloudList>(`/cloud/sessions?${query}`)
-      if (!asked.trim()) writeCache('cloud', { query, list } satisfies CachedCloud)
-      sessions.value = list.sessions
+      const rows = JSON.stringify(list.sessions)
+      if (rows !== heldRows) {
+        heldRows = rows
+        sessions.value = list.sessions
+      }
+      // A plain answer is kept for the next reload, but only when it differs from what is kept.
+      const kept = `${query}
+${list.thisPc}
+${rows}`
+      if (!asked.trim() && kept !== keptCache) {
+        keptCache = kept
+        writeCache('cloud', { query, list } satisfies CachedCloud)
+      }
       answered.value = asked
       thisPc.value = list.thisPc
       error.value = null

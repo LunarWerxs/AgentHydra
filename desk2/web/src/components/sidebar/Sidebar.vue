@@ -223,8 +223,16 @@ const nesting = computed<NestedTasks | null>(() => {
 })
 const tasksOf = (key: string) => nesting.value?.byRow.get(key) ?? null
 /** The running tasks under a desk-list group's rows, and its rows that run, for its heading while it is folded. */
-const runningInGroup = (g: ChatGroup) => runningIn(g.entries.map((e) => tasksOf(`${e.kind}:${e.id}`)))
-const chatsRunningIn = (g: ChatGroup) => g.entries.filter(entryRunning).length
+const foldedRunning = computed(() => {
+  const out = new Map<string, { tasks: number; chats: number }>()
+  for (const g of groupList.value) {
+    if (!collapsed.value.has(g.key)) continue
+    const tasks = runningIn(g.entries.map((e) => tasksOf(`${e.kind}:${e.id}`)))
+    const chats = g.entries.filter(entryRunning).length
+    if (tasks || chats) out.set(g.key, { tasks, chats })
+  }
+  return out
+})
 /** The cloud list's rows that run: the ones the desk knows as running. */
 const runningSessions = computed(() => runningSessionIds(src.chats.value, src.external.value))
 const sessionRunning = (id: string) => runningSessions.value.has(id)
@@ -492,7 +500,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                   class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)] group-hover/head:opacity-100"
                   :class="collapsed.has(group.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
                 />
-                <RunningBadge v-if="collapsed.has(group.key) && (runningInGroup(group) || chatsRunningIn(group))" class="ml-1" :tasks="runningInGroup(group)" :chats="chatsRunningIn(group)" />
+                <RunningBadge v-if="foldedRunning.get(group.key)" class="ml-1" :tasks="foldedRunning.get(group.key)!.tasks" :chats="foldedRunning.get(group.key)!.chats" />
               </button>
             </Tip>
             <span class="flex-1" />

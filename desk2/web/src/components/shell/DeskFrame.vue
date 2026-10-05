@@ -166,10 +166,26 @@ watch(
   () => src.selected.value,
   () => peek.close()
 )
+// A drag reports every pointer move: the width follows once per frame, and is saved once the drag rests.
+let widthFrame = 0
+let widthSave: ReturnType<typeof setTimeout> | null = null
+let pendingWidth = sidebarWidth.value
 function resizeSidebar(w: number) {
-  sidebarWidth.value = w
-  storage?.setItem(SIDEBAR_KEY, String(w))
+  pendingWidth = w
+  if (!widthFrame) {
+    widthFrame = requestAnimationFrame(() => {
+      widthFrame = 0
+      sidebarWidth.value = pendingWidth
+    })
+  }
+  if (widthSave) clearTimeout(widthSave)
+  widthSave = setTimeout(() => {
+    widthSave = null
+    storage?.setItem(SIDEBAR_KEY, String(pendingWidth))
+  }, 250)
 }
+// The group names a row's menu offers, worked out when the chats or outside sessions change, not on every render.
+const rowGroups = computed(() => groupChoices(src.chats.value, src.external.value))
 function openSearch() {
   toggleSidebar(true)
   sidebar.value?.openSearch()
@@ -477,7 +493,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
               :external="external"
               :stand-in="standIn"
               :show-thinking="showThinking"
-              :groups="groupChoices(src.chats.value, src.external.value)"
+              :groups="rowGroups"
               @action="act"
               @rename="rename"
               @toggle-pane="togglePane"

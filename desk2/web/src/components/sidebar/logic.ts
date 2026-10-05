@@ -104,7 +104,11 @@ export function groupChats(
   // shows the path of its newest row exactly as that row has it. Moved-to groups ignore case too.
   const byFolder = new Map<string, SidebarEntry[]>()
   const byGroup = new Map<string, SidebarEntry[]>()
-  const add = (map: Map<string, SidebarEntry[]>, key: string, e: SidebarEntry) => map.set(key, [...(map.get(key) ?? []), e])
+  const add = (map: Map<string, SidebarEntry[]>, key: string, e: SidebarEntry) => {
+    const list = map.get(key)
+    if (list) list.push(e)
+    else map.set(key, [e])
+  }
   for (const e of inGroups) {
     const group = marksOf(e).group
     if (group) add(byGroup, group.toLowerCase(), e)
@@ -167,12 +171,20 @@ export function groupOrderKey(g: ChatGroup): string {
   return g.cwd ? folderKey(g.cwd) : g.key
 }
 
+const ranks = new WeakMap<readonly string[], Map<string, number>>()
+/** Each saved key's place, built once per saved list (a list is replaced when it changes, never edited). */
+function rankOf(saved: readonly string[]): Map<string, number> {
+  let rank = ranks.get(saved)
+  if (!rank) ranks.set(saved, (rank = new Map(saved.map((k, i) => [k, i]))))
+  return rank
+}
+
 /**
  * Items in their saved order; ones the order does not know yet go first, as they came (newest first),
  * except the ones `last` picks, which go after the known ones (the cloud list's own rows and groups).
  */
 export function stableOrder<T>(items: T[], keyOf: (t: T) => string, saved: readonly string[], last: (t: T) => boolean = () => false): T[] {
-  const rank = new Map(saved.map((k, i) => [k, i]))
+  const rank = rankOf(saved)
   const fresh = items.filter((t) => !rank.has(keyOf(t)))
   const known = items.filter((t) => rank.has(keyOf(t))).sort((a, b) => rank.get(keyOf(a))! - rank.get(keyOf(b))!)
   return [...fresh.filter((t) => !last(t)), ...known, ...fresh.filter(last)]

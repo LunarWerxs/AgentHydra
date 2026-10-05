@@ -14,6 +14,8 @@ const ORDER_KEY = 'hydra-desk.sidebar.order'
 const MAX_ROWS = 6000
 /** The groups remembered: keys are only ever added, so the oldest (last) go once there are this many. */
 const MAX_GROUPS = 1000
+/** How long a changed order waits before it is written, so a burst of changes writes once. */
+const PERSIST_MS = 1000
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((k, i) => k === b[i])
@@ -34,14 +36,24 @@ function createOrder() {
     const cloud = next.cloud ?? []
     if (same(next.groups, order.value.groups) && same(next.rows, order.value.rows) && same(cloud, order.value.cloud ?? [])) return
     order.value = next
+    // The memory is current at once; the disk follows once the order settles.
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(persist, PERSIST_MS)
+  }
+  let timer: ReturnType<typeof setTimeout> | null = null
+  function persist(): void {
+    timer = null
     try {
       // The cloud list's marks are added at the end, so its trim keeps the end.
-      const kept = { groups: next.groups.slice(0, MAX_GROUPS), rows: next.rows.slice(0, MAX_ROWS), cloud: cloud.slice(-MAX_ROWS) }
+      const next = order.value
+      const kept = { groups: next.groups.slice(0, MAX_GROUPS), rows: next.rows.slice(0, MAX_ROWS), cloud: (next.cloud ?? []).slice(-MAX_ROWS) }
       storage?.setItem(ORDER_KEY, JSON.stringify(kept))
     } catch {
       // storage full or blocked: the order holds for this window only
     }
   }
+  // A window closed inside the wait still keeps its order.
+  if (typeof window !== 'undefined') window.addEventListener('pagehide', () => timer && (clearTimeout(timer), persist()))
   return { order, save }
 }
 
