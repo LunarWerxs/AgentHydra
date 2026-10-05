@@ -6,7 +6,7 @@
 // instance, queued work, usage limits, archived and the time period are applied by AgentHydra; shape
 // and computer narrow the rows already fetched.
 import type { ChatSummary, CloudSession, ExternalSession } from '@shared/protocol'
-import { folderKey, folderLabel, NO_FOLDER, stableOrder, type SidebarOrder } from '../sidebar/logic'
+import { folderKey, folderLabel, NO_FOLDER, namesakeFolder, stableOrder, type SidebarOrder } from '../sidebar/logic'
 
 /** claude-opus-5-5 -> Opus 5.5, the way AgentHydra's rows name it; any other model as it is. */
 export function modelName(m: string | null | undefined): string | null {
@@ -362,8 +362,10 @@ export function groupCloud(rows: CloudSession[], s: CloudScopes, thisPc: string,
     }
   }
   const groups = [...byFolder.values()]
+  // The desk list picks among its own folders: a folder only the cloud list has is never the one.
+  const deskFolders = groups.filter((f) => f.rows.some((r) => desk.has(r.id)))
   for (const g of byGroup.values()) {
-    const folder = groups.find((f) => f.cwd && f.label.toLowerCase() === g.label.toLowerCase())
+    const folder = namesakeFolder(deskFolders, g.label)
     if (folder) folder.rows.push(...g.rows)
     else groups.push(g)
   }

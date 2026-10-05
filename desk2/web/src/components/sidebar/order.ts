@@ -3,8 +3,9 @@
 // 2026-10-04: "examine what happens when you enable and disable the cloud icon. For some reason they change
 // order"). A saved order wins over activity (Jacob, 2026-10-04): sending a message reorders nothing, groups
 // are dragged into the order wanted. Each list adds the keys it shows that the order lacks (logic.ts
-// recordOrder: the desk list's at the top, the cloud list's own at the end) and never moves a saved one.
-// This viewer's browser remembers it.
+// recordOrder: the desk list's at the top, the cloud list's own at the end) and never moves a saved one,
+// but for one the cloud list added: the first time the desk list shows it, it is new there and goes to the
+// top (SidebarOrder.cloud). This viewer's browser remembers it.
 import { ref } from 'vue'
 import type { SidebarOrder } from './logic'
 
@@ -22,18 +23,21 @@ function createOrder() {
   function read(): SidebarOrder {
     try {
       const o = JSON.parse(storage?.getItem(ORDER_KEY) ?? 'null') as Partial<SidebarOrder> | null
-      return { groups: strings(o?.groups), rows: strings(o?.rows) }
+      return { groups: strings(o?.groups), rows: strings(o?.rows), cloud: strings(o?.cloud) }
     } catch {
-      return { groups: [], rows: [] }
+      return { groups: [], rows: [], cloud: [] }
     }
   }
   const order = ref<SidebarOrder>(read())
   /** Keeps `next` as the order (nothing happens when it is the same). */
   function save(next: SidebarOrder): void {
-    if (same(next.groups, order.value.groups) && same(next.rows, order.value.rows)) return
+    const cloud = next.cloud ?? []
+    if (same(next.groups, order.value.groups) && same(next.rows, order.value.rows) && same(cloud, order.value.cloud ?? [])) return
     order.value = next
     try {
-      storage?.setItem(ORDER_KEY, JSON.stringify({ groups: next.groups.slice(0, MAX_GROUPS), rows: next.rows.slice(0, MAX_ROWS) }))
+      // The cloud list's marks are added at the end, so its trim keeps the end.
+      const kept = { groups: next.groups.slice(0, MAX_GROUPS), rows: next.rows.slice(0, MAX_ROWS), cloud: cloud.slice(-MAX_ROWS) }
+      storage?.setItem(ORDER_KEY, JSON.stringify(kept))
     } catch {
       // storage full or blocked: the order holds for this window only
     }

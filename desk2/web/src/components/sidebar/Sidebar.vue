@@ -38,7 +38,7 @@ import {
   isOrange,
   moveInOrder,
   raiseNewlyOrange,
-  recordOrder,
+  recordDeskOrder,
   moveTarget,
   parseFilter,
   resumeCommand,
@@ -137,8 +137,8 @@ const groups = computed(() =>
   groupChats(src.chats.value, { query: query.value, filter: filter.value, external: src.external.value, order: order.value })
 )
 // A group or row the plain list shows that the order lacks joins it at the top, so it keeps the place it
-// appeared in; a saved one never moves (the cloud list's rows among them); a row that just turned orange
-// goes to the top of its group.
+// appeared in, and so does one only the cloud list had shown (recordDeskOrder); any other saved one never
+// moves; a row that just turned orange goes to the top of its group.
 const wasOrange = new Map<string, boolean>()
 watch(
   groups,
@@ -147,9 +147,10 @@ watch(
     const shownEntries = [...(g.pinned?.entries ?? []), ...g.folders.flatMap((f) => f.entries)]
     const shownGroups = g.folders.map(groupOrderKey)
     const shownRows = shownEntries.map((e) => e.id)
-    const rows = raiseNewlyOrange(recordOrder(order.value.rows, shownRows, 'top'), shownEntries, wasOrange)
+    const next = recordDeskOrder(order.value, shownGroups, shownRows)
+    const rows = raiseNewlyOrange(next.rows, shownEntries, wasOrange)
     for (const e of shownEntries) wasOrange.set(e.id, isOrange(e))
-    saveOrder({ groups: recordOrder(order.value.groups, shownGroups, 'top'), rows })
+    saveOrder({ ...next, rows })
   },
   { immediate: true }
 )

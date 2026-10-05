@@ -5,7 +5,7 @@ import { computed, ref, watch } from 'vue'
 import type { CloudInstance, CloudList, CloudSession } from '@shared/protocol'
 import { readCache, writeCache } from '@/lib/list-cache'
 import { useShellSource } from '@/components/shell/source'
-import { recordOrder } from '@/components/sidebar/logic'
+import { recordCloudOrder } from '@/components/sidebar/logic'
 import { useSidebarOrder } from '@/components/sidebar/order'
 import { cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud, parseScopes, pcsIn, type CloudScopes } from './logic'
 
@@ -140,8 +140,7 @@ function createCloud() {
     () => (on.value && !searching.value ? groups.value : null),
     (shown) => {
       if (!shown) return
-      const added = cloudOnlyKeys(shown, placed.value)
-      saveOrder({ groups: recordOrder(order.value.groups, added.groups, 'end'), rows: recordOrder(order.value.rows, added.rows, 'end') })
+      saveOrder(recordCloudOrder(order.value, cloudOnlyKeys(shown, placed.value)))
     },
     { immediate: true }
   )

@@ -113,7 +113,7 @@ export function groupChats(
     return { key: cwd, label: cwd ? folderLabel(cwd) : NO_FOLDER, cwd: cwd || null, entries: list }
   })
   for (const [name, list] of byGroup) {
-    const folder = groups.find((g) => g.cwd && g.label.toLowerCase() === name)
+    const folder = namesakeFolder(groups, name)
     if (folder) folder.entries.push(...list)
     else groups.push({ key: `group:${name}`, label: marksOf(list.sort(newestFirst)[0]!).group!, cwd: null, entries: list })
   }
@@ -133,13 +133,31 @@ export function groupChats(
 }
 
 /**
+ * The folder group a moved-to group named `name` joins: of the folder groups with that name, the one whose
+ * folder sorts first. Two folders can share a name (C:/a/app, C:/b/app), and the desk list and the cloud
+ * list build their groups in different orders, so the first one found would differ between them.
+ */
+export function namesakeFolder<T extends { cwd: string | null; label: string }>(groups: readonly T[], name: string): T | undefined {
+  const lower = name.toLowerCase()
+  let best: { group: T; key: string } | undefined
+  for (const g of groups) {
+    if (!g.cwd || g.label.toLowerCase() !== lower) continue
+    const key = folderKey(g.cwd)
+    if (!best || key < best.key) best = { group: g, key }
+  }
+  return best?.group
+}
+
+/**
  * The order the sidebar keeps (order.ts), each first to last: group keys (groupOrderKey) and row keys, a
  * desk row's id (a Desk chat's id, an outside session's session id) or the session id of a row only the
- * cloud list has.
+ * cloud list has. `cloud`: the keys the cloud list added at the end that the desk list has not shown since;
+ * the first time it does (a desk chat started in another PC's folder), it lifts them to the top as new.
  */
 export interface SidebarOrder {
   groups: readonly string[]
   rows: readonly string[]
+  cloud?: readonly string[]
 }
 
 /** A group's place in the saved order: its folder however spelled, or its moved-to group key. */
@@ -168,6 +186,33 @@ export function recordOrder(saved: readonly string[], shown: readonly string[], 
   const known = new Set(saved)
   const added = [...new Set(shown.filter((k) => !known.has(k)))]
   return at === 'top' ? [...added, ...saved] : [...saved, ...added]
+}
+
+/**
+ * The saved order after the desk list showed these groups and rows: theirs join at the top, and a key the
+ * cloud list added (`cloud`) counts as new the first time the desk list shows it, so a group or row that
+ * gains a desk row (a desk chat started in another PC's folder) joins at the top whichever list saw it first.
+ */
+export function recordDeskOrder(order: SidebarOrder, shownGroups: readonly string[], shownRows: readonly string[]): SidebarOrder {
+  const cloud = new Set(order.cloud ?? [])
+  const lifted = new Set([...shownGroups, ...shownRows].filter((k) => cloud.has(k)))
+  const unlifted = (saved: readonly string[]) => (lifted.size ? saved.filter((k) => !lifted.has(k)) : saved)
+  return {
+    groups: recordOrder(unlifted(order.groups), shownGroups, 'top'),
+    rows: recordOrder(unlifted(order.rows), shownRows, 'top'),
+    cloud: unlifted(order.cloud ?? [])
+  }
+}
+
+/** The saved order after the cloud list showed its own groups and rows (`added`): at the end, marked as its. */
+export function recordCloudOrder(order: SidebarOrder, added: SidebarOrder): SidebarOrder {
+  const known = new Set([...order.groups, ...order.rows])
+  const fresh = [...added.groups, ...added.rows].filter((k) => !known.has(k))
+  return {
+    groups: recordOrder(order.groups, added.groups, 'end'),
+    rows: recordOrder(order.rows, added.rows, 'end'),
+    cloud: recordOrder(order.cloud ?? [], fresh, 'end')
+  }
 }
 
 /** Whether a row shows an attention dot: orange (waiting on you, or background tasks running) or green (done, unread). */

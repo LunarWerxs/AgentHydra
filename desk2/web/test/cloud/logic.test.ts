@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { CloudSession } from '@shared/protocol'
+import type { CloudSession, ExternalSession } from '@shared/protocol'
 import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud } from '../../src/components/cloud/logic'
-import { recordOrder, type SidebarOrder } from '../../src/components/sidebar/logic'
+import { groupChats, recordCloudOrder, recordDeskOrder, type SidebarOrder } from '../../src/components/sidebar/logic'
 
 // The cloud list asks AgentHydra's GET /api/sessions (through Desk's /api/cloud/sessions) in AgentHydra's
 // own scope spelling. A wrong spelling does not fail loudly there: an unknown value falls back to a
@@ -140,7 +140,7 @@ describe('groupCloud', () => {
     ])
     const added = cloudOnlyKeys(first, desk)
     expect(added).toEqual({ groups: ['d:/other'], rows: ['cloud-a', 'cloud-c', 'cloud-b'] })
-    order = { groups: recordOrder(order.groups, added.groups, 'end'), rows: recordOrder(order.rows, added.rows, 'end') }
+    order = recordCloudOrder(order, added)
 
     // The next refresh: new activity everywhere and two newcomers. Nothing recorded moves; they follow.
     const later = [
@@ -160,6 +160,47 @@ describe('groupCloud', () => {
       ['other', ['cloud-b']],
       ['zeta', ['cloud-e']]
     ])
+    order = recordCloudOrder(order, cloudOnlyKeys(groupCloud(later, all, 'PC', { desk, order }), desk))
+
+    // A Desk chat goes on in the folder only the cloud list had. New to the desk list, which shows it last
+    // (the order knows it), its group goes to the top of both lists, as a new desk group does, and stays.
+    const withOther = deskPlaces(
+      [deskChat('chat-split', 'split', { cwd: 'D:/new' }), deskChat('chat-other', 'cloud-b', { cwd: 'D:/other' })],
+      [outside('vector', { cwd: 'D:/new' }), outside('rust', { cwd: 'D:/new' }), outside('pub', { cwd: 'D:/pub' })]
+    )
+    order = recordDeskOrder(order, ['d:/pub', 'd:/new', 'd:/other'], ['chat-other', 'chat-split', 'vector', 'rust', 'pub'])
+    expect(order.groups[0]).toBe('d:/other')
+    expect(recordDeskOrder(order, ['d:/other', 'd:/pub', 'd:/new'], ['chat-other', 'chat-split', 'vector', 'rust', 'pub'])).toEqual(order)
+    expect(listed(groupCloud(later, all, 'PC', { desk: withOther, order })).map(([label]) => label)).toEqual(['other', 'pub', 'new', 'zeta'])
+  })
+
+  // Two folders share a name: a session moved to a group of that name joins the same one of them in both
+  // lists, never one only the cloud list has, so turning the cloud on moves nothing.
+  test('a moved-to group joins the same namesake folder in the desk list and the cloud list', () => {
+    const ext = (id: string, cwd: string, lastActivityAt: number, group: string | null = null): ExternalSession => ({
+      id,
+      title: id,
+      cwd,
+      source: 'desktop',
+      instance: null,
+      status: 'idle',
+      activity: null,
+      lastActivityAt,
+      model: null,
+      accountId: null,
+      canResume: false,
+      fromPc: null,
+      pinned: false,
+      archived: false,
+      unread: false,
+      group
+    })
+    const external = [ext('in-b', 'D:/b/app', 1), ext('in-a', 'D:/a/app', 2), ext('moved', 'D:/work/zeta', 3, 'App')]
+    const deskFolder = groupChats([], { external }).folders.find((f) => f.entries.some((e) => e.id === 'moved'))
+    const answer = [row('in-b', 'D:/b/app', 1), row('in-a', 'D:/a/app', 2), row('moved', 'D:/work/zeta', 3), row('cloud-only', 'D:/c/app', 9)]
+    const cloudFolder = groupCloud(answer, all, 'PC', { desk: deskPlaces([], external) }).find((g) => g.rows.some((r) => r.id === 'moved'))
+    expect(deskFolder?.cwd).toBe('D:/a/app')
+    expect(cloudFolder?.cwd).toBe('D:/a/app')
   })
 
   // Owner, 2026-10-04: an outside Desktop chat the desk list shows was missing from the cloud list, older
