@@ -15,8 +15,10 @@ import { hydraOpen, hydraSidebar, openSwarmInHydra, openWorkerInHydra } from '@/
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Cloud, EyeOff, Info, LoaderCircle, MessageSquare } from '@lucide/vue'
 import TaskRows from './TaskRows.vue'
+import SubBadges from './SubBadges.vue'
+import { expanded, rowSubItems, subModes } from './subitems'
 import RunningBadge from './RunningBadge.vue'
-import { nestTasks, runningIn, showTasks, unplacedHeading, type NestedTasks, type NestRow } from './tasks'
+import { nestTasks, runningIn, showTasks, unplacedHeading, type NestedTasks, type NestRow, type TaskNode } from './tasks'
 import ChatRow from './ChatRow.vue'
 import SidebarTools from './SidebarTools.vue'
 import ExternalRow from './ExternalRow.vue'
@@ -258,6 +260,9 @@ const nesting = computed<NestedTasks | null>(() => {
 })
 const tasksOf = (key: string) => nesting.value?.byRow.get(key) ?? null
 const jobsOf = (key: string) => nesting.value?.jobsByRow.get(key) ?? null
+/** What a row draws of its tasks and jobs: lines, a badge, or both once the badge is opened (subitems.ts). */
+const subOf = (key: string, tasks: TaskNode[] | null, jobs: SwarmJob[] | null) => rowSubItems(key, tasks, jobs, { tasks: subModes.tasks.value, jobs: subModes.jobs.value }, expanded.value)
+const rowSub = (key: string) => subOf(key, tasksOf(key), jobsOf(key))
 /** The running tasks under a desk-list group's rows, and its rows that run, for its heading while it is folded. */
 const foldedRunning = computed(() => {
   const out = new Map<string, { tasks: number; chats: number }>()
@@ -541,14 +546,15 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 <LoaderCircle v-if="c.worker?.status === 'running'" class="size-3 shrink-0 animate-[spin_2.5s_linear_infinite] text-accent-text" aria-hidden="true" />
                 <MessageSquare v-else class="size-3 shrink-0 text-text-muted" aria-hidden="true" />
                 <span class="min-w-0 flex-1 truncate">{{ c.title }}</span>
+                <SubBadges :row-key="`unplaced:${c.key}`" :badges="subOf(`unplaced:${c.key}`, c.nodes, c.jobs).badges" />
                 <Tip :label="c.note" align="start" :delay="100">
                   <button type="button" class="flex size-4 shrink-0 items-center justify-center rounded-[4px] text-text-muted hover:text-text-2" :aria-label="c.note" @click.stop>
                     <Info class="size-3" aria-hidden="true" />
                   </button>
                 </Tip>
               </div>
-              <div v-if="c.nodes.length || c.jobs.length" class="ml-1.5">
-                <TaskRows :nodes="c.nodes" :jobs="c.jobs" :selected-id="selectedExternalId" @open="openTask" @open-job="openJob" />
+              <div v-if="subOf(`unplaced:${c.key}`, c.nodes, c.jobs).nodes.length || subOf(`unplaced:${c.key}`, c.nodes, c.jobs).jobs.length" class="ml-1.5">
+                <TaskRows :nodes="subOf(`unplaced:${c.key}`, c.nodes, c.jobs).nodes" :jobs="subOf(`unplaced:${c.key}`, c.nodes, c.jobs).jobs" :selected-id="selectedExternalId" @open="openTask" @open-job="openJob" />
               </div>
             </template>
           </section>
@@ -556,7 +562,10 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
         <HydraSidebar v-if="hydraModel" :model="hydraModel" />
 
-        <CloudList v-else-if="cloud.on.value" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :running="sessionRunning" :glyph="(id: string) => deskDots.get(id)" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask">
+        <CloudList v-else-if="cloud.on.value" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :running="sessionRunning" :glyph="(id: string) => deskDots.get(id)" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask">
+          <template #sub-badges="{ id }">
+            <SubBadges v-if="nesting" :row-key="`cloud:${id}`" :badges="rowSub(`cloud:${id}`).badges" />
+          </template>
           <template #tools>
             <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
           </template>
@@ -633,7 +642,9 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 @select="src.select({ kind: 'chat', id: entry.id })"
                 @action="(item: RowMenuItem) => act({ kind: 'chat', chat: entry.chat }, item)"
                 @rename="(title: string) => mark({ kind: 'chat', chat: entry.chat }, { title })"
-              />
+              >
+                <SubBadges v-if="rowSub(`chat:${entry.id}`).badges.length" :row-key="`chat:${entry.id}`" :badges="rowSub(`chat:${entry.id}`).badges" />
+              </ChatRow>
               <ExternalRow
                 v-else
                 :session="entry.session"
@@ -642,8 +653,10 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 @select="openExternal(entry.session)"
                 @action="(item: RowMenuItem) => act({ kind: 'external', session: entry.session }, item)"
                 @rename="(title: string | null) => attempt('The change', src.updateSessionMeta(entry.id, { title }))"
-              />
-              <TaskRows v-if="tasksOf(`${entry.kind}:${entry.id}`) || jobsOf(`${entry.kind}:${entry.id}`)" :nodes="tasksOf(`${entry.kind}:${entry.id}`) ?? []" :jobs="jobsOf(`${entry.kind}:${entry.id}`) ?? []" :selected-id="selectedExternalId" @open="openTask" @open-job="openJob" />
+              >
+                <SubBadges v-if="rowSub(`external:${entry.id}`).badges.length" :row-key="`external:${entry.id}`" :badges="rowSub(`external:${entry.id}`).badges" />
+              </ExternalRow>
+              <TaskRows v-if="rowSub(`${entry.kind}:${entry.id}`).nodes.length || rowSub(`${entry.kind}:${entry.id}`).jobs.length" :nodes="rowSub(`${entry.kind}:${entry.id}`).nodes" :jobs="rowSub(`${entry.kind}:${entry.id}`).jobs" :selected-id="selectedExternalId" @open="openTask" @open-job="openJob" />
             </div>
           </TransitionGroup>
         </section>

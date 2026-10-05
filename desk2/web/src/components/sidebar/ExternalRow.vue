@@ -103,6 +103,9 @@ function run(item: RowMenuItem) {
           />
           <span v-else class="ext-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'ext-title-open': menuOpen }">{{ session.title }}</span>
 
+          <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts; they make room for the three dots on hover. -->
+          <span v-if="!renaming && $slots.default" class="ml-1 flex shrink-0 items-center pr-1 group-hover/row:pr-6" :class="{ 'pr-6': menuOpen }"><slot /></span>
+
           <DropdownMenu v-if="!renaming" v-model:open="menuOpen">
             <DropdownMenuTrigger as-child>
               <button

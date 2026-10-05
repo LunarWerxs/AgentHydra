@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Archive, Boxes, CalendarRange, CircleAlert, EyeOff, Hourglass, ListTodo, MessagesSquare, Monitor, RefreshCw, RotateCcw, Search, Settings2 } from '@lucide/vue'
+import { Archive, Bot, Boxes, CalendarRange, CircleAlert, EyeOff, Hourglass, ListTodo, MessagesSquare, Monitor, RefreshCw, Network, RotateCcw, Search, Settings2 } from '@lucide/vue'
 import { icons } from '@/lib/icons'
 import {
   DropdownMenuItem,
@@ -13,6 +13,7 @@ import {
 import { FILTER_LABELS, type SidebarFilter } from '@/components/sidebar/logic'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR } from '@/components/sidebar/menuClasses'
 import { useHiddenGroups } from '@/components/sidebar/hidden'
+import { SUB_KIND_LABELS, subModes, type SubKind, type SubMode } from '@/components/sidebar/subitems'
 import { openHydra } from '@/components/hydra/api'
 import {
   ARCHIVED_LABELS,
@@ -140,6 +141,16 @@ const FILTER_TIPS: Record<SidebarFilter, string> = {
 }
 
 const ITEM = `${MENU_ITEM} pr-2`
+
+// Sub-items: how each kind under a row shows, as its lines or as a count badge (sidebar/subitems.ts).
+const SUB_CHOICES: { value: SubMode; label: string }[] = [
+  { value: 'list', label: 'List' },
+  { value: 'count', label: 'Count' }
+]
+const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
+  { kind: 'tasks', icon: Bot, tip: "The CliMayte tasks a chat started: listed under it, or a count badge on its row that opens them" },
+  { kind: 'jobs', icon: Network, tip: 'The HSwarm jobs a chat started: listed under it, or a count badge on its row that opens them' }
+]
 </script>
 
 <template>
@@ -170,6 +181,29 @@ const ITEM = `${MENU_ITEM} pr-2`
     <span class="flex-1">Show hidden groups</span>
     <component :is="icons.check" v-if="showHidden" class="ml-3" />
   </DropdownMenuItem>
+
+  <DropdownMenuSeparator :class="MENU_SEPARATOR" />
+  <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[13px] font-medium text-text-muted">Sub-items</DropdownMenuLabel>
+  <DropdownMenuSub v-for="k in SUB_KINDS" :key="k.kind">
+    <DropdownMenuSubTrigger :class="ITEM" :title="k.tip">
+      <component :is="k.icon" />
+      <span class="flex-1">{{ SUB_KIND_LABELS[k.kind] }}</span>
+      <span class="pl-3 text-[12px] text-text-muted">{{ subModes[k.kind].value === 'count' ? 'Count' : 'List' }}</span>
+    </DropdownMenuSubTrigger>
+    <DropdownMenuSubContent :side-offset="4" :class="`${MENU_CONTENT} max-w-52`">
+      <DropdownMenuItem
+        v-for="c in SUB_CHOICES"
+        :key="c.value"
+        role="menuitemradio"
+        :aria-checked="subModes[k.kind].value === c.value"
+        :class="MENU_ITEM"
+        @select="subModes[k.kind].value = c.value"
+      >
+        <span class="flex-1">{{ c.label }}</span>
+        <component :is="icons.check" v-if="subModes[k.kind].value === c.value" class="ml-3" />
+      </DropdownMenuItem>
+    </DropdownMenuSubContent>
+  </DropdownMenuSub>
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
   <DropdownMenuLabel class="flex h-[23px] items-center gap-1 px-2 py-0 text-[13px] font-medium text-text-muted">

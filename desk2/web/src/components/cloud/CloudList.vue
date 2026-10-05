@@ -31,6 +31,8 @@ const props = defineProps<{
   selectedId: string | null
   /** With the chrome bar's CliMayte button on: the tasks a row handed out, listed under it (sidebar/tasks.ts). */
   tasksOf?: (id: string) => TaskNode[] | null
+  /** The tasks of a row whose lines are drawn (Count mode leaves them out until its badge is opened); `tasksOf` still counts every one. */
+  shownOf?: (id: string) => TaskNode[] | null
   /** Whether a row's session runs now, for a folded group's heading. */
   running?: (id: string) => boolean
   /** The desk row's dot (running, needs you, idle): the row here draws the same one. */
@@ -206,6 +208,7 @@ const ROW =
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
             <span v-if="otherPc(r)" class="max-w-24 shrink-0 truncate rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-accent-text">{{ r.fromPc }}</span>
             <span v-if="r.instanceNum !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
+            <slot name="sub-badges" :id="r.id" />
             <RowAge :at="r.lastActivityAt" />
           </div>
           </ContextMenuTrigger>
@@ -215,7 +218,7 @@ const ROW =
           </ContextMenu>
           </span>
         </Tip>
-        <TaskRows v-if="props.tasksOf?.(r.id)" :nodes="props.tasksOf(r.id)!" :selected-id="props.selectedId" @open="(w: CliMayteWorker) => emit('open-task', w)" />
+        <TaskRows v-if="(props.shownOf ?? props.tasksOf)?.(r.id)?.length" :nodes="(props.shownOf ?? props.tasksOf)!(r.id)!" :selected-id="props.selectedId" @open="(w: CliMayteWorker) => emit('open-task', w)" />
         </div>
       </TransitionGroup>
     </section>

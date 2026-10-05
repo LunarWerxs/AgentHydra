@@ -104,8 +104,10 @@ defineExpose({ startRename })
 
           <!-- Hydra Desk extras: elapsed time, limit reset, CliMayte count -->
           <!-- The elapsed counter gives its place to the three dots while the row is hovered or its menu open. -->
-          <span v-if="!renaming && (elapsed || resets || chat.climayteActive > 0)" class="ml-2 flex shrink-0 items-center gap-1 pr-1 text-[12px] leading-4 group-hover/row:pr-6" :class="{ 'pr-6': menuOpen }">
+          <span v-if="!renaming && (elapsed || resets || chat.climayteActive > 0 || $slots.default)" class="ml-2 flex shrink-0 items-center gap-1 pr-1 text-[12px] leading-4 group-hover/row:pr-6" :class="{ 'pr-6': menuOpen }">
             <span v-if="elapsed" class="tnum text-text-muted group-hover/row:hidden" :class="{ hidden: menuOpen }">{{ elapsed }}</span>
+            <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts. -->
+            <slot />
             <span v-if="resets" class="tnum text-[var(--status-limited-text)]">resets {{ resets }}</span>
             <span
               v-if="chat.climayteActive > 0"
