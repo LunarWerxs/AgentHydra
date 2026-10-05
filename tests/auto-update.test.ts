@@ -202,7 +202,8 @@ test('a database that never chose applies updates by itself (owner, 2026-10-05)'
     env: { ...process.env, AGENTHYDRA_DB: db },
   })
   expect(r.stdout.toString().trim()).toBe('true')
-})
+  // A cold bun loading the daemon's settings module: about a second here, several on a busy runner.
+}, 30_000)
 
 test('setAutoUpdateEnabled/Interval persist + clamp live', () => {
   setAutoUpdateEnabled(false)
