@@ -181,12 +181,8 @@ onMounted(load)
     :icon="Info"
     :label="$t('settings.claudeNativeDetails')"
     clickable
-    role="button"
-    tabindex="0"
     :aria-expanded="detailsOpen"
     @click="detailsOpen = !detailsOpen"
-    @keydown.enter.prevent="detailsOpen = !detailsOpen"
-    @keydown.space.prevent="detailsOpen = !detailsOpen"
   >
     <template #control>
       <ChevronDown class="size-4 transition-transform duration-200" :class="detailsOpen ? 'rotate-180' : ''" />

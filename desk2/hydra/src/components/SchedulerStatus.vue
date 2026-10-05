@@ -13,6 +13,7 @@ import { Switch } from '@/components/ui/switch'
 import { useData } from '@/composables/useData'
 import { usePanels } from '@/composables/usePanels'
 import * as api from '@/lib/api'
+import { HEADLESS_QUEUEING_ENABLED } from '@/lib/headless'
 import { visibleInterval } from '@/lib/visible-poll'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
@@ -127,10 +128,16 @@ const label = computed(() => {
 })
 
 const tooltip = computed(() => {
+  // Policy (headless.ts): dispatch is off in this build, so the switch is disabled and nothing
+  // dispatches on its own: say only that, with no click-to-toggle sentence.
+  const toggle = HEADLESS_QUEUEING_ENABLED ? ` ${t('scheduler.clickToToggle')}` : ''
   if (state.value === 'unavailable') {
-    return `${t('scheduler.unavailableHint', { reason: schedulerStatus.error.value ?? '' })} ${t('scheduler.clickToToggle')}`
+    return `${t('scheduler.unavailableHint', { reason: schedulerStatus.error.value ?? '' })}${toggle}`
   }
-  return `${enabled.value ? t('scheduler.onTooltip') : t('scheduler.offTooltip')} ${t('scheduler.clickToToggle')}`
+  if (!HEADLESS_QUEUEING_ENABLED) {
+    return enabled.value ? t('scheduler.onDisabledTooltip') : t('scheduler.offTooltip')
+  }
+  return `${enabled.value ? t('scheduler.onTooltip') : t('scheduler.offTooltip')}${toggle}`
 })
 
 const queuedCount = computed(() => queued.value.length)
@@ -188,7 +195,7 @@ const tone = computed(() => {
             </div>
             <Switch
               :model-value="enabled"
-              :disabled="toggling"
+              :disabled="toggling || !HEADLESS_QUEUEING_ENABLED"
               :aria-label="$t('scheduler.enabledLabel')"
               @update:model-value="setEnabled"
             />

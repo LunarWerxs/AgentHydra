@@ -202,12 +202,8 @@ function monitorStateLabelKey(state: MonitorStateName): string {
       :icon="SlidersHorizontal"
       :label="$t('settings.advanced')"
       clickable
-      role="button"
-      tabindex="0"
       :aria-expanded="schedAdvancedOpen"
       @click="schedAdvancedOpen = !schedAdvancedOpen"
-      @keydown.enter.prevent="schedAdvancedOpen = !schedAdvancedOpen"
-      @keydown.space.prevent="schedAdvancedOpen = !schedAdvancedOpen"
     >
       <template #control>
         <ChevronDown
@@ -259,12 +255,8 @@ function monitorStateLabelKey(state: MonitorStateName): string {
           :icon="SlidersHorizontal"
           :label="$t('settings.advanced')"
           clickable
-          role="button"
-          tabindex="0"
           :aria-expanded="monitorAdvancedOpen"
           @click="monitorAdvancedOpen = !monitorAdvancedOpen"
-          @keydown.enter.prevent="monitorAdvancedOpen = !monitorAdvancedOpen"
-          @keydown.space.prevent="monitorAdvancedOpen = !monitorAdvancedOpen"
         >
           <template #control>
             <ChevronDown

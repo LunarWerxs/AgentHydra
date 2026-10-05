@@ -17,6 +17,10 @@ withDefaults(
   <div
     class="flex items-center gap-3 px-3.5 py-2.5"
     :class="clickable ? 'cursor-pointer transition-colors hover:bg-accent/60' : ''"
+    :role="clickable ? 'button' : undefined"
+    :tabindex="clickable ? 0 : undefined"
+    @keydown.enter.self.prevent="clickable && $el.click()"
+    @keydown.space.self.prevent="clickable && $el.click()"
   >
     <component :is="icon" v-if="icon" class="size-4.5 shrink-0 text-muted-foreground" />
     <slot v-else name="icon" />
