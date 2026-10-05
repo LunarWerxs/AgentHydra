@@ -505,7 +505,7 @@ fn run(url: String, udf: PathBuf, state_file: PathBuf, rect: Rect, maximized: bo
         platform::windows::{WindowBuilderExtWindows, WindowExtWindows},
         window::{Theme, WindowBuilder},
     };
-    use wry::{NewWindowResponse, WebContext, WebViewBuilder};
+    use wry::{MemoryUsageLevel, NewWindowResponse, WebContext, WebViewBuilder, WebViewExtWindows};
 
     let event_loop = EventLoopBuilder::<Ev>::with_user_event().build();
     let proxy = event_loop.create_proxy();
@@ -596,6 +596,7 @@ fn run(url: String, udf: PathBuf, state_file: PathBuf, rect: Rect, maximized: bo
             );
         }
     };
+    let mut minimized = false;
     let _keep = (&webview, &ctx);
     event_loop.run(move |event, _, flow| {
         *flow = match dirty {
@@ -614,6 +615,18 @@ fn run(url: String, udf: PathBuf, state_file: PathBuf, rect: Rect, maximized: bo
                 ..
             } if !smoke => {
                 dirty = Some(Instant::now() + Duration::from_millis(400));
+                // wry skips SIZE_MINIMIZED, so the page would stay 'visible' while minimized.
+                let min = window.is_minimized();
+                if min != minimized {
+                    minimized = min;
+                    if min {
+                        let _ = webview.set_visible(false);
+                        let _ = webview.set_memory_usage_level(MemoryUsageLevel::Low);
+                    } else {
+                        let _ = webview.set_visible(true);
+                        let _ = webview.set_memory_usage_level(MemoryUsageLevel::Normal);
+                    }
+                }
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
