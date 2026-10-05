@@ -484,6 +484,7 @@ revives; workers a chat dispatches with `climayte_run` are ordinary unless they 
 | Prompt cache | 5 minutes | 1 hour (a person's next message is often more than 5 minutes away) |
 | Model and effort | the scorecard's pick unless named with `modelWhy` | Opus xhigh unless the task (or its run) names its own; no `modelWhy` needed; never `auto`, never split by sizing |
 | Hooks | edit claims and the wind-down signal | the same two: edit claims protects files other sessions edit, and the wind-down signal is how a session hands off and moves at a usage limit |
+| Placement (2026-10-05) | where its projection fits, the most behind its weekly pace first (`placedRank`); may wait up to `RESUME_WAIT_MS` for another account's reset | where it has the most room before the stop lines, in Pro points (5-hour room under `FIT_PCT` or weekly room, the smaller, times the plan: a Max 20x first), again after every handoff; starts before every task (`dueOrder`); never held for another account's reset |
 
 The account folder's CLAUDE.md is shared by every worker on the account, so it is never swapped
 per launch: an ordinary worker's launch is byte for byte what it was. Both mechanisms were checked

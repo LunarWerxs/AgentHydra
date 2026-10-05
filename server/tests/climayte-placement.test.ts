@@ -267,6 +267,56 @@ describe('which account a task starts on', () => {
     const order = [at('small', 4.6), at('big', 52.4), at('older', 1, 4)].sort(dueOrder)
     expect(order.map((w) => w.id)).toEqual(['older', 'big', 'small'])
   })
+
+  test('a chat goes where it has the most room, not where the week is most behind', () => {
+    // 2026-10-05: chats have no cost estimate, so a Pro at 80% far behind its weekly pace beat the
+    // Max 20x at 10%, and each chat wound down at 85% minutes later ("prioritize the Hydra desk").
+    const pro = acct('pro', 1, 80, 10, { planFactor: 1, ...weekAt(60) })
+    const max5 = acct('max5', 2, 10, 80, { planFactor: 5, ...weekAt(60) })
+    const max20 = acct('max20', 3, 10, 30, { planFactor: 20, ...weekAt(50) })
+    // Under the stop line, but what already runs there takes it past FIT_PCT.
+    const full = acct('full', 4, 84, 0, { planFactor: 20, ...weekAt(90) })
+    const placement = {
+      expected: 0,
+      running: new Map([['full', [{ expected: 40, startPct: 84 }]]]),
+    }
+    const none = new Map<string, number>()
+    const rank = (w: unknown) =>
+      rankAccounts(
+        w as any,
+        [pro, max5, max20, full],
+        {},
+        none,
+        2,
+        now,
+        none,
+        false,
+        placement,
+      ).map((a) => a.id)
+    expect(rank(worker())).toEqual(['pro', 'max20', 'max5', 'full'])
+    // The 20x has 55 weekly points to its stop line, times 20; the 5x 5 times 5; the Pro 5 to FIT_PCT.
+    expect(rank(worker({ chat: true }))).toEqual(['max20', 'max5', 'pro', 'full'])
+    // A chat's session after a handoff on conversation size is placed the same way again.
+    const handedOff = worker({
+      chat: true,
+      accountId: 'max20',
+      attempts: [
+        {
+          account: { id: 'max20', num: 3, name: 'max20' },
+          outcome: 'handoff',
+          windDown: { reason: 'context' },
+        },
+      ],
+    })
+    expect(rank(handedOff)[0]).toBe('max20')
+  })
+
+  test('a chat starts before every task, whatever its priority or age', () => {
+    const at = (id: string, priority: number, createdAt: number, chat?: boolean) =>
+      ({ id, priority, createdAt, chat }) as any
+    const order = [at('urgent', 5, 1), at('old', 0, 0), at('chat', 0, 9, true)].sort(dueOrder)
+    expect(order.map((w) => w.id)).toEqual(['chat', 'urgent', 'old'])
+  })
 })
 
 const GIB = 2 ** 30

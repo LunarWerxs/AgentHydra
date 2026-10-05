@@ -305,7 +305,7 @@ function holdForRoom(
  *  When to start instead, or nothing when the task need not wait. */
 function cooldownFor(
   s: TickState,
-  w: Pick<CliMayteWorker, 'accounts' | 'priority' | 'heldForResetSince'>,
+  w: Pick<CliMayteWorker, 'accounts' | 'priority' | 'heldForResetSince' | 'chat'>,
   acct: CliMayteAccount,
   allowed: CliMayteAccount[],
   groupActive: Map<string, number>,
@@ -338,7 +338,8 @@ function cooldownFor(
     s.now,
     {
       home: atHome,
-      priority: w.priority ?? 0,
+      // A chat is never held for another account's reset: a person is waiting on it.
+      priority: w.chat ? 1 : (w.priority ?? 0),
       heldSince: w.heldForResetSince ? Date.parse(w.heldForResetSince) : null,
       moving,
     },
@@ -355,7 +356,7 @@ interface Refusal {
 
 function refusalOn(
   s: TickState,
-  w: Pick<CliMayteWorker, 'accounts' | 'priority' | 'heldForResetSince'>,
+  w: Pick<CliMayteWorker, 'accounts' | 'priority' | 'heldForResetSince' | 'chat'>,
   acct: CliMayteAccount,
   allowed: CliMayteAccount[],
   groupActive: Map<string, number>,

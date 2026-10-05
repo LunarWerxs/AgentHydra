@@ -1394,11 +1394,13 @@ export function groupCap(
  *  the weekly reset; then accounts ahead of it (usage is usage, wherever it runs). Where it does
  *  not fit comes last, lowest projection first. 2026-10-02 05:09: the score added only a POSITIVE
  *  gap, so #90 (+7.5) beat #95 (-20.6) on a lower 5-hour projection, and #95 sat without a worker
- *  for 14 minutes while 8 tasks waited. */
+ *  for 14 minutes while 8 tasks waited. A chat (a person waits on it) goes where it has the most
+ *  room (chatRoom) instead. */
 function placedRank(
   a: CliMayteAccount,
   placement: CliMaytePlacement,
   now: number,
+  chat: boolean,
 ): [number, number] {
   const projected = projectedPct(
     a,
@@ -1407,13 +1409,24 @@ function placedRank(
     placement.finishedSince?.get(a.id) ?? 0,
   )
   if (projected > FIT_PCT) return [300 + projected, projected]
+  if (chat) return [0, -chatRoom(a, projected, now)]
   const gap = paceGap(a, now) ?? 0
   return [gap > PACE_BAND ? 100 + gap : gap, projected]
 }
 
+/** How much a chat has before the account is asked to stop, in Pro windows' points: the smaller of
+ *  the 5-hour room under FIT_PCT and the weekly room under its stop line, times the plan. A chat has
+ *  no cost estimate, so by pace alone a Pro at 80% beat a Max 20x at 10% and the owner's chat wound
+ *  down there minutes later (owner, 2026-10-05: "My chat should be prioritized in like a 20x account.
+ *  Not one that has to change every 10 seconds"). */
+function chatRoom(a: CliMayteAccount, projected: number, now: number): number {
+  const week = weekStopPct(a.weekResetsAt, now) - (a.weekPct ?? 50)
+  return Math.max(0, Math.min(FIT_PCT - projected, week)) * (a.planFactor ?? 1)
+}
+
 /** The best account for the worker (rankAccounts' first), or null when none takes it now. */
 export function pickAccount(
-  worker: Pick<CliMayteWorker, 'accounts' | 'accountId' | 'attempts'>,
+  worker: Pick<CliMayteWorker, 'accounts' | 'accountId' | 'attempts' | 'chat'>,
   accounts: CliMayteAccount[],
   walls: CliMayteWalls,
   active: Map<string, number>,
@@ -1576,7 +1589,7 @@ function takesNewWork(a: CliMayteAccount, r: RankInputs): boolean {
  *  `allowFull` (the owner allowed paid extra usage): accounts at or above the 98% session / 99%
  *  weekly caps stay eligible, but only after every account below them. */
 export function rankAccounts(
-  worker: Pick<CliMayteWorker, 'accounts' | 'accountId' | 'attempts'>,
+  worker: Pick<CliMayteWorker, 'accounts' | 'accountId' | 'attempts' | 'chat'>,
   accounts: CliMayteAccount[],
   walls: CliMayteWalls,
   active: Map<string, number>,
@@ -1608,7 +1621,7 @@ export function rankAccounts(
   ]
   const byNum = (a: CliMayteAccount): number => a.num ?? Number.MAX_SAFE_INTEGER
   const scored = eligible.map((a) => {
-    const [base, tie] = placement ? placedRank(a, placement, now) : flat(a)
+    const [base, tie] = placement ? placedRank(a, placement, now, worker.chat === true) : flat(a)
     const score = base + rankPenalty(a, nudgedFrom, failedId, now)
     return { a, score, tie }
   })
@@ -1629,12 +1642,15 @@ export function climaytePriority(v: unknown): number | null {
  *  note 20 (run 1, 19:45): with every account full, the owner's ASAP item (the Events deploy) waited
  *  behind sweep follow-ups for the 23:21 reset, because waiting work started strictly oldest-first.
  *  One dispatch's tasks share a createdAt (all 31 of odin-w1, 2026-10-02): among those the largest
- *  expected cost goes first, so a task only a fresh window holds is placed before small ones fill it. */
+ *  expected cost goes first, so a task only a fresh window holds is placed before small ones fill it.
+ *  A chat goes before all of them: a person is waiting on its answer (owner, 2026-10-05: "prioritize
+ *  the Hydra desk"). */
 export function dueOrder(
-  a: Pick<CliMayteWorker, 'priority' | 'createdAt' | 'size'>,
-  b: Pick<CliMayteWorker, 'priority' | 'createdAt' | 'size'>,
+  a: Pick<CliMayteWorker, 'priority' | 'createdAt' | 'size' | 'chat'>,
+  b: Pick<CliMayteWorker, 'priority' | 'createdAt' | 'size' | 'chat'>,
 ): number {
   return (
+    Number(b.chat === true) - Number(a.chat === true) ||
     (b.priority ?? 0) - (a.priority ?? 0) ||
     a.createdAt - b.createdAt ||
     (b.size?.expected ?? 0) - (a.size?.expected ?? 0)
