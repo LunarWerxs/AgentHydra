@@ -57,9 +57,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   "20 newest finished" cut. Turning it on while an AgentHydra tab with its own list is open slides back to
   the desk so the tasks show. Every task AgentHydra's CliMayte list shows running is in the sidebar
   (owner, 2026-10-05: "Is one smaller than six?"): one no row in the list started sits at the top, under
-  a heading for its PC ("On CornuCopia", "On this PC") with one line saying why: that PC's AgentHydra is
+  a heading for its PC ("On CornuCopia", "On this PC") whose ⓘ says why on hover: that PC's AgentHydra is
   too old to say which chat started it, nothing says, or that chat is not in the list. Once it can say, the
-  task moves under its chat.
+  task moves under its chat. The other PCs' tasks show only while the cloud is on. A folded group's heading
+  carries a blue dot with how many CliMayte tasks run under it and a green dot with how many of its chats
+  run (owner, 2026-10-05).
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
   instead of waiting for the next change.

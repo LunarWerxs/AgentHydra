@@ -24,6 +24,8 @@ const props = defineProps<{
   selectedId: string | null
   /** With the chrome bar's CliMayte button on: the tasks a row handed out, listed under it (sidebar/tasks.ts). */
   tasksOf?: (id: string) => TaskNode[] | null
+  /** Whether a row's session runs now, for a folded group's heading. */
+  running?: (id: string) => boolean
 }>()
 const emit = defineEmits<{ open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker] }>()
 
@@ -35,8 +37,9 @@ function toggleGroup(key: string) {
   collapsed.value = next
 }
 
-/** The running tasks under a group's rows, for its heading while it is folded. */
+/** The running tasks under a group's rows, and its rows that run, for its heading while it is folded. */
 const runningInGroup = (rows: readonly CloudSession[]) => (props.tasksOf ? runningIn(rows.map((r) => props.tasksOf!(r.id))) : 0)
+const chatsRunningIn = (rows: readonly CloudSession[]) => (props.running ? rows.filter((r) => props.running!(r.id)).length : 0)
 
 const now = ref(Date.now())
 let timer: ReturnType<typeof setInterval> | null = null
@@ -105,7 +108,7 @@ const ROW =
               class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)] group-hover/head:opacity-100"
               :class="collapsed.has(g.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
             />
-            <RunningBadge v-if="collapsed.has(g.key) && runningInGroup(g.rows)" class="ml-0.5" :count="runningInGroup(g.rows)" />
+            <RunningBadge v-if="collapsed.has(g.key) && (runningInGroup(g.rows) || chatsRunningIn(g.rows))" class="ml-1" :tasks="runningInGroup(g.rows)" :chats="chatsRunningIn(g.rows)" />
           </button>
         </Tip>
         <span class="flex-1" />

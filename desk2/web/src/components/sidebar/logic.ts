@@ -47,6 +47,8 @@ export function externalRename(draft: string, shown: string): string | null | un
 }
 
 const ACTIVE: ChatStatus[] = ['starting', 'working', 'needs_you']
+/** A turn runs now; one waiting on you does not. */
+const RUNNING: ChatStatus[] = ['starting', 'working']
 
 /** One row of the list: a Hydra Desk chat, or a session running elsewhere (read-only until continued here). */
 export type SidebarEntry =
@@ -219,6 +221,19 @@ export function recordCloudOrder(order: SidebarOrder, added: SidebarOrder): Side
 export function isOrange(e: SidebarEntry): boolean {
   const tone = (e.kind === 'chat' ? statusGlyph(e.chat) : externalGlyph(e.session)).tone
   return tone === 'warning' || tone === 'success'
+}
+
+/** Whether a row's turn runs now: a folded group's heading counts these (RunningBadge.vue). */
+export function entryRunning(e: SidebarEntry): boolean {
+  return e.kind === 'chat' ? RUNNING.includes(e.chat.status) : e.session.status === 'working'
+}
+
+/** The sessions whose turn runs now, ours and those running elsewhere: the cloud list's folded groups count by them. */
+export function runningSessionIds(chats: Pick<ChatSummary, 'sessionId' | 'status'>[], external: Pick<ExternalSession, 'id' | 'status'>[]): Set<string> {
+  return new Set([
+    ...chats.flatMap((c) => (c.sessionId && RUNNING.includes(c.status) ? [c.sessionId] : [])),
+    ...external.flatMap((s) => (s.status === 'working' ? [s.id] : []))
+  ])
 }
 
 /**

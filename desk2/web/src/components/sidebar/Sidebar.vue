@@ -11,7 +11,7 @@ import CloudList from '@/components/cloud/CloudList.vue'
 import { useCloud } from '@/components/cloud/store'
 import HydraSidebar from '@/components/hydra/HydraSidebar.vue'
 import { hydraOpen, hydraSidebar, openWorkerInHydra } from '@/components/hydra/api'
-import { Cloud } from '@lucide/vue'
+import { Cloud, Info } from '@lucide/vue'
 import TaskRows from './TaskRows.vue'
 import RunningBadge from './RunningBadge.vue'
 import { nestTasks, runningIn, showTasks, unplacedText, type NestedTasks, type NestRow } from './tasks'
@@ -33,6 +33,7 @@ import {
 import {
   accountFace,
   chatRow,
+  entryRunning,
   externalRow,
   groupChats,
   groupChoices,
@@ -46,6 +47,7 @@ import {
   resumeCommand,
   revealChat,
   rowPatch,
+  runningSessionIds,
   type ChatGroup,
   type RowMenuItem,
   type RowState,
@@ -196,11 +198,12 @@ const emptyText = computed(() =>
 // further in, each task once (tasks.ts), another PC's under its chat too (the chat sync brings that chat here
 // with the same session id; owner, 2026-10-04: "Under the chat which spawned them. Not as its own stand alone
 // table"). A running task no drawn row lists (its PC does not say which chat started it, or the filter, the
-// search or the list leaves that chat out) is still shown, at the top, per PC with the reason: every task
-// AgentHydra's CliMayte list shows running is here (owner, 2026-10-05: "Is one smaller than six?"). The other
-// PCs' tasks: the desk store keeps them apart from src.workers so they never count as this PC's
+// search or the list leaves that chat out) is still shown, at the top, per PC, the reason behind its ⓘ: every
+// task AgentHydra's CliMayte list shows running is here (owner, 2026-10-05: "Is one smaller than six?"). The
+// other PCs' tasks only with the cloud on (owner, 2026-10-05: "when cloud is turned off, it shouldn't show
+// these"): the desk store keeps them apart from src.workers so they never count as this PC's
 // (stores/desk.ts splitWorkers); a source without them (the Gallery) has none.
-const remoteWorkers = computed(() => src.remoteWorkers?.value ?? [])
+const remoteWorkers = computed(() => (cloud.on.value ? (src.remoteWorkers?.value ?? []) : []))
 const nesting = computed<NestedTasks | null>(() => {
   if (!showTasks.value) return null
   const workers = [...src.workers.value, ...remoteWorkers.value]
@@ -219,8 +222,12 @@ const nesting = computed<NestedTasks | null>(() => {
   return nestTasks(rows, workers)
 })
 const tasksOf = (key: string) => nesting.value?.byRow.get(key) ?? null
-/** The running tasks under a desk-list group's rows, for its heading while it is folded. */
+/** The running tasks under a desk-list group's rows, and its rows that run, for its heading while it is folded. */
 const runningInGroup = (g: ChatGroup) => runningIn(g.entries.map((e) => tasksOf(`${e.kind}:${e.id}`)))
+const chatsRunningIn = (g: ChatGroup) => g.entries.filter(entryRunning).length
+/** The cloud list's rows that run: the ones the desk knows as running. */
+const runningSessions = computed(() => runningSessionIds(src.chats.value, src.external.value))
+const sessionRunning = (id: string) => runningSessions.value.has(id)
 /** A task with a session here opens its transcript; one still queued, or another PC's, opens on CliMayte's tab. */
 function openTask(w: CliMayteWorker) {
   if (w.sessionId && !w.pc) src.select({ kind: 'external', id: w.sessionId })
@@ -442,20 +449,25 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
         <template v-if="!hydraModel && nesting">
           <section v-for="g in nesting.unplaced" :key="`${g.pc ?? ''}|${g.reason}`" :aria-label="`${unplacedText(g).title}: CliMayte tasks not under a chat`">
+            <!-- Why they are not under a chat sits behind the ⓘ (owner, 2026-10-05: "remove this ... text and put it in a info note"). -->
             <header class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted">
               <Cloud v-if="g.pc" class="size-3 shrink-0" aria-hidden="true" />
               <span class="truncate">{{ unplacedText(g).title }}</span>
+              <Tip :label="unplacedText(g).note" align="start" :delay="100">
+                <button type="button" class="flex size-4 shrink-0 items-center justify-center rounded-[4px] hover:text-text-2" :aria-label="unplacedText(g).note">
+                  <Info class="size-3" aria-hidden="true" />
+                </button>
+              </Tip>
               <span class="flex-1" />
               <span class="tnum">{{ unplacedText(g).count }}</span>
             </header>
-            <p class="px-1.5 pb-1 text-[11px] leading-4 text-text-muted">{{ unplacedText(g).note }}</p>
             <TaskRows :nodes="g.nodes" :selected-id="selectedExternalId" :now="now" @open="openTask" />
           </section>
         </template>
 
         <HydraSidebar v-if="hydraModel" :model="hydraModel" />
 
-        <CloudList v-else-if="cloud.on.value" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" @open="openCloud" @open-task="openTask">
+        <CloudList v-else-if="cloud.on.value" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :running="sessionRunning" @open="openCloud" @open-task="openTask">
           <template #tools>
             <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
           </template>
@@ -486,7 +498,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                   class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)] group-hover/head:opacity-100"
                   :class="collapsed.has(group.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
                 />
-                <RunningBadge v-if="collapsed.has(group.key) && runningInGroup(group)" class="ml-0.5" :count="runningInGroup(group)" />
+                <RunningBadge v-if="collapsed.has(group.key) && (runningInGroup(group) || chatsRunningIn(group))" class="ml-1" :tasks="runningInGroup(group)" :chats="chatsRunningIn(group)" />
               </button>
             </Tip>
             <span class="flex-1" />
