@@ -193,10 +193,9 @@ describe('poller', () => {
       { type: 'bridge.status', up: false, url: f.url },
       { type: 'external.update', sessions: [] },
       { type: 'climayte.update', workers: [] },
-      { type: 'swarm.update', jobs: [] },
       expect.objectContaining({ type: 'accounts.update' }),
     ])
-    const acc = h.events[4] as Extract<ServerEvent, { type: 'accounts.update' }>
+    const acc = h.events[3] as Extract<ServerEvent, { type: 'accounts.update' }>
     expect(acc.accounts.map((a) => a.id)).toEqual(['default'])
 
     // still down: nothing new to say
