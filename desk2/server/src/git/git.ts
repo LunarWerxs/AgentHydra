@@ -1,7 +1,8 @@
 // Git for the bar above the composer and the diff pane (SPEC.md REST rows /api/git, /api/git/diff).
 // Every git call is spawned without a shell, with a 5 second timeout, and never opens a window.
 
-import { closeSync, openSync, readSync, statSync } from 'node:fs'
+import { statSync } from 'node:fs'
+import { open } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { GitFileChange, GitStatus } from '@shared/protocol'
 
@@ -140,20 +141,6 @@ async function emptyTree(root: string): Promise<string> {
   return r.stdout.toString('utf8').trim()
 }
 
-async function branchName(root: string): Promise<string | null> {
-  const sym = await runGit(root, ['symbolic-ref', '--short', '-q', 'HEAD'])
-  if (sym.code === 0) return sym.stdout.toString('utf8').trim() || null
-  const sha = await runGit(root, ['rev-parse', '--short', 'HEAD'])
-  return sha.code === 0 ? sha.stdout.toString('utf8').trim() || null : null
-}
-
-async function aheadBehind(root: string): Promise<{ ahead: number; behind: number }> {
-  const r = await runGit(root, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'])
-  if (r.code !== 0) return { ahead: 0, behind: 0 } // no upstream, no commit, or detached
-  const [a, b] = r.stdout.toString('utf8').trim().split(/\s+/).map(Number)
-  return { ahead: a || 0, behind: b || 0 }
-}
-
 interface PorcelainEntry {
   path: string
   status: string
@@ -201,41 +188,81 @@ export function parseNumstatZ(out: string): Map<string, { added: number; removed
 }
 
 /** Lines in a text file the way git counts them; 0 for a binary, unreadable or huge file. */
-export function countTextLines(file: string): number {
-  let fd: number
+export async function countTextLines(file: string): Promise<number> {
+  let fh: Awaited<ReturnType<typeof open>> | null = null
   try {
-    const st = statSync(file)
+    fh = await open(file, 'r')
+    const st = await fh.stat()
     if (!st.isFile() || st.size === 0 || st.size > MAX_COUNT_BYTES) return 0
-    fd = openSync(file, 'r')
-  } catch {
-    return 0
-  }
-  try {
+    const hit = lineCounts.get(file)
+    if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.lines
     const buf = Buffer.alloc(64 * 1024)
     let lines = 0
     let last = -1
     let offset = 0
     for (;;) {
-      const n = readSync(fd, buf, 0, buf.length, offset)
+      const { bytesRead: n } = await fh.read(buf, 0, buf.length, offset)
       if (n <= 0) break
       const view = buf.subarray(0, n)
-      if (offset < BINARY_SNIFF_BYTES && view.subarray(0, BINARY_SNIFF_BYTES - offset).includes(0)) return 0
+      if (offset < BINARY_SNIFF_BYTES && view.subarray(0, BINARY_SNIFF_BYTES - offset).includes(0)) {
+        remember(file, st, 0)
+        return 0
+      }
       for (let i = 0; i < n; i++) if (view[i] === 10) lines++
       last = view[n - 1]
       offset += n
     }
     if (offset > 0 && last !== 10) lines++
+    remember(file, st, lines)
     return lines
   } catch {
     return 0
   } finally {
-    closeSync(fd)
+    await fh?.close().catch(() => {})
   }
+}
+
+/** Counts remembered by size and mtime, so the poll re-reads only an untracked file that changed. */
+const lineCounts = new Map<string, { size: number; mtimeMs: number; lines: number }>()
+const LINE_COUNTS_MAX = 2000
+
+function remember(file: string, st: { size: number; mtimeMs: number }, lines: number): void {
+  lineCounts.delete(file)
+  lineCounts.set(file, { size: st.size, mtimeMs: st.mtimeMs, lines })
+  if (lineCounts.size > LINE_COUNTS_MAX) lineCounts.delete(lineCounts.keys().next().value as string)
 }
 
 function notRepo(): GitStatusResult {
   return { isRepo: false, branch: null, ahead: 0, behind: 0, added: 0, removed: 0, files: [], truncated: false, totalFiles: 0 }
 }
+
+interface BranchHeader {
+  /** null for a detached HEAD: the caller names it by its short sha. */
+  branch: string | null
+  ahead: number
+  behind: number
+  /** The branch has no commit yet. */
+  unborn: boolean
+}
+
+/** Parses the `## ...` line `git status --branch` starts with. */
+function parseBranchHeader(head: string): BranchHeader {
+  const h = head.replace(/^## /, '')
+  const unborn = /^(No commits yet on|Initial commit on) /.exec(h)
+  if (unborn) return { branch: h.slice(unborn[0].length) || null, ahead: 0, behind: 0, unborn: true }
+  if (h.startsWith('HEAD (no branch)')) return { branch: null, ahead: 0, behind: 0, unborn: false }
+  const m = /^(\S+?)(?:\.\.\.\S+)?(?: \[(.*)\])?$/.exec(h)
+  const counts = m?.[2] ?? ''
+  return {
+    branch: m?.[1] ?? (h || null),
+    ahead: Number(/ahead (\d+)/.exec(counts)?.[1] ?? 0),
+    behind: Number(/behind (\d+)/.exec(counts)?.[1] ?? 0),
+    unborn: false,
+  }
+}
+
+/** Calls for the same folder that overlap (two panes, a reload) share one run of git. */
+const statusRuns = new Map<string, Promise<GitStatusResult>>()
 
 /**
  * The working tree against HEAD. isRepo false for a folder outside any repo. files is capped at
@@ -244,21 +271,39 @@ function notRepo(): GitStatusResult {
  */
 export async function gitStatus(cwd: string): Promise<GitStatusResult> {
   const dir = assertDir(cwd)
+  const running = statusRuns.get(dir)
+  if (running) return running
+  const run = readStatus(dir).finally(() => statusRuns.delete(dir))
+  statusRuns.set(dir, run)
+  return run
+}
+
+async function readStatus(dir: string): Promise<GitStatusResult> {
   const root = await repoRoot(dir)
   if (!root) return notRepo()
 
-  const head = await headSha(root)
-  const base = head ?? (await emptyTree(root))
-  const [branch, ab, status, numstat] = await Promise.all([
-    branchName(root),
-    aheadBehind(root),
-    runGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
-    runGit(root, ['diff', '--numstat', '-z', '-M', '--no-ext-diff', '--no-textconv', base, '--']),
+  // One status gives the branch, ahead/behind and the files; the numstat runs beside it against HEAD.
+  const [status, headNumstat] = await Promise.all([
+    runGit(root, ['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all']),
+    runGit(root, ['diff', '--numstat', '-z', '-M', '--no-ext-diff', '--no-textconv', 'HEAD', '--']),
   ])
   if (status.code !== 0) throw new GitError(`git status failed: ${status.stderr}`)
+  const out = status.stdout.toString('utf8')
+  const nul = out.indexOf('\0')
+  const header = parseBranchHeader(nul < 0 ? out : out.slice(0, nul))
+  let numstat = headNumstat
+  if (header.unborn) {
+    // No commit yet: diff against the empty tree instead.
+    numstat = await runGit(root, ['diff', '--numstat', '-z', '-M', '--no-ext-diff', '--no-textconv', await emptyTree(root), '--'])
+  }
   if (numstat.code !== 0) throw new GitError(`git diff --numstat failed: ${numstat.stderr}`)
+  let branch = header.branch
+  if (branch === null) {
+    const sha = await runGit(root, ['rev-parse', '--short', 'HEAD'])
+    branch = sha.code === 0 ? sha.stdout.toString('utf8').trim() || null : null
+  }
 
-  const entries = parsePorcelainZ(status.stdout.toString('utf8'))
+  const entries = parsePorcelainZ(nul < 0 ? '' : out.slice(nul + 1))
   const counts = parseNumstatZ(numstat.stdout.toString('utf8'))
   const listed = entries.slice(0, MAX_FILES)
 
@@ -268,21 +313,23 @@ export async function gitStatus(cwd: string): Promise<GitStatusResult> {
     added += c.added
     removed += c.removed
   }
-  const files: GitFileChange[] = listed.map((e) => {
-    if (e.status === '??') {
-      const lines = countTextLines(join(root, e.path))
-      added += lines
-      return { path: e.path, status: '??', added: lines, removed: 0 }
-    }
-    const c = counts.get(e.path)
-    return { path: e.path, status: e.status, added: c?.added ?? 0, removed: c?.removed ?? 0 }
-  })
+  const files: GitFileChange[] = await Promise.all(
+    listed.map(async (e) => {
+      if (e.status === '??') {
+        const lines = await countTextLines(join(root, e.path))
+        return { path: e.path, status: '??', added: lines, removed: 0 }
+      }
+      const c = counts.get(e.path)
+      return { path: e.path, status: e.status, added: c?.added ?? 0, removed: c?.removed ?? 0 }
+    }),
+  )
+  for (const f of files) if (f.status === '??') added += f.added
 
   return {
     isRepo: true,
     branch,
-    ahead: ab.ahead,
-    behind: ab.behind,
+    ahead: header.ahead,
+    behind: header.behind,
     added,
     removed,
     files,
