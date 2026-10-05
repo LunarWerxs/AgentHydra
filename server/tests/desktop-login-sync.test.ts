@@ -207,9 +207,13 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       made.push(b.dir)
       expect(b).toMatchObject({ uuid: UB, num: 4242 })
       expect(await here(b.dir)).toEqual({ expiry: 5000, session: 'sk-b' })
-      const row = new Database(join(b.dir, 'Network', 'Cookies'), { readonly: true })
-        .query('select value, encrypted_value from cookies')
-        .get() as { value: string; encrypted_value: Uint8Array }
+      // Closed at once: an open handle locks the file on Windows, and the cleanup below then fails with EBUSY.
+      const cookies = new Database(join(b.dir, 'Network', 'Cookies'), { readonly: true })
+      const row = cookies.query('select value, encrypted_value from cookies').get() as {
+        value: string
+        encrypted_value: Uint8Array
+      }
+      cookies.close()
       const plain = (await decryptV10Gcm(
         (await ensureWindowsMasterKey(b.dir))!,
         new Uint8Array(row.encrypted_value),
