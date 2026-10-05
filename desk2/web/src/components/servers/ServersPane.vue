@@ -58,25 +58,31 @@ async function refresh() {
   }
 }
 
-function schedule() {
-  if (!alive || document.hidden) return
+// One polling loop at a time: stopTimer and onVisibility move `loop` on, so a refresh that was already running
+// when the window was hidden does not schedule a second loop behind the new one.
+let loop = 0
+function schedule(gen = loop) {
+  if (!alive || document.hidden || gen !== loop) return
   timer = setTimeout(async () => {
     await refresh()
-    schedule()
+    schedule(gen)
   }, status.value?.state === 'starting' ? 1000 : 2000)
 }
 function stopTimer() {
+  loop++
   if (timer) clearTimeout(timer)
   timer = null
 }
 function onVisibility() {
   stopTimer()
   if (document.hidden) return
-  void refresh().then(schedule)
+  const gen = loop
+  void refresh().then(() => schedule(gen))
 }
 onMounted(() => {
   document.addEventListener('visibilitychange', onVisibility)
-  void refresh().then(schedule)
+  const gen = loop
+  void refresh().then(() => schedule(gen))
 })
 onBeforeUnmount(() => {
   alive = false
@@ -88,6 +94,10 @@ watch(
   () => props.cwd,
   () => {
     selectedId.value = null
+    history.value = []
+    at.value = -1
+    address.value = ''
+    viaManager.value = false
     addNothing.value = null
     actionError.value = null
     void refresh()
@@ -170,8 +180,8 @@ function submitAddress() {
   const url = parseAddress(address.value)
   if (url) go(url)
 }
-const back = () => at.value > 0 && ((at.value -= 1), (address.value = current.value ?? ''))
-const forward = () => at.value < history.value.length - 1 && ((at.value += 1), (address.value = current.value ?? ''))
+const back = () => at.value > 0 && ((at.value -= 1), (address.value = current.value ?? ''), (viaManager.value = false))
+const forward = () => at.value < history.value.length - 1 && ((at.value += 1), (address.value = current.value ?? ''), (viaManager.value = false))
 watch(
   () => (selected.value && selected.value.status === 'running' ? processAddress(selected.value) : null),
   (url) => {
@@ -259,6 +269,11 @@ const TEXT_BTN =
       <div>The server manager did not start.</div>
       <div class="break-words font-mono text-[12px]">{{ view.reason }}</div>
       <button type="button" :class="TEXT_BTN" class="self-start" @click="tryAgain">Try again</button>
+    </div>
+
+    <div v-else-if="view.kind === 'stopped'" class="mx-3 mt-1 flex flex-col gap-2 rounded-[var(--radius-10)] bg-[var(--fill-secondary)] px-3 py-2">
+      <div>The server manager stopped.</div>
+      <button type="button" :class="TEXT_BTN" class="self-start" @click="tryAgain">Start it</button>
     </div>
 
     <div v-else-if="view.kind === 'unreachable'" class="mx-3 mt-1 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]" role="alert">
