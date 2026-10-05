@@ -2,8 +2,9 @@
 
 This folder is Hydra Desk 2: a copy of Jacob's Hydra Desk (`../desk`) made on 2026-10-04 so Michael can
 try new things on it without touching Jacob's app. Both run side by side: Desk 2 is on port 7798, keeps
-its data in `~/.hydra-desk-2/` and its window profile in `%LOCALAPPDATA%\HydraDesk2\window`, and has its
-own "Hydra Desk 2" shortcut. SPEC.md is the design it started from and still describes what is
+its data in `~/.hydra-desk-2/`, opens in its own native window (`launcher/HydraDesk2.exe`, a WebView2
+host built from `launcher/host`, its data in `%LOCALAPPDATA%\HydraDesk2\webview`), and has its own
+"Hydra Desk 2" shortcut. SPEC.md is the design it started from and still describes what is
 unchanged; what Desk 2 adds is in README.md under "What Desk 2 adds". shared/protocol.ts is the contract
 between server/ and web/.
 

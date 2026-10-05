@@ -1,8 +1,8 @@
 # Hydra Desk 2
 
 Hydra Desk 2 is Michael's copy of Jacob's [Hydra Desk](../desk), made on 2026-10-04 to try new things
-on without touching Jacob's app. It runs beside it: port 7798, data in `~/.hydra-desk-2/`, window
-profile in `%LOCALAPPDATA%\HydraDesk2\window`, and its own **Hydra Desk 2** shortcut
+on without touching Jacob's app. It runs beside it: port 7798, data in `~/.hydra-desk-2/`, its own
+window (`launcher/HydraDesk2.exe`, WebView2 data in `%LOCALAPPDATA%\HydraDesk2\webview`), and its own **Hydra Desk 2** shortcut
 (`launcher/install-shortcuts.ps1`). Everything below is Hydra Desk's own description, with the ports
 and folders changed to Desk 2's.
 
@@ -21,7 +21,13 @@ sidebar on the left stays put, and only the pane on the right changes.
   back and opens it in Desk's own view, under the session header below. A chat the copy itself is asked
   to open (the Instances move dialog's list, the landing page's session tiles) comes back to Desk the
   same way. Every other AgentHydra tab (CliMayte, Instances, Analytics, HSwarm) is there as usual.
-  **← Desk** (or the button again, or picking one of Desk's own chats) slides the chat back.
+  Escape, the AgentHydra button again, or picking one of Desk's own chats slides the chat back. The pane
+  has no strip of its own above the copy (owner, 2026-10-05: "remove the header bar ... and remove the
+  logo"): the copy's top bar fills it, without the AgentHydra logo and title or the Queue button. It
+  opens at once: the copy loads in the background once Desk has painted and the window is idle, keeps
+  every tab it has opened, and keeps one shared store per kind of data (CLI and desktop instances,
+  analytics, HSwarm, CliMayte), asked again about every 2 minutes while the window is visible and
+  right when a page or the pane is shown, so every tab reads the same numbers (`hydra/src/lib/warm-data.ts`).
   What slides in is not AgentHydra's own window but Desk 2's copy of it, `hydra/` (AgentHydra's `web/`,
   copied at 779aa0fd), so it can be changed as much as wanted without touching AgentHydra. Desk 2
   serves it at `/ah/` and hands its API calls to the one AgentHydra daemon (`HYDRA_URL`, default
@@ -51,6 +57,14 @@ sidebar on the left stays put, and only the pane on the right changes.
   AgentHydra's transcript index knows (a Codex session, a CLI outside `~/.claude`) stays listed for 10
   minutes after its last write, idle after the first 30 s, instead of leaving 30 s after each write, and
   HSwarm's job transcripts stay out of the desk list (HSwarm has its own tab), as they do in the cloud list.
+- **Rows you arrange.** A row in either list drags to another place in its group (a line shows where it
+  will land), into the one order both lists share; not while selecting, searching or filtering (owner,
+  2026-10-05: "items in the sidebar need to be draggable to rearrange order"). A cloud list row has a
+  right-click menu: a row the desk list shows gets its desk menu, any other Open, Pin and Copy session
+  ID. A pinned outside session stays listed however long it has been idle. A row the desk list shows
+  idle has the dimmer hollow ring, as Claude draws one, in the cloud list too. Motion is calmer: a
+  working dot blinks every 2.4 s (was 1.2), a waiting one pulses every 3 s (was 2), and the sidebar's
+  spinner turns once in 2.5 s.
 - **CliMayte tasks in the sidebar.** The robot button beside the cloud (blue while on) lists, under each
   chat or session in the sidebar that has CliMayte tasks running, those tasks, one short indented line
   each (status, title, model, how long it has run); a task a manager started sits one step further in,
@@ -109,7 +123,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   running outside Desk too (owner, 2026-10-05: "it currently says, 'No running, no finished,' but there
   actually is one running and one finished"): it lists that session's running and finished background
   tasks, a failed or stopped one with an X, and keeps asking while one runs, even when the session itself
-  is idle. A chat's finished tasks count under Finished, in Desk's own chats too. The count lives in one
+  is idle. The title bar's list button, beside the session header's panel button, opens the panel, for
+  Desk's own chats too, with a blue count while tasks run (owner, 2026-10-05: "the one that shows me,
+  like, background running tasks. Which I have not been able to figure out how to view").
+  A chat's finished tasks count under Finished, in Desk's own chats too. The count lives in one
   place, the muted "1 running task · 2 finished" line under the last message; the agents chip that
   repeated it above the composer is gone. A workflow that finished before the latest turn began (a
   finished background task starts a turn of its own) folds into one muted line, as in the real app,
@@ -117,12 +134,24 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **Small things that stay put.** Closing the tip over a new chat's composer ends the tips for good
   (owner, 2026-10-05: "Those all need to remember if I close them and stay closed"). Over an outside
   session, the line about continuing it says what happens: it continues as a copy on the account CliMayte
-  picks when you send, and the original stays as it is.
-- **The window comes back where it was.** Closing Desk 2 and opening it again puts the window back at
-  the size and place it had, a snapped one included: Windows keeps a snapped window's floating size apart
-  from where it sits, so the launcher's window keeper saves the rectangle on screen too
-  (`~/.hydra-desk-2/window.json`) and puts the window back on it while both ends of its title bar are
-  still on a monitor (otherwise Windows' own placement, pulled onto a monitor that is there).
+  picks when you send, and the original stays as it is. That line now sits clear of the composer below it.
+- **A working Claude Desktop chat stays usable.** Over a Desktop chat that is working or waiting on you,
+  the composer stays (owner, 2026-10-05: "don't remove the box and just tell me it's working in the
+  desktop ... I need to be able to type in it"), under a line saying what the chat is doing. What you send
+  goes into that chat's own queue through AgentHydra (`POST /api/external/sessions/:id/message`, on to
+  the daemon's `POST /api/sessions/:id/message`) and runs when its turn ends; until the transcript shows
+  it, it is listed as queued. Text only: files, pictures and voice are off there. An idle chat still
+  continues as a copy, as above.
+- **Its own window, opening where you left it.** Desk 2 opens in its own native window,
+  `launcher/HydraDesk2.exe` (WebView2, built from `launcher/host`), instead of an Edge app window
+  (owner, 2026-10-05: "It loads and then it auto-adjusts itself on the screen ... I want it to load in
+  the position that I last left it"). The window is created hidden at the place saved in
+  `~/.hydra-desk-2/window.json` (the rectangle it had on screen, so a snapped window comes back on the
+  same spot, and maximized if it was), shown once, and never moved after; a saved place whose title bar
+  is no longer on a connected monitor falls back to a default on the main one. Its title bar is drawn in the page's background colour, so
+  it no longer shows black above it. Its WebView2 data lives in `%LOCALAPPDATA%\HydraDesk2\webview`; on
+  the first run the launcher asks the old Edge app window to close and the host copies the page's saved
+  settings (the sidebar order and filters among them) from the old window profile.
 - **More in the Filter menu.** The sidebar's Filter button now holds what AgentHydra's Sessions ⋯ menu
   has: Refresh, Only this view, Select multiple sessions, then Source, Instance, Queued work, Usage
   limits, Session shape, Archived, Computer and Time period, Reset, and Session settings (which opens
@@ -149,8 +178,8 @@ The full design is in [SPEC.md](SPEC.md). The contract between the server and th
 
 **The shortcut.** Run `launcher\install-shortcuts.ps1` once. It puts a "Hydra Desk" shortcut on the
 Desktop and in the Start Menu. Clicking it starts the server in the background if it is not running,
-waits for it to answer, then opens Hydra Desk as its own window (Microsoft Edge in app mode, or Chrome
-if Edge is missing), with its own taskbar entry. Clicking it again just brings the window forward; it
+waits for it to answer, then opens Hydra Desk in its own window (`launcher\HydraDesk2.exe`, which needs
+the WebView2 runtime that ships with Windows 11), with its own taskbar entry. Clicking it again just brings the window forward; it
 never starts a second server. No console window appears: the shortcut runs `launcher\start.vbs`, which
 runs `launcher\start.ps1` hidden.
 
@@ -190,7 +219,8 @@ To regenerate the icon: `python launcher\make-icon.py` (needs Pillow), then re-r
   - `logs/server.log` the server's output, `logs/launcher.log` what the launcher did,
     `logs/<chatId>.log` each chat's Claude Code log
   - `server.pid` the server the launcher started (read by `stop.ps1`)
-- `%LOCALAPPDATA%\HydraDesk2\window` the window's own browser profile (its size and position live here).
+  - `window.json` where the window was last left (written by `launcher\HydraDesk2.exe`)
+- `%LOCALAPPDATA%\HydraDesk2\webview` the window's WebView2 data (the page's saved settings live here).
 
 ## The SDK
 
