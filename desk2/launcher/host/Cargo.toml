@@ -1,0 +1,30 @@
+[package]
+name = "hydra-desk2-host"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+# The native window of Hydra Desk 2: tao + wry (WebView2). Built to ../HydraDesk2.exe.
+[[bin]]
+name = "HydraDesk2"
+path = "src/main.rs"
+
+[dependencies]
+tao = "0.37"
+wry = "0.55"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Its own workspace root: cargo never walks up into a host repo's manifest, so the profiles below apply.
+[workspace]
+
+# Line tables only in dev and test builds: a panic still names file:line (rust-ci-speed).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

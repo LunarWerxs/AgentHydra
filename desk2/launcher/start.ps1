@@ -5,8 +5,10 @@
 #      appended to ~/.hydra-desk-2/logs/server.log, its pids in ~/.hydra-desk-2/server.pid (stop.ps1 reads it).
 #      A server this launcher started that is still booting is waited on, never started twice.
 #   3. Wait for health up to 20 s; if it never answers, show a message box naming the log and exit 1.
-#   4. Focus the existing Hydra Desk 2 window, or open Microsoft Edge in app mode (Chrome when Edge is
-#      missing) with its own profile in %LOCALAPPDATA%\HydraDesk2\window, 1500x950 on first run.
+#   4. Run launcher/HydraDesk2.exe (the native WebView2 host). It opens hidden at the place saved in
+#      ~/.hydra-desk-2/window.json, then shows; a second run only focuses the open window. On the host's
+#      first run (no %LOCALAPPDATA%\HydraDesk2\webview yet) the old Edge app window is asked to close
+#      first, so the host can copy its localStorage over.
 #
 # Safe to run twice: a named mutex serialises launches, and a second run only focuses the window.
 # The shortcut runs this through launcher/start.vbs so no console window ever flashes.
@@ -33,7 +35,8 @@ $LogDir = Join-Path $DeskHome 'logs'
 $ServerLog = Join-Path $LogDir 'server.log'
 $LauncherLog = Join-Path $LogDir 'launcher.log'
 $PidFile = Join-Path $DeskHome 'server.pid'
-$WindowProfile = Join-Path $env:LOCALAPPDATA 'HydraDesk2\window'
+$WindowProfile = Join-Path $env:LOCALAPPDATA 'HydraDesk2\window'  # the old Edge app profile (hand-over only)
+$WebViewData = Join-Path $env:LOCALAPPDATA 'HydraDesk2\webview'
 $HealthTimeoutSec = 20
 
 function Say([string]$msg) {
@@ -80,55 +83,28 @@ function Get-LauncherServer {
   return $null
 }
 
-function Find-Browser {
-  $candidates = @(
-    @{ Name = 'Microsoft Edge'; Exe = 'msedge.exe'; Paths = @(
-        "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
-        "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
-        "$env:LOCALAPPDATA\Microsoft\Edge\Application\msedge.exe") },
-    @{ Name = 'Google Chrome'; Exe = 'chrome.exe'; Paths = @(
-        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
-        "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe") }
-  )
-  foreach ($c in $candidates) {
-    $paths = @()
-    foreach ($hive in 'HKCU', 'HKLM') {
-      try {
-        $v = (Get-ItemProperty -Path "${hive}:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$($c.Exe)" -ErrorAction Stop).'(default)'
-        if ($v) { $paths += $v.Trim('"') }
-      } catch { }
-    }
-    foreach ($p in ($paths + $c.Paths)) {
-      if ($p -and (Test-Path -LiteralPath $p)) { return @{ Name = $c.Name; Path = $p; Exe = $c.Exe } }
-    }
-  }
-  return $null
-}
-
-# The browser process that owns our profile (not its --type= helpers), if one is running.
-function Find-WindowProcess([string]$exe) {
+# The old Edge/Chrome app window (our profile, not its --type= helpers), if one is running.
+function Find-OldWindowProcess {
   $needle = $WindowProfile.ToLowerInvariant()
-  $procs = Get-CimInstance Win32_Process -Filter "Name='$exe'" -ErrorAction SilentlyContinue
-  foreach ($p in $procs) {
-    $cmd = [string]$p.CommandLine
-    if ($cmd -and $cmd.ToLowerInvariant().Contains($needle) -and $cmd -notmatch '--type=') { return [int]$p.ProcessId }
+  foreach ($exe in 'msedge.exe', 'chrome.exe') {
+    foreach ($p in (Get-CimInstance Win32_Process -Filter "Name='$exe'" -ErrorAction SilentlyContinue)) {
+      $cmd = [string]$p.CommandLine
+      if ($cmd -and $cmd.ToLowerInvariant().Contains($needle) -and $cmd -notmatch '--type=') { return [int]$p.ProcessId }
+    }
   }
   return $null
 }
 
-function Focus-Window([int]$browserPid) {
-  $p = Get-Process -Id $browserPid -ErrorAction SilentlyContinue
-  if (-not $p -or $p.MainWindowHandle -eq [IntPtr]::Zero) { return $false }
-  Add-Type -Namespace HydraDesk -Name Win32 -MemberDefinition @'
-[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-'@
-  $h = $p.MainWindowHandle
-  if ([HydraDesk.Win32]::IsIconic($h)) { [HydraDesk.Win32]::ShowWindow($h, 9) | Out-Null }  # 9 = SW_RESTORE
-  [HydraDesk.Win32]::SetForegroundWindow($h) | Out-Null
-  return $true
+# Hand-over at the host's first launch: ask the old window to close (up to 5 s) so its localStorage can be copied.
+function Close-OldWindow {
+  $id = Find-OldWindowProcess
+  if (-not $id) { return }
+  $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+  if ($p) {
+    [void]$p.CloseMainWindow()
+    [void]$p.WaitForExit(5000)
+    Say "asked the old Edge app window (pid $id) to close before the first host run"
+  }
 }
 
 # The bun that cmd.exe can run: bun.exe, else a .cmd/.bat shim. An npm-installed bun puts bun.ps1 first
@@ -196,10 +172,8 @@ function Wait-Health($wrapper) {
 
 # ---------------------------------------------------------------------------------------------
 
-$browser = Find-Browser
-$firstRun = -not (Test-Path $WindowProfile)
-$browserArgs = @("--app=$Url", "--user-data-dir=`"$WindowProfile`"", '--no-first-run', '--no-default-browser-check')
-if ($firstRun) { $browserArgs += '--window-size=1500,950' }
+$HostExe = Join-Path $PSScriptRoot 'HydraDesk2.exe'
+$FirstRun = -not (Test-Path $WebViewData)
 
 if ($DryRun) {
   $up = Test-Health
@@ -215,11 +189,11 @@ if ($DryRun) {
   }
   if (-not (Test-Path (Join-Path $DeskRoot 'web\dist\index.html'))) { Say 'note: web\dist is not built yet (bun run build); the window would be empty' }
   if ($NoWindow) { Say 'would not open or focus a window (-NoWindow)' }
-  elseif (-not $browser) { Say 'no Microsoft Edge or Google Chrome found: would fail with an error box' }
+  elseif (-not (Test-Path -LiteralPath $HostExe)) { Say "$HostExe is missing: would fail with an error box" }
   else {
-    $existing = Find-WindowProcess $browser.Exe
-    if ($existing) { Say "Hydra Desk 2 window already open ($($browser.Name) pid $existing): would focus it" }
-    else { Say "would open $($browser.Name): `"$($browser.Path)`" $($browserArgs -join ' ')" }
+    Say "would run $HostExe (opens hidden at the placement saved in $(Join-Path $DeskHome 'window.json'), then shows; a second run focuses the open window)"
+    if ($FirstRun) { Say "first host run ($WebViewData does not exist): would ask the old Edge app window to close, and the host would copy its localStorage" }
+    & $HostExe --url $Url --dry-run 2>&1 | ForEach-Object { Say "  $_" }
   }
   exit 0
 }
@@ -255,21 +229,10 @@ try {
   }
   if ($NoWindow) { return }
 
-  if (-not $browser) { Fail 'Hydra Desk 2 needs Microsoft Edge or Google Chrome to open its window; neither was found.' }
-  $existing = Find-WindowProcess $browser.Exe
-  $opened = $false
-  if ($existing -and (Focus-Window $existing)) {
-    Say "focused the open Hydra Desk 2 window ($($browser.Name) pid $existing)"
-  } else {
-    Start-Process -FilePath $browser.Path -ArgumentList $browserArgs | Out-Null
-    $opened = $true
-    Say "opened $($browser.Name) app window on $Url$(if ($firstRun) { ' (first run, 1500x950)' })"
-  }
-  # The window keeper remembers the window's place and size, and puts a window just opened back there.
-  $keeperArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$(Join-Path $PSScriptRoot 'window-keeper.ps1')`"",
-    '-BrowserExe', $browser.Exe, '-WindowProfile', "`"$WindowProfile`"", '-StateFile', "`"$(Join-Path $DeskHome 'window.json')`"")
-  if ($opened) { $keeperArgs += '-Apply' }
-  try { Start-Process -FilePath 'powershell.exe' -ArgumentList $keeperArgs -WindowStyle Hidden | Out-Null } catch { Say "window keeper did not start: $_" }
+  if (-not (Test-Path -LiteralPath $HostExe)) { Fail "Hydra Desk 2's window host is missing: $HostExe`n`nBuild it in launcher\host (cargo build --release) and copy it here." }
+  if ($FirstRun) { Close-OldWindow }
+  Start-Process -FilePath $HostExe -ArgumentList @("--url", $Url) -WorkingDirectory $PSScriptRoot | Out-Null
+  Say "ran $HostExe on $Url$(if ($FirstRun) { ' (first run)' })"
 } finally {
   try { $mutex.ReleaseMutex() } catch { }
   $mutex.Dispose()
