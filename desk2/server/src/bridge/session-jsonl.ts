@@ -173,11 +173,9 @@ export function sessionJsonlItems(path: string, cwd?: string | null): Transcript
     from += nl < 0 ? buf.length : nl + 1
     text = nl < 0 ? '' : buf.subarray(nl + 1).toString('utf8')
   }
-  const end = text.lastIndexOf('
-') + 1
+  const end = text.lastIndexOf('\n') + 1
   const fresh = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, recs: [], bytes: 0, items: [] }
-  const done = text.slice(0, end).split('
-')
+  const done = text.slice(0, end).split('\n')
   done.pop()
   for (const line of done) {
     const bytes = Buffer.byteLength(line) + 1

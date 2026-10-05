@@ -39,6 +39,7 @@ export default {
   loadFailedTitle: 'Could not reach AgentHydra',
   loadFailedBody: 'Your tasks are safe on disk. Retrying every 15 seconds.',
   retry: 'Retry',
+  showOlder: 'Show older',
   staleBanner: 'Cannot reach AgentHydra. Showing the last known state; retrying.',
   noAccount: 'No account yet',
   seconds: '{s}s',

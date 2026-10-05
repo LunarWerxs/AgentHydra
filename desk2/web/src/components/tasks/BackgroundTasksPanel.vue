@@ -59,15 +59,16 @@ const squares = computed(() => {
 // The shared 1 s clock runs only while something here counts up (a running unit, or a unit with a start and no end).
 const ticking = computed(() => lists.value.running.length > 0 || lists.value.finished.some((u) => u.startedAt !== null && u.endedAt === null))
 const frozenNow = Date.now()
-const clock = shallowRef<Readonly<Ref<number>> | null>(null)
-const now = computed(() => clock.value?.value ?? frozenNow)
+const clock = shallowRef<{ now: Readonly<Ref<number>> } | null>(null)
+const now = computed(() => clock.value?.now.value ?? frozenNow)
 let clockScope: EffectScope | null = null
 watch(
   ticking,
   (on) => {
     if (on && !clockScope) {
       clockScope = effectScope()
-      clock.value = clockScope.run(() => useClock(1000)) ?? null
+      const tick = clockScope.run(() => useClock(1000))
+      clock.value = tick ? { now: tick } : null
     } else if (!on && clockScope) {
       clockScope.stop()
       clockScope = null
