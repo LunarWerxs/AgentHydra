@@ -112,11 +112,6 @@ export function setFetchedPrices(prices: Record<string, ModelPrice>, fetchedAt: 
   fetched = { prices, asOf }
 }
 
-/** Every model id with a price in force (catalog first, then the bundled file), for tables. */
-export function pricedModelIds(): string[] {
-  return [...new Set([...Object.keys(fetched?.prices ?? {}), ...Object.keys(PRICES)])].sort()
-}
-
 /** Drop any downloaded catalog and fall back to the bundled table. Tests use this; so would a
  *  future setting for an install that wants only what it shipped with. */
 export function clearFetchedPrices(): void {

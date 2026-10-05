@@ -3,9 +3,10 @@
  * What the numbers mean and how the choice is made: docs/COST-MODEL.md.
  */
 
+import priceFile from '../../../hswarm/data/prices.json'
 import { setSetting } from '../db'
 import { app } from '../http-app'
-import { pricedModelIds, priceFor, pricesAsOf } from '../pricing'
+import { priceFor, pricesAsOf } from '../pricing'
 import {
   clampDiscounts,
   costModel,
@@ -26,7 +27,9 @@ const round = (n: number, d = 6) => Math.round(n * 10 ** d) / 10 ** d
 
 app.get('/api/routing/cost-model', (c) => {
   const m = costModel()
-  const models = pricedModelIds()
+  // Ids only from the price file; every rate comes through pricing.ts (a downloaded catalog wins there).
+  const models = Object.keys(priceFile.models)
+    .sort()
     .filter((id) => /^(claude|deepseek)/.test(id))
     .flatMap((id) => {
       const p = priceFor(id)
