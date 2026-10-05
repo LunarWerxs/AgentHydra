@@ -94,6 +94,9 @@ async function handleRoutingToggle(checked: boolean) {
   }
 }
 
+// The slider's value while it is being dragged; it is saved once, when the drag settles.
+const biasDraft = ref<number | null>(null)
+
 async function handleLoadBiasChange(value: string) {
   try {
     const bias = parseFloat(value)
@@ -360,7 +363,7 @@ async function handlePreview() {
               <div class="flex items-center justify-between">
                 <Label>{{ t('hswarm.v.routing.loadBias') }}</Label>
                 <span class="font-mono text-sm">
-                  {{ (state.options?.load_bias ?? 0).toFixed(1) }}
+                  {{ (biasDraft ?? state.options?.load_bias ?? 0).toFixed(1) }}
                 </span>
               </div>
               <input
@@ -369,7 +372,8 @@ async function handlePreview() {
                 max="5"
                 step="0.1"
                 :value="state.options?.load_bias ?? 0"
-                @input="(e) => handleLoadBiasChange((e.target as HTMLInputElement).value)"
+                @input="(e) => (biasDraft = parseFloat((e.target as HTMLInputElement).value))"
+                @change="(e) => handleLoadBiasChange((e.target as HTMLInputElement).value).finally(() => (biasDraft = null))"
                 class="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer"
               />
               <p class="text-xs text-muted-foreground">

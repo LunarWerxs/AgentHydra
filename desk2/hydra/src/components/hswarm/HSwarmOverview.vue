@@ -256,6 +256,21 @@ const isFresh = computed(() => {
 const spendDays = computed(() => usage.value?.days ?? [])
 // The window is zero-filled, so "has data" means some day had a call, not that the list is non-empty.
 const hasDays = computed(() => spendDays.value.some((d) => d.tasks > 0 || d.tokens > 0))
+// The table lists the newest day first.
+const reversedDays = computed(() => [...spendDays.value].reverse())
+// The ask box's model list: each provider's enabled models, grouped once per state change.
+const enabledByProvider = computed(() => {
+  const groups = new Map<string, any[]>()
+  for (const m of props.state.models ?? []) {
+    if (!m.enabled) continue
+    const list = groups.get(m.provider)
+    if (list) list.push(m)
+    else groups.set(m.provider, [m])
+  }
+  return groups
+})
+// The doctor's report, pretty-printed once when it arrives.
+const doctorJson = computed(() => (doctor.value?.data ? JSON.stringify(doctor.value.data, null, 2) : ''))
 
 const spendChartData = computed(() => {
   return spendDays.value.map((d) => ({
@@ -349,8 +364,7 @@ async function submitAsk() {
 
 // Load data on mount
 onMounted(async () => {
-  await loadUsage()
-  await loadClients()
+  await Promise.all([loadUsage(), loadClients()])
 })
 
 // Money and tokens: the kit's formatters (lib/kit.ts).
@@ -509,7 +523,7 @@ function formatPercent(value: number): string {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="d in [...spendDays].reverse()" :key="d.date" class="border-t hover:bg-muted/50">
+                <tr v-for="d in reversedDays" :key="d.date" class="border-t hover:bg-muted/50">
                   <td class="px-2 py-1">{{ d.date }}</td>
                   <td class="px-2 py-1 text-right">{{ formatTokens(d.tokens) }}</td>
                   <td class="px-2 py-1 text-right">{{ fineUsd(d.cost) }}</td>
@@ -615,7 +629,7 @@ function formatPercent(value: number): string {
             <p class="text-xs text-destructive">{{ doctor.error }}</p>
           </div>
           <div v-if="doctor?.data" class="rounded-lg border bg-muted p-3">
-            <pre class="text-xs overflow-auto max-h-40">{{ JSON.stringify(doctor.data, null, 2) }}</pre>
+            <pre class="text-xs overflow-auto max-h-40">{{ doctorJson }}</pre>
           </div>
         </div>
 
@@ -662,7 +676,7 @@ function formatPercent(value: number): string {
             <option value="auto">{{ t('hswarm.v.overview.autoCheapest') }}</option>
             <optgroup v-for="provider in state.providers" :key="provider.name" :label="provider.name">
               <option
-                v-for="model in state.models?.filter((m: any) => m.provider === provider.name && m.enabled)"
+                v-for="model in enabledByProvider.get(provider.name)"
                 :key="model.name"
                 :value="model.name"
               >
