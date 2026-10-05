@@ -87,3 +87,15 @@ export const OPEN_CLIMAYTE_EVENT = 'hydra-desk:open-climayte'
 
 /** Window event the composer fires to bring the chat's pending request into view (detail: { chatId }). */
 export const SHOW_PENDING_EVENT = 'hydra-desk:show-pending'
+
+/** Window event the composer fires as a message is sent or queued: that chat's transcript goes to its bottom and follows the reply. */
+export const CHAT_SENT_EVENT = 'hydra-desk:chat-sent'
+export interface ChatSentDetail {
+  chatId: string
+  sessionId: string | null
+}
+
+/** Whether a send was into the transcript shown under `transcriptId`: a Desk chat's id, or an outside session's id (its composer's chat is a stand-in with an id of its own). */
+export function sentHere(detail: ChatSentDetail | null | undefined, transcriptId: string): boolean {
+  return !!detail && (detail.chatId === transcriptId || detail.sessionId === transcriptId)
+}

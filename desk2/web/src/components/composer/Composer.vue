@@ -26,7 +26,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import WorkerDock from '@/components/climayte/WorkerDock.vue'
-import { COMPOSER_API, httpComposerApi, OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT, SHOW_PENDING_EVENT } from './api'
+import { CHAT_SENT_EVENT, COMPOSER_API, httpComposerApi, OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT, SHOW_PENDING_EVENT, type ChatSentDetail } from './api'
 import {
   appendDictation,
   applyMention,
@@ -821,6 +821,8 @@ async function submit(ctrl = false) {
   sending.value = true
   text.value = ''
   images.value = []
+  // Enter brings the chat to its bottom at once, even scrolled up, and the reply is followed from there.
+  if (props.chat) window.dispatchEvent(new CustomEvent<ChatSentDetail>(CHAT_SENT_EVENT, { detail: { chatId: props.chat.id, sessionId: props.chat.sessionId ?? null } }))
   try {
     if (props.chat && props.into) {
       await props.into.send(body)

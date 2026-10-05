@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // The transcript: a windowed list (only the rows near the viewport are in the DOM, so a 3,000-item
-// chat scrolls smoothly), auto-scroll that lets go when Jacob scrolls up, and a Working row under
+// chat scrolls smoothly), auto-scroll that lets go when Jacob scrolls up (a send takes it back to the
+// bottom), and a Working row under
 // the last item while the chat's turn runs.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch, type Directive } from 'vue'
 import { icons } from '@/lib/icons'
@@ -17,6 +18,7 @@ import WorkingFooter from './parts/WorkingFooter.vue'
 import ToolGroup from './parts/ToolGroup.vue'
 import TaskGroup from './parts/TaskGroup.vue'
 import RunningTasksRow from '@/components/tasks/RunningTasksRow.vue'
+import { CHAT_SENT_EVENT, sentHere, type ChatSentDetail } from '@/components/composer/api'
 import './transcript.css'
 
 const props = defineProps<{
@@ -135,6 +137,11 @@ function jumpToLatest() {
   requestAnimationFrame(scrollToBottom)
 }
 
+// Sending from this chat's composer goes to the bottom, even scrolled up, and stays pinned for the reply.
+function onSent(e: Event) {
+  if (sentHere((e as CustomEvent<ChatSentDetail>).detail, props.chatId)) jumpToLatest()
+}
+
 let rowObserver: ResizeObserver | null = null
 let viewObserver: ResizeObserver | null = null
 
@@ -186,9 +193,11 @@ onMounted(() => {
   // The rows mounted before the observer existed.
   scroller.value?.querySelectorAll<HTMLElement>('[data-id]').forEach((el) => rowObserver!.observe(el, { box: 'border-box' }))
   scrollToBottom()
+  window.addEventListener(CHAT_SENT_EVENT, onSent)
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener(CHAT_SENT_EVENT, onSent)
   rowObserver?.disconnect()
   viewObserver?.disconnect()
   clearFind()
