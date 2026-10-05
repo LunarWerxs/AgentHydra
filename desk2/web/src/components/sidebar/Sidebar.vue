@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { ChatSummary, CliMayteWorker, CloudSession, ExternalSession, SessionMetaPatch, SwarmJob } from '@shared/protocol'
 import { icons, shellGlyphs, sidebarIcons } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -7,10 +7,11 @@ import { Input } from '@/components/ui/input'
 import { Tip } from '@/components/ui/tooltip'
 import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import { useShellSource } from '@/components/shell/source'
-const CloudList = defineAsyncComponent(() => import('@/components/cloud/CloudList.vue'))
+const CloudList = lazyPanel(() => import('@/components/cloud/CloudList.vue'))
 import { useCloud } from '@/components/cloud/store'
-const HydraSidebar = defineAsyncComponent(() => import('@/components/hydra/HydraSidebar.vue'))
+const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
+import { lazyPanel } from '@/lib/lazy-panel'
 import { useSwarmJobs } from '@/lib/swarm-jobs'
 import { hydraOpen, hydraSidebar, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
