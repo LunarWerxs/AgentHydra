@@ -463,6 +463,27 @@ picks the account and moves the worker when that account hits its limit or its l
   signed-in account not yet tried (`pickHealthy`), copies the session there (`seedSession`), restarts the
   runtime and resends the unanswered message once, with the muted line 'Moved from #126 (signed out) to #61.'.
   At most 4 accounts per message, then one clear error. Any other error (tool failure, bad request) never moves.
+  - **A move mid-turn continues the work** (`ChatRuntime.carrySends`): a turn cut before it replied resends its
+    message as above. A turn cut after it replied, or one the CLI started itself (a background task ended, so no
+    message of ours started it), is sent `CONTINUE_TEXT` instead, once per move ("You were moved to another
+    account mid-task ... Continue exactly where you left off; do not redo finished steps."), plus any send the
+    CLI had not taken up yet. (2026-10-04: a limit in a background-task turn moved with nothing to resend, and
+    the new account ended at once, "Done in 54ms".)
+  - **A big session moves as a fresh session from a condensed handoff** (`engine/handoff.ts`): when the session
+    being left is over `HANDOFF_TOKENS` (150k tokens; the option `handoffTokens` or `HYDRA_DESK_HANDOFF_TOKENS`
+    changes it), measured as the context of its newest main-thread assistant line (input plus both cache counts
+    plus output, so it follows a compaction down; the file's size / 4 when no line has usage), the session is
+    not copied: the new account would re-read it uncached and cannot use thinking from another organization.
+    The chat drops its `sessionId` (the old one joins the stored `pastSessions`, still its own, never listed
+    "Elsewhere") and its first message is `buildHandoff`, built from the Desk chat file in the shape of CliMayte's
+    continuation: why it moved and how big the session was, where the full history is (`GET
+    /api/chats/<id>/transcript` and the agenthydra MCP's `history_search` / `history_read` with the old session
+    ids), the goal (the owner's first message), the owner's later instructions in short form, how earlier turns
+    ended, what the cut turn was doing (its last words and tool calls), the open to-dos and the last exchanges
+    verbatim, at most `MAX_HANDOFF_CHARS` (16k characters, sections shrunk to fit); the sends it had not
+    answered follow it whole. The muted line 'The session had grown to about Nk tokens, so it continues as a
+    fresh session ...' says so; the window keeps one transcript across both sessions. Smaller sessions keep the
+    copy and resume.
 - **Fork** copies the transcript now and cuts the SDK session at the source's last message at that moment
   (`resumeSessionAt`, server-internal `forkAt`), so the source's later turns never reach the fork.
 - **Local server guard:** the server answers 403 to any request whose Host or Origin is not loopback

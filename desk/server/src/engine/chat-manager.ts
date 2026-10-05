@@ -52,6 +52,8 @@ import { ChatStore } from './store'
 import { classifyFailure, FailureLedger, type FailureInput } from './failures'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
+import { buildHandoff, CONTINUE_TEXT, HANDOFF_TOKENS, sessionTokens } from './handoff'
+import type { QueuedInput } from './input-queue'
 
 export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalItems' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
@@ -76,6 +78,11 @@ export interface ChatManagerOptions {
   newChats?: 'climayte' | 'sdk'
   /** Names a new chat from its first message; null = never. Default: a Sonnet query (none when queryImpl is faked). */
   titleGenerator?: TitleGenerator | null
+  /** A move to another account starts a fresh session from a condensed handoff above this many tokens of
+   *  session (SPEC "Account failover"). Default HYDRA_DESK_HANDOFF_TOKENS, else HANDOFF_TOKENS. */
+  handoffTokens?: number
+  /** Hydra Desk's own address, which a handoff names for the full transcript. */
+  deskUrl?: string
 }
 
 /** A request the manager refuses, with the HTTP status the route answers. */
@@ -168,6 +175,8 @@ interface Entry {
   lastFailure?: string
   /** A CliMayte chat: the worker error already in the ledger, so a re-read of the same failure adds no row. */
   workerErrorSeen?: string | null
+  /** The sessions this chat ran before a move started a fresh one (oldest first): still its own, never "Elsewhere". */
+  pastSessions?: string[]
 }
 
 type UserItem = Extract<TranscriptItem, { kind: 'user' }>
@@ -201,7 +210,7 @@ interface ResolvedAccount {
 }
 
 /** The stored chat record: a fork's cut and the folder the chat last ran in ride along, kept out of ChatSummary and so off the wire. */
-type StoredRecord = ChatSummary & { forkAt?: unknown; ranIn?: unknown }
+type StoredRecord = ChatSummary & { forkAt?: unknown; ranIn?: unknown; pastSessions?: unknown }
 
 export class ChatManager {
   readonly store: ChatStore
@@ -225,6 +234,8 @@ export class ChatManager {
   private readonly newChats: 'climayte' | 'sdk'
   private syncing: Promise<void> | null = null
   private readonly titleGen: TitleGenerator | null
+  private readonly handoffTokens: number
+  private readonly deskUrl: string
 
   constructor(o: ChatManagerOptions) {
     this.store = new ChatStore(o.home, { debounceMs: o.storeDebounceMs })
@@ -242,16 +253,19 @@ export class ChatManager {
     this.now = o.now ?? Date.now
     this.liveListTimeoutMs = o.liveListTimeoutMs ?? 5000
     this.newChats = o.newChats ?? 'climayte'
+    this.handoffTokens = o.handoffTokens ?? (Number(process.env.HYDRA_DESK_HANDOFF_TOKENS) || HANDOFF_TOKENS)
+    this.deskUrl = o.deskUrl ?? `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7795}`
     // A test that fakes the query gets no title queries unless it fakes the generator too.
     this.titleGen = o.titleGenerator === undefined ? (o.queryImpl ? null : sdkTitleGenerator(this.queryImpl, o.env)) : o.titleGenerator
     for (const stored of this.store.loadChats()) {
-      const { forkAt, ranIn, ...chat } = stored as StoredRecord
+      const { forkAt, ranIn, pastSessions, ...chat } = stored as StoredRecord
       this.chats.set(chat.id, {
         chat,
         runtime: null,
         query: null,
         forkAt: typeof forkAt === 'string' ? forkAt : undefined,
         ranIn: typeof ranIn === 'string' || ranIn === null ? ranIn : undefined,
+        pastSessions: Array.isArray(pastSessions) ? pastSessions.filter((x): x is string => typeof x === 'string') : undefined,
       })
     }
     // Our own chats are not "Elsewhere".
@@ -300,7 +314,7 @@ export class ChatManager {
   }
 
   sessionIds(): string[] {
-    return [...this.chats.values()].flatMap((e) => (e.chat.sessionId ? [e.chat.sessionId] : []))
+    return [...this.chats.values()].flatMap((e) => [...(e.pastSessions ?? []), ...(e.chat.sessionId ? [e.chat.sessionId] : [])])
   }
 
   async commands(id: string): Promise<SlashCommandInfo[]> {
@@ -1078,21 +1092,66 @@ export class ChatManager {
       this.moveFailed(e, rt, `${accountName(from)} ${signIn ? 'is signed out' : 'hit its limit'} and no other signed-in account has room (tried ${tried.map((id) => accountName(accounts.find((a) => a.id === id) ?? from)).join(', ')}).`)
       return
     }
-    const sends = rt.unansweredSends()
+    const { cut, sends } = rt.carrySends()
+    const big = this.bigSession(e)
     tried.push(next.id)
     chat.account = accountRef(next)
     chat.accountAuto = true
-    const cannot = this.seedResume(e)
-    if (cannot) {
-      this.moveFailed(e, rt, cannot)
-      return
+    let out: QueuedInput[]
+    if (big) {
+      out = [this.handoffSend(e, big, signIn ? 'signed out' : window ? `${window} limit` : 'usage limit', sends)]
+    } else {
+      const cannot = this.seedResume(e)
+      if (cannot) {
+        this.moveFailed(e, rt, cannot)
+        return
+      }
+      // A turn that had replied is told to go on, once; its message would only ask it to start over.
+      out = cut ? [{ text: CONTINUE_TEXT }, ...sends] : sends
     }
     this.systemLine(chat.id, 'moved', 'info', `Moved from ${accountName(from)} (${signIn ? 'signed out' : window ? `${window} limit` : 'limit reached'}) to ${accountName(chat.account)}.`)
+    if (big) this.systemLine(chat.id, 'handoff', 'info', `The session had grown to about ${Math.round(big.tokens / 1000)}k tokens, so it continues as a fresh session from a condensed handoff instead of a copy. This chat keeps the whole record.`)
     if (e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
     await rt.close()
     if (this.chats.get(chat.id) !== e) return
     this.changed(chat)
-    rt.replay(sends)
+    rt.replay(out)
+  }
+
+  /** The session the chat leaves and its size, when it is too big to copy and resume on another account; else null. */
+  private bigSession(e: Entry): { sessionId: string; tokens: number } | null {
+    const sessionId = e.chat.sessionId
+    if (!sessionId) return null
+    const ranIn = ranInOf(e)
+    const file = findSessionJsonl(sessionId, [...(ranIn === undefined ? [] : [projectsRoot(ranIn)]), ...this.bridge.sessionRoots()], e.chat.cwd)
+    const tokens = file ? sessionTokens(file) : null
+    return tokens !== null && tokens > this.handoffTokens ? { sessionId, tokens } : null
+  }
+
+  /**
+   * The chat leaves its big session for a fresh one (no resume): the old session joins pastSessions and the
+   * first message is the condensed handoff built from the chat file, with the sends the old session had not
+   * answered after it.
+   */
+  private handoffSend(e: Entry, big: { sessionId: string; tokens: number }, why: string, sends: QueuedInput[]): QueuedInput {
+    const chat = e.chat
+    const text = buildHandoff({
+      chatId: chat.id,
+      title: chat.title,
+      cwd: chat.cwd,
+      items: this.store.loadItems(chat.id),
+      sessions: [big.sessionId, ...(e.pastSessions ?? []).slice().reverse()],
+      tokens: big.tokens,
+      why,
+      deskUrl: this.deskUrl,
+    })
+    e.pastSessions = [...(e.pastSessions ?? []), big.sessionId]
+    chat.sessionId = null
+    chat.forkedFrom = null
+    e.forkAt = undefined
+    const images = sends.flatMap((s) => s.images ?? [])
+    const pending = sends.length ? `\n\n## The owner's messages the old session had not answered yet\n${sends.map((s) => s.text).join('\n\n')}` : ''
+    return images.length ? { text: text + pending, images } : { text: text + pending }
   }
 
   /** The move could not be made: the chat keeps the error state, said once and notified. */
@@ -1165,10 +1224,11 @@ export class ChatManager {
 
   private stored(): ChatSummary[] {
     return [...this.chats.values()].map((e) => {
-      if (!e.forkAt && e.ranIn === undefined) return e.chat
+      if (!e.forkAt && e.ranIn === undefined && !e.pastSessions) return e.chat
       const record: StoredRecord = { ...e.chat }
       if (e.forkAt) record.forkAt = e.forkAt
       if (e.ranIn !== undefined) record.ranIn = e.ranIn
+      if (e.pastSessions) record.pastSessions = e.pastSessions
       return record
     })
   }
