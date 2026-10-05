@@ -1,7 +1,7 @@
 // Git for the bar above the composer and the diff pane (SPEC.md REST rows /api/git, /api/git/diff).
 // Every git call is spawned without a shell, with a 5 second timeout, and never opens a window.
 
-import { closeSync, openSync, readSync, statSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { GitFileChange, GitStatus } from '@shared/protocol'
 
@@ -128,6 +128,20 @@ async function repoRoot(cwd: string): Promise<string | null> {
   return top ? resolve(top) : null
 }
 
+/** How long a folder's answer from repoRoot is reused. The composer asks every 5 seconds per open
+ *  chat, and a folder rarely becomes or stops being a repo. */
+const ROOT_TTL_MS = 60_000
+const roots = new Map<string, { root: string | null; at: number }>()
+
+async function cachedRepoRoot(dir: string): Promise<string | null> {
+  const hit = roots.get(dir)
+  if (hit && Date.now() - hit.at < ROOT_TTL_MS && (hit.root === null || existsSync(join(hit.root, '.git'))))
+    return hit.root
+  const root = await repoRoot(dir)
+  roots.set(dir, { root, at: Date.now() })
+  return root
+}
+
 async function headSha(root: string): Promise<string | null> {
   const r = await runGit(root, ['rev-parse', '--verify', '-q', 'HEAD'])
   return r.code === 0 ? r.stdout.toString('utf8').trim() : null
@@ -140,44 +154,62 @@ async function emptyTree(root: string): Promise<string> {
   return r.stdout.toString('utf8').trim()
 }
 
-async function branchName(root: string): Promise<string | null> {
-  const sym = await runGit(root, ['symbolic-ref', '--short', '-q', 'HEAD'])
-  if (sym.code === 0) return sym.stdout.toString('utf8').trim() || null
-  const sha = await runGit(root, ['rev-parse', '--short', 'HEAD'])
-  return sha.code === 0 ? sha.stdout.toString('utf8').trim() || null : null
-}
-
-async function aheadBehind(root: string): Promise<{ ahead: number; behind: number }> {
-  const r = await runGit(root, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'])
-  if (r.code !== 0) return { ahead: 0, behind: 0 } // no upstream, no commit, or detached
-  const [a, b] = r.stdout.toString('utf8').trim().split(/\s+/).map(Number)
-  return { ahead: a || 0, behind: b || 0 }
-}
-
 interface PorcelainEntry {
   path: string
   status: string
 }
 
-/** Parses `git status --porcelain=v1 -z`: `XY path\0`, and for renames/copies `XY to\0from\0`. */
-export function parsePorcelainZ(out: string): PorcelainEntry[] {
+/** What one `git status --porcelain=v2 --branch -z` tells: the branch headers and the entries. */
+export interface PorcelainV2 {
+  /** The commit HEAD is at; null before the first commit. */
+  head: string | null
+  /** The branch name; null when HEAD is detached. */
+  branch: string | null
+  ahead: number
+  behind: number
+  entries: PorcelainEntry[]
+}
+
+/** Fields before the path in each v2 record kind: `1 XY sub mH mI mW hH hI path`, `2 ... Xscore path`
+ *  (then the old path as the next part), `u XY sub m1 m2 m3 mW h1 h2 h3 path`. */
+const V2_FIELDS: Record<string, number> = { '1': 8, '2': 9, u: 10 }
+
+/** Parses `git status --porcelain=v2 --branch -z`. One call answers what used to take rev-parse,
+ *  symbolic-ref and rev-list as well. */
+export function parsePorcelainV2Z(out: string): PorcelainV2 {
+  const parsed: PorcelainV2 = { head: null, branch: null, ahead: 0, behind: 0, entries: [] }
   const parts = out.split('\0')
-  const entries: PorcelainEntry[] = []
   for (let i = 0; i < parts.length; i++) {
     const rec = parts[i]
-    if (rec.length < 4) continue
-    const x = rec[0]
-    const y = rec[1]
-    const path = rec.slice(3)
-    if (x === 'R' || x === 'C' || y === 'R' || y === 'C') i++ // the next part is the old path
-    let status: string
-    if (x === '?' && y === '?') status = '??'
-    else if (x === '!' && y === '!') continue
-    else if (x === 'U' || y === 'U' || (x === 'A' && y === 'A') || (x === 'D' && y === 'D')) status = 'U'
-    else status = x !== ' ' ? x : y
-    entries.push({ path, status })
+    if (rec.startsWith('# ')) {
+      const space = rec.indexOf(' ', 2)
+      const key = rec.slice(2, space)
+      const value = rec.slice(space + 1)
+      if (key === 'branch.oid') parsed.head = value === '(initial)' ? null : value
+      else if (key === 'branch.head') parsed.branch = value === '(detached)' ? null : value
+      else if (key === 'branch.ab') {
+        const m = /^\+(\d+) -(\d+)$/.exec(value)
+        if (m) {
+          parsed.ahead = Number(m[1])
+          parsed.behind = Number(m[2])
+        }
+      }
+      continue
+    }
+    if (rec.startsWith('? ')) {
+      parsed.entries.push({ path: rec.slice(2), status: '??' })
+      continue
+    }
+    const fields = V2_FIELDS[rec[0]]
+    if (!fields) continue // `! path` (ignored) or the empty tail
+    let at = 0
+    for (let n = 0; n < fields; n++) at = rec.indexOf(' ', at) + 1
+    if (rec[0] === '2') i++ // the next part is the old path
+    const x = rec[2]
+    const y = rec[3]
+    parsed.entries.push({ path: rec.slice(at), status: rec[0] === 'u' ? 'U' : x !== '.' ? x : y })
   }
-  return entries
+  return parsed
 }
 
 /** Parses `git diff --numstat -z`: `a\tr\tpath\0`, renames `a\tr\t\0from\0to\0`, binary `-\t-\t...`. */
@@ -244,22 +276,69 @@ function notRepo(): GitStatusResult {
  */
 export async function gitStatus(cwd: string): Promise<GitStatusResult> {
   const dir = assertDir(cwd)
-  const root = await repoRoot(dir)
+  const root = await cachedRepoRoot(dir)
   if (!root) return notRepo()
+  // Every open composer polls; two asking about one repo at once share one run.
+  let run = running.get(root)
+  if (!run) {
+    run = readStatus(root).finally(() => running.delete(root))
+    running.set(root, run)
+  }
+  return run
+}
 
-  const head = await headSha(root)
-  const base = head ?? (await emptyTree(root))
-  const [branch, ab, status, numstat] = await Promise.all([
-    branchName(root),
-    aheadBehind(root),
-    runGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
-    runGit(root, ['diff', '--numstat', '-z', '-M', '--no-ext-diff', '--no-textconv', base, '--']),
-  ])
+const running = new Map<string, Promise<GitStatusResult>>()
+
+/** Above this many changed paths the numstat is not memoized: stat-ing them all costs more than it saves. */
+const MAX_MEMO_ENTRIES = 2000
+
+/**
+ * The last numstat and untracked line counts per repo, keyed by what decides them. `git diff
+ * --numstat <HEAD> --` compares HEAD with the working tree, and every tracked path that differs is
+ * in status; so while HEAD, those paths' statuses and their files' size and mtime are unchanged,
+ * the numstat is too, and the poll costs one git process instead of two.
+ */
+const memos = new Map<
+  string,
+  { key: string; counts: Map<string, { added: number; removed: number }>; lines: Map<string, { stamp: string; lines: number }> }
+>()
+
+function stampOf(file: string): string {
+  try {
+    const st = statSync(file)
+    return `${st.size}:${st.mtimeMs}`
+  } catch {
+    return '-'
+  }
+}
+
+async function readStatus(root: string): Promise<GitStatusResult> {
+  const status = await runGit(root, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'])
   if (status.code !== 0) throw new GitError(`git status failed: ${status.stderr}`)
-  if (numstat.code !== 0) throw new GitError(`git diff --numstat failed: ${numstat.stderr}`)
+  const { head, branch: name, ahead, behind, entries } = parsePorcelainV2Z(status.stdout.toString('utf8'))
+  let branch = name
+  if (branch === null && head) {
+    const short = await runGit(root, ['rev-parse', '--short', 'HEAD'])
+    branch = (short.code === 0 && short.stdout.toString('utf8').trim()) || head.slice(0, 7)
+  }
 
-  const entries = parsePorcelainZ(status.stdout.toString('utf8'))
-  const counts = parseNumstatZ(numstat.stdout.toString('utf8'))
+  const memo = memos.get(root)
+  const stamps = new Map<string, string>()
+  const tracked = entries.filter((e) => e.status !== '??')
+  let key: string | null = null
+  if (entries.length <= MAX_MEMO_ENTRIES) {
+    for (const e of entries) stamps.set(e.path, stampOf(join(root, e.path)))
+    key = `${head}\0${tracked.map((e) => `${e.status}\t${e.path}\t${stamps.get(e.path)}`).join('\0')}`
+  }
+  let counts: Map<string, { added: number; removed: number }>
+  if (tracked.length === 0) counts = new Map()
+  else if (key !== null && memo?.key === key) counts = memo.counts
+  else {
+    const base = head ?? (await emptyTree(root))
+    const numstat = await runGit(root, ['diff', '--numstat', '-z', '-M', '--no-ext-diff', '--no-textconv', base, '--'])
+    if (numstat.code !== 0) throw new GitError(`git diff --numstat failed: ${numstat.stderr}`)
+    counts = parseNumstatZ(numstat.stdout.toString('utf8'))
+  }
   const listed = entries.slice(0, MAX_FILES)
 
   let added = 0
@@ -268,21 +347,27 @@ export async function gitStatus(cwd: string): Promise<GitStatusResult> {
     added += c.added
     removed += c.removed
   }
+  const lines = new Map<string, { stamp: string; lines: number }>()
   const files: GitFileChange[] = listed.map((e) => {
     if (e.status === '??') {
-      const lines = countTextLines(join(root, e.path))
-      added += lines
-      return { path: e.path, status: '??', added: lines, removed: 0 }
+      const stamp = stamps.get(e.path)
+      const known = stamp ? memo?.lines.get(e.path) : undefined
+      const n = known && known.stamp === stamp ? known.lines : countTextLines(join(root, e.path))
+      if (stamp) lines.set(e.path, { stamp, lines: n })
+      added += n
+      return { path: e.path, status: '??', added: n, removed: 0 }
     }
     const c = counts.get(e.path)
     return { path: e.path, status: e.status, added: c?.added ?? 0, removed: c?.removed ?? 0 }
   })
+  if (key !== null) memos.set(root, { key, counts, lines })
+  else memos.delete(root)
 
   return {
     isRepo: true,
     branch,
-    ahead: ab.ahead,
-    behind: ab.behind,
+    ahead,
+    behind,
     added,
     removed,
     files,
@@ -307,7 +392,7 @@ function finishDiff(path: string, r: RunResult): string {
 export async function gitDiff(cwd: string, path: string): Promise<string> {
   const dir = assertDir(cwd)
   if (!path) throw new GitError('path is required')
-  const root = await repoRoot(dir)
+  const root = await cachedRepoRoot(dir)
   if (!root) throw new GitError(`not a git repository: ${dir}`)
   const abs = resolve(root, path)
   const rel = relative(root, abs)

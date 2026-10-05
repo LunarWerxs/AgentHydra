@@ -300,6 +300,9 @@ async function refreshGit() {
     git.value = null
   }
 }
+function refreshGitWhenShown() {
+  if (!document.hidden) refreshGit()
+}
 function openDiff() {
   if (!cwd.value) return
   emit('open-diff', cwd.value)
@@ -858,7 +861,9 @@ onMounted(async () => {
   }
   nextTick(autoGrow)
   refreshGit()
-  gitTimer = setInterval(refreshGit, 5000)
+  // Each poll is a git status on the server; nobody reads the bar while Desk is hidden.
+  gitTimer = setInterval(() => document.hidden || refreshGit(), 5000)
+  document.addEventListener('visibilitychange', refreshGitWhenShown)
   window.addEventListener('resize', autoGrow)
   loadNewSessionDefaults()
   try {
@@ -874,6 +879,7 @@ defineExpose({ focus: () => textarea.value && holdFocus(textarea.value, document
 
 onBeforeUnmount(() => {
   if (gitTimer) clearInterval(gitTimer)
+  document.removeEventListener('visibilitychange', refreshGitWhenShown)
   if (draftTimer) {
     clearTimeout(draftTimer)
     if (!props.demo) saveDraft(storage, slot.value, text.value)

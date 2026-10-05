@@ -131,6 +131,37 @@ describe('gitStatus', () => {
     expect(f['new.bin']).toEqual({ path: 'new.bin', status: '??', added: 0, removed: 0 })
   })
 
+  test('a repeat poll reuses the numstat until a changed file changes again, in one git process', async () => {
+    const dir = initRepo()
+    writeFileSync(join(dir, 'keep.txt'), 'a\n')
+    commitAll(dir)
+    writeFileSync(join(dir, 'keep.txt'), 'a\nb\n')
+    writeFileSync(join(dir, 'new.txt'), 'n\n')
+    expect((await gitStatus(dir)).added).toBe(2)
+
+    const spawn = Bun.spawn
+    let gits = 0
+    ;(Bun as unknown as { spawn: unknown }).spawn = (...args: Parameters<typeof Bun.spawn>) => {
+      gits++
+      return spawn(...args)
+    }
+    try {
+      const again = await gitStatus(dir)
+      expect(again.added).toBe(2)
+      expect(gits).toBe(1)
+
+      // Same status letters, new content: the counts must follow the file, not the memo.
+      writeFileSync(join(dir, 'keep.txt'), 'a\nb\nc\nd\n')
+      writeFileSync(join(dir, 'new.txt'), 'n\no\n')
+      const edited = await gitStatus(dir)
+      expect(byPath(edited.files)['keep.txt']).toEqual({ path: 'keep.txt', status: 'M', added: 3, removed: 0 })
+      expect(byPath(edited.files)['new.txt']).toEqual({ path: 'new.txt', status: '??', added: 2, removed: 0 })
+      expect(edited.added).toBe(5)
+    } finally {
+      ;(Bun as unknown as { spawn: unknown }).spawn = spawn
+    }
+  })
+
   test(`caps the list at ${MAX_FILES} files and says so`, async () => {
     const dir = initRepo()
     for (let i = 0; i < MAX_FILES + 20; i++) writeFileSync(join(dir, `f${String(i).padStart(4, '0')}.txt`), 'x\n')
