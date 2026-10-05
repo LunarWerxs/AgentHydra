@@ -27,7 +27,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { join } from 'node:path'
 import {
   openTodoSections,
   parseGithubSlug,
@@ -58,6 +58,7 @@ const HEADING = '# WARNING: THIS REPOSITORY IS **PUBLIC**'
 
 const REAL_PREPUSH = join(REPO_ROOT, '.githooks', 'pre-push')
 const REAL_GUARD = join(REPO_ROOT, '.githooks', 'check-public-push.mjs')
+const REAL_KIT_SYNC = join(REPO_ROOT, '.githooks', 'check-kit-sync-pushed.mjs')
 
 type Env = Record<string, string>
 
@@ -259,26 +260,34 @@ describe('.githooks/pre-push: the lanes run free of the hook git environment', (
   test(
     'a push from a linked worktree hands the lanes no GIT_DIR, so their own git finds their own repo',
     () => {
-      // The hook only reaches its lanes with a kit beside the checkout (../../lunarwerx-ui), and a
-      // stand-in `bun` first on PATH records the git variables a lane would inherit. Pushing the
-      // 1.5.0 tag from a worktree, every git-backed test and the kit check inherited GIT_DIR and
-      // looked at the pushing checkout instead of their own repos (2026-10-01).
+      // The hook only reaches its lanes with a kit beside the checkout (../../lunarwerx-ui), and that
+      // kit's stand-in sync.mjs, which the kit drift lane runs, records the git variables it inherits.
+      // Pushing the 1.5.0 tag from a worktree, every git-backed test and the kit check inherited
+      // GIT_DIR and looked at the pushing checkout instead of their own repos (2026-10-01).
       const base = prepushRoot('lanes')
       const repo = join(base, 'ah', 'repo')
       const wt = join(base, 'ah', 'wt')
       const origin = join(base, 'origin')
-      const bin = join(base, 'bin')
       const seen = join(base, 'seen.txt').replace(/\\/g, '/')
       mkdirSync(join(base, 'lunarwerx-ui'), { recursive: true })
-      writeFileSync(join(base, 'lunarwerx-ui', 'sync.mjs'), '')
-      mkdirSync(bin, { recursive: true })
-      writeFileSync(join(bin, 'bun'), `#!/bin/sh\nenv | grep '^GIT_' > '${seen}'\nexit 0\n`)
-      chmodSync(join(bin, 'bun'), 0o755)
+      writeFileSync(
+        join(base, 'lunarwerx-ui', 'sync.mjs'),
+        [
+          "import { writeFileSync } from 'node:fs'",
+          `const git = Object.keys(process.env).filter((k) => k.startsWith('GIT_')).map((k) => k + '=' + process.env[k])`,
+          `writeFileSync(${JSON.stringify(seen)}, git.join(String.fromCharCode(10)))`,
+          '',
+        ].join('\n'),
+      )
 
       mkdirSync(join(repo, '.githooks'), { recursive: true })
       git(base, {}, 'init', '-q', '--bare', origin)
       writeFileSync(join(repo, '.githooks', 'pre-push'), readFileSync(REAL_PREPUSH))
       writeFileSync(join(repo, '.githooks', 'check-public-push.mjs'), readFileSync(REAL_GUARD))
+      writeFileSync(
+        join(repo, '.githooks', 'check-kit-sync-pushed.mjs'),
+        readFileSync(REAL_KIT_SYNC),
+      )
       chmodSync(join(repo, '.githooks', 'pre-push'), 0o755)
       git(repo, {}, 'init', '-q', '-b', 'main')
       git(repo, {}, 'config', 'core.hooksPath', '.githooks')
@@ -287,11 +296,7 @@ describe('.githooks/pre-push: the lanes run free of the hook git environment', (
       git(repo, {}, 'commit', '-q', '-m', 'init')
       git(repo, {}, 'worktree', 'add', '-q', '--detach', wt)
 
-      const r = push(
-        wt,
-        { AGENTHYDRA_VISIBILITY_STUB: 'private', PATH: `${bin}${delimiter}${process.env.PATH}` },
-        'HEAD:refs/heads/side',
-      )
+      const r = push(wt, { AGENTHYDRA_VISIBILITY_STUB: 'private' }, 'HEAD:refs/heads/side')
       expect(r.status).toBe(0)
       const inherited = readFileSync(seen, 'utf8')
       expect(inherited).not.toMatch(/^GIT_(DIR|WORK_TREE|INDEX_FILE)=/m)
