@@ -68,13 +68,22 @@ const heights = new Map<string, number>()
 const version = ref(0)
 
 const indexById = computed(() => new Map(display.value.map((r, i) => [r.id, i])))
-const gaps = computed(() => display.value.map((_, i) => (props.compact ? Math.round(rowGap(display.value, i) * 0.4) : rowGap(display.value, i))))
+// Gaps and row heights together, once per change of the rows: a re-measure then only updates its own row's
+// height and adds the heights up again.
+const layout = computed(() => {
+  const top = display.value
+  const gaps: number[] = new Array(top.length)
+  const h = new Float64Array(top.length)
+  for (let i = 0; i < top.length; i++) {
+    gaps[i] = props.compact ? Math.round(rowGap(top, i) * 0.4) : rowGap(top, i)
+    h[i] = heights.get(top[i].id) ?? estimateRow(top[i]) + gaps[i]
+  }
+  return { gaps, h }
+})
+const gaps = computed(() => layout.value.gaps)
 const offsets = computed(() => {
   void version.value
-  const top = display.value
-  const h = new Float64Array(top.length)
-  for (let i = 0; i < top.length; i++) h[i] = heights.get(top[i].id) ?? estimateRow(top[i]) + gaps.value[i]
-  return prefixOffsets(h)
+  return prefixOffsets(layout.value.h)
 })
 const range = computed(() => visibleRange(offsets.value, scrollTop.value, viewHeight.value, 800))
 const visible = computed(() =>
@@ -153,6 +162,7 @@ onMounted(() => {
       const old = o[idx + 1] - o[idx]
       if (Math.abs(h - old) < 0.5 && heights.has(id)) continue
       heights.set(id, h)
+      layout.value.h[idx] = h
       changed = true
       // A row above the viewport changed size: keep what Jacob is reading where it is.
       if (!pinned.value && idx < firstOnScreen) anchorDelta += h - old
@@ -262,7 +272,8 @@ watch(activeKey, () => {
     }),
   )
 })
-watch([visible, () => props.find?.query, activeKey], () => nextTick(paintFind), { flush: 'post' })
+// Without a query there is nothing to mark, so the rows scrolling or measuring do not ask the DOM anything.
+watch([() => (props.find?.query ? visible.value : null), () => props.find?.query, activeKey], () => nextTick(paintFind), { flush: 'post' })
 
 // The header over the top folding or unfolding changes the inset: what is on screen stays where it is
 // (the header slides over it or off it) unless the list is at its top, where the first row follows it.
@@ -310,7 +321,7 @@ watch(
         <div v-for="({ r, gap }, k) in visible" :key="r.id" v-measure :data-id="r.id" :style="{ paddingBottom: `${gap}px` }">
           <ToolGroup v-if="r.kind === 'tools'" :id="r.id" :items="r.items" :tasks="r.tasks" />
           <TaskGroup v-else-if="r.kind === 'tasks'" :id="r.id" :items="r.items" />
-          <TranscriptRow v-else :item="r.item" :end-of-turn="r.endOfTurn" :overlay-actions="display[range.start + k + 1]?.kind === 'tasks'" />
+          <TranscriptRow v-else :item="r.item" :end-of-turn="r.endOfTurn" :prompt="r.prompt" :overlay-actions="display[range.start + k + 1]?.kind === 'tasks'" />
         </div>
         <div :style="{ height: `${padBottom}px` }" />
         <WorkingFooter v-if="showWorking && chat" :chat="chat" class="mt-4" />

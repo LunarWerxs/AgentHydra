@@ -31,8 +31,18 @@ export function buildRows(items: TranscriptItem[]): Rows {
   return { top, children }
 }
 
+// A message's estimate is worked out once per item object: a changed item is a new object.
+const estimates = new WeakMap<TranscriptItem, number>()
+
 /** A first guess at a row's height in px, used until the row has been measured. */
 export function estimateHeight(it: TranscriptItem): number {
+  if (it.kind !== 'assistant_text') return guessHeight(it)
+  let h = estimates.get(it)
+  if (h === undefined) estimates.set(it, (h = guessHeight(it)))
+  return h
+}
+
+function guessHeight(it: TranscriptItem): number {
   switch (it.kind) {
     case 'user':
       return 52 + 20 * Math.min(20, Math.floor(it.text.length / 90)) + (it.images?.length ? 104 : 0)

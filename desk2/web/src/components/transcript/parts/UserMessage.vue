@@ -1,3 +1,50 @@
+<script lang="ts">
+// One observer for the column all the bubbles stand in, not one each: a width change fits every bubble in
+// four steps (clear all, measure all, set all, read all), so the page lays out twice instead of once per bubble.
+interface Fitter {
+  lastWidth: number
+  reset(): void
+  measure(): void
+  apply(): void
+  settle(): void
+}
+const fitters = new Map<Element, Set<Fitter>>()
+let columns: ResizeObserver | null = null
+
+function fitAll(list: Fitter[]) {
+  for (const f of list) f.reset()
+  for (const f of list) f.measure()
+  for (const f of list) f.apply()
+  for (const f of list) f.settle()
+}
+
+function watchColumn(column: Element, f: Fitter) {
+  columns ??= new ResizeObserver((entries) => {
+    const due: Fitter[] = []
+    for (const e of entries) {
+      const w = (e.target as HTMLElement).clientWidth
+      for (const f of fitters.get(e.target) ?? []) {
+        if (f.lastWidth === w) continue
+        f.lastWidth = w
+        due.push(f)
+      }
+    }
+    fitAll(due)
+  })
+  let set = fitters.get(column)
+  if (!set) fitters.set(column, (set = new Set()))
+  set.add(f)
+  if (set.size === 1) columns.observe(column)
+  return () => {
+    set.delete(f)
+    if (!set.size) {
+      fitters.delete(column)
+      columns?.unobserve(column)
+    }
+  }
+}
+</script>
+
 <script setup lang="ts">
 // The real user bubble: right aligned, at most 85% of the column and only as wide as its longest line,
 // padding 8/12, radius 10, white 5%, 14/20 text,
@@ -17,14 +64,18 @@ const row = ref<HTMLElement | null>(null)
 const body = ref<HTMLElement | null>(null)
 const long = ref(false)
 const expanded = ref(false)
-let ro: ResizeObserver | null = null
-let lastWidth = -1
+let unwatch: (() => void) | null = null
+let target: number | null = null
 
-// The real bubble hugs its longest wrapped line instead of filling its max width.
-function fit() {
+// The real bubble hugs its longest wrapped line instead of filling its max width. Four steps, so many
+// bubbles can be fitted with their reads together (see the top of this file).
+function reset() {
+  if (body.value) body.value.style.width = ''
+}
+function measure() {
+  target = null
   const el = body.value
   if (!el) return
-  el.style.width = ''
   const range = document.createRange()
   range.selectNodeContents(el)
   let left = Infinity
@@ -37,26 +88,26 @@ function fit() {
   // A fresh bubble is still scaling in: client rects are transformed, offsetWidth is not.
   const scale = el.getBoundingClientRect().width / (el.offsetWidth || 1) || 1
   const width = Math.ceil((right - left) / scale)
-  if (right > left && width < el.clientWidth) el.style.width = `${width}px`
-  if (!expanded.value) long.value = el.scrollHeight > el.clientHeight + 1
+  if (right > left && width < el.clientWidth) target = width
 }
-
-function onResize() {
-  const w = row.value?.parentElement?.clientWidth ?? 0
-  if (w === lastWidth) return
-  lastWidth = w
-  fit()
+function apply() {
+  if (body.value && target !== null) body.value.style.width = `${target}px`
 }
+function settle() {
+  const el = body.value
+  if (el && !expanded.value) long.value = el.scrollHeight > el.clientHeight + 1
+}
+function fit() {
+  fitAll([fitter])
+}
+const fitter: Fitter = { lastWidth: -1, reset, measure, apply, settle }
 
 onMounted(() => {
   fit()
   const parent = row.value?.parentElement
-  if (typeof ResizeObserver !== 'undefined' && parent) {
-    ro = new ResizeObserver(onResize)
-    ro.observe(parent)
-  }
+  if (typeof ResizeObserver !== 'undefined' && parent) unwatch = watchColumn(parent, fitter)
 })
-onBeforeUnmount(() => ro?.disconnect())
+onBeforeUnmount(() => unwatch?.())
 watch(() => props.text, () => nextTick(fit))
 </script>
 

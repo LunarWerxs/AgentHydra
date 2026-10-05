@@ -75,5 +75,8 @@ export function watchBundle(): void {
     else void reloadIfStale()
   })
   window.addEventListener('focus', () => void reloadIfStale())
-  setInterval(() => void reloadIfStale(), LOOK_EVERY_MS)
+  // A hidden window looks when it comes back into view (above), not every minute.
+  setInterval(() => {
+    if (!document.hidden) void reloadIfStale()
+  }, LOOK_EVERY_MS)
 }
