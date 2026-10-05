@@ -107,7 +107,8 @@ export function serveSignal(signalFile: string): { port: number; stop: () => voi
     app.use('*', createLoopbackGuard({ allowedOrigins: () => [] }))
     app.all('*', async (c) => {
       let body = '{}'
-      if (await fromSubagent(c.req)) return c.body(body, 200, { 'content-type': 'application/json' })
+      if (await fromSubagent(c.req))
+        return c.body(body, 200, { 'content-type': 'application/json' })
       try {
         const text = readFileSync(signalFile, 'utf8')
         JSON.parse(text)

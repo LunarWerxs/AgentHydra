@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-10-04
+
 ### Fixed
 
 - **A chat worker is no longer stopped as "Not converging" or held for room** (2026-10-04). The owner's own chat (`chat: true`) ran at 96% of a Pro window, over 3 times a task estimate it never had, and CliMayte stopped it. A chat now skips the convergence stop (`notConverging`) and has no cost estimate, so nothing holds it for room or counts it in other tasks' estimates; it still moves accounts at a usage limit and hands off as before.
