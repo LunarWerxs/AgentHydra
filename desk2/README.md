@@ -39,7 +39,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   chat or session in the sidebar that has CliMayte tasks running, those tasks, one short indented line
   each (status, title, model, how long it has run); a task a manager started sits one step further in,
   under its manager. A task with a session opens it; one without opens it on AgentHydra's CliMayte tab.
-  A CliMayte worker's own session row is folded under the chat that started it rather than listed twice.
+  Each task is listed once: a row that is itself a task (a manager's session in the cloud list) does not
+  list its tasks again when they already show under the row that started it.
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
   instead of waiting for the next change.
