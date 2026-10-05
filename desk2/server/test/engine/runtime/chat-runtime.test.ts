@@ -44,6 +44,7 @@ class FakeQuery {
   contextUsage: { percentage?: number; totalTokens?: number; maxTokens?: number } = { percentage: 42 }
   /** A mode the CLI refuses, as it refuses Bypass to a process not launched for it. */
   refuseMode: string | null = null
+  refuseModel = false
 
   constructor(
     readonly prompt: string | AsyncIterable<SDKUserMessage>,
@@ -107,6 +108,7 @@ class FakeQuery {
   }
   async setModel(model?: string) {
     this.calls.setModel.push(model)
+    if (this.refuseModel) throw new Error('model not available')
   }
   async applyFlagSettings(s: unknown) {
     this.calls.applyFlagSettings.push(s)
@@ -801,6 +803,15 @@ describe('ChatRuntime: live controls and lifecycle', () => {
     expect(t.fake().calls.setModel).toEqual(['claude-sonnet-5-5', undefined])
     expect(t.fake().calls.applyFlagSettings).toEqual([{ effortLevel: 'max' }])
     expect(t.rt.chat).toMatchObject({ permissionMode: 'plan', model: null, effort: 'max' })
+  })
+
+  test('a model the process refuses goes back to the old one with a warning', async () => {
+    const t = setup()
+    t.rt.start()
+    await t.rt.setModel('claude-sonnet-5-5')
+    t.fake().refuseModel = true
+    await t.rt.setModel('claude-haiku-4-5')
+    expect(t.rt.chat.model).toBe('claude-sonnet-5-5')
   })
 
   test('close ends the query and the chat is closed', async () => {

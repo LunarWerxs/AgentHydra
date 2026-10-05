@@ -9,7 +9,9 @@ import { userTurn } from './system-text'
 import { mediaCache } from '../media/cache'
 
 /** Live-only fields: never saved, reset on load (every chat starts 'closed'). */
-const VOLATILE = ['status', 'activity', 'turnStartedAt', 'pendingCount', 'queuedCount', 'climayteActive', 'backgroundActive'] as const
+/** Chats whose raw transcript lines stay in memory; the least recently read goes first. */
+const LINE_CACHE_MAX = 20
+const VOLATILE =['status', 'activity', 'turnStartedAt', 'pendingCount', 'queuedCount', 'climayteActive', 'backgroundActive'] as const
 
 export type StoredChat = Omit<ChatSummary, (typeof VOLATILE)[number]>
 
@@ -38,7 +40,7 @@ export class ChatStore {
   /** Item files whose tail was checked for a torn last line this process. */
   private checkedTails = new Set<string>()
   /** Per item file: the last line per id as the file stood at this size and mtime, so a poll need not read the file again. */
-  private lineCache = new Map<string, { size: number; mtimeMs: number; offset: number; lines: Map<string, string>; tail: Map<string, string> }>()
+  private lineCache =new Map<string, { size: number; mtimeMs: number; offset: number; lines: Map<string, string>; tail: Map<string, string> }>()
   /** The chats.json text last written, so an unchanged list is not written again. */
   private lastSaved: string | null = null
 
@@ -140,8 +142,11 @@ export class ChatStore {
       const tail = new Map<string, string>()
       addLines(tail, chunk.toString('utf8', end))
       cached = { size: st.size, mtimeMs: st.mtimeMs, offset: from + end, lines, tail }
-      this.lineCache.set(file, cached)
     }
+    // Most recently read last; the oldest entries go once there are more than the cap (a miss just reads the file again).
+    this.lineCache.delete(file)
+    this.lineCache.set(file, cached)
+    while (this.lineCache.size > LINE_CACHE_MAX) this.lineCache.delete(this.lineCache.keys().next().value as string)
     // Parsed afresh on every call: callers keep and change the items they get, so a shared object would leak between them.
     const out = new Map(cached.lines)
     for (const [id, line] of cached.tail) out.set(id, line)

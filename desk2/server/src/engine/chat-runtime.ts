@@ -658,17 +658,46 @@ ${swap.real}` }
   }
 
   async setModel(model: string | null): Promise<void> {
+    const was = this.chat.model
     this.chat.model = model
     this.touch()
     this.publishChat()
-    if (this.q) await this.q.setModel(model ?? undefined)
+    const q = this.q
+    if (!q) return
+    try {
+      await q.setModel(model ?? undefined)
+    } catch (err) {
+      this.revertRefused('model', err, q, () => {
+        this.chat.model = was
+      })
+    }
   }
 
   async setEffort(effort: Effort | null): Promise<void> {
+    const was = this.chat.effort
     this.chat.effort = effort
     this.touch()
     this.publishChat()
-    if (this.q) await this.q.applyFlagSettings({ effortLevel: effort })
+    const q = this.q
+    if (!q) return
+    try {
+      await q.applyFlagSettings({ effortLevel: effort })
+    } catch (err) {
+      this.revertRefused('effort', err, q, () => {
+        this.chat.effort = was
+      })
+    }
+  }
+
+  /** A process that went away takes the value at its next start; one that refused it still runs the old one, so the chat goes back to that and says why. */
+  private revertRefused(what: string, err: unknown, q: unknown, restore: () => void): void {
+    if (this.q !== q) return
+    restore()
+    this.touch()
+    this.publishChat()
+    const now = this.now()
+    const why = err instanceof Error ? err.message : String(err)
+    this.upsert({ kind: 'system', id: `${what}:${now}`, ts: now, level: 'warn', text: `The ${what} did not change: ${why}` })
   }
 
   respondPermission(requestId: string, decision: PermissionDecision): void {
