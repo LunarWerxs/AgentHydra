@@ -52,4 +52,6 @@ test.skipIf(process.platform !== 'win32')(
     expect(nativeCommandLines([child.pid])?.has(child.pid)).toBe(false)
     expect(nativeProcessInfo(0x7ffffffc)).toBeNull()
   },
+  // A real child process: a cold Windows CI runner has taken several times the 5 s default.
+  20_000,
 )
