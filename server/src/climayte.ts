@@ -82,6 +82,13 @@ import {
 } from './climayte-core'
 import { validateCwd } from './climayte-cwd'
 import {
+  type EtaCalibration,
+  etaCalibration,
+  etaNote,
+  etaSamples,
+  etaTookSeconds,
+} from './climayte-eta'
+import {
   appendJournal,
   type CliMayteJournalEntry,
   firstLine,
@@ -1317,6 +1324,12 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
     w.lastActivity = latest
     w.updatedAt = Date.now()
   }
+  // Its `ETA:` line for this message (climayte-eta.ts), once: a later attempt of the same message
+  // (a move, a handoff) keeps the first. startReport clears it when the next message goes in.
+  if (!w.chat && !w.eta && r.eta) {
+    w.eta = { minutes: r.eta.minutes, at: r.eta.at, attempt: w.attempts.length - 1 }
+    changed(w)
+  }
   if (exited) finish(w, r.events)
 }
 
@@ -1729,15 +1742,27 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
     return
   }
   settleWorker(w, at, v, now, stderr)
+  // A worker that asked (climayteAsk) ended its turn to wait for the answer: nothing is judged, no
+  // check runs and no wave batch is woken until the answer resumes it. A question left when the
+  // turn went on (a message was already queued) is answered.
+  const asking = w.status === 'done' && !!w.question
+  // The message's estimate settles when its turn ends done, not to ask: the working time since the
+  // `ETA:` line is the sample the next briefs are calibrated on (climayte-eta.ts).
+  if (
+    v.outcome === 'done' &&
+    !asking &&
+    w.status !== 'failed' &&
+    w.eta &&
+    w.eta.tookS === undefined
+  ) {
+    w.eta.tookS = etaTookSeconds(w.eta, w.attempts, now)
+    w.eta.doneAt = now
+  }
   // climayteSend told the caller a queued message would be delivered; say that it was not.
   if (w.status === 'failed' && w.pending.length)
     w.error =
       `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
   journalFinish(w, at, v, spent)
-  // A worker that asked (climayteAsk) ended its turn to wait for the answer: nothing is judged, no
-  // check runs and no wave batch is woken until the answer resumes it. A question left when the
-  // turn went on (a message was already queued) is answered.
-  const asking = w.status === 'done' && !!w.question
   if (w.question && !asking) delete w.question
   // A wave task with no check is judged now; with one, when its check ends (judgeCheck).
   const judged = !asking && w.status === 'done' && !w.check && judgeInWave(w, null)
@@ -1801,6 +1826,10 @@ function journalFinish(
         costUsd: Math.round(spent * 10_000) / 10_000,
         turns: v.turns,
         totalCostUsd: Math.round(w.costUsd * 10_000) / 10_000,
+        // The estimate this turn settled (finish), never an earlier turn's.
+        ...(w.eta?.tookS !== undefined && w.eta.doneAt === at.endedAt
+          ? { etaMin: w.eta.minutes, tookMin: Math.round(w.eta.tookS / 6) / 10 }
+          : {}),
       })
       break
     case 'handoff':
@@ -3115,9 +3144,17 @@ export function climayteScorecard(): {
     pctPerTask: number | null
     pick: boolean
   }>
+  /** How the workers' own time estimates compared with the time they took (climayte-eta.ts): every
+   *  kind's, each kind's with enough samples, and the note the next brief carries. */
+  estimates: { all: EtaCalibration | null; byKind: EtaCalibration[]; note: string | null }
 } {
   load()
   const rows = scoreRows(workers.values())
+  const samples = etaSamples(workers.values())
+  const all = etaCalibration(samples, null)
+  const byKind = [...new Set(samples.map((s) => s.kind).filter((k): k is string => !!k))]
+    .map((k) => etaCalibration(samples, k))
+    .filter((c): c is EtaCalibration => c?.kind != null)
   const picks = new Map<string, number>()
   for (const r of rows) {
     if (picks.has(r.kind)) continue
@@ -3145,6 +3182,7 @@ export function climayteScorecard(): {
           ladderIndex({ model: ladderModel(r.model), effort: r.effort }) === best,
       }
     }),
+    estimates: { all, byKind, note: etaNote(all) },
   }
 }
 

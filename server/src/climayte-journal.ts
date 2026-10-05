@@ -66,6 +66,8 @@ export interface CliMayteJournalEntry {
   costUsd?: number // done / turn-done: this attempt's spend
   turns?: number // done / turn-done: this attempt's turns
   totalCostUsd?: number // done / turn-done: the worker's so far
+  etaMin?: number // done / turn-done: the worker's own estimate for the message (its `ETA:` line)
+  tookMin?: number // done / turn-done: the minutes it really worked on it (climayte-eta.ts)
   error?: string // failed / waiting: the first line
   said?: string // turn-end: the first line of the turn's closing text
   model?: string | null // dispatched / launched / follow-ups: the model asked for (null: the CLI's default)
@@ -271,9 +273,13 @@ function describeWaitingLine(
 
 /** The attempt's spend and turns, then how the turn ended: `turn done` or `done`. */
 function describeDoneTurnLine(e: CliMayteJournalEntry, on: string, event: string): string {
+  const eta =
+    e.etaMin !== undefined && e.tookMin !== undefined
+      ? `; estimated ${e.etaMin} min, took ${e.tookMin} min`
+      : ''
   if (event === 'turn-done')
-    return `turn done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task so far ${usd(e.totalCostUsd)}); next queued message follows`
-  return `done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task total ${usd(e.totalCostUsd)})`
+    return `turn done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task so far ${usd(e.totalCostUsd)})${eta}; next queued message follows`
+  return `done${on}: ${usd(e.costUsd)}, ${turns(e.turns)} (task total ${usd(e.totalCostUsd)})${eta}`
 }
 
 /** `judged`: its verdict, with the next setting (on a fail) and the words that came with it. */

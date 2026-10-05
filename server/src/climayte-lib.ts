@@ -10,6 +10,7 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import type { CliMayteEta } from './climayte-eta'
 import { type CliMayteOrigin, verdictCoversNewestWork } from './climayte-ping'
 import {
   type CliMaytePlacement,
@@ -266,6 +267,11 @@ export interface CliMayteWorker {
   /** What it asked with climayte_ask and waits on (its turn ends after asking). Cleared when the
    *  answer arrives through climayteSend. Absent: it asks nothing. */
   question?: CliMayteQuestion
+  /** How long it said the current message would take (its `ETA:` line, climayte-eta.ts), and once
+   *  that turn ended done, how long it took. Absent: it has said nothing yet (or is a chat). */
+  eta?: CliMayteEta
+  /** The settled estimates of its earlier messages, oldest first (MAX_PAST_ETAS). */
+  pastEtas?: CliMayteEta[]
   createdAt: number
   updatedAt: number
 }
@@ -498,6 +504,12 @@ export interface CliMayteWorkerReport {
   error: string | null
   /** The question it waits on (its text, cut), answered with climayte_send. Absent: none. */
   question?: string
+  /** Its own estimate for the current message in minutes, and while it runs, the minutes left by
+   *  that estimate (negative: over it). Absent: it gave none. */
+  etaMin?: number
+  etaLeftMin?: number
+  /** Once the message finished: the minutes it really worked. */
+  tookMin?: number
   judged: boolean
   /** Its newest verdict and who gave it; null when it has none. */
   verdict: 'pass' | 'fail' | null
@@ -522,12 +534,27 @@ export interface CliMayteWorkerReport {
  *  characters; the recap most of them end with is under 700. */
 export const REPORT_CHARS = 1500
 
-export function toReport(v: CliMayteWorkerView, chars = REPORT_CHARS): CliMayteWorkerReport {
+export function toReport(
+  v: CliMayteWorkerView,
+  chars = REPORT_CHARS,
+  now = Date.now(),
+): CliMayteWorkerReport {
   const turns = v.results?.length ? v.results : v.result ? [v.result] : []
   const main = turns[0] ?? ''
   const recap = main.lastIndexOf('## What I did')
   const report = (recap >= 0 ? main.slice(recap) : main).slice(0, Math.max(0, chars))
   const last = v.verdicts?.at(-1)
+  const eta = v.eta
+  const etaFields = !eta
+    ? {}
+    : eta.tookS !== undefined
+      ? { etaMin: eta.minutes, tookMin: Math.round(eta.tookS / 6) / 10 }
+      : {
+          etaMin: eta.minutes,
+          ...(isLive(v)
+            ? { etaLeftMin: Math.round((eta.at + eta.minutes * 60_000 - now) / 60_000) }
+            : {}),
+        }
   return {
     id: v.id,
     group: v.group,
@@ -541,6 +568,7 @@ export function toReport(v: CliMayteWorkerView, chars = REPORT_CHARS): CliMayteW
     ...(v.waitUntil !== undefined ? { waitUntil: v.waitUntil } : {}),
     error: v.error,
     ...(v.question ? { question: v.question.text.slice(0, 400) } : {}),
+    ...etaFields,
     judged: v.judged,
     verdict: last?.verdict ?? null,
     by: last?.by ?? null,
@@ -600,7 +628,7 @@ export function climayteEffort(v: unknown): string | null {
 }
 
 export const WORKER_BRIEF =
-  "You are a CliMayte worker: a Claude Code CLI session that AgentHydra started on one of the owner's accounts, at the owner's request, to do one delegated task for an orchestrating chat. Do the whole task yourself, in this session. Nobody is watching live: make the reasonable call and say which call you made. Only when you are blocked on a real decision that the task does not settle and a wrong guess would cost real work, call the climayte_ask tool (question, options, context), then end your turn: the chat or worker that started you answers by message, and this same session resumes with the answer. Never ask what you can find out or decide yourself. Follow the repository's own rules. Commit only the files you changed, and push if the repository's rules say to. Never read or print a secret value. Do not deploy, publish or release unless the task says to: the orchestrator ships finished work. If a hook in the repository asks about deploying, answer in one line that the orchestrator deploys, and do not explain how. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
+  "You are a CliMayte worker: a Claude Code CLI session that AgentHydra started on one of the owner's accounts, at the owner's request, to do one delegated task for an orchestrating chat. Do the whole task yourself, in this session. Before your first tool call, write one line on its own, `ETA: <n> min`: your honest estimate of the working time the whole task will take you, checks included (write a new one for each later message you are sent, not when told to continue). The owner reads it to decide whether to wait, and AgentHydra compares it with the time it really took. Nobody is watching live: make the reasonable call and say which call you made. Only when you are blocked on a real decision that the task does not settle and a wrong guess would cost real work, call the climayte_ask tool (question, options, context), then end your turn: the chat or worker that started you answers by message, and this same session resumes with the answer. Never ask what you can find out or decide yourself. Follow the repository's own rules. Commit only the files you changed, and push if the repository's rules say to. Never read or print a secret value. Do not deploy, publish or release unless the task says to: the orchestrator ships finished work. If a hook in the repository asks about deploying, answer in one line that the orchestrator deploys, and do not explain how. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
 
 export const HANDOFF_PROMPT =
   'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.'

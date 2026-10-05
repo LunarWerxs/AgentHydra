@@ -18,6 +18,8 @@ export interface TaskAgent {
   endedAt: number | null
   state: AgentState
   sessionId: string | null
+  /** The minutes it said its current message would take (its `ETA:` line), null when it gave none. */
+  etaMin: number | null
 }
 
 export interface TaskPhase {
@@ -47,6 +49,9 @@ export interface TaskUnit {
   keys: string[]
   /** A transcript task that failed or was stopped: its finished row shows an X. */
   failed?: boolean
+  /** When its last still-working estimate runs out (epoch ms): the latest `at + minutes` among its
+   *  active workers whose current message is not done yet. Null when none of them gave one. */
+  etaEndsAt: number | null
 }
 
 /** The real app's panel lists a chat's 50 newest finished tasks (owner's screenshot, 2026-10-05: "Finished 50"). */
@@ -86,9 +91,14 @@ function toAgent(w: CliMayteWorker): TaskAgent {
     startedAt: w.startedAt,
     endedAt: w.active ? null : (w.endedAt ?? w.lastActivityAt),
     state: agentState(w),
-    sessionId: w.sessionId
+    sessionId: w.sessionId,
+    etaMin: w.eta?.minutes ?? null
   }
 }
+
+/** When a worker's estimate runs out, while it is still working on the message it gave it for. */
+const etaEnd = (w: CliMayteWorker): number | null =>
+  w.active && w.eta && w.eta.tookS === null ? w.eta.at + w.eta.minutes * 60_000 : null
 
 /** One phase per stage (the worker's kind), in the order the stages started. */
 function phasesOf(workers: CliMayteWorker[]): TaskPhase[] {
@@ -122,7 +132,8 @@ function workerUnit(id: string, name: string, workers: CliMayteWorker[]): TaskUn
     account: accounts.length ? accounts.join(', ') : null,
     phases: phasesOf(workers),
     stoppable: workers.filter((w) => w.active).map((w) => w.id),
-    keys: workers.map((w) => w.id)
+    keys: workers.map((w) => w.id),
+    etaEndsAt: maxOf(workers.map(etaEnd))
   }
 }
 
@@ -151,7 +162,8 @@ function taskUnit(t: TaskItem): TaskUnit {
     phases: [],
     stoppable: [],
     keys: [`task:${t.id}`],
-    failed: t.status === 'failed' || t.status === 'stopped'
+    failed: t.status === 'failed' || t.status === 'stopped',
+    etaEndsAt: null
   }
 }
 
@@ -201,12 +213,39 @@ export function panelLists(o: {
   return { running, finished }
 }
 
-/** The inline row under the last message: '1 running task', '3 running tasks · 2 finished', '4 finished tasks', '' when none. */
-export function runningLabel(n: number, finished = 0): string {
+/** The latest estimate end among running units, null when none gave one. */
+export function latestEtaEnd(units: readonly TaskUnit[]): number | null {
+  return maxOf(units.filter((u) => u.running).map((u) => u.etaEndsAt))
+}
+
+const minutesText = (m: number): string => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`)
+
+/** 'about 5 min left', 'about 1 h 20 min left', 'due about now', '3 min over the estimate'. */
+export function etaLeft(endsAt: number, now: number): string {
+  const left = endsAt - now
+  if (left > 0) return `about ${minutesText(Math.ceil(left / 60_000))} left`
+  const over = Math.floor(-left / 60_000)
+  return over < 1 ? 'due about now' : `${minutesText(over)} over the estimate`
+}
+
+/** A worker's estimate in the agent table's Time cell: '~5m', '~1h 20m', '~30s'. */
+export function etaShort(minutes: number): string {
+  if (minutes < 1) return `~${Math.round(minutes * 60)}s`
+  const m = Math.round(minutes)
+  return m < 60 ? `~${m}m` : `~${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
+}
+
+/**
+ * The inline row under the last message: '1 running task', '3 running tasks · 2 finished', '4 finished
+ * tasks', '' when none; with `eta` (the running workers' latest estimate end, and the time now) it says
+ * how long is left after the running count: '3 running tasks · about 5 min left · 50+ finished'.
+ */
+export function runningLabel(n: number, finished = 0, eta?: { endsAt: number | null; now: number }): string {
   const done = finished > 0 ? `${finished}${finished >= FINISHED_CAP ? '+' : ''} finished` : ''
   if (n <= 0) return done ? `${done} ${finished === 1 ? 'task' : 'tasks'}` : ''
   const running = `${n} running ${n === 1 ? 'task' : 'tasks'}`
-  return done ? `${running} · ${done}` : running
+  const left = eta && eta.endsAt !== null ? etaLeft(eta.endsAt, eta.now) : ''
+  return [running, left, done].filter(Boolean).join(' · ')
 }
 
 /** '11m 06s', '45s', '1h 02m'. */

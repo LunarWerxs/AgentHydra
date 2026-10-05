@@ -2,8 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import type { CliMayteWorker, TranscriptItem } from '@shared/protocol'
 import {
   agentState,
+  etaLeft,
+  etaShort,
   formatElapsed,
   formatTokens,
+  latestEtaEnd,
   openPhase,
   panelLists,
   phaseSquares,
@@ -151,6 +154,9 @@ test('labels and formats', () => {
   expect(runningLabel(1, 2)).toBe('1 running task · 2 finished')
   expect(runningLabel(0, 1)).toBe('1 finished task')
   expect(runningLabel(0, 50)).toBe('50+ finished tasks')
+  expect(runningLabel(3, 50, { endsAt: 300_000, now: 0 })).toBe('3 running tasks · about 5 min left · 50+ finished')
+  expect(runningLabel(1, 0, { endsAt: null, now: 0 })).toBe('1 running task')
+  expect(runningLabel(0, 2, { endsAt: 300_000, now: 0 })).toBe('2 finished tasks')
   expect(formatElapsed(666_000)).toBe('11m 06s')
   expect(formatElapsed(45_000)).toBe('45s')
   expect(formatElapsed(3_720_000)).toBe('1h 02m')
@@ -158,4 +164,49 @@ test('labels and formats', () => {
   expect(formatTokens(812)).toBe('812')
   expect(formatTokens(4_106_540)).toBe('4.1M')
   expect(formatTokens(null)).toBe('–')
+})
+
+describe('estimates', () => {
+  const eta = (minutes: number, at: number, tookS: number | null = null) => ({ minutes, at, tookS })
+
+  test("a unit's estimate runs out at its latest still-working worker's; a settled or finished one does not count", () => {
+    const [unit] = workerUnits([
+      w('a', { group: 'g', eta: eta(5, 0) }), // ends at 300 s
+      w('b', { group: 'g', eta: eta(2, 120_000) }), // ends at 240 s
+      w('c', { group: 'g', status: 'checking', eta: eta(30, 0, 200) }), // its message is done: being checked
+      done('d', { group: 'g', eta: eta(60, 0, 900) }),
+      w('e', { group: 'g' }) // gave none
+    ])
+    expect(unit!.etaEndsAt).toBe(300_000)
+    expect(unit!.phases[0]!.agents.map((a) => [a.id, a.etaMin])).toEqual([
+      ['a', 5],
+      ['b', 2],
+      ['c', 30],
+      ['e', null],
+      ['d', 60]
+    ])
+    expect(workerUnits([w('x')])[0]!.etaEndsAt).toBeNull()
+  })
+
+  test('the row takes the latest end among running units', () => {
+    const units = workerUnits([w('a', { eta: eta(5, 0) }), w('b', { eta: eta(10, 0) }), done('c', { eta: eta(90, 0, 60) })])
+    expect(latestEtaEnd(units)).toBe(600_000)
+    expect(latestEtaEnd(workerUnits([w('x')]))).toBeNull()
+  })
+
+  test('left, due and over', () => {
+    expect(etaLeft(300_000, 0)).toBe('about 5 min left')
+    expect(etaLeft(300_000, 250_000)).toBe('about 1 min left')
+    expect(etaLeft(4_800_000, 0)).toBe('about 1 h 20 min left')
+    expect(etaLeft(3_600_000, 0)).toBe('about 1 h left')
+    expect(etaLeft(300_000, 330_000)).toBe('due about now')
+    expect(etaLeft(300_000, 480_000)).toBe('3 min over the estimate')
+  })
+
+  test("a worker's estimate in the Time cell", () => {
+    expect(etaShort(5)).toBe('~5m')
+    expect(etaShort(7.5)).toBe('~8m')
+    expect(etaShort(80)).toBe('~1h 20m')
+    expect(etaShort(0.5)).toBe('~30s')
+  })
 })

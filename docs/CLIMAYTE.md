@@ -132,11 +132,17 @@ Bun.spawn(argv, { cwd, env, stdin: Bun.file(promptFile), stdout: <fd of log, app
 - `WORKER_BRIEF` (exported constant):
   "You are a CliMayte worker: a Claude Code CLI session that AgentHydra started on one of the
   owner's accounts, at the owner's request, to do one delegated task for an orchestrating chat.
-  Do the whole task yourself, in this session. Nobody is watching to answer questions, so make
-  the reasonable call and say which call you made. Follow the repository's own rules. Commit only
-  the files you changed, and push if the repository's rules say to. Never read or print a secret
-  value. End with a short report: what you did, the proof you saw (a command and what it
-  printed), and anything left undone with the reason."
+  Do the whole task yourself, in this session. Before your first tool call, write one line on its
+  own, `ETA: <n> min`: your honest estimate of the working time the whole task will take you,
+  checks included (write a new one for each later message you are sent, not when told to
+  continue). The owner reads it to decide whether to wait, and AgentHydra compares it with the
+  time it really took. Nobody is watching live: make the reasonable call and say which call you
+  made. Only when you are blocked on a real decision ... call the climayte_ask tool ... Follow the
+  repository's own rules. Commit only the files you changed, and push if the repository's rules
+  say to. Never read or print a secret value. Do not deploy, publish or release unless the task
+  says to ... End with a short report: what you did, the proof you saw (a command and what it
+  printed), and anything left undone with the reason." The code holds the full text. Once there
+  are 5 settled estimates the brief ends with the calibration note (see "Time estimates" below).
 
 **What a worker starts with** (2026-10-02): its settings deny the agenthydra and magnific MCP
 servers and set `syncClaudeAiSkills: false`, which hides the claude.ai-synced skills (docx, pptx,
@@ -533,7 +539,42 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
 - **`climayteScorecard()`** (`GET /api/corch/scorecard`, `climayte_scorecard`): passes, fails and cost per
   task as a share of a Pro 5-hour window (`UNITS_PER_PRO_PERCENT` = 320,000 weighted units per 1%,
   fitted on run 1, R^2 0.48) per kind and setting, `pick` on the next auto setting. The CliMayte view
-  shows it as "What works" and puts thumbs up/down on a finished task.
+  shows it as "What works" and puts thumbs up/down on a finished task. `estimates` carries the time
+  estimate calibration (below).
+
+### Time estimates (`server/src/climayte-eta.ts`, owner, 2026-10-05)
+
+Owner, 2026-10-05: sub-agents should "say estimated times ... estimated five minutes", shown on
+Desk 2's running-tasks row, and "we could get better at improving the prompt we give the
+sub-agents for estimating time until they can actually estimate time properly."
+
+- **The line.** `WORKER_BRIEF` asks for `ETA: <n> min` on its own line before the first tool call,
+  and a new one per later message. `parseEta` reads `ETA: ~5 min`, `**ETA:** 12 minutes`,
+  `ETA: 1h 20m` (80), `ETA: 5-10 min` (7.5, a range is its middle) and a bare number as minutes;
+  only the amounts right after `ETA` count; 0 or over a day is no estimate. `etaOfEvent` looks only
+  at an assistant event's text blocks, never a tool result or the prompt.
+- **Recording.** `applyLogEvent` (climayte-core.ts) keeps the first estimate of an attempt's log in
+  `LogRead.eta` with its event time; `noteActivity` copies it once per message to
+  `worker.eta { minutes, at, attempt }` (chat workers are skipped: they get no `WORKER_BRIEF`). A
+  move or handoff keeps the first estimate.
+- **Settling.** When the message's turn ends `done` (not to ask a question, not failed), `finish`
+  sets `eta.tookS` = `etaTookSeconds`: the rest of the attempt the estimate was said in, then every
+  later attempt whole. Waits for an account between attempts are not counted. The `done` /
+  `turn-done` journal line adds `estimated N min, took M min`.
+- **Next message.** `startReport` moves a settled estimate into `pastEtas` (the newest
+  `MAX_PAST_ETAS` = 10) and clears `eta`; an unsettled one (cancelled, failed, asked) is dropped.
+- **Calibration.** `etaSamples` collects every settled estimate, newest first; `etaCalibration`
+  takes the newest `ETA_SAMPLES` = 30 of the task's kind when it has `ETA_MIN_SAMPLES` = 5, else of
+  every kind, and gives the median and quartiles of took/estimated; under 5 samples it is null.
+  `etaNote` turns it into the sentence `briefArgs` appends to `WORKER_BRIEF`: within 1.25x either way
+  "Your estimates have been close ...", otherwise "Calibrate your ETA: ... Multiply your first guess
+  by about X before you write it." So the prompt corrects itself as the samples come in.
+- **Where it shows.** `climayte_status` rows carry `etaMin`, `etaLeftMin` (while live; negative is
+  over) and `tookMin`; `climayteScorecard().estimates` has `all`, `byKind` and the current `note`.
+  Desk 2's running-tasks row says "about N min left" from the latest estimate of a running worker,
+  and its Background tasks panel shows each worker's estimate beside its time.
+- **Not covered.** Sub-agents a Desk 2 chat starts with the Agent tool: Desk 2 does not see their
+  text, so they have no estimate.
 
 ### Placement (`server/src/climayte-placement.ts`, `a6569b4`)
 

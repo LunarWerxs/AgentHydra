@@ -20,6 +20,7 @@ import {
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
+import { etaOfEvent } from './climayte-eta'
 import {
   appendJournal,
   type CliMayteJournalEntry,
@@ -182,6 +183,9 @@ export interface LogRead {
   /** The newest `timestamp` an event carried (assistant and user events do, epoch ms): when a
    *  replayed reading was really taken (readInto). */
   lastAt: number | null
+  /** The first `ETA:` line its assistant text wrote (climayte-eta.ts etaOfEvent): the minutes and
+   *  when (the event's time, else the read's). */
+  eta: { minutes: number; at: number } | null
 }
 
 /** Each account's newest live usage reading from any of its workers' streams (poll copies it
@@ -717,6 +721,7 @@ export const freshRead = (): LogRead => ({
   live: null,
   firstLive: null,
   lastAt: null,
+  eta: null,
 })
 
 /** A finished attempt's log, parsed once without keeping it in `reads`. */
@@ -794,6 +799,10 @@ function applyLogEvent(ev: unknown, r: LogRead, replayAt: number | null): void {
   r.lastAt = eventTime(ev) ?? r.lastAt
   r.live = liveUsage(ev, replayAt === null ? Date.now() : (r.lastAt ?? replayAt)) ?? r.live
   r.firstLive ??= r.live
+  if (!r.eta) {
+    const minutes = etaOfEvent(ev)
+    if (minutes !== null) r.eta = { minutes, at: eventTime(ev) ?? replayAt ?? Date.now() }
+  }
   r.events.push(ev)
   if (r.events.length > 400) r.events.splice(0, r.events.length - 400)
   const s = summarizeEvent(ev)

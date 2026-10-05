@@ -93,7 +93,17 @@ describe('CliMayte workers', () => {
       tokens: null,
       verdict: null,
       error: null,
+      eta: null,
     })
+  })
+
+  test("a worker's own time estimate comes through, with the time it took once settled", () => {
+    const [running, settled] = mapWorkers([
+      { ...raw[0], eta: { minutes: 5, at: 1791069630000, attempt: 0 } },
+      { ...raw[2], eta: { minutes: 3, at: 1791069630000, attempt: 0, tookS: 250, doneAt: 1791069880000 } },
+    ])
+    expect(running!.eta).toEqual({ minutes: 5, at: 1791069630000, tookS: null })
+    expect(settled!.eta).toEqual({ minutes: 3, at: 1791069630000, tookS: 250 })
   })
 
   test('a settled worker has ended when it last changed and carries every token it was charged', () => {

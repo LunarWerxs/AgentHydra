@@ -23,7 +23,7 @@ const prompt = await Bun.stdin.text()
 if (configDir)
   appendFileSync(
     join(configDir, 'fake-launches.jsonl'),
-    `${JSON.stringify({ ttl: process.env.CLAUDE_CODE_PROMPT_CACHE_TTL ?? null, session: sessionId, resume: !!resume, prompt })}
+    `${JSON.stringify({ ttl: process.env.CLAUDE_CODE_PROMPT_CACHE_TTL ?? null, session: sessionId, resume: !!resume, prompt, brief: flag('--append-system-prompt') })}
 `,
   )
 
@@ -351,6 +351,8 @@ appendFileSync(
 init()
 // `FAKE-CONTEXT:<n>` in the prompt: the newest request read n tokens (the conversation's size).
 const context = Number(/FAKE-CONTEXT:(\d+)/.exec(prompt)?.[1] ?? 0)
+// `FAKE-ETA:<n>` in the prompt: the first text is the brief's `ETA: <n> min` line.
+const eta = /FAKE-ETA:(\d+)/.exec(prompt)?.[1]
 emit({
   type: 'assistant',
   session_id: sessionId,
@@ -358,7 +360,7 @@ emit({
     role: 'assistant',
     model: 'fake-model',
     ...(context ? { usage: { input_tokens: 0, output_tokens: 1, cache_read_input_tokens: context, cache_creation_input_tokens: 0 } } : {}),
-    content: [{ type: 'text', text: 'Working on it.' }],
+    content: [{ type: 'text', text: eta ? `ETA: ${eta} min\n\nWorking on it.` : 'Working on it.' }],
   },
 })
 // A session started from a handoff says so, so a test can see the handoff reached it.

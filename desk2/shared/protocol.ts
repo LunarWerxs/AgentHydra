@@ -339,6 +339,12 @@ export interface CliMayteWorker {
   verdict: string | null
   error: string | null
   /**
+   * What the worker said its current message would take (its `ETA: <n> min` line; AgentHydra's
+   * climayte-eta.ts): `at` is when it said it, `tookS` the working seconds it took once that message
+   * ended done (null until then). Absent or null when it gave none, or on another PC's worker.
+   */
+  eta?: { minutes: number; at: number; tookS: number | null } | null
+  /**
    * The other PC's name when the worker runs there (AgentHydra's shared queue, GET /api/corch/remote);
    * absent or null = this PC. Such a worker has no folder, and its session and origin are only ids that
    * PC shared (a snapshot from an older AgentHydra has neither); its id may equal one of this PC's, and

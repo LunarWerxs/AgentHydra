@@ -2,8 +2,9 @@
 // The real app's Background tasks panel (real-background-tasks-panel.png, measured at 1x), listing
 // CliMayte as its workflows: one card per running unit (a CliMayte group, a lone worker, or one of
 // this chat's background tasks), its phases with progress squares and the agent table, then the
-// finished ones behind 'Finished N'. Stop cancels the unit's active workers through AgentHydra; the
-// trash only hides finished units here.
+// finished ones behind 'Finished N'. A worker's own estimate (its `ETA:` line) shows after its time,
+// '1m 20s / ~5m', and a running unit says about how long is left by its latest one. Stop cancels the
+// unit's active workers through AgentHydra; the trash only hides finished units here.
 import { computed, effectScope, nextTick, onBeforeUnmount, ref, shallowRef, watch, type EffectScope, type Ref } from 'vue'
 import { Check, ChevronDown, ChevronRight, Maximize2, Minimize2, Trash2, X } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
@@ -13,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { Tip } from '@/components/ui/tooltip'
 import { useClock } from '@/lib/clock'
 import { cleared, clearFinished } from './api'
-import { elapsedOf, formatTokens, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
+import { elapsedOf, etaLeft, etaShort, formatTokens, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
 
 const props = defineProps<{
   sessionId: string | null | undefined
@@ -173,6 +174,7 @@ const ICON_BTN =
               <p class="mt-0.5 flex gap-2.5">
                 <span class="font-semibold text-[var(--text-2)]">{{ u.label }}</span>
                 <span class="tnum text-[var(--text-muted)]">{{ elapsedOf(u.startedAt, u.endedAt, now) }}</span>
+                <span v-if="u.etaEndsAt !== null" class="tnum text-[var(--text-muted)]">{{ etaLeft(u.etaEndsAt, now) }}</span>
                 <span v-if="u.account" class="text-[var(--text-muted)]">{{ u.account }}</span>
               </p>
               <p v-if="u.agents || u.tokens !== null" class="tnum flex gap-1.5 text-[var(--text-muted)]">
@@ -237,7 +239,7 @@ const ICON_BTN =
                     <th class="p-0 text-left font-normal">Agent</th>
                     <th class="w-[64px] p-0 text-left font-normal">Model</th>
                     <th class="w-12 p-0 text-right font-normal">Tokens</th>
-                    <th class="w-[72px] p-0 pr-2 text-right font-normal">Time</th>
+                    <th class="w-24 p-0 pr-2 text-right font-normal">Time</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -258,7 +260,9 @@ const ICON_BTN =
                     </td>
                     <td class="truncate p-0">{{ a.model || '–' }}</td>
                     <td class="p-0 text-right">{{ formatTokens(a.tokens) }}</td>
-                    <td class="p-0 pr-2 text-right">{{ elapsedOf(a.startedAt, a.endedAt, now) }}</td>
+                    <td class="truncate p-0 pr-2 text-right">
+                      {{ elapsedOf(a.startedAt, a.endedAt, now) }}<span v-if="a.etaMin !== null" class="font-normal text-[var(--text-muted)]"> / {{ etaShort(a.etaMin) }}</span>
+                    </td>
                   </tr>
                 </tbody>
               </table>

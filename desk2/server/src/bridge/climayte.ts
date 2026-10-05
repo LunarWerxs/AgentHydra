@@ -85,6 +85,7 @@ export function mapWorker(w: AhWorker, all: ReadonlyMap<string, AhWorker>, manag
     tokens: tokenTotal(w.tokens),
     verdict: w.verdicts?.at(-1)?.verdict ?? null,
     error: w.error ?? null,
+    eta: w.eta ? { minutes: w.eta.minutes, at: w.eta.at, tookS: w.eta.tookS ?? null } : null,
   }
 }
 

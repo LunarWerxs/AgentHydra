@@ -36,6 +36,7 @@ import {
   workers,
 } from './climayte-core'
 import { copySessionToCwd } from './climayte-cwd'
+import { etaCalibration, etaNote, etaSamples, MAX_PAST_ETAS } from './climayte-eta'
 import { firstLine } from './climayte-journal'
 import {
   type CliMayteAccount,
@@ -537,7 +538,12 @@ function ownerHome(): string | null {
 /** What tells the CLI who it is: an ordinary worker's WORKER_BRIEF, or a chat's prompt file and the
  *  owner's skills. */
 function briefArgs(w: CliMayteWorker): string[] {
-  if (!w.chat) return ['--append-system-prompt', WORKER_BRIEF]
+  if (!w.chat) {
+    // How the newest estimates compared with the real time (climayte-eta.ts): nothing until there
+    // are enough samples, then the ratio to multiply a first guess by.
+    const note = etaNote(etaCalibration(etaSamples(workers.values()), w.kind ?? null))
+    return ['--append-system-prompt', note ? `${WORKER_BRIEF} ${note}` : WORKER_BRIEF]
+  }
   const home = ownerHome()
   // --add-dir is variadic: the option after it ends its list.
   return [...(home ? ['--add-dir', home] : []), '--append-system-prompt-file', writeChatPrompt(w)]
@@ -679,7 +685,13 @@ function startReport(w: CliMayteWorker, p: LaunchPlan): void {
   if (p.last && !p.delivers && !p.fresh) return
   const label = p.fresh ? `${w.message ?? firstLine(w.prompt, 200)} (before a handoff)` : w.message
   w.reports = keepReport({ ...w, message: label }, Date.now())
-  if (!p.fresh) w.message = firstLine(p.delivers ? p.next : w.prompt, 200)
+  if (!p.fresh) {
+    w.message = firstLine(p.delivers ? p.next : w.prompt, 200)
+    // A new message gets its own estimate; the last one's is kept once it settled (finish).
+    if (w.eta?.tookS !== undefined)
+      w.pastEtas = [...(w.pastEtas ?? []), w.eta].slice(-MAX_PAST_ETAS)
+    delete w.eta
+  }
   w.result = null
   w.results = []
 }
