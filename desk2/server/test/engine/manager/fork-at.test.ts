@@ -8,7 +8,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { AccountInfo, ChatSummary, TranscriptItem } from '@shared/protocol'
+import type { AccountInfo, ChatSummary, ServerEvent, TranscriptItem } from '@shared/protocol'
 import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
 import { ChatError, ChatManager, type ManagerBridge } from '../../../src/engine/chat-manager'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
@@ -60,9 +60,10 @@ function boot(o: { chats?: (w: World) => { chat: ChatSummary; items: TranscriptI
   const q = fakeQueries()
   const fake = fakeBridge({ items: o.items, roots: [join(a.configDir!, 'projects'), join(b.configDir!, 'projects')] })
   const bridge: ManagerBridge = { ...fake.bridge, listAccounts: async () => [a, b] }
+  const events: ServerEvent[] = []
   const m = new ChatManager({
     home,
-    emit: () => {},
+    emit: (event) => events.push(event),
     settings: () => ({ ...DEFAULT_SETTINGS, defaultAccountId: a.id }),
     bridge,
     queryImpl: q.queryImpl,
@@ -72,7 +73,7 @@ function boot(o: { chats?: (w: World) => { chat: ChatSummary; items: TranscriptI
     newChats: o.newChats ?? 'sdk',
   })
   managers.push(m)
-  return { m, cwd, a, b, state: fake.state, ...q }
+  return { m, cwd, a, b, state: fake.state, events, ...q }
 }
 
 /** A session transcript at <config dir>/projects/<cwd's folder>/<id>.jsonl, one entry a line. */
@@ -143,6 +144,9 @@ function record(over: Partial<ChatSummary>): ChatSummary {
     ...over,
   }
 }
+
+/** The items the windows were told to take out of the chat, in order. */
+const removed = (events: ServerEvent[], chatId: string) => events.flatMap((e) => (e.type === 'item.removed' && e.chatId === chatId ? [e.itemId] : []))
 
 async function refusal(p: Promise<unknown>): Promise<ChatError> {
   const err = await p.then(
@@ -233,4 +237,61 @@ test("an outside session forks at one of its messages: the history before it, cu
   await t.m.send(fork.id, 'go')
   expect(t.last().options).toMatchObject({ resume: SID, forkSession: true, resumeSessionAt: 'a-3' })
   expect((await refusal(t.m.importSession({ sessionId: SID, cwd: t.cwd, configDir: t.a.configDir, fork: true, at: 'a-1' }))).status).toBe(400)
+})
+
+test('Undo at a message takes it and all after it out of the same chat, and its next send resumes the session cut just before it', async () => {
+  const src = record({})
+  const t = boot({ chats: (w) => [{ chat: { ...src, account: { ...src.account, configDir: w.a.configDir } }, items: ITEMS }] })
+  session(t.a.configDir!, t.cwd, SID, ENTRIES)
+
+  const back = await t.m.rewind(src.id, 'u-2')
+  expect(back).toMatchObject({ id: src.id, title: 'Garden', sessionId: null, forkedFrom: SID, status: 'closed', pinned: true, group: 'Yard', account: { id: 'acct-35' } })
+  expect(t.m.list({ archived: true })).toHaveLength(1)
+  expect(t.m.listItems(src.id).map((i) => i.id)).toEqual(['u-1', 'a-1'])
+  expect(removed(t.events, src.id)).toEqual(['u-2', 'a-2', 'old-3', 'a-3', 'old-4', 'a-4'])
+  // The session with the turns taken back is still this chat's own, never listed under Elsewhere.
+  expect(t.m.sessionIds()).toContain(SID)
+  await t.m.send(src.id, 'Add a row of peppers')
+  expect(t.last().options).toMatchObject({ resume: SID, forkSession: true, resumeSessionAt: 'a-1', env: { CLAUDE_CONFIG_DIR: t.a.configDir } })
+})
+
+test('Undo during a running turn stops it first; at the message that opened the session the chat is left empty and starts afresh; a refused Undo changes nothing', async () => {
+  const src = record({})
+  const t = boot({ chats: (w) => [{ chat: { ...src, account: { ...src.account, configDir: w.a.configDir } }, items: [...ITEMS, { kind: 'user', id: 'lost', ts: 9, text: 'Never sent anywhere' }] }] })
+  session(t.a.configDir!, t.cwd, SID, ENTRIES)
+
+  expect((await refusal(t.m.rewind(src.id, 'lost'))).message).toMatch(/no telling where the chat would go back to/)
+  expect((await refusal(t.m.rewind(src.id, 'a-1'))).status).toBe(400)
+  expect(t.m.listItems(src.id)).toHaveLength(ITEMS.length + 1)
+  expect(t.m.get(src.id)).toMatchObject({ sessionId: SID })
+
+  await t.m.send(src.id, 'Water them again')
+  const running = t.last()
+  expect(running.calls.close).toBe(0)
+  const back = await t.m.rewind(src.id, 'u-1')
+  expect(running.calls.close).toBe(1)
+  expect(back).toMatchObject({ sessionId: null, forkedFrom: null, status: 'closed' })
+  expect(t.m.listItems(src.id)).toEqual([])
+  await t.m.send(src.id, 'Plan the garden beds again')
+  expect(t.last()).not.toBe(running)
+  expect(t.last().options.resume).toBeUndefined()
+})
+
+test("Undo in a CliMayte chat cancels its worker, and the chat goes on from the session that has the message, on the account whose folder holds it", async () => {
+  const OLD = '6a6a6a6a-1111-4222-8333-444455556666'
+  const src = record({ sessionId: 'worker-session-2', workerId: 'w1', workerIds: ['w9'], account: { id: 'cli-2', label: '#62', configDir: null }, accountAuto: true })
+  const t = boot({ chats: () => [{ chat: src, items: ITEMS }], newChats: 'climayte' })
+  t.state.rows.push(ahWorker({ id: 'w1', status: 'running', sessions: [OLD], sessionId: 'worker-session-2', accountId: 'cli-2', cwd: t.cwd }))
+  session(t.b.configDir!, t.cwd, OLD, ENTRIES)
+  session(t.a.configDir!, t.cwd, 'worker-session-2', [said('h-1', null, 'Continue the garden task from the handoff notes')])
+
+  const back = await t.m.rewind(src.id, 'u-2')
+  expect(t.state.cancelled).toEqual(['w1'])
+  expect(back).not.toHaveProperty('workerId')
+  // The workers it handed work to are still its own.
+  expect(back).toMatchObject({ id: src.id, workerIds: ['w9'], sessionId: null, forkedFrom: OLD, account: { id: 'acct-61', configDir: t.b.configDir }, accountAuto: true })
+  expect(t.m.listItems(src.id).map((i) => i.id)).toEqual(['u-1', 'a-1'])
+  await t.m.send(src.id, 'Add a row of peppers')
+  expect(t.state.sentToWorker).toEqual([])
+  expect(t.last().options).toMatchObject({ resume: OLD, forkSession: true, resumeSessionAt: 'a-1', env: { CLAUDE_CONFIG_DIR: t.b.configDir } })
 })

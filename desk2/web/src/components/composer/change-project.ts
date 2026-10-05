@@ -30,3 +30,8 @@ export function movedChat(
 export function joinDrafts(waiting: string, moved: string): string {
   return waiting.trim() ? `${waiting.replace(/\s+$/, '')}\n\n${moved}` : moved
 }
+
+/** A message Undo took out goes back in the box above whatever was typed there since. */
+export function putBackDraft(message: string, typed: string): string {
+  return typed.trim() ? joinDrafts(message, typed) : message
+}

@@ -187,6 +187,14 @@ sidebar on the left stays put, and only the pane on the right changes.
   permissions and CliMayte setting, and opens it; this chat stays as it is, reply and all. An unsent draft
   gets a ⋯ on the box's top-right corner: the same menu moves the text and pictures, unsent, into that
   folder's new-session box (below anything already waiting there) and opens it, leaving this box empty.
+- **Undo takes a message out.** The ↺ button under a message of yours, and under the reply that ends its
+  turn, is Claude Code's rewind (owner, 2026-10-05: "I clicked undo ... it just copied it"; it used to be
+  Resend, which sent the prompt again). The chat loses that message and everything after it, a running
+  turn is stopped, and the message, pictures and all, goes back in the box above anything typed there
+  since (or waits as the chat's draft if another chat is open). The next send resumes the session cut
+  just before it (`POST /api/chats/:id/rewind {at}`), so Claude no longer knows what was undone; undoing
+  the first message starts a fresh session. A CliMayte chat's worker is cancelled and its next message
+  starts a new one. A message Desk cannot find in the session file is refused with nothing changed.
 - **A message to a working CliMayte chat goes now.** What you send while its worker is mid-turn stops
   that turn and the same session continues with your message first, as Send now on a held bubble does
   (owner, 2026-10-05: "We still can't send messages by hitting send now"). An AgentHydra with deliver-now

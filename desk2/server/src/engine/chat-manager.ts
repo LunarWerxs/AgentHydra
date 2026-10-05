@@ -30,6 +30,7 @@ import type {
   PermissionMode,
   PlanDecision,
   QuestionAnswer,
+  RewindChatRequest,
   SendNowRequest,
   SendNowResult,
   ServerEvent,
@@ -949,6 +950,64 @@ export class ChatManager {
     return { ...chat }
   }
 
+  /**
+   * Undo at one of the owner's messages, as Claude Code's rewind: this chat loses that message and all after it,
+   * and its next send resumes the session cut at the entry before it, as forkBefore's fork would (the SDK forks
+   * it, so the turns taken back stay only in the old session's file, still this chat's own). A turn running now
+   * is stopped first, a CliMayte chat's worker cancelled; that chat goes on where forkBefore's fork would. A
+   * message that opened its session leaves the chat empty, its next send a fresh start. Every check comes before
+   * anything is changed. The window puts the message back in the box.
+   */
+  async rewind(id: string, at: string): Promise<ChatSummary> {
+    const e = this.entry(id)
+    if (e.starting) throw new ChatError(409, 'This chat is starting its worker: undo once it has started.')
+    const chat = e.chat
+    const items = this.listItems(id)
+    const index = items.findIndex((i) => i.id === at)
+    const msg = items[index]
+    if (msg?.kind !== 'user') throw new ChatError(400, `this chat has no message ${JSON.stringify(at)} of yours to undo`)
+    const found = this.findCut(await this.sessionsOf(e), chat.cwd, msg, items.slice(index + 1), [chat.account, e.runtime?.startedAs])
+    if (!found) throw new ChatError(409, UNDO_NOT_FOUND)
+    const fresh = found.cut === null
+    const worker = chat.workerId !== undefined
+    const account = worker && !fresh ? await this.accountForConfigDir(found.configDir) : null
+    if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
+
+    const rt = e.runtime
+    e.runtime = null
+    e.query = null
+    if (rt) await rt.close().catch(() => {})
+    if (chat.workerId && e.workerLive !== false) await this.bridge.cancelWorker(chat.workerId).catch(() => {})
+    if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
+
+    // The session the undone turns are in stays the chat's (never listed under Elsewhere).
+    if (chat.sessionId && !e.pastSessions?.includes(chat.sessionId)) e.pastSessions = [...(e.pastSessions ?? []), chat.sessionId]
+    chat.sessionId = null
+    chat.forkedFrom = fresh ? null : found.sessionId
+    e.forkAt = fresh ? undefined : (found.cut as string)
+    e.ranIn = fresh ? undefined : found.configDir
+    if (worker && fresh) {
+      chat.workerId = null
+      chat.account = { ...CLIMAYTE_ACCOUNT }
+      chat.model = WORKER_MODEL
+    } else if (worker && account) {
+      delete chat.workerId
+      chat.account = account
+      chat.accountAuto = true
+    }
+    Object.assign(chat, { status: 'closed', activity: null, turnStartedAt: null, lastError: null, limitResetsAt: null, pendingCount: 0, queuedCount: 0, contextPct: null })
+    // What was remembered of the old worker or process goes with it.
+    for (const k of ['emitted', 'workerSeen', 'cwdFile', 'readAccount', 'workerLive', 'workerCwd', 'ended', 'matchKey', 'cwdPending', 'moved', 'workerErrorSeen'] as const) delete e[k]
+    const dropped = this.store.keepItems(id, new Set(items.slice(0, index).map((i) => i.id)))
+    for (const s of e.sent ?? []) dropped.push(s.id)
+    e.sent = undefined
+    for (const itemId of new Set(dropped)) this.emitEvent({ type: 'item.removed', chatId: id, itemId })
+    // A task still running before the cut ran in the process just stopped.
+    this.endTasks(e)
+    this.changed(chat)
+    return { ...chat }
+  }
+
   /** The sessions a chat's transcript was read from, newest first: its own, the one it forked, those it ran before a move, a worker's before each handoff. */
   private async sessionsOf(e: Entry): Promise<string[]> {
     const chat = e.chat
@@ -1173,7 +1232,8 @@ export class ChatManager {
     const rescan = e.readAccount !== w.accountId
     const writing = w.sessionId && w.accountId ? { sessionId: w.sessionId, accountId: w.accountId } : undefined
     const items = await this.bridge.workerItems([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])], chat.cwd, { rescan, writing })
-    if (this.chats.get(chat.id) !== e) return
+    // Deleted meanwhile, or Undo let this worker go.
+    if (this.chats.get(chat.id) !== e || chat.workerId !== w.id) return
     e.readAccount = w.accountId
     const emitted = e.emitted!
     let newReply = false
@@ -1725,6 +1785,7 @@ interface Cut {
 }
 
 const CUT_NOT_FOUND = 'Could not find this message in its session file, so there is no telling where the fork would start.'
+const UNDO_NOT_FOUND = 'Could not find this message in its session file, so there is no telling where the chat would go back to.'
 
 /** A saved record as the manager holds it: a fork's cut, the folder it last ran in and its past sessions off the summary. */
 function entryOf(stored: StoredRecord): Entry {
@@ -2021,4 +2082,11 @@ export function parseSendNow(body: unknown): SendNowRequest {
 export function parseFork(body: unknown): ForkChatRequest {
   const at = optString(obj(body), 'at')
   return at?.trim() ? { at: at.trim() } : {}
+}
+
+/** Undo's request: the owner's message the chat goes back to before. */
+export function parseRewind(body: unknown): RewindChatRequest {
+  const at = optString(obj(body), 'at')?.trim()
+  if (!at) throw new ChatError(400, 'at (the id of your message to undo) is required')
+  return { at }
 }

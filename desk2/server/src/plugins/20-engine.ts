@@ -28,6 +28,7 @@ import {
   parsePermission,
   parsePlan,
   parseQuestion,
+  parseRewind,
   parseSendNow,
   parseSend,
   parseSessionMeta,
@@ -243,6 +244,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
       return at ? manager.forkBefore(c.req.param('id'), at) : manager.fork(c.req.param('id'))
     }),
   )
+  app.post('/api/chats/:id/rewind', (c) => answer(c, async () => manager.rewind(c.req.param('id'), parseRewind(await body(c)).at)))
   app.patch('/api/external/sessions/:id/meta', (c) => answer(c, async () => manager.patchSessionMeta(c.req.param('id'), parseSessionMeta(await body(c)))))
   app.delete('/api/chats/:id', (c) =>
     answer(c, async () => {

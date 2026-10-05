@@ -56,7 +56,7 @@ import { dataUrlToFile, parseCopiedImages } from '@/lib/clipboard-images'
 import { holdFocus } from '@/lib/hold-focus'
 import { warmChat } from '@/lib/timing'
 import { isExternalChatId } from '@/components/external/logic'
-import { draftImages, draftImagesReady, saveDraftImages, type DraftImage } from './draft-images'
+import { draftImages, draftImagesReady, PUT_BACK_EVENT, saveDraftImages, type DraftImage, type PutBack } from './draft-images'
 import { HEADER, ITEM, MENU, MENU_GLYPH, SEPARATOR, SHORTCUT, SUB_TRIGGER, TOOL_ICON, TOOL_VALUE } from './menu'
 import SendSplit from './SendSplit.vue'
 import QueueTray from './QueueTray.vue'
@@ -68,7 +68,7 @@ import McpSubmenu from './McpSubmenu.vue'
 import TipBanner from './TipBanner.vue'
 import RepoStrip from './RepoStrip.vue'
 import ChangeProjectMenu from './ChangeProjectMenu.vue'
-import { joinDrafts } from './change-project'
+import { joinDrafts, putBackDraft } from './change-project'
 import { Tip } from '@/components/ui/tooltip'
 import { openLightbox } from '@/components/transcript/lib/media'
 import { provideTranscript } from '@/components/transcript/context'
@@ -537,6 +537,19 @@ function moveDraft(path: string) {
   shell.select({ kind: 'new', cwd: path })
 }
 
+// Undo took a message of this chat's out: it comes back in above what is typed, its pictures before those attached.
+function onPutBack(ev: Event) {
+  const back = (ev as CustomEvent<PutBack>).detail
+  if (props.demo || back.taken || back.chatId !== chatId.value) return
+  back.taken = true
+  text.value = putBackDraft(back.text, text.value)
+  if (back.images.length) images.value = [...back.images, ...images.value]
+  nextTick(() => {
+    textarea.value?.focus()
+    textarea.value?.setSelectionRange(back.text.length, back.text.length)
+  })
+}
+
 watch(cwd, () => {
   mentionDirsFor = null
   mentionDirs.value = []
@@ -932,6 +945,7 @@ onMounted(async () => {
   window.addEventListener('focus', refreshGit)
   document.addEventListener('visibilitychange', onShown)
   window.addEventListener('resize', autoGrow)
+  window.addEventListener(PUT_BACK_EVENT, onPutBack)
   loadNewSessionDefaults()
   try {
     models.value = await api.models()
@@ -957,6 +971,7 @@ onBeforeUnmount(() => {
   }
   recognition?.stop()
   window.removeEventListener('resize', autoGrow)
+  window.removeEventListener(PUT_BACK_EVENT, onPutBack)
   cancelAnimationFrame(growFrame)
 })
 </script>

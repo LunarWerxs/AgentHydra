@@ -48,7 +48,7 @@ function watchColumn(column: Element, f: Fitter) {
 <script setup lang="ts">
 // The real user bubble: right aligned, at most 85% of the column and only as wide as its longest line,
 // padding 8/12, radius 10, white 5%, 14/20 text,
-// entering with code-user-bubble-enter; the actions toolbar (time, Copy, Resend, Fork) under it, shown on hover.
+// entering with code-user-bubble-enter; the actions toolbar (time, Copy, Undo, Fork) under it, shown on hover.
 // A message waiting behind a running turn says so instead, with Send now: the turn stops and it goes at once.
 // A long message is clamped with a fade and a "Show more" link inside the bubble. Pictures sent with it
 // sit above the bubble as 8px-rounded tiles that open in the lightbox.

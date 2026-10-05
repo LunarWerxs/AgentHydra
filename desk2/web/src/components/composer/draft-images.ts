@@ -10,6 +10,17 @@ export interface DraftImage {
   url: string // data: URL for the thumbnail
 }
 
+/** Undo puts a message back in its chat's box: the window event, whose detail is a PutBack. */
+export const PUT_BACK_EVENT = 'hydra-desk:put-back'
+
+/** A message Undo took out. The box showing its chat takes it and sets `taken`; else it is saved as that chat's draft. */
+export interface PutBack {
+  chatId: string
+  text: string
+  images: DraftImage[]
+  taken?: boolean
+}
+
 type Stored = Omit<DraftImage, 'url'>
 
 const DB_NAME = 'hydra-desk-drafts'

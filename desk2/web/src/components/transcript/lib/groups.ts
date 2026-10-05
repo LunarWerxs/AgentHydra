@@ -9,6 +9,8 @@ export type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
 
 /** The user message that started a turn: what Retry under its finished reply sends again. */
 export interface TurnPrompt {
+  /** The message's item id (Undo goes back to before it). */
+  id: string
   text: string
   images: Extract<TranscriptItem, { kind: 'user' }>['images']
 }
@@ -74,7 +76,7 @@ export function groupRows(items: TranscriptItem[]): DisplayRow[] {
     const last = out[out.length - 1]
     if (it.kind === 'user' && !it.parentToolUseId && !it.queued) {
       let p = prompts.get(it)
-      if (!p || p.text !== it.text || p.images !== it.images) prompts.set(it, (p = { text: it.text, images: it.images }))
+      if (!p || p.text !== it.text || p.images !== it.images) prompts.set(it, (p = { id: it.id, text: it.text, images: it.images }))
       prompt = p
     }
     // A reply to a note has no prompt of the person's to send again.

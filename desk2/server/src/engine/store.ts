@@ -158,6 +158,29 @@ export class ChatStore {
     })
   }
 
+  /**
+   * Keeps only the items `keep` names (Undo): the file is written again from its own lines, the last per id, in
+   * their order, and swapped in whole. Answers the ids it dropped.
+   */
+  keepItems(chatId: string, keep: ReadonlySet<string>): string[] {
+    const file = this.itemsFile(chatId)
+    let text: string
+    try {
+      text = readFileSync(file, 'utf8')
+    } catch {
+      return []
+    }
+    // The raw lines, never loadItems' items: a user item is read as it shows now (userTurn), which is not what was saved.
+    const lines = new Map<string, string>()
+    addLines(lines, text)
+    const tmp = `${file}.${process.pid}.tmp`
+    writeFileSync(tmp, [...lines].flatMap(([id, line]) => (keep.has(id) ? [line + '\n'] : [])).join(''))
+    renameSync(tmp, file)
+    this.checkedTails.add(file)
+    this.lineCache.delete(file)
+    return [...lines.keys()].filter((id) => !keep.has(id))
+  }
+
   /** Drops the chat's transcript file (the caller drops it from the list and saves). */
   deleteChat(chatId: string): void {
     const file = this.itemsFile(chatId)

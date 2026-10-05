@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { joinDrafts, movedChat, projectRows } from '../../src/components/composer/change-project'
+import { joinDrafts, movedChat, projectRows, putBackDraft } from '../../src/components/composer/change-project'
 
 describe('Change project', () => {
   it('offers every recent folder but the one the message is in, in any spelling of it', () => {
@@ -30,5 +30,11 @@ describe('Change project', () => {
     expect(joinDrafts('', 'Moved text')).toBe('Moved text')
     expect(joinDrafts('  \n', 'Moved text')).toBe('Moved text')
     expect(joinDrafts('Already here\n', 'Moved text')).toBe('Already here\n\nMoved text')
+  })
+
+  it('puts a message Undo took out back in the box above what was typed there since', () => {
+    expect(putBackDraft('Fix the header', '')).toBe('Fix the header')
+    expect(putBackDraft('Fix the header', ' \n')).toBe('Fix the header')
+    expect(putBackDraft('Fix the header', 'and the footer')).toBe('Fix the header\n\nand the footer')
   })
 })

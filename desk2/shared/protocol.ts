@@ -500,6 +500,11 @@ export interface ForkChatRequest {
   at?: string
 }
 
+/** POST /api/chats/:id/rewind (Undo): the chat drops the owner's message `at` (its item id) and all after it; answers the chat. */
+export interface RewindChatRequest {
+  at: string
+}
+
 /** POST /api/chats/:id/send-now: Send now on a message waiting behind a running turn ("Queued" under its bubble); `itemId` is that bubble. */
 export interface SendNowRequest {
   itemId?: string
@@ -614,7 +619,7 @@ export type ServerEvent =
   | { type: 'chat.removed'; chatId: string }
   | { type: 'item.upsert'; chatId: string; item: TranscriptItem }
   | { type: 'item.delta'; chatId: string; itemId: string; text: string } // append to a streaming assistant_text/thinking
-  | { type: 'item.removed'; chatId: string; itemId: string } // a stand-in item its real copy replaced (a CliMayte chat's sent message)
+  | { type: 'item.removed'; chatId: string; itemId: string } // a stand-in item its real copy replaced (a CliMayte chat's sent message), or an item Undo took out
   | {
       type: 'notify'
       chatId: string

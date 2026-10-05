@@ -54,6 +54,13 @@ describe('groupRows', () => {
     const t2 = rows.find((r) => r.id === 't2')
     expect(t2?.kind === 'item' && t2.prompt).toBeNull()
   })
+
+  test('a reply carries the id of the message it answers, so Undo under it goes back to before that message', () => {
+    const rows = groupRows([user('u1'), text('t1'), user('u2'), tool('a', 'Bash'), text('t2')])
+    const prompt = (id: string) => rows.flatMap((r) => (r.kind === 'item' && r.id === id ? [r.prompt?.id] : []))[0]
+    expect(prompt('t1')).toBe('u1')
+    expect(prompt('t2')).toBe('u2')
+  })
 })
 
 describe('rowGap', () => {

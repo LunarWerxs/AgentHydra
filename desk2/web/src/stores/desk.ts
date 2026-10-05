@@ -19,6 +19,7 @@ import type {
   ChatPatch,
   ImportSessionRequest,
   ForkChatRequest,
+  RewindChatRequest,
   SearchHit,
   SessionMeta,
   SessionMetaPatch,
@@ -36,8 +37,9 @@ import { openBackgroundTasks } from '@/components/tasks/api'
 import { movedOrder } from '@/components/composer/queue'
 import { SEARCH_LIMIT, SEARCH_MIN_CHARS, SearchError } from '@/components/sidebar/search'
 import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId } from '@/components/external/logic'
-import { saveDraft } from '@/components/composer/logic'
-import { saveDraftImages, type DraftImage } from '@/components/composer/draft-images'
+import { loadDraft, saveDraft } from '@/components/composer/logic'
+import { draftImages, PUT_BACK_EVENT, saveDraftImages, type DraftImage, type PutBack } from '@/components/composer/draft-images'
+import { putBackDraft } from '@/components/composer/change-project'
 import { reloadIfStale, watchBundle } from '@/lib/stale-bundle'
 import { refusalText, serverHello, watchServerUpdate } from '@/lib/server-update'
 import { rememberView, restoreView } from '@/lib/view-memory'
@@ -851,6 +853,27 @@ export function useDesk() {
       saveDraft(typeof localStorage === 'undefined' ? null : localStorage, chat.id, message.text)
       saveDraftImages(chat.id, message.images ?? [])
       landChat(chat)
+      return chat
+    },
+
+    /**
+     * Undo at a message of the owner's (its hover toolbar, or its reply's): the chat drops it and all after it,
+     * and its text and pictures go back in the box, above anything typed there since.
+     */
+    async rewind(chatId: string, itemId: string, message: { text: string; images?: DraftImage[] }): Promise<ChatSummary> {
+      const chat = await fetchJson<ChatSummary>(`/chats/${chatId}/rewind`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ at: itemId } satisfies RewindChatRequest)
+      })
+      const back: PutBack = { chatId, text: message.text, images: message.images ?? [] }
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: back }))
+      // No box shows the chat now: it waits as the chat's draft.
+      if (!back.taken) {
+        const storage = typeof localStorage === 'undefined' ? null : localStorage
+        saveDraft(storage, chatId, putBackDraft(message.text, loadDraft(storage, chatId)))
+        saveDraftImages(chatId, [...back.images, ...draftImages(chatId)])
+      }
       return chat
     },
 

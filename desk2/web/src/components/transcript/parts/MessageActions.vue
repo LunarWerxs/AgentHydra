@@ -1,14 +1,15 @@
 <script setup lang="ts">
 // The toolbar under a message (role=toolbar "Message actions"): 24px muted buttons, hidden until the
-// message row is hovered. Hydra Desk has Copy, Resend, Fork, "..." and the time; the real app's Rewind, Pin and
-// Read aloud need server routes Hydra Desk does not have yet. Resend sends a prompt again as a new message
-// at the end of the chat (queued if a turn is running); it does not rewind what came after it. Fork (a
-// message of yours) opens a new chat cut just before that message, the message waiting unsent in its box.
+// message row is hovered. Hydra Desk has Copy, Undo, Fork, "..." and the time; the real app's Pin and Read aloud
+// need server routes Hydra Desk does not have yet. Undo (a message of yours, or the reply ending its turn) is
+// Claude Code's rewind: this chat loses that message and all after it (a running turn is stopped), and the
+// message, pictures and all, goes back in the box to change and send again. Fork (a message of yours) opens a
+// new chat cut just before that message, the message waiting unsent in its box.
 // "..." (a message of yours) has Change project: a new chat in the folder chosen sends the same text and
 // pictures and opens; this chat is left as it is, the message and its reply still in it.
 import { computed, ref } from 'vue'
 import { RotateCcw } from '@lucide/vue'
-import type { ImageRef, SendMessageRequest } from '@shared/protocol'
+import type { ImageRef } from '@shared/protocol'
 import { icons, shellGlyphs } from '@/lib/icons'
 import { buildCopyHtml } from '@/lib/clipboard-images'
 import type { DraftImage } from '@/components/composer/draft-images'
@@ -22,8 +23,8 @@ const props = defineProps<{
   ts: number
   align?: 'start' | 'end'
   pinned?: boolean
-  /** The prompt the Resend button sends again; no button without one. */
-  resend?: { text: string; images?: ImageRef[] } | null
+  /** The owner's message this row belongs to (the reply's: the one it answers), with its item id: Copy's pictures, Undo, Change project. */
+  resend?: { text: string; images?: ImageRef[]; id?: string } | null
   /** The message's transcript id: a message of yours with one has Fork. */
   itemId?: string
 }>()
@@ -33,9 +34,18 @@ const time = computed(() => new Date(props.ts).toLocaleTimeString([], { hour: 'n
 const ctx = useTranscript()
 const desk = useDesk()
 const canResend = computed(() => !!props.resend && !ctx.readOnly.value && !!ctx.chatId.value)
-const resendState = ref<'idle' | 'sending' | 'sent' | 'failed'>('idle')
-const resendLabel = computed(() =>
-  resendState.value === 'sent' ? 'Sent again' : resendState.value === 'failed' ? 'Resend failed' : 'Resend this prompt'
+
+/** The message Undo goes back to before: this one, or the one this reply answers. Only a Hydra Desk chat has it. */
+const undoAt = computed(() => props.itemId ?? props.resend?.id)
+const canUndo = computed(() => canResend.value && !!undoAt.value && desk.chats.value.some((c) => c.id === ctx.chatId.value))
+const undoState = ref<'idle' | 'undoing' | 'failed'>('idle')
+const undoError = ref('')
+const undoLabel = computed(() =>
+  undoState.value === 'undoing'
+    ? 'Undoing…'
+    : undoState.value === 'failed'
+      ? `Undo failed${undoError.value ? `: ${undoError.value}` : ''}`
+      : 'Undo: take your message and all after it out of this chat, and put it back in the box'
 )
 
 const canFork = computed(() => !!props.itemId && !ctx.readOnly.value && !!ctx.chatId.value)
@@ -97,19 +107,28 @@ async function withBytes(img: ImageRef): Promise<ImageRef> {
   return { mediaType: img.mediaType, dataBase64: btoa(bin), name: img.name }
 }
 
-async function resend() {
+/** The message's pictures as a box holds them. */
+async function boxImages(): Promise<DraftImage[]> {
+  const refs = props.resend?.images?.length ? await Promise.all(props.resend.images.map(withBytes)) : []
+  return refs.flatMap(({ name, mediaType, dataBase64 }) =>
+    dataBase64 ? [{ id: crypto.randomUUID(), name: name ?? 'Image', mediaType, dataBase64, url: `data:${mediaType};base64,${dataBase64}` }] : []
+  )
+}
+
+/** Undo: the chat goes back to before the message, which waits in the box (its pictures read first, so a failed read changes nothing). */
+async function undo() {
   const r = props.resend
-  if (!r || resendState.value === 'sending') return
-  resendState.value = 'sending'
+  const at = undoAt.value
+  if (!r || !at || undoState.value === 'undoing') return
+  undoState.value = 'undoing'
   try {
-    const images = r.images?.length ? await Promise.all(r.images.map(withBytes)) : []
-    const message: SendMessageRequest = { text: r.text, ...(images.length ? { images } : {}) }
-    await desk.send(ctx.chatId.value, message)
-    resendState.value = 'sent'
-  } catch {
-    resendState.value = 'failed'
+    await desk.rewind(ctx.chatId.value, at, { text: r.text, images: await boxImages() })
+    undoState.value = 'idle'
+  } catch (err) {
+    undoError.value = err instanceof Error ? err.message : String(err)
+    undoState.value = 'failed'
+    setTimeout(() => (undoState.value = 'idle'), 4000)
   }
-  setTimeout(() => (resendState.value = 'idle'), 1500)
 }
 
 /** Change project: the message, pictures and all, starts a new chat in that folder, which opens. */
@@ -133,11 +152,7 @@ async function fork() {
   if (!props.itemId || forkState.value === 'forking') return
   forkState.value = 'forking'
   try {
-    const refs = props.resend?.images?.length ? await Promise.all(props.resend.images.map(withBytes)) : []
-    const images: DraftImage[] = refs.flatMap(({ name, mediaType, dataBase64 }) =>
-      dataBase64 ? [{ id: crypto.randomUUID(), name: name ?? 'Image', mediaType, dataBase64, url: `data:${mediaType};base64,${dataBase64}` }] : []
-    )
-    await desk.forkAt(ctx.chatId.value, props.itemId, { text: props.text, images })
+    await desk.forkAt(ctx.chatId.value, props.itemId, { text: props.text, images: await boxImages() })
     forkState.value = 'idle'
   } catch (err) {
     forkError.value = err instanceof Error ? err.message : String(err)
@@ -152,22 +167,22 @@ async function fork() {
     role="toolbar"
     aria-label="Message actions"
     class="tx-actions"
-    :class="[align === 'end' ? 'justify-end' : 'justify-start', (pinned || moreOpen || moveState !== 'idle') && 'tx-actions-pinned']"
+    :class="[align === 'end' ? 'justify-end' : 'justify-start', (pinned || moreOpen || moveState !== 'idle' || undoState === 'failed') && 'tx-actions-pinned']"
   >
     <time v-if="align === 'end'" class="tx-actions-time">{{ time }}</time>
     <button type="button" class="tx-action" :aria-label="copied ? 'Copied' : 'Copy'" :title="copied ? 'Copied' : 'Copy'" @click="copy">
       <component :is="copied ? icons.check : icons.copy" class="size-4" />
     </button>
     <button
-      v-if="canResend"
+      v-if="canUndo"
       type="button"
       class="tx-action"
-      :aria-label="resendLabel"
-      :title="resendLabel"
-      :disabled="resendState === 'sending'"
-      @click="resend"
+      :aria-label="undoLabel"
+      :title="undoLabel"
+      :disabled="undoState === 'undoing'"
+      @click="undo"
     >
-      <component :is="resendState === 'sent' ? icons.check : RotateCcw" class="size-4" :class="resendState === 'failed' && 'text-danger-text'" />
+      <component :is="RotateCcw" class="size-4" :class="undoState === 'failed' && 'text-danger-text'" />
     </button>
     <button
       v-if="canFork"
