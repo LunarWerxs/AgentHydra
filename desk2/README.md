@@ -15,12 +15,18 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **AgentHydra inside the window, Desk 2's own copy of it.** The AgentHydra button in the chrome bar,
   after Back and Forward (an outline two-headed serpent drawn like the Cloud and Bot beside it), slides AgentHydra in over the chat with a push (0.42 s, the chat moving out
   to the left as AgentHydra comes in). While it is open there is still only the one sidebar, Desk's: on
-  HSwarm it lists the tab's pages first (CliMayte, then HSwarm, `hydra/src/lib/hswarm-pages.ts`), and
+  HSwarm it lists the tab's pages first (CliMayte, Routing, then HSwarm, `hydra/src/lib/hswarm-pages.ts`), and
   under the page on screen its own rows, CliMayte's task list or HSwarm's tree, drawn in Desk's look (the
   copy describes them in `shared/hydra-embed.ts` and hides its own; a click goes back to it); on every
   other tab the cloud list below. CliMayte has no tab of its own (owner, 2026-10-05: "move what is
-  currently on the CliMayte tab into HSwarm ... and have it be on the sidebar as CliMayte"). CliMayte's
-  waves move to the top of its task column. The copy has no Sessions
+  currently on the CliMayte tab into HSwarm ... and have it be on the sidebar as CliMayte"). The Routing
+  page (`hydra/src/components/RoutingView.vue`) holds AgentHydra's cost routing between API keys and the
+  Claude subscriptions: the on/off switch, the API-or-subscription split used when the two costs are
+  close (default 60 / 40 to API keys), the close band, a bulk-rate discount per provider, and tables of
+  each plan's measured worth and each model's list price, price at your rate and subscription
+  equivalent; every change is saved at once (`PUT /api/routing/settings`) and synced to the other PC by
+  login sync. How the choice is made is in `../docs/COST-MODEL.md`. CliMayte's waves move to the top of
+  its task column. The copy has no Sessions
   tab: the cloud list is the session list, and a session clicked there slides the chat
   back and opens it in Desk's own view, under the session header below. A chat the copy itself is asked
   to open (the Instances move dialog's list, the landing page's session tiles) comes back to Desk the
@@ -83,7 +89,8 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **CliMayte tasks in the sidebar.** The robot button beside the cloud (blue while on) lists, under each
   chat or session in the sidebar that has CliMayte tasks running, those tasks, one short indented line
   each (status, title, model, how long it has run); a task a manager started sits one step further in,
-  under its manager. A task with a session opens it; one without opens it on AgentHydra's CliMayte tab.
+  under its manager. A task with a session opens it; one without opens it on the CliMayte page of
+  AgentHydra's HSwarm tab.
   Each task is listed once: a row that is itself a task (a manager's session in the cloud list) does not
   list its tasks again when they already show under the row that started it. A task sits only under the
   chat that spawned it, never in a list of its own (owner, 2026-10-04: "under the chat which spawned them.
@@ -105,9 +112,20 @@ sidebar on the left stays put, and only the pane on the right changes.
   run (owner, 2026-10-05).
 - **HSwarm jobs in the sidebar.** While the robot button is on, a chat's row also lists the HSwarm jobs it
   started, after its CliMayte tasks (owner, 2026-10-05: "ZSwarm threads should also be displayed on the
-  HydraDesk 2 sidebar"). Desk 2's server reads them through AgentHydra at most every 10 s
-  (`GET /api/swarm/jobs`, `server/src/bridge/swarm.ts`) and the page polls them while the toggle is on
-  (`web/src/lib/swarm-jobs.ts`); a running job whose chat is not drawn goes in the block at the top.
+  HydraDesk 2 sidebar"), placed by the same rules: under the chat's row in either list, else under a
+  stand-in for that chat titled with the chat's name, in the block at the top (a prefix that could be two
+  chats goes to the stand-in, never a guess). Desk 2's server reads the jobs with the CliMayte workers on
+  one poller (`server/src/bridge/poller.ts`, jobs at most every 10 s) and pushes them to every window
+  (`swarm.update`); HSwarm stamps each job with its caller's full ids, and a Claude Desktop chat's id
+  (`local_...`) is turned into its session through AgentHydra's chat list. With the cloud on, the other
+  PC's jobs (shared in its queue snapshot) show under that PC's chats or in its "On <PC>" block. A job
+  click opens that job on AgentHydra's HSwarm page.
+- **A list or a count per kind.** The Filter menu's Sub-items choose, per kind, whether a row shows its
+  CliMayte tasks and HSwarm jobs as lines (List) or as a small badge with the kind's icon and how many run
+  (Count; muted when only finished ones are left) at the row's right edge; defaults: CliMayte List,
+  HSwarm Count (owner, 2026-10-05: "just an icon, like a number ... not insanely cluttering up my
+  sidebar"). A badge's tooltip names up to eight of them; a click shows that row's lines inline until the
+  next click. Kept in `hydra-desk.sidebar.tasks-mode` and `hydra-desk.sidebar.jobs-mode`.
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
   instead of waiting for the next change.
@@ -135,7 +153,8 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **Every source in the home screen's stats.** The stats card under "What's up next?" counts everything
   AgentHydra knows, not only Desk's own chats (owner, 2026-10-04: "full consolidated stats from all
   sources"): sessions, messages, tokens, active days, peak hour, favourite model, CliMayte's tasks,
-  HSwarm's tasks and the cost at API rates, then one line per source (Claude desktop, the CLI, CliMayte,
+  HSwarm's tasks and the cost at API rates (AgentHydra's Analytics also shows it at your bulk rate, labelled
+  "at your rate", once a discount is set on the Routing page), then one line per source (Claude desktop, the CLI, CliMayte,
   HSwarm, Codex, OpenCode, DeepSeek) and the activity grid, for All, 30 days or 7 days. Desk's server
   gathers it in one route, `GET /api/stats/home?range=`, from AgentHydra's spend and activity reports,
   CliMayte's totals and HSwarm's stats; a part that does not answer shows a dash saying why, never a 0,
@@ -294,8 +313,9 @@ it, and works without it:
 - **Accounts.** A new chat runs on the signed-in Claude account with the most room left, picked from
   AgentHydra's accounts, or on your default login.
 - **CliMayte.** Every chat gets AgentHydra's MCP server, so it can hand work to CliMayte workers on any
-  account. The CliMayte panel lists the workers running now, and each chat shows how many of its own
-  workers are active.
+  account, and HSwarm sends a tool-using task there by itself when AgentHydra's cost model says the
+  subscription is the better buy. The CliMayte page of AgentHydra's HSwarm tab lists the workers, and
+  each chat lists its own in the sidebar.
 - **Elsewhere.** The chats running in Claude Desktop or the Claude CLI show in their own list with
   their status, and you can adopt one into Hydra Desk.
 

@@ -26,7 +26,8 @@ instance CliMayte can use. No naming, no terminal, no `/login`.
   ... the Agent Hydra client manager should handle all that stuff." CliMayte is a standing option
   for work that needs Claude quality HSwarm cannot give (AgentHydra's MCP instructions say so),
   and placement is AgentHydra's job: new work goes around an account someone else is using (see
-  Placement). It runs nothing by itself: a chat or the CliMayte view still sends every task.
+  Placement). It runs nothing by itself: a chat, the CliMayte view, or HSwarm when AgentHydra's cost
+  model picks the subscription for a tool-using task (see "Tasks that arrive from HSwarm") sends every task.
 - **2026-10-03:** "when a worker hits a five-hour or weekly limit, CliMayte moves it to another
   account and resumes it, unless the limit resets in under five minutes; distribute the load." See
   "The five-minute rule" under Placement; it supersedes the 2026-10-01 pace cooldown where they clash.
@@ -1209,6 +1210,22 @@ desktop? ... to save me from having to do both individually."
   syncs, and each PC feeds its own CLI instance. The sync dialog says so on that row.
 - CliMayte sees a fed instance as any signed-in CLI account.
 
+## Tasks that arrive from HSwarm (owner, 2026-10-05)
+
+The owner asked for HSwarm and CliMayte to act as one tool, with a cost-aware split between API keys and
+the subscriptions ("if the cost is even remotely close ... I generally prefer to push things into API
+keys"). Before HSwarm runs a task that has tools (read, edit or all) and an absolute folder, it asks
+`POST /api/routing/decide` (`server/src/routing-cost.ts`, `docs/COST-MODEL.md`) with the task's estimated
+cost on its planned API leg; on "subscription" it dispatches the task here (kind `code` for edit/all, else
+`review`), polls it every 10 s and uses the worker's report as the task's answer (`hswarm/climayte_route.py`).
+Guards: a CliMayte worker's own HSwarm calls are never routed (the worker's `python -m hswarm connect`
+sends `x-hswarm-climayte-worker: 1`, since one shared HSwarm server serves every chat and its own
+environment says nothing about the caller); at most `route_via_climayte_max` (4) routed tasks at once;
+a worker not running within `route_via_climayte_start_s` (90 s) is cancelled (`POST /api/corch/cancel`) and
+the task runs on its API route once, as does a worker that fails; a cancelled HSwarm task cancels its
+worker. A free planned leg (an NVIDIA or other $0 model) always stays on the API. These workers show in
+the CliMayte view like any other, under the chat that called HSwarm.
+
 ## Routes: `server/src/routes/climayte.ts`
 
 - `GET /api/corch/workers?group=&id=&ids=&active=1&limit=&brief=1&wait=` → `climayteList` (`wait`
@@ -1309,6 +1326,9 @@ wrapped as `{ peerWarning, result }`, and an error carries it).
 `accounts` accepts CLI instance numbers or ids (resolve through the existing instance resolver).
 
 ## Web: Quick add and the CliMayte view
+
+In Hydra Desk 2's copy of this window the CliMayte view is the first page of the HSwarm tab, and each
+chat's workers are listed under it in Desk 2's sidebar.
 
 - `web/src/components/CliInstancesSection.vue`: a Quick add row at the top, shown by the header's
   plus (and open by itself on an empty table) and closed by its X or by an account being added: one
