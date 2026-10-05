@@ -18,7 +18,6 @@
 // kit's i18n factory with no ref to mirror, and English is the only catalog that ships today).
 
 import { useStorage } from '@vueuse/core'
-import { watch } from 'vue'
 import {
   APP_VIEW_KEY,
   APP_VIEWS,
@@ -66,75 +65,14 @@ const view = createTabView(storedView, tabStorage())
 const desktopSortKey = useStorage('agenthydra.instances.desktopSortKey', '')
 const desktopSortDirection = useStorage('agenthydra.instances.desktopSortDirection', '')
 
-// --- Sessions: transcript verbosity, search case, sidebar width ---------------------------------
-
-/** Also show tool_use / tool_result events (off = responses only). They are folded into one work
- *  row per run between two messages (components/TranscriptWorkGroup.vue), so on costs one line. */
-const showTools = useStorage('agenthydra.sessions.showTools', true)
-/** Show the model's reasoning blocks, folded into the same work rows. Off by default until
- *  2026-10-04, when they were the bulkiest part of a transcript; folded, they are one line. */
-const showThinking = useStorage('agenthydra.sessions.showThinking', true)
-/** Whether the one-time switch-on below has run. Shared like the toggles it guards, so a window on
- *  a hopped port (an empty localStorage) does not run it again over the reader's own choice. */
-const workRowsOn = useStorage('agenthydra.sessions.workRowsOn', false)
-
-/**
- * Turn tool calls and reasoning on once for readers who had them stored as off. useStorage writes
- * its default on first use, so every existing install holds an explicit `false` from the days when
- * each tool call and each reasoning block was a full log block; the owner asked (2026-10-04) for
- * the work to be folded instead of hidden. After this runs the two toggles are the reader's again.
- *
- * Called by main.ts once the shared preferences have hydrated: the store wins on hydrate
- * (composables/useSharedPrefs.ts), so run any earlier and the store's old `false` would land on
- * top a beat later; run after, and the change is pushed to the store like any other.
- */
-export function switchOnWorkRowsOnce(): void {
-  if (workRowsOn.value) return
-  showTools.value = true
-  showThinking.value = true
-  workRowsOn.value = true
-}
-/** Only what a person typed. The tail's turn window is applied AFTER this filter on the daemon, so
- *  turning it on genuinely reaches back through a long session rather than thinning 40 turns. */
-const humanOnly = useStorage('agenthydra.sessions.humanOnly', false)
-/** Tighter bubbles and smaller type — the same turns, more of them on screen. Purely visual, so it
- *  never re-fetches. */
-const compactTranscript = useStorage('agenthydra.sessions.compact', false)
-/** Case sensitivity for the opt-in body search. */
-const advancedCaseSensitive = useStorage('agenthydra.sessions.advancedCaseSensitive', false)
-
 /** Mask account e-mail addresses across the UI, for screenshots and screen-shares. */
 const privacyMode = useStorage('agenthydra.privacyMode', false)
 
-// --- "Copy session file location": what actually lands on the clipboard -------------------------
-//
-// The bare path is what this action always copied, and on its own it is not much use for the thing
-// people do next, which is hand the session to another agent and ask it to carry on. These two add
-// the missing halves of that: what the conversation was CALLED, and the sentence to start with.
-// Both default ON — a setting you have to go and find is a setting that does nothing — and turning
-// both off restores the original path-only behaviour exactly.
-
-/** Put the session's title on the clipboard above the path. */
-const copyPathIncludeName = useStorage('agenthydra.sessions.copyPathIncludeName', true)
-/** Put a prompt on the clipboard, so the paste is something you can send rather than a file path. */
-const copyPathIncludePrompt = useStorage('agenthydra.sessions.copyPathIncludePrompt', true)
-/** The prompt itself. Free text, so it carries no allowed-value list when it is registered below. */
-const copyPathPrompt = useStorage('agenthydra.sessions.copyPathPrompt', 'Resume where we left off')
-
+// The width a side list (components/side-list/SideBar.vue) may be dragged to.
 export const SIDEBAR_MIN = 240
 export const SIDEBAR_MAX = 560
 export const SIDEBAR_DEFAULT = 340
 export const clampWidth = (w: number) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w))
-
-const sidebarWidth = useStorage('agenthydra.sessions.sidebarWidth', SIDEBAR_DEFAULT)
-sidebarWidth.value = clampWidth(sidebarWidth.value)
-// Clamped on every write, not just the first read: the drag already clamps its own arithmetic, but
-// a width arriving from the daemon's store (or from a hand-edited file) has been through neither.
-// Converges in one step, so it cannot loop.
-watch(sidebarWidth, (w) => {
-  const bounded = clampWidth(w)
-  if (bounded !== w) sidebarWidth.value = bounded
-})
 
 // Mirrored through the daemon, at module scope, for the reasons in the header.
 registerSharedPref(APP_VIEW_KEY, storedView, APP_VIEWS)
@@ -144,17 +82,7 @@ registerSharedPref('agenthydra.instances.desktopSortDirection', desktopSortDirec
   'asc',
   'desc',
 ])
-registerSharedPref('agenthydra.sessions.showTools', showTools)
-registerSharedPref('agenthydra.sessions.showThinking', showThinking)
-registerSharedPref('agenthydra.sessions.workRowsOn', workRowsOn)
-registerSharedPref('agenthydra.sessions.humanOnly', humanOnly)
-registerSharedPref('agenthydra.sessions.compact', compactTranscript)
-registerSharedPref('agenthydra.sessions.advancedCaseSensitive', advancedCaseSensitive)
 registerSharedPref('agenthydra.privacyMode', privacyMode)
-registerSharedPref('agenthydra.sessions.sidebarWidth', sidebarWidth)
-registerSharedPref('agenthydra.sessions.copyPathIncludeName', copyPathIncludeName)
-registerSharedPref('agenthydra.sessions.copyPathIncludePrompt', copyPathIncludePrompt)
-registerSharedPref('agenthydra.sessions.copyPathPrompt', copyPathPrompt)
 
 /** The shared, persisted layout state. Singletons — every caller gets the same refs. */
 export function useUiPrefs() {
@@ -162,15 +90,6 @@ export function useUiPrefs() {
     view,
     desktopSortKey,
     desktopSortDirection,
-    showTools,
-    showThinking,
-    humanOnly,
-    compactTranscript,
-    advancedCaseSensitive,
-    sidebarWidth,
-    copyPathIncludeName,
-    copyPathIncludePrompt,
-    copyPathPrompt,
     privacyMode,
   }
 }

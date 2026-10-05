@@ -120,7 +120,6 @@ export default {
   useAccountName: 'Name it after the account',
   toastUsingAccountName: 'Cleared the typed name. This instance is called “{name}” again.',
   copyAccountEmailAria: 'Copy the account address {email}',
-  toastEmailCopied: 'Copied {email}: the account this instance is signed into.',
   // Sign a profile out. Removes the stored login ONLY: history, settings and the folder stay.
   // Disabled while the instance runs, because the server refuses it then (Claude Desktop holds
   // config.json open and would undo or corrupt the write) and a dead click is worse than a

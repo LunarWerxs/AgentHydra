@@ -6,7 +6,6 @@ import builder from './en/builder'
 import cliInstances from './en/cliInstances'
 import climayte from './en/climayte'
 import codexInstances from './en/codexInstances'
-import composer from './en/composer'
 import dshInstances from './en/dshInstances'
 import hswarm from './en/hswarm'
 import incidents from './en/incidents'
@@ -25,7 +24,6 @@ export default {
   builder,
   cliInstances,
   codexInstances,
-  composer,
   climayte,
   dshInstances,
   hswarm,

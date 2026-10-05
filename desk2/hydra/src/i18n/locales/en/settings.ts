@@ -34,34 +34,6 @@ export default {
   hideTrayIconHint:
     'Removes the AgentHydra icon from the notification area. AgentHydra keeps running in the background - launch the shortcut again to reopen the UI, or come back here to turn the icon back on. Only applies when AgentHydra was started from its tray shortcut: the icon comes from that launcher, so if you ran the executable directly there is no icon for this to affect.',
   hideTrayIconToastFailed: 'Failed to save hide tray icon setting.',
-  // --- what "copy session file location" puts on the clipboard ---
-  copyPathLabel: 'Copying a session file location',
-  copyPathHint:
-    'What lands on the clipboard when you copy a session file location. With both off it is just the path, exactly as before.',
-  copyPathIncludeNameLabel: 'Include the session name',
-  copyPathIncludePromptLabel: 'Include a prompt',
-  copyPathPromptLabel: 'The prompt',
-  copyPathPromptPlaceholder: 'Resume where we left off',
-  copyPathPreviewLabel: 'What gets copied',
-  transcriptEditorLabel: 'Transcript editor',
-  transcriptEditorHint:
-    'Absolute path to the editor "Open the session file" opens .jsonl transcripts with. Empty auto-detects VS Code, Cursor, Notepad++ or Sublime Text (in that order), falling back to Notepad - never the OS "pick an app" dialog.',
-  transcriptEditorPlaceholder: 'Auto-detect',
-  transcriptEditorToastFailed: 'Failed to save transcript editor setting.',
-  transcriptEditorResolved: 'Opens with {editor}',
-  transcriptEditorNotFound: "That path doesn't exist. Using {editor}",
-  transcriptEditorCustomBadge: 'Custom',
-  // --- search index (the conversation index behind fast content search) ---
-  searchIndexLabel: 'Search index',
-  searchIndexHint:
-    'Makes searching session content instant. It holds the words of your conversations, not the file contents or command output, and rebuilds itself from your transcripts whenever it is missing.',
-  searchIndexBuilt: '{size}, covering {n} sessions',
-  searchIndexAbsent:
-    'Not built yet. It is created in the background the first time you search session content.',
-  searchIndexDelete: 'Delete',
-  searchIndexDeleted: 'Search index deleted. It will rebuild on your next content search.',
-  searchIndexDeleteFailed: "Couldn't delete the search index",
-  transcriptEditorReset: 'Back to auto-detect',
 
   // usage section
   usageAutoRefreshLabel: 'Auto-refresh usage',
@@ -122,9 +94,6 @@ export default {
   extraUsageLabel: 'Allow paid extra usage',
   extraUsageHint:
     'Off by default. Some Claude accounts keep working past their limits on paid extra usage (usage credits) instead of stopping. With this off, nothing AgentHydra manages is allowed to bill it: CliMayte moves a task to an account with free quota before its account would bill, and any Claude session on an account that has extra usage switched on is stopped as that account nears its limit. The chat itself is kept and can carry on later or on another account. Turn it on only if you want work to spend those credits.',
-  chatGptHandoffLabel: 'ChatGPT handoff',
-  chatGptHandoffHint:
-    'Adds a composer action that downloads a bounded, secret-screened repository context file, copies the task prompt, and opens ChatGPT. You still review and submit everything manually.',
   providerToastFailed: 'Failed to save provider setting.',
 
   // updates section: the version number itself is the status + control now (see the tips below),
